@@ -3,3 +3,4 @@ port.jsonl
 run.log
 extract.log
 coverage.json
+__pycache__/
