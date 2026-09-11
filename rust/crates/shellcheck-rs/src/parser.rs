@@ -671,8 +671,13 @@ impl Parser {
                 raw.push(ch);
             }
             if ok && has_comma_or_range {
-                let id = self.next_id_between(start, self.pos());
-                return Ok(Token::new(id, InnerToken::T_Literal(raw)));
+                // Model as T_BraceExpansion (non-constant, non-literal) like
+                // ShellCheck; the raw text is kept as a single child for now.
+                let end = self.pos();
+                let child_id = self.next_id_between(start.clone(), end.clone());
+                let child = Token::new(child_id, InnerToken::T_Literal(raw));
+                let id = self.next_id_between(start, end);
+                return Ok(Token::new(id, InnerToken::T_BraceExpansion(vec![child])));
             }
             // Not an expansion: emit a bare `{` literal, rewinding the scan.
             self.reset(m);
@@ -1233,6 +1238,7 @@ impl Parser {
         loop {
             let m = self.mark();
             self.spacing();
+            let op_start = self.pos();
             let op = if self.peek() == Some('&') && self.peek_at(1) == Some('&') {
                 self.bump();
                 self.bump();
@@ -1246,11 +1252,13 @@ impl Parser {
             };
             match op {
                 Some(is_and) => {
+                    // T_AndIf/T_OrIf inherit the operator token's span (matching
+                    // ShellCheck's g_AND_IF / g_OR_IF ids), so checks that emit on
+                    // the node land on the `&&` / `||`.
+                    let op_end = self.pos();
                     self.line_break();
-                    let start = self.span_for(left.id()).0;
                     let right = self.read_pipeline()?;
-                    let end = self.span_for(right.id()).1;
-                    let id = self.next_id_between(start, end);
+                    let id = self.next_id_between(op_start, op_end);
                     left = if is_and {
                         Token::new(id, InnerToken::T_AndIf { lhs: left, rhs: right })
                     } else {
@@ -2694,14 +2702,14 @@ impl Parser {
         let mut left = self.read_cond_and(single)?;
         loop {
             let m = self.mark();
-            let start = self.span_for(left.id()).0;
+            let op_start = self.pos();
             if let Some(op) = self.read_cond_and_op() {
+                let op_end = self.pos();
                 self.cond_spacing();
                 match self.read_cond_and(single) {
                     Ok(right) => {
-                        let end = self.span_for(right.id()).1;
                         let typ = self.cond_typ(single);
-                        let id = self.next_id_between(start, end);
+                        let id = self.next_id_between(op_start, op_end);
                         left = Token::new(id, InnerToken::TC_And { typ, op, lhs: left, rhs: right });
                     }
                     Err(()) => {
@@ -2721,14 +2729,14 @@ impl Parser {
         let mut left = self.read_cond_term(single)?;
         loop {
             let m = self.mark();
-            let start = self.span_for(left.id()).0;
+            let op_start = self.pos();
             if let Some(op) = self.read_cond_or_op() {
+                let op_end = self.pos();
                 self.cond_spacing();
                 match self.read_cond_term(single) {
                     Ok(right) => {
-                        let end = self.span_for(right.id()).1;
                         let typ = self.cond_typ(single);
-                        let id = self.next_id_between(start, end);
+                        let id = self.next_id_between(op_start, op_end);
                         left = Token::new(id, InnerToken::TC_Or { typ, op, lhs: left, rhs: right });
                     }
                     Err(()) => {
@@ -2912,13 +2920,20 @@ impl Parser {
         let x = self.read_cond_word()?;
         // try binary op
         let m = self.mark();
+        let op_start = self.pos();
         if let Some(op) = self.read_cond_binary_op() {
+            // TC_Binary inherits the operator token's span (ShellCheck's readComboOp
+            // id), so checks emit on the operator, not the whole expression.
+            let op_end = Position {
+                file: op_start.file.clone(),
+                line: op_start.line,
+                column: op_start.column + op.chars().count() as i64,
+            };
             self.cond_spacing();
             match self.read_cond_word() {
                 Ok(y) => {
-                    let end = self.span_for(y.id()).1;
                     let typ = self.cond_typ(single);
-                    let id = self.next_id_between(start, end);
+                    let id = self.next_id_between(op_start, op_end);
                     return Ok(Token::new(id, InnerToken::TC_Binary { typ, op, lhs: x, rhs: y }));
                 }
                 Err(()) => {

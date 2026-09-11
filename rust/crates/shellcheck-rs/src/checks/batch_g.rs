@@ -38,6 +38,8 @@ pub fn register(c: &mut Checker) {
     c.node(check_mkdir_dash_pm);
     c.node(check_pipe_wc);
     c.node(check_catastrophic_rm);
+    // Enabled now that TC_Or is anchored on its operator token.
+    c.node(check_conditional_or);
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +348,9 @@ fn fix_path(filename: &str) -> String {
 fn get_potential_path(token: &Token) -> Option<String> {
     get_literal_string_ext(token, &|inner: &InnerToken| match inner {
         InnerToken::T_Glob(s) => Some(s.clone()),
+        // Brace expansions enumerate to multiple paths; ShellCheck checks each,
+        // which we don't model yet, so bail rather than risk a false positive.
+        InnerToken::T_BraceExpansion(_) => None,
         InnerToken::T_DollarBraced { op, .. } => {
             let var = get_literal_string_ext(op, &|_| Some(String::new())).unwrap_or_default();
             if var.contains(":?") || var.contains(":-") || var.contains(":=") {

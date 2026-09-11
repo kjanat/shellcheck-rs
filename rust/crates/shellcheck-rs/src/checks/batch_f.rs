@@ -37,12 +37,10 @@ use crate::astlib;
 use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {
-    // Intentionally empty: SC2015 and SC2166 are implemented below but withheld
-    // because the parser positions their AST nodes on the full expression span
-    // instead of the operator, which would make every diagnostic an `extra`.
-    // See the module-level BLOCKER note. SC2128 needs dataflow (skipped).
-    let _ = check_shorthand_if;
-    let _ = check_conditional_and_ors;
+    // Enabled now that the parser anchors T_OrIf/T_AndIf/TC_And/TC_Or on the
+    // operator token (matching ShellCheck). SC2128 still needs dataflow (skipped).
+    c.node(check_shorthand_if);
+    c.node(check_conditional_and_ors);
 }
 
 // ---------------------------------------------------------------------------

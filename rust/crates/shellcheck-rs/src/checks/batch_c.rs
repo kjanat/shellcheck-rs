@@ -29,11 +29,11 @@ use crate::interface::Shell;
 
 /// Register this batch's checks.
 pub fn register(c: &mut Checker) {
-    // check_constant_ifs (SC2050) is intentionally NOT registered — see the
-    // module-level "Skipped" note (parser operator-span gap).
     c.node(check_literal_breaking_test);
     c.node(check_constant_nullary);
     c.node(check_comparison_against_glob);
+    // Enabled: TC_Binary is now anchored on its operator token.
+    c.node(check_constant_ifs);
 }
 
 // ---------------------------------------------------------------------------
