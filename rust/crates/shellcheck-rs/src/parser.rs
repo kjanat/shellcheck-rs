@@ -452,8 +452,8 @@ impl Parser {
                     let id = self.next_id_between(start, self.pos());
                     Ok(Token::new(id, InnerToken::T_Literal(c.to_string())))
                 }
-                '{' => self.read_brace_or_literal(),
-                '<' | '>' if self.peek_at(1) == Some('(') => Err(()),
+                '<' | '>' if self.peek_at(1) == Some('(') => self.read_proc_sub(),
+                '{' | '}' => self.read_brace_or_literal(),
                 _ => self.read_normal_literal(""),
             },
         }
@@ -634,12 +634,67 @@ impl Parser {
     }
 
     fn read_brace_or_literal(&mut self) -> PResult<Token> {
-        // Simplified brace expansion: treat as a literal '{' for now unless a
-        // comma-form brace expansion is clearly present. Fidelity refined later.
+        // Try a `{a,b}` / `{1..3}` brace expansion; otherwise read `{` or `}` as
+        // a literal char (so `{}`, `foo{...}`, etc. parse as words). The
+        // expansion is currently flattened to a literal of its raw text — the
+        // structural `T_BraceExpansion` port is refined later; downstream checks
+        // that consume it are added alongside.
         let start = self.pos();
-        self.char('{')?;
+        let c = self.peek();
+        if c == Some('{') {
+            let m = self.mark();
+            self.bump();
+            // Detect comma/range brace expansion by scanning balanced braces.
+            let mut depth = 1;
+            let mut raw = String::from("{");
+            let mut has_comma_or_range = false;
+            let mut ok = false;
+            while let Some(ch) = self.peek() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        raw.push('}');
+                        self.bump();
+                        if depth == 0 {
+                            ok = true;
+                            break;
+                        }
+                        continue;
+                    }
+                    ',' if depth == 1 => has_comma_or_range = true,
+                    '.' if depth == 1 && self.peek_at(1) == Some('.') => has_comma_or_range = true,
+                    ' ' | '\t' | '\n' | '\r' => break,
+                    _ => {}
+                }
+                self.bump();
+                raw.push(ch);
+            }
+            if ok && has_comma_or_range {
+                let id = self.next_id_between(start, self.pos());
+                return Ok(Token::new(id, InnerToken::T_Literal(raw)));
+            }
+            // Not an expansion: emit a bare `{` literal, rewinding the scan.
+            self.reset(m);
+            self.bump();
+            let id = self.next_id_between(start, self.pos());
+            return Ok(Token::new(id, InnerToken::T_Literal("{".to_string())));
+        }
+        // bare '}'
+        self.char('}')?;
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_Literal("{".to_string())))
+        Ok(Token::new(id, InnerToken::T_Literal("}".to_string())))
+    }
+
+    fn read_proc_sub(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let dir = self.one_of("<>")?;
+        self.char('(')?;
+        let sub_start = self.pos();
+        let raw = self.read_balanced_parens_until_close()?;
+        let list = self.subparse_commands(&raw, sub_start);
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_ProcSub { op: dir.to_string(), list }))
     }
 
     fn read_extglob(&mut self) -> PResult<Token> {
@@ -2111,6 +2166,7 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
         T_BraceGroup(l) => T_BraceGroup(rv!(l)),
         T_Array(l) => T_Array(rv!(l)),
         T_Extglob { op, list } => T_Extglob { op, list: rv!(list) },
+        T_ProcSub { op, list } => T_ProcSub { op, list: rv!(list) },
         T_DollarArithmetic(t) => T_DollarArithmetic(r!(t)),
         T_DollarBracket(t) => T_DollarBracket(r!(t)),
         T_Arithmetic(t) => T_Arithmetic(r!(t)),
