@@ -1397,6 +1397,8 @@ impl Parser {
                     self.read_function_def()
                 } else if self.peek() == Some('(') && self.peek_at(1) == Some('(') {
                     self.read_arithmetic_command()
+                } else if self.string_peek("@test ") {
+                    self.read_bats_test()
                 } else if self.looks_like_posix_function() {
                     self.read_posix_function()
                 } else {
@@ -1593,6 +1595,30 @@ impl Parser {
         let id = self.next_id_between(start, self.pos());
         let _ = is_in;
         Ok(Token::new(id, InnerToken::T_ForIn { var, items, body }))
+    }
+
+    /// `readBatsTest`: `@test <name> { ... }`, where <name> is everything on the
+    /// line up to the last ` {`.
+    fn read_bats_test(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        self.string("@test ")?;
+        self.spacing();
+        // name = current line up to the last " {"
+        let mut j = self.idx;
+        while matches!(self.input.get(j), Some(&c) if c != '\n') {
+            j += 1;
+        }
+        let line: String = self.input[self.idx..j].iter().collect();
+        let brace_pos = line.rfind(" {").ok_or(())?;
+        let name = line[..brace_pos].trim_end().to_string();
+        // consume exactly name.chars().count() chars
+        for _ in 0..name.chars().count() {
+            self.bump();
+        }
+        self.spacing();
+        let body = self.read_brace_group()?;
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_BatsTest { name, body }))
     }
 
     fn read_select_clause(&mut self) -> PResult<Token> {
@@ -2329,6 +2355,7 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
             cases: cases.into_iter().map(|(t, p, b)| (t, rv!(p), rv!(b))).collect(),
         },
         T_Function { keyword, parens, name, body } => T_Function { keyword, parens, name, body: r!(body) },
+        T_BatsTest { name, body } => T_BatsTest { name, body: r!(body) },
         T_Script { shebang, commands } => T_Script { shebang: r!(shebang), commands: rv!(commands) },
         T_Annotation { annotations, token } => T_Annotation { annotations, token: r!(token) },
         T_IoFile { op, file } => T_IoFile { op: r!(op), file: r!(file) },
