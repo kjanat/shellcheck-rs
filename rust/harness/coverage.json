@@ -394,8 +394,8 @@
       },
       "2006": {
         "oracle": 19,
-        "matched": 0,
-        "missing": 19,
+        "matched": 17,
+        "missing": 2,
         "extra": 0
       },
       "2007": {
@@ -3206,35 +3206,6 @@
           2013,
           "To read lines rather than words, pipe/redirect to a 'while read' loop.",
           null
-        ],
-        [
-          1,
-          10,
-          1,
-          19,
-          "style",
-          2006,
-          "Use $(...) notation instead of legacy backticks `...`.",
-          [
-            [
-              1,
-              10,
-              1,
-              11,
-              "afterEnd",
-              7,
-              "$("
-            ],
-            [
-              1,
-              18,
-              1,
-              19,
-              "beforeStart",
-              7,
-              ")"
-            ]
-          ]
         ]
       ],
       "extra": []
@@ -3287,35 +3258,6 @@
           2013,
           "To read lines rather than words, pipe/redirect to a 'while read' loop.",
           null
-        ],
-        [
-          1,
-          10,
-          1,
-          30,
-          "style",
-          2006,
-          "Use $(...) notation instead of legacy backticks `...`.",
-          [
-            [
-              1,
-              10,
-              1,
-              11,
-              "afterEnd",
-              7,
-              "$("
-            ],
-            [
-              1,
-              29,
-              1,
-              30,
-              "beforeStart",
-              7,
-              ")"
-            ]
-          ]
         ]
       ],
       "extra": []

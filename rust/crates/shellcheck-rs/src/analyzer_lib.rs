@@ -80,6 +80,64 @@ pub fn style_with_fix(out: &mut Out, id: Id, code: Code, note: &str, fix: Fix) {
     out.push(make_comment_with_fix(Severity::StyleC, id, code, note, fix));
 }
 
+// ---- fix construction (from ShellCheck.Analytics) --------------------------
+
+use crate::interface::{InsertionPoint, Position, Replacement};
+
+/// Precedence = length of the parent path (getPath) from the token to the root,
+/// counting the token itself. Higher precedence is applied first.
+fn fix_depth(params: &Parameters, id: Id) -> i32 {
+    let mut depth = 1;
+    let mut cur = id;
+    while let Some(&p) = params.parent_map.get(&cur) {
+        depth += 1;
+        cur = p;
+    }
+    depth
+}
+
+/// `replaceStart id params n r`: replace `n` columns at the token's start.
+pub fn replace_start(params: &Parameters, id: Id, n: i64, r: &str) -> Replacement {
+    let (start, _) = params.token_positions.get(&id).cloned().unwrap_or_default();
+    let new_end = Position { column: start.column + n, ..start.clone() };
+    Replacement {
+        start,
+        end: new_end,
+        string: r.to_string(),
+        precedence: fix_depth(params, id),
+        insertion_point: InsertionPoint::InsertAfter,
+    }
+}
+
+/// `replaceEnd id params n r`: replace `n` columns at the token's end.
+pub fn replace_end(params: &Parameters, id: Id, n: i64, r: &str) -> Replacement {
+    let (_, end) = params.token_positions.get(&id).cloned().unwrap_or_default();
+    let new_start = Position { column: end.column - n, ..end.clone() };
+    Replacement {
+        start: new_start,
+        end,
+        string: r.to_string(),
+        precedence: fix_depth(params, id),
+        insertion_point: InsertionPoint::InsertBefore,
+    }
+}
+
+/// `replaceToken id params r`: replace the whole token span.
+pub fn replace_token(params: &Parameters, id: Id, r: &str) -> Replacement {
+    let (start, end) = params.token_positions.get(&id).cloned().unwrap_or_default();
+    Replacement {
+        start,
+        end,
+        string: r.to_string(),
+        precedence: fix_depth(params, id),
+        insertion_point: InsertionPoint::InsertBefore,
+    }
+}
+
+pub fn fix_with(replacements: Vec<Replacement>) -> Fix {
+    Fix { replacements }
+}
+
 /// `ShellCheck.AnalyzerLib.Checker` — a set of tree- and node-level checks.
 #[derive(Default)]
 pub struct Checker {

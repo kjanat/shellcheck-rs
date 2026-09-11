@@ -26,6 +26,7 @@ pub mod analytics;
 pub mod analyzer_lib;
 pub mod astlib;
 pub mod checker;
+pub mod checks;
 pub mod parser;
 
 pub use checker::check_script;

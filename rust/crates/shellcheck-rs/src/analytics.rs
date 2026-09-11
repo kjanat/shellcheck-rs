@@ -12,7 +12,23 @@ pub fn checker() -> Checker {
     let mut c = Checker::new();
     c.tree(check_shebang);
     c.node(check_for_in_quoted);
+    c.node(check_backticks);
+    crate::checks::register_all(&mut c);
     c
+}
+
+/// `checkBackticks` (SC2006): legacy backticks -> `$(...)`, with a fix.
+fn check_backticks(params: &Parameters, t: &Token, out: &mut Out) {
+    if let InnerToken::T_Backticked(list) = &*t.inner {
+        if !list.is_empty() {
+            let fix = fix_with(vec![
+                replace_start(params, t.id(), 1, "$("),
+                replace_end(params, t.id(), 1, ")"),
+            ]);
+            style_with_fix(out, t.id(), 2006,
+                "Use $(...) notation instead of legacy backticks `...`.", fix);
+        }
+    }
 }
 
 /// `checkShebang` (SC2148 / SC2239 / SC2246 / SC2187).
