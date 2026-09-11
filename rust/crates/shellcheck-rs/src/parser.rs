@@ -2210,6 +2210,11 @@ impl Parser {
         let body = self.read_compound_list_or_empty();
         self.allspacing();
         self.consume_keyword("done")?;
+        // ShellCheck's `g_Done` is `tryWordToken "done" .. \`thenSkip\` spacing`, so
+        // the loop's span extends over the line-whitespace following `done` (a
+        // trailing redirect starts after it). Without this the node is one column
+        // short of the oracle. `spacing` is line-whitespace only (no newlines).
+        self.spacing();
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_WhileExpression { condition: cond, body }))
     }
@@ -2223,6 +2228,9 @@ impl Parser {
         let body = self.read_compound_list_or_empty();
         self.allspacing();
         self.consume_keyword("done")?;
+        // See `read_while_clause`: `g_Done` consumes trailing line-whitespace, so
+        // the T_UntilExpression span reaches the start of any trailing redirect.
+        self.spacing();
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_UntilExpression { condition: cond, body }))
     }
@@ -4024,9 +4032,14 @@ impl Parser {
     fn read_cond_unary(&mut self, single: bool) -> PResult<Token> {
         let m = self.mark();
         let start = self.pos();
+        // ShellCheck's `readCondUnaryOp` uses `readOp` with NO exclusion of
+        // `-a`/`-o`: at a term (expression) position `-a`/`-o` are the unary
+        // "file exists"/"option set" tests. Their AND/OR meaning is only reached
+        // by `readCondAndOp`/`readCondOrOp` in the chainl1 layer, i.e. between two
+        // already-parsed operands — so a left operand must exist first.
         let op = match self.read_cond_op_flag() {
-            Some(o) if o != "-a" && o != "-o" => o,
-            _ => {
+            Some(o) => o,
+            None => {
                 self.reset(m);
                 return Err(());
             }
@@ -4080,16 +4093,18 @@ impl Parser {
         // try binary op
         let m = self.mark();
         let op_start = self.pos();
-        if let Some(op) = self.read_cond_binary_op() {
-            // TC_Binary inherits the operator token's span (ShellCheck's readComboOp
-            // id), so checks emit on the operator, not the whole expression.
-            let op_end = Position {
-                file: op_start.file.clone(),
-                line: op_start.line,
-                column: op_start.column + op.chars().count() as i64,
+        // `regexOperatorAhead`: a lookahead (non-consuming) for `=~`/`~=`. When
+        // true the RHS is read as a regex rather than a normal condition word.
+        let is_regex = self.regex_operator_ahead();
+        if let Some((op, op_end)) = self.read_cond_binary_op() {
+            // TC_Binary inherits the operator token's span (ShellCheck's
+            // `getOp`: `startSpan .. endSpan`), so checks emit on the operator.
+            let y = if is_regex {
+                self.read_regex()
+            } else {
+                self.read_cond_word()
             };
-            self.cond_spacing();
-            match self.read_cond_word() {
+            match y {
                 Ok(y) => {
                     let typ = self.cond_typ(single);
                     let id = self.next_id_between(op_start, op_end);
@@ -4107,32 +4122,90 @@ impl Parser {
         Ok(Token::new(id, InnerToken::TC_Nullary { typ, token: x }))
     }
 
-    fn read_cond_binary_op(&mut self) -> Option<String> {
-        // flagless (longest first), then flag ops
-        for op in ["==", "!=", "<=", ">=", "=~"] {
-            if self.string_peek(op) {
-                self.string(op).ok();
-                self.cond_spacing();
-                return Some(op.to_string());
-            }
+    /// `regexOperatorAhead`: lookahead for `=~` (or the quirky `~=`) without
+    /// consuming input.
+    fn regex_operator_ahead(&self) -> bool {
+        self.string_peek("=~") || self.string_peek("~=")
+    }
+
+    /// `readCondBinaryOp`: `readRegularOrEscaped anyOp`, then trailing spacing.
+    /// Returns the operator string (with a leading `\` re-added for escaped/quoted
+    /// `<`/`>`/`(`/`)`, matching `escaped`) and the position just after the
+    /// operator (before spacing), used for the TC_Binary span.
+    fn read_cond_binary_op(&mut self) -> Option<(String, Position)> {
+        let m = self.mark();
+        // readEscaped anyOp  (\op  or  'op' / "op")
+        if let Some(op) = self.read_cond_escaped_op() {
+            let end = self.pos();
+            self.cond_spacing();
+            return Some((op, end));
         }
-        for op in ["=", "<", ">"] {
-            if self.peek() == op.chars().next() {
-                self.bump();
-                self.cond_spacing();
-                return Some(op.to_string());
-            }
+        self.reset(m);
+        // plain anyOp
+        if let Some(op) = self.read_cond_any_op() {
+            let end = self.pos();
+            self.cond_spacing();
+            return Some((op, end));
         }
-        // flag binary ops: -eq -ne -lt -le -gt -ge -ef -nt -ot
+        self.reset(m);
+        None
+    }
+
+    /// `anyOp = flagOp <|> flaglessOp`. flagOp is a `-`+letters test operator
+    /// that is not `-a`/`-o`; flaglessOp is one of the symbolic comparisons.
+    fn read_cond_any_op(&mut self) -> Option<String> {
         let m = self.mark();
         if let Some(o) = self.read_cond_op_flag() {
             if o != "-a" && o != "-o" {
-                self.cond_spacing();
                 return Some(o);
             }
         }
         self.reset(m);
+        // flaglessOps, longest first
+        for op in ["==", "!=", "<=", ">=", "=~", ">", "<", "="] {
+            if self.string_peek(op) {
+                self.string(op).ok();
+                return Some(op.to_string());
+            }
+        }
         None
+    }
+
+    /// `readEscaped anyOp`: `\op` or a quote-wrapped `'op'` / `"op"`. Per
+    /// ShellCheck's `escaped`, if the operator contains any of `<>()` a leading
+    /// backslash is re-added to the returned string.
+    fn read_cond_escaped_op(&mut self) -> Option<String> {
+        let m = self.mark();
+        match self.peek() {
+            Some('\\') => {
+                self.bump();
+                if let Some(s) = self.read_cond_any_op() {
+                    return Some(Self::escape_cond_op(&s));
+                }
+                self.reset(m);
+                None
+            }
+            Some(q @ ('\'' | '"')) => {
+                self.bump();
+                if let Some(s) = self.read_cond_any_op() {
+                    if self.peek() == Some(q) {
+                        self.bump();
+                        return Some(Self::escape_cond_op(&s));
+                    }
+                }
+                self.reset(m);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn escape_cond_op(s: &str) -> String {
+        if s.chars().any(|c| "<>()".contains(c)) {
+            format!("\\{}", s)
+        } else {
+            s.to_string()
+        }
     }
 
     fn string_peek(&self, s: &str) -> bool {
@@ -4160,6 +4233,150 @@ impl Parser {
     /// unexpectedly in `[ ]`).
     fn cond_spacing_line(&mut self) {
         while self.line_whitespace().is_ok() {}
+    }
+
+    /// `readRegex`: the RHS of `=~`. `many1 readPart`, then trailing spacing.
+    /// The parts absorb regex syntax (groups, glob chars, `|`) so that an
+    /// unquoted `]]`/`)` inside a `( .. )` group does not terminate the
+    /// condition, while unquoted whitespace outside a group ends the regex.
+    fn read_regex(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let mut parts = Vec::new();
+        loop {
+            let before = self.idx;
+            match self.read_regex_part() {
+                Ok(p) => {
+                    // guard against a zero-width part looping forever
+                    if self.idx == before {
+                        break;
+                    }
+                    parts.push(p);
+                }
+                Err(()) => break,
+            }
+        }
+        if parts.is_empty() {
+            return Err(());
+        }
+        let id = self.next_id_between(start, self.pos());
+        self.spacing();
+        Ok(Token::new(id, InnerToken::T_NormalWord(parts)))
+    }
+
+    /// One `readPart` of a regex: group, quoted string, `$`-expression, a normal
+    /// literal (stopping at `(`/space), a literal `|`, or a glob literal char.
+    fn read_regex_part(&mut self) -> PResult<Token> {
+        match self.peek() {
+            Some('(') => return self.read_regex_group(),
+            Some('\'') => return self.read_single_quoted(),
+            Some('"') => return self.read_double_quoted(),
+            Some('$') => {
+                let m = self.mark();
+                if let Ok(t) = self.read_normal_dollar() {
+                    return Ok(t);
+                }
+                self.reset(m);
+                // fall through: bare `$` becomes a glob literal below
+            }
+            _ => {}
+        }
+        // readLiteralForParser (readNormalLiteral "( ")
+        if let Ok(t) = self.read_normal_literal("( ") {
+            return Ok(t);
+        }
+        // readLiteralString "|"
+        if self.peek() == Some('|') {
+            let start = self.pos();
+            self.bump();
+            let id = self.next_id_between(start, self.pos());
+            return Ok(Token::new(id, InnerToken::T_Literal("|".to_string())));
+        }
+        // readGlobLiteral: extglobStart <|> oneOf "{}[]$"
+        if let Some(c) = self.peek() {
+            if "?*@!+".contains(c) || "{}[]$".contains(c) {
+                let start = self.pos();
+                self.bump();
+                let id = self.next_id_between(start, self.pos());
+                return Ok(Token::new(id, InnerToken::T_Literal(c.to_string())));
+            }
+        }
+        Err(())
+    }
+
+    /// `readGroup`: `( .. )` inside a regex. Inside, `readRegexLiteral` swallows
+    /// runs of chars (including spaces and `]]`) until a `'"$`()` boundary.
+    fn read_regex_group(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let p1_start = self.pos();
+        self.char('(')?;
+        let p1 = Token::new(
+            self.next_id_between(p1_start, self.pos()),
+            InnerToken::T_Literal("(".to_string()),
+        );
+        let mut parts = vec![p1];
+        loop {
+            let m = self.mark();
+            let before = self.idx;
+            if let Ok(p) = self.read_regex_part() {
+                if self.idx != before {
+                    parts.push(p);
+                    continue;
+                }
+                self.reset(m);
+            } else {
+                self.reset(m);
+            }
+            if let Ok(p) = self.read_regex_literal() {
+                parts.push(p);
+                continue;
+            }
+            break;
+        }
+        if self.peek() != Some(')') {
+            return Err(());
+        }
+        let p2_start = self.pos();
+        self.char(')')?;
+        let p2 = Token::new(
+            self.next_id_between(p2_start, self.pos()),
+            InnerToken::T_Literal(")".to_string()),
+        );
+        parts.push(p2);
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_NormalWord(parts)))
+    }
+
+    /// `readRegexLiteral`: `readGenericLiteral1` stopping at `'`, `"`, `$`,
+    /// backtick, `(` or `)` (keeping backslash escapes verbatim).
+    fn read_regex_literal(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let mut s = String::new();
+        loop {
+            match self.peek() {
+                None => break,
+                Some('\\') => {
+                    self.bump();
+                    match self.bump() {
+                        Some('\n') => {}
+                        Some(c) => {
+                            s.push('\\');
+                            s.push(c);
+                        }
+                        None => s.push('\\'),
+                    }
+                }
+                Some('\'') | Some('"') | Some('$') | Some('`') | Some('(') | Some(')') => break,
+                Some(c) => {
+                    self.bump();
+                    s.push(c);
+                }
+            }
+        }
+        if s.is_empty() {
+            return Err(());
+        }
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_Literal(s)))
     }
 }
 
@@ -4205,3 +4422,4 @@ mod arith_tests {
     #[test] fn prop_a22() { assert!(arith_ok("!!a")); }
     #[test] fn prop_a23() { assert!(arith_ok("~0")); }
 }
+
