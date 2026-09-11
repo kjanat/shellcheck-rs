@@ -3,12 +3,11 @@
   "corpus_size": 1659,
   "comparable_scripts": 1659,
   "oracle_error_scripts": 0,
-  "exact_scripts": 1651,
+  "exact_scripts": 1654,
   "order_mismatch": 0,
   "order_mismatch_ids": [],
-  "exit_mismatch": 3,
+  "exit_mismatch": 2,
   "exit_mismatch_ids": [
-    "prop_checkShebang16",
     "prop_checkSourceArgs2",
     "prop_checkSourceArgs3"
   ],
@@ -16,14 +15,14 @@
   "per_code": {
     "1008": {
       "oracle": 1,
-      "matched": 0,
-      "missing": 1,
+      "matched": 1,
+      "missing": 0,
       "extra": 0
     },
     "1014": {
       "oracle": 1,
-      "matched": 0,
-      "missing": 1,
+      "matched": 1,
+      "missing": 0,
       "extra": 0
     },
     "1037": {
@@ -46,8 +45,8 @@
     },
     "1127": {
       "oracle": 1,
-      "matched": 0,
-      "missing": 1,
+      "matched": 1,
+      "missing": 0,
       "extra": 0
     },
     "2000": {
@@ -1882,21 +1881,9 @@
     }
   },
   "known_missing": {
-    "1008": {
-      "missing": 1,
-      "reason": "SC1008 (unrecognized shebang): shebang-dialect note not yet ported."
-    },
-    "1014": {
-      "missing": 1,
-      "reason": "SC1014 (test as command): parser note not yet ported for this construct."
-    },
     "1091": {
       "missing": 5,
       "reason": "SC1091 (Not following sourced file): the port does not resolve/follow `source`d files, so it cannot emit the informational 'not following' note."
-    },
-    "1127": {
-      "missing": 1,
-      "reason": "SC1127 (comment without leading space / unexpected token) parser note not yet ported."
     }
   },
   "provenance": {
@@ -1905,17 +1892,17 @@
       "binary": "/home/user/shellcheck/dist-newstyle/build/x86_64-linux/ghc-9.6.6/ShellCheck-0.11.0/x/shellcheck/build/shellcheck/shellcheck",
       "binary_sha256": "9ce27f9a673bd4ef826249a2e1f8c4a44f6d08573ee4efc2e6d807d21fe4550e",
       "git": {
-        "head": "823c5ce25eb6065ba47948c8a1fe1b7d8ac0048f",
-        "describe": "823c5ce-dirty"
+        "head": "4365aa4f73032862d6db8fe3719285280c00ba8f",
+        "describe": "4365aa4"
       }
     },
     "port": {
       "kind": "port",
       "binary": "/home/user/shellcheck/rust/target/release/shellcheck-rs",
-      "binary_sha256": "6bd787e7c154e3403d54fbfc903ca20d1f190851afa74b5287ac1cb544434ed6",
+      "binary_sha256": "734ec60af2c3b7a9803a05c7de515794df6a3c634860b55cfd9acd9cc55430f8",
       "git": {
-        "head": "823c5ce25eb6065ba47948c8a1fe1b7d8ac0048f",
-        "describe": "823c5ce-dirty"
+        "head": "4365aa4f73032862d6db8fe3719285280c00ba8f",
+        "describe": "4365aa4"
       }
     }
   }
