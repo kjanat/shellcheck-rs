@@ -1342,6 +1342,9 @@ impl Parser {
         if let Ok(t) = self.read_compound_command() {
             return Ok(t);
         }
+        if let Ok(t) = self.read_condition_command() {
+            return Ok(t);
+        }
         self.read_simple_command()
     }
 
@@ -2190,6 +2193,13 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
         T_Array(l) => T_Array(rv!(l)),
         T_Extglob { op, list } => T_Extglob { op, list: rv!(list) },
         T_ProcSub { op, list } => T_ProcSub { op, list: rv!(list) },
+        T_Condition { typ, token } => T_Condition { typ, token: r!(token) },
+        TC_And { typ, op, lhs, rhs } => TC_And { typ, op, lhs: r!(lhs), rhs: r!(rhs) },
+        TC_Or { typ, op, lhs, rhs } => TC_Or { typ, op, lhs: r!(lhs), rhs: r!(rhs) },
+        TC_Binary { typ, op, lhs, rhs } => TC_Binary { typ, op, lhs: r!(lhs), rhs: r!(rhs) },
+        TC_Group { typ, token } => TC_Group { typ, token: r!(token) },
+        TC_Nullary { typ, token } => TC_Nullary { typ, token: r!(token) },
+        TC_Unary { typ, op, token } => TC_Unary { typ, op, token: r!(token) },
         T_DollarArithmetic(t) => T_DollarArithmetic(r!(t)),
         T_DollarBracket(t) => T_DollarBracket(r!(t)),
         T_Arithmetic(t) => T_Arithmetic(r!(t)),
@@ -2438,5 +2448,413 @@ fn parse_disable_element(s: &str) -> Option<Annotation> {
     } else {
         let from = parse_code(s)?;
         Some(Annotation::DisableComment(from, from + 1))
+    }
+}
+
+// ============================================================================
+// Test conditions: [ .. ] and [[ .. ]]  (ShellCheck.Parser.readCondition)
+// ============================================================================
+
+impl Parser {
+    /// `readConditionCommand`: a condition plus optional redirects, wrapped in
+    /// T_Redirecting like every other command. Returns Err (with full reset)
+    /// on any failure so the caller can fall back to a simple command.
+    fn read_condition_command(&mut self) -> PResult<Token> {
+        let m = self.mark();
+        let start = self.pos();
+        let cond = match self.read_condition() {
+            Ok(c) => c,
+            Err(()) => {
+                self.reset(m);
+                return Err(());
+            }
+        };
+        let redirs = self.read_redirect_list();
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_Redirecting { redirs, cmd: cond }))
+    }
+
+    fn read_condition(&mut self) -> PResult<Token> {
+        if self.peek() != Some('[') {
+            return Err(());
+        }
+        let start = self.pos();
+        let dbl = self.peek_at(1) == Some('[');
+        if dbl {
+            self.string("[[")?;
+        } else {
+            self.char('[')?;
+        }
+        let single = !dbl;
+        let typ = if single { ConditionType::SingleBracket } else { ConditionType::DoubleBracket };
+
+        // required space after the bracket
+        let space = self.cond_spacing();
+        let contents = match self.read_cond_contents(single) {
+            Ok(c) => Some(c),
+            Err(()) => None,
+        };
+        let token = match contents {
+            Some(c) => c,
+            None => {
+                // empty condition: only valid if there was space and a closing ] follows
+                if space.is_empty() {
+                    return Err(());
+                }
+                let id = self.next_id_between(start.clone(), self.pos());
+                Token::new(id, InnerToken::TC_Empty { typ })
+            }
+        };
+        // closing bracket
+        let closed = if dbl {
+            self.string("]]").is_ok()
+        } else {
+            // single ] but not ]]
+            self.peek() == Some(']') && {
+                self.bump();
+                true
+            }
+        };
+        if !closed {
+            return Err(());
+        }
+        self.spacing();
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_Condition { typ, token }))
+    }
+
+    /// Spacing within a condition (spaces, tabs, line continuations, newlines in
+    /// `[[ ]]`). Returns the consumed whitespace.
+    fn cond_spacing(&mut self) -> String {
+        let mut out = String::new();
+        loop {
+            let mut progressed = false;
+            while let Ok(c) = self.line_whitespace() {
+                out.push(c);
+                progressed = true;
+            }
+            let m = self.mark();
+            if self.string("\\\n").is_ok() {
+                out.push('\n');
+                progressed = true;
+            } else {
+                self.reset(m);
+            }
+            // allow bare newlines too (only meaningful in [[ ]], but harmless)
+            let m2 = self.mark();
+            if self.char('\n').is_ok() {
+                out.push('\n');
+                progressed = true;
+            } else {
+                self.reset(m2);
+            }
+            if !progressed {
+                break;
+            }
+        }
+        out
+    }
+
+    // contents = or-level (chained by && / -a → TC_And)
+    fn read_cond_contents(&mut self, single: bool) -> PResult<Token> {
+        self.read_cond_or(single)
+    }
+
+    fn read_cond_or(&mut self, single: bool) -> PResult<Token> {
+        let mut left = self.read_cond_and(single)?;
+        loop {
+            let m = self.mark();
+            let start = self.span_for(left.id()).0;
+            if let Some(op) = self.read_cond_and_op() {
+                self.cond_spacing();
+                match self.read_cond_and(single) {
+                    Ok(right) => {
+                        let end = self.span_for(right.id()).1;
+                        let typ = self.cond_typ(single);
+                        let id = self.next_id_between(start, end);
+                        left = Token::new(id, InnerToken::TC_And { typ, op, lhs: left, rhs: right });
+                    }
+                    Err(()) => {
+                        self.reset(m);
+                        break;
+                    }
+                }
+            } else {
+                self.reset(m);
+                break;
+            }
+        }
+        Ok(left)
+    }
+
+    fn read_cond_and(&mut self, single: bool) -> PResult<Token> {
+        let mut left = self.read_cond_term(single)?;
+        loop {
+            let m = self.mark();
+            let start = self.span_for(left.id()).0;
+            if let Some(op) = self.read_cond_or_op() {
+                self.cond_spacing();
+                match self.read_cond_term(single) {
+                    Ok(right) => {
+                        let end = self.span_for(right.id()).1;
+                        let typ = self.cond_typ(single);
+                        let id = self.next_id_between(start, end);
+                        left = Token::new(id, InnerToken::TC_Or { typ, op, lhs: left, rhs: right });
+                    }
+                    Err(()) => {
+                        self.reset(m);
+                        break;
+                    }
+                }
+            } else {
+                self.reset(m);
+                break;
+            }
+        }
+        Ok(left)
+    }
+
+    fn cond_typ(&self, single: bool) -> ConditionType {
+        if single { ConditionType::SingleBracket } else { ConditionType::DoubleBracket }
+    }
+
+    fn read_cond_and_op(&mut self) -> Option<String> {
+        // && (both) or -a (word-bounded)
+        if self.peek() == Some('&') && self.peek_at(1) == Some('&') {
+            self.bump();
+            self.bump();
+            return Some("&&".to_string());
+        }
+        if self.keyword_dash("-a") {
+            self.string("-a").ok();
+            return Some("-a".to_string());
+        }
+        None
+    }
+
+    fn read_cond_or_op(&mut self) -> Option<String> {
+        if self.peek() == Some('|') && self.peek_at(1) == Some('|') {
+            self.bump();
+            self.bump();
+            return Some("||".to_string());
+        }
+        if self.keyword_dash("-o") {
+            self.string("-o").ok();
+            return Some("-o".to_string());
+        }
+        None
+    }
+
+    /// A `-x` operator token that is word-bounded (followed by whitespace).
+    fn keyword_dash(&self, s: &str) -> bool {
+        let chars: Vec<char> = s.chars().collect();
+        for (i, &c) in chars.iter().enumerate() {
+            if self.peek_at(i) != Some(c) {
+                return false;
+            }
+        }
+        matches!(self.peek_at(chars.len()), Some(' ') | Some('\t') | Some('\n') | None)
+    }
+
+    fn read_cond_term(&mut self, single: bool) -> PResult<Token> {
+        let t = if self.peek() == Some('!') && self.peek_at(1) != Some('=') {
+            self.read_cond_not(single)?
+        } else {
+            self.read_cond_expr(single)?
+        };
+        self.cond_spacing();
+        Ok(t)
+    }
+
+    fn read_cond_not(&mut self, single: bool) -> PResult<Token> {
+        let start = self.pos();
+        self.char('!')?;
+        let id = self.next_id_between(start.clone(), self.pos());
+        self.cond_spacing();
+        let expr = self.read_cond_expr(single)?;
+        let end = self.span_for(expr.id()).1;
+        let typ = self.cond_typ(single);
+        let full = self.next_id_between(start, end);
+        let _ = id;
+        Ok(Token::new(full, InnerToken::TC_Unary { typ, op: "!".to_string(), token: expr }))
+    }
+
+    fn read_cond_expr(&mut self, single: bool) -> PResult<Token> {
+        if let Ok(g) = self.read_cond_group(single) {
+            return Ok(g);
+        }
+        if let Ok(u) = self.read_cond_unary(single) {
+            return Ok(u);
+        }
+        self.read_cond_nullary_or_binary(single)
+    }
+
+    fn read_cond_group(&mut self, single: bool) -> PResult<Token> {
+        let m = self.mark();
+        let start = self.pos();
+        let opened = if single {
+            self.string("\\(").is_ok()
+        } else {
+            self.char('(').is_ok()
+        };
+        if !opened {
+            self.reset(m);
+            return Err(());
+        }
+        self.cond_spacing();
+        let inner = match self.read_cond_contents(single) {
+            Ok(c) => c,
+            Err(()) => {
+                self.reset(m);
+                return Err(());
+            }
+        };
+        let closed = if single {
+            self.string("\\)").is_ok()
+        } else {
+            self.char(')').is_ok()
+        };
+        if !closed {
+            self.reset(m);
+            return Err(());
+        }
+        self.cond_spacing();
+        let typ = self.cond_typ(single);
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::TC_Group { typ, token: inner }))
+    }
+
+    fn read_cond_unary(&mut self, single: bool) -> PResult<Token> {
+        let m = self.mark();
+        let start = self.pos();
+        let op = match self.read_cond_op_flag() {
+            Some(o) if o != "-a" && o != "-o" => o,
+            _ => {
+                self.reset(m);
+                return Err(());
+            }
+        };
+        // must be followed by spacing then a word
+        let sp = self.cond_spacing();
+        if sp.is_empty() {
+            self.reset(m);
+            return Err(());
+        }
+        match self.read_cond_word() {
+            Ok(word) => {
+                let end = self.span_for(word.id()).1;
+                let typ = self.cond_typ(single);
+                let id = self.next_id_between(start, end);
+                Ok(Token::new(id, InnerToken::TC_Unary { typ, op, token: word }))
+            }
+            Err(()) => {
+                self.reset(m);
+                Err(())
+            }
+        }
+    }
+
+    /// Read a `-` followed by letters (test operator), word-bounded.
+    fn read_cond_op_flag(&mut self) -> Option<String> {
+        if self.peek() != Some('-') {
+            return None;
+        }
+        let m = self.mark();
+        self.bump();
+        let mut s = String::from("-");
+        while let Some(c) = self.peek() {
+            if c.is_ascii_alphabetic() {
+                self.bump();
+                s.push(c);
+            } else {
+                break;
+            }
+        }
+        if s.len() < 2 {
+            self.reset(m);
+            return None;
+        }
+        Some(s)
+    }
+
+    fn read_cond_nullary_or_binary(&mut self, single: bool) -> PResult<Token> {
+        let start = self.pos();
+        let x = self.read_cond_word()?;
+        // try binary op
+        let m = self.mark();
+        if let Some(op) = self.read_cond_binary_op() {
+            self.cond_spacing();
+            match self.read_cond_word() {
+                Ok(y) => {
+                    let end = self.span_for(y.id()).1;
+                    let typ = self.cond_typ(single);
+                    let id = self.next_id_between(start, end);
+                    return Ok(Token::new(id, InnerToken::TC_Binary { typ, op, lhs: x, rhs: y }));
+                }
+                Err(()) => {
+                    self.reset(m);
+                }
+            }
+        } else {
+            self.reset(m);
+        }
+        let typ = self.cond_typ(single);
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::TC_Nullary { typ, token: x }))
+    }
+
+    fn read_cond_binary_op(&mut self) -> Option<String> {
+        // flagless (longest first), then flag ops
+        for op in ["==", "!=", "<=", ">=", "=~"] {
+            if self.string_peek(op) {
+                self.string(op).ok();
+                self.cond_spacing();
+                return Some(op.to_string());
+            }
+        }
+        for op in ["=", "<", ">"] {
+            if self.peek() == op.chars().next() {
+                self.bump();
+                self.cond_spacing();
+                return Some(op.to_string());
+            }
+        }
+        // flag binary ops: -eq -ne -lt -le -gt -ge -ef -nt -ot
+        let m = self.mark();
+        if let Some(o) = self.read_cond_op_flag() {
+            if o != "-a" && o != "-o" {
+                self.cond_spacing();
+                return Some(o);
+            }
+        }
+        self.reset(m);
+        None
+    }
+
+    fn string_peek(&self, s: &str) -> bool {
+        for (i, c) in s.chars().enumerate() {
+            if self.peek_at(i) != Some(c) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// A condition word: a normal word, not the closing bracket. Stops at
+    /// whitespace/operators/brackets like the normal word reader.
+    fn read_cond_word(&mut self) -> PResult<Token> {
+        // don't read the closing ] / ]] as a word
+        if self.peek() == Some(']') {
+            return Err(());
+        }
+        let w = self.read_normal_word()?;
+        self.cond_spacing_line();
+        Ok(w)
+    }
+
+    /// Line-spacing only (used after a cond word so we don't cross newlines
+    /// unexpectedly in `[ ]`).
+    fn cond_spacing_line(&mut self) {
+        while self.line_whitespace().is_ok() {}
     }
 }

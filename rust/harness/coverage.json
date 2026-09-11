@@ -316,8 +316,8 @@
     "2326": 1
   },
   "port": {
-    "exact_scripts": 557,
-    "exact_pct": 33.57,
+    "exact_scripts": 559,
+    "exact_pct": 33.69,
     "port_errors": 0,
     "per_code": {
       "1008": {
@@ -394,8 +394,8 @@
       },
       "2006": {
         "oracle": 19,
-        "matched": 17,
-        "missing": 2,
+        "matched": 18,
+        "missing": 1,
         "extra": 0
       },
       "2007": {
@@ -712,8 +712,8 @@
       },
       "2068": {
         "oracle": 29,
-        "matched": 25,
-        "missing": 4,
+        "matched": 29,
+        "missing": 0,
         "extra": 0
       },
       "2069": {
