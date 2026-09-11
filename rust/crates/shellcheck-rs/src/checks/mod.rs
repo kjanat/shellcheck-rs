@@ -5,7 +5,7 @@ pub mod batch_f; pub mod batch_g; pub mod batch_h; pub mod batch_i; pub mod batc
 pub mod batch_l; pub mod batch_m; pub mod batch_n;
 pub mod batch_o; pub mod batch_p; pub mod batch_q;
 pub mod batch_r; pub mod batch_s; pub mod batch_t; pub mod batch_u;
-pub mod batch_v; pub mod batch_w; pub mod batch_x;
+pub mod batch_v; pub mod batch_w; pub mod batch_x; pub mod batch_y;
 pub mod flow;
 pub fn register_all(c: &mut Checker) {
     batch_a::register(c); batch_b::register(c); batch_c::register(c); batch_d::register(c);
@@ -14,6 +14,6 @@ pub fn register_all(c: &mut Checker) {
     batch_l::register(c); batch_m::register(c); batch_n::register(c);
     batch_o::register(c); batch_p::register(c); batch_q::register(c);
     batch_r::register(c); batch_s::register(c); batch_t::register(c); batch_u::register(c);
-    batch_v::register(c); batch_w::register(c); batch_x::register(c);
+    batch_v::register(c); batch_w::register(c); batch_x::register(c); batch_y::register(c);
     flow::register(c);
 }
