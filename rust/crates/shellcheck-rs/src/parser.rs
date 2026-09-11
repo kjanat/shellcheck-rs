@@ -1387,6 +1387,8 @@ impl Parser {
                     self.read_function_def()
                 } else if self.peek() == Some('(') && self.peek_at(1) == Some('(') {
                     self.read_arithmetic_command()
+                } else if self.looks_like_posix_function() {
+                    self.read_posix_function()
                 } else {
                     Err(())
                 }
@@ -1675,6 +1677,65 @@ impl Parser {
             }
         }
         out
+    }
+
+    /// Non-consuming lookahead for a POSIX function definition:
+    /// `name` (spaces) `(` (spaces) `)`.
+    fn looks_like_posix_function(&self) -> bool {
+        let mut i = self.idx;
+        let is_start = |c: char| c.is_ascii_alphanumeric() || "_:+?-./^@,".contains(c);
+        let is_cont = |c: char| c.is_ascii_alphanumeric() || "_#:+?-./^@,".contains(c);
+        match self.input.get(i) {
+            Some(&c) if is_start(c) => i += 1,
+            _ => return false,
+        }
+        let name_start = self.idx;
+        while matches!(self.input.get(i), Some(&c) if is_cont(c)) {
+            i += 1;
+        }
+        let name: String = self.input[name_start..i].iter().collect();
+        if name == "time" {
+            return false;
+        }
+        while matches!(self.input.get(i), Some(' ') | Some('\t')) {
+            i += 1;
+        }
+        if self.input.get(i) != Some(&'(') {
+            return false;
+        }
+        i += 1;
+        while matches!(self.input.get(i), Some(' ') | Some('\t')) {
+            i += 1;
+        }
+        self.input.get(i) == Some(&')')
+    }
+
+    /// `readWithoutFunction`: `name ( )` then a brace-group or subshell body.
+    fn read_posix_function(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let name = self.read_function_name()?;
+        if name == "time" {
+            return Err(());
+        }
+        self.spacing();
+        self.char('(')?;
+        self.spacing();
+        self.char(')')?;
+        self.allspacing();
+        let body = if self.peek() == Some('{') {
+            self.read_brace_group()?
+        } else if self.peek() == Some('(') {
+            self.read_subshell()?
+        } else {
+            return Err(());
+        };
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_Function {
+            keyword: false,
+            parens: true,
+            name,
+            body,
+        }))
     }
 
     fn read_function_def(&mut self) -> PResult<Token> {
