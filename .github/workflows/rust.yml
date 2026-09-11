@@ -43,10 +43,10 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            rust/target
-          key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('rust/Cargo.lock', 'rust/**/Cargo.toml', 'rust/.cargo/**', '.github/workflows/rust.yml') }}-${{ hashFiles('rust/crates/**') }}
+            target
+          key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust/**/Cargo.toml', '.cargo/**', '.github/workflows/rust.yml') }}-${{ hashFiles('rust/crates/**') }}
           restore-keys: |
-            ${{ env.CACHE_PREFIX }}-${{ hashFiles('rust/Cargo.lock', 'rust/**/Cargo.toml', 'rust/.cargo/**', '.github/workflows/rust.yml') }}-
+            ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust/**/Cargo.toml', '.cargo/**', '.github/workflows/rust.yml') }}-
             ${{ env.CACHE_PREFIX }}-
 
       # (b) Haskell oracle — mirror build.yml's GHC/cabal setup.
@@ -109,5 +109,5 @@ jobs:
           ORACLE="${GITHUB_WORKSPACE}/.cache/shellcheck-oracle"
           echo "oracle: ${ORACLE}"
           ORACLE="${ORACLE}" \
-          PORT=rust/target/release/shellcheck-rs \
+          PORT=target/release/rshellcheck \
           python3 rust/harness/run_conformance.py --gate
