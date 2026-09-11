@@ -1990,18 +1990,18 @@ fn dom(g: &MutGraph, root: Node) -> Vec<(Node, Vec<Node>)> {
 const FLAGS_FOR_READ: &str = "sreu:n:N:i:p:a:t:";
 const FLAGS_FOR_MAPFILE: &str = "d:n:O:s:u:C:c:t";
 
-fn is_variable_start_char(c: char) -> bool {
+pub(crate) fn is_variable_start_char(c: char) -> bool {
     c == '_' || c.is_ascii_lowercase() || c.is_ascii_uppercase()
 }
-fn is_variable_char(c: char) -> bool {
+pub(crate) fn is_variable_char(c: char) -> bool {
     is_variable_start_char(c) || c.is_ascii_digit()
 }
-fn is_special_variable_char(c: char) -> bool {
+pub(crate) fn is_special_variable_char(c: char) -> bool {
     "*@#?-$!".contains(c)
 }
 
 /// `isVariableName`.
-fn is_variable_name(s: &str) -> bool {
+pub(crate) fn is_variable_name(s: &str) -> bool {
     let mut it = s.chars();
     match it.next() {
         Some(x) => is_variable_start_char(x) && it.all(is_variable_char),
@@ -2010,7 +2010,7 @@ fn is_variable_name(s: &str) -> bool {
 }
 
 /// `getLiteralStringDef def t` — non-literals contribute `def`.
-fn get_literal_string_def(t: &Token, def: &str) -> String {
+pub(crate) fn get_literal_string_def(t: &Token, def: &str) -> String {
     crate::astlib::get_literal_string_ext(t, &|_| Some(def.to_string())).unwrap_or_default()
 }
 
@@ -2032,7 +2032,7 @@ fn get_unquoted_literal(t: &Token) -> Option<String> {
 }
 
 /// `oversimplify` (faithful to ASTLib).
-fn oversimplify(t: &Token) -> Vec<String> {
+pub(crate) fn oversimplify(t: &Token) -> Vec<String> {
     use InnerToken::*;
     match &*t.inner {
         T_NormalWord(l) => {
@@ -2066,12 +2066,12 @@ fn oversimplify(t: &Token) -> Vec<String> {
     }
 }
 
-fn oversimplify_concat(t: &Token) -> String {
+pub(crate) fn oversimplify_concat(t: &Token) -> String {
     oversimplify(t).concat()
 }
 
 /// `getBracedReference`.
-fn get_braced_reference(s: &str) -> String {
+pub(crate) fn get_braced_reference(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let drop_prefix = |cs: &[char]| -> Vec<char> {
         if let Some(&c) = cs.first() {
@@ -2121,7 +2121,7 @@ fn get_braced_reference(s: &str) -> String {
 }
 
 /// `getBracedModifier`.
-fn get_braced_modifier(s: &str) -> String {
+pub(crate) fn get_braced_modifier(s: &str) -> String {
     let var = get_braced_reference(s);
     let chars: Vec<char> = s.chars().collect();
     // dropModifier: candidates in list-monad order.
@@ -2146,7 +2146,7 @@ fn variable_name_regex() -> &'static Regex {
 }
 
 /// `getIndexReferences`.
-fn get_index_references(s: &str) -> Vec<String> {
+pub(crate) fn get_index_references(s: &str) -> Vec<String> {
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"(\[.*\])").unwrap());
@@ -2160,7 +2160,7 @@ fn get_index_references(s: &str) -> Vec<String> {
 }
 
 /// `getOffsetReferences`.
-fn get_offset_references(mods: &str) -> Vec<String> {
+pub(crate) fn get_offset_references(mods: &str) -> Vec<String> {
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"^(\[.+\])? *:([^-=?+].*)").unwrap());
@@ -2299,7 +2299,7 @@ enum PseudoGlob {
     PGChar(char),
 }
 
-fn get_word_parts(t: &Token) -> Vec<Token> {
+pub(crate) fn get_word_parts(t: &Token) -> Vec<Token> {
     use InnerToken::*;
     match &*t.inner {
         T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
@@ -2395,10 +2395,10 @@ fn lookup(key: &str, flags: &[(String, (Token, Token))]) -> Option<(Token, Token
     flags.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
 }
 
-fn get_gnu_opts(spec: &str, args: &[Token]) -> Option<Vec<(String, (Token, Token))>> {
+pub(crate) fn get_gnu_opts(spec: &str, args: &[Token]) -> Option<Vec<(String, (Token, Token))>> {
     get_opts(true, false, spec, &[], args)
 }
-fn get_bsd_opts(spec: &str, args: &[Token]) -> Option<Vec<(String, (Token, Token))>> {
+pub(crate) fn get_bsd_opts(spec: &str, args: &[Token]) -> Option<Vec<(String, (Token, Token))>> {
     get_opts(false, false, spec, &[], args)
 }
 
@@ -2530,7 +2530,7 @@ fn get_opts(
 }
 
 /// `getGenericOpts`.
-fn get_generic_opts(args: &[Token]) -> Vec<(String, (Token, Token))> {
+pub(crate) fn get_generic_opts(args: &[Token]) -> Vec<(String, (Token, Token))> {
     if args.is_empty() {
         return Vec::new();
     }

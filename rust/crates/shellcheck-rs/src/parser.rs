@@ -441,7 +441,7 @@ impl Parser {
                 '\'' => self.read_single_quoted(),
                 '"' => self.read_double_quoted(),
                 '$' => self.read_normal_dollar(),
-                '`' => self.read_backticked(),
+                '`' => self.read_backticked(false),
                 // extglob start: ?*@!+ followed by '('
                 _ if "?*@!+".contains(c) && self.peek_at(1) == Some('(') => self.read_extglob(),
                 '*' | '?' | '[' => self.read_glob(),
@@ -491,7 +491,7 @@ impl Parser {
                     // literal '$'
                     parts.push(self.read_double_literal_run()?);
                 }
-                Some('`') => parts.push(self.read_backticked()?),
+                Some('`') => parts.push(self.read_backticked(true)?),
                 _ => parts.push(self.read_double_literal_run()?),
             }
         }
@@ -536,8 +536,10 @@ impl Parser {
     fn read_normal_literal(&mut self, custom_end: &str) -> PResult<Token> {
         let start = self.pos();
         let mut s = String::new();
-        // standard end: "[{}" ++ quotableChars ++ extglobStartChars ++ unicode quotes
-        let standard_end = "[{}|&;<>()\\ \t\n\r\u{A0}\"$`?*@!+";
+        // standard end: "[{}" ++ quotableChars ++ extglobStartChars ++ unicode quotes.
+        // Must include `'` so a mid-word single quote starts a T_SingleQuoted part
+        // rather than being swallowed into the literal.
+        let standard_end = "[{}|&;<>()\\ \t\n\r\u{A0}\"'$`?*@!+";
         loop {
             match self.peek() {
                 Some('\\') => {
@@ -817,10 +819,10 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_Extglob { op: op.to_string(), list: parts }))
     }
 
-    fn read_backticked(&mut self) -> PResult<Token> {
+    fn read_backticked(&mut self, quoted: bool) -> PResult<Token> {
         let start = self.pos();
         self.char('`')?;
-        // collect raw until closing backtick, then subparse
+        // collect raw until closing backtick, then unescape + subparse
         let sub_start = self.pos();
         let mut raw = String::new();
         while let Some(c) = self.peek() {
@@ -839,7 +841,10 @@ impl Parser {
             raw.push(c);
         }
         self.char('`').map_err(|_| ())?;
-        let cmds = self.subparse_commands(&raw, sub_start);
+        // `unEscape`: process backtick escapes (`\$` `` \` `` `\\`, line splices,
+        // and `\"`->`"` when inside double quotes) before sub-parsing.
+        let unescaped = unescape_backtick(&raw, quoted);
+        let cmds = self.subparse_commands(&unescaped, sub_start);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Backticked(cmds)))
     }
@@ -898,6 +903,17 @@ impl Parser {
         if self.peek() == Some('$') && self.peek_at(1) == Some('[') {
             return self.read_dollar_bracket();
         }
+        // ksh/bash `${ cmd; }` / `${| cmd; }` command expansion: `${` then a
+        // pipe or whitespace.
+        if self.peek() == Some('$')
+            && self.peek_at(1) == Some('{')
+            && matches!(self.peek_at(2), Some('|') | Some(' ') | Some('\t') | Some('\n') | Some('\r'))
+        {
+            if let Ok(t) = self.read_dollar_brace_command_expansion() {
+                return Ok(t);
+            }
+            self.reset(m);
+        }
         if self.peek() == Some('$') && self.peek_at(1) == Some('{') {
             return self.read_dollar_braced();
         }
@@ -915,6 +931,43 @@ impl Parser {
         }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_DollarArithmetic(c)))
+    }
+
+    fn read_dollar_brace_command_expansion(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        self.string("${")?;
+        let piped = if self.char('|').is_ok() {
+            Piped::Piped
+        } else {
+            // must be whitespace
+            match self.peek() {
+                Some(' ') | Some('\t') | Some('\n') | Some('\r') => {
+                    self.bump();
+                    Piped::Unpiped
+                }
+                _ => return Err(()),
+            }
+        };
+        // Extract the content up to the matching `}` (brace-depth aware).
+        let sub_start = self.pos();
+        let mut raw = String::new();
+        let mut depth = 1;
+        while let Some(c) = self.peek() {
+            if c == '{' {
+                depth += 1;
+            } else if c == '}' {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            self.bump();
+            raw.push(c);
+        }
+        self.char('}').map_err(|_| ())?;
+        let list = self.subparse_commands(&raw, sub_start);
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_DollarBraceCommandExpansion { pipe: piped, list }))
     }
 
     fn read_dollar_bracket(&mut self) -> PResult<Token> {
@@ -956,8 +1009,9 @@ impl Parser {
             raw.push(c);
         }
         self.char('}').map_err(|_| ())?;
-        // Represent the braced content as a NormalWord of a single literal for now.
-        let inner = self.make_literal_word(&raw, word_start);
+        // Parse the braced content into parts so nested expansions (e.g.
+        // `${x:+$y}`) become real child tokens and are seen by the analyses.
+        let inner = self.make_braced_word(&raw, &word_start);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_DollarBraced { braced: true, op: inner }))
     }
@@ -1065,7 +1119,7 @@ impl Parser {
                     }
                     parts.push(self.read_double_literal_run()?);
                 }
-                Some('`') => parts.push(self.read_backticked()?),
+                Some('`') => parts.push(self.read_backticked(true)?),
                 _ => parts.push(self.read_double_literal_run()?),
             }
         }
@@ -1082,6 +1136,79 @@ impl Parser {
         // that matters. Return current mark (no-op safety).
         let _ = p;
         self.mark()
+    }
+
+    /// Parse the raw content of a `${...}` into a word whose parts include any
+    /// nested expansions, single/double quotes and literal runs.
+    fn make_braced_word(&mut self, raw: &str, start: &Position) -> Token {
+        let mut sub = Parser::new(&self.filename, raw);
+        sub.line = start.line;
+        sub.col = start.column;
+        sub.next_id = self.next_id;
+        let parts = sub.read_braced_parts();
+        for (k, v) in sub.positions.iter() {
+            self.positions.insert(*k, v.clone());
+        }
+        self.notes.extend(sub.notes.drain(..));
+        self.problems.extend(sub.problems.drain(..));
+        self.next_id = sub.next_id;
+        let wid = self.next_id_between(start.clone(), self.pos());
+        Token::new(wid, InnerToken::T_NormalWord(parts))
+    }
+
+    fn read_braced_parts(&mut self) -> Vec<Token> {
+        let mut parts = Vec::new();
+        loop {
+            match self.peek() {
+                None => break,
+                Some('\'') => match self.read_single_quoted() {
+                    Ok(t) => parts.push(t),
+                    Err(()) => parts.push(self.braced_literal_char()),
+                },
+                Some('"') => match self.read_double_quoted() {
+                    Ok(t) => parts.push(t),
+                    Err(()) => parts.push(self.braced_literal_char()),
+                },
+                Some('`') => match self.read_backticked(false) {
+                    Ok(t) => parts.push(t),
+                    Err(()) => parts.push(self.braced_literal_char()),
+                },
+                Some('$') => {
+                    let m = self.mark();
+                    match self.read_normal_dollar() {
+                        Ok(t) => parts.push(t),
+                        Err(()) => {
+                            self.reset(m);
+                            parts.push(self.braced_literal_char());
+                        }
+                    }
+                }
+                Some(_) => {
+                    let start = self.pos();
+                    let mut s = String::new();
+                    while let Some(c) = self.peek() {
+                        if "$`'\"".contains(c) {
+                            break;
+                        }
+                        s.push(c);
+                        self.bump();
+                    }
+                    if s.is_empty() {
+                        break;
+                    }
+                    let id = self.next_id_between(start, self.pos());
+                    parts.push(Token::new(id, InnerToken::T_Literal(s)));
+                }
+            }
+        }
+        parts
+    }
+
+    fn braced_literal_char(&mut self) -> Token {
+        let start = self.pos();
+        let c = self.bump().unwrap_or('\0');
+        let id = self.next_id_between(start, self.pos());
+        Token::new(id, InnerToken::T_Literal(c.to_string()))
     }
 
     fn make_literal_word(&mut self, s: &str, start: Position) -> Token {
@@ -1557,7 +1684,7 @@ impl Parser {
                 Some('\'') => self.read_single_quoted(),
                 Some('"') => self.read_double_quoted(),
                 Some('$') => self.read_normal_dollar(),
-                Some('`') => self.read_backticked(),
+                Some('`') => self.read_backticked(false),
                 Some('{') => self.read_braced(),
                 Some('#') => {
                     let s = self.pos();
@@ -2103,6 +2230,9 @@ impl Parser {
     fn read_for_clause(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword("for")?;
+        // ShellCheck reuses the `for` keyword id for the whole T_ForIn/T_ForArithmetic
+        // node, so SC2034 (and others) point at `for`, not the entire loop.
+        let for_end = self.pos();
         self.spacing();
         // arithmetic for: for ((init; cond; step))
         if self.peek() == Some('(') && self.peek_at(1) == Some('(') {
@@ -2131,7 +2261,7 @@ impl Parser {
             let body = self.read_compound_list_or_empty();
             self.allspacing();
             self.consume_keyword("done")?;
-            let id = self.next_id_between(start, self.pos());
+            let id = self.next_id_between(start, for_end.clone());
             return Ok(Token::new(id, InnerToken::T_ForArithmetic { init, cond, step, body }));
         }
         let var = self.read_variable_name()?;
@@ -2159,7 +2289,7 @@ impl Parser {
         let body = self.read_compound_list_or_empty();
         self.allspacing();
         self.consume_keyword("done")?;
-        let id = self.next_id_between(start, self.pos());
+        let id = self.next_id_between(start, for_end);
         let _ = is_in;
         Ok(Token::new(id, InnerToken::T_ForIn { var, items, body }))
     }
@@ -2191,6 +2321,8 @@ impl Parser {
     fn read_select_clause(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword("select")?;
+        // ShellCheck reuses the `select` keyword id for the whole T_SelectIn node.
+        let sel_end = self.pos();
         self.spacing();
         let var = self.read_variable_name()?;
         self.spacing();
@@ -2215,7 +2347,7 @@ impl Parser {
         let body = self.read_compound_list_or_empty();
         self.allspacing();
         self.consume_keyword("done")?;
-        let id = self.next_id_between(start, self.pos());
+        let id = self.next_id_between(start, sel_end);
         Ok(Token::new(id, InnerToken::T_SelectIn { var, items, body }))
     }
 
@@ -2430,8 +2562,33 @@ impl Parser {
             return Err(());
         }
         let mut suffix = Vec::new();
-        if cmd.is_some() {
-            suffix = self.read_cmd_suffix();
+        if let Some(ref c) = cmd {
+            // Determine whether this is a modifier command whose arguments are
+            // parsed as assignments (readModifierSuffix). For `builtin`, use the
+            // first argument's name.
+            let name = Self::command_literal_name(c);
+            let effective = if name.as_deref() == Some("builtin") {
+                let m = self.mark();
+                self.spacing();
+                let peeked = self
+                    .read_normal_word()
+                    .ok()
+                    .and_then(|w| Self::command_literal_name(&w));
+                self.reset(m);
+                peeked
+            } else {
+                name
+            };
+            let is_modifier = matches!(
+                effective.as_deref(),
+                Some("declare") | Some("export") | Some("local") | Some("readonly")
+                    | Some("typeset")
+            );
+            if effective.as_deref() == Some("let") {
+                suffix = self.read_let_suffix();
+            } else {
+                suffix = self.read_cmd_suffix(is_modifier);
+            }
         }
         // assemble
         let mut all_for_span: Vec<&Token> = prefix.iter().collect();
@@ -2509,13 +2666,23 @@ impl Parser {
         }
     }
 
-    fn read_cmd_suffix(&mut self) -> Vec<Token> {
+    fn read_cmd_suffix(&mut self, modifier: bool) -> Vec<Token> {
         let mut out = Vec::new();
         loop {
             self.spacing();
             if let Ok(r) = self.read_io_redirect() {
                 out.push(r);
                 continue;
+            }
+            // Modifier commands (declare/export/local/readonly/typeset) parse
+            // well-formed assignments as T_Assignment (readModifierSuffix).
+            if modifier {
+                let am = self.mark();
+                if let Ok(a) = self.read_assignment_word() {
+                    out.push(a);
+                    continue;
+                }
+                self.reset(am);
             }
             let m = self.mark();
             match self.read_normal_word() {
@@ -2527,6 +2694,232 @@ impl Parser {
             }
         }
         out
+    }
+
+    /// `reparseIndices`: reparse each `T_UnparsedIndex` as arithmetic (indexed
+    /// arrays) or an index word (associative arrays), matching ShellCheck.
+    fn reparse_indices_root(&mut self, mut root: Token, assoc: &std::collections::HashSet<String>) -> Token {
+        self.reparse_walk(&mut root, assoc);
+        root
+    }
+
+    fn reparse_walk(&mut self, t: &mut Token, assoc: &std::collections::HashSet<String>) {
+        let name = match &*t.inner {
+            InnerToken::T_Assignment { var, .. } => Some(var.clone()),
+            InnerToken::TA_Variable { name, .. } => Some(name.clone()),
+            _ => None,
+        };
+        if let Some(name) = name {
+            let is_assoc = assoc.contains(&name);
+            let indices: Option<&mut Vec<Token>> = match &mut *t.inner {
+                InnerToken::T_Assignment { indices, .. } => Some(indices),
+                InnerToken::TA_Variable { indices, .. } => Some(indices),
+                _ => None,
+            };
+            if let Some(indices) = indices {
+                let jobs: Vec<(usize, Position, String)> = indices
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, slot)| match &*slot.inner {
+                        InnerToken::T_UnparsedIndex { pos, str } => {
+                            Some((i, pos.clone(), str.clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                for (i, pos, src) in jobs {
+                    let newtok = if is_assoc {
+                        self.sub_parse_index_word(&pos, &src)
+                    } else {
+                        self.sub_parse_arithmetic(&pos, &src)
+                    };
+                    if let Some(nt) = newtok {
+                        // Re-fetch the indices vec (borrow released after sub_parse).
+                        if let Some(slot) = match &mut *t.inner {
+                            InnerToken::T_Assignment { indices, .. } => indices.get_mut(i),
+                            InnerToken::TA_Variable { indices, .. } => indices.get_mut(i),
+                            _ => None,
+                        } {
+                            *slot = nt;
+                        }
+                    }
+                }
+            }
+            // Reparse T_IndexedElement indices inside a T_Assignment's array value,
+            // using the assignment's array name (fixIndexElement).
+            if let InnerToken::T_Assignment { value, .. } = &mut *t.inner {
+                if let InnerToken::T_Array(elems) = &mut *value.inner {
+                    for elem in elems.iter_mut() {
+                        self.reparse_indexed_element(elem, is_assoc);
+                    }
+                }
+            }
+        }
+        for c in t.inner.children_mut() {
+            self.reparse_walk(c, assoc);
+        }
+    }
+
+    fn reparse_indexed_element(&mut self, elem: &mut Token, is_assoc: bool) {
+        if let InnerToken::T_IndexedElement { indices, .. } = &*elem.inner {
+            let jobs: Vec<(usize, Position, String)> = indices
+                .iter()
+                .enumerate()
+                .filter_map(|(i, slot)| match &*slot.inner {
+                    InnerToken::T_UnparsedIndex { pos, str } => Some((i, pos.clone(), str.clone())),
+                    _ => None,
+                })
+                .collect();
+            for (i, pos, src) in jobs {
+                let newtok = if is_assoc {
+                    self.sub_parse_index_word(&pos, &src)
+                } else {
+                    self.sub_parse_arithmetic(&pos, &src)
+                };
+                if let Some(nt) = newtok {
+                    if let InnerToken::T_IndexedElement { indices, .. } = &mut *elem.inner {
+                        if let Some(slot) = indices.get_mut(i) {
+                            *slot = nt;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sub-parse `src` (starting at `pos`) as arithmetic contents, merging the
+    /// sub-parser's positions and id counter. Mirrors ShellCheck's `subParse`.
+    fn sub_parse_arithmetic(&mut self, pos: &Position, src: &str) -> Option<Token> {
+        let mut sub = Parser::new(&self.filename, src);
+        sub.line = pos.line;
+        sub.col = pos.column;
+        sub.next_id = self.next_id;
+        sub.spacing();
+        let tok = sub.read_arithmetic_contents().ok()?;
+        // require eof (readArithmeticContents <* eof)
+        sub.spacing();
+        if !sub.eof() {
+            return None;
+        }
+        for (k, v) in sub.positions.iter() {
+            self.positions.insert(*k, v.clone());
+        }
+        self.next_id = sub.next_id;
+        Some(tok)
+    }
+
+    /// Sub-parse `src` (at `pos`) as an associative-array index word.
+    fn sub_parse_index_word(&mut self, pos: &Position, src: &str) -> Option<Token> {
+        let mut sub = Parser::new(&self.filename, src);
+        sub.line = pos.line;
+        sub.col = pos.column;
+        sub.next_id = self.next_id;
+        let tok = sub.read_normal_word().ok();
+        let tok = tok.unwrap_or_else(|| sub.empty_literal_word());
+        for (k, v) in sub.positions.iter() {
+            self.positions.insert(*k, v.clone());
+        }
+        self.next_id = sub.next_id;
+        Some(tok)
+    }
+
+    /// Read one raw `let` argument word (tracking quotes), returning the raw
+    /// text and its start position. Mirrors `readStringForParser readCmdWord`.
+    fn read_let_arg_raw(&mut self) -> Option<(String, Position)> {
+        let start = self.pos();
+        let mut raw = String::new();
+        let mut in_single = false;
+        let mut in_double = false;
+        while let Some(c) = self.peek() {
+            if in_single {
+                raw.push(c);
+                self.bump();
+                if c == '\'' {
+                    in_single = false;
+                }
+                continue;
+            }
+            if in_double {
+                raw.push(c);
+                self.bump();
+                if c == '"' {
+                    in_double = false;
+                }
+                continue;
+            }
+            match c {
+                ' ' | '\t' | '\n' | '\r' | ';' | '&' | '|' | ')' => break,
+                '\'' => {
+                    in_single = true;
+                    raw.push(c);
+                    self.bump();
+                }
+                '"' => {
+                    in_double = true;
+                    raw.push(c);
+                    self.bump();
+                }
+                _ => {
+                    raw.push(c);
+                    self.bump();
+                }
+            }
+        }
+        if raw.is_empty() {
+            None
+        } else {
+            Some((raw, start))
+        }
+    }
+
+    /// `readLetSuffix`: parse `let` arguments as arithmetic expressions.
+    fn read_let_suffix(&mut self) -> Vec<Token> {
+        let mut out = Vec::new();
+        loop {
+            self.spacing();
+            if let Ok(r) = self.read_io_redirect() {
+                out.push(r);
+                continue;
+            }
+            let m = self.mark();
+            if let Some((raw, start)) = self.read_let_arg_raw() {
+                // kludgeAwayQuotes: strip matching surrounding quotes.
+                let chars: Vec<char> = raw.chars().collect();
+                let (unquoted, adj_pos) = if chars.len() >= 2
+                    && (chars[0] == '\'' || chars[0] == '"')
+                    && chars[0] == chars[chars.len() - 1]
+                {
+                    let mut p = start.clone();
+                    p.column += 1;
+                    (chars[1..chars.len() - 1].iter().collect::<String>(), p)
+                } else {
+                    (raw.clone(), start.clone())
+                };
+                if let Some(tok) = self.sub_parse_arithmetic(&adj_pos, &unquoted) {
+                    out.push(tok);
+                    continue;
+                }
+            }
+            // Fall back to a normal word.
+            self.reset(m);
+            match self.read_normal_word() {
+                Ok(w) => out.push(w),
+                Err(()) => break,
+            }
+        }
+        out
+    }
+
+    /// The single-literal command name of a T_NormalWord, if any.
+    fn command_literal_name(t: &Token) -> Option<String> {
+        if let InnerToken::T_NormalWord(parts) = &*t.inner {
+            if parts.len() == 1 {
+                if let InnerToken::T_Literal(s) = &*parts[0].inner {
+                    return Some(s.clone());
+                }
+            }
+        }
+        None
     }
 
     fn read_assignment_word(&mut self) -> PResult<Token> {
@@ -2551,6 +2944,10 @@ impl Parser {
             let idx_id = self.next_id_between(istart, self.pos());
             indices.push(Token::new(idx_id, InnerToken::T_UnparsedIndex { pos, str: raw }));
         }
+        // The T_Assignment span ends here (variable name + indices), before the
+        // `=` — matching ShellCheck's `id <- endSpan start` placement, so that
+        // SC2034 etc. point at the variable name rather than the whole word.
+        let op_start = self.pos();
         // += or =
         let mode = if self.string("+=").is_ok() {
             AssignmentMode::Append
@@ -2573,7 +2970,7 @@ impl Parser {
                 }
             }
         };
-        let id = self.next_id_between(start, self.pos());
+        let id = self.next_id_between(start, op_start);
         Ok(Token::new(id, InnerToken::T_Assignment { mode, var: name, indices, value }))
     }
 
@@ -2593,6 +2990,46 @@ impl Parser {
             self.allspacing();
             if self.peek() == Some(')') || self.peek().is_none() {
                 break;
+            }
+            // readIndexed: `[idx]...=value` -> T_IndexedElement
+            if self.peek() == Some('[') {
+                let em = self.mark();
+                let estart = self.pos();
+                let mut indices = Vec::new();
+                while self.peek() == Some('[') {
+                    let istart = self.pos();
+                    self.bump();
+                    let pos = self.pos();
+                    let mut raw = String::new();
+                    let mut depth = 1;
+                    while let Some(c) = self.peek() {
+                        if c == '[' {
+                            depth += 1;
+                        } else if c == ']' {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        self.bump();
+                        raw.push(c);
+                    }
+                    if self.char(']').is_err() {
+                        break;
+                    }
+                    let idx_id = self.next_id_between(istart, self.pos());
+                    indices.push(Token::new(idx_id, InnerToken::T_UnparsedIndex { pos, str: raw }));
+                }
+                if !indices.is_empty() && self.char('=').is_ok() {
+                    let value = match self.read_normal_word() {
+                        Ok(w) => w,
+                        Err(()) => self.empty_literal_word(),
+                    };
+                    let eid = self.next_id_between(estart, self.pos());
+                    elems.push(Token::new(eid, InnerToken::T_IndexedElement { indices, value }));
+                    continue;
+                }
+                self.reset(em);
             }
             match self.read_normal_word() {
                 Ok(w) => elems.push(w),
@@ -2631,6 +3068,36 @@ impl Parser {
                 break;
             }
         }
+        // `{varname}` file-descriptor variable, only when directly followed by a
+        // redirection operator (otherwise it's a brace group / word).
+        if fd.is_empty() && self.peek() == Some('{') {
+            let fdmark = self.mark();
+            self.bump(); // {
+            let mut name = String::new();
+            if let Some(c) = self.peek() {
+                if c == '_' || c.is_ascii_alphabetic() {
+                    name.push(c);
+                    self.bump();
+                    while let Some(c) = self.peek() {
+                        if c == '_' || c.is_ascii_alphanumeric() {
+                            name.push(c);
+                            self.bump();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            let ok = !name.is_empty()
+                && self.peek() == Some('}')
+                && matches!(self.peek_at(1), Some('<') | Some('>'));
+            if ok {
+                self.bump(); // }
+                fd = format!("{{{}}}", name);
+            } else {
+                self.reset(fdmark);
+            }
+        }
         // heredoc
         if self.peek() == Some('<') && self.peek_at(1) == Some('<') {
             return self.read_heredoc_or_herestring(start, fd);
@@ -2639,21 +3106,46 @@ impl Parser {
         if (self.peek() == Some('<') || self.peek() == Some('>')) && self.peek_at(1) == Some('&') {
             let opc = self.bump().unwrap();
             self.bump(); // &
+            // `digitsAndOrDash`: digits then optional `-`, or a required `-` when
+            // there are no digits. If neither, this is NOT a duplicate but a
+            // `>& file` / `<& file` redirect (readIoDuplicate `try` fails).
             let mut num = String::new();
             while let Some(c) = self.peek() {
-                if c.is_ascii_digit() || c == '-' {
+                if c.is_ascii_digit() {
                     num.push(c);
                     self.bump();
                 } else {
                     break;
                 }
             }
+            if self.peek() == Some('-') {
+                num.push('-');
+                self.bump();
+            }
             let opid = self.next_id_between(start.clone(), self.pos());
-            let op_tok = Token::new(opid, if opc == '<' { InnerToken::T_LESSAND } else { InnerToken::T_GREATAND });
-            let dup_id = self.next_id_between(start.clone(), self.pos());
-            let dup = Token::new(dup_id, InnerToken::T_IoDuplicate { op: op_tok, num });
+            let op_tok = Token::new(
+                opid,
+                if opc == '<' { InnerToken::T_LESSAND } else { InnerToken::T_GREATAND },
+            );
+            if !num.is_empty() {
+                let dup_id = self.next_id_between(start.clone(), self.pos());
+                let dup = Token::new(dup_id, InnerToken::T_IoDuplicate { op: op_tok, num });
+                let id = self.next_id_between(start, self.pos());
+                return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: dup }));
+            }
+            // `>& file` / `<& file`: a file redirect to the following word.
+            self.spacing();
+            let file = match self.read_normal_word() {
+                Ok(w) => w,
+                Err(()) => {
+                    self.reset(m);
+                    return Err(());
+                }
+            };
+            let iofile_id = self.next_id_between(start.clone(), self.pos());
+            let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
             let id = self.next_id_between(start, self.pos());
-            return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: dup }));
+            return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: iofile }));
         }
         // file redirect operators
         let op = self.read_io_file_op(start.clone());
@@ -2841,10 +3333,109 @@ pub fn parse_script(filename: &str, script: &str) -> ParseOutput {
     let root = p.read_script_file();
     // Reattach here-doc bodies collected during parsing.
     let root = root.map(|r| reattach_heredocs(r, &p.heredoc_bodies));
+    // Reparse array indices as arithmetic / index words (reparseIndices).
+    let root = root.map(|r| {
+        let assoc = get_associative_arrays(&r);
+        p.reparse_indices_root(r, &assoc)
+    });
     // Parse succeeded (we always return a tree in the slice); emit notes+problems.
     let mut notes = p.problems.clone();
     notes.extend(p.notes.clone());
     ParseOutput { root, notes, positions: p.positions }
+}
+
+/// `getAssociativeArrays`: names declared with `declare/local/typeset -A`.
+fn get_associative_arrays(root: &Token) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    root.visit_preorder(&mut |t| {
+        if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
+            if words.is_empty() {
+                return;
+            }
+            let name = match &*words[0].inner {
+                InnerToken::T_NormalWord(parts) if parts.len() == 1 => match &*parts[0].inner {
+                    InnerToken::T_Literal(s) => Some(s.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if !matches!(name.as_deref(), Some("declare") | Some("local") | Some("typeset")) {
+                return;
+            }
+            let args = &words[1..];
+            // Collect flag chars (getAllFlags).
+            let mut has_a = false;
+            for a in args {
+                if let Some(s) = crate::astlib::get_literal_string(a) {
+                    if let Some(rest) = s.strip_prefix("--") {
+                        let _ = rest;
+                    } else if let Some(chars) = s.strip_prefix('-') {
+                        if chars.contains('A') {
+                            has_a = true;
+                        }
+                    }
+                }
+            }
+            if !has_a {
+                return;
+            }
+            for a in args {
+                // non-flag args only
+                let lit = crate::astlib::get_literal_string(a);
+                if let Some(ref s) = lit {
+                    if s.starts_with('-') {
+                        continue;
+                    }
+                }
+                match &*a.inner {
+                    InnerToken::T_Assignment { var, .. } => {
+                        out.insert(var.clone());
+                    }
+                    _ => {
+                        if let Some(s) = lit {
+                            out.insert(s);
+                        }
+                    }
+                }
+            }
+        }
+    });
+    out
+}
+
+/// `unEscape` from `readBackTicked`: process backslash escapes in backtick
+/// command-substitution content before sub-parsing.
+fn unescape_backtick(raw: &str, quoted: bool) -> String {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' && i + 1 < chars.len() {
+            let x = chars[i + 1];
+            if quoted && x == '"' {
+                out.push('"');
+                i += 2;
+                continue;
+            }
+            if x == '$' || x == '`' || x == '\\' {
+                out.push(x);
+                i += 2;
+                continue;
+            }
+            if x == '\n' {
+                i += 2;
+                continue;
+            }
+            // Other escapes keep the backslash (process the next char normally).
+            out.push('\\');
+            i += 1;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
 }
 
 fn reattach_heredocs(t: Token, bodies: &BTreeMap<Id, Vec<Token>>) -> Token {

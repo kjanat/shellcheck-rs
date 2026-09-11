@@ -363,6 +363,143 @@ impl InnerToken {
     }
 }
 
+impl InnerToken {
+    /// Mutable immediate child tokens, in the same order as [`children`].
+    pub fn children_mut(&mut self) -> Vec<&mut Token> {
+        use InnerToken::*;
+        let mut out: Vec<&mut Token> = Vec::new();
+        match self {
+            TA_Binary { lhs, rhs, .. } | TA_Assignment { lhs, rhs, .. } => {
+                out.push(lhs);
+                out.push(rhs);
+            }
+            TA_Variable { indices, .. } => out.extend(indices.iter_mut()),
+            TA_Expansion(l) | TA_Sequence(l) => out.extend(l.iter_mut()),
+            TA_Parenthesis(t) => out.push(t),
+            TA_Trinary { cond, then, els } => {
+                out.push(cond);
+                out.push(then);
+                out.push(els);
+            }
+            TA_Unary { operand, .. } => out.push(operand),
+            TC_And { lhs, rhs, .. } | TC_Binary { lhs, rhs, .. } | TC_Or { lhs, rhs, .. } => {
+                out.push(lhs);
+                out.push(rhs);
+            }
+            TC_Group { token, .. } | TC_Nullary { token, .. } | TC_Unary { token, .. } => {
+                out.push(token)
+            }
+            TC_Empty { .. } => {}
+            T_AndIf { lhs, rhs } | T_OrIf { lhs, rhs } => {
+                out.push(lhs);
+                out.push(rhs);
+            }
+            T_Arithmetic(t)
+            | T_Backgrounded(t)
+            | T_Banged(t)
+            | T_DollarArithmetic(t)
+            | T_DollarBracket(t)
+            | T_HereString(t)
+            | T_CoProcBody(t)
+            | T_Include(t) => out.push(t),
+            T_Array(l)
+            | T_Backticked(l)
+            | T_BraceExpansion(l)
+            | T_BraceGroup(l)
+            | T_DollarDoubleQuoted(l)
+            | T_DollarExpansion(l)
+            | T_DoubleQuoted(l)
+            | T_NormalWord(l)
+            | T_Subshell(l) => out.extend(l.iter_mut()),
+            T_IndexedElement { indices, value } => {
+                out.extend(indices.iter_mut());
+                out.push(value);
+            }
+            T_Assignment { indices, value, .. } => {
+                out.extend(indices.iter_mut());
+                out.push(value);
+            }
+            T_CaseExpression { word, cases } => {
+                out.push(word);
+                for (_, pats, body) in cases {
+                    out.extend(pats.iter_mut());
+                    out.extend(body.iter_mut());
+                }
+            }
+            T_Condition { token, .. } => out.push(token),
+            T_DollarBraced { op, .. } => out.push(op),
+            T_DollarBraceCommandExpansion { list, .. } => out.extend(list.iter_mut()),
+            T_Extglob { list, .. } => out.extend(list.iter_mut()),
+            T_FdRedirect { target, .. } => out.push(target),
+            T_ForArithmetic { init, cond, step, body } => {
+                out.push(init);
+                out.push(cond);
+                out.push(step);
+                out.extend(body.iter_mut());
+            }
+            T_ForIn { items, body, .. } | T_SelectIn { items, body, .. } => {
+                out.extend(items.iter_mut());
+                out.extend(body.iter_mut());
+            }
+            T_Function { body, .. } => out.push(body),
+            T_HereDoc { body, .. } => out.extend(body.iter_mut()),
+            T_IfExpression { clauses, elses } => {
+                for (cond, body) in clauses {
+                    out.extend(cond.iter_mut());
+                    out.extend(body.iter_mut());
+                }
+                out.extend(elses.iter_mut());
+            }
+            T_IoFile { op, file } => {
+                out.push(op);
+                out.push(file);
+            }
+            T_IoDuplicate { op, .. } => out.push(op),
+            T_Pipeline { separators, commands } => {
+                out.extend(separators.iter_mut());
+                out.extend(commands.iter_mut());
+            }
+            T_ProcSub { list, .. } => out.extend(list.iter_mut()),
+            T_Redirecting { redirs, cmd } => {
+                out.extend(redirs.iter_mut());
+                out.push(cmd);
+            }
+            T_Script { shebang, commands } => {
+                out.push(shebang);
+                out.extend(commands.iter_mut());
+            }
+            T_SimpleCommand { assignments, words } => {
+                out.extend(assignments.iter_mut());
+                out.extend(words.iter_mut());
+            }
+            T_UntilExpression { condition, body } | T_WhileExpression { condition, body } => {
+                out.extend(condition.iter_mut());
+                out.extend(body.iter_mut());
+            }
+            T_Annotation { token, .. } => out.push(token),
+            T_CoProc { name, body } => {
+                if let Some(n) = name {
+                    out.push(n);
+                }
+                out.push(body);
+            }
+            T_SourceCommand { includer, included } => {
+                out.push(includer);
+                out.push(included);
+            }
+            T_BatsTest { body, .. } => out.push(body),
+            T_AND_IF | T_Bang | T_Case | T_CLOBBER | T_DGREAT | T_DLESS | T_DLESSDASH
+            | T_DSEMI | T_Do | T_DollarSingleQuoted(_) | T_Done | T_Elif | T_Else | T_EOF
+            | T_Esac | T_Fi | T_For | T_Glob(_) | T_GREATAND | T_Greater | T_If | T_In
+            | T_Lbrace | T_Less | T_LESSAND | T_LESSGREAT | T_Literal(_) | T_Lparen
+            | T_NEWLINE | T_OR_IF | T_ParamSubSpecialChar(_) | T_Pipe(_) | T_Rbrace
+            | T_Rparen | T_Select | T_Semi | T_SingleQuoted(_) | T_Then | T_UnparsedIndex { .. }
+            | T_Until | T_While => {}
+        }
+        out
+    }
+}
+
 impl Token {
     /// Immediate children of this token.
     pub fn children(&self) -> Vec<&Token> {
