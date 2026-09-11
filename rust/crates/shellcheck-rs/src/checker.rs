@@ -19,11 +19,12 @@ pub fn check_script(spec: &CheckSpec) -> CheckResult {
 
     // Analysis comments (SC2xxx/SC3xxx): resolved from ids via the position map.
     if let Some(root) = parse.root.clone() {
-        let params = analyzer_lib::make_parameters(
+        let params = analyzer_lib::make_parameters_ext(
             root,
             parse.positions.clone(),
             spec.shell_type_override,
             shell_from_filename(&spec.filename),
+            spec.extended_analysis,
         );
         let analysis = analytics::analyze(&params);
         for tc in analysis {

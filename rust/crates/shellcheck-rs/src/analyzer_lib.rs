@@ -352,6 +352,20 @@ pub fn make_parameters(
     shell_override: Option<Shell>,
     fallback_shell: Option<Shell>,
 ) -> Parameters {
+    make_parameters_ext(root, token_positions, shell_override, fallback_shell, None)
+}
+
+/// Like [`make_parameters`] but with an explicit extended-analysis override from
+/// the `CheckSpec` (`--extended-analysis` / rc `extended-analysis=`). The
+/// override takes precedence over any inline directive, matching the Haskell
+/// `AnalyzerLib`: `fromMaybe True $ msum [asExtendedAnalysis spec, directive]`.
+pub fn make_parameters_ext(
+    root: Token,
+    token_positions: PositionMap,
+    shell_override: Option<Shell>,
+    fallback_shell: Option<Shell>,
+    extended_analysis_override: Option<bool>,
+) -> Parameters {
     let shell = shell_override.unwrap_or_else(|| determine_shell(fallback_shell, &root));
     let shell_type_specified = shell_override.is_some() || fallback_shell.is_some();
     let (parent_map, id_map) = build_maps(&root);
@@ -367,9 +381,12 @@ pub fn make_parameters(
     // Linear variable-flow analysis (does not depend on itself or the CFG).
     let variable_flow = get_variable_flow(&parent_map, &id_map, shell, has_lastpipe, &root);
 
-    // Control Flow Graph data-flow analysis, gated on extended analysis
-    // (default True; honours a `# shellcheck extended-analysis=...` directive).
-    let extended_analysis = get_extended_analysis_directive(&root).unwrap_or(true);
+    // Control Flow Graph data-flow analysis, gated on extended analysis. The
+    // spec override (CLI/rc) wins over a `# shellcheck extended-analysis=...`
+    // directive, which wins over the default True (Haskell `msum`).
+    let extended_analysis = extended_analysis_override
+        .or_else(|| get_extended_analysis_directive(&root))
+        .unwrap_or(true);
     let cfg_analysis = if extended_analysis {
         let cf_params = CFGParameters {
             cf_lastpipe: has_lastpipe,
