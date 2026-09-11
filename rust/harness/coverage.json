@@ -316,8 +316,8 @@
     "2326": 1
   },
   "port": {
-    "exact_scripts": 543,
-    "exact_pct": 32.73,
+    "exact_scripts": 557,
+    "exact_pct": 33.57,
     "port_errors": 0,
     "per_code": {
       "1008": {
@@ -342,7 +342,7 @@
         "oracle": 0,
         "matched": 0,
         "missing": 0,
-        "extra": 138
+        "extra": 133
       },
       "1091": {
         "oracle": 5,
@@ -352,9 +352,9 @@
       },
       "1107": {
         "oracle": 1,
-        "matched": 0,
-        "missing": 1,
-        "extra": 1
+        "matched": 1,
+        "missing": 0,
+        "extra": 0
       },
       "1127": {
         "oracle": 1,
@@ -394,9 +394,9 @@
       },
       "2006": {
         "oracle": 19,
-        "matched": 13,
-        "missing": 6,
-        "extra": 4
+        "matched": 17,
+        "missing": 2,
+        "extra": 0
       },
       "2007": {
         "oracle": 2,
@@ -538,8 +538,8 @@
       },
       "2035": {
         "oracle": 18,
-        "matched": 0,
-        "missing": 18,
+        "matched": 18,
+        "missing": 0,
         "extra": 0
       },
       "2036": {
@@ -2556,22 +2556,6 @@
       "extra": []
     },
     {
-      "id": "prop_checkUuoc2",
-      "missing": [
-        [
-          1,
-          5,
-          1,
-          6,
-          "info",
-          2035,
-          "Use ./*glob* or -- *glob* so names with dashes won't become options.",
-          null
-        ]
-      ],
-      "extra": []
-    },
-    {
       "id": "prop_checkUuoc3",
       "missing": [
         [
@@ -2772,33 +2756,6 @@
         ]
       ],
       "extra": []
-    },
-    {
-      "id": "prop_checkShebang10",
-      "missing": [
-        [
-          2,
-          23,
-          2,
-          23,
-          "warning",
-          1107,
-          "This directive is unknown. It will be ignored.",
-          null
-        ]
-      ],
-      "extra": [
-        [
-          2,
-          30,
-          2,
-          30,
-          "warning",
-          1107,
-          "This directive is unknown. It will be ignored.",
-          null
-        ]
-      ]
     },
     {
       "id": "prop_checkShebang16",
@@ -3196,68 +3153,9 @@
           2013,
           "To read lines rather than words, pipe/redirect to a 'while read' loop.",
           null
-        ],
-        [
-          1,
-          10,
-          1,
-          19,
-          "style",
-          2006,
-          "Use $(...) notation instead of legacy backticks `...`.",
-          [
-            [
-              1,
-              10,
-              1,
-              11,
-              "afterEnd",
-              7,
-              "$("
-            ],
-            [
-              1,
-              18,
-              1,
-              19,
-              "beforeStart",
-              7,
-              ")"
-            ]
-          ]
         ]
       ],
-      "extra": [
-        [
-          1,
-          10,
-          1,
-          19,
-          "style",
-          2006,
-          "Use $(...) notation instead of legacy backticks `...`.",
-          [
-            [
-              1,
-              10,
-              1,
-              11,
-              "afterEnd",
-              6,
-              "$("
-            ],
-            [
-              1,
-              18,
-              1,
-              19,
-              "beforeStart",
-              6,
-              ")"
-            ]
-          ]
-        ]
-      ]
+      "extra": []
     },
     {
       "id": "prop_checkForInCat2",
@@ -3307,68 +3205,51 @@
           2013,
           "To read lines rather than words, pipe/redirect to a 'while read' loop.",
           null
+        ]
+      ],
+      "extra": []
+    },
+    {
+      "id": "prop_checkForInCat3",
+      "missing": [
+        [
+          1,
+          1,
+          1,
+          4,
+          "warning",
+          2034,
+          "f appears unused. Verify use (or export if used externally).",
+          null
         ],
         [
           1,
-          10,
+          22,
           1,
           30,
           "style",
-          2006,
-          "Use $(...) notation instead of legacy backticks `...`.",
-          [
-            [
-              1,
-              10,
-              1,
-              11,
-              "afterEnd",
-              7,
-              "$("
-            ],
-            [
-              1,
-              29,
-              1,
-              30,
-              "beforeStart",
-              7,
-              ")"
-            ]
-          ]
+          2126,
+          "Consider using 'grep -c' instead of 'grep|wc -l'.",
+          null
         ]
       ],
-      "extra": [
+      "extra": []
+    },
+    {
+      "id": "prop_checkFindExec1",
+      "missing": [
         [
           1,
-          10,
+          31,
           1,
-          30,
-          "style",
-          2006,
-          "Use $(...) notation instead of legacy backticks `...`.",
-          [
-            [
-              1,
-              10,
-              1,
-              11,
-              "afterEnd",
-              6,
-              "$("
-            ],
-            [
-              1,
-              29,
-              1,
-              30,
-              "beforeStart",
-              6,
-              ")"
-            ]
-          ]
+          33,
+          "error",
+          2067,
+          "Missing ';' or + terminating -exec. You can't use |/||/&&, and ';' has to be a separate, quoted argument.",
+          null
         ]
-      ]
+      ],
+      "extra": []
     }
   ]
 }

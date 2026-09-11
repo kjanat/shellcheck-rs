@@ -1061,13 +1061,14 @@ impl Parser {
     }
 
     /// Subparse a fragment as a compound list, in a nested parser sharing the id
-    /// space and position/note collections. Positions are offset by `start`.
-    fn subparse_commands(&mut self, raw: &str, _start: Position) -> Vec<Token> {
-        // For fidelity we parse the fragment with a fresh sub-parser but continue
-        // id numbering and merge positions/notes. Line/col offsetting is
-        // approximate for now (positions inside command substitutions are refined
-        // later); most checks key off structure, not inner-substitution columns.
+    /// space and position/note collections. The sub-parser starts at `start`'s
+    /// absolute line/column so inner-token positions are correct in the original
+    /// script (the raw text is a verbatim, offset-preserving substring for
+    /// `$(...)`, `<(...)` and backticks).
+    fn subparse_commands(&mut self, raw: &str, start: Position) -> Vec<Token> {
         let mut sub = Parser::new(&self.filename, raw);
+        sub.line = start.line;
+        sub.col = start.column;
         sub.next_id = self.next_id;
         let cmds = sub.read_compound_list_or_empty();
         // merge
@@ -1390,16 +1391,15 @@ impl Parser {
         };
         match cmd {
             Ok(t) => {
-                // compound commands may carry redirections
+                // Every compound command is wrapped in T_Redirecting (with a
+                // possibly-empty redirect list), exactly as ShellCheck's
+                // readCompoundCommand. This keeps parent-path depth (and thus
+                // fix precedence) identical to the oracle.
                 let redirs = self.read_redirect_list();
-                if redirs.is_empty() {
-                    Ok(t)
-                } else {
-                    let (s, _) = self.span_for(t.id());
-                    let e = self.pos();
-                    let id = self.next_id_between(s, e);
-                    Ok(Token::new(id, InnerToken::T_Redirecting { redirs, cmd: t }))
-                }
+                let (s, _) = self.span_for(t.id());
+                let e = self.pos();
+                let id = self.next_id_between(s, e);
+                Ok(Token::new(id, InnerToken::T_Redirecting { redirs, cmd: t }))
             }
             Err(()) => {
                 self.reset(m);
@@ -1630,46 +1630,48 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_CaseExpression { word, cases }))
     }
 
+    /// True at a case-clause terminator: `;;`, `;&`, or `;;&`.
+    fn at_case_terminator(&self) -> bool {
+        self.peek() == Some(';') && matches!(self.peek_at(1), Some(';') | Some('&'))
+    }
+
     fn read_case_body(&mut self) -> Vec<Token> {
-        // read a compound list until ;; / ;& / ;;& / esac
+        // A compound list, stopping at a clause terminator (;;/;&/;;&) or esac.
+        // A plain `;` (not part of a terminator) is a statement separator.
         self.allspacing();
-        if self.keyword_ahead("esac") || self.peek() == Some(';') {
+        if self.keyword_ahead("esac") || self.at_case_terminator() {
             return Vec::new();
         }
-        match self.read_and_or() {
-            Ok(first) => {
-                // read term-more but stop at ;;
-                let mut out = vec![first];
-                loop {
-                    let m = self.mark();
-                    self.spacing();
-                    if self.peek() == Some(';') {
-                        self.reset(m);
-                        break;
-                    }
-                    if let Some((sep, (s, e))) = self.read_separator() {
-                        let _ = sep;
-                        let _ = (s, e);
-                        self.allspacing();
-                        if self.peek() == Some(';') || self.keyword_ahead("esac") {
-                            break;
-                        }
-                        match self.read_and_or() {
-                            Ok(n) => out.push(n),
-                            Err(()) => {
-                                self.reset(m);
-                                break;
-                            }
-                        }
-                    } else {
+        let first = match self.read_and_or() {
+            Ok(f) => f,
+            Err(()) => return Vec::new(),
+        };
+        let mut out = vec![first];
+        loop {
+            let m = self.mark();
+            self.spacing();
+            if self.at_case_terminator() {
+                self.reset(m);
+                break;
+            }
+            if self.read_separator().is_some() {
+                self.allspacing();
+                if self.at_case_terminator() || self.keyword_ahead("esac") {
+                    break;
+                }
+                match self.read_and_or() {
+                    Ok(n) => out.push(n),
+                    Err(()) => {
                         self.reset(m);
                         break;
                     }
                 }
-                out
+            } else {
+                self.reset(m);
+                break;
             }
-            Err(()) => Vec::new(),
         }
+        out
     }
 
     fn read_function_def(&mut self) -> PResult<Token> {
@@ -2287,6 +2289,7 @@ impl Parser {
                 }
                 _ => {}
             }
+            let key_pos = self.pos();
             let key = self.read_annotation_key_name();
             if key.is_empty() {
                 // not a key=value; skip rest of line
@@ -2302,7 +2305,7 @@ impl Parser {
                 // malformed; stop
                 break;
             }
-            let mut anns = self.read_annotation_value(&key);
+            let mut anns = self.read_annotation_value(&key, key_pos);
             out.append(&mut anns);
             while self.line_whitespace().is_ok() {}
         }
@@ -2356,7 +2359,7 @@ impl Parser {
         }
     }
 
-    fn read_annotation_value(&mut self, key: &str) -> Vec<Annotation> {
+    fn read_annotation_value(&mut self, key: &str, key_pos: Position) -> Vec<Annotation> {
         match key {
             "disable" => {
                 let raw = self.read_annotation_raw_value();
@@ -2405,9 +2408,8 @@ impl Parser {
                 }
             }
             _ => {
-                let pos = self.pos();
                 let _ = self.read_annotation_raw_value();
-                self.note_at(pos.clone(), pos, Severity::WarningC, 1107,
+                self.note_at(key_pos.clone(), key_pos, Severity::WarningC, 1107,
                     "This directive is unknown. It will be ignored.");
                 Vec::new()
             }

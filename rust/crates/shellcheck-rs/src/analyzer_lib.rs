@@ -27,6 +27,7 @@ pub struct Parameters {
     pub has_set_e: bool,
     pub has_pipefail: bool,
     pub has_lastpipe: bool,
+    pub has_noglob: bool,
 }
 
 impl Parameters {
@@ -252,6 +253,34 @@ pub fn is_option_set(opt: &str, root: &Token) -> bool {
     found
 }
 
+/// `containsNoglob`: script has `set -f` / `set -o noglob` anywhere.
+pub fn contains_noglob(root: &Token) -> bool {
+    let mut found = false;
+    root.visit_preorder(&mut |t| {
+        if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
+            let lits: Vec<String> = words.iter().filter_map(astlib::get_literal_string).collect();
+            if lits.first().map(|s| s == "set").unwrap_or(false) {
+                let mut it = lits.iter().skip(1).peekable();
+                while let Some(w) = it.next() {
+                    // set -f, set -fx, set -ef, etc. (single-dash flag containing 'f')
+                    if w.starts_with('-') && !w.starts_with("--") && w[1..].contains('f') {
+                        found = true;
+                    }
+                    // set -o noglob
+                    if w == "-o" {
+                        if let Some(next) = it.peek() {
+                            if next.as_str() == "noglob" {
+                                found = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    found
+}
+
 /// `containsSetE` (approximate): script has `set -e` / `set -o errexit`.
 pub fn contains_set_e(root: &Token) -> bool {
     let mut found = false;
@@ -281,6 +310,7 @@ pub fn make_parameters(
     let shell_type_specified = shell_override.is_some() || fallback_shell.is_some();
     let (parent_map, id_map) = build_maps(&root);
     let has_set_e = contains_set_e(&root);
+    let has_noglob = contains_noglob(&root);
     let has_pipefail = is_option_set("pipefail", &root);
     let has_lastpipe = match shell {
         Shell::Bash => is_option_set("lastpipe", &root),
@@ -297,6 +327,7 @@ pub fn make_parameters(
         has_set_e,
         has_pipefail,
         has_lastpipe,
+        has_noglob,
     }
 }
 

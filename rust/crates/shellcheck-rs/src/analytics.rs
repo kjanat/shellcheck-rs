@@ -13,8 +13,45 @@ pub fn checker() -> Checker {
     c.tree(check_shebang);
     c.node(check_for_in_quoted);
     c.node(check_backticks);
+    c.node(check_globs_as_options);
     crate::checks::register_all(&mut c);
     c
+}
+
+/// `checkGlobsAsOptions` (SC2035): a leading `*`/`?` glob argument can be
+/// mistaken for options; suggest `./*` or `-- *`.
+fn check_globs_as_options(params: &Parameters, t: &Token, out: &mut Out) {
+    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
+        let base = command_basename(words);
+        if matches!(base.as_deref(), Some("echo") | Some("printf")) || params.has_noglob {
+            return;
+        }
+        for w in words.iter().skip(1) {
+            // stop at end-of-args markers
+            if let Some(lit) = astlib::get_literal_string(w) {
+                if lit == "--" || lit == ":::" || lit == "::::" {
+                    break;
+                }
+            }
+            if let InnerToken::T_NormalWord(parts) = &*w.inner {
+                if let Some(first) = parts.first() {
+                    if let InnerToken::T_Glob(s) = &*first.inner {
+                        if s == "*" || s == "?" {
+                            info(out, first.id(), 2035,
+                                "Use ./*glob* or -- *glob* so names with dashes won't become options.");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Basename of a simple command's command word (first word), if literal.
+fn command_basename(words: &[Token]) -> Option<String> {
+    let first = words.first()?;
+    let s = astlib::get_literal_string(first)?;
+    Some(s.rsplit('/').next().unwrap_or(&s).to_string())
 }
 
 /// `checkBackticks` (SC2006): legacy backticks -> `$(...)`, with a fix.
