@@ -1332,10 +1332,31 @@ impl Parser {
     }
 
     fn read_command(&mut self) -> PResult<Token> {
+        // Reserved words that close a compound list must not be read as command
+        // names (mirrors `readPipeline`'s `unexpecting readKeyword`). Without
+        // this, e.g. `for..do..done`'s body swallows `done` and the loop fails.
+        if self.at_command_terminator() {
+            return Err(());
+        }
         if let Ok(t) = self.read_compound_command() {
             return Ok(t);
         }
         self.read_simple_command()
+    }
+
+    /// True if the upcoming token is a reserved word/operator that terminates a
+    /// command list (`then else elif fi do done esac`, `}`).
+    fn at_command_terminator(&self) -> bool {
+        for kw in ["then", "else", "elif", "fi", "do", "done", "esac"] {
+            if self.keyword_ahead(kw) {
+                return true;
+            }
+        }
+        // A bare `}` closing a brace group (word-bounded).
+        if self.peek() == Some('}') && self.is_word_boundary_after(1) {
+            return true;
+        }
+        false
     }
 
     // ---- compound commands -------------------------------------------------

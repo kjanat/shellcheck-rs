@@ -316,8 +316,8 @@
     "2326": 1
   },
   "port": {
-    "exact_scripts": 545,
-    "exact_pct": 32.85,
+    "exact_scripts": 543,
+    "exact_pct": 32.73,
     "port_errors": 0,
     "per_code": {
       "1008": {
@@ -342,7 +342,7 @@
         "oracle": 0,
         "matched": 0,
         "missing": 0,
-        "extra": 132
+        "extra": 138
       },
       "1091": {
         "oracle": 5,
@@ -388,15 +388,15 @@
       },
       "2005": {
         "oracle": 11,
-        "matched": 8,
-        "missing": 3,
+        "matched": 9,
+        "missing": 2,
         "extra": 0
       },
       "2006": {
         "oracle": 19,
-        "matched": 17,
-        "missing": 2,
-        "extra": 0
+        "matched": 13,
+        "missing": 6,
+        "extra": 4
       },
       "2007": {
         "oracle": 2,
@@ -580,14 +580,14 @@
       },
       "2044": {
         "oracle": 1,
-        "matched": 0,
-        "missing": 1,
+        "matched": 1,
+        "missing": 0,
         "extra": 0
       },
       "2045": {
         "oracle": 2,
-        "matched": 0,
-        "missing": 2,
+        "matched": 2,
+        "missing": 0,
         "extra": 0
       },
       "2046": {
@@ -3196,9 +3196,68 @@
           2013,
           "To read lines rather than words, pipe/redirect to a 'while read' loop.",
           null
+        ],
+        [
+          1,
+          10,
+          1,
+          19,
+          "style",
+          2006,
+          "Use $(...) notation instead of legacy backticks `...`.",
+          [
+            [
+              1,
+              10,
+              1,
+              11,
+              "afterEnd",
+              7,
+              "$("
+            ],
+            [
+              1,
+              18,
+              1,
+              19,
+              "beforeStart",
+              7,
+              ")"
+            ]
+          ]
         ]
       ],
-      "extra": []
+      "extra": [
+        [
+          1,
+          10,
+          1,
+          19,
+          "style",
+          2006,
+          "Use $(...) notation instead of legacy backticks `...`.",
+          [
+            [
+              1,
+              10,
+              1,
+              11,
+              "afterEnd",
+              6,
+              "$("
+            ],
+            [
+              1,
+              18,
+              1,
+              19,
+              "beforeStart",
+              6,
+              ")"
+            ]
+          ]
+        ]
+      ]
     },
     {
       "id": "prop_checkForInCat2",
@@ -3248,9 +3307,68 @@
           2013,
           "To read lines rather than words, pipe/redirect to a 'while read' loop.",
           null
+        ],
+        [
+          1,
+          10,
+          1,
+          30,
+          "style",
+          2006,
+          "Use $(...) notation instead of legacy backticks `...`.",
+          [
+            [
+              1,
+              10,
+              1,
+              11,
+              "afterEnd",
+              7,
+              "$("
+            ],
+            [
+              1,
+              29,
+              1,
+              30,
+              "beforeStart",
+              7,
+              ")"
+            ]
+          ]
         ]
       ],
-      "extra": []
+      "extra": [
+        [
+          1,
+          10,
+          1,
+          30,
+          "style",
+          2006,
+          "Use $(...) notation instead of legacy backticks `...`.",
+          [
+            [
+              1,
+              10,
+              1,
+              11,
+              "afterEnd",
+              6,
+              "$("
+            ],
+            [
+              1,
+              29,
+              1,
+              30,
+              "beforeStart",
+              6,
+              ")"
+            ]
+          ]
+        ]
+      ]
     }
   ]
 }
