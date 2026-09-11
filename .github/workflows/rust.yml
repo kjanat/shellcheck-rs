@@ -8,7 +8,7 @@ on:
   # On a PR, the pull_request event already runs the gate on every commit, so
   # restrict push to the release branches to avoid running it twice per commit.
   push:
-    branches: [master, main]
+    branches: [master]
     paths:
       - 'rust/**'
       - '.github/workflows/rust.yml'
