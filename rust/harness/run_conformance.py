@@ -113,13 +113,21 @@ def run_json1(binary, script):
     Returns {"comments": [...], "exit": rc} on success, else {"error": ...}.
     ShellCheck exits non-zero when it finds issues; that is expected and the
     exact code is captured for comparison (statusToCode)."""
+    # Isolate from the invoking environment so results are deterministic: clear
+    # SHELLCHECK_OPTS (both tools prepend it to argv) and pass --norc (both do
+    # .shellcheckrc discovery). Otherwise a personal option or a stray rc file in
+    # a parent directory would silently change the goldens/port output and make
+    # conformance machine-dependent.
+    env = dict(os.environ)
+    env.pop("SHELLCHECK_OPTS", None)
     try:
         proc = subprocess.run(
-            [binary, "--format=json1", "-"],
+            [binary, "--norc", "--format=json1", "-"],
             input=script.encode("utf-8"),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=30,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return {"error": "timeout"}
@@ -449,6 +457,18 @@ def run_gate(report, port_results):
     if pr["exact_scripts"] < baseline["exact_scripts"]:
         failures.append(f"exact_scripts {pr['exact_scripts']} < baseline {baseline['exact_scripts']}")
 
+    # 6. If the baseline is fully exact, EVERY comparable script must stay exact.
+    #    Otherwise a newly-added corpus case that the port gets only partly right
+    #    slips through: it merely raises comparable_scripts while the per-code
+    #    matched counts and exact_scripts (checks 2 and 5) stay satisfied. Tie
+    #    exact to the current comparable count so any new non-exact case fails.
+    if baseline["exact_scripts"] == baseline["comparable_scripts"]:
+        if pr["exact_scripts"] != report["comparable_scripts"]:
+            failures.append(
+                f"non-exact scripts present: exact {pr['exact_scripts']} != "
+                f"comparable {report['comparable_scripts']} "
+                f"(baseline is fully exact, so every comparable script must match)")
+
     if failures:
         print("GATE: FAIL")
         for f in failures:
@@ -511,6 +531,15 @@ def main():
                     choices=["", "extra", "missing", "exit", "order"],
                     help="corrupt port results IN MEMORY to prove the gate fires")
     args = ap.parse_args()
+
+    # A baseline must describe the full, unmodified corpus. Refuse to write one
+    # from a filtered or deliberately corrupted run, which would bake in reduced
+    # thresholds that let later regressions outside the subset pass the gate.
+    if args.write_baseline and (args.limit or args.codes or args.selftest):
+        sys.stderr.write(
+            "[run] ERROR: --write-baseline cannot be combined with "
+            "--limit/--codes/--selftest (the baseline must cover the full corpus).\n")
+        sys.exit(2)
 
     corpus = json.load(open(os.path.join(HERE, "corpus.json"), encoding="utf-8"))
     if args.limit:

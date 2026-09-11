@@ -64,13 +64,27 @@ enum Input {
     Err { name: String, message: String },
 }
 
-fn load(name: &str, spec_template: &CheckSpec, rc: Option<&RcConfig>) -> Input {
+/// Load one input. `stdin_cache` holds the stdin contents once read, so that a
+/// repeated `-` (e.g. `shellcheck - -`, or `-` listed twice via --files-from)
+/// reuses the same script instead of reading EOF on the second pass, matching
+/// the oracle's cache of non-reopenable inputs. Reading is lazy: stdin is only
+/// touched when a `-` input is actually reached, preserving quiet-mode's
+/// short-circuit (it must not block on stdin after an earlier file failed).
+fn load(
+    name: &str,
+    spec_template: &CheckSpec,
+    rc: Option<&RcConfig>,
+    stdin_cache: &mut Option<String>,
+) -> Input {
     let contents = if name == "-" {
-        let mut s = String::new();
-        if std::io::stdin().read_to_string(&mut s).is_err() {
-            return Input::Err { name: name.to_string(), message: "failed to read stdin".to_string() };
+        if stdin_cache.is_none() {
+            let mut s = String::new();
+            if std::io::stdin().read_to_string(&mut s).is_err() {
+                return Input::Err { name: name.to_string(), message: "failed to read stdin".to_string() };
+            }
+            *stdin_cache = Some(s);
         }
-        s
+        stdin_cache.clone().unwrap()
     } else {
         match std::fs::read_to_string(name) {
             Ok(s) => s,
@@ -172,10 +186,11 @@ fn run(config: RunConfig) -> ExitCode {
     // the Haskell Quiet formatter, which folds inputs lazily and reports the
     // first failing result. A read failure counts as a problem (exit 1), not a
     // runtime error (2), matching the oracle.
+    let mut stdin_cache: Option<String> = None;
     if format == "quiet" {
         for i in &inputs {
             let rc = resolve_rc(i);
-            match load(i, &spec_template, rc.as_ref()) {
+            match load(i, &spec_template, rc.as_ref(), &mut stdin_cache) {
                 Input::Ok(l) if !l.comments.is_empty() => return ExitCode::from(1),
                 Input::Ok(_) => {}
                 Input::Err { .. } => return ExitCode::from(1),
@@ -184,8 +199,10 @@ fn run(config: RunConfig) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let loaded: Vec<Input> =
-        inputs.iter().map(|i| load(i, &spec_template, resolve_rc(i).as_ref())).collect();
+    let loaded: Vec<Input> = inputs
+        .iter()
+        .map(|i| load(i, &spec_template, resolve_rc(i).as_ref(), &mut stdin_cache))
+        .collect();
 
     let any_failure = loaded.iter().any(|i| matches!(i, Input::Err { .. }));
     let any_comments = loaded

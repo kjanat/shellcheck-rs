@@ -62,7 +62,10 @@ pub fn parse_contents(contents: &str) -> RcConfig {
             Some((k, v)) => (k.trim(), v.trim()),
             None => continue, // no '=' : not a directive, ignore
         };
-        apply_directive(&mut cfg, key, value);
+        // The established annotation parser accepts quoted directive values,
+        // e.g. `disable='SC2086,SC2181'` or `shell="bash"`; strip a matching
+        // surrounding quote pair before applying.
+        apply_directive(&mut cfg, key, unquote(value));
     }
     cfg
 }
@@ -106,10 +109,14 @@ fn apply_directive(cfg: &mut RcConfig, key: &str, value: &str) {
             }
         }
         "shell" => {
-            // Only accept a recognised dialect; an unknown value is ignored
-            // (the oracle emits SC1103 but proceeds without an override).
-            if let Some(sh) = parse_shell(value) {
-                cfg.shell = Some(sh);
+            // Keep the FIRST recognised shell override: `determineShell` selects
+            // the first `ShellOverride` (headOrDefault), so a later `shell=`
+            // line does not supersede an earlier valid one. An unknown value is
+            // ignored (the oracle emits SC1103 but proceeds without override).
+            if cfg.shell.is_none() {
+                if let Some(sh) = parse_shell(value) {
+                    cfg.shell = Some(sh);
+                }
             }
         }
         "extended-analysis" => match value {
@@ -122,6 +129,18 @@ fn apply_directive(cfg: &mut RcConfig, key: &str, value: &str) {
         "external-sources" | "source-path" | "source" => {}
         // Unknown keys are silently ignored.
         _ => {}
+    }
+}
+
+/// Strip a single matching pair of surrounding single or double quotes.
+/// `'SC2086,SC2181'` -> `SC2086,SC2181`, `"bash"` -> `bash`; unquoted or
+/// mismatched values are returned unchanged.
+fn unquote(s: &str) -> &str {
+    let b = s.as_bytes();
+    if b.len() >= 2 && (b[0] == b'\'' || b[0] == b'"') && b[b.len() - 1] == b[0] {
+        &s[1..s.len() - 1]
+    } else {
+        s
     }
 }
 
@@ -151,8 +170,18 @@ pub fn read_config_file(path: &Path) -> Option<RcConfig> {
 pub fn discover(input_name: &str) -> Option<RcConfig> {
     let dir = starting_dir(input_name)?;
     for candidate in candidate_paths(&dir) {
-        if let Ok(contents) = std::fs::read_to_string(&candidate) {
-            return Some(parse_contents(&contents));
+        // `findConfig`/`readConfig` select the FIRST candidate that EXISTS
+        // (doesFileExist). A nearer existing-but-unreadable file is still
+        // selected: the oracle reports the read error and uses an empty config,
+        // rather than silently falling through to a parent or user config.
+        if candidate.is_file() {
+            match std::fs::read_to_string(&candidate) {
+                Ok(contents) => return Some(parse_contents(&contents)),
+                Err(e) => {
+                    eprintln!("{}: {}", candidate.display(), e);
+                    return Some(RcConfig::default());
+                }
+            }
         }
     }
     None
@@ -271,6 +300,23 @@ mod tests {
         assert_eq!(parse_contents("shell=sh").shell, Some(Shell::Sh));
         // Unknown dialect is ignored (no override), not an error.
         assert_eq!(parse_contents("shell=zsh").shell, None);
+        // Aliases route through parse_shell (shellForExecutable).
+        assert_eq!(parse_contents("shell=ksh93").shell, Some(Shell::Ksh));
+    }
+
+    #[test]
+    fn shell_keeps_first_override() {
+        // determineShell selects the first ShellOverride, so a later shell=
+        // does not supersede an earlier valid one.
+        assert_eq!(parse_contents("shell=sh\nshell=bash\n").shell, Some(Shell::Sh));
+    }
+
+    #[test]
+    fn quoted_values_are_unquoted() {
+        assert_eq!(parse_contents("disable='SC2086,SC2181'").disabled_codes, vec![2086, 2181]);
+        assert_eq!(parse_contents("shell=\"bash\"").shell, Some(Shell::Bash));
+        // A mismatched/again-unquoted value is left as-is (and then rejected).
+        assert_eq!(parse_contents("shell='bash\"").shell, None);
     }
 
     #[test]

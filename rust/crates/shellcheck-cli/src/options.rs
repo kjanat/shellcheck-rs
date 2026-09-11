@@ -336,14 +336,23 @@ fn parse_num(s: &str) -> Result<i64, String> {
     digits.parse::<i64>().map_err(|_| format!("Invalid number: {s}"))
 }
 
-/// `shellForExecutable` restricted to the values the port accepts.
+/// `shellForExecutable` (ShellCheck.Data): maps interpreter names, including
+/// the established aliases, to a dialect. Used for `--shell`, rc `shell=`, and
+/// `# shellcheck shell=` directives.
 pub fn parse_shell(s: &str) -> Option<Shell> {
     Some(match s {
         "sh" => Shell::Sh,
         "bash" => Shell::Bash,
-        "dash" => Shell::Dash,
-        "ksh" => Shell::Ksh,
+        "bats" => Shell::Bash,
         "busybox" => Shell::BusyboxSh,
+        "busybox sh" => Shell::BusyboxSh,
+        "busybox ash" => Shell::BusyboxSh,
+        "dash" => Shell::Dash,
+        "ash" => Shell::Dash,
+        "ksh" => Shell::Ksh,
+        "ksh88" => Shell::Ksh,
+        "ksh93" => Shell::Ksh,
+        "oksh" => Shell::Ksh,
         _ => return None,
     })
 }
