@@ -2,3 +2,4 @@ goldens.jsonl
 port.jsonl
 run.log
 extract.log
+coverage.json
