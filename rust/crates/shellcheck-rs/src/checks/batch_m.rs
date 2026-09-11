@@ -18,17 +18,9 @@ use std::collections::{HashMap, HashSet};
 pub fn register(c: &mut Checker) {
     c.tree(check_subshell_assignment);
     c.tree(check_array_without_index);
-    // SC2095 (check_while_read_pitfalls) is deliberately NOT registered.
-    // Its logic is faithful and matches the oracle 12/14, but it cannot reach
-    // extra==0: the `info` diagnostic is emitted at the T_WhileExpression token,
-    // and the shared parser records that token's end column one short (41 vs the
-    // oracle's 42) whenever the loop is followed by a trailing redirect
-    // (`done < file` / `done 3< file`). Non-redirected while loops match exactly.
-    // Fixing it means correcting the T_WhileExpression span in parser.rs (a
-    // shared file owned elsewhere), so per the conformance-safety rule the check
-    // stays unregistered until that lands. See tests below (they pass — they
-    // exercise the function directly, independent of source positions).
-    // c.node(check_while_read_pitfalls);
+    // SC2095: enabled now that the T_WhileExpression/until span is fixed in the
+    // parser (trailing spacing after `done` consumed, matching ShellCheck).
+    c.node(check_while_read_pitfalls);
 }
 
 // ===========================================================================
