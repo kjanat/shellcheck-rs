@@ -336,8 +336,6 @@ struct Ctx {
     // cfIsCondition: set by asCondition but never read (kept for fidelity).
     is_condition: bool,
     is_function: bool,
-    // cfLoopStack: defined but never read in CFG.hs (kept for fidelity).
-    loop_stack: Vec<(Node, Node)>,
     token_stack: Vec<Id>,
     exit_target: Option<Node>,
     return_target: Option<Node>,
@@ -348,7 +346,6 @@ impl Ctx {
         Ctx {
             is_condition: false,
             is_function: false,
-            loop_stack: Vec::new(),
             token_stack: Vec::new(),
             exit_target: None,
             return_target: None,

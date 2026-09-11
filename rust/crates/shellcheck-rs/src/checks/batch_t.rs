@@ -1217,7 +1217,6 @@ fn modifies_variable(params: &Parameters, token: &Token, name: &str) -> bool {
     let flow = get_variable_flow(
         &params.parent_map,
         &params.id_map,
-        params.shell,
         params.has_lastpipe,
         token,
     );

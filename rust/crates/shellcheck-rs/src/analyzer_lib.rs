@@ -419,7 +419,7 @@ pub fn make_parameters_ext(
     };
 
     // Linear variable-flow analysis (does not depend on itself or the CFG).
-    let variable_flow = get_variable_flow(&parent_map, &id_map, shell, has_lastpipe, &root);
+    let variable_flow = get_variable_flow(&parent_map, &id_map, has_lastpipe, &root);
 
     // Control Flow Graph data-flow analysis, gated on extended analysis. The
     // spec override (CLI/rc) wins over a `# shellcheck extended-analysis=...`
@@ -915,7 +915,10 @@ pub(crate) const SPECIAL_VARIABLES_WITHOUT_SPACES: &[&str] = &["-", "$", "?", "!
 struct FlowCtx<'a> {
     parent_map: &'a BTreeMap<Id, Id>,
     id_map: &'a BTreeMap<Id, Token>,
-    shell: Shell,
+    // The only shell-dependent decision in this flow (whether the last pipeline
+    // element runs in a subshell) is captured by `has_lastpipe`, computed
+    // upstream exactly as Haskell's `hasLastpipe`; `shellType` itself is not used
+    // by getVariableFlow (see AnalyzerLib.hs `leadType`/`causesSubshell`).
     has_lastpipe: bool,
 }
 
@@ -952,14 +955,12 @@ fn data_type_from(def: &DefCtor, value: &Token) -> DataType {
 pub(crate) fn get_variable_flow(
     parent_map: &BTreeMap<Id, Id>,
     id_map: &BTreeMap<Id, Token>,
-    shell: Shell,
     has_lastpipe: bool,
     root: &Token,
 ) -> Vec<StackData> {
     let ctx = FlowCtx {
         parent_map,
         id_map,
-        shell,
         has_lastpipe,
     };
     let mut out = Vec::new();

@@ -376,16 +376,6 @@ impl Parser {
         }
     }
 
-    fn none_of(&mut self, set: &str) -> PResult<char> {
-        match self.peek() {
-            Some(c) if !set.contains(c) => {
-                self.bump();
-                Ok(c)
-            }
-            _ => Err(()),
-        }
-    }
-
     fn string(&mut self, s: &str) -> PResult<()> {
         let m = self.mark();
         for c in s.chars() {
@@ -407,33 +397,6 @@ impl Parser {
         }
     }
 
-    /// `many1 (oneOf set)` collected as String.
-    fn many1_of(&mut self, set: &str) -> PResult<String> {
-        let mut s = String::new();
-        while let Some(c) = self.peek() {
-            if set.contains(c) {
-                self.bump();
-                s.push(c);
-            } else {
-                break;
-            }
-        }
-        if s.is_empty() { Err(()) } else { Ok(s) }
-    }
-
-    fn many_of(&mut self, set: &str) -> String {
-        let mut s = String::new();
-        while let Some(c) = self.peek() {
-            if set.contains(c) {
-                self.bump();
-                s.push(c);
-            } else {
-                break;
-            }
-        }
-        s
-    }
-
     // ---- id / span / notes -------------------------------------------------
 
     fn next_id_between(&mut self, start: Position, end: Position) -> Id {
@@ -445,12 +408,6 @@ impl Parser {
 
     fn span_for(&self, id: Id) -> (Position, Position) {
         self.positions.get(&id).cloned().unwrap_or_default()
-    }
-
-    /// Allocate a new id spanning the same range as an existing one.
-    fn new_id_for(&mut self, id: Id) -> Id {
-        let (s, e) = self.span_for(id);
-        self.next_id_between(s, e)
     }
 
     fn note_at(&mut self, start: Position, end: Position, sev: Severity, code: i64, msg: &str) {

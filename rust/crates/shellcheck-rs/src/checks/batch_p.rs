@@ -290,7 +290,6 @@ fn check_unpassed_in_functions(params: &Parameters, root: &Token, out: &mut Out)
             let flow = get_variable_flow(
                 &params.parent_map,
                 &params.id_map,
-                params.shell,
                 params.has_lastpipe,
                 body,
             );
