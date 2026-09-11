@@ -2093,39 +2093,9 @@ fn get_unquoted_literal(t: &Token) -> Option<String> {
     }
 }
 
-/// `oversimplify` (faithful to ASTLib).
+/// `oversimplify`: delegates to the single faithful implementation in `astlib`.
 pub(crate) fn oversimplify(t: &Token) -> Vec<String> {
-    use InnerToken::*;
-    match &*t.inner {
-        T_NormalWord(l) => {
-            let s: String = l.iter().flat_map(oversimplify).collect::<Vec<_>>().concat();
-            vec![s]
-        }
-        T_DoubleQuoted(l) => {
-            let s: String = l.iter().flat_map(oversimplify).collect::<Vec<_>>().concat();
-            vec![s]
-        }
-        T_SingleQuoted(s) => vec![s.clone()],
-        T_DollarBraced { .. } => vec!["${VAR}".to_string()],
-        T_DollarArithmetic(_) => vec!["${VAR}".to_string()],
-        T_DollarExpansion(_) => vec!["${VAR}".to_string()],
-        T_Backticked(_) => vec!["${VAR}".to_string()],
-        T_Glob(s) => vec![s.clone()],
-        T_Pipeline { commands, .. } if commands.len() == 1 => oversimplify(&commands[0]),
-        T_Literal(x) => vec![x.clone()],
-        T_ParamSubSpecialChar(x) => vec![x.clone()],
-        T_SimpleCommand { words, .. } => words.iter().flat_map(oversimplify).collect(),
-        T_Redirecting { cmd, .. } => oversimplify(cmd),
-        T_DollarSingleQuoted(s) => vec![s.clone()],
-        T_Annotation { token, .. } => oversimplify(token),
-        TA_Sequence(seq) if seq.len() == 1 && matches!(&*seq[0].inner, TA_Expansion(_)) => {
-            match &*seq[0].inner {
-                TA_Expansion(v) => v.iter().flat_map(oversimplify).collect(),
-                _ => Vec::new(),
-            }
-        }
-        _ => Vec::new(),
-    }
+    crate::astlib::oversimplify(t)
 }
 
 pub(crate) fn oversimplify_concat(t: &Token) -> String {

@@ -56,13 +56,44 @@ pub fn get_literal_string_ext(
     }
 }
 
-/// `oversimplify`: flatten a word to its most literal string form, treating
-/// expansions/globs loosely. Used by many command checks.
+/// `oversimplify`: flatten a token to its most literal string forms. Faithful
+/// to `ShellCheck.ASTLib.oversimplify`: words concatenate their parts,
+/// expansions become `"${VAR}"`, globs and literals pass through, and a
+/// single-element pipeline / redirected / annotated command is looked through.
+/// This is the single implementation in the crate; `cfg::oversimplify`
+/// delegates here.
 pub fn oversimplify(t: &Token) -> Vec<String> {
-    // Simplified: return the single literal string if fully literal, else empty.
-    match get_literal_string(t) {
-        Some(s) => vec![s],
-        None => Vec::new(),
+    use InnerToken::*;
+    match &*t.inner {
+        T_NormalWord(l) => {
+            let s: String = l.iter().flat_map(oversimplify).collect::<Vec<_>>().concat();
+            vec![s]
+        }
+        T_DoubleQuoted(l) => {
+            let s: String = l.iter().flat_map(oversimplify).collect::<Vec<_>>().concat();
+            vec![s]
+        }
+        T_SingleQuoted(s) => vec![s.clone()],
+        T_DollarBraced { .. } => vec!["${VAR}".to_string()],
+        T_DollarArithmetic(_) => vec!["${VAR}".to_string()],
+        T_DollarExpansion(_) => vec!["${VAR}".to_string()],
+        T_Backticked(_) => vec!["${VAR}".to_string()],
+        T_Glob(s) => vec![s.clone()],
+        T_Pipeline { commands, .. } if commands.len() == 1 => oversimplify(&commands[0]),
+        T_Literal(x) => vec![x.clone()],
+        T_ParamSubSpecialChar(x) => vec![x.clone()],
+        T_SimpleCommand { words, .. } => words.iter().flat_map(oversimplify).collect(),
+        T_Redirecting { cmd, .. } => oversimplify(cmd),
+        T_DollarSingleQuoted(s) => vec![s.clone()],
+        T_Annotation { token, .. } => oversimplify(token),
+        // Workaround for `let "foo = bar"` parsing (as in the Haskell source).
+        TA_Sequence(seq) if seq.len() == 1 && matches!(&*seq[0].inner, TA_Expansion(_)) => {
+            match &*seq[0].inner {
+                TA_Expansion(v) => v.iter().flat_map(oversimplify).collect(),
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
     }
 }
 

@@ -17,6 +17,7 @@
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::oversimplify;
 use crate::astlib::get_literal_string;
 use crate::interface::Shell;
 use std::sync::OnceLock;
@@ -33,43 +34,6 @@ pub fn register(c: &mut Checker) {
 // Private helpers (ported from ASTLib/AnalyzerLib; kept local so this module
 // does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
-
-/// Faithful port of `ShellCheck.ASTLib.oversimplify` (subset needed here).
-fn oversimplify(token: &Token) -> Vec<String> {
-    use InnerToken::*;
-    match &*token.inner {
-        T_NormalWord(l) => {
-            vec![
-                l.iter()
-                    .flat_map(oversimplify)
-                    .collect::<Vec<String>>()
-                    .concat(),
-            ]
-        }
-        T_DoubleQuoted(l) => {
-            vec![
-                l.iter()
-                    .flat_map(oversimplify)
-                    .collect::<Vec<String>>()
-                    .concat(),
-            ]
-        }
-        T_SingleQuoted(s) => vec![s.clone()],
-        T_DollarBraced { .. } => vec!["${VAR}".to_string()],
-        T_DollarArithmetic(_) => vec!["${VAR}".to_string()],
-        T_DollarExpansion(_) => vec!["${VAR}".to_string()],
-        T_Backticked(_) => vec!["${VAR}".to_string()],
-        T_Glob(s) => vec![s.clone()],
-        T_Pipeline { commands, .. } if commands.len() == 1 => oversimplify(&commands[0]),
-        T_Literal(x) => vec![x.clone()],
-        T_ParamSubSpecialChar(x) => vec![x.clone()],
-        T_SimpleCommand { words, .. } => words.iter().flat_map(oversimplify).collect(),
-        T_Redirecting { cmd, .. } => oversimplify(cmd),
-        T_DollarSingleQuoted(s) => vec![s.clone()],
-        T_Annotation { token, .. } => oversimplify(token),
-        _ => vec![],
-    }
-}
 
 /// `getWordParts`.
 fn get_word_parts(t: &Token) -> Vec<&Token> {

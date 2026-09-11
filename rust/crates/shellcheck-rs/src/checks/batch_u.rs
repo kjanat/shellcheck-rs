@@ -30,6 +30,7 @@
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::oversimplify;
 use crate::interface::Shell;
 
 // ===========================================================================
@@ -144,33 +145,6 @@ const UNARY_TEST_OPS: &[&str] = &[
     "!", "-a", "-b", "-c", "-d", "-e", "-f", "-g", "-h", "-L", "-k", "-p", "-r", "-s", "-S", "-t",
     "-u", "-w", "-x", "-O", "-G", "-N", "-z", "-n", "-o", "-v", "-R",
 ];
-
-/// Faithful port of `ShellCheck.ASTLib.oversimplify`.
-fn oversimplify(token: &Token) -> Vec<String> {
-    use InnerToken::*;
-    match &*token.inner {
-        T_NormalWord(l) => vec![l.iter().flat_map(oversimplify).collect::<Vec<_>>().concat()],
-        T_DoubleQuoted(l) => vec![l.iter().flat_map(oversimplify).collect::<Vec<_>>().concat()],
-        T_SingleQuoted(s) => vec![s.clone()],
-        T_DollarBraced { .. } => vec!["${VAR}".to_string()],
-        T_DollarArithmetic(_) => vec!["${VAR}".to_string()],
-        T_DollarExpansion(_) => vec!["${VAR}".to_string()],
-        T_Backticked(_) => vec!["${VAR}".to_string()],
-        T_Glob(s) => vec![s.clone()],
-        T_Pipeline { commands, .. } if commands.len() == 1 => oversimplify(&commands[0]),
-        T_Literal(x) => vec![x.clone()],
-        T_ParamSubSpecialChar(x) => vec![x.clone()],
-        T_SimpleCommand { words, .. } => words.iter().flat_map(oversimplify).collect(),
-        T_Redirecting { cmd, .. } => oversimplify(cmd),
-        T_DollarSingleQuoted(s) => vec![s.clone()],
-        T_Annotation { token, .. } => oversimplify(token),
-        TA_Sequence(seq) if seq.len() == 1 => match &*seq[0].inner {
-            TA_Expansion(v) => v.iter().flat_map(oversimplify).collect(),
-            _ => vec![],
-        },
-        _ => vec![],
-    }
-}
 
 /// `getWordParts`.
 fn get_word_parts(t: &Token) -> Vec<&Token> {
