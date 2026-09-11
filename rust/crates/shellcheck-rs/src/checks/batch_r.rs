@@ -1500,7 +1500,6 @@ mod tests {
     #[test]
     fn prop_checkBashisms143() { assert!(emits(bashism, "a=(foo bar)")); }
     #[test]
-    #[ignore = "parser gap (not in batch_r): parser.rs has no `coproc` support, so `coproc foo { :; }` never produces a T_CoProc node. The SC3032 branch itself is a faithful port."]
     fn prop_checkBashisms144() { assert!(emits(bashism, "coproc foo { :; }")); }
     #[test]
     fn prop_checkBashisms145a() { assert!(emits(bashism, "#!/bin/sh\nf() { local i=; }")); }

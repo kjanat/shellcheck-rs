@@ -1480,12 +1480,10 @@ mod tests {
     #[test]
     fn prop_checkPipeToNowhere13() { assert!(emits(check_pipe_to_nowhere, "ls > foo 2> bar > baz")); }
     #[test]
-    #[ignore = "parser gap: `&>` is parsed as `&` + `>`, not a combined redirect, so the two fd-1 redirections never land in one stage"]
     fn prop_checkPipeToNowhere14() { assert!(emits(check_pipe_to_nowhere, "ls > foo &> bar")); }
     #[test]
     fn prop_checkPipeToNowhere15() { assert!(!emits(check_pipe_to_nowhere, "ls > foo 2> bar |& grep 'No space left'")); }
     #[test]
-    #[ignore = "parser gap: command substitutions inside an unquoted heredoc body are parsed as a literal, so `$(cat)` is not seen as a stdin consumer and SC2259 spuriously fires"]
     fn prop_checkPipeToNowhere16() { assert!(!emits(check_pipe_to_nowhere, "echo World | cat << EOF\nhello $(cat)\nEOF\n")); }
     #[test]
     fn prop_checkPipeToNowhere17() { assert!(emits(check_pipe_to_nowhere, "echo World | cat << 'EOF'\nhello $(cat)\nEOF\n")); }

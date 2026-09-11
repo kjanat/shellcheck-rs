@@ -376,16 +376,6 @@ fn check_occurrences(params: &Parameters, x: &Token, u: &Token, out: &mut Out) {
     if x != u {
         return;
     }
-    // Parser-span workaround: a `$foo`/`${foo}` reference is a `T_NormalWord`
-    // nested inside `T_DollarBraced`; the oracle attributes the diagnostic to a
-    // word that starts *after* the `$`/`{`, while the Rust parser's inner word
-    // includes the `$`, so an emission here always lands one column early and
-    // registers as an over-fire. Skip candidate words inside a parameter
-    // expansion — this only drops the noisy `$var == filename` self-match the
-    // oracle makes, never a real redirect/argument filename.
-    if inside_dollar_braced(params, u) || inside_dollar_braced(params, x) {
-        return;
-    }
     if is_input(params, x) && is_input(params, u) {
         return;
     }
@@ -414,24 +404,6 @@ fn check_occurrences(params: &Parameters, x: &Token, u: &Token, out: &mut Out) {
         2094,
         "Make sure not to read and write the same file in the same pipeline.",
     );
-}
-
-/// True if `t` is nested inside a `T_DollarBraced` (a `${..}`/`$var` operand).
-fn inside_dollar_braced(params: &Parameters, t: &Token) -> bool {
-    let mut cur = params.parent(t);
-    while let Some(node) = cur {
-        match &*node.inner {
-            InnerToken::T_DollarBraced { .. } => return true,
-            // Stop once we leave the word: a filename word sits directly under an
-            // IoFile or SimpleCommand, never under a param expansion.
-            InnerToken::T_IoFile { .. }
-            | InnerToken::T_SimpleCommand { .. }
-            | InnerToken::T_Redirecting { .. } => return false,
-            _ => {}
-        }
-        cur = params.parent(node);
-    }
-    false
 }
 
 fn parent_io_op<'a>(params: &'a Parameters, t: &'a Token) -> Option<&'a Token> {

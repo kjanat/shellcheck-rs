@@ -497,7 +497,6 @@ mod tests {
     #[test]
     fn prop_checkArrayWithoutIndex2() { assert!(!tree_emits(check_array_without_index, "foo='bar baz'; foo=($foo); echo ${foo[0]}")); }
     #[test]
-    #[ignore = "parser gap: `coproc NAME command` is not parsed by the Rust parser yet (shared parser.rs), so `foo` is never recorded as an array. Check logic is faithful; only the parser can't feed it."]
     fn prop_checkArrayWithoutIndex3() { assert!(tree_emits(check_array_without_index, "coproc foo while true; do echo cow; done; echo $foo")); }
     #[test]
     fn prop_checkArrayWithoutIndex4() { assert!(tree_emits(check_array_without_index, "coproc tail -f log; echo $COPROC")); }

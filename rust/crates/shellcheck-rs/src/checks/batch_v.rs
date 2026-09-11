@@ -1555,7 +1555,6 @@ mod tests {
     #[test]
     fn prop_checkBadParameterSubstitution6() { assert!(node_emits(check_bad_parameter_substitution, "${\"bar\"}")); }
     #[test]
-    #[ignore = "parser gap: `${{var}` is tokenized as literal `$` `{` `{` `var` `}` rather than a T_DollarBraced, so no expansion node exists to check (SC2296). Missing-only; does not affect registration."]
     fn prop_checkBadParameterSubstitution7() { assert!(node_emits(check_bad_parameter_substitution, "${{var}")); }
     #[test]
     fn prop_checkBadParameterSubstitution8() { assert!(node_emits(check_bad_parameter_substitution, "${$(x)//x/y}")); }
