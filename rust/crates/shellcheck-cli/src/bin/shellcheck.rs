@@ -16,7 +16,14 @@ use shellcheck_cli::options::{self, Outcome, RunConfig};
 use shellcheck_rs::interface::{CheckSpec, PositionedComment};
 
 fn main() -> ExitCode {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    // SHELLCHECK_OPTS is split on whitespace (Haskell `words`) and prepended to
+    // argv before parsing, so env-configured defaults apply but explicit argv
+    // can still override them (shellcheck.hs `getOptions`: env ++ args).
+    let mut argv: Vec<String> = Vec::new();
+    if let Ok(opts) = std::env::var("SHELLCHECK_OPTS") {
+        argv.extend(opts.split_whitespace().map(|s| s.to_string()));
+    }
+    argv.extend(std::env::args().skip(1));
 
     let config = match options::parse(&argv) {
         Outcome::Run(c) => c,
@@ -25,10 +32,13 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Outcome::PrintHelp => {
-            print!("{}", options::usage());
+            // `println!` adds the trailing blank line the oracle's --help emits
+            // after the usage block (usage() itself ends with a single "\n").
+            println!("{}", options::usage());
             return ExitCode::SUCCESS;
         }
         Outcome::ListOptional => {
+            print!("{}", options::list_optional_text());
             return ExitCode::SUCCESS;
         }
         Outcome::Error { message, code } => {
@@ -78,6 +88,24 @@ fn load(name: &str, spec_template: &CheckSpec) -> Input {
 fn run(config: RunConfig) -> ExitCode {
     let RunConfig { format, inputs, spec_template, color, wiki_link_count } = config;
 
+    // Quiet mode is a streaming short-circuit: process inputs in order and exit
+    // 1 on the FIRST input that has any comment or fails to read, without
+    // loading later inputs (so `-f quiet bad.sh -` never blocks on stdin once
+    // bad.sh has a problem). Exit 0 only if every input is clean. This mirrors
+    // the Haskell Quiet formatter, which folds inputs lazily and reports the
+    // first failing result. A read failure counts as a problem (exit 1), not a
+    // runtime error (2), matching the oracle.
+    if format == "quiet" {
+        for i in &inputs {
+            match load(i, &spec_template) {
+                Input::Ok(l) if !l.comments.is_empty() => return ExitCode::from(1),
+                Input::Ok(_) => {}
+                Input::Err { .. } => return ExitCode::from(1),
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
+
     let loaded: Vec<Input> = inputs.iter().map(|i| load(i, &spec_template)).collect();
 
     let any_failure = loaded.iter().any(|i| matches!(i, Input::Err { .. }));
@@ -94,12 +122,8 @@ fn run(config: RunConfig) -> ExitCode {
     let mut err = stderr.lock();
 
     match format.as_str() {
-        "quiet" => {
-            // No output; exit 1 on any failure or any comments (matching the
-            // Haskell Quiet formatter's immediate exitFailure).
-            return if any_failure || any_comments { ExitCode::from(1) } else { ExitCode::SUCCESS };
-        }
-
+        // "quiet" is handled by the streaming short-circuit above and never
+        // reaches this match.
         "json1" => {
             // Untab per file (makeNonVirtual); comments prepended per file
             // (reverse file order), matching the Haskell IORef accumulation.

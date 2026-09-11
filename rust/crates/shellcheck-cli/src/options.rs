@@ -107,29 +107,100 @@ fn find_short(c: char) -> Option<&'static OptDef> {
 /// The usage summary (`getUsageInfo`). Faithful in spirit to `usageInfo`; the
 /// exact column layout is not load-bearing.
 pub fn usage() -> String {
+    // Mirrors GHC getOpt's `usageInfo`: two left columns (short-with-arg,
+    // long-with-arg) padded to the widest entry, then the description. The
+    // wording/placeholders match shellcheck.hs so `--help` and the
+    // "No files specified." error read like the oracle's.
     let mut s = String::from("Usage: shellcheck [OPTIONS...] FILES...\n");
     let lines = [
-        ("-a", "--check-sourced",            "Include warnings from sourced files"),
-        ("-C", "--color[=WHEN]",             "Use color (auto, always, never)"),
-        ("-i", "--include=CODE1,CODE2..",    "Consider only given types of warnings"),
-        ("-e", "--exclude=CODE1,CODE2..",    "Exclude types of warnings"),
-        ("",   "--extended-analysis=bool",   "Perform dataflow analysis (default true)"),
-        ("-f", "--format=FORMAT",            "Output format (checkstyle, diff, gcc, json, json1, quiet, tty)"),
-        ("",   "--list-optional",            "List checks disabled by default"),
-        ("",   "--norc",                     "Don't look for .shellcheckrc files"),
-        ("",   "--rcfile=RCFILE",            "Prefer the specified configuration file"),
-        ("-o", "--enable=check1,check2..",   "List of optional checks to enable (or 'all')"),
-        ("-P", "--source-path=SOURCEPATHS",  "Specify path when looking for sourced files"),
-        ("-s", "--shell=SHELLNAME",          "Specify dialect (sh, bash, dash, ksh, busybox)"),
-        ("-S", "--severity=SEVERITY",        "Minimum severity of errors to consider"),
-        ("-V", "--version",                  "Print version information"),
-        ("-W", "--wiki-link-count=NUM",      "The number of wiki links to show"),
-        ("-x", "--external-sources",         "Allow 'source' outside of FILES"),
-        ("",   "--help",                     "Show this usage summary and exit"),
-        ("",   "--files-from=FILE",          "Read input files from FILE"),
+        ("-a",                 "--check-sourced",           "Include warnings from sourced files"),
+        ("-C[WHEN]",           "--color[=WHEN]",            "Use color (auto, always, never)"),
+        ("-i CODE1,CODE2..",   "--include=CODE1,CODE2..",   "Consider only given types of warnings"),
+        ("-e CODE1,CODE2..",   "--exclude=CODE1,CODE2..",   "Exclude types of warnings"),
+        ("",                   "--extended-analysis=bool",  "Perform dataflow analysis (default true)"),
+        ("-f FORMAT",          "--format=FORMAT",           "Output format (checkstyle, diff, gcc, json, json1, quiet, tty)"),
+        ("",                   "--list-optional",           "List checks disabled by default"),
+        ("",                   "--norc",                    "Don't look for .shellcheckrc files"),
+        ("",                   "--rcfile=RCFILE",           "Prefer the specified configuration file over searching for one"),
+        ("-o check1,check2..", "--enable=check1,check2..",  "List of optional checks to enable (or 'all')"),
+        ("-P SOURCEPATHS",     "--source-path=SOURCEPATHS", "Specify path when looking for sourced files (\"SCRIPTDIR\" for script's dir)"),
+        ("-s SHELLNAME",       "--shell=SHELLNAME",         "Specify dialect (sh, bash, dash, ksh, busybox)"),
+        ("-S SEVERITY",        "--severity=SEVERITY",       "Minimum severity of errors to consider (error, warning, info, style)"),
+        ("-V",                 "--version",                 "Print version information"),
+        ("-W NUM",             "--wiki-link-count=NUM",     "The number of wiki links to show, when applicable"),
+        ("-x",                 "--external-sources",        "Allow 'source' outside of FILES"),
+        ("",                   "--help",                    "Show this usage summary and exit"),
+        ("",                   "--files-from=FILE",         "Read input files from FILE (one per line, or '-' for stdin)"),
     ];
+    let short_w = lines.iter().map(|(sh, _, _)| sh.len()).max().unwrap_or(0);
+    let long_w = lines.iter().map(|(_, lo, _)| lo.len()).max().unwrap_or(0);
     for (short, long, desc) in lines {
-        s.push_str(&format!("  {short:<2}  {long:<28}  {desc}\n"));
+        s.push_str(&format!("  {short:<short_w$}  {long:<long_w$}  {desc}\n"));
+    }
+    s
+}
+
+/// The optional checks the analyzer knows about, in the order the Haskell
+/// `optionalChecks` list defines them. Each tuple is (name, description,
+/// example, fix), matching the `--list-optional` catalog emitted by the oracle.
+const OPTIONAL_CHECKS: &[(&str, &str, &str, &str)] = &[
+    ("add-default-case",
+     "Suggest adding a default case in `case` statements",
+     "case $? in 0) echo 'Success';; esac",
+     "case $? in 0) echo 'Success';; *) echo 'Fail' ;; esac"),
+    ("avoid-negated-conditions",
+     "Suggest removing unnecessary comparison negations",
+     "[ ! \"$var\" -eq 1 ]",
+     "[ \"$var\" -ne 1 ]"),
+    ("avoid-nullary-conditions",
+     "Suggest explicitly using -n in `[ $var ]`",
+     "[ \"$var\" ]",
+     "[ -n \"$var\" ]"),
+    ("check-extra-masked-returns",
+     "Check for additional cases where exit codes are masked",
+     "rm -r \"$(get_chroot_dir)/home\"",
+     "set -e; dir=\"$(get_chroot_dir)\"; rm -r \"$dir/home\""),
+    ("check-set-e-suppressed",
+     "Notify when set -e is suppressed during function invocation",
+     "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func && echo ok",
+     "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func; echo ok"),
+    ("check-unassigned-uppercase",
+     "Warn when uppercase variables are unassigned",
+     "echo $VAR",
+     "VAR=hello; echo $VAR"),
+    ("deprecate-which",
+     "Suggest 'command -v' instead of 'which'",
+     "which javac",
+     "command -v javac"),
+    ("quote-safe-variables",
+     "Suggest quoting variables without metacharacters",
+     "var=hello; echo $var",
+     "var=hello; echo \"$var\""),
+    ("require-double-brackets",
+     "Require [[ and warn about [ in Bash/Ksh",
+     "[ -e /etc/issue ]",
+     "[[ -e /etc/issue ]]"),
+    ("require-variable-braces",
+     "Suggest putting braces around all variable references",
+     "var=hello; echo $var",
+     "var=hello; echo ${var}"),
+    ("useless-use-of-cat",
+     "Check for Useless Use Of Cat (UUOC)",
+     "cat foo | grep bar",
+     "grep bar foo"),
+];
+
+/// Render the `--list-optional` catalog exactly as the oracle does: for each
+/// check, four `key: value` lines followed by a blank line (`newLinesBetween`
+/// in `printOptional`), including a trailing blank line after the last entry.
+pub fn list_optional_text() -> String {
+    let mut s = String::new();
+    for (name, desc, example, fix) in OPTIONAL_CHECKS {
+        s.push_str(&format!("name:    {name}\n"));
+        s.push_str(&format!("desc:    {desc}\n"));
+        s.push_str(&format!("example: {example}\n"));
+        s.push_str(&format!("fix:     {fix}\n"));
+        s.push('\n');
     }
     s
 }
@@ -419,7 +490,13 @@ pub fn parse(argv: &[String]) -> Outcome {
             "files-from" => {}
 
             // --format: validated after the fold (handled specially, like Haskell).
-            "format" => format = flag.value.clone(),
+            // getOption returns the FIRST matching flag, so `-f json -f tty`
+            // keeps json. Only set when not already set.
+            "format" => {
+                if format.is_none() {
+                    format = flag.value.clone();
+                }
+            }
 
             other => {
                 // Should be unreachable: every OPTS key is handled above.
@@ -470,10 +547,17 @@ pub fn parse(argv: &[String]) -> Outcome {
     }
     inputs.extend(files);
 
-    // No explicit inputs and no --files-from: default to stdin (preserve the
-    // port's existing stdin behaviour).
-    if inputs.is_empty() && !had_files_from {
-        inputs.push("-".to_string());
+    // An empty final input list is a usage error (exit 3), NOT an implicit
+    // stdin read: the oracle requires one or more filenames or an explicit `-`
+    // and prints "No files specified." with the usage summary
+    // (shellcheck.hs `parseArguments`). Reading stdin here would turn a common
+    // invocation mistake into a hang on an interactive terminal.
+    let _ = had_files_from;
+    if inputs.is_empty() {
+        return Outcome::Error {
+            message: format!("No files specified.\n\n{}", usage()),
+            code: 3,
+        };
     }
 
     // Validate format last (mirrors `process`: fold, then format lookup).
@@ -516,10 +600,35 @@ mod tests {
     }
 
     #[test]
-    fn default_is_stdin_tty() {
-        let c = run(&[]);
+    fn explicit_stdin_tty() {
+        let c = run(&["-"]);
         assert_eq!(c.inputs, vec!["-".to_string()]);
         assert_eq!(c.format, "tty");
+    }
+
+    #[test]
+    fn no_files_is_syntax_error() {
+        // No filenames and no explicit `-`: usage error (exit 3), never an
+        // implicit stdin read. Matches the oracle's "No files specified."
+        match parse(&args(&[])) {
+            Outcome::Error { code, message } => {
+                assert_eq!(code, 3);
+                assert!(message.contains("No files specified."));
+            }
+            other => panic!("expected Error(3), got {other:?}"),
+        }
+        // Options-only, still no input target: same error.
+        match parse(&args(&["-s", "bash"])) {
+            Outcome::Error { code, .. } => assert_eq!(code, 3),
+            other => panic!("expected Error(3), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn format_first_wins() {
+        // getOption returns the first match: `-f json -f tty` keeps json.
+        let c = run(&["-f", "json", "-f", "tty", "-"]);
+        assert_eq!(c.format, "json");
     }
 
     #[test]
@@ -567,7 +676,8 @@ mod tests {
 
     #[test]
     fn unknown_format_is_support_error() {
-        match parse(&args(&["--format=bogus"])) {
+        // With a valid input target, format is validated last (exit 4).
+        match parse(&args(&["--format=bogus", "-"])) {
             Outcome::Error { code, message } => {
                 assert_eq!(code, 4);
                 assert!(message.contains("Unknown format bogus"));
@@ -579,9 +689,9 @@ mod tests {
 
     #[test]
     fn json1_format_ok() {
-        assert_eq!(run(&["--format=json1"]).format, "json1");
-        assert_eq!(run(&["-f", "json1"]).format, "json1");
-        assert_eq!(run(&["--format", "json1"]).format, "json1");
+        assert_eq!(run(&["--format=json1", "-"]).format, "json1");
+        assert_eq!(run(&["-f", "json1", "-"]).format, "json1");
+        assert_eq!(run(&["--format", "json1", "-"]).format, "json1");
     }
 
     #[test]
@@ -597,25 +707,25 @@ mod tests {
     #[test]
     fn valid_shell_both_forms() {
         // Separate-arg form must set the shell, not be treated as a filename.
-        let c = run(&["-s", "bash"]);
+        let c = run(&["-s", "bash", "-"]);
         assert_eq!(c.spec_template.shell_type_override, Some(Shell::Bash));
         assert_eq!(c.inputs, vec!["-".to_string()]);
 
-        let c = run(&["--shell=ksh"]);
+        let c = run(&["--shell=ksh", "-"]);
         assert_eq!(c.spec_template.shell_type_override, Some(Shell::Ksh));
 
-        let c = run(&["-sdash"]); // glued short
+        let c = run(&["-sdash", "-"]); // glued short
         assert_eq!(c.spec_template.shell_type_override, Some(Shell::Dash));
 
-        assert_eq!(run(&["-s", "busybox"]).spec_template.shell_type_override, Some(Shell::BusyboxSh));
-        assert_eq!(run(&["-s", "sh"]).spec_template.shell_type_override, Some(Shell::Sh));
+        assert_eq!(run(&["-s", "busybox", "-"]).spec_template.shell_type_override, Some(Shell::BusyboxSh));
+        assert_eq!(run(&["-s", "sh", "-"]).spec_template.shell_type_override, Some(Shell::Sh));
     }
 
     #[test]
     fn severity_wired() {
-        let c = run(&["-S", "error"]);
+        let c = run(&["-S", "error", "-"]);
         assert_eq!(c.spec_template.min_severity, Severity::ErrorC);
-        let c = run(&["--severity=warning"]);
+        let c = run(&["--severity=warning", "-"]);
         assert_eq!(c.spec_template.min_severity, Severity::WarningC);
     }
 
@@ -629,14 +739,14 @@ mod tests {
 
     #[test]
     fn include_wired_and_accumulates() {
-        let c = run(&["-i", "SC2086,2154", "--include=SC1000"]);
+        let c = run(&["-i", "SC2086,2154", "--include=SC1000", "-"]);
         // include: Just new <> old, so later flags prepend.
         assert_eq!(c.spec_template.included_warnings, Some(vec![1000, 2086, 2154]));
     }
 
     #[test]
     fn exclude_wired_and_accumulates() {
-        let c = run(&["-e", "SC2086", "-e", "2154"]);
+        let c = run(&["-e", "SC2086", "-e", "2154", "-"]);
         // exclude: new ++ old, later flags prepend.
         assert_eq!(c.spec_template.excluded_warnings, vec![2154, 2086]);
     }
@@ -651,7 +761,7 @@ mod tests {
 
     #[test]
     fn enable_wired() {
-        let c = run(&["-o", "avoid-nullary-conditions,check-extra-masked-returns"]);
+        let c = run(&["-o", "avoid-nullary-conditions,check-extra-masked-returns", "-"]);
         assert_eq!(
             c.spec_template.optional_checks,
             vec![
@@ -663,7 +773,7 @@ mod tests {
 
     #[test]
     fn norc_wired() {
-        assert!(run(&["--norc"]).spec_template.ignore_rc);
+        assert!(run(&["--norc", "-"]).spec_template.ignore_rc);
     }
 
     #[test]
@@ -677,7 +787,7 @@ mod tests {
     #[test]
     fn accepted_but_inert_flags_parse() {
         // -P, -x, --rcfile, -a parse without error and do not become filenames.
-        let c = run(&["-x", "-a", "-P", "src", "--rcfile", "my.rc"]);
+        let c = run(&["-x", "-a", "-P", "src", "--rcfile", "my.rc", "-"]);
         assert_eq!(c.inputs, vec!["-".to_string()]);
         assert!(c.spec_template.check_sourced);
     }
@@ -689,7 +799,7 @@ mod tests {
             other => panic!("expected Error(4), got {other:?}"),
         }
         // Bare --color defaults to "always" and is accepted.
-        assert!(matches!(parse(&args(&["--color"])), Outcome::Run(_)));
+        assert!(matches!(parse(&args(&["--color", "-"])), Outcome::Run(_)));
     }
 
     #[test]
