@@ -1487,15 +1487,52 @@ impl Builder {
         let cmd = &words[0];
         let args = &words[1..];
 
+        // Trailing run of literal args (or REPLY). Shared fallback, used both
+        // when getGnuOpts fails to parse and when `-a`'s value is not a valid
+        // array literal. Matches AnalyzerLib's getLiteralOfDataType, which
+        // rejects `-`-prefixed values so control falls back to the trailing
+        // literals (e.g. `read -ar foo`: getGnuOpts binds `-a`'s value to the
+        // bundled token `-ar`, which is not a real name, so `foo` is recorded
+        // via this fallback instead of a bogus `-ar` array write).
+        let fallback = |args: &[Token]| -> Vec<IdTagged<CFEffect>> {
+            let mut names: Vec<(Id, String)> = Vec::new();
+            for c in args.iter().rev() {
+                match get_literal_string(c) {
+                    Some(s) => names.push((c.id, s)),
+                    None => break,
+                }
+            }
+            names.reverse();
+            let names_or_default = if names.is_empty() {
+                vec![(cmd.id, "REPLY".to_string())]
+            } else {
+                names
+            };
+            let has_dash_a = get_generic_opts(args).iter().any(|(s, _)| s == "a");
+            let value = if has_dash_a {
+                CFValue::CFValueArray
+            } else {
+                CFValue::CFValueString
+            };
+            names_or_default
+                .into_iter()
+                .map(|(id, name)| IdTagged::new(id, CFEffect::CFWriteVariable(name, value.clone())))
+                .collect()
+        };
+
+        // `-a NAME` names a valid array literal. None when there is no `-a`, or
+        // its value is not a literal, or the literal is `-`-prefixed (a bundled
+        // flag such as `-ar`, not a real variable name).
         let with_array = |flags: &[(String, (Token, Token))]| -> Option<Vec<IdTagged<CFEffect>>> {
             let (_, token) = lookup("a", flags)?;
-            Some(match get_literal_string(&token) {
-                Some(name) => vec![IdTagged::new(
-                    token.id,
-                    CFEffect::CFWriteVariable(name, CFValue::CFValueArray),
-                )],
-                None => Vec::new(),
-            })
+            let name = get_literal_string(&token)?;
+            if name.starts_with('-') {
+                return None;
+            }
+            Some(vec![IdTagged::new(
+                token.id,
+                CFEffect::CFWriteVariable(name, CFValue::CFValueArray),
+            )])
         };
         let with_fields = |flags: &[(String, (Token, Token))]| -> Vec<IdTagged<CFEffect>> {
             flags
@@ -1514,35 +1551,16 @@ impl Builder {
         };
 
         let main: Vec<IdTagged<CFEffect>> = match get_gnu_opts(FLAGS_FOR_READ, args) {
-            Some(flags) => with_array(&flags).unwrap_or_else(|| with_fields(&flags)),
-            None => {
-                // fallback: trailing run of literal args (or REPLY)
-                let mut names: Vec<(Id, String)> = Vec::new();
-                for c in args.iter().rev() {
-                    match get_literal_string(c) {
-                        Some(s) => names.push((c.id, s)),
-                        None => break,
-                    }
+            Some(flags) => {
+                if lookup("a", &flags).is_some() {
+                    // `-a` present: use its array name, else fall back to the
+                    // trailing literal run (the `-a` value wasn't a real name).
+                    with_array(&flags).unwrap_or_else(|| fallback(args))
+                } else {
+                    with_fields(&flags)
                 }
-                names.reverse();
-                let names_or_default = if names.is_empty() {
-                    vec![(cmd.id, "REPLY".to_string())]
-                } else {
-                    names
-                };
-                let has_dash_a = get_generic_opts(args).iter().any(|(s, _)| s == "a");
-                let value = if has_dash_a {
-                    CFValue::CFValueArray
-                } else {
-                    CFValue::CFValueString
-                };
-                names_or_default
-                    .into_iter()
-                    .map(|(id, name)| {
-                        IdTagged::new(id, CFEffect::CFWriteVariable(name, value.clone()))
-                    })
-                    .collect()
             }
+            None => fallback(args),
         };
         self.new_node_range(CFNode::CFApplyEffects(main))
     }
@@ -1965,7 +1983,16 @@ fn dom(g: &MutGraph, root: Node) -> Vec<(Node, Vec<Node>)> {
         }
     }
 
-    // Build result: chain for reachable nodes, all-nodes for unreachable.
+    // Build result: dominator chain for each node reachable from `root`.
+    //
+    // fgl's `dom` returns entries ONLY for reachable nodes (its `rest`/`-1`
+    // fallback is dead: `fromNode` only ever holds reachable nodes, so the
+    // unreachable list is always empty). Callers treat an omitted node as
+    // having no post-dominators — `findPostDominators` leaves it at the
+    // initialized `[]`. We must NOT assign unreachable nodes the full node
+    // set: that would make every node "post-dominate" an unreachable node,
+    // e.g. spuriously flagging the recursive calls inside a backgrounded,
+    // self-referential function body (`:(){ :|:& };:`) as SC2218.
     let mut result: Vec<(Node, Vec<Node>)> = Vec::new();
     for &n in &all_nodes {
         if number.contains_key(&n) {
@@ -1976,8 +2003,6 @@ fn dom(g: &MutGraph, root: Node) -> Vec<(Node, Vec<Node>)> {
                 chain.push(cur);
             }
             result.push((n, chain));
-        } else {
-            result.push((n, all_nodes.clone()));
         }
     }
     result

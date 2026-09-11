@@ -1358,7 +1358,15 @@ fn get_modified_variable_command(base: &Token, words: &[Token]) -> Vec<(Token, T
             };
             match cfg_get_gnu_opts("sreu:n:N:i:p:a:t:", rest) {
                 Some(parsed) => match parsed.iter().find(|(f, _)| f == "a") {
-                    Some((_, (_, var))) => get_literal_array_c(base, var).into_iter().collect(),
+                    // Haskell: `Just (_, var) -> (:[]) <$> getLiteralArray var`
+                    // inside `fromMaybe fallback $ do ...`. When getLiteralArray
+                    // is Nothing (non-literal, or `-`-prefixed such as the
+                    // bundled `-ar` in `read -ar foo`), the whole `do` is Nothing
+                    // and control falls back to the trailing-literal run.
+                    Some((_, (_, var))) => match get_literal_array_c(base, var) {
+                        Some(a) => vec![a],
+                        None => fallback(),
+                    },
                     None => parsed
                         .iter()
                         .filter(|(f, _)| f.is_empty())

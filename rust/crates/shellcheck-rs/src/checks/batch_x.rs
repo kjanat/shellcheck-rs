@@ -24,16 +24,7 @@ use std::collections::BTreeMap;
 
 pub fn register(c: &mut Checker) {
     // Registration is gated by the conformance guardrail (extra == 0 per code).
-    //
-    // HELD BACK: `check_use_before_definition` (SC2218). It is faithfully ported
-    // and fully tested below, but registering it produces 2 spurious SC2218 on
-    // the fork-bomb `:(){ :|:& };:` (corpus prop_checkBlatantRecursion1): the
-    // port's CFG post-dominator computation reports the function definition as
-    // post-dominating the recursive `:` calls inside its own body, where the
-    // Haskell oracle does not. That is a fidelity gap in the shared CFG analysis
-    // (cfg_analysis.rs, out of this file's scope), not in this check. All other
-    // corpus scripts match the oracle exactly, so it is left unregistered.
-    // c.tree(check_use_before_definition);
+    c.tree(check_use_before_definition);
     c.node(check_command_is_unreachable);
     c.node(check_overwritten_exit_code);
     c.node(check_plus_equals_number);
@@ -384,7 +375,6 @@ fn paren_fix(params: &Parameters, id: Id) -> crate::interface::Fix {
 // SC2218 — checkUseBeforeDefinition (tree)
 // ===========================================================================
 
-#[allow(dead_code)] // Held back from registration; see register(). Still tested.
 fn check_use_before_definition(params: &Parameters, root: &Token, out: &mut Out) {
     let cfga = match params.cfg_analysis.as_ref() {
         Some(c) => c,
