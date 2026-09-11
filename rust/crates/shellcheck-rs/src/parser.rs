@@ -907,35 +907,23 @@ impl Parser {
     fn read_dollar_arithmetic(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("$((")?;
-        let inner_start = self.pos();
-        let raw = self.read_balanced_parens_until_double_close()?;
-        let arith = self.make_arith_literal(&raw, inner_start);
+        let c = self.read_arithmetic_contents()?;
+        self.char(')')?;
+        if self.char(')').is_err() {
+            // Haskell: char ')' <|> fail "Expected a double )) to end the $((..))"
+            return Err(());
+        }
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_DollarArithmetic(arith)))
+        Ok(Token::new(id, InnerToken::T_DollarArithmetic(c)))
     }
 
     fn read_dollar_bracket(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("$[")?;
-        let inner_start = self.pos();
-        let mut raw = String::new();
-        let mut depth = 1;
-        while let Some(c) = self.peek() {
-            if c == '[' {
-                depth += 1;
-            } else if c == ']' {
-                depth -= 1;
-                if depth == 0 {
-                    break;
-                }
-            }
-            self.bump();
-            raw.push(c);
-        }
-        self.char(']')?;
-        let arith = self.make_arith_literal(&raw, inner_start);
+        let c = self.read_arithmetic_contents()?;
+        self.string("]")?;
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_DollarBracket(arith)))
+        Ok(Token::new(id, InnerToken::T_DollarBracket(c)))
     }
 
     fn read_dollar_expansion(&mut self) -> PResult<Token> {
@@ -1103,12 +1091,496 @@ impl Parser {
         Token::new(wid, InnerToken::T_NormalWord(vec![lit]))
     }
 
-    fn make_arith_literal(&mut self, s: &str, start: Position) -> Token {
-        // Placeholder: arithmetic contents kept as a literal token. Full
-        // arithmetic parsing (TA_*) is ported later; downstream checks that need
-        // structure will drive it.
+    // ---- arithmetic contents (faithful port of readArithmeticContents) -----
+    //
+    // Parses inline (like the Haskell parser) directly off the input stream,
+    // producing the real `TA_*` tree. Binary/assignment/combo-op nodes carry the
+    // *operator token's* span (matching `readComboOp`'s `id <- endSpan start`),
+    // not the whole lhs..rhs range.
+
+    /// `spacing` local to arithmetic: many (whitespace | "\\\n").
+    fn arith_spacing(&mut self) {
+        loop {
+            let m = self.mark();
+            if self.string("\\\n").is_ok() {
+                continue;
+            }
+            self.reset(m);
+            if self.whitespace().is_ok() {
+                continue;
+            }
+            break;
+        }
+    }
+
+    /// `readComboOp op token`: match one of `ops` (atomic), require it not be
+    /// followed by another op char (`failIfIncompleteOp`), give it a span-only
+    /// id, then eat trailing spacing. Returns `(id, matched-op)`.
+    fn arith_read_combo_op(&mut self, ops: &[&str]) -> PResult<(Id, String)> {
+        let start = self.pos();
+        let outer = self.mark();
+        let mut matched: Option<String> = None;
+        for op in ops {
+            let m = self.mark();
+            if self.string(op).is_ok() {
+                // failIfIncompleteOp = notFollowedBy2 (oneOf "&|<>=")
+                if !matches!(self.peek(), Some(c) if "&|<>=".contains(c)) {
+                    matched = Some((*op).to_string());
+                    break;
+                }
+            }
+            self.reset(m);
+        }
+        let op = match matched {
+            Some(o) => o,
+            None => {
+                self.reset(outer);
+                return Err(());
+            }
+        };
         let id = self.next_id_between(start, self.pos());
-        Token::new(id, InnerToken::T_Literal(s.to_string()))
+        self.arith_spacing();
+        Ok((id, op))
+    }
+
+    /// `readMinusOp`: binary `-`, but warn (SC1106) for `-lt`/`-gt`/&c.
+    fn arith_read_minus_op(&mut self) -> PResult<(Id, String)> {
+        let start = self.pos();
+        let pos = self.pos();
+        let outer = self.mark();
+        // try (char '-' >> failIfIncompleteOp)
+        if self.char('-').is_err() {
+            self.reset(outer);
+            return Err(());
+        }
+        if matches!(self.peek(), Some(c) if "&|<>=".contains(c)) {
+            self.reset(outer);
+            return Err(());
+        }
+        // optional lookAhead: -lt/-gt/... -> SC1106
+        let look = self.mark();
+        let alts = [
+            ("lt", "<"),
+            ("gt", ">"),
+            ("le", "<="),
+            ("ge", ">="),
+            ("eq", "=="),
+            ("ne", "!="),
+        ];
+        let mut found: Option<(&str, &str)> = None;
+        for (s, alt) in alts {
+            let m = self.mark();
+            if self.string(s).is_ok() && self.spacing1().is_ok() {
+                found = Some((s, alt));
+                self.reset(m);
+                break;
+            }
+            self.reset(m);
+        }
+        self.reset(look);
+        if let Some((s, alt)) = found {
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1106,
+                &format!("In arithmetic contexts, use {} instead of -{}", alt, s),
+            );
+        }
+        let id = self.next_id_between(start, self.pos());
+        self.arith_spacing();
+        Ok((id, "-".to_string()))
+    }
+
+    /// Generic `splitBy sub ops = chainl1 sub (readBinary ops)` producing
+    /// left-associated `TA_Binary` nodes.
+    fn arith_split_by(
+        &mut self,
+        sub: fn(&mut Self) -> PResult<Token>,
+        ops: &[&str],
+    ) -> PResult<Token> {
+        let mut x = sub(self)?;
+        loop {
+            let m = self.mark();
+            match self.arith_read_combo_op(ops) {
+                Ok((id, op)) => {
+                    // op consumed: term is now required (Parsec propagates failure)
+                    let y = sub(self)?;
+                    x = Token::new(id, InnerToken::TA_Binary { op, lhs: x, rhs: y });
+                }
+                Err(()) => {
+                    self.reset(m);
+                    break;
+                }
+            }
+        }
+        Ok(x)
+    }
+
+    /// Entry point: `readArithmeticContents = readSequence`.
+    fn read_arithmetic_contents(&mut self) -> PResult<Token> {
+        self.read_arith_sequence()
+    }
+
+    /// `readSequence`: comma-separated assignments -> `TA_Sequence`.
+    fn read_arith_sequence(&mut self) -> PResult<Token> {
+        self.arith_spacing();
+        let start = self.pos();
+        let mut list = Vec::new();
+        let m = self.mark();
+        match self.read_arith_assignment() {
+            Ok(first) => {
+                list.push(first);
+                // many (char ',' >> spacing >> readAssignment)
+                loop {
+                    let mm = self.mark();
+                    if self.char(',').is_ok() {
+                        self.arith_spacing();
+                        // sepBy1's inner is `sep >> p`; if sep consumed then p
+                        // fails, Parsec propagates the failure.
+                        let t = self.read_arith_assignment()?;
+                        list.push(t);
+                    } else {
+                        self.reset(mm);
+                        break;
+                    }
+                }
+            }
+            Err(()) => {
+                self.reset(m);
+            }
+        }
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::TA_Sequence(list)))
+    }
+
+    /// `readAssignment = chainr1 readTrinary readAssignmentOp` -> `TA_Assignment`.
+    fn read_arith_assignment(&mut self) -> PResult<Token> {
+        let x = self.read_arith_trinary()?;
+        let m = self.mark();
+        match self.arith_read_combo_op(&[
+            "=", "*=", "/=", "%=", "+=", "-=", "<<=", ">>=", "&=", "^=", "|=",
+        ]) {
+            Ok((id, op)) => {
+                // chainr1: right-recurse
+                let y = self.read_arith_assignment()?;
+                Ok(Token::new(id, InnerToken::TA_Assignment { op, lhs: x, rhs: y }))
+            }
+            Err(()) => {
+                self.reset(m);
+                Ok(x)
+            }
+        }
+    }
+
+    /// `readTrinary` (?:) -> `TA_Trinary`.
+    fn read_arith_trinary(&mut self) -> PResult<Token> {
+        let x = self.read_arith_logical_or()?;
+        let m = self.mark();
+        let start = self.pos();
+        if self.string("?").is_ok() {
+            self.arith_spacing();
+            let y = self.read_arith_trinary()?;
+            // string ":" — required
+            if self.string(":").is_err() {
+                // consumed input; propagate failure faithfully
+                return Err(());
+            }
+            self.arith_spacing();
+            let z = self.read_arith_trinary()?;
+            let id = self.next_id_between(start, self.pos());
+            Ok(Token::new(id, InnerToken::TA_Trinary { cond: x, then: y, els: z }))
+        } else {
+            self.reset(m);
+            Ok(x)
+        }
+    }
+
+    fn read_arith_logical_or(&mut self) -> PResult<Token> {
+        self.arith_split_by(Self::read_arith_logical_and, &["||"])
+    }
+    fn read_arith_logical_and(&mut self) -> PResult<Token> {
+        self.arith_split_by(Self::read_arith_bit_or, &["&&"])
+    }
+    fn read_arith_bit_or(&mut self) -> PResult<Token> {
+        self.arith_split_by(Self::read_arith_bit_xor, &["|"])
+    }
+    fn read_arith_bit_xor(&mut self) -> PResult<Token> {
+        self.arith_split_by(Self::read_arith_bit_and, &["^"])
+    }
+    fn read_arith_bit_and(&mut self) -> PResult<Token> {
+        self.arith_split_by(Self::read_arith_equated, &["&"])
+    }
+    fn read_arith_equated(&mut self) -> PResult<Token> {
+        self.arith_split_by(Self::read_arith_compared, &["==", "!="])
+    }
+    fn read_arith_compared(&mut self) -> PResult<Token> {
+        self.arith_split_by(Self::read_arith_shift, &["<=", ">=", "<", ">"])
+    }
+    fn read_arith_shift(&mut self) -> PResult<Token> {
+        self.arith_split_by(Self::read_arith_addition, &["<<", ">>"])
+    }
+
+    /// `readAddition = chainl1 readMultiplication (readBinary ["+"] <|> readMinusOp)`.
+    fn read_arith_addition(&mut self) -> PResult<Token> {
+        let mut x = self.read_arith_multiplication()?;
+        loop {
+            let m = self.mark();
+            // try "+" combo op, else minus op
+            let opres = match self.arith_read_combo_op(&["+"]) {
+                Ok(r) => Some(r),
+                Err(()) => {
+                    self.reset(m);
+                    match self.arith_read_minus_op() {
+                        Ok(r) => Some(r),
+                        Err(()) => {
+                            self.reset(m);
+                            None
+                        }
+                    }
+                }
+            };
+            match opres {
+                Some((id, op)) => {
+                    let y = self.read_arith_multiplication()?;
+                    x = Token::new(id, InnerToken::TA_Binary { op, lhs: x, rhs: y });
+                }
+                None => break,
+            }
+        }
+        Ok(x)
+    }
+
+    fn read_arith_multiplication(&mut self) -> PResult<Token> {
+        self.arith_split_by(Self::read_arith_exponential, &["*", "/", "%"])
+    }
+    fn read_arith_exponential(&mut self) -> PResult<Token> {
+        self.arith_split_by(Self::read_arith_any_negated, &["**"])
+    }
+
+    /// `readAnyNegated = readNegated <|> readAnySigned`.
+    fn read_arith_any_negated(&mut self) -> PResult<Token> {
+        let m = self.mark();
+        if let Ok(t) = self.read_arith_negated() {
+            return Ok(t);
+        }
+        self.reset(m);
+        self.read_arith_any_signed()
+    }
+
+    /// `readNegated`: `! | ~` prefix -> `TA_Unary`.
+    fn read_arith_negated(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let op = self.one_of("!~")?;
+        let id = self.next_id_between(start, self.pos());
+        self.arith_spacing();
+        let x = self.read_arith_any_negated()?;
+        Ok(Token::new(id, InnerToken::TA_Unary { op: op.to_string(), operand: x }))
+    }
+
+    /// `readAnySigned = readSigned <|> readAnycremented`.
+    fn read_arith_any_signed(&mut self) -> PResult<Token> {
+        let m = self.mark();
+        if let Ok(t) = self.read_arith_signed() {
+            return Ok(t);
+        }
+        self.reset(m);
+        self.read_arith_anycremented()
+    }
+
+    /// `readSigned`: unary `+`/`-` (not `++`/`--`) -> `TA_Unary`.
+    fn read_arith_signed(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let outer = self.mark();
+        let mut got: Option<char> = None;
+        for c in ['+', '-'] {
+            let m = self.mark();
+            if self.char(c).is_ok() {
+                // notFollowedBy2 (char c)
+                if self.peek() != Some(c) {
+                    self.arith_spacing();
+                    got = Some(c);
+                    break;
+                }
+            }
+            self.reset(m);
+        }
+        let op = match got {
+            Some(c) => c,
+            None => {
+                self.reset(outer);
+                return Err(());
+            }
+        };
+        let id = self.next_id_between(start, self.pos());
+        self.arith_spacing();
+        let x = self.read_arith_anycremented()?;
+        Ok(Token::new(id, InnerToken::TA_Unary { op: op.to_string(), operand: x }))
+    }
+
+    /// `readAnycremented = readNormalOrPostfixIncremented <|> readPrefixIncremented`.
+    fn read_arith_anycremented(&mut self) -> PResult<Token> {
+        let m = self.mark();
+        if let Ok(t) = self.read_arith_normal_or_postfix() {
+            return Ok(t);
+        }
+        self.reset(m);
+        self.read_arith_prefix_incremented()
+    }
+
+    /// `readPrefixIncremented`: `++x`/`--x` -> `TA_Unary` with op `"++|"`/`"--|"`.
+    fn read_arith_prefix_incremented(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let m = self.mark();
+        let op = if self.string("++").is_ok() {
+            "++"
+        } else {
+            self.reset(m);
+            if self.string("--").is_ok() {
+                "--"
+            } else {
+                self.reset(m);
+                return Err(());
+            }
+        };
+        let id = self.next_id_between(start, self.pos());
+        self.arith_spacing();
+        let x = self.read_arith_term()?;
+        Ok(Token::new(id, InnerToken::TA_Unary { op: format!("{}|", op), operand: x }))
+    }
+
+    /// `readNormalOrPostfixIncremented`: term, optional trailing `++`/`--`
+    /// -> `TA_Unary` with op `"|++"`/`"|--"`.
+    fn read_arith_normal_or_postfix(&mut self) -> PResult<Token> {
+        let x = self.read_arith_term()?;
+        self.arith_spacing();
+        let start = self.pos();
+        let m = self.mark();
+        let op = if self.string("++").is_ok() {
+            Some("++")
+        } else {
+            self.reset(m);
+            if self.string("--").is_ok() {
+                Some("--")
+            } else {
+                self.reset(m);
+                None
+            }
+        };
+        match op {
+            Some(op) => {
+                let id = self.next_id_between(start, self.pos());
+                self.arith_spacing();
+                Ok(Token::new(id, InnerToken::TA_Unary { op: format!("|{}", op), operand: x }))
+            }
+            None => Ok(x),
+        }
+    }
+
+    /// `readArithTerm = readGroup <|> readVariable <|> readExpansion`.
+    fn read_arith_term(&mut self) -> PResult<Token> {
+        let m = self.mark();
+        if let Ok(t) = self.read_arith_group() {
+            return Ok(t);
+        }
+        self.reset(m);
+        if let Ok(t) = self.read_arith_variable() {
+            return Ok(t);
+        }
+        self.reset(m);
+        self.read_arith_expansion()
+    }
+
+    /// `readGroup`: `( sequence )` -> `TA_Parenthesis`.
+    fn read_arith_group(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        self.char('(')?;
+        let s = self.read_arith_sequence()?;
+        self.char(')')?;
+        let id = self.next_id_between(start, self.pos());
+        self.arith_spacing();
+        Ok(Token::new(id, InnerToken::TA_Parenthesis(s)))
+    }
+
+    /// `readVariable`: name + array indices -> `TA_Variable`.
+    fn read_arith_variable(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let name = self.read_variable_name()?;
+        let mut indices = Vec::new();
+        loop {
+            let m = self.mark();
+            match self.read_arith_array_index() {
+                Ok(t) => indices.push(t),
+                Err(()) => {
+                    self.reset(m);
+                    break;
+                }
+            }
+        }
+        let id = self.next_id_between(start, self.pos());
+        self.arith_spacing();
+        Ok(Token::new(id, InnerToken::TA_Variable { name, indices }))
+    }
+
+    /// `readArrayIndex` (arithmetic-local): `[ arith ]` -> `T_UnparsedIndex`
+    /// storing the source position and the raw consumed text. The inner
+    /// arithmetic parse is used only to find the extent (like `readStringForParser`
+    /// via `inSeparateContext`); its ids/notes are rolled back.
+    fn read_arith_array_index(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        self.char('[')?;
+        let pos = self.pos();
+        let idx0 = self.idx;
+        let save_next_id = self.next_id;
+        let save_notes = self.notes.len();
+        let save_problems = self.problems.len();
+        // Consume what readArithmeticContents would, discarding its output.
+        let _ = self.read_arithmetic_contents();
+        let raw: String = self.input[idx0..self.idx].iter().collect();
+        // Roll back the separate-context allocations/notes.
+        self.next_id = save_next_id;
+        self.notes.truncate(save_notes);
+        self.problems.truncate(save_problems);
+        self.positions.retain(|k, _| k.0 < save_next_id);
+        self.char(']')?;
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_UnparsedIndex { pos, str: raw }))
+    }
+
+    /// `readExpansion`: `$`-expansions / quotes / literals -> `TA_Expansion`.
+    fn read_arith_expansion(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let mut pieces = Vec::new();
+        loop {
+            let m = self.mark();
+            let piece = match self.peek() {
+                Some('\'') => self.read_single_quoted(),
+                Some('"') => self.read_double_quoted(),
+                Some('$') => self.read_normal_dollar(),
+                Some('`') => self.read_backticked(),
+                Some('{') => self.read_braced(),
+                Some('#') => {
+                    let s = self.pos();
+                    self.bump();
+                    let lid = self.next_id_between(s, self.pos());
+                    Ok(Token::new(lid, InnerToken::T_Literal("#".to_string())))
+                }
+                _ => self.read_normal_literal("+-*/=%^,]?:"),
+            };
+            match piece {
+                Ok(t) => pieces.push(t),
+                Err(()) => {
+                    self.reset(m);
+                    break;
+                }
+            }
+        }
+        if pieces.is_empty() {
+            return Err(());
+        }
+        let id = self.next_id_between(start, self.pos());
+        self.arith_spacing();
+        Ok(Token::new(id, InnerToken::TA_Expansion(pieces)))
     }
 
     fn read_balanced_parens_until_close(&mut self) -> PResult<String> {
@@ -1128,37 +1600,6 @@ impl Parser {
             raw.push(c);
         }
         self.char(')')?;
-        Ok(raw)
-    }
-
-    fn read_balanced_parens_until_double_close(&mut self) -> PResult<String> {
-        // for $(( .. )) : read until )) at depth 0
-        let mut raw = String::new();
-        let mut depth = 0i32;
-        loop {
-            match self.peek() {
-                None => return Err(()),
-                Some('(') => {
-                    depth += 1;
-                    self.bump();
-                    raw.push('(');
-                }
-                Some(')') => {
-                    if depth == 0 && self.peek_at(1) == Some(')') {
-                        self.bump();
-                        self.bump();
-                        break;
-                    }
-                    depth -= 1;
-                    self.bump();
-                    raw.push(')');
-                }
-                Some(c) => {
-                    self.bump();
-                    raw.push(c);
-                }
-            }
-        }
         Ok(raw)
     }
 
@@ -1474,7 +1915,17 @@ impl Parser {
         let c = self.peek();
         let m = self.mark();
         let cmd = match c {
-            Some('(') if self.peek_at(1) == Some('(') => self.read_arithmetic_command(),
+            Some('(') if self.peek_at(1) == Some('(') => {
+                // readAmbiguous "((" readArithmeticExpression readSubshell
+                let mm = self.mark();
+                match self.read_arithmetic_command() {
+                    Ok(t) => Ok(t),
+                    Err(()) => {
+                        self.reset(mm);
+                        self.read_subshell()
+                    }
+                }
+            }
             Some('(') => self.read_subshell(),
             Some('{') if self.is_word_boundary_after(1) => self.read_brace_group(),
             _ => {
@@ -1493,7 +1944,14 @@ impl Parser {
                 } else if self.keyword_ahead("function") {
                     self.read_function_def()
                 } else if self.peek() == Some('(') && self.peek_at(1) == Some('(') {
-                    self.read_arithmetic_command()
+                    let mm = self.mark();
+                    match self.read_arithmetic_command() {
+                        Ok(t) => Ok(t),
+                        Err(()) => {
+                            self.reset(mm);
+                            self.read_subshell()
+                        }
+                    }
                 } else if self.string_peek("@test ") {
                     self.read_bats_test()
                 } else if self.looks_like_posix_function() {
@@ -1646,11 +2104,26 @@ impl Parser {
         let start = self.pos();
         self.consume_keyword("for")?;
         self.spacing();
-        // arithmetic for: for ((...))
+        // arithmetic for: for ((init; cond; step))
         if self.peek() == Some('(') && self.peek_at(1) == Some('(') {
-            // simplified: skip to )) then do..done
-            self.string("((")?;
-            let _ = self.read_balanced_parens_until_double_close();
+            // readArithmeticDelimiter '(': "(" spacing "(" (lenient about spaces)
+            self.char('(')?;
+            self.arith_spacing();
+            self.char('(')?;
+            let init = self.read_arithmetic_contents()?;
+            self.char(';')?;
+            self.arith_spacing();
+            let cond = self.read_arithmetic_contents()?;
+            self.char(';')?;
+            self.arith_spacing();
+            let step = self.read_arithmetic_contents()?;
+            self.arith_spacing();
+            // readArithmeticDelimiter ')': ")" spacing ")"
+            self.char(')')?;
+            self.arith_spacing();
+            self.char(')')?;
+            self.spacing();
+            // optional sequential separator, then do..done (or brace group)
             self.allspacing();
             let _ = self.char(';');
             self.allspacing();
@@ -1659,10 +2132,7 @@ impl Parser {
             self.allspacing();
             self.consume_keyword("done")?;
             let id = self.next_id_between(start, self.pos());
-            let zero = self.empty_literal();
-            let one = self.empty_literal();
-            let two = self.empty_literal();
-            return Ok(Token::new(id, InnerToken::T_ForArithmetic { init: zero, cond: one, step: two, body }));
+            return Ok(Token::new(id, InnerToken::T_ForArithmetic { init, cond, step, body }));
         }
         let var = self.read_variable_name()?;
         self.spacing();
@@ -1943,11 +2413,11 @@ impl Parser {
     fn read_arithmetic_command(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("((")?;
-        let inner_start = self.pos();
-        let raw = self.read_balanced_parens_until_double_close()?;
-        let arith = self.make_arith_literal(&raw, inner_start);
+        let c = self.read_arithmetic_contents()?;
+        self.string("))")?;
+        self.arith_spacing();
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_Arithmetic(arith)))
+        Ok(Token::new(id, InnerToken::T_Arithmetic(c)))
     }
 
     // ---- simple command ----------------------------------------------------
@@ -2063,11 +2533,12 @@ impl Parser {
         let start = self.pos();
         // name
         let name = self.read_variable_name()?;
-        // optional [index]
+        // optional [index] indices -> T_UnparsedIndex (like top-level readArrayIndex)
         let mut indices = Vec::new();
-        if self.peek() == Some('[') {
+        while self.peek() == Some('[') {
             let istart = self.pos();
             self.bump();
+            let pos = self.pos();
             let mut raw = String::new();
             let mut depth = 1;
             while let Some(c) = self.peek() {
@@ -2077,8 +2548,8 @@ impl Parser {
                 raw.push(c);
             }
             self.char(']')?;
-            let idxw = self.make_literal_word(&raw, istart);
-            indices.push(idxw);
+            let idx_id = self.next_id_between(istart, self.pos());
+            indices.push(Token::new(idx_id, InnerToken::T_UnparsedIndex { pos, str: raw }));
         }
         // += or =
         let mode = if self.string("+=").is_ok() {
@@ -2428,6 +2899,14 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
         T_DollarArithmetic(t) => T_DollarArithmetic(r!(t)),
         T_DollarBracket(t) => T_DollarBracket(r!(t)),
         T_Arithmetic(t) => T_Arithmetic(r!(t)),
+        TA_Binary { op, lhs, rhs } => TA_Binary { op, lhs: r!(lhs), rhs: r!(rhs) },
+        TA_Assignment { op, lhs, rhs } => TA_Assignment { op, lhs: r!(lhs), rhs: r!(rhs) },
+        TA_Variable { name, indices } => TA_Variable { name, indices: rv!(indices) },
+        TA_Expansion(l) => TA_Expansion(rv!(l)),
+        TA_Sequence(l) => TA_Sequence(rv!(l)),
+        TA_Parenthesis(t) => TA_Parenthesis(r!(t)),
+        TA_Trinary { cond, then, els } => TA_Trinary { cond: r!(cond), then: r!(then), els: r!(els) },
+        TA_Unary { op, operand } => TA_Unary { op, operand: r!(operand) },
         T_Backgrounded(t) => T_Backgrounded(r!(t)),
         T_Banged(t) => T_Banged(r!(t)),
         T_HereString(t) => T_HereString(r!(t)),
@@ -3091,4 +3570,47 @@ impl Parser {
     fn cond_spacing_line(&mut self) {
         while self.line_whitespace().is_ok() {}
     }
+}
+
+// ============================================================================
+// Tests — arithmetic contents (ports of Parser.hs prop_a1..prop_a23)
+// ============================================================================
+
+#[cfg(test)]
+mod arith_tests {
+    use super::*;
+
+    /// Mirrors `isOk readArithmeticContents s`: the parser succeeds, consumes
+    /// all input (`>> eof`), and produces no notes or problems.
+    fn arith_ok(script: &str) -> bool {
+        let mut p = Parser::new("-", script);
+        match p.read_arithmetic_contents() {
+            Ok(_) => p.eof() && p.notes.is_empty() && p.problems.is_empty(),
+            Err(()) => false,
+        }
+    }
+
+    #[test] fn prop_a1() { assert!(arith_ok(" n++ + ++c")); }
+    #[test] fn prop_a2() { assert!(arith_ok("$N*4-(3,2)")); }
+    #[test] fn prop_a3() { assert!(arith_ok("n|=2<<1")); }
+    #[test] fn prop_a4() { assert!(arith_ok("n &= 2 **3")); }
+    #[test] fn prop_a5() { assert!(arith_ok("1 |= 4 && n >>= 4")); }
+    #[test] fn prop_a6() { assert!(arith_ok(" 1 | 2 ||3|4")); }
+    #[test] fn prop_a7() { assert!(arith_ok("3*2**10")); }
+    #[test] fn prop_a8() { assert!(arith_ok("3")); }
+    #[test] fn prop_a9() { assert!(arith_ok("a^!-b")); }
+    #[test] fn prop_a10() { assert!(arith_ok("! $?")); }
+    #[test] fn prop_a11() { assert!(arith_ok("10#08 * 16#f")); }
+    #[test] fn prop_a12() { assert!(arith_ok("\"$((3+2))\" + '37'")); }
+    #[test] fn prop_a13() { assert!(arith_ok("foo[9*y+x]++")); }
+    #[test] fn prop_a14() { assert!(arith_ok("1+`echo 2`")); }
+    #[test] fn prop_a15() { assert!(arith_ok("foo[`echo foo | sed s/foo/4/g` * 3] + 4")); }
+    #[test] fn prop_a16() { assert!(arith_ok("$foo$bar")); }
+    #[test] fn prop_a17() { assert!(arith_ok("i<(0+(1+1))")); }
+    #[test] fn prop_a18() { assert!(arith_ok("a?b:c")); }
+    #[test] fn prop_a19() { assert!(arith_ok("\\\n3 +\\\n  2")); }
+    #[test] fn prop_a20() { assert!(arith_ok("a ? b ? c : d : e")); }
+    #[test] fn prop_a21() { assert!(arith_ok("a ? b : c ? d : e")); }
+    #[test] fn prop_a22() { assert!(arith_ok("!!a")); }
+    #[test] fn prop_a23() { assert!(arith_ok("~0")); }
 }
