@@ -75,6 +75,23 @@ pub struct Parser {
 const DOUBLE_QUOTABLE: &str = "\\\"$`";
 const NBSP: char = '\u{A0}';
 
+/// True if `c` terminates a glob character class body (`readClass`'s inner
+/// literal run). This is `customEnd ("]") ++ standardEnd` from `readNormalLiteralPart`,
+/// where `standardEnd = "[{}" ++ quotableChars ++ extglobStartChars ++ unicodeDoubleQuotes`.
+/// `]` is handled by the caller (closes the class); `\` is an escape; `[` and the
+/// extglob chars `?*@!+` are accepted as globchars by the caller. What remains here
+/// are the pure terminators.
+fn is_glob_class_terminator(c: char) -> bool {
+    matches!(
+        c,
+        '{' | '}'
+            | '|' | '&' | ';' | '<' | '>' | '(' | ')'
+            | ' ' | '\'' | '\t' | '\n' | '\r' | NBSP
+            | '"' | '$' | '`'
+            | '\u{201C}' | '\u{201D}' | '\u{2033}' | '\u{2036}'
+    )
+}
+
 impl Parser {
     pub fn new(filename: &str, script: &str) -> Parser {
         Parser {
@@ -618,8 +635,34 @@ impl Parser {
             } else {
                 self.reset(m);
             }
+            // Faithful port of `readClass`'s inner
+            // `many (predefined <|> readNormalLiteralPart "]" <|> globchars)`.
+            // `predefined` ([:class:]) is handled above. Here we handle escapes,
+            // globchars (`![` + extglobStartChars), and normal literal parts,
+            // stopping on `]`/EOF or any char in `customEnd ++ standardEnd`.
             match self.peek() {
                 Some(']') | None => break,
+                // readNormalEscaped: backslash + the escaped char.
+                Some('\\') => {
+                    self.bump();
+                    body.push('\\');
+                    if let Some(n) = self.peek() {
+                        self.bump();
+                        body.push(n);
+                    }
+                    had = true;
+                }
+                // globchars = oneOf ("![" ++ extglobStartChars): accepted as a
+                // single char even though they otherwise terminate a literal run.
+                Some(c) if "![?*@+".contains(c) => {
+                    self.bump();
+                    body.push(c);
+                    had = true;
+                }
+                // standardEnd = "[{}" ++ quotableChars ++ extglobStartChars ++
+                // unicodeDoubleQuotes (minus `\` handled above, and `[`/extglob
+                // handled as globchars). These terminate the class body.
+                Some(c) if is_glob_class_terminator(c) => break,
                 Some(c) => {
                     self.bump();
                     body.push(c);
@@ -1027,16 +1070,21 @@ impl Parser {
         let start = self.pos();
         let pos = self.pos();
         self.char('$')?;
+        // Position right after the `$`. Haskell's `wrapString` captures the
+        // inner literal word's span starting after `char '$'`, so the inner
+        // T_NormalWord/T_Literal begin here (the outer T_DollarBraced keeps the
+        // `$`-anchored `start`).
+        let word_pos = self.pos();
         // positional / special / regular
         if let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 self.bump();
-                let word = self.make_literal_word(&c.to_string(), pos.clone());
+                let word = self.make_literal_word(&c.to_string(), word_pos);
                 let id = self.next_id_between(start, self.pos());
                 if let Some(n) = self.peek() {
                     if n.is_ascii_digit() {
-                        let p = self.pos();
-                        self.note_at(pos, p, Severity::ErrorC, 1037,
+                        // `parseNoteAt pos` in Haskell is zero-width at the `$`.
+                        self.note_at(pos.clone(), pos.clone(), Severity::ErrorC, 1037,
                             "Braces are required for positionals over 9, e.g. ${10}.");
                     }
                 }
@@ -1044,13 +1092,13 @@ impl Parser {
             }
             if "$?!#-@*".contains(c) {
                 self.bump();
-                let word = self.make_literal_word(&c.to_string(), pos);
+                let word = self.make_literal_word(&c.to_string(), word_pos);
                 let id = self.next_id_between(start, self.pos());
                 return Ok(Token::new(id, InnerToken::T_DollarBraced { braced: false, op: word }));
             }
             if c == '_' || c.is_ascii_alphabetic() {
                 let name = self.read_variable_name()?;
-                let word = self.make_literal_word(&name, pos);
+                let word = self.make_literal_word(&name, word_pos);
                 let id = self.next_id_between(start, self.pos());
                 return Ok(Token::new(id, InnerToken::T_DollarBraced { braced: false, op: word }));
             }
@@ -2046,7 +2094,74 @@ impl Parser {
         if let Ok(t) = self.read_condition_command() {
             return Ok(t);
         }
+        if let Ok(t) = self.read_coproc() {
+            return Ok(t);
+        }
         self.read_simple_command()
+    }
+
+    /// Faithful port of `readCoProc` (Parser.hs). `coproc` + spacing, then either
+    /// a compound form (optional name word + compound command body) or a simple
+    /// form (a simple-command body). The body is wrapped in `T_CoProcBody`.
+    fn read_coproc(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let m = self.mark();
+        // try { string "coproc"; spacing1 }
+        if self.string("coproc").is_err() {
+            self.reset(m);
+            return Err(());
+        }
+        if self.spacing1().is_err() {
+            self.reset(m);
+            return Err(());
+        }
+        // choice [ try readCompoundCoProc, readSimpleCoProc ]
+        let mc = self.mark();
+        if let Ok(t) = self.read_compound_coproc(start.clone()) {
+            return Ok(t);
+        }
+        self.reset(mc);
+        self.read_simple_coproc(start)
+    }
+
+    fn read_compound_coproc(&mut self, start: Position) -> PResult<Token> {
+        // notFollowedBy2 readAssignmentWord
+        let ma = self.mark();
+        let is_assign = self.read_assignment_word().is_ok();
+        self.reset(ma);
+        if is_assign {
+            return Err(());
+        }
+        // choice [ try (body only, no name), (name word + body) ]
+        let m1 = self.mark();
+        if let Ok(body) = self.read_coproc_body(true) {
+            let id = self.next_id_between(start.clone(), self.pos());
+            return Ok(Token::new(id, InnerToken::T_CoProc { name: None, body }));
+        }
+        self.reset(m1);
+        let var = self.read_normal_word()?;
+        self.spacing();
+        let body = self.read_coproc_body(true)?;
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_CoProc { name: Some(var), body }))
+    }
+
+    fn read_simple_coproc(&mut self, start: Position) -> PResult<Token> {
+        let body = self.read_coproc_body(false)?;
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_CoProc { name: None, body }))
+    }
+
+    /// `readBody parser`: run `parser`, wrap its result in `T_CoProcBody`.
+    fn read_coproc_body(&mut self, compound: bool) -> PResult<Token> {
+        let start = self.pos();
+        let body = if compound {
+            self.read_compound_command()?
+        } else {
+            self.read_simple_command()?
+        };
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_CoProcBody(body)))
     }
 
     /// True if the upcoming token is a reserved word/operator that terminates a
@@ -4922,5 +5037,189 @@ mod parser_gap_tests {
             "time -p (..) must parse cleanly: {:?}",
             out.notes
         );
+    }
+}
+
+#[cfg(test)]
+mod coproc_glob_dollar_tests {
+    use super::*;
+
+    fn count_nodes<F>(script: &str, pred: F) -> usize
+    where
+        F: Fn(&InnerToken) -> bool,
+    {
+        let out = parse_script("-", script);
+        let root = out.root.expect("parse produced a tree");
+        let mut n = 0;
+        root.visit_preorder(&mut |t| {
+            if pred(&t.inner) {
+                n += 1;
+            }
+        });
+        n
+    }
+
+    fn has_note(script: &str, code: i64) -> bool {
+        parse_script("-", script).notes.iter().any(|n| n.code == code)
+    }
+
+    // ---- P1: coproc parsing -----------------------------------------------
+
+    #[test]
+    fn coproc_compound_with_name() {
+        // `coproc foo { echo bar; }`: one T_CoProc whose name is Some, and a
+        // T_CoProcBody wrapping the compound command. No spurious SC1072.
+        let script = "coproc foo { echo bar; }";
+        assert!(!has_note(script, 1072), "coproc must parse without SC1072");
+        let out = parse_script("-", script);
+        let root = out.root.unwrap();
+        let mut named = 0;
+        let mut bodies = 0;
+        root.visit_preorder(&mut |t| match &*t.inner {
+            InnerToken::T_CoProc { name: Some(_), .. } => named += 1,
+            InnerToken::T_CoProcBody(_) => bodies += 1,
+            _ => {}
+        });
+        assert_eq!(named, 1, "expected one named T_CoProc");
+        assert_eq!(bodies, 1, "expected one T_CoProcBody");
+    }
+
+    #[test]
+    fn coproc_compound_without_name() {
+        // `coproc { echo bar; }`: T_CoProc with name None.
+        let script = "coproc { echo bar; }";
+        assert!(!has_note(script, 1072));
+        let out = parse_script("-", script);
+        let root = out.root.unwrap();
+        let mut unnamed = 0;
+        root.visit_preorder(&mut |t| {
+            if let InnerToken::T_CoProc { name: None, .. } = &*t.inner {
+                unnamed += 1;
+            }
+        });
+        assert_eq!(unnamed, 1, "expected one unnamed T_CoProc");
+    }
+
+    #[test]
+    fn coproc_simple_command() {
+        // `coproc echo bar`: simple form, T_CoProc name None + T_CoProcBody.
+        let script = "coproc echo bar";
+        assert!(!has_note(script, 1072));
+        assert_eq!(
+            count_nodes(script, |i| matches!(i, InnerToken::T_CoProc { name: None, .. })),
+            1
+        );
+        assert_eq!(count_nodes(script, |i| matches!(i, InnerToken::T_CoProcBody(_))), 1);
+    }
+
+    #[test]
+    fn coproc_named_while_loop() {
+        // `coproc foo while true; do true; done`: compound (while) body, named.
+        let script = "coproc foo while true; do true; done";
+        assert!(!has_note(script, 1072), "coproc + while must parse without SC1072");
+        assert_eq!(
+            count_nodes(script, |i| matches!(i, InnerToken::T_CoProc { name: Some(_), .. })),
+            1
+        );
+        assert_eq!(
+            count_nodes(script, |i| matches!(i, InnerToken::T_WhileExpression { .. })),
+            1,
+            "the while loop must be parsed as the coproc body"
+        );
+    }
+
+    // ---- P2: glob class no longer swallows expansions ---------------------
+
+    #[test]
+    fn glob_class_stops_at_dollar() {
+        // `unset foo[$i]`: `$i` must become a real T_DollarBraced expansion, and
+        // no T_Glob may contain the `$` (the class body must not swallow it).
+        let script = "unset foo[$i]";
+        let out = parse_script("-", script);
+        let root = out.root.unwrap();
+        let mut dollar_i = 0;
+        let mut glob_with_dollar = 0;
+        root.visit_preorder(&mut |t| match &*t.inner {
+            InnerToken::T_DollarBraced { op, .. } => {
+                if let InnerToken::T_NormalWord(parts) = &*op.inner {
+                    if let [p] = &parts[..] {
+                        if let InnerToken::T_Literal(s) = &*p.inner {
+                            if s == "i" {
+                                dollar_i += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            InnerToken::T_Glob(g) if g.contains('$') => glob_with_dollar += 1,
+            _ => {}
+        });
+        assert_eq!(dollar_i, 1, "`$i` must parse as a real expansion");
+        assert_eq!(glob_with_dollar, 0, "no T_Glob may swallow the `$`");
+    }
+
+    #[test]
+    fn glob_class_still_parses_valid_class() {
+        // A real character class `[abc]` still parses to a single T_Glob("[abc]").
+        assert_eq!(
+            count_nodes("ls f[abc]", |i| matches!(i, InnerToken::T_Glob(g) if g == "[abc]")),
+            1
+        );
+        // POSIX predefined class survives too.
+        assert_eq!(
+            count_nodes("ls f[[:digit:]]", |i| matches!(i, InnerToken::T_Glob(g) if g == "[[:digit:]]")),
+            1
+        );
+    }
+
+    // ---- P3a: SC1037 note is zero-width at the `$` -------------------------
+
+    #[test]
+    fn sc1037_note_is_zero_width_at_dollar() {
+        // `echo "$12"`: `$` is at column 7, so SC1037 must be zero-width 1:7-1:7.
+        let out = parse_script("-", "echo \"$12\"");
+        let note = out
+            .notes
+            .iter()
+            .find(|n| n.code == 1037)
+            .expect("SC1037 must fire on $12");
+        assert_eq!(
+            (note.start.line, note.start.column, note.end.line, note.end.column),
+            (1, 7, 1, 7),
+            "SC1037 must be zero-width at the `$`"
+        );
+    }
+
+    // ---- P3b: inner literal word of `$name` starts after the `$` -----------
+
+    #[test]
+    fn dollar_var_inner_word_starts_after_dollar() {
+        // `echo $foo`: `$` at column 6; the inner T_NormalWord/T_Literal("foo")
+        // must start at column 7 (after the `$`), while the outer T_DollarBraced
+        // stays anchored at the `$` (column 6).
+        let out = parse_script("-", "echo $foo");
+        let root = out.root.unwrap();
+        let mut outer: Option<(i64, i64)> = None;
+        let mut inner_word: Option<(i64, i64)> = None;
+        root.visit_preorder(&mut |t| {
+            if let InnerToken::T_DollarBraced { braced: false, op } = &*t.inner {
+                if let InnerToken::T_NormalWord(parts) = &*op.inner {
+                    if let [p] = &parts[..] {
+                        if let InnerToken::T_Literal(s) = &*p.inner {
+                            if s == "foo" {
+                                if let Some((s0, _)) = out.positions.get(&t.id) {
+                                    outer = Some((s0.line, s0.column));
+                                }
+                                if let Some((s1, _)) = out.positions.get(&op.id) {
+                                    inner_word = Some((s1.line, s1.column));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        assert_eq!(outer, Some((1, 6)), "outer T_DollarBraced anchors at the `$`");
+        assert_eq!(inner_word, Some((1, 7)), "inner word starts after the `$`");
     }
 }
