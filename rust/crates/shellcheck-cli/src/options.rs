@@ -19,11 +19,12 @@
 //! is responsible for printing to stderr/stdout and exiting. This keeps the
 //! parser unit-testable without shelling out.
 
-use shellcheck_rs::interface::{CheckSpec, Severity, Shell};
+use shellcheck_rs::interface::{CheckSpec, ColorOption, Severity, Shell};
 
-/// Formats the port actually implements. `getOpt`'s format validation lists
-/// exactly these (sorted, mirroring `Map.keys`).
-pub const SUPPORTED_FORMATS: &[&str] = &["json1", "tty"];
+/// Formats the port implements. `getOpt`'s format validation lists exactly
+/// these, sorted (mirroring `Map.keys` of the Haskell `formats` map).
+pub const SUPPORTED_FORMATS: &[&str] =
+    &["checkstyle", "diff", "gcc", "json", "json1", "quiet", "tty"];
 
 /// What the caller should do after parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +49,10 @@ pub struct RunConfig {
     pub format: String,
     pub inputs: Vec<String>,
     pub spec_template: CheckSpec,
+    /// Resolved from `-C/--color` (default `auto`), used by tty/diff.
+    pub color: ColorOption,
+    /// `-W/--wiki-link-count` (default 3), used by tty's wiki summary.
+    pub wiki_link_count: usize,
 }
 
 /// Argument kind for a recognised option, following the Haskell `ArgDescr`.
@@ -109,7 +114,7 @@ pub fn usage() -> String {
         ("-i", "--include=CODE1,CODE2..",    "Consider only given types of warnings"),
         ("-e", "--exclude=CODE1,CODE2..",    "Exclude types of warnings"),
         ("",   "--extended-analysis=bool",   "Perform dataflow analysis (default true)"),
-        ("-f", "--format=FORMAT",            "Output format (json1, tty)"),
+        ("-f", "--format=FORMAT",            "Output format (checkstyle, diff, gcc, json, json1, quiet, tty)"),
         ("",   "--list-optional",            "List checks disabled by default"),
         ("",   "--norc",                     "Don't look for .shellcheckrc files"),
         ("",   "--rcfile=RCFILE",            "Prefer the specified configuration file"),
@@ -298,6 +303,8 @@ pub fn parse(argv: &[String]) -> Outcome {
     // Phase 2: fold over flags in order.
     let mut spec = CheckSpec::default();
     let mut format: Option<String> = None;
+    let mut color = ColorOption::ColorAuto;
+    let mut wiki_link_count: usize = 3;
 
     for flag in &flags {
         match flag.key {
@@ -383,21 +390,21 @@ pub fn parse(argv: &[String]) -> Outcome {
             // --- Validated but not yet effective in the core. ---
             "color" => {
                 // Default value when no argument is given is "always" (matches
-                // the Haskell OptArg default), then validated. Accepted-but-not-
-                // yet-effective: the port has no colorized formatter yet.
+                // the Haskell OptArg default), then validated.
                 let v = flag.value.clone().unwrap_or_else(|| "always".to_string());
-                if !["auto", "always", "never"].contains(&v.as_str()) {
-                    return support_error("color", &["auto", "always", "never"]);
-                }
+                color = match v.as_str() {
+                    "auto" => ColorOption::ColorAuto,
+                    "always" => ColorOption::ColorAlways,
+                    "never" => ColorOption::ColorNever,
+                    _ => return support_error("color", &["auto", "always", "never"]),
+                };
             }
             "wiki-link-count" => {
-                // Validated as a number for parity; the count is not yet used
-                // (no TTY/wiki formatter). Invalid -> SyntaxFailure (exit 3).
+                // Parsed as a number; invalid -> SyntaxFailure (exit 3).
                 let v = flag.value.as_deref().unwrap_or("");
-                if let Err(m) = parse_num(v) {
-                    // wiki-link-count wants a plain number (no SC prefix), but
-                    // parse_num's SC-stripping is harmless here.
-                    return Outcome::Error { message: m, code: 3 };
+                match parse_num(v) {
+                    Ok(n) => wiki_link_count = n.max(0) as usize,
+                    Err(m) => return Outcome::Error { message: m, code: 3 },
                 }
             }
 
@@ -479,7 +486,7 @@ pub fn parse(argv: &[String]) -> Outcome {
         return Outcome::Error { message, code: 4 };
     }
 
-    Outcome::Run(RunConfig { format, inputs, spec_template: spec })
+    Outcome::Run(RunConfig { format, inputs, spec_template: spec, color, wiki_link_count })
 }
 
 /// Build a SupportFailure (exit 4) error mirroring `parseEnum`.
