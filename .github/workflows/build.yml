@@ -1,7 +1,31 @@
 name: Build ShellCheck
 
-# Run this workflow every time a new commit pushed to your repository
-on: [push, pull_request]
+# The Haskell release pipeline (7-platform build + release). It is expensive and
+# has nothing to do with the Rust port, so it only runs where the Haskell build
+# can actually change: pushes to the release branches / tags, and pull requests
+# that touch Haskell sources or the pipeline's own scripts. Rust-port work
+# (rust/**, harness/**) is gated by rust.yml instead, so this matrix no longer
+# runs on every rust-port commit.
+on:
+  push:
+    branches: [master, main]
+    tags: ['*']
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'shellcheck.hs'
+      - 'ShellCheck.cabal'
+      - 'setgitversion'
+      - 'builders/**'
+      - '.prepare_deploy'
+      - '.github_deploy'
+      - '.multi_arch_docker'
+
+# Supersede in-flight runs of this workflow on the same ref when a newer commit
+# arrives, so a burst of pushes does not run the matrix several times over.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   package_source:

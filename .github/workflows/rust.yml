@@ -5,7 +5,10 @@ name: Rust port conformance
 # check: it builds the Haskell oracle and the Rust port from the same tree and
 # fails if the port regresses against rust/harness/baseline.json.
 on:
+  # On a PR, the pull_request event already runs the gate on every commit, so
+  # restrict push to the release branches to avoid running it twice per commit.
   push:
+    branches: [master, main]
     paths:
       - 'rust/**'
       - '.github/workflows/rust.yml'
@@ -19,6 +22,11 @@ on:
       - 'ShellCheck.cabal'
       - 'src/**'
       - 'shellcheck.hs'
+
+# Cancel an in-flight gate run when a newer commit is pushed to the same ref.
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   conformance-gate:
