@@ -53,6 +53,9 @@ pub struct RunConfig {
     pub color: ColorOption,
     /// `-W/--wiki-link-count` (default 3), used by tty's wiki summary.
     pub wiki_link_count: usize,
+    /// `--rcfile <path>`: prefer this config file over directory search.
+    /// `None` means normal `.shellcheckrc` discovery applies (unless `--norc`).
+    pub rcfile: Option<String>,
 }
 
 /// Argument kind for a recognised option, following the Haskell `ArgDescr`.
@@ -376,6 +379,7 @@ pub fn parse(argv: &[String]) -> Outcome {
     let mut format: Option<String> = None;
     let mut color = ColorOption::ColorAuto;
     let mut wiki_link_count: usize = 3;
+    let mut rcfile: Option<String> = None;
 
     for flag in &flags {
         match flag.key {
@@ -484,8 +488,10 @@ pub fn parse(argv: &[String]) -> Outcome {
             "source-path" => {}
             // -x/--external-sources: reading sources outside FILES is not ported.
             "externals" => {}
-            // --rcfile: rc-file resolution is not ported.
-            "rcfile" => {}
+            // --rcfile: captured here; resolved per input in the driver.
+            // A later flag overwrites an earlier one (last-wins, matching the
+            // Haskell fold `options { rcfile = Just str }`).
+            "rcfile" => rcfile = flag.value.clone(),
             // --files-from: handled below (expands into the input list).
             "files-from" => {}
 
@@ -570,7 +576,7 @@ pub fn parse(argv: &[String]) -> Outcome {
         return Outcome::Error { message, code: 4 };
     }
 
-    Outcome::Run(RunConfig { format, inputs, spec_template: spec, color, wiki_link_count })
+    Outcome::Run(RunConfig { format, inputs, spec_template: spec, color, wiki_link_count, rcfile })
 }
 
 /// Build a SupportFailure (exit 4) error mirroring `parseEnum`.
@@ -786,10 +792,24 @@ mod tests {
 
     #[test]
     fn accepted_but_inert_flags_parse() {
-        // -P, -x, --rcfile, -a parse without error and do not become filenames.
+        // -P, -x, -a parse without error and do not become filenames.
+        // --rcfile is now captured into RunConfig (last-wins) but still does
+        // not become a filename.
         let c = run(&["-x", "-a", "-P", "src", "--rcfile", "my.rc", "-"]);
         assert_eq!(c.inputs, vec!["-".to_string()]);
         assert!(c.spec_template.check_sourced);
+        assert_eq!(c.rcfile, Some("my.rc".to_string()));
+    }
+
+    #[test]
+    fn rcfile_last_wins() {
+        let c = run(&["--rcfile", "a.rc", "--rcfile=b.rc", "-"]);
+        assert_eq!(c.rcfile, Some("b.rc".to_string()));
+    }
+
+    #[test]
+    fn no_rcfile_is_none() {
+        assert_eq!(run(&["-"]).rcfile, None);
     }
 
     #[test]

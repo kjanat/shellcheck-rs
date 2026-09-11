@@ -13,6 +13,7 @@ use shellcheck_cli::formatter::{
     self, checkstyle, diff, fixer, gcc, json, json1, tty,
 };
 use shellcheck_cli::options::{self, Outcome, RunConfig};
+use shellcheck_cli::rc::{self, RcConfig};
 use shellcheck_rs::interface::{CheckSpec, PositionedComment};
 
 fn main() -> ExitCode {
@@ -63,7 +64,7 @@ enum Input {
     Err { name: String, message: String },
 }
 
-fn load(name: &str, spec_template: &CheckSpec) -> Input {
+fn load(name: &str, spec_template: &CheckSpec, rc: Option<&RcConfig>) -> Input {
     let contents = if name == "-" {
         let mut s = String::new();
         if std::io::stdin().read_to_string(&mut s).is_err() {
@@ -76,17 +77,83 @@ fn load(name: &str, spec_template: &CheckSpec) -> Input {
             Err(e) => return Input::Err { name: name.to_string(), message: e.to_string() },
         }
     };
-    let spec = CheckSpec {
+    let mut spec = CheckSpec {
         filename: name.to_string(),
         script: contents.clone(),
         ..spec_template.clone()
     };
+    merge_rc(&mut spec, rc);
     let result = shellcheck_rs::check_script(&spec);
     Input::Ok(Loaded { name: name.to_string(), contents, comments: result.comments })
 }
 
+/// Merge rc directives into the per-input `CheckSpec`. CLI flags (already on
+/// `spec` via `spec_template`) win over rc where they conflict:
+///   * rc `disable` codes ADD to `excluded_warnings`; `disable=all` excludes
+///     everything (represented as an empty include set, which the checker
+///     treats as "include nothing" — this also overrides any CLI include, as
+///     the oracle does).
+///   * rc `enable` names APPEND to `optional_checks` (alongside CLI enables).
+///   * rc `shell` sets the override ONLY if the CLI did not (`--shell` wins).
+///   * rc `extended-analysis` applies ONLY if the CLI did not set it.
+fn merge_rc(spec: &mut CheckSpec, rc: Option<&RcConfig>) {
+    let rc = match rc {
+        Some(rc) => rc,
+        None => return,
+    };
+    if rc.disable_all {
+        // Include nothing: `should_include` returns `included.contains(code)`,
+        // false for every code -> all warnings suppressed.
+        spec.included_warnings = Some(Vec::new());
+    } else {
+        spec.excluded_warnings.extend(rc.disabled_codes.iter().copied());
+    }
+    for name in &rc.enabled_checks {
+        spec.optional_checks.push(name.clone());
+    }
+    if spec.shell_type_override.is_none() {
+        spec.shell_type_override = rc.shell;
+    }
+    if spec.extended_analysis.is_none() {
+        spec.extended_analysis = rc.extended_analysis;
+    }
+}
+
 fn run(config: RunConfig) -> ExitCode {
-    let RunConfig { format, inputs, spec_template, color, wiki_link_count } = config;
+    let RunConfig { format, inputs, spec_template, color, wiki_link_count, rcfile } = config;
+
+    // Resolve the rc configuration policy up front (mirrors `getConfig`):
+    //   * `--norc` (ignore_rc): never use any rc file.
+    //   * `--rcfile <path>`: read exactly that file once, applied to every
+    //     input; if unreadable, warn once and proceed with no config.
+    //   * otherwise: discover `.shellcheckrc` per input by walking up from the
+    //     input's directory (CWD for stdin) and then the user config dirs.
+    let ignore_rc = spec_template.ignore_rc;
+    let rcfile_config: Option<RcConfig> = if !ignore_rc {
+        if let Some(path) = &rcfile {
+            match rc::read_config_file(std::path::Path::new(path)) {
+                Some(cfg) => Some(cfg),
+                None => {
+                    eprintln!("Warning: unable to read --rcfile {path}");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    // Per-input rc config: fixed rcfile config, directory discovery, or none.
+    let resolve_rc = |name: &str| -> Option<RcConfig> {
+        if ignore_rc {
+            None
+        } else if rcfile.is_some() {
+            rcfile_config.clone()
+        } else {
+            rc::discover(name)
+        }
+    };
 
     // Quiet mode is a streaming short-circuit: process inputs in order and exit
     // 1 on the FIRST input that has any comment or fails to read, without
@@ -97,7 +164,8 @@ fn run(config: RunConfig) -> ExitCode {
     // runtime error (2), matching the oracle.
     if format == "quiet" {
         for i in &inputs {
-            match load(i, &spec_template) {
+            let rc = resolve_rc(i);
+            match load(i, &spec_template, rc.as_ref()) {
                 Input::Ok(l) if !l.comments.is_empty() => return ExitCode::from(1),
                 Input::Ok(_) => {}
                 Input::Err { .. } => return ExitCode::from(1),
@@ -106,7 +174,8 @@ fn run(config: RunConfig) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let loaded: Vec<Input> = inputs.iter().map(|i| load(i, &spec_template)).collect();
+    let loaded: Vec<Input> =
+        inputs.iter().map(|i| load(i, &spec_template, resolve_rc(i).as_ref())).collect();
 
     let any_failure = loaded.iter().any(|i| matches!(i, Input::Err { .. }));
     let any_comments = loaded
