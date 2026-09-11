@@ -757,17 +757,23 @@ impl Parser {
         if self.peek() != Some('$') {
             return Err(());
         }
+        // Each alternative must be atomic: reset to the '$' before trying the
+        // next, since a sub-parser may consume the '$' then fail.
+        let m = self.mark();
         if let Ok(t) = self.read_dollar_exp() {
             return Ok(t);
         }
+        self.reset(m);
         // $'...'
         if let Ok(t) = self.read_dollar_single_quote() {
             return Ok(t);
         }
+        self.reset(m);
         // $"..."
         if let Ok(t) = self.read_dollar_double_quote() {
             return Ok(t);
         }
+        self.reset(m);
         self.read_dollar_lonely()
     }
 
@@ -775,9 +781,11 @@ impl Parser {
         if self.peek() != Some('$') {
             return Err(());
         }
+        let m = self.mark();
         if let Ok(t) = self.read_dollar_exp() {
             return Ok(t);
         }
+        self.reset(m);
         self.read_dollar_lonely()
     }
 
@@ -1383,6 +1391,8 @@ impl Parser {
                     self.read_for_clause()
                 } else if self.keyword_ahead("case") {
                     self.read_case_clause()
+                } else if self.keyword_ahead("select") {
+                    self.read_select_clause()
                 } else if self.keyword_ahead("function") {
                     self.read_function_def()
                 } else if self.peek() == Some('(') && self.peek_at(1) == Some('(') {
@@ -1583,6 +1593,37 @@ impl Parser {
         let id = self.next_id_between(start, self.pos());
         let _ = is_in;
         Ok(Token::new(id, InnerToken::T_ForIn { var, items, body }))
+    }
+
+    fn read_select_clause(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        self.consume_keyword("select")?;
+        self.spacing();
+        let var = self.read_variable_name()?;
+        self.spacing();
+        let mut items = Vec::new();
+        if self.keyword_ahead("in") {
+            self.consume_keyword("in")?;
+            self.spacing();
+            loop {
+                self.spacing();
+                if matches!(self.peek(), Some(';') | Some('\n') | Some('\r') | None) {
+                    break;
+                }
+                match self.read_normal_word() {
+                    Ok(w) => items.push(w),
+                    Err(()) => break,
+                }
+            }
+        }
+        let _ = self.char(';');
+        self.allspacing();
+        self.consume_keyword("do")?;
+        let body = self.read_compound_list_or_empty();
+        self.allspacing();
+        self.consume_keyword("done")?;
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_SelectIn { var, items, body }))
     }
 
     fn read_case_clause(&mut self) -> PResult<Token> {
@@ -2281,6 +2322,7 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
         T_WhileExpression { condition, body } => T_WhileExpression { condition: rv!(condition), body: rv!(body) },
         T_UntilExpression { condition, body } => T_UntilExpression { condition: rv!(condition), body: rv!(body) },
         T_ForIn { var, items, body } => T_ForIn { var, items: rv!(items), body: rv!(body) },
+        T_SelectIn { var, items, body } => T_SelectIn { var, items: rv!(items), body: rv!(body) },
         T_ForArithmetic { init, cond, step, body } => T_ForArithmetic { init: r!(init), cond: r!(cond), step: r!(step), body: rv!(body) },
         T_CaseExpression { word, cases } => T_CaseExpression {
             word: r!(word),
