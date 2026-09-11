@@ -993,11 +993,17 @@ impl Parser {
         let start = self.pos();
         self.string("${")?;
         let word_start = self.pos();
-        // read braced word: everything up to matching }
+        // read braced word: everything up to matching }. A bare `{` is an
+        // ordinary literal char here (Parser.hs `readDollarBracedLiteral` stops
+        // only at `bracedQuotable` = `}"$'` + backtick); so e.g. `${{var}`
+        // parses the `${...}` as one expansion whose word is `{var`. Nesting is
+        // introduced only by a `${` sub-expansion, so depth increments on `${`
+        // (a `{` preceded by `$`), not on a bare `{`.
         let mut raw = String::new();
         let mut depth = 1;
+        let mut prev = '\0';
         while let Some(c) = self.peek() {
-            if c == '{' {
+            if c == '{' && prev == '$' {
                 depth += 1;
             } else if c == '}' {
                 depth -= 1;
@@ -1007,6 +1013,7 @@ impl Parser {
             }
             self.bump();
             raw.push(c);
+            prev = c;
         }
         self.char('}').map_err(|_| ())?;
         // Parse the braced content into parts so nested expansions (e.g.
@@ -1964,11 +1971,32 @@ impl Parser {
         self.read_pipe_sequence()
     }
 
+    /// `readBanged readCommand`: a single pipeline stage, which may itself be
+    /// prefixed by one or more `!` (e.g. `true | ! true`, `! ! true`). Unlike
+    /// `read_banged`, the fallback reads a single command, not a whole pipe
+    /// sequence, so it can be used per-stage inside `read_pipe_sequence`.
+    fn read_banged_command(&mut self) -> PResult<Token> {
+        let m = self.mark();
+        if self.peek() == Some('!') {
+            let after = self.peek_at(1);
+            if after == Some(' ') || after == Some('\t') {
+                let start = self.pos();
+                self.bump();
+                let bang_id = self.next_id_between(start, self.pos());
+                self.spacing();
+                let inner = self.read_banged_command()?;
+                return Ok(Token::new(bang_id, InnerToken::T_Banged(inner)));
+            }
+        }
+        self.reset(m);
+        self.read_command()
+    }
+
     fn read_pipe_sequence(&mut self) -> PResult<Token> {
         let start = self.pos();
         let mut cmds = Vec::new();
         let mut pipes = Vec::new();
-        let first = self.read_command()?;
+        let first = self.read_banged_command()?;
         cmds.push(first);
         loop {
             let m = self.mark();
@@ -1984,7 +2012,7 @@ impl Parser {
                 pipes.push(Token::new(pid, InnerToken::T_Pipe(op)));
                 self.spacing();
                 self.line_break();
-                match self.read_command() {
+                match self.read_banged_command() {
                     Ok(c) => cmds.push(c),
                     Err(()) => {
                         self.reset(m);
@@ -2594,6 +2622,8 @@ impl Parser {
             );
             if effective.as_deref() == Some("let") {
                 suffix = self.read_let_suffix();
+            } else if effective.as_deref() == Some("time") {
+                suffix = self.read_time_suffix();
             } else {
                 suffix = self.read_cmd_suffix(is_modifier);
             }
@@ -2639,6 +2669,42 @@ impl Parser {
         }
         let simple = Token::new(id2, InnerToken::T_SimpleCommand { assignments: assigns, words: cmd_args });
         Ok(Token::new(id1, InnerToken::T_Redirecting { redirs, cmd: simple }))
+    }
+
+    /// `readTimeSuffix`: `time [-p ...] <pipeline>`. Reads optional flag words
+    /// (each a `-`-prefixed cmd word), then a full pipeline, appended as the
+    /// suffix of the `time` simple command (Parser.hs `readTimeSuffix`). If no
+    /// pipeline follows, nothing is consumed and the suffix is empty (mirroring
+    /// `option []` over a non-consuming failure).
+    fn read_time_suffix(&mut self) -> Vec<Token> {
+        let m = self.mark();
+        let mut out = Vec::new();
+        // many readFlag ; readFlag = lookAhead '-' >> readCmdWord
+        loop {
+            let fm = self.mark();
+            self.spacing();
+            if self.peek() == Some('-') {
+                if let Ok(w) = self.read_normal_word() {
+                    out.push(w);
+                    continue;
+                }
+            }
+            self.reset(fm);
+            break;
+        }
+        self.spacing();
+        match self.read_pipeline() {
+            Ok(p) => {
+                out.push(p);
+                out
+            }
+            Err(()) => {
+                // No pipeline: undo any consumed flags and behave as a bare
+                // `time` command with no suffix.
+                self.reset(m);
+                Vec::new()
+            }
+        }
     }
 
     fn read_cmd_prefix(&mut self) -> Vec<Token> {
@@ -4083,14 +4149,13 @@ impl Parser {
     fn read_cond_not(&mut self, single: bool) -> PResult<Token> {
         let start = self.pos();
         self.char('!')?;
-        let id = self.next_id_between(start.clone(), self.pos());
+        // `readCondNot`: the TC_Unary id spans the `!` alone (`endSpan start`
+        // immediately after `char '!'`), not the whole negated expression.
+        let id = self.next_id_between(start, self.pos());
         self.cond_spacing();
         let expr = self.read_cond_expr(single)?;
-        let end = self.span_for(expr.id()).1;
         let typ = self.cond_typ(single);
-        let full = self.next_id_between(start, end);
-        let _ = id;
-        Ok(Token::new(full, InnerToken::TC_Unary { typ, op: "!".to_string(), token: expr }))
+        Ok(Token::new(id, InnerToken::TC_Unary { typ, op: "!".to_string(), token: expr }))
     }
 
     fn read_cond_expr(&mut self, single: bool) -> PResult<Token> {
@@ -4153,6 +4218,10 @@ impl Parser {
                 return Err(());
             }
         };
+        // `readCondUnaryOp`: the TC_Unary id spans the OPERATOR ALONE
+        // (`startSpan .. endSpan` around `readOp`, before the trailing spacing),
+        // mirroring TC_Binary's operator-only span.
+        let op_end = self.pos();
         // must be followed by spacing then a word
         let sp = self.cond_spacing();
         if sp.is_empty() {
@@ -4161,9 +4230,8 @@ impl Parser {
         }
         match self.read_cond_word() {
             Ok(word) => {
-                let end = self.span_for(word.id()).1;
                 let typ = self.cond_typ(single);
-                let id = self.next_id_between(start, end);
+                let id = self.next_id_between(start, op_end);
                 Ok(Token::new(id, InnerToken::TC_Unary { typ, op, token: word }))
             }
             Err(()) => {
@@ -4390,7 +4458,7 @@ impl Parser {
             _ => {}
         }
         // readLiteralForParser (readNormalLiteral "( ")
-        if let Ok(t) = self.read_normal_literal("( ") {
+        if let Ok(t) = self.read_literal_for_parser_normal("( ") {
             return Ok(t);
         }
         // readLiteralString "|"
@@ -4410,6 +4478,43 @@ impl Parser {
             }
         }
         Err(())
+    }
+
+    /// `readLiteralForParser (readNormalLiteral end)`: unlike `readNormalLiteral`
+    /// on its own, `readLiteralForParser` runs the inner parser only as a
+    /// lookahead to discover the END position, then reads the RAW characters up
+    /// to it (`readStringForParser`/`readUntil`). This preserves backslash
+    /// escapes verbatim (e.g. a regex RHS `\*` stays `\*`, not `*`), and drops
+    /// any notes the lookahead would have produced.
+    fn read_literal_for_parser_normal(&mut self, custom_end: &str) -> PResult<Token> {
+        let m = self.mark();
+        let start = self.pos();
+        // Lookahead: find where readNormalLiteral would stop. Preserve notes by
+        // snapshotting and restoring them (read_normal_literal itself emits none
+        // today, but be robust to that changing).
+        let notes_len = self.notes.len();
+        let problems_len = self.problems.len();
+        if self.read_normal_literal(custom_end).is_err() {
+            self.reset(m);
+            self.notes.truncate(notes_len);
+            self.problems.truncate(problems_len);
+            return Err(());
+        }
+        let end_idx = self.idx;
+        self.reset(m);
+        self.notes.truncate(notes_len);
+        self.problems.truncate(problems_len);
+        // Read raw characters up to the discovered end.
+        let mut s = String::new();
+        while self.idx < end_idx {
+            if let Some(c) = self.bump() {
+                s.push(c);
+            } else {
+                break;
+            }
+        }
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_Literal(s)))
     }
 
     /// `readGroup`: `( .. )` inside a regex. Inside, `readRegexLiteral` swallows
@@ -4671,5 +4776,151 @@ mod redirect_heredoc_tests {
         // Regression guard: a heredoc with an expansion parses without a
         // spurious problem (e.g. SC1044 unterminated).
         assert!(!has_problem("cat << EOF\n$(date)\nEOF\n", 1044));
+    }
+}
+
+#[cfg(test)]
+mod parser_gap_tests {
+    use super::*;
+
+    fn spans_of<F>(script: &str, pred: F) -> Vec<(i64, i64, i64, i64)>
+    where
+        F: Fn(&InnerToken) -> bool,
+    {
+        let out = parse_script("-", script);
+        let root = out.root.expect("parse produced a tree");
+        let mut found = Vec::new();
+        root.visit_preorder(&mut |t| {
+            if pred(&t.inner) {
+                if let Some((s, e)) = out.positions.get(&t.id) {
+                    found.push((s.line, s.column, e.line, e.column));
+                }
+            }
+        });
+        found
+    }
+
+    fn literals_of(script: &str) -> Vec<String> {
+        let out = parse_script("-", script);
+        let root = out.root.expect("parse produced a tree");
+        let mut found = Vec::new();
+        root.visit_preorder(&mut |t| {
+            if let InnerToken::T_Literal(s) = &*t.inner {
+                found.push(s.clone());
+            }
+        });
+        found
+    }
+
+    // ---- gap 1: TC_Unary span anchors on the operator alone ---------------
+
+    #[test]
+    fn tc_unary_op_span_is_operator_only() {
+        // `[ -M a ]`: the TC_Unary id must span just `-M` (cols 3-5), matching
+        // ShellCheck's `readCondUnaryOp` (`endSpan` right after `readOp`), not
+        // operator+operand. This is what SC2058/SC2331/... key off.
+        let spans = spans_of("[ -M a ]", |i| matches!(i, InnerToken::TC_Unary { .. }));
+        assert_eq!(spans, vec![(1, 3, 1, 5)], "TC_Unary must span the operator only");
+    }
+
+    #[test]
+    fn tc_unary_z_span_is_operator_only() {
+        // `[ -z $(fgrep x) ]` (the SC2143 unary branch): `-z` at cols 3-5.
+        let spans = spans_of("[ -z $(fgrep x) ]", |i| matches!(i, InnerToken::TC_Unary { .. }));
+        assert_eq!(spans, vec![(1, 3, 1, 5)]);
+    }
+
+    #[test]
+    fn tc_unary_bang_span_is_bang_only() {
+        // `[ ! x ]`: the negation TC_Unary id must span just `!` (cols 3-4),
+        // matching `readCondNot` (`endSpan` right after `char '!'`).
+        let spans = spans_of("[ ! x ]", |i| matches!(i, InnerToken::TC_Unary { op, .. } if op == "!"));
+        assert_eq!(spans, vec![(1, 3, 1, 4)]);
+    }
+
+    #[test]
+    fn tc_unary_v_span_is_operator_only() {
+        // `[ -v var ]`: `-v` at cols 3-5.
+        let spans = spans_of("[ -v var ]", |i| matches!(i, InnerToken::TC_Unary { .. }));
+        assert_eq!(spans, vec![(1, 3, 1, 5)]);
+    }
+
+    // ---- gap 2: regex RHS preserves backslash escapes raw -----------------
+
+    #[test]
+    fn regex_rhs_preserves_backslash_escape() {
+        // `[[ $x =~ \* ]]`: the regex literal keeps the raw `\*`, not a decoded
+        // `*` (Parser.hs `readLiteralForParser` reads the raw span).
+        let lits = literals_of("[[ $x =~ \\* ]]");
+        assert!(lits.iter().any(|s| s == "\\*"), "regex `\\*` must stay raw, got {lits:?}");
+        assert!(!lits.iter().any(|s| s == "*"), "regex `\\*` must not decode to `*`, got {lits:?}");
+    }
+
+    #[test]
+    fn regex_rhs_preserves_dotted_escapes() {
+        // `[[ $1 =~ \.a\.c\. ]]`: escaped dots are kept raw.
+        let lits = literals_of("[[ $1 =~ \\.a\\.c\\. ]]");
+        assert!(lits.iter().any(|s| s.contains("\\.")), "escaped dots must stay raw, got {lits:?}");
+    }
+
+    // ---- gap 3: mid-pipeline `!` becomes T_Banged -------------------------
+
+    #[test]
+    fn mid_pipeline_bang_is_banged() {
+        // `true | ! true`: the second stage is negated (T_Banged), bang at col 8.
+        let spans = spans_of("true | ! true", |i| matches!(i, InnerToken::T_Banged(_)));
+        assert_eq!(spans, vec![(1, 8, 1, 9)], "mid-pipeline `!` must produce T_Banged");
+    }
+
+    #[test]
+    fn leading_bang_still_banged() {
+        // Regression guard: `! cat | grep x` keeps the leading bang as T_Banged.
+        let spans = spans_of("! cat | grep x", |i| matches!(i, InnerToken::T_Banged(_)));
+        assert_eq!(spans, vec![(1, 1, 1, 2)]);
+    }
+
+    // ---- gap 4: `${{var}` parses the `${...}` as an expansion -------------
+
+    #[test]
+    fn dollar_brace_open_brace_is_expansion() {
+        // `${{var}`: the `${...}` is a T_DollarBraced (cols 1-8), whose word is
+        // the literal `{var`. Its op word span is used by SC2296 (cols 3-7).
+        let spans = spans_of("${{var}", |i| matches!(i, InnerToken::T_DollarBraced { .. }));
+        assert_eq!(spans, vec![(1, 1, 1, 8)], "expected one T_DollarBraced for ${{{{var}}");
+    }
+
+    // ---- gap 5: `time` as a pipeline prefix -------------------------------
+
+    #[test]
+    fn time_wraps_pipeline_in_suffix() {
+        // `time foo | bar`: the pipeline is a suffix word of the `time` simple
+        // command (Parser.hs `readTimeSuffix`), so there is exactly one
+        // top-level pipeline containing the `time` command, and a nested
+        // pipeline `foo | bar` inside its suffix.
+        let out = parse_script("-", "time foo | bar");
+        let root = out.root.expect("parse produced a tree");
+        // A T_Pipeline with two commands (foo | bar) must exist somewhere.
+        let mut multi_stage = 0;
+        root.visit_preorder(&mut |t| {
+            if let InnerToken::T_Pipeline { commands, .. } = &*t.inner {
+                if commands.len() == 2 {
+                    multi_stage += 1;
+                }
+            }
+        });
+        assert_eq!(multi_stage, 1, "the `foo | bar` pipeline must be nested under `time`");
+    }
+
+    #[test]
+    fn time_with_flag_and_compound() {
+        // `time -p ( ls -l; )` parses without error.
+        let out = parse_script("-", "time -p ( ls -l; )");
+        assert!(out.root.is_some());
+        // No fatal parse problem (SC1072/SC1073) should be reported.
+        assert!(
+            !out.notes.iter().any(|n| n.code == 1072 || n.code == 1073),
+            "time -p (..) must parse cleanly: {:?}",
+            out.notes
+        );
     }
 }
