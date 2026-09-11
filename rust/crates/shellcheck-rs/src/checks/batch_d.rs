@@ -34,10 +34,20 @@ fn oversimplify(token: &Token) -> Vec<String> {
     use InnerToken::*;
     match &*token.inner {
         T_NormalWord(l) => {
-            vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()]
+            vec![
+                l.iter()
+                    .flat_map(oversimplify)
+                    .collect::<Vec<String>>()
+                    .concat(),
+            ]
         }
         T_DoubleQuoted(l) => {
-            vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()]
+            vec![
+                l.iter()
+                    .flat_map(oversimplify)
+                    .collect::<Vec<String>>()
+                    .concat(),
+            ]
         }
         T_SingleQuoted(s) => vec![s.clone()],
         T_DollarBraced { .. } => vec!["${VAR}".to_string()],
@@ -120,11 +130,17 @@ fn parse_flag_list(spec: &str, longopts: &[(String, bool)]) -> Vec<(String, bool
     out
 }
 
-fn get_gnu_opts<'a>(spec: &str, args: &'a [Token]) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
+fn get_gnu_opts<'a>(
+    spec: &str,
+    args: &'a [Token],
+) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
     get_opts(true, false, spec, &[], args)
 }
 
-fn get_bsd_opts<'a>(spec: &str, args: &'a [Token]) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
+fn get_bsd_opts<'a>(
+    spec: &str,
+    args: &'a [Token],
+) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
     get_opts(false, false, spec, &[], args)
 }
 
@@ -297,11 +313,7 @@ fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Toke
 fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> {
     let first_arg = || -> Option<&'a Token> {
         let arg = args.first()?;
-        if is_flag(arg) {
-            None
-        } else {
-            Some(arg)
-        }
+        if is_flag(arg) { None } else { Some(arg) }
     };
     match s {
         "busybox" | "builtin" | "command" | "run" => first_arg(),
@@ -515,7 +527,12 @@ fn check_cd_and_back(params: &Parameters, t: &Token, out: &mut Out) {
     for seq in get_command_sequences(t) {
         let candidates: Vec<&Token> = seq.iter().filter_map(|x| cd_candidate(x)).collect();
         if let Some(id) = find_cd_pair(&candidates) {
-            info(out, id, 2103, "Use a ( subshell ) to avoid having to cd back.");
+            info(
+                out,
+                id,
+                2103,
+                "Use a ( subshell ) to avoid having to cd back.",
+            );
         }
     }
 }
@@ -569,9 +586,10 @@ fn condition_children(parent: &Token) -> Vec<&Token> {
     match &*parent.inner {
         T_AndIf { lhs, .. } => vec![lhs],
         T_OrIf { lhs, .. } => vec![lhs],
-        T_IfExpression { clauses, .. } => {
-            clauses.iter().filter_map(|(conds, _)| conds.last()).collect()
-        }
+        T_IfExpression { clauses, .. } => clauses
+            .iter()
+            .filter_map(|(conds, _)| conds.last())
+            .collect(),
         T_WhileExpression { condition, .. } => condition.last().into_iter().collect(),
         T_UntilExpression { condition, .. } => condition.last().into_iter().collect(),
         _ => vec![],
@@ -588,7 +606,10 @@ fn is_condition_path(params: &Parameters, t: &Token) -> bool {
             Some(p) => p,
             None => return false,
         };
-        if condition_children(parent).iter().any(|c| c.id() == child.id()) {
+        if condition_children(parent)
+            .iter()
+            .any(|c| c.id() == child.id())
+        {
             return true;
         }
         child = parent;
@@ -652,9 +673,7 @@ fn check_unchecked_cd_pushd_popd(params: &Parameters, t: &Token, out: &mut Out) 
     if is_safe_dir(t) {
         return;
     }
-    if matches!(name.as_str(), "pushd" | "popd")
-        && get_all_flags(t).iter().any(|(_, f)| f == "n")
-    {
+    if matches!(name.as_str(), "pushd" | "popd") && get_all_flags(t).iter().any(|(_, f)| f == "n") {
         return;
     }
     if is_last_command_in_function(params, t) {
@@ -794,7 +813,9 @@ fn check_return_against_zero(params: &Parameters, t: &Token, out: &mut Out) {
     use InnerToken::*;
     match &*t.inner {
         TC_Binary { op, lhs, rhs, .. } => rz_check(params, t, op, lhs, rhs, out),
-        TA_Binary { op, lhs, rhs } if matches!(op.as_str(), ">" | "<" | ">=" | "<=" | "==" | "!=") => {
+        TA_Binary { op, lhs, rhs }
+            if matches!(op.as_str(), ">" | "<" | ">=" | "<=" | "==" | "!=") =>
+        {
             rz_check(params, t, op, lhs, rhs, out)
         }
         TA_Unary { op, operand } if op == "!" && is_exit_code(operand) => {

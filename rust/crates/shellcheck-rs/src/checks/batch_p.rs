@@ -18,7 +18,9 @@
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
-use crate::cfg::{get_braced_modifier, get_braced_reference, get_gnu_opts, is_variable_name, oversimplify};
+use crate::cfg::{
+    get_braced_modifier, get_braced_reference, get_gnu_opts, is_variable_name, oversimplify,
+};
 use crate::interface::Shell;
 use std::collections::HashMap;
 
@@ -75,7 +77,9 @@ fn is_annotation_ignoring_code(code: i64, t: &Token) -> bool {
 
 /// `shouldIgnoreCode params code t`.
 fn should_ignore_code(params: &Parameters, code: i64, t: &Token) -> bool {
-    get_path(params, t).iter().any(|p| is_annotation_ignoring_code(code, p))
+    get_path(params, t)
+        .iter()
+        .any(|p| is_annotation_ignoring_code(code, p))
 }
 
 /// `escapeForMessage` (`e4m`).
@@ -117,24 +121,22 @@ fn functions_and_aliases(root: &Token) -> HashMap<String, Id> {
     // by prepending). We reproduce "first encountered wins".
     let mut functions: HashMap<String, Id> = HashMap::new();
     let mut aliases: HashMap<String, Id> = HashMap::new();
-    root.visit_preorder(&mut |t| {
-        match &*t.inner {
-            InnerToken::T_Function { name, .. } => {
-                functions.entry(name.clone()).or_insert_with(|| t.id());
-            }
-            InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => {
-                if is_unqualified_command(t, "alias") {
-                    for arg in &words[1..] {
-                        let string = astlib::only_literal_string(arg);
-                        if string.contains('=') {
-                            let key: String = string.chars().take_while(|c| *c != '=').collect();
-                            aliases.entry(key).or_insert_with(|| arg.id());
-                        }
+    root.visit_preorder(&mut |t| match &*t.inner {
+        InnerToken::T_Function { name, .. } => {
+            functions.entry(name.clone()).or_insert_with(|| t.id());
+        }
+        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => {
+            if is_unqualified_command(t, "alias") {
+                for arg in &words[1..] {
+                    let string = astlib::only_literal_string(arg);
+                    if string.contains('=') {
+                        let key: String = string.chars().take_while(|c| *c != '=').collect();
+                        aliases.entry(key).or_insert_with(|| arg.id());
                     }
                 }
             }
-            _ => {}
         }
+        _ => {}
     });
     // Map.union functions aliases  (left-biased: functions override aliases)
     let mut combined = aliases;
@@ -167,7 +169,8 @@ fn get_potential_commands<'a>(
         let i = list.iter().take_while(|x| is_flag(x)).count();
         &list[i..]
     };
-    let first_non_flag = || -> Vec<&'a (String, Token)> { drop_flags(arg_and_string).iter().take(1).collect() };
+    let first_non_flag =
+        || -> Vec<&'a (String, Token)> { drop_flags(arg_and_string).iter().take(1).collect() };
     match name {
         "chroot" | "screen" | "sudo" | "doas" | "run0" | "xargs" | "tmux" => first_non_flag(),
         "timeout" | "ssh" => drop_flags(arg_and_string).iter().skip(1).take(1).collect(),
@@ -268,7 +271,12 @@ fn has_default_value(t: &Token) -> bool {
 fn is_direct_child_of(params: &Parameters, child: &Token, parent: &Token) -> bool {
     get_path(params, child)
         .iter()
-        .find(|x| matches!(&*x.inner, InnerToken::T_Function { .. } | InnerToken::T_Script { .. }))
+        .find(|x| {
+            matches!(
+                &*x.inner,
+                InnerToken::T_Function { .. } | InnerToken::T_Script { .. }
+            )
+        })
         .map(|f| f.id() == parent.id())
         .unwrap_or(false)
 }
@@ -288,7 +296,9 @@ fn check_unpassed_in_functions(params: &Parameters, root: &Token, out: &mut Out)
             );
             let references_positional = flow.iter().any(|sd| match sd {
                 StackData::Reference(_, tok, str) => {
-                    is_positional(str) && is_direct_child_of(params, tok, t) && !has_default_value(tok)
+                    is_positional(str)
+                        && is_direct_child_of(params, tok, t)
+                        && !has_default_value(tok)
                 }
                 _ => false,
             });
@@ -339,7 +349,10 @@ fn check_unpassed_in_functions(params: &Parameters, root: &Token, out: &mut Out)
                 out,
                 thing.id(),
                 2119,
-                &format!("Use {} \"$@\" if function's $1 should mean script's $1.", e4m(name)),
+                &format!(
+                    "Use {} \"$@\" if function's $1 should mean script's $1.",
+                    e4m(name)
+                ),
             );
         }
         warn(
@@ -414,7 +427,12 @@ fn check_quotes_in_literals(params: &Parameters, _root: &Token, out: &mut Out) {
     for sd in &params.variable_flow {
         match sd {
             // writeF _ _ name (DataString (SourceFrom values))
-            StackData::Assignment(_base, _place, name, DataType::DataString(DataSource::SourceFrom(values))) => {
+            StackData::Assignment(
+                _base,
+                _place,
+                name,
+                DataType::DataString(DataSource::SourceFrom(values)),
+            ) => {
                 let quoted = values.iter().find_map(|v| for_token(&quote_map, v));
                 match quoted {
                     Some(x) => {
@@ -438,7 +456,10 @@ fn check_quotes_in_literals(params: &Parameters, _root: &Token, out: &mut Out) {
                             out,
                             j,
                             2089,
-                            &format!("Quotes/backslashes will be treated literally. {}", suggestion),
+                            &format!(
+                                "Quotes/backslashes will be treated literally. {}",
+                                suggestion
+                            ),
                         );
                         warn(
                             out,
@@ -583,107 +604,328 @@ mod tests {
 
     // SC2032 / SC2033 — checkFunctionsUsedExternally
     #[test]
-    fn prop_checkFunctionsUsedExternally1() { assert!(tree_emits(check_functions_used_externally, "foo() { :; }; sudo foo")); }
+    fn prop_checkFunctionsUsedExternally1() {
+        assert!(tree_emits(
+            check_functions_used_externally,
+            "foo() { :; }; sudo foo"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionsUsedExternally2() { assert!(tree_emits(check_functions_used_externally, "alias f='a'; xargs -0 f")); }
+    fn prop_checkFunctionsUsedExternally2() {
+        assert!(tree_emits(
+            check_functions_used_externally,
+            "alias f='a'; xargs -0 f"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionsUsedExternally2b() { assert!(!tree_emits(check_functions_used_externally, "alias f='a'; find . -type f")); }
+    fn prop_checkFunctionsUsedExternally2b() {
+        assert!(!tree_emits(
+            check_functions_used_externally,
+            "alias f='a'; find . -type f"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionsUsedExternally2c() { assert!(tree_emits(check_functions_used_externally, "alias f='a'; find . -type f -exec f {} +")); }
+    fn prop_checkFunctionsUsedExternally2c() {
+        assert!(tree_emits(
+            check_functions_used_externally,
+            "alias f='a'; find . -type f -exec f {} +"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionsUsedExternally3() { assert!(!tree_emits(check_functions_used_externally, "f() { :; }; echo f")); }
+    fn prop_checkFunctionsUsedExternally3() {
+        assert!(!tree_emits(
+            check_functions_used_externally,
+            "f() { :; }; echo f"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionsUsedExternally4() { assert!(!tree_emits(check_functions_used_externally, "foo() { :; }; run0 \"foo\"")); }
+    fn prop_checkFunctionsUsedExternally4() {
+        assert!(!tree_emits(
+            check_functions_used_externally,
+            "foo() { :; }; run0 \"foo\""
+        ));
+    }
     #[test]
-    fn prop_checkFunctionsUsedExternally5() { assert!(tree_emits(check_functions_used_externally, "foo() { :; }; ssh host foo")); }
+    fn prop_checkFunctionsUsedExternally5() {
+        assert!(tree_emits(
+            check_functions_used_externally,
+            "foo() { :; }; ssh host foo"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionsUsedExternally6() { assert!(!tree_emits(check_functions_used_externally, "foo() { :; }; ssh host echo foo")); }
+    fn prop_checkFunctionsUsedExternally6() {
+        assert!(!tree_emits(
+            check_functions_used_externally,
+            "foo() { :; }; ssh host echo foo"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionsUsedExternally7() { assert!(!tree_emits(check_functions_used_externally, "install() { :; }; sudo apt-get install foo")); }
+    fn prop_checkFunctionsUsedExternally7() {
+        assert!(!tree_emits(
+            check_functions_used_externally,
+            "install() { :; }; sudo apt-get install foo"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionsUsedExternally8() { assert!(tree_emits(check_functions_used_externally, "foo() { :; }; command sudo foo")); }
+    fn prop_checkFunctionsUsedExternally8() {
+        assert!(tree_emits(
+            check_functions_used_externally,
+            "foo() { :; }; command sudo foo"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionsUsedExternally9() { assert!(tree_emits(check_functions_used_externally, "foo() { :; }; exec -c doas foo")); }
+    fn prop_checkFunctionsUsedExternally9() {
+        assert!(tree_emits(
+            check_functions_used_externally,
+            "foo() { :; }; exec -c doas foo"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionsUsedExternally10() { assert!(tree_emits(check_functions_used_externally, "foo() { :; }; timeout -p 10 foo")); }
+    fn prop_checkFunctionsUsedExternally10() {
+        assert!(tree_emits(
+            check_functions_used_externally,
+            "foo() { :; }; timeout -p 10 foo"
+        ));
+    }
 
     // SC2119 / SC2120 — checkUnpassedInFunctions
     #[test]
-    fn prop_checkUnpassedInFunctions1() { assert!(tree_emits(check_unpassed_in_functions, "foo() { echo $1; }; foo")); }
+    fn prop_checkUnpassedInFunctions1() {
+        assert!(tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo $1; }; foo"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions2() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { echo $1; };")); }
+    fn prop_checkUnpassedInFunctions2() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo $1; };"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions3() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { echo $lol; }; foo")); }
+    fn prop_checkUnpassedInFunctions3() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo $lol; }; foo"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions4() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { echo $0; }; foo")); }
+    fn prop_checkUnpassedInFunctions4() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo $0; }; foo"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions5() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { echo $1; }; foo 'lol'; foo")); }
+    fn prop_checkUnpassedInFunctions5() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo $1; }; foo 'lol'; foo"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions6() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { set -- *; echo $1; }; foo")); }
+    fn prop_checkUnpassedInFunctions6() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { set -- *; echo $1; }; foo"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions7() { assert!(tree_emits(check_unpassed_in_functions, "foo() { echo $1; }; foo; foo;")); }
+    fn prop_checkUnpassedInFunctions7() {
+        assert!(tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo $1; }; foo; foo;"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions8() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { echo $((1)); }; foo;")); }
+    fn prop_checkUnpassedInFunctions8() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo $((1)); }; foo;"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions9() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { echo $(($b)); }; foo;")); }
+    fn prop_checkUnpassedInFunctions9() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo $(($b)); }; foo;"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions10() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { echo $!; }; foo;")); }
+    fn prop_checkUnpassedInFunctions10() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo $!; }; foo;"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions11() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { bar() { echo $1; }; bar baz; }; foo;")); }
+    fn prop_checkUnpassedInFunctions11() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { bar() { echo $1; }; bar baz; }; foo;"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions12() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { echo ${!var*}; }; foo;")); }
+    fn prop_checkUnpassedInFunctions12() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo ${!var*}; }; foo;"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions13() { assert!(!tree_emits(check_unpassed_in_functions, "# shellcheck disable=SC2120\nfoo() { echo $1; }\nfoo\n")); }
+    fn prop_checkUnpassedInFunctions13() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "# shellcheck disable=SC2120\nfoo() { echo $1; }\nfoo\n"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions14() { assert!(tree_emits(check_unpassed_in_functions, "foo() { echo $#; }; foo")); }
+    fn prop_checkUnpassedInFunctions14() {
+        assert!(tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo $#; }; foo"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions15() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { echo ${1-x}; }; foo")); }
+    fn prop_checkUnpassedInFunctions15() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo ${1-x}; }; foo"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions16() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { echo ${1:-x}; }; foo")); }
+    fn prop_checkUnpassedInFunctions16() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { echo ${1:-x}; }; foo"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions17() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { mycommand ${1+--verbose}; }; foo")); }
+    fn prop_checkUnpassedInFunctions17() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { mycommand ${1+--verbose}; }; foo"
+        ));
+    }
     #[test]
-    fn prop_checkUnpassedInFunctions18() { assert!(!tree_emits(check_unpassed_in_functions, "foo() { if mycheck; then foo ${1?Missing}; fi; }; foo")); }
+    fn prop_checkUnpassedInFunctions18() {
+        assert!(!tree_emits(
+            check_unpassed_in_functions,
+            "foo() { if mycheck; then foo ${1?Missing}; fi; }; foo"
+        ));
+    }
 
     // SC2089 / SC2090 — checkQuotesInLiterals
     #[test]
-    fn prop_checkQuotesInLiterals1() { assert!(tree_emits(check_quotes_in_literals, "param='--foo=\"bar\"'; app $param")); }
+    fn prop_checkQuotesInLiterals1() {
+        assert!(tree_emits(
+            check_quotes_in_literals,
+            "param='--foo=\"bar\"'; app $param"
+        ));
+    }
     #[test]
-    fn prop_checkQuotesInLiterals1a() { assert!(tree_emits(check_quotes_in_literals, "param=\"--foo='lolbar'\"; app $param")); }
+    fn prop_checkQuotesInLiterals1a() {
+        assert!(tree_emits(
+            check_quotes_in_literals,
+            "param=\"--foo='lolbar'\"; app $param"
+        ));
+    }
     #[test]
-    fn prop_checkQuotesInLiterals2() { assert!(!tree_emits(check_quotes_in_literals, "param='--foo=\"bar\"'; app \"$param\"")); }
+    fn prop_checkQuotesInLiterals2() {
+        assert!(!tree_emits(
+            check_quotes_in_literals,
+            "param='--foo=\"bar\"'; app \"$param\""
+        ));
+    }
     #[test]
-    fn prop_checkQuotesInLiterals3() { assert!(!tree_emits(check_quotes_in_literals, "param=('--foo='); app \"${param[@]}\"")); }
+    fn prop_checkQuotesInLiterals3() {
+        assert!(!tree_emits(
+            check_quotes_in_literals,
+            "param=('--foo='); app \"${param[@]}\""
+        ));
+    }
     #[test]
-    fn prop_checkQuotesInLiterals4() { assert!(!tree_emits(check_quotes_in_literals, "param=\"don't bother with this one\"; app $param")); }
+    fn prop_checkQuotesInLiterals4() {
+        assert!(!tree_emits(
+            check_quotes_in_literals,
+            "param=\"don't bother with this one\"; app $param"
+        ));
+    }
     #[test]
-    fn prop_checkQuotesInLiterals5() { assert!(!tree_emits(check_quotes_in_literals, "param=\"--foo='lolbar'\"; eval app $param")); }
+    fn prop_checkQuotesInLiterals5() {
+        assert!(!tree_emits(
+            check_quotes_in_literals,
+            "param=\"--foo='lolbar'\"; eval app $param"
+        ));
+    }
     #[test]
-    fn prop_checkQuotesInLiterals6() { assert!(tree_emits(check_quotes_in_literals, "param='my\\ file'; cmd=\"rm $param\"; $cmd")); }
+    fn prop_checkQuotesInLiterals6() {
+        assert!(tree_emits(
+            check_quotes_in_literals,
+            "param='my\\ file'; cmd=\"rm $param\"; $cmd"
+        ));
+    }
     #[test]
-    fn prop_checkQuotesInLiterals6a() { assert!(!tree_emits(check_quotes_in_literals, "param='my\\ file'; cmd=\"rm ${#param}\"; $cmd")); }
+    fn prop_checkQuotesInLiterals6a() {
+        assert!(!tree_emits(
+            check_quotes_in_literals,
+            "param='my\\ file'; cmd=\"rm ${#param}\"; $cmd"
+        ));
+    }
     #[test]
-    fn prop_checkQuotesInLiterals7() { assert!(tree_emits(check_quotes_in_literals, "param='my\\ file'; rm $param")); }
+    fn prop_checkQuotesInLiterals7() {
+        assert!(tree_emits(
+            check_quotes_in_literals,
+            "param='my\\ file'; rm $param"
+        ));
+    }
     #[test]
-    fn prop_checkQuotesInLiterals8() { assert!(tree_emits(check_quotes_in_literals, "param=\"/foo/'bar baz'/etc\"; rm $param")); }
+    fn prop_checkQuotesInLiterals8() {
+        assert!(tree_emits(
+            check_quotes_in_literals,
+            "param=\"/foo/'bar baz'/etc\"; rm $param"
+        ));
+    }
     #[test]
-    fn prop_checkQuotesInLiterals9() { assert!(!tree_emits(check_quotes_in_literals, "param=\"/foo/'bar baz'/etc\"; rm ${#param}")); }
+    fn prop_checkQuotesInLiterals9() {
+        assert!(!tree_emits(
+            check_quotes_in_literals,
+            "param=\"/foo/'bar baz'/etc\"; rm ${#param}"
+        ));
+    }
 
     // SC2229 — checkReadExpansions (dollarWarning branch)
     #[test]
-    fn prop_checkReadExpansions1() { assert!(node_emits(check_read_expansions, "read $var")); }
+    fn prop_checkReadExpansions1() {
+        assert!(node_emits(check_read_expansions, "read $var"));
+    }
     #[test]
-    fn prop_checkReadExpansions2() { assert!(node_emits(check_read_expansions, "read -r $var")); }
+    fn prop_checkReadExpansions2() {
+        assert!(node_emits(check_read_expansions, "read -r $var"));
+    }
     #[test]
-    fn prop_checkReadExpansions3() { assert!(!node_emits(check_read_expansions, "read -p $var")); }
+    fn prop_checkReadExpansions3() {
+        assert!(!node_emits(check_read_expansions, "read -p $var"));
+    }
     #[test]
-    fn prop_checkReadExpansions4() { assert!(!node_emits(check_read_expansions, "read -rd $delim name")); }
+    fn prop_checkReadExpansions4() {
+        assert!(!node_emits(check_read_expansions, "read -rd $delim name"));
+    }
     #[test]
-    fn prop_checkReadExpansions5() { assert!(node_emits(check_read_expansions, "read \"$var\"")); }
+    fn prop_checkReadExpansions5() {
+        assert!(node_emits(check_read_expansions, "read \"$var\""));
+    }
     #[test]
-    fn prop_checkReadExpansions6() { assert!(node_emits(check_read_expansions, "read -a $var")); }
+    fn prop_checkReadExpansions6() {
+        assert!(node_emits(check_read_expansions, "read -a $var"));
+    }
     #[test]
-    fn prop_checkReadExpansions7() { assert!(!node_emits(check_read_expansions, "read $1")); }
+    fn prop_checkReadExpansions7() {
+        assert!(!node_emits(check_read_expansions, "read $1"));
+    }
     #[test]
-    fn prop_checkReadExpansions8() { assert!(!node_emits(check_read_expansions, "read ${var?}")); }
+    fn prop_checkReadExpansions8() {
+        assert!(!node_emits(check_read_expansions, "read ${var?}"));
+    }
 }

@@ -68,7 +68,11 @@ pub struct Position {
 impl Default for Position {
     fn default() -> Self {
         // newPosition
-        Position { file: String::new(), line: 1, column: 1 }
+        Position {
+            file: String::new(),
+            line: 1,
+            column: 1,
+        }
     }
 }
 
@@ -83,7 +87,11 @@ pub struct Comment {
 impl Default for Comment {
     fn default() -> Self {
         // newComment
-        Comment { severity: Severity::StyleC, code: 0, message: String::new() }
+        Comment {
+            severity: Severity::StyleC,
+            code: 0,
+            message: String::new(),
+        }
     }
 }
 

@@ -33,8 +33,18 @@ pub fn register(c: &mut Checker) {
 fn oversimplify(token: &Token) -> Vec<String> {
     use InnerToken::*;
     match &*token.inner {
-        T_NormalWord(l) => vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()],
-        T_DoubleQuoted(l) => vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()],
+        T_NormalWord(l) => vec![
+            l.iter()
+                .flat_map(oversimplify)
+                .collect::<Vec<String>>()
+                .concat(),
+        ],
+        T_DoubleQuoted(l) => vec![
+            l.iter()
+                .flat_map(oversimplify)
+                .collect::<Vec<String>>()
+                .concat(),
+        ],
         T_SingleQuoted(s) => vec![s.clone()],
         T_DollarBraced { .. } => vec!["${VAR}".to_string()],
         T_DollarArithmetic(_) => vec!["${VAR}".to_string()],
@@ -138,7 +148,10 @@ fn parse_flag_list(spec: &str) -> Vec<(String, bool)> {
     out
 }
 
-fn get_bsd_opts<'a>(spec: &str, args: &'a [Token]) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
+fn get_bsd_opts<'a>(
+    spec: &str,
+    args: &'a [Token],
+) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
     let mut flag_map: HashMap<String, bool> = HashMap::new();
     flag_map.insert(String::new(), false);
     for (k, v) in parse_flag_list(spec) {
@@ -240,11 +253,7 @@ fn short_to_opts<'a>(
 fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> {
     let first_arg = || -> Option<&'a Token> {
         let arg = args.first()?;
-        if is_flag(arg) {
-            None
-        } else {
-            Some(arg)
-        }
+        if is_flag(arg) { None } else { Some(arg) }
     };
     match s {
         "busybox" | "builtin" | "command" | "run" => first_arg(),
@@ -329,9 +338,18 @@ fn is_quote_free_element(p: &Parameters, t: &Token) -> bool {
 fn is_quote_free_context(p: &Parameters, t: &Token) -> Option<bool> {
     use InnerToken::*;
     match &*t.inner {
-        TC_Nullary { typ: ConditionType::DoubleBracket, .. } => Some(true),
-        TC_Unary { typ: ConditionType::DoubleBracket, .. } => Some(true),
-        TC_Binary { typ: ConditionType::DoubleBracket, .. } => Some(true),
+        TC_Nullary {
+            typ: ConditionType::DoubleBracket,
+            ..
+        } => Some(true),
+        TC_Unary {
+            typ: ConditionType::DoubleBracket,
+            ..
+        } => Some(true),
+        TC_Binary {
+            typ: ConditionType::DoubleBracket,
+            ..
+        } => Some(true),
         T_Arithmetic(_) => Some(true),
         T_DollarArithmetic(_) => Some(true),
         T_Assignment { .. } => Some(assignment_is_quoting(p, t)),
@@ -358,9 +376,10 @@ fn is_quote_free_context(p: &Parameters, t: &Token) -> Option<bool> {
 /// True if `word` is a `name=` / `name+=` argument to a declaration utility.
 fn is_declaration_assignment_word(p: &Parameters, word: &Token) -> bool {
     let is_form = match &*word.inner {
-        InnerToken::T_NormalWord(parts) => parts.first().map_or(false, |f| {
-            matches!(&*f.inner, InnerToken::T_Literal(s) if literal_is_assignment_prefix(s))
-        }),
+        InnerToken::T_NormalWord(parts) => parts.first().map_or(
+            false,
+            |f| matches!(&*f.inner, InnerToken::T_Literal(s) if literal_is_assignment_prefix(s)),
+        ),
         _ => false,
     };
     if !is_form {
@@ -443,9 +462,7 @@ fn used_as_command_name(p: &Parameters, token: &Token) -> bool {
                 node = p.parent(t);
             }
             T_SimpleCommand { words, .. } if !words.is_empty() => {
-                if words[0].id() == current_id
-                    || get_command_token_or_this(t).id() == current_id
-                {
+                if words[0].id() == current_id || get_command_token_or_this(t).id() == current_id {
                     return true;
                 }
                 // `time CMD`: the reserved word `time` is followed by the command
@@ -481,7 +498,10 @@ fn check_unquoted_expansions(p: &Parameters, t: &Token, out: &mut Out) {
 }
 
 fn should_be_split(t: &Token) -> bool {
-    matches!(get_command_name_from_expansion(t).as_deref(), Some("seq") | Some("pgrep"))
+    matches!(
+        get_command_name_from_expansion(t).as_deref(),
+        Some("seq") | Some("pgrep")
+    )
 }
 
 // ===========================================================================
@@ -527,7 +547,12 @@ fn basename_dispatch(p: &Parameters, name: &str, args: &[Token], out: &mut Out) 
 fn check_tr(args: &[Token], out: &mut Out) {
     for w in args {
         if is_glob(w) {
-            warn(out, w.id(), 2060, "Quote parameters to tr to prevent glob expansion.");
+            warn(
+                out,
+                w.id(),
+                2060,
+                "Quote parameters to tr to prevent glob expansion.",
+            );
         }
     }
 }
@@ -581,8 +606,16 @@ fn check_printf_format(p: &Parameters, format: &Token, more: &[Token], out: &mut
         } else if arg_count > 0 && format_count > 0 && arg_count % format_count == 0 {
             // A suitable number of arguments.
         } else {
-            let pl_var = if format_count == 1 { "variable" } else { "variables" };
-            let pl_arg = if arg_count == 1 { "argument" } else { "arguments" };
+            let pl_var = if format_count == 1 {
+                "variable"
+            } else {
+                "variables"
+            };
+            let pl_arg = if arg_count == 1 {
+                "argument"
+            } else {
+                "arguments"
+            };
             warn(
                 out,
                 format.id(),
@@ -772,13 +805,18 @@ fn match_format_re(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
     // length modifier (hh|h|l|ll|q|L|j|z|Z|t)? — greedy, but only if a type char
     // then follows (regex backtracking). Alternation preference order preserved.
     let type_at = |j: usize| -> Option<char> {
-        rest.get(j).copied().filter(|c| PRINTF_TYPE_CHARS.contains(*c))
+        rest.get(j)
+            .copied()
+            .filter(|c| PRINTF_TYPE_CHARS.contains(*c))
     };
     let mods = ["hh", "h", "l", "ll", "q", "L", "j", "z", "Z", "t"];
     let mut chosen_len = 0usize;
     for m in mods {
         let mc: Vec<char> = m.chars().collect();
-        if i + mc.len() <= rest.len() && rest[i..i + mc.len()] == mc[..] && type_at(i + mc.len()).is_some() {
+        if i + mc.len() <= rest.len()
+            && rest[i..i + mc.len()] == mc[..]
+            && type_at(i + mc.len()).is_some()
+        {
             chosen_len = mc.len();
             break;
         }

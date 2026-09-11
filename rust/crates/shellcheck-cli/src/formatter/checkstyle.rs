@@ -52,7 +52,12 @@ fn format_comment(c: &PositionedComment) -> String {
 }
 
 /// Render one `<file>` block (with its comments, possibly empty).
-pub fn render_file(filename: &str, contents: &str, comments: &[PositionedComment], out: &mut String) {
+pub fn render_file(
+    filename: &str,
+    contents: &str,
+    comments: &[PositionedComment],
+    out: &mut String,
+) {
     let untabbed = make_non_virtual(comments, contents);
     out.push_str(&format!("<file {}>\n", attr("name", filename)));
     for c in &untabbed {

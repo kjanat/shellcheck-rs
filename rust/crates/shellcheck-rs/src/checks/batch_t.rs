@@ -217,7 +217,10 @@ fn will_concat_in_assignment(t: &Token) -> bool {
 
 /// `isFunctionLike`.
 fn is_function_like(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Function { .. } | InnerToken::T_BatsTest { .. })
+    matches!(
+        &*t.inner,
+        InnerToken::T_Function { .. } | InnerToken::T_BatsTest { .. }
+    )
 }
 
 /// `escapeForMessage` (`e4m`).
@@ -312,7 +315,11 @@ fn dispatch_exactly(t: &Token, target: &str) -> Option<Token> {
         }
         return None;
     }
-    if name == target { Some(t.clone()) } else { None }
+    if name == target {
+        Some(t.clone())
+    } else {
+        None
+    }
 }
 
 /// Like `dispatch_exactly` but matches any of the given names.
@@ -334,20 +341,29 @@ fn dispatch_basename(t: &Token, target: &str) -> Option<Token> {
     };
     let name = astlib::get_literal_string(&words[0])?;
     if name.contains('/') {
-        return if basename(&name) == target { Some(t.clone()) } else { None };
+        return if basename(&name) == target {
+            Some(t.clone())
+        } else {
+            None
+        };
     }
     if name == "builtin" && words.len() >= 2 {
         return None; // builtin branch: no Basename dispatch
     }
-    if name == target { Some(t.clone()) } else { None }
+    if name == target {
+        Some(t.clone())
+    } else {
+        None
+    }
 }
 
 // ===========================================================================
 // SC2003 / SC2304 / SC2305 / SC2306 / SC2307 / SC2308 — checkExpr
 // ===========================================================================
 
-const EXPR_EXCEPTIONS: [&str; 9] =
-    [":", "<", ">", "<=", ">=", "match", "length", "substr", "index"];
+const EXPR_EXCEPTIONS: [&str; 9] = [
+    ":", "<", ">", "<=", ">=", "match", "length", "substr", "index",
+];
 
 fn expr_check_op(side: &Token, out: &mut Out) {
     if let Some(s) = astlib::get_literal_string(side) {
@@ -372,7 +388,10 @@ fn check_expr(params: &Parameters, t: &Token, out: &mut Out) {
     let args = arguments(&te);
 
     let literal_args: Vec<String> = args.iter().filter_map(astlib::get_literal_string).collect();
-    if literal_args.iter().all(|x| !EXPR_EXCEPTIONS.contains(&x.as_str())) {
+    if literal_args
+        .iter()
+        .all(|x| !EXPR_EXCEPTIONS.contains(&x.as_str()))
+    {
         style(
             out,
             get_command_token_or_this(&te).id(),
@@ -472,12 +491,7 @@ fn return_is_invalid(s: &str) -> bool {
         || s.parse::<u64>().map_or(false, |v| v > 255)
 }
 
-fn return_or_exit(
-    args: &[Token],
-    out: &mut Out,
-    multi: (Code, &str),
-    invalid: (Code, &str),
-) {
+fn return_or_exit(args: &[Token], out: &mut Out, multi: (Code, &str), invalid: (Code, &str)) {
     match args {
         [first, _second, ..] => err(out, first.id(), multi.0, multi.1),
         [value] => {
@@ -494,8 +508,14 @@ fn check_return(params: &Parameters, t: &Token, out: &mut Out) {
         return_or_exit(
             arguments(&te),
             out,
-            (2151, "Only one integer 0-255 can be returned. Use stdout for other data."),
-            (2152, "Can only return 0-255. Other data should be written to stdout."),
+            (
+                2151,
+                "Only one integer 0-255 can be returned. Use stdout for other data.",
+            ),
+            (
+                2152,
+                "Can only return 0-255. Other data should be written to stdout.",
+            ),
         );
     }
 }
@@ -505,8 +525,14 @@ fn check_exit(params: &Parameters, t: &Token, out: &mut Out) {
         return_or_exit(
             arguments(&te),
             out,
-            (2241, "The exit status can only be one integer 0-255. Use stdout for other data."),
-            (2242, "Can only exit with status 0-255. Other data should be written to stdout/stderr."),
+            (
+                2241,
+                "The exit status can only be one integer 0-255. Use stdout for other data.",
+            ),
+            (
+                2242,
+                "Can only exit with status 0-255. Other data should be written to stdout/stderr.",
+            ),
         );
     }
 }
@@ -903,7 +929,9 @@ fn printf_match_format(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
         }
     }
     let type_at = |j: usize| -> Option<char> {
-        rest.get(j).copied().filter(|c| PRINTF_TYPE_CHARS.contains(*c))
+        rest.get(j)
+            .copied()
+            .filter(|c| PRINTF_TYPE_CHARS.contains(*c))
     };
     let mods = ["hh", "h", "l", "ll", "q", "L", "j", "z", "Z", "t"];
     let mut chosen_len = 0usize;
@@ -1006,10 +1034,7 @@ fn check_unquoted_echo_spaces(params: &Parameters, t: &Token, out: &mut Out) {
         .collect();
 
     let has_spaces_between = |first: &(crate::interface::Position, crate::interface::Position),
-                              second: &(
-        crate::interface::Position,
-        crate::interface::Position,
-    )|
+                              second: &(crate::interface::Position, crate::interface::Position)|
      -> bool {
         let (a, b) = first;
         let (c, d) = second;
@@ -1093,14 +1118,24 @@ fn missing_destination(te: &Token, out: &mut Out, handler: impl Fn(&mut Out, Id)
 fn check_mv_arguments(params: &Parameters, t: &Token, out: &mut Out) {
     if let Some(te) = dispatch_basename(t, "mv") {
         missing_destination(&te, out, |o, id| {
-            err(o, id, 2224, "This mv has no destination. Check the arguments.");
+            err(
+                o,
+                id,
+                2224,
+                "This mv has no destination. Check the arguments.",
+            );
         });
     }
 }
 fn check_cp_arguments(params: &Parameters, t: &Token, out: &mut Out) {
     if let Some(te) = dispatch_basename(t, "cp") {
         missing_destination(&te, out, |o, id| {
-            err(o, id, 2225, "This cp has no destination. Check the arguments.");
+            err(
+                o,
+                id,
+                2225,
+                "This cp has no destination. Check the arguments.",
+            );
         });
     }
 }
@@ -1371,7 +1406,12 @@ fn getopts_check(opts: &[String], case_id: Id, cases: &[CaseClause], out: &mut O
     }
     redundant.sort_by(|a, b| a.0.cmp(&b.0));
     for (_, expr) in redundant {
-        warn(out, expr.id(), 2214, "This case is not specified by getopts.");
+        warn(
+            out,
+            expr.id(),
+            2214,
+            "This case is not specified by getopts.",
+        );
     }
 }
 
@@ -1389,7 +1429,10 @@ fn check_read_array(params: &Parameters, t: &Token, out: &mut Out) {
         None => return,
     };
     for word in arguments(&te) {
-        if get_word_parts(word).iter().any(|p| read_is_unquoted_bracket(p)) {
+        if get_word_parts(word)
+            .iter()
+            .any(|p| read_is_unquoted_bracket(p))
+        {
             warn(
                 out,
                 word.id(),
@@ -1423,9 +1466,7 @@ mod tests {
     fn produces(f: fn(&Parameters, &Token, &mut Out), s: &str) -> bool {
         let params = params_for(s);
         let mut out = Out::new();
-        params
-            .root
-            .visit_preorder(&mut |t| f(&params, t, &mut out));
+        params.root.visit_preorder(&mut |t| f(&params, t, &mut out));
         out.retain(|c| !is_ignored(&params, c.comment.code, c.id));
         !out.is_empty()
     }
@@ -1449,263 +1490,579 @@ mod tests {
 
     // checkExpr
     #[test]
-    fn prop_checkExpr() { assert!(produces(check_expr, "foo=$(expr 3 + 2)")); }
+    fn prop_checkExpr() {
+        assert!(produces(check_expr, "foo=$(expr 3 + 2)"));
+    }
     #[test]
-    fn prop_checkExpr2() { assert!(produces(check_expr, "foo=`echo \\`expr 3 + 2\\``")); }
+    fn prop_checkExpr2() {
+        assert!(produces(check_expr, "foo=`echo \\`expr 3 + 2\\``"));
+    }
     #[test]
-    fn prop_checkExpr3() { assert!(!produces(check_expr, "foo=$(expr foo : regex)")); }
+    fn prop_checkExpr3() {
+        assert!(!produces(check_expr, "foo=$(expr foo : regex)"));
+    }
     #[test]
-    fn prop_checkExpr4() { assert!(!produces(check_expr, "foo=$(expr foo \\< regex)")); }
+    fn prop_checkExpr4() {
+        assert!(!produces(check_expr, "foo=$(expr foo \\< regex)"));
+    }
     #[test]
-    fn prop_checkExpr5() { assert!(produces(check_expr, "# shellcheck disable=SC2003\nexpr match foo bar")); }
+    fn prop_checkExpr5() {
+        assert!(produces(
+            check_expr,
+            "# shellcheck disable=SC2003\nexpr match foo bar"
+        ));
+    }
     #[test]
-    fn prop_checkExpr6() { assert!(produces(check_expr, "# shellcheck disable=SC2003\nexpr foo : fo*")); }
+    fn prop_checkExpr6() {
+        assert!(produces(
+            check_expr,
+            "# shellcheck disable=SC2003\nexpr foo : fo*"
+        ));
+    }
     #[test]
-    fn prop_checkExpr7() { assert!(produces(check_expr, "# shellcheck disable=SC2003\nexpr 5 -3")); }
+    fn prop_checkExpr7() {
+        assert!(produces(
+            check_expr,
+            "# shellcheck disable=SC2003\nexpr 5 -3"
+        ));
+    }
     #[test]
-    fn prop_checkExpr8() { assert!(!produces(check_expr, "# shellcheck disable=SC2003\nexpr \"$@\"")); }
+    fn prop_checkExpr8() {
+        assert!(!produces(
+            check_expr,
+            "# shellcheck disable=SC2003\nexpr \"$@\""
+        ));
+    }
     #[test]
-    fn prop_checkExpr9() { assert!(!produces(check_expr, "# shellcheck disable=SC2003\nexpr 5 $rest")); }
+    fn prop_checkExpr9() {
+        assert!(!produces(
+            check_expr,
+            "# shellcheck disable=SC2003\nexpr 5 $rest"
+        ));
+    }
     #[test]
-    fn prop_checkExpr10() { assert!(produces(check_expr, "# shellcheck disable=SC2003\nexpr length \"$var\"")); }
+    fn prop_checkExpr10() {
+        assert!(produces(
+            check_expr,
+            "# shellcheck disable=SC2003\nexpr length \"$var\""
+        ));
+    }
     #[test]
-    fn prop_checkExpr11() { assert!(produces(check_expr, "# shellcheck disable=SC2003\nexpr foo > bar")); }
+    fn prop_checkExpr11() {
+        assert!(produces(
+            check_expr,
+            "# shellcheck disable=SC2003\nexpr foo > bar"
+        ));
+    }
     #[test]
-    fn prop_checkExpr12() { assert!(produces(check_expr, "# shellcheck disable=SC2003\nexpr 1 | 2")); }
+    fn prop_checkExpr12() {
+        assert!(produces(
+            check_expr,
+            "# shellcheck disable=SC2003\nexpr 1 | 2"
+        ));
+    }
     #[test]
-    fn prop_checkExpr13() { assert!(produces(check_expr, "# shellcheck disable=SC2003\nexpr 1 * 2")); }
+    fn prop_checkExpr13() {
+        assert!(produces(
+            check_expr,
+            "# shellcheck disable=SC2003\nexpr 1 * 2"
+        ));
+    }
     #[test]
-    fn prop_checkExpr14() { assert!(produces(check_expr, "# shellcheck disable=SC2003\nexpr \"$x\" >=  \"$y\"")); }
+    fn prop_checkExpr14() {
+        assert!(produces(
+            check_expr,
+            "# shellcheck disable=SC2003\nexpr \"$x\" >=  \"$y\""
+        ));
+    }
 
     // checkReturn
     #[test]
-    fn prop_checkReturn1() { assert!(!produces(check_return, "return")); }
+    fn prop_checkReturn1() {
+        assert!(!produces(check_return, "return"));
+    }
     #[test]
-    fn prop_checkReturn2() { assert!(!produces(check_return, "return 1")); }
+    fn prop_checkReturn2() {
+        assert!(!produces(check_return, "return 1"));
+    }
     #[test]
-    fn prop_checkReturn3() { assert!(!produces(check_return, "return $var")); }
+    fn prop_checkReturn3() {
+        assert!(!produces(check_return, "return $var"));
+    }
     #[test]
-    fn prop_checkReturn4() { assert!(!produces(check_return, "return $((a|b))")); }
+    fn prop_checkReturn4() {
+        assert!(!produces(check_return, "return $((a|b))"));
+    }
     #[test]
-    fn prop_checkReturn5() { assert!(produces(check_return, "return -1")); }
+    fn prop_checkReturn5() {
+        assert!(produces(check_return, "return -1"));
+    }
     #[test]
-    fn prop_checkReturn6() { assert!(produces(check_return, "return 1000")); }
+    fn prop_checkReturn6() {
+        assert!(produces(check_return, "return 1000"));
+    }
     #[test]
-    fn prop_checkReturn7() { assert!(produces(check_return, "return 'hello world'")); }
+    fn prop_checkReturn7() {
+        assert!(produces(check_return, "return 'hello world'"));
+    }
 
     // checkExit
     #[test]
-    fn prop_checkExit1() { assert!(!produces(check_exit, "exit")); }
+    fn prop_checkExit1() {
+        assert!(!produces(check_exit, "exit"));
+    }
     #[test]
-    fn prop_checkExit2() { assert!(!produces(check_exit, "exit 1")); }
+    fn prop_checkExit2() {
+        assert!(!produces(check_exit, "exit 1"));
+    }
     #[test]
-    fn prop_checkExit3() { assert!(!produces(check_exit, "exit $var")); }
+    fn prop_checkExit3() {
+        assert!(!produces(check_exit, "exit $var"));
+    }
     #[test]
-    fn prop_checkExit4() { assert!(!produces(check_exit, "exit $((a|b))")); }
+    fn prop_checkExit4() {
+        assert!(!produces(check_exit, "exit $((a|b))"));
+    }
     #[test]
-    fn prop_checkExit5() { assert!(produces(check_exit, "exit -1")); }
+    fn prop_checkExit5() {
+        assert!(produces(check_exit, "exit -1"));
+    }
     #[test]
-    fn prop_checkExit6() { assert!(produces(check_exit, "exit 1000")); }
+    fn prop_checkExit6() {
+        assert!(produces(check_exit, "exit 1000"));
+    }
     #[test]
-    fn prop_checkExit7() { assert!(produces(check_exit, "exit 'hello world'")); }
+    fn prop_checkExit7() {
+        assert!(produces(check_exit, "exit 'hello world'"));
+    }
 
     // checkSetAssignment
     #[test]
-    fn prop_checkSetAssignment1() { assert!(produces(check_set_assignment, "set foo 42")); }
+    fn prop_checkSetAssignment1() {
+        assert!(produces(check_set_assignment, "set foo 42"));
+    }
     #[test]
-    fn prop_checkSetAssignment2() { assert!(produces(check_set_assignment, "set foo = 42")); }
+    fn prop_checkSetAssignment2() {
+        assert!(produces(check_set_assignment, "set foo = 42"));
+    }
     #[test]
-    fn prop_checkSetAssignment3() { assert!(produces(check_set_assignment, "set foo=42")); }
+    fn prop_checkSetAssignment3() {
+        assert!(produces(check_set_assignment, "set foo=42"));
+    }
     #[test]
-    fn prop_checkSetAssignment4() { assert!(!produces(check_set_assignment, "set -- if=/dev/null")); }
+    fn prop_checkSetAssignment4() {
+        assert!(!produces(check_set_assignment, "set -- if=/dev/null"));
+    }
     #[test]
-    fn prop_checkSetAssignment5() { assert!(!produces(check_set_assignment, "set 'a=5'")); }
+    fn prop_checkSetAssignment5() {
+        assert!(!produces(check_set_assignment, "set 'a=5'"));
+    }
     #[test]
-    fn prop_checkSetAssignment6() { assert!(!produces(check_set_assignment, "set")); }
+    fn prop_checkSetAssignment6() {
+        assert!(!produces(check_set_assignment, "set"));
+    }
 
     // checkExportedExpansions
     #[test]
-    fn prop_checkExportedExpansions1() { assert!(produces(check_exported_expansions, "export $foo")); }
+    fn prop_checkExportedExpansions1() {
+        assert!(produces(check_exported_expansions, "export $foo"));
+    }
     #[test]
-    fn prop_checkExportedExpansions2() { assert!(produces(check_exported_expansions, "export \"$foo\"")); }
+    fn prop_checkExportedExpansions2() {
+        assert!(produces(check_exported_expansions, "export \"$foo\""));
+    }
     #[test]
-    fn prop_checkExportedExpansions3() { assert!(!produces(check_exported_expansions, "export foo")); }
+    fn prop_checkExportedExpansions3() {
+        assert!(!produces(check_exported_expansions, "export foo"));
+    }
     #[test]
-    fn prop_checkExportedExpansions4() { assert!(!produces(check_exported_expansions, "export ${foo?}")); }
+    fn prop_checkExportedExpansions4() {
+        assert!(!produces(check_exported_expansions, "export ${foo?}"));
+    }
 
     // checkAliasesUsesArgs
     #[test]
-    fn prop_checkAliasesUsesArgs1() { assert!(produces(check_aliases_uses_args, "alias a='cp $1 /a'")); }
+    fn prop_checkAliasesUsesArgs1() {
+        assert!(produces(check_aliases_uses_args, "alias a='cp $1 /a'"));
+    }
     #[test]
-    fn prop_checkAliasesUsesArgs2() { assert!(!produces(check_aliases_uses_args, "alias $1='foo'")); }
+    fn prop_checkAliasesUsesArgs2() {
+        assert!(!produces(check_aliases_uses_args, "alias $1='foo'"));
+    }
     #[test]
-    fn prop_checkAliasesUsesArgs3() { assert!(produces(check_aliases_uses_args, "alias a=\"echo \\${@}\"")); }
+    fn prop_checkAliasesUsesArgs3() {
+        assert!(produces(check_aliases_uses_args, "alias a=\"echo \\${@}\""));
+    }
 
     // checkAliasesExpandEarly
     #[test]
-    fn prop_checkAliasesExpandEarly1() { assert!(produces(check_aliases_expand_early, "alias foo=\"echo $PWD\"")); }
+    fn prop_checkAliasesExpandEarly1() {
+        assert!(produces(
+            check_aliases_expand_early,
+            "alias foo=\"echo $PWD\""
+        ));
+    }
     #[test]
-    fn prop_checkAliasesExpandEarly2() { assert!(!produces(check_aliases_expand_early, "alias -p")); }
+    fn prop_checkAliasesExpandEarly2() {
+        assert!(!produces(check_aliases_expand_early, "alias -p"));
+    }
     #[test]
-    fn prop_checkAliasesExpandEarly3() { assert!(!produces(check_aliases_expand_early, "alias foo='echo {1..10}'")); }
+    fn prop_checkAliasesExpandEarly3() {
+        assert!(!produces(
+            check_aliases_expand_early,
+            "alias foo='echo {1..10}'"
+        ));
+    }
 
     // checkUnsetGlobs
     #[test]
-    fn prop_checkUnsetGlobs1() { assert!(produces(check_unset_globs, "unset foo[1]")); }
+    fn prop_checkUnsetGlobs1() {
+        assert!(produces(check_unset_globs, "unset foo[1]"));
+    }
     #[test]
-    fn prop_checkUnsetGlobs2() { assert!(!produces(check_unset_globs, "unset foo")); }
+    fn prop_checkUnsetGlobs2() {
+        assert!(!produces(check_unset_globs, "unset foo"));
+    }
     #[test]
-    fn prop_checkUnsetGlobs3() { assert!(produces(check_unset_globs, "unset foo[$i]")); }
+    fn prop_checkUnsetGlobs3() {
+        assert!(produces(check_unset_globs, "unset foo[$i]"));
+    }
     #[test]
-    fn prop_checkUnsetGlobs4() { assert!(produces(check_unset_globs, "unset foo[x${i}y]")); }
+    fn prop_checkUnsetGlobs4() {
+        assert!(produces(check_unset_globs, "unset foo[x${i}y]"));
+    }
     #[test]
-    fn prop_checkUnsetGlobs5() { assert!(!produces(check_unset_globs, "unset foo][")); }
+    fn prop_checkUnsetGlobs5() {
+        assert!(!produces(check_unset_globs, "unset foo]["));
+    }
 
     // checkLocalScope
     #[test]
-    fn prop_checkLocalScope1() { assert!(produces(check_local_scope, "local foo=3")); }
+    fn prop_checkLocalScope1() {
+        assert!(produces(check_local_scope, "local foo=3"));
+    }
     #[test]
-    fn prop_checkLocalScope2() { assert!(!produces(check_local_scope, "f() { local foo=3; }")); }
+    fn prop_checkLocalScope2() {
+        assert!(!produces(check_local_scope, "f() { local foo=3; }"));
+    }
 
     // checkMaskedReturns
     #[test]
-    fn prop_checkMaskedReturns1() { assert!(produces(check_masked_returns, "f() { local a=$(false); }")); }
+    fn prop_checkMaskedReturns1() {
+        assert!(produces(check_masked_returns, "f() { local a=$(false); }"));
+    }
     #[test]
-    fn prop_checkMaskedReturns2() { assert!(produces(check_masked_returns, "declare a=$(false)")); }
+    fn prop_checkMaskedReturns2() {
+        assert!(produces(check_masked_returns, "declare a=$(false)"));
+    }
     #[test]
-    fn prop_checkMaskedReturns3() { assert!(produces(check_masked_returns, "declare a=\"`false`\"")); }
+    fn prop_checkMaskedReturns3() {
+        assert!(produces(check_masked_returns, "declare a=\"`false`\""));
+    }
     #[test]
-    fn prop_checkMaskedReturns4() { assert!(produces(check_masked_returns, "readonly a=$(false)")); }
+    fn prop_checkMaskedReturns4() {
+        assert!(produces(check_masked_returns, "readonly a=$(false)"));
+    }
     #[test]
-    fn prop_checkMaskedReturns5() { assert!(produces(check_masked_returns, "readonly a=\"`false`\"")); }
+    fn prop_checkMaskedReturns5() {
+        assert!(produces(check_masked_returns, "readonly a=\"`false`\""));
+    }
     #[test]
-    fn prop_checkMaskedReturns6() { assert!(!produces(check_masked_returns, "declare a; a=$(false)")); }
+    fn prop_checkMaskedReturns6() {
+        assert!(!produces(check_masked_returns, "declare a; a=$(false)"));
+    }
     #[test]
-    fn prop_checkMaskedReturns7() { assert!(!produces(check_masked_returns, "f() { local -r a=$(false); }")); }
+    fn prop_checkMaskedReturns7() {
+        assert!(!produces(
+            check_masked_returns,
+            "f() { local -r a=$(false); }"
+        ));
+    }
     #[test]
-    fn prop_checkMaskedReturns8() { assert!(!produces(check_masked_returns, "a=$(false); readonly a")); }
+    fn prop_checkMaskedReturns8() {
+        assert!(!produces(check_masked_returns, "a=$(false); readonly a"));
+    }
     #[test]
-    fn prop_checkMaskedReturns9() { assert!(produces(check_masked_returns, "#!/bin/ksh\n f() { typeset -r x=$(false); }")); }
+    fn prop_checkMaskedReturns9() {
+        assert!(produces(
+            check_masked_returns,
+            "#!/bin/ksh\n f() { typeset -r x=$(false); }"
+        ));
+    }
     #[test]
-    fn prop_checkMaskedReturns10() { assert!(!produces(check_masked_returns, "#!/bin/ksh\n function f { typeset -r x=$(false); }")); }
+    fn prop_checkMaskedReturns10() {
+        assert!(!produces(
+            check_masked_returns,
+            "#!/bin/ksh\n function f { typeset -r x=$(false); }"
+        ));
+    }
     #[test]
-    fn prop_checkMaskedReturns11() { assert!(!produces(check_masked_returns, "#!/bin/bash\n f() { typeset -r x=$(false); }")); }
+    fn prop_checkMaskedReturns11() {
+        assert!(!produces(
+            check_masked_returns,
+            "#!/bin/bash\n f() { typeset -r x=$(false); }"
+        ));
+    }
     #[test]
-    fn prop_checkMaskedReturns12() { assert!(produces(check_masked_returns, "typeset -r x=$(false);")); }
+    fn prop_checkMaskedReturns12() {
+        assert!(produces(check_masked_returns, "typeset -r x=$(false);"));
+    }
     #[test]
-    fn prop_checkMaskedReturns13() { assert!(produces(check_masked_returns, "f() { typeset -g x=$(false); }")); }
+    fn prop_checkMaskedReturns13() {
+        assert!(produces(
+            check_masked_returns,
+            "f() { typeset -g x=$(false); }"
+        ));
+    }
     #[test]
-    fn prop_checkMaskedReturns14() { assert!(produces(check_masked_returns, "declare x=${ false; }")); }
+    fn prop_checkMaskedReturns14() {
+        assert!(produces(check_masked_returns, "declare x=${ false; }"));
+    }
     #[test]
-    fn prop_checkMaskedReturns15() { assert!(produces(check_masked_returns, "f() { declare x=$(false); }")); }
+    fn prop_checkMaskedReturns15() {
+        assert!(produces(
+            check_masked_returns,
+            "f() { declare x=$(false); }"
+        ));
+    }
 
     // checkPrintfVar (SC2182 only)
     #[test]
-    fn prop_checkPrintfVar6() { assert!(produces(check_printf_var, "printf foo bar baz")); }
+    fn prop_checkPrintfVar6() {
+        assert!(produces(check_printf_var, "printf foo bar baz"));
+    }
     #[test]
-    fn prop_checkPrintfVar7() { assert!(produces(check_printf_var, "printf -- foo bar baz")); }
+    fn prop_checkPrintfVar7() {
+        assert!(produces(check_printf_var, "printf -- foo bar baz"));
+    }
     #[test]
-    fn prop_checkPrintfVar_novar_only() { assert!(!produces(check_printf_var, "printf 'foo'")); }
+    fn prop_checkPrintfVar_novar_only() {
+        assert!(!produces(check_printf_var, "printf 'foo'"));
+    }
     #[test]
-    fn prop_checkPrintfVar5() { assert!(!produces(check_printf_var, "printf '%s %s %s' foo bar")); }
+    fn prop_checkPrintfVar5() {
+        assert!(!produces(check_printf_var, "printf '%s %s %s' foo bar"));
+    }
     #[test]
-    fn prop_checkPrintfVar23() { assert!(!produces(check_printf_var, "printf -vTODAY '%(%Y)T'")); }
+    fn prop_checkPrintfVar23() {
+        assert!(!produces(check_printf_var, "printf -vTODAY '%(%Y)T'"));
+    }
     #[test]
-    fn prop_checkPrintfVar16() { assert!(!produces(check_printf_var, "printf $'string'")); }
+    fn prop_checkPrintfVar16() {
+        assert!(!produces(check_printf_var, "printf $'string'"));
+    }
 
     // checkSshCommandString
     #[test]
-    fn prop_checkSshCmdStr1() { assert!(produces(check_ssh_command_string, "ssh host \"echo $PS1\"")); }
+    fn prop_checkSshCmdStr1() {
+        assert!(produces(check_ssh_command_string, "ssh host \"echo $PS1\""));
+    }
     #[test]
-    fn prop_checkSshCmdStr2() { assert!(!produces(check_ssh_command_string, "ssh host \"ls foo\"")); }
+    fn prop_checkSshCmdStr2() {
+        assert!(!produces(check_ssh_command_string, "ssh host \"ls foo\""));
+    }
     #[test]
-    fn prop_checkSshCmdStr3() { assert!(!produces(check_ssh_command_string, "ssh \"$host\"")); }
+    fn prop_checkSshCmdStr3() {
+        assert!(!produces(check_ssh_command_string, "ssh \"$host\""));
+    }
     #[test]
-    fn prop_checkSshCmdStr4() { assert!(!produces(check_ssh_command_string, "ssh -i key \"$host\"")); }
+    fn prop_checkSshCmdStr4() {
+        assert!(!produces(check_ssh_command_string, "ssh -i key \"$host\""));
+    }
 
     // checkUnquotedEchoSpaces
     #[test]
-    fn prop_checkUnquotedEchoSpaces1() { assert!(produces(check_unquoted_echo_spaces, "echo foo         bar")); }
+    fn prop_checkUnquotedEchoSpaces1() {
+        assert!(produces(check_unquoted_echo_spaces, "echo foo         bar"));
+    }
     #[test]
-    fn prop_checkUnquotedEchoSpaces2() { assert!(!produces(check_unquoted_echo_spaces, "echo       foo")); }
+    fn prop_checkUnquotedEchoSpaces2() {
+        assert!(!produces(check_unquoted_echo_spaces, "echo       foo"));
+    }
     #[test]
-    fn prop_checkUnquotedEchoSpaces3() { assert!(!produces(check_unquoted_echo_spaces, "echo foo  bar")); }
+    fn prop_checkUnquotedEchoSpaces3() {
+        assert!(!produces(check_unquoted_echo_spaces, "echo foo  bar"));
+    }
     #[test]
-    fn prop_checkUnquotedEchoSpaces4() { assert!(!produces(check_unquoted_echo_spaces, "echo 'foo          bar'")); }
+    fn prop_checkUnquotedEchoSpaces4() {
+        assert!(!produces(
+            check_unquoted_echo_spaces,
+            "echo 'foo          bar'"
+        ));
+    }
     #[test]
-    fn prop_checkUnquotedEchoSpaces5() { assert!(!produces(check_unquoted_echo_spaces, "echo a > myfile.txt b")); }
+    fn prop_checkUnquotedEchoSpaces5() {
+        assert!(!produces(
+            check_unquoted_echo_spaces,
+            "echo a > myfile.txt b"
+        ));
+    }
     #[test]
-    fn prop_checkUnquotedEchoSpaces6() { assert!(!produces(check_unquoted_echo_spaces, "        echo foo\\\n        bar")); }
+    fn prop_checkUnquotedEchoSpaces6() {
+        assert!(!produces(
+            check_unquoted_echo_spaces,
+            "        echo foo\\\n        bar"
+        ));
+    }
 
     // checkEvalArray
     #[test]
-    fn prop_checkEvalArray1() { assert!(produces(check_eval_array, "eval $@")); }
+    fn prop_checkEvalArray1() {
+        assert!(produces(check_eval_array, "eval $@"));
+    }
     #[test]
-    fn prop_checkEvalArray2() { assert!(produces(check_eval_array, "eval \"${args[@]}\"")); }
+    fn prop_checkEvalArray2() {
+        assert!(produces(check_eval_array, "eval \"${args[@]}\""));
+    }
     #[test]
-    fn prop_checkEvalArray3() { assert!(produces(check_eval_array, "eval \"${args[@]@Q}\"")); }
+    fn prop_checkEvalArray3() {
+        assert!(produces(check_eval_array, "eval \"${args[@]@Q}\""));
+    }
     #[test]
-    fn prop_checkEvalArray4() { assert!(!produces(check_eval_array, "eval \"${args[*]@Q}\"")); }
+    fn prop_checkEvalArray4() {
+        assert!(!produces(check_eval_array, "eval \"${args[*]@Q}\""));
+    }
     #[test]
-    fn prop_checkEvalArray5() { assert!(!produces(check_eval_array, "eval \"$*\"")); }
+    fn prop_checkEvalArray5() {
+        assert!(!produces(check_eval_array, "eval \"$*\""));
+    }
 
     // checkMvArguments
     #[test]
-    fn prop_checkMvArguments1() { assert!(produces(check_mv_arguments, "mv 'foo bar'")); }
+    fn prop_checkMvArguments1() {
+        assert!(produces(check_mv_arguments, "mv 'foo bar'"));
+    }
     #[test]
-    fn prop_checkMvArguments2() { assert!(!produces(check_mv_arguments, "mv foo bar")); }
+    fn prop_checkMvArguments2() {
+        assert!(!produces(check_mv_arguments, "mv foo bar"));
+    }
     #[test]
-    fn prop_checkMvArguments3() { assert!(!produces(check_mv_arguments, "mv 'foo bar'{,bak}")); }
+    fn prop_checkMvArguments3() {
+        assert!(!produces(check_mv_arguments, "mv 'foo bar'{,bak}"));
+    }
     #[test]
-    fn prop_checkMvArguments4() { assert!(!produces(check_mv_arguments, "mv \"$@\"")); }
+    fn prop_checkMvArguments4() {
+        assert!(!produces(check_mv_arguments, "mv \"$@\""));
+    }
     #[test]
-    fn prop_checkMvArguments5() { assert!(!produces(check_mv_arguments, "mv -t foo bar")); }
+    fn prop_checkMvArguments5() {
+        assert!(!produces(check_mv_arguments, "mv -t foo bar"));
+    }
     #[test]
-    fn prop_checkMvArguments6() { assert!(!produces(check_mv_arguments, "mv --target-directory=foo bar")); }
+    fn prop_checkMvArguments6() {
+        assert!(!produces(
+            check_mv_arguments,
+            "mv --target-directory=foo bar"
+        ));
+    }
     #[test]
-    fn prop_checkMvArguments7() { assert!(!produces(check_mv_arguments, "mv --target-direc=foo bar")); }
+    fn prop_checkMvArguments7() {
+        assert!(!produces(check_mv_arguments, "mv --target-direc=foo bar"));
+    }
     #[test]
-    fn prop_checkMvArguments8() { assert!(!produces(check_mv_arguments, "mv --version")); }
+    fn prop_checkMvArguments8() {
+        assert!(!produces(check_mv_arguments, "mv --version"));
+    }
     #[test]
-    fn prop_checkMvArguments9() { assert!(!produces(check_mv_arguments, "mv \"${!var}\"")); }
+    fn prop_checkMvArguments9() {
+        assert!(!produces(check_mv_arguments, "mv \"${!var}\""));
+    }
 
     // checkSudoArgs
     #[test]
-    fn prop_checkSudoArgs1() { assert!(produces(check_sudo_args, "sudo cd /root")); }
+    fn prop_checkSudoArgs1() {
+        assert!(produces(check_sudo_args, "sudo cd /root"));
+    }
     #[test]
-    fn prop_checkSudoArgs2() { assert!(produces(check_sudo_args, "run0 export x=3")); }
+    fn prop_checkSudoArgs2() {
+        assert!(produces(check_sudo_args, "run0 export x=3"));
+    }
     #[test]
-    fn prop_checkSudoArgs3() { assert!(!produces(check_sudo_args, "sudo ls /usr/local/protected")); }
+    fn prop_checkSudoArgs3() {
+        assert!(!produces(check_sudo_args, "sudo ls /usr/local/protected"));
+    }
     #[test]
-    fn prop_checkSudoArgs4() { assert!(!produces(check_sudo_args, "doas ls && export x=3")); }
+    fn prop_checkSudoArgs4() {
+        assert!(!produces(check_sudo_args, "doas ls && export x=3"));
+    }
     #[test]
-    fn prop_checkSudoArgs5() { assert!(!produces(check_sudo_args, "sudo echo ls")); }
+    fn prop_checkSudoArgs5() {
+        assert!(!produces(check_sudo_args, "sudo echo ls"));
+    }
     #[test]
-    fn prop_checkSudoArgs6() { assert!(!produces(check_sudo_args, "sudo -n -u export ls")); }
+    fn prop_checkSudoArgs6() {
+        assert!(!produces(check_sudo_args, "sudo -n -u export ls"));
+    }
     #[test]
-    fn prop_checkSudoArgs7() { assert!(!produces(check_sudo_args, "sudo docker export foo")); }
+    fn prop_checkSudoArgs7() {
+        assert!(!produces(check_sudo_args, "sudo docker export foo"));
+    }
 
     // checkWhileGetoptsCase
     #[test]
-    fn prop_checkWhileGetoptsCase1() { assert!(produces(check_while_getopts_case, "while getopts 'a:b' x; do case $x in a) foo;; esac; done")); }
+    fn prop_checkWhileGetoptsCase1() {
+        assert!(produces(
+            check_while_getopts_case,
+            "while getopts 'a:b' x; do case $x in a) foo;; esac; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileGetoptsCase2() { assert!(produces(check_while_getopts_case, "while getopts 'a:' x; do case $x in a) foo;; b) bar;; esac; done")); }
+    fn prop_checkWhileGetoptsCase2() {
+        assert!(produces(
+            check_while_getopts_case,
+            "while getopts 'a:' x; do case $x in a) foo;; b) bar;; esac; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileGetoptsCase3() { assert!(!produces(check_while_getopts_case, "while getopts 'a:b' x; do case $x in a) foo;; b) bar;; *) :;esac; done")); }
+    fn prop_checkWhileGetoptsCase3() {
+        assert!(!produces(
+            check_while_getopts_case,
+            "while getopts 'a:b' x; do case $x in a) foo;; b) bar;; *) :;esac; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileGetoptsCase4() { assert!(!produces(check_while_getopts_case, "while getopts 'a:123' x; do case $x in a) foo;; [0-9]) bar;; esac; done")); }
+    fn prop_checkWhileGetoptsCase4() {
+        assert!(!produces(
+            check_while_getopts_case,
+            "while getopts 'a:123' x; do case $x in a) foo;; [0-9]) bar;; esac; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileGetoptsCase5() { assert!(!produces(check_while_getopts_case, "while getopts 'a:' x; do case $x in a) foo;; \\?) bar;; *) baz;; esac; done")); }
+    fn prop_checkWhileGetoptsCase5() {
+        assert!(!produces(
+            check_while_getopts_case,
+            "while getopts 'a:' x; do case $x in a) foo;; \\?) bar;; *) baz;; esac; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileGetoptsCase6() { assert!(!produces(check_while_getopts_case, "while getopts 'a:b' x; do case $y in a) foo;; esac; done")); }
+    fn prop_checkWhileGetoptsCase6() {
+        assert!(!produces(
+            check_while_getopts_case,
+            "while getopts 'a:b' x; do case $y in a) foo;; esac; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileGetoptsCase7() { assert!(!produces(check_while_getopts_case, "while getopts 'a:b' x; do case x$x in xa) foo;; xb) foo;; esac; done")); }
+    fn prop_checkWhileGetoptsCase7() {
+        assert!(!produces(
+            check_while_getopts_case,
+            "while getopts 'a:b' x; do case x$x in xa) foo;; xb) foo;; esac; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileGetoptsCase8() { assert!(!produces(check_while_getopts_case, "while getopts 'a:b' x; do x=a; case $x in a) foo;; esac; done")); }
+    fn prop_checkWhileGetoptsCase8() {
+        assert!(!produces(
+            check_while_getopts_case,
+            "while getopts 'a:b' x; do x=a; case $x in a) foo;; esac; done"
+        ));
+    }
 
     // checkReadExpansions (SC2313 branch)
     #[test]
-    fn prop_checkReadExpansions9() { assert!(produces(check_read_array, "read arr[val]")); }
+    fn prop_checkReadExpansions9() {
+        assert!(produces(check_read_array, "read arr[val]"));
+    }
     #[test]
-    fn prop_checkReadArray_negative() { assert!(!produces(check_read_array, "read foo")); }
+    fn prop_checkReadArray_negative() {
+        assert!(!produces(check_read_array, "read foo"));
+    }
 }

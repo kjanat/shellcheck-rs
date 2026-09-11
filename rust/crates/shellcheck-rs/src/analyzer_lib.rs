@@ -89,15 +89,29 @@ pub type Out = Vec<TokenComment>;
 pub fn make_comment(severity: Severity, id: Id, code: Code, note: &str) -> TokenComment {
     TokenComment {
         id,
-        comment: Comment { severity, code, message: note.to_string() },
+        comment: Comment {
+            severity,
+            code,
+            message: note.to_string(),
+        },
         fix: None,
     }
 }
 
-pub fn make_comment_with_fix(severity: Severity, id: Id, code: Code, note: &str, fix: Fix) -> TokenComment {
+pub fn make_comment_with_fix(
+    severity: Severity,
+    id: Id,
+    code: Code,
+    note: &str,
+    fix: Fix,
+) -> TokenComment {
     TokenComment {
         id,
-        comment: Comment { severity, code, message: note.to_string() },
+        comment: Comment {
+            severity,
+            code,
+            message: note.to_string(),
+        },
         fix: Some(fix),
     }
 }
@@ -118,7 +132,13 @@ pub fn err_with_fix(out: &mut Out, id: Id, code: Code, note: &str, fix: Fix) {
     out.push(make_comment_with_fix(Severity::ErrorC, id, code, note, fix));
 }
 pub fn warn_with_fix(out: &mut Out, id: Id, code: Code, note: &str, fix: Fix) {
-    out.push(make_comment_with_fix(Severity::WarningC, id, code, note, fix));
+    out.push(make_comment_with_fix(
+        Severity::WarningC,
+        id,
+        code,
+        note,
+        fix,
+    ));
 }
 pub fn info_with_fix(out: &mut Out, id: Id, code: Code, note: &str, fix: Fix) {
     out.push(make_comment_with_fix(Severity::InfoC, id, code, note, fix));
@@ -146,7 +166,10 @@ fn fix_depth(params: &Parameters, id: Id) -> i32 {
 /// `replaceStart id params n r`: replace `n` columns at the token's start.
 pub fn replace_start(params: &Parameters, id: Id, n: i64, r: &str) -> Replacement {
     let (start, _) = params.token_positions.get(&id).cloned().unwrap_or_default();
-    let new_end = Position { column: start.column + n, ..start.clone() };
+    let new_end = Position {
+        column: start.column + n,
+        ..start.clone()
+    };
     Replacement {
         start,
         end: new_end,
@@ -159,7 +182,10 @@ pub fn replace_start(params: &Parameters, id: Id, n: i64, r: &str) -> Replacemen
 /// `replaceEnd id params n r`: replace `n` columns at the token's end.
 pub fn replace_end(params: &Parameters, id: Id, n: i64, r: &str) -> Replacement {
     let (_, end) = params.token_positions.get(&id).cloned().unwrap_or_default();
-    let new_start = Position { column: end.column - n, ..end.clone() };
+    let new_start = Position {
+        column: end.column - n,
+        ..end.clone()
+    };
     Replacement {
         start: new_start,
         end,
@@ -282,7 +308,10 @@ pub fn is_option_set(opt: &str, root: &Token) -> bool {
     let mut found = false;
     root.visit_preorder(&mut |t| {
         if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-            let lits: Vec<String> = words.iter().filter_map(astlib::get_literal_string).collect();
+            let lits: Vec<String> = words
+                .iter()
+                .filter_map(astlib::get_literal_string)
+                .collect();
             if let Some(first) = lits.first() {
                 if first == "shopt" && lits.iter().any(|w| w == opt) {
                     found = true;
@@ -304,7 +333,10 @@ pub fn contains_noglob(root: &Token) -> bool {
     let mut found = false;
     root.visit_preorder(&mut |t| {
         if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-            let lits: Vec<String> = words.iter().filter_map(astlib::get_literal_string).collect();
+            let lits: Vec<String> = words
+                .iter()
+                .filter_map(astlib::get_literal_string)
+                .collect();
             if lits.first().map(|s| s == "set").unwrap_or(false) {
                 let mut it = lits.iter().skip(1).peekable();
                 while let Some(w) = it.next() {
@@ -332,10 +364,18 @@ pub fn contains_set_e(root: &Token) -> bool {
     let mut found = false;
     root.visit_preorder(&mut |t| {
         if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-            let lits: Vec<String> = words.iter().filter_map(astlib::get_literal_string).collect();
+            let lits: Vec<String> = words
+                .iter()
+                .filter_map(astlib::get_literal_string)
+                .collect();
             if lits.first().map(|s| s == "set").unwrap_or(false) {
-                if lits.iter().any(|w| w.starts_with("-e") || w == "errexit" || w == "-o") {
-                    if lits.iter().any(|w| w.contains('e') && w.starts_with('-')) || lits.iter().any(|w| w == "errexit") {
+                if lits
+                    .iter()
+                    .any(|w| w.starts_with("-e") || w == "errexit" || w == "-o")
+                {
+                    if lits.iter().any(|w| w.contains('e') && w.starts_with('-'))
+                        || lits.iter().any(|w| w == "errexit")
+                    {
                         found = true;
                     }
                 }
@@ -428,14 +468,13 @@ fn get_extended_analysis_directive(root: &Token) -> Option<bool> {
     }
 }
 
-
 // ===========================================================================
 // Shared AST helpers for the dataflow checks (SC2154/SC2034/SC2086)
 // Ported from ShellCheck.ASTLib / ShellCheck.AnalyzerLib / ShellCheck.Data.
 // ===========================================================================
 
 use crate::cfg::{
-    get_bsd_opts as cfg_get_bsd_opts, get_braced_modifier, get_braced_reference,
+    get_braced_modifier, get_braced_reference, get_bsd_opts as cfg_get_bsd_opts,
     get_generic_opts as cfg_get_generic_opts, get_gnu_opts as cfg_get_gnu_opts,
     get_index_references, get_offset_references, is_variable_char, is_variable_name,
     oversimplify as cfg_oversimplify,
@@ -497,11 +536,7 @@ pub(crate) fn get_command(t: &Token) -> Option<&Token> {
 fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> {
     let first_arg = || -> Option<&'a Token> {
         let arg = args.first()?;
-        if is_flag_word(arg) {
-            None
-        } else {
-            Some(arg)
-        }
+        if is_flag_word(arg) { None } else { Some(arg) }
     };
     match s {
         "busybox" | "builtin" | "command" | "run" => first_arg(),
@@ -563,7 +598,10 @@ pub(crate) fn is_command(t: &Token, str: &str) -> bool {
 
 /// `getAllFlags` restricted to the flag strings (`map snd $ getAllFlags`).
 fn command_flag_strings(words: &[Token]) -> Vec<String> {
-    get_all_flags_words(words).into_iter().map(|(_, s)| s).collect()
+    get_all_flags_words(words)
+        .into_iter()
+        .map(|(_, s)| s)
+        .collect()
 }
 
 /// `getFlagsUntil (== "--")` over an already-extracted words list (words[0] is cmd).
@@ -723,9 +761,18 @@ fn is_quote_free_element(params: &Parameters, t: &Token) -> bool {
 fn is_quote_free_context(params: &Parameters, t: &Token) -> Option<bool> {
     use InnerToken::*;
     match &*t.inner {
-        TC_Nullary { typ: ConditionType::DoubleBracket, .. } => Some(true),
-        TC_Unary { typ: ConditionType::DoubleBracket, .. } => Some(true),
-        TC_Binary { typ: ConditionType::DoubleBracket, .. } => Some(true),
+        TC_Nullary {
+            typ: ConditionType::DoubleBracket,
+            ..
+        } => Some(true),
+        TC_Unary {
+            typ: ConditionType::DoubleBracket,
+            ..
+        } => Some(true),
+        TC_Binary {
+            typ: ConditionType::DoubleBracket,
+            ..
+        } => Some(true),
         TA_Sequence(_) => Some(true),
         T_Arithmetic(_) => Some(true),
         T_DollarArithmetic(_) => Some(true),
@@ -749,9 +796,10 @@ fn is_quote_free_context(params: &Parameters, t: &Token) -> Option<bool> {
 
 fn is_declaration_assignment_word(params: &Parameters, word: &Token) -> bool {
     let is_form = match &*word.inner {
-        InnerToken::T_NormalWord(parts) => parts.first().map_or(false, |f| {
-            matches!(&*f.inner, InnerToken::T_Literal(s) if literal_is_assignment_prefix(s))
-        }),
+        InnerToken::T_NormalWord(parts) => parts.first().map_or(
+            false,
+            |f| matches!(&*f.inner, InnerToken::T_Literal(s) if literal_is_assignment_prefix(s)),
+        ),
         _ => false,
     };
     if !is_form {
@@ -908,7 +956,12 @@ pub(crate) fn get_variable_flow(
     has_lastpipe: bool,
     root: &Token,
 ) -> Vec<StackData> {
-    let ctx = FlowCtx { parent_map, id_map, shell, has_lastpipe };
+    let ctx = FlowCtx {
+        parent_map,
+        id_map,
+        shell,
+        has_lastpipe,
+    };
     let mut out = Vec::new();
     stack_analysis(&ctx, root, &mut out);
     out
@@ -993,7 +1046,10 @@ fn causes_subshell(ctx: &FlowCtx, t: &Token) -> Option<bool> {
 fn is_closing_file_op(op: &Token) -> bool {
     match &*op.inner {
         InnerToken::T_IoDuplicate { op: inner, num } if num == "-" => {
-            matches!(&*inner.inner, InnerToken::T_GREATAND | InnerToken::T_LESSAND)
+            matches!(
+                &*inner.inner,
+                InnerToken::T_GREATAND | InnerToken::T_LESSAND
+            )
         }
         _ => false,
     }
@@ -1082,24 +1138,47 @@ fn get_modified_variables(t: &Token) -> Vec<(Token, Token, String, DataType)> {
         }
 
         T_BatsTest { .. } => vec![
-            (t.clone(), t.clone(), "lines".into(), DataType::DataArray(DataSource::SourceExternal)),
-            (t.clone(), t.clone(), "status".into(), DataType::DataString(DataSource::SourceInteger)),
-            (t.clone(), t.clone(), "output".into(), DataType::DataString(DataSource::SourceExternal)),
-            (t.clone(), t.clone(), "stderr".into(), DataType::DataString(DataSource::SourceExternal)),
-            (t.clone(), t.clone(), "stderr_lines".into(), DataType::DataArray(DataSource::SourceExternal)),
+            (
+                t.clone(),
+                t.clone(),
+                "lines".into(),
+                DataType::DataArray(DataSource::SourceExternal),
+            ),
+            (
+                t.clone(),
+                t.clone(),
+                "status".into(),
+                DataType::DataString(DataSource::SourceInteger),
+            ),
+            (
+                t.clone(),
+                t.clone(),
+                "output".into(),
+                DataType::DataString(DataSource::SourceExternal),
+            ),
+            (
+                t.clone(),
+                t.clone(),
+                "stderr".into(),
+                DataType::DataString(DataSource::SourceExternal),
+            ),
+            (
+                t.clone(),
+                t.clone(),
+                "stderr_lines".into(),
+                DataType::DataArray(DataSource::SourceExternal),
+            ),
         ],
 
-        TC_Unary { op, token, .. } if op == "-v" => {
-            match get_variable_for_test_dash_v(token) {
-                Some(str) => vec![(
-                    t.clone(),
-                    token.clone(),
-                    str,
-                    DataType::DataString(DataSource::SourceChecked),
-                )],
-                None => vec![],
-            }
-        }
+        TC_Unary { op, token, .. } if op == "-v" => match get_variable_for_test_dash_v(token) {
+            Some(str) => vec![(
+                t.clone(),
+                token.clone(),
+                str,
+                DataType::DataString(DataSource::SourceChecked),
+            )],
+            None => vec![],
+        },
         TC_Unary { op, token, .. } if op == "-n" || op == "-z" => mark_as_checked(t, token),
         TC_Nullary { token, .. } => mark_as_checked(t, token),
 
@@ -1138,7 +1217,9 @@ fn get_modified_variables(t: &Token) -> Vec<(Token, Token, String, DataType)> {
             "COPROC".into(),
             DataType::DataArray(DataSource::SourceInteger),
         )],
-        T_CoProc { name: Some(token), .. } => match astlib::get_literal_string(token) {
+        T_CoProc {
+            name: Some(token), ..
+        } => match astlib::get_literal_string(token) {
             Some(name) => vec![(
                 t.clone(),
                 t.clone(),
@@ -1150,9 +1231,19 @@ fn get_modified_variables(t: &Token) -> Vec<(Token, Token, String, DataType)> {
 
         T_ForIn { var, items, .. } => {
             if items.is_empty() {
-                vec![(t.clone(), t.clone(), var.clone(), DataType::DataString(DataSource::SourceExternal))]
+                vec![(
+                    t.clone(),
+                    t.clone(),
+                    var.clone(),
+                    DataType::DataString(DataSource::SourceExternal),
+                )]
             } else {
-                vec![(t.clone(), t.clone(), var.clone(), DataType::DataString(DataSource::SourceFrom(items.clone())))]
+                vec![(
+                    t.clone(),
+                    t.clone(),
+                    var.clone(),
+                    DataType::DataString(DataSource::SourceFrom(items.clone())),
+                )]
             }
         }
         T_SelectIn { var, items, .. } => vec![(
@@ -1184,10 +1275,19 @@ fn split_assignment_word(word: &Token) -> Option<String> {
 }
 
 /// `getModifierParam def t`.
-fn get_modifier_param(def: &DefCtor, base: &Token, t: &Token) -> Vec<(Token, Token, String, DataType)> {
+fn get_modifier_param(
+    def: &DefCtor,
+    base: &Token,
+    t: &Token,
+) -> Vec<(Token, Token, String, DataType)> {
     match &*t.inner {
         InnerToken::T_Assignment { var, value, .. } => {
-            vec![(base.clone(), t.clone(), var.clone(), data_type_from(def, value))]
+            vec![(
+                base.clone(),
+                t.clone(),
+                var.clone(),
+                data_type_from(def, value),
+            )]
         }
         InnerToken::T_NormalWord(_) => {
             // Reconstruct declaration-utility assignment words that this parser
@@ -1223,7 +1323,11 @@ fn get_modifier_param_string(base: &Token, t: &Token) -> Vec<(Token, Token, Stri
 }
 
 /// `getLiteralOfDataType`.
-fn get_literal_of_data_type(base: &Token, t: &Token, d: DataType) -> Option<(Token, Token, String, DataType)> {
+fn get_literal_of_data_type(
+    base: &Token,
+    t: &Token,
+    d: DataType,
+) -> Option<(Token, Token, String, DataType)> {
     let s = astlib::get_literal_string(t)?;
     if s.starts_with('-') {
         return None;
@@ -1241,7 +1345,10 @@ fn get_literal_array_c(base: &Token, t: &Token) -> Option<(Token, Token, String,
 fn let_param_to_literal(base: &Token, token: &Token) -> Vec<(Token, Token, String, DataType)> {
     let s = concat_over(token);
     let after_sign: String = s.chars().skip_while(|c| *c == '+' || *c == '-').collect();
-    let var: String = after_sign.chars().take_while(|c| is_variable_char(*c)).collect();
+    let var: String = after_sign
+        .chars()
+        .take_while(|c| is_variable_char(*c))
+        .collect();
     if var.is_empty() {
         vec![]
     } else {
@@ -1307,7 +1414,12 @@ fn get_mapfile_array(base: &Token, rest: &[Token]) -> Option<(Token, Token, Stri
                 if !is_variable_name(&name) {
                     return None;
                 }
-                Some((base.clone(), y.clone(), name, DataType::DataArray(DataSource::SourceExternal)))
+                Some((
+                    base.clone(),
+                    y.clone(),
+                    name,
+                    DataType::DataArray(DataSource::SourceExternal),
+                ))
             }
         }
     };
@@ -1344,7 +1456,10 @@ fn get_flag_variable(base: &Token, rest: &[Token]) -> Option<(Token, Token, Stri
 }
 
 /// `getModifiedVariableCommand` — `base` is the T_SimpleCommand, `words[0]` its name.
-fn get_modified_variable_command(base: &Token, words: &[Token]) -> Vec<(Token, Token, String, DataType)> {
+fn get_modified_variable_command(
+    base: &Token,
+    words: &[Token],
+) -> Vec<(Token, Token, String, DataType)> {
     // first word's leading literal is the command name x
     let x = match words.first().and_then(|w| match &*w.inner {
         InnerToken::T_NormalWord(parts) => parts.first().and_then(|p| match &*p.inner {
@@ -1400,28 +1515,44 @@ fn get_modified_variable_command(base: &Token, words: &[Token]) -> Vec<(Token, T
                 vec![]
             }
         }
-        "let" => rest.iter().flat_map(|t| let_param_to_literal(base, t)).collect(),
+        "let" => rest
+            .iter()
+            .flat_map(|t| let_param_to_literal(base, t))
+            .collect(),
         "export" => {
             if has("f") {
                 vec![]
             } else {
-                rest.iter().flat_map(|t| get_modifier_param_string(base, t)).collect()
+                rest.iter()
+                    .flat_map(|t| get_modifier_param_string(base, t))
+                    .collect()
             }
         }
         "declare" | "typeset" => {
             if has("F") || has("f") || has("p") {
                 vec![]
             } else {
-                let def = if has("a") || has("A") { DefCtor::Arr } else { DefCtor::Str };
-                rest.iter().flat_map(|t| get_modifier_param(&def, base, t)).collect()
+                let def = if has("a") || has("A") {
+                    DefCtor::Arr
+                } else {
+                    DefCtor::Str
+                };
+                rest.iter()
+                    .flat_map(|t| get_modifier_param(&def, base, t))
+                    .collect()
             }
         }
-        "local" => rest.iter().flat_map(|t| get_modifier_param_string(base, t)).collect(),
+        "local" => rest
+            .iter()
+            .flat_map(|t| get_modifier_param_string(base, t))
+            .collect(),
         "readonly" => {
             if has("f") || has("p") {
                 vec![]
             } else {
-                rest.iter().flat_map(|t| get_modifier_param_string(base, t)).collect()
+                rest.iter()
+                    .flat_map(|t| get_modifier_param_string(base, t))
+                    .collect()
             }
         }
         "set" => match get_set_params(rest) {
@@ -1455,7 +1586,10 @@ fn get_modified_variable_command(base: &Token, words: &[Token]) -> Vec<(Token, T
         }
         _ => vec![],
     };
-    result.into_iter().filter(|(_, _, s, _)| !s.starts_with('-')).collect()
+    result
+        .into_iter()
+        .filter(|(_, _, s, _)| !s.starts_with('-'))
+        .collect()
 }
 
 // ---- getReferencedVariables ------------------------------------------------
@@ -1514,7 +1648,9 @@ fn get_referenced_variables(ctx: &FlowCtx, t: &Token) -> Vec<(Token, Token, Stri
                 vec![(t.clone(), t.clone(), name.clone())]
             }
         }
-        T_Assignment { mode, var, value, .. } => {
+        T_Assignment {
+            mode, var, value, ..
+        } => {
             let mut out = Vec::new();
             if *mode == AssignmentMode::Append {
                 out.push((t.clone(), t.clone(), var.clone()));
@@ -1523,7 +1659,12 @@ fn get_referenced_variables(ctx: &FlowCtx, t: &Token) -> Vec<(Token, Token, Stri
             out
         }
         TC_Unary { op, token, .. } if op == "-v" || op == "-R" => get_if_reference(t, token),
-        TC_Binary { typ: ConditionType::DoubleBracket, op, lhs, rhs } => {
+        TC_Binary {
+            typ: ConditionType::DoubleBracket,
+            op,
+            lhs,
+            rhs,
+        } => {
             if is_dereferencing_binary_op(op) {
                 let mut out = get_if_reference(t, lhs);
                 out.extend(get_if_reference(t, rhs));

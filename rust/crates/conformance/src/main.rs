@@ -121,7 +121,10 @@ fn as_i64(v: &Value, field: &str) -> i64 {
 
 /// Extract an owned string from a JSON field, defaulting to "".
 fn as_str(v: &Value, field: &str) -> String {
-    v.get(field).and_then(Value::as_str).unwrap_or("").to_string()
+    v.get(field)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Build a `CommentKey` from a json1-shaped comment `Value` (used for both the
@@ -218,7 +221,11 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             other => return Err(format!("unknown argument: {other}")),
         }
     }
-    Ok(Args { harness, limit, quiet })
+    Ok(Args {
+        harness,
+        limit,
+        quiet,
+    })
 }
 
 /// Load the goldens: map id -> ordered comment keys, skipping provenance lines.
@@ -230,8 +237,8 @@ fn load_goldens(path: &str) -> Result<HashMap<String, Vec<CommentKey>>, String> 
         if line.is_empty() {
             continue;
         }
-        let v: Value = serde_json::from_str(line)
-            .map_err(|e| format!("{path}:{}: {e}", lineno + 1))?;
+        let v: Value =
+            serde_json::from_str(line).map_err(|e| format!("{path}:{}: {e}", lineno + 1))?;
         if v.get("__provenance__").is_some() {
             continue;
         }
@@ -338,9 +345,7 @@ fn run(args: Args) -> Result<bool, String> {
         }
     }
 
-    println!(
-        "conformance: compared {compared}, matched {matched}, mismatched {mismatched}"
-    );
+    println!("conformance: compared {compared}, matched {matched}, mismatched {mismatched}");
 
     Ok(mismatched == 0)
 }

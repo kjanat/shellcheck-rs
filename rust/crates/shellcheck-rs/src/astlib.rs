@@ -11,7 +11,10 @@ pub fn get_literal_string(t: &Token) -> Option<String> {
 
 /// `getLiteralStringExt`: like `getLiteralString` but a fallback decides what
 /// non-literal parts contribute (used e.g. to treat globs as "*").
-pub fn get_literal_string_ext(t: &Token, fallback: &dyn Fn(&InnerToken) -> Option<String>) -> Option<String> {
+pub fn get_literal_string_ext(
+    t: &Token,
+    fallback: &dyn Fn(&InnerToken) -> Option<String>,
+) -> Option<String> {
     fn go(t: &Token, fb: &dyn Fn(&InnerToken) -> Option<String>, out: &mut String) -> bool {
         match &*t.inner {
             InnerToken::T_Literal(s)

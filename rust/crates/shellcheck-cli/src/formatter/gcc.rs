@@ -32,7 +32,12 @@ fn format_comment(filename: &str, c: &PositionedComment) -> String {
 
 /// Render one file's comments (already sorted). `contents` is the file source,
 /// used for tab realignment.
-pub fn render_file(filename: &str, contents: &str, comments: &[PositionedComment], out: &mut String) {
+pub fn render_file(
+    filename: &str,
+    contents: &str,
+    comments: &[PositionedComment],
+    out: &mut String,
+) {
     let untabbed = make_non_virtual(comments, contents);
     for c in &untabbed {
         out.push_str(&format_comment(filename, c));

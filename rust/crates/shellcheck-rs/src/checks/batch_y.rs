@@ -161,7 +161,11 @@ fn dispatch_exactly(t: &Token, target: &str) -> Option<Token> {
         }
         return None;
     }
-    if name == target { Some(t.clone()) } else { None }
+    if name == target {
+        Some(t.clone())
+    } else {
+        None
+    }
 }
 
 fn check_source_args(params: &Parameters, t: &Token, out: &mut Out) {
@@ -341,7 +345,9 @@ fn check_source_not_followed(params: &Parameters, t: &Token, out: &mut Out) {
                 out,
                 file_id,
                 1091,
-                &format!("Not following: {filename} was not specified as input (see shellcheck -x)."),
+                &format!(
+                    "Not following: {filename} was not specified as input (see shellcheck -x)."
+                ),
             );
         }
     }
@@ -367,16 +373,17 @@ mod tests {
     fn produces(f: fn(&Parameters, &Token, &mut Out), s: &str) -> bool {
         let params = params_for(s);
         let mut out = Out::new();
-        params
-            .root
-            .visit_preorder(&mut |t| f(&params, t, &mut out));
+        params.root.visit_preorder(&mut |t| f(&params, t, &mut out));
         !out.is_empty()
     }
 
     // checkUnquotedN (SC2070)
     #[test]
     fn prop_checkUnquotedN() {
-        assert!(produces(check_unquoted_n, "if [ -n $foo ]; then echo cow; fi"));
+        assert!(produces(
+            check_unquoted_n,
+            "if [ -n $foo ]; then echo cow; fi"
+        ));
     }
     #[test]
     fn prop_checkUnquotedN2() {
@@ -413,17 +420,13 @@ mod tests {
     fn only_code(f: fn(&Parameters, &Token, &mut Out), s: &str) -> Vec<i32> {
         let params = params_for(s);
         let mut out = Out::new();
-        params
-            .root
-            .visit_preorder(&mut |t| f(&params, t, &mut out));
+        params.root.visit_preorder(&mut |t| f(&params, t, &mut out));
         out.iter().map(|c| c.comment.code as i32).collect()
     }
     fn only_msg(f: fn(&Parameters, &Token, &mut Out), s: &str) -> Vec<String> {
         let params = params_for(s);
         let mut out = Out::new();
-        params
-            .root
-            .visit_preorder(&mut |t| f(&params, t, &mut out));
+        params.root.visit_preorder(&mut |t| f(&params, t, &mut out));
         out.iter().map(|c| c.comment.message.clone()).collect()
     }
 
@@ -439,7 +442,10 @@ mod tests {
     #[test]
     fn prop_source_keyword_not_followed() {
         // prop_checkBashisms5 corpus input.
-        assert_eq!(only_code(check_source_not_followed, "source file"), vec![1091]);
+        assert_eq!(
+            only_code(check_source_not_followed, "source file"),
+            vec![1091]
+        );
         assert_eq!(
             only_msg(check_source_not_followed, "source file"),
             vec!["Not following: file was not specified as input (see shellcheck -x)."]
@@ -467,13 +473,19 @@ mod tests {
     #[test]
     fn prop_cant_source_tilde() {
         // prop_cantSourceDynamic2: literal `~/` is treated as non-constant.
-        assert_eq!(only_code(check_source_not_followed, "source ~/foo"), vec![1090]);
+        assert_eq!(
+            only_code(check_source_not_followed, "source ~/foo"),
+            vec![1090]
+        );
     }
     #[test]
     fn prop_source_override_directive_is_followed_constant() {
         // A `source=` directive supplies a constant target -> SC1091, not SC1090.
         assert_eq!(
-            only_msg(check_source_not_followed, "# shellcheck source=lib\n. \"$1\""),
+            only_msg(
+                check_source_not_followed,
+                "# shellcheck source=lib\n. \"$1\""
+            ),
             vec!["Not following: lib was not specified as input (see shellcheck -x)."]
         );
     }

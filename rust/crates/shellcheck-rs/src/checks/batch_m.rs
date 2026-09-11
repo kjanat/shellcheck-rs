@@ -52,8 +52,7 @@ enum VarState {
 
 fn check_subshell_assignment(params: &Parameters, _root: &Token, out: &mut Out) {
     // findSubshelled flow [("oops",[])] Map.empty
-    let mut scopes: Vec<(String, Vec<(Token, String)>)> =
-        vec![("oops".to_string(), Vec::new())];
+    let mut scopes: Vec<(String, Vec<(Token, String)>)> = vec![("oops".to_string(), Vec::new())];
     let mut dead: HashMap<String, VarState> = HashMap::new();
 
     for sd in &params.variable_flow {
@@ -111,9 +110,22 @@ fn check_subshell_assignment(params: &Parameters, _root: &Token, out: &mut Out) 
 
 // ShellCheck.Data.arrayVariables
 const ARRAY_VARIABLES: &[&str] = &[
-    "BASH_ALIASES", "BASH_ARGC", "BASH_ARGV", "BASH_CMDS", "BASH_LINENO",
-    "BASH_REMATCH", "BASH_SOURCE", "BASH_VERSINFO", "COMP_WORDS", "COPROC",
-    "DIRSTACK", "FUNCNAME", "GROUPS", "MAPFILE", "PIPESTATUS", "COMPREPLY",
+    "BASH_ALIASES",
+    "BASH_ARGC",
+    "BASH_ARGV",
+    "BASH_CMDS",
+    "BASH_LINENO",
+    "BASH_REMATCH",
+    "BASH_SOURCE",
+    "BASH_VERSINFO",
+    "COMP_WORDS",
+    "COPROC",
+    "DIRSTACK",
+    "FUNCNAME",
+    "GROUPS",
+    "MAPFILE",
+    "PIPESTATUS",
+    "COMPREPLY",
 ];
 
 fn check_array_without_index(params: &Parameters, _root: &Token, out: &mut Out) {
@@ -210,7 +222,11 @@ fn muncher(name: &str) -> Option<(MunchCheck, MunchFix, &'static str)> {
     match name {
         "ssh" => Some((MunchCheck::HasFlag, MunchFix::AddFlag, "-n")),
         "ffmpeg" => Some((MunchCheck::HasArgument, MunchFix::AddFlag, "-nostdin")),
-        "mplayer" => Some((MunchCheck::HasArgument, MunchFix::AddFlag, "-noconsolecontrols")),
+        "mplayer" => Some((
+            MunchCheck::HasArgument,
+            MunchFix::AddFlag,
+            "-noconsolecontrols",
+        )),
         "HandBrakeCLI" => Some((MunchCheck::Never, MunchFix::AddRedirect, "< /dev/null")),
         _ => None,
     }
@@ -375,12 +391,20 @@ fn build_munch_fix(params: &Parameters, fixkind: MunchFix, flag: &str, cmd: &Tok
         // addFlag: replaceEnd (getId $ getCommandTokenOrThis cmd) params 0 (' ':string)
         MunchFix::AddFlag => {
             let tok = get_command_token_or_this(cmd);
-            fix_with(vec![replace_end(params, tok.id(), 0, &format!(" {}", flag))])
+            fix_with(vec![replace_end(
+                params,
+                tok.id(),
+                0,
+                &format!(" {}", flag),
+            )])
         }
         // addRedirect: replaceEnd (getId cmd) params 0 (' ':string)
-        MunchFix::AddRedirect => {
-            fix_with(vec![replace_end(params, cmd.id(), 0, &format!(" {}", flag))])
-        }
+        MunchFix::AddRedirect => fix_with(vec![replace_end(
+            params,
+            cmd.id(),
+            0,
+            &format!(" {}", flag),
+        )]),
     }
 }
 
@@ -402,8 +426,10 @@ fn get_all_flags(cmd: &Token) -> Vec<(Token, String)> {
         return vec![];
     }
     let args = &words[1..];
-    let token_and_text: Vec<(Token, String)> =
-        args.iter().map(|x| (x.clone(), oversimplify(x).concat())).collect();
+    let token_and_text: Vec<(Token, String)> = args
+        .iter()
+        .map(|x| (x.clone(), oversimplify(x).concat()))
+        .collect();
     let break_at = token_and_text.iter().position(|(_, s)| s == "--");
     let (flag_args, rest): (&[(Token, String)], &[(Token, String)]) = match break_at {
         Some(i) => (&token_and_text[..i], &token_and_text[i..]),
@@ -493,111 +519,347 @@ mod tests {
 
     // SC2128 — checkArrayWithoutIndex
     #[test]
-    fn prop_checkArrayWithoutIndex1() { assert!(tree_emits(check_array_without_index, "foo=(a b); echo $foo")); }
+    fn prop_checkArrayWithoutIndex1() {
+        assert!(tree_emits(
+            check_array_without_index,
+            "foo=(a b); echo $foo"
+        ));
+    }
     #[test]
-    fn prop_checkArrayWithoutIndex2() { assert!(!tree_emits(check_array_without_index, "foo='bar baz'; foo=($foo); echo ${foo[0]}")); }
+    fn prop_checkArrayWithoutIndex2() {
+        assert!(!tree_emits(
+            check_array_without_index,
+            "foo='bar baz'; foo=($foo); echo ${foo[0]}"
+        ));
+    }
     #[test]
-    fn prop_checkArrayWithoutIndex3() { assert!(tree_emits(check_array_without_index, "coproc foo while true; do echo cow; done; echo $foo")); }
+    fn prop_checkArrayWithoutIndex3() {
+        assert!(tree_emits(
+            check_array_without_index,
+            "coproc foo while true; do echo cow; done; echo $foo"
+        ));
+    }
     #[test]
-    fn prop_checkArrayWithoutIndex4() { assert!(tree_emits(check_array_without_index, "coproc tail -f log; echo $COPROC")); }
+    fn prop_checkArrayWithoutIndex4() {
+        assert!(tree_emits(
+            check_array_without_index,
+            "coproc tail -f log; echo $COPROC"
+        ));
+    }
     #[test]
-    fn prop_checkArrayWithoutIndex5() { assert!(tree_emits(check_array_without_index, "a[0]=foo; echo $a")); }
+    fn prop_checkArrayWithoutIndex5() {
+        assert!(tree_emits(check_array_without_index, "a[0]=foo; echo $a"));
+    }
     #[test]
-    fn prop_checkArrayWithoutIndex6() { assert!(tree_emits(check_array_without_index, "echo $PIPESTATUS")); }
+    fn prop_checkArrayWithoutIndex6() {
+        assert!(tree_emits(check_array_without_index, "echo $PIPESTATUS"));
+    }
     #[test]
-    fn prop_checkArrayWithoutIndex7() { assert!(tree_emits(check_array_without_index, "a=(a b); a+=c")); }
+    fn prop_checkArrayWithoutIndex7() {
+        assert!(tree_emits(check_array_without_index, "a=(a b); a+=c"));
+    }
     #[test]
-    fn prop_checkArrayWithoutIndex8() { assert!(tree_emits(check_array_without_index, "declare -a foo; foo=bar;")); }
+    fn prop_checkArrayWithoutIndex8() {
+        assert!(tree_emits(
+            check_array_without_index,
+            "declare -a foo; foo=bar;"
+        ));
+    }
     #[test]
-    fn prop_checkArrayWithoutIndex9() { assert!(tree_emits(check_array_without_index, "read -r -a arr <<< 'foo bar'; echo \"$arr\"")); }
+    fn prop_checkArrayWithoutIndex9() {
+        assert!(tree_emits(
+            check_array_without_index,
+            "read -r -a arr <<< 'foo bar'; echo \"$arr\""
+        ));
+    }
     #[test]
-    fn prop_checkArrayWithoutIndex10() { assert!(tree_emits(check_array_without_index, "read -ra arr <<< 'foo bar'; echo \"$arr\"")); }
+    fn prop_checkArrayWithoutIndex10() {
+        assert!(tree_emits(
+            check_array_without_index,
+            "read -ra arr <<< 'foo bar'; echo \"$arr\""
+        ));
+    }
     #[test]
-    fn prop_checkArrayWithoutIndex11() { assert!(!tree_emits(check_array_without_index, "read -rpfoobar r; r=42")); }
+    fn prop_checkArrayWithoutIndex11() {
+        assert!(!tree_emits(
+            check_array_without_index,
+            "read -rpfoobar r; r=42"
+        ));
+    }
 
     // SC2030 / SC2031 — subshellAssignmentCheck
     #[test]
-    fn prop_subshellAssignmentCheck() { assert!(tree_emits(check_subshell_assignment, "cat foo | while read bar; do a=$bar; done; echo \"$a\"")); }
+    fn prop_subshellAssignmentCheck() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "cat foo | while read bar; do a=$bar; done; echo \"$a\""
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck2() { assert!(!tree_emits(check_subshell_assignment, "while read bar; do a=$bar; done < file; echo \"$a\"")); }
+    fn prop_subshellAssignmentCheck2() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "while read bar; do a=$bar; done < file; echo \"$a\""
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck3() { assert!(tree_emits(check_subshell_assignment, "( A=foo; ); rm $A")); }
+    fn prop_subshellAssignmentCheck3() {
+        assert!(tree_emits(check_subshell_assignment, "( A=foo; ); rm $A"));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck4() { assert!(!tree_emits(check_subshell_assignment, "( A=foo; rm $A; )")); }
+    fn prop_subshellAssignmentCheck4() {
+        assert!(!tree_emits(check_subshell_assignment, "( A=foo; rm $A; )"));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck5() { assert!(tree_emits(check_subshell_assignment, "cat foo | while read cow; do true; done; echo $cow;")); }
+    fn prop_subshellAssignmentCheck5() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "cat foo | while read cow; do true; done; echo $cow;"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck6() { assert!(tree_emits(check_subshell_assignment, "( export lol=$(ls); ); echo $lol;")); }
+    fn prop_subshellAssignmentCheck6() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "( export lol=$(ls); ); echo $lol;"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck6a() { assert!(tree_emits(check_subshell_assignment, "( typeset -a lol=a; ); echo $lol;")); }
+    fn prop_subshellAssignmentCheck6a() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "( typeset -a lol=a; ); echo $lol;"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck7() { assert!(tree_emits(check_subshell_assignment, "cmd | while read foo; do (( n++ )); done; echo \"$n lines\"")); }
+    fn prop_subshellAssignmentCheck7() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "cmd | while read foo; do (( n++ )); done; echo \"$n lines\""
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck8() { assert!(tree_emits(check_subshell_assignment, "n=3 & echo $((n++))")); }
+    fn prop_subshellAssignmentCheck8() {
+        assert!(tree_emits(check_subshell_assignment, "n=3 & echo $((n++))"));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck9() { assert!(tree_emits(check_subshell_assignment, "read n & n=foo$n")); }
+    fn prop_subshellAssignmentCheck9() {
+        assert!(tree_emits(check_subshell_assignment, "read n & n=foo$n"));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck10() { assert!(tree_emits(check_subshell_assignment, "(( n <<= 3 )) & (( n |= 4 )) &")); }
+    fn prop_subshellAssignmentCheck10() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "(( n <<= 3 )) & (( n |= 4 )) &"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck11() { assert!(tree_emits(check_subshell_assignment, "cat /etc/passwd | while read line; do let n=n+1; done\necho $n")); }
+    fn prop_subshellAssignmentCheck11() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "cat /etc/passwd | while read line; do let n=n+1; done\necho $n"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck12() { assert!(tree_emits(check_subshell_assignment, "cat /etc/passwd | while read line; do let ++n; done\necho $n")); }
+    fn prop_subshellAssignmentCheck12() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "cat /etc/passwd | while read line; do let ++n; done\necho $n"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck13() { assert!(tree_emits(check_subshell_assignment, "#!/bin/bash\necho foo | read bar; echo $bar")); }
+    fn prop_subshellAssignmentCheck13() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "#!/bin/bash\necho foo | read bar; echo $bar"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck14() { assert!(!tree_emits(check_subshell_assignment, "#!/bin/ksh93\necho foo | read bar; echo $bar")); }
+    fn prop_subshellAssignmentCheck14() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "#!/bin/ksh93\necho foo | read bar; echo $bar"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck15() { assert!(!tree_emits(check_subshell_assignment, "#!/bin/ksh\ncat foo | while read bar; do a=$bar; done\necho \"$a\"")); }
+    fn prop_subshellAssignmentCheck15() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "#!/bin/ksh\ncat foo | while read bar; do a=$bar; done\necho \"$a\""
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck16() { assert!(!tree_emits(check_subshell_assignment, "(set -e); echo $@")); }
+    fn prop_subshellAssignmentCheck16() {
+        assert!(!tree_emits(check_subshell_assignment, "(set -e); echo $@"));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck17() { assert!(!tree_emits(check_subshell_assignment, "foo=${ { bar=$(baz); } 2>&1; }; echo $foo $bar")); }
+    fn prop_subshellAssignmentCheck17() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "foo=${ { bar=$(baz); } 2>&1; }; echo $foo $bar"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck18() { assert!(tree_emits(check_subshell_assignment, "( exec {n}>&2; ); echo $n")); }
+    fn prop_subshellAssignmentCheck18() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "( exec {n}>&2; ); echo $n"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck19() { assert!(!tree_emits(check_subshell_assignment, "#!/bin/bash\nshopt -s lastpipe; echo a | read -r b; echo \"$b\"")); }
+    fn prop_subshellAssignmentCheck19() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "#!/bin/bash\nshopt -s lastpipe; echo a | read -r b; echo \"$b\""
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck20() { assert!(tree_emits(check_subshell_assignment, "@test 'foo' { a=1; }\n@test 'bar' { echo $a; }\n")); }
+    fn prop_subshellAssignmentCheck20() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "@test 'foo' { a=1; }\n@test 'bar' { echo $a; }\n"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck21() { assert!(!tree_emits(check_subshell_assignment, "test1() { echo foo | if [[ $var ]]; then echo $var; fi; }; test2() { echo $var; }")); }
+    fn prop_subshellAssignmentCheck21() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "test1() { echo foo | if [[ $var ]]; then echo $var; fi; }; test2() { echo $var; }"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck22() { assert!(!tree_emits(check_subshell_assignment, "( [[ -n $foo || -z $bar ]] ); echo $foo $bar")); }
+    fn prop_subshellAssignmentCheck22() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "( [[ -n $foo || -z $bar ]] ); echo $foo $bar"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck23() { assert!(!tree_emits(check_subshell_assignment, "( export foo ); echo $foo")); }
+    fn prop_subshellAssignmentCheck23() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "( export foo ); echo $foo"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck24() { assert!(!tree_emits(check_subshell_assignment, "( read -r a _ c <<< 'x y z'; ); echo $_")); }
+    fn prop_subshellAssignmentCheck24() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "( read -r a _ c <<< 'x y z'; ); echo $_"
+        ));
+    }
     #[test]
-    fn prop_subshellAssignmentCheck25() { assert!(!tree_emits(check_subshell_assignment, "( _=discard; ); echo $_")); }
+    fn prop_subshellAssignmentCheck25() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "( _=discard; ); echo $_"
+        ));
+    }
 
     // SC2095 — checkWhileReadPitfalls
     #[test]
-    fn prop_checkWhileReadPitfalls1() { assert!(node_emits(check_while_read_pitfalls, "while read foo; do ssh $foo uptime; done < file")); }
+    fn prop_checkWhileReadPitfalls1() {
+        assert!(node_emits(
+            check_while_read_pitfalls,
+            "while read foo; do ssh $foo uptime; done < file"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls2() { assert!(!node_emits(check_while_read_pitfalls, "while read -u 3 foo; do ssh $foo uptime; done 3< file")); }
+    fn prop_checkWhileReadPitfalls2() {
+        assert!(!node_emits(
+            check_while_read_pitfalls,
+            "while read -u 3 foo; do ssh $foo uptime; done 3< file"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls3() { assert!(!node_emits(check_while_read_pitfalls, "while true; do ssh host uptime; done")); }
+    fn prop_checkWhileReadPitfalls3() {
+        assert!(!node_emits(
+            check_while_read_pitfalls,
+            "while true; do ssh host uptime; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls4() { assert!(!node_emits(check_while_read_pitfalls, "while read foo; do ssh $foo hostname < /dev/null; done")); }
+    fn prop_checkWhileReadPitfalls4() {
+        assert!(!node_emits(
+            check_while_read_pitfalls,
+            "while read foo; do ssh $foo hostname < /dev/null; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls5() { assert!(!node_emits(check_while_read_pitfalls, "while read foo; do echo ls | ssh $foo; done")); }
+    fn prop_checkWhileReadPitfalls5() {
+        assert!(!node_emits(
+            check_while_read_pitfalls,
+            "while read foo; do echo ls | ssh $foo; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls6() { assert!(!node_emits(check_while_read_pitfalls, "while read foo <&3; do ssh $foo; done 3< foo")); }
+    fn prop_checkWhileReadPitfalls6() {
+        assert!(!node_emits(
+            check_while_read_pitfalls,
+            "while read foo <&3; do ssh $foo; done 3< foo"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls7() { assert!(node_emits(check_while_read_pitfalls, "while read foo; do if true; then ssh $foo uptime; fi; done < file")); }
+    fn prop_checkWhileReadPitfalls7() {
+        assert!(node_emits(
+            check_while_read_pitfalls,
+            "while read foo; do if true; then ssh $foo uptime; fi; done < file"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls8() { assert!(!node_emits(check_while_read_pitfalls, "while read foo; do ssh -n $foo uptime; done < file")); }
+    fn prop_checkWhileReadPitfalls8() {
+        assert!(!node_emits(
+            check_while_read_pitfalls,
+            "while read foo; do ssh -n $foo uptime; done < file"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls9() { assert!(node_emits(check_while_read_pitfalls, "while read foo; do ffmpeg -i foo.mkv bar.mkv -an; done")); }
+    fn prop_checkWhileReadPitfalls9() {
+        assert!(node_emits(
+            check_while_read_pitfalls,
+            "while read foo; do ffmpeg -i foo.mkv bar.mkv -an; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls10() { assert!(node_emits(check_while_read_pitfalls, "while read foo; do mplayer foo.ogv > file; done")); }
+    fn prop_checkWhileReadPitfalls10() {
+        assert!(node_emits(
+            check_while_read_pitfalls,
+            "while read foo; do mplayer foo.ogv > file; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls11() { assert!(!node_emits(check_while_read_pitfalls, "while read foo; do mplayer foo.ogv <<< q; done")); }
+    fn prop_checkWhileReadPitfalls11() {
+        assert!(!node_emits(
+            check_while_read_pitfalls,
+            "while read foo; do mplayer foo.ogv <<< q; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls12() { assert!(!node_emits(check_while_read_pitfalls, "while read foo\ndo\nmplayer foo.ogv << EOF\nq\nEOF\ndone")); }
+    fn prop_checkWhileReadPitfalls12() {
+        assert!(!node_emits(
+            check_while_read_pitfalls,
+            "while read foo\ndo\nmplayer foo.ogv << EOF\nq\nEOF\ndone"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls13() { assert!(node_emits(check_while_read_pitfalls, "while read foo; do x=$(ssh host cmd); done")); }
+    fn prop_checkWhileReadPitfalls13() {
+        assert!(node_emits(
+            check_while_read_pitfalls,
+            "while read foo; do x=$(ssh host cmd); done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls14() { assert!(node_emits(check_while_read_pitfalls, "while read foo; do echo $(ssh host cmd) < /dev/null; done")); }
+    fn prop_checkWhileReadPitfalls14() {
+        assert!(node_emits(
+            check_while_read_pitfalls,
+            "while read foo; do echo $(ssh host cmd) < /dev/null; done"
+        ));
+    }
     #[test]
-    fn prop_checkWhileReadPitfalls15() { assert!(node_emits(check_while_read_pitfalls, "while read foo; do ssh $foo cmd & done")); }
+    fn prop_checkWhileReadPitfalls15() {
+        assert!(node_emits(
+            check_while_read_pitfalls,
+            "while read foo; do ssh $foo cmd & done"
+        ));
+    }
 }

@@ -1,2179 +1,2179 @@
 [
-{
-"id": "prop_spacing1",
-"file": "Parser.hs",
-"parser": "spacing",
-"expect": "ok",
-"script": "  \\\n # Comment"
-},
-{
-"id": "prop_spacing2",
-"file": "Parser.hs",
-"parser": "spacing",
-"expect": "ok",
-"script": "# We can continue lines with \\"
-},
-{
-"id": "prop_spacing3",
-"file": "Parser.hs",
-"parser": "spacing",
-"expect": "warning",
-"script": "   \\\n #  --verbose=true \\"
-},
-{
-"id": "prop_allspacing",
-"file": "Parser.hs",
-"parser": "allspacing",
-"expect": "ok",
-"script": "#foo"
-},
-{
-"id": "prop_allspacing2",
-"file": "Parser.hs",
-"parser": "allspacing",
-"expect": "ok",
-"script": " #foo\n # bar\n#baz\n"
-},
-{
-"id": "prop_allspacing3",
-"file": "Parser.hs",
-"parser": "allspacing",
-"expect": "ok",
-"script": "#foo\n#bar\n#baz\n"
-},
-{
-"id": "prop_a1",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": " n++ + ++c"
-},
-{
-"id": "prop_a2",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "$N*4-(3,2)"
-},
-{
-"id": "prop_a3",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "n|=2<<1"
-},
-{
-"id": "prop_a4",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "n &= 2 **3"
-},
-{
-"id": "prop_a5",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "1 |= 4 && n >>= 4"
-},
-{
-"id": "prop_a6",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": " 1 | 2 ||3|4"
-},
-{
-"id": "prop_a7",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "3*2**10"
-},
-{
-"id": "prop_a8",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "3"
-},
-{
-"id": "prop_a9",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "a^!-b"
-},
-{
-"id": "prop_a10",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "! $?"
-},
-{
-"id": "prop_a11",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "10#08 * 16#f"
-},
-{
-"id": "prop_a12",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "\"$((3+2))\" + '37'"
-},
-{
-"id": "prop_a13",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "foo[9*y+x]++"
-},
-{
-"id": "prop_a14",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "1+`echo 2`"
-},
-{
-"id": "prop_a15",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "foo[`echo foo | sed s/foo/4/g` * 3] + 4"
-},
-{
-"id": "prop_a16",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "$foo$bar"
-},
-{
-"id": "prop_a17",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "i<(0+(1+1))"
-},
-{
-"id": "prop_a18",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "a?b:c"
-},
-{
-"id": "prop_a19",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "\\\n3 +\\\n  2"
-},
-{
-"id": "prop_a20",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "a ? b ? c : d : e"
-},
-{
-"id": "prop_a21",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "a ? b : c ? d : e"
-},
-{
-"id": "prop_a22",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "!!a"
-},
-{
-"id": "prop_a23",
-"file": "Parser.hs",
-"parser": "readArithmeticContents",
-"expect": "ok",
-"script": "~0"
-},
-{
-"id": "prop_readCondition",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[ \\( a = b \\) -a \\( c = d \\) ]"
-},
-{
-"id": "prop_readCondition2",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ (a = b) || (c = d) ]]"
-},
-{
-"id": "prop_readCondition3",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ $c = [[:alpha:].~-] ]]"
-},
-{
-"id": "prop_readCondition4",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ $c =~ *foo* ]]"
-},
-{
-"id": "prop_readCondition5",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ $c =~ f( ]] )* ]]"
-},
-{
-"id": "prop_readCondition5a",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ $c =~ a(b) ]]"
-},
-{
-"id": "prop_readCondition5b",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ $c =~ f( ($var ]]) )* ]]"
-},
-{
-"id": "prop_readCondition6",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ $c =~ ^[yY]$ ]]"
-},
-{
-"id": "prop_readCondition7",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ ${line} =~ ^[[:space:]]*# ]]"
-},
-{
-"id": "prop_readCondition8",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ $l =~ ogg|flac ]]"
-},
-{
-"id": "prop_readCondition9",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[ foo -a -f bar ]"
-},
-{
-"id": "prop_readCondition10",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[\na == b\n||\nc == d ]]"
-},
-{
-"id": "prop_readCondition10a",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[\na == b  ||\nc == d ]]"
-},
-{
-"id": "prop_readCondition10b",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ a == b\n||\nc == d ]]"
-},
-{
-"id": "prop_readCondition11",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ a == b ||\n c == d ]]"
-},
-{
-"id": "prop_readCondition12",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "warning",
-"script": "[ a == b \n -o c == d ]"
-},
-{
-"id": "prop_readCondition13",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ foo =~ ^fo{1,3}$ ]]"
-},
-{
-"id": "prop_readCondition14",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[ foo '>' bar ]"
-},
-{
-"id": "prop_readCondition15",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[ foo \">=\" bar ]"
-},
-{
-"id": "prop_readCondition16",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[ foo \\< bar ]"
-},
-{
-"id": "prop_readCondition17",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ ${file::1} = [-.\\|/\\\\] ]]"
-},
-{
-"id": "prop_readCondition18",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[ ]"
-},
-{
-"id": "prop_readCondition19",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[ '(' x \")\" ]"
-},
-{
-"id": "prop_readCondition20",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ echo_rc -eq 0 ]]"
-},
-{
-"id": "prop_readCondition21",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ $1 =~ ^(a\\ b)$ ]]"
-},
-{
-"id": "prop_readCondition22",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ $1 =~ \\.a\\.(\\.b\\.)\\.c\\. ]]"
-},
-{
-"id": "prop_readCondition23",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ -v arr[$var] ]]"
-},
-{
-"id": "prop_readCondition25",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ lex.yy.c -ot program.l ]]"
-},
-{
-"id": "prop_readCondition26",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "[[ foo ]]\\\n && bar"
-},
-{
-"id": "prop_readCondition28",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ x = [\"$1\"] ]]"
-},
-{
-"id": "prop_readCondition29",
-"file": "Parser.hs",
-"parser": "readCondition",
-"expect": "ok",
-"script": "[[ x = [*] ]]"
-},
-{
-"id": "prop_readAnnotation1",
-"file": "Parser.hs",
-"parser": "readAnnotation",
-"expect": "ok",
-"script": "# shellcheck disable=1234,5678\n"
-},
-{
-"id": "prop_readAnnotation2",
-"file": "Parser.hs",
-"parser": "readAnnotation",
-"expect": "ok",
-"script": "# shellcheck disable=SC1234 disable=SC5678\n"
-},
-{
-"id": "prop_readAnnotation3",
-"file": "Parser.hs",
-"parser": "readAnnotation",
-"expect": "ok",
-"script": "# shellcheck disable=SC1234 source=/dev/null disable=SC5678\n"
-},
-{
-"id": "prop_readAnnotation4",
-"file": "Parser.hs",
-"parser": "readAnnotation",
-"expect": "warning",
-"script": "# shellcheck cats=dogs disable=SC1234\n"
-},
-{
-"id": "prop_readAnnotation5",
-"file": "Parser.hs",
-"parser": "readAnnotation",
-"expect": "ok",
-"script": "# shellcheck disable=SC2002 # All cats are precious\n"
-},
-{
-"id": "prop_readAnnotation6",
-"file": "Parser.hs",
-"parser": "readAnnotation",
-"expect": "ok",
-"script": "# shellcheck disable=SC1234 # shellcheck foo=bar\n"
-},
-{
-"id": "prop_readAnnotation7",
-"file": "Parser.hs",
-"parser": "readAnnotation",
-"expect": "ok",
-"script": "# shellcheck disable=SC1000,SC2000-SC3000,SC1001\n"
-},
-{
-"id": "prop_readAnnotation8",
-"file": "Parser.hs",
-"parser": "readAnnotation",
-"expect": "ok",
-"script": "# shellcheck disable=all\n"
-},
-{
-"id": "prop_readAnnotation9",
-"file": "Parser.hs",
-"parser": "readAnnotation",
-"expect": "ok",
-"script": "# shellcheck source='foo bar' source-path=\"baz etc\"\n"
-},
-{
-"id": "prop_readAnnotation10",
-"file": "Parser.hs",
-"parser": "readAnnotation",
-"expect": "ok",
-"script": "# shellcheck disable='SC1234,SC2345' enable=\"foo\" shell='bash'\n"
-},
-{
-"id": "prop_readAnyComment",
-"file": "Parser.hs",
-"parser": "readAnyComment",
-"expect": "ok",
-"script": "# Comment"
-},
-{
-"id": "prop_readNormalWord",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "ok",
-"script": "'foo'\"bar\"{1..3}baz$(lol)"
-},
-{
-"id": "prop_readNormalWord2",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "ok",
-"script": "foo**(foo)!!!(@@(bar))"
-},
-{
-"id": "prop_readNormalWord3",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "ok",
-"script": "foo#"
-},
-{
-"id": "prop_readNormalWord4",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "ok",
-"script": "$\"foo\"$'foo\nbar'"
-},
-{
-"id": "prop_readNormalWord5",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "warning",
-"script": "${foo}}"
-},
-{
-"id": "prop_readNormalWord6",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "ok",
-"script": "foo/{}"
-},
-{
-"id": "prop_readNormalWord7",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "ok",
-"script": "foo\\\nbar"
-},
-{
-"id": "prop_readNormalWord8",
-"file": "Parser.hs",
-"parser": "readSubshell",
-"expect": "warning",
-"script": "(foo\\ \nbar)"
-},
-{
-"id": "prop_readNormalWord9",
-"file": "Parser.hs",
-"parser": "readSubshell",
-"expect": "ok",
-"script": "(foo\\ ;\nbar)"
-},
-{
-"id": "prop_readNormalWord10",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "warning",
-"script": "“hello”"
-},
-{
-"id": "prop_readNormalWord11",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "warning",
-"script": "‘hello’"
-},
-{
-"id": "prop_readNormalWord12",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "warning",
-"script": "hello‘"
-},
-{
-"id": "prop_readProcSub1",
-"file": "Parser.hs",
-"parser": "readProcSub",
-"expect": "ok",
-"script": "<(echo test | wc -l)"
-},
-{
-"id": "prop_readProcSub2",
-"file": "Parser.hs",
-"parser": "readProcSub",
-"expect": "ok",
-"script": "<(  if true; then true; fi )"
-},
-{
-"id": "prop_readProcSub3",
-"file": "Parser.hs",
-"parser": "readProcSub",
-"expect": "ok",
-"script": "<( # nothing here \n)"
-},
-{
-"id": "prop_readSingleQuoted",
-"file": "Parser.hs",
-"parser": "readSingleQuoted",
-"expect": "ok",
-"script": "'foo bar'"
-},
-{
-"id": "prop_readSingleQuoted2",
-"file": "Parser.hs",
-"parser": "readSingleQuoted",
-"expect": "warning",
-"script": "'foo bar\\'"
-},
-{
-"id": "prop_readSingleQuoted4",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "warning",
-"script": "'it's"
-},
-{
-"id": "prop_readSingleQuoted5",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "warning",
-"script": "foo='bar\ncow 'arg"
-},
-{
-"id": "prop_readSingleQuoted6",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "foo='bar cow 'arg"
-},
-{
-"id": "prop_readSingleQuoted7",
-"file": "Parser.hs",
-"parser": "readSingleQuoted",
-"expect": "ok",
-"script": "'foo“bar'"
-},
-{
-"id": "prop_readSingleQuoted8",
-"file": "Parser.hs",
-"parser": "readSingleQuoted",
-"expect": "warning",
-"script": "'foo‘bar'"
-},
-{
-"id": "prop_readBackTicked4",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "`echo foo\necho bar`"
-},
-{
-"id": "prop_readBackTicked5",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "echo `foo`bar"
-},
-{
-"id": "prop_readBackTicked6",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "warning",
-"script": "echo `foo\necho `bar"
-},
-{
-"id": "prop_readBackTicked7",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "`#inline comment`"
-},
-{
-"id": "prop_readBackTicked8",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "echo `#comment` \\\nbar baz"
-},
-{
-"id": "prop_readDoubleQuoted",
-"file": "Parser.hs",
-"parser": "readDoubleQuoted",
-"expect": "ok",
-"script": "\"Hello $FOO\""
-},
-{
-"id": "prop_readDoubleQuoted2",
-"file": "Parser.hs",
-"parser": "readDoubleQuoted",
-"expect": "ok",
-"script": "\"$'\""
-},
-{
-"id": "prop_readDoubleQuoted3",
-"file": "Parser.hs",
-"parser": "readDoubleQuoted",
-"expect": "ok",
-"script": "\"‘hello’\""
-},
-{
-"id": "prop_readDoubleQuoted4",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "warning",
-"script": "\"foo\nbar\"foo"
-},
-{
-"id": "prop_readDoubleQuoted5",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "lol \"foo\nbar\" etc"
-},
-{
-"id": "prop_readDoubleQuoted6",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "echo \"${ ls; }\""
-},
-{
-"id": "prop_readDoubleQuoted7",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "echo \"${ ls;}bar\""
-},
-{
-"id": "prop_readDoubleQuoted8",
-"file": "Parser.hs",
-"parser": "readDoubleQuoted",
-"expect": "warning",
-"script": "\"“hello”\""
-},
-{
-"id": "prop_readDoubleQuoted10",
-"file": "Parser.hs",
-"parser": "readDoubleQuoted",
-"expect": "ok",
-"script": "\"foo\\\\n\""
-},
-{
-"id": "prop_readGlob1",
-"file": "Parser.hs",
-"parser": "readGlob",
-"expect": "ok",
-"script": "*"
-},
-{
-"id": "prop_readGlob2",
-"file": "Parser.hs",
-"parser": "readGlob",
-"expect": "ok",
-"script": "[^0-9]"
-},
-{
-"id": "prop_readGlob3",
-"file": "Parser.hs",
-"parser": "readGlob",
-"expect": "ok",
-"script": "[a[:alpha:]]"
-},
-{
-"id": "prop_readGlob4",
-"file": "Parser.hs",
-"parser": "readGlob",
-"expect": "ok",
-"script": "[[:alnum:]]"
-},
-{
-"id": "prop_readGlob5",
-"file": "Parser.hs",
-"parser": "readGlob",
-"expect": "ok",
-"script": "[^[:alpha:]1-9]"
-},
-{
-"id": "prop_readGlob6",
-"file": "Parser.hs",
-"parser": "readGlob",
-"expect": "ok",
-"script": "[\\|]"
-},
-{
-"id": "prop_readGlob7",
-"file": "Parser.hs",
-"parser": "readGlob",
-"expect": "ok",
-"script": "[^[]"
-},
-{
-"id": "prop_readGlob8",
-"file": "Parser.hs",
-"parser": "readGlob",
-"expect": "ok",
-"script": "[*?]"
-},
-{
-"id": "prop_readGlob9",
-"file": "Parser.hs",
-"parser": "readGlob",
-"expect": "ok",
-"script": "[!]^]"
-},
-{
-"id": "prop_readGlob10",
-"file": "Parser.hs",
-"parser": "readGlob",
-"expect": "ok",
-"script": "[]]"
-},
-{
-"id": "prop_readExtglob1",
-"file": "Parser.hs",
-"parser": "readExtglob",
-"expect": "ok",
-"script": "!(*.mp3)"
-},
-{
-"id": "prop_readExtglob2",
-"file": "Parser.hs",
-"parser": "readExtglob",
-"expect": "ok",
-"script": "!(*.mp3|*.wmv)"
-},
-{
-"id": "prop_readExtglob4",
-"file": "Parser.hs",
-"parser": "readExtglob",
-"expect": "ok",
-"script": "+(foo \\) bar)"
-},
-{
-"id": "prop_readExtglob5",
-"file": "Parser.hs",
-"parser": "readExtglob",
-"expect": "ok",
-"script": "+(!(foo *(bar)))"
-},
-{
-"id": "prop_readExtglob6",
-"file": "Parser.hs",
-"parser": "readExtglob",
-"expect": "ok",
-"script": "*(((||))|())"
-},
-{
-"id": "prop_readExtglob7",
-"file": "Parser.hs",
-"parser": "readExtglob",
-"expect": "ok",
-"script": "*(<>)"
-},
-{
-"id": "prop_readExtglob8",
-"file": "Parser.hs",
-"parser": "readExtglob",
-"expect": "ok",
-"script": "@(|*())"
-},
-{
-"id": "prop_readBraced",
-"file": "Parser.hs",
-"parser": "readBraced",
-"expect": "ok",
-"script": "{1..4}"
-},
-{
-"id": "prop_readBraced2",
-"file": "Parser.hs",
-"parser": "readBraced",
-"expect": "ok",
-"script": "{foo,bar,\"baz lol\"}"
-},
-{
-"id": "prop_readBraced3",
-"file": "Parser.hs",
-"parser": "readBraced",
-"expect": "ok",
-"script": "{1,\\},2}"
-},
-{
-"id": "prop_readBraced4",
-"file": "Parser.hs",
-"parser": "readBraced",
-"expect": "ok",
-"script": "{1,{2,3}}"
-},
-{
-"id": "prop_readBraced5",
-"file": "Parser.hs",
-"parser": "readBraced",
-"expect": "ok",
-"script": "{JP{,E}G,jp{,e}g}"
-},
-{
-"id": "prop_readBraced6",
-"file": "Parser.hs",
-"parser": "readBraced",
-"expect": "ok",
-"script": "{foo,bar,$((${var}))}"
-},
-{
-"id": "prop_readBraced7",
-"file": "Parser.hs",
-"parser": "readBraced",
-"expect": "notok",
-"script": "{}"
-},
-{
-"id": "prop_readBraced8",
-"file": "Parser.hs",
-"parser": "readBraced",
-"expect": "notok",
-"script": "{foo}"
-},
-{
-"id": "prop_readDollarExpression1",
-"file": "Parser.hs",
-"parser": "readDollarExpression",
-"expect": "ok",
-"script": "$(((1) && 3))"
-},
-{
-"id": "prop_readDollarExpression2",
-"file": "Parser.hs",
-"parser": "readDollarExpression",
-"expect": "warning",
-"script": "$(((1)) && 3)"
-},
-{
-"id": "prop_readDollarExpression3",
-"file": "Parser.hs",
-"parser": "readDollarExpression",
-"expect": "warning",
-"script": "$((\"$@\" &); foo;)"
-},
-{
-"id": "prop_readDollarSingleQuote",
-"file": "Parser.hs",
-"parser": "readDollarSingleQuote",
-"expect": "ok",
-"script": "$'foo\\'lol'"
-},
-{
-"id": "prop_readDollarDoubleQuote",
-"file": "Parser.hs",
-"parser": "readDollarDoubleQuote",
-"expect": "ok",
-"script": "$\"hello\""
-},
-{
-"id": "prop_readDollarArithmetic",
-"file": "Parser.hs",
-"parser": "readDollarArithmetic",
-"expect": "ok",
-"script": "$(( 3 * 4 +5))"
-},
-{
-"id": "prop_readDollarArithmetic2",
-"file": "Parser.hs",
-"parser": "readDollarArithmetic",
-"expect": "ok",
-"script": "$(((3*4)+(1*2+(3-1))))"
-},
-{
-"id": "prop_readArithmeticExpression",
-"file": "Parser.hs",
-"parser": "readArithmeticExpression",
-"expect": "ok",
-"script": "((a?b:c))"
-},
-{
-"id": "prop_readDollarBraceCommandExpansion1",
-"file": "Parser.hs",
-"parser": "readDollarBraceCommandExpansion",
-"expect": "ok",
-"script": "${ ls; }"
-},
-{
-"id": "prop_readDollarBraceCommandExpansion2",
-"file": "Parser.hs",
-"parser": "readDollarBraceCommandExpansion",
-"expect": "ok",
-"script": "${\nls\n}"
-},
-{
-"id": "prop_readDollarBraceCommandExpansion3",
-"file": "Parser.hs",
-"parser": "readDollarBraceCommandExpansion",
-"expect": "ok",
-"script": "${|  REPLY=42; }"
-},
-{
-"id": "prop_readDollarBraced1",
-"file": "Parser.hs",
-"parser": "readDollarBraced",
-"expect": "ok",
-"script": "${foo//bar/baz}"
-},
-{
-"id": "prop_readDollarBraced2",
-"file": "Parser.hs",
-"parser": "readDollarBraced",
-"expect": "ok",
-"script": "${foo/'{cow}'}"
-},
-{
-"id": "prop_readDollarBraced3",
-"file": "Parser.hs",
-"parser": "readDollarBraced",
-"expect": "ok",
-"script": "${foo%%$(echo cow\\})}"
-},
-{
-"id": "prop_readDollarBraced4",
-"file": "Parser.hs",
-"parser": "readDollarBraced",
-"expect": "ok",
-"script": "${foo#\\}}"
-},
-{
-"id": "prop_readDollarExpansion1",
-"file": "Parser.hs",
-"parser": "readDollarExpansion",
-"expect": "ok",
-"script": "$(echo foo; ls\n)"
-},
-{
-"id": "prop_readDollarExpansion2",
-"file": "Parser.hs",
-"parser": "readDollarExpansion",
-"expect": "ok",
-"script": "$(  )"
-},
-{
-"id": "prop_readDollarExpansion3",
-"file": "Parser.hs",
-"parser": "readDollarExpansion",
-"expect": "ok",
-"script": "$( command \n#comment \n)"
-},
-{
-"id": "prop_readDollarVariable",
-"file": "Parser.hs",
-"parser": "readDollarVariable",
-"expect": "ok",
-"script": "$@"
-},
-{
-"id": "prop_readDollarLonely1",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "warning",
-"script": "\"$\"var"
-},
-{
-"id": "prop_readDollarLonely2",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "warning",
-"script": "\"$\"\"var\""
-},
-{
-"id": "prop_readDollarLonely3",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "ok",
-"script": "\"$\"$var"
-},
-{
-"id": "prop_readDollarLonely4",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "ok",
-"script": "\"$\"*"
-},
-{
-"id": "prop_readDollarLonely5",
-"file": "Parser.hs",
-"parser": "readNormalWord",
-"expect": "ok",
-"script": "$\"str\""
-},
-{
-"id": "prop_readHereDoc",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "cat << foo\nlol\ncow\nfoo"
-},
-{
-"id": "prop_readHereDoc2",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "notok",
-"script": "cat <<- EOF\n  cow\n  EOF"
-},
-{
-"id": "prop_readHereDoc3",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "cat << foo\n$\"\nfoo"
-},
-{
-"id": "prop_readHereDoc4",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "notok",
-"script": "cat << foo\n`\nfoo"
-},
-{
-"id": "prop_readHereDoc5",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "cat <<- !foo\nbar\n!foo"
-},
-{
-"id": "prop_readHereDoc6",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "cat << foo\\ bar\ncow\nfoo bar"
-},
-{
-"id": "prop_readHereDoc7",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "cat << foo\n\\$(f ())\nfoo"
-},
-{
-"id": "prop_readHereDoc8",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "cat <<foo>>bar\netc\nfoo"
-},
-{
-"id": "prop_readHereDoc9",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "if true; then cat << foo; fi\nbar\nfoo\n"
-},
-{
-"id": "prop_readHereDoc10",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "if true; then cat << foo << bar; fi\nfoo\nbar\n"
-},
-{
-"id": "prop_readHereDoc11",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "cat << foo $(\nfoo\n)lol\nfoo\n"
-},
-{
-"id": "prop_readHereDoc12",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "cat << foo|cat\nbar\nfoo"
-},
-{
-"id": "prop_readHereDoc13",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "cat <<'#!'\nHello World\n#!\necho Done"
-},
-{
-"id": "prop_readHereDoc14",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "cat << foo\nbar\nfoo \n"
-},
-{
-"id": "prop_readHereDoc15",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "cat <<foo\nbar\nfoo bar\nfoo"
-},
-{
-"id": "prop_readHereDoc16",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "cat <<- ' foo'\nbar\n foo\n"
-},
-{
-"id": "prop_readHereDoc17",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "cat <<- ' foo'\nbar\n  foo\n foo\n"
-},
-{
-"id": "prop_readHereDoc18",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "cat <<'\"foo'\nbar\n\"foo\n"
-},
-{
-"id": "prop_readHereDoc20",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "cat << foo\n  foo\n()\nfoo\n"
-},
-{
-"id": "prop_readHereDoc21",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "# shellcheck disable=SC1039\ncat << foo\n  foo\n()\nfoo\n"
-},
-{
-"id": "prop_readHereDoc22",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "cat << foo\r\ncow\r\nfoo\r\n"
-},
-{
-"id": "prop_readHereDoc23",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "notok",
-"script": "cat << foo \r\ncow\r\nfoo\r\n"
-},
-{
-"id": "prop_readIoFile",
-"file": "Parser.hs",
-"parser": "readIoFile",
-"expect": "ok",
-"script": ">> \"$(date +%YYmmDD)\""
-},
-{
-"id": "prop_readIoRedirect",
-"file": "Parser.hs",
-"parser": "readIoRedirect",
-"expect": "ok",
-"script": "3>&2"
-},
-{
-"id": "prop_readIoRedirect2",
-"file": "Parser.hs",
-"parser": "readIoRedirect",
-"expect": "ok",
-"script": "2> lol"
-},
-{
-"id": "prop_readIoRedirect3",
-"file": "Parser.hs",
-"parser": "readIoRedirect",
-"expect": "ok",
-"script": "4>&-"
-},
-{
-"id": "prop_readIoRedirect4",
-"file": "Parser.hs",
-"parser": "readIoRedirect",
-"expect": "ok",
-"script": "&> lol"
-},
-{
-"id": "prop_readIoRedirect5",
-"file": "Parser.hs",
-"parser": "readIoRedirect",
-"expect": "ok",
-"script": "{foo}>&2"
-},
-{
-"id": "prop_readIoRedirect6",
-"file": "Parser.hs",
-"parser": "readIoRedirect",
-"expect": "ok",
-"script": "{foo}<&-"
-},
-{
-"id": "prop_readIoRedirect7",
-"file": "Parser.hs",
-"parser": "readIoRedirect",
-"expect": "ok",
-"script": "{foo}>&1-"
-},
-{
-"id": "prop_readHereString",
-"file": "Parser.hs",
-"parser": "readHereString",
-"expect": "ok",
-"script": "<<< \"Hello $world\""
-},
-{
-"id": "prop_readNewlineList1",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "&> /dev/null echo foo"
-},
-{
-"id": "prop_readSeparator1",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "a &; b"
-},
-{
-"id": "prop_readSeparator2",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "a & b"
-},
-{
-"id": "prop_readSeparator3",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "a &amp; b"
-},
-{
-"id": "prop_readSeparator4",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "a &gt; file; b"
-},
-{
-"id": "prop_readSeparator5",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "curl https://example.com/?foo=moo&bar=cow"
-},
-{
-"id": "prop_readSimpleCommand",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "echo test > file"
-},
-{
-"id": "prop_readSimpleCommand2",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "cmd &> file"
-},
-{
-"id": "prop_readSimpleCommand3",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "export foo=(bar baz)"
-},
-{
-"id": "prop_readSimpleCommand4",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "typeset -a foo=(lol)"
-},
-{
-"id": "prop_readSimpleCommand5",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "time if true; then echo foo; fi"
-},
-{
-"id": "prop_readSimpleCommand6",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "time -p ( ls -l; )"
-},
-{
-"id": "prop_readSimpleCommand7",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "\\ls"
-},
-{
-"id": "prop_readSimpleCommand7b",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "\\:"
-},
-{
-"id": "prop_readSimpleCommand8",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "warning",
-"script": "// Lol"
-},
-{
-"id": "prop_readSimpleCommand9",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "warning",
-"script": "/* Lolbert */"
-},
-{
-"id": "prop_readSimpleCommand10",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "warning",
-"script": "/**** Lolbert */"
-},
-{
-"id": "prop_readSimpleCommand11",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "ok",
-"script": "/\\* foo"
-},
-{
-"id": "prop_readSimpleCommand12",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "warning",
-"script": "elsif foo"
-},
-{
-"id": "prop_readSimpleCommand13",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "warning",
-"script": "ElseIf foo"
-},
-{
-"id": "prop_readSimpleCommand14",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "warning",
-"script": "elseif[$i==2]"
-},
-{
-"id": "prop_readSimpleCommand15",
-"file": "Parser.hs",
-"parser": "readSimpleCommand",
-"expect": "warning",
-"script": "trap 'foo\"bar' INT"
-},
-{
-"id": "prop_readPipeline",
-"file": "Parser.hs",
-"parser": "readPipeline",
-"expect": "ok",
-"script": "! cat /etc/issue | grep -i ubuntu"
-},
-{
-"id": "prop_readPipeline2",
-"file": "Parser.hs",
-"parser": "readPipeline",
-"expect": "warning",
-"script": "!cat /etc/issue | grep -i ubuntu"
-},
-{
-"id": "prop_readPipeline3",
-"file": "Parser.hs",
-"parser": "readPipeline",
-"expect": "ok",
-"script": "for f; do :; done|cat"
-},
-{
-"id": "prop_readPipeline4",
-"file": "Parser.hs",
-"parser": "readPipeline",
-"expect": "ok",
-"script": "! ! true"
-},
-{
-"id": "prop_readPipeline5",
-"file": "Parser.hs",
-"parser": "readPipeline",
-"expect": "ok",
-"script": "true | ! true"
-},
-{
-"id": "prop_readAndOr",
-"file": "Parser.hs",
-"parser": "readAndOr",
-"expect": "ok",
-"script": "grep -i lol foo || exit 1"
-},
-{
-"id": "prop_readAndOr1",
-"file": "Parser.hs",
-"parser": "readAndOr",
-"expect": "ok",
-"script": "# shellcheck disable=1\nfoo"
-},
-{
-"id": "prop_readAndOr2",
-"file": "Parser.hs",
-"parser": "readAndOr",
-"expect": "ok",
-"script": "# shellcheck disable=1\n# lol\n# shellcheck disable=3\nfoo"
-},
-{
-"id": "prop_readTerm",
-"file": "Parser.hs",
-"parser": "readTerm",
-"expect": "ok",
-"script": "time ( foo; bar; )"
-},
-{
-"id": "prop_readIfClause",
-"file": "Parser.hs",
-"parser": "readIfClause",
-"expect": "ok",
-"script": "if false; then foo; elif true; then stuff; more stuff; else cows; fi"
-},
-{
-"id": "prop_readIfClause2",
-"file": "Parser.hs",
-"parser": "readIfClause",
-"expect": "warning",
-"script": "if false; then; echo oo; fi"
-},
-{
-"id": "prop_readIfClause3",
-"file": "Parser.hs",
-"parser": "readIfClause",
-"expect": "warning",
-"script": "if false; then true; else; echo lol; fi"
-},
-{
-"id": "prop_readIfClause4",
-"file": "Parser.hs",
-"parser": "readIfClause",
-"expect": "warning",
-"script": "if false; then true; else if true; then echo lol; fi; fi"
-},
-{
-"id": "prop_readIfClause5",
-"file": "Parser.hs",
-"parser": "readIfClause",
-"expect": "ok",
-"script": "if false; then true; else\nif true; then echo lol; fi; fi"
-},
-{
-"id": "prop_readIfClause6",
-"file": "Parser.hs",
-"parser": "readIfClause",
-"expect": "warning",
-"script": "if true\nthen\nDo the thing\nfi"
-},
-{
-"id": "prop_readSubshell",
-"file": "Parser.hs",
-"parser": "readSubshell",
-"expect": "ok",
-"script": "( cd /foo; tar cf stuff.tar * )"
-},
-{
-"id": "prop_readBraceGroup",
-"file": "Parser.hs",
-"parser": "readBraceGroup",
-"expect": "ok",
-"script": "{ a; b | c | d; e; }"
-},
-{
-"id": "prop_readBraceGroup2",
-"file": "Parser.hs",
-"parser": "readBraceGroup",
-"expect": "warning",
-"script": "{foo;}"
-},
-{
-"id": "prop_readBraceGroup3",
-"file": "Parser.hs",
-"parser": "readBraceGroup",
-"expect": "ok",
-"script": "{(foo)}"
-},
-{
-"id": "prop_readBatsTest1",
-"file": "Parser.hs",
-"parser": "readBatsTest",
-"expect": "ok",
-"script": "@test 'can parse' {\n  true\n}"
-},
-{
-"id": "prop_readBatsTest2",
-"file": "Parser.hs",
-"parser": "readBatsTest",
-"expect": "ok",
-"script": "@test random text !(@*$Y&! {\n  true\n}"
-},
-{
-"id": "prop_readBatsTest3",
-"file": "Parser.hs",
-"parser": "readBatsTest",
-"expect": "ok",
-"script": "@test foo { bar { baz {\n  true\n}"
-},
-{
-"id": "prop_readBatsTest4",
-"file": "Parser.hs",
-"parser": "readBatsTest",
-"expect": "notok",
-"script": "@test foo \n{\n true\n}"
-},
-{
-"id": "prop_readWhileClause",
-"file": "Parser.hs",
-"parser": "readWhileClause",
-"expect": "ok",
-"script": "while [[ -e foo ]]; do sleep 1; done"
-},
-{
-"id": "prop_readUntilClause",
-"file": "Parser.hs",
-"parser": "readUntilClause",
-"expect": "ok",
-"script": "until kill -0 $PID; do sleep 1; done"
-},
-{
-"id": "prop_readForClause",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "ok",
-"script": "for f in *; do rm \"$f\"; done"
-},
-{
-"id": "prop_readForClause1",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "ok",
-"script": "for f in *; { rm \"$f\"; }"
-},
-{
-"id": "prop_readForClause3",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "ok",
-"script": "for f; do foo; done"
-},
-{
-"id": "prop_readForClause4",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "ok",
-"script": "for((i=0; i<10; i++)); do echo $i; done"
-},
-{
-"id": "prop_readForClause5",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "ok",
-"script": "for ((i=0;i<10 && n>x;i++,--n))\ndo \necho $i\ndone"
-},
-{
-"id": "prop_readForClause6",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "ok",
-"script": "for ((;;))\ndo echo $i\ndone"
-},
-{
-"id": "prop_readForClause7",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "ok",
-"script": "for ((;;)) do echo $i\ndone"
-},
-{
-"id": "prop_readForClause8",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "ok",
-"script": "for ((;;)) ; do echo $i\ndone"
-},
-{
-"id": "prop_readForClause9",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "ok",
-"script": "for i do true; done"
-},
-{
-"id": "prop_readForClause10",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "ok",
-"script": "for ((;;)) { true; }"
-},
-{
-"id": "prop_readForClause12",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "warning",
-"script": "for $a in *; do echo \"$a\"; done"
-},
-{
-"id": "prop_readForClause13",
-"file": "Parser.hs",
-"parser": "readForClause",
-"expect": "ok",
-"script": "for foo\nin\\\n  bar\\\n  baz\ndo true; done"
-},
-{
-"id": "prop_readSelectClause1",
-"file": "Parser.hs",
-"parser": "readSelectClause",
-"expect": "ok",
-"script": "select foo in *; do echo $foo; done"
-},
-{
-"id": "prop_readSelectClause2",
-"file": "Parser.hs",
-"parser": "readSelectClause",
-"expect": "ok",
-"script": "select foo; do echo $foo; done"
-},
-{
-"id": "prop_readCaseClause",
-"file": "Parser.hs",
-"parser": "readCaseClause",
-"expect": "ok",
-"script": "case foo in a ) lol; cow;; b|d) fooo; esac"
-},
-{
-"id": "prop_readCaseClause2",
-"file": "Parser.hs",
-"parser": "readCaseClause",
-"expect": "ok",
-"script": "case foo\n in * ) echo bar;; esac"
-},
-{
-"id": "prop_readCaseClause3",
-"file": "Parser.hs",
-"parser": "readCaseClause",
-"expect": "ok",
-"script": "case foo\n in * ) echo bar & ;; esac"
-},
-{
-"id": "prop_readCaseClause4",
-"file": "Parser.hs",
-"parser": "readCaseClause",
-"expect": "ok",
-"script": "case foo\n in *) echo bar ;& bar) foo; esac"
-},
-{
-"id": "prop_readCaseClause5",
-"file": "Parser.hs",
-"parser": "readCaseClause",
-"expect": "ok",
-"script": "case foo\n in *) echo bar;;& foo) baz;; esac"
-},
-{
-"id": "prop_readCaseClause6",
-"file": "Parser.hs",
-"parser": "readCaseClause",
-"expect": "ok",
-"script": "case foo\n in if) :;; done) :;; esac"
-},
-{
-"id": "prop_readFunctionDefinition",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "ok",
-"script": "foo() { command foo --lol \"$@\"; }"
-},
-{
-"id": "prop_readFunctionDefinition1",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "ok",
-"script": "foo   (){ command foo --lol \"$@\"; }"
-},
-{
-"id": "prop_readFunctionDefinition4",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "warning",
-"script": "foo(a, b) { true; }"
-},
-{
-"id": "prop_readFunctionDefinition5",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "ok",
-"script": ":(){ :|:;}"
-},
-{
-"id": "prop_readFunctionDefinition6",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "ok",
-"script": "?(){ foo; }"
-},
-{
-"id": "prop_readFunctionDefinition7",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "ok",
-"script": "..(){ cd ..; }"
-},
-{
-"id": "prop_readFunctionDefinition8",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "ok",
-"script": "foo() (ls)"
-},
-{
-"id": "prop_readFunctionDefinition9",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "ok",
-"script": "function foo { true; }"
-},
-{
-"id": "prop_readFunctionDefinition10",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "ok",
-"script": "function foo () { true; }"
-},
-{
-"id": "prop_readFunctionDefinition11",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "warning",
-"script": "function foo{\ntrue\n}"
-},
-{
-"id": "prop_readFunctionDefinition12",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "ok",
-"script": "function []!() { true; }"
-},
-{
-"id": "prop_readFunctionDefinition13",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "ok",
-"script": "@require(){ true; }"
-},
-{
-"id": "prop_readFunctionDefinition14",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "ok",
-"script": "foo#bar(){ :; }"
-},
-{
-"id": "prop_readFunctionDefinition15",
-"file": "Parser.hs",
-"parser": "readFunctionDefinition",
-"expect": "notok",
-"script": "#bar(){ :; }"
-},
-{
-"id": "prop_readCoProc1",
-"file": "Parser.hs",
-"parser": "readCoProc",
-"expect": "ok",
-"script": "coproc foo { echo bar; }"
-},
-{
-"id": "prop_readCoProc2",
-"file": "Parser.hs",
-"parser": "readCoProc",
-"expect": "ok",
-"script": "coproc { echo bar; }"
-},
-{
-"id": "prop_readCoProc3",
-"file": "Parser.hs",
-"parser": "readCoProc",
-"expect": "ok",
-"script": "coproc echo bar"
-},
-{
-"id": "prop_readCoProc4",
-"file": "Parser.hs",
-"parser": "readCoProc",
-"expect": "ok",
-"script": "coproc a=b echo bar"
-},
-{
-"id": "prop_readCoProc5",
-"file": "Parser.hs",
-"parser": "readCoProc",
-"expect": "ok",
-"script": "coproc 'foo' { echo bar; }"
-},
-{
-"id": "prop_readCoProc6",
-"file": "Parser.hs",
-"parser": "readCoProc",
-"expect": "ok",
-"script": "coproc \"foo$$\" { echo bar; }"
-},
-{
-"id": "prop_readCoProc7",
-"file": "Parser.hs",
-"parser": "readCoProc",
-"expect": "ok",
-"script": "coproc 'foo' ( echo bar )"
-},
-{
-"id": "prop_readCoProc8",
-"file": "Parser.hs",
-"parser": "readCoProc",
-"expect": "ok",
-"script": "coproc \"foo$$\" while true; do true; done"
-},
-{
-"id": "prop_readConditionCommand",
-"file": "Parser.hs",
-"parser": "readConditionCommand",
-"expect": "ok",
-"script": "[[ x ]] > foo 2>&1"
-},
-{
-"id": "prop_readCompoundCommand",
-"file": "Parser.hs",
-"parser": "readCompoundCommand",
-"expect": "ok",
-"script": "{ echo foo; }>/dev/null"
-},
-{
-"id": "prop_readAssignmentWord",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "a=42"
-},
-{
-"id": "prop_readAssignmentWord2",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "b=(1 2 3)"
-},
-{
-"id": "prop_readAssignmentWord5",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "b+=lol"
-},
-{
-"id": "prop_readAssignmentWord7",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "a[3$n'']=42"
-},
-{
-"id": "prop_readAssignmentWord8",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "a[4''$(cat foo)]=42"
-},
-{
-"id": "prop_readAssignmentWord9",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "IFS= "
-},
-{
-"id": "prop_readAssignmentWord9a",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "foo="
-},
-{
-"id": "prop_readAssignmentWord9b",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "foo=  "
-},
-{
-"id": "prop_readAssignmentWord9c",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "foo=  #bar"
-},
-{
-"id": "prop_readAssignmentWord11",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "foo=([a]=b [c] [d]= [e f )"
-},
-{
-"id": "prop_readAssignmentWord12",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "a[b <<= 3 + c]='thing'"
-},
-{
-"id": "prop_readAssignmentWord13",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "var=( (1 2) (3 4) )"
-},
-{
-"id": "prop_readAssignmentWord14",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "var=( 1 [2]=(3 4) )"
-},
-{
-"id": "prop_readAssignmentWord15",
-"file": "Parser.hs",
-"parser": "readAssignmentWord",
-"expect": "ok",
-"script": "var=(1 [2]=(3 4))"
-},
-{
-"id": "prop_readShebang1",
-"file": "Parser.hs",
-"parser": "readShebang",
-"expect": "ok",
-"script": "#!/bin/sh\n"
-},
-{
-"id": "prop_readShebang2",
-"file": "Parser.hs",
-"parser": "readShebang",
-"expect": "warning",
-"script": "!# /bin/sh\n"
-},
-{
-"id": "prop_readShebang3",
-"file": "Parser.hs",
-"parser": "readShebang",
-"expect": "notok",
-"script": "#shellcheck shell=/bin/sh\n"
-},
-{
-"id": "prop_readShebang4",
-"file": "Parser.hs",
-"parser": "readShebang",
-"expect": "warning",
-"script": "! /bin/sh"
-},
-{
-"id": "prop_readShebang5",
-"file": "Parser.hs",
-"parser": "readShebang",
-"expect": "warning",
-"script": "\n#!/bin/sh"
-},
-{
-"id": "prop_readShebang6",
-"file": "Parser.hs",
-"parser": "readShebang",
-"expect": "warning",
-"script": " # Copyright \n!#/bin/bash"
-},
-{
-"id": "prop_readShebang7",
-"file": "Parser.hs",
-"parser": "readShebang",
-"expect": "notok",
-"script": "# Copyright \nfoo\n#!/bin/bash"
-},
-{
-"id": "prop_readConfigKVs1",
-"file": "Parser.hs",
-"parser": "readConfigKVs",
-"expect": "ok",
-"script": "disable=1234"
-},
-{
-"id": "prop_readConfigKVs2",
-"file": "Parser.hs",
-"parser": "readConfigKVs",
-"expect": "ok",
-"script": "# Comment\ndisable=1234 # Comment\n"
-},
-{
-"id": "prop_readConfigKVs3",
-"file": "Parser.hs",
-"parser": "readConfigKVs",
-"expect": "ok",
-"script": ""
-},
-{
-"id": "prop_readConfigKVs4",
-"file": "Parser.hs",
-"parser": "readConfigKVs",
-"expect": "ok",
-"script": "\n\n\n\n\t \n"
-},
-{
-"id": "prop_readConfigKVs5",
-"file": "Parser.hs",
-"parser": "readConfigKVs",
-"expect": "ok",
-"script": "# shellcheck accepts annotation-like comments in rc files\ndisable=1234"
-},
-{
-"id": "prop_readScript1",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "#!/bin/bash\necho hello world\n"
-},
-{
-"id": "prop_readScript2",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "#!/bin/bash\r\necho hello world\n"
-},
-{
-"id": "prop_readScript3",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "#!/bin/bash\necho hello world"
-},
-{
-"id": "prop_readScript4",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "warning",
-"script": "#!/usr/bin/perl\nfoo=("
-},
-{
-"id": "prop_readScript5",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "#!/bin/bash\n#This is an empty script\n\n"
-},
-{
-"id": "prop_readScript6",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "#!/usr/bin/env -S X=FOO bash\n#This is an empty script\n\n"
-},
-{
-"id": "prop_readScript7",
-"file": "Parser.hs",
-"parser": "readScript",
-"expect": "ok",
-"script": "#!/bin/zsh\n# shellcheck disable=SC1071\nfor f (a b); echo $f\n"
-}
+	{
+		"id": "prop_spacing1",
+		"file": "Parser.hs",
+		"parser": "spacing",
+		"expect": "ok",
+		"script": "  \\\n # Comment"
+	},
+	{
+		"id": "prop_spacing2",
+		"file": "Parser.hs",
+		"parser": "spacing",
+		"expect": "ok",
+		"script": "# We can continue lines with \\"
+	},
+	{
+		"id": "prop_spacing3",
+		"file": "Parser.hs",
+		"parser": "spacing",
+		"expect": "warning",
+		"script": "   \\\n #  --verbose=true \\"
+	},
+	{
+		"id": "prop_allspacing",
+		"file": "Parser.hs",
+		"parser": "allspacing",
+		"expect": "ok",
+		"script": "#foo"
+	},
+	{
+		"id": "prop_allspacing2",
+		"file": "Parser.hs",
+		"parser": "allspacing",
+		"expect": "ok",
+		"script": " #foo\n # bar\n#baz\n"
+	},
+	{
+		"id": "prop_allspacing3",
+		"file": "Parser.hs",
+		"parser": "allspacing",
+		"expect": "ok",
+		"script": "#foo\n#bar\n#baz\n"
+	},
+	{
+		"id": "prop_a1",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": " n++ + ++c"
+	},
+	{
+		"id": "prop_a2",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "$N*4-(3,2)"
+	},
+	{
+		"id": "prop_a3",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "n|=2<<1"
+	},
+	{
+		"id": "prop_a4",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "n &= 2 **3"
+	},
+	{
+		"id": "prop_a5",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "1 |= 4 && n >>= 4"
+	},
+	{
+		"id": "prop_a6",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": " 1 | 2 ||3|4"
+	},
+	{
+		"id": "prop_a7",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "3*2**10"
+	},
+	{
+		"id": "prop_a8",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "3"
+	},
+	{
+		"id": "prop_a9",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "a^!-b"
+	},
+	{
+		"id": "prop_a10",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "! $?"
+	},
+	{
+		"id": "prop_a11",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "10#08 * 16#f"
+	},
+	{
+		"id": "prop_a12",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "\"$((3+2))\" + '37'"
+	},
+	{
+		"id": "prop_a13",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "foo[9*y+x]++"
+	},
+	{
+		"id": "prop_a14",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "1+`echo 2`"
+	},
+	{
+		"id": "prop_a15",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "foo[`echo foo | sed s/foo/4/g` * 3] + 4"
+	},
+	{
+		"id": "prop_a16",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "$foo$bar"
+	},
+	{
+		"id": "prop_a17",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "i<(0+(1+1))"
+	},
+	{
+		"id": "prop_a18",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "a?b:c"
+	},
+	{
+		"id": "prop_a19",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "\\\n3 +\\\n  2"
+	},
+	{
+		"id": "prop_a20",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "a ? b ? c : d : e"
+	},
+	{
+		"id": "prop_a21",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "a ? b : c ? d : e"
+	},
+	{
+		"id": "prop_a22",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "!!a"
+	},
+	{
+		"id": "prop_a23",
+		"file": "Parser.hs",
+		"parser": "readArithmeticContents",
+		"expect": "ok",
+		"script": "~0"
+	},
+	{
+		"id": "prop_readCondition",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[ \\( a = b \\) -a \\( c = d \\) ]"
+	},
+	{
+		"id": "prop_readCondition2",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ (a = b) || (c = d) ]]"
+	},
+	{
+		"id": "prop_readCondition3",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ $c = [[:alpha:].~-] ]]"
+	},
+	{
+		"id": "prop_readCondition4",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ $c =~ *foo* ]]"
+	},
+	{
+		"id": "prop_readCondition5",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ $c =~ f( ]] )* ]]"
+	},
+	{
+		"id": "prop_readCondition5a",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ $c =~ a(b) ]]"
+	},
+	{
+		"id": "prop_readCondition5b",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ $c =~ f( ($var ]]) )* ]]"
+	},
+	{
+		"id": "prop_readCondition6",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ $c =~ ^[yY]$ ]]"
+	},
+	{
+		"id": "prop_readCondition7",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ ${line} =~ ^[[:space:]]*# ]]"
+	},
+	{
+		"id": "prop_readCondition8",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ $l =~ ogg|flac ]]"
+	},
+	{
+		"id": "prop_readCondition9",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[ foo -a -f bar ]"
+	},
+	{
+		"id": "prop_readCondition10",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[\na == b\n||\nc == d ]]"
+	},
+	{
+		"id": "prop_readCondition10a",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[\na == b  ||\nc == d ]]"
+	},
+	{
+		"id": "prop_readCondition10b",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ a == b\n||\nc == d ]]"
+	},
+	{
+		"id": "prop_readCondition11",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ a == b ||\n c == d ]]"
+	},
+	{
+		"id": "prop_readCondition12",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "warning",
+		"script": "[ a == b \n -o c == d ]"
+	},
+	{
+		"id": "prop_readCondition13",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ foo =~ ^fo{1,3}$ ]]"
+	},
+	{
+		"id": "prop_readCondition14",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[ foo '>' bar ]"
+	},
+	{
+		"id": "prop_readCondition15",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[ foo \">=\" bar ]"
+	},
+	{
+		"id": "prop_readCondition16",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[ foo \\< bar ]"
+	},
+	{
+		"id": "prop_readCondition17",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ ${file::1} = [-.\\|/\\\\] ]]"
+	},
+	{
+		"id": "prop_readCondition18",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[ ]"
+	},
+	{
+		"id": "prop_readCondition19",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[ '(' x \")\" ]"
+	},
+	{
+		"id": "prop_readCondition20",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ echo_rc -eq 0 ]]"
+	},
+	{
+		"id": "prop_readCondition21",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ $1 =~ ^(a\\ b)$ ]]"
+	},
+	{
+		"id": "prop_readCondition22",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ $1 =~ \\.a\\.(\\.b\\.)\\.c\\. ]]"
+	},
+	{
+		"id": "prop_readCondition23",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ -v arr[$var] ]]"
+	},
+	{
+		"id": "prop_readCondition25",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ lex.yy.c -ot program.l ]]"
+	},
+	{
+		"id": "prop_readCondition26",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "[[ foo ]]\\\n && bar"
+	},
+	{
+		"id": "prop_readCondition28",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ x = [\"$1\"] ]]"
+	},
+	{
+		"id": "prop_readCondition29",
+		"file": "Parser.hs",
+		"parser": "readCondition",
+		"expect": "ok",
+		"script": "[[ x = [*] ]]"
+	},
+	{
+		"id": "prop_readAnnotation1",
+		"file": "Parser.hs",
+		"parser": "readAnnotation",
+		"expect": "ok",
+		"script": "# shellcheck disable=1234,5678\n"
+	},
+	{
+		"id": "prop_readAnnotation2",
+		"file": "Parser.hs",
+		"parser": "readAnnotation",
+		"expect": "ok",
+		"script": "# shellcheck disable=SC1234 disable=SC5678\n"
+	},
+	{
+		"id": "prop_readAnnotation3",
+		"file": "Parser.hs",
+		"parser": "readAnnotation",
+		"expect": "ok",
+		"script": "# shellcheck disable=SC1234 source=/dev/null disable=SC5678\n"
+	},
+	{
+		"id": "prop_readAnnotation4",
+		"file": "Parser.hs",
+		"parser": "readAnnotation",
+		"expect": "warning",
+		"script": "# shellcheck cats=dogs disable=SC1234\n"
+	},
+	{
+		"id": "prop_readAnnotation5",
+		"file": "Parser.hs",
+		"parser": "readAnnotation",
+		"expect": "ok",
+		"script": "# shellcheck disable=SC2002 # All cats are precious\n"
+	},
+	{
+		"id": "prop_readAnnotation6",
+		"file": "Parser.hs",
+		"parser": "readAnnotation",
+		"expect": "ok",
+		"script": "# shellcheck disable=SC1234 # shellcheck foo=bar\n"
+	},
+	{
+		"id": "prop_readAnnotation7",
+		"file": "Parser.hs",
+		"parser": "readAnnotation",
+		"expect": "ok",
+		"script": "# shellcheck disable=SC1000,SC2000-SC3000,SC1001\n"
+	},
+	{
+		"id": "prop_readAnnotation8",
+		"file": "Parser.hs",
+		"parser": "readAnnotation",
+		"expect": "ok",
+		"script": "# shellcheck disable=all\n"
+	},
+	{
+		"id": "prop_readAnnotation9",
+		"file": "Parser.hs",
+		"parser": "readAnnotation",
+		"expect": "ok",
+		"script": "# shellcheck source='foo bar' source-path=\"baz etc\"\n"
+	},
+	{
+		"id": "prop_readAnnotation10",
+		"file": "Parser.hs",
+		"parser": "readAnnotation",
+		"expect": "ok",
+		"script": "# shellcheck disable='SC1234,SC2345' enable=\"foo\" shell='bash'\n"
+	},
+	{
+		"id": "prop_readAnyComment",
+		"file": "Parser.hs",
+		"parser": "readAnyComment",
+		"expect": "ok",
+		"script": "# Comment"
+	},
+	{
+		"id": "prop_readNormalWord",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "ok",
+		"script": "'foo'\"bar\"{1..3}baz$(lol)"
+	},
+	{
+		"id": "prop_readNormalWord2",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "ok",
+		"script": "foo**(foo)!!!(@@(bar))"
+	},
+	{
+		"id": "prop_readNormalWord3",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "ok",
+		"script": "foo#"
+	},
+	{
+		"id": "prop_readNormalWord4",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "ok",
+		"script": "$\"foo\"$'foo\nbar'"
+	},
+	{
+		"id": "prop_readNormalWord5",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "warning",
+		"script": "${foo}}"
+	},
+	{
+		"id": "prop_readNormalWord6",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "ok",
+		"script": "foo/{}"
+	},
+	{
+		"id": "prop_readNormalWord7",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "ok",
+		"script": "foo\\\nbar"
+	},
+	{
+		"id": "prop_readNormalWord8",
+		"file": "Parser.hs",
+		"parser": "readSubshell",
+		"expect": "warning",
+		"script": "(foo\\ \nbar)"
+	},
+	{
+		"id": "prop_readNormalWord9",
+		"file": "Parser.hs",
+		"parser": "readSubshell",
+		"expect": "ok",
+		"script": "(foo\\ ;\nbar)"
+	},
+	{
+		"id": "prop_readNormalWord10",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "warning",
+		"script": "“hello”"
+	},
+	{
+		"id": "prop_readNormalWord11",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "warning",
+		"script": "‘hello’"
+	},
+	{
+		"id": "prop_readNormalWord12",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "warning",
+		"script": "hello‘"
+	},
+	{
+		"id": "prop_readProcSub1",
+		"file": "Parser.hs",
+		"parser": "readProcSub",
+		"expect": "ok",
+		"script": "<(echo test | wc -l)"
+	},
+	{
+		"id": "prop_readProcSub2",
+		"file": "Parser.hs",
+		"parser": "readProcSub",
+		"expect": "ok",
+		"script": "<(  if true; then true; fi )"
+	},
+	{
+		"id": "prop_readProcSub3",
+		"file": "Parser.hs",
+		"parser": "readProcSub",
+		"expect": "ok",
+		"script": "<( # nothing here \n)"
+	},
+	{
+		"id": "prop_readSingleQuoted",
+		"file": "Parser.hs",
+		"parser": "readSingleQuoted",
+		"expect": "ok",
+		"script": "'foo bar'"
+	},
+	{
+		"id": "prop_readSingleQuoted2",
+		"file": "Parser.hs",
+		"parser": "readSingleQuoted",
+		"expect": "warning",
+		"script": "'foo bar\\'"
+	},
+	{
+		"id": "prop_readSingleQuoted4",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "warning",
+		"script": "'it's"
+	},
+	{
+		"id": "prop_readSingleQuoted5",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "warning",
+		"script": "foo='bar\ncow 'arg"
+	},
+	{
+		"id": "prop_readSingleQuoted6",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "foo='bar cow 'arg"
+	},
+	{
+		"id": "prop_readSingleQuoted7",
+		"file": "Parser.hs",
+		"parser": "readSingleQuoted",
+		"expect": "ok",
+		"script": "'foo“bar'"
+	},
+	{
+		"id": "prop_readSingleQuoted8",
+		"file": "Parser.hs",
+		"parser": "readSingleQuoted",
+		"expect": "warning",
+		"script": "'foo‘bar'"
+	},
+	{
+		"id": "prop_readBackTicked4",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "`echo foo\necho bar`"
+	},
+	{
+		"id": "prop_readBackTicked5",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "echo `foo`bar"
+	},
+	{
+		"id": "prop_readBackTicked6",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "warning",
+		"script": "echo `foo\necho `bar"
+	},
+	{
+		"id": "prop_readBackTicked7",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "`#inline comment`"
+	},
+	{
+		"id": "prop_readBackTicked8",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "echo `#comment` \\\nbar baz"
+	},
+	{
+		"id": "prop_readDoubleQuoted",
+		"file": "Parser.hs",
+		"parser": "readDoubleQuoted",
+		"expect": "ok",
+		"script": "\"Hello $FOO\""
+	},
+	{
+		"id": "prop_readDoubleQuoted2",
+		"file": "Parser.hs",
+		"parser": "readDoubleQuoted",
+		"expect": "ok",
+		"script": "\"$'\""
+	},
+	{
+		"id": "prop_readDoubleQuoted3",
+		"file": "Parser.hs",
+		"parser": "readDoubleQuoted",
+		"expect": "ok",
+		"script": "\"‘hello’\""
+	},
+	{
+		"id": "prop_readDoubleQuoted4",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "warning",
+		"script": "\"foo\nbar\"foo"
+	},
+	{
+		"id": "prop_readDoubleQuoted5",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "lol \"foo\nbar\" etc"
+	},
+	{
+		"id": "prop_readDoubleQuoted6",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "echo \"${ ls; }\""
+	},
+	{
+		"id": "prop_readDoubleQuoted7",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "echo \"${ ls;}bar\""
+	},
+	{
+		"id": "prop_readDoubleQuoted8",
+		"file": "Parser.hs",
+		"parser": "readDoubleQuoted",
+		"expect": "warning",
+		"script": "\"“hello”\""
+	},
+	{
+		"id": "prop_readDoubleQuoted10",
+		"file": "Parser.hs",
+		"parser": "readDoubleQuoted",
+		"expect": "ok",
+		"script": "\"foo\\\\n\""
+	},
+	{
+		"id": "prop_readGlob1",
+		"file": "Parser.hs",
+		"parser": "readGlob",
+		"expect": "ok",
+		"script": "*"
+	},
+	{
+		"id": "prop_readGlob2",
+		"file": "Parser.hs",
+		"parser": "readGlob",
+		"expect": "ok",
+		"script": "[^0-9]"
+	},
+	{
+		"id": "prop_readGlob3",
+		"file": "Parser.hs",
+		"parser": "readGlob",
+		"expect": "ok",
+		"script": "[a[:alpha:]]"
+	},
+	{
+		"id": "prop_readGlob4",
+		"file": "Parser.hs",
+		"parser": "readGlob",
+		"expect": "ok",
+		"script": "[[:alnum:]]"
+	},
+	{
+		"id": "prop_readGlob5",
+		"file": "Parser.hs",
+		"parser": "readGlob",
+		"expect": "ok",
+		"script": "[^[:alpha:]1-9]"
+	},
+	{
+		"id": "prop_readGlob6",
+		"file": "Parser.hs",
+		"parser": "readGlob",
+		"expect": "ok",
+		"script": "[\\|]"
+	},
+	{
+		"id": "prop_readGlob7",
+		"file": "Parser.hs",
+		"parser": "readGlob",
+		"expect": "ok",
+		"script": "[^[]"
+	},
+	{
+		"id": "prop_readGlob8",
+		"file": "Parser.hs",
+		"parser": "readGlob",
+		"expect": "ok",
+		"script": "[*?]"
+	},
+	{
+		"id": "prop_readGlob9",
+		"file": "Parser.hs",
+		"parser": "readGlob",
+		"expect": "ok",
+		"script": "[!]^]"
+	},
+	{
+		"id": "prop_readGlob10",
+		"file": "Parser.hs",
+		"parser": "readGlob",
+		"expect": "ok",
+		"script": "[]]"
+	},
+	{
+		"id": "prop_readExtglob1",
+		"file": "Parser.hs",
+		"parser": "readExtglob",
+		"expect": "ok",
+		"script": "!(*.mp3)"
+	},
+	{
+		"id": "prop_readExtglob2",
+		"file": "Parser.hs",
+		"parser": "readExtglob",
+		"expect": "ok",
+		"script": "!(*.mp3|*.wmv)"
+	},
+	{
+		"id": "prop_readExtglob4",
+		"file": "Parser.hs",
+		"parser": "readExtglob",
+		"expect": "ok",
+		"script": "+(foo \\) bar)"
+	},
+	{
+		"id": "prop_readExtglob5",
+		"file": "Parser.hs",
+		"parser": "readExtglob",
+		"expect": "ok",
+		"script": "+(!(foo *(bar)))"
+	},
+	{
+		"id": "prop_readExtglob6",
+		"file": "Parser.hs",
+		"parser": "readExtglob",
+		"expect": "ok",
+		"script": "*(((||))|())"
+	},
+	{
+		"id": "prop_readExtglob7",
+		"file": "Parser.hs",
+		"parser": "readExtglob",
+		"expect": "ok",
+		"script": "*(<>)"
+	},
+	{
+		"id": "prop_readExtglob8",
+		"file": "Parser.hs",
+		"parser": "readExtglob",
+		"expect": "ok",
+		"script": "@(|*())"
+	},
+	{
+		"id": "prop_readBraced",
+		"file": "Parser.hs",
+		"parser": "readBraced",
+		"expect": "ok",
+		"script": "{1..4}"
+	},
+	{
+		"id": "prop_readBraced2",
+		"file": "Parser.hs",
+		"parser": "readBraced",
+		"expect": "ok",
+		"script": "{foo,bar,\"baz lol\"}"
+	},
+	{
+		"id": "prop_readBraced3",
+		"file": "Parser.hs",
+		"parser": "readBraced",
+		"expect": "ok",
+		"script": "{1,\\},2}"
+	},
+	{
+		"id": "prop_readBraced4",
+		"file": "Parser.hs",
+		"parser": "readBraced",
+		"expect": "ok",
+		"script": "{1,{2,3}}"
+	},
+	{
+		"id": "prop_readBraced5",
+		"file": "Parser.hs",
+		"parser": "readBraced",
+		"expect": "ok",
+		"script": "{JP{,E}G,jp{,e}g}"
+	},
+	{
+		"id": "prop_readBraced6",
+		"file": "Parser.hs",
+		"parser": "readBraced",
+		"expect": "ok",
+		"script": "{foo,bar,$((${var}))}"
+	},
+	{
+		"id": "prop_readBraced7",
+		"file": "Parser.hs",
+		"parser": "readBraced",
+		"expect": "notok",
+		"script": "{}"
+	},
+	{
+		"id": "prop_readBraced8",
+		"file": "Parser.hs",
+		"parser": "readBraced",
+		"expect": "notok",
+		"script": "{foo}"
+	},
+	{
+		"id": "prop_readDollarExpression1",
+		"file": "Parser.hs",
+		"parser": "readDollarExpression",
+		"expect": "ok",
+		"script": "$(((1) && 3))"
+	},
+	{
+		"id": "prop_readDollarExpression2",
+		"file": "Parser.hs",
+		"parser": "readDollarExpression",
+		"expect": "warning",
+		"script": "$(((1)) && 3)"
+	},
+	{
+		"id": "prop_readDollarExpression3",
+		"file": "Parser.hs",
+		"parser": "readDollarExpression",
+		"expect": "warning",
+		"script": "$((\"$@\" &); foo;)"
+	},
+	{
+		"id": "prop_readDollarSingleQuote",
+		"file": "Parser.hs",
+		"parser": "readDollarSingleQuote",
+		"expect": "ok",
+		"script": "$'foo\\'lol'"
+	},
+	{
+		"id": "prop_readDollarDoubleQuote",
+		"file": "Parser.hs",
+		"parser": "readDollarDoubleQuote",
+		"expect": "ok",
+		"script": "$\"hello\""
+	},
+	{
+		"id": "prop_readDollarArithmetic",
+		"file": "Parser.hs",
+		"parser": "readDollarArithmetic",
+		"expect": "ok",
+		"script": "$(( 3 * 4 +5))"
+	},
+	{
+		"id": "prop_readDollarArithmetic2",
+		"file": "Parser.hs",
+		"parser": "readDollarArithmetic",
+		"expect": "ok",
+		"script": "$(((3*4)+(1*2+(3-1))))"
+	},
+	{
+		"id": "prop_readArithmeticExpression",
+		"file": "Parser.hs",
+		"parser": "readArithmeticExpression",
+		"expect": "ok",
+		"script": "((a?b:c))"
+	},
+	{
+		"id": "prop_readDollarBraceCommandExpansion1",
+		"file": "Parser.hs",
+		"parser": "readDollarBraceCommandExpansion",
+		"expect": "ok",
+		"script": "${ ls; }"
+	},
+	{
+		"id": "prop_readDollarBraceCommandExpansion2",
+		"file": "Parser.hs",
+		"parser": "readDollarBraceCommandExpansion",
+		"expect": "ok",
+		"script": "${\nls\n}"
+	},
+	{
+		"id": "prop_readDollarBraceCommandExpansion3",
+		"file": "Parser.hs",
+		"parser": "readDollarBraceCommandExpansion",
+		"expect": "ok",
+		"script": "${|  REPLY=42; }"
+	},
+	{
+		"id": "prop_readDollarBraced1",
+		"file": "Parser.hs",
+		"parser": "readDollarBraced",
+		"expect": "ok",
+		"script": "${foo//bar/baz}"
+	},
+	{
+		"id": "prop_readDollarBraced2",
+		"file": "Parser.hs",
+		"parser": "readDollarBraced",
+		"expect": "ok",
+		"script": "${foo/'{cow}'}"
+	},
+	{
+		"id": "prop_readDollarBraced3",
+		"file": "Parser.hs",
+		"parser": "readDollarBraced",
+		"expect": "ok",
+		"script": "${foo%%$(echo cow\\})}"
+	},
+	{
+		"id": "prop_readDollarBraced4",
+		"file": "Parser.hs",
+		"parser": "readDollarBraced",
+		"expect": "ok",
+		"script": "${foo#\\}}"
+	},
+	{
+		"id": "prop_readDollarExpansion1",
+		"file": "Parser.hs",
+		"parser": "readDollarExpansion",
+		"expect": "ok",
+		"script": "$(echo foo; ls\n)"
+	},
+	{
+		"id": "prop_readDollarExpansion2",
+		"file": "Parser.hs",
+		"parser": "readDollarExpansion",
+		"expect": "ok",
+		"script": "$(  )"
+	},
+	{
+		"id": "prop_readDollarExpansion3",
+		"file": "Parser.hs",
+		"parser": "readDollarExpansion",
+		"expect": "ok",
+		"script": "$( command \n#comment \n)"
+	},
+	{
+		"id": "prop_readDollarVariable",
+		"file": "Parser.hs",
+		"parser": "readDollarVariable",
+		"expect": "ok",
+		"script": "$@"
+	},
+	{
+		"id": "prop_readDollarLonely1",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "warning",
+		"script": "\"$\"var"
+	},
+	{
+		"id": "prop_readDollarLonely2",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "warning",
+		"script": "\"$\"\"var\""
+	},
+	{
+		"id": "prop_readDollarLonely3",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "ok",
+		"script": "\"$\"$var"
+	},
+	{
+		"id": "prop_readDollarLonely4",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "ok",
+		"script": "\"$\"*"
+	},
+	{
+		"id": "prop_readDollarLonely5",
+		"file": "Parser.hs",
+		"parser": "readNormalWord",
+		"expect": "ok",
+		"script": "$\"str\""
+	},
+	{
+		"id": "prop_readHereDoc",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "cat << foo\nlol\ncow\nfoo"
+	},
+	{
+		"id": "prop_readHereDoc2",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "notok",
+		"script": "cat <<- EOF\n  cow\n  EOF"
+	},
+	{
+		"id": "prop_readHereDoc3",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "cat << foo\n$\"\nfoo"
+	},
+	{
+		"id": "prop_readHereDoc4",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "notok",
+		"script": "cat << foo\n`\nfoo"
+	},
+	{
+		"id": "prop_readHereDoc5",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "cat <<- !foo\nbar\n!foo"
+	},
+	{
+		"id": "prop_readHereDoc6",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "cat << foo\\ bar\ncow\nfoo bar"
+	},
+	{
+		"id": "prop_readHereDoc7",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "cat << foo\n\\$(f ())\nfoo"
+	},
+	{
+		"id": "prop_readHereDoc8",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "cat <<foo>>bar\netc\nfoo"
+	},
+	{
+		"id": "prop_readHereDoc9",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "if true; then cat << foo; fi\nbar\nfoo\n"
+	},
+	{
+		"id": "prop_readHereDoc10",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "if true; then cat << foo << bar; fi\nfoo\nbar\n"
+	},
+	{
+		"id": "prop_readHereDoc11",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "cat << foo $(\nfoo\n)lol\nfoo\n"
+	},
+	{
+		"id": "prop_readHereDoc12",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "cat << foo|cat\nbar\nfoo"
+	},
+	{
+		"id": "prop_readHereDoc13",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "cat <<'#!'\nHello World\n#!\necho Done"
+	},
+	{
+		"id": "prop_readHereDoc14",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "cat << foo\nbar\nfoo \n"
+	},
+	{
+		"id": "prop_readHereDoc15",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "cat <<foo\nbar\nfoo bar\nfoo"
+	},
+	{
+		"id": "prop_readHereDoc16",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "cat <<- ' foo'\nbar\n foo\n"
+	},
+	{
+		"id": "prop_readHereDoc17",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "cat <<- ' foo'\nbar\n  foo\n foo\n"
+	},
+	{
+		"id": "prop_readHereDoc18",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "cat <<'\"foo'\nbar\n\"foo\n"
+	},
+	{
+		"id": "prop_readHereDoc20",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "cat << foo\n  foo\n()\nfoo\n"
+	},
+	{
+		"id": "prop_readHereDoc21",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "# shellcheck disable=SC1039\ncat << foo\n  foo\n()\nfoo\n"
+	},
+	{
+		"id": "prop_readHereDoc22",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "cat << foo\r\ncow\r\nfoo\r\n"
+	},
+	{
+		"id": "prop_readHereDoc23",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "notok",
+		"script": "cat << foo \r\ncow\r\nfoo\r\n"
+	},
+	{
+		"id": "prop_readIoFile",
+		"file": "Parser.hs",
+		"parser": "readIoFile",
+		"expect": "ok",
+		"script": ">> \"$(date +%YYmmDD)\""
+	},
+	{
+		"id": "prop_readIoRedirect",
+		"file": "Parser.hs",
+		"parser": "readIoRedirect",
+		"expect": "ok",
+		"script": "3>&2"
+	},
+	{
+		"id": "prop_readIoRedirect2",
+		"file": "Parser.hs",
+		"parser": "readIoRedirect",
+		"expect": "ok",
+		"script": "2> lol"
+	},
+	{
+		"id": "prop_readIoRedirect3",
+		"file": "Parser.hs",
+		"parser": "readIoRedirect",
+		"expect": "ok",
+		"script": "4>&-"
+	},
+	{
+		"id": "prop_readIoRedirect4",
+		"file": "Parser.hs",
+		"parser": "readIoRedirect",
+		"expect": "ok",
+		"script": "&> lol"
+	},
+	{
+		"id": "prop_readIoRedirect5",
+		"file": "Parser.hs",
+		"parser": "readIoRedirect",
+		"expect": "ok",
+		"script": "{foo}>&2"
+	},
+	{
+		"id": "prop_readIoRedirect6",
+		"file": "Parser.hs",
+		"parser": "readIoRedirect",
+		"expect": "ok",
+		"script": "{foo}<&-"
+	},
+	{
+		"id": "prop_readIoRedirect7",
+		"file": "Parser.hs",
+		"parser": "readIoRedirect",
+		"expect": "ok",
+		"script": "{foo}>&1-"
+	},
+	{
+		"id": "prop_readHereString",
+		"file": "Parser.hs",
+		"parser": "readHereString",
+		"expect": "ok",
+		"script": "<<< \"Hello $world\""
+	},
+	{
+		"id": "prop_readNewlineList1",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "&> /dev/null echo foo"
+	},
+	{
+		"id": "prop_readSeparator1",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "a &; b"
+	},
+	{
+		"id": "prop_readSeparator2",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "a & b"
+	},
+	{
+		"id": "prop_readSeparator3",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "a &amp; b"
+	},
+	{
+		"id": "prop_readSeparator4",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "a &gt; file; b"
+	},
+	{
+		"id": "prop_readSeparator5",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "curl https://example.com/?foo=moo&bar=cow"
+	},
+	{
+		"id": "prop_readSimpleCommand",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "echo test > file"
+	},
+	{
+		"id": "prop_readSimpleCommand2",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "cmd &> file"
+	},
+	{
+		"id": "prop_readSimpleCommand3",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "export foo=(bar baz)"
+	},
+	{
+		"id": "prop_readSimpleCommand4",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "typeset -a foo=(lol)"
+	},
+	{
+		"id": "prop_readSimpleCommand5",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "time if true; then echo foo; fi"
+	},
+	{
+		"id": "prop_readSimpleCommand6",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "time -p ( ls -l; )"
+	},
+	{
+		"id": "prop_readSimpleCommand7",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "\\ls"
+	},
+	{
+		"id": "prop_readSimpleCommand7b",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "\\:"
+	},
+	{
+		"id": "prop_readSimpleCommand8",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "warning",
+		"script": "// Lol"
+	},
+	{
+		"id": "prop_readSimpleCommand9",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "warning",
+		"script": "/* Lolbert */"
+	},
+	{
+		"id": "prop_readSimpleCommand10",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "warning",
+		"script": "/**** Lolbert */"
+	},
+	{
+		"id": "prop_readSimpleCommand11",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "ok",
+		"script": "/\\* foo"
+	},
+	{
+		"id": "prop_readSimpleCommand12",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "warning",
+		"script": "elsif foo"
+	},
+	{
+		"id": "prop_readSimpleCommand13",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "warning",
+		"script": "ElseIf foo"
+	},
+	{
+		"id": "prop_readSimpleCommand14",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "warning",
+		"script": "elseif[$i==2]"
+	},
+	{
+		"id": "prop_readSimpleCommand15",
+		"file": "Parser.hs",
+		"parser": "readSimpleCommand",
+		"expect": "warning",
+		"script": "trap 'foo\"bar' INT"
+	},
+	{
+		"id": "prop_readPipeline",
+		"file": "Parser.hs",
+		"parser": "readPipeline",
+		"expect": "ok",
+		"script": "! cat /etc/issue | grep -i ubuntu"
+	},
+	{
+		"id": "prop_readPipeline2",
+		"file": "Parser.hs",
+		"parser": "readPipeline",
+		"expect": "warning",
+		"script": "!cat /etc/issue | grep -i ubuntu"
+	},
+	{
+		"id": "prop_readPipeline3",
+		"file": "Parser.hs",
+		"parser": "readPipeline",
+		"expect": "ok",
+		"script": "for f; do :; done|cat"
+	},
+	{
+		"id": "prop_readPipeline4",
+		"file": "Parser.hs",
+		"parser": "readPipeline",
+		"expect": "ok",
+		"script": "! ! true"
+	},
+	{
+		"id": "prop_readPipeline5",
+		"file": "Parser.hs",
+		"parser": "readPipeline",
+		"expect": "ok",
+		"script": "true | ! true"
+	},
+	{
+		"id": "prop_readAndOr",
+		"file": "Parser.hs",
+		"parser": "readAndOr",
+		"expect": "ok",
+		"script": "grep -i lol foo || exit 1"
+	},
+	{
+		"id": "prop_readAndOr1",
+		"file": "Parser.hs",
+		"parser": "readAndOr",
+		"expect": "ok",
+		"script": "# shellcheck disable=1\nfoo"
+	},
+	{
+		"id": "prop_readAndOr2",
+		"file": "Parser.hs",
+		"parser": "readAndOr",
+		"expect": "ok",
+		"script": "# shellcheck disable=1\n# lol\n# shellcheck disable=3\nfoo"
+	},
+	{
+		"id": "prop_readTerm",
+		"file": "Parser.hs",
+		"parser": "readTerm",
+		"expect": "ok",
+		"script": "time ( foo; bar; )"
+	},
+	{
+		"id": "prop_readIfClause",
+		"file": "Parser.hs",
+		"parser": "readIfClause",
+		"expect": "ok",
+		"script": "if false; then foo; elif true; then stuff; more stuff; else cows; fi"
+	},
+	{
+		"id": "prop_readIfClause2",
+		"file": "Parser.hs",
+		"parser": "readIfClause",
+		"expect": "warning",
+		"script": "if false; then; echo oo; fi"
+	},
+	{
+		"id": "prop_readIfClause3",
+		"file": "Parser.hs",
+		"parser": "readIfClause",
+		"expect": "warning",
+		"script": "if false; then true; else; echo lol; fi"
+	},
+	{
+		"id": "prop_readIfClause4",
+		"file": "Parser.hs",
+		"parser": "readIfClause",
+		"expect": "warning",
+		"script": "if false; then true; else if true; then echo lol; fi; fi"
+	},
+	{
+		"id": "prop_readIfClause5",
+		"file": "Parser.hs",
+		"parser": "readIfClause",
+		"expect": "ok",
+		"script": "if false; then true; else\nif true; then echo lol; fi; fi"
+	},
+	{
+		"id": "prop_readIfClause6",
+		"file": "Parser.hs",
+		"parser": "readIfClause",
+		"expect": "warning",
+		"script": "if true\nthen\nDo the thing\nfi"
+	},
+	{
+		"id": "prop_readSubshell",
+		"file": "Parser.hs",
+		"parser": "readSubshell",
+		"expect": "ok",
+		"script": "( cd /foo; tar cf stuff.tar * )"
+	},
+	{
+		"id": "prop_readBraceGroup",
+		"file": "Parser.hs",
+		"parser": "readBraceGroup",
+		"expect": "ok",
+		"script": "{ a; b | c | d; e; }"
+	},
+	{
+		"id": "prop_readBraceGroup2",
+		"file": "Parser.hs",
+		"parser": "readBraceGroup",
+		"expect": "warning",
+		"script": "{foo;}"
+	},
+	{
+		"id": "prop_readBraceGroup3",
+		"file": "Parser.hs",
+		"parser": "readBraceGroup",
+		"expect": "ok",
+		"script": "{(foo)}"
+	},
+	{
+		"id": "prop_readBatsTest1",
+		"file": "Parser.hs",
+		"parser": "readBatsTest",
+		"expect": "ok",
+		"script": "@test 'can parse' {\n  true\n}"
+	},
+	{
+		"id": "prop_readBatsTest2",
+		"file": "Parser.hs",
+		"parser": "readBatsTest",
+		"expect": "ok",
+		"script": "@test random text !(@*$Y&! {\n  true\n}"
+	},
+	{
+		"id": "prop_readBatsTest3",
+		"file": "Parser.hs",
+		"parser": "readBatsTest",
+		"expect": "ok",
+		"script": "@test foo { bar { baz {\n  true\n}"
+	},
+	{
+		"id": "prop_readBatsTest4",
+		"file": "Parser.hs",
+		"parser": "readBatsTest",
+		"expect": "notok",
+		"script": "@test foo \n{\n true\n}"
+	},
+	{
+		"id": "prop_readWhileClause",
+		"file": "Parser.hs",
+		"parser": "readWhileClause",
+		"expect": "ok",
+		"script": "while [[ -e foo ]]; do sleep 1; done"
+	},
+	{
+		"id": "prop_readUntilClause",
+		"file": "Parser.hs",
+		"parser": "readUntilClause",
+		"expect": "ok",
+		"script": "until kill -0 $PID; do sleep 1; done"
+	},
+	{
+		"id": "prop_readForClause",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "ok",
+		"script": "for f in *; do rm \"$f\"; done"
+	},
+	{
+		"id": "prop_readForClause1",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "ok",
+		"script": "for f in *; { rm \"$f\"; }"
+	},
+	{
+		"id": "prop_readForClause3",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "ok",
+		"script": "for f; do foo; done"
+	},
+	{
+		"id": "prop_readForClause4",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "ok",
+		"script": "for((i=0; i<10; i++)); do echo $i; done"
+	},
+	{
+		"id": "prop_readForClause5",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "ok",
+		"script": "for ((i=0;i<10 && n>x;i++,--n))\ndo \necho $i\ndone"
+	},
+	{
+		"id": "prop_readForClause6",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "ok",
+		"script": "for ((;;))\ndo echo $i\ndone"
+	},
+	{
+		"id": "prop_readForClause7",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "ok",
+		"script": "for ((;;)) do echo $i\ndone"
+	},
+	{
+		"id": "prop_readForClause8",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "ok",
+		"script": "for ((;;)) ; do echo $i\ndone"
+	},
+	{
+		"id": "prop_readForClause9",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "ok",
+		"script": "for i do true; done"
+	},
+	{
+		"id": "prop_readForClause10",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "ok",
+		"script": "for ((;;)) { true; }"
+	},
+	{
+		"id": "prop_readForClause12",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "warning",
+		"script": "for $a in *; do echo \"$a\"; done"
+	},
+	{
+		"id": "prop_readForClause13",
+		"file": "Parser.hs",
+		"parser": "readForClause",
+		"expect": "ok",
+		"script": "for foo\nin\\\n  bar\\\n  baz\ndo true; done"
+	},
+	{
+		"id": "prop_readSelectClause1",
+		"file": "Parser.hs",
+		"parser": "readSelectClause",
+		"expect": "ok",
+		"script": "select foo in *; do echo $foo; done"
+	},
+	{
+		"id": "prop_readSelectClause2",
+		"file": "Parser.hs",
+		"parser": "readSelectClause",
+		"expect": "ok",
+		"script": "select foo; do echo $foo; done"
+	},
+	{
+		"id": "prop_readCaseClause",
+		"file": "Parser.hs",
+		"parser": "readCaseClause",
+		"expect": "ok",
+		"script": "case foo in a ) lol; cow;; b|d) fooo; esac"
+	},
+	{
+		"id": "prop_readCaseClause2",
+		"file": "Parser.hs",
+		"parser": "readCaseClause",
+		"expect": "ok",
+		"script": "case foo\n in * ) echo bar;; esac"
+	},
+	{
+		"id": "prop_readCaseClause3",
+		"file": "Parser.hs",
+		"parser": "readCaseClause",
+		"expect": "ok",
+		"script": "case foo\n in * ) echo bar & ;; esac"
+	},
+	{
+		"id": "prop_readCaseClause4",
+		"file": "Parser.hs",
+		"parser": "readCaseClause",
+		"expect": "ok",
+		"script": "case foo\n in *) echo bar ;& bar) foo; esac"
+	},
+	{
+		"id": "prop_readCaseClause5",
+		"file": "Parser.hs",
+		"parser": "readCaseClause",
+		"expect": "ok",
+		"script": "case foo\n in *) echo bar;;& foo) baz;; esac"
+	},
+	{
+		"id": "prop_readCaseClause6",
+		"file": "Parser.hs",
+		"parser": "readCaseClause",
+		"expect": "ok",
+		"script": "case foo\n in if) :;; done) :;; esac"
+	},
+	{
+		"id": "prop_readFunctionDefinition",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "ok",
+		"script": "foo() { command foo --lol \"$@\"; }"
+	},
+	{
+		"id": "prop_readFunctionDefinition1",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "ok",
+		"script": "foo   (){ command foo --lol \"$@\"; }"
+	},
+	{
+		"id": "prop_readFunctionDefinition4",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "warning",
+		"script": "foo(a, b) { true; }"
+	},
+	{
+		"id": "prop_readFunctionDefinition5",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "ok",
+		"script": ":(){ :|:;}"
+	},
+	{
+		"id": "prop_readFunctionDefinition6",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "ok",
+		"script": "?(){ foo; }"
+	},
+	{
+		"id": "prop_readFunctionDefinition7",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "ok",
+		"script": "..(){ cd ..; }"
+	},
+	{
+		"id": "prop_readFunctionDefinition8",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "ok",
+		"script": "foo() (ls)"
+	},
+	{
+		"id": "prop_readFunctionDefinition9",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "ok",
+		"script": "function foo { true; }"
+	},
+	{
+		"id": "prop_readFunctionDefinition10",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "ok",
+		"script": "function foo () { true; }"
+	},
+	{
+		"id": "prop_readFunctionDefinition11",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "warning",
+		"script": "function foo{\ntrue\n}"
+	},
+	{
+		"id": "prop_readFunctionDefinition12",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "ok",
+		"script": "function []!() { true; }"
+	},
+	{
+		"id": "prop_readFunctionDefinition13",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "ok",
+		"script": "@require(){ true; }"
+	},
+	{
+		"id": "prop_readFunctionDefinition14",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "ok",
+		"script": "foo#bar(){ :; }"
+	},
+	{
+		"id": "prop_readFunctionDefinition15",
+		"file": "Parser.hs",
+		"parser": "readFunctionDefinition",
+		"expect": "notok",
+		"script": "#bar(){ :; }"
+	},
+	{
+		"id": "prop_readCoProc1",
+		"file": "Parser.hs",
+		"parser": "readCoProc",
+		"expect": "ok",
+		"script": "coproc foo { echo bar; }"
+	},
+	{
+		"id": "prop_readCoProc2",
+		"file": "Parser.hs",
+		"parser": "readCoProc",
+		"expect": "ok",
+		"script": "coproc { echo bar; }"
+	},
+	{
+		"id": "prop_readCoProc3",
+		"file": "Parser.hs",
+		"parser": "readCoProc",
+		"expect": "ok",
+		"script": "coproc echo bar"
+	},
+	{
+		"id": "prop_readCoProc4",
+		"file": "Parser.hs",
+		"parser": "readCoProc",
+		"expect": "ok",
+		"script": "coproc a=b echo bar"
+	},
+	{
+		"id": "prop_readCoProc5",
+		"file": "Parser.hs",
+		"parser": "readCoProc",
+		"expect": "ok",
+		"script": "coproc 'foo' { echo bar; }"
+	},
+	{
+		"id": "prop_readCoProc6",
+		"file": "Parser.hs",
+		"parser": "readCoProc",
+		"expect": "ok",
+		"script": "coproc \"foo$$\" { echo bar; }"
+	},
+	{
+		"id": "prop_readCoProc7",
+		"file": "Parser.hs",
+		"parser": "readCoProc",
+		"expect": "ok",
+		"script": "coproc 'foo' ( echo bar )"
+	},
+	{
+		"id": "prop_readCoProc8",
+		"file": "Parser.hs",
+		"parser": "readCoProc",
+		"expect": "ok",
+		"script": "coproc \"foo$$\" while true; do true; done"
+	},
+	{
+		"id": "prop_readConditionCommand",
+		"file": "Parser.hs",
+		"parser": "readConditionCommand",
+		"expect": "ok",
+		"script": "[[ x ]] > foo 2>&1"
+	},
+	{
+		"id": "prop_readCompoundCommand",
+		"file": "Parser.hs",
+		"parser": "readCompoundCommand",
+		"expect": "ok",
+		"script": "{ echo foo; }>/dev/null"
+	},
+	{
+		"id": "prop_readAssignmentWord",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "a=42"
+	},
+	{
+		"id": "prop_readAssignmentWord2",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "b=(1 2 3)"
+	},
+	{
+		"id": "prop_readAssignmentWord5",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "b+=lol"
+	},
+	{
+		"id": "prop_readAssignmentWord7",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "a[3$n'']=42"
+	},
+	{
+		"id": "prop_readAssignmentWord8",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "a[4''$(cat foo)]=42"
+	},
+	{
+		"id": "prop_readAssignmentWord9",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "IFS= "
+	},
+	{
+		"id": "prop_readAssignmentWord9a",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "foo="
+	},
+	{
+		"id": "prop_readAssignmentWord9b",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "foo=  "
+	},
+	{
+		"id": "prop_readAssignmentWord9c",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "foo=  #bar"
+	},
+	{
+		"id": "prop_readAssignmentWord11",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "foo=([a]=b [c] [d]= [e f )"
+	},
+	{
+		"id": "prop_readAssignmentWord12",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "a[b <<= 3 + c]='thing'"
+	},
+	{
+		"id": "prop_readAssignmentWord13",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "var=( (1 2) (3 4) )"
+	},
+	{
+		"id": "prop_readAssignmentWord14",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "var=( 1 [2]=(3 4) )"
+	},
+	{
+		"id": "prop_readAssignmentWord15",
+		"file": "Parser.hs",
+		"parser": "readAssignmentWord",
+		"expect": "ok",
+		"script": "var=(1 [2]=(3 4))"
+	},
+	{
+		"id": "prop_readShebang1",
+		"file": "Parser.hs",
+		"parser": "readShebang",
+		"expect": "ok",
+		"script": "#!/bin/sh\n"
+	},
+	{
+		"id": "prop_readShebang2",
+		"file": "Parser.hs",
+		"parser": "readShebang",
+		"expect": "warning",
+		"script": "!# /bin/sh\n"
+	},
+	{
+		"id": "prop_readShebang3",
+		"file": "Parser.hs",
+		"parser": "readShebang",
+		"expect": "notok",
+		"script": "#shellcheck shell=/bin/sh\n"
+	},
+	{
+		"id": "prop_readShebang4",
+		"file": "Parser.hs",
+		"parser": "readShebang",
+		"expect": "warning",
+		"script": "! /bin/sh"
+	},
+	{
+		"id": "prop_readShebang5",
+		"file": "Parser.hs",
+		"parser": "readShebang",
+		"expect": "warning",
+		"script": "\n#!/bin/sh"
+	},
+	{
+		"id": "prop_readShebang6",
+		"file": "Parser.hs",
+		"parser": "readShebang",
+		"expect": "warning",
+		"script": " # Copyright \n!#/bin/bash"
+	},
+	{
+		"id": "prop_readShebang7",
+		"file": "Parser.hs",
+		"parser": "readShebang",
+		"expect": "notok",
+		"script": "# Copyright \nfoo\n#!/bin/bash"
+	},
+	{
+		"id": "prop_readConfigKVs1",
+		"file": "Parser.hs",
+		"parser": "readConfigKVs",
+		"expect": "ok",
+		"script": "disable=1234"
+	},
+	{
+		"id": "prop_readConfigKVs2",
+		"file": "Parser.hs",
+		"parser": "readConfigKVs",
+		"expect": "ok",
+		"script": "# Comment\ndisable=1234 # Comment\n"
+	},
+	{
+		"id": "prop_readConfigKVs3",
+		"file": "Parser.hs",
+		"parser": "readConfigKVs",
+		"expect": "ok",
+		"script": ""
+	},
+	{
+		"id": "prop_readConfigKVs4",
+		"file": "Parser.hs",
+		"parser": "readConfigKVs",
+		"expect": "ok",
+		"script": "\n\n\n\n\t \n"
+	},
+	{
+		"id": "prop_readConfigKVs5",
+		"file": "Parser.hs",
+		"parser": "readConfigKVs",
+		"expect": "ok",
+		"script": "# shellcheck accepts annotation-like comments in rc files\ndisable=1234"
+	},
+	{
+		"id": "prop_readScript1",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "#!/bin/bash\necho hello world\n"
+	},
+	{
+		"id": "prop_readScript2",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "#!/bin/bash\r\necho hello world\n"
+	},
+	{
+		"id": "prop_readScript3",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "#!/bin/bash\necho hello world"
+	},
+	{
+		"id": "prop_readScript4",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "warning",
+		"script": "#!/usr/bin/perl\nfoo=("
+	},
+	{
+		"id": "prop_readScript5",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "#!/bin/bash\n#This is an empty script\n\n"
+	},
+	{
+		"id": "prop_readScript6",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "#!/usr/bin/env -S X=FOO bash\n#This is an empty script\n\n"
+	},
+	{
+		"id": "prop_readScript7",
+		"file": "Parser.hs",
+		"parser": "readScript",
+		"expect": "ok",
+		"script": "#!/bin/zsh\n# shellcheck disable=SC1071\nfor f (a b); echo $f\n"
+	}
 ]

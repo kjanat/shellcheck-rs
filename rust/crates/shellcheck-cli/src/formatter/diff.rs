@@ -168,7 +168,11 @@ fn find_regions(hunks: &[(bool, Vec<DiffElem>)]) -> Vec<DiffRegion> {
     for (output, run) in hunks {
         let (dl, dr) = count_delta(run);
         if *output {
-            out.push(DiffRegion { left: (left, dl), right: (right, dr), diffs: run.clone() });
+            out.push(DiffRegion {
+                left: (left, dl),
+                right: (right, dr),
+                diffs: run.clone(),
+            });
         }
         left += dl;
         right += dr;
@@ -239,7 +243,15 @@ fn reversed_strings(mut v: Vec<String>) -> Vec<String> {
 }
 
 fn normalize_path(path: &str) -> String {
-    path.chars().map(|c| if c == std::path::MAIN_SEPARATOR { '/' } else { c }).collect()
+    path.chars()
+        .map(|c| {
+            if c == std::path::MAIN_SEPARATOR {
+                '/'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// `"a" </> name`: on POSIX, an absolute `name` (leading `/`) discards the
@@ -254,9 +266,17 @@ fn join_prefix(prefix: &str, name: &str) -> String {
 
 fn format_doc(use_color: bool, name: &str, lf: Lf, regions: &[DiffRegion]) -> String {
     let mut s = String::new();
-    s.push_str(&colorize(use_color, BOLD, &format!("--- {}", normalize_path(&join_prefix("a", name)))));
+    s.push_str(&colorize(
+        use_color,
+        BOLD,
+        &format!("--- {}", normalize_path(&join_prefix("a", name))),
+    ));
     s.push('\n');
-    s.push_str(&colorize(use_color, BOLD, &format!("+++ {}", normalize_path(&join_prefix("b", name)))));
+    s.push_str(&colorize(
+        use_color,
+        BOLD,
+        &format!("+++ {}", normalize_path(&join_prefix("b", name))),
+    ));
     s.push('\n');
     if regions.is_empty() {
         return s;
@@ -301,19 +321,33 @@ pub struct DiffOutput {
 }
 
 /// Render the diff for one file's comments (already the file's own fixes).
-pub fn render_file(use_color: bool, filename: &str, contents: &str, comments: &[PositionedComment]) -> DiffOutput {
+pub fn render_file(
+    use_color: bool,
+    filename: &str,
+    contents: &str,
+    comments: &[PositionedComment],
+) -> DiffOutput {
     let fixes: Vec<Fix> = comments.iter().filter_map(|c| c.fix.clone()).collect();
     if fixes.is_empty() {
-        return DiffOutput { text: String::new(), reported: false };
+        return DiffOutput {
+            text: String::new(),
+            reported: false,
+        };
     }
     let merged = fix_mconcat(&fixes);
     if merged.replacements.is_empty() {
-        return DiffOutput { text: String::new(), reported: false };
+        return DiffOutput {
+            text: String::new(),
+            reported: false,
+        };
     }
     // `putStrLn $ formatDoc ...` adds a trailing newline.
     let mut text = make_diff_string(use_color, filename, contents, &merged);
     text.push('\n');
-    DiffOutput { text, reported: true }
+    DiffOutput {
+        text,
+        reported: true,
+    }
 }
 
 /// The footer warning printed to stderr when issues exist but none are fixable.

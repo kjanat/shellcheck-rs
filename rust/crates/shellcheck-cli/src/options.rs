@@ -80,24 +80,114 @@ struct OptDef {
 
 /// The recognised option table (mirrors `options` in shellcheck.hs).
 const OPTS: &[OptDef] = &[
-    OptDef { short: Some('a'), long: "check-sourced",     key: "sourced",           kind: ArgKind::None },
-    OptDef { short: Some('C'), long: "color",             key: "color",             kind: ArgKind::Optional },
-    OptDef { short: Some('i'), long: "include",           key: "include",           kind: ArgKind::Required },
-    OptDef { short: Some('e'), long: "exclude",           key: "exclude",           kind: ArgKind::Required },
-    OptDef { short: None,      long: "extended-analysis", key: "extended-analysis", kind: ArgKind::Required },
-    OptDef { short: Some('f'), long: "format",            key: "format",            kind: ArgKind::Required },
-    OptDef { short: None,      long: "list-optional",     key: "list-optional",     kind: ArgKind::None },
-    OptDef { short: None,      long: "norc",              key: "norc",              kind: ArgKind::None },
-    OptDef { short: None,      long: "rcfile",            key: "rcfile",            kind: ArgKind::Required },
-    OptDef { short: Some('o'), long: "enable",            key: "enable",            kind: ArgKind::Required },
-    OptDef { short: Some('P'), long: "source-path",       key: "source-path",       kind: ArgKind::Required },
-    OptDef { short: Some('s'), long: "shell",             key: "shell",             kind: ArgKind::Required },
-    OptDef { short: Some('S'), long: "severity",          key: "severity",          kind: ArgKind::Required },
-    OptDef { short: Some('V'), long: "version",           key: "version",           kind: ArgKind::None },
-    OptDef { short: Some('W'), long: "wiki-link-count",   key: "wiki-link-count",   kind: ArgKind::Required },
-    OptDef { short: Some('x'), long: "external-sources",  key: "externals",         kind: ArgKind::None },
-    OptDef { short: None,      long: "help",              key: "help",              kind: ArgKind::None },
-    OptDef { short: None,      long: "files-from",        key: "files-from",        kind: ArgKind::Required },
+    OptDef {
+        short: Some('a'),
+        long: "check-sourced",
+        key: "sourced",
+        kind: ArgKind::None,
+    },
+    OptDef {
+        short: Some('C'),
+        long: "color",
+        key: "color",
+        kind: ArgKind::Optional,
+    },
+    OptDef {
+        short: Some('i'),
+        long: "include",
+        key: "include",
+        kind: ArgKind::Required,
+    },
+    OptDef {
+        short: Some('e'),
+        long: "exclude",
+        key: "exclude",
+        kind: ArgKind::Required,
+    },
+    OptDef {
+        short: None,
+        long: "extended-analysis",
+        key: "extended-analysis",
+        kind: ArgKind::Required,
+    },
+    OptDef {
+        short: Some('f'),
+        long: "format",
+        key: "format",
+        kind: ArgKind::Required,
+    },
+    OptDef {
+        short: None,
+        long: "list-optional",
+        key: "list-optional",
+        kind: ArgKind::None,
+    },
+    OptDef {
+        short: None,
+        long: "norc",
+        key: "norc",
+        kind: ArgKind::None,
+    },
+    OptDef {
+        short: None,
+        long: "rcfile",
+        key: "rcfile",
+        kind: ArgKind::Required,
+    },
+    OptDef {
+        short: Some('o'),
+        long: "enable",
+        key: "enable",
+        kind: ArgKind::Required,
+    },
+    OptDef {
+        short: Some('P'),
+        long: "source-path",
+        key: "source-path",
+        kind: ArgKind::Required,
+    },
+    OptDef {
+        short: Some('s'),
+        long: "shell",
+        key: "shell",
+        kind: ArgKind::Required,
+    },
+    OptDef {
+        short: Some('S'),
+        long: "severity",
+        key: "severity",
+        kind: ArgKind::Required,
+    },
+    OptDef {
+        short: Some('V'),
+        long: "version",
+        key: "version",
+        kind: ArgKind::None,
+    },
+    OptDef {
+        short: Some('W'),
+        long: "wiki-link-count",
+        key: "wiki-link-count",
+        kind: ArgKind::Required,
+    },
+    OptDef {
+        short: Some('x'),
+        long: "external-sources",
+        key: "externals",
+        kind: ArgKind::None,
+    },
+    OptDef {
+        short: None,
+        long: "help",
+        key: "help",
+        kind: ArgKind::None,
+    },
+    OptDef {
+        short: None,
+        long: "files-from",
+        key: "files-from",
+        kind: ArgKind::Required,
+    },
 ];
 
 fn find_long(name: &str) -> Option<&'static OptDef> {
@@ -116,24 +206,80 @@ pub fn usage() -> String {
     // "No files specified." error read like the oracle's.
     let mut s = String::from("Usage: shellcheck [OPTIONS...] FILES...\n");
     let lines = [
-        ("-a",                 "--check-sourced",           "Include warnings from sourced files"),
-        ("-C[WHEN]",           "--color[=WHEN]",            "Use color (auto, always, never)"),
-        ("-i CODE1,CODE2..",   "--include=CODE1,CODE2..",   "Consider only given types of warnings"),
-        ("-e CODE1,CODE2..",   "--exclude=CODE1,CODE2..",   "Exclude types of warnings"),
-        ("",                   "--extended-analysis=bool",  "Perform dataflow analysis (default true)"),
-        ("-f FORMAT",          "--format=FORMAT",           "Output format (checkstyle, diff, gcc, json, json1, quiet, tty)"),
-        ("",                   "--list-optional",           "List checks disabled by default"),
-        ("",                   "--norc",                    "Don't look for .shellcheckrc files"),
-        ("",                   "--rcfile=RCFILE",           "Prefer the specified configuration file over searching for one"),
-        ("-o check1,check2..", "--enable=check1,check2..",  "List of optional checks to enable (or 'all')"),
-        ("-P SOURCEPATHS",     "--source-path=SOURCEPATHS", "Specify path when looking for sourced files (\"SCRIPTDIR\" for script's dir)"),
-        ("-s SHELLNAME",       "--shell=SHELLNAME",         "Specify dialect (sh, bash, dash, ksh, busybox)"),
-        ("-S SEVERITY",        "--severity=SEVERITY",       "Minimum severity of errors to consider (error, warning, info, style)"),
-        ("-V",                 "--version",                 "Print version information"),
-        ("-W NUM",             "--wiki-link-count=NUM",     "The number of wiki links to show, when applicable"),
-        ("-x",                 "--external-sources",        "Allow 'source' outside of FILES"),
-        ("",                   "--help",                    "Show this usage summary and exit"),
-        ("",                   "--files-from=FILE",         "Read input files from FILE (one per line, or '-' for stdin)"),
+        (
+            "-a",
+            "--check-sourced",
+            "Include warnings from sourced files",
+        ),
+        (
+            "-C[WHEN]",
+            "--color[=WHEN]",
+            "Use color (auto, always, never)",
+        ),
+        (
+            "-i CODE1,CODE2..",
+            "--include=CODE1,CODE2..",
+            "Consider only given types of warnings",
+        ),
+        (
+            "-e CODE1,CODE2..",
+            "--exclude=CODE1,CODE2..",
+            "Exclude types of warnings",
+        ),
+        (
+            "",
+            "--extended-analysis=bool",
+            "Perform dataflow analysis (default true)",
+        ),
+        (
+            "-f FORMAT",
+            "--format=FORMAT",
+            "Output format (checkstyle, diff, gcc, json, json1, quiet, tty)",
+        ),
+        ("", "--list-optional", "List checks disabled by default"),
+        ("", "--norc", "Don't look for .shellcheckrc files"),
+        (
+            "",
+            "--rcfile=RCFILE",
+            "Prefer the specified configuration file over searching for one",
+        ),
+        (
+            "-o check1,check2..",
+            "--enable=check1,check2..",
+            "List of optional checks to enable (or 'all')",
+        ),
+        (
+            "-P SOURCEPATHS",
+            "--source-path=SOURCEPATHS",
+            "Specify path when looking for sourced files (\"SCRIPTDIR\" for script's dir)",
+        ),
+        (
+            "-s SHELLNAME",
+            "--shell=SHELLNAME",
+            "Specify dialect (sh, bash, dash, ksh, busybox)",
+        ),
+        (
+            "-S SEVERITY",
+            "--severity=SEVERITY",
+            "Minimum severity of errors to consider (error, warning, info, style)",
+        ),
+        ("-V", "--version", "Print version information"),
+        (
+            "-W NUM",
+            "--wiki-link-count=NUM",
+            "The number of wiki links to show, when applicable",
+        ),
+        (
+            "-x",
+            "--external-sources",
+            "Allow 'source' outside of FILES",
+        ),
+        ("", "--help", "Show this usage summary and exit"),
+        (
+            "",
+            "--files-from=FILE",
+            "Read input files from FILE (one per line, or '-' for stdin)",
+        ),
     ];
     let short_w = lines.iter().map(|(sh, _, _)| sh.len()).max().unwrap_or(0);
     let long_w = lines.iter().map(|(_, lo, _)| lo.len()).max().unwrap_or(0);
@@ -147,50 +293,72 @@ pub fn usage() -> String {
 /// `optionalChecks` list defines them. Each tuple is (name, description,
 /// example, fix), matching the `--list-optional` catalog emitted by the oracle.
 const OPTIONAL_CHECKS: &[(&str, &str, &str, &str)] = &[
-    ("add-default-case",
-     "Suggest adding a default case in `case` statements",
-     "case $? in 0) echo 'Success';; esac",
-     "case $? in 0) echo 'Success';; *) echo 'Fail' ;; esac"),
-    ("avoid-negated-conditions",
-     "Suggest removing unnecessary comparison negations",
-     "[ ! \"$var\" -eq 1 ]",
-     "[ \"$var\" -ne 1 ]"),
-    ("avoid-nullary-conditions",
-     "Suggest explicitly using -n in `[ $var ]`",
-     "[ \"$var\" ]",
-     "[ -n \"$var\" ]"),
-    ("check-extra-masked-returns",
-     "Check for additional cases where exit codes are masked",
-     "rm -r \"$(get_chroot_dir)/home\"",
-     "set -e; dir=\"$(get_chroot_dir)\"; rm -r \"$dir/home\""),
-    ("check-set-e-suppressed",
-     "Notify when set -e is suppressed during function invocation",
-     "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func && echo ok",
-     "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func; echo ok"),
-    ("check-unassigned-uppercase",
-     "Warn when uppercase variables are unassigned",
-     "echo $VAR",
-     "VAR=hello; echo $VAR"),
-    ("deprecate-which",
-     "Suggest 'command -v' instead of 'which'",
-     "which javac",
-     "command -v javac"),
-    ("quote-safe-variables",
-     "Suggest quoting variables without metacharacters",
-     "var=hello; echo $var",
-     "var=hello; echo \"$var\""),
-    ("require-double-brackets",
-     "Require [[ and warn about [ in Bash/Ksh",
-     "[ -e /etc/issue ]",
-     "[[ -e /etc/issue ]]"),
-    ("require-variable-braces",
-     "Suggest putting braces around all variable references",
-     "var=hello; echo $var",
-     "var=hello; echo ${var}"),
-    ("useless-use-of-cat",
-     "Check for Useless Use Of Cat (UUOC)",
-     "cat foo | grep bar",
-     "grep bar foo"),
+    (
+        "add-default-case",
+        "Suggest adding a default case in `case` statements",
+        "case $? in 0) echo 'Success';; esac",
+        "case $? in 0) echo 'Success';; *) echo 'Fail' ;; esac",
+    ),
+    (
+        "avoid-negated-conditions",
+        "Suggest removing unnecessary comparison negations",
+        "[ ! \"$var\" -eq 1 ]",
+        "[ \"$var\" -ne 1 ]",
+    ),
+    (
+        "avoid-nullary-conditions",
+        "Suggest explicitly using -n in `[ $var ]`",
+        "[ \"$var\" ]",
+        "[ -n \"$var\" ]",
+    ),
+    (
+        "check-extra-masked-returns",
+        "Check for additional cases where exit codes are masked",
+        "rm -r \"$(get_chroot_dir)/home\"",
+        "set -e; dir=\"$(get_chroot_dir)\"; rm -r \"$dir/home\"",
+    ),
+    (
+        "check-set-e-suppressed",
+        "Notify when set -e is suppressed during function invocation",
+        "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func && echo ok",
+        "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func; echo ok",
+    ),
+    (
+        "check-unassigned-uppercase",
+        "Warn when uppercase variables are unassigned",
+        "echo $VAR",
+        "VAR=hello; echo $VAR",
+    ),
+    (
+        "deprecate-which",
+        "Suggest 'command -v' instead of 'which'",
+        "which javac",
+        "command -v javac",
+    ),
+    (
+        "quote-safe-variables",
+        "Suggest quoting variables without metacharacters",
+        "var=hello; echo $var",
+        "var=hello; echo \"$var\"",
+    ),
+    (
+        "require-double-brackets",
+        "Require [[ and warn about [ in Bash/Ksh",
+        "[ -e /etc/issue ]",
+        "[[ -e /etc/issue ]]",
+    ),
+    (
+        "require-variable-braces",
+        "Suggest putting braces around all variable references",
+        "var=hello; echo $var",
+        "var=hello; echo ${var}",
+    ),
+    (
+        "useless-use-of-cat",
+        "Check for Useless Use Of Cat (UUOC)",
+        "cat foo | grep bar",
+        "grep bar foo",
+    ),
 ];
 
 /// Render the `--list-optional` catalog exactly as the oracle does: for each
@@ -253,7 +421,10 @@ fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
                     if inline_val.is_some() {
                         return Err(format!("option `--{name}' doesn't allow an argument"));
                     }
-                    flags.push(Flag { key: def.key, value: None });
+                    flags.push(Flag {
+                        key: def.key,
+                        value: None,
+                    });
                 }
                 ArgKind::Required => {
                     let v = if let Some(v) = inline_val {
@@ -267,11 +438,17 @@ fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
                             }
                         }
                     };
-                    flags.push(Flag { key: def.key, value: Some(v) });
+                    flags.push(Flag {
+                        key: def.key,
+                        value: Some(v),
+                    });
                 }
                 ArgKind::Optional => {
                     // OptArg: only an inline `=value` supplies an argument.
-                    flags.push(Flag { key: def.key, value: inline_val });
+                    flags.push(Flag {
+                        key: def.key,
+                        value: inline_val,
+                    });
                 }
             }
         } else if arg.starts_with('-') && arg.len() > 1 {
@@ -286,7 +463,10 @@ fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
                 };
                 match def.kind {
                     ArgKind::None => {
-                        flags.push(Flag { key: def.key, value: None });
+                        flags.push(Flag {
+                            key: def.key,
+                            value: None,
+                        });
                         j += 1;
                     }
                     ArgKind::Required => {
@@ -302,13 +482,19 @@ fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
                                 }
                             }
                         };
-                        flags.push(Flag { key: def.key, value: Some(v) });
+                        flags.push(Flag {
+                            key: def.key,
+                            value: Some(v),
+                        });
                         break; // rest of cluster consumed as the argument
                     }
                     ArgKind::Optional => {
                         let rest: String = chars[j + 1..].iter().collect();
                         let v = if rest.is_empty() { None } else { Some(rest) };
-                        flags.push(Flag { key: def.key, value: v });
+                        flags.push(Flag {
+                            key: def.key,
+                            value: v,
+                        });
                         break;
                     }
                 }
@@ -324,7 +510,10 @@ fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
 /// Split a comma-separated list, dropping empty entries (Haskell
 /// `filter (not . null) $ split ','`).
 fn split_nonempty(s: &str) -> Vec<String> {
-    s.split(',').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect()
+    s.split(',')
+        .filter(|x| !x.is_empty())
+        .map(|x| x.to_string())
+        .collect()
 }
 
 /// `parseNum`: strip an optional leading `SC`, require all digits.
@@ -333,7 +522,9 @@ fn parse_num(s: &str) -> Result<i64, String> {
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return Err(format!("Invalid number: {s}"));
     }
-    digits.parse::<i64>().map_err(|_| format!("Invalid number: {s}"))
+    digits
+        .parse::<i64>()
+        .map_err(|_| format!("Invalid number: {s}"))
 }
 
 /// `shellForExecutable` (ShellCheck.Data): maps interpreter names, including
@@ -414,7 +605,9 @@ pub fn parse(argv: &[String]) -> Outcome {
                 let v = flag.value.as_deref().unwrap_or("");
                 match parse_severity(v) {
                     Some(sev) => spec.min_severity = sev,
-                    None => return support_error("severity", &["error", "warning", "info", "style"]),
+                    None => {
+                        return support_error("severity", &["error", "warning", "info", "style"]);
+                    }
                 }
             }
             "include" => {
@@ -422,7 +615,12 @@ pub fn parse(argv: &[String]) -> Outcome {
                 for c in split_nonempty(flag.value.as_deref().unwrap_or("")) {
                     match parse_num(&c) {
                         Ok(n) => new.push(n),
-                        Err(m) => return Outcome::Error { message: m, code: 3 },
+                        Err(m) => {
+                            return Outcome::Error {
+                                message: m,
+                                code: 3,
+                            };
+                        }
                     }
                 }
                 // csIncludedWarnings = if null new then old else Just new <> old
@@ -439,7 +637,12 @@ pub fn parse(argv: &[String]) -> Outcome {
                 for c in split_nonempty(flag.value.as_deref().unwrap_or("")) {
                     match parse_num(&c) {
                         Ok(n) => new.push(n),
-                        Err(m) => return Outcome::Error { message: m, code: 3 },
+                        Err(m) => {
+                            return Outcome::Error {
+                                message: m,
+                                code: 3,
+                            };
+                        }
                     }
                 }
                 // csExcludedWarnings = new ++ old
@@ -488,7 +691,12 @@ pub fn parse(argv: &[String]) -> Outcome {
                 let v = flag.value.as_deref().unwrap_or("");
                 match parse_num(v) {
                     Ok(n) => wiki_link_count = n.max(0) as usize,
-                    Err(m) => return Outcome::Error { message: m, code: 3 },
+                    Err(m) => {
+                        return Outcome::Error {
+                            message: m,
+                            code: 3,
+                        };
+                    }
                 }
             }
 
@@ -588,7 +796,14 @@ pub fn parse(argv: &[String]) -> Outcome {
         return Outcome::Error { message, code: 4 };
     }
 
-    Outcome::Run(RunConfig { format, inputs, spec_template: spec, color, wiki_link_count, rcfile })
+    Outcome::Run(RunConfig {
+        format,
+        inputs,
+        spec_template: spec,
+        color,
+        wiki_link_count,
+        rcfile,
+    })
 }
 
 /// Build a SupportFailure (exit 4) error mirroring `parseEnum`.
@@ -683,7 +898,10 @@ mod tests {
     #[test]
     fn version_wins_over_later_bad_value() {
         // Fold is left-to-right: version exits before shell is validated.
-        assert_eq!(parse(&args(&["--version", "--shell=zsh"])), Outcome::PrintVersion);
+        assert_eq!(
+            parse(&args(&["--version", "--shell=zsh"])),
+            Outcome::PrintVersion
+        );
     }
 
     #[test]
@@ -723,7 +941,11 @@ mod tests {
 
     #[test]
     fn unknown_shell_is_support_error() {
-        for a in [vec!["--shell=zsh"], vec!["-s", "zsh"], vec!["--shell", "zsh"]] {
+        for a in [
+            vec!["--shell=zsh"],
+            vec!["-s", "zsh"],
+            vec!["--shell", "zsh"],
+        ] {
             match parse(&args(&a)) {
                 Outcome::Error { code, .. } => assert_eq!(code, 4, "for {a:?}"),
                 other => panic!("expected Error(4) for {a:?}, got {other:?}"),
@@ -744,8 +966,16 @@ mod tests {
         let c = run(&["-sdash", "-"]); // glued short
         assert_eq!(c.spec_template.shell_type_override, Some(Shell::Dash));
 
-        assert_eq!(run(&["-s", "busybox", "-"]).spec_template.shell_type_override, Some(Shell::BusyboxSh));
-        assert_eq!(run(&["-s", "sh", "-"]).spec_template.shell_type_override, Some(Shell::Sh));
+        assert_eq!(
+            run(&["-s", "busybox", "-"])
+                .spec_template
+                .shell_type_override,
+            Some(Shell::BusyboxSh)
+        );
+        assert_eq!(
+            run(&["-s", "sh", "-"]).spec_template.shell_type_override,
+            Some(Shell::Sh)
+        );
     }
 
     #[test]
@@ -768,7 +998,10 @@ mod tests {
     fn include_wired_and_accumulates() {
         let c = run(&["-i", "SC2086,2154", "--include=SC1000", "-"]);
         // include: Just new <> old, so later flags prepend.
-        assert_eq!(c.spec_template.included_warnings, Some(vec![1000, 2086, 2154]));
+        assert_eq!(
+            c.spec_template.included_warnings,
+            Some(vec![1000, 2086, 2154])
+        );
     }
 
     #[test]
@@ -788,7 +1021,11 @@ mod tests {
 
     #[test]
     fn enable_wired() {
-        let c = run(&["-o", "avoid-nullary-conditions,check-extra-masked-returns", "-"]);
+        let c = run(&[
+            "-o",
+            "avoid-nullary-conditions,check-extra-masked-returns",
+            "-",
+        ]);
         assert_eq!(
             c.spec_template.optional_checks,
             vec![

@@ -596,44 +596,46 @@ fn is_test_structure(t: &Token) -> bool {
         InnerToken::T_AndIf { lhs, rhs } | InnerToken::T_OrIf { lhs, rhs } => {
             is_test_structure(lhs) && is_test_structure(rhs)
         }
-        InnerToken::T_Pipeline { separators, commands } if separators.is_empty() => {
-            match commands.as_slice() {
-                [only] => {
-                    if let InnerToken::T_Redirecting { cmd, .. } = &*only.inner {
-                        match &*cmd.inner {
-                            InnerToken::T_BraceGroup(ts) | InnerToken::T_Subshell(ts) => {
-                                ts.iter().all(is_test_structure)
-                            }
-                            _ => is_test_command(t),
+        InnerToken::T_Pipeline {
+            separators,
+            commands,
+        } if separators.is_empty() => match commands.as_slice() {
+            [only] => {
+                if let InnerToken::T_Redirecting { cmd, .. } = &*only.inner {
+                    match &*cmd.inner {
+                        InnerToken::T_BraceGroup(ts) | InnerToken::T_Subshell(ts) => {
+                            ts.iter().all(is_test_structure)
                         }
-                    } else {
-                        is_test_command(t)
+                        _ => is_test_command(t),
                     }
+                } else {
+                    is_test_command(t)
                 }
-                _ => is_test_command(t),
             }
-        }
+            _ => is_test_command(t),
+        },
         _ => is_test_command(t),
     }
 }
 
 fn is_test_command(t: &Token) -> bool {
     match &*t.inner {
-        InnerToken::T_Pipeline { separators, commands } if separators.is_empty() => {
-            match commands.as_slice() {
-                [only] => {
-                    if let InnerToken::T_Redirecting { cmd, .. } = &*only.inner {
-                        match &*cmd.inner {
-                            InnerToken::T_Condition { .. } => true,
-                            _ => is_command_test(cmd),
-                        }
-                    } else {
-                        false
+        InnerToken::T_Pipeline {
+            separators,
+            commands,
+        } if separators.is_empty() => match commands.as_slice() {
+            [only] => {
+                if let InnerToken::T_Redirecting { cmd, .. } = &*only.inner {
+                    match &*cmd.inner {
+                        InnerToken::T_Condition { .. } => true,
+                        _ => is_command_test(cmd),
                     }
+                } else {
+                    false
                 }
-                _ => false,
             }
-        }
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -697,9 +699,9 @@ fn node_is_assignment(t: &Token) -> bool {
         // cases of `guardNotAssignment` can never match structurally. Recover the
         // increment/assignment cases (e.g. `$((i++))`, `$((i+=1))`) by scanning
         // the placeholder text; this keeps `( [[ $((i++)) = 10 ]] )` from firing.
-        InnerToken::T_DollarArithmetic(inner) => {
-            astlib::get_literal_string(inner).map(|s| arith_has_assignment(&s)).unwrap_or(false)
-        }
+        InnerToken::T_DollarArithmetic(inner) => astlib::get_literal_string(inner)
+            .map(|s| arith_has_assignment(&s))
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -762,11 +764,7 @@ fn drop_hashbang_prefix(s: &str) -> &str {
 
 fn take_name(s: &str) -> Option<String> {
     let name: String = s.chars().take_while(|c| is_variable_char(*c)).collect();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
+    if name.is_empty() { None } else { Some(name) }
 }
 
 fn get_special(s: &str) -> Option<String> {

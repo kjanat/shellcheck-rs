@@ -100,7 +100,11 @@ fn is_array_expansion(t: &Token) -> bool {
 /// Whether the assignment token `id`'s parent is a declaration-utility command
 /// (so the assignment is passed as an argument, e.g. `export FOO=bar`).
 fn is_assignment_param_to_command(params: &Parameters, id: Id) -> bool {
-    let parent = match params.parent_map.get(&id).and_then(|pid| params.id_map.get(pid)) {
+    let parent = match params
+        .parent_map
+        .get(&id)
+        .and_then(|pid| params.id_map.get(pid))
+    {
         Some(p) => p,
         None => return false,
     };
@@ -130,9 +134,15 @@ fn is_quote_free_element(params: &Parameters, t: &Token) -> bool {
 fn is_quote_free_context(params: &Parameters, t: &Token) -> Option<bool> {
     use ConditionType::DoubleBracket;
     match &*t.inner {
-        InnerToken::TC_Nullary { typ: DoubleBracket, .. } => Some(true),
-        InnerToken::TC_Unary { typ: DoubleBracket, .. } => Some(true),
-        InnerToken::TC_Binary { typ: DoubleBracket, .. } => Some(true),
+        InnerToken::TC_Nullary {
+            typ: DoubleBracket, ..
+        } => Some(true),
+        InnerToken::TC_Unary {
+            typ: DoubleBracket, ..
+        } => Some(true),
+        InnerToken::TC_Binary {
+            typ: DoubleBracket, ..
+        } => Some(true),
         InnerToken::TA_Sequence(_) => Some(true),
         InnerToken::T_Arithmetic(_) => Some(true),
         InnerToken::T_Assignment { .. } => Some(assignment_is_quoting(params, t.id())),
@@ -196,8 +206,12 @@ fn check_uuoe_cmd(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
         if let Some(args) = echo_arguments(words) {
             if args.len() == 1 && token_is_just_command_output(&args[0]) {
-                style(out, args[0].id(), 2005,
-                    "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'.");
+                style(
+                    out,
+                    args[0].id(),
+                    2005,
+                    "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'.",
+                );
             }
         }
     }
@@ -270,8 +284,12 @@ fn check_uuoe_var(params: &Parameters, t: &Token, out: &mut Out) {
         return;
     }
     if vars.iter().all(could_be_optimized) {
-        style(out, id, 2116,
-            "Useless echo? Instead of 'cmd $(echo foo)', just use 'cmd foo'.");
+        style(
+            out,
+            id,
+            2116,
+            "Useless echo? Instead of 'cmd $(echo foo)', just use 'cmd foo'.",
+        );
     }
 }
 
@@ -294,8 +312,12 @@ fn check_inexplicably_unquoted_2027(params: &Parameters, t: &Token, out: &mut Ou
         {
             match &*trapped.inner {
                 InnerToken::T_DollarExpansion(_) | InnerToken::T_DollarBraced { .. } => {
-                    warn(out, trapped.id(), 2027,
-                        "The surrounding quotes actually unquote this. Remove or escape them.");
+                    warn(
+                        out,
+                        trapped.id(),
+                        2027,
+                        "The surrounding quotes actually unquote this. Remove or escape them.",
+                    );
                 }
                 _ => {}
             }
@@ -318,11 +340,14 @@ fn check_concatenated_dollar_at(params: &Parameters, word: &Token, out: &mut Out
         return;
     }
     if let Some(array) = parts.iter().find(|p| is_array_expansion(p)) {
-        err(out, array.id(), 2145,
-            "Argument mixes string and array. Use * or separate argument.");
+        err(
+            out,
+            array.id(),
+            2145,
+            "Argument mixes string and array. Use * or separate argument.",
+        );
     }
 }
-
 
 #[cfg(test)]
 #[allow(non_snake_case)]
@@ -348,17 +373,29 @@ mod tests {
 
     // ---- checkUuoeCmd (SC2005), mirroring Checks/Commands.hs prop tests ----
     #[test]
-    fn prop_checkUuoeCmd1() { assert!(emits(check_uuoe_cmd, "echo $(date)")); }
+    fn prop_checkUuoeCmd1() {
+        assert!(emits(check_uuoe_cmd, "echo $(date)"));
+    }
     #[test]
-    fn prop_checkUuoeCmd2() { assert!(emits(check_uuoe_cmd, "echo `date`")); }
+    fn prop_checkUuoeCmd2() {
+        assert!(emits(check_uuoe_cmd, "echo `date`"));
+    }
     #[test]
-    fn prop_checkUuoeCmd3() { assert!(emits(check_uuoe_cmd, "echo \"$(date)\"")); }
+    fn prop_checkUuoeCmd3() {
+        assert!(emits(check_uuoe_cmd, "echo \"$(date)\""));
+    }
     #[test]
-    fn prop_checkUuoeCmd4() { assert!(emits(check_uuoe_cmd, "echo \"`date`\"")); }
+    fn prop_checkUuoeCmd4() {
+        assert!(emits(check_uuoe_cmd, "echo \"`date`\""));
+    }
     #[test]
-    fn prop_checkUuoeCmd5() { assert!(!emits(check_uuoe_cmd, "echo \"The time is $(date)\"")); }
+    fn prop_checkUuoeCmd5() {
+        assert!(!emits(check_uuoe_cmd, "echo \"The time is $(date)\""));
+    }
     #[test]
-    fn prop_checkUuoeCmd6() { assert!(!emits(check_uuoe_cmd, "echo \"$(<file)\"")); }
+    fn prop_checkUuoeCmd6() {
+        assert!(!emits(check_uuoe_cmd, "echo \"$(<file)\""));
+    }
 
     // Regression guards for FIX B1: SC2005 must fire even when the `echo $(cmd)`
     // is itself nested inside a command substitution (the old command-sub

@@ -25,25 +25,173 @@ use std::collections::BTreeMap;
 /// `ShellCheck.Data.commonCommands` — used by the SC1014 parser note to detect
 /// a command mistakenly used as a `[ .. ]`/`[[ .. ]]` test operand.
 const COMMON_COMMANDS: &[&str] = &[
-    "admin", "alias", "ar", "asa", "at", "awk", "basename", "batch", "bc", "bg",
-    "break", "c99", "cal", "cat", "cd", "cflow", "chgrp", "chmod", "chown",
-    "cksum", "cmp", "colon", "comm", "command", "compress", "continue", "cp",
-    "crontab", "csplit", "ctags", "cut", "cxref", "date", "dd", "delta", "df",
-    "diff", "dirname", "dot", "du", "echo", "ed", "env", "eval", "ex", "exec",
-    "exit", "expand", "export", "expr", "fc", "fg", "file", "find", "fold",
-    "fuser", "gencat", "get", "getconf", "getopts", "gettext", "grep", "hash",
-    "head", "iconv", "ipcrm", "ipcs", "jobs", "join", "kill", "lex", "link",
-    "ln", "locale", "localedef", "logger", "logname", "lp", "ls", "m4", "mailx",
-    "make", "man", "mesg", "mkdir", "mkfifo", "more", "msgfmt", "mv", "newgrp",
-    "ngettext", "nice", "nl", "nm", "nohup", "od", "paste", "patch", "pathchk",
-    "pax", "pr", "printf", "prs", "ps", "pwd", "read", "readlink", "readonly",
-    "realpath", "renice", "return", "rm", "rmdel", "rmdir", "sact", "sccs",
-    "sed", "set", "sh", "shift", "sleep", "sort", "split", "strings", "strip",
-    "stty", "tabs", "tail", "talk", "tee", "test", "time", "timeout", "times",
-    "touch", "tput", "tr", "trap", "tsort", "tty", "type", "ulimit", "umask",
-    "unalias", "uname", "uncompress", "unexpand", "unget", "uniq", "unlink",
-    "unset", "uucp", "uudecode", "uuencode", "uustat", "uux", "val", "vi",
-    "wait", "wc", "what", "who", "write", "xargs", "xgettext", "yacc", "zcat",
+    "admin",
+    "alias",
+    "ar",
+    "asa",
+    "at",
+    "awk",
+    "basename",
+    "batch",
+    "bc",
+    "bg",
+    "break",
+    "c99",
+    "cal",
+    "cat",
+    "cd",
+    "cflow",
+    "chgrp",
+    "chmod",
+    "chown",
+    "cksum",
+    "cmp",
+    "colon",
+    "comm",
+    "command",
+    "compress",
+    "continue",
+    "cp",
+    "crontab",
+    "csplit",
+    "ctags",
+    "cut",
+    "cxref",
+    "date",
+    "dd",
+    "delta",
+    "df",
+    "diff",
+    "dirname",
+    "dot",
+    "du",
+    "echo",
+    "ed",
+    "env",
+    "eval",
+    "ex",
+    "exec",
+    "exit",
+    "expand",
+    "export",
+    "expr",
+    "fc",
+    "fg",
+    "file",
+    "find",
+    "fold",
+    "fuser",
+    "gencat",
+    "get",
+    "getconf",
+    "getopts",
+    "gettext",
+    "grep",
+    "hash",
+    "head",
+    "iconv",
+    "ipcrm",
+    "ipcs",
+    "jobs",
+    "join",
+    "kill",
+    "lex",
+    "link",
+    "ln",
+    "locale",
+    "localedef",
+    "logger",
+    "logname",
+    "lp",
+    "ls",
+    "m4",
+    "mailx",
+    "make",
+    "man",
+    "mesg",
+    "mkdir",
+    "mkfifo",
+    "more",
+    "msgfmt",
+    "mv",
+    "newgrp",
+    "ngettext",
+    "nice",
+    "nl",
+    "nm",
+    "nohup",
+    "od",
+    "paste",
+    "patch",
+    "pathchk",
+    "pax",
+    "pr",
+    "printf",
+    "prs",
+    "ps",
+    "pwd",
+    "read",
+    "readlink",
+    "readonly",
+    "realpath",
+    "renice",
+    "return",
+    "rm",
+    "rmdel",
+    "rmdir",
+    "sact",
+    "sccs",
+    "sed",
+    "set",
+    "sh",
+    "shift",
+    "sleep",
+    "sort",
+    "split",
+    "strings",
+    "strip",
+    "stty",
+    "tabs",
+    "tail",
+    "talk",
+    "tee",
+    "test",
+    "time",
+    "timeout",
+    "times",
+    "touch",
+    "tput",
+    "tr",
+    "trap",
+    "tsort",
+    "tty",
+    "type",
+    "ulimit",
+    "umask",
+    "unalias",
+    "uname",
+    "uncompress",
+    "unexpand",
+    "unget",
+    "uniq",
+    "unlink",
+    "unset",
+    "uucp",
+    "uudecode",
+    "uuencode",
+    "uustat",
+    "uux",
+    "val",
+    "vi",
+    "wait",
+    "wc",
+    "what",
+    "who",
+    "write",
+    "xargs",
+    "xgettext",
+    "yacc",
+    "zcat",
 ];
 
 /// A pending parse note/problem (SC1xxx), before id/position resolution.
@@ -109,10 +257,26 @@ fn is_glob_class_terminator(c: char) -> bool {
     matches!(
         c,
         '{' | '}'
-            | '|' | '&' | ';' | '<' | '>' | '(' | ')'
-            | ' ' | '\'' | '\t' | '\n' | '\r' | NBSP
-            | '"' | '$' | '`'
-            | '\u{201C}' | '\u{201D}' | '\u{2033}' | '\u{2036}'
+            | '|'
+            | '&'
+            | ';'
+            | '<'
+            | '>'
+            | '('
+            | ')'
+            | ' '
+            | '\''
+            | '\t'
+            | '\n'
+            | '\r'
+            | NBSP
+            | '"'
+            | '$'
+            | '`'
+            | '\u{201C}'
+            | '\u{201D}'
+            | '\u{2033}'
+            | '\u{2036}'
     )
 }
 
@@ -137,7 +301,11 @@ impl Parser {
 
     #[inline]
     fn mark(&self) -> Mark {
-        Mark { idx: self.idx, line: self.line, col: self.col }
+        Mark {
+            idx: self.idx,
+            line: self.line,
+            col: self.col,
+        }
     }
 
     #[inline]
@@ -149,7 +317,11 @@ impl Parser {
 
     #[inline]
     fn pos(&self) -> Position {
-        Position { file: self.filename.clone(), line: self.line, column: self.col }
+        Position {
+            file: self.filename.clone(),
+            line: self.line,
+            column: self.col,
+        }
     }
 
     #[inline]
@@ -282,11 +454,23 @@ impl Parser {
     }
 
     fn note_at(&mut self, start: Position, end: Position, sev: Severity, code: i64, msg: &str) {
-        self.notes.push(ParseNote { start, end, severity: sev, code, message: msg.to_string() });
+        self.notes.push(ParseNote {
+            start,
+            end,
+            severity: sev,
+            code,
+            message: msg.to_string(),
+        });
     }
 
     fn problem_at(&mut self, start: Position, end: Position, sev: Severity, code: i64, msg: &str) {
-        self.problems.push(ParseNote { start, end, severity: sev, code, message: msg.to_string() });
+        self.problems.push(ParseNote {
+            start,
+            end,
+            severity: sev,
+            code,
+            message: msg.to_string(),
+        });
     }
 
     // ---- whitespace / comments --------------------------------------------
@@ -301,8 +485,13 @@ impl Parser {
             Some(c) if c == NBSP => {
                 let p = self.pos();
                 self.bump();
-                self.note_at(p.clone(), p, Severity::ErrorC, 1018,
-                    "This is a unicode non-breaking space. Delete and retype it.");
+                self.note_at(
+                    p.clone(),
+                    p,
+                    Severity::ErrorC,
+                    1018,
+                    "This is a unicode non-breaking space. Delete and retype it.",
+                );
                 Ok(' ')
             }
             _ => Err(()),
@@ -384,7 +573,10 @@ impl Parser {
             i += 1;
         }
         // must be followed by whitespace or end (so "shellcheckfoo" is not a directive)
-        matches!(self.input.get(i), None | Some(' ') | Some('\t') | Some('\n') | Some('\r'))
+        matches!(
+            self.input.get(i),
+            None | Some(' ') | Some('\t') | Some('\n') | Some('\r')
+        )
     }
 
     fn linefeed(&mut self) -> PResult<char> {
@@ -814,9 +1006,19 @@ impl Parser {
         fn is_brace_ws(c: char) -> bool {
             matches!(
                 c,
-                ' ' | '\t' | '\n' | '\r'
-                    | '\u{A0}' | '\u{2002}' | '\u{2003}' | '\u{2004}' | '\u{2005}'
-                    | '\u{2006}' | '\u{2007}' | '\u{2008}' | '\u{2009}' | '\u{200B}'
+                ' ' | '\t'
+                    | '\n'
+                    | '\r'
+                    | '\u{A0}'
+                    | '\u{2002}'
+                    | '\u{2003}'
+                    | '\u{2004}'
+                    | '\u{2005}'
+                    | '\u{2006}'
+                    | '\u{2007}'
+                    | '\u{2008}'
+                    | '\u{2009}'
+                    | '\u{200B}'
                     | '\u{202F}'
             )
         }
@@ -857,7 +1059,13 @@ impl Parser {
         let raw = self.read_balanced_parens_until_close()?;
         let list = self.subparse_commands(&raw, sub_start);
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_ProcSub { op: dir.to_string(), list }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_ProcSub {
+                op: dir.to_string(),
+                list,
+            },
+        ))
     }
 
     fn read_extglob(&mut self) -> PResult<Token> {
@@ -883,7 +1091,13 @@ impl Parser {
         }
         self.char(')')?;
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_Extglob { op: op.to_string(), list: parts }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_Extglob {
+                op: op.to_string(),
+                list: parts,
+            },
+        ))
     }
 
     fn read_backticked(&mut self, quoted: bool) -> PResult<Token> {
@@ -958,7 +1172,8 @@ impl Parser {
     fn read_dollar_exp(&mut self) -> PResult<Token> {
         // arithmetic $((, expansion $(, bracket $[, braced ${, variable $x
         let m = self.mark();
-        if self.peek() == Some('$') && self.peek_at(1) == Some('(') && self.peek_at(2) == Some('(') {
+        if self.peek() == Some('$') && self.peek_at(1) == Some('(') && self.peek_at(2) == Some('(')
+        {
             if let Ok(t) = self.read_dollar_arithmetic() {
                 return Ok(t);
             }
@@ -974,7 +1189,10 @@ impl Parser {
         // pipe or whitespace.
         if self.peek() == Some('$')
             && self.peek_at(1) == Some('{')
-            && matches!(self.peek_at(2), Some('|') | Some(' ') | Some('\t') | Some('\n') | Some('\r'))
+            && matches!(
+                self.peek_at(2),
+                Some('|') | Some(' ') | Some('\t') | Some('\n') | Some('\r')
+            )
         {
             if let Ok(t) = self.read_dollar_brace_command_expansion() {
                 return Ok(t);
@@ -1034,7 +1252,10 @@ impl Parser {
         self.char('}').map_err(|_| ())?;
         let list = self.subparse_commands(&raw, sub_start);
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_DollarBraceCommandExpansion { pipe: piped, list }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_DollarBraceCommandExpansion { pipe: piped, list },
+        ))
     }
 
     fn read_dollar_bracket(&mut self) -> PResult<Token> {
@@ -1087,7 +1308,13 @@ impl Parser {
         // `${x:+$y}`) become real child tokens and are seen by the analyses.
         let inner = self.make_braced_word(&raw, &word_start);
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_DollarBraced { braced: true, op: inner }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_DollarBraced {
+                braced: true,
+                op: inner,
+            },
+        ))
     }
 
     fn read_dollar_variable(&mut self) -> PResult<Token> {
@@ -1108,23 +1335,46 @@ impl Parser {
                 if let Some(n) = self.peek() {
                     if n.is_ascii_digit() {
                         // `parseNoteAt pos` in Haskell is zero-width at the `$`.
-                        self.note_at(pos.clone(), pos.clone(), Severity::ErrorC, 1037,
-                            "Braces are required for positionals over 9, e.g. ${10}.");
+                        self.note_at(
+                            pos.clone(),
+                            pos.clone(),
+                            Severity::ErrorC,
+                            1037,
+                            "Braces are required for positionals over 9, e.g. ${10}.",
+                        );
                     }
                 }
-                return Ok(Token::new(id, InnerToken::T_DollarBraced { braced: false, op: word }));
+                return Ok(Token::new(
+                    id,
+                    InnerToken::T_DollarBraced {
+                        braced: false,
+                        op: word,
+                    },
+                ));
             }
             if "$?!#-@*".contains(c) {
                 self.bump();
                 let word = self.make_literal_word(&c.to_string(), word_pos);
                 let id = self.next_id_between(start, self.pos());
-                return Ok(Token::new(id, InnerToken::T_DollarBraced { braced: false, op: word }));
+                return Ok(Token::new(
+                    id,
+                    InnerToken::T_DollarBraced {
+                        braced: false,
+                        op: word,
+                    },
+                ));
             }
             if c == '_' || c.is_ascii_alphabetic() {
                 let name = self.read_variable_name()?;
                 let word = self.make_literal_word(&name, word_pos);
                 let id = self.next_id_between(start, self.pos());
-                return Ok(Token::new(id, InnerToken::T_DollarBraced { braced: false, op: word }));
+                return Ok(Token::new(
+                    id,
+                    InnerToken::T_DollarBraced {
+                        braced: false,
+                        op: word,
+                    },
+                ));
             }
         }
         // lone '$'
@@ -1470,7 +1720,10 @@ impl Parser {
             Ok((id, op)) => {
                 // chainr1: right-recurse
                 let y = self.read_arith_assignment()?;
-                Ok(Token::new(id, InnerToken::TA_Assignment { op, lhs: x, rhs: y }))
+                Ok(Token::new(
+                    id,
+                    InnerToken::TA_Assignment { op, lhs: x, rhs: y },
+                ))
             }
             Err(()) => {
                 self.reset(m);
@@ -1495,7 +1748,14 @@ impl Parser {
             self.arith_spacing();
             let z = self.read_arith_trinary()?;
             let id = self.next_id_between(start, self.pos());
-            Ok(Token::new(id, InnerToken::TA_Trinary { cond: x, then: y, els: z }))
+            Ok(Token::new(
+                id,
+                InnerToken::TA_Trinary {
+                    cond: x,
+                    then: y,
+                    els: z,
+                },
+            ))
         } else {
             self.reset(m);
             Ok(x)
@@ -1581,7 +1841,13 @@ impl Parser {
         let id = self.next_id_between(start, self.pos());
         self.arith_spacing();
         let x = self.read_arith_any_negated()?;
-        Ok(Token::new(id, InnerToken::TA_Unary { op: op.to_string(), operand: x }))
+        Ok(Token::new(
+            id,
+            InnerToken::TA_Unary {
+                op: op.to_string(),
+                operand: x,
+            },
+        ))
     }
 
     /// `readAnySigned = readSigned <|> readAnycremented`.
@@ -1621,7 +1887,13 @@ impl Parser {
         let id = self.next_id_between(start, self.pos());
         self.arith_spacing();
         let x = self.read_arith_anycremented()?;
-        Ok(Token::new(id, InnerToken::TA_Unary { op: op.to_string(), operand: x }))
+        Ok(Token::new(
+            id,
+            InnerToken::TA_Unary {
+                op: op.to_string(),
+                operand: x,
+            },
+        ))
     }
 
     /// `readAnycremented = readNormalOrPostfixIncremented <|> readPrefixIncremented`.
@@ -1652,7 +1924,13 @@ impl Parser {
         let id = self.next_id_between(start, self.pos());
         self.arith_spacing();
         let x = self.read_arith_term()?;
-        Ok(Token::new(id, InnerToken::TA_Unary { op: format!("{}|", op), operand: x }))
+        Ok(Token::new(
+            id,
+            InnerToken::TA_Unary {
+                op: format!("{}|", op),
+                operand: x,
+            },
+        ))
     }
 
     /// `readNormalOrPostfixIncremented`: term, optional trailing `++`/`--`
@@ -1677,7 +1955,13 @@ impl Parser {
             Some(op) => {
                 let id = self.next_id_between(start, self.pos());
                 self.arith_spacing();
-                Ok(Token::new(id, InnerToken::TA_Unary { op: format!("|{}", op), operand: x }))
+                Ok(Token::new(
+                    id,
+                    InnerToken::TA_Unary {
+                        op: format!("|{}", op),
+                        operand: x,
+                    },
+                ))
             }
             None => Ok(x),
         }
@@ -1750,7 +2034,10 @@ impl Parser {
         self.positions.retain(|k, _| k.0 < save_next_id);
         self.char(']')?;
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_UnparsedIndex { pos, str: raw }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_UnparsedIndex { pos, str: raw },
+        ))
     }
 
     /// `readExpansion`: `$`-expansions / quotes / literals -> `TA_Expansion`.
@@ -1996,9 +2283,21 @@ impl Parser {
                     let right = self.read_pipeline()?;
                     let id = self.next_id_between(op_start, op_end);
                     left = if is_and {
-                        Token::new(id, InnerToken::T_AndIf { lhs: left, rhs: right })
+                        Token::new(
+                            id,
+                            InnerToken::T_AndIf {
+                                lhs: left,
+                                rhs: right,
+                            },
+                        )
                     } else {
-                        Token::new(id, InnerToken::T_OrIf { lhs: left, rhs: right })
+                        Token::new(
+                            id,
+                            InnerToken::T_OrIf {
+                                lhs: left,
+                                rhs: right,
+                            },
+                        )
                     };
                 }
                 None => {
@@ -2012,7 +2311,13 @@ impl Parser {
         } else {
             let end = self.span_for(left.id()).1;
             let id = self.next_id_between(ann_start, end);
-            Ok(Token::new(id, InnerToken::T_Annotation { annotations, token: left }))
+            Ok(Token::new(
+                id,
+                InnerToken::T_Annotation {
+                    annotations,
+                    token: left,
+                },
+            ))
         }
     }
 
@@ -2102,7 +2407,13 @@ impl Parser {
             // command in T_Pipeline [] [cmd]. Yes.
         }
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_Pipeline { separators: pipes, commands: cmds }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_Pipeline {
+                separators: pipes,
+                commands: cmds,
+            },
+        ))
     }
 
     fn read_command(&mut self) -> PResult<Token> {
@@ -2167,7 +2478,13 @@ impl Parser {
         self.spacing();
         let body = self.read_coproc_body(true)?;
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_CoProc { name: Some(var), body }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_CoProc {
+                name: Some(var),
+                body,
+            },
+        ))
     }
 
     fn read_simple_coproc(&mut self, start: Position) -> PResult<Token> {
@@ -2322,7 +2639,8 @@ impl Parser {
         self.allspacing();
         let list = self.read_compound_list_or_empty();
         self.allspacing();
-        self.consume_keyword("}").or_else(|_| self.char('}').map(|_| ()))?;
+        self.consume_keyword("}")
+            .or_else(|_| self.char('}').map(|_| ()))?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_BraceGroup(list)))
     }
@@ -2359,7 +2677,10 @@ impl Parser {
         self.allspacing();
         self.consume_keyword("fi")?;
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_IfExpression { clauses, elses }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_IfExpression { clauses, elses },
+        ))
     }
 
     fn read_condition_list(&mut self) -> PResult<Vec<Token>> {
@@ -2383,7 +2704,13 @@ impl Parser {
         // short of the oracle. `spacing` is line-whitespace only (no newlines).
         self.spacing();
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_WhileExpression { condition: cond, body }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_WhileExpression {
+                condition: cond,
+                body,
+            },
+        ))
     }
 
     fn read_until_clause(&mut self) -> PResult<Token> {
@@ -2399,7 +2726,13 @@ impl Parser {
         // the T_UntilExpression span reaches the start of any trailing redirect.
         self.spacing();
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_UntilExpression { condition: cond, body }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_UntilExpression {
+                condition: cond,
+                body,
+            },
+        ))
     }
 
     fn read_for_clause(&mut self) -> PResult<Token> {
@@ -2437,7 +2770,15 @@ impl Parser {
             self.allspacing();
             self.consume_keyword("done")?;
             let id = self.next_id_between(start, for_end.clone());
-            return Ok(Token::new(id, InnerToken::T_ForArithmetic { init, cond, step, body }));
+            return Ok(Token::new(
+                id,
+                InnerToken::T_ForArithmetic {
+                    init,
+                    cond,
+                    step,
+                    body,
+                },
+            ));
         }
         let var = self.read_variable_name()?;
         self.spacing();
@@ -2449,7 +2790,10 @@ impl Parser {
             self.spacing();
             loop {
                 self.spacing();
-                if self.peek() == Some(';') || self.peek() == Some('\n') || self.peek() == Some('\r') {
+                if self.peek() == Some(';')
+                    || self.peek() == Some('\n')
+                    || self.peek() == Some('\r')
+                {
                     break;
                 }
                 match self.read_normal_word() {
@@ -2671,12 +3015,15 @@ impl Parser {
             return Err(());
         };
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_Function {
-            keyword: false,
-            parens: true,
-            name,
-            body,
-        }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_Function {
+                keyword: false,
+                parens: true,
+                name,
+                body,
+            },
+        ))
     }
 
     fn read_function_def(&mut self) -> PResult<Token> {
@@ -2696,12 +3043,15 @@ impl Parser {
         self.allspacing();
         let body = self.read_command()?;
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_Function {
-            keyword: true,
-            parens: has_parens,
-            name,
-            body,
-        }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_Function {
+                keyword: true,
+                parens: has_parens,
+                name,
+                body,
+            },
+        ))
     }
 
     fn read_function_name(&mut self) -> PResult<String> {
@@ -2759,7 +3109,10 @@ impl Parser {
             };
             let is_modifier = matches!(
                 effective.as_deref(),
-                Some("declare") | Some("export") | Some("local") | Some("readonly")
+                Some("declare")
+                    | Some("export")
+                    | Some("local")
+                    | Some("readonly")
                     | Some("typeset")
             );
             if effective.as_deref() == Some("let") {
@@ -2809,8 +3162,20 @@ impl Parser {
                 _ => cmd_args.push(t),
             }
         }
-        let simple = Token::new(id2, InnerToken::T_SimpleCommand { assignments: assigns, words: cmd_args });
-        Ok(Token::new(id1, InnerToken::T_Redirecting { redirs, cmd: simple }))
+        let simple = Token::new(
+            id2,
+            InnerToken::T_SimpleCommand {
+                assignments: assigns,
+                words: cmd_args,
+            },
+        );
+        Ok(Token::new(
+            id1,
+            InnerToken::T_Redirecting {
+                redirs,
+                cmd: simple,
+            },
+        ))
     }
 
     /// `readTimeSuffix`: `time [-p ...] <pipeline>`. Reads optional flag words
@@ -2914,7 +3279,11 @@ impl Parser {
 
     /// `reparseIndices`: reparse each `T_UnparsedIndex` as arithmetic (indexed
     /// arrays) or an index word (associative arrays), matching ShellCheck.
-    fn reparse_indices_root(&mut self, mut root: Token, assoc: &std::collections::HashSet<String>) -> Token {
+    fn reparse_indices_root(
+        &mut self,
+        mut root: Token,
+        assoc: &std::collections::HashSet<String>,
+    ) -> Token {
         self.reparse_walk(&mut root, assoc);
         root
     }
@@ -3176,14 +3545,23 @@ impl Parser {
             let mut raw = String::new();
             let mut depth = 1;
             while let Some(c) = self.peek() {
-                if c == '[' { depth += 1; }
-                else if c == ']' { depth -= 1; if depth == 0 { break; } }
+                if c == '[' {
+                    depth += 1;
+                } else if c == ']' {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
                 self.bump();
                 raw.push(c);
             }
             self.char(']')?;
             let idx_id = self.next_id_between(istart, self.pos());
-            indices.push(Token::new(idx_id, InnerToken::T_UnparsedIndex { pos, str: raw }));
+            indices.push(Token::new(
+                idx_id,
+                InnerToken::T_UnparsedIndex { pos, str: raw },
+            ));
         }
         // The T_Assignment span ends here (variable name + indices), before the
         // `=` — matching ShellCheck's `id <- endSpan start` placement, so that
@@ -3212,7 +3590,15 @@ impl Parser {
             }
         };
         let id = self.next_id_between(start, op_start);
-        Ok(Token::new(id, InnerToken::T_Assignment { mode, var: name, indices, value }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_Assignment {
+                mode,
+                var: name,
+                indices,
+                value,
+            },
+        ))
     }
 
     fn empty_literal_word(&mut self) -> Token {
@@ -3259,7 +3645,10 @@ impl Parser {
                         break;
                     }
                     let idx_id = self.next_id_between(istart, self.pos());
-                    indices.push(Token::new(idx_id, InnerToken::T_UnparsedIndex { pos, str: raw }));
+                    indices.push(Token::new(
+                        idx_id,
+                        InnerToken::T_UnparsedIndex { pos, str: raw },
+                    ));
                 }
                 if !indices.is_empty() && self.char('=').is_ok() {
                     let value = match self.read_normal_word() {
@@ -3267,7 +3656,10 @@ impl Parser {
                         Err(()) => self.empty_literal_word(),
                     };
                     let eid = self.next_id_between(estart, self.pos());
-                    elems.push(Token::new(eid, InnerToken::T_IndexedElement { indices, value }));
+                    elems.push(Token::new(
+                        eid,
+                        InnerToken::T_IndexedElement { indices, value },
+                    ));
                     continue;
                 }
                 self.reset(em);
@@ -3384,7 +3776,11 @@ impl Parser {
             let opid = self.next_id_between(op_start.clone(), self.pos());
             let op_tok = Token::new(
                 opid,
-                if opc == '<' { InnerToken::T_LESSAND } else { InnerToken::T_GREATAND },
+                if opc == '<' {
+                    InnerToken::T_LESSAND
+                } else {
+                    InnerToken::T_GREATAND
+                },
             );
             if !num.is_empty() {
                 let dup_id = self.next_id_between(op_start.clone(), self.pos());
@@ -3404,7 +3800,10 @@ impl Parser {
             let iofile_id = self.next_id_between(op_start.clone(), self.pos());
             let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
             let id = self.next_id_between(start, self.pos());
-            return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: iofile }));
+            return Ok(Token::new(
+                id,
+                InnerToken::T_FdRedirect { fd, target: iofile },
+            ));
         }
         // file redirect operators
         let op = self.read_io_file_op(op_start.clone());
@@ -3421,7 +3820,10 @@ impl Parser {
                 let iofile_id = self.next_id_between(op_start.clone(), self.pos());
                 let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
                 let id = self.next_id_between(start, self.pos());
-                Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: iofile }))
+                Ok(Token::new(
+                    id,
+                    InnerToken::T_FdRedirect { fd, target: iofile },
+                ))
             }
             None => {
                 self.reset(m);
@@ -3464,7 +3866,11 @@ impl Parser {
             let id = self.next_id_between(start, self.pos());
             return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: hs }));
         }
-        let dashed = if self.char('-').is_ok() { Dashed::Dashed } else { Dashed::Undashed };
+        let dashed = if self.char('-').is_ok() {
+            Dashed::Dashed
+        } else {
+            Dashed::Undashed
+        };
         self.spacing();
         // delimiter (may be quoted). `readHereDoc` captures `startSpan` here,
         // *after* `<<`/`-`/spacing, so T_HereDoc spans only the end token.
@@ -3473,8 +3879,21 @@ impl Parser {
         // Body is read lazily at next newline; for the slice, capture nothing now
         // and register a pending heredoc.
         let hd_id = self.next_id_between(delim_start, self.pos());
-        self.pending_heredocs.push(PendingHereDoc { dashed, quoted, delim: delim.clone(), id: hd_id });
-        let hd = Token::new(hd_id, InnerToken::T_HereDoc { dashed, quoted, delim, body: Vec::new() });
+        self.pending_heredocs.push(PendingHereDoc {
+            dashed,
+            quoted,
+            delim: delim.clone(),
+            id: hd_id,
+        });
+        let hd = Token::new(
+            hd_id,
+            InnerToken::T_HereDoc {
+                dashed,
+                quoted,
+                delim,
+                body: Vec::new(),
+            },
+        );
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: hd }))
     }
@@ -3485,7 +3904,9 @@ impl Parser {
                 self.bump();
                 let mut s = String::new();
                 while let Some(c) = self.peek() {
-                    if c == '\'' { break; }
+                    if c == '\'' {
+                        break;
+                    }
                     self.bump();
                     s.push(c);
                 }
@@ -3496,7 +3917,9 @@ impl Parser {
                 self.bump();
                 let mut s = String::new();
                 while let Some(c) = self.peek() {
-                    if c == '"' { break; }
+                    if c == '"' {
+                        break;
+                    }
                     self.bump();
                     s.push(c);
                 }
@@ -3513,7 +3936,11 @@ impl Parser {
                         break;
                     }
                 }
-                if s.is_empty() { Err(()) } else { Ok((s, Quoted::Unquoted)) }
+                if s.is_empty() {
+                    Err(())
+                } else {
+                    Ok((s, Quoted::Unquoted))
+                }
             }
         }
     }
@@ -3653,11 +4080,18 @@ impl Parser {
     /// `isValidShell` (Parser.hs readScriptFile): `Just true` for a recognized
     /// good shell, `Just false` for a known-unsupported one, `None` otherwise.
     fn is_valid_shell(s: &str) -> Option<bool> {
-        const GOOD: &[&str] =
-            &["sh", "ash", "dash", "busybox sh", "bash", "bats", "ksh", "oksh"];
+        const GOOD: &[&str] = &[
+            "sh",
+            "ash",
+            "dash",
+            "busybox sh",
+            "bash",
+            "bats",
+            "ksh",
+            "oksh",
+        ];
         const BAD: &[&str] = &[
-            "awk", "csh", "expect", "fish", "perl", "python", "python3", "ruby",
-            "tcsh", "zsh",
+            "awk", "csh", "expect", "fish", "perl", "python", "python3", "ruby", "tcsh", "zsh",
         ];
         let good = s.is_empty() || GOOD.iter().any(|g| s.starts_with(g));
         let bad = BAD.iter().any(|b| s.starts_with(b));
@@ -3708,13 +4142,24 @@ impl Parser {
         self.allspacing();
         if !self.eof() {
             let p = self.pos();
-            self.problem_at(p.clone(), p, Severity::ErrorC, 1072,
-                "Unexpected input near here.");
+            self.problem_at(
+                p.clone(),
+                p,
+                Severity::ErrorC,
+                1072,
+                "Unexpected input near here.",
+            );
         }
         let script_id = self.next_id_between(start.clone(), self.pos());
         let script = Token::new(script_id, InnerToken::T_Script { shebang, commands });
         let ann_id = self.next_id_between(start.clone(), self.pos());
-        let root = Token::new(ann_id, InnerToken::T_Annotation { annotations: file_annotations, token: script });
+        let root = Token::new(
+            ann_id,
+            InnerToken::T_Annotation {
+                annotations: file_annotations,
+                token: script,
+            },
+        );
         Some(root)
     }
 }
@@ -3733,7 +4178,11 @@ pub fn parse_script(filename: &str, script: &str) -> ParseOutput {
     // Parse succeeded (we always return a tree in the slice); emit notes+problems.
     let mut notes = p.problems.clone();
     notes.extend(p.notes.clone());
-    ParseOutput { root, notes, positions: p.positions }
+    ParseOutput {
+        root,
+        notes,
+        positions: p.positions,
+    }
 }
 
 /// `getAssociativeArrays`: names declared with `declare/local/typeset -A`.
@@ -3751,7 +4200,10 @@ fn get_associative_arrays(root: &Token) -> std::collections::HashSet<String> {
                 },
                 _ => None,
             };
-            if !matches!(name.as_deref(), Some("declare") | Some("local") | Some("typeset")) {
+            if !matches!(
+                name.as_deref(),
+                Some("declare") | Some("local") | Some("typeset")
+            ) {
                 return;
             }
             let args = &words[1..];
@@ -3834,19 +4286,32 @@ fn reattach_heredocs(t: Token, bodies: &BTreeMap<Id, Vec<Token>>) -> Token {
     // Rebuild the tree, filling T_HereDoc bodies by id.
     let Token { id, inner } = t;
     let new_inner = map_children_inner(*inner, bodies, id);
-    Token { id, inner: Box::new(new_inner) }
+    Token {
+        id,
+        inner: Box::new(new_inner),
+    }
 }
 
 fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: Id) -> InnerToken {
     use InnerToken::*;
     // Special-case heredoc body fill.
-    if let T_HereDoc { dashed, quoted, delim, .. } = &inner {
+    if let T_HereDoc {
+        dashed,
+        quoted,
+        delim,
+        ..
+    } = &inner
+    {
         if let Some(body) = bodies.get(&id) {
             return T_HereDoc {
                 dashed: *dashed,
                 quoted: *quoted,
                 delim: delim.clone(),
-                body: body.iter().cloned().map(|b| reattach_heredocs(b, bodies)).collect(),
+                body: body
+                    .iter()
+                    .cloned()
+                    .map(|b| reattach_heredocs(b, bodies))
+                    .collect(),
             };
         }
     }
@@ -3858,7 +4323,9 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
     }
     macro_rules! rv {
         ($v:expr) => {
-            $v.into_iter().map(|x| reattach_heredocs(x, bodies)).collect()
+            $v.into_iter()
+                .map(|x| reattach_heredocs(x, bodies))
+                .collect()
         };
     }
     match inner {
@@ -3870,56 +4337,188 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
         T_Subshell(l) => T_Subshell(rv!(l)),
         T_BraceGroup(l) => T_BraceGroup(rv!(l)),
         T_Array(l) => T_Array(rv!(l)),
-        T_Extglob { op, list } => T_Extglob { op, list: rv!(list) },
-        T_ProcSub { op, list } => T_ProcSub { op, list: rv!(list) },
-        T_Condition { typ, token } => T_Condition { typ, token: r!(token) },
-        TC_And { typ, op, lhs, rhs } => TC_And { typ, op, lhs: r!(lhs), rhs: r!(rhs) },
-        TC_Or { typ, op, lhs, rhs } => TC_Or { typ, op, lhs: r!(lhs), rhs: r!(rhs) },
-        TC_Binary { typ, op, lhs, rhs } => TC_Binary { typ, op, lhs: r!(lhs), rhs: r!(rhs) },
-        TC_Group { typ, token } => TC_Group { typ, token: r!(token) },
-        TC_Nullary { typ, token } => TC_Nullary { typ, token: r!(token) },
-        TC_Unary { typ, op, token } => TC_Unary { typ, op, token: r!(token) },
+        T_Extglob { op, list } => T_Extglob {
+            op,
+            list: rv!(list),
+        },
+        T_ProcSub { op, list } => T_ProcSub {
+            op,
+            list: rv!(list),
+        },
+        T_Condition { typ, token } => T_Condition {
+            typ,
+            token: r!(token),
+        },
+        TC_And { typ, op, lhs, rhs } => TC_And {
+            typ,
+            op,
+            lhs: r!(lhs),
+            rhs: r!(rhs),
+        },
+        TC_Or { typ, op, lhs, rhs } => TC_Or {
+            typ,
+            op,
+            lhs: r!(lhs),
+            rhs: r!(rhs),
+        },
+        TC_Binary { typ, op, lhs, rhs } => TC_Binary {
+            typ,
+            op,
+            lhs: r!(lhs),
+            rhs: r!(rhs),
+        },
+        TC_Group { typ, token } => TC_Group {
+            typ,
+            token: r!(token),
+        },
+        TC_Nullary { typ, token } => TC_Nullary {
+            typ,
+            token: r!(token),
+        },
+        TC_Unary { typ, op, token } => TC_Unary {
+            typ,
+            op,
+            token: r!(token),
+        },
         T_DollarArithmetic(t) => T_DollarArithmetic(r!(t)),
         T_DollarBracket(t) => T_DollarBracket(r!(t)),
         T_Arithmetic(t) => T_Arithmetic(r!(t)),
-        TA_Binary { op, lhs, rhs } => TA_Binary { op, lhs: r!(lhs), rhs: r!(rhs) },
-        TA_Assignment { op, lhs, rhs } => TA_Assignment { op, lhs: r!(lhs), rhs: r!(rhs) },
-        TA_Variable { name, indices } => TA_Variable { name, indices: rv!(indices) },
+        TA_Binary { op, lhs, rhs } => TA_Binary {
+            op,
+            lhs: r!(lhs),
+            rhs: r!(rhs),
+        },
+        TA_Assignment { op, lhs, rhs } => TA_Assignment {
+            op,
+            lhs: r!(lhs),
+            rhs: r!(rhs),
+        },
+        TA_Variable { name, indices } => TA_Variable {
+            name,
+            indices: rv!(indices),
+        },
         TA_Expansion(l) => TA_Expansion(rv!(l)),
         TA_Sequence(l) => TA_Sequence(rv!(l)),
         TA_Parenthesis(t) => TA_Parenthesis(r!(t)),
-        TA_Trinary { cond, then, els } => TA_Trinary { cond: r!(cond), then: r!(then), els: r!(els) },
-        TA_Unary { op, operand } => TA_Unary { op, operand: r!(operand) },
+        TA_Trinary { cond, then, els } => TA_Trinary {
+            cond: r!(cond),
+            then: r!(then),
+            els: r!(els),
+        },
+        TA_Unary { op, operand } => TA_Unary {
+            op,
+            operand: r!(operand),
+        },
         T_Backgrounded(t) => T_Backgrounded(r!(t)),
         T_Banged(t) => T_Banged(r!(t)),
         T_HereString(t) => T_HereString(r!(t)),
         T_DollarBraced { braced, op } => T_DollarBraced { braced, op: r!(op) },
-        T_AndIf { lhs, rhs } => T_AndIf { lhs: r!(lhs), rhs: r!(rhs) },
-        T_OrIf { lhs, rhs } => T_OrIf { lhs: r!(lhs), rhs: r!(rhs) },
-        T_Pipeline { separators, commands } => T_Pipeline { separators: rv!(separators), commands: rv!(commands) },
-        T_Redirecting { redirs, cmd } => T_Redirecting { redirs: rv!(redirs), cmd: r!(cmd) },
-        T_SimpleCommand { assignments, words } => T_SimpleCommand { assignments: rv!(assignments), words: rv!(words) },
-        T_Assignment { mode, var, indices, value } => T_Assignment { mode, var, indices: rv!(indices), value: r!(value) },
+        T_AndIf { lhs, rhs } => T_AndIf {
+            lhs: r!(lhs),
+            rhs: r!(rhs),
+        },
+        T_OrIf { lhs, rhs } => T_OrIf {
+            lhs: r!(lhs),
+            rhs: r!(rhs),
+        },
+        T_Pipeline {
+            separators,
+            commands,
+        } => T_Pipeline {
+            separators: rv!(separators),
+            commands: rv!(commands),
+        },
+        T_Redirecting { redirs, cmd } => T_Redirecting {
+            redirs: rv!(redirs),
+            cmd: r!(cmd),
+        },
+        T_SimpleCommand { assignments, words } => T_SimpleCommand {
+            assignments: rv!(assignments),
+            words: rv!(words),
+        },
+        T_Assignment {
+            mode,
+            var,
+            indices,
+            value,
+        } => T_Assignment {
+            mode,
+            var,
+            indices: rv!(indices),
+            value: r!(value),
+        },
         T_IfExpression { clauses, elses } => T_IfExpression {
             clauses: clauses.into_iter().map(|(c, b)| (rv!(c), rv!(b))).collect(),
             elses: rv!(elses),
         },
-        T_WhileExpression { condition, body } => T_WhileExpression { condition: rv!(condition), body: rv!(body) },
-        T_UntilExpression { condition, body } => T_UntilExpression { condition: rv!(condition), body: rv!(body) },
-        T_ForIn { var, items, body } => T_ForIn { var, items: rv!(items), body: rv!(body) },
-        T_SelectIn { var, items, body } => T_SelectIn { var, items: rv!(items), body: rv!(body) },
-        T_ForArithmetic { init, cond, step, body } => T_ForArithmetic { init: r!(init), cond: r!(cond), step: r!(step), body: rv!(body) },
+        T_WhileExpression { condition, body } => T_WhileExpression {
+            condition: rv!(condition),
+            body: rv!(body),
+        },
+        T_UntilExpression { condition, body } => T_UntilExpression {
+            condition: rv!(condition),
+            body: rv!(body),
+        },
+        T_ForIn { var, items, body } => T_ForIn {
+            var,
+            items: rv!(items),
+            body: rv!(body),
+        },
+        T_SelectIn { var, items, body } => T_SelectIn {
+            var,
+            items: rv!(items),
+            body: rv!(body),
+        },
+        T_ForArithmetic {
+            init,
+            cond,
+            step,
+            body,
+        } => T_ForArithmetic {
+            init: r!(init),
+            cond: r!(cond),
+            step: r!(step),
+            body: rv!(body),
+        },
         T_CaseExpression { word, cases } => T_CaseExpression {
             word: r!(word),
-            cases: cases.into_iter().map(|(t, p, b)| (t, rv!(p), rv!(b))).collect(),
+            cases: cases
+                .into_iter()
+                .map(|(t, p, b)| (t, rv!(p), rv!(b)))
+                .collect(),
         },
-        T_Function { keyword, parens, name, body } => T_Function { keyword, parens, name, body: r!(body) },
-        T_BatsTest { name, body } => T_BatsTest { name, body: r!(body) },
-        T_Script { shebang, commands } => T_Script { shebang: r!(shebang), commands: rv!(commands) },
-        T_Annotation { annotations, token } => T_Annotation { annotations, token: r!(token) },
-        T_IoFile { op, file } => T_IoFile { op: r!(op), file: r!(file) },
+        T_Function {
+            keyword,
+            parens,
+            name,
+            body,
+        } => T_Function {
+            keyword,
+            parens,
+            name,
+            body: r!(body),
+        },
+        T_BatsTest { name, body } => T_BatsTest {
+            name,
+            body: r!(body),
+        },
+        T_Script { shebang, commands } => T_Script {
+            shebang: r!(shebang),
+            commands: rv!(commands),
+        },
+        T_Annotation { annotations, token } => T_Annotation {
+            annotations,
+            token: r!(token),
+        },
+        T_IoFile { op, file } => T_IoFile {
+            op: r!(op),
+            file: r!(file),
+        },
         T_IoDuplicate { op, num } => T_IoDuplicate { op: r!(op), num },
-        T_FdRedirect { fd, target } => T_FdRedirect { fd, target: r!(target) },
+        T_FdRedirect { fd, target } => T_FdRedirect {
+            fd,
+            target: r!(target),
+        },
         other => other,
     }
 }
@@ -4062,9 +4661,7 @@ impl Parser {
         match key {
             "disable" => {
                 let raw = self.read_annotation_raw_value();
-                raw.split(',')
-                    .filter_map(parse_disable_element)
-                    .collect()
+                raw.split(',').filter_map(parse_disable_element).collect()
             }
             "enable" => {
                 let raw = self.read_annotation_raw_value();
@@ -4085,8 +4682,13 @@ impl Parser {
                 let pos = self.pos();
                 let v = self.read_annotation_raw_value();
                 if crate::astlib::shell_for_executable(&v).is_none() {
-                    self.note_at(pos.clone(), pos, Severity::ErrorC, 1103,
-                        "This shell type is unknown. Use e.g. sh or bash.");
+                    self.note_at(
+                        pos.clone(),
+                        pos,
+                        Severity::ErrorC,
+                        1103,
+                        "This shell type is unknown. Use e.g. sh or bash.",
+                    );
                 }
                 vec![Annotation::ShellOverride(v)]
             }
@@ -4108,8 +4710,13 @@ impl Parser {
             }
             _ => {
                 let _ = self.read_annotation_raw_value();
-                self.note_at(key_pos.clone(), key_pos, Severity::WarningC, 1107,
-                    "This directive is unknown. It will be ignored.");
+                self.note_at(
+                    key_pos.clone(),
+                    key_pos,
+                    Severity::WarningC,
+                    1107,
+                    "This directive is unknown. It will be ignored.",
+                );
                 Vec::new()
             }
         }
@@ -4160,7 +4767,10 @@ impl Parser {
         };
         let redirs = self.read_redirect_list();
         let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(id, InnerToken::T_Redirecting { redirs, cmd: cond }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_Redirecting { redirs, cmd: cond },
+        ))
     }
 
     fn read_condition(&mut self) -> PResult<Token> {
@@ -4175,7 +4785,11 @@ impl Parser {
             self.char('[')?;
         }
         let single = !dbl;
-        let typ = if single { ConditionType::SingleBracket } else { ConditionType::DoubleBracket };
+        let typ = if single {
+            ConditionType::SingleBracket
+        } else {
+            ConditionType::DoubleBracket
+        };
 
         // required space after the bracket
         let space = self.cond_spacing();
@@ -4283,7 +4897,15 @@ impl Parser {
                     Ok(right) => {
                         let typ = self.cond_typ(single);
                         let id = self.next_id_between(op_start, op_end);
-                        left = Token::new(id, InnerToken::TC_And { typ, op, lhs: left, rhs: right });
+                        left = Token::new(
+                            id,
+                            InnerToken::TC_And {
+                                typ,
+                                op,
+                                lhs: left,
+                                rhs: right,
+                            },
+                        );
                     }
                     Err(()) => {
                         self.reset(m);
@@ -4310,7 +4932,15 @@ impl Parser {
                     Ok(right) => {
                         let typ = self.cond_typ(single);
                         let id = self.next_id_between(op_start, op_end);
-                        left = Token::new(id, InnerToken::TC_Or { typ, op, lhs: left, rhs: right });
+                        left = Token::new(
+                            id,
+                            InnerToken::TC_Or {
+                                typ,
+                                op,
+                                lhs: left,
+                                rhs: right,
+                            },
+                        );
                     }
                     Err(()) => {
                         self.reset(m);
@@ -4326,7 +4956,11 @@ impl Parser {
     }
 
     fn cond_typ(&self, single: bool) -> ConditionType {
-        if single { ConditionType::SingleBracket } else { ConditionType::DoubleBracket }
+        if single {
+            ConditionType::SingleBracket
+        } else {
+            ConditionType::DoubleBracket
+        }
     }
 
     fn read_cond_and_op(&mut self) -> Option<String> {
@@ -4364,7 +4998,10 @@ impl Parser {
                 return false;
             }
         }
-        matches!(self.peek_at(chars.len()), Some(' ') | Some('\t') | Some('\n') | None)
+        matches!(
+            self.peek_at(chars.len()),
+            Some(' ') | Some('\t') | Some('\n') | None
+        )
     }
 
     fn read_cond_term(&mut self, single: bool) -> PResult<Token> {
@@ -4386,7 +5023,14 @@ impl Parser {
         self.cond_spacing();
         let expr = self.read_cond_expr(single)?;
         let typ = self.cond_typ(single);
-        Ok(Token::new(id, InnerToken::TC_Unary { typ, op: "!".to_string(), token: expr }))
+        Ok(Token::new(
+            id,
+            InnerToken::TC_Unary {
+                typ,
+                op: "!".to_string(),
+                token: expr,
+            },
+        ))
     }
 
     fn read_cond_expr(&mut self, single: bool) -> PResult<Token> {
@@ -4463,7 +5107,14 @@ impl Parser {
             Ok(word) => {
                 let typ = self.cond_typ(single);
                 let id = self.next_id_between(start, op_end);
-                Ok(Token::new(id, InnerToken::TC_Unary { typ, op, token: word }))
+                Ok(Token::new(
+                    id,
+                    InnerToken::TC_Unary {
+                        typ,
+                        op,
+                        token: word,
+                    },
+                ))
             }
             Err(()) => {
                 self.reset(m);
@@ -4516,7 +5167,15 @@ impl Parser {
                 Ok(y) => {
                     let typ = self.cond_typ(single);
                     let id = self.next_id_between(op_start, op_end);
-                    return Ok(Token::new(id, InnerToken::TC_Binary { typ, op, lhs: x, rhs: y }));
+                    return Ok(Token::new(
+                        id,
+                        InnerToken::TC_Binary {
+                            typ,
+                            op,
+                            lhs: x,
+                            rhs: y,
+                        },
+                    ));
                 }
                 Err(()) => {
                     self.reset(m);
@@ -4843,31 +5502,99 @@ mod arith_tests {
         }
     }
 
-    #[test] fn prop_a1() { assert!(arith_ok(" n++ + ++c")); }
-    #[test] fn prop_a2() { assert!(arith_ok("$N*4-(3,2)")); }
-    #[test] fn prop_a3() { assert!(arith_ok("n|=2<<1")); }
-    #[test] fn prop_a4() { assert!(arith_ok("n &= 2 **3")); }
-    #[test] fn prop_a5() { assert!(arith_ok("1 |= 4 && n >>= 4")); }
-    #[test] fn prop_a6() { assert!(arith_ok(" 1 | 2 ||3|4")); }
-    #[test] fn prop_a7() { assert!(arith_ok("3*2**10")); }
-    #[test] fn prop_a8() { assert!(arith_ok("3")); }
-    #[test] fn prop_a9() { assert!(arith_ok("a^!-b")); }
-    #[test] fn prop_a10() { assert!(arith_ok("! $?")); }
-    #[test] fn prop_a11() { assert!(arith_ok("10#08 * 16#f")); }
-    #[test] fn prop_a12() { assert!(arith_ok("\"$((3+2))\" + '37'")); }
-    #[test] fn prop_a13() { assert!(arith_ok("foo[9*y+x]++")); }
-    #[test] fn prop_a14() { assert!(arith_ok("1+`echo 2`")); }
-    #[test] fn prop_a15() { assert!(arith_ok("foo[`echo foo | sed s/foo/4/g` * 3] + 4")); }
-    #[test] fn prop_a16() { assert!(arith_ok("$foo$bar")); }
-    #[test] fn prop_a17() { assert!(arith_ok("i<(0+(1+1))")); }
-    #[test] fn prop_a18() { assert!(arith_ok("a?b:c")); }
-    #[test] fn prop_a19() { assert!(arith_ok("\\\n3 +\\\n  2")); }
-    #[test] fn prop_a20() { assert!(arith_ok("a ? b ? c : d : e")); }
-    #[test] fn prop_a21() { assert!(arith_ok("a ? b : c ? d : e")); }
-    #[test] fn prop_a22() { assert!(arith_ok("!!a")); }
-    #[test] fn prop_a23() { assert!(arith_ok("~0")); }
+    #[test]
+    fn prop_a1() {
+        assert!(arith_ok(" n++ + ++c"));
+    }
+    #[test]
+    fn prop_a2() {
+        assert!(arith_ok("$N*4-(3,2)"));
+    }
+    #[test]
+    fn prop_a3() {
+        assert!(arith_ok("n|=2<<1"));
+    }
+    #[test]
+    fn prop_a4() {
+        assert!(arith_ok("n &= 2 **3"));
+    }
+    #[test]
+    fn prop_a5() {
+        assert!(arith_ok("1 |= 4 && n >>= 4"));
+    }
+    #[test]
+    fn prop_a6() {
+        assert!(arith_ok(" 1 | 2 ||3|4"));
+    }
+    #[test]
+    fn prop_a7() {
+        assert!(arith_ok("3*2**10"));
+    }
+    #[test]
+    fn prop_a8() {
+        assert!(arith_ok("3"));
+    }
+    #[test]
+    fn prop_a9() {
+        assert!(arith_ok("a^!-b"));
+    }
+    #[test]
+    fn prop_a10() {
+        assert!(arith_ok("! $?"));
+    }
+    #[test]
+    fn prop_a11() {
+        assert!(arith_ok("10#08 * 16#f"));
+    }
+    #[test]
+    fn prop_a12() {
+        assert!(arith_ok("\"$((3+2))\" + '37'"));
+    }
+    #[test]
+    fn prop_a13() {
+        assert!(arith_ok("foo[9*y+x]++"));
+    }
+    #[test]
+    fn prop_a14() {
+        assert!(arith_ok("1+`echo 2`"));
+    }
+    #[test]
+    fn prop_a15() {
+        assert!(arith_ok("foo[`echo foo | sed s/foo/4/g` * 3] + 4"));
+    }
+    #[test]
+    fn prop_a16() {
+        assert!(arith_ok("$foo$bar"));
+    }
+    #[test]
+    fn prop_a17() {
+        assert!(arith_ok("i<(0+(1+1))"));
+    }
+    #[test]
+    fn prop_a18() {
+        assert!(arith_ok("a?b:c"));
+    }
+    #[test]
+    fn prop_a19() {
+        assert!(arith_ok("\\\n3 +\\\n  2"));
+    }
+    #[test]
+    fn prop_a20() {
+        assert!(arith_ok("a ? b ? c : d : e"));
+    }
+    #[test]
+    fn prop_a21() {
+        assert!(arith_ok("a ? b : c ? d : e"));
+    }
+    #[test]
+    fn prop_a22() {
+        assert!(arith_ok("!!a"));
+    }
+    #[test]
+    fn prop_a23() {
+        assert!(arith_ok("~0"));
+    }
 }
-
 
 #[cfg(test)]
 mod redirect_heredoc_tests {
@@ -4950,29 +5677,30 @@ mod redirect_heredoc_tests {
     fn unquoted_heredoc_parses_command_substitution() {
         // The body `$(rm x)` must become a T_DollarExpansion node, not a flat
         // literal, so stdin-consumer analysis sees it.
-        let subs = spans_of(
-            "cat << EOF\n$(rm x)\nEOF\n",
-            |i| matches!(i, InnerToken::T_DollarExpansion(_)),
-        );
+        let subs = spans_of("cat << EOF\n$(rm x)\nEOF\n", |i| {
+            matches!(i, InnerToken::T_DollarExpansion(_))
+        });
         assert_eq!(subs.len(), 1, "expected a command substitution in the body");
     }
 
     #[test]
     fn unquoted_heredoc_parses_backtick() {
-        let subs = spans_of(
-            "cat << EOF\n`rm x`\nEOF\n",
-            |i| matches!(i, InnerToken::T_Backticked(_)),
+        let subs = spans_of("cat << EOF\n`rm x`\nEOF\n", |i| {
+            matches!(i, InnerToken::T_Backticked(_))
+        });
+        assert_eq!(
+            subs.len(),
+            1,
+            "expected a backtick substitution in the body"
         );
-        assert_eq!(subs.len(), 1, "expected a backtick substitution in the body");
     }
 
     #[test]
     fn quoted_heredoc_does_not_expand() {
         // With a quoted delimiter the body stays a single literal.
-        let subs = spans_of(
-            "cat << 'EOF'\n$(rm x)\nEOF\n",
-            |i| matches!(i, InnerToken::T_DollarExpansion(_)),
-        );
+        let subs = spans_of("cat << 'EOF'\n$(rm x)\nEOF\n", |i| {
+            matches!(i, InnerToken::T_DollarExpansion(_))
+        });
         assert!(subs.is_empty(), "quoted heredoc body must not be expanded");
     }
 
@@ -4982,10 +5710,12 @@ mod redirect_heredoc_tests {
         // must not swallow the following expansion.
         let out = parse_script("-", "cat << EOF\na\"b$c\nEOF\n");
         assert!(out.root.is_some());
-        let vars = spans_of(
-            "cat << EOF\na\"b$c\nEOF\n",
-            |i| matches!(i, InnerToken::T_DollarBraced { .. } | InnerToken::T_NormalWord(_)),
-        );
+        let vars = spans_of("cat << EOF\na\"b$c\nEOF\n", |i| {
+            matches!(
+                i,
+                InnerToken::T_DollarBraced { .. } | InnerToken::T_NormalWord(_)
+            )
+        });
         let _ = vars;
         // The `$c` variable is present.
         let dollar = {
@@ -5051,13 +5781,19 @@ mod parser_gap_tests {
         // ShellCheck's `readCondUnaryOp` (`endSpan` right after `readOp`), not
         // operator+operand. This is what SC2058/SC2331/... key off.
         let spans = spans_of("[ -M a ]", |i| matches!(i, InnerToken::TC_Unary { .. }));
-        assert_eq!(spans, vec![(1, 3, 1, 5)], "TC_Unary must span the operator only");
+        assert_eq!(
+            spans,
+            vec![(1, 3, 1, 5)],
+            "TC_Unary must span the operator only"
+        );
     }
 
     #[test]
     fn tc_unary_z_span_is_operator_only() {
         // `[ -z $(fgrep x) ]` (the SC2143 unary branch): `-z` at cols 3-5.
-        let spans = spans_of("[ -z $(fgrep x) ]", |i| matches!(i, InnerToken::TC_Unary { .. }));
+        let spans = spans_of("[ -z $(fgrep x) ]", |i| {
+            matches!(i, InnerToken::TC_Unary { .. })
+        });
         assert_eq!(spans, vec![(1, 3, 1, 5)]);
     }
 
@@ -5065,7 +5801,10 @@ mod parser_gap_tests {
     fn tc_unary_bang_span_is_bang_only() {
         // `[ ! x ]`: the negation TC_Unary id must span just `!` (cols 3-4),
         // matching `readCondNot` (`endSpan` right after `char '!'`).
-        let spans = spans_of("[ ! x ]", |i| matches!(i, InnerToken::TC_Unary { op, .. } if op == "!"));
+        let spans = spans_of(
+            "[ ! x ]",
+            |i| matches!(i, InnerToken::TC_Unary { op, .. } if op == "!"),
+        );
         assert_eq!(spans, vec![(1, 3, 1, 4)]);
     }
 
@@ -5083,15 +5822,24 @@ mod parser_gap_tests {
         // `[[ $x =~ \* ]]`: the regex literal keeps the raw `\*`, not a decoded
         // `*` (Parser.hs `readLiteralForParser` reads the raw span).
         let lits = literals_of("[[ $x =~ \\* ]]");
-        assert!(lits.iter().any(|s| s == "\\*"), "regex `\\*` must stay raw, got {lits:?}");
-        assert!(!lits.iter().any(|s| s == "*"), "regex `\\*` must not decode to `*`, got {lits:?}");
+        assert!(
+            lits.iter().any(|s| s == "\\*"),
+            "regex `\\*` must stay raw, got {lits:?}"
+        );
+        assert!(
+            !lits.iter().any(|s| s == "*"),
+            "regex `\\*` must not decode to `*`, got {lits:?}"
+        );
     }
 
     #[test]
     fn regex_rhs_preserves_dotted_escapes() {
         // `[[ $1 =~ \.a\.c\. ]]`: escaped dots are kept raw.
         let lits = literals_of("[[ $1 =~ \\.a\\.c\\. ]]");
-        assert!(lits.iter().any(|s| s.contains("\\.")), "escaped dots must stay raw, got {lits:?}");
+        assert!(
+            lits.iter().any(|s| s.contains("\\.")),
+            "escaped dots must stay raw, got {lits:?}"
+        );
     }
 
     // ---- gap 3: mid-pipeline `!` becomes T_Banged -------------------------
@@ -5100,7 +5848,11 @@ mod parser_gap_tests {
     fn mid_pipeline_bang_is_banged() {
         // `true | ! true`: the second stage is negated (T_Banged), bang at col 8.
         let spans = spans_of("true | ! true", |i| matches!(i, InnerToken::T_Banged(_)));
-        assert_eq!(spans, vec![(1, 8, 1, 9)], "mid-pipeline `!` must produce T_Banged");
+        assert_eq!(
+            spans,
+            vec![(1, 8, 1, 9)],
+            "mid-pipeline `!` must produce T_Banged"
+        );
     }
 
     #[test]
@@ -5116,8 +5868,14 @@ mod parser_gap_tests {
     fn dollar_brace_open_brace_is_expansion() {
         // `${{var}`: the `${...}` is a T_DollarBraced (cols 1-8), whose word is
         // the literal `{var`. Its op word span is used by SC2296 (cols 3-7).
-        let spans = spans_of("${{var}", |i| matches!(i, InnerToken::T_DollarBraced { .. }));
-        assert_eq!(spans, vec![(1, 1, 1, 8)], "expected one T_DollarBraced for ${{{{var}}");
+        let spans = spans_of("${{var}", |i| {
+            matches!(i, InnerToken::T_DollarBraced { .. })
+        });
+        assert_eq!(
+            spans,
+            vec![(1, 1, 1, 8)],
+            "expected one T_DollarBraced for ${{{{var}}"
+        );
     }
 
     // ---- gap 5: `time` as a pipeline prefix -------------------------------
@@ -5139,7 +5897,10 @@ mod parser_gap_tests {
                 }
             }
         });
-        assert_eq!(multi_stage, 1, "the `foo | bar` pipeline must be nested under `time`");
+        assert_eq!(
+            multi_stage, 1,
+            "the `foo | bar` pipeline must be nested under `time`"
+        );
     }
 
     #[test]
@@ -5176,7 +5937,10 @@ mod coproc_glob_dollar_tests {
     }
 
     fn has_note(script: &str, code: i64) -> bool {
-        parse_script("-", script).notes.iter().any(|n| n.code == code)
+        parse_script("-", script)
+            .notes
+            .iter()
+            .any(|n| n.code == code)
     }
 
     // ---- P1: coproc parsing -----------------------------------------------
@@ -5222,23 +5986,38 @@ mod coproc_glob_dollar_tests {
         let script = "coproc echo bar";
         assert!(!has_note(script, 1072));
         assert_eq!(
-            count_nodes(script, |i| matches!(i, InnerToken::T_CoProc { name: None, .. })),
+            count_nodes(script, |i| matches!(
+                i,
+                InnerToken::T_CoProc { name: None, .. }
+            )),
             1
         );
-        assert_eq!(count_nodes(script, |i| matches!(i, InnerToken::T_CoProcBody(_))), 1);
+        assert_eq!(
+            count_nodes(script, |i| matches!(i, InnerToken::T_CoProcBody(_))),
+            1
+        );
     }
 
     #[test]
     fn coproc_named_while_loop() {
         // `coproc foo while true; do true; done`: compound (while) body, named.
         let script = "coproc foo while true; do true; done";
-        assert!(!has_note(script, 1072), "coproc + while must parse without SC1072");
+        assert!(
+            !has_note(script, 1072),
+            "coproc + while must parse without SC1072"
+        );
         assert_eq!(
-            count_nodes(script, |i| matches!(i, InnerToken::T_CoProc { name: Some(_), .. })),
+            count_nodes(script, |i| matches!(
+                i,
+                InnerToken::T_CoProc { name: Some(_), .. }
+            )),
             1
         );
         assert_eq!(
-            count_nodes(script, |i| matches!(i, InnerToken::T_WhileExpression { .. })),
+            count_nodes(script, |i| matches!(
+                i,
+                InnerToken::T_WhileExpression { .. }
+            )),
             1,
             "the while loop must be parsed as the coproc body"
         );
@@ -5278,12 +6057,18 @@ mod coproc_glob_dollar_tests {
     fn glob_class_still_parses_valid_class() {
         // A real character class `[abc]` still parses to a single T_Glob("[abc]").
         assert_eq!(
-            count_nodes("ls f[abc]", |i| matches!(i, InnerToken::T_Glob(g) if g == "[abc]")),
+            count_nodes(
+                "ls f[abc]",
+                |i| matches!(i, InnerToken::T_Glob(g) if g == "[abc]")
+            ),
             1
         );
         // POSIX predefined class survives too.
         assert_eq!(
-            count_nodes("ls f[[:digit:]]", |i| matches!(i, InnerToken::T_Glob(g) if g == "[[:digit:]]")),
+            count_nodes(
+                "ls f[[:digit:]]",
+                |i| matches!(i, InnerToken::T_Glob(g) if g == "[[:digit:]]")
+            ),
             1
         );
     }
@@ -5300,7 +6085,12 @@ mod coproc_glob_dollar_tests {
             .find(|n| n.code == 1037)
             .expect("SC1037 must fire on $12");
         assert_eq!(
-            (note.start.line, note.start.column, note.end.line, note.end.column),
+            (
+                note.start.line,
+                note.start.column,
+                note.end.line,
+                note.end.column
+            ),
             (1, 7, 1, 7),
             "SC1037 must be zero-width at the `$`"
         );
@@ -5335,7 +6125,11 @@ mod coproc_glob_dollar_tests {
                 }
             }
         });
-        assert_eq!(outer, Some((1, 6)), "outer T_DollarBraced anchors at the `$`");
+        assert_eq!(
+            outer,
+            Some((1, 6)),
+            "outer T_DollarBraced anchors at the `$`"
+        );
         assert_eq!(inner_word, Some((1, 7)), "inner word starts after the `$`");
     }
 
@@ -5353,7 +6147,12 @@ mod coproc_glob_dollar_tests {
             .expect("SC1008 must fire on an unrecognized shebang");
         assert_eq!(note.severity, Severity::ErrorC);
         assert_eq!(
-            (note.start.line, note.start.column, note.end.line, note.end.column),
+            (
+                note.start.line,
+                note.start.column,
+                note.end.line,
+                note.end.column
+            ),
             (1, 1, 1, 1),
             "SC1008 is anchored at the start of the file"
         );
@@ -5375,7 +6174,10 @@ mod coproc_glob_dollar_tests {
     #[test]
     fn sc1008_suppressed_by_shell_directive() {
         // A `# shellcheck shell=...` directive overrides the shebang, so no SC1008.
-        assert!(!has_note("#!/bin/busybox ash\n# shellcheck shell=sh\n", 1008));
+        assert!(!has_note(
+            "#!/bin/busybox ash\n# shellcheck shell=sh\n",
+            1008
+        ));
     }
 
     // ---- SC1014: command used as a test operand ---------------------------
@@ -5392,7 +6194,12 @@ mod coproc_glob_dollar_tests {
             .expect("SC1014 must fire on a common command in [ .. ]");
         assert_eq!(note.severity, Severity::WarningC);
         assert_eq!(
-            (note.start.line, note.start.column, note.end.line, note.end.column),
+            (
+                note.start.line,
+                note.start.column,
+                note.end.line,
+                note.end.column
+            ),
             (1, 3, 1, 3),
             "SC1014 is anchored at the start of the operand word"
         );
@@ -5422,10 +6229,7 @@ mod coproc_glob_dollar_tests {
             .find(|n| n.code == 1127)
             .expect("SC1127 must fire on a `/*` command word");
         assert_eq!(note.severity, Severity::ErrorC);
-        assert_eq!(
-            note.message,
-            "Was this intended as a comment? Use # in sh."
-        );
+        assert_eq!(note.message, "Was this intended as a comment? Use # in sh.");
     }
 
     #[test]

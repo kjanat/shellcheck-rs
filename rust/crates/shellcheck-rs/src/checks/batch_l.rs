@@ -34,8 +34,18 @@ pub fn register(c: &mut Checker) {
 fn oversimplify(token: &Token) -> Vec<String> {
     use InnerToken::*;
     match &*token.inner {
-        T_NormalWord(l) => vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()],
-        T_DoubleQuoted(l) => vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()],
+        T_NormalWord(l) => vec![
+            l.iter()
+                .flat_map(oversimplify)
+                .collect::<Vec<String>>()
+                .concat(),
+        ],
+        T_DoubleQuoted(l) => vec![
+            l.iter()
+                .flat_map(oversimplify)
+                .collect::<Vec<String>>()
+                .concat(),
+        ],
         T_SingleQuoted(s) => vec![s.clone()],
         T_DollarBraced { .. } => vec!["${VAR}".to_string()],
         T_DollarArithmetic(_) => vec!["${VAR}".to_string()],
@@ -167,7 +177,12 @@ fn check_arithmetic_deref(params: &Parameters, t: &Token, out: &mut Out) {
             | InnerToken::T_DollarArithmetic(_)
             | InnerToken::T_ForArithmetic { .. }
             | InnerToken::T_Assignment { .. } => {
-                style(out, id, 2004, "$/${} is unnecessary on arithmetic variables.");
+                style(
+                    out,
+                    id,
+                    2004,
+                    "$/${} is unnecessary on arithmetic variables.",
+                );
                 return;
             }
             InnerToken::T_SimpleCommand { .. } => return,
@@ -196,7 +211,12 @@ fn check_let_usage(params: &Parameters, t: &Token, out: &mut Out) {
         return;
     }
     if matches!(params.shell, Shell::Bash | Shell::Ksh) {
-        style(out, t.id(), 2219, "Instead of 'let expr', prefer (( expr )) .");
+        style(
+            out,
+            t.id(),
+            2219,
+            "Instead of 'let expr', prefer (( expr )) .",
+        );
     }
 }
 
@@ -231,7 +251,12 @@ fn check_assign_ate_command(_params: &Parameters, t: &Token, out: &mut Out) {
         _ => return,
     };
     if first_word_is_arg(words) {
-        err(out, t.id(), 2037, "To assign the output of a command, use var=$(cmd) .");
+        err(
+            out,
+            t.id(),
+            2037,
+            "To assign the output of a command, use var=$(cmd) .",
+        );
     } else if is_common_command(&get_unquoted_literal(assignment_term)) {
         warn(
             out,
@@ -324,25 +349,172 @@ fn check_test_redirects(_params: &Parameters, t: &Token, out: &mut Out) {
 
 // ShellCheck.Data.commonCommands
 const COMMON_COMMANDS: &[&str] = &[
-    "admin", "alias", "ar", "asa", "at", "awk", "basename", "batch", "bc", "bg",
-    "break", "c99", "cal", "cat", "cd", "cflow", "chgrp", "chmod", "chown",
-    "cksum", "cmp", "colon", "comm", "command", "compress", "continue", "cp",
-    "crontab", "csplit", "ctags", "cut", "cxref", "date", "dd", "delta", "df",
-    "diff", "dirname", "dot", "du", "echo", "ed", "env", "eval", "ex", "exec",
-    "exit", "expand", "export", "expr", "fc", "fg", "file", "find", "fold",
-    "fuser", "gencat", "get", "getconf", "getopts", "gettext", "grep", "hash",
-    "head", "iconv", "ipcrm", "ipcs", "jobs", "join", "kill", "lex", "link",
-    "ln", "locale", "localedef", "logger", "logname", "lp", "ls", "m4",
-    "mailx", "make", "man", "mesg", "mkdir", "mkfifo", "more", "msgfmt", "mv",
-    "newgrp", "ngettext", "nice", "nl", "nm", "nohup", "od", "paste", "patch",
-    "pathchk", "pax", "pr", "printf", "prs", "ps", "pwd", "read", "readlink",
-    "readonly", "realpath", "renice", "return", "rm", "rmdel", "rmdir", "sact",
-    "sccs", "sed", "set", "sh", "shift", "sleep", "sort", "split", "strings",
-    "strip", "stty", "tabs", "tail", "talk", "tee", "test", "time", "timeout",
-    "times", "touch", "tput", "tr", "trap", "tsort", "tty", "type", "ulimit",
-    "umask", "unalias", "uname", "uncompress", "unexpand", "unget", "uniq",
-    "unlink", "unset", "uucp", "uudecode", "uuencode", "uustat", "uux", "val",
-    "vi", "wait", "wc", "what", "who", "write", "xargs", "xgettext", "yacc",
+    "admin",
+    "alias",
+    "ar",
+    "asa",
+    "at",
+    "awk",
+    "basename",
+    "batch",
+    "bc",
+    "bg",
+    "break",
+    "c99",
+    "cal",
+    "cat",
+    "cd",
+    "cflow",
+    "chgrp",
+    "chmod",
+    "chown",
+    "cksum",
+    "cmp",
+    "colon",
+    "comm",
+    "command",
+    "compress",
+    "continue",
+    "cp",
+    "crontab",
+    "csplit",
+    "ctags",
+    "cut",
+    "cxref",
+    "date",
+    "dd",
+    "delta",
+    "df",
+    "diff",
+    "dirname",
+    "dot",
+    "du",
+    "echo",
+    "ed",
+    "env",
+    "eval",
+    "ex",
+    "exec",
+    "exit",
+    "expand",
+    "export",
+    "expr",
+    "fc",
+    "fg",
+    "file",
+    "find",
+    "fold",
+    "fuser",
+    "gencat",
+    "get",
+    "getconf",
+    "getopts",
+    "gettext",
+    "grep",
+    "hash",
+    "head",
+    "iconv",
+    "ipcrm",
+    "ipcs",
+    "jobs",
+    "join",
+    "kill",
+    "lex",
+    "link",
+    "ln",
+    "locale",
+    "localedef",
+    "logger",
+    "logname",
+    "lp",
+    "ls",
+    "m4",
+    "mailx",
+    "make",
+    "man",
+    "mesg",
+    "mkdir",
+    "mkfifo",
+    "more",
+    "msgfmt",
+    "mv",
+    "newgrp",
+    "ngettext",
+    "nice",
+    "nl",
+    "nm",
+    "nohup",
+    "od",
+    "paste",
+    "patch",
+    "pathchk",
+    "pax",
+    "pr",
+    "printf",
+    "prs",
+    "ps",
+    "pwd",
+    "read",
+    "readlink",
+    "readonly",
+    "realpath",
+    "renice",
+    "return",
+    "rm",
+    "rmdel",
+    "rmdir",
+    "sact",
+    "sccs",
+    "sed",
+    "set",
+    "sh",
+    "shift",
+    "sleep",
+    "sort",
+    "split",
+    "strings",
+    "strip",
+    "stty",
+    "tabs",
+    "tail",
+    "talk",
+    "tee",
+    "test",
+    "time",
+    "timeout",
+    "times",
+    "touch",
+    "tput",
+    "tr",
+    "trap",
+    "tsort",
+    "tty",
+    "type",
+    "ulimit",
+    "umask",
+    "unalias",
+    "uname",
+    "uncompress",
+    "unexpand",
+    "unget",
+    "uniq",
+    "unlink",
+    "unset",
+    "uucp",
+    "uudecode",
+    "uuencode",
+    "uustat",
+    "uux",
+    "val",
+    "vi",
+    "wait",
+    "wc",
+    "what",
+    "who",
+    "write",
+    "xargs",
+    "xgettext",
+    "yacc",
     "zcat",
 ];
 
@@ -370,7 +542,12 @@ mod tests {
         params.root.visit_preorder(&mut |t| f(&params, t, &mut out));
         out.iter().any(|c| c.comment.code == code)
     }
-    fn emits_code_shell(f: fn(&Parameters, &Token, &mut Out), s: &str, code: i64, shell: Shell) -> bool {
+    fn emits_code_shell(
+        f: fn(&Parameters, &Token, &mut Out),
+        s: &str,
+        code: i64,
+        shell: Shell,
+    ) -> bool {
         let params = params_for_shell(s, shell);
         let mut out = Out::new();
         params.root.visit_preorder(&mut |t| f(&params, t, &mut out));
@@ -385,79 +562,159 @@ mod tests {
 
     // ---- SC2004 checkArithmeticDeref ----
     #[test]
-    fn prop_checkArithmeticDeref1() { assert!(emits(check_arithmetic_deref, "echo $((3+$foo))")); }
+    fn prop_checkArithmeticDeref1() {
+        assert!(emits(check_arithmetic_deref, "echo $((3+$foo))"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref2() { assert!(emits(check_arithmetic_deref, "cow=14; (( s+= $cow ))")); }
+    fn prop_checkArithmeticDeref2() {
+        assert!(emits(check_arithmetic_deref, "cow=14; (( s+= $cow ))"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref3() { assert!(!emits(check_arithmetic_deref, "cow=1/40; (( s+= ${cow%%/*} ))")); }
+    fn prop_checkArithmeticDeref3() {
+        assert!(!emits(
+            check_arithmetic_deref,
+            "cow=1/40; (( s+= ${cow%%/*} ))"
+        ));
+    }
     #[test]
-    fn prop_checkArithmeticDeref4() { assert!(!emits(check_arithmetic_deref, "(( ! $? ))")); }
+    fn prop_checkArithmeticDeref4() {
+        assert!(!emits(check_arithmetic_deref, "(( ! $? ))"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref5() { assert!(!emits(check_arithmetic_deref, "(($1))")); }
+    fn prop_checkArithmeticDeref5() {
+        assert!(!emits(check_arithmetic_deref, "(($1))"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref6() { assert!(emits(check_arithmetic_deref, "(( a[$i] ))")); }
+    fn prop_checkArithmeticDeref6() {
+        assert!(emits(check_arithmetic_deref, "(( a[$i] ))"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref7() { assert!(!emits(check_arithmetic_deref, "(( 10#$n ))")); }
+    fn prop_checkArithmeticDeref7() {
+        assert!(!emits(check_arithmetic_deref, "(( 10#$n ))"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref8() { assert!(!emits(check_arithmetic_deref, "let i=$i+1")); }
+    fn prop_checkArithmeticDeref8() {
+        assert!(!emits(check_arithmetic_deref, "let i=$i+1"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref9() { assert!(!emits(check_arithmetic_deref, "(( a[foo] ))")); }
+    fn prop_checkArithmeticDeref9() {
+        assert!(!emits(check_arithmetic_deref, "(( a[foo] ))"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref10() { assert!(!emits(check_arithmetic_deref, "(( a[\\$foo] ))")); }
+    fn prop_checkArithmeticDeref10() {
+        assert!(!emits(check_arithmetic_deref, "(( a[\\$foo] ))"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref11() { assert!(emits(check_arithmetic_deref, "a[$foo]=wee")); }
+    fn prop_checkArithmeticDeref11() {
+        assert!(emits(check_arithmetic_deref, "a[$foo]=wee"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref11b() { assert!(!emits(check_arithmetic_deref, "declare -A a; a[$foo]=wee")); }
+    fn prop_checkArithmeticDeref11b() {
+        assert!(!emits(check_arithmetic_deref, "declare -A a; a[$foo]=wee"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref12() { assert!(emits(check_arithmetic_deref, "for ((i=0; $i < 3; i)); do true; done")); }
+    fn prop_checkArithmeticDeref12() {
+        assert!(emits(
+            check_arithmetic_deref,
+            "for ((i=0; $i < 3; i)); do true; done"
+        ));
+    }
     #[test]
-    fn prop_checkArithmeticDeref13() { assert!(!emits(check_arithmetic_deref, "(( $$ ))")); }
+    fn prop_checkArithmeticDeref13() {
+        assert!(!emits(check_arithmetic_deref, "(( $$ ))"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref14() { assert!(!emits(check_arithmetic_deref, "(( $! ))")); }
+    fn prop_checkArithmeticDeref14() {
+        assert!(!emits(check_arithmetic_deref, "(( $! ))"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref15() { assert!(!emits(check_arithmetic_deref, "(( ${!var} ))")); }
+    fn prop_checkArithmeticDeref15() {
+        assert!(!emits(check_arithmetic_deref, "(( ${!var} ))"));
+    }
     #[test]
-    fn prop_checkArithmeticDeref16() { assert!(!emits(check_arithmetic_deref, "(( ${x+1} + ${x=42} ))")); }
+    fn prop_checkArithmeticDeref16() {
+        assert!(!emits(check_arithmetic_deref, "(( ${x+1} + ${x=42} ))"));
+    }
 
     // ---- SC2219 checkLetUsage ----
     #[test]
-    fn prop_checkLetUsage1() { assert!(emits_code_shell(check_let_usage, "let a=1", 2219i64, Shell::Bash)); }
+    fn prop_checkLetUsage1() {
+        assert!(emits_code_shell(
+            check_let_usage,
+            "let a=1",
+            2219i64,
+            Shell::Bash
+        ));
+    }
     #[test]
-    fn prop_checkLetUsage2() { assert!(!emits_code_shell(check_let_usage, "(( a=1 ))", 2219i64, Shell::Bash)); }
+    fn prop_checkLetUsage2() {
+        assert!(!emits_code_shell(
+            check_let_usage,
+            "(( a=1 ))",
+            2219i64,
+            Shell::Bash
+        ));
+    }
 
     // ---- SC2209 / SC2037 checkAssignAteCommand ----
     #[test]
-    fn prop_checkAssignAteCommand1() { assert!(emits(check_assign_ate_command, "A=ls -l")); }
+    fn prop_checkAssignAteCommand1() {
+        assert!(emits(check_assign_ate_command, "A=ls -l"));
+    }
     #[test]
-    fn prop_checkAssignAteCommand2() { assert!(emits(check_assign_ate_command, "A=ls --sort=$foo")); }
+    fn prop_checkAssignAteCommand2() {
+        assert!(emits(check_assign_ate_command, "A=ls --sort=$foo"));
+    }
     #[test]
-    fn prop_checkAssignAteCommand3() { assert!(emits(check_assign_ate_command, "A=cat foo | grep bar")); }
+    fn prop_checkAssignAteCommand3() {
+        assert!(emits(check_assign_ate_command, "A=cat foo | grep bar"));
+    }
     #[test]
-    fn prop_checkAssignAteCommand4() { assert!(!emits(check_assign_ate_command, "A=foo ls -l")); }
+    fn prop_checkAssignAteCommand4() {
+        assert!(!emits(check_assign_ate_command, "A=foo ls -l"));
+    }
     #[test]
-    fn prop_checkAssignAteCommand5() { assert!(emits(check_assign_ate_command, "PAGER=cat grep bar")); }
+    fn prop_checkAssignAteCommand5() {
+        assert!(emits(check_assign_ate_command, "PAGER=cat grep bar"));
+    }
     #[test]
-    fn prop_checkAssignAteCommand6() { assert!(!emits(check_assign_ate_command, "PAGER=\"cat\" grep bar")); }
+    fn prop_checkAssignAteCommand6() {
+        assert!(!emits(check_assign_ate_command, "PAGER=\"cat\" grep bar"));
+    }
     #[test]
-    fn prop_checkAssignAteCommand7() { assert!(emits(check_assign_ate_command, "here=pwd")); }
+    fn prop_checkAssignAteCommand7() {
+        assert!(emits(check_assign_ate_command, "here=pwd"));
+    }
 
     // ---- SC2211 checkGlobAsCommand ----
     #[test]
-    fn prop_checkGlobAsCommand1() { assert!(emits(check_glob_as_command, "foo*")); }
+    fn prop_checkGlobAsCommand1() {
+        assert!(emits(check_glob_as_command, "foo*"));
+    }
     #[test]
-    fn prop_checkGlobAsCommand2() { assert!(emits(check_glob_as_command, "$(var[i])")); }
+    fn prop_checkGlobAsCommand2() {
+        assert!(emits(check_glob_as_command, "$(var[i])"));
+    }
     #[test]
-    fn prop_checkGlobAsCommand3() { assert!(!emits(check_glob_as_command, "echo foo*")); }
+    fn prop_checkGlobAsCommand3() {
+        assert!(!emits(check_glob_as_command, "echo foo*"));
+    }
 
     // ---- SC2065 checkTestRedirects ----
     #[test]
-    fn prop_checkTestRedirects1() { assert!(emits(check_test_redirects, "test 3 > 1")); }
+    fn prop_checkTestRedirects1() {
+        assert!(emits(check_test_redirects, "test 3 > 1"));
+    }
     #[test]
-    fn prop_checkTestRedirects2() { assert!(!emits(check_test_redirects, "test 3 \\> 1")); }
+    fn prop_checkTestRedirects2() {
+        assert!(!emits(check_test_redirects, "test 3 \\> 1"));
+    }
     #[test]
-    fn prop_checkTestRedirects3() { assert!(emits(check_test_redirects, "/usr/bin/test $var > $foo")); }
+    fn prop_checkTestRedirects3() {
+        assert!(emits(check_test_redirects, "/usr/bin/test $var > $foo"));
+    }
     #[test]
-    fn prop_checkTestRedirects4() { assert!(!emits(check_test_redirects, "test 1 -eq 2 2> file")); }
+    fn prop_checkTestRedirects4() {
+        assert!(!emits(check_test_redirects, "test 1 -eq 2 2> file"));
+    }
 }
-
-

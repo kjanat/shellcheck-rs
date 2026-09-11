@@ -36,27 +36,51 @@ Outputs (all under this directory):
   fn_tests.json       raw function-unit props for later porting
   prop_manifest.json  EVERY prop: {id, file, category, helper, decoded, ...}
 """
+
+import json
 import os
 import re
-import sys
-import json
 import subprocess
-import tempfile
+import sys
+from collections.abc import Iterator
+from typing import NotRequired, TypedDict
+
+
+class Classification(TypedDict):
+    category: str
+    helper: str
+    target: NotRequired[str | None]
+    polarity: NotRequired[str]
+    expr: NotRequired[str]
+    parser: NotRequired[str | None]
+    expect: NotRequired[str]
+    raw: NotRequired[str]
+
+
+class ManifestEntry(Classification):
+    id: str
+    file: str
+    script: NotRequired[str | None]
+    decoded: NotRequired[bool]
+
 
 SRC = os.environ.get("SC_SRC", "src")
 
 FULL_ONE_ARG = {"verify", "verifyNot", "verifyTree", "verifyNotTree"}
 PARSER_HELPERS = {"isOk", "isWarning", "isNotOk"}
 POLARITY = {
-    "verify": "positive", "verifyTree": "positive", "verifyCodes": "positive",
-    "verifyNot": "negative", "verifyNotTree": "negative",
+    "verify": "positive",
+    "verifyTree": "positive",
+    "verifyCodes": "positive",
+    "verifyNot": "negative",
+    "verifyNotTree": "negative",
 }
 PARSER_EXPECT = {"isOk": "ok", "isWarning": "warning", "isNotOk": "notok"}
 
 PROP_START = re.compile(r"^prop_(\w+)\s*((?:[\w']+\s*)*)=\s*(.*)$")
 
 
-def collect_props(path):
+def collect_props(path: str) -> Iterator[tuple[str, str, str]]:
     with open(path, encoding="utf-8") as fh:
         lines = fh.readlines()
     i, n = 0, len(lines)
@@ -72,7 +96,7 @@ def collect_props(path):
             nxt = lines[j]
             if nxt.strip() == "":
                 break
-            if not (nxt.startswith(" ") or nxt.startswith("\t")):
+            if not nxt.startswith((" ", "\t")):
                 break
             if PROP_START.match(nxt):
                 break
@@ -83,15 +107,15 @@ def collect_props(path):
         i = j
 
 
-def skip_atom(s):
+def skip_atom(s: str) -> tuple[str, str] | tuple[None, None]:
     s = s.lstrip()
     m = re.match(r"[A-Za-z_][A-Za-z0-9_'.]*", s)
     if not m:
         return None, None
-    return s[:m.end()].strip(), s[m.end():]
+    return s[: m.end()].strip(), s[m.end() :]
 
 
-def skip_bracket_list(s):
+def skip_bracket_list(s: str) -> str | None:
     s = s.lstrip()
     if not s.startswith("["):
         return None
@@ -102,11 +126,11 @@ def skip_bracket_list(s):
         elif ch == "]":
             depth -= 1
             if depth == 0:
-                return s[idx + 1:]
+                return s[idx + 1 :]
     return None
 
 
-def find_top_level(s, op):
+def find_top_level(s: str, op: str) -> int | None:
     depth = 0
     in_str = esc = False
     i = 0
@@ -133,7 +157,7 @@ def find_top_level(s, op):
     return None
 
 
-def strip_trailing_cmp(strexpr):
+def strip_trailing_cmp(strexpr: str) -> str:
     for op in ("==", "`elem`", "/=", "`notElem`"):
         idx = find_top_level(strexpr, op)
         if idx is not None:
@@ -141,7 +165,7 @@ def strip_trailing_cmp(strexpr):
     return strexpr
 
 
-def categorize(name, rhs):
+def categorize(_name: str, rhs: str) -> Classification:
     """Return a manifest entry dict (always), possibly with a decodable 'expr'."""
     parts = rhs.split(None, 1)
     helper = parts[0] if parts else ""
@@ -151,34 +175,59 @@ def categorize(name, rhs):
         target, rem = skip_atom(rest)
         if rem is not None:
             expr = clean_expr(rem)
-            return {"category": "full", "helper": helper, "target": target,
-                    "polarity": POLARITY[helper], "expr": expr}
+            return {
+                "category": "full",
+                "helper": helper,
+                "target": target,
+                "polarity": POLARITY[helper],
+                "expr": expr,
+            }
     if helper == "verifyCodes":
         target, rem = skip_atom(rest)
         if rem is not None:
             rem2 = skip_bracket_list(rem)
             if rem2 is not None:
-                return {"category": "full", "helper": helper, "target": target,
-                        "polarity": "positive", "expr": clean_expr(rem2)}
+                return {
+                    "category": "full",
+                    "helper": helper,
+                    "target": target,
+                    "polarity": "positive",
+                    "expr": clean_expr(rem2),
+                }
     if helper == "check":
-        return {"category": "full", "helper": helper, "target": "",
-                "polarity": "positive", "expr": clean_expr(strip_trailing_cmp(rest))}
+        return {
+            "category": "full",
+            "helper": helper,
+            "target": "",
+            "polarity": "positive",
+            "expr": clean_expr(strip_trailing_cmp(rest)),
+        }
     if helper == "checkWithIncludes":
         rem = skip_bracket_list(rest)
         if rem is not None:
-            return {"category": "full", "helper": helper, "target": "",
-                    "polarity": "positive", "expr": clean_expr(strip_trailing_cmp(rem))}
+            return {
+                "category": "full",
+                "helper": helper,
+                "target": "",
+                "polarity": "positive",
+                "expr": clean_expr(strip_trailing_cmp(rem)),
+            }
     if helper in PARSER_HELPERS:
         parser, rem = skip_atom(rest)
         if rem is not None:
-            return {"category": "parser", "helper": helper, "parser": parser,
-                    "expect": PARSER_EXPECT[helper], "expr": clean_expr(rem)}
+            return {
+                "category": "parser",
+                "helper": helper,
+                "parser": parser,
+                "expect": PARSER_EXPECT[helper],
+                "expr": clean_expr(rem),
+            }
 
     # Everything else: function-unit test or wrapper. Preserve raw for porting.
     return {"category": "fn", "helper": helper, "raw": rhs}
 
 
-def clean_expr(strexpr):
+def clean_expr(strexpr: str) -> str:
     strexpr = strexpr.strip()
     if strexpr.startswith("$"):
         strexpr = strexpr[1:].strip()
@@ -190,22 +239,22 @@ def clean_expr(strexpr):
     return strexpr
 
 
-def main():
-    manifest = []
+def main() -> None:
+    manifest: list[ManifestEntry] = []
     for root, _d, files in os.walk(SRC):
         for f in sorted(files):
             if not f.endswith(".hs"):
                 continue
             path = os.path.join(root, f)
             for name, rhs, base in collect_props(path):
-                ent = categorize(name, rhs)
-                ent["id"] = name
-                ent["file"] = base
+                ent: ManifestEntry = {**categorize(name, rhs), "id": name, "file": base}
                 manifest.append(ent)
 
     total = len(manifest)
     decodable = [e for e in manifest if "expr" in e]
-    sys.stderr.write(f"[extract] total props: {total}; decodable exprs: {len(decodable)}\n")
+    _ = sys.stderr.write(
+        f"[extract] total props: {total}; decodable exprs: {len(decodable)}\n"
+    )
 
     # Decode all decodable exprs in one GHCi pass.
     decoded = decode_exprs(decodable)
@@ -223,75 +272,111 @@ def main():
 
     here = os.path.dirname(os.path.abspath(__file__))
 
-    def dump(fname, obj):
+    def dump(fname: str, obj: object) -> None:
         with open(os.path.join(here, fname), "w", encoding="utf-8") as fh:
             json.dump(obj, fh, ensure_ascii=False, indent=0)
-            fh.write("\n")
+            _ = fh.write("\n")
 
-    dump("corpus.json", [
-        {"id": e["id"], "file": e["file"], "helper": e["helper"],
-         "target": e.get("target", ""), "polarity": e.get("polarity", ""),
-         "script": e["script"]}
-        for e in full_ok
-    ])
-    dump("parser_corpus.json", [
-        {"id": e["id"], "file": e["file"], "parser": e.get("parser", ""),
-         "expect": e.get("expect", ""), "script": e["script"]}
-        for e in parser_ok
-    ])
-    dump("fn_tests.json", [
-        {"id": e["id"], "file": e["file"], "helper": e["helper"], "raw": e["raw"]}
-        for e in fn
-    ])
-    dump("prop_manifest.json", [
-        {k: v for k, v in e.items() if k != "expr"} for e in manifest
-    ])
+    dump(
+        "corpus.json",
+        [
+            {
+                "id": e["id"],
+                "file": e["file"],
+                "helper": e["helper"],
+                "target": e.get("target", ""),
+                "polarity": e.get("polarity", ""),
+                "script": e.get("script"),
+            }
+            for e in full_ok
+        ],
+    )
+    dump(
+        "parser_corpus.json",
+        [
+            {
+                "id": e["id"],
+                "file": e["file"],
+                "parser": e.get("parser", ""),
+                "expect": e.get("expect", ""),
+                "script": e.get("script"),
+            }
+            for e in parser_ok
+        ],
+    )
+    dump(
+        "fn_tests.json",
+        [
+            {
+                "id": e["id"],
+                "file": e["file"],
+                "helper": e["helper"],
+                "raw": e.get("raw", ""),
+            }
+            for e in fn
+        ],
+    )
+    dump(
+        "prop_manifest.json",
+        [{k: v for k, v in e.items() if k != "expr"} for e in manifest],
+    )
 
     # Provenance summary.
     from collections import Counter
+
     by_cat = Counter(e["category"] for e in manifest)
-    sys.stderr.write(
-        f"[extract] categories: {dict(by_cat)}\n"
-        f"[extract] full decoded: {len(full_ok)}/{len(full)}; "
-        f"parser decoded: {len(parser_ok)}/{len(parser)}; "
-        f"fn (raw, not decoded): {len(fn)}\n"
+    _ = sys.stderr.write(
+        f"[extract] categories: {dict(by_cat)}\n[extract] full decoded: {len(full_ok)}/{len(full)}; parser decoded: {len(parser_ok)}/{len(parser)}; fn (raw, not decoded): {len(fn)}\n"
     )
     undecoded = [e["id"] for e in (full + parser) if not e.get("decoded")]
     if undecoded:
-        sys.stderr.write(f"[extract] undecodable full/parser exprs ({len(undecoded)}): "
-                         f"{', '.join(undecoded[:20])}{'...' if len(undecoded) > 20 else ''}\n")
-    print(json.dumps({
-        "total_props": total,
-        "categories": dict(by_cat),
-        "full_decoded": len(full_ok), "full_total": len(full),
-        "parser_decoded": len(parser_ok), "parser_total": len(parser),
-        "fn_raw": len(fn),
-        "undecoded_ids": undecoded,
-    }, indent=2))
+        _ = sys.stderr.write(
+            f"[extract] undecodable full/parser exprs ({len(undecoded)}): {', '.join(undecoded[:20])}{'...' if len(undecoded) > 20 else ''}\n"
+        )
+    print(
+        json.dumps(
+            {
+                "total_props": total,
+                "categories": dict(by_cat),
+                "full_decoded": len(full_ok),
+                "full_total": len(full),
+                "parser_decoded": len(parser_ok),
+                "parser_total": len(parser),
+                "fn_raw": len(fn),
+                "undecoded_ids": undecoded,
+            },
+            indent=2,
+        )
+    )
 
 
-def decode_exprs(entries):
+def decode_exprs(entries: list[ManifestEntry]) -> dict[str, str]:
     """Evaluate each Haskell String expr in GHCi; return {id: string}."""
     # Framing: \x01 id \x02 script \x03 per record. Scripts contain no control
     # bytes 1-3 in practice, so this is unambiguous even for empty scripts.
     script_lines = [
-        ":set -XExtendedDefaultRules", ":set prompt \"\"", ":set -v0",
-        "import Data.List", "import System.IO",
+        ":set -XExtendedDefaultRules",
+        ':set prompt ""',
+        ":set -v0",
+        "import Data.List",
+        "import System.IO",
         "hSetBuffering stdout (BlockBuffering Nothing)",
         r'let dump name s = putStr ("\SOH" ++ name ++ "\STX" ++ (s :: String) ++ "\ETX")',
     ]
     for e in entries:
+        assert "expr" in e
         expr = e["expr"].replace("\n", " ")
         script_lines.append(f'dump "{e["id"]}" ({expr})')
     script_lines += ["hFlush stdout", ":quit"]
-    with tempfile.NamedTemporaryFile("w", suffix=".ghci", delete=False) as tf:
-        tf.write("\n".join(script_lines) + "\n")
-        ghci_path = tf.name
     ghc = os.environ.get("GHCI", os.path.expanduser("~/.ghcup/bin/ghci"))
-    proc = subprocess.run([ghc, "-ignore-dot-ghci"], stdin=open(ghci_path),
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.run(
+        [ghc, "-ignore-dot-ghci"],
+        input=("\n".join(script_lines) + "\n").encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
     ids = {e["id"] for e in entries}
-    decoded = {}
+    decoded: dict[str, str] = {}
     for m in re.finditer(b"\x01(.*?)\x02(.*?)\x03", proc.stdout, re.DOTALL):
         name = m.group(1).decode("utf-8", "replace").strip()
         if name in ids:
@@ -299,7 +384,9 @@ def decode_exprs(entries):
     # Warn if any decoded script contains framing control bytes (would be unsafe).
     for name, s in decoded.items():
         if any(c in s for c in ("\x01", "\x02", "\x03")):
-            sys.stderr.write(f"[extract] WARNING: {name} contains a framing control byte\n")
+            _ = sys.stderr.write(
+                f"[extract] WARNING: {name} contains a framing control byte\n"
+            )
     return decoded
 
 

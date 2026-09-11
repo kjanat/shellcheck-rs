@@ -16,14 +16,29 @@ use shellcheck_rs::interface::{
 const CONTENTS: &str = "#!/bin/bash\necho `date`\n";
 
 fn pos(line: i64, col: i64) -> Position {
-    Position { file: "fix.sh".to_string(), line, column: col }
+    Position {
+        file: "fix.sh".to_string(),
+        line,
+        column: col,
+    }
 }
 
-fn comment(sev: Severity, code: i64, msg: &str, sc: i64, ec: i64, fix: Option<Fix>) -> PositionedComment {
+fn comment(
+    sev: Severity,
+    code: i64,
+    msg: &str,
+    sc: i64,
+    ec: i64,
+    fix: Option<Fix>,
+) -> PositionedComment {
     PositionedComment {
         start: pos(2, sc),
         end: pos(2, ec),
-        comment: Comment { severity: sev, code, message: msg.to_string() },
+        comment: Comment {
+            severity: sev,
+            code,
+            message: msg.to_string(),
+        },
         fix,
     }
 }
@@ -48,9 +63,30 @@ fn sample() -> Vec<PositionedComment> {
         ],
     };
     vec![
-        comment(Severity::WarningC, 2046, "Quote this to prevent word splitting.", 6, 12, None),
-        comment(Severity::StyleC, 2005, "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'.", 6, 12, None),
-        comment(Severity::StyleC, 2006, "Use $(...) notation instead of legacy backticks `...`.", 6, 12, Some(fix)),
+        comment(
+            Severity::WarningC,
+            2046,
+            "Quote this to prevent word splitting.",
+            6,
+            12,
+            None,
+        ),
+        comment(
+            Severity::StyleC,
+            2005,
+            "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'.",
+            6,
+            12,
+            None,
+        ),
+        comment(
+            Severity::StyleC,
+            2006,
+            "Use $(...) notation instead of legacy backticks `...`.",
+            6,
+            12,
+            Some(fix),
+        ),
     ]
 }
 

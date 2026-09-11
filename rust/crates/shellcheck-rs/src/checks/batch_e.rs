@@ -134,9 +134,7 @@ fn get_command_name(t: &Token) -> Option<String> {
     let s = astlib::get_literal_string(w)?;
     let rest = &words[1..];
     let effective: Option<&Token> = match s.as_str() {
-        "busybox" | "builtin" | "command" | "run" => {
-            rest.first().filter(|a| !is_flag(a))
-        }
+        "busybox" | "builtin" | "command" | "run" => rest.first().filter(|a| !is_flag(a)),
         "exec" => exec_effective(rest),
         _ => None,
     };
@@ -225,9 +223,11 @@ fn get_find_command(cmd: &Token) -> String {
     let lits: Vec<Option<String>> = words.iter().map(astlib::get_literal_string).collect();
     let exec_flags = ["-exec", "-execdir", "-ok", "-okdir"];
     // dropWhile (not in exec_flags)
-    let start = lits
-        .iter()
-        .position(|x| x.as_deref().map(|s| exec_flags.contains(&s)).unwrap_or(false));
+    let start = lits.iter().position(|x| {
+        x.as_deref()
+            .map(|s| exec_flags.contains(&s))
+            .unwrap_or(false)
+    });
     match start {
         Some(idx) => {
             // cmd is at idx+1 (flag:cmd:rest)
@@ -269,9 +269,29 @@ fn get_mumps_command(cmd: &Token) -> String {
 }
 
 const SC2016_OK_COMMANDS: &[&str] = &[
-    "trap", "sh", "bash", "ksh", "zsh", "ssh", "eval", "xprop", "alias", "sudo", "doas", "run0",
-    "docker", "podman", "oc", "dpkg-query", "jq", "rename", "rg", "unset", "git filter-branch",
-    "mumps -run %XCMD", "mumps -run LOOP%XCMD",
+    "trap",
+    "sh",
+    "bash",
+    "ksh",
+    "zsh",
+    "ssh",
+    "eval",
+    "xprop",
+    "alias",
+    "sudo",
+    "doas",
+    "run0",
+    "docker",
+    "podman",
+    "oc",
+    "dpkg-query",
+    "jq",
+    "rename",
+    "rg",
+    "unset",
+    "git filter-branch",
+    "mumps -run %XCMD",
+    "mumps -run LOOP%XCMD",
 ];
 
 const SC2016_COMMONLY_QUOTED: &[&str] = &["PS1", "PS2", "PS3", "PS4", "PROMPT_COMMAND"];
@@ -445,4 +465,3 @@ fn check_inexplicably_unquoted(params: &Parameters, t: &Token, out: &mut Out) {
         }
     }
 }
-

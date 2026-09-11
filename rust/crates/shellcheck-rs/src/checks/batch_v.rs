@@ -501,12 +501,7 @@ fn check_spurious_expansion_2084(params: &Parameters, t: &Token, out: &mut Out) 
 
 fn check_dollar_brackets(params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_DollarBracket(_) = &*t.inner {
-        style(
-            out,
-            t.id(),
-            2007,
-            "Use $((..)) instead of deprecated $[..]",
-        );
+        style(out, t.id(), 2007, "Use $((..)) instead of deprecated $[..]");
     }
 }
 
@@ -527,7 +522,10 @@ fn check_ssh_here_doc(params: &Parameters, t: &Token, out: &mut Out) {
 fn sshd_check_here_doc(r: &Token, out: &mut Out) {
     if let InnerToken::T_FdRedirect { target, .. } = &*r.inner {
         if let InnerToken::T_HereDoc {
-            quoted, delim, body, ..
+            quoted,
+            delim,
+            body,
+            ..
         } = &*target.inner
         {
             if *quoted == Quoted::Unquoted && !body.iter().all(is_constant) {
@@ -569,10 +567,7 @@ fn check_prefix_assignment_reference(params: &Parameters, t: &Token, out: &mut O
 }
 
 fn par_check_var(v: &Token, name: &str, id_path: &[Id], expansion_id: Id, out: &mut Out) {
-    if let InnerToken::T_Assignment {
-        var, indices, ..
-    } = &*v.inner
-    {
+    if let InnerToken::T_Assignment { var, indices, .. } = &*v.inner {
         if indices.is_empty() && var == name && !id_path.contains(&v.id()) {
             warn(
                 out,
@@ -623,7 +618,8 @@ fn check_translated_string_variable(params: &Parameters, t: &Token, out: &mut Ou
     if let InnerToken::T_DollarDoubleQuoted(list) = &*t.inner {
         if list.len() == 1 {
             if let InnerToken::T_Literal(s) = &*list[0].inner {
-                if s.chars().all(cfg::is_variable_char) && translated_assignments(params).contains(s)
+                if s.chars().all(cfg::is_variable_char)
+                    && translated_assignments(params).contains(s)
                 {
                     let fix = fix_with(vec![replace_start(params, t.id(), 2, "\"$")]);
                     warn_with_fix(
@@ -763,11 +759,10 @@ enum PipeType {
 
 /// `ShellCheck.Data.nonReadingCommands`.
 const NON_READING_COMMANDS: &[&str] = &[
-    "alias", "basename", "bg", "cal", "cd", "chgrp", "chmod", "chown", "cp",
-    "du", "echo", "export", "fg", "fuser", "getconf", "getopt", "getopts",
-    "ipcrm", "ipcs", "jobs", "kill", "ln", "ls", "locale", "mv", "printf",
-    "ps", "pwd", "readlink", "realpath", "renice", "rm", "rmdir", "set",
-    "sleep", "touch", "trap", "ulimit", "unalias", "uname",
+    "alias", "basename", "bg", "cal", "cd", "chgrp", "chmod", "chown", "cp", "du", "echo",
+    "export", "fg", "fuser", "getconf", "getopt", "getopts", "ipcrm", "ipcs", "jobs", "kill", "ln",
+    "ls", "locale", "mv", "printf", "ps", "pwd", "readlink", "realpath", "renice", "rm", "rmdir",
+    "set", "sleep", "touch", "trap", "ulimit", "unalias", "uname",
 ];
 
 const INTERACTIVE_FLAG_CMDS: &[&str] = &["cp", "mv", "rm"];
@@ -777,7 +772,11 @@ fn ptn_get_all_flags(cmd: &Token) -> Vec<(&Token, String)> {
         InnerToken::T_SimpleCommand { words, .. } => words,
         _ => return Vec::new(),
     };
-    let args = if words.len() > 1 { &words[1..] } else { &[][..] };
+    let args = if words.len() > 1 {
+        &words[1..]
+    } else {
+        &[][..]
+    };
     let token_and_text: Vec<(&Token, String)> = args
         .iter()
         .map(|x| (x, cfg::oversimplify(x).concat()))
@@ -864,7 +863,9 @@ fn ptn_get_default_fds(redir: &Token) -> Option<Vec<i64>> {
             InnerToken::T_DGREAT => Some(vec![1]),
             InnerToken::T_GREATAND => Some(vec![1, 2]),
             InnerToken::T_CLOBBER => Some(vec![1]),
-            InnerToken::T_IoDuplicate { op: inner, num } if num == "-" => ptn_get_default_fds(inner),
+            InnerToken::T_IoDuplicate { op: inner, num } if num == "-" => {
+                ptn_get_default_fds(inner)
+            }
             _ => None,
         },
         _ => None,
@@ -921,7 +922,10 @@ fn check_pipe_to_nowhere_no_dupes(params: &Parameters, t: &Token, out: &mut Out)
 
 fn ptn_impl(params: &Parameters, t: &Token, emit_dupes: bool, out: &mut Out) {
     match &*t.inner {
-        InnerToken::T_Pipeline { separators, commands } => {
+        InnerToken::T_Pipeline {
+            separators,
+            commands,
+        } => {
             let pipe_types: Vec<PipeType> = separators.iter().map(ptn_pipe_type).collect();
             for (i, stage) in commands.iter().enumerate() {
                 let input = if i == 0 {
@@ -1172,7 +1176,10 @@ fn caai_get_associative_arrays(root: &Token) -> std::collections::HashSet<String
                 return;
             }
             let name = get_command_name(t);
-            if !matches!(name.as_deref(), Some("declare") | Some("local") | Some("typeset")) {
+            if !matches!(
+                name.as_deref(),
+                Some("declare") | Some("local") | Some("typeset")
+            ) {
                 return;
             }
             let args = &words[1..];
@@ -1214,7 +1221,10 @@ fn check_array_assignment_indices(params: &Parameters, root: &Token, out: &mut O
     let assocs = caai_get_associative_arrays(root);
     root.visit_preorder(&mut |t| {
         if let InnerToken::T_Assignment {
-            var, indices, value, ..
+            var,
+            indices,
+            value,
+            ..
         } = &*t.inner
         {
             if indices.is_empty() {
@@ -1408,7 +1418,10 @@ fn avi_get_array_if_used_as_index<'a>(
             });
             Some((parent.clone(), cfg::get_braced_reference(&pstr)))
         }
-        InnerToken::TA_Variable { name: reference, indices } if indices.is_empty() => {
+        InnerToken::TA_Variable {
+            name: reference,
+            indices,
+        } if indices.is_empty() => {
             if reference != name {
                 return None;
             }
@@ -1424,7 +1437,10 @@ fn avi_get_array_if_used_as_index<'a>(
             // parent TA_Variable arrayName [element] where element == seq
             let arr = params.parent(seq)?;
             match &*arr.inner {
-                InnerToken::TA_Variable { name: array_name, indices } if indices.len() == 1 => {
+                InnerToken::TA_Variable {
+                    name: array_name,
+                    indices,
+                } if indices.len() == 1 => {
                     if indices[0].id() != seq.id() {
                         return None;
                     }
@@ -1462,7 +1478,8 @@ fn check_array_value_used_as_index(params: &Parameters, _root: &Token, out: &mut
                     if let Some((array_ref, array_name)) =
                         avi_get_array_if_used_as_index(params, name, token)
                     {
-                        if let Some((loop_word, _)) = arrays.iter().find(|(_, n)| *n == array_name) {
+                        if let Some((loop_word, _)) = arrays.iter().find(|(_, n)| *n == array_name)
+                        {
                             let loop_id = loop_tok.id();
                             let in_loop = get_path(params, token).iter().any(|x| x.id() == loop_id);
                             if in_loop {
@@ -1493,25 +1510,172 @@ fn check_array_value_used_as_index(params: &Parameters, _root: &Token, out: &mut
 
 /// `ShellCheck.Data.commonCommands`.
 const COMMON_COMMANDS: &[&str] = &[
-    "admin", "alias", "ar", "asa", "at", "awk", "basename", "batch", "bc", "bg",
-    "break", "c99", "cal", "cat", "cd", "cflow", "chgrp", "chmod", "chown",
-    "cksum", "cmp", "colon", "comm", "command", "compress", "continue", "cp",
-    "crontab", "csplit", "ctags", "cut", "cxref", "date", "dd", "delta", "df",
-    "diff", "dirname", "dot", "du", "echo", "ed", "env", "eval", "ex", "exec",
-    "exit", "expand", "export", "expr", "fc", "fg", "file", "find", "fold",
-    "fuser", "gencat", "get", "getconf", "getopts", "gettext", "grep", "hash",
-    "head", "iconv", "ipcrm", "ipcs", "jobs", "join", "kill", "lex", "link",
-    "ln", "locale", "localedef", "logger", "logname", "lp", "ls", "m4",
-    "mailx", "make", "man", "mesg", "mkdir", "mkfifo", "more", "msgfmt", "mv",
-    "newgrp", "ngettext", "nice", "nl", "nm", "nohup", "od", "paste", "patch",
-    "pathchk", "pax", "pr", "printf", "prs", "ps", "pwd", "read", "readlink",
-    "readonly", "realpath", "renice", "return", "rm", "rmdel", "rmdir", "sact",
-    "sccs", "sed", "set", "sh", "shift", "sleep", "sort", "split", "strings",
-    "strip", "stty", "tabs", "tail", "talk", "tee", "test", "time", "timeout",
-    "times", "touch", "tput", "tr", "trap", "tsort", "tty", "type", "ulimit",
-    "umask", "unalias", "uname", "uncompress", "unexpand", "unget", "uniq",
-    "unlink", "unset", "uucp", "uudecode", "uuencode", "uustat", "uux", "val",
-    "vi", "wait", "wc", "what", "who", "write", "xargs", "xgettext", "yacc",
+    "admin",
+    "alias",
+    "ar",
+    "asa",
+    "at",
+    "awk",
+    "basename",
+    "batch",
+    "bc",
+    "bg",
+    "break",
+    "c99",
+    "cal",
+    "cat",
+    "cd",
+    "cflow",
+    "chgrp",
+    "chmod",
+    "chown",
+    "cksum",
+    "cmp",
+    "colon",
+    "comm",
+    "command",
+    "compress",
+    "continue",
+    "cp",
+    "crontab",
+    "csplit",
+    "ctags",
+    "cut",
+    "cxref",
+    "date",
+    "dd",
+    "delta",
+    "df",
+    "diff",
+    "dirname",
+    "dot",
+    "du",
+    "echo",
+    "ed",
+    "env",
+    "eval",
+    "ex",
+    "exec",
+    "exit",
+    "expand",
+    "export",
+    "expr",
+    "fc",
+    "fg",
+    "file",
+    "find",
+    "fold",
+    "fuser",
+    "gencat",
+    "get",
+    "getconf",
+    "getopts",
+    "gettext",
+    "grep",
+    "hash",
+    "head",
+    "iconv",
+    "ipcrm",
+    "ipcs",
+    "jobs",
+    "join",
+    "kill",
+    "lex",
+    "link",
+    "ln",
+    "locale",
+    "localedef",
+    "logger",
+    "logname",
+    "lp",
+    "ls",
+    "m4",
+    "mailx",
+    "make",
+    "man",
+    "mesg",
+    "mkdir",
+    "mkfifo",
+    "more",
+    "msgfmt",
+    "mv",
+    "newgrp",
+    "ngettext",
+    "nice",
+    "nl",
+    "nm",
+    "nohup",
+    "od",
+    "paste",
+    "patch",
+    "pathchk",
+    "pax",
+    "pr",
+    "printf",
+    "prs",
+    "ps",
+    "pwd",
+    "read",
+    "readlink",
+    "readonly",
+    "realpath",
+    "renice",
+    "return",
+    "rm",
+    "rmdel",
+    "rmdir",
+    "sact",
+    "sccs",
+    "sed",
+    "set",
+    "sh",
+    "shift",
+    "sleep",
+    "sort",
+    "split",
+    "strings",
+    "strip",
+    "stty",
+    "tabs",
+    "tail",
+    "talk",
+    "tee",
+    "test",
+    "time",
+    "timeout",
+    "times",
+    "touch",
+    "tput",
+    "tr",
+    "trap",
+    "tsort",
+    "tty",
+    "type",
+    "ulimit",
+    "umask",
+    "unalias",
+    "uname",
+    "uncompress",
+    "unexpand",
+    "unget",
+    "uniq",
+    "unlink",
+    "unset",
+    "uucp",
+    "uudecode",
+    "uuencode",
+    "uustat",
+    "uux",
+    "val",
+    "vi",
+    "wait",
+    "wc",
+    "what",
+    "who",
+    "write",
+    "xargs",
+    "xgettext",
+    "yacc",
     "zcat",
 ];
 
@@ -1543,271 +1707,712 @@ mod tests {
 
     // ---- SC2082/2296/2297/2298/2299/2300/2301 checkBadParameterSubstitution ----
     #[test]
-    fn prop_checkBadParameterSubstitution1() { assert!(node_emits(check_bad_parameter_substitution, "${foo$n}")); }
+    fn prop_checkBadParameterSubstitution1() {
+        assert!(node_emits(check_bad_parameter_substitution, "${foo$n}"));
+    }
     #[test]
-    fn prop_checkBadParameterSubstitution2() { assert!(!node_emits(check_bad_parameter_substitution, "${foo//$n/lol}")); }
+    fn prop_checkBadParameterSubstitution2() {
+        assert!(!node_emits(
+            check_bad_parameter_substitution,
+            "${foo//$n/lol}"
+        ));
+    }
     #[test]
-    fn prop_checkBadParameterSubstitution3() { assert!(node_emits(check_bad_parameter_substitution, "${$#}")); }
+    fn prop_checkBadParameterSubstitution3() {
+        assert!(node_emits(check_bad_parameter_substitution, "${$#}"));
+    }
     #[test]
-    fn prop_checkBadParameterSubstitution4() { assert!(node_emits(check_bad_parameter_substitution, "${var${n}_$((i%2))}")); }
+    fn prop_checkBadParameterSubstitution4() {
+        assert!(node_emits(
+            check_bad_parameter_substitution,
+            "${var${n}_$((i%2))}"
+        ));
+    }
     #[test]
-    fn prop_checkBadParameterSubstitution5() { assert!(!node_emits(check_bad_parameter_substitution, "${bar}")); }
+    fn prop_checkBadParameterSubstitution5() {
+        assert!(!node_emits(check_bad_parameter_substitution, "${bar}"));
+    }
     #[test]
-    fn prop_checkBadParameterSubstitution6() { assert!(node_emits(check_bad_parameter_substitution, "${\"bar\"}")); }
+    fn prop_checkBadParameterSubstitution6() {
+        assert!(node_emits(check_bad_parameter_substitution, "${\"bar\"}"));
+    }
     #[test]
-    fn prop_checkBadParameterSubstitution7() { assert!(node_emits(check_bad_parameter_substitution, "${{var}")); }
+    fn prop_checkBadParameterSubstitution7() {
+        assert!(node_emits(check_bad_parameter_substitution, "${{var}"));
+    }
     #[test]
-    fn prop_checkBadParameterSubstitution8() { assert!(node_emits(check_bad_parameter_substitution, "${$(x)//x/y}")); }
+    fn prop_checkBadParameterSubstitution8() {
+        assert!(node_emits(check_bad_parameter_substitution, "${$(x)//x/y}"));
+    }
     #[test]
-    fn prop_checkBadParameterSubstitution9() { assert!(!node_emits(check_bad_parameter_substitution, "$# ${#} $! ${!} ${!#} ${#!}")); }
+    fn prop_checkBadParameterSubstitution9() {
+        assert!(!node_emits(
+            check_bad_parameter_substitution,
+            "$# ${#} $! ${!} ${!#} ${#!}"
+        ));
+    }
     #[test]
-    fn prop_checkBadParameterSubstitution10() { assert!(node_emits(check_bad_parameter_substitution, "${'foo'}")); }
+    fn prop_checkBadParameterSubstitution10() {
+        assert!(node_emits(check_bad_parameter_substitution, "${'foo'}"));
+    }
     #[test]
-    fn prop_checkBadParameterSubstitution11() { assert!(node_emits(check_bad_parameter_substitution, "${${x%.*}##*/}")); }
+    fn prop_checkBadParameterSubstitution11() {
+        assert!(node_emits(
+            check_bad_parameter_substitution,
+            "${${x%.*}##*/}"
+        ));
+    }
 
     // ---- SC2088 checkTildeInQuotes ----
     #[test]
-    fn prop_checkTildeInQuotes1() { assert!(node_emits(check_tilde_in_quotes, "var=\"~/out.txt\"")); }
+    fn prop_checkTildeInQuotes1() {
+        assert!(node_emits(check_tilde_in_quotes, "var=\"~/out.txt\""));
+    }
     #[test]
-    fn prop_checkTildeInQuotes2() { assert!(node_emits(check_tilde_in_quotes, "foo > '~/dir'")); }
+    fn prop_checkTildeInQuotes2() {
+        assert!(node_emits(check_tilde_in_quotes, "foo > '~/dir'"));
+    }
     #[test]
-    fn prop_checkTildeInQuotes4() { assert!(!node_emits(check_tilde_in_quotes, "~/file")); }
+    fn prop_checkTildeInQuotes4() {
+        assert!(!node_emits(check_tilde_in_quotes, "~/file"));
+    }
     #[test]
-    fn prop_checkTildeInQuotes5() { assert!(!node_emits(check_tilde_in_quotes, "echo '/~foo/cow'")); }
+    fn prop_checkTildeInQuotes5() {
+        assert!(!node_emits(check_tilde_in_quotes, "echo '/~foo/cow'"));
+    }
     #[test]
-    fn prop_checkTildeInQuotes6() { assert!(!node_emits(check_tilde_in_quotes, "awk '$0 ~ /foo/'")); }
+    fn prop_checkTildeInQuotes6() {
+        assert!(!node_emits(check_tilde_in_quotes, "awk '$0 ~ /foo/'"));
+    }
 
     // ---- SC2026/2027/2140 checkInexplicablyUnquoted ----
     #[test]
-    fn prop_checkInexplicablyUnquoted1() { assert!(node_emits(check_inexplicably_unquoted, "echo 'var='value';'")); }
+    fn prop_checkInexplicablyUnquoted1() {
+        assert!(node_emits(
+            check_inexplicably_unquoted,
+            "echo 'var='value';'"
+        ));
+    }
     #[test]
-    fn prop_checkInexplicablyUnquoted2() { assert!(!node_emits(check_inexplicably_unquoted, "'foo'*")); }
+    fn prop_checkInexplicablyUnquoted2() {
+        assert!(!node_emits(check_inexplicably_unquoted, "'foo'*"));
+    }
     #[test]
-    fn prop_checkInexplicablyUnquoted3() { assert!(!node_emits(check_inexplicably_unquoted, "wget --user-agent='something'")); }
+    fn prop_checkInexplicablyUnquoted3() {
+        assert!(!node_emits(
+            check_inexplicably_unquoted,
+            "wget --user-agent='something'"
+        ));
+    }
     #[test]
-    fn prop_checkInexplicablyUnquoted4() { assert!(node_emits(check_inexplicably_unquoted, "echo \"VALUES (\"id\")\"")); }
+    fn prop_checkInexplicablyUnquoted4() {
+        assert!(node_emits(
+            check_inexplicably_unquoted,
+            "echo \"VALUES (\"id\")\""
+        ));
+    }
     #[test]
-    fn prop_checkInexplicablyUnquoted5() { assert!(!node_emits(check_inexplicably_unquoted, "\"$dir\"/\"$file\"")); }
+    fn prop_checkInexplicablyUnquoted5() {
+        assert!(!node_emits(
+            check_inexplicably_unquoted,
+            "\"$dir\"/\"$file\""
+        ));
+    }
     #[test]
-    fn prop_checkInexplicablyUnquoted6() { assert!(!node_emits(check_inexplicably_unquoted, "\"$dir\"some_stuff\"$file\"")); }
+    fn prop_checkInexplicablyUnquoted6() {
+        assert!(!node_emits(
+            check_inexplicably_unquoted,
+            "\"$dir\"some_stuff\"$file\""
+        ));
+    }
     #[test]
-    fn prop_checkInexplicablyUnquoted7() { assert!(!node_emits(check_inexplicably_unquoted, "${dir/\"foo\"/\"bar\"}")); }
+    fn prop_checkInexplicablyUnquoted7() {
+        assert!(!node_emits(
+            check_inexplicably_unquoted,
+            "${dir/\"foo\"/\"bar\"}"
+        ));
+    }
     #[test]
-    fn prop_checkInexplicablyUnquoted8() { assert!(!node_emits(check_inexplicably_unquoted, "  'foo'\\\n  'bar'")); }
+    fn prop_checkInexplicablyUnquoted8() {
+        assert!(!node_emits(
+            check_inexplicably_unquoted,
+            "  'foo'\\\n  'bar'"
+        ));
+    }
     #[test]
-    fn prop_checkInexplicablyUnquoted9() { assert!(!node_emits(check_inexplicably_unquoted, "[[ $x =~ \"foo\"(\"bar\"|\"baz\") ]]")); }
+    fn prop_checkInexplicablyUnquoted9() {
+        assert!(!node_emits(
+            check_inexplicably_unquoted,
+            "[[ $x =~ \"foo\"(\"bar\"|\"baz\") ]]"
+        ));
+    }
     #[test]
-    fn prop_checkInexplicablyUnquoted10() { assert!(!node_emits(check_inexplicably_unquoted, "cmd ${x+--name=\"$x\" --output=\"$x.out\"}")); }
+    fn prop_checkInexplicablyUnquoted10() {
+        assert!(!node_emits(
+            check_inexplicably_unquoted,
+            "cmd ${x+--name=\"$x\" --output=\"$x.out\"}"
+        ));
+    }
     #[test]
-    fn prop_checkInexplicablyUnquoted11() { assert!(!node_emits(check_inexplicably_unquoted, "echo \"foo\"/\"bar\"")); }
+    fn prop_checkInexplicablyUnquoted11() {
+        assert!(!node_emits(
+            check_inexplicably_unquoted,
+            "echo \"foo\"/\"bar\""
+        ));
+    }
     #[test]
-    fn prop_checkInexplicablyUnquoted12() { assert!(!node_emits(check_inexplicably_unquoted, "declare \"foo\"=\"bar\"")); }
+    fn prop_checkInexplicablyUnquoted12() {
+        assert!(!node_emits(
+            check_inexplicably_unquoted,
+            "declare \"foo\"=\"bar\""
+        ));
+    }
 
     // ---- SC2083 checkLonelyDotDash ----
     #[test]
-    fn prop_checkLonelyDotDash1() { assert!(node_emits(check_lonely_dot_dash, "./ file")); }
+    fn prop_checkLonelyDotDash1() {
+        assert!(node_emits(check_lonely_dot_dash, "./ file"));
+    }
     #[test]
-    fn prop_checkLonelyDotDash2() { assert!(!node_emits(check_lonely_dot_dash, "./file")); }
+    fn prop_checkLonelyDotDash2() {
+        assert!(!node_emits(check_lonely_dot_dash, "./file"));
+    }
 
     // ---- SC2084/2091/2092 checkSpuriousExpansion ----
     #[test]
-    fn prop_checkSpuriousExpansion1() { assert!(node_emits(check_spurious_expansion, "if $(true); then true; fi")); }
+    fn prop_checkSpuriousExpansion1() {
+        assert!(node_emits(
+            check_spurious_expansion,
+            "if $(true); then true; fi"
+        ));
+    }
     #[test]
-    fn prop_checkSpuriousExpansion3() { assert!(!node_emits(check_spurious_expansion, "$(cmd) --flag1 --flag2")); }
+    fn prop_checkSpuriousExpansion3() {
+        assert!(!node_emits(
+            check_spurious_expansion,
+            "$(cmd) --flag1 --flag2"
+        ));
+    }
     #[test]
-    fn prop_checkSpuriousExpansion4() { assert!(node_emits(check_spurious_expansion, "$((i++))")); }
+    fn prop_checkSpuriousExpansion4() {
+        assert!(node_emits(check_spurious_expansion, "$((i++))"));
+    }
 
     // ---- SC2007 checkDollarBrackets ----
     #[test]
-    fn prop_checkDollarBrackets1() { assert!(node_emits(check_dollar_brackets, "echo $[1+2]")); }
+    fn prop_checkDollarBrackets1() {
+        assert!(node_emits(check_dollar_brackets, "echo $[1+2]"));
+    }
     #[test]
-    fn prop_checkDollarBrackets2() { assert!(!node_emits(check_dollar_brackets, "echo $((1+2))")); }
+    fn prop_checkDollarBrackets2() {
+        assert!(!node_emits(check_dollar_brackets, "echo $((1+2))"));
+    }
 
     // ---- SC2087 checkSshHereDoc ----
     #[test]
-    fn prop_checkSshHereDoc1() { assert!(node_emits(check_ssh_here_doc, "ssh host << foo\necho $PATH\nfoo")); }
+    fn prop_checkSshHereDoc1() {
+        assert!(node_emits(
+            check_ssh_here_doc,
+            "ssh host << foo\necho $PATH\nfoo"
+        ));
+    }
     #[test]
-    fn prop_checkSshHereDoc2() { assert!(!node_emits(check_ssh_here_doc, "ssh host << 'foo'\necho $PATH\nfoo")); }
+    fn prop_checkSshHereDoc2() {
+        assert!(!node_emits(
+            check_ssh_here_doc,
+            "ssh host << 'foo'\necho $PATH\nfoo"
+        ));
+    }
 
     // ---- SC2097/2098 checkPrefixAssignmentReference ----
     #[test]
-    fn prop_checkPrefixAssign1() { assert!(node_emits(check_prefix_assignment_reference, "var=foo echo $var")); }
+    fn prop_checkPrefixAssign1() {
+        assert!(node_emits(
+            check_prefix_assignment_reference,
+            "var=foo echo $var"
+        ));
+    }
     #[test]
-    fn prop_checkPrefixAssign2() { assert!(!node_emits(check_prefix_assignment_reference, "var=$(echo $var) cmd")); }
+    fn prop_checkPrefixAssign2() {
+        assert!(!node_emits(
+            check_prefix_assignment_reference,
+            "var=$(echo $var) cmd"
+        ));
+    }
 
     // ---- SC2247 checkDollarQuoteParen ----
     #[test]
-    fn prop_checkDollarQuoteParen1() { assert!(node_emits(check_dollar_quote_paren, "$\"(foo)\"")); }
+    fn prop_checkDollarQuoteParen1() {
+        assert!(node_emits(check_dollar_quote_paren, "$\"(foo)\""));
+    }
     #[test]
-    fn prop_checkDollarQuoteParen2() { assert!(node_emits(check_dollar_quote_paren, "$\"{foo}\"")); }
+    fn prop_checkDollarQuoteParen2() {
+        assert!(node_emits(check_dollar_quote_paren, "$\"{foo}\""));
+    }
     #[test]
-    fn prop_checkDollarQuoteParen3() { assert!(!node_emits(check_dollar_quote_paren, "\"$(foo)\"")); }
+    fn prop_checkDollarQuoteParen3() {
+        assert!(!node_emits(check_dollar_quote_paren, "\"$(foo)\""));
+    }
     #[test]
-    fn prop_checkDollarQuoteParen4() { assert!(!node_emits(check_dollar_quote_paren, "$\"..\"")); }
+    fn prop_checkDollarQuoteParen4() {
+        assert!(!node_emits(check_dollar_quote_paren, "$\"..\""));
+    }
 
     // ---- SC2256 checkTranslatedStringVariable ----
     #[test]
-    fn prop_checkTranslatedStringVariable1() { assert!(node_emits(check_translated_string_variable, "foo_bar2=val; $\"foo_bar2\"")); }
+    fn prop_checkTranslatedStringVariable1() {
+        assert!(node_emits(
+            check_translated_string_variable,
+            "foo_bar2=val; $\"foo_bar2\""
+        ));
+    }
     #[test]
-    fn prop_checkTranslatedStringVariable2() { assert!(!node_emits(check_translated_string_variable, "$\"foo_bar2\"")); }
+    fn prop_checkTranslatedStringVariable2() {
+        assert!(!node_emits(
+            check_translated_string_variable,
+            "$\"foo_bar2\""
+        ));
+    }
     #[test]
-    fn prop_checkTranslatedStringVariable3() { assert!(!node_emits(check_translated_string_variable, "$\"..\"")); }
+    fn prop_checkTranslatedStringVariable3() {
+        assert!(!node_emits(check_translated_string_variable, "$\"..\""));
+    }
     #[test]
-    fn prop_checkTranslatedStringVariable4() { assert!(!node_emits(check_translated_string_variable, "var=val; $\"$var\"")); }
+    fn prop_checkTranslatedStringVariable4() {
+        assert!(!node_emits(
+            check_translated_string_variable,
+            "var=val; $\"$var\""
+        ));
+    }
     #[test]
-    fn prop_checkTranslatedStringVariable5() { assert!(!node_emits(check_translated_string_variable, "foo=var; bar=val2; $\"foo bar\"")); }
+    fn prop_checkTranslatedStringVariable5() {
+        assert!(!node_emits(
+            check_translated_string_variable,
+            "foo=var; bar=val2; $\"foo bar\""
+        ));
+    }
 
     // ---- SC2188/2189 checkRedirectedNowhere ----
     #[test]
-    fn prop_checkRedirectedNowhere1() { assert!(node_emits(check_redirected_nowhere, "> file")); }
+    fn prop_checkRedirectedNowhere1() {
+        assert!(node_emits(check_redirected_nowhere, "> file"));
+    }
     #[test]
-    fn prop_checkRedirectedNowhere2() { assert!(node_emits(check_redirected_nowhere, "> file | grep foo")); }
+    fn prop_checkRedirectedNowhere2() {
+        assert!(node_emits(check_redirected_nowhere, "> file | grep foo"));
+    }
     #[test]
-    fn prop_checkRedirectedNowhere3() { assert!(node_emits(check_redirected_nowhere, "grep foo | > bar")); }
+    fn prop_checkRedirectedNowhere3() {
+        assert!(node_emits(check_redirected_nowhere, "grep foo | > bar"));
+    }
     #[test]
-    fn prop_checkRedirectedNowhere4() { assert!(!node_emits(check_redirected_nowhere, "grep foo > bar")); }
+    fn prop_checkRedirectedNowhere4() {
+        assert!(!node_emits(check_redirected_nowhere, "grep foo > bar"));
+    }
     #[test]
-    fn prop_checkRedirectedNowhere5() { assert!(!node_emits(check_redirected_nowhere, "foo | grep bar > baz")); }
+    fn prop_checkRedirectedNowhere5() {
+        assert!(!node_emits(
+            check_redirected_nowhere,
+            "foo | grep bar > baz"
+        ));
+    }
     #[test]
-    fn prop_checkRedirectedNowhere6() { assert!(!node_emits(check_redirected_nowhere, "var=$(value) 2> /dev/null")); }
+    fn prop_checkRedirectedNowhere6() {
+        assert!(!node_emits(
+            check_redirected_nowhere,
+            "var=$(value) 2> /dev/null"
+        ));
+    }
     #[test]
-    fn prop_checkRedirectedNowhere7() { assert!(!node_emits(check_redirected_nowhere, "var=$(< file)")); }
+    fn prop_checkRedirectedNowhere7() {
+        assert!(!node_emits(check_redirected_nowhere, "var=$(< file)"));
+    }
     #[test]
-    fn prop_checkRedirectedNowhere8() { assert!(!node_emits(check_redirected_nowhere, "var=`< file`")); }
+    fn prop_checkRedirectedNowhere8() {
+        assert!(!node_emits(check_redirected_nowhere, "var=`< file`"));
+    }
 
     // ---- SC2210 checkRedirectionToNumber ----
     #[test]
-    fn prop_checkRedirectionToNumber1() { assert!(node_emits(check_redirection_to_number, "( 1 > 2 )")); }
+    fn prop_checkRedirectionToNumber1() {
+        assert!(node_emits(check_redirection_to_number, "( 1 > 2 )"));
+    }
     #[test]
-    fn prop_checkRedirectionToNumber2() { assert!(node_emits(check_redirection_to_number, "foo 1>2")); }
+    fn prop_checkRedirectionToNumber2() {
+        assert!(node_emits(check_redirection_to_number, "foo 1>2"));
+    }
     #[test]
-    fn prop_checkRedirectionToNumber3() { assert!(!node_emits(check_redirection_to_number, "echo foo > '2'")); }
+    fn prop_checkRedirectionToNumber3() {
+        assert!(!node_emits(check_redirection_to_number, "echo foo > '2'"));
+    }
     #[test]
-    fn prop_checkRedirectionToNumber4() { assert!(!node_emits(check_redirection_to_number, "foo 1>&2")); }
+    fn prop_checkRedirectionToNumber4() {
+        assert!(!node_emits(check_redirection_to_number, "foo 1>&2"));
+    }
 
     // ---- SC2238 checkRedirectionToCommand ----
     #[test]
-    fn prop_checkRedirectionToCommand1() { assert!(node_emits(check_redirection_to_command, "ls > rm")); }
+    fn prop_checkRedirectionToCommand1() {
+        assert!(node_emits(check_redirection_to_command, "ls > rm"));
+    }
     #[test]
-    fn prop_checkRedirectionToCommand2() { assert!(!node_emits(check_redirection_to_command, "ls > 'rm'")); }
+    fn prop_checkRedirectionToCommand2() {
+        assert!(!node_emits(check_redirection_to_command, "ls > 'rm'"));
+    }
     #[test]
-    fn prop_checkRedirectionToCommand3() { assert!(!node_emits(check_redirection_to_command, "ls > myfile")); }
+    fn prop_checkRedirectionToCommand3() {
+        assert!(!node_emits(check_redirection_to_command, "ls > myfile"));
+    }
 
     // ---- SC2216/2217/2259/2260/2261 checkPipeToNowhere (full) ----
     #[test]
-    fn prop_checkPipeToNowhere1() { assert!(node_emits(check_pipe_to_nowhere, "foo | echo bar")); }
+    fn prop_checkPipeToNowhere1() {
+        assert!(node_emits(check_pipe_to_nowhere, "foo | echo bar"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere2() { assert!(node_emits(check_pipe_to_nowhere, "basename < file.txt")); }
+    fn prop_checkPipeToNowhere2() {
+        assert!(node_emits(check_pipe_to_nowhere, "basename < file.txt"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere3() { assert!(node_emits(check_pipe_to_nowhere, "printf 'Lol' <<< str")); }
+    fn prop_checkPipeToNowhere3() {
+        assert!(node_emits(check_pipe_to_nowhere, "printf 'Lol' <<< str"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere4() { assert!(node_emits(check_pipe_to_nowhere, "printf 'Lol' << eof\nlol\neof\n")); }
+    fn prop_checkPipeToNowhere4() {
+        assert!(node_emits(
+            check_pipe_to_nowhere,
+            "printf 'Lol' << eof\nlol\neof\n"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere5() { assert!(!node_emits(check_pipe_to_nowhere, "echo foo | xargs du")); }
+    fn prop_checkPipeToNowhere5() {
+        assert!(!node_emits(check_pipe_to_nowhere, "echo foo | xargs du"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere6() { assert!(!node_emits(check_pipe_to_nowhere, "ls | echo $(cat)")); }
+    fn prop_checkPipeToNowhere6() {
+        assert!(!node_emits(check_pipe_to_nowhere, "ls | echo $(cat)"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere7() { assert!(!node_emits(check_pipe_to_nowhere, "echo foo | var=$(cat) ls")); }
+    fn prop_checkPipeToNowhere7() {
+        assert!(!node_emits(
+            check_pipe_to_nowhere,
+            "echo foo | var=$(cat) ls"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere9() { assert!(!node_emits(check_pipe_to_nowhere, "mv -i f . < /dev/stdin")); }
+    fn prop_checkPipeToNowhere9() {
+        assert!(!node_emits(check_pipe_to_nowhere, "mv -i f . < /dev/stdin"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere10() { assert!(node_emits(check_pipe_to_nowhere, "ls > file | grep foo")); }
+    fn prop_checkPipeToNowhere10() {
+        assert!(node_emits(check_pipe_to_nowhere, "ls > file | grep foo"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere11() { assert!(node_emits(check_pipe_to_nowhere, "ls | grep foo < file")); }
+    fn prop_checkPipeToNowhere11() {
+        assert!(node_emits(check_pipe_to_nowhere, "ls | grep foo < file"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere12() { assert!(node_emits(check_pipe_to_nowhere, "ls > foo > bar")); }
+    fn prop_checkPipeToNowhere12() {
+        assert!(node_emits(check_pipe_to_nowhere, "ls > foo > bar"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere13() { assert!(node_emits(check_pipe_to_nowhere, "ls > foo 2> bar > baz")); }
+    fn prop_checkPipeToNowhere13() {
+        assert!(node_emits(check_pipe_to_nowhere, "ls > foo 2> bar > baz"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere14() { assert!(node_emits(check_pipe_to_nowhere, "ls > foo &> bar")); }
+    fn prop_checkPipeToNowhere14() {
+        assert!(node_emits(check_pipe_to_nowhere, "ls > foo &> bar"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere15() { assert!(!node_emits(check_pipe_to_nowhere, "ls > foo 2> bar |& grep 'No space left'")); }
+    fn prop_checkPipeToNowhere15() {
+        assert!(!node_emits(
+            check_pipe_to_nowhere,
+            "ls > foo 2> bar |& grep 'No space left'"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere16() { assert!(!node_emits(check_pipe_to_nowhere, "echo World | cat << EOF\nhello $(cat)\nEOF\n")); }
+    fn prop_checkPipeToNowhere16() {
+        assert!(!node_emits(
+            check_pipe_to_nowhere,
+            "echo World | cat << EOF\nhello $(cat)\nEOF\n"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere17() { assert!(node_emits(check_pipe_to_nowhere, "echo World | cat << 'EOF'\nhello $(cat)\nEOF\n")); }
+    fn prop_checkPipeToNowhere17() {
+        assert!(node_emits(
+            check_pipe_to_nowhere,
+            "echo World | cat << 'EOF'\nhello $(cat)\nEOF\n"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere18() { assert!(!node_emits(check_pipe_to_nowhere, "ls 1>&3 3>&1 3>&- | wc -l")); }
+    fn prop_checkPipeToNowhere18() {
+        assert!(!node_emits(
+            check_pipe_to_nowhere,
+            "ls 1>&3 3>&1 3>&- | wc -l"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere19() { assert!(!node_emits(check_pipe_to_nowhere, "find . -print0 | du --files0-from=/dev/stdin")); }
+    fn prop_checkPipeToNowhere19() {
+        assert!(!node_emits(
+            check_pipe_to_nowhere,
+            "find . -print0 | du --files0-from=/dev/stdin"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere20() { assert!(!node_emits(check_pipe_to_nowhere, "find . | du --exclude-from=/dev/fd/0")); }
+    fn prop_checkPipeToNowhere20() {
+        assert!(!node_emits(
+            check_pipe_to_nowhere,
+            "find . | du --exclude-from=/dev/fd/0"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere21() { assert!(!node_emits(check_pipe_to_nowhere, "yes | cp -ri foo/* bar")); }
+    fn prop_checkPipeToNowhere21() {
+        assert!(!node_emits(check_pipe_to_nowhere, "yes | cp -ri foo/* bar"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere22() { assert!(!node_emits(check_pipe_to_nowhere, "yes | rm --interactive *")); }
+    fn prop_checkPipeToNowhere22() {
+        assert!(!node_emits(
+            check_pipe_to_nowhere,
+            "yes | rm --interactive *"
+        ));
+    }
 
     // ---- SC2327/2328 checkExpansionWithRedirection ----
     #[test]
-    fn prop_checkExpansionWithRedirection1() { assert!(node_emits(check_expansion_with_redirection, "var=$(foo > bar)")); }
+    fn prop_checkExpansionWithRedirection1() {
+        assert!(node_emits(
+            check_expansion_with_redirection,
+            "var=$(foo > bar)"
+        ));
+    }
     #[test]
-    fn prop_checkExpansionWithRedirection2() { assert!(node_emits(check_expansion_with_redirection, "var=`foo 1> bar`")); }
+    fn prop_checkExpansionWithRedirection2() {
+        assert!(node_emits(
+            check_expansion_with_redirection,
+            "var=`foo 1> bar`"
+        ));
+    }
     #[test]
-    fn prop_checkExpansionWithRedirection3() { assert!(node_emits(check_expansion_with_redirection, "var=${ foo >> bar; }")); }
+    fn prop_checkExpansionWithRedirection3() {
+        assert!(node_emits(
+            check_expansion_with_redirection,
+            "var=${ foo >> bar; }"
+        ));
+    }
     #[test]
-    fn prop_checkExpansionWithRedirection4() { assert!(node_emits(check_expansion_with_redirection, "var=$(foo | bar > baz)")); }
+    fn prop_checkExpansionWithRedirection4() {
+        assert!(node_emits(
+            check_expansion_with_redirection,
+            "var=$(foo | bar > baz)"
+        ));
+    }
     #[test]
-    fn prop_checkExpansionWithRedirection5() { assert!(!node_emits(check_expansion_with_redirection, "stderr=$(foo 2>&1 > /dev/null)")); }
+    fn prop_checkExpansionWithRedirection5() {
+        assert!(!node_emits(
+            check_expansion_with_redirection,
+            "stderr=$(foo 2>&1 > /dev/null)"
+        ));
+    }
     #[test]
-    fn prop_checkExpansionWithRedirection6() { assert!(!node_emits(check_expansion_with_redirection, "var=$(foo; bar > baz)")); }
+    fn prop_checkExpansionWithRedirection6() {
+        assert!(!node_emits(
+            check_expansion_with_redirection,
+            "var=$(foo; bar > baz)"
+        ));
+    }
     #[test]
-    fn prop_checkExpansionWithRedirection7() { assert!(!node_emits(check_expansion_with_redirection, "var=$(foo > bar; baz)")); }
+    fn prop_checkExpansionWithRedirection7() {
+        assert!(!node_emits(
+            check_expansion_with_redirection,
+            "var=$(foo > bar; baz)"
+        ));
+    }
     #[test]
-    fn prop_checkExpansionWithRedirection8() { assert!(!node_emits(check_expansion_with_redirection, "var=$(cat <&3)")); }
+    fn prop_checkExpansionWithRedirection8() {
+        assert!(!node_emits(
+            check_expansion_with_redirection,
+            "var=$(cat <&3)"
+        ));
+    }
 
     // ---- SC2190/2191/2192 checkArrayAssignmentIndices ----
     #[test]
-    fn prop_checkArrayAssignmentIndices1() { assert!(tree_emits(check_array_assignment_indices, "declare -A foo; foo=(bar)")); }
+    fn prop_checkArrayAssignmentIndices1() {
+        assert!(tree_emits(
+            check_array_assignment_indices,
+            "declare -A foo; foo=(bar)"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices2() { assert!(!tree_emits(check_array_assignment_indices, "declare -a foo; foo=(bar)")); }
+    fn prop_checkArrayAssignmentIndices2() {
+        assert!(!tree_emits(
+            check_array_assignment_indices,
+            "declare -a foo; foo=(bar)"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices3() { assert!(!tree_emits(check_array_assignment_indices, "declare -A foo; foo=([i]=bar)")); }
+    fn prop_checkArrayAssignmentIndices3() {
+        assert!(!tree_emits(
+            check_array_assignment_indices,
+            "declare -A foo; foo=([i]=bar)"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices4() { assert!(tree_emits(check_array_assignment_indices, "typeset -A foo; foo+=(bar)")); }
+    fn prop_checkArrayAssignmentIndices4() {
+        assert!(tree_emits(
+            check_array_assignment_indices,
+            "typeset -A foo; foo+=(bar)"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices5() { assert!(tree_emits(check_array_assignment_indices, "arr=( [foo]= bar )")); }
+    fn prop_checkArrayAssignmentIndices5() {
+        assert!(tree_emits(
+            check_array_assignment_indices,
+            "arr=( [foo]= bar )"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices6() { assert!(tree_emits(check_array_assignment_indices, "arr=( [foo] = bar )")); }
+    fn prop_checkArrayAssignmentIndices6() {
+        assert!(tree_emits(
+            check_array_assignment_indices,
+            "arr=( [foo] = bar )"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices7() { assert!(!tree_emits(check_array_assignment_indices, "arr=( var=value )")); }
+    fn prop_checkArrayAssignmentIndices7() {
+        assert!(!tree_emits(
+            check_array_assignment_indices,
+            "arr=( var=value )"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices8() { assert!(!tree_emits(check_array_assignment_indices, "arr=( [foo]=bar )")); }
+    fn prop_checkArrayAssignmentIndices8() {
+        assert!(!tree_emits(
+            check_array_assignment_indices,
+            "arr=( [foo]=bar )"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices9() { assert!(!tree_emits(check_array_assignment_indices, "arr=( [foo]=\"\" )")); }
+    fn prop_checkArrayAssignmentIndices9() {
+        assert!(!tree_emits(
+            check_array_assignment_indices,
+            "arr=( [foo]=\"\" )"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices10() { assert!(tree_emits(check_array_assignment_indices, "declare -A arr; arr=( var=value )")); }
+    fn prop_checkArrayAssignmentIndices10() {
+        assert!(tree_emits(
+            check_array_assignment_indices,
+            "declare -A arr; arr=( var=value )"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices11() { assert!(tree_emits(check_array_assignment_indices, "arr=( 1=value )")); }
+    fn prop_checkArrayAssignmentIndices11() {
+        assert!(tree_emits(
+            check_array_assignment_indices,
+            "arr=( 1=value )"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices12() { assert!(tree_emits(check_array_assignment_indices, "arr=( $a=value )")); }
+    fn prop_checkArrayAssignmentIndices12() {
+        assert!(tree_emits(
+            check_array_assignment_indices,
+            "arr=( $a=value )"
+        ));
+    }
     #[test]
-    fn prop_checkArrayAssignmentIndices13() { assert!(tree_emits(check_array_assignment_indices, "arr=( $((1+1))=value )")); }
+    fn prop_checkArrayAssignmentIndices13() {
+        assert!(tree_emits(
+            check_array_assignment_indices,
+            "arr=( $((1+1))=value )"
+        ));
+    }
 
     // ---- SC2295 checkUnquotedParameterExpansionPattern ----
     #[test]
-    fn prop_checkUnquotedParameterExpansionPattern1() { assert!(node_emits(check_unquoted_parameter_expansion_pattern, "echo \"${var#$x}\"")); }
+    fn prop_checkUnquotedParameterExpansionPattern1() {
+        assert!(node_emits(
+            check_unquoted_parameter_expansion_pattern,
+            "echo \"${var#$x}\""
+        ));
+    }
     #[test]
-    fn prop_checkUnquotedParameterExpansionPattern2() { assert!(node_emits(check_unquoted_parameter_expansion_pattern, "echo \"${var%%$(x)}\"")); }
+    fn prop_checkUnquotedParameterExpansionPattern2() {
+        assert!(node_emits(
+            check_unquoted_parameter_expansion_pattern,
+            "echo \"${var%%$(x)}\""
+        ));
+    }
     #[test]
-    fn prop_checkUnquotedParameterExpansionPattern3() { assert!(!node_emits(check_unquoted_parameter_expansion_pattern, "echo \"${var[#$x]}\"")); }
+    fn prop_checkUnquotedParameterExpansionPattern3() {
+        assert!(!node_emits(
+            check_unquoted_parameter_expansion_pattern,
+            "echo \"${var[#$x]}\""
+        ));
+    }
     #[test]
-    fn prop_checkUnquotedParameterExpansionPattern4() { assert!(!node_emits(check_unquoted_parameter_expansion_pattern, "echo \"${var%\"$x\"}\"")); }
+    fn prop_checkUnquotedParameterExpansionPattern4() {
+        assert!(!node_emits(
+            check_unquoted_parameter_expansion_pattern,
+            "echo \"${var%\"$x\"}\""
+        ));
+    }
 
     // ---- SC2302/2303 checkArrayValueUsedAsIndex ----
     #[test]
-    fn prop_checkArrayValueUsedAsIndex1() { assert!(tree_emits(check_array_value_used_as_index, "for i in ${arr[@]}; do echo ${arr[i]}; done")); }
+    fn prop_checkArrayValueUsedAsIndex1() {
+        assert!(tree_emits(
+            check_array_value_used_as_index,
+            "for i in ${arr[@]}; do echo ${arr[i]}; done"
+        ));
+    }
     #[test]
-    fn prop_checkArrayValueUsedAsIndex2() { assert!(tree_emits(check_array_value_used_as_index, "for i in ${arr[@]}; do echo ${arr[$i]}; done")); }
+    fn prop_checkArrayValueUsedAsIndex2() {
+        assert!(tree_emits(
+            check_array_value_used_as_index,
+            "for i in ${arr[@]}; do echo ${arr[$i]}; done"
+        ));
+    }
     #[test]
-    fn prop_checkArrayValueUsedAsIndex3() { assert!(tree_emits(check_array_value_used_as_index, "for i in ${arr[@]}; do echo $((arr[i])); done")); }
+    fn prop_checkArrayValueUsedAsIndex3() {
+        assert!(tree_emits(
+            check_array_value_used_as_index,
+            "for i in ${arr[@]}; do echo $((arr[i])); done"
+        ));
+    }
     #[test]
-    fn prop_checkArrayValueUsedAsIndex4() { assert!(tree_emits(check_array_value_used_as_index, "for i in ${arr1[@]} ${arr2[@]}; do echo ${arr1[$i]}; done")); }
+    fn prop_checkArrayValueUsedAsIndex4() {
+        assert!(tree_emits(
+            check_array_value_used_as_index,
+            "for i in ${arr1[@]} ${arr2[@]}; do echo ${arr1[$i]}; done"
+        ));
+    }
     #[test]
-    fn prop_checkArrayValueUsedAsIndex5() { assert!(tree_emits(check_array_value_used_as_index, "for i in ${arr1[@]} ${arr2[@]}; do echo ${arr2[$i]}; done")); }
+    fn prop_checkArrayValueUsedAsIndex5() {
+        assert!(tree_emits(
+            check_array_value_used_as_index,
+            "for i in ${arr1[@]} ${arr2[@]}; do echo ${arr2[$i]}; done"
+        ));
+    }
     #[test]
-    fn prop_checkArrayValueUsedAsIndex7() { assert!(!tree_emits(check_array_value_used_as_index, "for i in ${arr[@]}; do echo ${arr[K]}; done")); }
+    fn prop_checkArrayValueUsedAsIndex7() {
+        assert!(!tree_emits(
+            check_array_value_used_as_index,
+            "for i in ${arr[@]}; do echo ${arr[K]}; done"
+        ));
+    }
     #[test]
-    fn prop_checkArrayValueUsedAsIndex8() { assert!(!tree_emits(check_array_value_used_as_index, "for i in ${arr[@]}; do i=42; echo ${arr[i]}; done")); }
+    fn prop_checkArrayValueUsedAsIndex8() {
+        assert!(!tree_emits(
+            check_array_value_used_as_index,
+            "for i in ${arr[@]}; do i=42; echo ${arr[i]}; done"
+        ));
+    }
     #[test]
-    fn prop_checkArrayValueUsedAsIndex9() { assert!(!tree_emits(check_array_value_used_as_index, "for i in ${arr[@]}; do echo ${arr2[i]}; done")); }
+    fn prop_checkArrayValueUsedAsIndex9() {
+        assert!(!tree_emits(
+            check_array_value_used_as_index,
+            "for i in ${arr[@]}; do echo ${arr2[i]}; done"
+        ));
+    }
 }

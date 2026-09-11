@@ -49,10 +49,20 @@ fn oversimplify(token: &Token) -> Vec<String> {
     use InnerToken::*;
     match &*token.inner {
         T_NormalWord(l) => {
-            vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()]
+            vec![
+                l.iter()
+                    .flat_map(oversimplify)
+                    .collect::<Vec<String>>()
+                    .concat(),
+            ]
         }
         T_DoubleQuoted(l) => {
-            vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()]
+            vec![
+                l.iter()
+                    .flat_map(oversimplify)
+                    .collect::<Vec<String>>()
+                    .concat(),
+            ]
         }
         T_SingleQuoted(s) => vec![s.clone()],
         T_DollarBraced { .. } => vec!["${VAR}".to_string()],
@@ -219,7 +229,12 @@ fn check_let_usage(params: &Parameters, t: &Token, out: &mut Out) {
         return;
     }
     if matches!(params.shell, Shell::Bash | Shell::Ksh) {
-        style(out, t.id(), 2219, "Instead of 'let expr', prefer (( expr )) .");
+        style(
+            out,
+            t.id(),
+            2219,
+            "Instead of 'let expr', prefer (( expr )) .",
+        );
     }
 }
 
@@ -262,7 +277,16 @@ fn check_pipe_wc(_params: &Parameters, t: &Token, out: &mut Out) {
         "B",
         "before-context",
     ];
-    const WC_EXCL: &[&str] = &["m", "chars", "w", "words", "c", "bytes", "L", "max-line-length"];
+    const WC_EXCL: &[&str] = &[
+        "m",
+        "chars",
+        "w",
+        "words",
+        "c",
+        "bytes",
+        "L",
+        "max-line-length",
+    ];
 
     for i in 0..commands.len() - 1 {
         if names[i] == "grep" && names[i + 1] == "wc" {
@@ -301,8 +325,21 @@ fn check_conditional_or(_params: &Parameters, t: &Token, out: &mut Out) {
 
 fn important_paths() -> Vec<String> {
     let paths = [
-        "", "/bin", "/etc", "/home", "/mnt", "/usr", "/usr/share", "/usr/local", "/var", "/lib",
-        "/dev", "/media", "/boot", "/lib64", "/usr/bin",
+        "",
+        "/bin",
+        "/etc",
+        "/home",
+        "/mnt",
+        "/usr",
+        "/usr/share",
+        "/usr/local",
+        "/var",
+        "/lib",
+        "/dev",
+        "/media",
+        "/boot",
+        "/lib64",
+        "/usr/bin",
     ];
     let suffixes = ["", "/", "/*", "/*/*"];
     let mut out = vec![];
@@ -364,7 +401,12 @@ fn check_rm_word(token: &Token, important: &[String], out: &mut Out) {
     match get_literal_string(token) {
         Some(s) => {
             if important.iter().any(|p| p == &fix_path(&s)) {
-                warn(out, token.id(), 2114, "Warning: deletes a system directory.");
+                warn(
+                    out,
+                    token.id(),
+                    2114,
+                    "Warning: deletes a system directory.",
+                );
             }
         }
         None => {
@@ -375,7 +417,10 @@ fn check_rm_word(token: &Token, important: &[String], out: &mut Out) {
                         out,
                         token.id(),
                         2115,
-                        &format!("Use \"${{var:?}}\" to ensure this never expands to {} .", path),
+                        &format!(
+                            "Use \"${{var:?}}\" to ensure this never expands to {} .",
+                            path
+                        ),
                     );
                 }
             }

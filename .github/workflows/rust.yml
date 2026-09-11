@@ -9,19 +9,13 @@ on:
   # restrict push to the release branches to avoid running it twice per commit.
   push:
     branches: [master]
-    paths:
-      - 'rust/**'
-      - '.github/workflows/rust.yml'
-      - 'ShellCheck.cabal'
-      - 'src/**'
-      - 'shellcheck.hs'
-  pull_request:
-    paths:
-      - 'rust/**'
-      - '.github/workflows/rust.yml'
-      - 'ShellCheck.cabal'
-      - 'src/**'
-      - 'shellcheck.hs'
+    paths: &PATHS
+      - "rust/**"
+      - ".github/workflows/rust.yml"
+      - "ShellCheck.cabal"
+      - "src/**"
+      - "shellcheck.hs"
+  pull_request: { paths: *PATHS }
 
 # Cancel an in-flight gate run when a newer commit is pushed to the same ref.
 concurrency:
@@ -34,30 +28,66 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # (a) Rust stable toolchain.
       - name: Install Rust stable
+        id: rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
+        env:
+          CACHE_PREFIX: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ steps.rust.outputs.cachekey }}
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('rust/Cargo.lock', 'rust/**/Cargo.toml', 'rust/.cargo/**', '.github/workflows/rust.yml') }}-${{ hashFiles('rust/crates/**') }}
+          restore-keys: |
+            ${{ env.CACHE_PREFIX }}-${{ hashFiles('rust/Cargo.lock', 'rust/**/Cargo.toml', 'rust/.cargo/**', '.github/workflows/rust.yml') }}-
+            ${{ env.CACHE_PREFIX }}-
 
       # (b) Haskell oracle — mirror build.yml's GHC/cabal setup.
       - name: Setup Haskell
+        id: haskell
         uses: haskell-actions/setup@v2
         with:
-          ghc-version: '9.6.6'
+          ghc-version: "9.6.6"
+
+      - name: Plan Haskell oracle build
+        run: cabal build shellcheck --dry-run
+
+      # Only an exact match may reuse the executable; dependency changes also invalidate it.
+      - name: Cache Haskell oracle
+        id: oracle
+        uses: actions/cache@v6
+        with:
+          path: .cache/shellcheck-oracle
+          key: ${{ runner.os }}-${{ runner.arch }}-oracle-${{ steps.haskell.outputs.ghc-version }}-${{ steps.haskell.outputs.cabal-version }}-${{ hashFiles('dist-newstyle/cache/plan.json', 'ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs', '.github/workflows/rust.yml') }}
+
+      - name: Cache Haskell build
+        if: steps.oracle.outputs.cache-hit != 'true'
+        uses: actions/cache@v6
+        env:
+          CACHE_PREFIX: ${{ runner.os }}-${{ runner.arch }}-cabal-oracle-${{ steps.haskell.outputs.ghc-version }}-${{ steps.haskell.outputs.cabal-version }}
+        with:
+          path: |
+            ${{ steps.haskell.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('dist-newstyle/cache/plan.json') }}-${{ hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs', '.github/workflows/rust.yml') }}
+          restore-keys: |
+            ${{ env.CACHE_PREFIX }}-${{ hashFiles('dist-newstyle/cache/plan.json') }}-
+            ${{ env.CACHE_PREFIX }}-
 
       - name: Build Haskell oracle
-        run: cabal build shellcheck
+        if: steps.oracle.outputs.cache-hit != 'true'
+        run: |
+          cabal build shellcheck
+          mkdir -p .cache
+          ORACLE="$(cabal list-bin shellcheck)"
+          cp "${ORACLE}" .cache/shellcheck-oracle
 
       # (c) Build + test the Rust port.
       - name: Build Rust port (release)
@@ -76,8 +106,8 @@ jobs:
       #     oracle SHA and the committed baseline.
       - name: Conformance gate
         run: |
-          ORACLE="$(cabal list-bin shellcheck)"
-          echo "oracle: $ORACLE"
-          ORACLE="$ORACLE" \
+          ORACLE="${GITHUB_WORKSPACE}/.cache/shellcheck-oracle"
+          echo "oracle: ${ORACLE}"
+          ORACLE="${ORACLE}" \
           PORT=rust/target/release/shellcheck-rs \
           python3 rust/harness/run_conformance.py --gate

@@ -14,8 +14,7 @@ const WIKI_LINK: &str = "https://www.shellcheck.net/wiki/";
 
 /// Codes considered "uninteresting" (generic parser errors), downranked in the
 /// wiki summary.
-const UNINTERESTING: &[i64] =
-    &[1009, 1019, 1036, 1047, 1062, 1070, 1072, 1073, 1088, 1089];
+const UNINTERESTING: &[i64] = &[1009, 1019, 1036, 1047, 1062, 1070, 1072, 1073, 1088, 1089];
 
 /// A wiki-summary entry: (ranking, code, message). Ranking is
 /// (rank_char, severity, code) to match the Haskell `Ranking`.
@@ -36,7 +35,11 @@ fn severity_text(sev: Severity) -> &'static str {
 }
 
 fn rank_error(c: &PositionedComment) -> (char, Severity, i64) {
-    let rank = if UNINTERESTING.contains(&c.comment.code) { 'Z' } else { 'A' };
+    let rank = if UNINTERESTING.contains(&c.comment.code) {
+        'Z'
+    } else {
+        'A'
+    };
     (rank, c.comment.severity, c.comment.code)
 }
 
@@ -55,7 +58,9 @@ fn cute_indent(c: &PositionedComment) -> String {
     } else {
         "^--".to_string()
     };
-    let indent: String = std::iter::repeat(' ').take((col - 1).max(0) as usize).collect();
+    let indent: String = std::iter::repeat(' ')
+        .take((col - 1).max(0) as usize)
+        .collect();
     format!(
         "{indent}{arrow} SC{} ({}): {}",
         c.comment.code,
@@ -151,7 +156,10 @@ pub fn render_file(
         };
 
         out.push('\n');
-        out.push_str(&color("message", &format!("In {filename} line {line_num}:")));
+        out.push_str(&color(
+            "message",
+            &format!("In {filename} line {line_num}:"),
+        ));
         out.push('\n');
         out.push_str(&color("source", &line));
         out.push('\n');
@@ -186,7 +194,11 @@ pub fn render_wiki(entries: &[WikiEntry], wiki_link_count: usize, out: &mut Stri
     }
     out.push_str("For more information:\n");
     for e in issues {
-        out.push_str(&format!("  {WIKI_LINK}SC{} -- {}\n", e.code, shorten(&e.message)));
+        out.push_str(&format!(
+            "  {WIKI_LINK}SC{} -- {}\n",
+            e.code,
+            shorten(&e.message)
+        ));
     }
 }
 

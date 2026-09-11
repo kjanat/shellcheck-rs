@@ -448,12 +448,7 @@ impl Builder {
 
     // --- scoping helpers (local / under / subshell / withFunctionScope) ---
 
-    fn subshell(
-        &mut self,
-        id: Id,
-        reason: &str,
-        f: impl FnOnce(&mut Self) -> Range,
-    ) -> Range {
+    fn subshell(&mut self, id: Id, reason: &str, f: impl FnOnce(&mut Self) -> Range) -> Range {
         let start = self.new_node(CFNode::CFEntryPoint(format!(
             "Subshell Id {}: {}",
             id.0, reason
@@ -555,9 +550,7 @@ impl Builder {
                     self.new_node_range(apply_single(id, CFEffect::CFWriteVariable(name, val)));
                 self.link_ranges(&[value, subscript, read, write])
             }
-            TA_Assignment { lhs, rhs, .. } => {
-                self.sequentially(&[lhs.clone(), rhs.clone()])
-            }
+            TA_Assignment { lhs, rhs, .. } => self.sequentially(&[lhs.clone(), rhs.clone()]),
             TA_Binary { lhs, rhs, .. } => self.sequentially(&[lhs.clone(), rhs.clone()]),
             TA_Expansion(list) => self.sequentially(list),
             TA_Sequence(list) => self.sequentially(list),
@@ -606,10 +599,18 @@ impl Builder {
             }
             TA_Unary { operand, .. } => self.build(operand),
 
-            TC_And { typ: ConditionType::SingleBracket, lhs, rhs, .. } => {
-                self.sequentially(&[lhs.clone(), rhs.clone()])
-            }
-            TC_And { typ: ConditionType::DoubleBracket, lhs, rhs, .. } => {
+            TC_And {
+                typ: ConditionType::SingleBracket,
+                lhs,
+                rhs,
+                ..
+            } => self.sequentially(&[lhs.clone(), rhs.clone()]),
+            TC_And {
+                typ: ConditionType::DoubleBracket,
+                lhs,
+                rhs,
+                ..
+            } => {
                 let left = self.build(lhs);
                 let right = self.build(rhs);
                 let end = self.new_structural_node();
@@ -624,10 +625,18 @@ impl Builder {
             TC_Empty { .. } => self.new_structural_node(),
             TC_Group { token, .. } => self.build(token),
             TC_Nullary { token, .. } => self.build(token),
-            TC_Or { typ: ConditionType::SingleBracket, lhs, rhs, .. } => {
-                self.sequentially(&[lhs.clone(), rhs.clone()])
-            }
-            TC_Or { typ: ConditionType::DoubleBracket, lhs, rhs, .. } => {
+            TC_Or {
+                typ: ConditionType::SingleBracket,
+                lhs,
+                rhs,
+                ..
+            } => self.sequentially(&[lhs.clone(), rhs.clone()]),
+            TC_Or {
+                typ: ConditionType::DoubleBracket,
+                lhs,
+                rhs,
+                ..
+            } => {
                 let left = self.build(lhs);
                 let right = self.build(rhs);
                 let end = self.new_structural_node();
@@ -660,9 +669,7 @@ impl Builder {
                 self.link_range_as(CFEdge::CFEFalseFlow, fork, pid);
                 self.link_ranges(&[start, pid, status])
             }
-            T_Backticked(body) => {
-                self.subshell(id, "`..` expansion", |b| b.sequentially(body))
-            }
+            T_Backticked(body) => self.subshell(id, "`..` expansion", |b| b.sequentially(body)),
             T_Banged(cmd) => {
                 let main = self.build(cmd);
                 let status = self.new_node_range(CFNode::CFSetExitCode(id));
@@ -733,17 +740,19 @@ impl Builder {
                 let effect = if is_closing_file_op(target) {
                     apply_single(id, CFEffect::CFReadVariable(name))
                 } else {
-                    apply_single(
-                        id,
-                        CFEffect::CFWriteVariable(name, CFValue::CFValueInteger),
-                    )
+                    apply_single(id, CFEffect::CFWriteVariable(name, CFValue::CFValueInteger))
                 };
                 let rw = self.new_node_range(effect);
                 self.link_range(expression, rw)
             }
             T_FdRedirect { target, .. } => self.build(target),
 
-            T_ForArithmetic { init, cond, step, body } => {
+            T_ForArithmetic {
+                init,
+                cond,
+                step,
+                body,
+            } => {
                 let init_r = self.build(init);
                 let cond_r = self.build(cond);
                 let body_r = self.sequentially(body);
@@ -873,15 +882,15 @@ impl Builder {
         let vals = self.build(op);
         let mut deps_list = vec![vals];
         for x in indices.iter().chain(offsets.iter()) {
-            let r = node_to_range(
-                self.new_node(apply_single(id, CFEffect::CFReadVariable(x.clone()))),
-            );
+            let r =
+                node_to_range(self.new_node(apply_single(id, CFEffect::CFReadVariable(x.clone()))));
             deps_list.push(r);
         }
         let deps = self.link_ranges(&deps_list);
-        let read = node_to_range(
-            self.new_node(apply_single(id, CFEffect::CFReadVariable(reference.clone()))),
-        );
+        let read = node_to_range(self.new_node(apply_single(
+            id,
+            CFEffect::CFReadVariable(reference.clone()),
+        )));
         let total_read = self.link_range(deps, read);
         if modifier.starts_with('=') || modifier.starts_with(":=") {
             let optional_assign = self.new_node_range(apply_single(
@@ -1069,14 +1078,17 @@ impl Builder {
 
     fn build_assignment(&mut self, scope: Option<Scope>, t: &Token) -> Range {
         let op = match &*t.inner {
-            InnerToken::T_Assignment { mode, var, indices, value } => {
+            InnerToken::T_Assignment {
+                mode,
+                var,
+                indices,
+                value,
+            } => {
                 let expand = self.build(value);
                 let index = self.sequentially(indices);
                 let read = match mode {
-                    AssignmentMode::Append => self.new_node_range(apply_single(
-                        t.id,
-                        CFEffect::CFReadVariable(var.clone()),
-                    )),
+                    AssignmentMode::Append => self
+                        .new_node_range(apply_single(t.id, CFEffect::CFReadVariable(var.clone()))),
                     AssignmentMode::Assign => self.none(),
                 };
                 let value_type = if indices.is_empty() {
@@ -1127,7 +1139,9 @@ impl Builder {
             Some("read") => {
                 self.regular_expansion_with_status(vars, words, |b| b.handle_read(words))
             }
-            Some("DEFINE_boolean") | Some("DEFINE_float") | Some("DEFINE_integer")
+            Some("DEFINE_boolean")
+            | Some("DEFINE_float")
+            | Some("DEFINE_integer")
             | Some("DEFINE_string") => {
                 self.regular_expansion_with_status(vars, words, |b| b.handle_define(words))
             }
@@ -1237,8 +1251,11 @@ impl Builder {
             None => args.iter().map(|c| (String::new(), c.clone())).collect(),
         };
         let names: Vec<&(String, Token)> = pairs.iter().filter(|(s, _)| s.is_empty()).collect();
-        let flag_names: Vec<&String> =
-            pairs.iter().filter(|(s, _)| !s.is_empty()).map(|(s, _)| s).collect();
+        let flag_names: Vec<&String> = pairs
+            .iter()
+            .filter(|(s, _)| !s.is_empty())
+            .map(|(s, _)| s)
+            .collect();
         let literal_names: Vec<(Token, String)> = names
             .iter()
             .filter_map(|(_, t)| get_literal_string(t).map(|s| (t.clone(), s)))
@@ -1330,7 +1347,12 @@ impl Builder {
 
         for a in args {
             match &*a.inner {
-                InnerToken::T_Assignment { mode, var, indices, value } => {
+                InnerToken::T_Assignment {
+                    mode,
+                    var,
+                    indices,
+                    value,
+                } => {
                     evaluated.extend(indices.iter().cloned());
                     evaluated.push(value.clone());
                     let mut parts: Vec<CFStringPart> = Vec::new();
@@ -1366,8 +1388,7 @@ impl Builder {
                         // (pre, [], [], [])
                     } else if m.is_some() && is_known {
                         let after_eq: String = {
-                            let rest: String =
-                                literal.chars().skip_while(|c| *c != '=').collect();
+                            let rest: String = literal.chars().skip_while(|c| *c != '=').collect();
                             rest.chars().skip(1).collect()
                         };
                         assignments.push(IdTagged::new(
@@ -1477,8 +1498,9 @@ impl Builder {
                 }
             })
         };
-        let (id, name) =
-            get_from_arg().or_else(get_from_fallback).unwrap_or((cmd.id, "MAPFILE".to_string()));
+        let (id, name) = get_from_arg()
+            .or_else(get_from_fallback)
+            .unwrap_or((cmd.id, "MAPFILE".to_string()));
         let effect = IdTagged::new(id, CFEffect::CFWriteVariable(name, CFValue::CFValueArray));
         self.new_node_range(CFNode::CFApplyEffects(vec![effect]))
     }
@@ -1616,8 +1638,7 @@ pub fn build_graph(params: CFGParameters, root: &Token) -> CFGResult {
         id_to_nodes.entry(*id).or_default().insert(*n);
     }
 
-    let post_dominators =
-        find_post_dominators(main_exit, &nodes, &only_real_edges);
+    let post_dominators = find_post_dominators(main_exit, &nodes, &only_real_edges);
 
     CFGResult {
         cf_graph: CFGraph::mk_graph(nodes, edges),
@@ -1663,7 +1684,10 @@ fn remap_node(m: &HashMap<Node, Node>, (node, label): &(Node, CFNode)) -> (Node,
     (remap_helper(m, *node), new_label)
 }
 
-fn remap_edge(m: &HashMap<Node, Node>, (from, to, label): &(Node, Node, CFEdge)) -> (Node, Node, CFEdge) {
+fn remap_edge(
+    m: &HashMap<Node, Node>,
+    (from, to, label): &(Node, Node, CFEdge),
+) -> (Node, Node, CFEdge) {
     (remap_helper(m, *from), remap_helper(m, *to), *label)
 }
 
@@ -1676,7 +1700,10 @@ fn remap_graph(remap: &HashMap<Node, Node>, g: CFW) -> CFW {
             .iter()
             .map(|(id, (a, b))| (*id, (remap_helper(remap, *a), remap_helper(remap, *b))))
             .collect(),
-        assoc.iter().map(|(id, n)| (*id, remap_helper(remap, *n))).collect(),
+        assoc
+            .iter()
+            .map(|(id, n)| (*id, remap_helper(remap, *n)))
+            .collect(),
     )
 }
 
@@ -1721,8 +1748,11 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
         .filter(|(_, l)| *l == CFNode::CFStructuralNode)
         .map(|(n, _)| *n)
         .collect();
-    let candidate_nodes: HashSet<Node> =
-        structural_nodes.iter().copied().filter(|n| is_linear(*n)).collect();
+    let candidate_nodes: HashSet<Node> = structural_nodes
+        .iter()
+        .copied()
+        .filter(|n| is_linear(*n))
+        .collect();
 
     // edgesToCollapse = Set of regular edges with both endpoints candidates.
     let mut edges_to_collapse: Vec<(Node, Node, CFEdge)> = regular_edges
@@ -1844,8 +1874,14 @@ fn find_terminal_nodes(g: &MutGraph) -> Vec<Node> {
 /// Change all subshell invocations to instead link directly to their contents.
 fn inline_subshells(g: &mut MutGraph) {
     // Collect subshells with their (original) incoming/outgoing.
-    let mut subs: Vec<(Node, CFNode, Node, Node, Vec<(Node, CFEdge)>, Vec<(Node, CFEdge)>)> =
-        Vec::new();
+    let mut subs: Vec<(
+        Node,
+        CFNode,
+        Node,
+        Node,
+        Vec<(Node, CFEdge)>,
+        Vec<(Node, CFEdge)>,
+    )> = Vec::new();
     for n in g.node_list() {
         if let Some(CFNode::CFExecuteSubshell(_, start, end)) = g.labels.get(&n).cloned() {
             let (incoming, _, label, outgoing) = g.context(n);
@@ -1938,7 +1974,11 @@ fn dom(g: &MutGraph, root: Node) -> Vec<(Node, Vec<Node>)> {
     let mut idom: HashMap<Node, Node> = HashMap::new();
     idom.insert(root, root);
 
-    let intersect = |mut a: Node, mut b: Node, idom: &HashMap<Node, Node>, number: &HashMap<Node, usize>| -> Node {
+    let intersect = |mut a: Node,
+                     mut b: Node,
+                     idom: &HashMap<Node, Node>,
+                     number: &HashMap<Node, usize>|
+     -> Node {
         while a != b {
             while number[&a] > number[&b] {
                 a = idom[&a];
@@ -2110,11 +2150,7 @@ pub(crate) fn get_braced_reference(s: &str) -> String {
 
     let take_name = |cs: &[char]| -> Option<String> {
         let name: String = cs.iter().take_while(|c| is_variable_char(**c)).collect();
-        if name.is_empty() {
-            None
-        } else {
-            Some(name)
-        }
+        if name.is_empty() { None } else { Some(name) }
     };
     let get_special = |cs: &[char]| -> Option<String> {
         match cs.first() {
@@ -2203,7 +2239,9 @@ fn var_assign_match(s: &str) -> Option<String> {
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"^([_a-zA-Z][_a-zA-Z0-9]*)=").unwrap());
-    re.captures(s).and_then(|c| c.get(1)).map(|m| m.as_str().to_string())
+    re.captures(s)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string())
 }
 
 /// `isUnmodifiedParameterExpansion`.
@@ -2259,7 +2297,10 @@ fn assignment_value(id: Id, mode: AssignmentMode, var: &str, value: &Token) -> C
 fn is_closing_file_op(op: &Token) -> bool {
     match &*op.inner {
         InnerToken::T_IoDuplicate { op: inner_op, num } if num == "-" => {
-            matches!(&*inner_op.inner, InnerToken::T_GREATAND | InnerToken::T_LESSAND)
+            matches!(
+                &*inner_op.inner,
+                InnerToken::T_GREATAND | InnerToken::T_LESSAND
+            )
         }
         _ => false,
     }
@@ -2308,8 +2349,7 @@ fn is_array_expansion(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_DollarBraced { op, .. } => {
             let string = oversimplify_concat(op);
-            string.starts_with('@')
-                || (!string.starts_with('#') && string.contains("[@]"))
+            string.starts_with('@') || (!string.starts_with('#') && string.contains("[@]"))
         }
         _ => false,
     }
@@ -2357,10 +2397,16 @@ fn word_to_exact_pseudo_glob(word: &Token) -> Option<Vec<PseudoGlob>> {
 
 fn simplify_pseudo_glob(list: Vec<PseudoGlob>) -> Vec<PseudoGlob> {
     fn order(s: &[PseudoGlob]) -> Vec<PseudoGlob> {
-        let anys: Vec<PseudoGlob> =
-            s.iter().copied().filter(|x| *x == PseudoGlob::PGAny).collect();
-        let many: Vec<PseudoGlob> =
-            s.iter().copied().filter(|x| *x == PseudoGlob::PGMany).collect();
+        let anys: Vec<PseudoGlob> = s
+            .iter()
+            .copied()
+            .filter(|x| *x == PseudoGlob::PGAny)
+            .collect();
+        let many: Vec<PseudoGlob> = s
+            .iter()
+            .copied()
+            .filter(|x| *x == PseudoGlob::PGMany)
+            .collect();
         let mut out = anys;
         out.extend(many.into_iter().take(1));
         out
@@ -2373,8 +2419,7 @@ fn simplify_pseudo_glob(list: Vec<PseudoGlob>) -> Vec<PseudoGlob> {
             i += 1;
         } else {
             let start = i;
-            while i < list.len()
-                && (list[i] == PseudoGlob::PGMany || list[i] == PseudoGlob::PGAny)
+            while i < list.len() && (list[i] == PseudoGlob::PGMany || list[i] == PseudoGlob::PGAny)
             {
                 i += 1;
             }
@@ -2388,12 +2433,9 @@ fn simplify_pseudo_glob(list: Vec<PseudoGlob>) -> Vec<PseudoGlob> {
 fn pseudo_glob_is_superset_of(x: &[PseudoGlob], y: &[PseudoGlob]) -> bool {
     match (x.first(), y.first()) {
         (Some(&xf), Some(&yf)) => match (xf, yf) {
-            (PseudoGlob::PGMany, PseudoGlob::PGMany) => {
-                pseudo_glob_is_superset_of(x, &y[1..])
-            }
+            (PseudoGlob::PGMany, PseudoGlob::PGMany) => pseudo_glob_is_superset_of(x, &y[1..]),
             (PseudoGlob::PGMany, _) => {
-                pseudo_glob_is_superset_of(x, &y[1..])
-                    || pseudo_glob_is_superset_of(&x[1..], y)
+                pseudo_glob_is_superset_of(x, &y[1..]) || pseudo_glob_is_superset_of(&x[1..], y)
             }
             (_, PseudoGlob::PGMany) => false,
             (PseudoGlob::PGAny, _) => pseudo_glob_is_superset_of(&x[1..], &y[1..]),
@@ -2457,7 +2499,9 @@ fn get_opts(
 ) -> Option<Vec<(String, (Token, Token))>> {
     let flag_map = build_flag_map(spec, longopts);
     fn list_to_args(list: &[Token]) -> Vec<(String, (Token, Token))> {
-        list.iter().map(|x| (String::new(), (x.clone(), x.clone()))).collect()
+        list.iter()
+            .map(|x| (String::new(), (x.clone(), x.clone())))
+            .collect()
     }
 
     fn short_to_opts(
@@ -2524,8 +2568,7 @@ fn get_opts(
                 if let Some(argtok) = rest.first() {
                     let rest2 = &rest[1..];
                     let mut more = process(rest2, flag_map, gnu, arbitrary)?;
-                    let mut out =
-                        vec![(name.to_string(), (token.clone(), argtok.clone()))];
+                    let mut out = vec![(name.to_string(), (token.clone(), argtok.clone()))];
                     out.append(&mut more);
                     Some(out)
                 } else {
@@ -2563,10 +2606,16 @@ pub(crate) fn get_generic_opts(args: &[Token]) -> Vec<(String, (Token, Token))> 
     let rest = &args[1..];
     let s = get_literal_string_def(token, "\0");
     if s == "--" {
-        return rest.iter().map(|c| (String::new(), (c.clone(), c.clone()))).collect();
+        return rest
+            .iter()
+            .map(|c| (String::new(), (c.clone(), c.clone())))
+            .collect();
     }
     if let Some(word) = s.strip_prefix("--") {
-        let name: String = word.chars().take_while(|c| *c != '\0' && *c != '=').collect();
+        let name: String = word
+            .chars()
+            .take_while(|c| *c != '\0' && *c != '=')
+            .collect();
         let mut out = vec![(name, (token.clone(), token.clone()))];
         out.extend(get_generic_opts(rest));
         return out;
@@ -2690,7 +2739,10 @@ mod tests {
         // A small end-to-end build to ensure construction + post-dominators run.
         let out = crate::parser::parse_script("test.sh", "x=1\necho \"$x\"\n");
         let root = out.root.expect("parse produced a root");
-        let params = CFGParameters { cf_lastpipe: false, cf_pipefail: false };
+        let params = CFGParameters {
+            cf_lastpipe: false,
+            cf_pipefail: false,
+        };
         let result = build_graph(params, &root);
         // The root's range must exist and its exit must be post-dominated by itself.
         let (_, main_exit) = result.cf_id_to_range[&root.id];
@@ -2713,7 +2765,10 @@ mod tests {
             "if [ -z \"$x\" ]; then echo empty; elif true; then echo mid; else echo full; fi\n",
             "mapfile -t arr < file; printf -v out '%s' done\n",
         ];
-        let params = CFGParameters { cf_lastpipe: true, cf_pipefail: true };
+        let params = CFGParameters {
+            cf_lastpipe: true,
+            cf_pipefail: true,
+        };
         for src in scripts {
             let out = crate::parser::parse_script("test.sh", src);
             if let Some(root) = out.root {

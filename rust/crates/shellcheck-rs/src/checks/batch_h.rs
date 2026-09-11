@@ -45,8 +45,18 @@ fn warn_msg(out: &mut Out, p: &Parameters, id: Id, code: i64, s: &str) {
 fn oversimplify(token: &Token) -> Vec<String> {
     use InnerToken::*;
     match &*token.inner {
-        T_NormalWord(l) => vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()],
-        T_DoubleQuoted(l) => vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()],
+        T_NormalWord(l) => vec![
+            l.iter()
+                .flat_map(oversimplify)
+                .collect::<Vec<String>>()
+                .concat(),
+        ],
+        T_DoubleQuoted(l) => vec![
+            l.iter()
+                .flat_map(oversimplify)
+                .collect::<Vec<String>>()
+                .concat(),
+        ],
         T_SingleQuoted(s) => vec![s.clone()],
         T_DollarBraced { .. } => vec!["${VAR}".to_string()],
         T_DollarArithmetic(_) => vec!["${VAR}".to_string()],
@@ -175,11 +185,7 @@ fn drop_prefix(cs: &[char]) -> &[char] {
 }
 fn take_name(cs: &[char]) -> Option<String> {
     let name: String = cs.iter().take_while(|&&c| is_var_char(c)).collect();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
+    if name.is_empty() { None } else { Some(name) }
 }
 fn get_special(cs: &[char]) -> Option<String> {
     match cs.first() {
@@ -237,7 +243,10 @@ fn parse_flag_list(spec: &str) -> Vec<(String, bool)> {
     out
 }
 
-fn get_bsd_opts<'a>(spec: &str, args: &'a [Token]) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
+fn get_bsd_opts<'a>(
+    spec: &str,
+    args: &'a [Token],
+) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
     let mut flag_map: HashMap<String, bool> = HashMap::new();
     flag_map.insert(String::new(), false);
     for (k, v) in parse_flag_list(spec) {
@@ -339,11 +348,7 @@ fn short_to_opts<'a>(
 fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> {
     let first_arg = || -> Option<&'a Token> {
         let arg = args.first()?;
-        if is_flag(arg) {
-            None
-        } else {
-            Some(arg)
-        }
+        if is_flag(arg) { None } else { Some(arg) }
     };
     match s {
         "busybox" | "builtin" | "command" | "run" => first_arg(),
@@ -423,10 +428,16 @@ fn get_leading_flags(t: &Token) -> Vec<(&Token, String)> {
 
 fn bashism_binary_test(op: &str) -> Option<(i64, &'static [Shell], String)> {
     Some(match op {
-        "<" | ">" | "\\<" | "\\>" | "<=" | ">=" | "\\<=" | "\\>=" => {
-            (3012, &[Shell::Dash, Shell::BusyboxSh][..], format!("lexicographical {} is", op))
-        }
-        "==" => (3014, &[Shell::BusyboxSh][..], format!("{} in place of = is", op)),
+        "<" | ">" | "\\<" | "\\>" | "<=" | ">=" | "\\<=" | "\\>=" => (
+            3012,
+            &[Shell::Dash, Shell::BusyboxSh][..],
+            format!("lexicographical {} is", op),
+        ),
+        "==" => (
+            3014,
+            &[Shell::BusyboxSh][..],
+            format!("{} in place of = is", op),
+        ),
         "=~" => (3015, &[][..], format!("{} regex matching is", op)),
         _ => return None,
     })
@@ -434,14 +445,34 @@ fn bashism_binary_test(op: &str) -> Option<(i64, &'static [Shell], String)> {
 
 fn bashism_unary_test(op: &str) -> Option<(i64, &'static [Shell], String)> {
     Some(match op {
-        "-v" => (3016, &[][..], format!("test {} (in place of [ -n \"${{var+x}}\" ]) is", op)),
+        "-v" => (
+            3016,
+            &[][..],
+            format!("test {} (in place of [ -n \"${{var+x}}\" ]) is", op),
+        ),
         "-a" => (3017, &[][..], format!("unary {} in place of -e is", op)),
         "-o" => (3062, &[][..], format!("test {} to check options is", op)),
-        "-R" => (3063, &[][..], format!("test {} and namerefs in general are", op)),
+        "-R" => (
+            3063,
+            &[][..],
+            format!("test {} and namerefs in general are", op),
+        ),
         "-N" => (3064, &[][..], format!("test {} is", op)),
-        "-k" => (3065, &[Shell::Dash, Shell::BusyboxSh][..], format!("test {} is", op)),
-        "-G" => (3066, &[Shell::Dash, Shell::BusyboxSh][..], format!("test {} is", op)),
-        "-O" => (3067, &[Shell::Dash, Shell::BusyboxSh][..], format!("test {} is", op)),
+        "-k" => (
+            3065,
+            &[Shell::Dash, Shell::BusyboxSh][..],
+            format!("test {} is", op),
+        ),
+        "-G" => (
+            3066,
+            &[Shell::Dash, Shell::BusyboxSh][..],
+            format!("test {} is", op),
+        ),
+        "-O" => (
+            3067,
+            &[Shell::Dash, Shell::BusyboxSh][..],
+            format!("test {} is", op),
+        ),
         _ => return None,
     })
 }
@@ -465,16 +496,53 @@ fn check_test_op(
 // ---------------------------------------------------------------------------
 
 const BASH_VARS: &[&str] = &[
-    "OSTYPE", "MACHTYPE", "HOSTTYPE", "HOSTNAME", "DIRSTACK", "EUID", "UID", "SHLVL",
-    "PIPESTATUS", "SHELLOPTS", "_", "BASH", "BASHOPTS", "BASHPID", "BASH_ALIASES",
-    "BASH_ARGC", "BASH_ARGV", "BASH_ARGV0", "BASH_CMDS", "BASH_COMMAND",
-    "BASH_EXECUTION_STRING", "BASH_LINENO", "BASH_LOADABLES_PATH", "BASH_REMATCH",
-    "BASH_SOURCE", "BASH_SUBSHELL", "BASH_VERSINFO", "COMP_CWORD", "COMP_KEY",
-    "COMP_LINE", "COMP_POINT", "COMP_TYPE", "COMP_WORDBREAKS", "COMP_WORDS", "COPROC",
-    "FUNCNAME", "GROUPS", "HISTCMD", "MAPFILE",
+    "OSTYPE",
+    "MACHTYPE",
+    "HOSTTYPE",
+    "HOSTNAME",
+    "DIRSTACK",
+    "EUID",
+    "UID",
+    "SHLVL",
+    "PIPESTATUS",
+    "SHELLOPTS",
+    "_",
+    "BASH",
+    "BASHOPTS",
+    "BASHPID",
+    "BASH_ALIASES",
+    "BASH_ARGC",
+    "BASH_ARGV",
+    "BASH_ARGV0",
+    "BASH_CMDS",
+    "BASH_COMMAND",
+    "BASH_EXECUTION_STRING",
+    "BASH_LINENO",
+    "BASH_LOADABLES_PATH",
+    "BASH_REMATCH",
+    "BASH_SOURCE",
+    "BASH_SUBSHELL",
+    "BASH_VERSINFO",
+    "COMP_CWORD",
+    "COMP_KEY",
+    "COMP_LINE",
+    "COMP_POINT",
+    "COMP_TYPE",
+    "COMP_WORDBREAKS",
+    "COMP_WORDS",
+    "COPROC",
+    "FUNCNAME",
+    "GROUPS",
+    "HISTCMD",
+    "MAPFILE",
 ];
 const BASH_DYNAMIC_VARS: &[&str] = &[
-    "BASH_MONOSECONDS", "EPOCHREALTIME", "EPOCHSECONDS", "RANDOM", "SECONDS", "SRANDOM",
+    "BASH_MONOSECONDS",
+    "EPOCHREALTIME",
+    "EPOCHSECONDS",
+    "RANDOM",
+    "SECONDS",
+    "SRANDOM",
 ];
 const DASH_VARS: &[&str] = &["_"];
 
@@ -485,8 +553,8 @@ fn is_assigned(p: &Parameters, name: &str) -> bool {
 }
 
 fn is_bash_variable(p: &Parameters, var: &str) -> bool {
-    let dyn_or_static = BASH_DYNAMIC_VARS.contains(&var)
-        || (BASH_VARS.contains(&var) && !is_assigned(p, var));
+    let dyn_or_static =
+        BASH_DYNAMIC_VARS.contains(&var) || (BASH_VARS.contains(&var) && !is_assigned(p, var));
     dyn_or_static && !(is_dash(p) && DASH_VARS.contains(&var))
 }
 
@@ -611,7 +679,10 @@ fn check_bashisms(p: &Parameters, t: &Token, out: &mut Out) {
         T_Arithmetic(_) => warn_msg(out, p, id, 3006, "standalone ((..)) is"),
         T_DollarBracket(_) => warn_msg(out, p, id, 3007, "$[..] in place of $((..)) is"),
         T_SelectIn { .. } => warn_msg(out, p, id, 3008, "select loops are"),
-        T_Condition { typ: ConditionType::DoubleBracket, .. } => {
+        T_Condition {
+            typ: ConditionType::DoubleBracket,
+            ..
+        } => {
             if !is_busybox(p) {
                 warn_msg(out, p, id, 3010, "[[ ]] is");
             }
@@ -634,14 +705,26 @@ fn check_bashisms(p: &Parameters, t: &Token, out: &mut Out) {
         }
 
         T_Glob(s) if s.contains("[^") => {
-            warn_msg(out, p, id, 3026, "^ in place of ! in glob bracket expressions is");
+            warn_msg(
+                out,
+                p,
+                id,
+                3026,
+                "^ in place of ! in glob bracket expressions is",
+            );
         }
 
         T_Pipe(op) if op == "|&" => warn_msg(out, p, id, 3029, "|& in place of 2>&1 | is"),
         T_Array(_) => warn_msg(out, p, id, 3030, "arrays are"),
 
         T_Function { name, .. } if !is_variable_name(name) => {
-            warn_msg(out, p, id, 3033, "naming functions outside [a-zA-Z_][a-zA-Z0-9_]* is");
+            warn_msg(
+                out,
+                p,
+                id,
+                3033,
+                "naming functions outside [a-zA-Z_][a-zA-Z0-9_]* is",
+            );
         }
 
         T_DollarExpansion(list) if list.len() == 1 && is_only_redirection(&list[0]) => {
@@ -760,8 +843,22 @@ fn check_simple_command(p: &Parameters, t: &Token, words: &[Token], out: &mut Ou
 }
 
 const UNSUPPORTED_COMMANDS: &[&str] = &[
-    "let", "caller", "builtin", "complete", "compgen", "declare", "dirs", "disown", "enable",
-    "mapfile", "readarray", "pushd", "popd", "shopt", "suspend", "typeset",
+    "let",
+    "caller",
+    "builtin",
+    "complete",
+    "compgen",
+    "declare",
+    "dirs",
+    "disown",
+    "enable",
+    "mapfile",
+    "readarray",
+    "pushd",
+    "popd",
+    "shopt",
+    "suspend",
+    "typeset",
 ];
 
 fn allowed_flags(name: &str, p: &Parameters) -> Option<Vec<&'static str>> {
@@ -771,16 +868,36 @@ fn allowed_flags(name: &str, p: &Parameters) -> Option<Vec<&'static str>> {
         "cd" => vec!["L", "P"],
         "exec" => vec![],
         "export" => vec!["p"],
-        "hash" => if dash { vec!["r", "v"] } else { vec!["r"] },
+        "hash" => {
+            if dash {
+                vec!["r", "v"]
+            } else {
+                vec!["r"]
+            }
+        }
         "jobs" => vec!["l", "p"],
         "printf" => vec![],
-        "read" => if dash || busybox { vec!["r", "p"] } else { vec!["r"] },
+        "read" => {
+            if dash || busybox {
+                vec!["r", "p"]
+            } else {
+                vec!["r"]
+            }
+        }
         "readonly" => vec!["p"],
         "trap" => vec![],
-        "type" => if busybox { vec!["p"] } else { vec![] },
+        "type" => {
+            if busybox {
+                vec!["p"]
+            } else {
+                vec![]
+            }
+        }
         "ulimit" => {
             if dash {
-                vec!["H", "S", "a", "c", "d", "f", "l", "m", "n", "p", "r", "s", "t", "v", "w"]
+                vec![
+                    "H", "S", "a", "c", "d", "f", "l", "m", "n", "p", "r", "s", "t", "v", "w",
+                ]
             } else {
                 vec!["H", "S", "a", "c", "d", "f", "n", "s", "t", "v"]
             }
@@ -834,8 +951,9 @@ fn check_general_command(p: &Parameters, t: &Token, words: &[Token], out: &mut O
 
     if let Some(allowed) = allowed_flags(&name, p) {
         let flags = get_leading_flags(t);
-        if let Some((word, flag)) =
-            flags.iter().find(|(_, f)| !f.is_empty() && !allowed.contains(&f.as_str()))
+        if let Some((word, flag)) = flags
+            .iter()
+            .find(|(_, f)| !f.is_empty() && !allowed.contains(&f.as_str()))
         {
             warn_msg(out, p, word.id(), 3045, &format!("{} -{} is", name, flag));
         }
@@ -853,10 +971,22 @@ fn check_general_command(p: &Parameters, t: &Token, words: &[Token], out: &mut O
                     warn_msg(out, p, token.id(), 3047, &format!("trapping {} is", s));
                 }
                 if !is_busybox(p) && upper.starts_with("SIG") {
-                    warn_msg(out, p, token.id(), 3048, "prefixing signal names with 'SIG' is");
+                    warn_msg(
+                        out,
+                        p,
+                        token.id(),
+                        3048,
+                        "prefixing signal names with 'SIG' is",
+                    );
                 }
                 if !is_dash(p) && upper != s {
-                    warn_msg(out, p, token.id(), 3049, "using lower/mixed case for signal names is");
+                    warn_msg(
+                        out,
+                        p,
+                        token.id(),
+                        3049,
+                        "using lower/mixed case for signal names is",
+                    );
                 }
             }
         }
@@ -879,8 +1009,20 @@ fn check_general_command(p: &Parameters, t: &Token, words: &[Token], out: &mut O
 
 const SET_OPTIONS: &str = "abCefhmnuvxo";
 const SET_LONG_OPTIONS: &[&str] = &[
-    "allexport", "errexit", "ignoreeof", "monitor", "noclobber", "noexec", "noglob", "nolog",
-    "notify", "nounset", "pipefail", "verbose", "vi", "xtrace",
+    "allexport",
+    "errexit",
+    "ignoreeof",
+    "monitor",
+    "noclobber",
+    "noexec",
+    "noglob",
+    "nolog",
+    "notify",
+    "nounset",
+    "pipefail",
+    "verbose",
+    "vi",
+    "xtrace",
 ];
 
 fn set_starts_option(s: &str) -> bool {
@@ -899,7 +1041,9 @@ fn set_o_flag(s: &str) -> bool {
 }
 fn set_valid_flags(s: &str) -> bool {
     let b = s.as_bytes();
-    b.len() >= 2 && (b[0] == b'-' || b[0] == b'+') && s[1..].chars().all(|c| SET_OPTIONS.contains(c))
+    b.len() >= 2
+        && (b[0] == b'-' || b[0] == b'+')
+        && s[1..].chars().all(|c| SET_OPTIONS.contains(c))
 }
 
 fn check_set_options(p: &Parameters, t: &Token, out: &mut Out) {

@@ -128,8 +128,14 @@ pub fn remove_tab_stops_rep(r: &Replacement, lines: &[String]) -> Replacement {
     let start_col = realign_column(lines, r.start.line, r.start.column);
     let end_col = realign_column(lines, r.end.line, r.end.column);
     Replacement {
-        start: Position { column: start_col, ..r.start.clone() },
-        end: Position { column: end_col, ..r.end.clone() },
+        start: Position {
+            column: start_col,
+            ..r.start.clone()
+        },
+        end: Position {
+            column: end_col,
+            ..r.end.clone()
+        },
         ..r.clone()
     }
 }
@@ -139,8 +145,14 @@ pub fn remove_tab_stops_comment(c: &PositionedComment, lines: &[String]) -> Posi
     let start_col = realign_column(lines, c.start.line, c.start.column);
     let end_col = realign_column(lines, c.end.line, c.end.column);
     PositionedComment {
-        start: Position { column: start_col, ..c.start.clone() },
-        end: Position { column: end_col, ..c.end.clone() },
+        start: Position {
+            column: start_col,
+            ..c.start.clone()
+        },
+        end: Position {
+            column: end_col,
+            ..c.end.clone()
+        },
         ..c.clone()
     }
 }
@@ -188,7 +200,12 @@ impl PSTree {
         loop {
             match node {
                 PSTree::Leaf => return sum,
-                PSTree::Branch { pivot, left, right, cumulative } => {
+                PSTree::Branch {
+                    pivot,
+                    left,
+                    right,
+                    cumulative,
+                } => {
                     use std::cmp::Ordering::*;
                     match target.cmp(pivot) {
                         Less => node = left,
@@ -217,7 +234,12 @@ impl PSTree {
                     cumulative: value,
                 };
             }
-            PSTree::Branch { pivot, left, right, cumulative } => {
+            PSTree::Branch {
+                pivot,
+                left,
+                right,
+                cumulative,
+            } => {
                 use std::cmp::Ordering::*;
                 match key.cmp(pivot) {
                     Less => {
@@ -298,7 +320,11 @@ fn multi_to_single(fix: &Fix, lines_in: &[String]) -> (Fix, String) {
         } else {
             0
         };
-        Position { file: pos.file.clone(), line: 1, column: pos.column + shift }
+        Position {
+            file: pos.file.clone(),
+            line: 1,
+            column: pos.column + shift,
+        }
     };
     (map_positions(fix, adjust), unlines(lines_in))
 }
@@ -323,7 +349,11 @@ mod tests {
     use shellcheck_rs::interface::{InsertionPoint, Position};
 
     fn pos(line: i64, col: i64) -> Position {
-        Position { file: String::new(), line, column: col }
+        Position {
+            file: String::new(),
+            line,
+            column: col,
+        }
     }
 
     fn t_from_start(start: i64, end: i64, repl: &str, order: i32) -> Replacement {
@@ -336,12 +366,17 @@ mod tests {
         }
     }
     fn t_from_end(start: i64, end: i64, repl: &str, order: i32) -> Replacement {
-        Replacement { insertion_point: InsertionPoint::InsertBefore, ..t_from_start(start, end, repl, order) }
+        Replacement {
+            insertion_point: InsertionPoint::InsertBefore,
+            ..t_from_start(start, end, repl, order)
+        }
     }
 
     fn test_fixes(expected: &str, original: &str, fixes: &[Fix]) {
-        let reps: Vec<Replacement> =
-            fixes.iter().flat_map(|f| f.replacements.iter().cloned()).collect();
+        let reps: Vec<Replacement> = fixes
+            .iter()
+            .flat_map(|f| f.replacements.iter().cloned())
+            .collect();
         let actual = apply_replacements(&reps, original.to_string());
         assert_eq!(actual, expected);
     }
@@ -358,7 +393,13 @@ mod tests {
 
     #[test]
     fn simple_fix() {
-        test_fixes("hello world", "hell world", &[Fix { replacements: vec![t_from_end(5, 5, "o", 1)] }]);
+        test_fixes(
+            "hello world",
+            "hell world",
+            &[Fix {
+                replacements: vec![t_from_end(5, 5, "o", 1)],
+            }],
+        );
     }
 
     #[test]
@@ -366,7 +407,9 @@ mod tests {
         test_fixes(
             "-->foobar<--",
             "--><--",
-            &[Fix { replacements: vec![t_from_start(4, 4, "foo", 1), t_from_start(4, 4, "bar", 2)] }],
+            &[Fix {
+                replacements: vec![t_from_start(4, 4, "foo", 1), t_from_start(4, 4, "bar", 2)],
+            }],
         );
     }
 
@@ -375,7 +418,9 @@ mod tests {
         test_fixes(
             "-->foobar<--",
             "--><--",
-            &[Fix { replacements: vec![t_from_end(4, 4, "bar", 1), t_from_end(4, 4, "foo", 2)] }],
+            &[Fix {
+                replacements: vec![t_from_end(4, 4, "bar", 1), t_from_end(4, 4, "foo", 2)],
+            }],
         );
     }
 
@@ -385,8 +430,12 @@ mod tests {
             "cd \"$1\" || exit",
             "cd $1",
             &[
-                Fix { replacements: vec![t_from_start(4, 4, "\"", 10), t_from_end(6, 6, "\"", 10)] },
-                Fix { replacements: vec![t_from_end(6, 6, " || exit", 5)] },
+                Fix {
+                    replacements: vec![t_from_start(4, 4, "\"", 10), t_from_end(6, 6, "\"", 10)],
+                },
+                Fix {
+                    replacements: vec![t_from_end(6, 6, " || exit", 5)],
+                },
             ],
         );
     }

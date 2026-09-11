@@ -171,11 +171,7 @@ fn effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> 
     match s {
         "busybox" | "builtin" | "command" | "run" => {
             let arg = args.first()?;
-            if is_flag(arg) {
-                None
-            } else {
-                Some(arg)
-            }
+            if is_flag(arg) { None } else { Some(arg) }
         }
         _ => None,
     }
@@ -205,7 +201,12 @@ fn commarray_literal(t: &Token) -> String {
 fn check_commarrays(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_Array(l) = &*t.inner {
         if l.iter().any(|e| commarray_literal(e).contains(',')) {
-            warn(out, t.id(), 2054, "Use spaces, not commas, to separate array elements.");
+            warn(
+                out,
+                t.id(),
+                2054,
+                "Use spaces, not commas, to separate array elements.",
+            );
         }
     }
 }
@@ -220,7 +221,12 @@ fn check_pipe_pitfalls_ls_grep(_params: &Parameters, t: &Token, out: &mut Out) {
         for i in 0..commands.len().saturating_sub(1) {
             if names[i].as_deref() == Some("ls") && names[i + 1].as_deref() == Some("grep") {
                 let id = get_command_token_or_this(&commands[i]).id();
-                warn(out, id, 2010, "Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames.");
+                warn(
+                    out,
+                    id,
+                    2010,
+                    "Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames.",
+                );
             }
         }
     }
@@ -300,7 +306,12 @@ fn check_unused_echo_escapes(params: &Parameters, t: &Token, out: &mut Out) {
     for token in args {
         let str = only_literal_string(token);
         if echo_escapes_re().is_match(&str) {
-            info(out, token.id(), 2028, "echo may not expand escape sequences. Use printf.");
+            info(
+                out,
+                token.id(),
+                2028,
+                "echo may not expand escape sequences. Use printf.",
+            );
         }
     }
 }
@@ -319,7 +330,12 @@ fn check_grep_re(_params: &Parameters, t: &Token, out: &mut Out) {
     }
     if let Some(re) = find_grep_regex(args) {
         if is_glob(re) {
-            warn(out, re.id(), 2062, "Quote the grep pattern so the shell won't interpret it.");
+            warn(
+                out,
+                re.id(),
+                2062,
+                "Quote the grep pattern so the shell won't interpret it.",
+            );
         }
     }
 }
@@ -350,7 +366,12 @@ fn find_grep_regex(args: &[Token]) -> Option<&Token> {
 fn check_unmatchable_cases_constant(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_CaseExpression { word, .. } = &*t.inner {
         if is_constant(word) {
-            warn(out, word.id(), 2194, "This word is constant. Did you forget the $ on a variable?");
+            warn(
+                out,
+                word.id(),
+                2194,
+                "This word is constant. Did you forget the $ on a variable?",
+            );
         }
     }
 }
@@ -394,7 +415,12 @@ fn check_flag_as_command(_params: &Parameters, t: &Token, out: &mut Out) {
         if assignments.is_empty() {
             if let Some(first) = words.first() {
                 if is_unquoted_flag(first) {
-                    warn(out, first.id(), 2215, "This flag is used as a command name. Bad line break or missing [ .. ]?");
+                    warn(
+                        out,
+                        first.id(),
+                        2215,
+                        "This flag is used as a command name. Bad line break or missing [ .. ]?",
+                    );
                 }
             }
         }
@@ -425,7 +451,12 @@ fn check_second_arg_is_comparison(_params: &Parameters, t: &Token, out: &mut Out
         // Order in the oracle: "====" -> skip, "+=" -> 2285, "==" -> 2284,
         // "=" -> 2283. We only emit 2283.
         if s.starts_with('=') && !s.starts_with("==") {
-            err(out, head_id(arg), 2283, "Remove spaces around = to assign (or use [ ] to compare, or quote '=' if literal).");
+            err(
+                out,
+                head_id(arg),
+                2283,
+                "Remove spaces around = to assign (or use [ ] to compare, or quote '=' if literal).",
+            );
         }
     }
 }
@@ -471,8 +502,8 @@ fn check_command_with_trailing_symbol(_params: &Parameters, t: &Token, out: &mut
     let last = str.chars().last().unwrap_or('x');
     match str.as_str() {
         "." | ":" | " " | "//" => {}
-        "" => {}                                  // SC2286 (not ours)
-        _ if last == '/' => {}                    // SC2287 (not ours)
+        "" => {}               // SC2286 (not ours)
+        _ if last == '/' => {} // SC2287 (not ours)
         _ if "\\.,([{<>}])#\"'% ".contains(last) => {
             warn(
                 out,
@@ -509,7 +540,12 @@ mod tests {
     fn collect(f: fn(&Parameters, &Token, &mut Out), s: &str) -> Out {
         let params = params_for(s);
         let mut out = Out::new();
-        fn walk(f: fn(&Parameters, &Token, &mut Out), params: &Parameters, t: &Token, out: &mut Out) {
+        fn walk(
+            f: fn(&Parameters, &Token, &mut Out),
+            params: &Parameters,
+            t: &Token,
+            out: &mut Out,
+        ) {
             f(params, t, out);
             for c in t.children() {
                 walk(f, params, c, out);
@@ -528,137 +564,325 @@ mod tests {
 
     // SC2054 — checkCommarrays
     #[test]
-    fn prop_checkCommarrays1() { assert!(emits(check_commarrays, "a=(1, 2)")); }
+    fn prop_checkCommarrays1() {
+        assert!(emits(check_commarrays, "a=(1, 2)"));
+    }
     #[test]
-    fn prop_checkCommarrays2() { assert!(emits(check_commarrays, "a+=(1,2,3)")); }
+    fn prop_checkCommarrays2() {
+        assert!(emits(check_commarrays, "a+=(1,2,3)"));
+    }
     #[test]
-    fn prop_checkCommarrays3() { assert!(!emits(check_commarrays, "cow=(1 \"foo,bar\" 3)")); }
+    fn prop_checkCommarrays3() {
+        assert!(!emits(check_commarrays, "cow=(1 \"foo,bar\" 3)"));
+    }
     #[test]
-    fn prop_checkCommarrays4() { assert!(!emits(check_commarrays, "cow=('one,' 'two')")); }
+    fn prop_checkCommarrays4() {
+        assert!(!emits(check_commarrays, "cow=('one,' 'two')"));
+    }
     #[test]
-    fn prop_checkCommarrays5() { assert!(emits(check_commarrays, "a=([a]=b, [c]=d)")); }
+    fn prop_checkCommarrays5() {
+        assert!(emits(check_commarrays, "a=([a]=b, [c]=d)"));
+    }
     #[test]
-    fn prop_checkCommarrays6() { assert!(emits(check_commarrays, "a=([a]=b,[c]=d,[e]=f)")); }
+    fn prop_checkCommarrays6() {
+        assert!(emits(check_commarrays, "a=([a]=b,[c]=d,[e]=f)"));
+    }
     #[test]
-    fn prop_checkCommarrays7() { assert!(emits(check_commarrays, "a=(1,2)")); }
+    fn prop_checkCommarrays7() {
+        assert!(emits(check_commarrays, "a=(1,2)"));
+    }
 
     // SC2010 — ls | grep
     #[test]
-    fn prop_checkPipePitfalls3() { assert!(emits_code(check_pipe_pitfalls_ls_grep, "ls | grep -v mp3", 2010)); }
+    fn prop_checkPipePitfalls3() {
+        assert!(emits_code(
+            check_pipe_pitfalls_ls_grep,
+            "ls | grep -v mp3",
+            2010
+        ));
+    }
     #[test]
-    fn prop_lsgrep_neg() { assert!(!emits(check_pipe_pitfalls_ls_grep, "ls | foo")); }
+    fn prop_lsgrep_neg() {
+        assert!(!emits(check_pipe_pitfalls_ls_grep, "ls | foo"));
+    }
     #[test]
-    fn prop_lsgrep_neg2() { assert!(!emits(check_pipe_pitfalls_ls_grep, "find . | grep foo")); }
+    fn prop_lsgrep_neg2() {
+        assert!(!emits(check_pipe_pitfalls_ls_grep, "find . | grep foo"));
+    }
 
     // SC2028 — checkUnusedEchoEscapes
     #[test]
-    fn prop_checkUnusedEchoEscapes1() { assert!(emits(check_unused_echo_escapes, "echo 'foo\\nbar\\n'")); }
+    fn prop_checkUnusedEchoEscapes1() {
+        assert!(emits(check_unused_echo_escapes, "echo 'foo\\nbar\\n'"));
+    }
     #[test]
-    fn prop_checkUnusedEchoEscapes2() { assert!(!emits(check_unused_echo_escapes, "echo -e 'foi\\nbar'")); }
+    fn prop_checkUnusedEchoEscapes2() {
+        assert!(!emits(check_unused_echo_escapes, "echo -e 'foi\\nbar'"));
+    }
     #[test]
-    fn prop_checkUnusedEchoEscapes3() { assert!(emits(check_unused_echo_escapes, "echo \"n:\\t42\"")); }
+    fn prop_checkUnusedEchoEscapes3() {
+        assert!(emits(check_unused_echo_escapes, "echo \"n:\\t42\""));
+    }
     #[test]
-    fn prop_checkUnusedEchoEscapes4() { assert!(!emits(check_unused_echo_escapes, "echo lol")); }
+    fn prop_checkUnusedEchoEscapes4() {
+        assert!(!emits(check_unused_echo_escapes, "echo lol"));
+    }
     #[test]
-    fn prop_checkUnusedEchoEscapes5() { assert!(!emits(check_unused_echo_escapes, "echo -n -e '\n'")); }
+    fn prop_checkUnusedEchoEscapes5() {
+        assert!(!emits(check_unused_echo_escapes, "echo -n -e '\n'"));
+    }
     #[test]
-    fn prop_checkUnusedEchoEscapes6() { assert!(emits(check_unused_echo_escapes, "echo '\\506'")); }
+    fn prop_checkUnusedEchoEscapes6() {
+        assert!(emits(check_unused_echo_escapes, "echo '\\506'"));
+    }
     #[test]
-    fn prop_checkUnusedEchoEscapes7() { assert!(emits(check_unused_echo_escapes, "echo '\\5a'")); }
+    fn prop_checkUnusedEchoEscapes7() {
+        assert!(emits(check_unused_echo_escapes, "echo '\\5a'"));
+    }
     #[test]
-    fn prop_checkUnusedEchoEscapes8() { assert!(!emits(check_unused_echo_escapes, "echo '\\8a'")); }
+    fn prop_checkUnusedEchoEscapes8() {
+        assert!(!emits(check_unused_echo_escapes, "echo '\\8a'"));
+    }
     #[test]
-    fn prop_checkUnusedEchoEscapes9() { assert!(!emits(check_unused_echo_escapes, "echo '\\d5a'")); }
+    fn prop_checkUnusedEchoEscapes9() {
+        assert!(!emits(check_unused_echo_escapes, "echo '\\d5a'"));
+    }
     #[test]
-    fn prop_checkUnusedEchoEscapes10() { assert!(emits(check_unused_echo_escapes, "echo '\\x4a'")); }
+    fn prop_checkUnusedEchoEscapes10() {
+        assert!(emits(check_unused_echo_escapes, "echo '\\x4a'"));
+    }
     #[test]
-    fn prop_checkUnusedEchoEscapes11() { assert!(emits(check_unused_echo_escapes, "echo '\\xat'")); }
+    fn prop_checkUnusedEchoEscapes11() {
+        assert!(emits(check_unused_echo_escapes, "echo '\\xat'"));
+    }
     #[test]
-    fn prop_checkUnusedEchoEscapes12() { assert!(!emits(check_unused_echo_escapes, "echo '\\xth'")); }
+    fn prop_checkUnusedEchoEscapes12() {
+        assert!(!emits(check_unused_echo_escapes, "echo '\\xth'"));
+    }
 
     // SC2062 — checkGrepRe (glob branch)
     #[test]
-    fn prop_checkGrepRe1() { assert!(emits_code(check_grep_re, "cat foo | grep *.mp3", 2062)); }
+    fn prop_checkGrepRe1() {
+        assert!(emits_code(check_grep_re, "cat foo | grep *.mp3", 2062));
+    }
     #[test]
-    fn prop_checkGrepRe2() { assert!(emits_code(check_grep_re, "grep -Ev cow*test *.mp3", 2062)); }
+    fn prop_checkGrepRe2() {
+        assert!(emits_code(check_grep_re, "grep -Ev cow*test *.mp3", 2062));
+    }
     #[test]
-    fn prop_checkGrepRe3() { assert!(emits_code(check_grep_re, "grep --regex=*.mp3 file", 2062)); }
+    fn prop_checkGrepRe3() {
+        assert!(emits_code(check_grep_re, "grep --regex=*.mp3 file", 2062));
+    }
     #[test]
-    fn prop_checkGrepRe4() { assert!(!emits_code(check_grep_re, "grep foo *.mp3", 2062)); }
+    fn prop_checkGrepRe4() {
+        assert!(!emits_code(check_grep_re, "grep foo *.mp3", 2062));
+    }
     #[test]
-    fn prop_checkGrepRe6() { assert!(!emits_code(check_grep_re, "grep foo \\*.mp3", 2062)); }
+    fn prop_checkGrepRe6() {
+        assert!(!emits_code(check_grep_re, "grep foo \\*.mp3", 2062));
+    }
     #[test]
-    fn prop_checkGrepRe7() { assert!(emits_code(check_grep_re, "grep *foo* file", 2062)); }
+    fn prop_checkGrepRe7() {
+        assert!(emits_code(check_grep_re, "grep *foo* file", 2062));
+    }
     #[test]
-    fn prop_checkGrepRe8() { assert!(emits_code(check_grep_re, "ls | grep foo*.jpg", 2062)); }
+    fn prop_checkGrepRe8() {
+        assert!(emits_code(check_grep_re, "ls | grep foo*.jpg", 2062));
+    }
     #[test]
-    fn prop_checkGrepRe9() { assert!(!emits_code(check_grep_re, "grep '[0-9]*' file", 2062)); }
+    fn prop_checkGrepRe9() {
+        assert!(!emits_code(check_grep_re, "grep '[0-9]*' file", 2062));
+    }
     #[test]
-    fn prop_checkGrepRe12() { assert!(!emits_code(check_grep_re, "grep -F 'Foo*' file", 2062)); }
+    fn prop_checkGrepRe12() {
+        assert!(!emits_code(check_grep_re, "grep -F 'Foo*' file", 2062));
+    }
     #[test]
-    fn prop_checkGrepRe13() { assert!(!emits_code(check_grep_re, "grep -- -foo bar*", 2062)); }
+    fn prop_checkGrepRe13() {
+        assert!(!emits_code(check_grep_re, "grep -- -foo bar*", 2062));
+    }
     #[test]
-    fn prop_checkGrepRe14() { assert!(!emits_code(check_grep_re, "grep -e -foo bar*", 2062)); }
+    fn prop_checkGrepRe14() {
+        assert!(!emits_code(check_grep_re, "grep -e -foo bar*", 2062));
+    }
 
     // SC2194 — constant case word
     #[test]
-    fn prop_case_const1() { assert!(emits_code(check_unmatchable_cases_constant, "case foo in bar) true; esac", 2194)); }
+    fn prop_case_const1() {
+        assert!(emits_code(
+            check_unmatchable_cases_constant,
+            "case foo in bar) true; esac",
+            2194
+        ));
+    }
     #[test]
-    fn prop_case_const2() { assert!(!emits_code(check_unmatchable_cases_constant, "case $f in bar) true; esac", 2194)); }
+    fn prop_case_const2() {
+        assert!(!emits_code(
+            check_unmatchable_cases_constant,
+            "case $f in bar) true; esac",
+            2194
+        ));
+    }
 
     // SC2207 — checkSplittingInArrays (command branch)
     #[test]
-    fn prop_checkSplittingInArrays2() { assert!(emits(check_splitting_in_arrays, "a=( $(cmd) )")); }
+    fn prop_checkSplittingInArrays2() {
+        assert!(emits(check_splitting_in_arrays, "a=( $(cmd) )"));
+    }
     #[test]
-    fn prop_checkSplittingInArrays4() { assert!(!emits(check_splitting_in_arrays, "a=( \"$(cmd)\" )")); }
+    fn prop_checkSplittingInArrays4() {
+        assert!(!emits(check_splitting_in_arrays, "a=( \"$(cmd)\" )"));
+    }
     #[test]
-    fn prop_splitarr_backtick() { assert!(emits(check_splitting_in_arrays, "a=( `cmd` )")); }
+    fn prop_splitarr_backtick() {
+        assert!(emits(check_splitting_in_arrays, "a=( `cmd` )"));
+    }
     #[test]
-    fn prop_splitarr_var() { assert!(!emits(check_splitting_in_arrays, "a=( $var )")); }
+    fn prop_splitarr_var() {
+        assert!(!emits(check_splitting_in_arrays, "a=( $var )"));
+    }
 
     // SC2215 — checkFlagAsCommand
     #[test]
-    fn prop_checkFlagAsCommand1() { assert!(emits(check_flag_as_command, "-e file")); }
+    fn prop_checkFlagAsCommand1() {
+        assert!(emits(check_flag_as_command, "-e file"));
+    }
     #[test]
-    fn prop_checkFlagAsCommand2() { assert!(emits(check_flag_as_command, "foo\n  --bar=baz")); }
+    fn prop_checkFlagAsCommand2() {
+        assert!(emits(check_flag_as_command, "foo\n  --bar=baz"));
+    }
     #[test]
-    fn prop_checkFlagAsCommand3() { assert!(!emits(check_flag_as_command, "'--myexec--' args")); }
+    fn prop_checkFlagAsCommand3() {
+        assert!(!emits(check_flag_as_command, "'--myexec--' args"));
+    }
     #[test]
-    fn prop_checkFlagAsCommand4() { assert!(!emits(check_flag_as_command, "var=cmd --arg")); }
+    fn prop_checkFlagAsCommand4() {
+        assert!(!emits(check_flag_as_command, "var=cmd --arg"));
+    }
 
     // SC2283 — spaces around =
     #[test]
-    fn prop_checkSecondArgIsComparison1() { assert!(emits_code(check_second_arg_is_comparison, "foo = $bar", 2283)); }
+    fn prop_checkSecondArgIsComparison1() {
+        assert!(emits_code(
+            check_second_arg_is_comparison,
+            "foo = $bar",
+            2283
+        ));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison2() { assert!(emits_code(check_second_arg_is_comparison, "$foo = $bar", 2283)); }
+    fn prop_checkSecondArgIsComparison2() {
+        assert!(emits_code(
+            check_second_arg_is_comparison,
+            "$foo = $bar",
+            2283
+        ));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison4() { assert!(emits_code(check_second_arg_is_comparison, "'var' =$bar", 2283)); }
+    fn prop_checkSecondArgIsComparison4() {
+        assert!(emits_code(
+            check_second_arg_is_comparison,
+            "'var' =$bar",
+            2283
+        ));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison6() { assert!(emits_code(check_second_arg_is_comparison, "$foo =$bar", 2283)); }
+    fn prop_checkSecondArgIsComparison6() {
+        assert!(emits_code(
+            check_second_arg_is_comparison,
+            "$foo =$bar",
+            2283
+        ));
+    }
     #[test]
-    fn prop_sc2283_not_eqeq() { assert!(!emits_code(check_second_arg_is_comparison, "2f == $bar", 2283)); }
+    fn prop_sc2283_not_eqeq() {
+        assert!(!emits_code(
+            check_second_arg_is_comparison,
+            "2f == $bar",
+            2283
+        ));
+    }
     #[test]
-    fn prop_sc2283_not_pluseq() { assert!(!emits_code(check_second_arg_is_comparison, "var += $(foo)", 2283)); }
+    fn prop_sc2283_not_pluseq() {
+        assert!(!emits_code(
+            check_second_arg_is_comparison,
+            "var += $(foo)",
+            2283
+        ));
+    }
     #[test]
-    fn prop_sc2283_not_border() { assert!(!emits_code(check_second_arg_is_comparison, "echo ======= Here =======", 2283)); }
+    fn prop_sc2283_not_border() {
+        assert!(!emits_code(
+            check_second_arg_is_comparison,
+            "echo ======= Here =======",
+            2283
+        ));
+    }
 
     // SC2288 — trailing symbol
     #[test]
-    fn prop_checkCommandWithTrailingSymbol6() { assert!(emits_code(check_command_with_trailing_symbol, "foo, bar", 2288)); }
+    fn prop_checkCommandWithTrailingSymbol6() {
+        assert!(emits_code(
+            check_command_with_trailing_symbol,
+            "foo, bar",
+            2288
+        ));
+    }
     #[test]
-    fn prop_sc2288_not_slash() { assert!(!emits_code(check_command_with_trailing_symbol, "/foo/ bar/baz", 2288)); }
+    fn prop_sc2288_not_slash() {
+        assert!(!emits_code(
+            check_command_with_trailing_symbol,
+            "/foo/ bar/baz",
+            2288
+        ));
+    }
     #[test]
-    fn prop_sc2288_not_dot() { assert!(!emits_code(check_command_with_trailing_symbol, ". foo.sh", 2288)); }
+    fn prop_sc2288_not_dot() {
+        assert!(!emits_code(
+            check_command_with_trailing_symbol,
+            ". foo.sh",
+            2288
+        ));
+    }
     #[test]
-    fn prop_sc2288_not_colon() { assert!(!emits_code(check_command_with_trailing_symbol, ": foo", 2288)); }
+    fn prop_sc2288_not_colon() {
+        assert!(!emits_code(
+            check_command_with_trailing_symbol,
+            ": foo",
+            2288
+        ));
+    }
     #[test]
-    fn prop_sc2288_not_var() { assert!(!emits_code(check_command_with_trailing_symbol, "$foo/$bar", 2288)); }
+    fn prop_sc2288_not_var() {
+        assert!(!emits_code(
+            check_command_with_trailing_symbol,
+            "$foo/$bar",
+            2288
+        ));
+    }
     // Fully-literal guard: parser-gap fallbacks with expansions/globs must not fire.
     #[test]
-    fn prop_sc2288_not_condition() { assert!(!emits_code(check_command_with_trailing_symbol, "[[ 3 \\< 4 ]]", 2288)); }
+    fn prop_sc2288_not_condition() {
+        assert!(!emits_code(
+            check_command_with_trailing_symbol,
+            "[[ 3 \\< 4 ]]",
+            2288
+        ));
+    }
     #[test]
-    fn prop_sc2288_not_badbrace() { assert!(!emits_code(check_command_with_trailing_symbol, "${{var}", 2288)); }
+    fn prop_sc2288_not_badbrace() {
+        assert!(!emits_code(
+            check_command_with_trailing_symbol,
+            "${{var}",
+            2288
+        ));
+    }
     // Real oracle cases remain literal and still fire.
     #[test]
-    fn prop_sc2288_dollar_dquote() { assert!(emits_code(check_command_with_trailing_symbol, "$\"(foo)\"", 2288)); }
+    fn prop_sc2288_dollar_dquote() {
+        assert!(emits_code(
+            check_command_with_trailing_symbol,
+            "$\"(foo)\"",
+            2288
+        ));
+    }
 }

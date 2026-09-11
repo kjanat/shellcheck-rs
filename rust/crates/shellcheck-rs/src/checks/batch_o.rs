@@ -15,7 +15,9 @@
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
-use crate::cfg::{get_braced_reference, get_literal_string_def, get_word_parts, is_variable_name, oversimplify};
+use crate::cfg::{
+    get_braced_reference, get_literal_string_def, get_word_parts, is_variable_name, oversimplify,
+};
 use crate::cfg_analysis::NumericalStatus;
 use crate::interface::Shell;
 
@@ -136,7 +138,10 @@ fn is_num(params: &Parameters, t: &Token) -> bool {
                     let cfga = params.cfg_analysis.as_ref()?;
                     let state = cfga.get_incoming_state(id)?;
                     let value = state.variables_in_scope.get(&var)?;
-                    Some(value.variable_value.numerical_status >= NumericalStatus::NumericalStatusMaybe)
+                    Some(
+                        value.variable_value.numerical_status
+                            >= NumericalStatus::NumericalStatusMaybe,
+                    )
                 })()
                 .unwrap_or(false);
             }
@@ -334,7 +339,12 @@ mod tests {
     fn collect(f: fn(&Parameters, &Token, &mut Out), s: &str) -> Out {
         let params = params_for(s);
         let mut out = Out::new();
-        fn walk(f: fn(&Parameters, &Token, &mut Out), params: &Parameters, t: &Token, out: &mut Out) {
+        fn walk(
+            f: fn(&Parameters, &Token, &mut Out),
+            params: &Parameters,
+            t: &Token,
+            out: &mut Out,
+        ) {
             f(params, t, out);
             for c in t.children() {
                 walk(f, params, c, out);
@@ -349,51 +359,102 @@ mod tests {
     }
 
     #[test]
-    fn prop_checkNumberComparisons1() { assert!(emits(check_number_comparisons, "[[ $foo < 3 ]]")); }
+    fn prop_checkNumberComparisons1() {
+        assert!(emits(check_number_comparisons, "[[ $foo < 3 ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons2() { assert!(emits(check_number_comparisons, "[[ 0 >= $(cmd) ]]")); }
+    fn prop_checkNumberComparisons2() {
+        assert!(emits(check_number_comparisons, "[[ 0 >= $(cmd) ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons3() { assert!(!emits(check_number_comparisons, "[[ $foo ]] > 3")); }
+    fn prop_checkNumberComparisons3() {
+        assert!(!emits(check_number_comparisons, "[[ $foo ]] > 3"));
+    }
     #[test]
-    fn prop_checkNumberComparisons4() { assert!(emits(check_number_comparisons, "[[ $foo > 2.72 ]]")); }
+    fn prop_checkNumberComparisons4() {
+        assert!(emits(check_number_comparisons, "[[ $foo > 2.72 ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons5() { assert!(emits(check_number_comparisons, "[[ $foo -le 2.72 ]]")); }
+    fn prop_checkNumberComparisons5() {
+        assert!(emits(check_number_comparisons, "[[ $foo -le 2.72 ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons6() { assert!(emits(check_number_comparisons, "[[ 3.14 -eq $foo ]]")); }
+    fn prop_checkNumberComparisons6() {
+        assert!(emits(check_number_comparisons, "[[ 3.14 -eq $foo ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons7() { assert!(!emits(check_number_comparisons, "[[ 3.14 == $foo ]]")); }
+    fn prop_checkNumberComparisons7() {
+        assert!(!emits(check_number_comparisons, "[[ 3.14 == $foo ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons8() { assert!(emits(check_number_comparisons, "[ foo <= bar ]")); }
+    fn prop_checkNumberComparisons8() {
+        assert!(emits(check_number_comparisons, "[ foo <= bar ]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons9() { assert!(emits(check_number_comparisons, "[ foo \\>= bar ]")); }
+    fn prop_checkNumberComparisons9() {
+        assert!(emits(check_number_comparisons, "[ foo \\>= bar ]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons11() { assert!(emits(check_number_comparisons, "[ $foo -eq 'N' ]")); }
+    fn prop_checkNumberComparisons11() {
+        assert!(emits(check_number_comparisons, "[ $foo -eq 'N' ]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons12() { assert!(emits(check_number_comparisons, "[ x$foo -gt x${N} ]")); }
+    fn prop_checkNumberComparisons12() {
+        assert!(emits(check_number_comparisons, "[ x$foo -gt x${N} ]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons13() { assert!(emits(check_number_comparisons, "[ $foo > $bar ]")); }
+    fn prop_checkNumberComparisons13() {
+        assert!(emits(check_number_comparisons, "[ $foo > $bar ]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons14() { assert!(!emits(check_number_comparisons, "[[ foo < bar ]]")); }
+    fn prop_checkNumberComparisons14() {
+        assert!(!emits(check_number_comparisons, "[[ foo < bar ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons15() { assert!(!emits(check_number_comparisons, "[ $foo '>' $bar ]")); }
+    fn prop_checkNumberComparisons15() {
+        assert!(!emits(check_number_comparisons, "[ $foo '>' $bar ]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons16() { assert!(emits(check_number_comparisons, "[ foo -eq 'y' ]")); }
+    fn prop_checkNumberComparisons16() {
+        assert!(emits(check_number_comparisons, "[ foo -eq 'y' ]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons17() { assert!(emits(check_number_comparisons, "[[ 'foo' -eq 2 ]]")); }
+    fn prop_checkNumberComparisons17() {
+        assert!(emits(check_number_comparisons, "[[ 'foo' -eq 2 ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons18() { assert!(emits(check_number_comparisons, "[[ foo -eq 2 ]]")); }
+    fn prop_checkNumberComparisons18() {
+        assert!(emits(check_number_comparisons, "[[ foo -eq 2 ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons19() { assert!(!emits(check_number_comparisons, "foo=1; [[ foo -eq 2 ]]")); }
+    fn prop_checkNumberComparisons19() {
+        assert!(!emits(check_number_comparisons, "foo=1; [[ foo -eq 2 ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons20() { assert!(emits(check_number_comparisons, "[[ 2 -eq / ]]")); }
+    fn prop_checkNumberComparisons20() {
+        assert!(emits(check_number_comparisons, "[[ 2 -eq / ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons21() { assert!(emits(check_number_comparisons, "[[ foo -eq foo ]]")); }
+    fn prop_checkNumberComparisons21() {
+        assert!(emits(check_number_comparisons, "[[ foo -eq foo ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons22() { assert!(emits(check_number_comparisons, "x=10; [[ $x > $z ]]")); }
+    fn prop_checkNumberComparisons22() {
+        assert!(emits(check_number_comparisons, "x=10; [[ $x > $z ]]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons23() { assert!(emits(check_number_comparisons, "x=0; if [[ -n $def ]]; then x=$def; fi; while [ $x > $z ]; do lol; done")); }
+    fn prop_checkNumberComparisons23() {
+        assert!(emits(
+            check_number_comparisons,
+            "x=0; if [[ -n $def ]]; then x=$def; fi; while [ $x > $z ]; do lol; done"
+        ));
+    }
     #[test]
-    fn prop_checkNumberComparisons24() { assert!(emits(check_number_comparisons, "x=$RANDOM; [ $x > $z ]")); }
+    fn prop_checkNumberComparisons24() {
+        assert!(emits(check_number_comparisons, "x=$RANDOM; [ $x > $z ]"));
+    }
     #[test]
-    fn prop_checkNumberComparisons25() { assert!(emits(check_number_comparisons, "[[ $((n++)) > $x ]]")); }
+    fn prop_checkNumberComparisons25() {
+        assert!(emits(check_number_comparisons, "[[ $((n++)) > $x ]]"));
+    }
 }

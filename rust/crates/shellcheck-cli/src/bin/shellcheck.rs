@@ -9,9 +9,7 @@
 use std::io::{IsTerminal, Read, Write};
 use std::process::ExitCode;
 
-use shellcheck_cli::formatter::{
-    self, checkstyle, diff, fixer, gcc, json, json1, tty,
-};
+use shellcheck_cli::formatter::{self, checkstyle, diff, fixer, gcc, json, json1, tty};
 use shellcheck_cli::options::{self, Outcome, RunConfig};
 use shellcheck_cli::rc::{self, RcConfig};
 use shellcheck_rs::interface::{CheckSpec, PositionedComment};
@@ -80,7 +78,10 @@ fn load(
         if stdin_cache.is_none() {
             let mut s = String::new();
             if std::io::stdin().read_to_string(&mut s).is_err() {
-                return Input::Err { name: name.to_string(), message: "failed to read stdin".to_string() };
+                return Input::Err {
+                    name: name.to_string(),
+                    message: "failed to read stdin".to_string(),
+                };
             }
             *stdin_cache = Some(s);
         }
@@ -88,7 +89,12 @@ fn load(
     } else {
         match std::fs::read_to_string(name) {
             Ok(s) => s,
-            Err(e) => return Input::Err { name: name.to_string(), message: e.to_string() },
+            Err(e) => {
+                return Input::Err {
+                    name: name.to_string(),
+                    message: e.to_string(),
+                };
+            }
         }
     };
     let mut spec = CheckSpec {
@@ -98,7 +104,11 @@ fn load(
     };
     merge_rc(&mut spec, rc);
     let result = shellcheck_rs::check_script(&spec);
-    Input::Ok(Loaded { name: name.to_string(), contents, comments: result.comments })
+    Input::Ok(Loaded {
+        name: name.to_string(),
+        contents,
+        comments: result.comments,
+    })
 }
 
 /// Merge rc directives into the per-input `CheckSpec`. CLI flags (already on
@@ -127,7 +137,8 @@ fn merge_rc(spec: &mut CheckSpec, rc: Option<&RcConfig>) {
         // false for every code -> all warnings suppressed.
         spec.included_warnings = Some(Vec::new());
     } else {
-        spec.excluded_warnings.extend(rc.disabled_codes.iter().copied());
+        spec.excluded_warnings
+            .extend(rc.disabled_codes.iter().copied());
         if let Some(included) = &mut spec.included_warnings {
             included.retain(|c| !rc.disabled_codes.contains(c));
         }
@@ -144,7 +155,14 @@ fn merge_rc(spec: &mut CheckSpec, rc: Option<&RcConfig>) {
 }
 
 fn run(config: RunConfig) -> ExitCode {
-    let RunConfig { format, inputs, spec_template, color, wiki_link_count, rcfile } = config;
+    let RunConfig {
+        format,
+        inputs,
+        spec_template,
+        color,
+        wiki_link_count,
+        rcfile,
+    } = config;
 
     // Resolve the rc configuration policy up front (mirrors `getConfig`):
     //   * `--norc` (ignore_rc): never use any rc file.

@@ -90,7 +90,10 @@ impl Eq for Token {}
 
 impl Token {
     pub fn new(id: Id, inner: InnerToken) -> Token {
-        Token { id, inner: Box::new(inner) }
+        Token {
+            id,
+            inner: Box::new(inner),
+        }
     }
 
     /// `getId`.
@@ -111,33 +114,92 @@ impl Token {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InnerToken {
     // --- Arithmetic (TA_*) ---
-    TA_Binary { op: String, lhs: Token, rhs: Token },
-    TA_Assignment { op: String, lhs: Token, rhs: Token },
-    TA_Variable { name: String, indices: Vec<Token> },
+    TA_Binary {
+        op: String,
+        lhs: Token,
+        rhs: Token,
+    },
+    TA_Assignment {
+        op: String,
+        lhs: Token,
+        rhs: Token,
+    },
+    TA_Variable {
+        name: String,
+        indices: Vec<Token>,
+    },
     TA_Expansion(Vec<Token>),
     TA_Sequence(Vec<Token>),
     TA_Parenthesis(Token),
-    TA_Trinary { cond: Token, then: Token, els: Token },
-    TA_Unary { op: String, operand: Token },
+    TA_Trinary {
+        cond: Token,
+        then: Token,
+        els: Token,
+    },
+    TA_Unary {
+        op: String,
+        operand: Token,
+    },
 
     // --- Test conditions (TC_*) ---
-    TC_And { typ: ConditionType, op: String, lhs: Token, rhs: Token },
-    TC_Binary { typ: ConditionType, op: String, lhs: Token, rhs: Token },
-    TC_Group { typ: ConditionType, token: Token },
-    TC_Nullary { typ: ConditionType, token: Token },
-    TC_Or { typ: ConditionType, op: String, lhs: Token, rhs: Token },
-    TC_Unary { typ: ConditionType, op: String, token: Token },
-    TC_Empty { typ: ConditionType },
+    TC_And {
+        typ: ConditionType,
+        op: String,
+        lhs: Token,
+        rhs: Token,
+    },
+    TC_Binary {
+        typ: ConditionType,
+        op: String,
+        lhs: Token,
+        rhs: Token,
+    },
+    TC_Group {
+        typ: ConditionType,
+        token: Token,
+    },
+    TC_Nullary {
+        typ: ConditionType,
+        token: Token,
+    },
+    TC_Or {
+        typ: ConditionType,
+        op: String,
+        lhs: Token,
+        rhs: Token,
+    },
+    TC_Unary {
+        typ: ConditionType,
+        op: String,
+        token: Token,
+    },
+    TC_Empty {
+        typ: ConditionType,
+    },
 
     // --- Operator / keyword leaves ---
     T_AND_IF,
-    T_AndIf { lhs: Token, rhs: Token },
+    T_AndIf {
+        lhs: Token,
+        rhs: Token,
+    },
     T_Arithmetic(Token),
     T_Array(Vec<Token>),
-    T_IndexedElement { indices: Vec<Token>, value: Token },
+    T_IndexedElement {
+        indices: Vec<Token>,
+        value: Token,
+    },
     /// Index stored as string, parsed later as arithmetic or string.
-    T_UnparsedIndex { pos: crate::interface::Position, str: String },
-    T_Assignment { mode: AssignmentMode, var: String, indices: Vec<Token>, value: Token },
+    T_UnparsedIndex {
+        pos: crate::interface::Position,
+        str: String,
+    },
+    T_Assignment {
+        mode: AssignmentMode,
+        var: String,
+        indices: Vec<Token>,
+        value: Token,
+    },
     T_Backgrounded(Token),
     T_Backticked(Vec<Token>),
     T_Bang,
@@ -146,43 +208,89 @@ pub enum InnerToken {
     T_BraceGroup(Vec<Token>),
     T_CLOBBER,
     T_Case,
-    T_CaseExpression { word: Token, cases: Vec<CaseClause> },
-    T_Condition { typ: ConditionType, token: Token },
+    T_CaseExpression {
+        word: Token,
+        cases: Vec<CaseClause>,
+    },
+    T_Condition {
+        typ: ConditionType,
+        token: Token,
+    },
     T_DGREAT,
     T_DLESS,
     T_DLESSDASH,
     T_DSEMI,
     T_Do,
     T_DollarArithmetic(Token),
-    T_DollarBraced { braced: bool, op: Token },
+    T_DollarBraced {
+        braced: bool,
+        op: Token,
+    },
     T_DollarBracket(Token),
     T_DollarDoubleQuoted(Vec<Token>),
     T_DollarExpansion(Vec<Token>),
     T_DollarSingleQuoted(String),
-    T_DollarBraceCommandExpansion { pipe: Piped, list: Vec<Token> },
+    T_DollarBraceCommandExpansion {
+        pipe: Piped,
+        list: Vec<Token>,
+    },
     T_Done,
     T_DoubleQuoted(Vec<Token>),
     T_EOF,
     T_Elif,
     T_Else,
     T_Esac,
-    T_Extglob { op: String, list: Vec<Token> },
-    T_FdRedirect { fd: String, target: Token },
+    T_Extglob {
+        op: String,
+        list: Vec<Token>,
+    },
+    T_FdRedirect {
+        fd: String,
+        target: Token,
+    },
     T_Fi,
     T_For,
-    T_ForArithmetic { init: Token, cond: Token, step: Token, body: Vec<Token> },
-    T_ForIn { var: String, items: Vec<Token>, body: Vec<Token> },
-    T_Function { keyword: bool, parens: bool, name: String, body: Token },
+    T_ForArithmetic {
+        init: Token,
+        cond: Token,
+        step: Token,
+        body: Vec<Token>,
+    },
+    T_ForIn {
+        var: String,
+        items: Vec<Token>,
+        body: Vec<Token>,
+    },
+    T_Function {
+        keyword: bool,
+        parens: bool,
+        name: String,
+        body: Token,
+    },
     T_GREATAND,
     T_Glob(String),
     T_Greater,
-    T_HereDoc { dashed: Dashed, quoted: Quoted, delim: String, body: Vec<Token> },
+    T_HereDoc {
+        dashed: Dashed,
+        quoted: Quoted,
+        delim: String,
+        body: Vec<Token>,
+    },
     T_HereString(Token),
     T_If,
-    T_IfExpression { clauses: Vec<IfClause>, elses: Vec<Token> },
+    T_IfExpression {
+        clauses: Vec<IfClause>,
+        elses: Vec<Token>,
+    },
     T_In,
-    T_IoFile { op: Token, file: Token },
-    T_IoDuplicate { op: Token, num: String },
+    T_IoFile {
+        op: Token,
+        file: Token,
+    },
+    T_IoDuplicate {
+        op: Token,
+        num: String,
+    },
     T_LESSAND,
     T_LESSGREAT,
     T_Lbrace,
@@ -192,32 +300,72 @@ pub enum InnerToken {
     T_NEWLINE,
     T_NormalWord(Vec<Token>),
     T_OR_IF,
-    T_OrIf { lhs: Token, rhs: Token },
+    T_OrIf {
+        lhs: Token,
+        rhs: Token,
+    },
     T_ParamSubSpecialChar(String),
-    T_Pipeline { separators: Vec<Token>, commands: Vec<Token> },
-    T_ProcSub { op: String, list: Vec<Token> },
+    T_Pipeline {
+        separators: Vec<Token>,
+        commands: Vec<Token>,
+    },
+    T_ProcSub {
+        op: String,
+        list: Vec<Token>,
+    },
     T_Rbrace,
-    T_Redirecting { redirs: Vec<Token>, cmd: Token },
+    T_Redirecting {
+        redirs: Vec<Token>,
+        cmd: Token,
+    },
     T_Rparen,
-    T_Script { shebang: Token, commands: Vec<Token> },
+    T_Script {
+        shebang: Token,
+        commands: Vec<Token>,
+    },
     T_Select,
-    T_SelectIn { var: String, items: Vec<Token>, body: Vec<Token> },
+    T_SelectIn {
+        var: String,
+        items: Vec<Token>,
+        body: Vec<Token>,
+    },
     T_Semi,
-    T_SimpleCommand { assignments: Vec<Token>, words: Vec<Token> },
+    T_SimpleCommand {
+        assignments: Vec<Token>,
+        words: Vec<Token>,
+    },
     T_SingleQuoted(String),
     T_Subshell(Vec<Token>),
     T_Then,
     T_Until,
-    T_UntilExpression { condition: Vec<Token>, body: Vec<Token> },
+    T_UntilExpression {
+        condition: Vec<Token>,
+        body: Vec<Token>,
+    },
     T_While,
-    T_WhileExpression { condition: Vec<Token>, body: Vec<Token> },
-    T_Annotation { annotations: Vec<Annotation>, token: Token },
+    T_WhileExpression {
+        condition: Vec<Token>,
+        body: Vec<Token>,
+    },
+    T_Annotation {
+        annotations: Vec<Annotation>,
+        token: Token,
+    },
     T_Pipe(String),
-    T_CoProc { name: Option<Token>, body: Token },
+    T_CoProc {
+        name: Option<Token>,
+        body: Token,
+    },
     T_CoProcBody(Token),
     T_Include(Token),
-    T_SourceCommand { includer: Token, included: Token },
-    T_BatsTest { name: String, body: Token },
+    T_SourceCommand {
+        includer: Token,
+        included: Token,
+    },
+    T_BatsTest {
+        name: String,
+        body: Token,
+    },
 }
 
 impl InnerToken {
@@ -291,7 +439,12 @@ impl InnerToken {
             T_DollarBraceCommandExpansion { list, .. } => out.extend(list.iter()),
             T_Extglob { list, .. } => out.extend(list.iter()),
             T_FdRedirect { target, .. } => out.push(target),
-            T_ForArithmetic { init, cond, step, body } => {
+            T_ForArithmetic {
+                init,
+                cond,
+                step,
+                body,
+            } => {
                 out.push(init);
                 out.push(cond);
                 out.push(step);
@@ -315,7 +468,10 @@ impl InnerToken {
                 out.push(file);
             }
             T_IoDuplicate { op, .. } => out.push(op),
-            T_Pipeline { separators, commands } => {
+            T_Pipeline {
+                separators,
+                commands,
+            } => {
                 out.extend(separators.iter());
                 out.extend(commands.iter());
             }
@@ -332,8 +488,7 @@ impl InnerToken {
                 out.extend(assignments.iter());
                 out.extend(words.iter());
             }
-            T_UntilExpression { condition, body }
-            | T_WhileExpression { condition, body } => {
+            T_UntilExpression { condition, body } | T_WhileExpression { condition, body } => {
                 out.extend(condition.iter());
                 out.extend(body.iter());
             }
@@ -351,13 +506,47 @@ impl InnerToken {
             T_BatsTest { body, .. } => out.push(body),
 
             // Leaves with no token children.
-            T_AND_IF | T_Bang | T_Case | T_CLOBBER | T_DGREAT | T_DLESS | T_DLESSDASH
-            | T_DSEMI | T_Do | T_DollarSingleQuoted(_) | T_Done | T_Elif | T_Else | T_EOF
-            | T_Esac | T_Fi | T_For | T_Glob(_) | T_GREATAND | T_Greater | T_If | T_In
-            | T_Lbrace | T_Less | T_LESSAND | T_LESSGREAT | T_Literal(_) | T_Lparen
-            | T_NEWLINE | T_OR_IF | T_ParamSubSpecialChar(_) | T_Pipe(_) | T_Rbrace
-            | T_Rparen | T_Select | T_Semi | T_SingleQuoted(_) | T_Then | T_UnparsedIndex { .. }
-            | T_Until | T_While => {}
+            T_AND_IF
+            | T_Bang
+            | T_Case
+            | T_CLOBBER
+            | T_DGREAT
+            | T_DLESS
+            | T_DLESSDASH
+            | T_DSEMI
+            | T_Do
+            | T_DollarSingleQuoted(_)
+            | T_Done
+            | T_Elif
+            | T_Else
+            | T_EOF
+            | T_Esac
+            | T_Fi
+            | T_For
+            | T_Glob(_)
+            | T_GREATAND
+            | T_Greater
+            | T_If
+            | T_In
+            | T_Lbrace
+            | T_Less
+            | T_LESSAND
+            | T_LESSGREAT
+            | T_Literal(_)
+            | T_Lparen
+            | T_NEWLINE
+            | T_OR_IF
+            | T_ParamSubSpecialChar(_)
+            | T_Pipe(_)
+            | T_Rbrace
+            | T_Rparen
+            | T_Select
+            | T_Semi
+            | T_SingleQuoted(_)
+            | T_Then
+            | T_UnparsedIndex { .. }
+            | T_Until
+            | T_While => {}
         }
         out
     }
@@ -431,7 +620,12 @@ impl InnerToken {
             T_DollarBraceCommandExpansion { list, .. } => out.extend(list.iter_mut()),
             T_Extglob { list, .. } => out.extend(list.iter_mut()),
             T_FdRedirect { target, .. } => out.push(target),
-            T_ForArithmetic { init, cond, step, body } => {
+            T_ForArithmetic {
+                init,
+                cond,
+                step,
+                body,
+            } => {
                 out.push(init);
                 out.push(cond);
                 out.push(step);
@@ -455,7 +649,10 @@ impl InnerToken {
                 out.push(file);
             }
             T_IoDuplicate { op, .. } => out.push(op),
-            T_Pipeline { separators, commands } => {
+            T_Pipeline {
+                separators,
+                commands,
+            } => {
                 out.extend(separators.iter_mut());
                 out.extend(commands.iter_mut());
             }
@@ -488,13 +685,47 @@ impl InnerToken {
                 out.push(included);
             }
             T_BatsTest { body, .. } => out.push(body),
-            T_AND_IF | T_Bang | T_Case | T_CLOBBER | T_DGREAT | T_DLESS | T_DLESSDASH
-            | T_DSEMI | T_Do | T_DollarSingleQuoted(_) | T_Done | T_Elif | T_Else | T_EOF
-            | T_Esac | T_Fi | T_For | T_Glob(_) | T_GREATAND | T_Greater | T_If | T_In
-            | T_Lbrace | T_Less | T_LESSAND | T_LESSGREAT | T_Literal(_) | T_Lparen
-            | T_NEWLINE | T_OR_IF | T_ParamSubSpecialChar(_) | T_Pipe(_) | T_Rbrace
-            | T_Rparen | T_Select | T_Semi | T_SingleQuoted(_) | T_Then | T_UnparsedIndex { .. }
-            | T_Until | T_While => {}
+            T_AND_IF
+            | T_Bang
+            | T_Case
+            | T_CLOBBER
+            | T_DGREAT
+            | T_DLESS
+            | T_DLESSDASH
+            | T_DSEMI
+            | T_Do
+            | T_DollarSingleQuoted(_)
+            | T_Done
+            | T_Elif
+            | T_Else
+            | T_EOF
+            | T_Esac
+            | T_Fi
+            | T_For
+            | T_Glob(_)
+            | T_GREATAND
+            | T_Greater
+            | T_If
+            | T_In
+            | T_Lbrace
+            | T_Less
+            | T_LESSAND
+            | T_LESSGREAT
+            | T_Literal(_)
+            | T_Lparen
+            | T_NEWLINE
+            | T_OR_IF
+            | T_ParamSubSpecialChar(_)
+            | T_Pipe(_)
+            | T_Rbrace
+            | T_Rparen
+            | T_Select
+            | T_Semi
+            | T_SingleQuoted(_)
+            | T_Then
+            | T_UnparsedIndex { .. }
+            | T_Until
+            | T_While => {}
         }
         out
     }

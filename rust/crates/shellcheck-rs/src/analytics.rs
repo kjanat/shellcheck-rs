@@ -37,8 +37,12 @@ fn check_globs_as_options(params: &Parameters, t: &Token, out: &mut Out) {
                 if let Some(first) = parts.first() {
                     if let InnerToken::T_Glob(s) = &*first.inner {
                         if s == "*" || s == "?" {
-                            info(out, first.id(), 2035,
-                                "Use ./*glob* or -- *glob* so names with dashes won't become options.");
+                            info(
+                                out,
+                                first.id(),
+                                2035,
+                                "Use ./*glob* or -- *glob* so names with dashes won't become options.",
+                            );
                         }
                     }
                 }
@@ -62,8 +66,13 @@ fn check_backticks(params: &Parameters, t: &Token, out: &mut Out) {
                 replace_start(params, t.id(), 1, "$("),
                 replace_end(params, t.id(), 1, ")"),
             ]);
-            style_with_fix(out, t.id(), 2006,
-                "Use $(...) notation instead of legacy backticks `...`.", fix);
+            style_with_fix(
+                out,
+                t.id(),
+                2006,
+                "Use $(...) notation instead of legacy backticks `...`.",
+                fix,
+            );
         }
     }
 }
@@ -73,7 +82,10 @@ fn check_shebang(params: &Parameters, t: &Token, out: &mut Out) {
     // Unwrap the T_Annotation root; skip entirely if a ShellOverride is present.
     let script = match &*t.inner {
         InnerToken::T_Annotation { annotations, token } => {
-            if annotations.iter().any(|a| matches!(a, Annotation::ShellOverride(_))) {
+            if annotations
+                .iter()
+                .any(|a| matches!(a, Annotation::ShellOverride(_)))
+            {
                 return;
             }
             token
@@ -85,21 +97,39 @@ fn check_shebang(params: &Parameters, t: &Token, out: &mut Out) {
             let id = shebang.id();
             if !params.shell_type_specified {
                 if sb.is_empty() {
-                    err(out, id, 2148,
-                        "Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.");
+                    err(
+                        out,
+                        id,
+                        2148,
+                        "Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.",
+                    );
                 }
                 if astlib::executable_from_shebang(sb) == "ash" {
-                    warn(out, id, 2187,
-                        "Ash scripts will be checked as Dash. Add '# shellcheck shell=dash' to silence.");
+                    warn(
+                        out,
+                        id,
+                        2187,
+                        "Ash scripts will be checked as Dash. Add '# shellcheck shell=dash' to silence.",
+                    );
                 }
             }
             if !sb.is_empty() {
                 if !sb.starts_with('/') {
-                    err(out, id, 2239, "Ensure the shebang uses an absolute path to the interpreter.");
+                    err(
+                        out,
+                        id,
+                        2239,
+                        "Ensure the shebang uses an absolute path to the interpreter.",
+                    );
                 }
                 if let Some(first) = sb.split_whitespace().next() {
                     if first.ends_with('/') {
-                        err(out, id, 2246, "This shebang specifies a directory. Ensure the interpreter is a file.");
+                        err(
+                            out,
+                            id,
+                            2246,
+                            "This shebang specifies a directory. Ensure the interpreter is a file.",
+                        );
                     }
                 }
             }
@@ -119,12 +149,17 @@ fn check_for_in_quoted(_params: &Parameters, t: &Token, out: &mut Out) {
                 if parts.len() == 1 {
                     if let InnerToken::T_DoubleQuoted(inner) = &*parts[0].inner {
                         let is_special = inner.len() == 1
-                            && matches!(&*inner[0].inner,
-                                InnerToken::T_DollarBraced { .. });
-                        let has_space_literal = inner.iter().any(|p| matches!(&*p.inner, InnerToken::T_Literal(s) if s.contains(' ')));
+                            && matches!(&*inner[0].inner, InnerToken::T_DollarBraced { .. });
+                        let has_space_literal = inner.iter().any(
+                            |p| matches!(&*p.inner, InnerToken::T_Literal(s) if s.contains(' ')),
+                        );
                         if !is_special && has_space_literal {
-                            err(out, word.id(), 2066,
-                                "Since you double quoted this, it will not word split, and the loop will only run once.");
+                            err(
+                                out,
+                                word.id(),
+                                2066,
+                                "Since you double quoted this, it will not word split, and the loop will only run once.",
+                            );
                         }
                     }
                 }

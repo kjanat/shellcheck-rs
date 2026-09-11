@@ -19,13 +19,14 @@ matching the oracle with `extra == 0`.
      placeholder `T_Literal`, not a `TA_*` tree).
    - *Needs dataflow/CFG* (`variableFlow`, `cfgAnalysis` — SC2154, SC2086,
      SC2034, ...): blocked until the CFG subsystem is ported.
-   Skip blocked checks and record them.
+     Skip blocked checks and record them.
 3. **Port** into a batch module under `crates/shellcheck-rs/src/checks/` with a
    `pub fn register(c: &mut Checker)`. Emit via `warn/err/info/style[_with_fix]`.
    Build fixes with `replace_start` / `replace_end` / `replace_token` +
    `fix_with` (precedence is computed from the parent-path depth automatically).
 4. **Build**: `cargo build -p shellcheck-rs` (from `rust/`).
 5. **Verify** against the oracle:
+
    ```sh
    cargo build --release -p shellcheck-cli
    cd rust/harness
@@ -35,6 +36,7 @@ matching the oracle with `extra == 0`.
    ORACLE=$(cabal list-bin shellcheck) \
    PORT=../target/release/shellcheck-rs python3 run_conformance.py --gate
    ```
+
    Inspect `coverage.json -> port.per_code["<code>"]`. Requirement to keep a
    check: `extra == 0` for every code it can emit. `matched` should rise toward
    `oracle`; residual `missing` is usually a parser gap on those scripts.

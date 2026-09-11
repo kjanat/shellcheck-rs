@@ -77,7 +77,10 @@ pub fn register(c: &mut Checker) {
     c.node(|p, t, out| {
         let mut tmp = Out::new();
         check_valid_cond_ops(p, t, &mut tmp);
-        out.extend(tmp.into_iter().filter(|c| matches!(c.comment.code, 2057 | 2058)));
+        out.extend(
+            tmp.into_iter()
+                .filter(|c| matches!(c.comment.code, 2057 | 2058)),
+        );
     });
 
     // checkComparisonAgainstGlob: SC2053/2081 in batch_c. Register only SC2330.
@@ -98,7 +101,10 @@ pub fn register(c: &mut Checker) {
     c.node(|p, t, out| {
         let mut tmp = Out::new();
         check_second_arg_is_comparison(p, t, &mut tmp);
-        out.extend(tmp.into_iter().filter(|c| matches!(c.comment.code, 2284 | 2285)));
+        out.extend(
+            tmp.into_iter()
+                .filter(|c| matches!(c.comment.code, 2284 | 2285)),
+        );
     });
     c.node(check_trailing_bracket);
     // checkUnaryTestA (SC2331): now registered. The shared parser anchors the
@@ -240,7 +246,10 @@ fn get_literal_string_local(t: &Token) -> Option<String> {
             T_DoubleQuoted(l) | T_DollarDoubleQuoted(l) | T_NormalWord(l) | TA_Expansion(l) => {
                 l.iter().all(|p| go(p, out))
             }
-            T_SingleQuoted(s) | T_Literal(s) | T_ParamSubSpecialChar(s) | T_DollarSingleQuoted(s) => {
+            T_SingleQuoted(s)
+            | T_Literal(s)
+            | T_ParamSubSpecialChar(s)
+            | T_DollarSingleQuoted(s) => {
                 out.push_str(s);
                 true
             }
@@ -465,9 +474,7 @@ fn simplify_pseudo_glob(list: &[PseudoGlob]) -> Vec<PseudoGlob> {
             _ => {
                 // span of Many/Any
                 let start = i;
-                while i < list.len()
-                    && matches!(list[i], PseudoGlob::Many | PseudoGlob::Any)
-                {
+                while i < list.len() && matches!(list[i], PseudoGlob::Many | PseudoGlob::Any) {
                     i += 1;
                 }
                 let seg = &list[start..i];
@@ -535,16 +542,31 @@ fn words_can_be_equal(x: &Token, y: &Token) -> bool {
 
 /// SC2074 — `checkSingleBracketOperators`.
 fn check_single_bracket_operators(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TC_Binary { typ: ConditionType::SingleBracket, op, .. } = &*t.inner {
+    if let InnerToken::TC_Binary {
+        typ: ConditionType::SingleBracket,
+        op,
+        ..
+    } = &*t.inner
+    {
         if op == "=~" && matches!(params.shell, Shell::Bash | Shell::Ksh) {
-            err(out, t.id(), 2074, "Can't use =~ in [ ]. Use [[..]] instead.");
+            err(
+                out,
+                t.id(),
+                2074,
+                "Can't use =~ in [ ]. Use [[..]] instead.",
+            );
         }
     }
 }
 
 /// SC2075 — `checkDoubleBracketOperators`.
 fn check_double_bracket_operators(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TC_Binary { typ: ConditionType::DoubleBracket, op, .. } = &*t.inner {
+    if let InnerToken::TC_Binary {
+        typ: ConditionType::DoubleBracket,
+        op,
+        ..
+    } = &*t.inner
+    {
         if op == "\\<" || op == "\\>" {
             err(
                 out,
@@ -561,23 +583,67 @@ fn check_conditional_and_ors(params: &Parameters, t: &Token, out: &mut Out) {
     use ConditionType::*;
     use InnerToken::*;
     match &*t.inner {
-        TC_And { typ: SingleBracket, op, .. } if op == "&&" => {
-            err(out, t.id(), 2107, "Instead of [ a && b ], use [ a ] && [ b ].");
+        TC_And {
+            typ: SingleBracket,
+            op,
+            ..
+        } if op == "&&" => {
+            err(
+                out,
+                t.id(),
+                2107,
+                "Instead of [ a && b ], use [ a ] && [ b ].",
+            );
         }
-        TC_And { typ: DoubleBracket, op, .. } if op == "-a" => {
+        TC_And {
+            typ: DoubleBracket,
+            op,
+            ..
+        } if op == "-a" => {
             err(out, t.id(), 2108, "In [[..]], use && instead of -a.");
         }
-        TC_Or { typ: SingleBracket, op, .. } if op == "||" => {
-            err(out, t.id(), 2109, "Instead of [ a || b ], use [ a ] || [ b ].");
+        TC_Or {
+            typ: SingleBracket,
+            op,
+            ..
+        } if op == "||" => {
+            err(
+                out,
+                t.id(),
+                2109,
+                "Instead of [ a || b ], use [ a ] || [ b ].",
+            );
         }
-        TC_Or { typ: DoubleBracket, op, .. } if op == "-o" => {
+        TC_Or {
+            typ: DoubleBracket,
+            op,
+            ..
+        } if op == "-o" => {
             err(out, t.id(), 2110, "In [[..]], use || instead of -o.");
         }
-        TC_And { typ: SingleBracket, op, .. } if op == "-a" => {
-            warn(out, t.id(), 2166, "Prefer [ p ] && [ q ] as [ p -a q ] is not well defined.");
+        TC_And {
+            typ: SingleBracket,
+            op,
+            ..
+        } if op == "-a" => {
+            warn(
+                out,
+                t.id(),
+                2166,
+                "Prefer [ p ] && [ q ] as [ p -a q ] is not well defined.",
+            );
         }
-        TC_Or { typ: SingleBracket, op, .. } if op == "-o" => {
-            warn(out, t.id(), 2166, "Prefer [ p ] || [ q ] as [ p -o q ] is not well defined.");
+        TC_Or {
+            typ: SingleBracket,
+            op,
+            ..
+        } if op == "-o" => {
+            warn(
+                out,
+                t.id(),
+                2166,
+                "Prefer [ p ] || [ q ] as [ p -o q ] is not well defined.",
+            );
         }
         _ => {}
     }
@@ -585,11 +651,22 @@ fn check_conditional_and_ors(params: &Parameters, t: &Token, out: &mut Out) {
 
 /// SC2049 — `checkGlobbedRegex`.
 fn check_globbed_regex(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TC_Binary { typ: ConditionType::DoubleBracket, op, rhs, .. } = &*t.inner {
+    if let InnerToken::TC_Binary {
+        typ: ConditionType::DoubleBracket,
+        op,
+        rhs,
+        ..
+    } = &*t.inner
+    {
         if op == "=~" {
             let s = oversimplify(rhs).concat();
             if is_confused_glob_regex(&s) {
-                warn(out, rhs.id(), 2049, "=~ is for regex, but this looks like a glob. Use = instead.");
+                warn(
+                    out,
+                    rhs.id(),
+                    2049,
+                    "=~ is for regex, but this looks like a glob. Use = instead.",
+                );
             }
         }
     }
@@ -627,11 +704,26 @@ fn check_constant_nullary(params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TC_Nullary { token, .. } = &*t.inner {
         if is_constant(token) {
             match astlib::only_literal_string(token).as_str() {
-                "false" => err(out, token.id(), 2158, "[ false ] is true. Remove the brackets."),
+                "false" => err(
+                    out,
+                    token.id(),
+                    2158,
+                    "[ false ] is true. Remove the brackets.",
+                ),
                 "0" => err(out, token.id(), 2159, "[ 0 ] is true. Use 'false' instead."),
-                "true" => style(out, token.id(), 2160, "Instead of '[ true ]', just use 'true'."),
+                "true" => style(
+                    out,
+                    token.id(),
+                    2160,
+                    "Instead of '[ true ]', just use 'true'.",
+                ),
                 "1" => style(out, token.id(), 2161, "Instead of '[ 1 ]', use 'true'."),
-                _ => err(out, token.id(), 2078, "This expression is constant. Did you forget a $ somewhere?"),
+                _ => err(
+                    out,
+                    token.id(),
+                    2078,
+                    "This expression is constant. Did you forget a $ somewhere?",
+                ),
             }
         }
     }
@@ -668,7 +760,10 @@ fn check_comparison_against_glob(params: &Parameters, t: &Token, out: &mut Out) 
                         out,
                         rhs.id(),
                         2053,
-                        &format!("Quote the right-hand side of {} in [[ ]] to prevent glob matching.", op),
+                        &format!(
+                            "Quote the right-hand side of {} in [[ ]] to prevent glob matching.",
+                            op
+                        ),
                     );
                     return;
                 }
@@ -685,11 +780,7 @@ fn check_comparison_against_glob(params: &Parameters, t: &Token, out: &mut Out) 
             return;
         }
         // Clause 3: BusyBox [[ x == glob ]]
-        if *typ == DoubleBracket
-            && params.shell == Shell::BusyboxSh
-            && op_is_eq
-            && is_glob(rhs)
-        {
+        if *typ == DoubleBracket && params.shell == Shell::BusyboxSh && op_is_eq && is_glob(rhs) {
             err(
                 out,
                 rhs.id(),
@@ -727,8 +818,18 @@ fn check_or_neq(params: &Parameters, t: &Token, out: &mut Out) {
         // Test-level "or": [ x != y -o x != z ]
         TC_Or { typ, lhs, rhs, .. } => {
             if let (
-                TC_Binary { op: op1, lhs: lhs1, rhs: rhs1, .. },
-                TC_Binary { op: op2, lhs: lhs2, rhs: rhs2, .. },
+                TC_Binary {
+                    op: op1,
+                    lhs: lhs1,
+                    rhs: rhs1,
+                    ..
+                },
+                TC_Binary {
+                    op: op2,
+                    lhs: lhs2,
+                    rhs: rhs2,
+                    ..
+                },
             ) = (&*lhs.inner, &*rhs.inner)
             {
                 if op1 == op2
@@ -738,12 +839,19 @@ fn check_or_neq(params: &Parameters, t: &Token, out: &mut Out) {
                     && !is_glob(rhs1)
                     && !is_glob(rhs2)
                 {
-                    let conj = if *typ == ConditionType::SingleBracket { "-a" } else { "&&" };
+                    let conj = if *typ == ConditionType::SingleBracket {
+                        "-a"
+                    } else {
+                        "&&"
+                    };
                     warn(
                         out,
                         t.id(),
                         2055,
-                        &format!("You probably wanted {} here, otherwise it's always true.", conj),
+                        &format!(
+                            "You probably wanted {} here, otherwise it's always true.",
+                            conj
+                        ),
                     );
                 }
             }
@@ -751,12 +859,21 @@ fn check_or_neq(params: &Parameters, t: &Token, out: &mut Out) {
         // Arithmetic "or"
         TA_Binary { op, lhs, rhs } if op == "||" => {
             if let (
-                TA_Binary { op: o1, lhs: w1, .. },
-                TA_Binary { op: o2, lhs: w2, .. },
+                TA_Binary {
+                    op: o1, lhs: w1, ..
+                },
+                TA_Binary {
+                    op: o2, lhs: w2, ..
+                },
             ) = (&*lhs.inner, &*rhs.inner)
             {
                 if o1 == "!=" && o2 == "!=" && w1 == w2 {
-                    warn(out, t.id(), 2056, "You probably wanted && here, otherwise it's always true.");
+                    warn(
+                        out,
+                        t.id(),
+                        2056,
+                        "You probably wanted && here, otherwise it's always true.",
+                    );
                 }
             }
         }
@@ -772,7 +889,12 @@ fn check_or_neq(params: &Parameters, t: &Token, out: &mut Out) {
                     && !is_glob(&rhs1)
                     && !is_glob(&rhs2)
                 {
-                    warn(out, t.id(), 2252, "You probably wanted && here, otherwise it's always true.");
+                    warn(
+                        out,
+                        t.id(),
+                        2252,
+                        "You probably wanted && here, otherwise it's always true.",
+                    );
                 }
             }
         }
@@ -823,18 +945,38 @@ fn check_and_eq(params: &Parameters, t: &Token, out: &mut Out) {
         // Test-level "and": [ x = y -a x = z ]
         TC_And { typ, lhs, rhs, .. } => {
             if let (
-                TC_Binary { op: op1, lhs: lhs1, rhs: rhs1, .. },
-                TC_Binary { op: op2, lhs: lhs2, rhs: rhs2, .. },
+                TC_Binary {
+                    op: op1,
+                    lhs: lhs1,
+                    rhs: rhs1,
+                    ..
+                },
+                TC_Binary {
+                    op: op2,
+                    lhs: lhs2,
+                    rhs: rhs2,
+                    ..
+                },
             ) = (&*lhs.inner, &*rhs.inner)
             {
-                if op1 == op2 && lhs1 == lhs2 && rhs1 != rhs2 && check_and_eq_operands(op1, rhs1, rhs2)
+                if op1 == op2
+                    && lhs1 == lhs2
+                    && rhs1 != rhs2
+                    && check_and_eq_operands(op1, rhs1, rhs2)
                 {
-                    let conj = if *typ == ConditionType::SingleBracket { "-o" } else { "||" };
+                    let conj = if *typ == ConditionType::SingleBracket {
+                        "-o"
+                    } else {
+                        "||"
+                    };
                     warn(
                         out,
                         t.id(),
                         2333,
-                        &format!("You probably wanted {} here, otherwise it's always false.", conj),
+                        &format!(
+                            "You probably wanted {} here, otherwise it's always false.",
+                            conj
+                        ),
                     );
                 }
             }
@@ -842,13 +984,30 @@ fn check_and_eq(params: &Parameters, t: &Token, out: &mut Out) {
         // Arithmetic "and"
         TA_Binary { op, lhs, rhs } if op == "&&" => {
             if let (
-                TA_Binary { op: o1, lhs: lhs1, rhs: rhs1 },
-                TA_Binary { op: o2, lhs: lhs2, rhs: rhs2 },
+                TA_Binary {
+                    op: o1,
+                    lhs: lhs1,
+                    rhs: rhs1,
+                },
+                TA_Binary {
+                    op: o2,
+                    lhs: lhs2,
+                    rhs: rhs2,
+                },
             ) = (&*lhs.inner, &*rhs.inner)
             {
-                if o1 == "==" && o2 == "==" && lhs1 == lhs2 && is_literal_number(rhs1) && is_literal_number(rhs2)
+                if o1 == "=="
+                    && o2 == "=="
+                    && lhs1 == lhs2
+                    && is_literal_number(rhs1)
+                    && is_literal_number(rhs2)
                 {
-                    warn(out, t.id(), 2334, "You probably wanted || here, otherwise it's always false.");
+                    warn(
+                        out,
+                        t.id(),
+                        2334,
+                        "You probably wanted || here, otherwise it's always false.",
+                    );
                 }
             }
         }
@@ -857,9 +1016,17 @@ fn check_and_eq(params: &Parameters, t: &Token, out: &mut Out) {
             if let (Some((lhs1, op1, rhs1)), Some((lhs2, op2, rhs2))) =
                 (cmd_level_get_expr(lhs), cmd_level_get_expr(rhs))
             {
-                if op1 == op2 && lhs1 == lhs2 && rhs1 != rhs2 && check_and_eq_operands(&op1, &rhs1, &rhs2)
+                if op1 == op2
+                    && lhs1 == lhs2
+                    && rhs1 != rhs2
+                    && check_and_eq_operands(&op1, &rhs1, &rhs2)
                 {
-                    warn(out, t.id(), 2333, "You probably wanted || here, otherwise it's always false.");
+                    warn(
+                        out,
+                        t.id(),
+                        2333,
+                        "You probably wanted || here, otherwise it's always false.",
+                    );
                 }
             }
         }
@@ -897,17 +1064,32 @@ fn subshell_check(id: Id, t: &Token, out: &mut Out) {
 
 fn subshell_check_params(id: Id, first: &Token, second: &Token, out: &mut Out) {
     if astlib::get_literal_string(first).map_or(false, |s| UNARY_TEST_OPS.contains(&s.as_str())) {
-        err(out, id, 2204, "(..) is a subshell. Did you mean [ .. ], a test expression?");
+        err(
+            out,
+            id,
+            2204,
+            "(..) is a subshell. Did you mean [ .. ], a test expression?",
+        );
     }
     if astlib::get_literal_string(second).map_or(false, |s| BINARY_TEST_OPS.contains(&s.as_str())) {
-        warn(out, id, 2205, "(..) is a subshell. Did you mean [ .. ], a test expression?");
+        warn(
+            out,
+            id,
+            2205,
+            "(..) is a subshell. Did you mean [ .. ], a test expression?",
+        );
     }
 }
 
 /// SC2212 — `checkEmptyCondition`.
 fn check_empty_condition(params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TC_Empty { .. } = &*t.inner {
-        style(out, t.id(), 2212, "Use 'false' instead of empty [/[[ conditionals.");
+        style(
+            out,
+            t.id(),
+            2212,
+            "Use 'false' instead of empty [/[[ conditionals.",
+        );
     }
 }
 
@@ -915,7 +1097,10 @@ fn check_empty_condition(params: &Parameters, t: &Token, out: &mut Out) {
 fn check_bad_test_and_or(params: &Parameters, t: &Token, out: &mut Out) {
     use InnerToken::*;
     match &*t.inner {
-        T_Pipeline { separators, commands } if commands.len() >= 2 => {
+        T_Pipeline {
+            separators,
+            commands,
+        } if commands.len() >= 2 => {
             // zip3 (Nothing:seps) cmds (seps ++ [Nothing])
             let n = commands.len();
             for (i, cmd) in commands.iter().enumerate() {
@@ -1077,7 +1262,12 @@ fn check_unmatchable_cases(params: &Parameters, t: &Token, out: &mut Out) {
             .collect();
 
         if is_constant(word) {
-            warn(out, word.id(), 2194, "This word is constant. Did you forget the $ on a variable?");
+            warn(
+                out,
+                word.id(),
+                2194,
+                "This word is constant. Did you forget the $ on a variable?",
+            );
         } else {
             let target = word_to_pseudo_glob(word);
             for candidate in &all_patterns {
@@ -1165,7 +1355,12 @@ fn check_char_range_glob(params: &Parameters, t: &Token, out: &mut Out) {
         let contents = drop_negation(&inner);
 
         if contents.starts_with(':') && contents.ends_with(':') && contents != ":" {
-            warn(out, t.id(), 2101, "Named class needs outer [], e.g. [[:digit:]].");
+            warn(
+                out,
+                t.id(),
+                2101,
+                "Named class needs outer [], e.g. [[:digit:]].",
+            );
         } else if !contents.contains('[') && has_dupes(&contents) {
             info(
                 out,
@@ -1203,7 +1398,11 @@ fn is_dereferenced(params: &Parameters, t: &Token) -> bool {
     use InnerToken::*;
     for node in get_path(params, t) {
         match &*node.inner {
-            TC_Binary { typ: ConditionType::DoubleBracket, op, .. } => {
+            TC_Binary {
+                typ: ConditionType::DoubleBracket,
+                op,
+                ..
+            } => {
                 return is_dereferencing_binary_op(op);
             }
             TC_Unary { op, .. } => return op == "-v",
@@ -1259,283 +1458,588 @@ mod tests {
 
     // ---- SC2074 checkSingleBracketOperators ----
     #[test]
-    fn prop_checkSingleBracketOperators1() { assert!(emits(check_single_bracket_operators, "[ test =~ foo ]")); }
+    fn prop_checkSingleBracketOperators1() {
+        assert!(emits(check_single_bracket_operators, "[ test =~ foo ]"));
+    }
 
     // ---- SC2075 checkDoubleBracketOperators ----
     #[test]
-    fn prop_checkDoubleBracketOperators1() { assert!(emits(check_double_bracket_operators, "[[ 3 \\< 4 ]]")); }
+    fn prop_checkDoubleBracketOperators1() {
+        assert!(emits(check_double_bracket_operators, "[[ 3 \\< 4 ]]"));
+    }
     #[test]
-    fn prop_checkDoubleBracketOperators3() { assert!(!emits(check_double_bracket_operators, "[[ foo < bar ]]")); }
+    fn prop_checkDoubleBracketOperators3() {
+        assert!(!emits(check_double_bracket_operators, "[[ foo < bar ]]"));
+    }
 
     // ---- SC2107/2108/2109/2110/2166 checkConditionalAndOrs ----
     #[test]
-    fn prop_checkConditionalAndOrs1() { assert!(emits(check_conditional_and_ors, "[ foo && bar ]")); }
+    fn prop_checkConditionalAndOrs1() {
+        assert!(emits(check_conditional_and_ors, "[ foo && bar ]"));
+    }
     #[test]
-    fn prop_checkConditionalAndOrs2() { assert!(emits(check_conditional_and_ors, "[[ foo -o bar ]]")); }
+    fn prop_checkConditionalAndOrs2() {
+        assert!(emits(check_conditional_and_ors, "[[ foo -o bar ]]"));
+    }
     #[test]
-    fn prop_checkConditionalAndOrs3() { assert!(!emits(check_conditional_and_ors, "[[ foo || bar ]]")); }
+    fn prop_checkConditionalAndOrs3() {
+        assert!(!emits(check_conditional_and_ors, "[[ foo || bar ]]"));
+    }
     #[test]
-    fn prop_checkConditionalAndOrs4() { assert!(emits(check_conditional_and_ors, "[ foo -a bar ]")); }
+    fn prop_checkConditionalAndOrs4() {
+        assert!(emits(check_conditional_and_ors, "[ foo -a bar ]"));
+    }
     #[test]
-    fn prop_checkConditionalAndOrs5() { assert!(emits(check_conditional_and_ors, "[ -z 3 -o a = b ]")); }
+    fn prop_checkConditionalAndOrs5() {
+        assert!(emits(check_conditional_and_ors, "[ -z 3 -o a = b ]"));
+    }
 
     // ---- SC2049 checkGlobbedRegex ----
     #[test]
-    fn prop_checkGlobbedRegex1() { assert!(emits(check_globbed_regex, "[[ $foo =~ *foo* ]]")); }
+    fn prop_checkGlobbedRegex1() {
+        assert!(emits(check_globbed_regex, "[[ $foo =~ *foo* ]]"));
+    }
     #[test]
-    fn prop_checkGlobbedRegex2() { assert!(emits(check_globbed_regex, "[[ $foo =~ f* ]]")); }
+    fn prop_checkGlobbedRegex2() {
+        assert!(emits(check_globbed_regex, "[[ $foo =~ f* ]]"));
+    }
     #[test]
-    fn prop_checkGlobbedRegex3() { assert!(!emits(check_globbed_regex, "[[ $foo =~ $foo ]]")); }
+    fn prop_checkGlobbedRegex3() {
+        assert!(!emits(check_globbed_regex, "[[ $foo =~ $foo ]]"));
+    }
     #[test]
-    fn prop_checkGlobbedRegex4() { assert!(!emits(check_globbed_regex, "[[ $foo =~ ^c.* ]]")); }
+    fn prop_checkGlobbedRegex4() {
+        assert!(!emits(check_globbed_regex, "[[ $foo =~ ^c.* ]]"));
+    }
     #[test]
-    fn prop_checkGlobbedRegex5() { assert!(!emits(check_globbed_regex, "[[ $foo =~ \\* ]]")); }
+    fn prop_checkGlobbedRegex5() {
+        assert!(!emits(check_globbed_regex, "[[ $foo =~ \\* ]]"));
+    }
     #[test]
-    fn prop_checkGlobbedRegex6() { assert!(!emits(check_globbed_regex, "[[ $foo =~ (o*) ]]")); }
+    fn prop_checkGlobbedRegex6() {
+        assert!(!emits(check_globbed_regex, "[[ $foo =~ (o*) ]]"));
+    }
     #[test]
-    fn prop_checkGlobbedRegex7() { assert!(!emits(check_globbed_regex, "[[ $foo =~ \\*foo ]]")); }
+    fn prop_checkGlobbedRegex7() {
+        assert!(!emits(check_globbed_regex, "[[ $foo =~ \\*foo ]]"));
+    }
     #[test]
-    fn prop_checkGlobbedRegex8() { assert!(!emits(check_globbed_regex, "[[ $foo =~ x\\* ]]")); }
+    fn prop_checkGlobbedRegex8() {
+        assert!(!emits(check_globbed_regex, "[[ $foo =~ x\\* ]]"));
+    }
 
     // ---- SC2050/2193 checkConstantIfs ----
     #[test]
-    fn prop_checkConstantIfs1() { assert!(emits(check_constant_ifs, "[[ foo != bar ]]")); }
+    fn prop_checkConstantIfs1() {
+        assert!(emits(check_constant_ifs, "[[ foo != bar ]]"));
+    }
     #[test]
-    fn prop_checkConstantIfs2a() { assert!(emits(check_constant_ifs, "[ n -le 4 ]")); }
+    fn prop_checkConstantIfs2a() {
+        assert!(emits(check_constant_ifs, "[ n -le 4 ]"));
+    }
     #[test]
-    fn prop_checkConstantIfs2b() { assert!(!emits(check_constant_ifs, "[[ n -le 4 ]]")); }
+    fn prop_checkConstantIfs2b() {
+        assert!(!emits(check_constant_ifs, "[[ n -le 4 ]]"));
+    }
     #[test]
-    fn prop_checkConstantIfs3() { assert!(emits(check_constant_ifs, "[[ $n -le 4 && n != 2 ]]")); }
+    fn prop_checkConstantIfs3() {
+        assert!(emits(check_constant_ifs, "[[ $n -le 4 && n != 2 ]]"));
+    }
     #[test]
-    fn prop_checkConstantIfs4() { assert!(!emits(check_constant_ifs, "[[ $n -le 3 ]]")); }
+    fn prop_checkConstantIfs4() {
+        assert!(!emits(check_constant_ifs, "[[ $n -le 3 ]]"));
+    }
     #[test]
-    fn prop_checkConstantIfs5() { assert!(!emits(check_constant_ifs, "[[ $n -le $n ]]")); }
+    fn prop_checkConstantIfs5() {
+        assert!(!emits(check_constant_ifs, "[[ $n -le $n ]]"));
+    }
     #[test]
-    fn prop_checkConstantIfs6() { assert!(!emits(check_constant_ifs, "[[ a -ot b ]]")); }
+    fn prop_checkConstantIfs6() {
+        assert!(!emits(check_constant_ifs, "[[ a -ot b ]]"));
+    }
     #[test]
-    fn prop_checkConstantIfs7() { assert!(!emits(check_constant_ifs, "[ a -nt b ]")); }
+    fn prop_checkConstantIfs7() {
+        assert!(!emits(check_constant_ifs, "[ a -nt b ]"));
+    }
     #[test]
-    fn prop_checkConstantIfs8() { assert!(!emits(check_constant_ifs, "[[ ~foo == '~foo' ]]")); }
+    fn prop_checkConstantIfs8() {
+        assert!(!emits(check_constant_ifs, "[[ ~foo == '~foo' ]]"));
+    }
     #[test]
-    fn prop_checkConstantIfs9() { assert!(emits(check_constant_ifs, "[[ *.png == [a-z] ]]")); }
+    fn prop_checkConstantIfs9() {
+        assert!(emits(check_constant_ifs, "[[ *.png == [a-z] ]]"));
+    }
     #[test]
-    fn prop_checkConstantIfs10() { assert!(!emits(check_constant_ifs, "[[ ~me == ~+ ]]")); }
+    fn prop_checkConstantIfs10() {
+        assert!(!emits(check_constant_ifs, "[[ ~me == ~+ ]]"));
+    }
     #[test]
-    fn prop_checkConstantIfs11() { assert!(!emits(check_constant_ifs, "[[ ~ == ~+ ]]")); }
+    fn prop_checkConstantIfs11() {
+        assert!(!emits(check_constant_ifs, "[[ ~ == ~+ ]]"));
+    }
     #[test]
-    fn prop_checkConstantIfs12() { assert!(emits(check_constant_ifs, "[[ '~' == x ]]")); }
+    fn prop_checkConstantIfs12() {
+        assert!(emits(check_constant_ifs, "[[ '~' == x ]]"));
+    }
 
     // ---- SC2158/2159/2160/2161/2078 checkConstantNullary ----
     #[test]
-    fn prop_checkConstantNullary() { assert!(emits(check_constant_nullary, "[[ '$(foo)' ]]")); }
+    fn prop_checkConstantNullary() {
+        assert!(emits(check_constant_nullary, "[[ '$(foo)' ]]"));
+    }
     #[test]
-    fn prop_checkConstantNullary2() { assert!(emits(check_constant_nullary, "[ \"-f lol\" ]")); }
+    fn prop_checkConstantNullary2() {
+        assert!(emits(check_constant_nullary, "[ \"-f lol\" ]"));
+    }
     #[test]
-    fn prop_checkConstantNullary3() { assert!(emits(check_constant_nullary, "[[ cmd ]]")); }
+    fn prop_checkConstantNullary3() {
+        assert!(emits(check_constant_nullary, "[[ cmd ]]"));
+    }
     #[test]
-    fn prop_checkConstantNullary4() { assert!(emits(check_constant_nullary, "[[ ! cmd ]]")); }
+    fn prop_checkConstantNullary4() {
+        assert!(emits(check_constant_nullary, "[[ ! cmd ]]"));
+    }
     #[test]
-    fn prop_checkConstantNullary5() { assert!(emits_code(check_constant_nullary, "[[ true ]]", 2160)); }
+    fn prop_checkConstantNullary5() {
+        assert!(emits_code(check_constant_nullary, "[[ true ]]", 2160));
+    }
     #[test]
-    fn prop_checkConstantNullary6() { assert!(emits_code(check_constant_nullary, "[ 1 ]", 2161)); }
+    fn prop_checkConstantNullary6() {
+        assert!(emits_code(check_constant_nullary, "[ 1 ]", 2161));
+    }
     #[test]
-    fn prop_checkConstantNullary7() { assert!(emits_code(check_constant_nullary, "[ false ]", 2158)); }
+    fn prop_checkConstantNullary7() {
+        assert!(emits_code(check_constant_nullary, "[ false ]", 2158));
+    }
 
     // ---- SC2057/2058 checkValidCondOps ----
     #[test]
-    fn prop_checkValidCondOps1() { assert!(emits(check_valid_cond_ops, "[[ a -xz b ]]")); }
+    fn prop_checkValidCondOps1() {
+        assert!(emits(check_valid_cond_ops, "[[ a -xz b ]]"));
+    }
     #[test]
-    fn prop_checkValidCondOps2() { assert!(emits(check_valid_cond_ops, "[ -M a ]")); }
+    fn prop_checkValidCondOps2() {
+        assert!(emits(check_valid_cond_ops, "[ -M a ]"));
+    }
     #[test]
-    fn prop_checkValidCondOps2a() { assert!(!emits(check_valid_cond_ops, "[ 3 \\> 2 ]")); }
+    fn prop_checkValidCondOps2a() {
+        assert!(!emits(check_valid_cond_ops, "[ 3 \\> 2 ]"));
+    }
     #[test]
-    fn prop_checkValidCondOps3() { assert!(!emits(check_valid_cond_ops, "[ 1 = 2 -a 3 -ge 4 ]")); }
+    fn prop_checkValidCondOps3() {
+        assert!(!emits(check_valid_cond_ops, "[ 1 = 2 -a 3 -ge 4 ]"));
+    }
     #[test]
-    fn prop_checkValidCondOps4() { assert!(!emits(check_valid_cond_ops, "[[ ! -v foo ]]")); }
+    fn prop_checkValidCondOps4() {
+        assert!(!emits(check_valid_cond_ops, "[[ ! -v foo ]]"));
+    }
 
     // ---- SC2053/2081/2330 checkComparisonAgainstGlob ----
     #[test]
-    fn prop_checkComparisonAgainstGlob() { assert!(emits(check_comparison_against_glob, "[[ $cow == $bar ]]")); }
+    fn prop_checkComparisonAgainstGlob() {
+        assert!(emits(check_comparison_against_glob, "[[ $cow == $bar ]]"));
+    }
     #[test]
-    fn prop_checkComparisonAgainstGlob2() { assert!(!emits(check_comparison_against_glob, "[[ $cow == \"$bar\" ]]")); }
+    fn prop_checkComparisonAgainstGlob2() {
+        assert!(!emits(
+            check_comparison_against_glob,
+            "[[ $cow == \"$bar\" ]]"
+        ));
+    }
     #[test]
-    fn prop_checkComparisonAgainstGlob3() { assert!(emits(check_comparison_against_glob, "[ $cow = *foo* ]")); }
+    fn prop_checkComparisonAgainstGlob3() {
+        assert!(emits(check_comparison_against_glob, "[ $cow = *foo* ]"));
+    }
     #[test]
-    fn prop_checkComparisonAgainstGlob4() { assert!(!emits(check_comparison_against_glob, "[ $cow = foo ]")); }
+    fn prop_checkComparisonAgainstGlob4() {
+        assert!(!emits(check_comparison_against_glob, "[ $cow = foo ]"));
+    }
     #[test]
-    fn prop_checkComparisonAgainstGlob5() { assert!(emits(check_comparison_against_glob, "[[ $cow != $bar ]]")); }
+    fn prop_checkComparisonAgainstGlob5() {
+        assert!(emits(check_comparison_against_glob, "[[ $cow != $bar ]]"));
+    }
     #[test]
-    fn prop_checkComparisonAgainstGlob6() { assert!(emits(check_comparison_against_glob, "[ $f != /* ]")); }
+    fn prop_checkComparisonAgainstGlob6() {
+        assert!(emits(check_comparison_against_glob, "[ $f != /* ]"));
+    }
     #[test]
-    fn prop_checkComparisonAgainstGlob7() { assert!(emits_code(check_comparison_against_glob, "#!/bin/busybox sh\n[[ $f == *foo* ]]", 2330)); }
+    fn prop_checkComparisonAgainstGlob7() {
+        assert!(emits_code(
+            check_comparison_against_glob,
+            "#!/bin/busybox sh\n[[ $f == *foo* ]]",
+            2330
+        ));
+    }
 
     // ---- SC2254 checkCaseAgainstGlob ----
     #[test]
-    fn prop_checkCaseAgainstGlob1() { assert!(emits(check_case_against_glob, "case foo in lol$n) foo;; esac")); }
+    fn prop_checkCaseAgainstGlob1() {
+        assert!(emits(
+            check_case_against_glob,
+            "case foo in lol$n) foo;; esac"
+        ));
+    }
     #[test]
-    fn prop_checkCaseAgainstGlob2() { assert!(emits(check_case_against_glob, "case foo in $(foo)) foo;; esac")); }
+    fn prop_checkCaseAgainstGlob2() {
+        assert!(emits(
+            check_case_against_glob,
+            "case foo in $(foo)) foo;; esac"
+        ));
+    }
     #[test]
-    fn prop_checkCaseAgainstGlob3() { assert!(!emits(check_case_against_glob, "case foo in *$bar*) foo;; esac")); }
+    fn prop_checkCaseAgainstGlob3() {
+        assert!(!emits(
+            check_case_against_glob,
+            "case foo in *$bar*) foo;; esac"
+        ));
+    }
 
     // ---- SC2055/2056/2252 checkOrNeq ----
     #[test]
-    fn prop_checkOrNeq1() { assert!(emits(check_or_neq, "if [[ $lol -ne cow || $lol -ne foo ]]; then echo foo; fi")); }
+    fn prop_checkOrNeq1() {
+        assert!(emits(
+            check_or_neq,
+            "if [[ $lol -ne cow || $lol -ne foo ]]; then echo foo; fi"
+        ));
+    }
     #[test]
-    fn prop_checkOrNeq2() { assert!(emits(check_or_neq, "(( a!=lol || a!=foo ))")); }
+    fn prop_checkOrNeq2() {
+        assert!(emits(check_or_neq, "(( a!=lol || a!=foo ))"));
+    }
     #[test]
-    fn prop_checkOrNeq3() { assert!(emits(check_or_neq, "[ \"$a\" != lol || \"$a\" != foo ]")); }
+    fn prop_checkOrNeq3() {
+        assert!(emits(check_or_neq, "[ \"$a\" != lol || \"$a\" != foo ]"));
+    }
     #[test]
-    fn prop_checkOrNeq4() { assert!(!emits(check_or_neq, "[ a != $cow || b != $foo ]")); }
+    fn prop_checkOrNeq4() {
+        assert!(!emits(check_or_neq, "[ a != $cow || b != $foo ]"));
+    }
     #[test]
-    fn prop_checkOrNeq5() { assert!(!emits(check_or_neq, "[[ $a != /home || $a != */public_html/* ]]")); }
+    fn prop_checkOrNeq5() {
+        assert!(!emits(
+            check_or_neq,
+            "[[ $a != /home || $a != */public_html/* ]]"
+        ));
+    }
     #[test]
-    fn prop_checkOrNeq6() { assert!(emits(check_or_neq, "[ $a != a ] || [ $a != b ]")); }
+    fn prop_checkOrNeq6() {
+        assert!(emits(check_or_neq, "[ $a != a ] || [ $a != b ]"));
+    }
     #[test]
-    fn prop_checkOrNeq7() { assert!(emits(check_or_neq, "[ $a != a ] || [ $a != b ] || true")); }
+    fn prop_checkOrNeq7() {
+        assert!(emits(check_or_neq, "[ $a != a ] || [ $a != b ] || true"));
+    }
     #[test]
-    fn prop_checkOrNeq8() { assert!(!emits(check_or_neq, "[[ $a != x || $a != x ]]")); }
+    fn prop_checkOrNeq8() {
+        assert!(!emits(check_or_neq, "[[ $a != x || $a != x ]]"));
+    }
     #[test]
-    fn prop_checkOrNeq9() { assert!(!emits(check_or_neq, "[ 0 -ne $FOO ] || [ 0 -ne $BAR ]")); }
+    fn prop_checkOrNeq9() {
+        assert!(!emits(check_or_neq, "[ 0 -ne $FOO ] || [ 0 -ne $BAR ]"));
+    }
 
     // ---- SC2333/2334 checkAndEq ----
     #[test]
-    fn prop_checkAndEq1() { assert!(!emits(check_and_eq, "cow=0; foo=0; if [[ $lol -eq cow && $lol -eq foo ]]; then echo foo; fi")); }
+    fn prop_checkAndEq1() {
+        assert!(!emits(
+            check_and_eq,
+            "cow=0; foo=0; if [[ $lol -eq cow && $lol -eq foo ]]; then echo foo; fi"
+        ));
+    }
     #[test]
-    fn prop_checkAndEq2() { assert!(!emits(check_and_eq, "lol=0 foo=0; (( a==lol && a==foo ))")); }
+    fn prop_checkAndEq2() {
+        assert!(!emits(check_and_eq, "lol=0 foo=0; (( a==lol && a==foo ))"));
+    }
     #[test]
-    fn prop_checkAndEq3() { assert!(emits(check_and_eq, "[ \"$a\" = lol && \"$a\" = foo ]")); }
+    fn prop_checkAndEq3() {
+        assert!(emits(check_and_eq, "[ \"$a\" = lol && \"$a\" = foo ]"));
+    }
     #[test]
-    fn prop_checkAndEq4() { assert!(!emits(check_and_eq, "[ a = $cow && b = $foo ]")); }
+    fn prop_checkAndEq4() {
+        assert!(!emits(check_and_eq, "[ a = $cow && b = $foo ]"));
+    }
     #[test]
-    fn prop_checkAndEq5() { assert!(!emits(check_and_eq, "[[ $a = /home && $a = */public_html/* ]]")); }
+    fn prop_checkAndEq5() {
+        assert!(!emits(
+            check_and_eq,
+            "[[ $a = /home && $a = */public_html/* ]]"
+        ));
+    }
     #[test]
-    fn prop_checkAndEq6() { assert!(emits(check_and_eq, "[ $a = a ] && [ $a = b ]")); }
+    fn prop_checkAndEq6() {
+        assert!(emits(check_and_eq, "[ $a = a ] && [ $a = b ]"));
+    }
     #[test]
-    fn prop_checkAndEq7() { assert!(emits(check_and_eq, "[ $a = a ] && [ $a = b ] || true")); }
+    fn prop_checkAndEq7() {
+        assert!(emits(check_and_eq, "[ $a = a ] && [ $a = b ] || true"));
+    }
     #[test]
-    fn prop_checkAndEq8() { assert!(!emits(check_and_eq, "[[ $a == x && $a == x ]]")); }
+    fn prop_checkAndEq8() {
+        assert!(!emits(check_and_eq, "[[ $a == x && $a == x ]]"));
+    }
     #[test]
-    fn prop_checkAndEq9() { assert!(!emits(check_and_eq, "[ 0 -eq $FOO ] && [ 0 -eq $BAR ]")); }
+    fn prop_checkAndEq9() {
+        assert!(!emits(check_and_eq, "[ 0 -eq $FOO ] && [ 0 -eq $BAR ]"));
+    }
     #[test]
-    fn prop_checkAndEq10() { assert!(emits(check_and_eq, "(( a == 1 && a == 2 ))")); }
+    fn prop_checkAndEq10() {
+        assert!(emits(check_and_eq, "(( a == 1 && a == 2 ))"));
+    }
     #[test]
-    fn prop_checkAndEq11() { assert!(emits(check_and_eq, "[ $x -eq 1 ] && [ $x -eq 2 ]")); }
+    fn prop_checkAndEq11() {
+        assert!(emits(check_and_eq, "[ $x -eq 1 ] && [ $x -eq 2 ]"));
+    }
     #[test]
-    fn prop_checkAndEq12() { assert!(emits(check_and_eq, "[ 1 -eq $x ] && [ $x -eq 2 ]")); }
+    fn prop_checkAndEq12() {
+        assert!(emits(check_and_eq, "[ 1 -eq $x ] && [ $x -eq 2 ]"));
+    }
     #[test]
-    fn prop_checkAndEq13() { assert!(!emits(check_and_eq, "[ 1 -eq $x ] && [ $x -eq 1 ]")); }
+    fn prop_checkAndEq13() {
+        assert!(!emits(check_and_eq, "[ 1 -eq $x ] && [ $x -eq 1 ]"));
+    }
     #[test]
-    fn prop_checkAndEq14() { assert!(!emits(check_and_eq, "[ $a = $b ] && [ $a = $c ]")); }
+    fn prop_checkAndEq14() {
+        assert!(!emits(check_and_eq, "[ $a = $b ] && [ $a = $c ]"));
+    }
 
     // ---- SC2204/2205 checkSubshellAsTest ----
     #[test]
-    fn prop_checkSubshellAsTest1() { assert!(emits(check_subshell_as_test, "( -e file )")); }
+    fn prop_checkSubshellAsTest1() {
+        assert!(emits(check_subshell_as_test, "( -e file )"));
+    }
     #[test]
-    fn prop_checkSubshellAsTest2() { assert!(emits(check_subshell_as_test, "( 1 -gt 2 )")); }
+    fn prop_checkSubshellAsTest2() {
+        assert!(emits(check_subshell_as_test, "( 1 -gt 2 )"));
+    }
     #[test]
-    fn prop_checkSubshellAsTest3() { assert!(!emits(check_subshell_as_test, "( grep -c foo bar )")); }
+    fn prop_checkSubshellAsTest3() {
+        assert!(!emits(check_subshell_as_test, "( grep -c foo bar )"));
+    }
     #[test]
-    fn prop_checkSubshellAsTest4() { assert!(!emits(check_subshell_as_test, "[ 1 -gt 2 ]")); }
+    fn prop_checkSubshellAsTest4() {
+        assert!(!emits(check_subshell_as_test, "[ 1 -gt 2 ]"));
+    }
     #[test]
-    fn prop_checkSubshellAsTest5() { assert!(emits(check_subshell_as_test, "( -e file && -x file )")); }
+    fn prop_checkSubshellAsTest5() {
+        assert!(emits(check_subshell_as_test, "( -e file && -x file )"));
+    }
     #[test]
-    fn prop_checkSubshellAsTest6() { assert!(emits(check_subshell_as_test, "( -e file || -x file && -t 1 )")); }
+    fn prop_checkSubshellAsTest6() {
+        assert!(emits(
+            check_subshell_as_test,
+            "( -e file || -x file && -t 1 )"
+        ));
+    }
     #[test]
-    fn prop_checkSubshellAsTest7() { assert!(emits(check_subshell_as_test, "( ! -d file )")); }
+    fn prop_checkSubshellAsTest7() {
+        assert!(emits(check_subshell_as_test, "( ! -d file )"));
+    }
 
     // ---- SC2212 checkEmptyCondition ----
     #[test]
-    fn prop_checkEmptyCondition1() { assert!(emits(check_empty_condition, "if [ ]; then ..; fi")); }
+    fn prop_checkEmptyCondition1() {
+        assert!(emits(check_empty_condition, "if [ ]; then ..; fi"));
+    }
     #[test]
-    fn prop_checkEmptyCondition2() { assert!(!emits(check_empty_condition, "[ foo -o bar ]")); }
+    fn prop_checkEmptyCondition2() {
+        assert!(!emits(check_empty_condition, "[ foo -o bar ]"));
+    }
 
     // ---- SC2265/2266 checkBadTestAndOr ----
     #[test]
-    fn prop_checkBadTestAndOr1() { assert!(emits(check_bad_test_and_or, "[ x ] & [ y ]")); }
+    fn prop_checkBadTestAndOr1() {
+        assert!(emits(check_bad_test_and_or, "[ x ] & [ y ]"));
+    }
     #[test]
-    fn prop_checkBadTestAndOr2() { assert!(emits(check_bad_test_and_or, "test -e foo & [ y ]")); }
+    fn prop_checkBadTestAndOr2() {
+        assert!(emits(check_bad_test_and_or, "test -e foo & [ y ]"));
+    }
     #[test]
-    fn prop_checkBadTestAndOr3() { assert!(emits(check_bad_test_and_or, "[ x ] | [ y ]")); }
+    fn prop_checkBadTestAndOr3() {
+        assert!(emits(check_bad_test_and_or, "[ x ] | [ y ]"));
+    }
 
     // ---- SC2283/2284/2285 checkSecondArgIsComparison ----
     #[test]
-    fn prop_checkSecondArgIsComparison1() { assert!(emits(check_second_arg_is_comparison, "foo = $bar")); }
+    fn prop_checkSecondArgIsComparison1() {
+        assert!(emits(check_second_arg_is_comparison, "foo = $bar"));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison2() { assert!(emits(check_second_arg_is_comparison, "$foo = $bar")); }
+    fn prop_checkSecondArgIsComparison2() {
+        assert!(emits(check_second_arg_is_comparison, "$foo = $bar"));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison3() { assert!(emits(check_second_arg_is_comparison, "2f == $bar")); }
+    fn prop_checkSecondArgIsComparison3() {
+        assert!(emits(check_second_arg_is_comparison, "2f == $bar"));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison4() { assert!(emits(check_second_arg_is_comparison, "'var' =$bar")); }
+    fn prop_checkSecondArgIsComparison4() {
+        assert!(emits(check_second_arg_is_comparison, "'var' =$bar"));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison5() { assert!(emits(check_second_arg_is_comparison, "foo ='$bar'")); }
+    fn prop_checkSecondArgIsComparison5() {
+        assert!(emits(check_second_arg_is_comparison, "foo ='$bar'"));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison6() { assert!(emits(check_second_arg_is_comparison, "$foo =$bar")); }
+    fn prop_checkSecondArgIsComparison6() {
+        assert!(emits(check_second_arg_is_comparison, "$foo =$bar"));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison7() { assert!(emits(check_second_arg_is_comparison, "2f ==$bar")); }
+    fn prop_checkSecondArgIsComparison7() {
+        assert!(emits(check_second_arg_is_comparison, "2f ==$bar"));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison8() { assert!(emits(check_second_arg_is_comparison, "'var' =$bar")); }
+    fn prop_checkSecondArgIsComparison8() {
+        assert!(emits(check_second_arg_is_comparison, "'var' =$bar"));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison9() { assert!(emits(check_second_arg_is_comparison, "var += $(foo)")); }
+    fn prop_checkSecondArgIsComparison9() {
+        assert!(emits(check_second_arg_is_comparison, "var += $(foo)"));
+    }
     #[test]
-    fn prop_checkSecondArgIsComparison10() { assert!(emits(check_second_arg_is_comparison, "var +=$(foo)")); }
+    fn prop_checkSecondArgIsComparison10() {
+        assert!(emits(check_second_arg_is_comparison, "var +=$(foo)"));
+    }
 
     // ---- SC2171 checkTrailingBracket ----
     #[test]
-    fn prop_checkTrailingBracket1() { assert!(emits(check_trailing_bracket, "if -z n ]]; then true; fi ")); }
+    fn prop_checkTrailingBracket1() {
+        assert!(emits(check_trailing_bracket, "if -z n ]]; then true; fi "));
+    }
     #[test]
-    fn prop_checkTrailingBracket2() { assert!(!emits(check_trailing_bracket, "if [[ -z n ]]; then true; fi ")); }
+    fn prop_checkTrailingBracket2() {
+        assert!(!emits(
+            check_trailing_bracket,
+            "if [[ -z n ]]; then true; fi "
+        ));
+    }
     #[test]
-    fn prop_checkTrailingBracket3() { assert!(emits(check_trailing_bracket, "a || b ] && thing")); }
+    fn prop_checkTrailingBracket3() {
+        assert!(emits(check_trailing_bracket, "a || b ] && thing"));
+    }
     #[test]
-    fn prop_checkTrailingBracket4() { assert!(!emits(check_trailing_bracket, "run [ foo ]")); }
+    fn prop_checkTrailingBracket4() {
+        assert!(!emits(check_trailing_bracket, "run [ foo ]"));
+    }
     #[test]
-    fn prop_checkTrailingBracket5() { assert!(!emits(check_trailing_bracket, "run bar ']'")); }
+    fn prop_checkTrailingBracket5() {
+        assert!(!emits(check_trailing_bracket, "run bar ']'"));
+    }
 
     // ---- SC2331 checkUnaryTestA ----
     #[test]
-    fn prop_checkUnaryTestA1() { assert!(emits(check_unary_test_a, "[ -a foo ]")); }
+    fn prop_checkUnaryTestA1() {
+        assert!(emits(check_unary_test_a, "[ -a foo ]"));
+    }
     #[test]
-    fn prop_checkUnaryTestA2() { assert!(emits(check_unary_test_a, "[ ! -a foo ]")); }
+    fn prop_checkUnaryTestA2() {
+        assert!(emits(check_unary_test_a, "[ ! -a foo ]"));
+    }
     #[test]
-    fn prop_checkUnaryTestA3() { assert!(!emits(check_unary_test_a, "[ foo -a bar ]")); }
+    fn prop_checkUnaryTestA3() {
+        assert!(!emits(check_unary_test_a, "[ foo -a bar ]"));
+    }
 
     // ---- SC2194/2195/2221/2222 checkUnmatchableCases ----
     #[test]
-    fn prop_checkUnmatchableCases1() { assert!(emits(check_unmatchable_cases, "case foo in bar) true; esac")); }
+    fn prop_checkUnmatchableCases1() {
+        assert!(emits(
+            check_unmatchable_cases,
+            "case foo in bar) true; esac"
+        ));
+    }
     #[test]
-    fn prop_checkUnmatchableCases2() { assert!(emits(check_unmatchable_cases, "case foo-$bar in ??|*) true; esac")); }
+    fn prop_checkUnmatchableCases2() {
+        assert!(emits(
+            check_unmatchable_cases,
+            "case foo-$bar in ??|*) true; esac"
+        ));
+    }
     #[test]
-    fn prop_checkUnmatchableCases3() { assert!(emits(check_unmatchable_cases, "case foo in foo) true; esac")); }
+    fn prop_checkUnmatchableCases3() {
+        assert!(emits(
+            check_unmatchable_cases,
+            "case foo in foo) true; esac"
+        ));
+    }
     #[test]
-    fn prop_checkUnmatchableCases4() { assert!(!emits(check_unmatchable_cases, "case foo-$bar in foo*|*bar|*baz*) true; esac")); }
+    fn prop_checkUnmatchableCases4() {
+        assert!(!emits(
+            check_unmatchable_cases,
+            "case foo-$bar in foo*|*bar|*baz*) true; esac"
+        ));
+    }
     #[test]
-    fn prop_checkUnmatchableCases5() { assert!(emits(check_unmatchable_cases, "case $f in *.txt) true;; f??.txt) false;; esac")); }
+    fn prop_checkUnmatchableCases5() {
+        assert!(emits(
+            check_unmatchable_cases,
+            "case $f in *.txt) true;; f??.txt) false;; esac"
+        ));
+    }
     #[test]
-    fn prop_checkUnmatchableCases6() { assert!(!emits(check_unmatchable_cases, "case $f in ?*) true;; *) false;; esac")); }
+    fn prop_checkUnmatchableCases6() {
+        assert!(!emits(
+            check_unmatchable_cases,
+            "case $f in ?*) true;; *) false;; esac"
+        ));
+    }
     #[test]
-    fn prop_checkUnmatchableCases7() { assert!(!emits(check_unmatchable_cases, "case $f in $(x)) true;; asdf) false;; esac")); }
+    fn prop_checkUnmatchableCases7() {
+        assert!(!emits(
+            check_unmatchable_cases,
+            "case $f in $(x)) true;; asdf) false;; esac"
+        ));
+    }
     #[test]
-    fn prop_checkUnmatchableCases8() { assert!(emits(check_unmatchable_cases, "case $f in cow) true;; bar|cow) false;; esac")); }
+    fn prop_checkUnmatchableCases8() {
+        assert!(emits(
+            check_unmatchable_cases,
+            "case $f in cow) true;; bar|cow) false;; esac"
+        ));
+    }
     #[test]
-    fn prop_checkUnmatchableCases9() { assert!(!emits(check_unmatchable_cases, "case $f in x) true;;& x) false;; esac")); }
+    fn prop_checkUnmatchableCases9() {
+        assert!(!emits(
+            check_unmatchable_cases,
+            "case $f in x) true;;& x) false;; esac"
+        ));
+    }
 
     // ---- SC2101/2102 checkCharRangeGlob ----
     #[test]
-    fn prop_checkCharRangeGlob1() { assert!(emits(check_char_range_glob, "ls *[:digit:].jpg")); }
+    fn prop_checkCharRangeGlob1() {
+        assert!(emits(check_char_range_glob, "ls *[:digit:].jpg"));
+    }
     #[test]
-    fn prop_checkCharRangeGlob2() { assert!(!emits(check_char_range_glob, "ls *[[:digit:]].jpg")); }
+    fn prop_checkCharRangeGlob2() {
+        assert!(!emits(check_char_range_glob, "ls *[[:digit:]].jpg"));
+    }
     #[test]
-    fn prop_checkCharRangeGlob3() { assert!(emits(check_char_range_glob, "ls [10-15]")); }
+    fn prop_checkCharRangeGlob3() {
+        assert!(emits(check_char_range_glob, "ls [10-15]"));
+    }
     #[test]
-    fn prop_checkCharRangeGlob4() { assert!(!emits(check_char_range_glob, "ls [a-zA-Z]")); }
+    fn prop_checkCharRangeGlob4() {
+        assert!(!emits(check_char_range_glob, "ls [a-zA-Z]"));
+    }
     #[test]
-    fn prop_checkCharRangeGlob5() { assert!(!emits(check_char_range_glob, "tr -d [aa]")); }
+    fn prop_checkCharRangeGlob5() {
+        assert!(!emits(check_char_range_glob, "tr -d [aa]"));
+    }
     #[test]
-    fn prop_checkCharRangeGlob6() { assert!(!emits(check_char_range_glob, "[[ $x == [!!]* ]]")); }
+    fn prop_checkCharRangeGlob6() {
+        assert!(!emits(check_char_range_glob, "[[ $x == [!!]* ]]"));
+    }
     #[test]
-    fn prop_checkCharRangeGlob7() { assert!(!emits(check_char_range_glob, "[[ -v arr[keykey] ]]")); }
+    fn prop_checkCharRangeGlob7() {
+        assert!(!emits(check_char_range_glob, "[[ -v arr[keykey] ]]"));
+    }
     #[test]
-    fn prop_checkCharRangeGlob8() { assert!(!emits(check_char_range_glob, "[[ arr[keykey] -gt 1 ]]")); }
+    fn prop_checkCharRangeGlob8() {
+        assert!(!emits(check_char_range_glob, "[[ arr[keykey] -gt 1 ]]"));
+    }
     #[test]
-    fn prop_checkCharRangeGlob9() { assert!(!emits(check_char_range_glob, "read arr[keykey]")); }
+    fn prop_checkCharRangeGlob9() {
+        assert!(!emits(check_char_range_glob, "read arr[keykey]"));
+    }
 }

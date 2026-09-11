@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::ast::{Id, Token};
 use crate::cfg::{
-    build_graph, CFEdge, CFEffect, CFGParameters, CFGraph, CFNode, CFStringPart, CFValue,
-    CFVariableProp, Node, Scope,
+    CFEdge, CFEffect, CFGParameters, CFGraph, CFNode, CFStringPart, CFValue, CFVariableProp, Node,
+    Scope, build_graph,
 };
 
 // The number of iterations for DFA to stabilize
@@ -536,7 +536,10 @@ fn patch_state(base: &InternalState, diff: &InternalState) -> InternalState {
         s_local_values: vm_patch(&base.s_local_values, &diff.s_local_values),
         s_prefix_values: vm_patch(&base.s_prefix_values, &diff.s_prefix_values),
         s_function_targets: vm_patch(&base.s_function_targets, &diff.s_function_targets),
-        s_exit_codes: diff.s_exit_codes.clone().or_else(|| base.s_exit_codes.clone()),
+        s_exit_codes: diff
+            .s_exit_codes
+            .clone()
+            .or_else(|| base.s_exit_codes.clone()),
         s_is_reachable: diff.s_is_reachable.or(base.s_is_reachable),
     }
 }
@@ -547,31 +550,146 @@ fn patch_state(base: &InternalState, diff: &InternalState) -> InternalState {
 
 // ShellCheck.Data.internalVariables
 const INTERNAL_VARIABLES: &[&str] = &[
-    "", "_", "rest", "REST", "CDPATH", "ENV", "FCEDIT", "HISTFILE", "HISTSIZE",
-    "HOME", "IFS", "LANG", "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES",
-    "LC_MONETARY", "LC_NUMERIC", "LC_TIME", "MAIL", "MAILCHECK", "MAILPATH",
-    "OLDPWD", "OPTARG", "OPTIND", "PATH", "PWD", "BASH", "BASHOPTS", "BASHPID",
-    "BASH_ALIASES", "BASH_ARGC", "BASH_ARGV", "BASH_ARGV0", "BASH_CMDS",
-    "BASH_COMMAND", "BASH_EXECUTION_STRING", "BASH_LINENO",
-    "BASH_LOADABLES_PATH", "BASH_REMATCH", "BASH_SOURCE", "BASH_SUBSHELL",
-    "BASH_VERSINFO", "BASH_VERSION", "COMP_CWORD", "COMP_KEY", "COMP_LINE",
-    "COMP_POINT", "COMP_TYPE", "COMP_WORDBREAKS", "COMP_WORDS", "COPROC",
-    "DIRSTACK", "EPOCHREALTIME", "EPOCHSECONDS", "EUID", "FUNCNAME", "GROUPS",
-    "HISTCMD", "HOSTNAME", "HOSTTYPE", "MACHTYPE", "MAPFILE", "OSTYPE",
-    "PIPESTATUS", "RANDOM", "READLINE_ARGUMENT", "READLINE_LINE",
-    "READLINE_MARK", "READLINE_POINT", "REPLY", "SECONDS", "SHELLOPTS", "SHLVL",
-    "SRANDOM", "UID", "BASH_COMPAT", "BASH_ENV", "BASH_XTRACEFD", "CHILD_MAX",
-    "COLUMNS", "COMPREPLY", "EMACS", "EXECIGNORE", "FIGNORE", "FUNCNEST",
-    "GLOBIGNORE", "HISTCONTROL", "HISTFILESIZE", "HISTIGNORE", "HISTTIMEFORMAT",
-    "HOSTFILE", "IGNOREEOF", "INPUTRC", "INSIDE_EMACS", "LINES", "OPTERR",
-    "POSIXLY_CORRECT", "PROMPT_COMMAND", "PROMPT_DIRTRIM", "PS0", "PS1", "PS2",
-    "PS3", "PS4", "SHELL", "TIMEFORMAT", "TMOUT", "BASH_MONOSECONDS",
-    "BASH_TRAPSIG", "GLOBSORT", "auto_resume", "histchars", "USER", "TZ",
-    "TERM", "LOGNAME", "LD_LIBRARY_PATH", "LANGUAGE", "DISPLAY", "HOSTNAME",
-    "KRB5CCNAME", "LINENO", "PPID", "TMPDIR", "XAUTHORITY", ".sh.version",
-    "FLAGS_ARGC", "FLAGS_ARGV", "FLAGS_ERROR", "FLAGS_FALSE", "FLAGS_HELP",
-    "FLAGS_PARENT", "FLAGS_RESERVED", "FLAGS_TRUE", "FLAGS_VERSION",
-    "flags_error", "flags_return", "stderr", "stderr_lines",
+    "",
+    "_",
+    "rest",
+    "REST",
+    "CDPATH",
+    "ENV",
+    "FCEDIT",
+    "HISTFILE",
+    "HISTSIZE",
+    "HOME",
+    "IFS",
+    "LANG",
+    "LC_ALL",
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "LC_MONETARY",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "MAIL",
+    "MAILCHECK",
+    "MAILPATH",
+    "OLDPWD",
+    "OPTARG",
+    "OPTIND",
+    "PATH",
+    "PWD",
+    "BASH",
+    "BASHOPTS",
+    "BASHPID",
+    "BASH_ALIASES",
+    "BASH_ARGC",
+    "BASH_ARGV",
+    "BASH_ARGV0",
+    "BASH_CMDS",
+    "BASH_COMMAND",
+    "BASH_EXECUTION_STRING",
+    "BASH_LINENO",
+    "BASH_LOADABLES_PATH",
+    "BASH_REMATCH",
+    "BASH_SOURCE",
+    "BASH_SUBSHELL",
+    "BASH_VERSINFO",
+    "BASH_VERSION",
+    "COMP_CWORD",
+    "COMP_KEY",
+    "COMP_LINE",
+    "COMP_POINT",
+    "COMP_TYPE",
+    "COMP_WORDBREAKS",
+    "COMP_WORDS",
+    "COPROC",
+    "DIRSTACK",
+    "EPOCHREALTIME",
+    "EPOCHSECONDS",
+    "EUID",
+    "FUNCNAME",
+    "GROUPS",
+    "HISTCMD",
+    "HOSTNAME",
+    "HOSTTYPE",
+    "MACHTYPE",
+    "MAPFILE",
+    "OSTYPE",
+    "PIPESTATUS",
+    "RANDOM",
+    "READLINE_ARGUMENT",
+    "READLINE_LINE",
+    "READLINE_MARK",
+    "READLINE_POINT",
+    "REPLY",
+    "SECONDS",
+    "SHELLOPTS",
+    "SHLVL",
+    "SRANDOM",
+    "UID",
+    "BASH_COMPAT",
+    "BASH_ENV",
+    "BASH_XTRACEFD",
+    "CHILD_MAX",
+    "COLUMNS",
+    "COMPREPLY",
+    "EMACS",
+    "EXECIGNORE",
+    "FIGNORE",
+    "FUNCNEST",
+    "GLOBIGNORE",
+    "HISTCONTROL",
+    "HISTFILESIZE",
+    "HISTIGNORE",
+    "HISTTIMEFORMAT",
+    "HOSTFILE",
+    "IGNOREEOF",
+    "INPUTRC",
+    "INSIDE_EMACS",
+    "LINES",
+    "OPTERR",
+    "POSIXLY_CORRECT",
+    "PROMPT_COMMAND",
+    "PROMPT_DIRTRIM",
+    "PS0",
+    "PS1",
+    "PS2",
+    "PS3",
+    "PS4",
+    "SHELL",
+    "TIMEFORMAT",
+    "TMOUT",
+    "BASH_MONOSECONDS",
+    "BASH_TRAPSIG",
+    "GLOBSORT",
+    "auto_resume",
+    "histchars",
+    "USER",
+    "TZ",
+    "TERM",
+    "LOGNAME",
+    "LD_LIBRARY_PATH",
+    "LANGUAGE",
+    "DISPLAY",
+    "HOSTNAME",
+    "KRB5CCNAME",
+    "LINENO",
+    "PPID",
+    "TMPDIR",
+    "XAUTHORITY",
+    ".sh.version",
+    "FLAGS_ARGC",
+    "FLAGS_ARGV",
+    "FLAGS_ERROR",
+    "FLAGS_FALSE",
+    "FLAGS_HELP",
+    "FLAGS_PARENT",
+    "FLAGS_RESERVED",
+    "FLAGS_TRUE",
+    "FLAGS_VERSION",
+    "flags_error",
+    "flags_return",
+    "stderr",
+    "stderr_lines",
 ];
 
 // ShellCheck.Data.specialIntegerVariables
@@ -580,12 +698,39 @@ const SPECIAL_INTEGER_VARIABLES: &[&str] = &["$", "?", "!", "#"];
 // ShellCheck.Data.variablesWithoutSpaces
 // = specialVariablesWithoutSpaces ("-" : specialIntegerVariables) ++ [..]
 const VARIABLES_WITHOUT_SPACES: &[&str] = &[
-    "-", "$", "?", "!", "#", "BASHPID", "BASH_ARGC", "BASH_LINENO",
-    "BASH_SUBSHELL", "EUID", "EPOCHREALTIME", "EPOCHSECONDS", "LINENO",
-    "OPTIND", "PPID", "RANDOM", "READLINE_ARGUMENT", "READLINE_MARK",
-    "READLINE_POINT", "SECONDS", "SHELLOPTS", "SHLVL", "SRANDOM", "UID",
-    "COLUMNS", "HISTFILESIZE", "HISTSIZE", "LINES", "BASH_MONOSECONDS",
-    "BASH_TRAPSIG", "FLAGS_ERROR", "FLAGS_FALSE", "FLAGS_TRUE",
+    "-",
+    "$",
+    "?",
+    "!",
+    "#",
+    "BASHPID",
+    "BASH_ARGC",
+    "BASH_LINENO",
+    "BASH_SUBSHELL",
+    "EUID",
+    "EPOCHREALTIME",
+    "EPOCHSECONDS",
+    "LINENO",
+    "OPTIND",
+    "PPID",
+    "RANDOM",
+    "READLINE_ARGUMENT",
+    "READLINE_MARK",
+    "READLINE_POINT",
+    "SECONDS",
+    "SHELLOPTS",
+    "SHLVL",
+    "SRANDOM",
+    "UID",
+    "COLUMNS",
+    "HISTFILESIZE",
+    "HISTSIZE",
+    "LINES",
+    "BASH_MONOSECONDS",
+    "BASH_TRAPSIG",
+    "FLAGS_ERROR",
+    "FLAGS_FALSE",
+    "FLAGS_TRUE",
 ];
 
 fn create_environment_state() -> InternalState {
@@ -773,7 +918,9 @@ impl Ctx {
         self.lookup_stack(
             false,
             |s| s.s_global_values.lookup(&key).cloned(),
-            |v: &VariableState| StateDependency::DepState(Scope::GlobalScope, key.clone(), v.clone()),
+            |v: &VariableState| {
+                StateDependency::DepState(Scope::GlobalScope, key.clone(), v.clone())
+            },
             unknown_variable_state(),
         )
     }
@@ -781,7 +928,11 @@ impl Ctx {
         let key = name.to_string();
         self.lookup_stack(
             false,
-            |s| s.s_global_values.lookup(&key).map(|vs| vs.variable_properties.clone()),
+            |s| {
+                s.s_global_values
+                    .lookup(&key)
+                    .map(|vs| vs.variable_properties.clone())
+            },
             |v: &VariableProperties| {
                 StateDependency::DepProperties(Scope::GlobalScope, key.clone(), v.clone())
             },
@@ -793,7 +944,9 @@ impl Ctx {
         self.lookup_stack(
             true,
             |s| s.s_local_values.lookup(&key).cloned(),
-            |v: &VariableState| StateDependency::DepState(Scope::LocalScope, key.clone(), v.clone()),
+            |v: &VariableState| {
+                StateDependency::DepState(Scope::LocalScope, key.clone(), v.clone())
+            },
             unset_variable_state(),
         )
     }
@@ -837,7 +990,11 @@ impl Ctx {
 
     // --- peek (no dependency) ---
 
-    fn peek_var_with_scope(&self, name: &str, def: (VariableState, Scope)) -> (VariableState, Scope) {
+    fn peek_var_with_scope(
+        &self,
+        name: &str,
+        def: (VariableState, Scope),
+    ) -> (VariableState, Scope) {
         if let Some(v) = get_variable_with_scope(&self.input, name) {
             return v;
         }
@@ -1167,7 +1324,9 @@ impl Ctx {
     fn do_merge(&mut self, a: &InternalState, b: &InternalState) -> InternalState {
         match (a.s_is_reachable, b.s_is_reachable) {
             (Some(true), Some(false)) | (Some(false), Some(true)) => {
-                panic!("ShellCheck internal error: Unexpected merge of reachable and unreachable state");
+                panic!(
+                    "ShellCheck internal error: Unexpected merge of reachable and unreachable state"
+                );
             }
             (Some(false), Some(false)) => return unreachable_state(),
             _ => {}

@@ -117,8 +117,12 @@ fn is_function(t: &Token) -> bool {
 fn will_split(t: &Token) -> bool {
     use InnerToken::*;
     match &*t.inner {
-        T_DollarBraced { .. } | T_DollarExpansion(_) | T_Backticked(_) | T_BraceExpansion(_)
-        | T_Glob(_) | T_Extglob { .. } => true,
+        T_DollarBraced { .. }
+        | T_DollarExpansion(_)
+        | T_Backticked(_)
+        | T_BraceExpansion(_)
+        | T_Glob(_)
+        | T_Extglob { .. } => true,
         T_DoubleQuoted(l) => l.iter().any(will_become_multiple_args),
         T_NormalWord(l) => l.iter().any(will_split),
         _ => false,
@@ -287,8 +291,10 @@ fn get_all_flags(t: &Token) -> Vec<(Token, String)> {
         return vec![];
     }
     let args = &words[1..];
-    let token_and_text: Vec<(Token, String)> =
-        args.iter().map(|x| (x.clone(), oversimplify(x).concat())).collect();
+    let token_and_text: Vec<(Token, String)> = args
+        .iter()
+        .map(|x| (x.clone(), oversimplify(x).concat()))
+        .collect();
     let mut flag_args: Vec<(Token, String)> = vec![];
     let mut rest: Vec<(Token, String)> = vec![];
     let mut broken = false;
@@ -353,7 +359,12 @@ fn check_echo_wc(_params: &Parameters, t: &Token, out: &mut Out) {
     let bcmd = oversimplify(&commands[1]);
     if acmd == ["echo", "${VAR}"] {
         if bcmd == ["wc", "-c"] || bcmd == ["wc", "-m"] {
-            style(out, t.id(), 2000, "See if you can use ${#variable} instead.");
+            style(
+                out,
+                t.id(),
+                2000,
+                "See if you can use ${#variable} instead.",
+            );
         }
     }
 }
@@ -392,7 +403,8 @@ fn check_arithmetic_op_command(_params: &Parameters, t: &Token, out: &mut Out) {
     let InnerToken::T_SimpleCommand { assignments, words } = &*t.inner else {
         return;
     };
-    if assignments.len() != 1 || !matches!(&*assignments[0].inner, InnerToken::T_Assignment { .. }) {
+    if assignments.len() != 1 || !matches!(&*assignments[0].inner, InnerToken::T_Assignment { .. })
+    {
         return;
     }
     let Some(first_word) = words.first() else {
@@ -526,7 +538,8 @@ fn check_pipe_pitfalls(_params: &Parameters, t: &Token, out: &mut Out) {
         args.iter().any(|x| x.starts_with('-') && x.contains(ch))
     };
     let has_parameter = |args: &[String], string: &str| -> bool {
-        args.iter().any(|x| x.trim_start_matches('-').starts_with(string))
+        args.iter()
+            .any(|x| x.trim_start_matches('-').starts_with(string))
     };
 
     // for ["find", "xargs"] -> SC2038
@@ -557,7 +570,12 @@ fn check_pipe_pitfalls(_params: &Parameters, t: &Token, out: &mut Out) {
             .iter()
             .any(|f| matches!(f.as_str(), "p" | "pid" | "q" | "quick-pid"))
         {
-            info(out, ps.id(), 2009, "Consider using pgrep instead of grepping ps output.");
+            info(
+                out,
+                ps.id(),
+                2009,
+                "Consider using pgrep instead of grepping ps output.",
+            );
         }
     }
 
@@ -584,11 +602,19 @@ fn check_pipe_pitfalls(_params: &Parameters, t: &Token, out: &mut Out) {
                     | "before-context"
             )
         });
-        let wc_ok = flags_wc
-            .iter()
-            .any(|f| matches!(f.as_str(), "m" | "chars" | "w" | "words" | "c" | "bytes" | "L" | "max-line-length"));
+        let wc_ok = flags_wc.iter().any(|f| {
+            matches!(
+                f.as_str(),
+                "m" | "chars" | "w" | "words" | "c" | "bytes" | "L" | "max-line-length"
+            )
+        });
         if !(grep_ok || wc_ok || flags_wc.is_empty()) {
-            style(out, grep.id(), 2126, "Consider using 'grep -c' instead of 'grep|wc -l'.");
+            style(
+                out,
+                grep.id(),
+                2126,
+                "Consider using 'grep -c' instead of 'grep|wc -l'.",
+            );
         }
     }
 
@@ -788,7 +814,12 @@ fn check_find_exec(_params: &Parameters, t: &Token, out: &mut Out) {
         if v {
             for part in from_word(w) {
                 if should_warn(part) {
-                    info(out, part.id(), 2014, "This will expand once before find runs, not per file found.");
+                    info(
+                        out,
+                        part.id(),
+                        2014,
+                        "This will expand once before find runs, not per file found.",
+                    );
                 }
             }
         }
@@ -881,10 +912,20 @@ fn check_loop_keyword_scope(params: &Parameters, t: &Token, out: &mut Out) {
     } else {
         match path.first() {
             Some(h) if is_function(h) => {
-                err(out, t.id(), 2104, &format!("In functions, use return instead of {}.", name));
+                err(
+                    out,
+                    t.id(),
+                    2104,
+                    &format!("In functions, use return instead of {}.", name),
+                );
             }
             _ => {
-                err(out, t.id(), 2105, &format!("{} is only valid in loops.", name));
+                err(
+                    out,
+                    t.id(),
+                    2105,
+                    &format!("{} is only valid in loops.", name),
+                );
             }
         }
     }
@@ -895,7 +936,10 @@ fn check_loop_keyword_scope(params: &Parameters, t: &Token, out: &mut Out) {
 // ===========================================================================
 
 fn check_function_declarations(params: &Parameters, t: &Token, out: &mut Out) {
-    let InnerToken::T_Function { keyword, parens, .. } = &*t.inner else {
+    let InnerToken::T_Function {
+        keyword, parens, ..
+    } = &*t.inner
+    else {
         return;
     };
     let has_keyword = *keyword;
@@ -905,12 +949,22 @@ fn check_function_declarations(params: &Parameters, t: &Token, out: &mut Out) {
         Shell::Bash => {}
         Shell::Ksh => {
             if has_keyword && has_parens {
-                err(out, id, 2111, "ksh does not allow 'function' keyword and '()' at the same time.");
+                err(
+                    out,
+                    id,
+                    2111,
+                    "ksh does not allow 'function' keyword and '()' at the same time.",
+                );
             }
         }
         Shell::Dash | Shell::BusyboxSh | Shell::Sh => {
             if has_keyword && has_parens {
-                warn(out, id, 2112, "'function' keyword is non-standard. Delete it.");
+                warn(
+                    out,
+                    id,
+                    2112,
+                    "'function' keyword is non-standard. Delete it.",
+                );
             }
             if has_keyword && !has_parens {
                 warn(
@@ -951,7 +1005,13 @@ fn check_overriding_path(_params: &Parameters, t: &Token, out: &mut Out) {
         return;
     }
     for var in assignments {
-        let InnerToken::T_Assignment { mode, var: name, indices, value } = &*var.inner else {
+        let InnerToken::T_Assignment {
+            mode,
+            var: name,
+            indices,
+            value,
+        } = &*var.inner
+        else {
             continue;
         };
         if *mode != AssignmentMode::Assign || name != "PATH" || !indices.is_empty() {
@@ -962,7 +1022,12 @@ fn check_overriding_path(_params: &Parameters, t: &Token, out: &mut Out) {
             continue;
         }
         let notify = |out: &mut Out| {
-            warn(out, var.id(), 2123, "PATH is the shell search path. Use another name.");
+            warn(
+                out,
+                var.id(),
+                2123,
+                "PATH is the shell search path. Use another name.",
+            );
         };
         if string.contains('/') && !string.contains(':') {
             notify(out);
@@ -982,7 +1047,13 @@ fn check_tilde_in_path(_params: &Parameters, t: &Token, out: &mut Out) {
         return;
     };
     for var in assignments {
-        let InnerToken::T_Assignment { mode, var: name, indices, value } = &*var.inner else {
+        let InnerToken::T_Assignment {
+            mode,
+            var: name,
+            indices,
+            value,
+        } = &*var.inner
+        else {
             continue;
         };
         if *mode != AssignmentMode::Assign || name != "PATH" || !indices.is_empty() {
@@ -992,11 +1063,19 @@ fn check_tilde_in_path(_params: &Parameters, t: &Token, out: &mut Out) {
             continue;
         };
         let is_quoted = |x: &Token| {
-            matches!(&*x.inner, InnerToken::T_DoubleQuoted(_) | InnerToken::T_SingleQuoted(_))
+            matches!(
+                &*x.inner,
+                InnerToken::T_DoubleQuoted(_) | InnerToken::T_SingleQuoted(_)
+            )
         };
         let has_tilde = |x: &Token| astlib::only_literal_string(x).contains('~');
         if parts.iter().any(|x| is_quoted(x) && has_tilde(x)) {
-            warn(out, var.id(), 2147, "Literal tilde in PATH works poorly across programs.");
+            warn(
+                out,
+                var.id(),
+                2147,
+                "Literal tilde in PATH works poorly across programs.",
+            );
         }
     }
 }
@@ -1066,18 +1145,54 @@ fn decode_escapes(s: &str) -> String {
         if chars[i] == '\\' && i + 1 < chars.len() {
             let c = chars[i + 1];
             match c {
-                'a' => { out.push('\u{07}'); i += 2; }
-                'b' => { out.push('\u{08}'); i += 2; }
-                'e' | 'E' => { out.push('\u{1B}'); i += 2; }
-                'f' => { out.push('\u{0C}'); i += 2; }
-                'n' => { out.push('\n'); i += 2; }
-                'r' => { out.push('\r'); i += 2; }
-                't' => { out.push('\t'); i += 2; }
-                'v' => { out.push('\u{0B}'); i += 2; }
-                '\\' => { out.push('\\'); i += 2; }
-                '\'' => { out.push('\''); i += 2; }
-                '"' => { out.push('"'); i += 2; }
-                '?' => { out.push('?'); i += 2; }
+                'a' => {
+                    out.push('\u{07}');
+                    i += 2;
+                }
+                'b' => {
+                    out.push('\u{08}');
+                    i += 2;
+                }
+                'e' | 'E' => {
+                    out.push('\u{1B}');
+                    i += 2;
+                }
+                'f' => {
+                    out.push('\u{0C}');
+                    i += 2;
+                }
+                'n' => {
+                    out.push('\n');
+                    i += 2;
+                }
+                'r' => {
+                    out.push('\r');
+                    i += 2;
+                }
+                't' => {
+                    out.push('\t');
+                    i += 2;
+                }
+                'v' => {
+                    out.push('\u{0B}');
+                    i += 2;
+                }
+                '\\' => {
+                    out.push('\\');
+                    i += 2;
+                }
+                '\'' => {
+                    out.push('\'');
+                    i += 2;
+                }
+                '"' => {
+                    out.push('"');
+                    i += 2;
+                }
+                '?' => {
+                    out.push('?');
+                    i += 2;
+                }
                 'x' => {
                     let hex: String = chars[i + 2..].iter().take(2).collect();
                     match u32::from_str_radix(&hex, 16) {
@@ -1087,7 +1202,11 @@ fn decode_escapes(s: &str) -> String {
                             }
                             i += 2 + hex.len();
                         }
-                        _ => { out.push('\\'); out.push('x'); i += 2; }
+                        _ => {
+                            out.push('\\');
+                            out.push('x');
+                            i += 2;
+                        }
                     }
                 }
                 'u' | 'U' => {
@@ -1100,7 +1219,11 @@ fn decode_escapes(s: &str) -> String {
                             }
                             i += 2 + hex.len();
                         }
-                        _ => { out.push('\\'); out.push('x'); i += 2; }
+                        _ => {
+                            out.push('\\');
+                            out.push('x');
+                            i += 2;
+                        }
                     }
                 }
                 _ => {
@@ -1112,7 +1235,11 @@ fn decode_escapes(s: &str) -> String {
                             }
                             i += 1 + oct.len();
                         }
-                        _ => { out.push('\\'); out.push(c); i += 2; }
+                        _ => {
+                            out.push('\\');
+                            out.push(c);
+                            i += 2;
+                        }
                     }
                 }
             }
@@ -1142,7 +1269,13 @@ fn decoded_literal_string(t: &Token) -> Option<String> {
 }
 
 fn check_suspicious_ifs(params: &Parameters, t: &Token, out: &mut Out) {
-    let InnerToken::T_Assignment { var, indices, value, .. } = &*t.inner else {
+    let InnerToken::T_Assignment {
+        var,
+        indices,
+        value,
+        ..
+    } = &*t.inner
+    else {
         return;
     };
     if var != "IFS" || !indices.is_empty() {
@@ -1249,7 +1382,8 @@ fn check_should_use_grep_q(_params: &Parameters, t: &Token, out: &mut Out) {
 // ===========================================================================
 
 fn check_cp_legacy_r(params: &Parameters, t: &Token, out: &mut Out) {
-    if !matches!(&*t.inner, InnerToken::T_SimpleCommand { .. }) || !is_unqualified_command(t, "cp") {
+    if !matches!(&*t.inner, InnerToken::T_SimpleCommand { .. }) || !is_unqualified_command(t, "cp")
+    {
         return;
     }
     let flags = get_all_flags(t);
@@ -1306,9 +1440,22 @@ fn check_loop_variable_reassignment(params: &Parameters, token: &Token, out: &mu
     let full = get_path(params, token);
     // NE.tail: ancestors
     let path = &full[1..];
-    if let Some(next) = path.iter().find(|x| loop_variable(x).as_deref() == Some(str.as_str())) {
-        warn(out, token.id(), 2165, "This nested loop overrides the index variable of its parent.");
-        warn(out, next.id(), 2167, "This parent loop has its index variable overridden.");
+    if let Some(next) = path
+        .iter()
+        .find(|x| loop_variable(x).as_deref() == Some(str.as_str()))
+    {
+        warn(
+            out,
+            token.id(),
+            2165,
+            "This nested loop overrides the index variable of its parent.",
+        );
+        warn(
+            out,
+            next.id(),
+            2167,
+            "This parent loop has its index variable overridden.",
+        );
     }
 }
 
@@ -1368,7 +1515,10 @@ fn get_command_sequences<'a>(t: &'a Token) -> Vec<&'a [Token]> {
 }
 
 /// `groupByLink`: group consecutive elements where each adjacent pair links.
-fn group_by_link<'a, F: Fn(&Token, &Token) -> bool>(f: F, list: &[&'a Token]) -> Vec<Vec<&'a Token>> {
+fn group_by_link<'a, F: Fn(&Token, &Token) -> bool>(
+    f: F,
+    list: &[&'a Token],
+) -> Vec<Vec<&'a Token>> {
     let mut out: Vec<Vec<&'a Token>> = vec![];
     let mut current: Vec<&'a Token> = vec![];
     for &item in list {
@@ -1401,7 +1551,9 @@ fn is_annotation_ignoring_code(code: i64, t: &Token) -> bool {
 }
 
 fn should_ignore_code(params: &Parameters, code: i64, t: &Token) -> bool {
-    get_path(params, t).iter().any(|p| is_annotation_ignoring_code(code, p))
+    get_path(params, t)
+        .iter()
+        .any(|p| is_annotation_ignoring_code(code, p))
 }
 
 fn is_sourced(params: &Parameters, t: &Token) -> bool {
@@ -1501,7 +1653,9 @@ fn add_alias(arg: &Token, aliases: &mut HashMap<String, Token>) {
     };
     if is_variable_name(name) && !value.is_empty() {
         // insertWith (\new old -> old): keep the first inserted.
-        aliases.entry(name.to_string()).or_insert_with(|| arg.clone());
+        aliases
+            .entry(name.to_string())
+            .or_insert_with(|| arg.clone());
     }
 }
 
@@ -1579,7 +1733,13 @@ fn check_assign_to_self(_params: &Parameters, t: &Token, out: &mut Out) {
         return;
     }
     for var in assignments {
-        let InnerToken::T_Assignment { mode, var: name, indices, value } = &*var.inner else {
+        let InnerToken::T_Assignment {
+            mode,
+            var: name,
+            indices,
+            value,
+        } = &*var.inner
+        else {
             continue;
         };
         if *mode != AssignmentMode::Assign || !indices.is_empty() {
@@ -1589,7 +1749,12 @@ fn check_assign_to_self(_params: &Parameters, t: &Token, out: &mut Out) {
         if parts.len() == 1 {
             if let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner {
                 if astlib::get_literal_string(op).as_deref() == Some(name.as_str()) {
-                    info(out, var.id(), 2269, "This variable is assigned to itself, so the assignment does nothing.");
+                    info(
+                        out,
+                        var.id(),
+                        2269,
+                        "This variable is assigned to itself, so the assignment does nothing.",
+                    );
                 }
             }
         }
@@ -1759,311 +1924,749 @@ mod tests {
 
     // ---- checkEchoWc ----
     #[test]
-    fn prop_checkEchoWc3() { assert!(emits(check_echo_wc, "n=$(echo $foo | wc -c)")); }
+    fn prop_checkEchoWc3() {
+        assert!(emits(check_echo_wc, "n=$(echo $foo | wc -c)"));
+    }
 
     // ---- checkPipedAssignment ----
     #[test]
-    fn prop_checkPipedAssignment1() { assert!(emits(check_piped_assignment, "A=ls | grep foo")); }
+    fn prop_checkPipedAssignment1() {
+        assert!(emits(check_piped_assignment, "A=ls | grep foo"));
+    }
     #[test]
-    fn prop_checkPipedAssignment2() { assert!(!emits(check_piped_assignment, "A=foo cmd | grep foo")); }
+    fn prop_checkPipedAssignment2() {
+        assert!(!emits(check_piped_assignment, "A=foo cmd | grep foo"));
+    }
     #[test]
-    fn prop_checkPipedAssignment3() { assert!(!emits(check_piped_assignment, "A=foo")); }
+    fn prop_checkPipedAssignment3() {
+        assert!(!emits(check_piped_assignment, "A=foo"));
+    }
 
     // ---- checkArithmeticOpCommand ----
     #[test]
-    fn prop_checkArithmeticOpCommand1() { assert!(emits(check_arithmetic_op_command, "i=i + 1")); }
+    fn prop_checkArithmeticOpCommand1() {
+        assert!(emits(check_arithmetic_op_command, "i=i + 1"));
+    }
     #[test]
-    fn prop_checkArithmeticOpCommand2() { assert!(emits(check_arithmetic_op_command, "foo=bar * 2")); }
+    fn prop_checkArithmeticOpCommand2() {
+        assert!(emits(check_arithmetic_op_command, "foo=bar * 2"));
+    }
     #[test]
-    fn prop_checkArithmeticOpCommand3() { assert!(!emits(check_arithmetic_op_command, "foo + opts")); }
+    fn prop_checkArithmeticOpCommand3() {
+        assert!(!emits(check_arithmetic_op_command, "foo + opts"));
+    }
 
     // ---- checkWrongArithmeticAssignment ----
     #[test]
-    fn prop_checkWrongArit() { assert!(emits(check_wrong_arithmetic_assignment, "i=i+1")); }
+    fn prop_checkWrongArit() {
+        assert!(emits(check_wrong_arithmetic_assignment, "i=i+1"));
+    }
     #[test]
-    fn prop_checkWrongArit2() { assert!(emits(check_wrong_arithmetic_assignment, "n=2; i=n*2")); }
+    fn prop_checkWrongArit2() {
+        assert!(emits(check_wrong_arithmetic_assignment, "n=2; i=n*2"));
+    }
 
     // ---- checkPipePitfalls ----
     #[test]
-    fn prop_checkPipePitfalls3() { assert!(emits(check_pipe_pitfalls, "ls | grep -v mp3")); }
+    fn prop_checkPipePitfalls3() {
+        assert!(emits(check_pipe_pitfalls, "ls | grep -v mp3"));
+    }
     #[test]
-    fn prop_checkPipePitfalls4() { assert!(!emits(check_pipe_pitfalls, "find . -print0 | xargs -0 foo")); }
+    fn prop_checkPipePitfalls4() {
+        assert!(!emits(check_pipe_pitfalls, "find . -print0 | xargs -0 foo"));
+    }
     #[test]
-    fn prop_checkPipePitfalls5() { assert!(!emits(check_pipe_pitfalls, "ls -N | foo")); }
+    fn prop_checkPipePitfalls5() {
+        assert!(!emits(check_pipe_pitfalls, "ls -N | foo"));
+    }
     #[test]
-    fn prop_checkPipePitfalls6() { assert!(emits(check_pipe_pitfalls, "find . | xargs foo")); }
+    fn prop_checkPipePitfalls6() {
+        assert!(emits(check_pipe_pitfalls, "find . | xargs foo"));
+    }
     #[test]
-    fn prop_checkPipePitfalls7() { assert!(!emits(check_pipe_pitfalls, "find . -printf '%s\\n' | xargs foo")); }
+    fn prop_checkPipePitfalls7() {
+        assert!(!emits(
+            check_pipe_pitfalls,
+            "find . -printf '%s\\n' | xargs foo"
+        ));
+    }
     #[test]
-    fn prop_checkPipePitfalls8() { assert!(emits(check_pipe_pitfalls, "foo | grep bar | wc -l")); }
+    fn prop_checkPipePitfalls8() {
+        assert!(emits(check_pipe_pitfalls, "foo | grep bar | wc -l"));
+    }
     #[test]
-    fn prop_checkPipePitfalls9() { assert!(!emits(check_pipe_pitfalls, "foo | grep -o bar | wc -l")); }
+    fn prop_checkPipePitfalls9() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep -o bar | wc -l"));
+    }
     #[test]
-    fn prop_checkPipePitfalls10() { assert!(!emits(check_pipe_pitfalls, "foo | grep -o bar | wc")); }
+    fn prop_checkPipePitfalls10() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep -o bar | wc"));
+    }
     #[test]
-    fn prop_checkPipePitfalls11() { assert!(!emits(check_pipe_pitfalls, "foo | grep bar | wc")); }
+    fn prop_checkPipePitfalls11() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep bar | wc"));
+    }
     #[test]
-    fn prop_checkPipePitfalls12() { assert!(!emits(check_pipe_pitfalls, "foo | grep -o bar | wc -c")); }
+    fn prop_checkPipePitfalls12() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep -o bar | wc -c"));
+    }
     #[test]
-    fn prop_checkPipePitfalls13() { assert!(!emits(check_pipe_pitfalls, "foo | grep bar | wc -c")); }
+    fn prop_checkPipePitfalls13() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep bar | wc -c"));
+    }
     #[test]
-    fn prop_checkPipePitfalls14() { assert!(!emits(check_pipe_pitfalls, "foo | grep -o bar | wc -cmwL")); }
+    fn prop_checkPipePitfalls14() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep -o bar | wc -cmwL"));
+    }
     #[test]
-    fn prop_checkPipePitfalls15() { assert!(!emits(check_pipe_pitfalls, "foo | grep bar | wc -cmwL")); }
+    fn prop_checkPipePitfalls15() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep bar | wc -cmwL"));
+    }
     #[test]
-    fn prop_checkPipePitfalls16() { assert!(!emits(check_pipe_pitfalls, "foo | grep -r bar | wc -l")); }
+    fn prop_checkPipePitfalls16() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep -r bar | wc -l"));
+    }
     #[test]
-    fn prop_checkPipePitfalls17() { assert!(!emits(check_pipe_pitfalls, "foo | grep -l bar | wc -l")); }
+    fn prop_checkPipePitfalls17() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep -l bar | wc -l"));
+    }
     #[test]
-    fn prop_checkPipePitfalls18() { assert!(!emits(check_pipe_pitfalls, "foo | grep -L bar | wc -l")); }
+    fn prop_checkPipePitfalls18() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep -L bar | wc -l"));
+    }
     #[test]
-    fn prop_checkPipePitfalls19() { assert!(!emits(check_pipe_pitfalls, "foo | grep -A2 bar | wc -l")); }
+    fn prop_checkPipePitfalls19() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep -A2 bar | wc -l"));
+    }
     #[test]
-    fn prop_checkPipePitfalls20() { assert!(!emits(check_pipe_pitfalls, "foo | grep -B999 bar | wc -l")); }
+    fn prop_checkPipePitfalls20() {
+        assert!(!emits(check_pipe_pitfalls, "foo | grep -B999 bar | wc -l"));
+    }
     #[test]
-    fn prop_checkPipePitfalls21() { assert!(!emits(check_pipe_pitfalls, "foo | grep --after-context 999 bar | wc -l")); }
+    fn prop_checkPipePitfalls21() {
+        assert!(!emits(
+            check_pipe_pitfalls,
+            "foo | grep --after-context 999 bar | wc -l"
+        ));
+    }
     #[test]
-    fn prop_checkPipePitfalls22() { assert!(!emits(check_pipe_pitfalls, "foo | grep -B 1 --after-context 999 bar | wc -l")); }
+    fn prop_checkPipePitfalls22() {
+        assert!(!emits(
+            check_pipe_pitfalls,
+            "foo | grep -B 1 --after-context 999 bar | wc -l"
+        ));
+    }
     #[test]
-    fn prop_checkPipePitfalls23() { assert!(!emits(check_pipe_pitfalls, "ps -o pid,args -p $(pgrep java) | grep -F net.shellcheck.Test")); }
+    fn prop_checkPipePitfalls23() {
+        assert!(!emits(
+            check_pipe_pitfalls,
+            "ps -o pid,args -p $(pgrep java) | grep -F net.shellcheck.Test"
+        ));
+    }
 
     // ---- checkShebangParameters ----
     #[test]
-    fn prop_checkShebangParameters1() { assert!(tree_emits(check_shebang_parameters, "#!/usr/bin/env bash -x\necho cow")); }
+    fn prop_checkShebangParameters1() {
+        assert!(tree_emits(
+            check_shebang_parameters,
+            "#!/usr/bin/env bash -x\necho cow"
+        ));
+    }
     #[test]
-    fn prop_checkShebangParameters2() { assert!(!tree_emits(check_shebang_parameters, "#! /bin/sh  -l ")); }
+    fn prop_checkShebangParameters2() {
+        assert!(!tree_emits(check_shebang_parameters, "#! /bin/sh  -l "));
+    }
     #[test]
-    fn prop_checkShebangParameters3() { assert!(!tree_emits(check_shebang_parameters, "#!/usr/bin/env -S bash -x\necho cow")); }
+    fn prop_checkShebangParameters3() {
+        assert!(!tree_emits(
+            check_shebang_parameters,
+            "#!/usr/bin/env -S bash -x\necho cow"
+        ));
+    }
     #[test]
-    fn prop_checkShebangParameters4() { assert!(!tree_emits(check_shebang_parameters, "#!/usr/bin/env --split-string bash -x\necho cow")); }
+    fn prop_checkShebangParameters4() {
+        assert!(!tree_emits(
+            check_shebang_parameters,
+            "#!/usr/bin/env --split-string bash -x\necho cow"
+        ));
+    }
 
     // ---- checkForInQuoted ----
     #[test]
-    fn prop_checkForInQuoted() { assert!(emits(check_for_in_quoted, "for f in \"$(ls)\"; do echo foo; done")); }
+    fn prop_checkForInQuoted() {
+        assert!(emits(
+            check_for_in_quoted,
+            "for f in \"$(ls)\"; do echo foo; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInQuoted2() { assert!(!emits(check_for_in_quoted, "for f in \"$@\"; do echo foo; done")); }
+    fn prop_checkForInQuoted2() {
+        assert!(!emits(
+            check_for_in_quoted,
+            "for f in \"$@\"; do echo foo; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInQuoted2a() { assert!(!emits(check_for_in_quoted, "for f in *.mp3; do echo foo; done")); }
+    fn prop_checkForInQuoted2a() {
+        assert!(!emits(
+            check_for_in_quoted,
+            "for f in *.mp3; do echo foo; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInQuoted2b() { assert!(emits(check_for_in_quoted, "for f in \"*.mp3\"; do echo foo; done")); }
+    fn prop_checkForInQuoted2b() {
+        assert!(emits(
+            check_for_in_quoted,
+            "for f in \"*.mp3\"; do echo foo; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInQuoted3() { assert!(emits(check_for_in_quoted, "for f in 'find /'; do true; done")); }
+    fn prop_checkForInQuoted3() {
+        assert!(emits(
+            check_for_in_quoted,
+            "for f in 'find /'; do true; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInQuoted4() { assert!(emits(check_for_in_quoted, "for f in 1,2,3; do true; done")); }
+    fn prop_checkForInQuoted4() {
+        assert!(emits(check_for_in_quoted, "for f in 1,2,3; do true; done"));
+    }
     #[test]
-    fn prop_checkForInQuoted4a() { assert!(!emits(check_for_in_quoted, "for f in foo{1,2,3}; do true; done")); }
+    fn prop_checkForInQuoted4a() {
+        assert!(!emits(
+            check_for_in_quoted,
+            "for f in foo{1,2,3}; do true; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInQuoted5() { assert!(emits(check_for_in_quoted, "for f in ls; do true; done")); }
+    fn prop_checkForInQuoted5() {
+        assert!(emits(check_for_in_quoted, "for f in ls; do true; done"));
+    }
     #[test]
-    fn prop_checkForInQuoted6() { assert!(!emits(check_for_in_quoted, "for f in \"${!arr}\"; do true; done")); }
+    fn prop_checkForInQuoted6() {
+        assert!(!emits(
+            check_for_in_quoted,
+            "for f in \"${!arr}\"; do true; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInQuoted7() { assert!(emits(check_for_in_quoted, "for f in ls, grep, mv; do true; done")); }
+    fn prop_checkForInQuoted7() {
+        assert!(emits(
+            check_for_in_quoted,
+            "for f in ls, grep, mv; do true; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInQuoted8() { assert!(emits(check_for_in_quoted, "for f in 'ls', 'grep', 'mv'; do true; done")); }
+    fn prop_checkForInQuoted8() {
+        assert!(emits(
+            check_for_in_quoted,
+            "for f in 'ls', 'grep', 'mv'; do true; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInQuoted9() { assert!(!emits(check_for_in_quoted, "for f in 'ls,' 'grep,' 'mv'; do true; done")); }
+    fn prop_checkForInQuoted9() {
+        assert!(!emits(
+            check_for_in_quoted,
+            "for f in 'ls,' 'grep,' 'mv'; do true; done"
+        ));
+    }
 
     // ---- checkFindExec ----
     #[test]
-    fn prop_checkFindExec1() { assert!(emits(check_find_exec, "find / -name '*.php' -exec rm {};")); }
+    fn prop_checkFindExec1() {
+        assert!(emits(check_find_exec, "find / -name '*.php' -exec rm {};"));
+    }
     #[test]
-    fn prop_checkFindExec2() { assert!(emits(check_find_exec, "find / -exec touch {} && ls {} \\;")); }
+    fn prop_checkFindExec2() {
+        assert!(emits(check_find_exec, "find / -exec touch {} && ls {} \\;"));
+    }
     #[test]
-    fn prop_checkFindExec3() { assert!(emits(check_find_exec, "find / -execdir cat {} | grep lol +")); }
+    fn prop_checkFindExec3() {
+        assert!(emits(
+            check_find_exec,
+            "find / -execdir cat {} | grep lol +"
+        ));
+    }
     #[test]
-    fn prop_checkFindExec4() { assert!(!emits(check_find_exec, "find / -name '*.php' -exec foo {} +")); }
+    fn prop_checkFindExec4() {
+        assert!(!emits(
+            check_find_exec,
+            "find / -name '*.php' -exec foo {} +"
+        ));
+    }
     #[test]
-    fn prop_checkFindExec5() { assert!(!emits(check_find_exec, "find / -execdir bash -c 'a && b' \\;")); }
+    fn prop_checkFindExec5() {
+        assert!(!emits(
+            check_find_exec,
+            "find / -execdir bash -c 'a && b' \\;"
+        ));
+    }
     #[test]
-    fn prop_checkFindExec6() { assert!(emits(check_find_exec, "find / -type d -execdir rm *.jpg \\;")); }
+    fn prop_checkFindExec6() {
+        assert!(emits(
+            check_find_exec,
+            "find / -type d -execdir rm *.jpg \\;"
+        ));
+    }
 
     // ---- checkLoopKeywordScope ----
     #[test]
-    fn prop_lks_break_toplevel() { assert!(emits_code(check_loop_keyword_scope, "break", 2105)); }
+    fn prop_lks_break_toplevel() {
+        assert!(emits_code(check_loop_keyword_scope, "break", 2105));
+    }
     #[test]
-    fn prop_lks_continue_toplevel() { assert!(emits_code(check_loop_keyword_scope, "continue", 2105)); }
+    fn prop_lks_continue_toplevel() {
+        assert!(emits_code(check_loop_keyword_scope, "continue", 2105));
+    }
     #[test]
-    fn prop_lks_in_function() { assert!(emits_code(check_loop_keyword_scope, "foo() { break; }", 2104)); }
+    fn prop_lks_in_function() {
+        assert!(emits_code(
+            check_loop_keyword_scope,
+            "foo() { break; }",
+            2104
+        ));
+    }
     #[test]
-    fn prop_lks_in_loop() { assert!(!emits(check_loop_keyword_scope, "while true; do break; done")); }
+    fn prop_lks_in_loop() {
+        assert!(!emits(
+            check_loop_keyword_scope,
+            "while true; do break; done"
+        ));
+    }
     #[test]
-    fn prop_lks_subshell_in_loop() { assert!(emits_code(check_loop_keyword_scope, "while true; do ( break ); done", 2106)); }
+    fn prop_lks_subshell_in_loop() {
+        assert!(emits_code(
+            check_loop_keyword_scope,
+            "while true; do ( break ); done",
+            2106
+        ));
+    }
 
     // ---- checkFunctionDeclarations ----
     #[test]
-    fn prop_checkFunctionDeclarations1() { assert!(emits(check_function_declarations, "#!/bin/ksh\nfunction foo() { command foo --lol \"$@\"; }")); }
+    fn prop_checkFunctionDeclarations1() {
+        assert!(emits(
+            check_function_declarations,
+            "#!/bin/ksh\nfunction foo() { command foo --lol \"$@\"; }"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionDeclarations2() { assert!(emits(check_function_declarations, "#!/bin/dash\nfunction foo { lol; }")); }
+    fn prop_checkFunctionDeclarations2() {
+        assert!(emits(
+            check_function_declarations,
+            "#!/bin/dash\nfunction foo { lol; }"
+        ));
+    }
     #[test]
-    fn prop_checkFunctionDeclarations3() { assert!(!emits(check_function_declarations, "foo() { echo bar; }")); }
+    fn prop_checkFunctionDeclarations3() {
+        assert!(!emits(check_function_declarations, "foo() { echo bar; }"));
+    }
 
     // ---- checkStderrPipe ----
     #[test]
-    fn prop_checkStderrPipe1() { assert!(emits(check_stderr_pipe, "#!/bin/ksh\nfoo |& bar")); }
+    fn prop_checkStderrPipe1() {
+        assert!(emits(check_stderr_pipe, "#!/bin/ksh\nfoo |& bar"));
+    }
     #[test]
-    fn prop_checkStderrPipe2() { assert!(!emits(check_stderr_pipe, "#!/bin/bash\nfoo |& bar")); }
+    fn prop_checkStderrPipe2() {
+        assert!(!emits(check_stderr_pipe, "#!/bin/bash\nfoo |& bar"));
+    }
 
     // ---- checkOverridingPath ----
     #[test]
-    fn prop_checkOverridingPath1() { assert!(emits(check_overriding_path, "PATH=\"$var/$foo\"")); }
+    fn prop_checkOverridingPath1() {
+        assert!(emits(check_overriding_path, "PATH=\"$var/$foo\""));
+    }
     #[test]
-    fn prop_checkOverridingPath2() { assert!(emits(check_overriding_path, "PATH=\"mydir\"")); }
+    fn prop_checkOverridingPath2() {
+        assert!(emits(check_overriding_path, "PATH=\"mydir\""));
+    }
     #[test]
-    fn prop_checkOverridingPath3() { assert!(emits(check_overriding_path, "PATH=/cow/foo")); }
+    fn prop_checkOverridingPath3() {
+        assert!(emits(check_overriding_path, "PATH=/cow/foo"));
+    }
     #[test]
-    fn prop_checkOverridingPath4() { assert!(!emits(check_overriding_path, "PATH=/cow/foo/bin")); }
+    fn prop_checkOverridingPath4() {
+        assert!(!emits(check_overriding_path, "PATH=/cow/foo/bin"));
+    }
     #[test]
-    fn prop_checkOverridingPath5() { assert!(!emits(check_overriding_path, "PATH='/bin:/sbin'")); }
+    fn prop_checkOverridingPath5() {
+        assert!(!emits(check_overriding_path, "PATH='/bin:/sbin'"));
+    }
     #[test]
-    fn prop_checkOverridingPath6() { assert!(!emits(check_overriding_path, "PATH=\"$var/$foo\" cmd")); }
+    fn prop_checkOverridingPath6() {
+        assert!(!emits(check_overriding_path, "PATH=\"$var/$foo\" cmd"));
+    }
     #[test]
-    fn prop_checkOverridingPath7() { assert!(!emits(check_overriding_path, "PATH=$OLDPATH")); }
+    fn prop_checkOverridingPath7() {
+        assert!(!emits(check_overriding_path, "PATH=$OLDPATH"));
+    }
     #[test]
-    fn prop_checkOverridingPath8() { assert!(!emits(check_overriding_path, "PATH=$PATH:/stuff")); }
+    fn prop_checkOverridingPath8() {
+        assert!(!emits(check_overriding_path, "PATH=$PATH:/stuff"));
+    }
 
     // ---- checkTildeInPath ----
     #[test]
-    fn prop_checkTildeInPath1() { assert!(emits(check_tilde_in_path, "PATH=\"$PATH:~/bin\"")); }
+    fn prop_checkTildeInPath1() {
+        assert!(emits(check_tilde_in_path, "PATH=\"$PATH:~/bin\""));
+    }
     #[test]
-    fn prop_checkTildeInPath2() { assert!(emits(check_tilde_in_path, "PATH='~foo/bin'")); }
+    fn prop_checkTildeInPath2() {
+        assert!(emits(check_tilde_in_path, "PATH='~foo/bin'"));
+    }
     #[test]
-    fn prop_checkTildeInPath3() { assert!(!emits(check_tilde_in_path, "PATH=~/bin")); }
+    fn prop_checkTildeInPath3() {
+        assert!(!emits(check_tilde_in_path, "PATH=~/bin"));
+    }
 
     // ---- checkUnsupported ----
     #[test]
-    fn prop_checkUnsupported3() { assert!(emits(check_unsupported, "#!/bin/sh\ncase foo in bar) baz ;& esac")); }
+    fn prop_checkUnsupported3() {
+        assert!(emits(
+            check_unsupported,
+            "#!/bin/sh\ncase foo in bar) baz ;& esac"
+        ));
+    }
     #[test]
-    fn prop_checkUnsupported4() { assert!(emits(check_unsupported, "#!/bin/ksh\ncase foo in bar) baz ;;& esac")); }
+    fn prop_checkUnsupported4() {
+        assert!(emits(
+            check_unsupported,
+            "#!/bin/ksh\ncase foo in bar) baz ;;& esac"
+        ));
+    }
     #[test]
-    fn prop_checkUnsupported5() { assert!(!emits(check_unsupported, "#!/bin/bash\necho \"${ ls; }\"")); }
+    fn prop_checkUnsupported5() {
+        assert!(!emits(check_unsupported, "#!/bin/bash\necho \"${ ls; }\""));
+    }
     #[test]
-    fn prop_checkUnsupported6() { assert!(emits(check_unsupported, "#!/bin/ash\necho \"${ ls; }\"")); }
+    fn prop_checkUnsupported6() {
+        assert!(emits(check_unsupported, "#!/bin/ash\necho \"${ ls; }\""));
+    }
 
     // ---- checkSuspiciousIFS ----
     #[test]
-    fn prop_checkSuspiciousIFS1() { assert!(emits(check_suspicious_ifs, "IFS=\"\\n\"")); }
+    fn prop_checkSuspiciousIFS1() {
+        assert!(emits(check_suspicious_ifs, "IFS=\"\\n\""));
+    }
     #[test]
-    fn prop_checkSuspiciousIFS2() { assert!(!emits(check_suspicious_ifs, "IFS=$'\\t'")); }
+    fn prop_checkSuspiciousIFS2() {
+        assert!(!emits(check_suspicious_ifs, "IFS=$'\\t'"));
+    }
     #[test]
-    fn prop_checkSuspiciousIFS3() { assert!(emits(check_suspicious_ifs, "IFS=' \\t\\n'")); }
+    fn prop_checkSuspiciousIFS3() {
+        assert!(emits(check_suspicious_ifs, "IFS=' \\t\\n'"));
+    }
 
     // ---- checkShouldUseGrepQ ----
     #[test]
-    fn prop_checkGrepQ1() { assert!(emits(check_should_use_grep_q, "[[ $(foo | grep bar) ]]")); }
+    fn prop_checkGrepQ1() {
+        assert!(emits(check_should_use_grep_q, "[[ $(foo | grep bar) ]]"));
+    }
     #[test]
-    fn prop_checkGrepQ2() { assert!(emits(check_should_use_grep_q, "[ -z $(fgrep lol) ]")); }
+    fn prop_checkGrepQ2() {
+        assert!(emits(check_should_use_grep_q, "[ -z $(fgrep lol) ]"));
+    }
     #[test]
-    fn prop_checkGrepQ3() { assert!(emits(check_should_use_grep_q, "[ -n \"$(foo | zgrep lol)\" ]")); }
+    fn prop_checkGrepQ3() {
+        assert!(emits(
+            check_should_use_grep_q,
+            "[ -n \"$(foo | zgrep lol)\" ]"
+        ));
+    }
     #[test]
-    fn prop_checkGrepQ4() { assert!(!emits(check_should_use_grep_q, "[ -z $(grep bar | cmd) ]")); }
+    fn prop_checkGrepQ4() {
+        assert!(!emits(check_should_use_grep_q, "[ -z $(grep bar | cmd) ]"));
+    }
     #[test]
-    fn prop_checkGrepQ5() { assert!(!emits(check_should_use_grep_q, "rm $(ls | grep file)")); }
+    fn prop_checkGrepQ5() {
+        assert!(!emits(check_should_use_grep_q, "rm $(ls | grep file)"));
+    }
     #[test]
-    fn prop_checkGrepQ6() { assert!(!emits(check_should_use_grep_q, "[[ -n $(pgrep foo) ]]")); }
+    fn prop_checkGrepQ6() {
+        assert!(!emits(check_should_use_grep_q, "[[ -n $(pgrep foo) ]]"));
+    }
 
     // ---- checkCpLegacyR ----
     #[test]
-    fn prop_checkCpLegacyR1() { assert!(emits(check_cp_legacy_r, "cp -r foo bar")); }
+    fn prop_checkCpLegacyR1() {
+        assert!(emits(check_cp_legacy_r, "cp -r foo bar"));
+    }
     #[test]
-    fn prop_checkCpLegacyR2() { assert!(!emits(check_cp_legacy_r, "cp -R foo bar")); }
+    fn prop_checkCpLegacyR2() {
+        assert!(!emits(check_cp_legacy_r, "cp -R foo bar"));
+    }
 
     // ---- checkLoopVariableReassignment ----
     #[test]
-    fn prop_checkLoopVariableReassignment1() { assert!(emits(check_loop_variable_reassignment, "for i in *; do for i in *.bar; do true; done; done")); }
+    fn prop_checkLoopVariableReassignment1() {
+        assert!(emits(
+            check_loop_variable_reassignment,
+            "for i in *; do for i in *.bar; do true; done; done"
+        ));
+    }
     #[test]
-    fn prop_checkLoopVariableReassignment2() { assert!(emits(check_loop_variable_reassignment, "for i in *; do for((i=0; i<3; i++)); do true; done; done")); }
+    fn prop_checkLoopVariableReassignment2() {
+        assert!(emits(
+            check_loop_variable_reassignment,
+            "for i in *; do for((i=0; i<3; i++)); do true; done; done"
+        ));
+    }
     #[test]
-    fn prop_checkLoopVariableReassignment3() { assert!(!emits(check_loop_variable_reassignment, "for i in *; do for j in *.bar; do true; done; done")); }
+    fn prop_checkLoopVariableReassignment3() {
+        assert!(!emits(
+            check_loop_variable_reassignment,
+            "for i in *; do for j in *.bar; do true; done; done"
+        ));
+    }
     #[test]
-    fn prop_checkLoopVariableReassignment4() { assert!(!emits(check_loop_variable_reassignment, "for _ in *; do for _ in *.bar; do true; done; done")); }
+    fn prop_checkLoopVariableReassignment4() {
+        assert!(!emits(
+            check_loop_variable_reassignment,
+            "for _ in *; do for _ in *.bar; do true; done; done"
+        ));
+    }
 
     // ---- checkForLoopGlobVariables ----
     #[test]
-    fn prop_checkForLoopGlobVariables1() { assert!(emits(check_for_loop_glob_variables, "for i in $var/*.txt; do true; done")); }
+    fn prop_checkForLoopGlobVariables1() {
+        assert!(emits(
+            check_for_loop_glob_variables,
+            "for i in $var/*.txt; do true; done"
+        ));
+    }
     #[test]
-    fn prop_checkForLoopGlobVariables2() { assert!(!emits(check_for_loop_glob_variables, "for i in \"$var\"/*.txt; do true; done")); }
+    fn prop_checkForLoopGlobVariables2() {
+        assert!(!emits(
+            check_for_loop_glob_variables,
+            "for i in \"$var\"/*.txt; do true; done"
+        ));
+    }
     #[test]
-    fn prop_checkForLoopGlobVariables3() { assert!(!emits(check_for_loop_glob_variables, "for i in $var; do true; done")); }
+    fn prop_checkForLoopGlobVariables3() {
+        assert!(!emits(
+            check_for_loop_glob_variables,
+            "for i in $var; do true; done"
+        ));
+    }
 
     // ---- checkAliasUsedInSameParsingUnit ----
     #[test]
-    fn prop_checkAliasUsedInSameParsingUnit1() { assert!(tree_emits(check_alias_used_in_same_parsing_unit, "alias x=y; x")); }
+    fn prop_checkAliasUsedInSameParsingUnit1() {
+        assert!(tree_emits(
+            check_alias_used_in_same_parsing_unit,
+            "alias x=y; x"
+        ));
+    }
     #[test]
-    fn prop_checkAliasUsedInSameParsingUnit2() { assert!(!tree_emits(check_alias_used_in_same_parsing_unit, "alias x=y\nx")); }
+    fn prop_checkAliasUsedInSameParsingUnit2() {
+        assert!(!tree_emits(
+            check_alias_used_in_same_parsing_unit,
+            "alias x=y\nx"
+        ));
+    }
     #[test]
-    fn prop_checkAliasUsedInSameParsingUnit3() { assert!(tree_emits(check_alias_used_in_same_parsing_unit, "{ alias x=y\nx\n}")); }
+    fn prop_checkAliasUsedInSameParsingUnit3() {
+        assert!(tree_emits(
+            check_alias_used_in_same_parsing_unit,
+            "{ alias x=y\nx\n}"
+        ));
+    }
     #[test]
-    fn prop_checkAliasUsedInSameParsingUnit4() { assert!(!tree_emits(check_alias_used_in_same_parsing_unit, "alias x=y; 'x';")); }
+    fn prop_checkAliasUsedInSameParsingUnit4() {
+        assert!(!tree_emits(
+            check_alias_used_in_same_parsing_unit,
+            "alias x=y; 'x';"
+        ));
+    }
     #[test]
-    fn prop_checkAliasUsedInSameParsingUnit5() { assert!(!tree_emits(check_alias_used_in_same_parsing_unit, ":\n{\n#shellcheck disable=SC2262\nalias x=y\nx\n}")); }
+    fn prop_checkAliasUsedInSameParsingUnit5() {
+        assert!(!tree_emits(
+            check_alias_used_in_same_parsing_unit,
+            ":\n{\n#shellcheck disable=SC2262\nalias x=y\nx\n}"
+        ));
+    }
     #[test]
-    fn prop_checkAliasUsedInSameParsingUnit6() { assert!(!tree_emits(check_alias_used_in_same_parsing_unit, ":\n{\n#shellcheck disable=SC2262\nalias x=y\nalias x=z\nx\n}")); }
+    fn prop_checkAliasUsedInSameParsingUnit6() {
+        assert!(!tree_emits(
+            check_alias_used_in_same_parsing_unit,
+            ":\n{\n#shellcheck disable=SC2262\nalias x=y\nalias x=z\nx\n}"
+        ));
+    }
 
     // ---- checkBlatantRecursion ----
     #[test]
-    fn prop_checkBlatantRecursion1() { assert!(emits(check_blatant_recursion, ":(){ :|:& };:")); }
+    fn prop_checkBlatantRecursion1() {
+        assert!(emits(check_blatant_recursion, ":(){ :|:& };:"));
+    }
     #[test]
-    fn prop_checkBlatantRecursion2() { assert!(emits(check_blatant_recursion, "f() { f; }")); }
+    fn prop_checkBlatantRecursion2() {
+        assert!(emits(check_blatant_recursion, "f() { f; }"));
+    }
     #[test]
-    fn prop_checkBlatantRecursion3() { assert!(!emits(check_blatant_recursion, "f() { command f; }")); }
+    fn prop_checkBlatantRecursion3() {
+        assert!(!emits(check_blatant_recursion, "f() { command f; }"));
+    }
     #[test]
-    fn prop_checkBlatantRecursion4() { assert!(emits(check_blatant_recursion, "cd() { cd \"$lol/$1\" || exit; }")); }
+    fn prop_checkBlatantRecursion4() {
+        assert!(emits(
+            check_blatant_recursion,
+            "cd() { cd \"$lol/$1\" || exit; }"
+        ));
+    }
     #[test]
-    fn prop_checkBlatantRecursion5() { assert!(!emits(check_blatant_recursion, "cd() { [ -z \"$1\" ] || cd \"$1\"; }")); }
+    fn prop_checkBlatantRecursion5() {
+        assert!(!emits(
+            check_blatant_recursion,
+            "cd() { [ -z \"$1\" ] || cd \"$1\"; }"
+        ));
+    }
     #[test]
-    fn prop_checkBlatantRecursion6() { assert!(!emits(check_blatant_recursion, "cd() { something; cd $1; }")); }
+    fn prop_checkBlatantRecursion6() {
+        assert!(!emits(
+            check_blatant_recursion,
+            "cd() { something; cd $1; }"
+        ));
+    }
     #[test]
-    fn prop_checkBlatantRecursion7() { assert!(!emits(check_blatant_recursion, "cd() { builtin cd $1; }")); }
+    fn prop_checkBlatantRecursion7() {
+        assert!(!emits(check_blatant_recursion, "cd() { builtin cd $1; }"));
+    }
 
     // ---- checkAssignToSelf ----
     #[test]
-    fn prop_checkAssignToSelf1() { assert!(emits(check_assign_to_self, "x=$x")); }
+    fn prop_checkAssignToSelf1() {
+        assert!(emits(check_assign_to_self, "x=$x"));
+    }
     #[test]
-    fn prop_checkAssignToSelf2() { assert!(emits(check_assign_to_self, "x=${x}")); }
+    fn prop_checkAssignToSelf2() {
+        assert!(emits(check_assign_to_self, "x=${x}"));
+    }
     #[test]
-    fn prop_checkAssignToSelf3() { assert!(emits(check_assign_to_self, "x=\"$x\"")); }
+    fn prop_checkAssignToSelf3() {
+        assert!(emits(check_assign_to_self, "x=\"$x\""));
+    }
     #[test]
-    fn prop_checkAssignToSelf4() { assert!(!emits(check_assign_to_self, "x=$x mycmd")); }
+    fn prop_checkAssignToSelf4() {
+        assert!(!emits(check_assign_to_self, "x=$x mycmd"));
+    }
 
     // ---- checkCommandWithTrailingSymbol ----
     #[test]
-    fn prop_checkCommandWithTrailingSymbol1() { assert!(emits(check_command_with_trailing_symbol, "/")); }
+    fn prop_checkCommandWithTrailingSymbol1() {
+        assert!(emits(check_command_with_trailing_symbol, "/"));
+    }
     #[test]
-    fn prop_checkCommandWithTrailingSymbol2() { assert!(emits(check_command_with_trailing_symbol, "/foo/ bar/baz")); }
+    fn prop_checkCommandWithTrailingSymbol2() {
+        assert!(emits(check_command_with_trailing_symbol, "/foo/ bar/baz"));
+    }
     #[test]
-    fn prop_checkCommandWithTrailingSymbol3() { assert!(emits(check_command_with_trailing_symbol, "/")); }
+    fn prop_checkCommandWithTrailingSymbol3() {
+        assert!(emits(check_command_with_trailing_symbol, "/"));
+    }
     #[test]
-    fn prop_checkCommandWithTrailingSymbol4() { assert!(!emits(check_command_with_trailing_symbol, "/*")); }
+    fn prop_checkCommandWithTrailingSymbol4() {
+        assert!(!emits(check_command_with_trailing_symbol, "/*"));
+    }
     #[test]
-    fn prop_checkCommandWithTrailingSymbol5() { assert!(!emits(check_command_with_trailing_symbol, "$foo/$bar")); }
+    fn prop_checkCommandWithTrailingSymbol5() {
+        assert!(!emits(check_command_with_trailing_symbol, "$foo/$bar"));
+    }
     #[test]
-    fn prop_checkCommandWithTrailingSymbol6() { assert!(emits(check_command_with_trailing_symbol, "foo, bar")); }
+    fn prop_checkCommandWithTrailingSymbol6() {
+        assert!(emits(check_command_with_trailing_symbol, "foo, bar"));
+    }
     #[test]
-    fn prop_checkCommandWithTrailingSymbol7() { assert!(!emits(check_command_with_trailing_symbol, ". foo.sh")); }
+    fn prop_checkCommandWithTrailingSymbol7() {
+        assert!(!emits(check_command_with_trailing_symbol, ". foo.sh"));
+    }
     #[test]
-    fn prop_checkCommandWithTrailingSymbol8() { assert!(!emits(check_command_with_trailing_symbol, ": foo")); }
+    fn prop_checkCommandWithTrailingSymbol8() {
+        assert!(!emits(check_command_with_trailing_symbol, ": foo"));
+    }
     #[test]
-    fn prop_checkCommandWithTrailingSymbol9() { assert!(!emits(check_command_with_trailing_symbol, "/usr/bin/python[23] file.py")); }
+    fn prop_checkCommandWithTrailingSymbol9() {
+        assert!(!emits(
+            check_command_with_trailing_symbol,
+            "/usr/bin/python[23] file.py"
+        ));
+    }
     #[test]
-    fn prop_sc2287_registered() { assert!(emits_code(check_command_with_trailing_symbol, "/", 2287)); }
+    fn prop_sc2287_registered() {
+        assert!(emits_code(check_command_with_trailing_symbol, "/", 2287));
+    }
 
     // ---- checkBatsTestDoesNotUseNegation ----
     #[test]
-    fn prop_checkBatsTestDoesNotUseNegation1() { assert!(emits(check_bats_test_does_not_use_negation, "#!/usr/bin/env/bats\n@test \"name\" { ! true;  false; }")); }
+    fn prop_checkBatsTestDoesNotUseNegation1() {
+        assert!(emits(
+            check_bats_test_does_not_use_negation,
+            "#!/usr/bin/env/bats\n@test \"name\" { ! true;  false; }"
+        ));
+    }
     #[test]
-    fn prop_checkBatsTestDoesNotUseNegation2() { assert!(emits(check_bats_test_does_not_use_negation, "#!/usr/bin/env/bats\n@test \"name\" { ! [[ -e test ]]; false; }")); }
+    fn prop_checkBatsTestDoesNotUseNegation2() {
+        assert!(emits(
+            check_bats_test_does_not_use_negation,
+            "#!/usr/bin/env/bats\n@test \"name\" { ! [[ -e test ]]; false; }"
+        ));
+    }
     #[test]
-    fn prop_checkBatsTestDoesNotUseNegation3() { assert!(emits(check_bats_test_does_not_use_negation, "#!/usr/bin/env/bats\n@test \"name\" { ! [ -e test ]; false; }")); }
+    fn prop_checkBatsTestDoesNotUseNegation3() {
+        assert!(emits(
+            check_bats_test_does_not_use_negation,
+            "#!/usr/bin/env/bats\n@test \"name\" { ! [ -e test ]; false; }"
+        ));
+    }
     #[test]
-    fn prop_checkBatsTestDoesNotUseNegation4() { assert!(!emits(check_bats_test_does_not_use_negation, "#!/usr/bin/env/bats\n@test \"name\" { run ! true; }")); }
+    fn prop_checkBatsTestDoesNotUseNegation4() {
+        assert!(!emits(
+            check_bats_test_does_not_use_negation,
+            "#!/usr/bin/env/bats\n@test \"name\" { run ! true; }"
+        ));
+    }
     #[test]
-    fn prop_checkBatsTestDoesNotUseNegation5() { assert!(!emits(check_bats_test_does_not_use_negation, "#!/usr/bin/env/bats\n@test \"name\" { ! [[ -e test ]] || false; }")); }
+    fn prop_checkBatsTestDoesNotUseNegation5() {
+        assert!(!emits(
+            check_bats_test_does_not_use_negation,
+            "#!/usr/bin/env/bats\n@test \"name\" { ! [[ -e test ]] || false; }"
+        ));
+    }
     #[test]
-    fn prop_checkBatsTestDoesNotUseNegation6() { assert!(!emits(check_bats_test_does_not_use_negation, "#!/usr/bin/env/bats\n@test \"name\" { ! [ -e test ] || false; }")); }
+    fn prop_checkBatsTestDoesNotUseNegation6() {
+        assert!(!emits(
+            check_bats_test_does_not_use_negation,
+            "#!/usr/bin/env/bats\n@test \"name\" { ! [ -e test ] || false; }"
+        ));
+    }
     #[test]
-    fn prop_checkBatsTestDoesNotUseNegation7() { assert_eq!(codes(check_bats_test_does_not_use_negation, "#!/usr/bin/env/bats\n@test \"name\" { ! true; }"), vec![2314]); }
+    fn prop_checkBatsTestDoesNotUseNegation7() {
+        assert_eq!(
+            codes(
+                check_bats_test_does_not_use_negation,
+                "#!/usr/bin/env/bats\n@test \"name\" { ! true; }"
+            ),
+            vec![2314]
+        );
+    }
     #[test]
-    fn prop_checkBatsTestDoesNotUseNegation8() { assert_eq!(codes(check_bats_test_does_not_use_negation, "#!/usr/bin/env/bats\n@test \"name\" { ! [[ -e test ]]; }"), vec![2315]); }
+    fn prop_checkBatsTestDoesNotUseNegation8() {
+        assert_eq!(
+            codes(
+                check_bats_test_does_not_use_negation,
+                "#!/usr/bin/env/bats\n@test \"name\" { ! [[ -e test ]]; }"
+            ),
+            vec![2315]
+        );
+    }
     #[test]
-    fn prop_checkBatsTestDoesNotUseNegation9() { assert_eq!(codes(check_bats_test_does_not_use_negation, "#!/usr/bin/env/bats\n@test \"name\" { ! [ -e test ]; }"), vec![2315]); }
+    fn prop_checkBatsTestDoesNotUseNegation9() {
+        assert_eq!(
+            codes(
+                check_bats_test_does_not_use_negation,
+                "#!/usr/bin/env/bats\n@test \"name\" { ! [ -e test ]; }"
+            ),
+            vec![2315]
+        );
+    }
 }

@@ -170,7 +170,9 @@ fn is_command(t: &Token, str: &str) -> bool {
 fn is_assignment(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_Redirecting { cmd, .. } => is_assignment(cmd),
-        InnerToken::T_SimpleCommand { assignments, words } => !assignments.is_empty() && words.is_empty(),
+        InnerToken::T_SimpleCommand { assignments, words } => {
+            !assignments.is_empty() && words.is_empty()
+        }
         InnerToken::T_Assignment { .. } => true,
         InnerToken::T_Annotation { token, .. } => is_assignment(token),
         _ => false,
@@ -184,7 +186,9 @@ fn is_test_command(t: &Token) -> bool {
         InnerToken::T_SimpleCommand { .. } => is_command(t, "test"),
         InnerToken::T_Redirecting { cmd, .. } => is_test_command(cmd),
         InnerToken::T_Annotation { token, .. } => is_test_command(token),
-        InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => is_test_command(&commands[0]),
+        InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => {
+            is_test_command(&commands[0])
+        }
         _ => false,
     }
 }
@@ -217,7 +221,10 @@ fn in_condition(params: &Parameters, t: &Token) -> bool {
             Some(p) => p,
             None => return false,
         };
-        if condition_children(parent).iter().any(|c| c.id() == child.id()) {
+        if condition_children(parent)
+            .iter()
+            .any(|c| c.id() == child.id())
+        {
             return true;
         }
         child = parent;
@@ -248,7 +255,12 @@ fn check_shorthand_if(params: &Parameters, x: &Token, out: &mut Out) {
         let cmd = &commands[0];
         is_assignment(cmd)
             || get_command_basename(cmd)
-                .map(|name| matches!(name.as_str(), "echo" | "exit" | "return" | "printf" | "true" | ":"))
+                .map(|name| {
+                    matches!(
+                        name.as_str(),
+                        "echo" | "exit" | "return" | "printf" | "true" | ":"
+                    )
+                })
                 .unwrap_or(false)
     } else {
         false
@@ -270,11 +282,29 @@ fn check_shorthand_if(params: &Parameters, x: &Token, out: &mut Out) {
 
 fn check_conditional_and_ors(_params: &Parameters, t: &Token, out: &mut Out) {
     match &*t.inner {
-        InnerToken::TC_And { typ: ConditionType::SingleBracket, op, .. } if op == "-a" => {
-            warn(out, t.id(), 2166, "Prefer [ p ] && [ q ] as [ p -a q ] is not well defined.");
+        InnerToken::TC_And {
+            typ: ConditionType::SingleBracket,
+            op,
+            ..
+        } if op == "-a" => {
+            warn(
+                out,
+                t.id(),
+                2166,
+                "Prefer [ p ] && [ q ] as [ p -a q ] is not well defined.",
+            );
         }
-        InnerToken::TC_Or { typ: ConditionType::SingleBracket, op, .. } if op == "-o" => {
-            warn(out, t.id(), 2166, "Prefer [ p ] || [ q ] as [ p -o q ] is not well defined.");
+        InnerToken::TC_Or {
+            typ: ConditionType::SingleBracket,
+            op,
+            ..
+        } if op == "-o" => {
+            warn(
+                out,
+                t.id(),
+                2166,
+                "Prefer [ p ] || [ q ] as [ p -o q ] is not well defined.",
+            );
         }
         _ => {}
     }

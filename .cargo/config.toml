@@ -1,0 +1,7 @@
+[alias]
+bwa         = "build --workspace --all-targets"
+fmt-check   = "fmt --check"
+install-bin = "install --path=rust/crates/shellcheck-cli --bin=rshellcheck --force"
+lint        = "clippy --workspace --all-targets --all-features -- -D warnings -D clippy::all"
+rbr         = "run --bin"
+shellcheck  = "rbr rshellcheck --"

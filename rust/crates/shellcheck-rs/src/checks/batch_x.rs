@@ -72,11 +72,7 @@ fn full_literal_string(t: &Token) -> Option<String> {
         }
     }
     let mut s = String::new();
-    if go(t, &mut s) {
-        Some(s)
-    } else {
-        None
-    }
+    if go(t, &mut s) { Some(s) } else { None }
 }
 
 /// `getUnquotedLiteral`.
@@ -560,9 +556,7 @@ fn used_unconditionally(
         Some(c) => c,
         None => return false,
     };
-    test_ids
-        .iter()
-        .all(|&c| cfga.does_post_dominate(t.id(), c))
+    test_ids.iter().all(|&c| cfga.does_post_dominate(t.id(), c))
 }
 
 fn is_printing(t: &Token) -> bool {
@@ -664,11 +658,17 @@ mod tests {
     }
     #[test]
     fn prop_checkDivBeforeMult2() {
-        assert_eq!(node_emits(check_div_before_mult, "echo $((c*100/n))"), false);
+        assert_eq!(
+            node_emits(check_div_before_mult, "echo $((c*100/n))"),
+            false
+        );
     }
     #[test]
     fn prop_checkDivBeforeMult3() {
-        assert_eq!(node_emits(check_div_before_mult, "echo $((c/10*10))"), false);
+        assert_eq!(
+            node_emits(check_div_before_mult, "echo $((c/10*10))"),
+            false
+        );
     }
 
     // --- SC2080 checkArithmeticBadOctal ---
@@ -682,7 +682,10 @@ mod tests {
     }
     #[test]
     fn prop_checkArithmeticBadOctal3() {
-        assert_eq!(node_emits(check_arithmetic_bad_octal, "(( 1 ^ 0777 ))"), false);
+        assert_eq!(
+            node_emits(check_arithmetic_bad_octal, "(( 1 ^ 0777 ))"),
+            false
+        );
     }
 
     // --- SC2257 checkModifiedArithmeticInRedirection ---
@@ -755,7 +758,10 @@ mod tests {
     #[test]
     fn prop_checkUnnecessaryArithmeticExpansionIndex1() {
         assert_eq!(
-            node_emits(check_unnecessary_arithmetic_expansion_index, "a[$((1+1))]=n"),
+            node_emits(
+                check_unnecessary_arithmetic_expansion_index,
+                "a[$((1+1))]=n"
+            ),
             true
         );
     }
@@ -790,7 +796,10 @@ mod tests {
     // --- SC2322/2323 checkUnnecessaryParens ---
     #[test]
     fn prop_checkUnnecessaryParens1() {
-        assert_eq!(node_emits(check_unnecessary_parens, "echo $(( ((1+1)) ))"), true);
+        assert_eq!(
+            node_emits(check_unnecessary_parens, "echo $(( ((1+1)) ))"),
+            true
+        );
     }
     #[test]
     fn prop_checkUnnecessaryParens2() {
@@ -824,7 +833,10 @@ mod tests {
     // --- SC2218 checkUseBeforeDefinition ---
     #[test]
     fn prop_checkUseBeforeDefinition1() {
-        assert_eq!(tree_emits(check_use_before_definition, "f; f() { true; }"), true);
+        assert_eq!(
+            tree_emits(check_use_before_definition, "f; f() { true; }"),
+            true
+        );
     }
     #[test]
     fn prop_checkUseBeforeDefinition2() {
@@ -853,7 +865,10 @@ mod tests {
     #[test]
     fn prop_checkUseBeforeDefinition5() {
         assert_eq!(
-            tree_emits(check_use_before_definition, "false || mycmd; mycmd() { f; }"),
+            tree_emits(
+                check_use_before_definition,
+                "false || mycmd; mycmd() { f; }"
+            ),
             true
         );
     }
@@ -896,14 +911,20 @@ mod tests {
     #[test]
     fn prop_checkCommandIsUnreachable4() {
         assert_eq!(
-            node_emits(check_command_is_unreachable, "f() { foo; };    # Maybe sourced"),
+            node_emits(
+                check_command_is_unreachable,
+                "f() { foo; };    # Maybe sourced"
+            ),
             false
         );
     }
     #[test]
     fn prop_checkCommandIsUnreachable5() {
         assert_eq!(
-            node_emits(check_command_is_unreachable, "f() { foo; }; exit  # Not sourced"),
+            node_emits(
+                check_command_is_unreachable,
+                "f() { foo; }; exit  # Not sourced"
+            ),
             true
         );
     }
@@ -939,7 +960,10 @@ mod tests {
     #[test]
     fn prop_checkOverwrittenExitCode4() {
         assert_eq!(
-            node_emits(check_overwritten_exit_code, "x; [ $? -eq 0 ] && echo Success"),
+            node_emits(
+                check_overwritten_exit_code,
+                "x; [ $? -eq 0 ] && echo Success"
+            ),
             false
         );
     }

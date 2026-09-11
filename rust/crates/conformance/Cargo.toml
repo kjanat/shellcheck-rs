@@ -1,15 +1,16 @@
 [package]
-name = "conformance"
-version = "0.0.0"
+name              = "conformance"
+version           = "0.0.0"
 edition.workspace = true
-publish = false
+license           = "MIT"
+publish           = false
 
 [[bin]]
 name = "conformance"
 path = "src/main.rs"
 
 [dependencies]
-shellcheck-rs.workspace = true
-shellcheck-cli = { path = "../shellcheck-cli" }
-serde.workspace = true
-serde_json.workspace = true
+serde.workspace          = true
+serde_json.workspace     = true
+shellcheck-cli.workspace = true
+shellcheck-rs.workspace  = true

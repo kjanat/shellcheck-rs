@@ -26,3 +26,5 @@ stack.yaml.lock
 
 ### misc ###
 /shellcheck.1
+
+target/

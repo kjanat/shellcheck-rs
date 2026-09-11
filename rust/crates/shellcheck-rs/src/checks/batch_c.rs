@@ -156,7 +156,12 @@ fn check_literal_breaking_test(params: &Parameters, t: &Token, out: &mut Out) {
                 }
                 // comparisonWarning `mplus` tautologyWarning: first that fires.
                 if let Some(tok) = l.iter().find(|x| has_equals(x)) {
-                    err(out, tok.id(), 2077, "You need spaces around the comparison operator.");
+                    err(
+                        out,
+                        tok.id(),
+                        2077,
+                        "You need spaces around the comparison operator.",
+                    );
                 } else if let Some(tok) = get_word_parts(w).into_iter().find(|x| is_nonempty(x)) {
                     err(
                         out,
@@ -206,7 +211,13 @@ fn check_constant_nullary(params: &Parameters, t: &Token, out: &mut Out) {
 
 /// SC2053 / SC2081 — `checkComparisonAgainstGlob`.
 fn check_comparison_against_glob(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TC_Binary { typ, op, lhs: _, rhs } = &*t.inner {
+    if let InnerToken::TC_Binary {
+        typ,
+        op,
+        lhs: _,
+        rhs,
+    } = &*t.inner
+    {
         let is_eq_op = matches!(op.as_str(), "=" | "==" | "!=");
         match typ {
             ConditionType::DoubleBracket => {

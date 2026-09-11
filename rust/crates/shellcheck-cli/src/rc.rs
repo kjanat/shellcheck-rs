@@ -308,12 +308,18 @@ mod tests {
     fn shell_keeps_first_override() {
         // determineShell selects the first ShellOverride, so a later shell=
         // does not supersede an earlier valid one.
-        assert_eq!(parse_contents("shell=sh\nshell=bash\n").shell, Some(Shell::Sh));
+        assert_eq!(
+            parse_contents("shell=sh\nshell=bash\n").shell,
+            Some(Shell::Sh)
+        );
     }
 
     #[test]
     fn quoted_values_are_unquoted() {
-        assert_eq!(parse_contents("disable='SC2086,SC2181'").disabled_codes, vec![2086, 2181]);
+        assert_eq!(
+            parse_contents("disable='SC2086,SC2181'").disabled_codes,
+            vec![2086, 2181]
+        );
         assert_eq!(parse_contents("shell=\"bash\"").shell, Some(Shell::Bash));
         // A mismatched/again-unquoted value is left as-is (and then rejected).
         assert_eq!(parse_contents("shell='bash\"").shell, None);
@@ -321,10 +327,19 @@ mod tests {
 
     #[test]
     fn extended_analysis_toggle() {
-        assert_eq!(parse_contents("extended-analysis=true").extended_analysis, Some(true));
-        assert_eq!(parse_contents("extended-analysis=false").extended_analysis, Some(false));
+        assert_eq!(
+            parse_contents("extended-analysis=true").extended_analysis,
+            Some(true)
+        );
+        assert_eq!(
+            parse_contents("extended-analysis=false").extended_analysis,
+            Some(false)
+        );
         // Unrecognised value is ignored.
-        assert_eq!(parse_contents("extended-analysis=maybe").extended_analysis, None);
+        assert_eq!(
+            parse_contents("extended-analysis=maybe").extended_analysis,
+            None
+        );
     }
 
     #[test]

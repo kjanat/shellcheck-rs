@@ -44,6 +44,6 @@ pub use checker::check_script;
 // pub mod fixer;
 
 pub use interface::{
-    CheckResult, CheckSpec, Code, Comment, ErrorMessage, ExecutionMode, Fix, InsertionPoint,
-    ColorOption, Position, PositionedComment, Replacement, Severity, Shell, TokenComment,
+    CheckResult, CheckSpec, Code, ColorOption, Comment, ErrorMessage, ExecutionMode, Fix,
+    InsertionPoint, Position, PositionedComment, Replacement, Severity, Shell, TokenComment,
 };

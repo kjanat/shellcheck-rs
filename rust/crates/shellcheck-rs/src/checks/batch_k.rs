@@ -39,10 +39,20 @@ fn oversimplify(token: &Token) -> Vec<String> {
     use InnerToken::*;
     match &*token.inner {
         T_NormalWord(l) => {
-            vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()]
+            vec![
+                l.iter()
+                    .flat_map(oversimplify)
+                    .collect::<Vec<String>>()
+                    .concat(),
+            ]
         }
         T_DoubleQuoted(l) => {
-            vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()]
+            vec![
+                l.iter()
+                    .flat_map(oversimplify)
+                    .collect::<Vec<String>>()
+                    .concat(),
+            ]
         }
         T_SingleQuoted(s) => vec![s.clone()],
         T_DollarBraced { .. } => vec!["${VAR}".to_string()],
@@ -95,11 +105,8 @@ fn is_glob(t: &Token) -> bool {
 
 fn has_split_range(l: &[Token]) -> bool {
     // foo[x${var}y] gets parsed as foo,[,x,$var,y]
-    let after_bracket = l
-        .iter()
-        .skip_while(|t| !is_half_open_range(t));
-    after_bracket.clone().next().is_some()
-        && after_bracket.skip(1).any(is_closing_range)
+    let after_bracket = l.iter().skip_while(|t| !is_half_open_range(t));
+    after_bracket.clone().next().is_some() && after_bracket.skip(1).any(is_closing_range)
 }
 
 fn is_half_open_range(t: &Token) -> bool {
@@ -116,10 +123,23 @@ fn is_closing_range(t: &Token) -> bool {
 
 fn check_conditional_and_ors(_params: &Parameters, t: &Token, out: &mut Out) {
     match &*t.inner {
-        InnerToken::TC_And { typ: ConditionType::SingleBracket, op, .. } if op == "&&" => {
-            err(out, t.id(), 2107, "Instead of [ a && b ], use [ a ] && [ b ].");
+        InnerToken::TC_And {
+            typ: ConditionType::SingleBracket,
+            op,
+            ..
+        } if op == "&&" => {
+            err(
+                out,
+                t.id(),
+                2107,
+                "Instead of [ a && b ], use [ a ] && [ b ].",
+            );
         }
-        InnerToken::TC_And { typ: ConditionType::DoubleBracket, op, .. } if op == "-a" => {
+        InnerToken::TC_And {
+            typ: ConditionType::DoubleBracket,
+            op,
+            ..
+        } if op == "-a" => {
             err(out, t.id(), 2108, "In [[..]], use && instead of -a.");
         }
         _ => {}
@@ -131,7 +151,8 @@ fn check_conditional_and_ors(_params: &Parameters, t: &Token, out: &mut Out) {
 // ---------------------------------------------------------------------------
 
 fn has_metachars(s: &str) -> bool {
-    s.chars().any(|c| matches!(c, '[' | ']' | '*' | '.' | '+' | '(' | ')' | '|'))
+    s.chars()
+        .any(|c| matches!(c, '[' | ']' | '*' | '.' | '+' | '(' | ')' | '|'))
 }
 
 /// `isConstantNonRe`: a literal with no regex metacharacters.
@@ -222,16 +243,28 @@ fn check_array_operand(token: &Token, out: &mut Out) {
 
 fn check_test_argument_splitting_arrays(_params: &Parameters, t: &Token, out: &mut Out) {
     match &*t.inner {
-        InnerToken::TC_Nullary { typ: ConditionType::DoubleBracket, token } => {
+        InnerToken::TC_Nullary {
+            typ: ConditionType::DoubleBracket,
+            token,
+        } => {
             check_array_operand(token, out);
         }
-        InnerToken::TC_Unary { typ: ConditionType::DoubleBracket, token, .. } => {
+        InnerToken::TC_Unary {
+            typ: ConditionType::DoubleBracket,
+            token,
+            ..
+        } => {
             // The glob branch in the oracle does not run checkArrays.
             if !is_glob(token) {
                 check_array_operand(token, out);
             }
         }
-        InnerToken::TC_Binary { typ: ConditionType::DoubleBracket, lhs, rhs, .. } => {
+        InnerToken::TC_Binary {
+            typ: ConditionType::DoubleBracket,
+            lhs,
+            rhs,
+            ..
+        } => {
             check_array_operand(lhs, out);
             check_array_operand(rhs, out);
         }
@@ -268,7 +301,10 @@ fn in_condition(params: &Parameters, t: &Token) -> bool {
             Some(p) => p,
             None => return false,
         };
-        if condition_children(parent).iter().any(|c| c.id() == child.id()) {
+        if condition_children(parent)
+            .iter()
+            .any(|c| c.id() == child.id())
+        {
             return true;
         }
         child = parent;
@@ -276,11 +312,7 @@ fn in_condition(params: &Parameters, t: &Token) -> bool {
 }
 
 fn drop_last<T>(v: &[T]) -> &[T] {
-    if v.is_empty() {
-        v
-    } else {
-        &v[..v.len() - 1]
-    }
+    if v.is_empty() { v } else { &v[..v.len() - 1] }
 }
 
 /// Is the immediate parent of `t` a `T_Function`?

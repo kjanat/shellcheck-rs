@@ -51,12 +51,39 @@ pub fn register(c: &mut Checker) {
 
 /// `ShellCheck.Data.variablesWithoutSpaces`.
 const VARIABLES_WITHOUT_SPACES: &[&str] = &[
-    "-", "$", "?", "!", "#", "BASHPID", "BASH_ARGC", "BASH_LINENO",
-    "BASH_SUBSHELL", "EUID", "EPOCHREALTIME", "EPOCHSECONDS", "LINENO",
-    "OPTIND", "PPID", "RANDOM", "READLINE_ARGUMENT", "READLINE_MARK",
-    "READLINE_POINT", "SECONDS", "SHELLOPTS", "SHLVL", "SRANDOM", "UID",
-    "COLUMNS", "HISTFILESIZE", "HISTSIZE", "LINES", "BASH_MONOSECONDS",
-    "BASH_TRAPSIG", "FLAGS_ERROR", "FLAGS_FALSE", "FLAGS_TRUE",
+    "-",
+    "$",
+    "?",
+    "!",
+    "#",
+    "BASHPID",
+    "BASH_ARGC",
+    "BASH_LINENO",
+    "BASH_SUBSHELL",
+    "EUID",
+    "EPOCHREALTIME",
+    "EPOCHSECONDS",
+    "LINENO",
+    "OPTIND",
+    "PPID",
+    "RANDOM",
+    "READLINE_ARGUMENT",
+    "READLINE_MARK",
+    "READLINE_POINT",
+    "SECONDS",
+    "SHELLOPTS",
+    "SHLVL",
+    "SRANDOM",
+    "UID",
+    "COLUMNS",
+    "HISTFILESIZE",
+    "HISTSIZE",
+    "LINES",
+    "BASH_MONOSECONDS",
+    "BASH_TRAPSIG",
+    "FLAGS_ERROR",
+    "FLAGS_FALSE",
+    "FLAGS_TRUE",
 ];
 
 /// `ShellCheck.ASTLib.getUnquotedLiteral`: the literal string of a word, only
@@ -170,7 +197,8 @@ fn check_splitting_part(params: &Parameters, part: &Token, out: &mut Out) {
             warn(out, part.id(), 2207, msg);
         }
         InnerToken::T_DollarBraced { op, .. } => {
-            let reference = crate::cfg::get_braced_reference(&crate::cfg::oversimplify(op).concat());
+            let reference =
+                crate::cfg::get_braced_reference(&crate::cfg::oversimplify(op).concat());
             if !is_counting_reference(part)
                 && !is_quoted_alternative_reference(part)
                 && !VARIABLES_WITHOUT_SPACES.contains(&reference.as_str())
@@ -366,7 +394,9 @@ fn spurious_cleanup(t: &Token) -> bool {
 fn spurious_is_assignment(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_Redirecting { cmd, .. } => spurious_is_assignment(cmd),
-        InnerToken::T_SimpleCommand { assignments, words } => !assignments.is_empty() && words.is_empty(),
+        InnerToken::T_SimpleCommand { assignments, words } => {
+            !assignments.is_empty() && words.is_empty()
+        }
         InnerToken::T_Assignment { .. } => true,
         InnerToken::T_Annotation { token, .. } => spurious_is_assignment(token),
         _ => false,
@@ -409,7 +439,9 @@ fn comment_if_exec(t: &Token, out: &mut Out) {
         }
         InnerToken::T_Redirecting { cmd, .. } => {
             if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-                if words.len() >= 2 && astlib::get_literal_string(&words[0]).as_deref() == Some("exec") {
+                if words.len() >= 2
+                    && astlib::get_literal_string(&words[0]).as_deref() == Some("exec")
+                {
                     warn(
                         out,
                         cmd.id(),
@@ -428,7 +460,10 @@ fn comment_if_exec(t: &Token, out: &mut Out) {
 // ---------------------------------------------------------------------------
 
 fn is_quotes(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_DoubleQuoted(_) | InnerToken::T_SingleQuoted(_))
+    matches!(
+        &*t.inner,
+        InnerToken::T_DoubleQuoted(_) | InnerToken::T_SingleQuoted(_)
+    )
 }
 
 fn will_concat_in_assignment(t: &Token) -> bool {
@@ -549,35 +584,96 @@ fn check_equals_in_command(params: &Parameters, original: &Token, out: &mut Out)
 
     // Message helpers.
     let positional_msg = |out: &mut Out, id: Id| {
-        err(out, id, 2270, "To assign positional parameters, use 'set -- first second ..' (or use [ ] to compare).");
+        err(
+            out,
+            id,
+            2270,
+            "To assign positional parameters, use 'set -- first second ..' (or use [ ] to compare).",
+        );
     };
     let indirection_msg = |out: &mut Out, id: Id| {
-        err(out, id, 2271, "For indirection, use arrays, declare \"var$n=value\", or (for sh) read/eval.");
+        err(
+            out,
+            id,
+            2271,
+            "For indirection, use arrays, declare \"var$n=value\", or (for sh) read/eval.",
+        );
     };
     let bad_comparison_msg = |out: &mut Out, id: Id| {
-        err(out, id, 2272, "Command name contains ==. For comparison, use [ \"$var\" = value ].");
+        err(
+            out,
+            id,
+            2272,
+            "Command name contains ==. For comparison, use [ \"$var\" = value ].",
+        );
     };
     let conflict_marker_msg = |out: &mut Out, id: Id| {
-        err(out, id, 2273, "Sequence of ===s found. Merge conflict or intended as a commented border?");
+        err(
+            out,
+            id,
+            2273,
+            "Sequence of ===s found. Merge conflict or intended as a commented border?",
+        );
     };
     let border_msg = |out: &mut Out, id: Id| {
-        err(out, id, 2274, "Command name starts with ===. Intended as a commented border?");
+        err(
+            out,
+            id,
+            2274,
+            "Command name starts with ===. Intended as a commented border?",
+        );
     };
     let prefix_msg = |out: &mut Out, id: Id| {
         err(out, id, 2275, "Command name starts with =. Bad line break?");
     };
     let generic_msg = |out: &mut Out, id: Id| {
-        err(out, id, 2276, "This is interpreted as a command name containing '='. Bad assignment or comparison?");
+        err(
+            out,
+            id,
+            2276,
+            "This is interpreted as a command name containing '='. Bad assignment or comparison?",
+        );
     };
     let leading_number_msg = |out: &mut Out, id: Id| {
-        err(out, id, 2282, "Variable names can't start with numbers, so this is interpreted as a command.");
+        err(
+            out,
+            id,
+            2282,
+            "Variable names can't start with numbers, so this is interpreted as a command.",
+        );
     };
     let assign0_msg = |out: &mut Out, id: Id, bashfix: Fix| match params.shell {
-        Shell::Bash => err_with_fix(out, id, 2277, "Use BASH_ARGV0 to assign to $0 in bash (or use [ ] to compare).", bashfix),
-        Shell::Ksh => err(out, id, 2278, "$0 can't be assigned in Ksh (but it does reflect the current function)."),
-        Shell::Dash => err(out, id, 2279, "$0 can't be assigned in Dash. This becomes a command name."),
-        Shell::BusyboxSh => err(out, id, 2279, "$0 can't be assigned in Busybox Ash. This becomes a command name."),
-        _ => err(out, id, 2280, "$0 can't be assigned this way, and there is no portable alternative."),
+        Shell::Bash => err_with_fix(
+            out,
+            id,
+            2277,
+            "Use BASH_ARGV0 to assign to $0 in bash (or use [ ] to compare).",
+            bashfix,
+        ),
+        Shell::Ksh => err(
+            out,
+            id,
+            2278,
+            "$0 can't be assigned in Ksh (but it does reflect the current function).",
+        ),
+        Shell::Dash => err(
+            out,
+            id,
+            2279,
+            "$0 can't be assigned in Dash. This becomes a command name.",
+        ),
+        Shell::BusyboxSh => err(
+            out,
+            id,
+            2279,
+            "$0 can't be assigned in Busybox Ash. This becomes a command name.",
+        ),
+        _ => err(
+            out,
+            id,
+            2280,
+            "$0 can't be assigned this way, and there is no portable alternative.",
+        ),
     };
 
     // The order of these branches matters.
@@ -608,7 +704,8 @@ fn check_equals_in_command(params: &Parameters, original: &Token, out: &mut Out)
                 let variable_reference = crate::cfg::get_braced_reference(&variable_str);
                 let variable_modifier = crate::cfg::get_braced_modifier(&variable_str);
                 let is_plain = crate::cfg::is_variable_name(&variable_str);
-                let is_positional = !variable_str.is_empty() && variable_str.chars().all(|c| c.is_ascii_digit());
+                let is_positional =
+                    !variable_str.is_empty() && variable_str.chars().all(|c| c.is_ascii_digit());
                 let is_array = !variable_reference.is_empty()
                     && variable_modifier.starts_with('[')
                     && variable_modifier.ends_with(']');
@@ -699,9 +796,19 @@ fn is_brace_expansion(t: &Token) -> bool {
 fn tas_check_arrays(params: &Parameters, typ: ConditionType, token: &Token, out: &mut Out) {
     if word_parts(token).iter().any(|p| is_array_expansion(p)) {
         if typ == ConditionType::SingleBracket {
-            warn(out, token.id(), 2198, "Arrays don't work as operands in [ ]. Use a loop (or concatenate with * instead of @).");
+            warn(
+                out,
+                token.id(),
+                2198,
+                "Arrays don't work as operands in [ ]. Use a loop (or concatenate with * instead of @).",
+            );
         } else {
-            err(out, token.id(), 2199, "Arrays implicitly concatenate in [[ ]]. Use a loop (or explicit * instead of @).");
+            err(
+                out,
+                token.id(),
+                2199,
+                "Arrays implicitly concatenate in [[ ]]. Use a loop (or explicit * instead of @).",
+            );
         }
     }
 }
@@ -709,9 +816,19 @@ fn tas_check_arrays(params: &Parameters, typ: ConditionType, token: &Token, out:
 fn tas_check_braces(params: &Parameters, typ: ConditionType, token: &Token, out: &mut Out) {
     if word_parts(token).iter().any(|p| is_brace_expansion(p)) {
         if typ == ConditionType::SingleBracket {
-            warn(out, token.id(), 2200, "Brace expansions don't work as operands in [ ]. Use a loop.");
+            warn(
+                out,
+                token.id(),
+                2200,
+                "Brace expansions don't work as operands in [ ]. Use a loop.",
+            );
         } else {
-            err(out, token.id(), 2201, "Brace expansion doesn't happen in [[ ]]. Use a loop.");
+            err(
+                out,
+                token.id(),
+                2201,
+                "Brace expansion doesn't happen in [[ ]]. Use a loop.",
+            );
         }
     }
 }
@@ -719,9 +836,19 @@ fn tas_check_braces(params: &Parameters, typ: ConditionType, token: &Token, out:
 fn tas_check_globs(params: &Parameters, typ: ConditionType, token: &Token, out: &mut Out) {
     if is_glob(token) {
         if typ == ConditionType::SingleBracket {
-            warn(out, token.id(), 2202, "Globs don't work as operands in [ ]. Use a loop.");
+            warn(
+                out,
+                token.id(),
+                2202,
+                "Globs don't work as operands in [ ]. Use a loop.",
+            );
         } else {
-            err(out, token.id(), 2203, "Globs are ignored in [[ ]] except right of =/!=. Use a loop.");
+            err(
+                out,
+                token.id(),
+                2203,
+                "Globs are ignored in [[ ]] except right of =/!=. Use a loop.",
+            );
         }
     }
 }
@@ -735,7 +862,12 @@ fn tas_check_all(params: &Parameters, typ: ConditionType, token: &Token, out: &m
 fn tas_check_numerical_glob(params: &Parameters, token: &Token, out: &mut Out) {
     // Only the SingleBracket clause exists in Haskell; callers only pass SingleBracket.
     if params.shell != Shell::Ksh && is_glob(token) {
-        err(out, token.id(), 2255, "[ ] does not apply arithmetic evaluation. Evaluate with $((..)) for numbers, or use string comparator for strings.");
+        err(
+            out,
+            token.id(),
+            2255,
+            "[ ] does not apply arithmetic evaluation. Evaluate with $((..)) for numbers, or use string comparator for strings.",
+        );
     }
 }
 
@@ -744,7 +876,12 @@ fn check_test_argument_splitting(params: &Parameters, t: &Token, out: &mut Out) 
         InnerToken::TC_Unary { typ, op, token } if is_glob(token) => {
             if op == "-v" {
                 if *typ == ConditionType::SingleBracket {
-                    err(out, token.id(), 2208, "Use [[ ]] or quote arguments to -v to avoid glob expansion.");
+                    err(
+                        out,
+                        token.id(),
+                        2208,
+                        "Use [[ ]] or quote arguments to -v to avoid glob expansion.",
+                    );
                 }
             } else if *typ == ConditionType::SingleBracket && params.shell == Shell::Ksh {
                 // Ksh appears to stop processing after unrecognized tokens.
@@ -753,10 +890,23 @@ fn check_test_argument_splitting(params: &Parameters, t: &Token, out: &mut Out) 
                     .map(|c| format!("-{}", c))
                     .collect();
                 if ksh_ops.iter().any(|o| o == op) {
-                    warn(out, token.id(), 2245, &format!("{} only applies to the first expansion of this glob. Use a loop to check any/all.", op));
+                    warn(
+                        out,
+                        token.id(),
+                        2245,
+                        &format!(
+                            "{} only applies to the first expansion of this glob. Use a loop to check any/all.",
+                            op
+                        ),
+                    );
                 }
             } else {
-                err(out, token.id(), 2144, &format!("{} doesn't work with globs. Use a for loop.", op));
+                err(
+                    out,
+                    token.id(),
+                    2144,
+                    &format!("{} doesn't work with globs. Use a for loop.", op),
+                );
             }
         }
         InnerToken::TC_Nullary { typ, token } => {
@@ -812,11 +962,10 @@ enum PipeType {
 
 /// `ShellCheck.Data.nonReadingCommands`.
 const NON_READING_COMMANDS: &[&str] = &[
-    "alias", "basename", "bg", "cal", "cd", "chgrp", "chmod", "chown", "cp",
-    "du", "echo", "export", "fg", "fuser", "getconf", "getopt", "getopts",
-    "ipcrm", "ipcs", "jobs", "kill", "ln", "ls", "locale", "mv", "printf",
-    "ps", "pwd", "readlink", "realpath", "renice", "rm", "rmdir", "set",
-    "sleep", "touch", "trap", "ulimit", "unalias", "uname",
+    "alias", "basename", "bg", "cal", "cd", "chgrp", "chmod", "chown", "cp", "du", "echo",
+    "export", "fg", "fuser", "getconf", "getopt", "getopts", "ipcrm", "ipcs", "jobs", "kill", "ln",
+    "ls", "locale", "mv", "printf", "ps", "pwd", "readlink", "realpath", "renice", "rm", "rmdir",
+    "set", "sleep", "touch", "trap", "ulimit", "unalias", "uname",
 ];
 
 const INTERACTIVE_FLAG_CMDS: &[&str] = &["cp", "mv", "rm"];
@@ -828,9 +977,15 @@ fn ptn_get_all_flags(cmd: &Token) -> Vec<(&Token, String)> {
         _ => return Vec::new(),
     };
     // Skip the command name (first word).
-    let args = if words.len() > 1 { &words[1..] } else { &[][..] };
-    let token_and_text: Vec<(&Token, String)> =
-        args.iter().map(|x| (x, crate::cfg::oversimplify(x).concat())).collect();
+    let args = if words.len() > 1 {
+        &words[1..]
+    } else {
+        &[][..]
+    };
+    let token_and_text: Vec<(&Token, String)> = args
+        .iter()
+        .map(|x| (x, crate::cfg::oversimplify(x).concat()))
+        .collect();
     // break (== "--")
     let stop = token_and_text.iter().position(|(_, t)| t == "--");
     let (flag_args, rest) = match stop {
@@ -914,7 +1069,9 @@ fn ptn_get_default_fds(redir: &Token) -> Option<Vec<i64>> {
             InnerToken::T_DGREAT => Some(vec![1]),
             InnerToken::T_GREATAND => Some(vec![1, 2]),
             InnerToken::T_CLOBBER => Some(vec![1]),
-            InnerToken::T_IoDuplicate { op: inner, num } if num == "-" => ptn_get_default_fds(inner),
+            InnerToken::T_IoDuplicate { op: inner, num } if num == "-" => {
+                ptn_get_default_fds(inner)
+            }
             _ => None,
         },
         _ => None,
@@ -962,10 +1119,17 @@ fn ptn_fd_str(n: i64) -> String {
 
 fn check_pipe_to_nowhere(params: &Parameters, t: &Token, out: &mut Out) {
     match &*t.inner {
-        InnerToken::T_Pipeline { separators, commands } => {
+        InnerToken::T_Pipeline {
+            separators,
+            commands,
+        } => {
             let pipe_types: Vec<PipeType> = separators.iter().map(ptn_pipe_type).collect();
             for (i, stage) in commands.iter().enumerate() {
-                let input = if i == 0 { PipeType::NoPipe } else { pipe_types.get(i - 1).copied().unwrap_or(PipeType::NoPipe) };
+                let input = if i == 0 {
+                    PipeType::NoPipe
+                } else {
+                    pipe_types.get(i - 1).copied().unwrap_or(PipeType::NoPipe)
+                };
                 let output = pipe_types.get(i).copied().unwrap_or(PipeType::NoPipe);
                 ptn_check_pipe(params, input, stage, output, out);
             }
@@ -979,7 +1143,13 @@ fn check_pipe_to_nowhere(params: &Parameters, t: &Token, out: &mut Out) {
     }
 }
 
-fn ptn_check_pipe(params: &Parameters, input: PipeType, stage: &Token, output: PipeType, out: &mut Out) {
+fn ptn_check_pipe(
+    params: &Parameters,
+    input: PipeType,
+    stage: &Token,
+    output: PipeType,
+    out: &mut Out,
+) {
     let has_consumers = ptn_tree_contains(ptn_may_consume, stage);
     let has_producers = ptn_tree_contains(ptn_may_produce, stage);
 
@@ -996,8 +1166,15 @@ fn ptn_check_pipe(params: &Parameters, input: PipeType, stage: &Token, output: P
                 } else {
                     "Wrong command or missing xargs?"
                 };
-                warn(out, cmd.id(), 2216, &format!(
-                    "Piping to '{}', a command that doesn't read stdin. {}", name, suggestion));
+                warn(
+                    out,
+                    cmd.id(),
+                    2216,
+                    &format!(
+                        "Piping to '{}', a command that doesn't read stdin. {}",
+                        name, suggestion
+                    ),
+                );
             }
         }
     }
@@ -1029,8 +1206,12 @@ fn ptn_check_pipe(params: &Parameters, input: PipeType, stage: &Token, output: P
         if input != PipeType::NoPipe && !has_consumers {
             if let Some((_, list)) = fd_map.iter().find(|(k, _)| *k == 0) {
                 if let Some(override_) = list.first() {
-                    err(out, ptn_get_op_id(override_), 2259,
-                        "This redirection overrides piped input. To use both, merge or pass filenames.");
+                    err(
+                        out,
+                        ptn_get_op_id(override_),
+                        2259,
+                        "This redirection overrides piped input. To use both, merge or pass filenames.",
+                    );
                 }
             }
         }
@@ -1038,8 +1219,12 @@ fn ptn_check_pipe(params: &Parameters, input: PipeType, stage: &Token, output: P
         if output == PipeType::StdoutPipe && !has_producers {
             if let Some((_, list)) = fd_map.iter().find(|(k, _)| *k == 1) {
                 if let Some(override_) = list.first() {
-                    err(out, ptn_get_op_id(override_), 2260,
-                        "This redirection overrides the output pipe. Use 'tee' to output to both.");
+                    err(
+                        out,
+                        ptn_get_op_id(override_),
+                        2260,
+                        "This redirection overrides the output pipe. Use 'tee' to output to both.",
+                    );
                 }
             }
         }
@@ -1047,9 +1232,15 @@ fn ptn_check_pipe(params: &Parameters, input: PipeType, stage: &Token, output: P
         for (n, list) in &fd_map {
             if list.len() >= 2 {
                 for c in list {
-                    err(out, ptn_get_op_id(c), 2261, &format!(
-                        "Multiple redirections compete for {}. Use cat, tee, or pass filenames instead.",
-                        ptn_fd_str(*n)));
+                    err(
+                        out,
+                        ptn_get_op_id(c),
+                        2261,
+                        &format!(
+                            "Multiple redirections compete for {}. Use cat, tee, or pass filenames instead.",
+                            ptn_fd_str(*n)
+                        ),
+                    );
                 }
             }
         }
@@ -1067,8 +1258,15 @@ fn ptn_check_redir(params: &Parameters, cmd: &Token, out: &mut Out) {
             } else {
                 "Bad quoting, wrong command or missing xargs?"
             };
-            warn(out, cmd.id(), 2217, &format!(
-                "Redirecting to '{}', a command that doesn't read stdin. {}", name, suggestion));
+            warn(
+                out,
+                cmd.id(),
+                2217,
+                &format!(
+                    "Redirecting to '{}', a command that doesn't read stdin. {}",
+                    name, suggestion
+                ),
+            );
         }
     }
 }
@@ -1100,9 +1298,15 @@ fn check_competing_redirections(params: &Parameters, t: &Token, out: &mut Out) {
         for (n, list) in &fd_map {
             if list.len() >= 2 {
                 for c in list {
-                    err(out, ptn_get_op_id(c), 2261, &format!(
-                        "Multiple redirections compete for {}. Use cat, tee, or pass filenames instead.",
-                        ptn_fd_str(*n)));
+                    err(
+                        out,
+                        ptn_get_op_id(c),
+                        2261,
+                        &format!(
+                            "Multiple redirections compete for {}. Use cat, tee, or pass filenames instead.",
+                            ptn_fd_str(*n)
+                        ),
+                    );
                 }
             }
         }
@@ -1118,7 +1322,11 @@ fn sst_is_command_test(t: &Token) -> bool {
 }
 
 fn sst_is_test_command(t: &Token) -> bool {
-    if let InnerToken::T_Pipeline { separators, commands } = &*t.inner {
+    if let InnerToken::T_Pipeline {
+        separators,
+        commands,
+    } = &*t.inner
+    {
         if separators.is_empty() && commands.len() == 1 {
             if let InnerToken::T_Redirecting { cmd, .. } = &*commands[0].inner {
                 return matches!(&*cmd.inner, InnerToken::T_Condition { .. })
@@ -1135,9 +1343,10 @@ fn sst_is_test_structure(t: &Token) -> bool {
         InnerToken::T_AndIf { lhs, rhs } | InnerToken::T_OrIf { lhs, rhs } => {
             sst_is_test_structure(lhs) && sst_is_test_structure(rhs)
         }
-        InnerToken::T_Pipeline { separators, commands }
-            if separators.is_empty() && commands.len() == 1 =>
-        {
+        InnerToken::T_Pipeline {
+            separators,
+            commands,
+        } if separators.is_empty() && commands.len() == 1 => {
             if let InnerToken::T_Redirecting { cmd, .. } = &*commands[0].inner {
                 match &*cmd.inner {
                     InnerToken::T_BraceGroup(ts) => ts.iter().all(sst_is_test_structure),
@@ -1218,11 +1427,26 @@ fn check_subshelled_tests(params: &Parameters, t: &Token, out: &mut Out) {
         if list.iter().all(sst_is_test_structure) && !sst_has_assignment(t) {
             let path = get_path(params, t);
             if sst_is_compound_condition(&path) {
-                style(out, t.id(), 2233, "Remove superfluous (..) around condition to avoid subshell overhead.");
+                style(
+                    out,
+                    t.id(),
+                    2233,
+                    "Remove superfluous (..) around condition to avoid subshell overhead.",
+                );
             } else if sst_is_single_test(list) && !sst_is_function_body(&path) {
-                style(out, t.id(), 2234, "Remove superfluous (..) around test command to avoid subshell overhead.");
+                style(
+                    out,
+                    t.id(),
+                    2234,
+                    "Remove superfluous (..) around test command to avoid subshell overhead.",
+                );
             } else {
-                style(out, t.id(), 2235, "Use { ..; } instead of (..) to avoid subshell overhead.");
+                style(
+                    out,
+                    t.id(),
+                    2235,
+                    "Use { ..; } instead of (..) to avoid subshell overhead.",
+                );
             }
         }
     }
@@ -1267,256 +1491,584 @@ mod tests {
 
     // ---- SC2013 checkForInCat ----
     #[test]
-    fn prop_checkForInCat1() { assert!(emits(check_for_in_cat, "for f in $(cat foo); do stuff; done")); }
+    fn prop_checkForInCat1() {
+        assert!(emits(
+            check_for_in_cat,
+            "for f in $(cat foo); do stuff; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInCat1a() { assert!(emits(check_for_in_cat, "for f in `cat foo`; do stuff; done")); }
+    fn prop_checkForInCat1a() {
+        assert!(emits(
+            check_for_in_cat,
+            "for f in `cat foo`; do stuff; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInCat2() { assert!(emits(check_for_in_cat, "for f in $(cat foo | grep lol); do stuff; done")); }
+    fn prop_checkForInCat2() {
+        assert!(emits(
+            check_for_in_cat,
+            "for f in $(cat foo | grep lol); do stuff; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInCat2a() { assert!(emits(check_for_in_cat, "for f in `cat foo | grep lol`; do stuff; done")); }
+    fn prop_checkForInCat2a() {
+        assert!(emits(
+            check_for_in_cat,
+            "for f in `cat foo | grep lol`; do stuff; done"
+        ));
+    }
     #[test]
-    fn prop_checkForInCat3() { assert!(!emits(check_for_in_cat, "for f in $(cat foo | grep bar | wc -l); do stuff; done")); }
+    fn prop_checkForInCat3() {
+        assert!(!emits(
+            check_for_in_cat,
+            "for f in $(cat foo | grep bar | wc -l); do stuff; done"
+        ));
+    }
 
     // ---- SC2210 checkRedirectionToNumber ----
     #[test]
-    fn prop_checkRedirectionToNumber1() { assert!(emits(check_redirection_to_number, "( 1 > 2 )")); }
+    fn prop_checkRedirectionToNumber1() {
+        assert!(emits(check_redirection_to_number, "( 1 > 2 )"));
+    }
     #[test]
-    fn prop_checkRedirectionToNumber2() { assert!(emits(check_redirection_to_number, "foo 1>2")); }
+    fn prop_checkRedirectionToNumber2() {
+        assert!(emits(check_redirection_to_number, "foo 1>2"));
+    }
     #[test]
-    fn prop_checkRedirectionToNumber3() { assert!(!emits(check_redirection_to_number, "echo foo > '2'")); }
+    fn prop_checkRedirectionToNumber3() {
+        assert!(!emits(check_redirection_to_number, "echo foo > '2'"));
+    }
     #[test]
-    fn prop_checkRedirectionToNumber4() { assert!(!emits(check_redirection_to_number, "foo 1>&2")); }
+    fn prop_checkRedirectionToNumber4() {
+        assert!(!emits(check_redirection_to_number, "foo 1>&2"));
+    }
 
     // ---- SC2206 / SC2207 checkSplittingInArrays ----
     #[test]
-    fn prop_checkSplittingInArrays1() { assert!(emits(check_splitting_in_arrays, "a=( $var )")); }
+    fn prop_checkSplittingInArrays1() {
+        assert!(emits(check_splitting_in_arrays, "a=( $var )"));
+    }
     #[test]
-    fn prop_checkSplittingInArrays2() { assert!(emits(check_splitting_in_arrays, "a=( $(cmd) )")); }
+    fn prop_checkSplittingInArrays2() {
+        assert!(emits(check_splitting_in_arrays, "a=( $(cmd) )"));
+    }
     #[test]
-    fn prop_checkSplittingInArrays3() { assert!(!emits(check_splitting_in_arrays, "a=( \"$var\" )")); }
+    fn prop_checkSplittingInArrays3() {
+        assert!(!emits(check_splitting_in_arrays, "a=( \"$var\" )"));
+    }
     #[test]
-    fn prop_checkSplittingInArrays4() { assert!(!emits(check_splitting_in_arrays, "a=( \"$(cmd)\" )")); }
+    fn prop_checkSplittingInArrays4() {
+        assert!(!emits(check_splitting_in_arrays, "a=( \"$(cmd)\" )"));
+    }
     #[test]
-    fn prop_checkSplittingInArrays5() { assert!(!emits(check_splitting_in_arrays, "a=( $! $$ $# )")); }
+    fn prop_checkSplittingInArrays5() {
+        assert!(!emits(check_splitting_in_arrays, "a=( $! $$ $# )"));
+    }
     #[test]
-    fn prop_checkSplittingInArrays6() { assert!(!emits(check_splitting_in_arrays, "a=( ${#arr[@]} )")); }
+    fn prop_checkSplittingInArrays6() {
+        assert!(!emits(check_splitting_in_arrays, "a=( ${#arr[@]} )"));
+    }
     #[test]
-    fn prop_checkSplittingInArrays7() { assert!(!emits(check_splitting_in_arrays, "a=( foo{1,2} )")); }
+    fn prop_checkSplittingInArrays7() {
+        assert!(!emits(check_splitting_in_arrays, "a=( foo{1,2} )"));
+    }
     #[test]
-    fn prop_checkSplittingInArrays8() { assert!(!emits(check_splitting_in_arrays, "a=( * )")); }
+    fn prop_checkSplittingInArrays8() {
+        assert!(!emits(check_splitting_in_arrays, "a=( * )"));
+    }
 
     // ---- SC2268 checkComparisonWithLeadingX ----
     #[test]
-    fn prop_checkComparisonWithLeadingX1() { assert!(emits(check_comparison_with_leading_x, "[ x$foo = xlol ]")); }
+    fn prop_checkComparisonWithLeadingX1() {
+        assert!(emits(check_comparison_with_leading_x, "[ x$foo = xlol ]"));
+    }
     #[test]
-    fn prop_checkComparisonWithLeadingX2() { assert!(emits(check_comparison_with_leading_x, "test x$foo = xlol")); }
+    fn prop_checkComparisonWithLeadingX2() {
+        assert!(emits(check_comparison_with_leading_x, "test x$foo = xlol"));
+    }
     #[test]
-    fn prop_checkComparisonWithLeadingX3() { assert!(!emits(check_comparison_with_leading_x, "[ $foo = xbar ]")); }
+    fn prop_checkComparisonWithLeadingX3() {
+        assert!(!emits(check_comparison_with_leading_x, "[ $foo = xbar ]"));
+    }
     #[test]
-    fn prop_checkComparisonWithLeadingX4() { assert!(!emits(check_comparison_with_leading_x, "test $foo = xbar")); }
+    fn prop_checkComparisonWithLeadingX4() {
+        assert!(!emits(check_comparison_with_leading_x, "test $foo = xbar"));
+    }
     #[test]
-    fn prop_checkComparisonWithLeadingX5() { assert!(emits(check_comparison_with_leading_x, "[ \"x$foo\" = 'xlol' ]")); }
+    fn prop_checkComparisonWithLeadingX5() {
+        assert!(emits(
+            check_comparison_with_leading_x,
+            "[ \"x$foo\" = 'xlol' ]"
+        ));
+    }
     #[test]
-    fn prop_checkComparisonWithLeadingX6() { assert!(emits(check_comparison_with_leading_x, "[ x\"$foo\" = x'lol' ]")); }
+    fn prop_checkComparisonWithLeadingX6() {
+        assert!(emits(
+            check_comparison_with_leading_x,
+            "[ x\"$foo\" = x'lol' ]"
+        ));
+    }
     #[test]
-    fn prop_checkComparisonWithLeadingX7() { assert!(emits(check_comparison_with_leading_x, "[ X$foo != Xbar ]")); }
+    fn prop_checkComparisonWithLeadingX7() {
+        assert!(emits(check_comparison_with_leading_x, "[ X$foo != Xbar ]"));
+    }
 
     // ---- SC2001 checkEchoSed ----
     #[test]
-    fn prop_checkEchoSed1() { assert!(emits_code(check_echo_sed, "FOO=$(echo \"$cow\" | sed 's/foo/bar/g')", 2001)); }
+    fn prop_checkEchoSed1() {
+        assert!(emits_code(
+            check_echo_sed,
+            "FOO=$(echo \"$cow\" | sed 's/foo/bar/g')",
+            2001
+        ));
+    }
     #[test]
-    fn prop_checkEchoSed1b() { assert!(emits_code(check_echo_sed, "FOO=$(sed 's/foo/bar/g' <<< \"$cow\")", 2001)); }
+    fn prop_checkEchoSed1b() {
+        assert!(emits_code(
+            check_echo_sed,
+            "FOO=$(sed 's/foo/bar/g' <<< \"$cow\")",
+            2001
+        ));
+    }
     #[test]
-    fn prop_checkEchoSed2() { assert!(emits_code(check_echo_sed, "rm $(echo $cow | sed -e 's,foo,bar,')", 2001)); }
+    fn prop_checkEchoSed2() {
+        assert!(emits_code(
+            check_echo_sed,
+            "rm $(echo $cow | sed -e 's,foo,bar,')",
+            2001
+        ));
+    }
     #[test]
-    fn prop_checkEchoSed2b() { assert!(emits_code(check_echo_sed, "rm $(sed -e 's,foo,bar,' <<< $cow)", 2001)); }
+    fn prop_checkEchoSed2b() {
+        assert!(emits_code(
+            check_echo_sed,
+            "rm $(sed -e 's,foo,bar,' <<< $cow)",
+            2001
+        ));
+    }
 
     // ---- SC2093 checkSpuriousExec ----
     #[test]
-    fn prop_checkSpuriousExec1() { assert!(emits(check_spurious_exec, "exec foo; true")); }
+    fn prop_checkSpuriousExec1() {
+        assert!(emits(check_spurious_exec, "exec foo; true"));
+    }
     #[test]
-    fn prop_checkSpuriousExec2() { assert!(emits(check_spurious_exec, "if a; then exec b; exec c; fi")); }
+    fn prop_checkSpuriousExec2() {
+        assert!(emits(check_spurious_exec, "if a; then exec b; exec c; fi"));
+    }
     #[test]
-    fn prop_checkSpuriousExec3() { assert!(!emits(check_spurious_exec, "echo cow; exec foo")); }
+    fn prop_checkSpuriousExec3() {
+        assert!(!emits(check_spurious_exec, "echo cow; exec foo"));
+    }
     #[test]
-    fn prop_checkSpuriousExec4() { assert!(!emits(check_spurious_exec, "if a; then exec b; fi")); }
+    fn prop_checkSpuriousExec4() {
+        assert!(!emits(check_spurious_exec, "if a; then exec b; fi"));
+    }
     #[test]
-    fn prop_checkSpuriousExec5() { assert!(!emits(check_spurious_exec, "exec > file; cmd")); }
+    fn prop_checkSpuriousExec5() {
+        assert!(!emits(check_spurious_exec, "exec > file; cmd"));
+    }
     #[test]
-    fn prop_checkSpuriousExec6() { assert!(emits(check_spurious_exec, "exec foo > file; cmd")); }
+    fn prop_checkSpuriousExec6() {
+        assert!(emits(check_spurious_exec, "exec foo > file; cmd"));
+    }
     #[test]
-    fn prop_checkSpuriousExec7() { assert!(!emits(check_spurious_exec, "exec file; echo failed; exit 3")); }
+    fn prop_checkSpuriousExec7() {
+        assert!(!emits(
+            check_spurious_exec,
+            "exec file; echo failed; exit 3"
+        ));
+    }
     #[test]
-    fn prop_checkSpuriousExec8() { assert!(!emits(check_spurious_exec, "exec {origout}>&1- >tmp.log 2>&1; bar")); }
+    fn prop_checkSpuriousExec8() {
+        assert!(!emits(
+            check_spurious_exec,
+            "exec {origout}>&1- >tmp.log 2>&1; bar"
+        ));
+    }
     #[test]
-    fn prop_checkSpuriousExec9() { assert!(emits(check_spurious_exec, "for file in rc.d/*; do exec \"$file\"; done")); }
+    fn prop_checkSpuriousExec9() {
+        assert!(emits(
+            check_spurious_exec,
+            "for file in rc.d/*; do exec \"$file\"; done"
+        ));
+    }
     #[test]
-    fn prop_checkSpuriousExec10() { assert!(!emits(check_spurious_exec, "exec file; r=$?; printf >&2 'failed\n'; return $r")); }
+    fn prop_checkSpuriousExec10() {
+        assert!(!emits(
+            check_spurious_exec,
+            "exec file; r=$?; printf >&2 'failed\n'; return $r"
+        ));
+    }
     #[test]
-    fn prop_checkSpuriousExec11() { assert!(!emits(check_spurious_exec, "exec file; :")); }
+    fn prop_checkSpuriousExec11() {
+        assert!(!emits(check_spurious_exec, "exec file; :"));
+    }
     #[test]
-    fn prop_checkSpuriousExec12() { assert!(!emits(check_spurious_exec, "#!/bin/bash\nshopt -s execfail; exec foo; exec bar; echo 'Error'; exit 1;")); }
+    fn prop_checkSpuriousExec12() {
+        assert!(!emits(
+            check_spurious_exec,
+            "#!/bin/bash\nshopt -s execfail; exec foo; exec bar; echo 'Error'; exit 1;"
+        ));
+    }
     #[test]
-    fn prop_checkSpuriousExec13() { assert!(emits(check_spurious_exec, "#!/bin/dash\nshopt -s execfail; exec foo; exec bar; echo 'Error'; exit 1;")); }
+    fn prop_checkSpuriousExec13() {
+        assert!(emits(
+            check_spurious_exec,
+            "#!/bin/dash\nshopt -s execfail; exec foo; exec bar; echo 'Error'; exit 1;"
+        ));
+    }
 
     // ---- SC2270-2282 checkEqualsInCommand ----
-    fn eic_codes(s: &str) -> Vec<i64> { codes(check_equals_in_command, s) }
+    fn eic_codes(s: &str) -> Vec<i64> {
+        codes(check_equals_in_command, s)
+    }
     #[test]
-    fn prop_checkEqualsInCommand1a() { assert_eq!(eic_codes("#!/bin/bash\n0='foo'"), vec![2277]); }
+    fn prop_checkEqualsInCommand1a() {
+        assert_eq!(eic_codes("#!/bin/bash\n0='foo'"), vec![2277]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand2a() { assert_eq!(eic_codes("#!/bin/ksh \n$0='foo'"), vec![2278]); }
+    fn prop_checkEqualsInCommand2a() {
+        assert_eq!(eic_codes("#!/bin/ksh \n$0='foo'"), vec![2278]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand3a() { assert_eq!(eic_codes("#!/bin/dash\n${0}='foo'"), vec![2279]); }
+    fn prop_checkEqualsInCommand3a() {
+        assert_eq!(eic_codes("#!/bin/dash\n${0}='foo'"), vec![2279]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand4a() { assert_eq!(eic_codes("#!/bin/sh  \n0='foo'"), vec![2280]); }
+    fn prop_checkEqualsInCommand4a() {
+        assert_eq!(eic_codes("#!/bin/sh  \n0='foo'"), vec![2280]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand1b() { assert_eq!(eic_codes("1='foo'"), vec![2270]); }
+    fn prop_checkEqualsInCommand1b() {
+        assert_eq!(eic_codes("1='foo'"), vec![2270]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand2b() { assert_eq!(eic_codes("${2}='foo'"), vec![2270]); }
+    fn prop_checkEqualsInCommand2b() {
+        assert_eq!(eic_codes("${2}='foo'"), vec![2270]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand1c() { assert_eq!(eic_codes("var$((n+1))=value"), vec![2271]); }
+    fn prop_checkEqualsInCommand1c() {
+        assert_eq!(eic_codes("var$((n+1))=value"), vec![2271]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand2c() { assert_eq!(eic_codes("var${x}=value"), vec![2271]); }
+    fn prop_checkEqualsInCommand2c() {
+        assert_eq!(eic_codes("var${x}=value"), vec![2271]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand3c() { assert_eq!(eic_codes("var$((cmd))x='foo'"), vec![2271]); }
+    fn prop_checkEqualsInCommand3c() {
+        assert_eq!(eic_codes("var$((cmd))x='foo'"), vec![2271]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand4c() { assert_eq!(eic_codes("$(cmd)='foo'"), vec![2271]); }
+    fn prop_checkEqualsInCommand4c() {
+        assert_eq!(eic_codes("$(cmd)='foo'"), vec![2271]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand1d() { assert_eq!(eic_codes("======="), vec![2273]); }
+    fn prop_checkEqualsInCommand1d() {
+        assert_eq!(eic_codes("======="), vec![2273]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand2d() { assert_eq!(eic_codes("======= Here ======="), vec![2274]); }
+    fn prop_checkEqualsInCommand2d() {
+        assert_eq!(eic_codes("======= Here ======="), vec![2274]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand3d() { assert_eq!(eic_codes("foo\n=42"), vec![2275]); }
+    fn prop_checkEqualsInCommand3d() {
+        assert_eq!(eic_codes("foo\n=42"), vec![2275]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand1e() { assert_eq!(eic_codes("--foo=bar"), Vec::<i64>::new()); }
+    fn prop_checkEqualsInCommand1e() {
+        assert_eq!(eic_codes("--foo=bar"), Vec::<i64>::new());
+    }
     #[test]
-    fn prop_checkEqualsInCommand2e() { assert_eq!(eic_codes("$(cmd)'=foo'"), Vec::<i64>::new()); }
+    fn prop_checkEqualsInCommand2e() {
+        assert_eq!(eic_codes("$(cmd)'=foo'"), Vec::<i64>::new());
+    }
     #[test]
-    fn prop_checkEqualsInCommand3e() { assert_eq!(eic_codes("var${x}/=value"), vec![2276]); }
+    fn prop_checkEqualsInCommand3e() {
+        assert_eq!(eic_codes("var${x}/=value"), vec![2276]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand4e() { assert_eq!(eic_codes("${}=value"), vec![2276]); }
+    fn prop_checkEqualsInCommand4e() {
+        assert_eq!(eic_codes("${}=value"), vec![2276]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand5e() { assert_eq!(eic_codes("${#x}=value"), vec![2276]); }
+    fn prop_checkEqualsInCommand5e() {
+        assert_eq!(eic_codes("${#x}=value"), vec![2276]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand1f() { assert_eq!(eic_codes("$var=foo"), vec![2281]); }
+    fn prop_checkEqualsInCommand1f() {
+        assert_eq!(eic_codes("$var=foo"), vec![2281]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand2f() { assert_eq!(eic_codes("$a=$b"), vec![2281]); }
+    fn prop_checkEqualsInCommand2f() {
+        assert_eq!(eic_codes("$a=$b"), vec![2281]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand3f() { assert_eq!(eic_codes("${var}=foo"), vec![2281]); }
+    fn prop_checkEqualsInCommand3f() {
+        assert_eq!(eic_codes("${var}=foo"), vec![2281]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand4f() { assert_eq!(eic_codes("${var[42]}=foo"), vec![2281]); }
+    fn prop_checkEqualsInCommand4f() {
+        assert_eq!(eic_codes("${var[42]}=foo"), vec![2281]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand5f() { assert_eq!(eic_codes("$var+=foo"), vec![2281]); }
+    fn prop_checkEqualsInCommand5f() {
+        assert_eq!(eic_codes("$var+=foo"), vec![2281]);
+    }
     #[test]
-    fn prop_checkEqualsInCommand1g() { assert_eq!(eic_codes("411toppm=true"), vec![2282]); }
+    fn prop_checkEqualsInCommand1g() {
+        assert_eq!(eic_codes("411toppm=true"), vec![2282]);
+    }
 
     // ---- SC2144/2198/2199/2200/2201/2202/2203/2208/2245/2255 checkTestArgumentSplitting ----
     #[test]
-    fn prop_checkTestArgumentSplitting1() { assert!(emits(check_test_argument_splitting, "[ -e *.mp3 ]")); }
+    fn prop_checkTestArgumentSplitting1() {
+        assert!(emits(check_test_argument_splitting, "[ -e *.mp3 ]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting2() { assert!(!emits(check_test_argument_splitting, "[[ $a == *b* ]]")); }
+    fn prop_checkTestArgumentSplitting2() {
+        assert!(!emits(check_test_argument_splitting, "[[ $a == *b* ]]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting3() { assert!(emits(check_test_argument_splitting, "[[ *.png == '' ]]")); }
+    fn prop_checkTestArgumentSplitting3() {
+        assert!(emits(check_test_argument_splitting, "[[ *.png == '' ]]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting4() { assert!(emits(check_test_argument_splitting, "[[ foo == f{o,oo,ooo} ]]")); }
+    fn prop_checkTestArgumentSplitting4() {
+        assert!(emits(
+            check_test_argument_splitting,
+            "[[ foo == f{o,oo,ooo} ]]"
+        ));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting5() { assert!(emits(check_test_argument_splitting, "[[ $@ ]]")); }
+    fn prop_checkTestArgumentSplitting5() {
+        assert!(emits(check_test_argument_splitting, "[[ $@ ]]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting6() { assert!(emits(check_test_argument_splitting, "[ -e $@ ]")); }
+    fn prop_checkTestArgumentSplitting6() {
+        assert!(emits(check_test_argument_splitting, "[ -e $@ ]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting7() { assert!(emits(check_test_argument_splitting, "[ $@ == $@ ]")); }
+    fn prop_checkTestArgumentSplitting7() {
+        assert!(emits(check_test_argument_splitting, "[ $@ == $@ ]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting8() { assert!(emits(check_test_argument_splitting, "[[ $@ = $@ ]]")); }
+    fn prop_checkTestArgumentSplitting8() {
+        assert!(emits(check_test_argument_splitting, "[[ $@ = $@ ]]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting9() { assert!(!emits(check_test_argument_splitting, "[[ foo =~ bar{1,2} ]]")); }
+    fn prop_checkTestArgumentSplitting9() {
+        assert!(!emits(
+            check_test_argument_splitting,
+            "[[ foo =~ bar{1,2} ]]"
+        ));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting10() { assert!(!emits(check_test_argument_splitting, "[ \"$@\" ]")); }
+    fn prop_checkTestArgumentSplitting10() {
+        assert!(!emits(check_test_argument_splitting, "[ \"$@\" ]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting11() { assert!(emits(check_test_argument_splitting, "[[ \"$@\" ]]")); }
+    fn prop_checkTestArgumentSplitting11() {
+        assert!(emits(check_test_argument_splitting, "[[ \"$@\" ]]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting12() { assert!(emits(check_test_argument_splitting, "[ *.png ]")); }
+    fn prop_checkTestArgumentSplitting12() {
+        assert!(emits(check_test_argument_splitting, "[ *.png ]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting13() { assert!(emits(check_test_argument_splitting, "[ \"$@\" == \"\" ]")); }
+    fn prop_checkTestArgumentSplitting13() {
+        assert!(emits(check_test_argument_splitting, "[ \"$@\" == \"\" ]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting14() { assert!(emits(check_test_argument_splitting, "[[ \"$@\" == \"\" ]]")); }
+    fn prop_checkTestArgumentSplitting14() {
+        assert!(emits(check_test_argument_splitting, "[[ \"$@\" == \"\" ]]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting15() { assert!(!emits(check_test_argument_splitting, "[[ \"$*\" == \"\" ]]")); }
+    fn prop_checkTestArgumentSplitting15() {
+        assert!(!emits(
+            check_test_argument_splitting,
+            "[[ \"$*\" == \"\" ]]"
+        ));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting16() { assert!(!emits(check_test_argument_splitting, "[[ -v foo[123] ]]")); }
+    fn prop_checkTestArgumentSplitting16() {
+        assert!(!emits(check_test_argument_splitting, "[[ -v foo[123] ]]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting17() { assert!(!emits(check_test_argument_splitting, "#!/bin/ksh\n[ -e foo* ]")); }
+    fn prop_checkTestArgumentSplitting17() {
+        assert!(!emits(
+            check_test_argument_splitting,
+            "#!/bin/ksh\n[ -e foo* ]"
+        ));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting18() { assert!(emits(check_test_argument_splitting, "#!/bin/ksh\n[ -d foo* ]")); }
+    fn prop_checkTestArgumentSplitting18() {
+        assert!(emits(
+            check_test_argument_splitting,
+            "#!/bin/ksh\n[ -d foo* ]"
+        ));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting19() { assert!(!emits(check_test_argument_splitting, "[[ var[x] -eq 2*3 ]]")); }
+    fn prop_checkTestArgumentSplitting19() {
+        assert!(!emits(
+            check_test_argument_splitting,
+            "[[ var[x] -eq 2*3 ]]"
+        ));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting20() { assert!(emits(check_test_argument_splitting, "[ var[x] -eq 2 ]")); }
+    fn prop_checkTestArgumentSplitting20() {
+        assert!(emits(check_test_argument_splitting, "[ var[x] -eq 2 ]"));
+    }
     #[test]
-    fn prop_checkTestArgumentSplitting21() { assert!(emits(check_test_argument_splitting, "[ 6 -eq 2*3 ]")); }
+    fn prop_checkTestArgumentSplitting21() {
+        assert!(emits(check_test_argument_splitting, "[ 6 -eq 2*3 ]"));
+    }
 
     // ---- SC2216/2217/2259/2260/2261 checkPipeToNowhere ----
     #[test]
-    fn prop_checkPipeToNowhere1() { assert!(emits(check_pipe_to_nowhere, "foo | echo bar")); }
+    fn prop_checkPipeToNowhere1() {
+        assert!(emits(check_pipe_to_nowhere, "foo | echo bar"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere2() { assert!(emits(check_pipe_to_nowhere, "basename < file.txt")); }
+    fn prop_checkPipeToNowhere2() {
+        assert!(emits(check_pipe_to_nowhere, "basename < file.txt"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere3() { assert!(emits(check_pipe_to_nowhere, "printf 'Lol' <<< str")); }
+    fn prop_checkPipeToNowhere3() {
+        assert!(emits(check_pipe_to_nowhere, "printf 'Lol' <<< str"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere4() { assert!(emits(check_pipe_to_nowhere, "printf 'Lol' << eof\nlol\neof\n")); }
+    fn prop_checkPipeToNowhere4() {
+        assert!(emits(
+            check_pipe_to_nowhere,
+            "printf 'Lol' << eof\nlol\neof\n"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere5() { assert!(!emits(check_pipe_to_nowhere, "echo foo | xargs du")); }
+    fn prop_checkPipeToNowhere5() {
+        assert!(!emits(check_pipe_to_nowhere, "echo foo | xargs du"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere6() { assert!(!emits(check_pipe_to_nowhere, "ls | echo $(cat)")); }
+    fn prop_checkPipeToNowhere6() {
+        assert!(!emits(check_pipe_to_nowhere, "ls | echo $(cat)"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere7() { assert!(!emits(check_pipe_to_nowhere, "echo foo | var=$(cat) ls")); }
+    fn prop_checkPipeToNowhere7() {
+        assert!(!emits(check_pipe_to_nowhere, "echo foo | var=$(cat) ls"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere9() { assert!(!emits(check_pipe_to_nowhere, "mv -i f . < /dev/stdin")); }
+    fn prop_checkPipeToNowhere9() {
+        assert!(!emits(check_pipe_to_nowhere, "mv -i f . < /dev/stdin"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere10() { assert!(emits(check_pipe_to_nowhere, "ls > file | grep foo")); }
+    fn prop_checkPipeToNowhere10() {
+        assert!(emits(check_pipe_to_nowhere, "ls > file | grep foo"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere11() { assert!(emits(check_pipe_to_nowhere, "ls | grep foo < file")); }
+    fn prop_checkPipeToNowhere11() {
+        assert!(emits(check_pipe_to_nowhere, "ls | grep foo < file"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere12() { assert!(emits(check_pipe_to_nowhere, "ls > foo > bar")); }
+    fn prop_checkPipeToNowhere12() {
+        assert!(emits(check_pipe_to_nowhere, "ls > foo > bar"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere13() { assert!(emits(check_pipe_to_nowhere, "ls > foo 2> bar > baz")); }
+    fn prop_checkPipeToNowhere13() {
+        assert!(emits(check_pipe_to_nowhere, "ls > foo 2> bar > baz"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere14() { assert!(emits(check_pipe_to_nowhere, "ls > foo &> bar")); }
+    fn prop_checkPipeToNowhere14() {
+        assert!(emits(check_pipe_to_nowhere, "ls > foo &> bar"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere15() { assert!(!emits(check_pipe_to_nowhere, "ls > foo 2> bar |& grep 'No space left'")); }
+    fn prop_checkPipeToNowhere15() {
+        assert!(!emits(
+            check_pipe_to_nowhere,
+            "ls > foo 2> bar |& grep 'No space left'"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere16() { assert!(!emits(check_pipe_to_nowhere, "echo World | cat << EOF\nhello $(cat)\nEOF\n")); }
+    fn prop_checkPipeToNowhere16() {
+        assert!(!emits(
+            check_pipe_to_nowhere,
+            "echo World | cat << EOF\nhello $(cat)\nEOF\n"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere17() { assert!(emits(check_pipe_to_nowhere, "echo World | cat << 'EOF'\nhello $(cat)\nEOF\n")); }
+    fn prop_checkPipeToNowhere17() {
+        assert!(emits(
+            check_pipe_to_nowhere,
+            "echo World | cat << 'EOF'\nhello $(cat)\nEOF\n"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere18() { assert!(!emits(check_pipe_to_nowhere, "ls 1>&3 3>&1 3>&- | wc -l")); }
+    fn prop_checkPipeToNowhere18() {
+        assert!(!emits(check_pipe_to_nowhere, "ls 1>&3 3>&1 3>&- | wc -l"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere19() { assert!(!emits(check_pipe_to_nowhere, "find . -print0 | du --files0-from=/dev/stdin")); }
+    fn prop_checkPipeToNowhere19() {
+        assert!(!emits(
+            check_pipe_to_nowhere,
+            "find . -print0 | du --files0-from=/dev/stdin"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere20() { assert!(!emits(check_pipe_to_nowhere, "find . | du --exclude-from=/dev/fd/0")); }
+    fn prop_checkPipeToNowhere20() {
+        assert!(!emits(
+            check_pipe_to_nowhere,
+            "find . | du --exclude-from=/dev/fd/0"
+        ));
+    }
     #[test]
-    fn prop_checkPipeToNowhere21() { assert!(!emits(check_pipe_to_nowhere, "yes | cp -ri foo/* bar")); }
+    fn prop_checkPipeToNowhere21() {
+        assert!(!emits(check_pipe_to_nowhere, "yes | cp -ri foo/* bar"));
+    }
     #[test]
-    fn prop_checkPipeToNowhere22() { assert!(!emits(check_pipe_to_nowhere, "yes | rm --interactive *")); }
+    fn prop_checkPipeToNowhere22() {
+        assert!(!emits(check_pipe_to_nowhere, "yes | rm --interactive *"));
+    }
 
     // ---- SC2233/2234/2235 checkSubshelledTests ----
     #[test]
-    fn prop_checkSubshelledTests1() { assert!(emits(check_subshelled_tests, "a && ( [ b ] || ! [ c ] )")); }
+    fn prop_checkSubshelledTests1() {
+        assert!(emits(check_subshelled_tests, "a && ( [ b ] || ! [ c ] )"));
+    }
     #[test]
-    fn prop_checkSubshelledTests2() { assert!(emits(check_subshelled_tests, "( [ a ] )")); }
+    fn prop_checkSubshelledTests2() {
+        assert!(emits(check_subshelled_tests, "( [ a ] )"));
+    }
     #[test]
-    fn prop_checkSubshelledTests3() { assert!(emits(check_subshelled_tests, "( [ a ] && [ b ] || test c )")); }
+    fn prop_checkSubshelledTests3() {
+        assert!(emits(
+            check_subshelled_tests,
+            "( [ a ] && [ b ] || test c )"
+        ));
+    }
     #[test]
-    fn prop_checkSubshelledTests4() { assert!(emits(check_subshelled_tests, "( [ a ] && { [ b ] && [ c ]; } )")); }
+    fn prop_checkSubshelledTests4() {
+        assert!(emits(
+            check_subshelled_tests,
+            "( [ a ] && { [ b ] && [ c ]; } )"
+        ));
+    }
     #[test]
-    fn prop_checkSubshelledTests5() { assert!(!emits(check_subshelled_tests, "( [[ ${var:=x} = y ]] )")); }
+    fn prop_checkSubshelledTests5() {
+        assert!(!emits(check_subshelled_tests, "( [[ ${var:=x} = y ]] )"));
+    }
     #[test]
-    fn prop_checkSubshelledTests6() { assert!(!emits(check_subshelled_tests, "( [[ $((i++)) = 10 ]] )")); }
+    fn prop_checkSubshelledTests6() {
+        assert!(!emits(check_subshelled_tests, "( [[ $((i++)) = 10 ]] )"));
+    }
     #[test]
-    fn prop_checkSubshelledTests7() { assert!(!emits(check_subshelled_tests, "( [[ $((i+=1)) = 10 ]] )")); }
+    fn prop_checkSubshelledTests7() {
+        assert!(!emits(check_subshelled_tests, "( [[ $((i+=1)) = 10 ]] )"));
+    }
     #[test]
-    fn prop_checkSubshelledTests8() { assert!(emits(check_subshelled_tests, "# shellcheck disable=SC2234\nf() ( [[ x ]] )")); }
+    fn prop_checkSubshelledTests8() {
+        assert!(emits(
+            check_subshelled_tests,
+            "# shellcheck disable=SC2234\nf() ( [[ x ]] )"
+        ));
+    }
 }
-
-
-
-

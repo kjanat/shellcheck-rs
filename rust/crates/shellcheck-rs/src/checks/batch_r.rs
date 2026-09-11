@@ -20,14 +20,12 @@
 //! so the `prop_` tests exercise them the same way the QuickCheck props do.
 #![allow(unused_imports, unused_variables, dead_code)]
 
-use crate::analyzer_lib::{
-    err, info, style, warn, Checker, Out, Parameters,
-};
+use crate::analyzer_lib::{Checker, Out, Parameters, err, info, style, warn};
 use crate::ast::*;
 use crate::astlib::{self, get_literal_string, only_literal_string};
 use crate::cfg::{
-    get_braced_modifier, get_braced_reference, is_variable_char, is_variable_name,
-    oversimplify, oversimplify_concat,
+    get_braced_modifier, get_braced_reference, is_variable_char, is_variable_name, oversimplify,
+    oversimplify_concat,
 };
 use crate::interface::Shell;
 
@@ -86,13 +84,14 @@ fn lit_string(t: &Token) -> Option<String> {
     fn go(t: &Token, out: &mut String) -> bool {
         use InnerToken::*;
         match &*t.inner {
-            T_Literal(s) | T_SingleQuoted(s) | T_DollarSingleQuoted(s)
+            T_Literal(s)
+            | T_SingleQuoted(s)
+            | T_DollarSingleQuoted(s)
             | T_ParamSubSpecialChar(s) => {
                 out.push_str(s);
                 true
             }
-            T_NormalWord(l) | T_DoubleQuoted(l) | T_DollarDoubleQuoted(l)
-            | TA_Expansion(l) => {
+            T_NormalWord(l) | T_DoubleQuoted(l) | T_DollarDoubleQuoted(l) | TA_Expansion(l) => {
                 for p in l {
                     if !go(p, out) {
                         return false;
@@ -104,11 +103,7 @@ fn lit_string(t: &Token) -> Option<String> {
         }
     }
     let mut s = String::new();
-    if go(t, &mut s) {
-        Some(s)
-    } else {
-        None
-    }
+    if go(t, &mut s) { Some(s) } else { None }
 }
 
 /// `getWordParts`.
@@ -135,7 +130,10 @@ fn is_flag(t: &Token) -> bool {
 // ===========================================================================
 
 fn check_for_decimals_gated(p: &Parameters, t: &Token, out: &mut Out) {
-    if matches!(p.shell, Shell::Sh | Shell::Dash | Shell::BusyboxSh | Shell::Bash) {
+    if matches!(
+        p.shell,
+        Shell::Sh | Shell::Dash | Shell::BusyboxSh | Shell::Bash
+    ) {
         check_for_decimals(p, t, out);
     }
 }
@@ -147,7 +145,12 @@ fn check_for_decimals(_p: &Parameters, t: &Token, out: &mut Out) {
             if let Some(first) = chars.next() {
                 let rest: String = chars.collect();
                 if first.is_ascii_digit() && rest.contains('.') {
-                    err(out, t.id(), 2079, "(( )) doesn't support decimals. Use bc or awk.");
+                    err(
+                        out,
+                        t.id(),
+                        2079,
+                        "(( )) doesn't support decimals. Use bc or awk.",
+                    );
                 }
             }
         }
@@ -197,17 +200,16 @@ fn brace_element_to_string(t: &Token) -> String {
     fn go(t: &Token, out: &mut String) {
         use InnerToken::*;
         match &*t.inner {
-            T_Literal(s) | T_SingleQuoted(s) | T_DollarSingleQuoted(s)
+            T_Literal(s)
+            | T_SingleQuoted(s)
+            | T_DollarSingleQuoted(s)
             | T_ParamSubSpecialChar(s) => out.push_str(s),
-            T_NormalWord(l) | T_DoubleQuoted(l) | T_DollarDoubleQuoted(l)
-            | TA_Expansion(l) => {
+            T_NormalWord(l) | T_DoubleQuoted(l) | T_DollarDoubleQuoted(l) | TA_Expansion(l) => {
                 for p in l {
                     go(p, out);
                 }
             }
-            T_DollarBraced { .. } | T_DollarExpansion(_) | T_DollarArithmetic(_) => {
-                out.push('$')
-            }
+            T_DollarBraced { .. } | T_DollarExpansion(_) | T_DollarArithmetic(_) => out.push('$'),
             _ => out.push('-'),
         }
     }
@@ -219,9 +221,7 @@ fn brace_element_to_string(t: &Token) -> String {
 /// `isEvaled`: the closest enclosing command is an unqualified `eval`.
 fn is_evaled(p: &Parameters, t: &Token) -> bool {
     match get_closest_command(p, t) {
-        Some(cmd) => {
-            crate::analyzer_lib::get_command_name(cmd).as_deref() == Some("eval")
-        }
+        Some(cmd) => crate::analyzer_lib::get_command_name(cmd).as_deref() == Some("eval"),
         None => false,
     }
 }
@@ -395,7 +395,11 @@ fn bashism_binary_test(op: &str) -> Option<(i64, &'static [Shell], String)> {
             &[Shell::Dash, Shell::BusyboxSh][..],
             format!("lexicographical {} is", op),
         ),
-        "==" => (3014, &[Shell::BusyboxSh][..], format!("{} in place of = is", op)),
+        "==" => (
+            3014,
+            &[Shell::BusyboxSh][..],
+            format!("{} in place of = is", op),
+        ),
         "=~" => (3015, &[][..], format!("{} regex matching is", op)),
         _ => return None,
     })
@@ -410,11 +414,27 @@ fn bashism_unary_test(op: &str) -> Option<(i64, &'static [Shell], String)> {
         ),
         "-a" => (3017, &[][..], format!("unary {} in place of -e is", op)),
         "-o" => (3062, &[][..], format!("test {} to check options is", op)),
-        "-R" => (3063, &[][..], format!("test {} and namerefs in general are", op)),
+        "-R" => (
+            3063,
+            &[][..],
+            format!("test {} and namerefs in general are", op),
+        ),
         "-N" => (3064, &[][..], format!("test {} is", op)),
-        "-k" => (3065, &[Shell::Dash, Shell::BusyboxSh][..], format!("test {} is", op)),
-        "-G" => (3066, &[Shell::Dash, Shell::BusyboxSh][..], format!("test {} is", op)),
-        "-O" => (3067, &[Shell::Dash, Shell::BusyboxSh][..], format!("test {} is", op)),
+        "-k" => (
+            3065,
+            &[Shell::Dash, Shell::BusyboxSh][..],
+            format!("test {} is", op),
+        ),
+        "-G" => (
+            3066,
+            &[Shell::Dash, Shell::BusyboxSh][..],
+            format!("test {} is", op),
+        ),
+        "-O" => (
+            3067,
+            &[Shell::Dash, Shell::BusyboxSh][..],
+            format!("test {} is", op),
+        ),
         _ => return None,
     })
 }
@@ -436,16 +456,53 @@ fn check_test_op(
 // ---- bash-only variables (SC3028) ----
 
 const BASH_VARS: &[&str] = &[
-    "OSTYPE", "MACHTYPE", "HOSTTYPE", "HOSTNAME", "DIRSTACK", "EUID", "UID", "SHLVL",
-    "PIPESTATUS", "SHELLOPTS", "_", "BASH", "BASHOPTS", "BASHPID", "BASH_ALIASES",
-    "BASH_ARGC", "BASH_ARGV", "BASH_ARGV0", "BASH_CMDS", "BASH_COMMAND",
-    "BASH_EXECUTION_STRING", "BASH_LINENO", "BASH_LOADABLES_PATH", "BASH_REMATCH",
-    "BASH_SOURCE", "BASH_SUBSHELL", "BASH_VERSINFO", "COMP_CWORD", "COMP_KEY",
-    "COMP_LINE", "COMP_POINT", "COMP_TYPE", "COMP_WORDBREAKS", "COMP_WORDS", "COPROC",
-    "FUNCNAME", "GROUPS", "HISTCMD", "MAPFILE",
+    "OSTYPE",
+    "MACHTYPE",
+    "HOSTTYPE",
+    "HOSTNAME",
+    "DIRSTACK",
+    "EUID",
+    "UID",
+    "SHLVL",
+    "PIPESTATUS",
+    "SHELLOPTS",
+    "_",
+    "BASH",
+    "BASHOPTS",
+    "BASHPID",
+    "BASH_ALIASES",
+    "BASH_ARGC",
+    "BASH_ARGV",
+    "BASH_ARGV0",
+    "BASH_CMDS",
+    "BASH_COMMAND",
+    "BASH_EXECUTION_STRING",
+    "BASH_LINENO",
+    "BASH_LOADABLES_PATH",
+    "BASH_REMATCH",
+    "BASH_SOURCE",
+    "BASH_SUBSHELL",
+    "BASH_VERSINFO",
+    "COMP_CWORD",
+    "COMP_KEY",
+    "COMP_LINE",
+    "COMP_POINT",
+    "COMP_TYPE",
+    "COMP_WORDBREAKS",
+    "COMP_WORDS",
+    "COPROC",
+    "FUNCNAME",
+    "GROUPS",
+    "HISTCMD",
+    "MAPFILE",
 ];
 const BASH_DYNAMIC_VARS: &[&str] = &[
-    "BASH_MONOSECONDS", "EPOCHREALTIME", "EPOCHSECONDS", "RANDOM", "SECONDS", "SRANDOM",
+    "BASH_MONOSECONDS",
+    "EPOCHREALTIME",
+    "EPOCHSECONDS",
+    "RANDOM",
+    "SECONDS",
+    "SRANDOM",
 ];
 const DASH_VARS: &[&str] = &["_"];
 
@@ -456,8 +513,8 @@ fn is_assigned(p: &Parameters, name: &str) -> bool {
 }
 
 fn is_bash_variable(p: &Parameters, var: &str) -> bool {
-    let dyn_or_static = BASH_DYNAMIC_VARS.contains(&var)
-        || (BASH_VARS.contains(&var) && !is_assigned(p, var));
+    let dyn_or_static =
+        BASH_DYNAMIC_VARS.contains(&var) || (BASH_VARS.contains(&var) && !is_assigned(p, var));
     dyn_or_static && !(is_dash(p) && DASH_VARS.contains(&var))
 }
 
@@ -597,9 +654,7 @@ fn is_only_redirection(t: &Token) -> bool {
             is_only_redirection(&commands[0])
         }
         InnerToken::T_Annotation { token, .. } => is_only_redirection(token),
-        InnerToken::T_Redirecting { redirs, cmd } if !redirs.is_empty() => {
-            is_only_redirection(cmd)
-        }
+        InnerToken::T_Redirecting { redirs, cmd } if !redirs.is_empty() => is_only_redirection(cmd),
         InnerToken::T_SimpleCommand { assignments, words } => {
             assignments.is_empty() && words.is_empty()
         }
@@ -654,7 +709,10 @@ fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
         T_DollarBracket(_) => warn_msg(out, p, id, 3007, "$[..] in place of $((..)) is"),
         T_SelectIn { .. } => warn_msg(out, p, id, 3008, "select loops are"),
         T_BraceExpansion(_) => warn_msg(out, p, id, 3009, "brace expansion is"),
-        T_Condition { typ: ConditionType::DoubleBracket, .. } => {
+        T_Condition {
+            typ: ConditionType::DoubleBracket,
+            ..
+        } => {
             if !is_busybox(p) {
                 warn_msg(out, p, id, 3010, "[[ ]] is");
             }
@@ -664,9 +722,7 @@ fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
         TC_Binary { op, .. } => check_test_op(out, p, id, op, bashism_binary_test),
         TC_Unary { op, .. } => check_test_op(out, p, id, op, bashism_unary_test),
 
-        TA_Unary { op, .. }
-            if matches!(op.as_str(), "|++" | "|--" | "++|" | "--|") =>
-        {
+        TA_Unary { op, .. } if matches!(op.as_str(), "|++" | "|--" | "++|" | "--|") => {
             let filtered: String = op.chars().filter(|&c| c != '|').collect();
             warn_msg(out, p, id, 3018, &format!("{} is", filtered));
         }
@@ -676,7 +732,10 @@ fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
 
         T_FdRedirect { fd, target } => bashism_fd_redirect(p, id, fd, target, out),
 
-        T_Assignment { mode: AssignmentMode::Append, .. } => {
+        T_Assignment {
+            mode: AssignmentMode::Append,
+            ..
+        } => {
             warn_msg(out, p, id, 3024, "+= is");
         }
 
@@ -690,7 +749,13 @@ fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
         }
 
         T_Glob(s) if s.contains("[^") => {
-            warn_msg(out, p, id, 3026, "^ in place of ! in glob bracket expressions is");
+            warn_msg(
+                out,
+                p,
+                id,
+                3026,
+                "^ in place of ! in glob bracket expressions is",
+            );
         }
 
         TA_Variable { name, .. } if is_bash_variable(p, name) => {
@@ -702,7 +767,13 @@ fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
         T_CoProc { .. } => warn_msg(out, p, id, 3032, "coproc is"),
 
         T_Function { name, .. } if !is_variable_name(name) => {
-            warn_msg(out, p, id, 3033, "naming functions outside [a-zA-Z_][a-zA-Z0-9_]* is");
+            warn_msg(
+                out,
+                p,
+                id,
+                3033,
+                "naming functions outside [a-zA-Z_][a-zA-Z0-9_]* is",
+            );
         }
 
         T_DollarExpansion(list) if list.len() == 1 && is_only_redirection(&list[0]) => {
@@ -754,14 +825,11 @@ fn bashism_fd_redirect(p: &Parameters, id: Id, fd: &str, target: &Token, out: &m
     if fd.is_empty() {
         if let InnerToken::T_IoFile { op, file } = &*target.inner {
             if matches!(&*op.inner, InnerToken::T_GREATAND) {
-                if !only_literal_string(file).chars().all(|c| c.is_ascii_digit()) {
-                    warn_msg(
-                        out,
-                        p,
-                        id,
-                        3021,
-                        ">& filename (as opposed to >& fd) is",
-                    );
+                if !only_literal_string(file)
+                    .chars()
+                    .all(|c| c.is_ascii_digit())
+                {
+                    warn_msg(out, p, id, 3021, ">& filename (as opposed to >& fd) is");
                 }
                 return;
             }
@@ -873,8 +941,22 @@ fn check_simple_command(p: &Parameters, t: &Token, words: &[Token], out: &mut Ou
 }
 
 const UNSUPPORTED_COMMANDS: &[&str] = &[
-    "let", "caller", "builtin", "complete", "compgen", "declare", "dirs", "disown", "enable",
-    "mapfile", "readarray", "pushd", "popd", "shopt", "suspend", "typeset",
+    "let",
+    "caller",
+    "builtin",
+    "complete",
+    "compgen",
+    "declare",
+    "dirs",
+    "disown",
+    "enable",
+    "mapfile",
+    "readarray",
+    "pushd",
+    "popd",
+    "shopt",
+    "suspend",
+    "typeset",
 ];
 
 fn allowed_flags(name: &str, p: &Parameters) -> Option<Vec<&'static str>> {
@@ -911,7 +993,9 @@ fn allowed_flags(name: &str, p: &Parameters) -> Option<Vec<&'static str>> {
         }
         "ulimit" => {
             if dash {
-                vec!["H", "S", "a", "c", "d", "f", "l", "m", "n", "p", "r", "s", "t", "v", "w"]
+                vec![
+                    "H", "S", "a", "c", "d", "f", "l", "m", "n", "p", "r", "s", "t", "v", "w",
+                ]
             } else {
                 vec!["H", "S", "a", "c", "d", "f", "n", "s", "t", "v"]
             }
@@ -979,10 +1063,22 @@ fn check_general_command(p: &Parameters, t: &Token, words: &[Token], out: &mut O
                     warn_msg(out, p, token.id(), 3047, &format!("trapping {} is", s));
                 }
                 if !is_busybox(p) && upper.starts_with("SIG") {
-                    warn_msg(out, p, token.id(), 3048, "prefixing signal names with 'SIG' is");
+                    warn_msg(
+                        out,
+                        p,
+                        token.id(),
+                        3048,
+                        "prefixing signal names with 'SIG' is",
+                    );
                 }
                 if !is_dash(p) && upper != s {
-                    warn_msg(out, p, token.id(), 3049, "using lower/mixed case for signal names is");
+                    warn_msg(
+                        out,
+                        p,
+                        token.id(),
+                        3049,
+                        "using lower/mixed case for signal names is",
+                    );
                 }
             }
         }
@@ -1005,8 +1101,20 @@ fn check_general_command(p: &Parameters, t: &Token, words: &[Token], out: &mut O
 
 const SET_OPTIONS: &str = "abCefhmnuvxo";
 const SET_LONG_OPTIONS: &[&str] = &[
-    "allexport", "errexit", "ignoreeof", "monitor", "noclobber", "noexec", "noglob", "nolog",
-    "notify", "nounset", "pipefail", "verbose", "vi", "xtrace",
+    "allexport",
+    "errexit",
+    "ignoreeof",
+    "monitor",
+    "noclobber",
+    "noexec",
+    "noglob",
+    "nolog",
+    "notify",
+    "nounset",
+    "pipefail",
+    "verbose",
+    "vi",
+    "xtrace",
 ];
 
 fn set_starts_option(s: &str) -> bool {
@@ -1025,7 +1133,9 @@ fn set_o_flag(s: &str) -> bool {
 }
 fn set_valid_flags(s: &str) -> bool {
     let b = s.as_bytes();
-    b.len() >= 2 && (b[0] == b'-' || b[0] == b'+') && s[1..].chars().all(|c| SET_OPTIONS.contains(c))
+    b.len() >= 2
+        && (b[0] == b'-' || b[0] == b'+')
+        && s[1..].chars().all(|c| SET_OPTIONS.contains(c))
 }
 
 fn check_set_options(p: &Parameters, t: &Token, out: &mut Out) {
@@ -1123,7 +1233,9 @@ fn check_bashisms_gaps(p: &Parameters, t: &Token, out: &mut Out) {
             } else if fd.is_empty() {
                 if let InnerToken::T_IoFile { op, file } = &*target.inner {
                     if matches!(&*op.inner, InnerToken::T_GREATAND)
-                        && !only_literal_string(file).chars().all(|c| c.is_ascii_digit())
+                        && !only_literal_string(file)
+                            .chars()
+                            .all(|c| c.is_ascii_digit())
                     {
                         warn_msg(out, p, id, 3021, ">& filename (as opposed to >& fd) is");
                     }
@@ -1134,7 +1246,10 @@ fn check_bashisms_gaps(p: &Parameters, t: &Token, out: &mut Out) {
         }
 
         // += append assignments.
-        T_Assignment { mode: AssignmentMode::Append, .. } => {
+        T_Assignment {
+            mode: AssignmentMode::Append,
+            ..
+        } => {
             warn_msg(out, p, id, 3024, "+= is");
         }
 
@@ -1190,373 +1305,757 @@ mod tests {
 
     // ---- checkForDecimals (SC2079) ----
     #[test]
-    fn prop_checkForDecimals1() { assert!(emits(check_for_decimals, "((3.14*c))")); }
+    fn prop_checkForDecimals1() {
+        assert!(emits(check_for_decimals, "((3.14*c))"));
+    }
     #[test]
-    fn prop_checkForDecimals2() { assert!(emits(check_for_decimals, "foo[1.2]=bar")); }
+    fn prop_checkForDecimals2() {
+        assert!(emits(check_for_decimals, "foo[1.2]=bar"));
+    }
     #[test]
-    fn prop_checkForDecimals3() { assert!(!emits(check_for_decimals, "declare -A foo; foo[1.2]=bar")); }
+    fn prop_checkForDecimals3() {
+        assert!(!emits(check_for_decimals, "declare -A foo; foo[1.2]=bar"));
+    }
 
     // ---- checkBashisms (full SC30xx family) ----
     #[test]
-    fn prop_checkBashisms() { assert!(emits(bashism, "while read a; do :; done < <(a)")); }
-    #[test]
-    fn prop_checkBashisms2() { assert!(!emits(bashism, "[ foo -nt bar ]")); }
-    #[test]
-    fn prop_checkBashisms3() { assert!(emits(bashism, "echo $((i++))")); }
-    #[test]
-    fn prop_checkBashisms4() { assert!(emits(bashism, "rm !(*.hs)")); }
-    #[test]
-    fn prop_checkBashisms5() { assert!(emits(bashism, "source file")); }
-    #[test]
-    fn prop_checkBashisms6() { assert!(emits(bashism, "[ \"$a\" == 42 ]")); }
-    #[test]
-    fn prop_checkBashisms6b() { assert!(emits(bashism, "test \"$a\" == 42")); }
-    #[test]
-    fn prop_checkBashisms6c() { assert!(emits(bashism, "[ foo =~ bar ]")); }
-    #[test]
-    fn prop_checkBashisms6d() { assert!(emits(bashism, "test foo =~ bar")); }
-    #[test]
-    fn prop_checkBashisms7() { assert!(emits(bashism, "echo ${var[1]}")); }
-    #[test]
-    fn prop_checkBashisms8() { assert!(emits(bashism, "echo ${!var[@]}")); }
-    #[test]
-    fn prop_checkBashisms9() { assert!(emits(bashism, "echo ${!var*}")); }
-    #[test]
-    fn prop_checkBashisms10() { assert!(emits(bashism, "echo ${var:4:12}")); }
-    #[test]
-    fn prop_checkBashisms11() { assert!(!emits(bashism, "echo ${var:-4}")); }
-    #[test]
-    fn prop_checkBashisms12() { assert!(emits(bashism, "echo ${var//foo/bar}")); }
-    #[test]
-    fn prop_checkBashisms13() { assert!(emits(bashism, "exec -c env")); }
-    #[test]
-    fn prop_checkBashisms14() { assert!(emits(bashism, "echo -n \"Foo: \"")); }
-    #[test]
-    fn prop_checkBashisms15() { assert!(emits(bashism, "let n++")); }
-    #[test]
-    fn prop_checkBashisms16() { assert!(emits(bashism, "echo $RANDOM")); }
-    #[test]
-    fn prop_checkBashisms17() { assert!(emits(bashism, "echo $((RANDOM%6+1))")); }
-    #[test]
-    fn prop_checkBashisms18() { assert!(emits(bashism, "foo &> /dev/null")); }
-    #[test]
-    fn prop_checkBashisms19() { assert!(emits(bashism, "foo > file*.txt")); }
-    #[test]
-    fn prop_checkBashisms20() { assert!(emits(bashism, "read -ra foo")); }
-    #[test]
-    fn prop_checkBashisms21() { assert!(emits(bashism, "[ -a foo ]")); }
-    #[test]
-    fn prop_checkBashisms21b() { assert!(emits(bashism, "test -a foo")); }
-    #[test]
-    fn prop_checkBashisms22() { assert!(!emits(bashism, "[ foo -a bar ]")); }
-    #[test]
-    fn prop_checkBashisms23() { assert!(emits(bashism, "trap mything ERR INT")); }
-    #[test]
-    fn prop_checkBashisms24() { assert!(!emits(bashism, "trap mything INT TERM")); }
-    #[test]
-    fn prop_checkBashisms25() { assert!(emits(bashism, "cat < /dev/tcp/host/123")); }
-    #[test]
-    fn prop_checkBashisms26() { assert!(emits(bashism, "trap mything ERR SIGTERM")); }
-    #[test]
-    fn prop_checkBashisms27() { assert!(emits(bashism, "echo *[^0-9]*")); }
-    #[test]
-    fn prop_checkBashisms28() { assert!(emits(bashism, "exec {n}>&2")); }
-    #[test]
-    fn prop_checkBashisms29() { assert!(emits(bashism, "echo ${!var}")); }
-    #[test]
-    fn prop_checkBashisms30() { assert!(emits(bashism, "printf -v '%s' \"$1\"")); }
-    #[test]
-    fn prop_checkBashisms31() { assert!(emits(bashism, "printf '%q' \"$1\"")); }
-    #[test]
-    fn prop_checkBashisms32() { assert!(!emits(bashism, "#!/bin/dash\n[ foo -nt bar ]")); }
-    #[test]
-    fn prop_checkBashisms33() { assert!(emits(bashism, "#!/bin/sh\necho -n foo")); }
-    #[test]
-    fn prop_checkBashisms34() { assert!(!emits(bashism, "#!/bin/dash\necho -n foo")); }
-    #[test]
-    fn prop_checkBashisms35() { assert!(!emits(bashism, "#!/bin/dash\nlocal foo")); }
-    #[test]
-    fn prop_checkBashisms36() { assert!(!emits(bashism, "#!/bin/dash\nread -p foo -r bar")); }
-    #[test]
-    fn prop_checkBashisms37() { assert!(!emits(bashism, "HOSTNAME=foo; echo $HOSTNAME")); }
-    #[test]
-    fn prop_checkBashisms38() { assert!(emits(bashism, "RANDOM=9; echo $RANDOM")); }
-    #[test]
-    fn prop_checkBashisms39() { assert!(emits(bashism, "foo-bar() { true; }")); }
-    #[test]
-    fn prop_checkBashisms40() { assert!(emits(bashism, "echo $(<file)")); }
-    #[test]
-    fn prop_checkBashisms41() { assert!(emits(bashism, "echo `<file`")); }
-    #[test]
-    fn prop_checkBashisms42() { assert!(emits(bashism, "trap foo int")); }
-    #[test]
-    fn prop_checkBashisms43() { assert!(emits(bashism, "trap foo sigint")); }
-    #[test]
-    fn prop_checkBashisms44() { assert!(!emits(bashism, "#!/bin/dash\ntrap foo int")); }
-    #[test]
-    fn prop_checkBashisms45() { assert!(!emits(bashism, "#!/bin/dash\ntrap foo INT")); }
-    #[test]
-    fn prop_checkBashisms46() { assert!(emits(bashism, "#!/bin/dash\ntrap foo SIGINT")); }
-    #[test]
-    fn prop_checkBashisms47() { assert!(emits(bashism, "#!/bin/dash\necho foo 42>/dev/null")); }
-    #[test]
-    fn prop_checkBashisms48() { assert!(!emits(bashism, "#!/bin/sh\necho $LINENO")); }
-    #[test]
-    fn prop_checkBashisms49() { assert!(emits(bashism, "#!/bin/dash\necho $MACHTYPE")); }
-    #[test]
-    fn prop_checkBashisms50() { assert!(emits(bashism, "#!/bin/sh\ncmd >& file")); }
-    #[test]
-    fn prop_checkBashisms51() { assert!(!emits(bashism, "#!/bin/sh\ncmd 2>&1")); }
-    #[test]
-    fn prop_checkBashisms52() { assert!(!emits(bashism, "#!/bin/sh\ncmd >&2")); }
-    #[test]
-    fn prop_checkBashisms52b() { assert!(!emits(bashism, "#!/bin/sh\ncmd >& $var")); }
-    #[test]
-    fn prop_checkBashisms52c() { assert!(emits(bashism, "#!/bin/sh\ncmd >& $dir/$var")); }
-    #[test]
-    fn prop_checkBashisms53() { assert!(!emits(bashism, "#!/bin/sh\nprintf -- -f\n")); }
-    #[test]
-    fn prop_checkBashisms54() { assert!(emits(bashism, "#!/bin/sh\nfoo+=bar")); }
-    #[test]
-    fn prop_checkBashisms55() { assert!(emits(bashism, "#!/bin/sh\necho ${@%foo}")); }
-    #[test]
-    fn prop_checkBashisms56() { assert!(!emits(bashism, "#!/bin/sh\necho ${##}")); }
-    #[test]
-    fn prop_checkBashisms57() { assert!(!emits(bashism, "#!/bin/dash\nulimit -m unlimited")); }
-    #[test]
-    fn prop_checkBashisms58() { assert!(emits(bashism, "#!/bin/sh\nulimit -x unlimited")); }
-    #[test]
-    fn prop_checkBashisms59() { assert!(emits(bashism, "#!/bin/sh\njobs -s")); }
-    #[test]
-    fn prop_checkBashisms60() { assert!(!emits(bashism, "#!/bin/sh\njobs -p")); }
-    #[test]
-    fn prop_checkBashisms61() { assert!(!emits(bashism, "#!/bin/sh\njobs -lp")); }
-    #[test]
-    fn prop_checkBashisms62() { assert!(emits(bashism, "#!/bin/sh\nexport -f foo")); }
-    #[test]
-    fn prop_checkBashisms63() { assert!(!emits(bashism, "#!/bin/sh\nexport -p")); }
-    #[test]
-    fn prop_checkBashisms64() { assert!(emits(bashism, "#!/bin/sh\nreadonly -a")); }
-    #[test]
-    fn prop_checkBashisms65() { assert!(!emits(bashism, "#!/bin/sh\nreadonly -p")); }
-    #[test]
-    fn prop_checkBashisms66() { assert!(!emits(bashism, "#!/bin/sh\ncd -P .")); }
-    #[test]
-    fn prop_checkBashisms67() { assert!(emits(bashism, "#!/bin/sh\ncd -P -e .")); }
-    #[test]
-    fn prop_checkBashisms68() { assert!(emits(bashism, "#!/bin/sh\numask -p")); }
-    #[test]
-    fn prop_checkBashisms69() { assert!(!emits(bashism, "#!/bin/sh\numask -S")); }
-    #[test]
-    fn prop_checkBashisms70() { assert!(emits(bashism, "#!/bin/sh\ntrap -l")); }
-    #[test]
-    fn prop_checkBashisms71() { assert!(emits(bashism, "#!/bin/sh\ntype -a ls")); }
-    #[test]
-    fn prop_checkBashisms72() { assert!(!emits(bashism, "#!/bin/sh\ntype ls")); }
-    #[test]
-    fn prop_checkBashisms73() { assert!(emits(bashism, "#!/bin/sh\nunset -n namevar")); }
-    #[test]
-    fn prop_checkBashisms74() { assert!(!emits(bashism, "#!/bin/sh\nunset -f namevar")); }
-    #[test]
-    fn prop_checkBashisms75() { assert!(!emits(bashism, "#!/bin/sh\necho \"-n foo\"")); }
-    #[test]
-    fn prop_checkBashisms76() { assert!(!emits(bashism, "#!/bin/sh\necho \"-ne foo\"")); }
-    #[test]
-    fn prop_checkBashisms77() { assert!(!emits(bashism, "#!/bin/sh\necho -Q foo")); }
-    #[test]
-    fn prop_checkBashisms78() { assert!(emits(bashism, "#!/bin/sh\necho -ne foo")); }
-    #[test]
-    fn prop_checkBashisms79() { assert!(emits(bashism, "#!/bin/sh\nhash -l")); }
-    #[test]
-    fn prop_checkBashisms80() { assert!(!emits(bashism, "#!/bin/sh\nhash -r")); }
-    #[test]
-    fn prop_checkBashisms81() { assert!(!emits(bashism, "#!/bin/dash\nhash -v")); }
-    #[test]
-    fn prop_checkBashisms82() { assert!(!emits(bashism, "#!/bin/sh\nset -v +o allexport -o errexit -C")); }
-    #[test]
-    fn prop_checkBashisms83() { assert!(!emits(bashism, "#!/bin/sh\nset --")); }
-    #[test]
-    fn prop_checkBashisms84() { assert!(!emits(bashism, "#!/bin/sh\nset -o pipefail")); }
-    #[test]
-    fn prop_checkBashisms85() { assert!(emits(bashism, "#!/bin/sh\nset -B")); }
-    #[test]
-    fn prop_checkBashisms86() { assert!(!emits(bashism, "#!/bin/dash\nset -o emacs")); }
-    #[test]
-    fn prop_checkBashisms87() { assert!(emits(bashism, "#!/bin/sh\nset -o emacs")); }
-    #[test]
-    fn prop_checkBashisms88() { assert!(!emits(bashism, "#!/bin/sh\nset -- wget -o foo 'https://some.url'")); }
-    #[test]
-    fn prop_checkBashisms89() { assert!(!emits(bashism, "#!/bin/sh\nopts=$-\nset -\"$opts\"")); }
-    #[test]
-    fn prop_checkBashisms90() { assert!(!emits(bashism, "#!/bin/sh\nset -o \"$opt\"")); }
-    #[test]
-    fn prop_checkBashisms91() { assert!(emits(bashism, "#!/bin/sh\nwait -n")); }
-    #[test]
-    fn prop_checkBashisms92() { assert!(emits(bashism, "#!/bin/sh\necho $((16#FF))")); }
-    #[test]
-    fn prop_checkBashisms93() { assert!(emits(bashism, "#!/bin/sh\necho $(( 10#$(date +%m) ))")); }
-    #[test]
-    fn prop_checkBashisms94() { assert!(emits(bashism, "#!/bin/sh\n[ -v var ]")); }
-    #[test]
-    fn prop_checkBashisms95() { assert!(emits(bashism, "#!/bin/sh\necho $_")); }
-    #[test]
-    fn prop_checkBashisms96() { assert!(!emits(bashism, "#!/bin/dash\necho $_")); }
-    #[test]
-    fn prop_checkBashisms97() { assert!(emits(bashism, "#!/bin/sh\necho ${var,}")); }
-    #[test]
-    fn prop_checkBashisms98() { assert!(emits(bashism, "#!/bin/sh\necho ${var^^}")); }
-    #[test]
-    fn prop_checkBashisms99() { assert!(emits(bashism, "#!/bin/dash\necho [^f]oo")); }
-    #[test]
-    fn prop_checkBashisms100() { assert!(emits(bashism, "read -r")); }
-    #[test]
-    fn prop_checkBashisms101() { assert!(emits(bashism, "read")); }
-    #[test]
-    fn prop_checkBashisms102() { assert!(!emits(bashism, "read -r foo")); }
-    #[test]
-    fn prop_checkBashisms103() { assert!(!emits(bashism, "read foo")); }
-    #[test]
-    fn prop_checkBashisms104() { assert!(!emits(bashism, "read ''")); }
-    #[test]
-    fn prop_checkBashisms105() { assert!(!emits(bashism, "#!/bin/busybox sh\nset -o pipefail")); }
-    #[test]
-    fn prop_checkBashisms106() { assert!(!emits(bashism, "#!/bin/busybox sh\nx=x\n[[ \"$x\" = \"$x\" ]]")); }
-    #[test]
-    fn prop_checkBashisms107() { assert!(!emits(bashism, "#!/bin/busybox sh\nx=x\n[ \"$x\" == \"$x\" ]")); }
-    #[test]
-    fn prop_checkBashisms108() { assert!(!emits(bashism, "#!/bin/busybox sh\necho magic &> /dev/null")); }
-    #[test]
-    fn prop_checkBashisms109() { assert!(!emits(bashism, "#!/bin/busybox sh\ntrap stop EXIT SIGTERM")); }
-    #[test]
-    fn prop_checkBashisms110() { assert!(!emits(bashism, "#!/bin/busybox sh\nsource /dev/null")); }
-    #[test]
-    fn prop_checkBashisms111() { assert!(emits(bashism, "#!/bin/dash\nx='test'\n${x:0:3}")); }
-    #[test]
-    fn prop_checkBashisms112() { assert!(!emits(bashism, "#!/bin/busybox sh\nx='test'\n${x:0:3}")); }
-    #[test]
-    fn prop_checkBashisms113() { assert!(emits(bashism, "#!/bin/dash\nx='test'\n${x/st/xt}")); }
-    #[test]
-    fn prop_checkBashisms114() { assert!(!emits(bashism, "#!/bin/busybox sh\nx='test'\n${x/st/xt}")); }
-    #[test]
-    fn prop_checkBashisms115() { assert!(emits(bashism, "#!/bin/busybox sh\nx='test'\n${!x}")); }
-    #[test]
-    fn prop_checkBashisms116() { assert!(emits(bashism, "#!/bin/busybox sh\nx='test'\n${x[1]}")); }
-    #[test]
-    fn prop_checkBashisms117() { assert!(emits(bashism, "#!/bin/busybox sh\nx='test'\n${!x[@]}")); }
-    #[test]
-    fn prop_checkBashisms118() { assert!(emits(bashism, "#!/bin/busybox sh\nxyz=1\n${!x*}")); }
-    #[test]
-    fn prop_checkBashisms119() { assert!(emits(bashism, "#!/bin/busybox sh\nx='test'\n${x^^[t]}")); }
-    #[test]
-    fn prop_checkBashisms120() { assert!(emits(bashism, "#!/bin/sh\n[ x == y ]")); }
-    #[test]
-    fn prop_checkBashisms121() { assert!(!emits(bashism, "#!/bin/sh\n# shellcheck shell=busybox\n[ x == y ]")); }
-    #[test]
-    fn prop_checkBashisms122() { assert!(!emits(bashism, "#!/bin/dash\n$'a'")); }
-    #[test]
-    fn prop_checkBashisms123() { assert!(!emits(bashism, "#!/bin/busybox sh\n$'a'")); }
-    #[test]
-    fn prop_checkBashisms124() { assert!(emits(bashism, "#!/bin/dash\ntype -p test")); }
-    #[test]
-    fn prop_checkBashisms125() { assert!(!emits(bashism, "#!/bin/busybox sh\ntype -p test")); }
-    #[test]
-    fn prop_checkBashisms126() { assert!(!emits(bashism, "#!/bin/busybox sh\nread -p foo -r bar")); }
-    #[test]
-    fn prop_checkBashisms127() { assert!(!emits(bashism, "#!/bin/busybox sh\necho -ne foo")); }
-    #[test]
-    fn prop_checkBashisms128() { assert!(emits(bashism, "#!/bin/dash\ntype -p test")); }
-    #[test]
-    fn prop_checkBashisms129() { assert!(emits(bashism, "#!/bin/sh\n[ -k /tmp ]")); }
-    #[test]
-    fn prop_checkBashisms130() { assert!(!emits(bashism, "#!/bin/dash\ntest -k /tmp")); }
-    #[test]
-    fn prop_checkBashisms131() { assert!(emits(bashism, "#!/bin/sh\n[ -o errexit ]")); }
-    #[test]
-    fn prop_checkBashisms132() { assert!(emits(bashism, "echo $\"hello\"")); }
-    #[test]
-    fn prop_checkBashisms133() { assert!(emits(bashism, "for ((;;)); do break; done")); }
-    #[test]
-    fn prop_checkBashisms134() { assert!(emits(bashism, "((var))")); }
-    #[test]
-    fn prop_checkBashisms135() { assert!(emits(bashism, "var=$[1 + 2]")); }
-    #[test]
-    fn prop_checkBashisms136() { assert!(emits(bashism, "select x; do :; done")); }
-    #[test]
-    fn prop_checkBashisms137a() { assert!(emits(bashism, "echo {a,b}")); }
-    #[test]
-    fn prop_checkBashisms137b() { assert!(emits(bashism, "echo {1..3}")); }
-    #[test]
-    fn prop_checkBashisms138() { assert!(emits(bashism, "[[ -z $var ]]")); }
-    #[test]
-    fn prop_checkBashisms139() { assert!(emits(bashism, "cat <<< foo")); }
-    #[test]
-    fn prop_checkBashisms140a() { assert!(emits(bashism, "[ a '<' b ]")); }
-    #[test]
-    fn prop_checkBashisms140b() { assert!(emits(bashism, "test a \\> b")); }
-    #[test]
-    fn prop_checkBashisms141() { assert!(emits(bashism, "echo $((2 ** 3))")); }
-    #[test]
-    fn prop_checkBashisms142() { assert!(emits(bashism, "make |& less")); }
-    #[test]
-    fn prop_checkBashisms143() { assert!(emits(bashism, "a=(foo bar)")); }
-    #[test]
-    fn prop_checkBashisms144() { assert!(emits(bashism, "coproc foo { :; }")); }
-    #[test]
-    fn prop_checkBashisms145a() { assert!(emits(bashism, "#!/bin/sh\nf() { local i=; }")); }
-    #[test]
-    fn prop_checkBashisms145b() { assert!(!emits(bashism, "#!/bin/dash\nf() { local i=; }")); }
-    #[test]
-    fn prop_checkBashisms146() { assert!(emits(bashism, "readarray < file")); }
-    #[test]
-    fn prop_checkBashisms147() { assert!(emits(bashism, "[ -R ref ]")); }
-    #[test]
-    fn prop_checkBashisms148() { assert!(emits(bashism, "[ -N file ]")); }
-    #[test]
-    fn prop_checkBashisms149() { assert!(emits(bashism, "[ -G file ]")); }
-    #[test]
-    fn prop_checkBashisms150() { assert!(emits(bashism, "[ -O file ]")); }
+    fn prop_checkBashisms() {
+        assert!(emits(bashism, "while read a; do :; done < <(a)"));
+    }
+    #[test]
+    fn prop_checkBashisms2() {
+        assert!(!emits(bashism, "[ foo -nt bar ]"));
+    }
+    #[test]
+    fn prop_checkBashisms3() {
+        assert!(emits(bashism, "echo $((i++))"));
+    }
+    #[test]
+    fn prop_checkBashisms4() {
+        assert!(emits(bashism, "rm !(*.hs)"));
+    }
+    #[test]
+    fn prop_checkBashisms5() {
+        assert!(emits(bashism, "source file"));
+    }
+    #[test]
+    fn prop_checkBashisms6() {
+        assert!(emits(bashism, "[ \"$a\" == 42 ]"));
+    }
+    #[test]
+    fn prop_checkBashisms6b() {
+        assert!(emits(bashism, "test \"$a\" == 42"));
+    }
+    #[test]
+    fn prop_checkBashisms6c() {
+        assert!(emits(bashism, "[ foo =~ bar ]"));
+    }
+    #[test]
+    fn prop_checkBashisms6d() {
+        assert!(emits(bashism, "test foo =~ bar"));
+    }
+    #[test]
+    fn prop_checkBashisms7() {
+        assert!(emits(bashism, "echo ${var[1]}"));
+    }
+    #[test]
+    fn prop_checkBashisms8() {
+        assert!(emits(bashism, "echo ${!var[@]}"));
+    }
+    #[test]
+    fn prop_checkBashisms9() {
+        assert!(emits(bashism, "echo ${!var*}"));
+    }
+    #[test]
+    fn prop_checkBashisms10() {
+        assert!(emits(bashism, "echo ${var:4:12}"));
+    }
+    #[test]
+    fn prop_checkBashisms11() {
+        assert!(!emits(bashism, "echo ${var:-4}"));
+    }
+    #[test]
+    fn prop_checkBashisms12() {
+        assert!(emits(bashism, "echo ${var//foo/bar}"));
+    }
+    #[test]
+    fn prop_checkBashisms13() {
+        assert!(emits(bashism, "exec -c env"));
+    }
+    #[test]
+    fn prop_checkBashisms14() {
+        assert!(emits(bashism, "echo -n \"Foo: \""));
+    }
+    #[test]
+    fn prop_checkBashisms15() {
+        assert!(emits(bashism, "let n++"));
+    }
+    #[test]
+    fn prop_checkBashisms16() {
+        assert!(emits(bashism, "echo $RANDOM"));
+    }
+    #[test]
+    fn prop_checkBashisms17() {
+        assert!(emits(bashism, "echo $((RANDOM%6+1))"));
+    }
+    #[test]
+    fn prop_checkBashisms18() {
+        assert!(emits(bashism, "foo &> /dev/null"));
+    }
+    #[test]
+    fn prop_checkBashisms19() {
+        assert!(emits(bashism, "foo > file*.txt"));
+    }
+    #[test]
+    fn prop_checkBashisms20() {
+        assert!(emits(bashism, "read -ra foo"));
+    }
+    #[test]
+    fn prop_checkBashisms21() {
+        assert!(emits(bashism, "[ -a foo ]"));
+    }
+    #[test]
+    fn prop_checkBashisms21b() {
+        assert!(emits(bashism, "test -a foo"));
+    }
+    #[test]
+    fn prop_checkBashisms22() {
+        assert!(!emits(bashism, "[ foo -a bar ]"));
+    }
+    #[test]
+    fn prop_checkBashisms23() {
+        assert!(emits(bashism, "trap mything ERR INT"));
+    }
+    #[test]
+    fn prop_checkBashisms24() {
+        assert!(!emits(bashism, "trap mything INT TERM"));
+    }
+    #[test]
+    fn prop_checkBashisms25() {
+        assert!(emits(bashism, "cat < /dev/tcp/host/123"));
+    }
+    #[test]
+    fn prop_checkBashisms26() {
+        assert!(emits(bashism, "trap mything ERR SIGTERM"));
+    }
+    #[test]
+    fn prop_checkBashisms27() {
+        assert!(emits(bashism, "echo *[^0-9]*"));
+    }
+    #[test]
+    fn prop_checkBashisms28() {
+        assert!(emits(bashism, "exec {n}>&2"));
+    }
+    #[test]
+    fn prop_checkBashisms29() {
+        assert!(emits(bashism, "echo ${!var}"));
+    }
+    #[test]
+    fn prop_checkBashisms30() {
+        assert!(emits(bashism, "printf -v '%s' \"$1\""));
+    }
+    #[test]
+    fn prop_checkBashisms31() {
+        assert!(emits(bashism, "printf '%q' \"$1\""));
+    }
+    #[test]
+    fn prop_checkBashisms32() {
+        assert!(!emits(bashism, "#!/bin/dash\n[ foo -nt bar ]"));
+    }
+    #[test]
+    fn prop_checkBashisms33() {
+        assert!(emits(bashism, "#!/bin/sh\necho -n foo"));
+    }
+    #[test]
+    fn prop_checkBashisms34() {
+        assert!(!emits(bashism, "#!/bin/dash\necho -n foo"));
+    }
+    #[test]
+    fn prop_checkBashisms35() {
+        assert!(!emits(bashism, "#!/bin/dash\nlocal foo"));
+    }
+    #[test]
+    fn prop_checkBashisms36() {
+        assert!(!emits(bashism, "#!/bin/dash\nread -p foo -r bar"));
+    }
+    #[test]
+    fn prop_checkBashisms37() {
+        assert!(!emits(bashism, "HOSTNAME=foo; echo $HOSTNAME"));
+    }
+    #[test]
+    fn prop_checkBashisms38() {
+        assert!(emits(bashism, "RANDOM=9; echo $RANDOM"));
+    }
+    #[test]
+    fn prop_checkBashisms39() {
+        assert!(emits(bashism, "foo-bar() { true; }"));
+    }
+    #[test]
+    fn prop_checkBashisms40() {
+        assert!(emits(bashism, "echo $(<file)"));
+    }
+    #[test]
+    fn prop_checkBashisms41() {
+        assert!(emits(bashism, "echo `<file`"));
+    }
+    #[test]
+    fn prop_checkBashisms42() {
+        assert!(emits(bashism, "trap foo int"));
+    }
+    #[test]
+    fn prop_checkBashisms43() {
+        assert!(emits(bashism, "trap foo sigint"));
+    }
+    #[test]
+    fn prop_checkBashisms44() {
+        assert!(!emits(bashism, "#!/bin/dash\ntrap foo int"));
+    }
+    #[test]
+    fn prop_checkBashisms45() {
+        assert!(!emits(bashism, "#!/bin/dash\ntrap foo INT"));
+    }
+    #[test]
+    fn prop_checkBashisms46() {
+        assert!(emits(bashism, "#!/bin/dash\ntrap foo SIGINT"));
+    }
+    #[test]
+    fn prop_checkBashisms47() {
+        assert!(emits(bashism, "#!/bin/dash\necho foo 42>/dev/null"));
+    }
+    #[test]
+    fn prop_checkBashisms48() {
+        assert!(!emits(bashism, "#!/bin/sh\necho $LINENO"));
+    }
+    #[test]
+    fn prop_checkBashisms49() {
+        assert!(emits(bashism, "#!/bin/dash\necho $MACHTYPE"));
+    }
+    #[test]
+    fn prop_checkBashisms50() {
+        assert!(emits(bashism, "#!/bin/sh\ncmd >& file"));
+    }
+    #[test]
+    fn prop_checkBashisms51() {
+        assert!(!emits(bashism, "#!/bin/sh\ncmd 2>&1"));
+    }
+    #[test]
+    fn prop_checkBashisms52() {
+        assert!(!emits(bashism, "#!/bin/sh\ncmd >&2"));
+    }
+    #[test]
+    fn prop_checkBashisms52b() {
+        assert!(!emits(bashism, "#!/bin/sh\ncmd >& $var"));
+    }
+    #[test]
+    fn prop_checkBashisms52c() {
+        assert!(emits(bashism, "#!/bin/sh\ncmd >& $dir/$var"));
+    }
+    #[test]
+    fn prop_checkBashisms53() {
+        assert!(!emits(bashism, "#!/bin/sh\nprintf -- -f\n"));
+    }
+    #[test]
+    fn prop_checkBashisms54() {
+        assert!(emits(bashism, "#!/bin/sh\nfoo+=bar"));
+    }
+    #[test]
+    fn prop_checkBashisms55() {
+        assert!(emits(bashism, "#!/bin/sh\necho ${@%foo}"));
+    }
+    #[test]
+    fn prop_checkBashisms56() {
+        assert!(!emits(bashism, "#!/bin/sh\necho ${##}"));
+    }
+    #[test]
+    fn prop_checkBashisms57() {
+        assert!(!emits(bashism, "#!/bin/dash\nulimit -m unlimited"));
+    }
+    #[test]
+    fn prop_checkBashisms58() {
+        assert!(emits(bashism, "#!/bin/sh\nulimit -x unlimited"));
+    }
+    #[test]
+    fn prop_checkBashisms59() {
+        assert!(emits(bashism, "#!/bin/sh\njobs -s"));
+    }
+    #[test]
+    fn prop_checkBashisms60() {
+        assert!(!emits(bashism, "#!/bin/sh\njobs -p"));
+    }
+    #[test]
+    fn prop_checkBashisms61() {
+        assert!(!emits(bashism, "#!/bin/sh\njobs -lp"));
+    }
+    #[test]
+    fn prop_checkBashisms62() {
+        assert!(emits(bashism, "#!/bin/sh\nexport -f foo"));
+    }
+    #[test]
+    fn prop_checkBashisms63() {
+        assert!(!emits(bashism, "#!/bin/sh\nexport -p"));
+    }
+    #[test]
+    fn prop_checkBashisms64() {
+        assert!(emits(bashism, "#!/bin/sh\nreadonly -a"));
+    }
+    #[test]
+    fn prop_checkBashisms65() {
+        assert!(!emits(bashism, "#!/bin/sh\nreadonly -p"));
+    }
+    #[test]
+    fn prop_checkBashisms66() {
+        assert!(!emits(bashism, "#!/bin/sh\ncd -P ."));
+    }
+    #[test]
+    fn prop_checkBashisms67() {
+        assert!(emits(bashism, "#!/bin/sh\ncd -P -e ."));
+    }
+    #[test]
+    fn prop_checkBashisms68() {
+        assert!(emits(bashism, "#!/bin/sh\numask -p"));
+    }
+    #[test]
+    fn prop_checkBashisms69() {
+        assert!(!emits(bashism, "#!/bin/sh\numask -S"));
+    }
+    #[test]
+    fn prop_checkBashisms70() {
+        assert!(emits(bashism, "#!/bin/sh\ntrap -l"));
+    }
+    #[test]
+    fn prop_checkBashisms71() {
+        assert!(emits(bashism, "#!/bin/sh\ntype -a ls"));
+    }
+    #[test]
+    fn prop_checkBashisms72() {
+        assert!(!emits(bashism, "#!/bin/sh\ntype ls"));
+    }
+    #[test]
+    fn prop_checkBashisms73() {
+        assert!(emits(bashism, "#!/bin/sh\nunset -n namevar"));
+    }
+    #[test]
+    fn prop_checkBashisms74() {
+        assert!(!emits(bashism, "#!/bin/sh\nunset -f namevar"));
+    }
+    #[test]
+    fn prop_checkBashisms75() {
+        assert!(!emits(bashism, "#!/bin/sh\necho \"-n foo\""));
+    }
+    #[test]
+    fn prop_checkBashisms76() {
+        assert!(!emits(bashism, "#!/bin/sh\necho \"-ne foo\""));
+    }
+    #[test]
+    fn prop_checkBashisms77() {
+        assert!(!emits(bashism, "#!/bin/sh\necho -Q foo"));
+    }
+    #[test]
+    fn prop_checkBashisms78() {
+        assert!(emits(bashism, "#!/bin/sh\necho -ne foo"));
+    }
+    #[test]
+    fn prop_checkBashisms79() {
+        assert!(emits(bashism, "#!/bin/sh\nhash -l"));
+    }
+    #[test]
+    fn prop_checkBashisms80() {
+        assert!(!emits(bashism, "#!/bin/sh\nhash -r"));
+    }
+    #[test]
+    fn prop_checkBashisms81() {
+        assert!(!emits(bashism, "#!/bin/dash\nhash -v"));
+    }
+    #[test]
+    fn prop_checkBashisms82() {
+        assert!(!emits(
+            bashism,
+            "#!/bin/sh\nset -v +o allexport -o errexit -C"
+        ));
+    }
+    #[test]
+    fn prop_checkBashisms83() {
+        assert!(!emits(bashism, "#!/bin/sh\nset --"));
+    }
+    #[test]
+    fn prop_checkBashisms84() {
+        assert!(!emits(bashism, "#!/bin/sh\nset -o pipefail"));
+    }
+    #[test]
+    fn prop_checkBashisms85() {
+        assert!(emits(bashism, "#!/bin/sh\nset -B"));
+    }
+    #[test]
+    fn prop_checkBashisms86() {
+        assert!(!emits(bashism, "#!/bin/dash\nset -o emacs"));
+    }
+    #[test]
+    fn prop_checkBashisms87() {
+        assert!(emits(bashism, "#!/bin/sh\nset -o emacs"));
+    }
+    #[test]
+    fn prop_checkBashisms88() {
+        assert!(!emits(
+            bashism,
+            "#!/bin/sh\nset -- wget -o foo 'https://some.url'"
+        ));
+    }
+    #[test]
+    fn prop_checkBashisms89() {
+        assert!(!emits(bashism, "#!/bin/sh\nopts=$-\nset -\"$opts\""));
+    }
+    #[test]
+    fn prop_checkBashisms90() {
+        assert!(!emits(bashism, "#!/bin/sh\nset -o \"$opt\""));
+    }
+    #[test]
+    fn prop_checkBashisms91() {
+        assert!(emits(bashism, "#!/bin/sh\nwait -n"));
+    }
+    #[test]
+    fn prop_checkBashisms92() {
+        assert!(emits(bashism, "#!/bin/sh\necho $((16#FF))"));
+    }
+    #[test]
+    fn prop_checkBashisms93() {
+        assert!(emits(bashism, "#!/bin/sh\necho $(( 10#$(date +%m) ))"));
+    }
+    #[test]
+    fn prop_checkBashisms94() {
+        assert!(emits(bashism, "#!/bin/sh\n[ -v var ]"));
+    }
+    #[test]
+    fn prop_checkBashisms95() {
+        assert!(emits(bashism, "#!/bin/sh\necho $_"));
+    }
+    #[test]
+    fn prop_checkBashisms96() {
+        assert!(!emits(bashism, "#!/bin/dash\necho $_"));
+    }
+    #[test]
+    fn prop_checkBashisms97() {
+        assert!(emits(bashism, "#!/bin/sh\necho ${var,}"));
+    }
+    #[test]
+    fn prop_checkBashisms98() {
+        assert!(emits(bashism, "#!/bin/sh\necho ${var^^}"));
+    }
+    #[test]
+    fn prop_checkBashisms99() {
+        assert!(emits(bashism, "#!/bin/dash\necho [^f]oo"));
+    }
+    #[test]
+    fn prop_checkBashisms100() {
+        assert!(emits(bashism, "read -r"));
+    }
+    #[test]
+    fn prop_checkBashisms101() {
+        assert!(emits(bashism, "read"));
+    }
+    #[test]
+    fn prop_checkBashisms102() {
+        assert!(!emits(bashism, "read -r foo"));
+    }
+    #[test]
+    fn prop_checkBashisms103() {
+        assert!(!emits(bashism, "read foo"));
+    }
+    #[test]
+    fn prop_checkBashisms104() {
+        assert!(!emits(bashism, "read ''"));
+    }
+    #[test]
+    fn prop_checkBashisms105() {
+        assert!(!emits(bashism, "#!/bin/busybox sh\nset -o pipefail"));
+    }
+    #[test]
+    fn prop_checkBashisms106() {
+        assert!(!emits(
+            bashism,
+            "#!/bin/busybox sh\nx=x\n[[ \"$x\" = \"$x\" ]]"
+        ));
+    }
+    #[test]
+    fn prop_checkBashisms107() {
+        assert!(!emits(
+            bashism,
+            "#!/bin/busybox sh\nx=x\n[ \"$x\" == \"$x\" ]"
+        ));
+    }
+    #[test]
+    fn prop_checkBashisms108() {
+        assert!(!emits(
+            bashism,
+            "#!/bin/busybox sh\necho magic &> /dev/null"
+        ));
+    }
+    #[test]
+    fn prop_checkBashisms109() {
+        assert!(!emits(bashism, "#!/bin/busybox sh\ntrap stop EXIT SIGTERM"));
+    }
+    #[test]
+    fn prop_checkBashisms110() {
+        assert!(!emits(bashism, "#!/bin/busybox sh\nsource /dev/null"));
+    }
+    #[test]
+    fn prop_checkBashisms111() {
+        assert!(emits(bashism, "#!/bin/dash\nx='test'\n${x:0:3}"));
+    }
+    #[test]
+    fn prop_checkBashisms112() {
+        assert!(!emits(bashism, "#!/bin/busybox sh\nx='test'\n${x:0:3}"));
+    }
+    #[test]
+    fn prop_checkBashisms113() {
+        assert!(emits(bashism, "#!/bin/dash\nx='test'\n${x/st/xt}"));
+    }
+    #[test]
+    fn prop_checkBashisms114() {
+        assert!(!emits(bashism, "#!/bin/busybox sh\nx='test'\n${x/st/xt}"));
+    }
+    #[test]
+    fn prop_checkBashisms115() {
+        assert!(emits(bashism, "#!/bin/busybox sh\nx='test'\n${!x}"));
+    }
+    #[test]
+    fn prop_checkBashisms116() {
+        assert!(emits(bashism, "#!/bin/busybox sh\nx='test'\n${x[1]}"));
+    }
+    #[test]
+    fn prop_checkBashisms117() {
+        assert!(emits(bashism, "#!/bin/busybox sh\nx='test'\n${!x[@]}"));
+    }
+    #[test]
+    fn prop_checkBashisms118() {
+        assert!(emits(bashism, "#!/bin/busybox sh\nxyz=1\n${!x*}"));
+    }
+    #[test]
+    fn prop_checkBashisms119() {
+        assert!(emits(bashism, "#!/bin/busybox sh\nx='test'\n${x^^[t]}"));
+    }
+    #[test]
+    fn prop_checkBashisms120() {
+        assert!(emits(bashism, "#!/bin/sh\n[ x == y ]"));
+    }
+    #[test]
+    fn prop_checkBashisms121() {
+        assert!(!emits(
+            bashism,
+            "#!/bin/sh\n# shellcheck shell=busybox\n[ x == y ]"
+        ));
+    }
+    #[test]
+    fn prop_checkBashisms122() {
+        assert!(!emits(bashism, "#!/bin/dash\n$'a'"));
+    }
+    #[test]
+    fn prop_checkBashisms123() {
+        assert!(!emits(bashism, "#!/bin/busybox sh\n$'a'"));
+    }
+    #[test]
+    fn prop_checkBashisms124() {
+        assert!(emits(bashism, "#!/bin/dash\ntype -p test"));
+    }
+    #[test]
+    fn prop_checkBashisms125() {
+        assert!(!emits(bashism, "#!/bin/busybox sh\ntype -p test"));
+    }
+    #[test]
+    fn prop_checkBashisms126() {
+        assert!(!emits(bashism, "#!/bin/busybox sh\nread -p foo -r bar"));
+    }
+    #[test]
+    fn prop_checkBashisms127() {
+        assert!(!emits(bashism, "#!/bin/busybox sh\necho -ne foo"));
+    }
+    #[test]
+    fn prop_checkBashisms128() {
+        assert!(emits(bashism, "#!/bin/dash\ntype -p test"));
+    }
+    #[test]
+    fn prop_checkBashisms129() {
+        assert!(emits(bashism, "#!/bin/sh\n[ -k /tmp ]"));
+    }
+    #[test]
+    fn prop_checkBashisms130() {
+        assert!(!emits(bashism, "#!/bin/dash\ntest -k /tmp"));
+    }
+    #[test]
+    fn prop_checkBashisms131() {
+        assert!(emits(bashism, "#!/bin/sh\n[ -o errexit ]"));
+    }
+    #[test]
+    fn prop_checkBashisms132() {
+        assert!(emits(bashism, "echo $\"hello\""));
+    }
+    #[test]
+    fn prop_checkBashisms133() {
+        assert!(emits(bashism, "for ((;;)); do break; done"));
+    }
+    #[test]
+    fn prop_checkBashisms134() {
+        assert!(emits(bashism, "((var))"));
+    }
+    #[test]
+    fn prop_checkBashisms135() {
+        assert!(emits(bashism, "var=$[1 + 2]"));
+    }
+    #[test]
+    fn prop_checkBashisms136() {
+        assert!(emits(bashism, "select x; do :; done"));
+    }
+    #[test]
+    fn prop_checkBashisms137a() {
+        assert!(emits(bashism, "echo {a,b}"));
+    }
+    #[test]
+    fn prop_checkBashisms137b() {
+        assert!(emits(bashism, "echo {1..3}"));
+    }
+    #[test]
+    fn prop_checkBashisms138() {
+        assert!(emits(bashism, "[[ -z $var ]]"));
+    }
+    #[test]
+    fn prop_checkBashisms139() {
+        assert!(emits(bashism, "cat <<< foo"));
+    }
+    #[test]
+    fn prop_checkBashisms140a() {
+        assert!(emits(bashism, "[ a '<' b ]"));
+    }
+    #[test]
+    fn prop_checkBashisms140b() {
+        assert!(emits(bashism, "test a \\> b"));
+    }
+    #[test]
+    fn prop_checkBashisms141() {
+        assert!(emits(bashism, "echo $((2 ** 3))"));
+    }
+    #[test]
+    fn prop_checkBashisms142() {
+        assert!(emits(bashism, "make |& less"));
+    }
+    #[test]
+    fn prop_checkBashisms143() {
+        assert!(emits(bashism, "a=(foo bar)"));
+    }
+    #[test]
+    fn prop_checkBashisms144() {
+        assert!(emits(bashism, "coproc foo { :; }"));
+    }
+    #[test]
+    fn prop_checkBashisms145a() {
+        assert!(emits(bashism, "#!/bin/sh\nf() { local i=; }"));
+    }
+    #[test]
+    fn prop_checkBashisms145b() {
+        assert!(!emits(bashism, "#!/bin/dash\nf() { local i=; }"));
+    }
+    #[test]
+    fn prop_checkBashisms146() {
+        assert!(emits(bashism, "readarray < file"));
+    }
+    #[test]
+    fn prop_checkBashisms147() {
+        assert!(emits(bashism, "[ -R ref ]"));
+    }
+    #[test]
+    fn prop_checkBashisms148() {
+        assert!(emits(bashism, "[ -N file ]"));
+    }
+    #[test]
+    fn prop_checkBashisms149() {
+        assert!(emits(bashism, "[ -G file ]"));
+    }
+    #[test]
+    fn prop_checkBashisms150() {
+        assert!(emits(bashism, "[ -O file ]"));
+    }
 
     // ---- checkBraceExpansionVars (SC2051 / SC2175) ----
     #[test]
-    fn prop_checkBraceExpansionVars1() { assert!(emits(check_brace_expansion_vars, "echo {1..$n}")); }
+    fn prop_checkBraceExpansionVars1() {
+        assert!(emits(check_brace_expansion_vars, "echo {1..$n}"));
+    }
     #[test]
-    fn prop_checkBraceExpansionVars2() { assert!(!emits(check_brace_expansion_vars, "echo {1,3,$n}")); }
+    fn prop_checkBraceExpansionVars2() {
+        assert!(!emits(check_brace_expansion_vars, "echo {1,3,$n}"));
+    }
     #[test]
-    fn prop_checkBraceExpansionVars3() { assert!(emits(check_brace_expansion_vars, "eval echo DSC{0001..$n}.jpg")); }
+    fn prop_checkBraceExpansionVars3() {
+        assert!(emits(
+            check_brace_expansion_vars,
+            "eval echo DSC{0001..$n}.jpg"
+        ));
+    }
     #[test]
-    fn prop_checkBraceExpansionVars4() { assert!(emits(check_brace_expansion_vars, "echo {$i..100}")); }
+    fn prop_checkBraceExpansionVars4() {
+        assert!(emits(check_brace_expansion_vars, "echo {$i..100}"));
+    }
 
     // ---- checkMultiDimensionalArrays (SC2180) ----
     #[test]
-    fn prop_checkMultiDimensionalArrays1() { assert!(emits(check_multi_dimensional_arrays, "foo[a][b]=3")); }
+    fn prop_checkMultiDimensionalArrays1() {
+        assert!(emits(check_multi_dimensional_arrays, "foo[a][b]=3"));
+    }
     #[test]
-    fn prop_checkMultiDimensionalArrays2() { assert!(!emits(check_multi_dimensional_arrays, "foo[a]=3")); }
+    fn prop_checkMultiDimensionalArrays2() {
+        assert!(!emits(check_multi_dimensional_arrays, "foo[a]=3"));
+    }
     #[test]
-    fn prop_checkMultiDimensionalArrays3() { assert!(emits(check_multi_dimensional_arrays, "foo=( [a][b]=c )")); }
+    fn prop_checkMultiDimensionalArrays3() {
+        assert!(emits(check_multi_dimensional_arrays, "foo=( [a][b]=c )"));
+    }
     #[test]
-    fn prop_checkMultiDimensionalArrays4() { assert!(!emits(check_multi_dimensional_arrays, "foo=( [a]=c )")); }
+    fn prop_checkMultiDimensionalArrays4() {
+        assert!(!emits(check_multi_dimensional_arrays, "foo=( [a]=c )"));
+    }
     #[test]
-    fn prop_checkMultiDimensionalArrays5() { assert!(emits(check_multi_dimensional_arrays, "echo ${foo[bar][baz]}")); }
+    fn prop_checkMultiDimensionalArrays5() {
+        assert!(emits(
+            check_multi_dimensional_arrays,
+            "echo ${foo[bar][baz]}"
+        ));
+    }
     #[test]
-    fn prop_checkMultiDimensionalArrays6() { assert!(!emits(check_multi_dimensional_arrays, "echo ${foo[bar]}")); }
+    fn prop_checkMultiDimensionalArrays6() {
+        assert!(!emits(check_multi_dimensional_arrays, "echo ${foo[bar]}"));
+    }
 
     // ---- checkBangAfterPipe (SC2326) ----
     #[test]
-    fn prop_checkBangAfterPipe1() { assert!(emits(check_bang_after_pipe, "true | ! true")); }
+    fn prop_checkBangAfterPipe1() {
+        assert!(emits(check_bang_after_pipe, "true | ! true"));
+    }
     #[test]
-    fn prop_checkBangAfterPipe2() { assert!(!emits(check_bang_after_pipe, "true | ( ! true )")); }
+    fn prop_checkBangAfterPipe2() {
+        assert!(!emits(check_bang_after_pipe, "true | ( ! true )"));
+    }
     #[test]
-    fn prop_checkBangAfterPipe3() { assert!(!emits(check_bang_after_pipe, "! ! true | true")); }
+    fn prop_checkBangAfterPipe3() {
+        assert!(!emits(check_bang_after_pipe, "! ! true | true"));
+    }
 
     // ---- checkNegatedUnaryOps (SC2332) ----
     #[test]
-    fn prop_checkNegatedUnaryOps1() { assert!(emits(check_negated_unary_ops, "[ ! -o braceexpand ]")); }
+    fn prop_checkNegatedUnaryOps1() {
+        assert!(emits(check_negated_unary_ops, "[ ! -o braceexpand ]"));
+    }
     #[test]
-    fn prop_checkNegatedUnaryOps2() { assert!(!emits(check_negated_unary_ops, "[ -o braceexpand ]")); }
+    fn prop_checkNegatedUnaryOps2() {
+        assert!(!emits(check_negated_unary_ops, "[ -o braceexpand ]"));
+    }
     #[test]
-    fn prop_checkNegatedUnaryOps3() { assert!(!emits(check_negated_unary_ops, "[[ ! -o braceexpand ]]")); }
+    fn prop_checkNegatedUnaryOps3() {
+        assert!(!emits(check_negated_unary_ops, "[[ ! -o braceexpand ]]"));
+    }
     #[test]
-    fn prop_checkNegatedUnaryOps4() { assert!(!emits(check_negated_unary_ops, "! [ -o braceexpand ]")); }
+    fn prop_checkNegatedUnaryOps4() {
+        assert!(!emits(check_negated_unary_ops, "! [ -o braceexpand ]"));
+    }
     #[test]
-    fn prop_checkNegatedUnaryOps5() { assert!(emits(check_negated_unary_ops, "[ ! -a file ]")); }
+    fn prop_checkNegatedUnaryOps5() {
+        assert!(emits(check_negated_unary_ops, "[ ! -a file ]"));
+    }
 }

@@ -34,10 +34,20 @@ fn oversimplify(token: &Token) -> Vec<String> {
     use InnerToken::*;
     match &*token.inner {
         T_NormalWord(l) => {
-            vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()]
+            vec![
+                l.iter()
+                    .flat_map(oversimplify)
+                    .collect::<Vec<String>>()
+                    .concat(),
+            ]
         }
         T_DoubleQuoted(l) => {
-            vec![l.iter().flat_map(oversimplify).collect::<Vec<String>>().concat()]
+            vec![
+                l.iter()
+                    .flat_map(oversimplify)
+                    .collect::<Vec<String>>()
+                    .concat(),
+            ]
         }
         T_SingleQuoted(s) => vec![s.clone()],
         T_DollarBraced { .. } => vec!["${VAR}".to_string()],
@@ -98,11 +108,7 @@ fn drop_hashbang_prefix(s: &str) -> &str {
 
 fn take_name(s: &str) -> Option<String> {
     let name: String = s.chars().take_while(|c| is_variable_char(*c)).collect();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
+    if name.is_empty() { None } else { Some(name) }
 }
 
 fn get_special(s: &str) -> Option<String> {
@@ -152,8 +158,7 @@ fn is_array_expansion(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_DollarBraced { op, .. } => {
             let string = oversimplify(op).concat();
-            string.starts_with('@')
-                || (!string.starts_with('#') && string.contains("[@]"))
+            string.starts_with('@') || (!string.starts_with('#') && string.contains("[@]"))
         }
         _ => false,
     }
@@ -220,7 +225,11 @@ fn will_become_multiple_args_f(t: &Token) -> bool {
 // ---- isStrictlyQuoteFree (AnalyzerLib.isQuoteFreeNode strict=True) ----------
 
 fn is_assignment_param_to_command(params: &Parameters, id: Id) -> bool {
-    let parent = match params.parent_map.get(&id).and_then(|pid| params.id_map.get(pid)) {
+    let parent = match params
+        .parent_map
+        .get(&id)
+        .and_then(|pid| params.id_map.get(pid))
+    {
         Some(p) => p,
         None => return false,
     };
@@ -250,9 +259,15 @@ fn is_quote_free_element(params: &Parameters, t: &Token) -> bool {
 fn is_quote_free_context_strict(params: &Parameters, t: &Token) -> Option<bool> {
     use ConditionType::DoubleBracket;
     match &*t.inner {
-        InnerToken::TC_Nullary { typ: DoubleBracket, .. } => Some(true),
-        InnerToken::TC_Unary { typ: DoubleBracket, .. } => Some(true),
-        InnerToken::TC_Binary { typ: DoubleBracket, .. } => Some(true),
+        InnerToken::TC_Nullary {
+            typ: DoubleBracket, ..
+        } => Some(true),
+        InnerToken::TC_Unary {
+            typ: DoubleBracket, ..
+        } => Some(true),
+        InnerToken::TC_Binary {
+            typ: DoubleBracket, ..
+        } => Some(true),
         InnerToken::TA_Sequence(_) => Some(true),
         InnerToken::T_Arithmetic(_) => Some(true),
         InnerToken::T_Assignment { .. } => Some(assignment_is_quoting(params, t.id())),
@@ -320,9 +335,19 @@ fn check_flls(out: &mut Out, id: Id, x: &Token) {
         "ls" => {
             let rest = &words[1..];
             if rest.iter().any(|w| w.starts_with('-')) {
-                warn(out, id, 2045, "Iterating over ls output is fragile. Use globs.");
+                warn(
+                    out,
+                    id,
+                    2045,
+                    "Iterating over ls output is fragile. Use globs.",
+                );
             } else {
-                err(out, id, 2045, "Iterating over ls output is fragile. Use globs.");
+                err(
+                    out,
+                    id,
+                    2045,
+                    "Iterating over ls output is fragile. Use globs.",
+                );
             }
         }
         "find" => {

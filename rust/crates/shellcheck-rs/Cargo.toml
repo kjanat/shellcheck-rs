@@ -1,10 +1,10 @@
 [package]
-name = "shellcheck-rs"
-version = "0.11.0"
-edition.workspace = true
+name                   = "shellcheck-rs"
+version                = "0.11.0"
+edition.workspace      = true
 rust-version.workspace = true
-license.workspace = true
-description = "Rust port of ShellCheck: the reusable parse + analyze core (LSP-friendly, std + regex only)."
+description            = "Rust port of ShellCheck: the reusable parse + analyze core (LSP-friendly, std + regex only)."
+license.workspace      = true
 
 [lib]
 name = "shellcheck_rs"
@@ -13,4 +13,4 @@ path = "src/lib.rs"
 [dependencies]
 # Core stays IO-free so an LSP or other tool can embed it cheaply.
 # regex mirrors Haskell's regex-tdfa usage in the parser/analytics.
-regex = { workspace = true }
+regex.workspace = true
