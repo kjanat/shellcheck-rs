@@ -12,9 +12,11 @@ matching the oracle with `extra == 0`.
 2. **Classify** it:
    - *Pure AST pattern* (matches on `T_*`/`TC_*`/`TA_*`, uses `oversimplify` /
      `get_literal_string` / parent lookups): port now.
-   - *Needs conditions* (`TC_*` from `[[ ]]`/`[ ]`): blocked until the parser's
-     `readCondition` port lands (produces `T_Condition`/`TC_*`).
-   - *Needs arithmetic* (`TA_*`): blocked until arithmetic parsing lands.
+   - *Needs conditions* (`TC_*` from `[[ ]]`/`[ ]`): SUPPORTED — the parser now
+     produces `T_Condition`/`TC_*`.
+   - *Needs arithmetic* (`TA_*`): blocked until arithmetic parsing lands
+     (`$((..))`, `((..))`, `for ((;;))`, and array indices are currently a
+     placeholder `T_Literal`, not a `TA_*` tree).
    - *Needs dataflow/CFG* (`variableFlow`, `cfgAnalysis` — SC2154, SC2086,
      SC2034, ...): blocked until the CFG subsystem is ported.
    Skip blocked checks and record them.
@@ -61,11 +63,20 @@ the pipeline landed; keep it that way.
 `analytics::check_shebang` (SC2148, a tree check) are worked examples that match
 the oracle exactly, including fix replacements and precedence.
 
-## Current status (see harness/coverage.json)
+## Current status (see harness/coverage.json — regenerated, not committed)
 
-- Parser handles the full corpus with 0 crashes; ~130 scripts still hit
-  parser gaps (spurious SC1072) — mostly conditions, arithmetic-for, bats
-  `@test`, and a few redirection forms.
-- Ported & oracle-exact: SC2148, SC2006, SC2066 (partial), SC1xxx parse notes.
-- Biggest unblocking work, in order: (1) `readCondition` -> `TC_*`,
-  (2) arithmetic parsing -> `TA_*`, (3) the CFG subsystem for SC2154/2086/2034.
+- Parser handles the full corpus with 0 crashes; ~10 scripts still hit parser
+  gaps (spurious SC1072) — `time (..)`, `coproc`, a couple malformed inputs.
+- Conditions (`[ ]`/`[[ ]]`), `select`, POSIX `name(){}`, and bats `@test` all
+  parse now.
+- Exact-match parity ~40% (667/1659) with **0 check-level false positives**.
+- Ported & oracle-exact (batches a–e + analytics): SC2148, SC2006, SC2035,
+  SC2045/2044, SC2048, SC2068, SC2124/2125, SC2005, SC2116, SC2145, SC2016,
+  SC2027, SC2140, SC2077, SC2078, SC2053, SC2081, SC2157, SC2162, SC2164,
+  SC2103, SC2091/2092, SC2181 (condition branch), plus SC1xxx parse notes.
+- Biggest remaining unblocks, in order: (1) arithmetic parsing -> `TA_*`
+  (SC2004, SC2007, SC2181 arithmetic branch), (2) the CFG/dataflow subsystem for
+  the high-frequency SC2154 / SC2086 / SC2034 (~760 diagnostics), (3) the long
+  tail of self-contained checks (fan out via batches).
+- Known parser limitation blocking SC2050: condition operators (`TC_Binary.op`)
+  are plain strings with no span; SC2050 needs the operator's own position.
