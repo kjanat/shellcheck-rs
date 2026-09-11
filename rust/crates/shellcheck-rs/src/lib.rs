@@ -22,10 +22,16 @@
 pub mod ast;
 pub mod interface;
 
+pub mod analytics;
+pub mod analyzer_lib;
+pub mod astlib;
+pub mod checker;
+pub mod parser;
+
+pub use checker::check_script;
+
 // Populated as the port progresses:
 // pub mod regex;
-// pub mod astlib;
-// pub mod parser;
 // pub mod analyzer_lib;
 // pub mod analytics;
 // pub mod checks;
