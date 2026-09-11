@@ -525,6 +525,27 @@ def main():
     goldens, oracle_prov = generate(
         oracle, "oracle", corpus, os.path.join(HERE, "goldens.jsonl"), args.regen_oracle)
 
+    # --codes SC2086,SC2154: restrict to corpus cases whose oracle output
+    # includes one of the given codes, for rule-focused iteration. Applied after
+    # oracle generation (the codes come from the oracle's diagnostics) and before
+    # the port runs, so only the relevant subset is executed and reported. Not
+    # meaningful with --write-baseline (that needs the full corpus).
+    codes_filter = set()
+    for tok in args.codes.split(","):
+        tok = tok.strip().upper()
+        if tok.startswith("SC"):
+            tok = tok[2:]
+        if tok.isdigit():
+            codes_filter.add(int(tok))
+    if codes_filter:
+        keep = {
+            i for i, r in goldens.items()
+            if any(c.get("code") in codes_filter for c in r.get("comments", []))
+        }
+        corpus = [e for e in corpus if e["id"] in keep]
+        sys.stderr.write(
+            f"[run] --codes filter {sorted(codes_filter)} -> {len(corpus)} scripts\n")
+
     port = os.environ.get("PORT")
     if port and not os.path.exists(port):
         sys.stderr.write(f"[run] PORT set but not found: {port}\n")

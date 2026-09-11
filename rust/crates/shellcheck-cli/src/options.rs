@@ -553,13 +553,16 @@ pub fn parse(argv: &[String]) -> Outcome {
     }
     inputs.extend(files);
 
-    // An empty final input list is a usage error (exit 3), NOT an implicit
-    // stdin read: the oracle requires one or more filenames or an explicit `-`
-    // and prints "No files specified." with the usage summary
+    // An empty input list with NO --files-from is a usage error (exit 3), NOT
+    // an implicit stdin read: the oracle requires one or more filenames or an
+    // explicit `-` and prints "No files specified." with the usage summary
     // (shellcheck.hs `parseArguments`). Reading stdin here would turn a common
     // invocation mistake into a hang on an interactive terminal.
-    let _ = had_files_from;
-    if inputs.is_empty() {
+    //
+    // An explicit but empty --files-from (e.g. `--files-from=/dev/null`) is
+    // deliberately permitted: the oracle checks zero files and exits 0. In that
+    // case we fall through with an empty input list, which renders nothing.
+    if inputs.is_empty() && !had_files_from {
         return Outcome::Error {
             message: format!("No files specified.\n\n{}", usage()),
             code: 3,
@@ -628,6 +631,15 @@ mod tests {
             Outcome::Error { code, .. } => assert_eq!(code, 3),
             other => panic!("expected Error(3), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn empty_files_from_is_ok_not_error() {
+        // An explicit but empty --files-from is permitted and yields an empty
+        // input list (the oracle exits 0 having checked nothing), unlike the
+        // no-arguments case which is a usage error.
+        let c = run(&["--files-from=/dev/null"]);
+        assert!(c.inputs.is_empty());
     }
 
     #[test]

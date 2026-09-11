@@ -23,8 +23,16 @@
 //!      replacement)`.
 //!   3. The id matches iff the two key sequences are identical, order included.
 //!
-//! Exit codes: 0 = every compared id matched; 1 = at least one mismatch;
-//! 2 = IO / JSON parse error (missing or malformed harness files).
+//! The goldens file (`harness/goldens.jsonl`) is a large, oracle-pinned cache
+//! that the repo deliberately does NOT commit (see `harness/.gitignore`); the
+//! Python harness regenerates it from the Haskell oracle. This runner therefore
+//! needs no GHC toolchain to *replay* an existing goldens file, but it cannot
+//! conjure one: on a fresh checkout with no goldens present it prints how to
+//! generate them and exits 0 (SKIP) rather than crashing.
+//!
+//! Exit codes: 0 = every compared id matched (or goldens absent -> SKIP);
+//! 1 = at least one mismatch; 2 = IO / JSON parse error (corpus missing or a
+//! harness file malformed).
 //!
 //! Flags (tiny hand-rolled parser, no clap):
 //!   --harness <dir>   directory holding corpus.json + goldens.jsonl (default: "harness")
@@ -277,6 +285,20 @@ fn run(args: Args) -> Result<bool, String> {
     let goldens_path = format!("{}/goldens.jsonl", args.harness);
 
     let corpus = load_corpus(&corpus_path)?;
+
+    // The goldens cache is gitignored; on a fresh checkout it may not exist.
+    // Treat that as a SKIP (exit 0) with an actionable message rather than a
+    // crash, since this runner replays goldens but never regenerates them.
+    if !std::path::Path::new(&goldens_path).exists() {
+        println!(
+            "conformance: SKIP - no goldens at {goldens_path}\n  \
+             generate them (requires the Haskell oracle) with:\n  \
+             ORACLE=<shellcheck> PORT=<shellcheck-rs> python3 {}/run_conformance.py --regen-oracle",
+            args.harness
+        );
+        return Ok(true);
+    }
+
     let goldens = load_goldens(&goldens_path)?;
 
     let selected: &[CorpusEntry] = match args.limit {

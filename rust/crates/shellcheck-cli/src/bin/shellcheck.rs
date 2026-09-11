@@ -96,6 +96,13 @@ fn load(name: &str, spec_template: &CheckSpec, rc: Option<&RcConfig>) -> Input {
 ///   * rc `enable` names APPEND to `optional_checks` (alongside CLI enables).
 ///   * rc `shell` sets the override ONLY if the CLI did not (`--shell` wins).
 ///   * rc `extended-analysis` applies ONLY if the CLI did not set it.
+///
+/// rc disables are annotations in the established pipeline: they suppress a code
+/// regardless of the CLI include filter (`should_include` ignores
+/// `excluded_warnings` whenever an include list is present). So besides adding
+/// the codes to `excluded_warnings`, we also strip them from any CLI include
+/// list, so `--include=SC2086` cannot re-enable an rc-disabled SC2086 (the
+/// oracle emits nothing in that case).
 fn merge_rc(spec: &mut CheckSpec, rc: Option<&RcConfig>) {
     let rc = match rc {
         Some(rc) => rc,
@@ -107,6 +114,9 @@ fn merge_rc(spec: &mut CheckSpec, rc: Option<&RcConfig>) {
         spec.included_warnings = Some(Vec::new());
     } else {
         spec.excluded_warnings.extend(rc.disabled_codes.iter().copied());
+        if let Some(included) = &mut spec.included_warnings {
+            included.retain(|c| !rc.disabled_codes.contains(c));
+        }
     }
     for name in &rc.enabled_checks {
         spec.optional_checks.push(name.clone());
