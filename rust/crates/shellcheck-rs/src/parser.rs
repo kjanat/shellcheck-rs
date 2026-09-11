@@ -2860,6 +2860,11 @@ impl Parser {
             self.spacing();
             self.char(')')?;
             let body = self.read_case_body();
+            // Mirrors Parser.hs readCaseSeparator: the `;;` arm and the
+            // no-separator-before-esac arm both yield CaseBreak. The arms are
+            // NOT interchangeable — the `;;` condition consumes the separator
+            // while the fallback consumes nothing — so they must stay distinct.
+            #[allow(clippy::if_same_then_else)]
             let ctype = if self.string(";;&").is_ok() {
                 CaseType::CaseContinue
             } else if self.string(";&").is_ok() {

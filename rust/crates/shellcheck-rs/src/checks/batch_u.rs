@@ -65,6 +65,9 @@ pub fn register(c: &mut Checker) {
     c.node(|p, t, out| {
         let mut tmp = Out::new();
         check_constant_nullary(p, t, &mut tmp);
+        // Explicit list of SC codes registered here, not a numeric range;
+        // kept enumerated for parity with the other code-filter sites.
+        #[allow(clippy::manual_range_patterns)]
         out.extend(
             tmp.into_iter()
                 .filter(|c| matches!(c.comment.code, 2158 | 2159 | 2160 | 2161)),
@@ -1432,6 +1435,7 @@ fn check_unary_test_a_impl(params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
     use crate::analyzer_lib::make_parameters;

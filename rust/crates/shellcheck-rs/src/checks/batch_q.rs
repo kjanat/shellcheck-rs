@@ -259,7 +259,7 @@ fn fix_leading_x(params: &Parameters, token: &Token) -> Option<Replacement> {
     match &*first.inner {
         InnerToken::T_Literal(s) => {
             let c = s.chars().next()?;
-            if c.to_ascii_lowercase() != 'x' {
+            if !c.eq_ignore_ascii_case(&'x') {
                 return None;
             }
             // The side is a single, unquoted x or X, so we have to quote.
@@ -277,7 +277,7 @@ fn fix_leading_x(params: &Parameters, token: &Token) -> Option<Replacement> {
         }
         InnerToken::T_SingleQuoted(s) => {
             let c = s.chars().next()?;
-            if c.to_ascii_lowercase() != 'x' {
+            if !c.eq_ignore_ascii_case(&'x') {
                 return None;
             }
             // Replace the single quote and the character x or X.
@@ -523,7 +523,7 @@ fn is_leading_number_var(s: &str) -> bool {
 fn is_conflict_marker(cmd: &Token) -> bool {
     if let Some(str) = get_unquoted_literal(cmd) {
         let n = str.chars().count();
-        str.chars().all(|c| c == '=') && n >= 4 && n <= 12
+        str.chars().all(|c| c == '=') && (4..=12).contains(&n)
     } else {
         false
     }
@@ -710,6 +710,11 @@ fn check_equals_in_command(params: &Parameters, original: &Token, out: &mut Out)
                     && variable_modifier.starts_with('[')
                     && variable_modifier.ends_with(']');
 
+                // Mirrors Analytics.hs checkEqualsInCommand `case () of`: the
+                // empty-name (`${}=`) and `#`-prefixed (`$#=`/`${#var}=`) arms
+                // are distinct cases in the oracle that happen to share the
+                // generic message; kept separate to preserve that mapping.
+                #[allow(clippy::if_same_then_else)]
                 if variable_str.is_empty() {
                     generic_msg(out, cmd_id);
                 } else if variable_str.starts_with('#') {

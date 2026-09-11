@@ -1,10 +1,9 @@
 ---
 name: Bug report
 about: Create a new bug report
-title: ''
-labels: ''
-assignees: ''
-
+title: ""
+labels: ""
+assignees: ""
 ---
 
 #### For bugs with existing features
@@ -22,7 +21,5 @@ your script here
 ```
 
 #### Here's what shellcheck currently says:
-
-
 
 #### Here's what I wanted or expected to see:

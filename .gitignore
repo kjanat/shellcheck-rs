@@ -28,3 +28,6 @@ stack.yaml.lock
 /shellcheck.1
 
 target/
+
+# Locally built Haskell oracle binary (also where rust.yml stages it).
+/.cache/

@@ -1,0 +1,28 @@
+# Project toolchain, managed by mise (https://mise.jdx.dev).
+#
+# Versions are "latest" so `mise up` tracks upstream; mise records exact
+# resolved versions in mise.lock. This repo hosts the Haskell ShellCheck
+# oracle, the Rust port + its workspace, and the Python conformance harness,
+# so all three toolchains live here.
+#
+# Do not delete this file: it is the single source of truth for the project's
+# tools and is checked into the repo.
+
+min_version = "2026.7.3"
+
+[tools]
+# rustfmt is needed by dprint (it formats .rs via rustfmt); clippy by `cargo lint`.
+rust             = { version = "latest", components = ["rustfmt", "clippy"] }  # Rust port (edition 2024)
+cabal            = "latest"                                                    # Haskell build tool for the oracle (Aqua backend)
+python           = "latest"                                                    # conformance harness (rust/harness/*.py)
+ghcup            = "latest"                                                    # GHCup itself, so the compiler is reproducible
+"mise-ghcup:ghc" = "latest"                                                    # GHC 9.x via GHCup; mise's default ghc backend caps at 8.10.7
+dprint           = "latest"                                                    # formatter
+tombi            = "latest"                                                    # TOML toolkit (format/lint)
+
+[plugins]
+"vfox-backend:mise-ghcup" = "https://github.com/wasp-lang/mise-ghcup.git"
+
+[settings]
+# Backend plugins are experimental, so they must be enabled explicitly.
+experimental = true
