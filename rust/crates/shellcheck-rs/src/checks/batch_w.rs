@@ -69,17 +69,11 @@ pub fn register(c: &mut Checker) {
     c.node(check_tilde_in_path);
     c.node(check_unsupported);
     c.node(check_suspicious_ifs);
-    // checkShouldUseGrepQ (SC2143): register only the TC_Nullary branch. The
-    // Rust parser gives a TC_Unary node a span covering operator+operand, while
-    // the Haskell oracle spans only the operator (e.g. "-z"), so emitting SC2143
-    // on `[ -n ... ]` / `[ -z ... ]` yields the right message at the wrong span
-    // (2 extras / 2 missing). TC_Nullary spans match exactly. The full function
-    // (all branches) is retained and unit-tested; only registration is narrowed.
-    c.node(|p, t, out| {
-        if matches!(&*t.inner, InnerToken::TC_Nullary { .. }) {
-            check_should_use_grep_q(p, t, out);
-        }
-    });
+    // checkShouldUseGrepQ (SC2143): register all branches (TC_Nullary and the
+    // TC_Unary -n / -z branches). The shared parser now spans a TC_Unary node on
+    // the operator alone (e.g. "-z"), matching the Haskell oracle, so the unary
+    // branch anchors correctly and no longer produces span-mismatch extras.
+    c.node(check_should_use_grep_q);
     c.node(check_cp_legacy_r);
     c.node(check_loop_variable_reassignment);
     c.node(check_for_loop_glob_variables);

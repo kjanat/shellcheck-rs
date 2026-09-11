@@ -46,18 +46,16 @@ pub fn register(c: &mut Checker) {
     c.node(check_brace_expansion_vars_gated);
     c.node(check_multi_dimensional_arrays_gated);
     c.node(check_bashisms_gaps);
-    // HELD BACK (implemented + tested below, but NOT registered):
-    //   * checkBangAfterPipe (SC2326): the parser never wraps a mid-pipeline
-    //     `!` in `T_Banged` (`read_pipe_sequence` reads each command via
-    //     `read_command`, not `read_banged`), so the check can never match —
-    //     0 matched — violating the "at least one code matched" rule.
-    //   * checkNegatedUnaryOps (SC2332): the parser's `!` `TC_Unary` spans
-    //     `! -o opt`, while the oracle positions SC2332 on the `!` alone
-    //     (`readCondNot`'s `endSpan` is around just `char '!'`), so emitting
-    //     would produce a position-mismatch extra.
-    //   * The TC_Unary bashism codes (SC3016/3062/3065/…): same `TC_Unary`
-    //     span mismatch (Rust spans op..word; the oracle spans the operator
-    //     alone), so they are excluded from `check_bashisms_gaps`.
+    // Now registered (the parser gaps that held these back are fixed):
+    //   * checkBangAfterPipe (SC2326): the parser now wraps a mid-pipeline `!`
+    //     in `T_Banged`, so the check matches. ForShell [Dash,BusyboxSh,Sh,Bash].
+    //   * checkNegatedUnaryOps (SC2332): the `!` `TC_Unary` node now spans the
+    //     `!` alone, matching the oracle. ForShell [Bash].
+    //   * The TC_Unary bashism codes (SC3016/3062/3065/…): the `TC_Unary` node
+    //     now spans the operator alone, so they are handled in
+    //     `check_bashisms_gaps`.
+    c.node(check_bang_after_pipe_gated);
+    c.node(check_negated_unary_ops_gated);
 }
 
 // ===========================================================================
@@ -343,6 +341,12 @@ fn check_bang_after_pipe(_p: &Parameters, t: &Token, out: &mut Out) {
 // checkNegatedUnaryOps — SC2332  (HELD BACK — see module tail)
 // ForShell [Bash]
 // ===========================================================================
+
+fn check_negated_unary_ops_gated(p: &Parameters, t: &Token, out: &mut Out) {
+    if p.shell == Shell::Bash {
+        check_negated_unary_ops(p, t, out);
+    }
+}
 
 fn check_negated_unary_ops(_p: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TC_Unary {
@@ -1093,6 +1097,12 @@ fn check_bashisms_gaps(p: &Parameters, t: &Token, out: &mut Out) {
         // TC_Binary inherits the operator span (matches the oracle).
         TC_Binary { op, .. } => check_test_op(out, p, id, op, bashism_binary_test),
 
+        // TC_Unary now spans the operator alone (matches the oracle), so the
+        // unary test-operator bashisms (SC3016/3017/3062/3063/3064/3065/3066/
+        // 3067) can be emitted here. batch_h handles only the `test`
+        // SimpleCommand form, so there is no double emission.
+        TC_Unary { op, .. } => check_test_op(out, p, id, op, bashism_unary_test),
+
         // Arithmetic increments/decrements and exponentials.
         TA_Unary { op, .. } if matches!(op.as_str(), "|++" | "|--" | "++|" | "--|") => {
             let filtered: String = op.chars().filter(|&c| c != '|').collect();
@@ -1533,7 +1543,6 @@ mod tests {
 
     // ---- checkBangAfterPipe (SC2326) ----
     #[test]
-    #[ignore = "parser gap (not in batch_r): read_pipe_sequence reads each pipeline command via read_command, not read_banged, so a mid-pipeline `!` is not wrapped in T_Banged. The check body is a faithful port."]
     fn prop_checkBangAfterPipe1() { assert!(emits(check_bang_after_pipe, "true | ! true")); }
     #[test]
     fn prop_checkBangAfterPipe2() { assert!(!emits(check_bang_after_pipe, "true | ( ! true )")); }

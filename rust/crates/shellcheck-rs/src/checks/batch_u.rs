@@ -48,14 +48,10 @@ pub fn register(c: &mut Checker) {
         out.extend(tmp.into_iter().filter(|c| c.comment.code == 2109));
     });
 
-    // checkGlobbedRegex (SC2049) is implemented + tested but NOT registered:
-    // the Rust parser decodes regex backslash-escapes (`\*` -> literal "*"),
-    // whereas the oracle preserves the raw source ("\\*") for the regex RHS.
-    // With escapes gone the AST for `[[ $x =~ \* ]]` is indistinguishable from
-    // `[[ $x =~ * ]]`, so registering would emit spurious SC2049 (extra > 0) on
-    // the escaped cases. This is a shared-parser gap (parser.rs), not fixable
-    // here. See the #[ignore]d prop tests below.
-    // c.node(check_globbed_regex);
+    // checkGlobbedRegex (SC2049): now registered. The shared parser preserves
+    // backslash escapes on the regex RHS, so `[[ $x =~ \* ]]` keeps the raw
+    // "\*" and is distinguishable from the glob `[[ $x =~ * ]]`. No extra.
+    c.node(check_globbed_regex);
 
     // checkConstantIfs: SC2050 is emitted by batch_c. Register only SC2193.
     c.node(|p, t, out| {
@@ -75,16 +71,13 @@ pub fn register(c: &mut Checker) {
         );
     });
 
-    // checkValidCondOps: SC2057 (binary) anchors correctly. SC2058 (unary) is
-    // held back: the shared parser anchors the TC_Unary node on the whole
-    // expression (operator + operand), whereas the oracle anchors SC2058 on the
-    // operator alone (e.g. `[ -M a ]` -> cols 3-5, not 3-7). The operator has no
-    // token id of its own in the AST, so it cannot be re-anchored here; emitting
-    // yields extra > 0.
+    // checkValidCondOps: SC2057 (binary) and SC2058 (unary). The shared parser
+    // now anchors the TC_Unary node on the operator alone (e.g. `[ -M a ]` ->
+    // cols 3-5), matching the oracle, so SC2058 is registered too.
     c.node(|p, t, out| {
         let mut tmp = Out::new();
         check_valid_cond_ops(p, t, &mut tmp);
-        out.extend(tmp.into_iter().filter(|c| c.comment.code == 2057));
+        out.extend(tmp.into_iter().filter(|c| matches!(c.comment.code, 2057 | 2058)));
     });
 
     // checkComparisonAgainstGlob: SC2053/2081 in batch_c. Register only SC2330.
@@ -108,12 +101,10 @@ pub fn register(c: &mut Checker) {
         out.extend(tmp.into_iter().filter(|c| matches!(c.comment.code, 2284 | 2285)));
     });
     c.node(check_trailing_bracket);
-    // checkUnaryTestA (SC2331) is implemented + tested but NOT registered: like
-    // SC2058, its diagnostic must anchor on the `-a` operator alone (cols 3-5 in
-    // `[ -a foo ]`), but the shared parser anchors the TC_Unary node on the whole
-    // expression (cols 3-9). The autofix is already correct (replaceStart), but
-    // the comment span is wrong, so registering yields extra > 0. Parser gap.
-    // c.node(check_unary_test_a);
+    // checkUnaryTestA (SC2331): now registered. The shared parser anchors the
+    // TC_Unary node on the `-a` operator alone (cols 3-5 in `[ -a foo ]`),
+    // matching the oracle span; the autofix (replaceStart) was already correct.
+    c.node(check_unary_test_a);
 
     // checkUnmatchableCases: SC2194 (constant word) is emitted by batch_n.
     // Register only the pattern-shadowing codes SC2195/2221/2222.
@@ -1298,15 +1289,12 @@ mod tests {
     #[test]
     fn prop_checkGlobbedRegex4() { assert!(!emits(check_globbed_regex, "[[ $foo =~ ^c.* ]]")); }
     #[test]
-    #[ignore = "parser gap: the Rust parser (shared parser.rs) decodes regex backslash-escapes, turning `\\*` into a literal `*`; the oracle keeps the raw `\\*`. With the backslash gone the check faithfully but unavoidably treats it as a glob. Check logic matches Haskell; only the parser can't feed it the escaped form."]
     fn prop_checkGlobbedRegex5() { assert!(!emits(check_globbed_regex, "[[ $foo =~ \\* ]]")); }
     #[test]
     fn prop_checkGlobbedRegex6() { assert!(!emits(check_globbed_regex, "[[ $foo =~ (o*) ]]")); }
     #[test]
-    #[ignore = "parser gap: regex backslash-escapes are decoded by the shared parser, so `\\*foo` loses its backslash and reads as a glob. Faithful check logic; parser limitation."]
     fn prop_checkGlobbedRegex7() { assert!(!emits(check_globbed_regex, "[[ $foo =~ \\*foo ]]")); }
     #[test]
-    #[ignore = "parser gap: regex backslash-escapes are decoded by the shared parser, so `x\\*` becomes literal `x*` and reads as a glob. Faithful check logic; parser limitation."]
     fn prop_checkGlobbedRegex8() { assert!(!emits(check_globbed_regex, "[[ $foo =~ x\\* ]]")); }
 
     // ---- SC2050/2193 checkConstantIfs ----

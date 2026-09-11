@@ -35,14 +35,9 @@ use crate::interface::Shell;
 
 /// Register this batch's checks.
 ///
-/// `check_timed_command` (SC2176/SC2177) is implemented and tested but NOT
-/// registered: this port's parser does not treat the reserved word `time` as a
-/// pipeline prefix (it parses `time` as an ordinary command word), so
-/// `time -p foo | bar` becomes a two-stage pipeline whose first stage is the
-/// `time` command — the pipeline/compound argument the check inspects never
-/// appears. Both SC2176 and SC2177 therefore match 0 corpus cases (no extras,
-/// but no matches either), which the conformance-safety rule bars from
-/// registration. It stays here so the port is faithful and its prop_ tests run.
+/// `check_timed_command` (SC2176/SC2177) is now registered: the parser treats
+/// the reserved word `time` as a pipeline prefix, parsing the timed pipeline /
+/// compound command as `time`'s argument, so the check can inspect it.
 pub fn register(c: &mut Checker) {
     c.node(check_tr);
     c.node(check_find_name_glob);
@@ -56,7 +51,7 @@ pub fn register(c: &mut Checker) {
     c.node(check_xargs_dashi);
     c.node(check_nonportable_signals);
     c.node(check_time_parameters);
-    // check_timed_command: held back (parser does not special-case `time`).
+    c.node(check_timed_command);
     c.node(check_find_exec_with_single_argument);
     c.node(check_injectable_find_sh);
     c.node(check_find_action_precedence);
@@ -1251,7 +1246,11 @@ mod tests {
     #[test]
     fn prop_checkFindRedirections3() { assert!(!emits(check_find_redirections, "find . -execdir sh -c 'foo > file' \\;")); }
 
-    // ---- SC2176/2177 checkTimedCommand (held back, but tested) ----
+    // ---- SC2176/2177 checkTimedCommand ----
+    #[test]
+    fn prop_checkTimedCommand1() { assert!(emits_shell(check_timed_command, "#!/bin/sh\ntime -p foo | bar", Shell::Sh)); }
+    #[test]
+    fn prop_checkTimedCommand2() { assert!(emits_shell(check_timed_command, "#!/bin/dash\ntime ( foo; bar; )", Shell::Dash)); }
     #[test]
     fn prop_checkTimedCommand3() { assert!(!emits_shell(check_timed_command, "#!/bin/sh\ntime sleep 1", Shell::Sh)); }
 }
