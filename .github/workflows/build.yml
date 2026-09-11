@@ -149,7 +149,10 @@ jobs:
           path: deploy/
 
   deploy:
-    if: github.event_name == 'push'
+    # Only the canonical upstream repository has the `latest` GitHub release and
+    # the Docker Hub secrets this job needs; on a fork `.github_deploy` aborts at
+    # `hub release show latest` (exit 1). Skip deploy anywhere but upstream.
+    if: github.event_name == 'push' && github.repository == 'koalaman/shellcheck'
     name: Deploy binaries
     needs: package_binary
     runs-on: ubuntu-latest

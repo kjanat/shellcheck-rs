@@ -11,12 +11,14 @@ on:
       - '.github/workflows/rust.yml'
       - 'ShellCheck.cabal'
       - 'src/**'
+      - 'shellcheck.hs'
   pull_request:
     paths:
       - 'rust/**'
       - '.github/workflows/rust.yml'
       - 'ShellCheck.cabal'
       - 'src/**'
+      - 'shellcheck.hs'
 
 jobs:
   conformance-gate:
