@@ -22,6 +22,30 @@ use crate::astlib;
 use crate::interface::{Position, Severity};
 use std::collections::BTreeMap;
 
+/// `ShellCheck.Data.commonCommands` — used by the SC1014 parser note to detect
+/// a command mistakenly used as a `[ .. ]`/`[[ .. ]]` test operand.
+const COMMON_COMMANDS: &[&str] = &[
+    "admin", "alias", "ar", "asa", "at", "awk", "basename", "batch", "bc", "bg",
+    "break", "c99", "cal", "cat", "cd", "cflow", "chgrp", "chmod", "chown",
+    "cksum", "cmp", "colon", "comm", "command", "compress", "continue", "cp",
+    "crontab", "csplit", "ctags", "cut", "cxref", "date", "dd", "delta", "df",
+    "diff", "dirname", "dot", "du", "echo", "ed", "env", "eval", "ex", "exec",
+    "exit", "expand", "export", "expr", "fc", "fg", "file", "find", "fold",
+    "fuser", "gencat", "get", "getconf", "getopts", "gettext", "grep", "hash",
+    "head", "iconv", "ipcrm", "ipcs", "jobs", "join", "kill", "lex", "link",
+    "ln", "locale", "localedef", "logger", "logname", "lp", "ls", "m4", "mailx",
+    "make", "man", "mesg", "mkdir", "mkfifo", "more", "msgfmt", "mv", "newgrp",
+    "ngettext", "nice", "nl", "nm", "nohup", "od", "paste", "patch", "pathchk",
+    "pax", "pr", "printf", "prs", "ps", "pwd", "read", "readlink", "readonly",
+    "realpath", "renice", "return", "rm", "rmdel", "rmdir", "sact", "sccs",
+    "sed", "set", "sh", "shift", "sleep", "sort", "split", "strings", "strip",
+    "stty", "tabs", "tail", "talk", "tee", "test", "time", "timeout", "times",
+    "touch", "tput", "tr", "trap", "tsort", "tty", "type", "ulimit", "umask",
+    "unalias", "uname", "uncompress", "unexpand", "unget", "uniq", "unlink",
+    "unset", "uucp", "uudecode", "uuencode", "uustat", "uux", "val", "vi",
+    "wait", "wc", "what", "who", "write", "xargs", "xgettext", "yacc", "zcat",
+];
+
 /// A pending parse note/problem (SC1xxx), before id/position resolution.
 #[derive(Debug, Clone)]
 pub struct ParseNote {
@@ -2714,6 +2738,9 @@ impl Parser {
         }
         let mut suffix = Vec::new();
         if let Some(ref c) = cmd {
+            // `validateCommand` (Parser.hs): SC1127 when the command word looks
+            // like a C-style comment (`//` or `/* ... `).
+            self.validate_command_comment(c);
             // Determine whether this is a modifier command whose arguments are
             // parsed as assignments (readModifierSuffix). For `builtin`, use the
             // first argument's name.
@@ -3097,6 +3124,31 @@ impl Parser {
             }
         }
         out
+    }
+
+    /// `validateCommand` (Parser.hs): emit SC1127 when a command word is really
+    /// a C-style comment — either the word `//`, or a word starting `/*`.
+    fn validate_command_comment(&mut self, cmd: &Token) {
+        if let InnerToken::T_NormalWord(parts) = &*cmd.inner {
+            let is_comment = match parts.as_slice() {
+                [only] => matches!(&*only.inner, InnerToken::T_Literal(s) if s == "//"),
+                [first, second, ..] => {
+                    matches!(&*first.inner, InnerToken::T_Literal(s) if s == "/")
+                        && matches!(&*second.inner, InnerToken::T_Glob(g) if g == "*")
+                }
+                _ => false,
+            };
+            if is_comment {
+                let (s, e) = self.span_for(cmd.id());
+                self.problem_at(
+                    s,
+                    e,
+                    Severity::ErrorC,
+                    1127,
+                    "Was this intended as a comment? Use # in sh.",
+                );
+            }
+        }
     }
 
     /// The single-literal command name of a T_NormalWord, if any.
@@ -3598,6 +3650,26 @@ impl Parser {
 
     // ---- script entry ------------------------------------------------------
 
+    /// `isValidShell` (Parser.hs readScriptFile): `Just true` for a recognized
+    /// good shell, `Just false` for a known-unsupported one, `None` otherwise.
+    fn is_valid_shell(s: &str) -> Option<bool> {
+        const GOOD: &[&str] =
+            &["sh", "ash", "dash", "busybox sh", "bash", "bats", "ksh", "oksh"];
+        const BAD: &[&str] = &[
+            "awk", "csh", "expect", "fish", "perl", "python", "python3", "ruby",
+            "tcsh", "zsh",
+        ];
+        let good = s.is_empty() || GOOD.iter().any(|g| s.starts_with(g));
+        let bad = BAD.iter().any(|b| s.starts_with(b));
+        if good {
+            Some(true)
+        } else if bad {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
     fn read_script_file(&mut self) -> Option<Token> {
         let start = self.pos();
         // UTF-8 BOM
@@ -3607,6 +3679,28 @@ impl Parser {
         // File-wide shellcheck directives after the shebang.
         let file_annotations = self.read_annotations();
         self.allspacing();
+
+        // `verifyShebang` (Parser.hs readScriptFile): warn on an unrecognized
+        // interpreter, unless a `# shellcheck shell=...` directive overrides the
+        // shebang. Emitted at the start of the file, like `parseProblemAt pos`.
+        let shell_annotation_specified = file_annotations
+            .iter()
+            .any(|a| matches!(a, Annotation::ShellOverride(_)));
+        if !shell_annotation_specified {
+            if let InnerToken::T_Literal(sb) = &*shebang.inner {
+                let exe = astlib::executable_from_shebang(sb);
+                if Self::is_valid_shell(&exe).is_none() {
+                    self.problem_at(
+                        start.clone(),
+                        start.clone(),
+                        Severity::ErrorC,
+                        1008,
+                        "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify.",
+                    );
+                }
+            }
+        }
+
         let commands = self.read_compound_list_or_empty();
         self.read_pending_heredocs();
         // verify EOF: if not at end, it's a parse problem (SC1072-ish). For the
@@ -4085,6 +4179,28 @@ impl Parser {
 
         // required space after the bracket
         let space = self.cond_spacing();
+
+        // SC1014: mirror Parser.hs `readConditionContents`'s `attempting`
+        // lookahead — peek a variable name followed by whitespace; if it names a
+        // common command, warn that a command is being used as a test operand.
+        // Non-consuming (lookAhead), so the cursor is always restored.
+        {
+            let m = self.mark();
+            let pos = self.pos();
+            if let Ok(name) = self.read_variable_name() {
+                if self.spacing1().is_ok() && COMMON_COMMANDS.contains(&name.as_str()) {
+                    self.problem_at(
+                        pos.clone(),
+                        pos,
+                        Severity::WarningC,
+                        1014,
+                        "Use 'if cmd; then ..' to check exit code, or 'if [[ $(cmd) == .. ]]' to check output.",
+                    );
+                }
+            }
+            self.reset(m);
+        }
+
         let contents = match self.read_cond_contents(single) {
             Ok(c) => Some(c),
             Err(()) => None,
@@ -5221,5 +5337,105 @@ mod coproc_glob_dollar_tests {
         });
         assert_eq!(outer, Some((1, 6)), "outer T_DollarBraced anchors at the `$`");
         assert_eq!(inner_word, Some((1, 7)), "inner word starts after the `$`");
+    }
+
+    // ---- SC1008: unrecognized shebang -------------------------------------
+
+    #[test]
+    fn sc1008_unrecognized_shebang() {
+        // `#!/bin/busybox ash`: interpreter "busybox ash" is neither a good nor a
+        // known-bad shell, so SC1008 fires at the start of the file.
+        let out = parse_script("-", "#!/bin/busybox ash\n");
+        let note = out
+            .notes
+            .iter()
+            .find(|n| n.code == 1008)
+            .expect("SC1008 must fire on an unrecognized shebang");
+        assert_eq!(note.severity, Severity::ErrorC);
+        assert_eq!(
+            (note.start.line, note.start.column, note.end.line, note.end.column),
+            (1, 1, 1, 1),
+            "SC1008 is anchored at the start of the file"
+        );
+        assert_eq!(
+            note.message,
+            "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify."
+        );
+    }
+
+    #[test]
+    fn sc1008_not_for_recognized_shebang() {
+        assert!(!has_note("#!/bin/sh\n", 1008));
+        assert!(!has_note("#!/bin/bash\n", 1008));
+        assert!(!has_note("#!/bin/busybox sh\n", 1008));
+        // An empty shebang is treated as "good" (Just true), so no SC1008.
+        assert!(!has_note("echo hi\n", 1008));
+    }
+
+    #[test]
+    fn sc1008_suppressed_by_shell_directive() {
+        // A `# shellcheck shell=...` directive overrides the shebang, so no SC1008.
+        assert!(!has_note("#!/bin/busybox ash\n# shellcheck shell=sh\n", 1008));
+    }
+
+    // ---- SC1014: command used as a test operand ---------------------------
+
+    #[test]
+    fn sc1014_command_in_single_bracket() {
+        // `[ test =~ foo ]`: "test" is a common command, so SC1014 fires at the
+        // start of the word (column 3).
+        let out = parse_script("-", "[ test =~ foo ]");
+        let note = out
+            .notes
+            .iter()
+            .find(|n| n.code == 1014)
+            .expect("SC1014 must fire on a common command in [ .. ]");
+        assert_eq!(note.severity, Severity::WarningC);
+        assert_eq!(
+            (note.start.line, note.start.column, note.end.line, note.end.column),
+            (1, 3, 1, 3),
+            "SC1014 is anchored at the start of the operand word"
+        );
+        assert_eq!(
+            note.message,
+            "Use 'if cmd; then ..' to check exit code, or 'if [[ $(cmd) == .. ]]' to check output."
+        );
+    }
+
+    #[test]
+    fn sc1014_not_for_ordinary_operand() {
+        assert!(!has_note("[ x = y ]", 1014));
+        assert!(!has_note("[ -n foo ]", 1014));
+        // The lookahead must not consume input: the condition still parses.
+        assert!(!has_note("[ test =~ foo ]", 1072));
+    }
+
+    // ---- SC1127: command word that looks like a comment -------------------
+
+    #[test]
+    fn sc1127_slash_star() {
+        // `/*` as a command word: SC1127 spans the whole command word.
+        let out = parse_script("-", "/*");
+        let note = out
+            .notes
+            .iter()
+            .find(|n| n.code == 1127)
+            .expect("SC1127 must fire on a `/*` command word");
+        assert_eq!(note.severity, Severity::ErrorC);
+        assert_eq!(
+            note.message,
+            "Was this intended as a comment? Use # in sh."
+        );
+    }
+
+    #[test]
+    fn sc1127_double_slash() {
+        assert!(has_note("// this is a comment", 1127));
+    }
+
+    #[test]
+    fn sc1127_not_for_ordinary_command() {
+        assert!(!has_note("echo hi", 1127));
+        assert!(!has_note("/bin/sh", 1127));
     }
 }
