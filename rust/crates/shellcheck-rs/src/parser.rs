@@ -3106,9 +3106,27 @@ impl Parser {
                 self.reset(fdmark);
             }
         }
+        // `&>` / `&>>` combined redirect: `readIoSource` accepts `&` as the
+        // source when it is immediately followed by a redirection operator
+        // (`lookAhead $ readIoFileOp <|> string "<<"`). Consume the `&` here so
+        // the following operator (`>`/`>>`/`<`/`<<`/...) is parsed as the
+        // redirection, matching Parser.hs (`ls &> bar`, `ls &>> bar`).
+        if fd.is_empty()
+            && self.peek() == Some('&')
+            && matches!(self.peek_at(1), Some('<') | Some('>'))
+        {
+            self.bump(); // &
+            fd = "&".to_string();
+        }
+        // `op_start` is the position after the fd source, where the redirection
+        // operator begins. Parser.hs captures `startSpan` for the inner redir
+        // token (T_IoFile/T_IoDuplicate/T_HereString/T_HereDoc) here, *after*
+        // `readIoSource` has consumed the fd, so a glued `1>2` anchors T_IoFile
+        // (and thus SC2210) at the `>`, not the fd digit.
+        let op_start = self.pos();
         // heredoc
         if self.peek() == Some('<') && self.peek_at(1) == Some('<') {
-            return self.read_heredoc_or_herestring(start, fd);
+            return self.read_heredoc_or_herestring(start, op_start, fd);
         }
         // dup: <& or >&
         if (self.peek() == Some('<') || self.peek() == Some('>')) && self.peek_at(1) == Some('&') {
@@ -3130,13 +3148,13 @@ impl Parser {
                 num.push('-');
                 self.bump();
             }
-            let opid = self.next_id_between(start.clone(), self.pos());
+            let opid = self.next_id_between(op_start.clone(), self.pos());
             let op_tok = Token::new(
                 opid,
                 if opc == '<' { InnerToken::T_LESSAND } else { InnerToken::T_GREATAND },
             );
             if !num.is_empty() {
-                let dup_id = self.next_id_between(start.clone(), self.pos());
+                let dup_id = self.next_id_between(op_start.clone(), self.pos());
                 let dup = Token::new(dup_id, InnerToken::T_IoDuplicate { op: op_tok, num });
                 let id = self.next_id_between(start, self.pos());
                 return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: dup }));
@@ -3150,13 +3168,13 @@ impl Parser {
                     return Err(());
                 }
             };
-            let iofile_id = self.next_id_between(start.clone(), self.pos());
+            let iofile_id = self.next_id_between(op_start.clone(), self.pos());
             let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
             let id = self.next_id_between(start, self.pos());
             return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: iofile }));
         }
         // file redirect operators
-        let op = self.read_io_file_op(start.clone());
+        let op = self.read_io_file_op(op_start.clone());
         match op {
             Some(op_tok) => {
                 self.spacing();
@@ -3167,7 +3185,7 @@ impl Parser {
                         return Err(());
                     }
                 };
-                let iofile_id = self.next_id_between(start.clone(), self.pos());
+                let iofile_id = self.next_id_between(op_start.clone(), self.pos());
                 let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
                 let id = self.next_id_between(start, self.pos());
                 Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: iofile }))
@@ -3195,25 +3213,33 @@ impl Parser {
         Some(Token::new(id, inner))
     }
 
-    fn read_heredoc_or_herestring(&mut self, start: Position, fd: String) -> PResult<Token> {
+    fn read_heredoc_or_herestring(
+        &mut self,
+        start: Position,
+        op_start: Position,
+        fd: String,
+    ) -> PResult<Token> {
         // << , <<- , <<<
         self.string("<<")?;
         if self.char('<').is_ok() {
-            // here string
+            // here string: `readHereString` spans just `<<<` (id captured before
+            // the word is read).
+            let hs_id = self.next_id_between(op_start.clone(), self.pos());
             self.spacing();
             let word = self.read_normal_word()?;
-            let hs_id = self.next_id_between(start.clone(), self.pos());
             let hs = Token::new(hs_id, InnerToken::T_HereString(word));
             let id = self.next_id_between(start, self.pos());
             return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: hs }));
         }
         let dashed = if self.char('-').is_ok() { Dashed::Dashed } else { Dashed::Undashed };
         self.spacing();
-        // delimiter (may be quoted)
+        // delimiter (may be quoted). `readHereDoc` captures `startSpan` here,
+        // *after* `<<`/`-`/spacing, so T_HereDoc spans only the end token.
+        let delim_start = self.pos();
         let (delim, quoted) = self.read_heredoc_delim()?;
         // Body is read lazily at next newline; for the slice, capture nothing now
         // and register a pending heredoc.
-        let hd_id = self.next_id_between(start.clone(), self.pos());
+        let hd_id = self.next_id_between(delim_start, self.pos());
         self.pending_heredocs.push(PendingHereDoc { dashed, quoted, delim: delim.clone(), id: hd_id });
         let hd = Token::new(hd_id, InnerToken::T_HereDoc { dashed, quoted, delim, body: Vec::new() });
         let id = self.next_id_between(start, self.pos());
@@ -3265,6 +3291,9 @@ impl Parser {
         }
         let pending: Vec<PendingHereDoc> = std::mem::take(&mut self.pending_heredocs);
         for hd in pending {
+            // `docStartPos`: the position of the first byte of the body (this is
+            // invoked right after the `<<EOF` line's newline).
+            let doc_start = self.pos();
             // consume lines until a line equal to delim (trimmed if dashed)
             let mut body = String::new();
             loop {
@@ -3298,12 +3327,92 @@ impl Parser {
                     break;
                 }
             }
-            // store body as a single literal
-            let bstart = Position::default();
-            let lit_id = self.next_id_between(bstart.clone(), bstart);
-            let lit = Token::new(lit_id, InnerToken::T_Literal(body));
-            self.heredoc_bodies.insert(hd.id, vec![lit]);
+            let doc_end = self.pos();
+            // `parseHereData`: a quoted delimiter keeps the body verbatim as one
+            // literal; an unquoted delimiter sub-parses the body for expansions
+            // (`$(..)`, `` `..` ``, `${..}`, `$var`) exactly like a double-quoted
+            // string, so stdin-consumer detection sees them.
+            let tokens = match hd.quoted {
+                Quoted::Quoted => {
+                    let lit_id = self.next_id_between(doc_start, doc_end);
+                    vec![Token::new(lit_id, InnerToken::T_Literal(body))]
+                }
+                Quoted::Unquoted => self.read_here_data(&body, doc_start),
+            };
+            self.heredoc_bodies.insert(hd.id, tokens);
         }
+    }
+
+    /// `readHereData` (Parser.hs): sub-parse an unquoted here-doc body into the
+    /// same token stream a double-quoted string produces (literals, dollar
+    /// expansions, backtick command substitutions), with `"` and other
+    /// non-`` `$\ `` characters kept literal via `readHereLiteral`.
+    fn read_here_data(&mut self, body: &str, start: Position) -> Vec<Token> {
+        let mut sub = Parser::new(&self.filename, body);
+        sub.line = start.line;
+        sub.col = start.column;
+        sub.next_id = self.next_id;
+        let mut parts = Vec::new();
+        while !sub.eof() {
+            let progressed_from = sub.idx;
+            match sub.peek() {
+                // `readDoubleQuotedDollar` always succeeds on `$` (falls back to
+                // a literal `$` via `readDollarLonely`).
+                Some('$') => {
+                    if let Ok(t) = sub.read_double_quoted_dollar() {
+                        parts.push(t);
+                    }
+                }
+                // `readQuotedBackTicked`: a `` `..` `` command substitution.
+                Some('`') => match sub.read_backticked(true) {
+                    Ok(t) => parts.push(t),
+                    // An unterminated backtick can't be consumed by
+                    // `readHereLiteral` either (it excludes `` ` ``); stop.
+                    Err(()) => break,
+                },
+                // `readDoubleLiteral` (escapes + run up to a double-quotable
+                // char), else `readHereLiteral` (run up to `` `$\ ``, so `"` and
+                // ordinary text are literal).
+                _ => {
+                    if let Ok(t) = sub.read_double_literal_run() {
+                        parts.push(t);
+                    } else if let Ok(t) = sub.read_here_literal() {
+                        parts.push(t);
+                    } else {
+                        break;
+                    }
+                }
+            }
+            if sub.idx == progressed_from {
+                // No progress (shouldn't happen); guard against an infinite loop.
+                break;
+            }
+        }
+        self.next_id = sub.next_id;
+        for (k, v) in sub.positions {
+            self.positions.entry(k).or_insert(v);
+        }
+        self.notes.extend(sub.notes);
+        self.problems.extend(sub.problems);
+        parts
+    }
+
+    /// `readHereLiteral`: a run of characters that are not `` ` ``, `$` or `\`.
+    fn read_here_literal(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            if c == '`' || c == '$' || c == '\\' {
+                break;
+            }
+            self.bump();
+            s.push(c);
+        }
+        if s.is_empty() {
+            return Err(());
+        }
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_Literal(s)))
     }
 
     // ---- script entry ------------------------------------------------------
@@ -4423,3 +4532,144 @@ mod arith_tests {
     #[test] fn prop_a23() { assert!(arith_ok("~0")); }
 }
 
+
+#[cfg(test)]
+mod redirect_heredoc_tests {
+    use super::*;
+
+    // Collect every token whose inner matches the predicate, with its span.
+    fn spans_of<F>(script: &str, pred: F) -> Vec<(i64, i64, i64, i64)>
+    where
+        F: Fn(&InnerToken) -> bool,
+    {
+        let out = parse_script("-", script);
+        let root = out.root.expect("parse produced a tree");
+        let mut found = Vec::new();
+        root.visit_preorder(&mut |t| {
+            if pred(&t.inner) {
+                if let Some((s, e)) = out.positions.get(&t.id) {
+                    found.push((s.line, s.column, e.line, e.column));
+                }
+            }
+        });
+        found
+    }
+
+    fn has_problem(script: &str, code: i64) -> bool {
+        let out = parse_script("-", script);
+        out.notes.iter().any(|n| n.code == code)
+    }
+
+    // ---- gap 1: `&>` / `&>>` combined redirect --------------------------
+
+    #[test]
+    fn ampersand_redirect_is_single_fd_redirect() {
+        // `&>bar` is one T_FdRedirect (fd = "&"), not `&` + `>bar`.
+        let redirs = spans_of("ls &>bar", |i| matches!(i, InnerToken::T_FdRedirect { .. }));
+        assert_eq!(redirs.len(), 1, "expected one T_FdRedirect for &>");
+        // fd source is "&"
+        let out = parse_script("-", "ls &>bar");
+        let root = out.root.unwrap();
+        let mut fds = Vec::new();
+        root.visit_preorder(&mut |t| {
+            if let InnerToken::T_FdRedirect { fd, .. } = &*t.inner {
+                fds.push(fd.clone());
+            }
+        });
+        assert_eq!(fds, vec!["&".to_string()]);
+        // Not backgrounded.
+        let bg = spans_of("ls &>bar", |i| matches!(i, InnerToken::T_Backgrounded(_)));
+        assert!(bg.is_empty(), "`&>` must not parse as backgrounding");
+    }
+
+    #[test]
+    fn ampersand_dgreat_redirect() {
+        let out = parse_script("-", "ls &>>bar");
+        let root = out.root.unwrap();
+        let mut ops = Vec::new();
+        root.visit_preorder(&mut |t| {
+            if let InnerToken::T_IoFile { op, .. } = &*t.inner {
+                ops.push(matches!(*op.inner, InnerToken::T_DGREAT));
+            }
+        });
+        assert_eq!(ops, vec![true], "&>> should carry a T_DGREAT operator");
+    }
+
+    // ---- gap 3: glued fd redirect operator span (SC2210) ----------------
+
+    #[test]
+    fn glued_fd_redirect_anchors_iofile_at_operator() {
+        // `foo 1>2`: T_IoFile spans the operator `>` (col 6) through `2` (col 8),
+        // NOT the fd digit at col 5. This is what SC2210 reports.
+        let iofiles = spans_of("foo 1>2", |i| matches!(i, InnerToken::T_IoFile { .. }));
+        assert_eq!(iofiles, vec![(1, 6, 1, 8)]);
+        // The whole T_FdRedirect still starts at the fd digit (col 5).
+        let fds = spans_of("foo 1>2", |i| matches!(i, InnerToken::T_FdRedirect { .. }));
+        assert_eq!(fds, vec![(1, 5, 1, 8)]);
+    }
+
+    // ---- gap 2: heredoc body expansions ---------------------------------
+
+    #[test]
+    fn unquoted_heredoc_parses_command_substitution() {
+        // The body `$(rm x)` must become a T_DollarExpansion node, not a flat
+        // literal, so stdin-consumer analysis sees it.
+        let subs = spans_of(
+            "cat << EOF\n$(rm x)\nEOF\n",
+            |i| matches!(i, InnerToken::T_DollarExpansion(_)),
+        );
+        assert_eq!(subs.len(), 1, "expected a command substitution in the body");
+    }
+
+    #[test]
+    fn unquoted_heredoc_parses_backtick() {
+        let subs = spans_of(
+            "cat << EOF\n`rm x`\nEOF\n",
+            |i| matches!(i, InnerToken::T_Backticked(_)),
+        );
+        assert_eq!(subs.len(), 1, "expected a backtick substitution in the body");
+    }
+
+    #[test]
+    fn quoted_heredoc_does_not_expand() {
+        // With a quoted delimiter the body stays a single literal.
+        let subs = spans_of(
+            "cat << 'EOF'\n$(rm x)\nEOF\n",
+            |i| matches!(i, InnerToken::T_DollarExpansion(_)),
+        );
+        assert!(subs.is_empty(), "quoted heredoc body must not be expanded");
+    }
+
+    #[test]
+    fn heredoc_double_quote_is_literal() {
+        // A `"` in an unquoted heredoc body is literal (readHereLiteral), and it
+        // must not swallow the following expansion.
+        let out = parse_script("-", "cat << EOF\na\"b$c\nEOF\n");
+        assert!(out.root.is_some());
+        let vars = spans_of(
+            "cat << EOF\na\"b$c\nEOF\n",
+            |i| matches!(i, InnerToken::T_DollarBraced { .. } | InnerToken::T_NormalWord(_)),
+        );
+        let _ = vars;
+        // The `$c` variable is present.
+        let dollar = {
+            let out = parse_script("-", "cat << EOF\na\"b$c\nEOF\n");
+            let root = out.root.unwrap();
+            let mut n = 0;
+            root.visit_preorder(&mut |t| {
+                if matches!(&*t.inner, InnerToken::T_DollarBraced { .. }) {
+                    n += 1;
+                }
+            });
+            n
+        };
+        assert_eq!(dollar, 1, "the $c variable should be parsed in the body");
+    }
+
+    #[test]
+    fn heredoc_still_terminates_and_parses_ok() {
+        // Regression guard: a heredoc with an expansion parses without a
+        // spurious problem (e.g. SC1044 unterminated).
+        assert!(!has_problem("cat << EOF\n$(date)\nEOF\n", 1044));
+    }
+}
