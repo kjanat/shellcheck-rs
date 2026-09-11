@@ -302,85 +302,129 @@ pub fn build_maps(root: &Token) -> (BTreeMap<Id, Id>, BTreeMap<Id, Token>) {
     (parent, id_map)
 }
 
-/// Whether the script sets a given `set -o` / `shopt -s` option anywhere.
-/// Simplified scan over simple commands.
+/// `isOptionSet opt`: does the script mention `shopt -s opt` or `set -o opt`
+/// anywhere? Mirrors `containsShopt opt || containsSetOption opt`:
+///
+/// - `containsShopt`: a `shopt` command with `opt` among its arguments.
+/// - `containsSetOption`: a `set` command with `opt` among its arguments, or
+///   with an `o` flag before `--` at all. That last clause is the oracle's
+///   behaviour (any `set -o ...` satisfies it for every `opt`), reproduced
+///   deliberately rather than "corrected".
 pub fn is_option_set(opt: &str, root: &Token) -> bool {
     let mut found = false;
     root.visit_preorder(&mut |t| {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-            let lits: Vec<String> = words
-                .iter()
-                .filter_map(astlib::get_literal_string)
-                .collect();
-            if let Some(first) = lits.first() {
-                if first == "shopt" && lits.iter().any(|w| w == opt) {
-                    found = true;
-                }
-                if first == "set" && lits.iter().any(|w| w == opt || w == "-o") {
-                    // `set -o opt`
-                    if lits.iter().any(|w| w == opt) {
-                        found = true;
-                    }
-                }
-            }
+        if found {
+            return;
+        }
+        if let InnerToken::T_SimpleCommand { .. } = &*t.inner {
+            let name = get_command_name(t);
+            let has_opt = || astlib::oversimplify(t).iter().any(|w| w == opt);
+            found = match name.as_deref() {
+                Some("shopt") => has_opt(),
+                Some("set") => has_opt() || get_all_flags(t).iter().any(|(_, f)| f == "o"),
+                _ => false,
+            };
         }
     });
     found
 }
 
-/// `containsNoglob`: script has `set -f` / `set -o noglob` anywhere.
+/// `containsNoglob`: does the script disable globbing anywhere? Same shape as
+/// `contains_set_e` with `noglob` / flag `f`: a `set` command whose arguments
+/// contain `noglob` (with or without `-o`) or carry `f` in a flag group before
+/// `--`, or a shebang such as `#!/bin/sh -f` (Haskell's `[[:space:]]-[^-]*f`).
 pub fn contains_noglob(root: &Token) -> bool {
+    let shebang_re = regex::Regex::new(r"[[:space:]]-[^-]*f").expect("static regex");
     let mut found = false;
     root.visit_preorder(&mut |t| {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-            let lits: Vec<String> = words
-                .iter()
-                .filter_map(astlib::get_literal_string)
-                .collect();
-            if lits.first().map(|s| s == "set").unwrap_or(false) {
-                let mut it = lits.iter().skip(1).peekable();
-                while let Some(w) = it.next() {
-                    // set -f, set -fx, set -ef, etc. (single-dash flag containing 'f')
-                    if w.starts_with('-') && !w.starts_with("--") && w[1..].contains('f') {
-                        found = true;
-                    }
-                    // set -o noglob
-                    if w == "-o" {
-                        if let Some(next) = it.peek() {
-                            if next.as_str() == "noglob" {
-                                found = true;
-                            }
-                        }
-                    }
-                }
-            }
+        if found {
+            return;
         }
+        found = match &*t.inner {
+            InnerToken::T_Script { shebang, .. } => match &*shebang.inner {
+                InnerToken::T_Literal(s) => shebang_re.is_match(s),
+                _ => false,
+            },
+            InnerToken::T_SimpleCommand { .. } => {
+                get_command_name(t).as_deref() == Some("set")
+                    && (astlib::oversimplify(t).iter().any(|w| w == "noglob")
+                        || get_all_flags(t).iter().any(|(_, f)| f == "f"))
+            }
+            _ => false,
+        };
     });
     found
 }
 
-/// `containsSetE` (approximate): script has `set -e` / `set -o errexit`.
+/// `getFlagsUntil stopCondition`: turn a simple command's arguments into
+/// `(token, flag)` pairs the way ASTLib does — `-avz` yields `a`, `v`, `z`;
+/// `--bar=baz` yields `bar`; a non-flag argument yields `""`. From the first
+/// argument satisfying `stop` onward, everything (that argument included) is
+/// a non-flag, so for `get_all_flags` nothing at or after `--` is a flag.
+/// Argument text comes from `oversimplify`, as in Haskell.
+pub(crate) fn get_flags_until<'a>(
+    stop: &dyn Fn(&str) -> bool,
+    t: &'a Token,
+) -> Vec<(&'a Token, String)> {
+    let args: &[Token] = match &*t.inner {
+        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => &words[1..],
+        _ => return Vec::new(),
+    };
+    let texts: Vec<(&Token, String)> = args
+        .iter()
+        .map(|x| (x, astlib::oversimplify(x).concat()))
+        .collect();
+    let split = texts
+        .iter()
+        .position(|(_, s)| stop(s))
+        .unwrap_or(texts.len());
+    let mut out = Vec::new();
+    for (x, s) in &texts[..split] {
+        if let Some(arg) = s.strip_prefix("--") {
+            out.push((*x, arg.split('=').next().unwrap_or("").to_string()));
+        } else if let Some(group) = s.strip_prefix('-') {
+            for c in group.chars() {
+                out.push((*x, c.to_string()));
+            }
+        } else {
+            out.push((*x, String::new()));
+        }
+    }
+    for (x, _) in &texts[split..] {
+        out.push((*x, String::new()));
+    }
+    out
+}
+
+/// `getAllFlags`: all flags in the GNU way, up until `--`.
+pub(crate) fn get_all_flags(t: &Token) -> Vec<(&Token, String)> {
+    get_flags_until(&|s| s == "--", t)
+}
+
+/// `containsSetE`: does the script enable errexit anywhere? True for a `set`
+/// command whose arguments contain `errexit` or carry the short flag `e` in
+/// any flag group before `--` (`set -e`, `set -ue`, `set -xe`, `set -o
+/// errexit`, but not `set -- -e`), or for a shebang such as `#!/bin/sh -e`
+/// (Haskell's `[[:space:]]-[^-]*e`).
 pub fn contains_set_e(root: &Token) -> bool {
+    let shebang_re = regex::Regex::new(r"[[:space:]]-[^-]*e").expect("static regex");
     let mut found = false;
     root.visit_preorder(&mut |t| {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-            let lits: Vec<String> = words
-                .iter()
-                .filter_map(astlib::get_literal_string)
-                .collect();
-            if lits.first().map(|s| s == "set").unwrap_or(false) {
-                if lits
-                    .iter()
-                    .any(|w| w.starts_with("-e") || w == "errexit" || w == "-o")
-                {
-                    if lits.iter().any(|w| w.contains('e') && w.starts_with('-'))
-                        || lits.iter().any(|w| w == "errexit")
-                    {
-                        found = true;
-                    }
-                }
-            }
+        if found {
+            return;
         }
+        found = match &*t.inner {
+            InnerToken::T_Script { shebang, .. } => match &*shebang.inner {
+                InnerToken::T_Literal(s) => shebang_re.is_match(s),
+                _ => false,
+            },
+            InnerToken::T_SimpleCommand { .. } => {
+                get_command_name(t).as_deref() == Some("set")
+                    && (astlib::oversimplify(t).iter().any(|w| w == "errexit")
+                        || get_all_flags(t).iter().any(|(_, f)| f == "e"))
+            }
+            _ => false,
+        };
     });
     found
 }
@@ -1771,5 +1815,72 @@ fn get_referenced_variable_command(base: &Token) -> Vec<(Token, Token, String)> 
             })
             .collect(),
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod set_option_tests {
+    //! Unit tests for `contains_set_e` / `contains_noglob` / `is_option_set`,
+    //! mirroring the semantics of AnalyzerLib.hs `containsSetE`,
+    //! `containsNoglob` and `isOptionSet` (flag groups via `getAllFlags`, the
+    //! `--` stop, the bare-word forms, and the shebang regexes).
+    use super::*;
+
+    fn root(script: &str) -> Token {
+        crate::parser::parse_script("test", script)
+            .root
+            .expect("test script parses")
+    }
+
+    #[test]
+    fn set_e_flag_forms() {
+        for s in ["set -e", "set -ue", "set -xe", "set -eu", "set -o errexit", "set errexit"] {
+            assert!(contains_set_e(&root(s)), "{s}");
+        }
+    }
+
+    #[test]
+    fn set_e_shebang() {
+        assert!(contains_set_e(&root("#!/bin/bash -e\ntrue")));
+        assert!(contains_set_e(&root("#!/bin/bash -xe\ntrue")));
+        assert!(!contains_set_e(&root("#!/bin/bash --posix\ntrue")));
+        assert!(!contains_set_e(&root("#!/usr/bin/env bash\ntrue")));
+    }
+
+    #[test]
+    fn set_e_negatives() {
+        for s in ["true", "set -u", "set -- -e", "set --errexit", "echo set -e", "shopt -s errexit"] {
+            assert!(!contains_set_e(&root(s)), "{s}");
+        }
+    }
+
+    #[test]
+    fn noglob_forms() {
+        for s in ["set -f", "set -xf", "set -o noglob", "set noglob", "#!/bin/sh -f\ntrue"] {
+            assert!(contains_noglob(&root(s)), "{s}");
+        }
+        for s in ["true", "set -- -f", "set -e", "echo set -f"] {
+            assert!(!contains_noglob(&root(s)), "{s}");
+        }
+    }
+
+    #[test]
+    fn option_set_shopt_and_set_o() {
+        assert!(is_option_set("lastpipe", &root("shopt -s lastpipe")));
+        assert!(is_option_set("lastpipe", &root("shopt -- -s lastpipe")));
+        assert!(is_option_set("pipefail", &root("set -o pipefail")));
+        assert!(is_option_set("pipefail", &root("set -- -o pipefail")));
+        assert!(is_option_set("pipefail", &root("shopt -s pipefail")));
+        assert!(!is_option_set("pipefail", &root("true")));
+        assert!(!is_option_set("lastpipe", &root("set -e")));
+        assert!(!is_option_set("pipefail", &root("echo set -o pipefail")));
+    }
+
+    #[test]
+    fn option_set_mirrors_oracle_dash_o_quirk() {
+        // Haskell's containsSetOption is satisfied by any `set -o ...` for
+        // every opt (`"o" elem map snd (getAllFlags t)`); mirrored on purpose.
+        assert!(is_option_set("pipefail", &root("set -o vi")));
+        assert!(!is_option_set("pipefail", &root("set -- -o vi")));
     }
 }
