@@ -3,14 +3,11 @@
   "corpus_size": 1659,
   "comparable_scripts": 1659,
   "oracle_error_scripts": 0,
-  "exact_scripts": 1654,
+  "exact_scripts": 1659,
   "order_mismatch": 0,
   "order_mismatch_ids": [],
-  "exit_mismatch": 2,
-  "exit_mismatch_ids": [
-    "prop_checkSourceArgs2",
-    "prop_checkSourceArgs3"
-  ],
+  "exit_mismatch": 0,
+  "exit_mismatch_ids": [],
   "exit_mismatch_note": "These scripts exit-mismatch ONLY because the sole diagnostic the oracle emits on them is an un-ported SC1xxx note (see known_missing); with that note absent the port finds no issues and exits 0 while the oracle exits 1. They are pinned so the gate still fails on any NEW exit mismatch.",
   "per_code": {
     "1008": {
@@ -33,8 +30,8 @@
     },
     "1091": {
       "oracle": 5,
-      "matched": 0,
-      "missing": 5,
+      "matched": 5,
+      "missing": 0,
       "extra": 0
     },
     "1107": {
@@ -1880,29 +1877,24 @@
       "extra": 0
     }
   },
-  "known_missing": {
-    "1091": {
-      "missing": 5,
-      "reason": "SC1091 (Not following sourced file): the port does not resolve/follow `source`d files, so it cannot emit the informational 'not following' note."
-    }
-  },
+  "known_missing": {},
   "provenance": {
     "oracle": {
       "kind": "oracle",
       "binary": "/home/user/shellcheck/dist-newstyle/build/x86_64-linux/ghc-9.6.6/ShellCheck-0.11.0/x/shellcheck/build/shellcheck/shellcheck",
       "binary_sha256": "9ce27f9a673bd4ef826249a2e1f8c4a44f6d08573ee4efc2e6d807d21fe4550e",
       "git": {
-        "head": "4365aa4f73032862d6db8fe3719285280c00ba8f",
-        "describe": "4365aa4"
+        "head": "b296c213a1e634a36e5eb8ae4c0d262f948a8862",
+        "describe": "b296c21"
       }
     },
     "port": {
       "kind": "port",
       "binary": "/home/user/shellcheck/rust/target/release/shellcheck-rs",
-      "binary_sha256": "734ec60af2c3b7a9803a05c7de515794df6a3c634860b55cfd9acd9cc55430f8",
+      "binary_sha256": "68df7ed2f92aa4e83505b70e9168e9084bfda21f1257bfd3a7a755d255db03df",
       "git": {
-        "head": "4365aa4f73032862d6db8fe3719285280c00ba8f",
-        "describe": "4365aa4"
+        "head": "b296c213a1e634a36e5eb8ae4c0d262f948a8862",
+        "describe": "b296c21"
       }
     }
   }
