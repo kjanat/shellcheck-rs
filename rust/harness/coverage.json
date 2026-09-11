@@ -316,8 +316,8 @@
     "2326": 1
   },
   "port": {
-    "exact_scripts": 534,
-    "exact_pct": 32.19,
+    "exact_scripts": 545,
+    "exact_pct": 32.85,
     "port_errors": 0,
     "per_code": {
       "1008": {
@@ -388,8 +388,8 @@
       },
       "2005": {
         "oracle": 11,
-        "matched": 0,
-        "missing": 11,
+        "matched": 8,
+        "missing": 3,
         "extra": 0
       },
       "2006": {
@@ -598,8 +598,8 @@
       },
       "2048": {
         "oracle": 7,
-        "matched": 0,
-        "missing": 7,
+        "matched": 7,
+        "missing": 0,
         "extra": 0
       },
       "2049": {
@@ -712,8 +712,8 @@
       },
       "2068": {
         "oracle": 29,
-        "matched": 0,
-        "missing": 29,
+        "matched": 25,
+        "missing": 4,
         "extra": 0
       },
       "2069": {
@@ -970,8 +970,8 @@
       },
       "2116": {
         "oracle": 9,
-        "matched": 0,
-        "missing": 9,
+        "matched": 7,
+        "missing": 2,
         "extra": 0
       },
       "2117": {
@@ -1018,14 +1018,14 @@
       },
       "2124": {
         "oracle": 3,
-        "matched": 0,
-        "missing": 3,
+        "matched": 3,
+        "missing": 0,
         "extra": 0
       },
       "2125": {
         "oracle": 3,
-        "matched": 0,
-        "missing": 3,
+        "matched": 2,
+        "missing": 1,
         "extra": 0
       },
       "2126": {
@@ -1090,8 +1090,8 @@
       },
       "2145": {
         "oracle": 3,
-        "matched": 0,
-        "missing": 3,
+        "matched": 3,
+        "missing": 0,
         "extra": 0
       },
       "2146": {
@@ -2550,16 +2550,6 @@
           "warning",
           2100,
           "Use $((..)) for arithmetics, e.g. i=$((i * 2))",
-          null
-        ],
-        [
-          1,
-          8,
-          1,
-          11,
-          "warning",
-          2125,
-          "Brace expansions and globs are literal in assignments. Quote it or use an array.",
           null
         ]
       ],
