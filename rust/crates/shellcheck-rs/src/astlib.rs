@@ -58,6 +58,63 @@ pub fn oversimplify(t: &Token) -> Vec<String> {
     }
 }
 
+/// `onlyLiteralString = getLiteralStringDef ""`: definitely get a literal
+/// string, treating every non-literal part as the empty string.
+pub fn only_literal_string(t: &Token) -> String {
+    get_literal_string_ext(t, &|_| Some(String::new())).unwrap_or_default()
+}
+
+/// `braceExpand`: return the list of `T_NormalWord`s that a word would produce
+/// under brace expansion. For each part, a `T_BraceExpansion` chooses one of its
+/// elements (recursively expanded) while any other part passes through
+/// unchanged; the result is the cartesian product, capped at 1000 like Haskell's
+/// `take 1000`. Non-`T_NormalWord` input returns the single token. The produced
+/// words reuse the original word's id.
+pub fn brace_expand(word: &Token) -> Vec<Token> {
+    let (id, list) = match &*word.inner {
+        InnerToken::T_NormalWord(list) => (word.id, list),
+        _ => return vec![word.clone()],
+    };
+    // Cartesian product over the parts, in Haskell list-monad order.
+    let mut results: Vec<Vec<Token>> = vec![Vec::new()];
+    for part in list {
+        let choices = part_choices(part);
+        let mut next: Vec<Vec<Token>> = Vec::new();
+        'outer: for acc in &results {
+            for ch in &choices {
+                let mut v = acc.clone();
+                v.push(ch.clone());
+                next.push(v);
+                if next.len() >= 1000 {
+                    break 'outer;
+                }
+            }
+        }
+        results = next;
+    }
+    results
+        .into_iter()
+        .take(1000)
+        .map(|items| Token::new(id, InnerToken::T_NormalWord(items)))
+        .collect()
+}
+
+/// The list of alternative tokens a single word-part contributes to brace
+/// expansion: a `T_BraceExpansion` yields, for each of its element words, all of
+/// that element's own brace-expanded `T_NormalWord`s; anything else yields itself.
+fn part_choices(part: &Token) -> Vec<Token> {
+    match &*part.inner {
+        InnerToken::T_BraceExpansion(items) => {
+            let mut out = Vec::new();
+            for item in items {
+                out.extend(brace_expand(item));
+            }
+            out
+        }
+        _ => vec![part.clone()],
+    }
+}
+
 fn basename(path: &str) -> String {
     match path.rsplit('/').next() {
         Some(x) => x.to_string(),

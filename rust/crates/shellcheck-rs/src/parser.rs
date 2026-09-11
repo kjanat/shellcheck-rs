@@ -18,6 +18,7 @@
 //!   `parseProblem`.)
 
 use crate::ast::*;
+use crate::astlib;
 use crate::interface::{Position, Severity};
 use std::collections::BTreeMap;
 
@@ -634,52 +635,17 @@ impl Parser {
     }
 
     fn read_brace_or_literal(&mut self) -> PResult<Token> {
-        // Try a `{a,b}` / `{1..3}` brace expansion; otherwise read `{` or `}` as
-        // a literal char (so `{}`, `foo{...}`, etc. parse as words). The
-        // expansion is currently flattened to a literal of its raw text — the
-        // structural `T_BraceExpansion` port is refined later; downstream checks
-        // that consume it are added alongside.
+        // Faithful port of `readBraced <|> readLiteralCurlyBraces` from
+        // `readNormalWordPart`: try a real brace expansion (`{a,b}`, `{1..3}`,
+        // nested, with recursive element words); if it is not a valid brace
+        // expansion, fall back to a bare `{` (or `}`) literal so non-expansions
+        // still parse.
         let start = self.pos();
-        let c = self.peek();
-        if c == Some('{') {
+        if self.peek() == Some('{') {
             let m = self.mark();
-            self.bump();
-            // Detect comma/range brace expansion by scanning balanced braces.
-            let mut depth = 1;
-            let mut raw = String::from("{");
-            let mut has_comma_or_range = false;
-            let mut ok = false;
-            while let Some(ch) = self.peek() {
-                match ch {
-                    '{' => depth += 1,
-                    '}' => {
-                        depth -= 1;
-                        raw.push('}');
-                        self.bump();
-                        if depth == 0 {
-                            ok = true;
-                            break;
-                        }
-                        continue;
-                    }
-                    ',' if depth == 1 => has_comma_or_range = true,
-                    '.' if depth == 1 && self.peek_at(1) == Some('.') => has_comma_or_range = true,
-                    ' ' | '\t' | '\n' | '\r' => break,
-                    _ => {}
-                }
-                self.bump();
-                raw.push(ch);
+            if let Ok(t) = self.read_braced() {
+                return Ok(t);
             }
-            if ok && has_comma_or_range {
-                // Model as T_BraceExpansion (non-constant, non-literal) like
-                // ShellCheck; the raw text is kept as a single child for now.
-                let end = self.pos();
-                let child_id = self.next_id_between(start.clone(), end.clone());
-                let child = Token::new(child_id, InnerToken::T_Literal(raw));
-                let id = self.next_id_between(start, end);
-                return Ok(Token::new(id, InnerToken::T_BraceExpansion(vec![child])));
-            }
-            // Not an expansion: emit a bare `{` literal, rewinding the scan.
             self.reset(m);
             self.bump();
             let id = self.next_id_between(start, self.pos());
@@ -689,6 +655,129 @@ impl Parser {
         self.char('}')?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Literal("}".to_string())))
+    }
+
+    /// `readBraced = try braceExpansion` (Parser.hs). A brace expansion is
+    /// `'{' (bracedElement `sepBy1` ',') '}'` guarded so it needs either >=2
+    /// elements, or a single element whose literal string contains "..".
+    /// Returns `Err` (leaving the input untouched) when it is not one.
+    fn read_braced(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let m = self.mark();
+        if self.char('{').is_err() {
+            self.reset(m);
+            return Err(());
+        }
+        // bracedElement `sepBy1` ','  — bracedElement always succeeds (`many`),
+        // so there is at least one element.
+        let mut elements = vec![self.read_braced_element()];
+        while self.peek() == Some(',') {
+            self.bump();
+            elements.push(self.read_braced_element());
+        }
+        let guard_ok = match elements.len() {
+            0 => false,
+            1 => astlib::only_literal_string(&elements[0]).contains(".."),
+            _ => true,
+        };
+        if !guard_ok {
+            self.reset(m);
+            return Err(());
+        }
+        if self.char('}').is_err() {
+            self.reset(m);
+            return Err(());
+        }
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_BraceExpansion(elements)))
+    }
+
+    /// `bracedElement = T_NormalWord `withParser` many [ braceExpansion,
+    /// readDollarExpression, readSingleQuoted, readDoubleQuoted, braceLiteral ]`.
+    /// `many` never fails, so this always yields a (possibly empty) NormalWord.
+    fn read_braced_element(&mut self) -> Token {
+        let start = self.pos();
+        let mut parts = Vec::new();
+        loop {
+            // nested brace expansion
+            let m = self.mark();
+            if let Ok(t) = self.read_braced() {
+                parts.push(t);
+                continue;
+            }
+            self.reset(m);
+            // readDollarExpression = ensureDollar >> readDollarExp (no lonely $,
+            // no $'..'/$"..")
+            if self.peek() == Some('$') {
+                let m2 = self.mark();
+                if let Ok(t) = self.read_dollar_exp() {
+                    parts.push(t);
+                    continue;
+                }
+                self.reset(m2);
+            }
+            if self.peek() == Some('\'') {
+                if let Ok(t) = self.read_single_quoted() {
+                    parts.push(t);
+                    continue;
+                }
+            }
+            if self.peek() == Some('"') {
+                if let Ok(t) = self.read_double_quoted() {
+                    parts.push(t);
+                    continue;
+                }
+            }
+            if let Ok(t) = self.read_brace_literal() {
+                parts.push(t);
+                continue;
+            }
+            break;
+        }
+        let id = self.next_id_between(start, self.pos());
+        Token::new(id, InnerToken::T_NormalWord(parts))
+    }
+
+    /// `braceLiteral = T_Literal `withParser` readGenericLiteral1 (oneOf
+    /// "{}\"$'," <|> whitespace)`. Reads at least one char, keeping escape
+    /// backslashes verbatim (except `\<newline>`, which produces nothing).
+    fn read_brace_literal(&mut self) -> PResult<Token> {
+        fn is_brace_ws(c: char) -> bool {
+            matches!(
+                c,
+                ' ' | '\t' | '\n' | '\r'
+                    | '\u{A0}' | '\u{2002}' | '\u{2003}' | '\u{2004}' | '\u{2005}'
+                    | '\u{2006}' | '\u{2007}' | '\u{2008}' | '\u{2009}' | '\u{200B}'
+                    | '\u{202F}'
+            )
+        }
+        let start = self.pos();
+        let mut s = String::new();
+        loop {
+            match self.peek() {
+                Some('\\') => {
+                    self.bump();
+                    match self.bump() {
+                        Some('\n') => { /* line continuation: produces nothing */ }
+                        Some(c) => {
+                            s.push('\\');
+                            s.push(c);
+                        }
+                        None => s.push('\\'),
+                    }
+                }
+                Some(c) if !"{}\"$',".contains(c) && !is_brace_ws(c) => {
+                    self.bump();
+                    s.push(c);
+                }
+                _ => break,
+            }
+        }
+        if s.is_empty() {
+            return Err(());
+        }
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_Literal(s)))
     }
 
     fn read_proc_sub(&mut self) -> PResult<Token> {

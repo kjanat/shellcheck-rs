@@ -7,12 +7,9 @@
 //! - SC2110  checkConditionalAndOrs (Analytics.hs)     — `[[ .. -o .. ]]` -> `||`
 //! - SC2114/SC2115 checkCatastrophicRm (Checks/Commands.hs) — rm of a system dir
 //!
-//! Note: `checkCatastrophicRm` is ported without `braceExpand` (not yet ported);
-//! each argument word is checked directly. Because brace expansion only ever
-//! produces *more* candidate strings to check, omitting it can only cause missed
-//! diagnostics on brace-containing words, never false positives — the per-word
-//! logic below is byte-for-byte the Haskell logic. SC2114/SC2115 stay only if the
-//! conformance harness shows `extra == 0`.
+//! Note: `checkCatastrophicRm` brace-expands each argument via
+//! `astlib::brace_expand` and runs the per-word check on every expanded word,
+//! exactly as the Haskell `mapM_ (mapM_ checkWord . braceExpand)` does.
 #![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::*;
 use crate::ast::*;
@@ -348,9 +345,9 @@ fn fix_path(filename: &str) -> String {
 fn get_potential_path(token: &Token) -> Option<String> {
     get_literal_string_ext(token, &|inner: &InnerToken| match inner {
         InnerToken::T_Glob(s) => Some(s.clone()),
-        // Brace expansions enumerate to multiple paths; ShellCheck checks each,
-        // which we don't model yet, so bail rather than risk a false positive.
-        InnerToken::T_BraceExpansion(_) => None,
+        // `checkCatastrophicRm` brace-expands each argument first, so a
+        // `T_BraceExpansion` node never reaches `getPotentialPath`; the faithful
+        // fallback treats everything unlisted as "".
         InnerToken::T_DollarBraced { op, .. } => {
             let var = get_literal_string_ext(op, &|_| Some(String::new())).unwrap_or_default();
             if var.contains(":?") || var.contains(":-") || var.contains(":=") {
@@ -401,7 +398,10 @@ fn check_catastrophic_rm(_params: &Parameters, t: &Token, out: &mut Out) {
         return;
     }
     let important = important_paths();
+    // `mapM_ (mapM_ checkWord . braceExpand) $ arguments t`
     for arg in arguments(t) {
-        check_rm_word(arg, &important, out);
+        for word in astlib::brace_expand(arg) {
+            check_rm_word(&word, &important, out);
+        }
     }
 }
