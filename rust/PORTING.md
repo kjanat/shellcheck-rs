@@ -29,11 +29,19 @@ matching the oracle with `extra == 0`.
    ```sh
    cargo build --release -p shellcheck-cli
    cd rust/harness
+   ORACLE=$(cabal list-bin shellcheck) \
    PORT=../target/release/shellcheck-rs python3 run_conformance.py
+   # gate the change (exits nonzero on any regression vs baseline.json):
+   ORACLE=$(cabal list-bin shellcheck) \
+   PORT=../target/release/shellcheck-rs python3 run_conformance.py --gate
    ```
    Inspect `coverage.json -> port.per_code["<code>"]`. Requirement to keep a
    check: `extra == 0` for every code it can emit. `matched` should rise toward
    `oracle`; residual `missing` is usually a parser gap on those scripts.
+   Comparison is **strict**: diagnostics must match as an *ordered* sequence
+   (ShellCheck's deterministic sort), and the process **exit code** must match
+   too. If your change legitimately raises `exact_scripts` or `matched`, refresh
+   the committed baseline with `--write-baseline`.
 6. **Iterate** until `exact_pct == 100` and every code has `missing == extra == 0`.
 
 ## Conformance-safety rule
@@ -63,20 +71,41 @@ the pipeline landed; keep it that way.
 `analytics::check_shebang` (SC2148, a tree check) are worked examples that match
 the oracle exactly, including fix replacements and precedence.
 
-## Current status (see harness/coverage.json — regenerated, not committed)
+## Current status
 
-- Parser handles the full corpus with 0 crashes; ~10 scripts still hit parser
-  gaps (spurious SC1072) — `time (..)`, `coproc`, a couple malformed inputs.
+These figures are **measured, oracle-pinned, and machine-regenerated** by
+`run_conformance.py --gate` against the Haskell oracle at the git SHA recorded
+in `harness/baseline.json` (`provenance.oracle.git`). They are not
+hand-maintained — do not edit them by hand; re-run `--write-baseline` to refresh
+`baseline.json` and paste the printed numbers here.
+
+Strict comparison = ordered comment-key sequence identical **and** process exit
+code identical, over the scripts the oracle itself parses (oracle-errored
+scripts are counted in their own bucket, not silently folded into the rate).
+
+- **Strict exact-match parity: 1651 / 1659 comparable scripts (99.52%)**, with
+  **0 check-level false positives** (`extra == 0` on every code), **0 order
+  mismatches**, and **0 oracle-errored scripts**.
+- The **8 non-exact scripts are all missing-only SC1xxx notes** (the port emits
+  a strict subset of the oracle's diagnostics — never a spurious one):
+  - `SC1091` ×5 — the port does not resolve/follow `source`d files, so it can't
+    emit the informational "Not following sourced file" note.
+  - `SC1008` ×1 — unrecognized-shebang note not yet ported.
+  - `SC1014` ×1 — "test as command" parser note not yet ported.
+  - `SC1127` ×1 — "comment/unexpected token" parser note not yet ported.
+- **3 exit-code mismatches** (`prop_checkShebang16`, `prop_checkSourceArgs2`,
+  `prop_checkSourceArgs3`) are a direct *consequence* of the above: on those
+  scripts the un-ported SC1xxx note is the **only** diagnostic, so the port
+  finds no issues and exits 0 while the oracle exits 1. They are pinned in
+  `baseline.json` (`exit_mismatch_ids`); the gate still fails on any *new* exit
+  mismatch or any increase in count.
 - Conditions (`[ ]`/`[[ ]]`), `select`, POSIX `name(){}`, and bats `@test` all
-  parse now.
-- Exact-match parity ~40% (667/1659) with **0 check-level false positives**.
-- Ported & oracle-exact (batches a–e + analytics): SC2148, SC2006, SC2035,
-  SC2045/2044, SC2048, SC2068, SC2124/2125, SC2005, SC2116, SC2145, SC2016,
-  SC2027, SC2140, SC2077, SC2078, SC2053, SC2081, SC2157, SC2162, SC2164,
-  SC2103, SC2091/2092, SC2181 (condition branch), plus SC1xxx parse notes.
-- Biggest remaining unblocks, in order: (1) arithmetic parsing -> `TA_*`
-  (SC2004, SC2007, SC2181 arithmetic branch), (2) the CFG/dataflow subsystem for
-  the high-frequency SC2154 / SC2086 / SC2034 (~760 diagnostics), (3) the long
-  tail of self-contained checks (fan out via batches).
-- Known parser limitation blocking SC2050: condition operators (`TC_Binary.op`)
-  are plain strings with no span; SC2050 needs the operator's own position.
+  parse; the parser handles the full corpus with **0 crashes and 0 spurious
+  SC1072** (the earlier `time (..)`/`coproc` parser gaps are closed).
+- Biggest remaining work, in order: (1) `source`-file resolution to unblock the
+  SC1091 notes and their 3 dependent exit-code cases, (2) the remaining SC1xxx
+  parser notes (SC1008/SC1014/SC1127), (3) the long tail of self-contained
+  checks (fan out via batches).
+
+The gate baseline (`harness/baseline.json`) is committed; the derived caches
+(`goldens.jsonl`, `port.jsonl`, `coverage.json`) are regenerated and gitignored.

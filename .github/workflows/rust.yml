@@ -1,0 +1,73 @@
+name: Rust port conformance
+
+# Separate from the Haskell-only build.yml. Runs only when the Rust port, its
+# harness, or this workflow change. The `conformance-gate` job is the required
+# check: it builds the Haskell oracle and the Rust port from the same tree and
+# fails if the port regresses against rust/harness/baseline.json.
+on:
+  push:
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust.yml'
+      - 'ShellCheck.cabal'
+      - 'src/**'
+  pull_request:
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust.yml'
+      - 'ShellCheck.cabal'
+      - 'src/**'
+
+jobs:
+  conformance-gate:
+    name: Build oracle + port, run strict conformance gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # (a) Rust stable toolchain.
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # (b) Haskell oracle — mirror build.yml's GHC/cabal setup.
+      - name: Setup Haskell
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.6.6'
+
+      - name: Build Haskell oracle
+        run: cabal build shellcheck
+
+      # (c) Build + test the Rust port.
+      - name: Build Rust port (release)
+        working-directory: rust
+        run: cargo build --release
+
+      - name: Test shellcheck-rs
+        working-directory: rust
+        run: cargo test -p shellcheck-rs
+
+      - name: Test shellcheck-cli
+        working-directory: rust
+        run: cargo test -p shellcheck-cli
+
+      # (d) The required check: strict conformance gate against the pinned
+      #     oracle SHA and the committed baseline.
+      - name: Conformance gate
+        run: |
+          ORACLE="$(cabal list-bin shellcheck)"
+          echo "oracle: $ORACLE"
+          ORACLE="$ORACLE" \
+          PORT=rust/target/release/shellcheck-rs \
+          python3 rust/harness/run_conformance.py --gate
