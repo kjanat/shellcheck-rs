@@ -22,12 +22,17 @@ pub fn get_literal_string_ext(t: &Token, fallback: &dyn Fn(&InnerToken) -> Optio
             }
             InnerToken::T_NormalWord(parts)
             | InnerToken::T_DoubleQuoted(parts)
-            | InnerToken::T_DollarDoubleQuoted(parts) => {
+            | InnerToken::T_DollarDoubleQuoted(parts)
+            | InnerToken::TA_Expansion(parts) => {
                 for p in parts {
                     if !go(p, fb, out) {
                         return false;
                     }
                 }
+                true
+            }
+            InnerToken::T_ParamSubSpecialChar(s) => {
+                out.push_str(s);
                 true
             }
             other => {
@@ -190,4 +195,46 @@ pub fn shell_for_executable(name: &str) -> Option<Shell> {
         "oksh" => Shell::Ksh,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+    use crate::ast::{Id, InnerToken, Token};
+
+    fn lit(s: &str) -> Token {
+        Token::new(Id(0), InnerToken::T_Literal(s.to_string()))
+    }
+
+    // getLiteralStringExt handles TA_Expansion by concatenating its literal parts
+    // (mirrors Haskell `g (TA_Expansion _ l) = allInList l`). Regression guard for
+    // SC2181 on `(( $? == 0 ))`, whose RHS `0` is a TA_Expansion.
+    #[test]
+    fn prop_getLiteralString_ta_expansion_literal() {
+        let t = Token::new(Id(1), InnerToken::TA_Expansion(vec![lit("0")]));
+        assert_eq!(get_literal_string(&t), Some("0".to_string()));
+    }
+
+    #[test]
+    fn prop_getLiteralString_ta_expansion_multipart() {
+        let t = Token::new(Id(1), InnerToken::TA_Expansion(vec![lit("1"), lit("2")]));
+        assert_eq!(get_literal_string(&t), Some("12".to_string()));
+    }
+
+    // A non-literal part (here a bare expansion) makes the whole thing non-literal.
+    #[test]
+    fn prop_getLiteralString_ta_expansion_nonliteral() {
+        let expansion = Token::new(Id(2), InnerToken::T_DollarExpansion(vec![]));
+        let t = Token::new(Id(1), InnerToken::TA_Expansion(vec![lit("0"), expansion]));
+        assert_eq!(get_literal_string(&t), None);
+    }
+
+    // getLiteralStringExt returns the raw string of T_ParamSubSpecialChar
+    // (Haskell `g (T_ParamSubSpecialChar _ s) = return s`).
+    #[test]
+    fn prop_getLiteralString_param_sub_special_char() {
+        let t = Token::new(Id(1), InnerToken::T_ParamSubSpecialChar("%".to_string()));
+        assert_eq!(get_literal_string(&t), Some("%".to_string()));
+    }
 }

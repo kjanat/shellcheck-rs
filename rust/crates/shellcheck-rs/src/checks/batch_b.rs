@@ -166,26 +166,6 @@ fn is_quote_free(params: &Parameters, t: &Token) -> bool {
     false
 }
 
-/// Conformance-safety guard for a documented parser gap: positions and (for
-/// escaped nested backticks) structure inside command-substitution subparses
-/// are unreliable (see `Parser::subparse_commands`). Returns whether any
-/// ancestor of `t` is a command substitution, so diagnostics whose span or
-/// coverage-detection depends on subparsed tokens can be withheld rather than
-/// mismatch the oracle.
-fn is_inside_command_substitution(params: &Parameters, t: &Token) -> bool {
-    let mut cur = t;
-    while let Some(p) = params.parent(cur) {
-        match &*p.inner {
-            InnerToken::T_DollarExpansion(_)
-            | InnerToken::T_Backticked(_)
-            | InnerToken::T_DollarBraceCommandExpansion { .. } => return true,
-            _ => {}
-        }
-        cur = p;
-    }
-    false
-}
-
 // ---------------------------------------------------------------------------
 // SC2005 — checkUuoeCmd
 // ---------------------------------------------------------------------------
@@ -212,16 +192,10 @@ fn echo_arguments(words: &[Token]) -> Option<&[Token]> {
     None
 }
 
-fn check_uuoe_cmd(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_uuoe_cmd(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
         if let Some(args) = echo_arguments(words) {
             if args.len() == 1 && token_is_just_command_output(&args[0]) {
-                // The reported span is the argument (a command substitution),
-                // whose columns are unreliable when echo is itself subparsed
-                // inside a command substitution. Withhold to avoid a mismatch.
-                if is_inside_command_substitution(params, t) {
-                    return;
-                }
                 style(out, args[0].id(), 2005,
                     "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'.");
             }
@@ -349,3 +323,52 @@ fn check_concatenated_dollar_at(params: &Parameters, word: &Token, out: &mut Out
     }
 }
 
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+    use crate::analyzer_lib::make_parameters;
+    use crate::parser::parse_script;
+
+    fn params_for(script: &str) -> Parameters {
+        let p = parse_script("test", script);
+        let root = p.root.expect("parse produced no root");
+        make_parameters(root, p.positions, None, None)
+    }
+    fn collect(f: fn(&Parameters, &Token, &mut Out), s: &str) -> Out {
+        let params = params_for(s);
+        let mut out = Out::new();
+        params.root.visit_preorder(&mut |t| f(&params, t, &mut out));
+        out
+    }
+    fn emits(f: fn(&Parameters, &Token, &mut Out), s: &str) -> bool {
+        !collect(f, s).is_empty()
+    }
+
+    // ---- checkUuoeCmd (SC2005), mirroring Checks/Commands.hs prop tests ----
+    #[test]
+    fn prop_checkUuoeCmd1() { assert!(emits(check_uuoe_cmd, "echo $(date)")); }
+    #[test]
+    fn prop_checkUuoeCmd2() { assert!(emits(check_uuoe_cmd, "echo `date`")); }
+    #[test]
+    fn prop_checkUuoeCmd3() { assert!(emits(check_uuoe_cmd, "echo \"$(date)\"")); }
+    #[test]
+    fn prop_checkUuoeCmd4() { assert!(emits(check_uuoe_cmd, "echo \"`date`\"")); }
+    #[test]
+    fn prop_checkUuoeCmd5() { assert!(!emits(check_uuoe_cmd, "echo \"The time is $(date)\"")); }
+    #[test]
+    fn prop_checkUuoeCmd6() { assert!(!emits(check_uuoe_cmd, "echo \"$(<file)\"")); }
+
+    // Regression guards for FIX B1: SC2005 must fire even when the `echo $(cmd)`
+    // is itself nested inside a command substitution (the old command-sub
+    // suppression guard was removed since inner spans are now correct).
+    #[test]
+    fn prop_checkUuoeCmd_nested_dollar_expansion() {
+        assert!(emits(check_uuoe_cmd, "foo $(echo $(bar))"));
+    }
+    #[test]
+    fn prop_checkUuoeCmd_nested_backtick() {
+        assert!(emits(check_uuoe_cmd, "foo=`echo \\`expr 3+2\\``"));
+    }
+}
