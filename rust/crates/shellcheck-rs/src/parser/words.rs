@@ -23,6 +23,12 @@ impl Parser {
     }
 
     pub(super) fn read_normal_word_part(&mut self) -> PResult<Token> {
+        // Not ported: `checkForParenthesis`, which reports SC1036 for a `(`
+        // that cannot start a word part. Haskell reaches it only after
+        // `notFollowedBy2 (oneOf end)`, and this parser has no `end` set here,
+        // so emitting it unconditionally fires on the `(` of a process
+        // substitution — `read -ra arr <(ls)` and `ls >(cat)` — which the
+        // oracle accepts. Needs the terminator set threaded through first.
         match self.peek() {
             None => Err(()),
             Some(c) => match c {
@@ -500,7 +506,12 @@ impl Parser {
             self.bump();
             raw.push(c);
         }
-        self.char('`').map_err(|_| ())?;
+        if self.char('`').is_err() {
+            // Haskell has no message here, but the failure is still a real one
+            // rather than a backtracking point: `parsecBracket` re-fails a
+            // `called` production with `fail ""`.
+            return self.fail_with("");
+        }
         // `unEscape`: process backtick escapes (`\$` `` \` `` `\\`, line splices,
         // and `\"`->`"` when inside double quotes) before sub-parsing.
         let unescaped = unescape_backtick(&raw, quoted);

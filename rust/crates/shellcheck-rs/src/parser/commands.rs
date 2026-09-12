@@ -1433,6 +1433,36 @@ impl Parser {
 
     /// `isValidShell` (Parser.hs readScriptFile): `Just true` for a recognized
     /// good shell, `Just false` for a known-unsupported one, `None` otherwise.
+    /// `verifyEof`: input the grammar could not consume is *reported*, not
+    /// fatal — ShellCheck keeps the tree it managed to build and still
+    /// analyses it, which is why `r=\$(` yields SC1036/SC1088 alongside its
+    /// ordinary warnings instead of a parse failure.
+    fn verify_eof(&mut self) {
+        let p = self.pos();
+        let (code, message) = if self.peek() == Some('(') {
+            (1088, "Parsing stopped here. Invalid use of parentheses?")
+        } else if self.at_keyword() {
+            (
+                1089,
+                "Parsing stopped here. Is this keyword correctly matched up?",
+            )
+        } else {
+            (
+                1070,
+                "Parsing stopped here. Mismatched keywords or invalid parentheses?",
+            )
+        };
+        self.problem_at(p.clone(), p, Severity::ErrorC, code, message);
+    }
+
+    /// `readKeyword`: the tokens that close a compound command.
+    fn at_keyword(&self) -> bool {
+        const WORDS: [&str; 7] = ["then", "else", "elif", "fi", "do", "done", "esac"];
+        WORDS.iter().any(|k| self.keyword_ahead(k))
+            || matches!(self.peek(), Some('}') | Some(')'))
+            || (self.peek() == Some(';') && self.peek_at(1) == Some(';'))
+    }
+
     pub(super) fn is_valid_shell(s: &str) -> Option<bool> {
         const GOOD: &[&str] = &[
             "sh",
@@ -1526,11 +1556,11 @@ impl Parser {
         // verify EOF: if not at end, it's a parse problem (SC1072-ish). For the
         // slice we record a generic problem but still return the tree.
         self.allspacing();
-        if !self.eof() {
-            // Input the grammar could not consume: the parse has failed, and
-            // ShellCheck reports the deepest failure rather than this point.
-            self.record_failure("");
-            return None;
+        // `verifyEof` is only reached when the grammar ran to completion: if a
+        // production already failed outright, that failure propagates out of
+        // `readScriptFile` and this is never evaluated.
+        if !self.eof() && !self.has_committed_failure() {
+            self.verify_eof();
         }
         let script_id = self.next_id_between(start.clone(), self.pos());
         let script = Token::new(script_id, InnerToken::T_Script { shebang, commands });

@@ -290,6 +290,9 @@ struct Failure {
     /// *without* consuming, so such a failure both describes the error better
     /// and, when it came from an explicit `fail`, ends the parse outright.
     consumed: bool,
+    /// True when the production failed deliberately (`fail_with`) rather than
+    /// being backtracked out of by an enclosing alternative.
+    explicit: bool,
 }
 
 const DOUBLE_QUOTABLE: &str = "\\\"$`";
@@ -456,17 +459,18 @@ impl Parser {
         self.push_ctx(name);
         let r = body(self);
         if r.is_err() {
-            self.record_failure("");
+            self.record_failure("", false);
         }
         self.pop_ctx();
         r
     }
 
-    /// Fail the current production with an explicit message, Haskell
-    /// `fail "msg"`. The message reaches the user as SC1072 when this turns
-    /// out to be the deepest failure.
+    /// Fail the current production outright, Haskell `fail "msg"`. The message
+    /// reaches the user as SC1072 when this turns out to be the deepest
+    /// failure; an empty one is still a deliberate failure, as `fail ""` is in
+    /// the Haskell, and is what ends the parse rather than backtracking out.
     fn fail_with<T>(&mut self, message: &str) -> PResult<T> {
-        self.record_failure(message);
+        self.record_failure(message, true);
         Err(())
     }
 
@@ -474,6 +478,14 @@ impl Parser {
     /// production began, and so cannot be backtracked out of.
     fn has_consumed(&self) -> bool {
         self.contexts.last().is_some_and(|c| self.idx > c.start_idx)
+    }
+
+    /// Whether a production has failed outright past the point of commitment,
+    /// which is what ends the parse.
+    pub(super) fn has_committed_failure(&self) -> bool {
+        self.failure
+            .as_ref()
+            .is_some_and(|f| f.consumed && f.explicit)
     }
 
     /// The diagnostics a fatal parse failure reports: the innermost two open
@@ -523,16 +535,17 @@ impl Parser {
     /// Remember this failure if it is deeper than any seen so far, along with
     /// the productions open around it. Mirrors Parsec keeping the error from
     /// the furthest position reached.
-    fn record_failure(&mut self, message: &str) {
+    fn record_failure(&mut self, message: &str, explicit: bool) {
         let consumed = self.has_consumed();
         // Rank failures the way Parsec picks one: furthest position first,
         // then a production that had committed to what it was reading over an
-        // alternative that bailed immediately, then one that had something to
-        // say over one that merely ran out of input.
-        let rank = (self.reach, consumed, !message.is_empty());
+        // alternative that bailed immediately, then a deliberate failure over
+        // one that was merely backtracked out of, then one with something to
+        // say over one that ran out of input.
+        let rank = (self.reach, consumed, explicit, !message.is_empty());
         let better = match &self.failure {
             None => true,
-            Some(f) => rank > (f.reach, f.consumed, !f.message.is_empty()),
+            Some(f) => rank > (f.reach, f.consumed, f.explicit, !f.message.is_empty()),
         };
         if better {
             self.failure = Some(Failure {
@@ -541,6 +554,7 @@ impl Parser {
                 message: message.to_string(),
                 contexts: self.contexts.clone(),
                 consumed,
+                explicit,
             });
         }
     }
@@ -790,16 +804,12 @@ pub fn parse_script(filename: &str, script: &str) -> ParseOutput {
 pub fn parse_script_with(filename: &str, script: &str, shell_flag_specified: bool) -> ParseOutput {
     let mut p = Parser::with_shell_flag(filename, script, shell_flag_specified);
     let root = p.read_script_file();
-    // A production that failed after committing to what it was reading means
-    // the script does not parse, even if backtracking found some other way to
-    // read the rest of it.
-    // Only an explicit `fail` past the point of commitment ends the parse:
-    // that is where ShellCheck's grammar has decided what it is reading, and
-    // where Parsec's `<|>` can no longer offer an alternative.
-    let committed_failure = p
-        .failure
-        .as_ref()
-        .is_some_and(|f| f.consumed && !f.message.is_empty());
+    // A production that failed after consuming input means the script does not
+    // parse, even if backtracking found some other way to read the rest of it:
+    // Parsec's `<|>` offers no alternative once input has been consumed. Input
+    // simply left over at the end is not this — `verifyEof` reports it and the
+    // tree survives.
+    let committed_failure = p.has_committed_failure();
     if root.is_none() || committed_failure {
         // Haskell `parseShell`'s `Left err` branch: prRoot = Nothing, so no
         // analysis runs at all, the buffered parse *notes* are discarded, and
