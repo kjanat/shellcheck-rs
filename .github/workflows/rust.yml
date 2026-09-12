@@ -23,9 +23,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The rules the port is written under, enforced rather than remembered: every
-  # file clippy-clean under `-D warnings`, and formatted. Separate from the gate
-  # so a formatting slip does not hide behind a 10-minute oracle build.
   lint:
     name: Format, clippy, workflows
     runs-on: ubuntu-latest
@@ -33,8 +30,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      # rustfmt first: dprint formats .rs through an exec plugin that shells out
-      # to it, so without the toolchain the check fails on tooling, not on code.
+      # dprint formats .rs by shelling out to rustfmt, so install it first.
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -46,10 +42,6 @@ jobs:
       - name: Clippy
         run: cargo lint
 
-      # actionlint checks these workflows and hands every `run:` block to
-      # shellcheck. The action runs a container with shellcheck and pyflakes in
-      # it, so that half cannot silently skip the way it does when the CLI is
-      # run somewhere shellcheck is not installed -- there it still exits 0.
       - name: Lint workflows
         uses: kjanat/actionlint@v1
 
@@ -137,20 +129,13 @@ jobs:
         working-directory: rust
         run: cargo test -p shellcheck-cli
 
-      # (d) The required check: the script from every prop_ property that has
-      #     one, run through both tools' full pipeline and compared on the whole
-      #     json1 payload. The banner says how many properties have no script,
-      #     so the part this does not cover stays visible.
+      # (d) The required check. Its banner says what the corpus cannot reach.
       - name: Conformance gate
         run: cargo run --release -p conformance -- gate --repo . --oracle .cache/shellcheck-oracle
 
-      # (e) Differential fuzzing over generated and mutated shell: the same
-      #     comparison on input nobody wrote a test for. Allowed to fail; the
-      #     count it prints is the parity number, and DIVERGENCES.md is where
-      #     the open ones are written down.
-      #
-      #     --max-findings must stay well above that count: at the count, the
-      #     run stops at the cap and a new divergence hides behind it.
+      # (e) Allowed to fail; the open divergences are in DIVERGENCES.md.
+      #     Keep --max-findings well above their count, or the cap hides a new
+      #     one behind a number that looks stable.
       - name: Differential fuzz
         continue-on-error: true
         run: |
