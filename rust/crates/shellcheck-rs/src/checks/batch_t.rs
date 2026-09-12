@@ -24,6 +24,7 @@
 //!   * SC2293 / SC2294 — checkEvalArray
 //!   * SC2224 / SC2225 / SC2226 — checkMv/Cp/LnArguments (missingDestination)
 //!   * SC2232 — checkSudoArgs
+//!   * SC2024 — checkSudoRedirect
 //!   * SC2213 / SC2214 / SC2220 — checkWhileGetoptsCase
 //!   * SC2313 — checkReadExpansions (ONLY the array-index branch; SC2229 lives
 //!     in batch_p)
@@ -67,6 +68,7 @@ pub fn register(c: &mut Checker) {
     c.node(check_cp_arguments);
     c.node(check_ln_arguments);
     c.node(check_sudo_args);
+    c.node(check_sudo_redirect);
     c.node(check_while_getopts_case);
     c.node(check_read_array);
 }
@@ -1000,6 +1002,65 @@ fn check_sudo_args(_params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 // ===========================================================================
+// SC2024 — checkSudoRedirect
+// ===========================================================================
+
+/// `checkSudoRedirect cmd` for each of `privilegeElevationCommands`: a
+/// redirect on the enclosing `T_Redirecting` applies to the shell, not the
+/// elevated command.
+fn check_sudo_redirect(params: &Parameters, t: &Token, out: &mut Out) {
+    if !PRIVILEGE_ELEVATION_COMMANDS
+        .iter()
+        .any(|cmd| dispatch_basename(t, cmd).is_some())
+    {
+        return;
+    }
+    let Some(t_redir) = get_closest_command(params, t) else {
+        return;
+    };
+    if let InnerToken::T_Redirecting { redirs, .. } = &*t_redir.inner {
+        for redir in redirs {
+            sudo_redirect_warn_about(redir, out);
+        }
+    }
+}
+
+fn sudo_redirect_warn_about(redir: &Token, out: &mut Out) {
+    use InnerToken::*;
+    let T_FdRedirect { fd, target } = &*redir.inner else {
+        return;
+    };
+    let T_IoFile { op, file } = &*target.inner else {
+        return;
+    };
+    // special file = concat (oversimplify file) == "/dev/null"
+    if !(fd.is_empty() || fd == "&") || oversimplify_concat(file) == "/dev/null" {
+        return;
+    }
+    match &*op.inner {
+        T_Less => info(
+            out,
+            op.id(),
+            2024,
+            "sudo/doas/run0 doesn't affect redirects. Use sudo cat file | ..",
+        ),
+        T_Greater => warn(
+            out,
+            op.id(),
+            2024,
+            "sudo/doas/run0 doesn't affect redirects. Use ..| sudo tee file",
+        ),
+        T_DGREAT => warn(
+            out,
+            op.id(),
+            2024,
+            "sudo/doas/run0 doesn't affect redirects. Use .. | sudo tee -a file",
+        ),
+        _ => {}
+    }
+}
+
+// ===========================================================================
 // SC2213 / SC2214 / SC2220 — checkWhileGetoptsCase
 // ===========================================================================
 
@@ -1755,6 +1816,36 @@ mod tests {
     #[test]
     fn prop_checkMvArguments9() {
         assert!(!produces(check_mv_arguments, "mv \"${!var}\""));
+    }
+
+    // checkSudoRedirect
+    #[test]
+    fn prop_checkSudoRedirect1() {
+        assert!(produces(check_sudo_redirect, "sudo echo 3 > /proc/file"));
+    }
+    #[test]
+    fn prop_checkSudoRedirect2() {
+        assert!(produces(check_sudo_redirect, "doas cmd < input"));
+    }
+    #[test]
+    fn prop_checkSudoRedirect3() {
+        assert!(produces(check_sudo_redirect, "run0 cmd >> file"));
+    }
+    #[test]
+    fn prop_checkSudoRedirect4() {
+        assert!(produces(check_sudo_redirect, "sudo cmd &> file"));
+    }
+    #[test]
+    fn prop_checkSudoRedirect5() {
+        assert!(!produces(check_sudo_redirect, "sudo cmd 2>&1"));
+    }
+    #[test]
+    fn prop_checkSudoRedirect6() {
+        assert!(!produces(check_sudo_redirect, "doas cmd 2> log"));
+    }
+    #[test]
+    fn prop_checkSudoRedirect7() {
+        assert!(!produces(check_sudo_redirect, "run0 cmd > /dev/null 2>&1"));
     }
 
     // checkSudoArgs
