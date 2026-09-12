@@ -311,7 +311,7 @@ impl Parser {
 
     /// `readBraced <|> readDoGroup`: `for` also accepts a brace group as its
     /// body, as ksh does.
-    fn read_braced_or_do_group(&mut self, kw: &Position) -> PResult<Vec<Token>> {
+    fn read_braced_or_do_group(&mut self, kw: &(Position, Position)) -> PResult<Vec<Token>> {
         self.allspacing();
         if self.peek() == Some('{') {
             let m = self.mark();
@@ -331,12 +331,12 @@ impl Parser {
 
     /// `readDoGroup`: the `do .. done` body every loop shares. `kw` is where
     /// the loop keyword was, so a missing `do`/`done` can point back at it.
-    fn read_do_group(&mut self, kw: &Position) -> PResult<Vec<Token>> {
+    fn read_do_group(&mut self, kw: &(Position, Position)) -> PResult<Vec<Token>> {
         self.allspacing();
         if self.keyword_ahead("done") {
             self.problem_at(
-                kw.clone(),
-                kw.clone(),
+                kw.0.clone(),
+                kw.1.clone(),
                 Severity::ErrorC,
                 1057,
                 "Did you forget the 'do' for this loop?",
@@ -614,8 +614,10 @@ impl Parser {
 
     fn read_while_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
-        let kw = self.pos();
+        // `parseProblemAtId kwId`: the loop keyword's own span.
+        let kw_start = self.pos();
         self.consume_keyword("while")?;
+        let kw = (kw_start, self.pos());
         let cond = self.read_condition_list()?;
         let body = self.read_do_group(&kw)?;
         let id = self.next_id_between(start, self.pos());
@@ -634,8 +636,9 @@ impl Parser {
 
     fn read_until_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
-        let kw = self.pos();
+        let kw_start = self.pos();
         self.consume_keyword("until")?;
+        let kw = (kw_start, self.pos());
         let cond = self.read_condition_list()?;
         let body = self.read_do_group(&kw)?;
         let id = self.next_id_between(start, self.pos());
@@ -655,6 +658,7 @@ impl Parser {
     fn read_for_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword("for")?;
+        let kw = (start.clone(), self.pos());
         // ShellCheck reuses the `for` keyword id for the whole T_ForIn/T_ForArithmetic
         // node, so SC2034 (and others) point at `for`, not the entire loop.
         let for_end = self.pos();
@@ -682,7 +686,7 @@ impl Parser {
             self.allspacing();
             let _ = self.char(';');
             self.allspacing();
-            let body = self.read_braced_or_do_group(&start)?;
+            let body = self.read_braced_or_do_group(&kw)?;
             let id = self.next_id_between(start, for_end.clone());
             return Ok(Token::new(
                 id,
@@ -717,7 +721,7 @@ impl Parser {
             }
         }
         let _ = self.char(';');
-        let body = self.read_braced_or_do_group(&start)?;
+        let body = self.read_braced_or_do_group(&kw)?;
         let id = self.next_id_between(start.clone(), for_end);
         let _ = is_in;
         Ok(Token::new(id, InnerToken::T_ForIn { var, items, body }))
@@ -758,6 +762,7 @@ impl Parser {
     fn read_select_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword("select")?;
+        let kw = (start.clone(), self.pos());
         // ShellCheck reuses the `select` keyword id for the whole T_SelectIn node.
         let sel_end = self.pos();
         self.spacing();
@@ -779,7 +784,7 @@ impl Parser {
             }
         }
         let _ = self.char(';');
-        let body = self.read_do_group(&start)?;
+        let body = self.read_do_group(&kw)?;
         let id = self.next_id_between(start.clone(), sel_end);
         Ok(Token::new(id, InnerToken::T_SelectIn { var, items, body }))
     }

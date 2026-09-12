@@ -1069,6 +1069,39 @@ impl Parser {
             self.reset(prefix);
             return Err(());
         };
+        // Space after the `=`, or nothing left of the command, means the value
+        // is the empty string — and if it was space, that is rarely intended.
+        let right_start = self.pos();
+        let before_space = self.idx;
+        self.spacing();
+        let has_right_space = self.idx != before_space;
+        let right_end = self.pos();
+        let at_end_of_command = matches!(
+            self.peek(),
+            None | Some('\r' | '\n' | ';' | '&' | '|' | ')')
+        );
+        if has_right_space || at_end_of_command {
+            if name != "IFS" && has_right_space && !at_end_of_command {
+                self.problem_at(
+                    right_start,
+                    right_end,
+                    Severity::WarningC,
+                    1007,
+                    "Remove space after = if trying to assign a value (for empty string, use var='' ... ).",
+                );
+            }
+            let value = self.empty_literal_word();
+            let id = self.next_id_between(start, op_start);
+            return Ok(Token::new(
+                id,
+                InnerToken::T_Assignment {
+                    mode,
+                    var: name,
+                    indices,
+                    value,
+                },
+            ));
+        }
         // value: array (..) or word (possibly empty)
         let value = if self.peek() == Some('(') {
             self.read_array()?

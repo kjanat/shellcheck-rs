@@ -487,11 +487,9 @@ impl Parser {
         // must be followed by spacing then a word. `spacingOrLf` reports the
         // missing space; the `try` that rewinds the operator does not take the
         // problem back with it.
-        let sp = self.cond_spacing_checked(single, true);
-        if sp.is_empty() {
-            self.reset(m);
-            return Err(());
-        }
+        // `spacingOrLf` reports the missing space and carries on, so `-v=` is
+        // still a unary operator with a bad argument rather than one long word.
+        self.cond_spacing_checked(single, true);
         match self.read_cond_word(single) {
             Ok(word) => {
                 let typ = self.cond_typ(single);
