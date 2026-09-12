@@ -402,11 +402,25 @@ impl Parser {
     }
 
     pub(super) fn read_cond_expr(&mut self, single: bool) -> PResult<Token> {
-        if let Ok(g) = self.read_cond_group(single) {
-            return Ok(g);
+        // `readCondGroup <|> readCondUnaryExp <|> readCondNullaryOrBinary`:
+        // bare alternations, so an alternative that consumed before failing
+        // leaves the others out of reach.
+        let m = self.mark();
+        match self.read_cond_group(single) {
+            Ok(g) => return Ok(g),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+            }
         }
-        if let Ok(u) = self.read_cond_unary(single) {
-            return Ok(u);
+        match self.read_cond_unary(single) {
+            Ok(u) => return Ok(u),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+            }
         }
         self.read_cond_nullary_or_binary(single)
     }
@@ -516,6 +530,11 @@ impl Parser {
         // `spacingOrLf` reports the missing space and carries on, so `-v=` is
         // still a unary operator with a bad argument rather than one long word.
         self.cond_spacing_checked(single, true);
+        // `pos` is taken before `readCondWord`, so a missing argument is
+        // reported where it should have been -- not wherever the attempt to
+        // read one gave up.
+        let arg_pos = self.pos();
+        let wm = self.mark();
         match self.read_cond_word(single) {
             Ok(word) => {
                 let typ = self.cond_typ(single);
@@ -531,15 +550,17 @@ impl Parser {
             }
             Err(()) => {
                 // `orFail`: the operator is settled, so what is missing is its
-                // argument, not the whole unary expression.
-                let pos = self.pos();
+                // argument, not the whole unary expression. `try parser` has
+                // rewound by the time the message is raised, so that is where
+                // it sits.
                 self.problem_at(
-                    pos.clone(),
-                    pos,
+                    arg_pos.clone(),
+                    arg_pos,
                     Severity::ErrorC,
                     1019,
                     "Expected this to be an argument to the unary condition.",
                 );
+                self.reset(wm);
                 self.fail_with("Expected an argument for the unary operator")
             }
         }
@@ -597,6 +618,7 @@ impl Parser {
         if let Some((op, op_end)) = self.read_cond_binary_op(single) {
             // TC_Binary inherits the operator token's span (ShellCheck's
             // `getOp`: `startSpan .. endSpan`), so checks emit on the operator.
+            let ym = self.mark();
             let y = if is_regex {
                 self.read_regex()
             } else {
@@ -617,6 +639,12 @@ impl Parser {
                     ));
                 }
                 Err(()) => {
+                    // The operand consumed before failing, so neither the
+                    // `<|>` that reports SC1027 nor the one that would fall
+                    // back to a nullary expression can recover.
+                    if self.idx != ym.idx {
+                        return Err(());
+                    }
                     if !is_regex {
                         // The operator was there, so there is no falling back to
                         // a nullary expression: what is missing is its argument.
@@ -935,6 +963,10 @@ impl Parser {
     /// `readGroup`: `( .. )` inside a regex. Inside, `readRegexLiteral` swallows
     /// runs of chars (including spaces and `]]`) until a `'"$`()` boundary.
     pub(super) fn read_regex_group(&mut self) -> PResult<Token> {
+        self.called("regex grouping", |p| p.read_regex_group_body())
+    }
+
+    fn read_regex_group_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         let p1_start = self.pos();
         self.char('(')?;
