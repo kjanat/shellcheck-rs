@@ -311,18 +311,10 @@ const OPTIONAL_CHECKS: &[(&str, &str, &str, &str)] = &[
         "[ \"$var\" ]",
         "[ -n \"$var\" ]",
     ),
-    (
-        "check-extra-masked-returns",
-        "Check for additional cases where exit codes are masked",
-        "rm -r \"$(get_chroot_dir)/home\"",
-        "set -e; dir=\"$(get_chroot_dir)\"; rm -r \"$dir/home\"",
-    ),
-    (
-        "check-set-e-suppressed",
-        "Notify when set -e is suppressed during function invocation",
-        "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func && echo ok",
-        "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func; echo ok",
-    ),
+    // `check-extra-masked-returns` (SC2312) and `check-set-e-suppressed`
+    // (SC2310/SC2311) belong here, and upstream lists them. They are left out
+    // until the checks themselves are ported, so that every name this prints is
+    // a name that does something. See DIVERGENCES.md F1.
     (
         "check-unassigned-uppercase",
         "Warn when uppercase variables are unassigned",
@@ -822,6 +814,16 @@ mod tests {
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Known divergence, asserted the way upstream behaves and marked
+    /// `should_panic` so porting the checks fails this test. See
+    /// DIVERGENCES.md F1.
+    #[test]
+    #[should_panic(expected = "DIVERGENCES.md F1")]
+    fn list_optional_should_have_all_eleven_checks() {
+        let names = list_optional_text().matches("name:").count();
+        assert_eq!(names, 11, "DIVERGENCES.md F1: two optional checks unported");
     }
 
     fn run(a: &[&str]) -> RunConfig {

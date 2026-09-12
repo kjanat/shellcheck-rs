@@ -148,6 +148,54 @@ pub fn checker() -> Checker {
 
 /// Run every check over a parsed script.
 pub fn analyze(params: &Parameters) -> Out {
-    let c = checker();
+    analyze_with(params, &[])
+}
+
+/// `optionalTreeChecks` + `optionalCommandChecks`: checks that run only when
+/// named, by `--enable` or an `enable=` directive. The names are upstream's
+/// `cdName`s, which `--list-optional` prints.
+type Register = fn(&mut Checker);
+const OPTIONAL_CHECKS: &[(&str, Register)] = &[
+    ("quote-safe-variables", |c| {
+        c.node(flow::check_verbose_spacefulness_cfg)
+    }),
+    ("avoid-nullary-conditions", |c| {
+        c.node(conditions::check_nullary_expansion_test)
+    }),
+    ("avoid-negated-conditions", |c| {
+        c.node(conditions::check_unnecessarily_inverted_test)
+    }),
+    ("add-default-case", |c| c.node(loops::check_default_case)),
+    ("require-variable-braces", |c| {
+        c.node(quoting::check_variable_braces)
+    }),
+    ("check-unassigned-uppercase", |c| {
+        c.tree(flow::check_unassigned_references_uppercase)
+    }),
+    ("require-double-brackets", |c| {
+        c.tree(conditions::check_require_double_bracket)
+    }),
+    // `check-set-e-suppressed` (SC2310/SC2311) and `check-extra-masked-returns`
+    // (SC2312) are not ported yet. They are left out of `--list-optional` too,
+    // so the catalog never advertises a name that does nothing. See
+    // DIVERGENCES.md F1.
+    ("useless-use-of-cat", |c| c.node(redirections::check_uuoc)),
+    ("deprecate-which", |c| {
+        c.node(crate::checks::commands::coreutils::check_which())
+    }),
+];
+
+/// Run every check, plus the optional ones named in `optional`.
+///
+/// `mkChecker`'s `optionals`: `"all"` turns on every one, and any other name is
+/// looked up and silently dropped when unknown, as its `mapMaybe` does.
+pub fn analyze_with(params: &Parameters, optional: &[String]) -> Out {
+    let mut c = checker();
+    let all = optional.iter().any(|n| n == "all");
+    for (name, register) in OPTIONAL_CHECKS {
+        if all || optional.iter().any(|n| n == name) {
+            register(&mut c);
+        }
+    }
     run_checker(params, &c)
 }

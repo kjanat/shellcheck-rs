@@ -2126,11 +2126,205 @@ fn check_unary_test_a_impl(params: &Parameters, t: &Token, out: &mut Out) {
     }
 }
 
+/// `checkRequireDoubleBracket` (optional: `require-double-brackets`): a tree
+/// check, since it does nothing at all outside the shells that have `[[ ]]`.
+pub(super) fn check_require_double_bracket(params: &Parameters, root: &Token, out: &mut Out) {
+    if !matches!(params.shell, Shell::Bash | Shell::Ksh | Shell::BusyboxSh) {
+        return;
+    }
+    // `isSimple`: operators like `<` and `-o` are not tagged well enough to
+    // rewrite, so only the straightforward conditions get a fix.
+    fn is_simple(t: &Token) -> bool {
+        match &*t.inner {
+            InnerToken::T_Condition { token, .. } => is_simple(token),
+            InnerToken::TC_Binary { op, .. } => !op.contains(['<', '>']),
+            InnerToken::TC_Unary { .. } | InnerToken::TC_Nullary { .. } => true,
+            _ => false,
+        }
+    }
+    root.visit_preorder(&mut |t: &Token| {
+        if let InnerToken::T_Condition {
+            typ: ConditionType::SingleBracket,
+            ..
+        } = &*t.inner
+        {
+            let fix = if is_simple(t) {
+                fix_with(vec![
+                    replace_start(params, t.id(), 0, "["),
+                    replace_end(params, t.id(), 0, "]"),
+                ])
+            } else {
+                fix_with(Vec::new())
+            };
+            style_with_fix(
+                out,
+                t.id(),
+                2292,
+                "Prefer [[ ]] over [ ] for tests in Bash/Ksh/Busybox.",
+                fix,
+            );
+        }
+    });
+}
+
+/// `checkNullaryExpansionTest` (optional: `avoid-nullary-conditions`).
+pub(super) fn check_nullary_expansion_test(params: &Parameters, t: &Token, out: &mut Out) {
+    let InnerToken::TC_Nullary { token: word, .. } = &*t.inner else {
+        return;
+    };
+    let id = word.id();
+    let fix = fix_with(vec![replace_start(params, id, 0, "-n ")]);
+    let parts = ast_lib::get_word_parts(word);
+    if let [only] = parts.as_slice() {
+        if ast_lib::is_command_substitution(only) {
+            style_with_fix(
+                out,
+                id,
+                2243,
+                "Prefer explicit -n to check for output (or run command without [/[[ to check for success).",
+                fix,
+            );
+            return;
+        }
+    }
+    // Constant operands are SC2157's business, not this one's.
+    if !parts.is_empty() && !parts.iter().any(|p| ast_lib::is_constant(p)) {
+        style_with_fix(
+            out,
+            id,
+            2244,
+            "Prefer explicit -n to check non-empty string (or use =/-ne to check boolean/integer).",
+            fix,
+        );
+    }
+}
+
+/// `inversionMap`: the comparison each operator becomes when the `!` is folded
+/// into it.
+fn inverted_operator(op: &str) -> Option<&'static str> {
+    Some(match op {
+        "=" | "==" => "!=",
+        "!=" => "=",
+        "-eq" => "-ne",
+        "-ne" => "-eq",
+        "-le" => "-gt",
+        "-gt" => "-le",
+        "-ge" => "-lt",
+        "-lt" => "-ge",
+        _ => return None,
+    })
+}
+
+/// `checkUnnecessarilyInvertedTest` (optional: `avoid-negated-conditions`).
+pub(super) fn check_unnecessarily_inverted_test(_params: &Parameters, t: &Token, out: &mut Out) {
+    // `! [ .. ]` as a whole pipeline, which is the T_Banged shape.
+    fn banged_condition(t: &Token) -> Option<&Token> {
+        let InnerToken::T_Banged(inner) = &*t.inner else {
+            return None;
+        };
+        let InnerToken::T_Pipeline { commands, .. } = &*inner.inner else {
+            return None;
+        };
+        let [only] = commands.as_slice() else {
+            return None;
+        };
+        let InnerToken::T_Redirecting { cmd, .. } = &*only.inner else {
+            return None;
+        };
+        let InnerToken::T_Condition { token, .. } = &*cmd.inner else {
+            return None;
+        };
+        Some(token)
+    }
+
+    let suggest_rewrite = |bang_inside: bool, typ: &ConditionType, op: &str, out: &mut Out| {
+        let Some(new_op) = inverted_operator(op) else {
+            return;
+        };
+        let bracket = |s: &str| match typ {
+            ConditionType::SingleBracket => format!("[ {s} ]"),
+            ConditionType::DoubleBracket => format!("[[ {s} ]]"),
+        };
+        let old_expr = format!("a {op} b");
+        let new_expr = format!("a {new_op} b");
+        let msg = if bang_inside {
+            format!("Use {new_expr} instead of ! {old_expr}.")
+        } else {
+            format!(
+                "Use {} instead of ! {}.",
+                bracket(&new_expr),
+                bracket(&old_expr)
+            )
+        };
+        style(out, t.id(), 2335, &msg);
+    };
+
+    if let InnerToken::TC_Unary { op, token, .. } = &*t.inner {
+        if op == "!" {
+            match &*token.inner {
+                InnerToken::TC_Unary { op: inner_op, .. } => match inner_op.as_str() {
+                    "-n" => style(out, t.id(), 2236, "Use -z instead of ! -n."),
+                    "-z" => style(out, t.id(), 2236, "Use -n instead of ! -z."),
+                    _ => {}
+                },
+                InnerToken::TC_Binary {
+                    typ, op: inner_op, ..
+                } => suggest_rewrite(true, typ, inner_op, out),
+                _ => {}
+            }
+        }
+        return;
+    }
+    if let Some(cond) = banged_condition(t) {
+        match &*cond.inner {
+            InnerToken::TC_Unary { op, .. } => match op.as_str() {
+                "-n" => style(out, t.id(), 2237, "Use [ -z .. ] instead of ! [ -n .. ]."),
+                "-z" => style(out, t.id(), 2237, "Use [ -n .. ] instead of ! [ -z .. ]."),
+                _ => {}
+            },
+            InnerToken::TC_Binary { typ, op, .. } => suggest_rewrite(false, typ, op, out),
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    #[test]
+    fn prop_checkNullaryExpansionTest1_6() {
+        for s in ["[[ $(a) ]]", "[[ $a ]]", "[[ \"$a$b\" ]]", "[[ `x` ]]"] {
+            assert!(emits(check_nullary_expansion_test, s), "{s}");
+        }
+        for s in ["[[ $a=1 ]]", "[[ -n $(a) ]]"] {
+            assert!(!emits(check_nullary_expansion_test, s), "{s}");
+        }
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest1_10() {
+        for s in [
+            "[ ! -z $var ]",
+            "! [[ -n $var ]]",
+            "! [ $var != foo ]",
+            "[[ ! $var == foo ]]",
+            "[ ! $var -eq 0 ]",
+            "! [[ $var -gt 3 ]]",
+        ] {
+            assert!(emits(check_unnecessarily_inverted_test, s), "{s}");
+        }
+        for s in [
+            "! [ -x $var ]",
+            "[[ ! -w $var ]]",
+            "[ -z $var ]",
+            "! [[ $var =~ .* ]]",
+        ] {
+            assert!(!emits(check_unnecessarily_inverted_test, s), "{s}");
+        }
+    }
 
     #[test]
     fn prop_checkTestRedirects1() {

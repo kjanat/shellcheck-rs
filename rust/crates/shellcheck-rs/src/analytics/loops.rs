@@ -643,11 +643,58 @@ fn loop_variable(t: &Token) -> Option<String> {
     }
 }
 
+/// `checkDefaultCase` (optional: `add-default-case`): a `case` with no branch
+/// that can match anything.
+pub(super) fn check_default_case(_params: &Parameters, t: &Token, out: &mut Out) {
+    let InnerToken::T_CaseExpression { cases, .. } = &*t.inner else {
+        return;
+    };
+    let can_match_any = |pat: &Token| {
+        crate::cfg::word_to_exact_pseudo_glob(pat).is_some_and(|pg| {
+            crate::cfg::pseudo_glob_is_superset_of(&pg, &[crate::cfg::PseudoGlob::PGMany])
+        })
+    };
+    if !cases
+        .iter()
+        .any(|(_, patterns, _)| patterns.iter().any(can_match_any))
+    {
+        info(
+            out,
+            t.id(),
+            2249,
+            "Consider adding a default *) case, even if it just exits with error.",
+        );
+    }
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    #[test]
+    fn prop_checkDefaultCase1() {
+        assert!(emits(check_default_case, "case $1 in a) true ;; esac"));
+    }
+
+    #[test]
+    fn prop_checkDefaultCase2() {
+        assert!(emits(
+            check_default_case,
+            "case $1 in ?*?) true ;; *? ) true ;; esac"
+        ));
+    }
+
+    #[test]
+    fn prop_checkDefaultCase3() {
+        assert!(!emits(check_default_case, "case $1 in x|*) true ;; esac"));
+    }
+
+    #[test]
+    fn prop_checkDefaultCase4() {
+        assert!(!emits(check_default_case, "case $1 in **) true ;; esac"));
+    }
 
     #[test]
     fn prop_checkWhileReadPitfalls1() {

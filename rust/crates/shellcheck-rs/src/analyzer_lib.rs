@@ -114,7 +114,14 @@ pub fn make_comment_with_fix(
             code,
             message: note.to_string(),
         },
-        fix: Some(fix),
+        // "If fix is empty, pretend it wasn't there" -- a check that decides it
+        // cannot suggest a rewrite passes `fixWith []`, and that must read as no
+        // fix at all, not as a fix with nothing in it.
+        fix: if fix.replacements.is_empty() {
+            None
+        } else {
+            Some(fix)
+        },
     }
 }
 
@@ -522,6 +529,22 @@ pub fn make_parameters_ext(
         has_noglob,
         variable_flow,
         cfg_analysis,
+    }
+}
+
+/// `getEnableDirectives`: the `enable=` names on the file-wide annotation, which
+/// turn optional checks on exactly as `--enable` does. Only the root is
+/// consulted, as upstream does -- an `enable=` deeper in the file does nothing.
+pub fn get_enable_directives(root: &Token) -> Vec<String> {
+    match &*root.inner {
+        InnerToken::T_Annotation { annotations, .. } => annotations
+            .iter()
+            .filter_map(|a| match a {
+                Annotation::EnableComment(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
     }
 }
 

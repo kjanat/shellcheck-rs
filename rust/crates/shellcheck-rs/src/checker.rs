@@ -25,6 +25,9 @@ pub fn check_script(spec: &CheckSpec) -> CheckResult {
 
     // Analysis comments (SC2xxx/SC3xxx): resolved from ids via the position map.
     if let Some(root) = parse.root.clone() {
+        // `asOptionalChecks = getEnableDirectives root ++ csOptionalChecks spec`
+        let mut optional = analyzer_lib::get_enable_directives(&root);
+        optional.extend(spec.optional_checks.iter().cloned());
         let params = analyzer_lib::make_parameters_ext(
             root,
             parse.positions.clone(),
@@ -32,7 +35,7 @@ pub fn check_script(spec: &CheckSpec) -> CheckResult {
             shell_from_filename(&spec.filename),
             spec.extended_analysis,
         );
-        let analysis = analytics::analyze(&params);
+        let analysis = analytics::analyze_with(&params, &optional);
         for tc in analysis {
             if annotation_ignores(&params, tc.id, tc.comment.code) {
                 continue;

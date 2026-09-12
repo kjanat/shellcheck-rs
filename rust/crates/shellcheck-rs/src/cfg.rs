@@ -2306,14 +2306,14 @@ fn is_array_expansion(t: &Token) -> bool {
 // Variant names mirror the Haskell constructors PGAny / PGMany / PGChar.
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PseudoGlob {
+pub(crate) enum PseudoGlob {
     PGAny,
     PGMany,
     PGChar(char),
 }
 
 /// `wordToExactPseudoGlob` = `wordToPseudoGlob' True`.
-fn word_to_exact_pseudo_glob(word: &Token) -> Option<Vec<PseudoGlob>> {
+pub(crate) fn word_to_exact_pseudo_glob(word: &Token) -> Option<Vec<PseudoGlob>> {
     fn f(x: &Token) -> Option<Vec<PseudoGlob>> {
         match &*x.inner {
             InnerToken::T_Literal(s) => Some(s.chars().map(PseudoGlob::PGChar).collect()),
@@ -2367,7 +2367,7 @@ fn simplify_pseudo_glob(list: Vec<PseudoGlob>) -> Vec<PseudoGlob> {
 }
 
 /// `pseudoGlobIsSuperSetof`.
-fn pseudo_glob_is_superset_of(x: &[PseudoGlob], y: &[PseudoGlob]) -> bool {
+pub(crate) fn pseudo_glob_is_superset_of(x: &[PseudoGlob], y: &[PseudoGlob]) -> bool {
     match (x.first(), y.first()) {
         (Some(&xf), Some(&yf)) => match (xf, yf) {
             (PseudoGlob::PGMany, PseudoGlob::PGMany) => pseudo_glob_is_superset_of(x, &y[1..]),

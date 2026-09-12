@@ -958,11 +958,55 @@ fn upep_check(params: &Parameters, t: &Token, out: &mut Out) {
     }
 }
 
+/// `unbracedVariables`: the names that never need braces -- the special
+/// variables, and the single-digit positionals.
+fn is_unbraced_variable(name: &str) -> bool {
+    crate::data::SPECIAL_VARIABLES_WITHOUT_SPACES.contains(&name)
+        || name == "@"
+        || name == "*"
+        || (name.len() == 1 && name.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// `checkVariableBraces` (optional: `require-variable-braces`).
+pub(super) fn check_variable_braces(params: &Parameters, t: &Token, out: &mut Out) {
+    let InnerToken::T_DollarBraced { braced: false, op } = &*t.inner else {
+        return;
+    };
+    let name = crate::cfg::get_braced_reference(&crate::ast_lib::oversimplify(op).concat());
+    if is_unbraced_variable(&name) || super::flow::quotes_may_conflict_with_sc2281(params, t) {
+        return;
+    }
+    let fix = fix_with(vec![
+        replace_start(params, t.id(), 1, "${"),
+        replace_end(params, t.id(), 0, "}"),
+    ]);
+    style_with_fix(
+        out,
+        t.id(),
+        2250,
+        "Prefer putting braces around variable references even when not strictly required.",
+        fix,
+    );
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    #[test]
+    fn prop_CheckVariableBraces1_5() {
+        assert!(emits(check_variable_braces, "a='123'; echo $a"));
+        for s in [
+            "a='123'; echo ${a}",
+            "#shellcheck disable=SC2016\necho '$a'",
+            "echo $* $1",
+            "$foo=42",
+        ] {
+            assert!(!emits(check_variable_braces, s), "{s}");
+        }
+    }
 
     #[test]
     fn prop_checkQuotesInLiterals1() {

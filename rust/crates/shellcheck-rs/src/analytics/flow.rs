@@ -66,8 +66,26 @@ pub(super) fn check_unassigned_references(params: &Parameters, root: &Token, out
     check_unassigned_references_impl(params, root, out, false);
 }
 
+/// `checkUnassignedReferences' True` (optional: `check-unassigned-uppercase`):
+/// the same check, but it also reports the all-caps names it otherwise assumes
+/// are environment variables.
+pub(super) fn check_unassigned_references_uppercase(
+    params: &Parameters,
+    root: &Token,
+    out: &mut Out,
+) {
+    check_unassigned_references_impl(params, root, out, true);
+}
+
 pub(super) fn check_spacefulness_cfg(params: &Parameters, token: &Token, out: &mut Out) {
     check_spacefulness_cfg_impl(true, params, token, out);
+}
+
+/// `checkVerboseSpacefulnessCfg = checkSpacefulnessCfg' False` (optional:
+/// `quote-safe-variables`): the same analysis, reporting the variables that are
+/// merely *currently* free of metacharacters as well.
+pub(super) fn check_verbose_spacefulness_cfg(params: &Parameters, token: &Token, out: &mut Out) {
+    check_spacefulness_cfg_impl(false, params, token, out);
 }
 
 fn strip_suffix(name: &str) -> String {
@@ -338,7 +356,7 @@ fn add_double_quotes_around(params: &Parameters, token: &Token) -> crate::interf
 }
 
 /// `quotesMayConflictWithSC2281`.
-fn quotes_may_conflict_with_sc2281(params: &Parameters, t: &Token) -> bool {
+pub(super) fn quotes_may_conflict_with_sc2281(params: &Parameters, t: &Token) -> bool {
     let path = get_path(params, t);
     if path.len() < 3 {
         return false;

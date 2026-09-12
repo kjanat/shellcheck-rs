@@ -1030,11 +1030,63 @@ fn get_final_grep(t: &Token) -> Option<String> {
     }
 }
 
+/// `checkUuoc` (optional: `useless-use-of-cat`): `cat file | cmd`, where the
+/// `cat` buys nothing over a redirection.
+pub(super) fn check_uuoc(_params: &Parameters, t: &Token, out: &mut Out) {
+    let InnerToken::T_Pipeline { commands, .. } = &*t.inner else {
+        return;
+    };
+    // The first stage of a pipeline with at least two of them.
+    let [first, _, ..] = commands.as_slice() else {
+        return;
+    };
+    let InnerToken::T_Redirecting { cmd, .. } = &*first.inner else {
+        return;
+    };
+    if get_command_basename(cmd).as_deref() != Some("cat") {
+        return;
+    }
+    let Some(words) = simple_command_words(cmd) else {
+        return;
+    };
+    // `f [word]`: exactly one argument, and not a flag or something that can
+    // expand to several words.
+    let [_, word] = words.as_slice() else {
+        return;
+    };
+    let is_option = crate::ast_lib::only_literal_string(word).starts_with('-');
+    if !crate::cfg::may_become_multiple_args(word) && !is_option {
+        style(
+            out,
+            word.id(),
+            2002,
+            "Useless cat. Consider 'cmd < file | ..' or 'cmd file | ..' instead.",
+        );
+    }
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    #[test]
+    fn prop_checkUuoc1_6() {
+        for s in ["cat foo | grep bar", "cat \"$var\" | grep bar"] {
+            assert!(emits(check_uuoc, s), "{s}");
+        }
+        for s in [
+            "cat * | grep bar",
+            "cat $var | grep bar",
+            "cat \"${!var}\" | grep bar",
+            "cat $var",
+            "cat \"$@\"",
+            "cat -n | grep bar",
+        ] {
+            assert!(!emits(check_uuoc, s), "{s}");
+        }
+    }
 
     #[test]
     fn prop_checkSshHereDoc1() {

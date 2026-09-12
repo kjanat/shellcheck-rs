@@ -913,6 +913,18 @@ fn missing_destination(te: &Token, out: &mut Out, handler: impl Fn(&mut Out, Id)
     }
 }
 
+/// `checkWhich` (optional: `deprecate-which`).
+pub(crate) fn check_which() -> CommandCheck {
+    CommandCheck::new(Basename("which"), |_p, t, out| {
+        info(
+            out,
+            get_command_token_or_this(t).id(),
+            2230,
+            "'which' is non-standard. Use builtin 'command -v' instead.",
+        );
+    })
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
