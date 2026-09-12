@@ -2267,3 +2267,27 @@ pub(crate) fn simple_command_name(t: &Token) -> Option<String> {
 pub(crate) fn has_flag(t: &Token, flag: &str) -> bool {
     get_all_flags(t).iter().any(|(_, f)| f == flag)
 }
+
+/// `tokenIsJustCommandOutput` (AnalyzerLib): a word that is entirely the output
+/// of a single command substitution.
+pub(crate) fn token_is_just_command_output(t: &Token) -> bool {
+    // check: exactly one command, and it isn't only a redirection.
+    fn check(cmds: &[Token]) -> bool {
+        cmds.len() == 1 && !astlib::is_only_redirection(&cmds[0])
+    }
+    if let InnerToken::T_NormalWord(parts) = &*t.inner {
+        if parts.len() == 1 {
+            match &*parts[0].inner {
+                InnerToken::T_DollarExpansion(cmds) => return check(cmds),
+                InnerToken::T_Backticked(cmds) => return check(cmds),
+                InnerToken::T_DoubleQuoted(inner) if inner.len() == 1 => match &*inner[0].inner {
+                    InnerToken::T_DollarExpansion(cmds) => return check(cmds),
+                    InnerToken::T_Backticked(cmds) => return check(cmds),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+    false
+}

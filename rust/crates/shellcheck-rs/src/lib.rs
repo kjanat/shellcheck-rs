@@ -31,6 +31,8 @@ pub mod checker;
 pub mod checks;
 pub mod data;
 pub mod parser;
+#[cfg(test)]
+mod test_support;
 
 pub use checker::check_script;
 
