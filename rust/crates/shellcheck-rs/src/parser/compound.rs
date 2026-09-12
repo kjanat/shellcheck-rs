@@ -693,53 +693,115 @@ impl Parser {
         self.spacing();
         let word = self.read_normal_word()?;
         self.allspacing();
-        self.consume_keyword("in")?;
+        if self.consume_keyword("in").is_err() {
+            return self.fail_with("Expected 'in'");
+        }
         self.allspacing();
+        // `many readCaseItem`: an item that failed after consuming input is the
+        // case expression's failure, not the end of the list.
         let mut cases: Vec<CaseClause> = Vec::new();
         loop {
             self.allspacing();
-            if self.keyword_ahead("esac") {
-                break;
-            }
-            // optional leading (
-            let _ = self.char('(');
-            let mut pats = Vec::new();
-            loop {
-                self.spacing();
-                match self.read_normal_word() {
-                    Ok(w) => pats.push(w),
-                    Err(()) => break,
-                }
-                self.spacing();
-                if self.char('|').is_ok() {
-                    continue;
-                } else {
+            let m = self.mark();
+            match self.read_case_item() {
+                Ok(c) => cases.push(c),
+                Err(()) => {
+                    if self.idx != m.idx {
+                        return Err(());
+                    }
+                    self.reset(m);
                     break;
                 }
             }
-            self.spacing();
-            self.char(')')?;
-            let body = self.read_case_body();
-            // Mirrors Parser.hs readCaseSeparator: the `;;` arm and the
-            // no-separator-before-esac arm both yield CaseBreak. The arms are
-            // NOT interchangeable — the `;;` condition consumes the separator
-            // while the fallback consumes nothing — so they must stay distinct.
-            #[allow(clippy::if_same_then_else)]
-            let ctype = if self.string(";;&").is_ok() {
-                CaseType::CaseContinue
-            } else if self.string(";&").is_ok() {
-                CaseType::CaseFallThrough
-            } else if self.string(";;").is_ok() {
-                CaseType::CaseBreak
-            } else {
-                CaseType::CaseBreak
-            };
-            cases.push((ctype, pats, body));
         }
         self.allspacing();
-        self.consume_keyword("esac")?;
+        if self.has_committed_failure() {
+            return Err(());
+        }
+        if self.consume_keyword("esac").is_err() {
+            return self.fail_with("Expected 'esac' to close the case statement");
+        }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_CaseExpression { word, cases }))
+    }
+
+    fn read_case_item(&mut self) -> PResult<CaseClause> {
+        // `notFollowedBy2 g_Esac`
+        if self.keyword_ahead("esac") {
+            return Err(());
+        }
+        self.called("case item", |p| {
+            if p.at_annotation_prefix() {
+                let pos = p.pos();
+                p.problem_at(
+                    pos.clone(),
+                    pos,
+                    Severity::ErrorC,
+                    1124,
+                    "ShellCheck directives are only valid in front of complete commands like 'case' statements, not individual case branches.",
+                );
+            }
+            // optional leading (
+            let _ = p.char('(');
+            p.spacing();
+            // `readPattern`: words separated by `|`.
+            let mut pats = Vec::new();
+            while let Ok(w) = p.read_normal_word() {
+                pats.push(w);
+                p.spacing();
+                if p.char('|').is_err() {
+                    break;
+                }
+                p.spacing();
+            }
+            if p.char(')').is_err() {
+                let pos = p.pos();
+                p.problem_at(
+                    pos.clone(),
+                    pos,
+                    Severity::ErrorC,
+                    1085,
+                    "Did you forget to move the ;; after extending this case item?",
+                );
+                return p.fail_with("Expected ) to open a new case item");
+            }
+            let body = p.read_case_body();
+            // `readCaseSeparator`: the `;;` arm and the no-separator-before-esac
+            // arm both yield CaseBreak. They are NOT interchangeable — the `;;`
+            // condition consumes the separator, the fallback consumes nothing.
+            #[allow(clippy::if_same_then_else)]
+            let ctype = if p.string(";;&").is_ok() {
+                CaseType::CaseContinue
+            } else if p.string(";&").is_ok() {
+                CaseType::CaseFallThrough
+            } else if p.string(";;").is_ok() {
+                CaseType::CaseBreak
+            } else {
+                // `attempting`: a `)` ahead and no separator means the previous
+                // item ran straight into the next one.
+                let m = p.mark();
+                let pos = p.pos();
+                if p.peek() == Some(')') {
+                    p.problem_at(
+                        pos.clone(),
+                        pos,
+                        Severity::ErrorC,
+                        1074,
+                        "Did you forget the ;; after the previous case item?",
+                    );
+                }
+                // The last arm of `readCaseSeparator`: a line break and then
+                // `esac` ends the item without one. Anything else is a failure.
+                p.allspacing();
+                let at_esac = p.keyword_ahead("esac");
+                p.reset(m);
+                if !at_esac {
+                    return Err(());
+                }
+                CaseType::CaseBreak
+            };
+            Ok((ctype, pats, body))
+        })
     }
 
     /// True at a case-clause terminator: `;;`, `;&`, or `;;&`.
