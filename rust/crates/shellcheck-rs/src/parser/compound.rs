@@ -63,6 +63,7 @@ impl Parser {
                 let (s, _) = self.span_for(t.id());
                 let e = self.pos();
                 let id = self.next_id_between(s, e);
+                self.warn_on_tokens_after_compound_command();
                 Ok(Token::new(id, InnerToken::T_Redirecting { redirs, cmd: t }))
             }
             Err(()) => {
@@ -73,6 +74,37 @@ impl Parser {
                 }
                 Err(())
             }
+        }
+    }
+
+    /// A compound command is finished; anything but a keyword or a `{` still
+    /// sitting there is a missing terminator or a mistyped redirection. Read
+    /// under `lookAhead`, so the words themselves are put back.
+    fn warn_on_tokens_after_compound_command(&mut self) {
+        if self.keyword_len().is_some() || self.peek() == Some('{') {
+            return;
+        }
+        let m = self.mark();
+        let notes = self.notes.len();
+        let pos = self.pos();
+        let mut any = false;
+        while self.read_normal_word().is_ok() {
+            any = true;
+            self.spacing();
+        }
+        let pos_end = self.pos();
+        self.reset(m);
+        // `lookAhead` rewinds Parsec's state, so the words' notes go with it;
+        // problems live outside it and stay.
+        self.notes.truncate(notes);
+        if any {
+            self.problem_at(
+                pos,
+                pos_end,
+                Severity::ErrorC,
+                1141,
+                "Unexpected tokens after compound command. Bad redirection or missing ;/&&/||/|?",
+            );
         }
     }
 
@@ -178,6 +210,96 @@ impl Parser {
         }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_BraceGroup(list)))
+    }
+
+    /// `readBraced <|> readDoGroup`: `for` also accepts a brace group as its
+    /// body, as ksh does.
+    fn read_braced_or_do_group(&mut self, kw: &Position) -> PResult<Vec<Token>> {
+        self.allspacing();
+        if self.peek() == Some('{') {
+            let m = self.mark();
+            if let Ok(t) = self.read_brace_group() {
+                let InnerToken::T_BraceGroup(list) = t.inner() else {
+                    unreachable!("readBraceGroup returns a T_BraceGroup")
+                };
+                return Ok(list.clone());
+            }
+            if self.idx != m.idx {
+                return Err(());
+            }
+            self.reset(m);
+        }
+        self.read_do_group(kw)
+    }
+
+    /// `readDoGroup`: the `do .. done` body every loop shares. `kw` is where
+    /// the loop keyword was, so a missing `do`/`done` can point back at it.
+    fn read_do_group(&mut self, kw: &Position) -> PResult<Vec<Token>> {
+        self.allspacing();
+        if self.keyword_ahead("done") {
+            self.problem_at(
+                kw.clone(),
+                kw.clone(),
+                Severity::ErrorC,
+                1057,
+                "Did you forget the 'do' for this loop?",
+            );
+        }
+        let do_pos = self.pos();
+        if self.consume_keyword("do").is_err() {
+            let here = self.pos();
+            self.problem_at(here.clone(), here, Severity::ErrorC, 1058, "Expected 'do'.");
+            return self.fail_with("Expected 'do'");
+        }
+        self.accept_but_warn_semi_msg(
+            1059,
+            "Semicolon is not allowed directly after 'do'. You can just delete it.",
+        );
+        self.allspacing();
+        if self.keyword_ahead("done") {
+            self.problem_at(
+                do_pos.clone(),
+                do_pos.clone(),
+                Severity::ErrorC,
+                1060,
+                "Can't have empty do clauses (use 'true' as a no-op).",
+            );
+        }
+        let commands = self.read_term().ok_or(())?;
+        self.allspacing();
+        if self.consume_keyword("done").is_err() {
+            self.problem_at(
+                do_pos.clone(),
+                do_pos,
+                Severity::ErrorC,
+                1061,
+                "Couldn't find 'done' for this 'do'.",
+            );
+            let here = self.pos();
+            self.problem_at(
+                here.clone(),
+                here,
+                Severity::ErrorC,
+                1062,
+                "Expected 'done' matching previously mentioned 'do'.",
+            );
+            return self.fail_with("Expected 'done'");
+        }
+        // `g_Done` is `tryWordToken "done" .. `thenSkip` spacing`, so the loop's
+        // span extends over the line-whitespace after `done` and a trailing
+        // redirect starts beyond it.
+        self.spacing();
+        if self.string_peek("<(") {
+            let here = self.pos();
+            self.problem_at(
+                here.clone(),
+                here,
+                Severity::ErrorC,
+                1142,
+                "Use 'done < <(cmd)' to redirect from process substitution (currently missing one '<').",
+            );
+        }
+        Ok(commands)
     }
 
     pub(super) fn read_if_clause(&mut self) -> PResult<Token> {
@@ -352,18 +474,17 @@ impl Parser {
     /// `acceptButWarn g_Semi`: a `;` right after `then`/`else` is a syntax
     /// error the parser forgives after saying so.
     fn accept_but_warn_semi(&mut self, code: i64, after: &str) {
+        let msg = format!("Semicolons directly after '{after}' are not allowed. Just remove it.");
+        self.accept_but_warn_semi_msg(code, &msg);
+    }
+
+    fn accept_but_warn_semi_msg(&mut self, code: i64, message: &str) {
         let m = self.mark();
         self.spacing();
         if self.peek() == Some(';') && self.peek_at(1) != Some(';') {
             let pos = self.pos();
             self.bump();
-            self.problem_at(
-                pos.clone(),
-                pos,
-                Severity::ErrorC,
-                code,
-                &format!("Semicolons directly after '{after}' are not allowed. Just remove it."),
-            );
+            self.problem_at(pos.clone(), pos, Severity::ErrorC, code, message);
         } else {
             self.reset(m);
         }
@@ -381,18 +502,10 @@ impl Parser {
 
     fn read_while_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
+        let kw = self.pos();
         self.consume_keyword("while")?;
         let cond = self.read_condition_list()?;
-        self.allspacing();
-        self.consume_keyword("do")?;
-        let body = self.read_compound_list_or_empty();
-        self.allspacing();
-        self.consume_keyword("done")?;
-        // ShellCheck's `g_Done` is `tryWordToken "done" .. \`thenSkip\` spacing`, so
-        // the loop's span extends over the line-whitespace following `done` (a
-        // trailing redirect starts after it). Without this the node is one column
-        // short of the oracle. `spacing` is line-whitespace only (no newlines).
-        self.spacing();
+        let body = self.read_do_group(&kw)?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
@@ -409,16 +522,10 @@ impl Parser {
 
     fn read_until_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
+        let kw = self.pos();
         self.consume_keyword("until")?;
         let cond = self.read_condition_list()?;
-        self.allspacing();
-        self.consume_keyword("do")?;
-        let body = self.read_compound_list_or_empty();
-        self.allspacing();
-        self.consume_keyword("done")?;
-        // See `read_while_clause`: `g_Done` consumes trailing line-whitespace, so
-        // the T_UntilExpression span reaches the start of any trailing redirect.
-        self.spacing();
+        let body = self.read_do_group(&kw)?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
@@ -463,10 +570,7 @@ impl Parser {
             self.allspacing();
             let _ = self.char(';');
             self.allspacing();
-            self.consume_keyword("do")?;
-            let body = self.read_compound_list_or_empty();
-            self.allspacing();
-            self.consume_keyword("done")?;
+            let body = self.read_braced_or_do_group(&start)?;
             let id = self.next_id_between(start, for_end.clone());
             return Ok(Token::new(
                 id,
@@ -501,12 +605,8 @@ impl Parser {
             }
         }
         let _ = self.char(';');
-        self.allspacing();
-        self.consume_keyword("do")?;
-        let body = self.read_compound_list_or_empty();
-        self.allspacing();
-        self.consume_keyword("done")?;
-        let id = self.next_id_between(start, for_end);
+        let body = self.read_braced_or_do_group(&start)?;
+        let id = self.next_id_between(start.clone(), for_end);
         let _ = is_in;
         Ok(Token::new(id, InnerToken::T_ForIn { var, items, body }))
     }
@@ -567,12 +667,8 @@ impl Parser {
             }
         }
         let _ = self.char(';');
-        self.allspacing();
-        self.consume_keyword("do")?;
-        let body = self.read_compound_list_or_empty();
-        self.allspacing();
-        self.consume_keyword("done")?;
-        let id = self.next_id_between(start, sel_end);
+        let body = self.read_do_group(&start)?;
+        let id = self.next_id_between(start.clone(), sel_end);
         Ok(Token::new(id, InnerToken::T_SelectIn { var, items, body }))
     }
 

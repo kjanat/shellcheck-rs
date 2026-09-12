@@ -214,14 +214,17 @@ impl Parser {
             for _ in 0..n {
                 self.bump();
             }
+            // Recorded from past the keyword, where the `fail` inside the
+            // inner `try` happens, before the outer one rewinds.
+            let r = self.fail_recoverable("Unexpected keyword/token");
             self.reset(m);
-            return self.fail_recoverable("Unexpected keyword/token");
+            return r;
         }
         self.read_banged()
     }
 
     /// The length of the `readKeyword` token ahead, if any.
-    fn keyword_len(&self) -> Option<usize> {
+    pub(super) fn keyword_len(&self) -> Option<usize> {
         const WORDS: [&str; 7] = ["then", "else", "elif", "fi", "do", "done", "esac"];
         if let Some(w) = WORDS.iter().find(|k| self.keyword_ahead(k)) {
             return Some(w.len());
