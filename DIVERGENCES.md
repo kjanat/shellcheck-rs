@@ -204,29 +204,6 @@ printf '%s' 'until ];do ];do ' | shellcheck -f gcc -            # oracle 1:17 "U
 printf '%s' '(} '              | shellcheck -s busybox -f gcc -  # oracle 1:3 / port 1:4
 ```
 
-## F. Optional checks the port has not got
-
-### F1. `check-set-e-suppressed` and `check-extra-masked-returns`
-
-```sh
-shellcheck --list-optional | grep -c '^name:'    # oracle: 11, port: 9
-```
-
-Nine of upstream's eleven optional checks are ported and agree with the oracle
-on the full json1 payload, `--enable` and `enable=` alike. Two are not:
-`check-set-e-suppressed` (SC2310/SC2311) and `check-extra-masked-returns`
-(SC2312). They need `doTransform` and the declaring-command machinery.
-
-Until they exist the port leaves them out of `--list-optional` as well, so the
-catalog never advertises a name that silently does nothing — which is how this
-gap stayed invisible in the first place. The cost is that
-`--list-optional` differs from the oracle's, and `--enable` on either name is
-accepted and ignored (upstream ignores unknown names too, so that part matches).
-
-Nothing in `gate` or `fuzz` can see any of this: neither ever passes `--enable`,
-so both tools stay silent and agree. That is the hole to close next, not just
-the two checks.
-
 ## E. A check the port has not got
 
 ### E1. SC3051 on `source`

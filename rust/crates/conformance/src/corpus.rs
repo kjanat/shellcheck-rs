@@ -281,6 +281,66 @@ fn extract_text(file: &str, text: &str) -> Vec<Entry> {
     out
 }
 
+/// One optional check, as its `CheckDescription` declares it: the `--enable`
+/// name and the two example scripts upstream holds it to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionalExample {
+    pub name: String,
+    /// `cdPositive`: this must produce the check's diagnostic.
+    pub positive: String,
+    /// `cdNegative`: this must not.
+    pub negative: String,
+}
+
+/// Read the optional-check catalog out of the Haskell sources.
+///
+/// These are the checks `--enable` turns on, and nothing else in the gate
+/// reaches them: a property's script runs with the default check set, so an
+/// optional check that does nothing at all agrees with the oracle on every
+/// script in the corpus. Upstream holds them to `prop_verifyOptionalExamples`;
+/// this extracts the same examples so the gate can.
+pub fn optional_examples(src_dir: &Path) -> Result<Vec<OptionalExample>, String> {
+    let mut out = Vec::new();
+    for file in ["Analytics.hs", "Checks/Commands.hs"] {
+        let path = src_dir.join(file);
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut name: Option<String> = None;
+        let mut positive: Option<String> = None;
+        for line in text.lines() {
+            let line = line.trim();
+            let field = |key: &str| -> Option<String> {
+                let rest = line.strip_prefix(key)?.trim_start();
+                let rest = rest.strip_prefix('=')?;
+                string_literals(rest).into_iter().next()
+            };
+            if let Some(s) = field("cdName") {
+                name = Some(s);
+                continue;
+            }
+            if let Some(s) = field("cdPositive") {
+                positive = Some(s);
+                continue;
+            }
+            // `cdNegative` closes the description: the three belong to one
+            // check, and nothing is taken until all three are in hand.
+            let Some(negative) = field("cdNegative") else {
+                continue;
+            };
+            let (Some(name), Some(positive)) = (name.take(), positive.take()) else {
+                continue;
+            };
+            out.push(OptionalExample {
+                name,
+                positive,
+                negative,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
 /// Every `prop_` name a Haskell source defines, whether or not it names a
 /// script: a definition starts at the beginning of a line.
 fn property_names(text: &str) -> Vec<String> {

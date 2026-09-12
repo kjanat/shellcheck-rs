@@ -162,10 +162,21 @@ fn key_from_value(v: &Value) -> CommentKey {
 /// `filename` matters: both tools may infer a dialect from it, so the caller
 /// passes whatever path the oracle saw.
 pub fn port_keys(script: &str, filename: &str, shell: Option<&str>) -> Vec<CommentKey> {
+    port_keys_with(script, filename, shell, &[])
+}
+
+/// As [`port_keys`], with optional checks enabled — what `--enable` passes.
+pub fn port_keys_with(
+    script: &str,
+    filename: &str,
+    shell: Option<&str>,
+    optional: &[String],
+) -> Vec<CommentKey> {
     let spec = CheckSpec {
         filename: filename.to_string(),
         script: script.to_string(),
         shell_type_override: shell.and_then(parse_shell),
+        optional_checks: optional.to_vec(),
         ..CheckSpec::default()
     };
     let result = shellcheck_rs::check_script(&spec);
@@ -248,6 +259,34 @@ fn gate(args: &Args) -> Result<bool, String> {
         }
     }
 
+    // The optional checks, which nothing above can reach: a property's script
+    // runs with the default set, so a `--enable` check that does nothing agrees
+    // with the oracle everywhere. Both of upstream's examples per check, with
+    // that check enabled on both sides.
+    let mut optional_checked = 0usize;
+    for ex in corpus::optional_examples(&src)? {
+        for (kind, script) in [("positive", &ex.positive), ("negative", &ex.negative)] {
+            let name = oracle.name();
+            let named = [(name.clone(), script.clone())];
+            let by_name = oracle.check_with(&named, args.shell.as_deref(), Some(&ex.name))?;
+            let Some(ocomments) = by_name.get(&name) else {
+                continue;
+            };
+            optional_checked += 1;
+            let path = oracle.dir().join(&name);
+            let ok = oracle_keys(ocomments);
+            let pk = port_keys_with(
+                script,
+                &path.to_string_lossy(),
+                args.shell.as_deref(),
+                std::slice::from_ref(&ex.name),
+            );
+            if !keys_match(&pk, &ok) {
+                divergent.push((format!("--enable={} ({kind})", ex.name), pk, ok));
+            }
+        }
+    }
+
     if !args.quiet {
         // `--max-findings` caps how many are spelled out, as it does for `fuzz`.
         let max = args.max_findings;
@@ -264,9 +303,10 @@ fn gate(args: &Args) -> Result<bool, String> {
         }
     }
     println!(
-        "gate: {} properties, {} agree, {} diverge, {} sanctioned deviations",
+        "gate: {} properties + {optional_checked} optional-check examples, \
+         {} agree, {} diverge, {} sanctioned deviations",
         compared,
-        compared - divergent.len() - deviations.len(),
+        compared + optional_checked - divergent.len() - deviations.len(),
         divergent.len(),
         deviations.len()
     );

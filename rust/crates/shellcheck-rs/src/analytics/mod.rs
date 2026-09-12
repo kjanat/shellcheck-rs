@@ -175,10 +175,12 @@ const OPTIONAL_CHECKS: &[(&str, Register)] = &[
     ("require-double-brackets", |c| {
         c.tree(conditions::check_require_double_bracket)
     }),
-    // `check-set-e-suppressed` (SC2310/SC2311) and `check-extra-masked-returns`
-    // (SC2312) are not ported yet. They are left out of `--list-optional` too,
-    // so the catalog never advertises a name that does nothing. See
-    // DIVERGENCES.md F1.
+    ("check-set-e-suppressed", |c| {
+        c.tree(flow::check_set_e_suppressed)
+    }),
+    ("check-extra-masked-returns", |c| {
+        c.tree(flow::check_extra_masked_returns)
+    }),
     ("useless-use-of-cat", |c| c.node(redirections::check_uuoc)),
     ("deprecate-which", |c| {
         c.node(crate::checks::commands::coreutils::check_which())

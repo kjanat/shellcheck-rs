@@ -31,6 +31,10 @@ pub struct Parameters {
     pub has_set_e: bool,
     pub has_pipefail: bool,
     pub has_lastpipe: bool,
+    /// `hasInheritErrexit`: whether a command substitution inherits `set -e`.
+    /// Bash only when `shopt -s inherit_errexit`; always for the POSIX shells;
+    /// never for ksh.
+    pub has_inherit_errexit: bool,
     pub has_noglob: bool,
     /// A linear (bad) analysis of data flow (`ShellCheck.AnalyzerLib.variableFlow`).
     pub variable_flow: Vec<StackData>,
@@ -491,6 +495,11 @@ pub fn make_parameters_ext(
     let has_set_e = contains_set_e(&root);
     let has_noglob = contains_noglob(&root);
     let has_pipefail = is_option_set("pipefail", &root);
+    let has_inherit_errexit = match shell {
+        Shell::Bash => is_option_set("inherit_errexit", &root),
+        Shell::Dash | Shell::BusyboxSh | Shell::Sh => true,
+        Shell::Ksh => false,
+    };
     let has_lastpipe = match shell {
         Shell::Bash => is_option_set("lastpipe", &root),
         Shell::Ksh => true,
@@ -526,6 +535,7 @@ pub fn make_parameters_ext(
         has_set_e,
         has_pipefail,
         has_lastpipe,
+        has_inherit_errexit,
         has_noglob,
         variable_flow,
         cfg_analysis,

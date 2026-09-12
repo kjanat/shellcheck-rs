@@ -81,6 +81,246 @@ pub(super) fn check_spacefulness_cfg(params: &Parameters, token: &Token, out: &m
     check_spacefulness_cfg_impl(true, params, token, out);
 }
 
+/// `containsSimpleCommand`: does this subtree run a command at all?
+fn contains_simple_command(t: &Token) -> bool {
+    let mut found = false;
+    t.visit_preorder(&mut |n| {
+        if matches!(&*n.inner, InnerToken::T_SimpleCommand { .. }) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// `allButLastSimpleCommands`: of the parts that run a command, every one but
+/// the last — the last one's exit status is the one that survives.
+fn all_but_last_simple_commands(cmds: &[Token]) -> Vec<&Token> {
+    let mut with_commands: Vec<&Token> =
+        cmds.iter().filter(|c| contains_simple_command(c)).collect();
+    with_commands.pop();
+    with_commands
+}
+
+/// `checkExtraMaskedReturns` (optional: `check-extra-masked-returns`): a
+/// command whose exit status is thrown away because something else's status is
+/// what the shell keeps.
+pub(super) fn check_extra_masked_returns(params: &Parameters, root: &Token, out: &mut Out) {
+    // `removeTransparentCommands`: `time cmd` reports `cmd`'s status, so drop
+    // the `time` and judge what it wraps.
+    let transparent = remove_transparent_commands(root);
+
+    let mut masked: Vec<Token> = Vec::new();
+    transparent.visit_preorder(&mut |t| {
+        let lists: Vec<&Token> = match &*t.inner {
+            InnerToken::T_Arithmetic(list) => vec![list],
+            InnerToken::T_Array(list) => all_but_last_simple_commands(list),
+            InnerToken::T_Condition { token, .. } => vec![token],
+            InnerToken::T_DoubleQuoted(list) => all_but_last_simple_commands(list),
+            InnerToken::T_HereDoc { body, .. } => body.iter().collect(),
+            InnerToken::T_HereString(word) => vec![word],
+            InnerToken::T_NormalWord(parts) => all_but_last_simple_commands(parts),
+            InnerToken::T_Pipeline { commands, .. } if !params.has_pipefail => {
+                all_but_last_simple_commands(commands)
+            }
+            InnerToken::T_ProcSub { list, .. } => list.iter().collect(),
+            InnerToken::T_SimpleCommand { assignments, words } if !words.is_empty() => {
+                assignments.iter().chain(words.iter().skip(1)).collect()
+            }
+            InnerToken::T_SimpleCommand { assignments, .. } => {
+                all_but_last_simple_commands(assignments)
+            }
+            _ => Vec::new(),
+        };
+        for list in lists {
+            list.visit_preorder(&mut |n| match &*n.inner {
+                InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => {
+                    masked.push(n.clone())
+                }
+                InnerToken::T_Condition { .. } => masked.push(n.clone()),
+                _ => {}
+            });
+        }
+    });
+
+    for t in masked {
+        // The ids survive `removeTransparentCommands`, so the original token is
+        // what the path helpers need.
+        let Some(original) = params.id_map.get(&t.id()) else {
+            continue;
+        };
+        if is_harmless_command(&t)
+            || is_checked_elsewhere(params, original)
+            || is_mask_deliberate(params, original)
+        {
+            continue;
+        }
+        info(
+            out,
+            t.id(),
+            2312,
+            "Consider invoking this command separately to avoid masking its return value (or use '|| true' to ignore).",
+        );
+    }
+}
+
+/// `isTransparentCommand`: `time` passes its child's exit status through.
+fn remove_transparent_commands(t: &Token) -> Token {
+    /// `doTransform go`: every node, children first, ids preserved.
+    fn go(n: &mut Token) {
+        for c in n.inner.children_mut() {
+            go(c);
+        }
+        let is_time = matches!(&*n.inner, InnerToken::T_SimpleCommand { words, .. } if !words.is_empty())
+            && get_command_basename(n).as_deref() == Some("time");
+        if is_time {
+            if let InnerToken::T_SimpleCommand { words, .. } = &mut *n.inner {
+                words.remove(0);
+            }
+        }
+    }
+    let mut copy = t.clone();
+    go(&mut copy);
+    copy
+}
+
+fn is_harmless_command(t: &Token) -> bool {
+    const HARMLESS: [&str; 6] = ["echo", "basename", "dirname", "printf", "set", "shopt"];
+    get_command_basename(t).is_some_and(|b| HARMLESS.contains(&b.as_str()))
+}
+
+/// `isCheckedElsewhere`: `local x=$(false)` &co are SC2155's business.
+fn is_checked_elsewhere(params: &Parameters, t: &Token) -> bool {
+    let path = get_path(params, t);
+    path.iter().skip(1).any(|anc| {
+        let Some(cmd) = get_command(anc) else {
+            return false;
+        };
+        let Some(basename) = get_command_basename(cmd) else {
+            return false;
+        };
+        if basename == "local" && get_all_flags(cmd).iter().any(|(_, f)| f == "r") {
+            // `local -r x=$(false)` is deliberately left to SC2155.
+            return false;
+        }
+        crate::data::DECLARING_COMMANDS.contains(&basename.as_str())
+    })
+}
+
+/// `isMaskDeliberate`: a trailing `|| true` / `|| :` says the status is ignored
+/// on purpose.
+fn is_mask_deliberate(params: &Parameters, t: &Token) -> bool {
+    let mut path = get_path(params, t);
+    path.pop(); // `NE.init`: the root is not one of its own ancestors here.
+    path.iter().any(|anc| {
+        let InnerToken::T_OrIf { rhs, .. } = &*anc.inner else {
+            return false;
+        };
+        let InnerToken::T_Pipeline { commands, .. } = &*rhs.inner else {
+            return false;
+        };
+        let [only] = commands.as_slice() else {
+            return false;
+        };
+        let InnerToken::T_Redirecting { cmd, .. } = &*only.inner else {
+            return false;
+        };
+        matches!(
+            get_command_basename(cmd).as_deref(),
+            Some("true") | Some(":")
+        )
+    })
+}
+
+/// `checkSetESuppressed` (optional: `check-set-e-suppressed`): calling a
+/// function where `set -e` does not apply — in a condition, or inside a command
+/// substitution that does not inherit errexit.
+pub(super) fn check_set_e_suppressed(params: &Parameters, root: &Token, out: &mut Out) {
+    if !params.has_set_e {
+        return;
+    }
+    // `functions t`: every function this script defines, by name.
+    let mut functions: std::collections::HashSet<String> = std::collections::HashSet::new();
+    root.visit_preorder(&mut |t| {
+        if let InnerToken::T_Function { name, .. } = &*t.inner {
+            functions.insert(name.clone());
+        }
+    });
+
+    root.visit_preorder(&mut |t| {
+        let InnerToken::T_SimpleCommand { words, .. } = &*t.inner else {
+            return;
+        };
+        let Some(cmd) = words.first() else {
+            return;
+        };
+        // `isFunction`: the command word names a function defined here.
+        let is_function = crate::cfg::get_unquoted_literal(cmd)
+            .is_some_and(|literal| functions.contains(&literal));
+        if !is_function {
+            return;
+        }
+
+        let inform_conditional = |cond_type: &str, out: &mut Out| {
+            info(
+                out,
+                cmd.id(),
+                2310,
+                &format!(
+                    "This function is invoked in {cond_type} so set -e will be disabled. \
+                     Invoke separately if failures should cause the script to exit."
+                ),
+            );
+        };
+        let inform_uninherited = |out: &mut Out| {
+            info(
+                out,
+                cmd.id(),
+                2311,
+                "Bash implicitly disabled set -e for this function invocation because it's \
+                 inside a command substitution. Add set -e; before it or enable inherit_errexit.",
+            );
+        };
+        // `errExitEnabled`: a substitution that re-enables it is fine.
+        let err_exit_enabled =
+            |t: &Token| params.has_inherit_errexit || crate::analyzer_lib::contains_set_e(t);
+
+        // Walk child-then-parent up the path, as `go (child:parent:rest)` does.
+        let path = get_path(params, cmd);
+        let is_in = |child: &Token, cmds: &[Token]| cmds.iter().any(|c| c.id() == child.id());
+        for pair in path.windows(2) {
+            let (child, parent) = (&pair[0], &pair[1]);
+            match &*parent.inner {
+                InnerToken::T_Banged(condition) if child.id() == condition.id() => {
+                    inform_conditional("a ! condition", out)
+                }
+                InnerToken::T_AndIf { lhs, .. } if child.id() == lhs.id() => {
+                    inform_conditional("an && condition", out)
+                }
+                InnerToken::T_OrIf { lhs, .. } if child.id() == lhs.id() => {
+                    inform_conditional("an || condition", out)
+                }
+                InnerToken::T_IfExpression { clauses, .. }
+                    if clauses.iter().any(|(conds, _)| is_in(child, conds)) =>
+                {
+                    inform_conditional("an 'if' condition", out)
+                }
+                InnerToken::T_UntilExpression { condition, .. } if is_in(child, condition) => {
+                    inform_conditional("an 'until' condition", out)
+                }
+                InnerToken::T_WhileExpression { condition, .. } if is_in(child, condition) => {
+                    inform_conditional("a 'while' condition", out)
+                }
+                InnerToken::T_DollarExpansion(_) | InnerToken::T_Backticked(_)
+                    if !err_exit_enabled(parent) =>
+                {
+                    inform_uninherited(out)
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
 /// `checkVerboseSpacefulnessCfg = checkSpacefulnessCfg' False` (optional:
 /// `quote-safe-variables`): the same analysis, reporting the variables that are
 /// merely *currently* free of metacharacters as well.
@@ -392,6 +632,48 @@ mod tests {
 
     fn unassigned_globals(p: &Parameters, root: &Token, out: &mut Out) {
         check_unassigned_references_impl(p, root, out, true);
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed1_6() {
+        assert!(tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; x=$(f)"
+        ));
+        assert!(tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; f && echo"
+        ));
+        assert!(tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; baz=$(set -e; f) || :"
+        ));
+        for s in [
+            "f(){ :; }; x=$(f)",
+            "set -e; f(){ :; }; x=$(set -e; f)",
+            "set -e; f(){ :; }; baz=$(echo \"\") || :",
+        ] {
+            assert!(!tree_emits(check_set_e_suppressed, s), "{s}");
+        }
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            "rm -r \"$(get_chroot_dir)/home\""
+        ));
+        // `isHarmlessCommand` is about the *masked* command, so `echo $(false)`
+        // still reports: it is `false`'s status that is lost.
+        assert!(tree_emits(check_extra_masked_returns, "echo \"$(false)\""));
+        for s in [
+            "set -e; dir=\"$(get_chroot_dir)\"; rm -r \"$dir/home\"",
+            // `local` is SC2155's business, `|| true` is a deliberate mask.
+            "local x=\"$(false)\"",
+            "x=\"$(false || true)\"",
+        ] {
+            assert!(!tree_emits(check_extra_masked_returns, s), "{s}");
+        }
     }
 
     fn spaceful_verbose(p: &Parameters, t: &Token, out: &mut Out) {

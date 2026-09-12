@@ -117,6 +117,16 @@ impl Oracle {
         scripts: &[(String, String)],
         shell: Option<&str>,
     ) -> Result<HashMap<String, Vec<Value>>, String> {
+        self.check_with(scripts, shell, None)
+    }
+
+    /// As [`Oracle::check`], with an optional check enabled (`--enable`).
+    pub fn check_with(
+        &self,
+        scripts: &[(String, String)],
+        shell: Option<&str>,
+        enable: Option<&str>,
+    ) -> Result<HashMap<String, Vec<Value>>, String> {
         let mut out: HashMap<String, Vec<Value>> = HashMap::new();
         for chunk in scripts.chunks(BATCH) {
             let mut paths: Vec<String> = Vec::with_capacity(chunk.len());
@@ -130,6 +140,9 @@ impl Oracle {
             cmd.arg("--norc").arg("--format=json1");
             if let Some(s) = shell {
                 cmd.arg(format!("--shell={s}"));
+            }
+            if let Some(e) = enable {
+                cmd.arg(format!("--enable={e}"));
             }
             cmd.args(&paths);
             cmd.env_remove("SHELLCHECK_OPTS");
