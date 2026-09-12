@@ -962,6 +962,22 @@ impl Parser {
         Ok('\n')
     }
 
+    /// `linefeed <|> carriageReturn`, the unit `readNewlineList` repeats. A
+    /// `linefeed` that consumed a CR and then found no `\n` takes the whole
+    /// alternation down with it, as a bare `<|>` does.
+    fn linefeed_or_carriage_return(&mut self) -> PResult<char> {
+        let m = self.mark();
+        match self.linefeed() {
+            Ok(c) => Ok(c),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+                self.carriage_return()
+            }
+        }
+    }
+
     fn whitespace(&mut self) -> PResult<char> {
         if let Ok(c) = self.line_whitespace() {
             return Ok(c);

@@ -711,32 +711,121 @@ impl Parser {
         let start = self.pos();
         let op = self.one_of("?*@!+")?;
         self.char('(')?;
-        // read inner as list of words separated by |
-        let mut parts = Vec::new();
-        loop {
-            match self.peek() {
-                Some(')') | None => break,
-                Some('|') => {
-                    self.bump();
-                }
-                _ => {
-                    if let Ok(w) = self.read_normal_word_part() {
-                        parts.push(w);
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
+        let list = self.read_extglob_parts()?;
         self.char(')')?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
             InnerToken::T_Extglob {
                 op: op.to_string(),
-                list: parts,
+                list,
             },
         ))
+    }
+
+    /// `readExtglobPart `sepBy` char '|'`. A part can be empty, so there is
+    /// always at least one and the `|`s decide the rest.
+    fn read_extglob_parts(&mut self) -> PResult<Vec<Token>> {
+        let mut out = vec![self.read_extglob_part()?];
+        while self.char('|').is_ok() {
+            out.push(self.read_extglob_part()?);
+        }
+        Ok(out)
+    }
+
+    /// `readExtglobPart`: groups, ordinary word parts, whitespace, and the
+    /// characters that are literal only here (`<>#;&`).
+    fn read_extglob_part(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let mut parts = Vec::new();
+        loop {
+            // A group is tried first, so a `(` never reaches
+            // `readNormalWordPart`'s `checkForParenthesis`.
+            let m = self.mark();
+            match self.read_extglob_group() {
+                Ok(t) => {
+                    parts.push(t);
+                    continue;
+                }
+                Err(()) => {
+                    if self.idx != m.idx {
+                        return Err(());
+                    }
+                    self.reset(m);
+                }
+            }
+            match self.read_normal_word_part_end("") {
+                Ok(t) => {
+                    parts.push(t);
+                    continue;
+                }
+                Err(()) => {
+                    if self.idx != m.idx {
+                        return Err(());
+                    }
+                    self.reset(m);
+                }
+            }
+            if let Ok(t) = self.read_space_part() {
+                parts.push(t);
+                continue;
+            }
+            if let Ok(t) = self.read_extglob_literal() {
+                parts.push(t);
+                continue;
+            }
+            break;
+        }
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_NormalWord(parts)))
+    }
+
+    /// `readExtglobGroup`: a parenthesised alternation with no operator.
+    fn read_extglob_group(&mut self) -> PResult<Token> {
+        self.char('(')?;
+        let start = self.pos();
+        let list = self.read_extglob_parts()?;
+        let id = self.next_id_between(start, self.pos());
+        self.char(')')?;
+        Ok(Token::new(
+            id,
+            InnerToken::T_Extglob {
+                op: String::new(),
+                list,
+            },
+        ))
+    }
+
+    /// `readSpacePart`: whitespace as a literal word part.
+    fn read_space_part(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let mut s = String::new();
+        while let Ok(c) = self.whitespace() {
+            s.push(c);
+        }
+        if s.is_empty() {
+            return Err(());
+        }
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_Literal(s)))
+    }
+
+    /// `readExtglobLiteral`: `<>#;&` mean nothing special inside an extglob.
+    fn read_extglob_literal(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            if !"<>#;&".contains(c) {
+                break;
+            }
+            self.bump();
+            s.push(c);
+        }
+        if s.is_empty() {
+            return Err(());
+        }
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_Literal(s)))
     }
 
     pub(super) fn read_backticked(&mut self, quoted: bool) -> PResult<Token> {

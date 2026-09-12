@@ -726,33 +726,99 @@ impl Parser {
                 ))
             });
         }
+        // `readRegular`: `acceptButWarn (char '$')`, the name, then
+        // `allspacing` -- so the `in` may be on the next line.
+        let m = self.mark();
+        let dollar = self.pos();
+        if self.char('$').is_ok() {
+            self.problem_at(
+                dollar.clone(),
+                dollar,
+                Severity::ErrorC,
+                1086,
+                "Don't use $ on the iterator name in for loops.",
+            );
+        } else {
+            self.reset(m);
+        }
         let var = self.read_variable_name()?;
+        self.allspacing();
+        let items = match self.read_in_clause() {
+            Ok(v) => v,
+            Err(()) => {
+                // `optional readSequentialSep >> return []`
+                let m = self.mark();
+                if self.char(';').is_ok() {
+                    self.line_break();
+                } else {
+                    self.reset(m);
+                    self.allspacing();
+                }
+                Vec::new()
+            }
+        };
+        let body = self.read_braced_or_do_group(&kw)?;
+        let id = self.next_id_between(start.clone(), for_end);
+        Ok(Token::new(id, InnerToken::T_ForIn { var, items, body }))
+    }
+
+    /// `readInClause`: `in`, the words up to the first `;`, linefeed or `do`,
+    /// and then the separator that ends the list.
+    pub(super) fn read_in_clause(&mut self) -> PResult<Vec<Token>> {
+        // `g_In` is a `tryWordToken`, so it backs out without consuming, and
+        // takes the spacing after the keyword with it.
+        self.consume_keyword("in")?;
         self.spacing();
         let mut items = Vec::new();
-        let mut is_in = false;
-        if self.keyword_ahead("in") {
-            self.consume_keyword("in")?;
-            is_in = true;
-            self.spacing();
-            loop {
-                self.spacing();
-                if self.peek() == Some(';')
-                    || self.peek() == Some('\n')
-                    || self.peek() == Some('\r')
-                {
-                    break;
+        // `readCmdWord `reluctantlyTill` (g_Semi <|> linefeed <|> g_Do)`
+        loop {
+            if self.eof() || self.at_in_clause_end() {
+                break;
+            }
+            let m = self.mark();
+            match self.read_normal_word() {
+                Ok(w) => {
+                    items.push(w);
+                    self.spacing();
                 }
-                match self.read_normal_word() {
-                    Ok(w) => items.push(w),
-                    Err(()) => break,
+                Err(()) => {
+                    // `reluctantlyTill` ends on `<|> return []`, which only
+                    // catches a failure that consumed nothing.
+                    if self.idx != m.idx {
+                        return Err(());
+                    }
+                    self.reset(m);
+                    break;
                 }
             }
         }
-        let _ = self.char(';');
-        let body = self.read_braced_or_do_group(&kw)?;
-        let id = self.next_id_between(start.clone(), for_end);
-        let _ = is_in;
-        Ok(Token::new(id, InnerToken::T_ForIn { var, items, body }))
+        if self.keyword_ahead("do") {
+            let pos = self.pos();
+            self.note_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1063,
+                "You need a line feed or semicolon before the 'do'.",
+            );
+        } else {
+            let m = self.mark();
+            if self.char(';').is_err() {
+                self.reset(m);
+            }
+            self.allspacing();
+        }
+        Ok(items)
+    }
+
+    /// The `reluctantlyTill` end condition of `readInClause`: a `;` that is not
+    /// a `;;`, a linefeed, or the `do` keyword.
+    fn at_in_clause_end(&mut self) -> bool {
+        match self.peek() {
+            Some(';') => self.peek_at(1) != Some(';'),
+            Some('\n') | Some('\r') => true,
+            _ => self.keyword_ahead("do"),
+        }
     }
 
     /// `readBatsTest`: `@test <name> { ... }`, where <name> is everything on the
@@ -796,22 +862,24 @@ impl Parser {
         self.spacing();
         let var = self.read_variable_name()?;
         self.spacing();
-        let mut items = Vec::new();
-        if self.keyword_ahead("in") {
-            self.consume_keyword("in")?;
-            self.spacing();
-            loop {
-                self.spacing();
-                if matches!(self.peek(), Some(';') | Some('\n') | Some('\r') | None) {
-                    break;
+        let items = match self.read_in_clause() {
+            Ok(v) => v,
+            Err(()) => {
+                // `readSequentialSep >> return []`: required here, unlike the
+                // `for` loop's optional one.
+                let m = self.mark();
+                if self.char(';').is_ok() {
+                    self.line_break();
+                } else {
+                    self.reset(m);
+                    if self.linefeed_or_carriage_return().is_err() {
+                        return Err(());
+                    }
+                    self.allspacing();
                 }
-                match self.read_normal_word() {
-                    Ok(w) => items.push(w),
-                    Err(()) => break,
-                }
+                Vec::new()
             }
-        }
-        let _ = self.char(';');
+        };
         let body = self.read_do_group(&kw)?;
         let id = self.next_id_between(start.clone(), sel_end);
         Ok(Token::new(id, InnerToken::T_SelectIn { var, items, body }))

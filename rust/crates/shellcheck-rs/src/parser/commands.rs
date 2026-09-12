@@ -1140,6 +1140,23 @@ impl Parser {
                     1127,
                     "Was this intended as a comment? Use # in sh.",
                 );
+            } else if let Some(InnerToken::T_Literal(str)) = parts.first().map(|p| &*p.inner) {
+                // `takeWhile isAlpha`, lowercased: `elseif[$i==2]` counts.
+                let word: String = str
+                    .chars()
+                    .take_while(|c| c.is_alphabetic())
+                    .flat_map(char::to_lowercase)
+                    .collect();
+                if word == "elsif" || word == "elseif" {
+                    let (s, e) = self.span_for(cmd.id());
+                    self.problem_at(
+                        s,
+                        e,
+                        Severity::ErrorC,
+                        1131,
+                        "Use 'elif' to start another branch.",
+                    );
+                }
             }
         }
     }
