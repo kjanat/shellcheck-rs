@@ -513,7 +513,10 @@ pub fn run(args: &Args) -> Result<bool, String> {
         .map(|e| e.into_iter().map(|x| x.script).collect())
         .unwrap_or_default();
     let oracle = Oracle::new(&args.oracle)?;
-    println!("{}", crate::oracle::verify(&oracle, &args.repo)?);
+    println!(
+        "{}",
+        crate::oracle::verify(&oracle, &args.repo, args.any_oracle_version)?
+    );
     let mut rng = Rng::new(args.seed.wrapping_add(1));
 
     let mut seen: HashSet<String> = HashSet::new();

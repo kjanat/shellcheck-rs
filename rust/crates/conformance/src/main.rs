@@ -209,7 +209,10 @@ fn gate(args: &Args) -> Result<bool, String> {
     }
 
     let oracle = oracle::Oracle::new(&args.oracle)?;
-    println!("{}", oracle::verify(&oracle, &args.repo)?);
+    println!(
+        "{}",
+        oracle::verify(&oracle, &args.repo, args.any_oracle_version)?
+    );
     // Name each script after its property so a divergence names itself.
     let named: Vec<(String, String)> = entries
         .iter()
@@ -269,12 +272,30 @@ pub struct Args {
     pub iterations: usize,
     pub max_findings: usize,
     pub all_shells: bool,
+    pub any_oracle_version: bool,
+}
+
+/// Where the oracle comes from when `--oracle` is not given: `$ORACLE`, else
+/// the binary built from this tree if it is there, else whatever `shellcheck`
+/// is on `PATH`. The last one is what makes an installed release usable as the
+/// oracle with no build of its own.
+fn default_oracle() -> String {
+    // An empty `ORACLE=` reads as "not set", so it can be cleared in a shell
+    // without naming a binary called "".
+    if let Some(explicit) = std::env::var("ORACLE").ok().filter(|s| !s.is_empty()) {
+        return explicit;
+    }
+    let built = ".cache/shellcheck-oracle";
+    if std::path::Path::new(built).is_file() {
+        return built.to_string();
+    }
+    "shellcheck".to_string()
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut a = Args {
         cmd: "gate".to_string(),
-        oracle: std::env::var("ORACLE").unwrap_or_else(|_| ".cache/shellcheck-oracle".to_string()),
+        oracle: default_oracle(),
         repo: ".".to_string(),
         limit: None,
         shell: None,
@@ -283,6 +304,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         iterations: 2000,
         max_findings: 25,
         all_shells: false,
+        any_oracle_version: std::env::var("ORACLE_ANY_VERSION").is_ok_and(|v| v != "0"),
     };
     let mut i = 0;
     if let Some(first) = argv.first()
@@ -318,6 +340,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                     .map_err(|e| format!("--max-findings: {e}"))?
             }
             "--all-shells" => a.all_shells = true,
+            "--any-oracle-version" => a.any_oracle_version = true,
             "--quiet" => a.quiet = true,
             other => return Err(format!("unknown argument {other}")),
         }

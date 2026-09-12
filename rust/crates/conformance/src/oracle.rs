@@ -17,7 +17,9 @@ use std::process::Command;
 use serde_json::Value;
 
 pub struct Oracle {
-    binary: String,
+    /// The resolved binary, so every later use (running it, reading it for a
+    /// fingerprint) names the same file, whatever the caller wrote.
+    binary: PathBuf,
     dir: PathBuf,
     counter: std::cell::Cell<u64>,
 }
@@ -25,14 +27,67 @@ pub struct Oracle {
 /// How many scripts to check per oracle invocation.
 pub const BATCH: usize = 200;
 
+/// Resolve an oracle spec to the file that will actually be run.
+///
+/// A spec with a path separator (or a leading `.`) is a path and is used as
+/// given; a bare name is looked up on `PATH`, the way a shell would -- on
+/// Windows trying each `PATHEXT` suffix as well. Resolving here rather than
+/// leaving it to `Command` means the fingerprint and the banner name the same
+/// file the comparison ran against, instead of a name that only the OS can
+/// turn into one.
+fn resolve(spec: &str) -> Result<PathBuf, String> {
+    let as_path = Path::new(spec);
+    if spec.contains('/') || spec.contains('\\') || as_path.components().count() > 1 {
+        return if as_path.is_file() {
+            Ok(as_path.to_path_buf())
+        } else {
+            Err(format!("oracle {spec}: not a file"))
+        };
+    }
+    // A bare name: PATH, with the Windows extensions where they apply.
+    let exts: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+            .split(';')
+            .filter(|e| !e.is_empty())
+            .map(|e| e.to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for dir in std::env::split_paths(&path) {
+        let base = dir.join(spec);
+        if base.is_file() {
+            return Ok(base);
+        }
+        for ext in &exts {
+            let candidate = dir.join(format!("{spec}{ext}"));
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(format!(
+        "oracle {spec}: not found on PATH. Pass --oracle with a path, or put \
+         shellcheck on PATH, or build one from this tree:\n    \
+         cabal build shellcheck && cp \"$(cabal list-bin shellcheck)\" .cache/shellcheck-oracle"
+    ))
+}
+
 impl Oracle {
     /// Prepare an oracle runner with its own scratch directory.
-    pub fn new(binary: &str) -> Result<Oracle, String> {
+    ///
+    /// `spec` is either a path to the binary or a bare command name to look up
+    /// on `PATH`, so `--oracle shellcheck` uses the installed ShellCheck
+    /// without a build of its own.
+    pub fn new(spec: &str) -> Result<Oracle, String> {
+        let binary = resolve(spec)?;
         let dir =
             std::env::temp_dir().join(format!("shellcheck-conformance-{}", std::process::id()));
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(Oracle {
-            binary: binary.to_string(),
+            binary,
             dir,
             counter: std::cell::Cell::new(0),
         })
@@ -80,7 +135,7 @@ impl Oracle {
             cmd.env_remove("SHELLCHECK_OPTS");
             let res = cmd
                 .output()
-                .map_err(|e| format!("running {}: {e}", self.binary))?;
+                .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
             let stdout = String::from_utf8_lossy(&res.stdout);
             let v: Value = serde_json::from_str(stdout.trim())
                 .map_err(|e| format!("oracle json1: {e}: {}", &stdout[..stdout.len().min(200)]))?;
@@ -123,7 +178,7 @@ impl Oracle {
         cmd.env_remove("SHELLCHECK_OPTS");
         let res = cmd
             .output()
-            .map_err(|e| format!("running {}: {e}", self.binary))?;
+            .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
         let _ = std::fs::remove_file(&p);
         let stdout = String::from_utf8_lossy(&res.stdout);
         let v: Value =
@@ -143,19 +198,24 @@ impl Oracle {
         let out = Command::new(&self.binary)
             .arg("--version")
             .output()
-            .map_err(|e| format!("running {} --version: {e}", self.binary))?;
+            .map_err(|e| format!("running {} --version: {e}", self.binary.display()))?;
         let text = String::from_utf8_lossy(&out.stdout);
         text.lines()
             .find_map(|l| l.strip_prefix("version:"))
             .map(|v| v.trim().to_string())
-            .ok_or_else(|| format!("{}: no version line in --version output", self.binary))
+            .ok_or_else(|| {
+                format!(
+                    "{}: no version line in --version output",
+                    self.binary.display()
+                )
+            })
     }
 
     /// A cheap fingerprint of the binary (FNV-1a), enough to tell two builds
     /// apart in a log. Not a cryptographic digest and not claimed to be one.
     pub fn fingerprint(&self) -> Result<String, String> {
-        let bytes =
-            std::fs::read(&self.binary).map_err(|e| format!("reading {}: {e}", self.binary))?;
+        let bytes = std::fs::read(&self.binary)
+            .map_err(|e| format!("reading {}: {e}", self.binary.display()))?;
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for b in &bytes {
             h ^= u64::from(*b);
@@ -173,8 +233,9 @@ impl Oracle {
 /// every "agrees" into a statement about something else entirely. The version
 /// check below is necessary, not sufficient — the sufficient check is to
 /// rebuild from `src/` and compare behaviour, which `--verify-oracle`
-/// documents how to do.
-pub fn verify(oracle: &Oracle, repo: &str) -> Result<String, String> {
+/// documents how to do. `allow_mismatch` (`--any-oracle-version`) keeps a
+/// differently-versioned binary usable, but says so in the banner every time.
+pub fn verify(oracle: &Oracle, repo: &str, allow_mismatch: bool) -> Result<String, String> {
     let cabal_path = std::path::Path::new(repo).join("ShellCheck.cabal");
     let cabal = std::fs::read_to_string(&cabal_path)
         .map_err(|e| format!("{}: {e}", cabal_path.display()))?;
@@ -189,17 +250,24 @@ pub fn verify(oracle: &Oracle, repo: &str) -> Result<String, String> {
         })
         .ok_or_else(|| format!("{}: no Version: field", cabal_path.display()))?;
     let actual = oracle.version()?;
-    if actual != expected {
+    let mismatch = if actual == expected {
+        String::new()
+    } else if allow_mismatch {
+        // Said out loud on every run: the results describe the binary that
+        // answered, which is no longer the ShellCheck of this tree.
+        format!(" -- MISMATCH: {} says {expected}", cabal_path.display())
+    } else {
         return Err(format!(
             "oracle is version {actual}, but {} says {expected}.\n  \
              The oracle must be ShellCheck built from this tree:\n    \
-             cabal build shellcheck && cp \"$(cabal list-bin shellcheck)\" .cache/shellcheck-oracle",
+             cabal build shellcheck && cp \"$(cabal list-bin shellcheck)\" .cache/shellcheck-oracle\n  \
+             To compare against this binary anyway, pass --any-oracle-version.",
             cabal_path.display()
         ));
-    }
+    };
     Ok(format!(
-        "oracle: {} version {actual}, fingerprint {}",
-        oracle.binary,
+        "oracle: {} version {actual}, fingerprint {}{mismatch}",
+        oracle.binary.display(),
         oracle.fingerprint()?
     ))
 }
