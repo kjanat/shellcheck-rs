@@ -35,7 +35,7 @@ pub fn register(c: &mut Checker) {
 
 // ---- getWordParts / isFlag / isGlob (ported from ASTLib) --------------------
 
-// ---- command name resolution (ported from ASTLib, proven in batch_h) -------
+// ---- command name resolution (ported from ASTLib) -------
 
 fn get_command_token_or_this(t: &Token) -> &Token {
     get_command_name_and_token(false, t).1

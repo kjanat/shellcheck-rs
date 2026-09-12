@@ -3,10 +3,7 @@
 //! Faithful ports of the shell-portability (`ForShell`) checks from
 //! `src/ShellCheck/Checks/ShellSupport.hs`:
 //!
-//!   * `checkBashisms`              — the full SC30xx family (implemented WHOLE
-//!     here for parity + tests; see the module
-//!     tail for why only a *gap-filling* subset
-//!     is registered).
+//!   * `checkBashisms`              — the full SC30xx family
 //!   * `checkForDecimals`          — SC2079
 //!   * `checkBraceExpansionVars`   — SC2051 / SC2175
 //!   * `checkMultiDimensionalArrays` — SC2180
@@ -18,11 +15,6 @@
 //! wrapper. The check bodies themselves are ungated (mirroring Haskell's
 //! `ForShell [..] f`, whose `f` runs regardless of shell under `testChecker`),
 //! so the `prop_` tests exercise them the same way the QuickCheck props do.
-// This module still carries a second, unregistered copy of the checkBashisms
-// machinery (batch_h registers the live one). It is kept only because it holds
-// the complete prop_checkBashisms* suite; task #36 merges the two ports and
-// re-homes those tests, after which this allow goes away with the copy.
-#![allow(dead_code)]
 
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::get_closest_command;
@@ -38,29 +30,11 @@ use crate::cfg::{
 };
 use crate::interface::Shell;
 
-// ===========================================================================
-// Registration.
-//
-// checkBashisms is intentionally NOT registered here: `checks::batch_h`
-// already registers a (partial) `checkBashisms` covering most SC30xx codes.
-// Registering the whole function again would double-emit every code batch_h
-// already produces (extra > 0 on all of them), violating the conformance
-// guardrail. Instead we register `check_bashisms_gaps`, which handles ONLY the
-// branches batch_h omits and whose positions match the oracle (see tail note).
-// ===========================================================================
 pub fn register(c: &mut Checker) {
     c.node(check_for_decimals_gated);
     c.node(check_brace_expansion_vars_gated);
     c.node(check_multi_dimensional_arrays_gated);
-    c.node(check_bashisms_gaps);
-    // Now registered (the parser gaps that held these back are fixed):
-    //   * checkBangAfterPipe (SC2326): the parser now wraps a mid-pipeline `!`
-    //     in `T_Banged`, so the check matches. ForShell [Dash,BusyboxSh,Sh,Bash].
-    //   * checkNegatedUnaryOps (SC2332): the `!` `TC_Unary` node now spans the
-    //     `!` alone, matching the oracle. ForShell [Bash].
-    //   * The TC_Unary bashism codes (SC3016/3062/3065/…): the `TC_Unary` node
-    //     now spans the operator alone, so they are handled in
-    //     `check_bashisms_gaps`.
+    c.node(check_bashisms);
     c.node(check_bang_after_pipe_gated);
     c.node(check_negated_unary_ops_gated);
 }
@@ -353,11 +327,10 @@ fn check_negated_unary_ops(_p: &Parameters, t: &Token, out: &mut Out) {
 
 // ===========================================================================
 // checkBashisms — the full SC30xx family.
+// ForShell [Sh, Dash, BusyboxSh]
 //
-// `bashism` is the ungated body (Haskell's `f`). It is exercised by the
-// prop_ tests but not registered (batch_h owns registration; double
-// registration would double-emit). `check_bashisms_gaps` (registered) runs
-// only the branches batch_h omits.
+// `bashism` is the ungated body (Haskell's `f`); `check_bashisms` is the
+// registered, dialect-gated wrapper.
 // ===========================================================================
 
 // ---- test-operator tables (`bashismBinaryTestFlags` / `bashismUnaryTestFlags`) ----
@@ -597,10 +570,6 @@ fn matches_radix(s: &str) -> bool {
     }
     false
 }
-
-// ---- glob / redirection predicates ----
-
-// ---- leading flags (`getLeadingFlags` / `getFlagsUntil`) ----
 
 // ---- the ungated body ----
 
@@ -1098,89 +1067,9 @@ fn check_set_flags_rec(p: &Parameters, args: &[(Id, String)], out: &mut Out) {
     }
 }
 
-// ===========================================================================
-// Registered gap-filler: the SC30xx branches batch_h omits, restricted to
-// those whose node span matches the oracle. Gated to sh/dash/busybox exactly
-// like checkBashisms.
-// ===========================================================================
-
-fn check_bashisms_gaps(p: &Parameters, t: &Token, out: &mut Out) {
-    if !matches!(p.shell, Shell::Sh | Shell::Dash | Shell::BusyboxSh) {
-        return;
-    }
-    let id = t.id();
-    use InnerToken::*;
-    match &*t.inner {
-        // TC_Binary inherits the operator span (matches the oracle).
-        TC_Binary { op, .. } => check_test_op(out, p, id, op, bashism_binary_test),
-
-        // TC_Unary now spans the operator alone (matches the oracle), so the
-        // unary test-operator bashisms (SC3016/3017/3062/3063/3064/3065/3066/
-        // 3067) can be emitted here. batch_h handles only the `test`
-        // SimpleCommand form, so there is no double emission.
-        TC_Unary { op, .. } => check_test_op(out, p, id, op, bashism_unary_test),
-
-        // Arithmetic increments/decrements and exponentials.
-        TA_Unary { op, .. } if matches!(op.as_str(), "|++" | "|--" | "++|" | "--|") => {
-            let filtered: String = op.chars().filter(|&c| c != '|').collect();
-            warn_msg(out, p, id, 3018, &format!("{} is", filtered));
-        }
-        TA_Binary { op, .. } if op == "**" => {
-            warn_msg(out, p, id, 3019, "exponentials are");
-        }
-
-        // &> / >&file / {n}> — but NOT the all-digit 3023 (batch_h owns it).
-        T_FdRedirect { fd, target } => {
-            if fd == "&" {
-                if let InnerToken::T_IoFile { op, .. } = &*target.inner {
-                    if matches!(&*op.inner, InnerToken::T_Greater) && !is_busybox(p) {
-                        warn_msg(out, p, id, 3020, "&> is");
-                    }
-                }
-            } else if fd.is_empty() {
-                if let InnerToken::T_IoFile { op, file } = &*target.inner {
-                    if matches!(&*op.inner, InnerToken::T_GREATAND)
-                        && !only_literal_string(file)
-                            .chars()
-                            .all(|c| c.is_ascii_digit())
-                    {
-                        warn_msg(out, p, id, 3021, ">& filename (as opposed to >& fd) is");
-                    }
-                }
-            } else if fd.starts_with('{') {
-                warn_msg(out, p, id, 3022, "named file descriptors are");
-            }
-        }
-
-        // += append assignments.
-        T_Assignment {
-            mode: AssignmentMode::Append,
-            ..
-        } => {
-            warn_msg(out, p, id, 3024, "+= is");
-        }
-
-        // 'source' in place of '.' (T_SourceCommand form).
-        T_SourceCommand { includer, .. } => {
-            if crate::analyzer_lib::get_command_name(includer).as_deref() == Some("source")
-                && !is_busybox(p)
-            {
-                warn_msg(out, p, id, 3051, "'source' in place of '.' is");
-            }
-        }
-
-        // Arithmetic base conversion (radix literal).
-        TA_Expansion(pieces) => {
-            if let Some(first) = pieces.first() {
-                if let InnerToken::T_Literal(s) = &*first.inner {
-                    if matches_radix(s) {
-                        warn_msg(out, p, first.id(), 3052, "arithmetic base conversion is");
-                    }
-                }
-            }
-        }
-
-        _ => {}
+fn check_bashisms(p: &Parameters, t: &Token, out: &mut Out) {
+    if matches!(p.shell, Shell::Sh | Shell::Dash | Shell::BusyboxSh) {
+        bashism(p, t, out);
     }
 }
 
