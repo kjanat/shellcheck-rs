@@ -971,7 +971,12 @@ impl Parser {
             return r;
         }
         if self.peek() == Some('$') && self.peek_at(1) == Some('[') {
-            return self.read_dollar_bracket();
+            // Past `try (string "$[")` the `<|>` fold has no alternative left.
+            let r = self.read_dollar_bracket();
+            if r.is_err() {
+                self.committed = true;
+            }
+            return r;
         }
         // ksh/bash `${ cmd; }` / `${| cmd; }` command expansion: `${` then a
         // pipe or whitespace.

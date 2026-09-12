@@ -885,12 +885,21 @@ impl Parser {
             }
             // assignment?
             let m = self.mark();
-            if let Ok(a) = self.read_assignment_word() {
-                out.push(a);
-                continue;
+            match self.read_assignment_word() {
+                Ok(a) => {
+                    out.push(a);
+                    continue;
+                }
+                Err(()) => {
+                    // Only the part up to the `=` is a `try`: past it, a
+                    // failure is the parse error (`x=((`).
+                    if self.idx != m.idx {
+                        self.committed = true;
+                    }
+                    self.reset(m);
+                    break;
+                }
             }
-            self.reset(m);
-            break;
         }
         out
     }
@@ -1424,14 +1433,10 @@ impl Parser {
                     // `value <- readRegular <|> nothing`, and readRegular is
                     // itself `readArray <|> readNormalWord`.
                     let value = if self.peek() == Some('(') {
-                        let vm = self.mark();
-                        match self.read_array() {
-                            Ok(a) => a,
-                            Err(()) => {
-                                self.reset(vm);
-                                self.empty_literal_word()
-                            }
-                        }
+                        // `readArray <|> readNormalWord`, and past the `(`
+                        // neither that `<|>` nor the `<|> nothing` after it can
+                        // recover.
+                        self.read_array()?
                     } else {
                         match self.read_normal_word() {
                             Ok(w) => w,
@@ -1450,14 +1455,8 @@ impl Parser {
             // `readRegular = readArray <|> readNormalWord`: an element may
             // itself be an array, as in `a=(1 [2]=(3 4))`.
             if self.peek() == Some('(') {
-                let am = self.mark();
-                match self.read_array() {
-                    Ok(a) => {
-                        elems.push(a);
-                        continue;
-                    }
-                    Err(()) => self.reset(am),
-                }
+                elems.push(self.read_array()?);
+                continue;
             }
             match self.read_normal_word() {
                 Ok(w) => elems.push(w),
@@ -1548,7 +1547,13 @@ impl Parser {
         let op_start = self.pos();
         // heredoc
         if self.peek() == Some('<') && self.peek_at(1) == Some('<') {
-            return self.read_heredoc_or_herestring(start, op_start, fd);
+            let r = self.read_heredoc_or_herestring(start, op_start, fd);
+            if r.is_err() {
+                // The `<<` is consumed, so this is a here document whatever
+                // follows: `read -ra a<<)` is a parse error, not a word.
+                self.committed = true;
+            }
+            return r;
         }
         // dup: <& or >&
         // `readIoDuplicate` is a `try`, and its target is `digitsAndOrDash`:
