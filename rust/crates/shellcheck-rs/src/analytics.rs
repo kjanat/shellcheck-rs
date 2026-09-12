@@ -11,7 +11,6 @@ use crate::interface::Shell;
 pub fn checker() -> Checker {
     let mut c = Checker::new();
     c.tree(check_shebang);
-    c.node(check_for_in_quoted);
     c.node(check_backticks);
     c.node(check_globs_as_options);
     crate::checks::register_all(&mut c);
@@ -130,37 +129,6 @@ fn check_shebang(params: &Parameters, t: &Token, out: &mut Out) {
                             2246,
                             "This shebang specifies a directory. Ensure the interpreter is a file.",
                         );
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// `checkForInQuoted` (SC2066 / SC2041 ...): a minimal port covering the common
-/// `for f in "$(...)"` / `for f in "literal with spaces"` cases. Kept
-/// conservative; refined against the harness.
-fn check_for_in_quoted(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_ForIn { items, .. } = &*t.inner {
-        if items.len() == 1 {
-            let word = &items[0];
-            if let InnerToken::T_NormalWord(parts) = &*word.inner {
-                // Single double-quoted part that isn't purely "$@"/"$*"/array.
-                if parts.len() == 1 {
-                    if let InnerToken::T_DoubleQuoted(inner) = &*parts[0].inner {
-                        let is_special = inner.len() == 1
-                            && matches!(&*inner[0].inner, InnerToken::T_DollarBraced { .. });
-                        let has_space_literal = inner.iter().any(
-                            |p| matches!(&*p.inner, InnerToken::T_Literal(s) if s.contains(' ')),
-                        );
-                        if !is_special && has_space_literal {
-                            err(
-                                out,
-                                word.id(),
-                                2066,
-                                "Since you double quoted this, it will not word split, and the loop will only run once.",
-                            );
-                        }
                     }
                 }
             }
