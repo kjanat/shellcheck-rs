@@ -44,9 +44,7 @@ use std::sync::OnceLock;
 
 pub fn register(c: &mut Checker) {
     c.node(check_commarrays);
-    c.node(check_pipe_pitfalls_ls_grep);
     c.node(check_unused_echo_escapes);
-    c.node(check_splitting_in_arrays);
     c.node(check_flag_as_command);
 }
 
@@ -126,22 +124,6 @@ fn check_commarrays(_params: &Parameters, t: &Token, out: &mut Out) {
 // SC2010 — checkPipePitfalls (`ls | grep`)
 // ---------------------------------------------------------------------------
 
-fn check_pipe_pitfalls_ls_grep(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Pipeline { commands, .. } = &*t.inner {
-        let names: Vec<Option<String>> = commands.iter().map(get_command_name).collect();
-        for i in 0..commands.len().saturating_sub(1) {
-            if names[i].as_deref() == Some("ls") && names[i + 1].as_deref() == Some("grep") {
-                let id = get_command_token_or_this(&commands[i]).id();
-                warn(
-                    out,
-                    id,
-                    2010,
-                    "Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames.",
-                );
-            }
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Command-dispatch (mirrors Checks/Commands.hs `checkCommand`)
@@ -250,32 +232,6 @@ fn find_grep_regex(args: &[Token]) -> Option<&Token> {
 // ---------------------------------------------------------------------------
 // SC2207 — checkSplittingInArrays (command-substitution branch only)
 // ---------------------------------------------------------------------------
-
-fn check_splitting_in_arrays(params: &Parameters, t: &Token, out: &mut Out) {
-    let elements = match &*t.inner {
-        InnerToken::T_Array(l) => l,
-        _ => return,
-    };
-    let msg = if params.shell == Shell::Ksh {
-        "Prefer read -A or while read to split command output (or quote to avoid splitting)."
-    } else {
-        "Prefer mapfile or read -a to split command output (or quote to avoid splitting)."
-    };
-    for word in elements {
-        if let InnerToken::T_NormalWord(parts) = &*word.inner {
-            for part in parts {
-                match &*part.inner {
-                    InnerToken::T_DollarExpansion(_)
-                    | InnerToken::T_DollarBraceCommandExpansion { .. }
-                    | InnerToken::T_Backticked(_) => {
-                        warn(out, part.id(), 2207, msg);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // SC2215 — checkFlagAsCommand
@@ -400,22 +356,6 @@ mod tests {
     }
 
     // SC2010 — ls | grep
-    #[test]
-    fn prop_checkPipePitfalls3() {
-        assert!(emits_code(
-            check_pipe_pitfalls_ls_grep,
-            "ls | grep -v mp3",
-            2010
-        ));
-    }
-    #[test]
-    fn prop_lsgrep_neg() {
-        assert!(!emits(check_pipe_pitfalls_ls_grep, "ls | foo"));
-    }
-    #[test]
-    fn prop_lsgrep_neg2() {
-        assert!(!emits(check_pipe_pitfalls_ls_grep, "find . | grep foo"));
-    }
 
     // SC2028 — checkUnusedEchoEscapes
     #[test]
@@ -472,22 +412,6 @@ mod tests {
     // SC2194 — constant case word
 
     // SC2207 — checkSplittingInArrays (command branch)
-    #[test]
-    fn prop_checkSplittingInArrays2() {
-        assert!(emits(check_splitting_in_arrays, "a=( $(cmd) )"));
-    }
-    #[test]
-    fn prop_checkSplittingInArrays4() {
-        assert!(!emits(check_splitting_in_arrays, "a=( \"$(cmd)\" )"));
-    }
-    #[test]
-    fn prop_splitarr_backtick() {
-        assert!(emits(check_splitting_in_arrays, "a=( `cmd` )"));
-    }
-    #[test]
-    fn prop_splitarr_var() {
-        assert!(!emits(check_splitting_in_arrays, "a=( $var )"));
-    }
 
     // SC2215 — checkFlagAsCommand
     #[test]

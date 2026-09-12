@@ -57,17 +57,7 @@ pub fn register(c: &mut Checker) {
     c.node(check_piped_assignment);
     c.node(check_arithmetic_op_command);
     c.node(check_wrong_arithmetic_assignment);
-    // checkPipePitfalls: register only SC2038 + SC2012. SC2010 is owned by
-    // batch_n, SC2126 by batch_g; SC2009/SC2011 are out of this batch's scope.
-    c.node(|p, t, out| {
-        let mut tmp = Out::new();
-        check_pipe_pitfalls(p, t, &mut tmp);
-        for c in tmp {
-            if c.comment.code == 2038 || c.comment.code == 2012 {
-                out.push(c);
-            }
-        }
-    });
+    c.node(check_pipe_pitfalls);
     c.tree(check_shebang_parameters);
     c.node(check_for_in_quoted);
     c.node(check_find_exec);
