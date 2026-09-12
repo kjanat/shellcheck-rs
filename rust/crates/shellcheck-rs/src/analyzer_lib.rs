@@ -337,7 +337,9 @@ pub fn is_option_set(opt: &str, root: &Token) -> bool {
 /// contain `noglob` (with or without `-o`) or carry `f` in a flag group before
 /// `--`, or a shebang such as `#!/bin/sh -f` (Haskell's `[[:space:]]-[^-]*f`).
 pub fn contains_noglob(root: &Token) -> bool {
-    let shebang_re = regex::Regex::new(r"[[:space:]]-[^-]*f").expect("static regex");
+    use std::sync::OnceLock;
+    static SHEBANG_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let shebang_re = SHEBANG_RE.get_or_init(|| regex::Regex::new(r"[[:space:]]-[^-]*f").unwrap());
     let mut found = false;
     root.visit_preorder(&mut |t| {
         if found {
@@ -410,7 +412,9 @@ pub(crate) fn get_all_flags(t: &Token) -> Vec<(&Token, String)> {
 /// errexit`, but not `set -- -e`), or for a shebang such as `#!/bin/sh -e`
 /// (Haskell's `[[:space:]]-[^-]*e`).
 pub fn contains_set_e(root: &Token) -> bool {
-    let shebang_re = regex::Regex::new(r"[[:space:]]-[^-]*e").expect("static regex");
+    use std::sync::OnceLock;
+    static SHEBANG_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let shebang_re = SHEBANG_RE.get_or_init(|| regex::Regex::new(r"[[:space:]]-[^-]*e").unwrap());
     let mut found = false;
     root.visit_preorder(&mut |t| {
         if found {
