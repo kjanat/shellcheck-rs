@@ -611,9 +611,11 @@ impl Parser {
         let start = self.pos();
         let dir = self.one_of("<>")?;
         self.char('(')?;
-        let sub_start = self.pos();
-        let raw = self.read_balanced_parens_until_close()?;
-        let list = self.subparse_commands(&raw, sub_start);
+        // `readProcSub` parses its contents in place, like the shell does, so a
+        // failure inside them is the script's parse error.
+        let list = self.read_compound_list_or_empty();
+        self.allspacing();
+        self.char(')')?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
@@ -840,24 +842,15 @@ impl Parser {
                 _ => return Err(()),
             }
         };
-        // Extract the content up to the matching `}` (brace-depth aware).
-        let sub_start = self.pos();
-        let mut raw = String::new();
-        let mut depth = 1;
-        while let Some(c) = self.peek() {
-            if c == '{' {
-                depth += 1;
-            } else if c == '}' {
-                depth -= 1;
-                if depth == 0 {
-                    break;
-                }
-            }
-            self.bump();
-            raw.push(c);
+        // `readTerm` parses the contents in place, and `char '}'` closes the
+        // expansion, so a failure inside them is the script's parse error.
+        self.allspacing();
+        let Some(list) = self.read_term() else {
+            return Err(());
+        };
+        if self.char('}').is_err() {
+            return self.fail_with("Expected } to end the ksh-style ${ ..; } command expansion");
         }
-        self.char('}').map_err(|_| ())?;
-        let list = self.subparse_commands(&raw, sub_start);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
@@ -885,11 +878,13 @@ impl Parser {
     fn read_dollar_expansion_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("$(")?;
-        let sub_start = self.pos();
-        let Ok(raw) = self.read_balanced_parens_until_close() else {
+        // The contents are parsed in place, not scanned for a matching paren:
+        // `readCompoundListOrEmpty` and then `char ')'`, so a failure inside
+        // them is the script's parse error.
+        let cmds = self.read_compound_list_or_empty();
+        if self.char(')').is_err() {
             return self.fail_with("Expected end of $(..) expression");
-        };
-        let cmds = self.subparse_commands(&raw, sub_start);
+        }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_DollarExpansion(cmds)))
     }
@@ -1139,70 +1134,13 @@ impl Parser {
     // *operator token's* span (matching `readComboOp`'s `id <- endSpan start`),
     // not the whole lhs..rhs range.
 
-    pub(super) fn read_balanced_parens_until_close(&mut self) -> PResult<String> {
-        // Consumes up to and including the matching ')', returning the raw
-        // text between. Haskell instead parses the contents as commands and
-        // then expects the ')', which means a quote inside swallows any ')'
-        // it contains: `$(")` has no closing paren at all, because the `"`
-        // runs to end of input. Counting parens has to respect quoting for
-        // the same reason, or it stops at a ')' that is really quoted text.
-        let mut raw = String::new();
-        let mut depth = 1;
-        let mut quote: Option<char> = None;
-        while let Some(c) = self.peek() {
-            match quote {
-                // Inside '..' nothing is special but the closing quote.
-                Some('\'') => {
-                    if c == '\'' {
-                        quote = None;
-                    }
-                }
-                // Inside ".." a backslash still escapes the next character.
-                Some('"') => {
-                    if c == '\\' {
-                        self.bump();
-                        raw.push(c);
-                        if let Some(n) = self.bump() {
-                            raw.push(n);
-                        }
-                        continue;
-                    }
-                    if c == '"' {
-                        quote = None;
-                    }
-                }
-                _ => match c {
-                    '\\' => {
-                        self.bump();
-                        raw.push(c);
-                        if let Some(n) = self.bump() {
-                            raw.push(n);
-                        }
-                        continue;
-                    }
-                    '\'' | '"' => quote = Some(c),
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
-                },
-            }
-            self.bump();
-            raw.push(c);
-        }
-        self.char(')')?;
-        Ok(raw)
-    }
-
     /// Subparse a fragment as a compound list, in a nested parser sharing the id
     /// space and position/note collections. The sub-parser starts at `start`'s
     /// absolute line/column so inner-token positions are correct in the original
-    /// script (the raw text is a verbatim, offset-preserving substring for
-    /// `$(...)`, `<(...)` and backticks).
+    /// script. This is `subParse`, and only the constructs that use it in
+    /// Parser.hs come through here: backticks, here documents, the `trap`
+    /// argument and array indices. `$(..)`, `<(..)` and `${ ..; }` parse their
+    /// contents in place.
     pub(super) fn subparse_commands(&mut self, raw: &str, start: Position) -> Vec<Token> {
         let mut sub = Parser::new(&self.filename, raw);
         sub.line = start.line;
