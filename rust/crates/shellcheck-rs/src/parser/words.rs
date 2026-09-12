@@ -69,8 +69,27 @@ impl Parser {
             self.bump();
             s.push(c);
         }
+        let end = self.pos();
         if self.char('\'').is_err() {
             return self.fail_with("Expected end of single quoted string");
+        }
+        // A letter (or another quote) right after the closing quote: either the
+        // apostrophe in `it's` ended the string, or a quote was left open.
+        if let Some(c) = self.suspect_char_after_quotes().or(match self.peek() {
+            Some('\'') => Some('\''),
+            _ => None,
+        }) {
+            if s.chars().next_back().is_some_and(|l| l.is_alphabetic()) && c.is_alphabetic() {
+                self.problem_at(
+                    end.clone(),
+                    end,
+                    Severity::WarningC,
+                    1011,
+                    "This apostrophe terminated the single quoted string!",
+                );
+            } else if s.contains('\n') && !s.starts_with('\n') {
+                self.suggest_forgot_closing_quote(&start, &end, "single quoted string");
+            }
         }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_SingleQuoted(s)))
@@ -99,8 +118,23 @@ impl Parser {
                 _ => parts.push(self.read_double_literal_run()?),
             }
         }
+        let end = self.pos();
         if self.char('"').is_err() {
             return self.fail_with("Expected end of double quoted string");
+        }
+        if self.suspect_char_after_quotes().is_some() || matches!(self.peek(), Some('$' | '"')) {
+            let literal = |t: &Token| match t.inner() {
+                InnerToken::T_Literal(s) => Some(s.clone()),
+                _ => None,
+            };
+            let has_line_feed = parts.iter().filter_map(literal).any(|s| s.contains('\n'));
+            let starts_with_line_feed = parts
+                .first()
+                .and_then(literal)
+                .is_some_and(|s| s.starts_with('\n'));
+            if has_line_feed && !starts_with_line_feed {
+                self.suggest_forgot_closing_quote(&start, &end, "double quoted string");
+            }
         }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_DoubleQuoted(parts)))
@@ -148,15 +182,7 @@ impl Parser {
         let standard_end = "[{}|&;<>()\\ \t\n\r\u{A0}\"'$`?*@!+";
         loop {
             match self.peek() {
-                Some('\\') => {
-                    // escaped char
-                    self.bump();
-                    match self.bump() {
-                        Some('\n') => { /* line continuation: produces nothing */ }
-                        Some(c) => s.push(c),
-                        None => s.push('\\'),
-                    }
-                }
+                Some('\\') => s.push_str(&self.read_normal_escaped()?),
                 Some(c) if !custom_end.contains(c) && !standard_end.contains(c) => {
                     self.bump();
                     s.push(c);
@@ -169,6 +195,93 @@ impl Parser {
         }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Literal(s)))
+    }
+
+    /// `readNormalEscaped`: a backslash escape outside of quotes. Yields the
+    /// literal text it stands for — empty for a line continuation, since the
+    /// shell splices the lines together.
+    pub(super) fn read_normal_escaped(&mut self) -> PResult<String> {
+        self.called("escaped char", |p| p.read_normal_escaped_body())
+    }
+
+    fn read_normal_escaped_body(&mut self) -> PResult<String> {
+        let pos = self.pos();
+        self.char('\\')?;
+        // `quotable <|> oneOf "?*@!+[]{}.,~#"`: escaping these is meaningful,
+        // so there is nothing to report.
+        if let Ok(c) = self.almost_space() {
+            self.check_trailing_spaces(&pos);
+            return Ok(c.to_string());
+        }
+        let next = self.peek().ok_or(())?;
+        if QUOTABLE_CHARS.contains(next) || "?*@!+[]{}.,~#".contains(next) {
+            self.bump();
+            if next == ' ' {
+                self.check_trailing_spaces(&pos);
+            }
+            return Ok(if next == '\n' {
+                String::new()
+            } else {
+                next.to_string()
+            });
+        }
+        // Anything else: the backslash is dropped and the character stands for
+        // itself, which is rarely what was meant.
+        self.bump();
+        let (code, message) = match next {
+            'n' | 't' | 'r' => {
+                let name = match next {
+                    'n' => "line feed",
+                    't' => "tab",
+                    _ => "carriage return",
+                };
+                let alternative = if next == 'n' {
+                    "a quoted, literal line feed".to_string()
+                } else {
+                    format!("\"$(printf '\\{next}')\"")
+                };
+                (
+                    1012,
+                    format!(
+                        "\\{next} is just literal '{next}' here. For {name}, use {alternative} instead."
+                    ),
+                )
+            }
+            _ => (
+                1001,
+                format!("This \\{next} will be a regular '{next}' in this context."),
+            ),
+        };
+        let severity = if code == 1012 {
+            Severity::WarningC
+        } else {
+            Severity::InfoC
+        };
+        self.note_at(pos.clone(), pos, severity, code, &message);
+        Ok(next.to_string())
+    }
+
+    /// `checkTrailingSpaces`: `\` followed by nothing but blanks to the end of
+    /// the line looks like a line continuation but is a literal space.
+    fn check_trailing_spaces(&mut self, pos: &Position) {
+        // Scanned by hand rather than through `line_whitespace`: Haskell does
+        // this inside `lookAhead . try`, which rolls back the SC1018 notes a
+        // unicode space would otherwise leave behind.
+        let mut i = 0;
+        while matches!(self.peek_at(i), Some(c) if c == ' ' || c == '\t' || ALMOST_SPACE_CHARS.contains(c))
+        {
+            i += 1;
+        }
+        let at_end = matches!(self.peek_at(i), None | Some('\n'));
+        if at_end {
+            self.problem_at(
+                pos.clone(),
+                pos.clone(),
+                Severity::ErrorC,
+                1101,
+                "Delete trailing spaces after \\ to break line (or use quotes for literal space).",
+            );
+        }
     }
 
     pub(super) fn read_glob(&mut self) -> PResult<Token> {
@@ -538,11 +651,18 @@ impl Parser {
             self.bump();
             raw.push(c);
         }
+        let end = self.pos();
         if self.char('`').is_err() {
             // Haskell has no message here, but the failure is still a real one
             // rather than a backtracking point: `parsecBracket` re-fails a
             // `called` production with `fail ""`.
             return self.fail_with("");
+        }
+        if self.suspect_char_after_quotes().is_some()
+            && raw.contains('\n')
+            && !raw.starts_with('\n')
+        {
+            self.suggest_forgot_closing_quote(&start, &end, "backtick expansion");
         }
         // `unEscape`: process backtick escapes (`\$` `` \` `` `\\`, line splices,
         // and `\"`->`"` when inside double quotes) before sub-parsing.

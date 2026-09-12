@@ -298,6 +298,15 @@ struct Failure {
 const DOUBLE_QUOTABLE: &str = "\\\"$`";
 const NBSP: char = '\u{A0}';
 
+/// `quotableChars`: the characters a backslash meaningfully escapes outside of
+/// quotes. Includes `doubleQuotableChars`.
+const QUOTABLE_CHARS: &str = "|&;<>()\\ '\t\n\r\u{A0}\\\"$`";
+
+/// `almostSpace`'s character set: the unicode spaces that a shell does *not*
+/// treat as whitespace, so a script containing one behaves unexpectedly.
+const ALMOST_SPACE_CHARS: &str =
+    "\u{A0}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200B}\u{202F}";
+
 /// True if `c` terminates a glob character class body (`readClass`'s inner
 /// literal run). This is `customEnd ("]") ++ standardEnd` from `readNormalLiteralPart`,
 /// where `standardEnd = "[{}" ++ quotableChars ++ extglobStartChars ++ unicodeDoubleQuotes`.
@@ -637,13 +646,55 @@ impl Parser {
     // ---- whitespace / comments --------------------------------------------
 
     fn line_whitespace(&mut self) -> PResult<char> {
-        // " \t" <|> almostSpace(NBSP) <|> carriageReturn-not-before-newline handled elsewhere
+        // " \t" <|> almostSpace <|> carriageReturn-not-before-newline handled elsewhere
         match self.peek() {
             Some(c) if c == ' ' || c == '\t' => {
                 self.bump();
                 Ok(c)
             }
-            Some(c) if c == NBSP => {
+            _ => self.almost_space(),
+        }
+    }
+
+    /// `suspectCharAfterQuotes`: a character that, coming straight after a
+    /// closing quote, suggests the quote was meant to stay open.
+    pub(super) fn suspect_char_after_quotes(&self) -> Option<char> {
+        match self.peek() {
+            Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '%' => Some(c),
+            _ => None,
+        }
+    }
+
+    /// `suggestForgotClosingQuote`: a quoted string spanning a line feed and
+    /// followed by a suspect character is usually a quote left open earlier.
+    pub(super) fn suggest_forgot_closing_quote(
+        &mut self,
+        start: &Position,
+        end: &Position,
+        name: &str,
+    ) {
+        self.problem_at(
+            start.clone(),
+            start.clone(),
+            Severity::WarningC,
+            1078,
+            &format!("Did you forget to close this {name}?"),
+        );
+        self.problem_at(
+            end.clone(),
+            end.clone(),
+            Severity::InfoC,
+            1079,
+            "This is actually an end quote, but due to next char it looks suspect.",
+        );
+    }
+
+    /// `almostSpace`: a unicode space that the shell does not treat as one.
+    /// Reports SC1018 and yields a plain `' '` so the caller can carry on as
+    /// though the author had typed a space.
+    pub(super) fn almost_space(&mut self) -> PResult<char> {
+        match self.peek() {
+            Some(c) if ALMOST_SPACE_CHARS.contains(c) => {
                 let p = self.pos();
                 self.bump();
                 self.note_at(
@@ -651,7 +702,7 @@ impl Parser {
                     p,
                     Severity::ErrorC,
                     1018,
-                    "This is a unicode non-breaking space. Delete and retype it.",
+                    "This is a unicode space. Delete and retype it.",
                 );
                 Ok(' ')
             }
