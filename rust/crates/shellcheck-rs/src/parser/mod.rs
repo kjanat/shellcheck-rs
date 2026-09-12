@@ -288,6 +288,10 @@ pub struct Parser {
     /// alternative could take over. Parsec propagates such a failure straight
     /// out of `readScript`, so the parse is over and no tree survives.
     committed: bool,
+    /// The context stack as it stood when the parse committed. Parsec stops
+    /// dead there, so that is the stack `notesForContext` reads at the end --
+    /// whatever this parser goes on to push while it unwinds.
+    frozen_contexts: Option<Vec<Context>>,
     /// Whether the caller passed `--shell`, which like a `shell=` directive
     /// means the shebang no longer decides anything and is not checked.
     shell_flag_specified: bool,
@@ -404,6 +408,7 @@ impl Parser {
             disabled_codes: Vec::new(),
             next_serial: 0,
             committed: false,
+            frozen_contexts: None,
             reach: 0,
             reach_pos: Position {
                 file: filename.to_string(),
@@ -567,12 +572,14 @@ impl Parser {
         // Both attempts sit behind `try`, so a consuming failure in either is
         // caught rather than propagated: the parse is not over.
         let committed = self.committed;
+        let frozen = self.frozen_contexts.clone();
         if let Ok(t) = expected(self) {
             return Ok(t);
         }
         self.reset(m);
         self.notes.truncate(notes);
         self.committed = committed;
+        self.frozen_contexts = frozen.clone();
         // Problems and contexts live outside Parsec, so the first attempt's
         // survive: `forgetOnFailure` only rewinds what the *alternative* adds.
         let problems = self.problems.len();
@@ -588,6 +595,7 @@ impl Parser {
         // run consumes input and its error alone is what Parsec propagates.
         self.failure = failure;
         self.committed = committed;
+        self.frozen_contexts = frozen;
         self.reset(m);
         expected(self)
     }
@@ -621,9 +629,17 @@ impl Parser {
                 .is_some_and(|f| f.consumed && f.explicit)
     }
 
-    /// The diagnostics a fatal parse failure reports: the innermost two open
-    /// productions as SC1073 / SC1009, and the failure itself as SC1072.
-    /// Mirrors `notesForContext ++ [makeErrorFor err]`.
+    /// The parse is over: no enclosing alternative can recover, so Parsec
+    /// propagates the failure straight out of `readScript`. Freeze the context
+    /// stack as it stands, since that is the one `notesForContext` reads --
+    /// whatever this parser goes on to push while it unwinds.
+    pub(super) fn commit(&mut self) {
+        if !self.committed {
+            self.committed = true;
+            self.frozen_contexts = Some(self.contexts.clone());
+        }
+    }
+
     fn code_is_disabled(&self, code: i64) -> bool {
         self.disabled_codes
             .iter()
@@ -659,6 +675,9 @@ impl Parser {
         }
     }
 
+    /// The diagnostics a fatal parse failure reports: the innermost two open
+    /// productions as SC1073 / SC1009, and the failure itself as SC1072.
+    /// Mirrors `notesForContext ++ [makeErrorFor err]`.
     fn failure_notes(&self) -> Vec<ParseNote> {
         let Some(f) = &self.failure else {
             return Vec::new();
@@ -667,13 +686,12 @@ impl Parser {
         // `contextStack` lives in the state *outside* Parsec, so nothing
         // backtracks it: a production that failed after consuming input leaves
         // its frame behind, and that residue is what the report names.
-        // Haskell reports `notesForContext (contextStack state)`, the stack as it
-        // stands when the parse gives up. Since a commitment stops Parsec dead,
-        // that is the stack as the failure that ended the parse saw it -- give or
-        // take the frames a `parsecBracket` pops on the way out, which the
-        // brackets fix up in the snapshot themselves. Haskell has the innermost
-        // context first; ours has it last.
-        let mut inner = f.contexts.iter().rev();
+        // `notesForContext (contextStack state)`: the stack as it stands when
+        // the parse gives up, which is the one frozen at the commitment (or the
+        // live one, when nothing committed). Haskell has the innermost context
+        // first; ours has it last.
+        let stack = self.frozen_contexts.as_ref().unwrap_or(&self.contexts);
+        let mut inner = stack.iter().rev();
         if let Some(c) = inner.next() {
             out.push(ParseNote {
                 start: c.pos.clone(),
@@ -723,6 +741,7 @@ impl Parser {
         let contexts = self.contexts.clone();
         let failure = self.failure.clone();
         let committed = self.committed;
+        let frozen = self.frozen_contexts.clone();
         let r = f(self);
         let end = self.idx;
         self.reset(m);
@@ -731,6 +750,7 @@ impl Parser {
         self.contexts = contexts;
         self.failure = failure;
         self.committed = committed;
+        self.frozen_contexts = frozen;
         r?;
         let str: String = self.input[m.idx..end].iter().collect();
         while self.idx < end {
@@ -770,10 +790,12 @@ impl Parser {
     /// propagated -- the error itself plus the contexts it was left in -- after
     /// which the caller carries on with nothing (`<|> return []`).
     pub(super) fn report_sub_failure(&mut self, contexts: Vec<Context>, failure: Option<Failure>) {
-        let outer = std::mem::replace(&mut self.contexts, contexts);
+        // The sub-parse reports against its own stack, which is the one it
+        // froze when it committed.
+        let outer = std::mem::replace(&mut self.frozen_contexts, Some(contexts));
         let saved = std::mem::replace(&mut self.failure, failure);
         let notes = self.failure_notes();
-        self.contexts = outer;
+        self.frozen_contexts = outer;
         self.failure = saved;
         // `addParseProblem (makeErrorFor err)` then `notesForContext`, so the
         // error comes first.
@@ -807,9 +829,12 @@ impl Parser {
         // backtracked out of, then a production that had committed to what it
         // was reading over an alternative that bailed immediately.
         let rank = (self.idx, !message.is_empty(), explicit, consumed);
+        // On a tie the later failure wins: Parsec merges errors at the same
+        // position, and what it reports the contexts from is the stack as it
+        // stands then -- so the freshest snapshot is the right one.
         let better = match &self.failure {
             None => true,
-            Some(f) => rank > (f.reach, !f.message.is_empty(), f.explicit, f.consumed),
+            Some(f) => rank >= (f.reach, !f.message.is_empty(), f.explicit, f.consumed),
         };
         if better {
             self.failure = Some(Failure {
@@ -1040,7 +1065,12 @@ impl Parser {
 
     fn spacing1(&mut self) -> PResult<String> {
         let s = self.spacing();
-        if s.is_empty() { Err(()) } else { Ok(s) }
+        if s.is_empty() {
+            // `when (null spacing) $ fail "Expected whitespace"`
+            self.fail_with("Expected whitespace")
+        } else {
+            Ok(s)
+        }
     }
 
     fn read_comment(&mut self) -> PResult<String> {

@@ -280,7 +280,7 @@ impl Parser {
                 // `readTerm <|> return []` only recovers a failure that
                 // consumed nothing.
                 if self.idx != m.idx {
-                    self.committed = true;
+                    self.commit();
                 }
                 self.reset(m);
                 Vec::new()
@@ -416,8 +416,10 @@ impl Parser {
             for _ in 0..n {
                 self.bump();
             }
-            // Recorded from past the keyword, where the `fail` inside the
-            // inner `try` happens, before the outer one rewinds.
+            // `readKeyword` is a `tryWordToken`, which takes the spacing after
+            // the keyword with it, and the `fail` inside the inner `try`
+            // happens from there -- before the outer one rewinds.
+            self.spacing();
             let r = self.fail_recoverable("Unexpected keyword/token");
             self.reset(m);
             return r;
@@ -560,7 +562,7 @@ impl Parser {
             Ok(t) => return Ok(t),
             Err(()) => {
                 if self.idx != m.idx {
-                    self.committed = true;
+                    self.commit();
                     return Err(());
                 }
             }
@@ -569,7 +571,7 @@ impl Parser {
             Ok(t) => return Ok(t),
             Err(()) => {
                 if self.idx != m.idx {
-                    self.committed = true;
+                    self.commit();
                     return Err(());
                 }
             }
@@ -578,7 +580,7 @@ impl Parser {
             Ok(t) => return Ok(t),
             Err(()) => {
                 if self.idx != m.idx {
-                    self.committed = true;
+                    self.commit();
                     return Err(());
                 }
             }
@@ -587,7 +589,7 @@ impl Parser {
         // simple command that failed after consuming input.
         let r = self.read_simple_command();
         if r.is_err() && self.idx != m.idx {
-            self.committed = true;
+            self.commit();
         }
         r
     }
@@ -906,7 +908,7 @@ impl Parser {
                     // Only the part up to the `=` is a `try`: past it, a
                     // failure is the parse error (`x=((`).
                     if self.idx != m.idx {
-                        self.committed = true;
+                        self.commit();
                     }
                     self.reset(m);
                     break;
@@ -941,7 +943,7 @@ impl Parser {
                 // after consuming input ends the parse rather than leaving the
                 // command nameless.
                 if self.idx != m.idx {
-                    self.committed = true;
+                    self.commit();
                 }
                 self.reset(m);
                 None
@@ -974,7 +976,7 @@ impl Parser {
                     // `many` stops on a failure that consumed nothing; one that
                     // consumed ends the parse, as a trailing `\` does.
                     if self.idx != m.idx {
-                        self.committed = true;
+                        self.commit();
                     }
                     self.reset(m);
                     break;
@@ -1563,7 +1565,7 @@ impl Parser {
             if r.is_err() {
                 // The `<<` is consumed, so this is a here document whatever
                 // follows: `read -ra a<<)` is a parse error, not a word.
-                self.committed = true;
+                self.commit();
             }
             return r;
         }
@@ -1634,7 +1636,7 @@ impl Parser {
                 // The operator was consumed, so neither the `<|>` in
                 // `readIoRedirect` nor the `many`/`many1` around it can
                 // recover: the parse is over.
-                self.committed = true;
+                self.commit();
             }
         }
         r
@@ -1671,7 +1673,7 @@ impl Parser {
             return Err(());
         }
         if self.string_peek("<<<") {
-            return self.read_here_string(start, op_start, fd);
+            return self.called("here string", |p| p.read_here_string(start, op_start, fd));
         }
         self.called("here document", |p| p.read_here_doc(start, op_start, fd))
     }
@@ -1767,10 +1769,8 @@ impl Parser {
                 self.disabled_codes = outer_disabled;
                 // The restore happens before the failure reaches the top, so
                 // the report names the restored stack.
-                if let Some(f) = &mut self.failure {
-                    if f.contexts == hd.contexts {
-                        f.contexts = outer;
-                    }
+                if self.frozen_contexts.as_ref() == Some(&hd.contexts) {
+                    self.frozen_contexts = Some(outer);
                 }
             }
             r?;
@@ -1797,7 +1797,7 @@ impl Parser {
                 // makes it the last word, so it must not suppress its own
                 // message.
                 let r: PResult<()> = self.fail_with("Here document was not correctly terminated");
-                self.committed = true;
+                self.commit();
                 return r;
             }
             // `parseHereData`: a quoted delimiter keeps the body verbatim as one
@@ -2025,7 +2025,13 @@ impl Parser {
     pub(super) fn read_here_data(&mut self, body: &str, start: Position) -> PResult<Vec<Token>> {
         let mut sub = self.sub_parser(body, &start);
         let r = sub.read_here_data_parts();
-        let (contexts, failure) = (sub.contexts.clone(), sub.failure.clone());
+        // The stack the sub-parse reports from: the one it froze when it
+        // committed, or the live one if nothing did.
+        let contexts = sub
+            .frozen_contexts
+            .clone()
+            .unwrap_or_else(|| sub.contexts.clone());
+        let failure = sub.failure.clone();
         self.merge_sub(sub);
         match r {
             Ok(parts) => Ok(parts),
@@ -2033,9 +2039,10 @@ impl Parser {
                 // A plain `subParse`, not `tryWithErrors`: the failure comes
                 // straight back out, and the contexts it was left in -- the
                 // here document's own among them -- are what gets reported.
-                self.contexts = contexts;
+                self.contexts = contexts.clone();
                 self.failure = failure;
-                self.committed = true;
+                self.commit();
+                self.frozen_contexts = Some(contexts);
                 Err(())
             }
         }

@@ -14,7 +14,7 @@ impl Parser {
                 // As in `readCommand`'s `choice`: once the test expression has
                 // consumed input there is no falling back to a simple command.
                 if self.idx != m.idx {
-                    self.committed = true;
+                    self.commit();
                     return Err(());
                 }
                 self.reset(m);

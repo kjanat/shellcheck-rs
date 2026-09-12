@@ -17,7 +17,7 @@ impl Parser {
                     // malformed directive has consumed its prefix, and nothing
                     // above can recover from that.
                     if self.idx != m.idx {
-                        self.committed = true;
+                        self.commit();
                     }
                     self.reset(m);
                     break;

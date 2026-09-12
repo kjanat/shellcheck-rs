@@ -234,15 +234,24 @@ impl Parser {
             // and that is where Parsec's error sits -- `case '' i` reports the
             // end of input rather than the start of the missing `in`.
             let m = self.mark();
+            let mut matched = 0;
             for c in kw.chars() {
                 match self.peek() {
                     Some(p) if p.eq_ignore_ascii_case(&c) => {
                         self.bump();
+                        matched += 1;
                     }
                     _ => break,
                 }
             }
-            self.fail_implicitly();
+            if matched == kw.chars().count() {
+                // The keyword is all there, so what failed is
+                // `keywordSeparator`, whose `allspacingOrFail` is the only
+                // alternative in it with something to say.
+                let _: PResult<()> = self.fail_with("Expected whitespace");
+            } else {
+                self.fail_implicitly();
+            }
             self.reset(m);
             Err(())
         }

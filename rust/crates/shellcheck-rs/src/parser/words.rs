@@ -91,7 +91,24 @@ impl Parser {
                     let id = self.next_id_between(start, self.pos());
                     Ok(Token::new(id, InnerToken::T_Literal(c.to_string())))
                 }
-                '<' | '>' if self.peek_at(1) == Some('(') => self.read_proc_sub(),
+                // `readProcSub`'s `try` reads the `<`/`>` before it checks for
+                // the `(`, so even when this is not a process substitution
+                // Parsec's error ends up past the operator -- which is the
+                // position a failure here reports.
+                '<' | '>' => {
+                    let pm = self.mark();
+                    match self.read_proc_sub() {
+                        Ok(t) => Ok(t),
+                        Err(()) => {
+                            // Its `try` only covers the `<(`: past that, the
+                            // `choice` has nothing left to try.
+                            if self.idx != pm.idx {
+                                return Err(());
+                            }
+                            self.read_normal_literal(end)
+                        }
+                    }
+                }
                 // `readUnicodeQuote`: a curly quote is a literal, and a warning.
                 _ if UNICODE_SINGLE_QUOTES.contains(c) || UNICODE_DOUBLE_QUOTES.contains(c) => {
                     self.read_unicode_quote()
@@ -689,8 +706,18 @@ impl Parser {
 
     fn read_proc_sub_body(&mut self) -> PResult<Token> {
         let start = self.pos();
-        let dir = self.one_of("<>")?;
-        self.char('(')?;
+        // `dir <- try (oneOf "<>" >> char '(')`: the `try` is inside the
+        // `called`, so a `<` with no `(` after it leaves no context behind --
+        // only Parsec's error, past the operator it read.
+        let pm = self.mark();
+        let dir = match self.one_of("<>") {
+            Ok(d) => d,
+            Err(()) => return Err(()),
+        };
+        if self.char('(').is_err() {
+            self.reset(pm);
+            return Err(());
+        }
         // `readProcSub` parses its contents in place, like the shell does, so a
         // failure inside them is the script's parse error.
         let list = self.read_compound_list_or_empty();
@@ -956,7 +983,7 @@ impl Parser {
                 },
             );
             if r.is_err() {
-                self.committed = true;
+                self.commit();
             }
             return r;
         }
@@ -966,7 +993,7 @@ impl Parser {
             // literal `$` followed by a subshell.
             let r = self.read_dollar_expansion();
             if r.is_err() {
-                self.committed = true;
+                self.commit();
             }
             return r;
         }
@@ -974,7 +1001,7 @@ impl Parser {
             // Past `try (string "$[")` the `<|>` fold has no alternative left.
             let r = self.read_dollar_bracket();
             if r.is_err() {
-                self.committed = true;
+                self.commit();
             }
             return r;
         }
@@ -997,7 +1024,7 @@ impl Parser {
             // here is the parse error, not a literal `$` and a stray brace.
             let r = self.read_dollar_braced();
             if r.is_err() {
-                self.committed = true;
+                self.commit();
             }
             return r;
         }
@@ -1420,7 +1447,13 @@ impl Parser {
         if !failed && !sub.eof() {
             sub.verify_eof();
         }
-        let (contexts, failure) = (sub.contexts.clone(), sub.failure.clone());
+        // The stack the sub-parse reports from: the one it froze when it
+        // committed, or the live one if nothing did.
+        let contexts = sub
+            .frozen_contexts
+            .clone()
+            .unwrap_or_else(|| sub.contexts.clone());
+        let failure = sub.failure.clone();
         self.merge_sub(sub);
         if failed {
             // `tryWithErrors .. <|> return []`: the error and the contexts it
