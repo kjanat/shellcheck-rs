@@ -38,15 +38,13 @@ use crate::ast::*;
 use crate::astlib;
 use crate::astlib::get_command_sequences;
 use crate::astlib::get_literal_string_def;
-use crate::astlib::is_annotation_ignoring_code;
-use crate::astlib::is_command_substitution;
 use crate::astlib::is_function;
 use crate::astlib::is_glob;
 use crate::astlib::is_literal;
 use crate::astlib::oversimplify;
+use crate::astlib::{is_quoteable_expansion, will_split};
 use crate::cfg::get_unquoted_literal;
 use crate::cfg::may_become_multiple_args;
-use crate::cfg::will_become_multiple_args;
 use crate::cfg::{get_word_parts, is_variable_name};
 use crate::interface::Shell;
 use std::collections::HashMap;
@@ -97,22 +95,6 @@ fn is_loop(t: &Token) -> bool {
     )
 }
 
-/// `willSplit`.
-fn will_split(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_DollarBraced { .. }
-        | T_DollarExpansion(_)
-        | T_Backticked(_)
-        | T_BraceExpansion(_)
-        | T_Glob(_)
-        | T_Extglob { .. } => true,
-        T_DoubleQuoted(l) => l.iter().any(will_become_multiple_args),
-        T_NormalWord(l) => l.iter().any(will_split),
-        _ => false,
-    }
-}
-
 /// `getTrailingUnquotedLiteral`.
 fn get_trailing_unquoted_literal(t: &Token) -> Option<&Token> {
     if let InnerToken::T_NormalWord(list) = &*t.inner {
@@ -135,11 +117,6 @@ fn get_glob_or_literal_string(t: &Token) -> Option<String> {
         InnerToken::T_Glob(s) => Some(s.clone()),
         _ => None,
     })
-}
-
-/// `isQuoteableExpansion`.
-fn is_quoteable_expansion(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_DollarBraced { .. }) || is_command_substitution(t)
 }
 
 /// `getCommand`.
@@ -1324,12 +1301,6 @@ fn group_by_link<'a, F: Fn(&Token, &Token) -> bool>(
         out.push(current);
     }
     out
-}
-
-fn should_ignore_code(params: &Parameters, code: i64, t: &Token) -> bool {
-    get_path(params, t)
-        .iter()
-        .any(|p| is_annotation_ignoring_code(code, p))
 }
 
 fn check_alias_used_in_same_parsing_unit(params: &Parameters, root: &Token, out: &mut Out) {

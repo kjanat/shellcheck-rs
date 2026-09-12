@@ -1,7 +1,6 @@
 //! Port of selected `ShellCheck.ASTLib` helpers (grown as checks need them).
 
 use crate::ast::*;
-use crate::interface::Shell;
 
 /// `getLiteralString`: the literal string of a word, or None if any part is
 /// non-literal (an expansion, glob, etc.).
@@ -213,25 +212,6 @@ fn from_env_args(args: &[&str]) -> String {
     String::new()
 }
 
-/// `shellForExecutable` (from `ShellCheck.Data`).
-pub fn shell_for_executable(name: &str) -> Option<Shell> {
-    Some(match name {
-        "sh" => Shell::Sh,
-        "bash" => Shell::Bash,
-        "bats" => Shell::Bash,
-        "busybox" => Shell::BusyboxSh,
-        "busybox sh" => Shell::BusyboxSh,
-        "busybox ash" => Shell::BusyboxSh,
-        "dash" => Shell::Dash,
-        "ash" => Shell::Dash,
-        "ksh" => Shell::Ksh,
-        "ksh88" => Shell::Ksh,
-        "ksh93" => Shell::Ksh,
-        "oksh" => Shell::Ksh,
-        _ => return None,
-    })
-}
-
 // ---- helpers consolidated from the check batches (ports of ASTLib) ----
 
 /// `getWordParts`.
@@ -407,10 +387,6 @@ pub(crate) fn e4m(s: &str) -> String {
     out
 }
 
-pub(crate) fn list_to_args(args: &[Token]) -> Vec<(String, (&Token, &Token))> {
-    args.iter().map(|x| (String::new(), (x, x))).collect()
-}
-
 /// `ShellCheck.ASTLib.isCommandSubstitution`.
 pub(crate) fn is_command_substitution(t: &Token) -> bool {
     matches!(
@@ -452,6 +428,27 @@ pub(crate) fn get_command_sequences(t: &Token) -> Vec<&[Token]> {
 /// `getLiteralStringDef def`: the literal string of a word, with `def` standing in for every non-literal part.
 pub(crate) fn get_literal_string_def(def: &str, t: &Token) -> String {
     get_literal_string_ext(t, &|_| Some(def.to_string())).unwrap_or_default()
+}
+
+/// `willSplit`.
+pub(crate) fn will_split(t: &Token) -> bool {
+    use InnerToken::*;
+    match &*t.inner {
+        T_DollarBraced { .. }
+        | T_DollarExpansion(_)
+        | T_Backticked(_)
+        | T_BraceExpansion(_)
+        | T_Glob(_)
+        | T_Extglob { .. } => true,
+        T_DoubleQuoted(l) => l.iter().any(crate::cfg::will_become_multiple_args),
+        T_NormalWord(l) => l.iter().any(will_split),
+        _ => false,
+    }
+}
+
+/// `isQuoteableExpansion`.
+pub(crate) fn is_quoteable_expansion(t: &Token) -> bool {
+    matches!(&*t.inner, InnerToken::T_DollarBraced { .. }) || is_command_substitution(t)
 }
 
 /// `concat $ oversimplify t`, the form nearly every caller wants.

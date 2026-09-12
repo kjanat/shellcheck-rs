@@ -4635,7 +4635,7 @@ impl Parser {
             "shell" => {
                 let pos = self.pos();
                 let v = self.read_annotation_raw_value();
-                if crate::astlib::shell_for_executable(&v).is_none() {
+                if crate::data::shell_for_executable(&v).is_none() {
                     self.note_at(
                         pos.clone(),
                         pos,

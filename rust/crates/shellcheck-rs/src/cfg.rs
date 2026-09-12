@@ -19,7 +19,9 @@
 
 use crate::ast::*;
 use crate::astlib::get_literal_string;
+use crate::astlib::will_split;
 use crate::astlib::{get_literal_string_def, oversimplify_concat};
+use crate::data::{FLAGS_FOR_MAPFILE, FLAGS_FOR_READ};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use regex::Regex;
@@ -2059,9 +2061,6 @@ fn dom(g: &MutGraph, root: Node) -> Vec<(Node, Vec<Node>)> {
 // ASTLib helpers ported locally (CFG.hs relies on these)
 // ===========================================================================
 
-const FLAGS_FOR_READ: &str = "sreu:n:N:i:p:a:t:";
-const FLAGS_FOR_MAPFILE: &str = "d:n:O:s:u:C:c:t";
-
 pub(crate) fn is_variable_start_char(c: char) -> bool {
     c == '_' || c.is_ascii_lowercase() || c.is_ascii_uppercase()
 }
@@ -2265,22 +2264,6 @@ fn is_closing_file_op(op: &Token) -> bool {
                 InnerToken::T_GREATAND | InnerToken::T_LESSAND
             )
         }
-        _ => false,
-    }
-}
-
-/// `willSplit`.
-fn will_split(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_DollarBraced { .. } => true,
-        T_DollarExpansion(_) => true,
-        T_Backticked(_) => true,
-        T_BraceExpansion(_) => true,
-        T_Glob(_) => true,
-        T_Extglob { .. } => true,
-        T_DoubleQuoted(l) => l.iter().any(will_become_multiple_args),
-        T_NormalWord(l) => l.iter().any(will_split),
         _ => false,
     }
 }

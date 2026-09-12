@@ -5,7 +5,6 @@
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
-use crate::interface::Shell;
 
 /// Assemble the Analytics checks into a Checker.
 pub fn checker() -> Checker {
@@ -142,9 +141,4 @@ fn check_shebang(params: &Parameters, t: &Token, out: &mut Out) {
 pub fn analyze(params: &Parameters) -> Out {
     let c = checker();
     run_checker(params, &c)
-}
-
-#[allow(dead_code)]
-fn shell_is_sh(shell: Shell) -> bool {
-    matches!(shell, Shell::Sh | Shell::Dash | Shell::BusyboxSh)
 }

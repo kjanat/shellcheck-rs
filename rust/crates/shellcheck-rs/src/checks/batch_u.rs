@@ -38,7 +38,9 @@ use crate::astlib::get_word_parts;
 use crate::astlib::is_constant;
 use crate::astlib::is_glob;
 use crate::astlib::is_literal;
+use crate::astlib::is_quoteable_expansion;
 use crate::astlib::oversimplify;
+use crate::data::ARITHMETIC_BINARY_TEST_OPS;
 use crate::interface::Shell;
 
 // ===========================================================================
@@ -86,8 +88,6 @@ pub fn register(c: &mut Checker) {
 // Local helpers (ported from ASTLib / AnalyzerLib / Data; kept private).
 // ===========================================================================
 
-const ARITHMETIC_BINARY_TEST_OPS: &[&str] = &["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
-
 const BINARY_TEST_OPS: &[&str] = &[
     "-nt", "-ot", "-ef", "==", "!=", "<=", ">=", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "=~",
     ">", "<", "=", "\\<", "\\>", "\\<=", "\\>=",
@@ -128,18 +128,6 @@ fn is_literal_number(t: &Token) -> bool {
         Some(s) => s.chars().all(|c| c.is_ascii_digit()),
         None => false,
     }
-}
-
-/// `isQuoteableExpansion`.
-fn is_quoteable_expansion(t: &Token) -> bool {
-    use InnerToken::*;
-    matches!(
-        &*t.inner,
-        T_DollarBraced { .. }
-            | T_DollarExpansion(_)
-            | T_DollarBraceCommandExpansion { .. }
-            | T_Backticked(_)
-    )
 }
 
 fn is_command_match(t: &Token, matcher: impl Fn(&str) -> bool) -> bool {
@@ -972,7 +960,7 @@ fn trailing_check(word: &Token, command: &Token, out: &mut Out) {
         if list.len() == 1 {
             if let InnerToken::T_Literal(str) = &*list[0].inner {
                 if str == "]]" || str == "]" {
-                    let opposite = invert(str);
+                    let opposite = invert_bracket(str);
                     let parameters = oversimplify(command);
                     if !parameters.iter().any(|p| p == opposite) {
                         warn(
@@ -991,7 +979,7 @@ fn trailing_check(word: &Token, command: &Token, out: &mut Out) {
     }
 }
 
-fn invert(s: &str) -> &'static str {
+fn invert_bracket(s: &str) -> &'static str {
     match s {
         "]]" => "[[",
         "]" => "[",

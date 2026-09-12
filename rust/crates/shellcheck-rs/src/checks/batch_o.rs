@@ -18,24 +18,18 @@ use crate::astlib::is_quotes;
 use crate::astlib::{get_literal_string_def, oversimplify};
 use crate::cfg::{get_braced_reference, get_word_parts, is_variable_name};
 use crate::cfg_analysis::NumericalStatus;
+use crate::data::ARITHMETIC_BINARY_TEST_OPS;
 use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {
     c.node(check_number_comparisons);
 }
 
-const ARITHMETIC_BINARY_TEST_OPS: &[&str] = &["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
-
 fn is_lt_gt(op: &str) -> bool {
     matches!(op, "<" | "\\<" | ">" | "\\>")
 }
 fn is_le_ge(op: &str) -> bool {
     matches!(op, "<=" | "\\<=" | ">=" | "\\>=")
-}
-
-/// `hasFloatingPoint params = shellType params == Ksh`.
-fn has_floating_point(params: &Parameters) -> bool {
-    params.shell == Shell::Ksh
 }
 
 /// `eqv`: numeric operator suggested for a stringy `<`/`>`.
@@ -74,7 +68,7 @@ fn seqv(op: &str, typ: ConditionType) -> String {
 }
 
 /// `invert`: only defined for `<=`/`>=` (with optional leading backslash).
-fn invert(op: &str) -> &'static str {
+fn invert_comparison(op: &str) -> &'static str {
     let op = op.strip_prefix('\\').unwrap_or(op);
     match op {
         "<=" => ">",
@@ -276,7 +270,7 @@ fn check_number_comparisons(params: &Parameters, t: &Token, out: &mut Out) {
                     "{} is not a valid operator. Use '! a {}{} b' instead.",
                     op,
                     esc(typ),
-                    invert(op)
+                    invert_comparison(op)
                 ),
             );
         }

@@ -42,15 +42,6 @@ pub fn register(c: &mut Checker) {
 // shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
 
-/// The literal name of the first word of a `T_SimpleCommand`, if any.
-fn simple_command_name(t: &Token) -> Option<String> {
-    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-        let cmd = words.first()?;
-        return get_literal_string(cmd);
-    }
-    None
-}
-
 // ---------------------------------------------------------------------------
 // SC2174 — checkMkdirDashPM
 // ---------------------------------------------------------------------------

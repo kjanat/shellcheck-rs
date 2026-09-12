@@ -45,12 +45,13 @@ use crate::astlib::is_constant;
 use crate::astlib::is_glob;
 use crate::astlib::is_literal;
 use crate::astlib::oversimplify_concat;
+use crate::astlib::will_split;
 use crate::cfg::may_become_multiple_args;
-use crate::cfg::will_become_multiple_args;
 use crate::cfg::{
     get_braced_modifier, get_braced_reference, get_bsd_opts, get_gnu_opts, get_unquoted_literal,
     is_variable_name,
 };
+use crate::data::{DECLARING_COMMANDS, FLAGS_FOR_READ, PRIVILEGE_ELEVATION_COMMANDS};
 use crate::interface::{Code, Shell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -86,25 +87,6 @@ pub fn register(c: &mut Checker) {
 // module does not touch shared files that parallel agents also edit).
 // ===========================================================================
 
-const DECLARING_COMMANDS: [&str; 6] = ["local", "declare", "export", "readonly", "typeset", "let"];
-const PRIVILEGE_ELEVATION_COMMANDS: [&str; 3] = ["sudo", "doas", "run0"];
-
-/// `willSplit`.
-fn will_split(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_DollarBraced { .. } => true,
-        T_DollarExpansion(_) => true,
-        T_Backticked(_) => true,
-        T_BraceExpansion(_) => true,
-        T_Glob(_) => true,
-        T_Extglob { .. } => true,
-        T_DoubleQuoted(l) => l.iter().any(will_become_multiple_args),
-        T_NormalWord(l) => l.iter().any(will_split),
-        _ => false,
-    }
-}
-
 /// `isFunctionLike`.
 fn is_function_like(t: &Token) -> bool {
     matches!(
@@ -117,7 +99,7 @@ fn is_function_like(t: &Token) -> bool {
 
 /// Effective command token if a check registered under `Exactly target` would
 /// fire on `t`, per `checkCommand`.
-fn dispatch_exactly(t: &Token, target: &str) -> Option<Token> {
+pub(crate) fn dispatch_exactly(t: &Token, target: &str) -> Option<Token> {
     let (assignments, words) = match &*t.inner {
         InnerToken::T_SimpleCommand { assignments, words } if !words.is_empty() => {
             (assignments, words)
@@ -561,7 +543,7 @@ fn is_scoped_function(shell: Shell, t: &Token) -> bool {
 }
 
 fn check_masked_returns(params: &Parameters, t: &Token, out: &mut Out) {
-    let te = match dispatch_exactly_any(t, &DECLARING_COMMANDS) {
+    let te = match dispatch_exactly_any(t, DECLARING_COMMANDS) {
         Some(x) => x,
         None => return,
     };
@@ -1025,7 +1007,7 @@ fn check_arg_comparison(_params: &Parameters, t: &Token, out: &mut Out) {
 
 /// `map checkMultipleDeclaring declaringCommands`.
 fn check_multiple_declaring(_params: &Parameters, t: &Token, out: &mut Out) {
-    let te = match dispatch_exactly_any(t, &DECLARING_COMMANDS) {
+    let te = match dispatch_exactly_any(t, DECLARING_COMMANDS) {
         Some(x) => x,
         None => return,
     };
@@ -1058,7 +1040,7 @@ fn check_multiple_declaring(_params: &Parameters, t: &Token, out: &mut Out) {
 /// declaring command that reads a variable assigned earlier in the same
 /// command, where that assignment has not taken effect yet.
 fn check_backreferencing_declaration(params: &Parameters, t: &Token, out: &mut Out) {
-    let te = match dispatch_exactly_any(t, &DECLARING_COMMANDS) {
+    let te = match dispatch_exactly_any(t, DECLARING_COMMANDS) {
         Some(x) => x,
         None => return,
     };
@@ -1341,8 +1323,6 @@ fn getopts_check(opts: &[String], case_id: Id, cases: &[CaseClause], out: &mut O
 fn read_is_unquoted_bracket(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_Glob(s) if s.starts_with('['))
 }
-
-const FLAGS_FOR_READ: &str = "sreu:n:N:i:p:a:t:";
 
 fn check_read_expansions(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_exactly(t, "read") {

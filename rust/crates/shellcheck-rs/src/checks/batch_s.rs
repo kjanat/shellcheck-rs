@@ -35,9 +35,10 @@ use crate::astlib::basename;
 use crate::astlib::get_literal_string_def;
 use crate::astlib::is_flag;
 use crate::astlib::is_glob;
-use crate::astlib::list_to_args;
 use crate::astlib::oversimplify_concat;
 use crate::astlib::{get_literal_string, only_literal_string};
+use crate::cfg::get_bsd_opts;
+use crate::data::SAMPLE_WORDS;
 use crate::interface::Shell;
 
 /// Register this batch's checks.
@@ -123,126 +124,6 @@ fn get_all_flags(words: &[Token]) -> Vec<(&Token, String)> {
 
 fn has_flag(words: &[Token], flag: &str) -> bool {
     get_all_flags(words).iter().any(|(_, f)| f == flag)
-}
-
-// ---- getOpts (getBsdOpts) --------------------------------------------------
-
-use std::collections::HashMap;
-
-fn parse_flag_list(spec: &str) -> Vec<(String, bool)> {
-    let mut out = vec![];
-    let chars: Vec<char> = spec.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if i + 1 < chars.len() && chars[i + 1] == ':' {
-            out.push((c.to_string(), true));
-            i += 2;
-        } else {
-            out.push((c.to_string(), false));
-            i += 1;
-        }
-    }
-    out
-}
-
-fn get_bsd_opts<'a>(
-    spec: &str,
-    args: &'a [Token],
-) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
-    let mut flag_map: HashMap<String, bool> = HashMap::new();
-    flag_map.insert(String::new(), false);
-    for (k, v) in parse_flag_list(spec) {
-        flag_map.insert(k, v);
-    }
-    opts_process(false, &flag_map, args)
-}
-
-fn opts_process<'a>(
-    gnu: bool,
-    flag_map: &HashMap<String, bool>,
-    tokens: &'a [Token],
-) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
-    if tokens.is_empty() {
-        return Some(vec![]);
-    }
-    let token = &tokens[0];
-    let rest = &tokens[1..];
-    let s = get_literal_string(token).unwrap_or_else(|| "\0".to_string());
-
-    if s == "--" {
-        return Some(list_to_args(rest));
-    }
-    if let Some(word) = s.strip_prefix("--") {
-        let (name, arg): (&str, &str) = match word.find('=') {
-            Some(i) => (&word[..i], &word[i..]),
-            None => (word, ""),
-        };
-        let needs_arg = *flag_map.get(name)?;
-        if needs_arg && arg.is_empty() {
-            if rest.is_empty() {
-                return None;
-            }
-            let a = &rest[0];
-            let mut more = opts_process(gnu, flag_map, &rest[1..])?;
-            let mut out = vec![(name.to_string(), (token, a))];
-            out.append(&mut more);
-            return Some(out);
-        } else {
-            let mut more = opts_process(gnu, flag_map, rest)?;
-            let mut out = vec![(name.to_string(), (token, token))];
-            out.append(&mut more);
-            return Some(out);
-        }
-    }
-    if let Some(opts) = s.strip_prefix('-') {
-        return short_to_opts(gnu, flag_map, opts, token, rest);
-    }
-    if gnu {
-        let mut more = opts_process(gnu, flag_map, rest)?;
-        let mut out = vec![(String::new(), (token, token))];
-        out.append(&mut more);
-        Some(out)
-    } else {
-        Some(list_to_args(tokens))
-    }
-}
-
-fn short_to_opts<'a>(
-    gnu: bool,
-    flag_map: &HashMap<String, bool>,
-    opts: &str,
-    token: &'a Token,
-    args: &'a [Token],
-) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
-    let chars: Vec<char> = opts.chars().collect();
-    if chars.is_empty() {
-        return opts_process(gnu, flag_map, args);
-    }
-    let c = chars[0].to_string();
-    let rest_opts: String = chars[1..].iter().collect();
-    let needs_arg = *flag_map.get(&c)?;
-    if needs_arg && rest_opts.is_empty() {
-        if args.is_empty() {
-            return None;
-        }
-        let next = &args[0];
-        let mut more = opts_process(gnu, flag_map, &args[1..])?;
-        let mut out = vec![(c, (token, next))];
-        out.append(&mut more);
-        Some(out)
-    } else if needs_arg {
-        // -iVALUE : the rest of this token is the argument.
-        let mut more = opts_process(gnu, flag_map, args)?;
-        let mut out = vec![(c, (token, token))];
-        out.append(&mut more);
-        Some(out)
-    } else {
-        let mut more = short_to_opts(gnu, flag_map, &rest_opts, token, args)?;
-        let mut out = vec![(c, (token, token))];
-        out.append(&mut more);
-        Some(out)
-    }
 }
 
 // ---- getPath / getClosestCommand ------------------------------------------
@@ -392,12 +273,6 @@ fn find_accepts_glob(s: &str) -> bool {
 // ===========================================================================
 // SC2022/2063 (+2062) — checkGrepRe  (Basename "grep")
 // ===========================================================================
-
-const SAMPLE_WORDS: &[&str] = &[
-    "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliett",
-    "kilo", "lima", "mike", "november", "oscar", "papa", "quebec", "romeo", "sierra", "tango",
-    "uniform", "victor", "whiskey", "xray", "yankee", "zulu",
-];
 
 const GREP_GLOB_FLAGS: &[&str] = &[
     "fixed-strings",

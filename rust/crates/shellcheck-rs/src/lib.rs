@@ -29,6 +29,7 @@ pub mod cfg;
 pub mod cfg_analysis;
 pub mod checker;
 pub mod checks;
+pub mod data;
 pub mod parser;
 
 pub use checker::check_script;

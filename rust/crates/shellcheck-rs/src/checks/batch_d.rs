@@ -12,7 +12,6 @@ use crate::analyzer_lib::condition_children;
 use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::get_command_name;
-use crate::analyzer_lib::get_command_name_and_token;
 use crate::analyzer_lib::is_command;
 use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
@@ -20,9 +19,9 @@ use crate::ast::*;
 use crate::astlib::get_command_sequences;
 use crate::astlib::get_literal_string;
 use crate::astlib::get_word_parts;
-use crate::astlib::list_to_args;
 use crate::astlib::oversimplify;
-use std::collections::HashMap;
+use crate::cfg::get_gnu_opts;
+use crate::data::FLAGS_FOR_READ;
 
 /// Register this batch's checks.
 pub fn register(c: &mut Checker) {
@@ -39,145 +38,6 @@ pub fn register(c: &mut Checker) {
 
 fn concat_strings(v: Vec<String>) -> String {
     v.concat()
-}
-
-// ---- getOpts / getGnuOpts / getBsdOpts -------------------------------------
-
-fn parse_flag_list(spec: &str, longopts: &[(String, bool)]) -> Vec<(String, bool)> {
-    let mut out = vec![];
-    let chars: Vec<char> = spec.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if i + 1 < chars.len() && chars[i + 1] == ':' {
-            out.push((c.to_string(), true));
-            i += 2;
-        } else {
-            out.push((c.to_string(), false));
-            i += 1;
-        }
-    }
-    out.extend_from_slice(longopts);
-    out
-}
-
-fn get_gnu_opts<'a>(
-    spec: &str,
-    args: &'a [Token],
-) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
-    get_opts(true, false, spec, &[], args)
-}
-
-fn get_opts<'a>(
-    gnu: bool,
-    arbitrary: bool,
-    spec: &str,
-    longopts: &[(String, bool)],
-    args: &'a [Token],
-) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
-    let mut flag_map: HashMap<String, bool> = HashMap::new();
-    flag_map.insert(String::new(), false);
-    for (k, v) in parse_flag_list(spec, longopts) {
-        flag_map.insert(k, v);
-    }
-    opts_process(gnu, arbitrary, &flag_map, args)
-}
-
-fn opts_process<'a>(
-    gnu: bool,
-    arbitrary: bool,
-    flag_map: &HashMap<String, bool>,
-    tokens: &'a [Token],
-) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
-    if tokens.is_empty() {
-        return Some(vec![]);
-    }
-    let token = &tokens[0];
-    let rest = &tokens[1..];
-    let s = get_literal_string(token).unwrap_or_else(|| "\0".to_string());
-
-    if s == "--" {
-        return Some(list_to_args(rest));
-    }
-    if let Some(word) = s.strip_prefix("--") {
-        let (name, arg): (&str, &str) = match word.find('=') {
-            Some(i) => (&word[..i], &word[i..]),
-            None => (word, ""),
-        };
-        let needs_arg = if arbitrary {
-            *flag_map.get(name).unwrap_or(&false)
-        } else {
-            *flag_map.get(name)?
-        };
-        if needs_arg && arg.is_empty() {
-            if rest.is_empty() {
-                return None;
-            }
-            let a = &rest[0];
-            let mut more = opts_process(gnu, arbitrary, flag_map, &rest[1..])?;
-            let mut out = vec![(name.to_string(), (token, a))];
-            out.append(&mut more);
-            return Some(out);
-        } else {
-            let mut more = opts_process(gnu, arbitrary, flag_map, rest)?;
-            let mut out = vec![(name.to_string(), (token, token))];
-            out.append(&mut more);
-            return Some(out);
-        }
-    }
-    if let Some(opts) = s.strip_prefix('-') {
-        return short_to_opts(gnu, arbitrary, flag_map, opts, token, rest);
-    }
-    // Non-flag argument.
-    if gnu {
-        let mut more = opts_process(gnu, arbitrary, flag_map, rest)?;
-        let mut out = vec![(String::new(), (token, token))];
-        out.append(&mut more);
-        Some(out)
-    } else {
-        Some(list_to_args(tokens))
-    }
-}
-
-fn short_to_opts<'a>(
-    gnu: bool,
-    arbitrary: bool,
-    flag_map: &HashMap<String, bool>,
-    opts: &str,
-    token: &'a Token,
-    args: &'a [Token],
-) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
-    let chars: Vec<char> = opts.chars().collect();
-    if chars.is_empty() {
-        return opts_process(gnu, arbitrary, flag_map, args);
-    }
-    let c = chars[0].to_string();
-    let rest_opts: String = chars[1..].iter().collect();
-    let needs_arg = *flag_map.get(&c)?;
-    if needs_arg && rest_opts.is_empty() {
-        if args.is_empty() {
-            return None;
-        }
-        let next = &args[0];
-        let mut more = opts_process(gnu, arbitrary, flag_map, &args[1..])?;
-        let mut out = vec![(c, (token, next))];
-        out.append(&mut more);
-        Some(out)
-    } else if needs_arg {
-        let mut more = opts_process(gnu, arbitrary, flag_map, args)?;
-        let mut out = vec![(c, (token, token))];
-        out.append(&mut more);
-        Some(out)
-    } else {
-        let mut more = short_to_opts(gnu, arbitrary, flag_map, &rest_opts, token, args)?;
-        let mut out = vec![(c, (token, token))];
-        out.append(&mut more);
-        Some(out)
-    }
-}
-
-fn get_command_token_or_this(t: &Token) -> &Token {
-    get_command_name_and_token(false, t).1
 }
 
 /// `containsSetE`: `params.has_set_e` (which covers `set -e` commands) plus the
@@ -225,8 +85,6 @@ fn shebang_flag_matches(s: &str, c: u8) -> bool {
 // ---------------------------------------------------------------------------
 // SC2162 — checkReadWithoutR
 // ---------------------------------------------------------------------------
-
-const FLAGS_FOR_READ: &str = "sreu:n:N:i:p:a:t:";
 
 fn check_read_without_r(_params: &Parameters, t: &Token, out: &mut Out) {
     if !matches!(&*t.inner, InnerToken::T_SimpleCommand { .. }) {

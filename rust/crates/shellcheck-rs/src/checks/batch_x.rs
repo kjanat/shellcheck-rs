@@ -87,11 +87,6 @@ fn get_unmodified_parameter_expansion(t: &Token) -> Option<String> {
     }
 }
 
-/// `hasFloatingPoint params`.
-fn has_floating_point(params: &Parameters) -> bool {
-    params.shell == Shell::Ksh
-}
-
 // ===========================================================================
 // SC2017 — checkDivBeforeMult
 // ===========================================================================

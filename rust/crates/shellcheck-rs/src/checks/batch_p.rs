@@ -20,7 +20,6 @@ use crate::ast::*;
 use crate::astlib;
 use crate::astlib::basename;
 use crate::astlib::e4m;
-use crate::astlib::is_annotation_ignoring_code;
 use crate::astlib::oversimplify;
 use crate::cfg::get_braced_modifier;
 use crate::cfg::get_unquoted_literal;
@@ -41,13 +40,6 @@ pub fn register(c: &mut Checker) {
 /// `supportsArrays`.
 fn supports_arrays(shell: Shell) -> bool {
     matches!(shell, Shell::Bash | Shell::Ksh)
-}
-
-/// `shouldIgnoreCode params code t`.
-fn should_ignore_code(params: &Parameters, code: i64, t: &Token) -> bool {
-    get_path(params, t)
-        .iter()
-        .any(|p| is_annotation_ignoring_code(code, p))
 }
 
 // ===========================================================================

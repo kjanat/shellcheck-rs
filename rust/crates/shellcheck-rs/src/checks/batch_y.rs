@@ -15,7 +15,8 @@ use crate::ast::*;
 use crate::astlib;
 use crate::astlib::get_word_parts;
 use crate::astlib::is_command_substitution;
-use crate::cfg::will_become_multiple_args;
+use crate::astlib::will_split;
+use crate::checks::batch_t::dispatch_exactly;
 use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {
@@ -27,22 +28,6 @@ pub fn register(c: &mut Checker) {
 // ===========================================================================
 // Shared local helpers (ported from ASTLib).
 // ===========================================================================
-
-/// `willSplit`.
-fn will_split(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_DollarBraced { .. } => true,
-        T_DollarExpansion(_) => true,
-        T_Backticked(_) => true,
-        T_BraceExpansion(_) => true,
-        T_Glob(_) => true,
-        T_Extglob { .. } => true,
-        T_DoubleQuoted(l) => l.iter().any(will_become_multiple_args),
-        T_NormalWord(l) => l.iter().any(will_split),
-        _ => false,
-    }
-}
 
 // ===========================================================================
 // SC2070 — checkUnquotedN
@@ -81,39 +66,6 @@ fn check_unquoted_n(_params: &Parameters, t: &Token, out: &mut Out) {
 //             (file:arg1:_) -> warn (getId arg1) 2240 $
 //                 "The dot command does not support arguments in sh/dash. Set them as variables."
 //             _ -> return ()
-
-/// Effective command token if a check registered under `Exactly target` would
-/// fire on `t`, per `checkCommand`.
-fn dispatch_exactly(t: &Token, target: &str) -> Option<Token> {
-    let (assignments, words) = match &*t.inner {
-        InnerToken::T_SimpleCommand { assignments, words } if !words.is_empty() => {
-            (assignments, words)
-        }
-        _ => return None,
-    };
-    let name = astlib::get_literal_string(&words[0])?;
-    if name.contains('/') {
-        return None; // slash -> only Basename dispatch
-    }
-    if name == "builtin" && words.len() >= 2 {
-        let selected = astlib::only_literal_string(&words[1]);
-        if selected == target {
-            return Some(Token::new(
-                t.id(),
-                InnerToken::T_SimpleCommand {
-                    assignments: assignments.clone(),
-                    words: words[1..].to_vec(),
-                },
-            ));
-        }
-        return None;
-    }
-    if name == target {
-        Some(t.clone())
-    } else {
-        None
-    }
-}
 
 fn check_source_args(params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_exactly(t, ".") {

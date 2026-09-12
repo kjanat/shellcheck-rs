@@ -12,7 +12,6 @@
 //! Not ported here (belong to other batches / codes): SC2182 (printf, no
 //! variables), SC2018/2019/2020/2021 (tr literal-string advice).
 use crate::analyzer_lib::get_command_name;
-use crate::analyzer_lib::get_command_name_and_token;
 use crate::analyzer_lib::is_quote_free;
 use crate::analyzer_lib::*;
 use crate::ast::*;
@@ -30,10 +29,6 @@ pub fn register(c: &mut Checker) {
 // ---- getWordParts / isFlag / isGlob (ported from ASTLib) --------------------
 
 // ---- command name resolution (ported from ASTLib) -------
-
-fn get_command_token_or_this(t: &Token) -> &Token {
-    get_command_name_and_token(false, t).1
-}
 
 // ===========================================================================
 // SC2046 — checkUnquotedExpansions

@@ -8,6 +8,7 @@
 
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::{get_literal_string, is_annotation_ignoring_code};
 use crate::astlib::{get_literal_string_def, oversimplify_concat};
 use crate::cfg::CFGParameters;
 use crate::cfg_analysis::{self, CFGAnalysis};
@@ -263,7 +264,7 @@ pub fn run_checker(params: &Parameters, checker: &Checker) -> Out {
 /// the fallback, else Bash.
 pub fn determine_shell(fallback: Option<Shell>, root: &Token) -> Shell {
     let candidate = get_candidate(root);
-    astlib::shell_for_executable(&candidate)
+    crate::data::shell_for_executable(&candidate)
         .or(fallback)
         .unwrap_or(Shell::Bash)
 }
@@ -1080,8 +1081,6 @@ fn get_variables_from_literal_token(t: &Token) -> Vec<String> {
 }
 
 // ---- special variable data (ShellCheck.Data) -------------------------------
-
-pub(crate) const SPECIAL_VARIABLES_WITHOUT_SPACES: &[&str] = &["-", "$", "?", "!", "#"];
 
 // ===========================================================================
 // getVariableFlow (`ShellCheck.AnalyzerLib.getVariableFlow`)
@@ -2241,4 +2240,30 @@ mod printf_format_tests {
     fn prop_checkGetPrintfFormats10() {
         assert_eq!(get_printf_formats("%Q"), "Q");
     }
+}
+
+/// `hasFloatingPoint` (Analytics): only ksh does floating point in arithmetic.
+pub(crate) fn has_floating_point(params: &Parameters) -> bool {
+    params.shell == Shell::Ksh
+}
+
+/// `shouldIgnoreCode`.
+pub(crate) fn should_ignore_code(params: &Parameters, code: i64, t: &Token) -> bool {
+    get_path(params, t)
+        .iter()
+        .any(|p| is_annotation_ignoring_code(code, p))
+}
+
+/// The literal command name of a `T_SimpleCommand`, if it has one.
+pub(crate) fn simple_command_name(t: &Token) -> Option<String> {
+    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
+        let cmd = words.first()?;
+        return get_literal_string(cmd);
+    }
+    None
+}
+
+/// `hasFlag`.
+pub(crate) fn has_flag(t: &Token, flag: &str) -> bool {
+    get_all_flags(t).iter().any(|(_, f)| f == flag)
 }

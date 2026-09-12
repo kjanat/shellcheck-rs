@@ -28,6 +28,7 @@ use crate::astlib::is_command_substitution;
 use crate::astlib::is_constant;
 use crate::cfg;
 use crate::cfg::get_unquoted_literal;
+use crate::data::COMMON_COMMANDS;
 use crate::interface::Fix;
 use std::collections::HashMap;
 
@@ -670,54 +671,13 @@ const NON_READING_COMMANDS: &[&str] = &[
 
 const INTERACTIVE_FLAG_CMDS: &[&str] = &["cp", "mv", "rm"];
 
-fn ptn_get_all_flags(cmd: &Token) -> Vec<(&Token, String)> {
-    let words = match &*cmd.inner {
-        InnerToken::T_SimpleCommand { words, .. } => words,
-        _ => return Vec::new(),
-    };
-    let args = if words.len() > 1 {
-        &words[1..]
-    } else {
-        &[][..]
-    };
-    let token_and_text: Vec<(&Token, String)> = args
-        .iter()
-        .map(|x| (x, astlib::oversimplify(x).concat()))
-        .collect();
-    let stop = token_and_text.iter().position(|(_, t)| t == "--");
-    let (flag_args, rest) = match stop {
-        Some(i) => (&token_and_text[..i], &token_and_text[i..]),
-        None => (&token_and_text[..], &[][..]),
-    };
-    let mut out: Vec<(&Token, String)> = Vec::new();
-    for (x, text) in flag_args {
-        if let Some(arg) = text.strip_prefix("--") {
-            out.push((x, arg.split('=').next().unwrap_or("").to_string()));
-        } else if let Some(a) = text.strip_prefix('-') {
-            for v in a.chars() {
-                out.push((x, v.to_string()));
-            }
-        } else {
-            out.push((x, String::new()));
-        }
-    }
-    for (x, _) in rest {
-        out.push((x, String::new()));
-    }
-    out
-}
-
-fn ptn_has_flag(cmd: &Token, flag: &str) -> bool {
-    ptn_get_all_flags(cmd).iter().any(|(_, s)| s == flag)
-}
-
 fn ptn_has_interactive_flag(cmd: &Token) -> bool {
-    ptn_has_flag(cmd, "i") || ptn_has_flag(cmd, "interactive")
+    has_flag(cmd, "i") || has_flag(cmd, "interactive")
 }
 
 fn ptn_command_specific_exception(name: &str, cmd: &Token) -> bool {
     match name {
-        "du" => ptn_get_all_flags(cmd)
+        "du" => get_all_flags(cmd)
             .iter()
             .any(|(_, s)| s == "exclude-from" || s == "files0-from"),
         _ if INTERACTIVE_FLAG_CMDS.contains(&name) => ptn_has_interactive_flag(cmd),
@@ -1401,177 +1361,6 @@ fn check_array_value_used_as_index(params: &Parameters, _root: &Token, out: &mut
         }
     }
 }
-
-/// `ShellCheck.Data.commonCommands`.
-const COMMON_COMMANDS: &[&str] = &[
-    "admin",
-    "alias",
-    "ar",
-    "asa",
-    "at",
-    "awk",
-    "basename",
-    "batch",
-    "bc",
-    "bg",
-    "break",
-    "c99",
-    "cal",
-    "cat",
-    "cd",
-    "cflow",
-    "chgrp",
-    "chmod",
-    "chown",
-    "cksum",
-    "cmp",
-    "colon",
-    "comm",
-    "command",
-    "compress",
-    "continue",
-    "cp",
-    "crontab",
-    "csplit",
-    "ctags",
-    "cut",
-    "cxref",
-    "date",
-    "dd",
-    "delta",
-    "df",
-    "diff",
-    "dirname",
-    "dot",
-    "du",
-    "echo",
-    "ed",
-    "env",
-    "eval",
-    "ex",
-    "exec",
-    "exit",
-    "expand",
-    "export",
-    "expr",
-    "fc",
-    "fg",
-    "file",
-    "find",
-    "fold",
-    "fuser",
-    "gencat",
-    "get",
-    "getconf",
-    "getopts",
-    "gettext",
-    "grep",
-    "hash",
-    "head",
-    "iconv",
-    "ipcrm",
-    "ipcs",
-    "jobs",
-    "join",
-    "kill",
-    "lex",
-    "link",
-    "ln",
-    "locale",
-    "localedef",
-    "logger",
-    "logname",
-    "lp",
-    "ls",
-    "m4",
-    "mailx",
-    "make",
-    "man",
-    "mesg",
-    "mkdir",
-    "mkfifo",
-    "more",
-    "msgfmt",
-    "mv",
-    "newgrp",
-    "ngettext",
-    "nice",
-    "nl",
-    "nm",
-    "nohup",
-    "od",
-    "paste",
-    "patch",
-    "pathchk",
-    "pax",
-    "pr",
-    "printf",
-    "prs",
-    "ps",
-    "pwd",
-    "read",
-    "readlink",
-    "readonly",
-    "realpath",
-    "renice",
-    "return",
-    "rm",
-    "rmdel",
-    "rmdir",
-    "sact",
-    "sccs",
-    "sed",
-    "set",
-    "sh",
-    "shift",
-    "sleep",
-    "sort",
-    "split",
-    "strings",
-    "strip",
-    "stty",
-    "tabs",
-    "tail",
-    "talk",
-    "tee",
-    "test",
-    "time",
-    "timeout",
-    "times",
-    "touch",
-    "tput",
-    "tr",
-    "trap",
-    "tsort",
-    "tty",
-    "type",
-    "ulimit",
-    "umask",
-    "unalias",
-    "uname",
-    "uncompress",
-    "unexpand",
-    "unget",
-    "uniq",
-    "unlink",
-    "unset",
-    "uucp",
-    "uudecode",
-    "uuencode",
-    "uustat",
-    "uux",
-    "val",
-    "vi",
-    "wait",
-    "wc",
-    "what",
-    "who",
-    "write",
-    "xargs",
-    "xgettext",
-    "yacc",
-    "zcat",
-];
 
 #[cfg(test)]
 #[allow(non_snake_case)]

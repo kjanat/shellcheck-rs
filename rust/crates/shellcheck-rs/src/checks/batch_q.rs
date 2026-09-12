@@ -18,6 +18,7 @@ use crate::astlib::is_glob;
 use crate::astlib::is_quotes;
 use crate::cfg::get_unquoted_literal;
 use crate::cfg::will_become_multiple_args;
+use crate::data::{ARITHMETIC_BINARY_TEST_OPS, VARIABLES_WITHOUT_SPACES};
 use crate::interface::{Fix, Replacement, Shell};
 
 /// Register this batch's checks.
@@ -50,43 +51,6 @@ pub fn register(c: &mut Checker) {
 // ---------------------------------------------------------------------------
 // Shared local helpers (ported from ASTLib / AnalyzerLib; kept private).
 // ---------------------------------------------------------------------------
-
-/// `ShellCheck.Data.variablesWithoutSpaces`.
-const VARIABLES_WITHOUT_SPACES: &[&str] = &[
-    "-",
-    "$",
-    "?",
-    "!",
-    "#",
-    "BASHPID",
-    "BASH_ARGC",
-    "BASH_LINENO",
-    "BASH_SUBSHELL",
-    "EUID",
-    "EPOCHREALTIME",
-    "EPOCHSECONDS",
-    "LINENO",
-    "OPTIND",
-    "PPID",
-    "RANDOM",
-    "READLINE_ARGUMENT",
-    "READLINE_MARK",
-    "READLINE_POINT",
-    "SECONDS",
-    "SHELLOPTS",
-    "SHLVL",
-    "SRANDOM",
-    "UID",
-    "COLUMNS",
-    "HISTFILESIZE",
-    "HISTSIZE",
-    "LINES",
-    "BASH_MONOSECONDS",
-    "BASH_TRAPSIG",
-    "FLAGS_ERROR",
-    "FLAGS_FALSE",
-    "FLAGS_TRUE",
-];
 
 // ---------------------------------------------------------------------------
 // SC2013 — checkForInCat
@@ -697,8 +661,6 @@ fn check_equals_in_command(params: &Parameters, original: &Token, out: &mut Out)
 // SC2144/SC2198/SC2199/SC2200/SC2201/SC2202/SC2203/SC2208/SC2245/SC2255 —
 // checkTestArgumentSplitting
 // ---------------------------------------------------------------------------
-
-const ARITHMETIC_BINARY_TEST_OPS: [&str; 6] = ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
 
 fn is_brace_expansion(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_BraceExpansion(_))
