@@ -2074,43 +2074,35 @@ impl Parser {
     /// `many $ doubleQuotedPart <|> readHereLiteral`, on the body's own input.
     fn read_here_data_parts(&mut self) -> PResult<Vec<Token>> {
         let mut parts = Vec::new();
-        while !self.eof() {
-            let progressed_from = self.idx;
-            match self.peek() {
-                // `readDoubleQuotedDollar` always succeeds on `$` (falls back to
-                // a literal `$` via `readDollarLonely`).
-                Some('$') => {
-                    if let Ok(t) = self.read_double_quoted_dollar() {
-                        parts.push(t);
+        loop {
+            let before = self.idx;
+            match self.read_here_data_part() {
+                Ok(t) => parts.push(t),
+                Err(()) => {
+                    // `many`: an alternative that consumed before failing takes
+                    // the here document down with it.
+                    if self.idx != before {
+                        return Err(());
                     }
+                    return Ok(parts);
                 }
-                // `readQuotedBackTicked`: a `` `..` `` command substitution. An
-                // unterminated one has consumed the backtick, so `many` fails
-                // rather than leaving it to `readHereLiteral` (which excludes
-                // backticks anyway).
-                Some('`') => match self.read_backticked(true) {
-                    Ok(t) => parts.push(t),
-                    Err(()) => return Err(()),
-                },
-                // `readDoubleLiteral` (escapes + run up to a double-quotable
-                // char), else `readHereLiteral` (run up to `` `$\ ``, so `"` and
-                // ordinary text are literal).
-                _ => {
-                    if let Ok(t) = self.read_double_literal_run() {
-                        parts.push(t);
-                    } else if let Ok(t) = self.read_here_literal() {
-                        parts.push(t);
-                    } else {
-                        break;
-                    }
-                }
-            }
-            if self.idx == progressed_from {
-                // No progress (shouldn't happen); guard against an infinite loop.
-                break;
             }
         }
-        Ok(parts)
+    }
+
+    /// `doubleQuotedPart <|> readHereLiteral`: outside a double quote, a `"` and
+    /// the ordinary text around it are literal too.
+    fn read_here_data_part(&mut self) -> PResult<Token> {
+        let m = self.mark();
+        match self.read_double_quoted_part() {
+            Ok(t) => return Ok(t),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+            }
+        }
+        self.read_here_literal()
     }
 
     /// `readHereLiteral`: a run of characters that are not `` ` ``, `$` or `\`.

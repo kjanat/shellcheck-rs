@@ -216,40 +216,78 @@ impl Parser {
         self.called("double quoted string", |p| p.read_double_quoted_body())
     }
 
+    /// `doubleQuotedPart = readDoubleLiteral <|> readDoubleQuotedDollar <|>
+    /// readQuotedBackTicked <|> readUnicodeQuote`: bare alternations, so an
+    /// alternative that consumed before failing leaves the rest out of reach
+    /// and takes the enclosing `many` with it.
+    pub(super) fn read_double_quoted_part(&mut self) -> PResult<Token> {
+        let m = self.mark();
+        match self.read_double_literal_run() {
+            Ok(t) => return Ok(t),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+            }
+        }
+        match self.read_double_quoted_dollar() {
+            Ok(t) => return Ok(t),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+            }
+        }
+        match self.read_backticked(true) {
+            Ok(t) => return Ok(t),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+            }
+        }
+        // `readUnicodeQuote`, the double-quoted variant.
+        match self.peek() {
+            Some(c) if UNICODE_DOUBLE_QUOTES.contains(c) => {
+                let pos = self.pos();
+                self.bump();
+                let id = self.next_id_between(pos.clone(), self.pos());
+                // `parseProblemAt pos`, so zero-width at the quote.
+                self.problem_at(
+                    pos.clone(),
+                    pos,
+                    Severity::WarningC,
+                    1111,
+                    "This is a unicode quote. Delete and retype it (or ignore/singlequote for literal).",
+                );
+                Ok(Token::new(id, InnerToken::T_Literal(c.to_string())))
+            }
+            _ => Err(()),
+        }
+    }
+
+    /// `many doubleQuotedPart`: stops where every alternative declines without
+    /// consuming (the closing quote, or the end of the input).
+    pub(super) fn read_double_quoted_parts(&mut self) -> PResult<Vec<Token>> {
+        let mut parts = Vec::new();
+        loop {
+            let before = self.idx;
+            match self.read_double_quoted_part() {
+                Ok(t) => parts.push(t),
+                Err(()) => {
+                    if self.idx != before {
+                        return Err(());
+                    }
+                    return Ok(parts);
+                }
+            }
+        }
+    }
+
     fn read_double_quoted_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.char('"')?;
-        let mut parts = Vec::new();
-        loop {
-            match self.peek() {
-                Some('"') | None => break,
-                Some('$') => {
-                    if let Ok(t) = self.read_double_quoted_dollar() {
-                        parts.push(t);
-                        continue;
-                    }
-                    // literal '$'
-                    parts.push(self.read_double_literal_run()?);
-                }
-                Some('`') => parts.push(self.read_backticked(true)?),
-                // `readUnicodeQuote`, the double-quoted variant.
-                Some(c) if UNICODE_DOUBLE_QUOTES.contains(c) => {
-                    let pos = self.pos();
-                    self.bump();
-                    let id = self.next_id_between(pos.clone(), self.pos());
-                    // `parseProblemAt pos`, so zero-width at the quote.
-                    self.problem_at(
-                        pos.clone(),
-                        pos,
-                        Severity::WarningC,
-                        1111,
-                        "This is a unicode quote. Delete and retype it (or ignore/singlequote for literal).",
-                    );
-                    parts.push(Token::new(id, InnerToken::T_Literal(c.to_string())));
-                }
-                _ => parts.push(self.read_double_literal_run()?),
-            }
-        }
+        let parts = self.read_double_quoted_parts()?;
         let end = self.pos();
         if self.char('"').is_err() {
             return self.fail_with("Expected end of double quoted string");
@@ -930,21 +968,38 @@ impl Parser {
         if self.peek() != Some('$') {
             return Err(());
         }
-        // Each alternative must be atomic: reset to the '$' before trying the
-        // next, since a sub-parser may consume the '$' then fail.
+        // `readDollarExp <|> readDollarDoubleQuote <|> readDollarSingleQuote
+        // <|> readDollarLonely False`: bare alternations, so an alternative
+        // that consumed before failing leaves the rest out of reach. Each is
+        // atomic otherwise, since it may have read the `$` before backing out.
         let m = self.mark();
-        if let Ok(t) = self.read_dollar_exp() {
-            return Ok(t);
+        match self.read_dollar_exp() {
+            Ok(t) => return Ok(t),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+            }
         }
         self.reset(m);
         // $'...'
-        if let Ok(t) = self.read_dollar_single_quote() {
-            return Ok(t);
+        match self.read_dollar_single_quote() {
+            Ok(t) => return Ok(t),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+            }
         }
         self.reset(m);
         // $"..."
-        if let Ok(t) = self.read_dollar_double_quote() {
-            return Ok(t);
+        match self.read_dollar_double_quote() {
+            Ok(t) => return Ok(t),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+            }
         }
         self.reset(m);
         self.read_dollar_lonely(false)
@@ -954,9 +1009,15 @@ impl Parser {
         if self.peek() != Some('$') {
             return Err(());
         }
+        // `readDollarExp <|> readDollarLonely True`
         let m = self.mark();
-        if let Ok(t) = self.read_dollar_exp() {
-            return Ok(t);
+        match self.read_dollar_exp() {
+            Ok(t) => return Ok(t),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+            }
         }
         self.reset(m);
         self.read_dollar_lonely(true)
@@ -1143,7 +1204,14 @@ impl Parser {
         ))
     }
 
+    /// `try $ char '$' >> (positional <|> special <|> regular)`: the whole
+    /// production is atomic, so a bare `$` leaves nothing consumed for the
+    /// alternatives after it (`$'..'`, `$".."`, the lonely `$`).
     pub(super) fn read_dollar_variable(&mut self) -> PResult<Token> {
+        self.try_parse(|p| p.read_dollar_variable_body())
+    }
+
+    fn read_dollar_variable_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         let pos = self.pos();
         self.char('$')?;
@@ -1213,8 +1281,7 @@ impl Parser {
                 ));
             }
         }
-        // lone '$'
-        self.reset(self.mark_at_start(start.clone()));
+        // lone '$': `positional <|> special <|> regular` all declined.
         Err(())
     }
 
@@ -1303,22 +1370,8 @@ impl Parser {
     pub(super) fn read_dollar_double_quote(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("$\"")?;
-        // reuse double-quote body
-        let mut parts = Vec::new();
-        loop {
-            match self.peek() {
-                Some('"') | None => break,
-                Some('$') => {
-                    if let Ok(t) = self.read_double_quoted_dollar() {
-                        parts.push(t);
-                        continue;
-                    }
-                    parts.push(self.read_double_literal_run()?);
-                }
-                Some('`') => parts.push(self.read_backticked(true)?),
-                _ => parts.push(self.read_double_literal_run()?),
-            }
-        }
+        // `many doubleQuotedPart`, the same body as a plain double quote.
+        let parts = self.read_double_quoted_parts()?;
         if self.char('"').is_err() {
             return self.fail_with("Expected end of translated double quoted string");
         }
@@ -1327,14 +1380,6 @@ impl Parser {
     }
 
     // ---- helpers for subexpressions ---------------------------------------
-
-    pub(super) fn mark_at_start(&self, p: Position) -> Mark {
-        // Reconstruct a Mark from a Position by scanning is expensive; instead we
-        // never actually use this to move backward past consumed chars in a way
-        // that matters. Return current mark (no-op safety).
-        let _ = p;
-        self.mark()
-    }
 
     /// Parse the raw content of a `${...}` into a word whose parts include any
     /// nested expansions, single/double quotes and literal runs.
