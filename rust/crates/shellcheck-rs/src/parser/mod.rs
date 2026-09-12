@@ -657,6 +657,11 @@ impl Parser {
     }
 
     fn record_failure_as(&mut self, message: &str, explicit: bool, consumed: bool) {
+        if self.committed {
+            // The parse is over: Parsec would never have reached any of this,
+            // so a later failure must not outrank the one that ended it.
+            return;
+        }
         // Rank failures the way Parsec picks one: by the position the parser
         // had actually reached when it gave up — furthest wins —
         // then — since `getStringFromParsec` keeps only explicit, non-empty

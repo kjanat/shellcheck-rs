@@ -309,6 +309,31 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_BraceGroup(list)))
     }
 
+    /// `readArithmeticDelimiter`: the doubled `((` / `))` of an arithmetic for
+    /// loop, lenient about a space in the middle but not silent about it.
+    fn read_arithmetic_delimiter(&mut self, c: char, msg: &str) -> PResult<()> {
+        self.char(c)?;
+        let start = self.pos();
+        let before = self.idx;
+        self.spacing();
+        let end = self.pos();
+        let spaced = self.idx != before;
+        if self.char(c).is_err() {
+            self.problem_at(start.clone(), start, Severity::ErrorC, 1137, msg);
+            return self.fail_with("");
+        }
+        if spaced {
+            self.problem_at(
+                start,
+                end,
+                Severity::ErrorC,
+                1138,
+                &format!("Remove spaces between {c}{c} in arithmetic for loop."),
+            );
+        }
+        Ok(())
+    }
+
     /// `readBraced <|> readDoGroup`: `for` also accepts a brace group as its
     /// body, as ksh does.
     fn read_braced_or_do_group(&mut self, kw: &(Position, Position)) -> PResult<Vec<Token>> {
@@ -664,39 +689,42 @@ impl Parser {
         let for_end = self.pos();
         self.spacing();
         // arithmetic for: for ((init; cond; step))
-        if self.peek() == Some('(') && self.peek_at(1) == Some('(') {
-            // readArithmeticDelimiter '(': "(" spacing "(" (lenient about spaces)
-            self.char('(')?;
-            self.arith_spacing();
-            self.char('(')?;
-            let init = self.read_arithmetic_contents()?;
-            self.char(';')?;
-            self.arith_spacing();
-            let cond = self.read_arithmetic_contents()?;
-            self.char(';')?;
-            self.arith_spacing();
-            let step = self.read_arithmetic_contents()?;
-            self.arith_spacing();
-            // readArithmeticDelimiter ')': ")" spacing ")"
-            self.char(')')?;
-            self.arith_spacing();
-            self.char(')')?;
-            self.spacing();
-            // optional sequential separator, then do..done (or brace group)
-            self.allspacing();
-            let _ = self.char(';');
-            self.allspacing();
-            let body = self.read_braced_or_do_group(&kw)?;
-            let id = self.next_id_between(start, for_end.clone());
-            return Ok(Token::new(
-                id,
-                InnerToken::T_ForArithmetic {
-                    init,
-                    cond,
-                    step,
-                    body,
-                },
-            ));
+        if self.peek() == Some('(') {
+            let id_span = (start.clone(), for_end.clone());
+            return self.called("arithmetic for condition", |p| {
+                p.read_arithmetic_delimiter(
+                    '(',
+                    "Missing second '(' to start arithmetic for ((;;)) loop",
+                )?;
+                let init = p.read_arithmetic_contents()?;
+                p.char(';')?;
+                p.spacing();
+                let cond = p.read_arithmetic_contents()?;
+                p.char(';')?;
+                p.spacing();
+                let step = p.read_arithmetic_contents()?;
+                p.spacing();
+                p.read_arithmetic_delimiter(
+                    ')',
+                    "Missing second ')' to terminate 'for ((;;))' loop condition",
+                )?;
+                p.spacing();
+                // optional sequential separator, then do..done (or brace group)
+                p.allspacing();
+                let _ = p.char(';');
+                p.allspacing();
+                let body = p.read_braced_or_do_group(&kw)?;
+                let id = p.next_id_between(id_span.0, id_span.1);
+                Ok(Token::new(
+                    id,
+                    InnerToken::T_ForArithmetic {
+                        init,
+                        cond,
+                        step,
+                        body,
+                    },
+                ))
+            });
         }
         let var = self.read_variable_name()?;
         self.spacing();

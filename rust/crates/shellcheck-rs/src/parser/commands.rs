@@ -1353,12 +1353,16 @@ impl Parser {
             return self.read_heredoc_or_herestring(start, op_start, fd);
         }
         // dup: <& or >&
-        if (self.peek() == Some('<') || self.peek() == Some('>')) && self.peek_at(1) == Some('&') {
+        // `readIoDuplicate` is a `try`, and its target is `digitsAndOrDash`:
+        // digits with an optional dash, or a bare dash. With neither, this is
+        // not a duplicate but a `>& file` / `<& file` redirect, which
+        // `readIoFile` takes with `>&`/`<&` as the operator.
+        if (self.peek() == Some('<') || self.peek() == Some('>'))
+            && self.peek_at(1) == Some('&')
+            && matches!(self.peek_at(2), Some(c) if c.is_ascii_digit() || c == '-')
+        {
             let opc = self.bump().unwrap();
             self.bump(); // &
-            // `digitsAndOrDash`: digits then optional `-`, or a required `-` when
-            // there are no digits. If neither, this is NOT a duplicate but a
-            // `>& file` / `<& file` redirect (readIoDuplicate `try` fails).
             let mut num = String::new();
             while let Some(c) = self.peek() {
                 if c.is_ascii_digit() {
@@ -1381,60 +1385,52 @@ impl Parser {
                     InnerToken::T_GREATAND
                 },
             );
-            if !num.is_empty() {
-                let dup_id = self.next_id_between(op_start.clone(), self.pos());
-                let dup = Token::new(dup_id, InnerToken::T_IoDuplicate { op: op_tok, num });
-                let id = self.next_id_between(start, self.pos());
-                return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: dup }));
-            }
-            // `>& file` / `<& file`: a file redirect to the following word.
-            self.spacing();
-            let file = match self.read_normal_word() {
-                Ok(w) => w,
-                Err(()) => {
-                    self.reset(m);
-                    return Err(());
-                }
-            };
-            let iofile_id = self.next_id_between(op_start.clone(), self.pos());
-            let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
+            let dup_id = self.next_id_between(op_start.clone(), self.pos());
+            let dup = Token::new(dup_id, InnerToken::T_IoDuplicate { op: op_tok, num });
             let id = self.next_id_between(start, self.pos());
-            return Ok(Token::new(
+            return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: dup }));
+        }
+        // `readIoFile = called "redirection"`, so a redirection operator left
+        // without a filename is reported as one — and, having consumed the
+        // operator, it is not something the caller can back out of.
+        let (os, fdc, st) = (op_start.clone(), fd.clone(), start.clone());
+        let om = self.mark();
+        let r = self.called("redirection", move |p| {
+            let op_tok = p.read_io_file_op(os.clone()).ok_or(())?;
+            p.spacing();
+            let file = p.read_normal_word()?;
+            let iofile_id = p.next_id_between(os.clone(), p.pos());
+            let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
+            let id = p.next_id_between(st, p.pos());
+            Ok(Token::new(
                 id,
-                InnerToken::T_FdRedirect { fd, target: iofile },
-            ));
-        }
-        // file redirect operators
-        let op = self.read_io_file_op(op_start.clone());
-        match op {
-            Some(op_tok) => {
-                self.spacing();
-                let file = match self.read_normal_word() {
-                    Ok(w) => w,
-                    Err(()) => {
-                        self.reset(m);
-                        return Err(());
-                    }
-                };
-                let iofile_id = self.next_id_between(op_start.clone(), self.pos());
-                let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
-                let id = self.next_id_between(start, self.pos());
-                Ok(Token::new(
-                    id,
-                    InnerToken::T_FdRedirect { fd, target: iofile },
-                ))
-            }
-            None => {
+                InnerToken::T_FdRedirect {
+                    fd: fdc,
+                    target: iofile,
+                },
+            ))
+        });
+        if r.is_err() {
+            if self.idx == om.idx {
+                // `readIoSource` is a `try`, so the fd source rolls back when
+                // no redirection operator follows it.
                 self.reset(m);
-                Err(())
+            } else {
+                // The operator was consumed, so neither the `<|>` in
+                // `readIoRedirect` nor the `many`/`many1` around it can
+                // recover: the parse is over.
+                self.committed = true;
             }
         }
+        r
     }
 
     pub(super) fn read_io_file_op(&mut self, start: Position) -> Option<Token> {
         let (inner, len): (InnerToken, usize) = match (self.peek(), self.peek_at(1)) {
             (Some('>'), Some('>')) => (InnerToken::T_DGREAT, 2),
             (Some('<'), Some('>')) => (InnerToken::T_LESSGREAT, 2),
+            (Some('>'), Some('&')) => (InnerToken::T_GREATAND, 2),
+            (Some('<'), Some('&')) => (InnerToken::T_LESSAND, 2),
             (Some('>'), Some('|')) => (InnerToken::T_CLOBBER, 2),
             // `redirToken` ends with `notFollowedBy2 (char '(')`, so `<(`/`>(`
             // stay whole for `readProcSub` to take as a word.
