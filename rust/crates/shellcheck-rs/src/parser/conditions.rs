@@ -293,6 +293,8 @@ impl Parser {
         loop {
             let m = self.mark();
             let op_start = self.pos();
+            // `readCondOrOp` opens with `optional guardArithmetic`.
+            self.guard_arithmetic(single);
             if let Some(op) = self.read_cond_or_op() {
                 let op_end = self.pos();
                 self.cond_spacing_checked(single, op.starts_with('-'));
@@ -583,6 +585,10 @@ impl Parser {
             }
         }
         if s.len() < 2 {
+            // `many1 letter <|> fail "Expected a test operator"`, from past the
+            // dash. `readOp` is a `try`, so the failure is caught -- only its
+            // message and position carry.
+            let _: PResult<()> = self.fail_recoverable("Expected a test operator");
             self.reset(m);
             return None;
         }
@@ -692,12 +698,39 @@ impl Parser {
         self.string_peek("=~") || self.string_peek("~=")
     }
 
+    /// `guardArithmetic`: an arithmetic operator where a test operand belongs.
+    /// A `lookAhead`, so it only reports.
+    fn guard_arithmetic(&mut self, single: bool) {
+        let ahead = match self.peek() {
+            Some(c) if "+*/%".contains(c) => true,
+            Some('-') => self.peek_at(1) == Some(' '),
+            _ => false,
+        };
+        if !ahead {
+            return;
+        }
+        let pos = self.pos();
+        self.problem_at(
+            pos.clone(),
+            pos,
+            Severity::ErrorC,
+            1076,
+            if single {
+                "Trying to do math? Use e.g. [ $((i/2+7)) -ge 18 ]."
+            } else {
+                "Trying to do math? Use e.g. [[ $((i/2+7)) -ge 18 ]]."
+            },
+        );
+    }
+
     /// `readCondBinaryOp`: `readRegularOrEscaped anyOp`, then trailing spacing.
-    /// Returns the operator string (with a leading `\` re-added for escaped/quoted
-    /// `<`/`>`/`(`/`)`, matching `escaped`) and the position just after the
-    /// operator (before spacing), used for the TC_Binary span.
+    /// Returns the operator string (with a leading `\` re-added for
+    /// escaped/quoted `<`/`>`/`(`/`)`, matching `escaped`) and the position just
+    /// after the operator (before spacing), used for the TC_Binary span.
     pub(super) fn read_cond_binary_op(&mut self, single: bool) -> Option<(String, Position)> {
         let m = self.mark();
+        // `optional guardArithmetic`
+        self.guard_arithmetic(single);
         // readEscaped anyOp  (\op  or  'op' / "op")
         if let Some(op) = self.read_cond_escaped_op() {
             let end = self.pos();

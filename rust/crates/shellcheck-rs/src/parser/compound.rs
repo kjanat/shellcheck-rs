@@ -264,8 +264,9 @@ impl Parser {
             if matched == kw.chars().count() {
                 // The keyword is all there, so what failed is
                 // `keywordSeparator`, whose `allspacingOrFail` is the only
-                // alternative in it with something to say.
-                let _: PResult<()> = self.fail_with("Expected whitespace");
+                // alternative in it with something to say. `tryWordToken` is a
+                // `try`, so the failure itself is caught.
+                let _: PResult<()> = self.fail_recoverable("Expected whitespace");
             } else {
                 self.fail_implicitly();
             }

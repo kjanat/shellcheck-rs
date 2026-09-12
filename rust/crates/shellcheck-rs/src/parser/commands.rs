@@ -345,6 +345,18 @@ impl Parser {
         self.allspacing_no_newline();
         // `withAnnotations annotations $ chainl1 readPipeline ..`: the
         // directives cover the command they precede, and what it reports.
+        // `unless (null annotations) $ optional $ do { try . lookAhead $
+        // readKeyword; SC1123 }`: a directive in front of a keyword is in front
+        // of half a compound command.
+        if !annotations.is_empty() && self.keyword_len().is_some() {
+            self.problem_at(
+                ann_start.clone(),
+                ann_start.clone(),
+                Severity::ErrorC,
+                1123,
+                "ShellCheck directives are only valid in front of complete compound commands, like 'if', not e.g. individual 'elif' branches.",
+            );
+        }
         let left = self.with_annotations(&annotations, |p| p.read_and_or_chain())?;
         if annotations.is_empty() {
             Ok(left)
