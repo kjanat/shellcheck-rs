@@ -91,7 +91,24 @@ impl Parser {
     /// sitting there is a missing terminator or a mistyped redirection. Read
     /// under `lookAhead`, so the words themselves are put back.
     fn warn_on_tokens_after_compound_command(&mut self) {
-        if self.keyword_len().is_some() || self.peek() == Some('{') {
+        // `notFollowedBy2 $ choice [readKeyword, g_Lbrace]`, and `readKeyword`
+        // includes `}`, `)` and `;;` as well as the closing words. It is
+        // `unexpecting ""`, so a keyword that *is* there is read -- spacing and
+        // all, as `tryToken` does -- and then failed on with "Unexpected ",
+        // which is where Parsec's error ends up.
+        if let Some(n) = self.keyword_len() {
+            let m = self.mark();
+            for _ in 0..n {
+                self.bump();
+            }
+            self.spacing();
+            // Inside `optional . lookAhead`, so the failure itself goes nowhere:
+            // only its message and position survive.
+            let _: PResult<()> = self.fail_recoverable("Unexpected ");
+            self.reset(m);
+            return;
+        }
+        if self.peek() == Some('{') {
             return;
         }
         let m = self.mark();

@@ -224,7 +224,20 @@ impl Parser {
                 }
                 Some('&')
             }
-            Some(';') if self.peek_at(1) != Some(';') => {
+            Some(';') if self.peek_at(1) == Some(';') => {
+                // `g_Semi = notFollowedBy2 g_DSEMI >> tryToken ";"`, and
+                // `notFollowedBy2` is `unexpecting ""`: it reads the `;;` (and
+                // the spacing after it, as `tryToken` does) and then fails with
+                // "Unexpected ", which is where Parsec's error ends up.
+                let m = self.mark();
+                self.bump();
+                self.bump();
+                self.spacing();
+                let _: PResult<()> = self.fail_recoverable("Unexpected ");
+                self.reset(m);
+                None
+            }
+            Some(';') => {
                 self.bump();
                 Some(';')
             }

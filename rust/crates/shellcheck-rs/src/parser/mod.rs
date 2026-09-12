@@ -608,7 +608,7 @@ impl Parser {
     /// Fail deliberately from inside a `try`, as `unexpecting` does: the
     /// message is still the one reported if nothing gets further, but the
     /// failure reads as non-consuming so an enclosing alternative may recover.
-    fn fail_recoverable<T>(&mut self, message: &str) -> PResult<T> {
+    pub(super) fn fail_recoverable<T>(&mut self, message: &str) -> PResult<T> {
         self.record_failure_as(message, true, false);
         Err(())
     }
