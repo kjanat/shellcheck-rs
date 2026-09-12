@@ -256,18 +256,16 @@ impl Parser {
     }
 
     pub(super) fn newline_list(&mut self) {
+        // `many1 ((linefeed <|> carriageReturn) `thenSkip` spacing)`: the
+        // spacing comes after each newline, so it takes a comment on the
+        // following line with it.
         loop {
             let m = self.mark();
+            if self.linefeed_or_carriage_return().is_err() {
+                self.reset(m);
+                break;
+            }
             self.spacing();
-            if self.linefeed().is_ok() {
-                continue;
-            }
-            // lone CR?
-            if self.char('\r').is_ok() && self.peek() != Some('\n') {
-                continue;
-            }
-            self.reset(m);
-            break;
         }
     }
 
@@ -275,16 +273,28 @@ impl Parser {
 
     pub(super) fn read_compound_list_or_empty(&mut self) -> Vec<Token> {
         self.allspacing();
-        self.read_term().unwrap_or_default()
+        let m = self.mark();
+        match self.read_term() {
+            Some(t) => t,
+            None => {
+                // `readTerm <|> return []` only recovers a failure that
+                // consumed nothing.
+                if self.idx != m.idx {
+                    self.committed = true;
+                }
+                self.reset(m);
+                Vec::new()
+            }
+        }
     }
 
     pub(super) fn read_term(&mut self) -> Option<Vec<Token>> {
         self.allspacing();
         let first = self.read_and_or().ok()?;
-        Some(self.read_term_more(first))
+        self.read_term_more(first).ok()
     }
 
-    pub(super) fn read_term_more(&mut self, current: Token) -> Vec<Token> {
+    pub(super) fn read_term_more(&mut self, current: Token) -> PResult<Vec<Token>> {
         if let Some((sep, (start, end))) = self.read_separator() {
             let id = self.next_id_between(start, end);
             let node = if sep == '&' {
@@ -297,16 +307,22 @@ impl Parser {
             match self.read_and_or() {
                 Ok(next) => {
                     let mut v = vec![node];
-                    v.extend(self.read_term_more(next));
-                    v
+                    v.extend(self.read_term_more(next)?);
+                    Ok(v)
                 }
                 Err(()) => {
+                    // `option (T_EOF id) readAndOr`: a failure that consumed
+                    // input is out of reach of that `option`, and of the
+                    // `<|> return [current]` around it.
+                    if self.idx != m.idx {
+                        return Err(());
+                    }
                     self.reset(m);
-                    vec![node]
+                    Ok(vec![node])
                 }
             }
         } else {
-            vec![current]
+            Ok(vec![current])
         }
     }
 
@@ -505,13 +521,9 @@ impl Parser {
                 pipes.push(Token::new(pid, InnerToken::T_Pipe(op)));
                 self.spacing();
                 self.line_break();
-                match self.read_banged_command() {
-                    Ok(c) => cmds.push(c),
-                    Err(()) => {
-                        self.reset(m);
-                        break;
-                    }
-                }
+                // `chainl1`: the separator has consumed, so a command that
+                // fails after it takes the pipeline down with it (`d|`).
+                cmds.push(self.read_banged_command()?);
             } else {
                 self.reset(m);
                 break;

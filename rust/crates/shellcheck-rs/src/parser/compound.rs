@@ -644,7 +644,7 @@ impl Parser {
     pub(super) fn read_condition_list(&mut self) -> PResult<Vec<Token>> {
         self.allspacing();
         let first = self.read_and_or()?;
-        Ok(self.read_term_more(first))
+        self.read_term_more(first)
     }
 
     pub(super) fn read_while_clause(&mut self) -> PResult<Token> {

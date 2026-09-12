@@ -1158,18 +1158,14 @@ impl Parser {
 
     /// `allspacing`: whitespace including linefeeds and comments.
     fn allspacing(&mut self) {
+        // `allspacing = spacing; option False (linefeed >> allspacing)`, so it
+        // is `spacing` -- line continuations and a comment included -- with
+        // linefeeds between.
         loop {
-            let mut progressed = false;
-            while self.whitespace().is_ok() {
-                progressed = true;
-            }
+            self.spacing();
             let m = self.mark();
-            if self.read_comment().is_ok() {
-                progressed = true;
-            } else {
+            if self.linefeed().is_err() {
                 self.reset(m);
-            }
-            if !progressed {
                 break;
             }
         }
