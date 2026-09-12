@@ -975,17 +975,56 @@ impl Parser {
     // not the whole lhs..rhs range.
 
     pub(super) fn read_balanced_parens_until_close(&mut self) -> PResult<String> {
-        // consumes up to and including the matching ')', returns inner raw text
+        // Consumes up to and including the matching ')', returning the raw
+        // text between. Haskell instead parses the contents as commands and
+        // then expects the ')', which means a quote inside swallows any ')'
+        // it contains: `$(")` has no closing paren at all, because the `"`
+        // runs to end of input. Counting parens has to respect quoting for
+        // the same reason, or it stops at a ')' that is really quoted text.
         let mut raw = String::new();
         let mut depth = 1;
+        let mut quote: Option<char> = None;
         while let Some(c) = self.peek() {
-            if c == '(' {
-                depth += 1;
-            } else if c == ')' {
-                depth -= 1;
-                if depth == 0 {
-                    break;
+            match quote {
+                // Inside '..' nothing is special but the closing quote.
+                Some('\'') => {
+                    if c == '\'' {
+                        quote = None;
+                    }
                 }
+                // Inside ".." a backslash still escapes the next character.
+                Some('"') => {
+                    if c == '\\' {
+                        self.bump();
+                        raw.push(c);
+                        if let Some(n) = self.bump() {
+                            raw.push(n);
+                        }
+                        continue;
+                    }
+                    if c == '"' {
+                        quote = None;
+                    }
+                }
+                _ => match c {
+                    '\\' => {
+                        self.bump();
+                        raw.push(c);
+                        if let Some(n) = self.bump() {
+                            raw.push(n);
+                        }
+                        continue;
+                    }
+                    '\'' | '"' => quote = Some(c),
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                },
             }
             self.bump();
             raw.push(c);
