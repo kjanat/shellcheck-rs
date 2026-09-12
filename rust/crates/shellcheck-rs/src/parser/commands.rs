@@ -43,7 +43,42 @@ impl Parser {
     pub(super) fn read_separator_op(&mut self) -> Option<char> {
         match self.peek() {
             Some('&') if self.peek_at(1) != Some('&') => {
+                let pos = self.pos();
                 self.bump();
+                // What follows a `&` usually means it was not meant to
+                // background anything.
+                if ["amp;", "gt;", "lt;"].iter().any(|s| self.string_peek(s)) {
+                    self.problem_at(
+                        pos.clone(),
+                        pos.clone(),
+                        Severity::ErrorC,
+                        1109,
+                        "This is an unquoted HTML entity. Replace with corresponding character.",
+                    );
+                } else if matches!(self.peek(), Some(c) if c == '_' || c.is_ascii_alphabetic()) {
+                    self.problem_at(
+                        pos.clone(),
+                        pos,
+                        Severity::WarningC,
+                        1132,
+                        "This & terminates the command. Escape it or add space after & to silence.",
+                    );
+                }
+                // `a &; b` is a `&` with a stray `;` after it.
+                let m = self.mark();
+                self.spacing();
+                let semi = self.pos();
+                if self.char(';').is_ok() && self.peek() != Some(';') {
+                    self.problem_at(
+                        semi.clone(),
+                        semi,
+                        Severity::ErrorC,
+                        1045,
+                        "It's not 'foo &; bar', just 'foo & bar'.",
+                    );
+                } else {
+                    self.reset(m);
+                }
                 Some('&')
             }
             Some(';') if self.peek_at(1) != Some(';') => {

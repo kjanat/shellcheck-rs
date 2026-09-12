@@ -414,15 +414,17 @@ impl Parser {
     pub(super) fn read_cond_group(&mut self, single: bool) -> PResult<Token> {
         let m = self.mark();
         let start = self.pos();
-        let opened = if single {
-            self.string("\\(").is_ok()
+        // `readRegularOrEscaped`: either form parses, and the wrong one for
+        // this bracket type is reported rather than rejected.
+        let lparen = if self.string("\\(").is_ok() {
+            "\\("
+        } else if self.char('(').is_ok() {
+            "("
         } else {
-            self.char('(').is_ok()
-        };
-        if !opened {
             self.reset(m);
             return Err(());
-        }
+        };
+        self.warn_cond_paren(single, lparen == "(", &start);
         self.cond_spacing_checked(single, single);
         let inner = match self.read_cond_contents(single) {
             Ok(c) => c,
@@ -431,19 +433,36 @@ impl Parser {
                 return Err(());
             }
         };
-        let closed = if single {
-            self.string("\\)").is_ok()
+        let cpos = self.pos();
+        let rparen = if self.string("\\)").is_ok() {
+            "\\)"
+        } else if self.char(')').is_ok() {
+            ")"
         } else {
-            self.char(')').is_ok()
-        };
-        if !closed {
             self.reset(m);
             return Err(());
-        }
+        };
         self.cond_spacing_checked(single, single);
+        self.warn_cond_paren(single, rparen == ")", &cpos);
         let typ = self.cond_typ(single);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::TC_Group { typ, token: inner }))
+    }
+
+    /// `singleWarning` / `doubleWarning`: `[ ]` needs the parens escaped and
+    /// `[[ ]]` needs them bare.
+    fn warn_cond_paren(&mut self, single: bool, bare: bool, pos: &Position) {
+        let (code, msg) = if single && bare {
+            (
+                1028,
+                "In [..] you have to escape \\( \\) or preferably combine [..] expressions.",
+            )
+        } else if !single && !bare {
+            (1029, "In [[..]] you shouldn't escape ( or ).")
+        } else {
+            return;
+        };
+        self.problem_at(pos.clone(), pos.clone(), Severity::ErrorC, code, msg);
     }
 
     pub(super) fn read_cond_unary(&mut self, single: bool) -> PResult<Token> {
@@ -465,8 +484,10 @@ impl Parser {
         // (`startSpan .. endSpan` around `readOp`, before the trailing spacing),
         // mirroring TC_Binary's operator-only span.
         let op_end = self.pos();
-        // must be followed by spacing then a word
-        let sp = self.cond_spacing();
+        // must be followed by spacing then a word. `spacingOrLf` reports the
+        // missing space; the `try` that rewinds the operator does not take the
+        // problem back with it.
+        let sp = self.cond_spacing_checked(single, true);
         if sp.is_empty() {
             self.reset(m);
             return Err(());
@@ -485,8 +506,17 @@ impl Parser {
                 ))
             }
             Err(()) => {
-                self.reset(m);
-                Err(())
+                // `orFail`: the operator is settled, so what is missing is its
+                // argument, not the whole unary expression.
+                let pos = self.pos();
+                self.problem_at(
+                    pos.clone(),
+                    pos,
+                    Severity::ErrorC,
+                    1019,
+                    "Expected this to be an argument to the unary condition.",
+                );
+                self.fail_with("Expected an argument for the unary operator")
             }
         }
     }
