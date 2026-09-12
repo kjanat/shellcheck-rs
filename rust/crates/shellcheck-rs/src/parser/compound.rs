@@ -314,6 +314,8 @@ impl Parser {
             self.problem_at(here.clone(), here, Severity::ErrorC, 1058, "Expected 'do'.");
             return self.fail_with("Expected 'do'");
         }
+        // `parseProblemAtId (getId doKw)`: the span is the `do` token itself.
+        let do_end = self.pos();
         self.accept_but_warn_semi_msg(
             1059,
             "Semicolon is not allowed directly after 'do'. You can just delete it.",
@@ -322,7 +324,7 @@ impl Parser {
         if self.keyword_ahead("done") {
             self.problem_at(
                 do_pos.clone(),
-                do_pos.clone(),
+                do_end.clone(),
                 Severity::ErrorC,
                 1060,
                 "Can't have empty do clauses (use 'true' as a no-op).",
@@ -337,7 +339,7 @@ impl Parser {
         if self.consume_keyword("done").is_err() {
             self.problem_at(
                 do_pos.clone(),
-                do_pos,
+                do_end,
                 Severity::ErrorC,
                 1061,
                 "Couldn't find 'done' for this 'do'.",

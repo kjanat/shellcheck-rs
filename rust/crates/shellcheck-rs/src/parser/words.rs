@@ -12,8 +12,20 @@ impl Parser {
     pub(super) fn read_normalish_word(&mut self, _terms: &[&str]) -> PResult<Token> {
         let start = self.pos();
         let mut parts = Vec::new();
-        while let Ok(p) = self.read_normal_word_part() {
-            parts.push(p);
+        loop {
+            let before = self.idx;
+            match self.read_normal_word_part() {
+                Ok(p) => parts.push(p),
+                Err(()) => {
+                    // `many1`: a part that failed after consuming input fails
+                    // the whole word, so a trailing `\` is a parse error rather
+                    // than a word that quietly ends early.
+                    if self.idx != before {
+                        return Err(());
+                    }
+                    break;
+                }
+            }
         }
         if parts.is_empty() {
             return Err(());
@@ -180,6 +192,7 @@ impl Parser {
         // Must include `'` so a mid-word single quote starts a T_SingleQuoted part
         // rather than being swallowed into the literal.
         let standard_end = "[{}|&;<>()\\ \t\n\r\u{A0}\"'$`?*@!+";
+        let from = self.idx;
         loop {
             match self.peek() {
                 Some('\\') => s.push_str(&self.read_normal_escaped()?),
@@ -190,7 +203,9 @@ impl Parser {
                 _ => break,
             }
         }
-        if s.is_empty() {
+        // `many1`, so what matters is that a part was read — a line
+        // continuation is a part that stands for no text at all.
+        if self.idx == from {
             return Err(());
         }
         let id = self.next_id_between(start, self.pos());

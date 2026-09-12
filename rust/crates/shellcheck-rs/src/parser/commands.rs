@@ -656,6 +656,12 @@ impl Parser {
         match self.read_normal_word() {
             Ok(w) => Some(w),
             Err(()) => {
+                // `readCmdName` is not behind a `try`, so a word that failed
+                // after consuming input ends the parse rather than leaving the
+                // command nameless.
+                if self.idx != m.idx {
+                    self.committed = true;
+                }
                 self.reset(m);
                 None
             }

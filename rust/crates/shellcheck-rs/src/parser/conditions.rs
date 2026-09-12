@@ -516,6 +516,23 @@ impl Parser {
 
     pub(super) fn read_cond_nullary_or_binary(&mut self, single: bool) -> PResult<Token> {
         let start = self.pos();
+        // `attempting`: the branch runs first, so a `[` where an operand
+        // belongs is flagged as a grouping attempt with the wrong brackets
+        // whether or not the word itself reads.
+        if self.peek() == Some('[') {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1026,
+                if single {
+                    "If grouping expressions inside [..], use \\( ..\\)."
+                } else {
+                    "If grouping expressions inside [[..]], use ( .. )."
+                },
+            );
+        }
         let x = self.read_cond_word(single)?;
         // try binary op
         let m = self.mark();
