@@ -137,6 +137,73 @@ impl Oracle {
     }
 }
 
+impl Oracle {
+    /// The version the binary reports, from its `--version` banner.
+    pub fn version(&self) -> Result<String, String> {
+        let out = Command::new(&self.binary)
+            .arg("--version")
+            .output()
+            .map_err(|e| format!("running {} --version: {e}", self.binary))?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.lines()
+            .find_map(|l| l.strip_prefix("version:"))
+            .map(|v| v.trim().to_string())
+            .ok_or_else(|| format!("{}: no version line in --version output", self.binary))
+    }
+
+    /// A cheap fingerprint of the binary (FNV-1a), enough to tell two builds
+    /// apart in a log. Not a cryptographic digest and not claimed to be one.
+    pub fn fingerprint(&self) -> Result<String, String> {
+        let bytes =
+            std::fs::read(&self.binary).map_err(|e| format!("reading {}: {e}", self.binary))?;
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in &bytes {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Ok(format!("{h:016x} ({} bytes)", bytes.len()))
+    }
+}
+
+/// Establish that the binary being trusted as the oracle really is the
+/// ShellCheck of this repository's sources, and say so out loud.
+///
+/// A conformance result means nothing if it was measured against the wrong
+/// reference: a stale binary, or one built from a different version, turns
+/// every "agrees" into a statement about something else entirely. The version
+/// check below is necessary, not sufficient — the sufficient check is to
+/// rebuild from `src/` and compare behaviour, which `--verify-oracle`
+/// documents how to do.
+pub fn verify(oracle: &Oracle, repo: &str) -> Result<String, String> {
+    let cabal_path = std::path::Path::new(repo).join("ShellCheck.cabal");
+    let cabal = std::fs::read_to_string(&cabal_path)
+        .map_err(|e| format!("{}: {e}", cabal_path.display()))?;
+    let expected = cabal
+        .lines()
+        .find_map(|l| {
+            let l = l.trim();
+            let rest = l
+                .strip_prefix("Version:")
+                .or_else(|| l.strip_prefix("version:"))?;
+            Some(rest.trim().to_string())
+        })
+        .ok_or_else(|| format!("{}: no Version: field", cabal_path.display()))?;
+    let actual = oracle.version()?;
+    if actual != expected {
+        return Err(format!(
+            "oracle is version {actual}, but {} says {expected}.\n  \
+             The oracle must be ShellCheck built from this tree:\n    \
+             cabal build shellcheck && cp \"$(cabal list-bin shellcheck)\" .cache/shellcheck-oracle",
+            cabal_path.display()
+        ));
+    }
+    Ok(format!(
+        "oracle: {} version {actual}, fingerprint {}",
+        oracle.binary,
+        oracle.fingerprint()?
+    ))
+}
+
 impl Drop for Oracle {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);

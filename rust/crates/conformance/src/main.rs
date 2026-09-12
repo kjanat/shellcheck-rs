@@ -209,6 +209,7 @@ fn gate(args: &Args) -> Result<bool, String> {
     }
 
     let oracle = oracle::Oracle::new(&args.oracle)?;
+    println!("{}", oracle::verify(&oracle, &args.repo)?);
     // Name each script after its property so a divergence names itself.
     let named: Vec<(String, String)> = entries
         .iter()
@@ -258,7 +259,7 @@ fn gate(args: &Args) -> Result<bool, String> {
 pub struct Args {
     cmd: String,
     oracle: String,
-    repo: String,
+    pub repo: String,
     limit: Option<usize>,
     shell: Option<String>,
     quiet: bool,
