@@ -722,12 +722,27 @@ impl Parser {
     pub(super) fn read_dollar_exp(&mut self) -> PResult<Token> {
         // arithmetic $((, expansion $(, bracket $[, braced ${, variable $x
         let m = self.mark();
-        if self.peek() == Some('$') && self.peek_at(1) == Some('(') && self.peek_at(2) == Some('(')
-        {
-            if let Ok(t) = self.read_dollar_arithmetic() {
-                return Ok(t);
+        if self.string_peek("$((") {
+            // `readAmbiguous "$((" readDollarArithmetic readDollarExpansion`.
+            // Its last attempt consumes, so `readNormalDollar`'s bare `<|>` can
+            // no longer fall back to a literal `$`.
+            let r = self.read_ambiguous(
+                |p| p.read_dollar_arithmetic(),
+                |p| p.read_dollar_expansion(),
+                |p, pos| {
+                    p.note_at(
+                        pos.clone(),
+                        pos,
+                        Severity::ErrorC,
+                        1102,
+                        "Shells disambiguate $(( differently or not at all. For $(command substitution), add space after $( . For $((arithmetics)), fix parsing errors.",
+                    );
+                },
+            );
+            if r.is_err() {
+                self.committed = true;
             }
-            self.reset(m);
+            return r;
         }
         if self.peek() == Some('$') && self.peek_at(1) == Some('(') {
             return self.read_dollar_expansion();
