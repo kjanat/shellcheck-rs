@@ -9,6 +9,11 @@ impl Parser {
             let m = self.mark();
             match self.read_annotation() {
                 Some(mut anns) => {
+                    for a in &anns {
+                        if let Annotation::DisableComment(from, to) = a {
+                            self.disabled_codes.push((*from, *to));
+                        }
+                    }
                     out.append(&mut anns);
                     self.allspacing();
                 }

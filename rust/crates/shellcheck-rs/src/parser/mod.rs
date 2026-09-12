@@ -272,6 +272,11 @@ pub struct Parser {
     reach_pos: Position,
     /// The deepest failure seen, which is the one a fatal parse reports.
     failure: Option<Failure>,
+    /// Every `disable=` directive seen so far. Haskell scopes these through
+    /// `ContextAnnotation` frames and filters the parse-failure notes with
+    /// `isIgnored`; on a failed parse the frames in scope are the ones read
+    /// before the failure, which is what this collects.
+    disabled_codes: Vec<(i64, i64)>,
     /// Counter behind `Context::serial`.
     next_serial: u64,
     /// Set when a production gave up after consuming input and no enclosing
@@ -383,6 +388,7 @@ impl Parser {
             heredoc_bodies: BTreeMap::new(),
             contexts: Vec::new(),
             open_starts: Vec::new(),
+            disabled_codes: Vec::new(),
             next_serial: 0,
             committed: false,
             reach: 0,
@@ -590,6 +596,12 @@ impl Parser {
     /// The diagnostics a fatal parse failure reports: the innermost two open
     /// productions as SC1073 / SC1009, and the failure itself as SC1072.
     /// Mirrors `notesForContext ++ [makeErrorFor err]`.
+    fn code_is_disabled(&self, code: i64) -> bool {
+        self.disabled_codes
+            .iter()
+            .any(|&(f, t)| code >= f && code < t)
+    }
+
     fn failure_notes(&self) -> Vec<ParseNote> {
         let Some(f) = &self.failure else {
             return Vec::new();
@@ -631,6 +643,8 @@ impl Parser {
             code: 1072,
             message: format!("{detail} Fix any mentioned problems and try again."),
         });
+        // `isIgnored`: a `disable=` directive in scope silences these too.
+        out.retain(|n| !self.code_is_disabled(n.code));
         out
     }
 
