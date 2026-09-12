@@ -79,7 +79,7 @@ impl Parser {
                 '\'' => self.read_single_quoted(),
                 '"' => self.read_double_quoted(),
                 '$' => self.read_normal_dollar(),
-                '`' => self.read_backticked(false),
+                '`' | '´' => self.read_backticked(false),
                 // extglob start: ?*@!+ followed by '('
                 _ if "?*@!+".contains(c) && self.peek_at(1) == Some('(') => self.read_extglob(),
                 '*' | '?' | '[' => self.read_glob(),
@@ -837,12 +837,13 @@ impl Parser {
 
     fn read_backticked_body(&mut self, quoted: bool) -> PResult<Token> {
         let start = self.pos();
-        self.char('`')?;
+        self.backtick()?;
         // collect raw until closing backtick, then unescape + subparse
         let sub_start = self.pos();
         let mut raw = String::new();
         while let Some(c) = self.peek() {
-            if c == '`' {
+            // `readGenericLiteral "`´"`: either tick ends the expansion.
+            if c == '`' || c == '´' {
                 break;
             }
             if c == '\\' {
@@ -857,7 +858,7 @@ impl Parser {
             raw.push(c);
         }
         let end = self.pos();
-        if self.char('`').is_err() {
+        if self.backtick().is_err() {
             // Haskell has no message here, but the failure is still a real one
             // rather than a backtracking point: `parsecBracket` re-fails a
             // `called` production with `fail ""`.
@@ -875,6 +876,24 @@ impl Parser {
         let cmds = self.subparse_commands(&unescaped, sub_start);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Backticked(cmds)))
+    }
+
+    /// `backtick`: a real one, or the acute accent people get from an editor
+    /// or a keyboard layout -- which the shell does not treat as one at all.
+    fn backtick(&mut self) -> PResult<()> {
+        if self.char('`').is_ok() {
+            return Ok(());
+        }
+        let pos = self.pos();
+        self.char('´')?;
+        self.problem_at(
+            pos.clone(),
+            pos,
+            Severity::ErrorC,
+            1077,
+            "For command expansion, the tick should slant left (` vs ´). Use $(..) instead.",
+        );
+        Ok(())
     }
 
     // ---- dollar expansions -------------------------------------------------

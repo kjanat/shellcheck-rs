@@ -240,6 +240,11 @@ struct PendingHereDoc {
     /// under `swapContext`, so a body that never terminates is reported
     /// against the redirection rather than whatever line it ran into.
     contexts: Vec<Context>,
+    /// The `disable=` ranges in scope at the `<<`, which in Haskell are
+    /// `ContextAnnotation` frames on that same stack -- so a directive in
+    /// front of the command covers what its here document reports, even
+    /// though the body is read after the command is done.
+    disabled_codes: Vec<(i64, i64)>,
 }
 
 pub struct Parser {
@@ -615,6 +620,35 @@ impl Parser {
             .any(|&(f, t)| code >= f && code < t)
     }
 
+    /// `withAnnotations`: a `disable=` directive applies to the command it
+    /// precedes, including the parse problems raised while reading it. Like any
+    /// `parsecBracket` the scope closes on success or on a failure that
+    /// consumed nothing; one that consumed leaves it open, which is what lets
+    /// `# shellcheck disable=..` silence the failure notes too.
+    pub(super) fn with_annotations<T>(
+        &mut self,
+        anns: &[Annotation],
+        f: impl FnOnce(&mut Self) -> PResult<T>,
+    ) -> PResult<T> {
+        let from = self.disabled_codes.len();
+        let start_idx = self.idx;
+        self.push_disables(anns);
+        let r = f(self);
+        if r.is_ok() || self.idx == start_idx {
+            self.disabled_codes.truncate(from);
+        }
+        r
+    }
+
+    /// The `disable=` ranges of these annotations, pushed as a scope.
+    pub(super) fn push_disables(&mut self, anns: &[Annotation]) {
+        for a in anns {
+            if let Annotation::DisableComment(from, to) = a {
+                self.disabled_codes.push((*from, *to));
+            }
+        }
+    }
+
     fn failure_notes(&self) -> Vec<ParseNote> {
         let Some(f) = &self.failure else {
             return Vec::new();
@@ -806,6 +840,10 @@ impl Parser {
     }
 
     fn note_at(&mut self, start: Position, end: Position, sev: Severity, code: i64, msg: &str) {
+        // `addParseNote` checks `shouldIgnoreCode` too.
+        if self.code_is_disabled(code) {
+            return;
+        }
         self.notes.push(ParseNote {
             start,
             end,
@@ -816,6 +854,11 @@ impl Parser {
     }
 
     fn problem_at(&mut self, start: Position, end: Position, sev: Severity, code: i64, msg: &str) {
+        // `parseProblemAt` checks `shouldIgnoreCode` against the annotation
+        // frames in scope.
+        if self.code_is_disabled(code) {
+            return;
+        }
         if self.committed {
             // Parsing is over as far as Haskell is concerned: everything this
             // parser reads past the point of no return is phantom, and its
@@ -1000,11 +1043,10 @@ impl Parser {
             }
             i += 1;
         }
-        // must be followed by whitespace or end (so "shellcheckfoo" is not a directive)
-        matches!(
-            self.input.get(i),
-            None | Some(' ') | Some('\t') | Some('\n') | Some('\r')
-        )
+        // `readAnnotationPrefix` stops at "shellcheck": whatever follows,
+        // `readComment`'s `unexpecting` refuses the line, so `# shellcheckfoo`
+        // is a broken directive rather than a comment.
+        true
     }
 
     /// `carriageReturn`: a literal CR, which the shell keeps as part of the

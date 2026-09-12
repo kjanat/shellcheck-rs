@@ -314,6 +314,26 @@ impl Parser {
         let ann_start = self.pos();
         let annotations = self.read_annotations();
         self.allspacing_no_newline();
+        // `withAnnotations annotations $ chainl1 readPipeline ..`: the
+        // directives cover the command they precede, and what it reports.
+        let left = self.with_annotations(&annotations, |p| p.read_and_or_chain())?;
+        if annotations.is_empty() {
+            Ok(left)
+        } else {
+            let end = self.span_for(left.id()).1;
+            let id = self.next_id_between(ann_start, end);
+            Ok(Token::new(
+                id,
+                InnerToken::T_Annotation {
+                    annotations,
+                    token: left,
+                },
+            ))
+        }
+    }
+
+    /// `chainl1 readPipeline (g_AND_IF <|> g_OR_IF)`.
+    fn read_and_or_chain(&mut self) -> PResult<Token> {
         let mut left = self.read_pipeline()?;
         loop {
             let m = self.mark();
@@ -363,19 +383,7 @@ impl Parser {
                 }
             }
         }
-        if annotations.is_empty() {
-            Ok(left)
-        } else {
-            let end = self.span_for(left.id()).1;
-            let id = self.next_id_between(ann_start, end);
-            Ok(Token::new(
-                id,
-                InnerToken::T_Annotation {
-                    annotations,
-                    token: left,
-                },
-            ))
-        }
+        Ok(left)
     }
 
     pub(super) fn allspacing_no_newline(&mut self) {
@@ -1724,6 +1732,7 @@ impl Parser {
             delim: delim.clone(),
             id: hd_id,
             contexts: self.contexts.clone(),
+            disabled_codes: self.disabled_codes.clone(),
         });
         let hd = Token::new(
             hd_id,
@@ -1779,6 +1788,8 @@ impl Parser {
             // `swapContext`: the body is read long after the redirection was
             // parsed, so the diagnostics name the `<<` and what contained it.
             let outer = std::mem::replace(&mut self.contexts, hd.contexts.clone());
+            let outer_disabled =
+                std::mem::replace(&mut self.disabled_codes, hd.disabled_codes.clone());
             let from = self.idx;
             let r = self.read_pending_here_doc(&hd);
             // `parsecBracket` restores the outer stack unless the body both
@@ -1786,6 +1797,7 @@ impl Parser {
             // all leaves nothing behind to name.
             if r.is_ok() || self.idx == from {
                 self.contexts = outer.clone();
+                self.disabled_codes = outer_disabled;
                 // The restore happens before the failure reaches the top, so
                 // the report names the restored stack.
                 if let Some(f) = &mut self.failure {
@@ -1916,6 +1928,11 @@ impl Parser {
         let trailing_pos = col(leading.len() + hd.delim.chars().count());
         let trailer_pos = col(leading.len() + hd.delim.chars().count() + trailing.len());
         let mut ppt = |pos: Position, code: i64, msg: &str| {
+            // `ppt` is `parseProblemAt`, which checks `shouldIgnoreCode`: a
+            // `disable=` in front of the command covers this.
+            if self.code_is_disabled(code) {
+                return;
+            }
             self.problems.push(ParseNote {
                 start: pos.clone(),
                 end: pos,
@@ -2185,6 +2202,9 @@ impl Parser {
         // File-wide shellcheck directives after the shebang.
         let file_annotations = self.read_annotations();
         self.allspacing();
+        // `withAnnotations fileAnnotations` wraps the whole file, so these
+        // never go out of scope again.
+        self.push_disables(&file_annotations);
 
         // `verifyShebang` (Parser.hs readScriptFile): warn on an unrecognized
         // interpreter, unless a `# shellcheck shell=...` directive overrides the

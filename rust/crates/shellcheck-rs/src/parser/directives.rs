@@ -8,16 +8,17 @@ impl Parser {
         loop {
             let m = self.mark();
             match self.read_annotation() {
-                Some(mut anns) => {
-                    for a in &anns {
-                        if let Annotation::DisableComment(from, to) = a {
-                            self.disabled_codes.push((*from, *to));
-                        }
-                    }
+                Ok(mut anns) => {
                     out.append(&mut anns);
                     self.allspacing();
                 }
-                None => {
+                Err(()) => {
+                    // `many` stops on a failure that consumed nothing; a
+                    // malformed directive has consumed its prefix, and nothing
+                    // above can recover from that.
+                    if self.idx != m.idx {
+                        self.committed = true;
+                    }
                     self.reset(m);
                     break;
                 }
@@ -26,42 +27,40 @@ impl Parser {
         out
     }
 
-    /// A single `# shellcheck <keys>` directive; None if the line is not one.
-    pub(super) fn read_annotation(&mut self) -> Option<Vec<Annotation>> {
+    /// A single `# shellcheck <keys>` directive. A line that is not one fails
+    /// without consuming; one that is, but is malformed, is a parse error.
+    pub(super) fn read_annotation(&mut self) -> PResult<Vec<Annotation>> {
+        self.called("shellcheck directive", |p| p.read_annotation_body())
+    }
+
+    fn read_annotation_body(&mut self) -> PResult<Vec<Annotation>> {
+        // `try readAnnotationPrefix`
         let m = self.mark();
         if self.char('#').is_err() {
             self.reset(m);
-            return None;
+            return Err(());
         }
         while self.line_whitespace().is_ok() {}
         if self.string("shellcheck").is_err() {
             self.reset(m);
-            return None;
+            return Err(());
         }
-        // require at least one whitespace
-        if self.line_whitespace().is_err() {
-            // "shellcheck" immediately followed by non-space -> not a directive
-            self.reset(m);
-            return None;
-        }
+        // `many1 linewhitespace`, outside the `try`: past the prefix this is a
+        // directive, so `# shellcheckfoo` is a broken one rather than a comment.
+        self.line_whitespace()?;
         while self.line_whitespace().is_ok() {}
-        Some(self.read_annotation_keys())
+        self.read_annotation_keys()
     }
 
-    pub(super) fn read_annotation_keys(&mut self) -> Vec<Annotation> {
+    fn read_annotation_keys(&mut self) -> PResult<Vec<Annotation>> {
         let mut out = Vec::new();
+        // `many1 readKey`
         loop {
-            // stop at end of line
             match self.peek() {
+                // `optional readAnyComment` then the end of the line.
                 None | Some('\n') | Some('\r') => break,
                 Some('#') => {
-                    // trailing comment: consume rest of line
-                    while let Some(c) = self.peek() {
-                        if c == '\n' {
-                            break;
-                        }
-                        self.bump();
-                    }
+                    let _ = self.read_any_comment();
                     break;
                 }
                 _ => {}
@@ -69,27 +68,24 @@ impl Parser {
             let key_pos = self.pos();
             let key = self.read_annotation_key_name();
             if key.is_empty() {
-                // not a key=value; skip rest of line
-                while let Some(c) = self.peek() {
-                    if c == '\n' {
-                        break;
-                    }
-                    self.bump();
-                }
                 break;
             }
             if self.char('=').is_err() {
-                // malformed; stop
-                break;
+                return self.fail_with("Expected '=' after directive key");
             }
             let mut anns = self.read_annotation_value(&key, key_pos);
             out.append(&mut anns);
             while self.line_whitespace().is_ok() {}
         }
+        if out.is_empty() {
+            // `many1` needs one key; `# shellcheck` alone has none.
+            return self.fail_with("");
+        }
         // consume trailing newline
-        let _ = self.char('\r');
+        let _ = self.carriage_return();
         let _ = self.char('\n');
-        out
+        while self.line_whitespace().is_ok() {}
+        Ok(out)
     }
 
     pub(super) fn read_annotation_key_name(&mut self) -> String {
