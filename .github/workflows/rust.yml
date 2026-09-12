@@ -1,9 +1,9 @@
 name: Rust port conformance
 
-# Separate from the Haskell-only build.yml. Runs only when the Rust port, its
-# harness, or this workflow change. The `conformance-gate` job is the required
-# check: it builds the Haskell oracle and the Rust port from the same tree and
-# fails if the port regresses against rust/harness/baseline.json.
+# Separate from the Haskell-only build.yml. Runs only when the Rust port or
+# this workflow change. The `conformance-gate` job is the required check: it
+# builds the Haskell oracle and the Rust port from the same tree and compares
+# them directly, with no committed baseline to drift.
 on:
   # On a PR, the pull_request event already runs the gate on every commit, so
   # restrict push to the release branches to avoid running it twice per commit.
@@ -107,12 +107,21 @@ jobs:
         working-directory: rust
         run: cargo test -p shellcheck-cli
 
-      # (d) The required check: strict conformance gate against the pinned
-      #     oracle SHA and the committed baseline.
+      # (d) The required check: every prop_ property ShellCheck ships, run
+      #     through both tools and compared on the full json1 payload.
       - name: Conformance gate
+        run: cargo run --release -p conformance -- gate --repo . --oracle .cache/shellcheck-oracle
+
+      # (e) Differential fuzzing over generated and mutated shell: the same
+      #     comparison on input nobody wrote a test for. NOT required yet --
+      #     the port still diverges from the oracle on scripts that fail to
+      #     parse, where ShellCheck reports the SC1073/SC1009/SC1072 context
+      #     trio and analyses nothing, while the port analyses a partial tree.
+      #     The count it prints is the honest parity number; it must fall, and
+      #     this step becomes required once it reaches zero.
+      - name: Differential fuzz
+        continue-on-error: true
         run: |
-          ORACLE="${GITHUB_WORKSPACE}/.cache/shellcheck-oracle"
-          echo "oracle: ${ORACLE}"
-          ORACLE="${ORACLE}" \
-          PORT=target/release/rshellcheck \
-          python3 rust/harness/run_conformance.py --gate
+          cargo run --release -p conformance -- fuzz --repo . \
+            --oracle .cache/shellcheck-oracle \
+            --seed ${{ github.run_number }} --iterations 4000 --max-findings 15

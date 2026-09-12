@@ -1,0 +1,396 @@
+//! The conformance corpus, derived directly from ShellCheck's own test suite.
+//!
+//! Every check in `src/ShellCheck/**/*.hs` carries `prop_` properties holding
+//! the exact shell snippets its author considered decisive:
+//!
+//! ```haskell
+//! prop_checkEchoWc3   = verify      checkEchoWc  "n=$(echo $foo | wc -c)"
+//! prop_checkSudoArgs1 = verify     (checkSudoArgs "sudo") "sudo cd /root"
+//! prop_checkEqualsInCommand1a = verifyCodes checkEqualsInCommand [2277] "#!/bin/bash\n0='foo'"
+//! prop_checkFunctionsUsedExternally1 =
+//!     verifyTree checkFunctionsUsedExternally "foo() { :; }; sudo foo"
+//! ```
+//!
+//! Those snippets *are* the corpus: this module reads the Haskell sources and
+//! extracts them, rather than depending on a generated JSON file that can drift
+//! away from the sources it was generated from. The only input is the Haskell
+//! tree that is already in this repository.
+//!
+//! The extraction is a small Haskell-string-literal lexer: the script is the
+//! last string literal on the (possibly continued) property line, unescaped
+//! per the Haskell report — `\n`, `\\`, `\"`, `\x41`, `\o17`, `\123`, ASCII
+//! mnemonics like `\NUL`, and string gaps (`\   \`).
+
+use std::path::Path;
+
+/// One extracted property: an id, the helper that consumes it, and the script.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    /// The Haskell property name, e.g. `prop_checkEchoWc3`.
+    pub id: String,
+    /// Source file the property came from, e.g. `Analytics.hs`.
+    pub file: String,
+    /// `verify`, `verifyNot`, `verifyTree`, `verifyNotTree` or `verifyCodes`.
+    pub helper: String,
+    /// The shell script under test, with Haskell escapes resolved.
+    pub script: String,
+}
+
+const HELPERS: [&str; 5] = [
+    "verifyNotTree",
+    "verifyNot",
+    "verifyTree",
+    "verifyCodes",
+    "verify",
+];
+
+/// ASCII mnemonic escapes, longest first so `\SOH` wins over `\SO`.
+const MNEMONICS: [(&str, char); 24] = [
+    ("NUL", '\0'),
+    ("SOH", '\u{1}'),
+    ("STX", '\u{2}'),
+    ("ETX", '\u{3}'),
+    ("EOT", '\u{4}'),
+    ("ENQ", '\u{5}'),
+    ("ACK", '\u{6}'),
+    ("BEL", '\u{7}'),
+    ("BS", '\u{8}'),
+    ("HT", '\u{9}'),
+    ("LF", '\u{a}'),
+    ("VT", '\u{b}'),
+    ("FF", '\u{c}'),
+    ("CR", '\u{d}'),
+    ("SO", '\u{e}'),
+    ("SI", '\u{f}'),
+    ("DLE", '\u{10}'),
+    ("ESC", '\u{1b}'),
+    ("SP", ' '),
+    ("DEL", '\u{7f}'),
+    ("EM", '\u{19}'),
+    ("SUB", '\u{1a}'),
+    ("FS", '\u{1c}'),
+    ("GS", '\u{1d}'),
+];
+
+/// Unescape one Haskell string literal body (the text between the quotes).
+fn unescape(body: &str) -> String {
+    let c: Vec<char> = body.chars().collect();
+    let mut out = String::with_capacity(body.len());
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] != '\\' {
+            out.push(c[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if i >= c.len() {
+            break;
+        }
+        let e = c[i];
+        // String gap: a backslash, whitespace, and a closing backslash, which
+        // stands for nothing at all.
+        if e.is_whitespace() {
+            while i < c.len() && c[i].is_whitespace() {
+                i += 1;
+            }
+            if i < c.len() && c[i] == '\\' {
+                i += 1;
+            }
+            continue;
+        }
+        // `\&` is the empty string (used to break up numeric escapes).
+        if e == '&' {
+            i += 1;
+            continue;
+        }
+        // Numeric escapes.
+        if e == 'x' || e == 'o' || e.is_ascii_digit() {
+            let (radix, start) = match e {
+                'x' => (16, i + 1),
+                'o' => (8, i + 1),
+                _ => (10, i),
+            };
+            let mut j = start;
+            while j < c.len() && c[j].is_digit(radix) {
+                j += 1;
+            }
+            if j > start {
+                let digits: String = c[start..j].iter().collect();
+                if let Some(ch) = u32::from_str_radix(&digits, radix)
+                    .ok()
+                    .and_then(char::from_u32)
+                {
+                    out.push(ch);
+                    i = j;
+                    continue;
+                }
+            }
+            // Not a valid numeric escape: fall through to the literal below.
+        }
+        // ASCII mnemonics.
+        if e.is_ascii_uppercase() {
+            let rest: String = c[i..].iter().collect();
+            if let Some((name, ch)) = MNEMONICS
+                .iter()
+                .filter(|(n, _)| rest.starts_with(n))
+                .max_by_key(|(n, _)| n.len())
+            {
+                out.push(*ch);
+                i += name.len();
+                continue;
+            }
+        }
+        let simple = match e {
+            'n' => Some('\n'),
+            't' => Some('\t'),
+            'r' => Some('\r'),
+            'f' => Some('\u{c}'),
+            'v' => Some('\u{b}'),
+            'a' => Some('\u{7}'),
+            'b' => Some('\u{8}'),
+            '\\' => Some('\\'),
+            '"' => Some('"'),
+            '\'' => Some('\''),
+            _ => None,
+        };
+        match simple {
+            Some(ch) => out.push(ch),
+            // Anything else: keep the backslash and the character, which is
+            // what an unrecognized sequence means in practice.
+            None => {
+                out.push('\\');
+                out.push(e);
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Every top-level string literal in `text`, as unescaped bodies, skipping
+/// anything inside a `--` line comment.
+fn string_literals(text: &str) -> Vec<String> {
+    let c: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < c.len() {
+        // A Haskell line comment runs to end of line.
+        if c[i] == '-' && i + 1 < c.len() && c[i + 1] == '-' {
+            while i < c.len() && c[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // A character literal can hold a quote: '"' must not open a string.
+        if c[i] == '\'' {
+            let mut j = i + 1;
+            let mut n = 0;
+            while j < c.len() && c[j] != '\'' && n < 6 {
+                if c[j] == '\\' {
+                    j += 1;
+                }
+                j += 1;
+                n += 1;
+            }
+            if j < c.len() && c[j] == '\'' && n > 0 {
+                i = j + 1;
+                continue;
+            }
+        }
+        if c[i] != '"' {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let mut j = start;
+        while j < c.len() {
+            if c[j] == '\\' {
+                j += 2;
+                continue;
+            }
+            if c[j] == '"' {
+                break;
+            }
+            j += 1;
+        }
+        if j >= c.len() {
+            break; // unterminated
+        }
+        let body: String = c[start..j.min(c.len())].iter().collect();
+        out.push(unescape(&body));
+        i = j + 1;
+    }
+    out
+}
+
+/// Extract every property from one Haskell source file's text.
+fn extract_text(file: &str, text: &str) -> Vec<Entry> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if !line.starts_with("prop_") {
+            i += 1;
+            continue;
+        }
+        // Haskell layout: a property may continue on following indented lines.
+        let mut joined = line.to_string();
+        let mut j = i + 1;
+        while j < lines.len()
+            && !lines[j].is_empty()
+            && lines[j].starts_with(char::is_whitespace)
+            && !lines[j].trim_start().starts_with("where")
+        {
+            joined.push(' ');
+            joined.push_str(lines[j].trim_start());
+            j += 1;
+        }
+        i = j;
+
+        let Some(eq) = joined.find(" = ") else {
+            continue;
+        };
+        let id = joined[..eq].trim().to_string();
+        let body = &joined[eq + 3..];
+        // The helper is the leading identifier of the body.
+        let Some(helper) = HELPERS.iter().find(|h| {
+            body.starts_with(**h) && !body[h.len()..].starts_with(|c: char| c.is_alphanumeric())
+        }) else {
+            continue;
+        };
+        // The script is the last string literal on the line: a parenthesised
+        // target like `(checkSudoArgs "sudo")` contributes an earlier one.
+        let Some(script) = string_literals(body).pop() else {
+            continue;
+        };
+        out.push(Entry {
+            id,
+            file: file.to_string(),
+            helper: (*helper).to_string(),
+            script,
+        });
+    }
+    out
+}
+
+/// Read every `prop_` property out of the Haskell tree rooted at `src_dir`
+/// (normally `<repo>/src/ShellCheck`), sorted by id for a stable order.
+pub fn extract(src_dir: &Path) -> Result<Vec<Entry>, String> {
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut stack = vec![src_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let rd = std::fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        for ent in rd {
+            let ent = ent.map_err(|e| format!("{}: {e}", dir.display()))?;
+            let p = ent.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|e| e == "hs") {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    let mut out = Vec::new();
+    for f in &files {
+        let text = std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
+        let name = f
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        out.extend(extract_text(&name, &text));
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out.dedup_by(|a, b| a.id == b.id);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_property() {
+        let e = extract_text("X.hs", r#"prop_checkFoo1 = verify checkFoo "echo $x""#);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].id, "prop_checkFoo1");
+        assert_eq!(e[0].helper, "verify");
+        assert_eq!(e[0].script, "echo $x");
+    }
+
+    #[test]
+    fn parenthesised_target_takes_the_last_literal() {
+        let e = extract_text(
+            "X.hs",
+            r#"prop_checkSudoArgs1 = verify (checkSudoArgs "sudo") "sudo cd /root""#,
+        );
+        assert_eq!(e[0].script, "sudo cd /root");
+    }
+
+    #[test]
+    fn verify_codes_list_is_skipped() {
+        let e = extract_text(
+            "X.hs",
+            r##"prop_x = verifyCodes checkEqualsInCommand [2277] "#!/bin/bash\n0='foo'""##,
+        );
+        assert_eq!(e[0].helper, "verifyCodes");
+        assert_eq!(e[0].script, "#!/bin/bash\n0='foo'");
+    }
+
+    #[test]
+    fn continuation_line_is_joined() {
+        let e = extract_text(
+            "X.hs",
+            "prop_checkFunctionsUsedExternally1 =\n    verifyTree checkFunctionsUsedExternally \"foo() { :; }; sudo foo\"\n",
+        );
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].helper, "verifyTree");
+        assert_eq!(e[0].script, "foo() { :; }; sudo foo");
+    }
+
+    #[test]
+    fn verify_not_is_not_read_as_verify() {
+        let e = extract_text("X.hs", r#"prop_x = verifyNot checkFoo "ok""#);
+        assert_eq!(e[0].helper, "verifyNot");
+        let e = extract_text("X.hs", r#"prop_x = verifyNotTree checkFoo "ok""#);
+        assert_eq!(e[0].helper, "verifyNotTree");
+    }
+
+    #[test]
+    fn escapes() {
+        assert_eq!(unescape(r"a\nb"), "a\nb");
+        assert_eq!(unescape(r#"say \"hi\""#), "say \"hi\"");
+        assert_eq!(unescape(r"back\\slash"), r"back\slash");
+        assert_eq!(unescape(r"\x41\x42"), "AB");
+        assert_eq!(unescape(r"\o101"), "A");
+        assert_eq!(unescape(r"\65"), "A");
+        assert_eq!(unescape(r"\NUL"), "\0");
+        assert_eq!(unescape(r"\ESC[0m"), "\u{1b}[0m");
+        // A shell backslash-escape survives as a literal backslash pair.
+        assert_eq!(unescape(r"echo \\e"), r"echo \e");
+    }
+
+    #[test]
+    fn string_gap_vanishes() {
+        assert_eq!(unescape("one\\   \\two"), "onetwo");
+    }
+
+    #[test]
+    fn comments_do_not_yield_literals() {
+        let lits = string_literals(r#"foo "keep" -- "dropped""#);
+        assert_eq!(lits, vec!["keep".to_string()]);
+    }
+
+    #[test]
+    fn quote_char_literal_does_not_open_a_string() {
+        let lits = string_literals(r#"f '"' "real""#);
+        assert_eq!(lits, vec!["real".to_string()]);
+    }
+
+    #[test]
+    fn non_property_lines_are_ignored() {
+        assert!(extract_text("X.hs", "checkFoo = doStuff \"not a prop\"").is_empty());
+    }
+}

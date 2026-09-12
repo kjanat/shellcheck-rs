@@ -88,12 +88,25 @@ cargo lint                                   # clippy, -D warnings; must be clea
 mise run fmt                                 # dprint; run before committing
 cargo test --workspace                       # prop_ tests ported from the Haskell
 cargo build --release                        # target/release/rshellcheck
-ORACLE=.cache/shellcheck-oracle PORT=target/release/rshellcheck \
-  python3 rust/harness/run_conformance.py --gate   # must stay 1659/1659, 0 extras
+
+# Conformance, both against the Haskell binary as an oracle:
+cargo run --release -p conformance -- gate --oracle .cache/shellcheck-oracle
+cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle
 ```
 
-Layout mirrors the Haskell modules one-to-one (`rust/DESIGN.md`, "Workspace
-layout"); the porting loop and the check-authoring API are in `rust/PORTING.md`.
-Rules that apply to every change there: one definition per helper (grep before
-adding one), no blanket `#![allow(..)]`, every touched file clippy-clean, and a
-check is only registered when the gate shows `extra == 0` for its codes.
+`gate` replays every `prop_` property in `src/ShellCheck/**/*.hs` (extracted
+from the sources at run time, so there is no corpus file to go stale) and must
+stay at 0 divergences. `fuzz` runs the same comparison over generated and
+mutated shell; it is the only one of the two that can say anything about
+parity, because `gate` only ever covers what upstream already wrote a test for.
+A green `gate` with a divergent `fuzz` means the port is incomplete, not
+correct.
+
+Layout mirrors the Haskell modules one-to-one: `ast_lib.rs` = `ASTLib.hs`,
+`data.rs` = `Data.hs`, `parser/` = `Parser.hs`, `analytics/` = `Analytics.hs`,
+`checks/commands/` = `Checks/Commands.hs`, `checks/shell_support.rs` =
+`Checks/ShellSupport.hs`. A check keeps its Haskell shape: a plain fn, a
+`CommandCheck::new(Basename("x"), ..)`, or a `ForShell::new(&[Shell::Sh], ..)`.
+Rules for every change there: one definition per helper (grep before adding
+one), no blanket `#![allow(..)]`, every touched file clippy-clean, and a check
+is only registered once both conformance commands agree about its codes.
