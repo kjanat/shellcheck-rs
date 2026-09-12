@@ -690,6 +690,11 @@ impl Parser {
             match self.read_normal_word() {
                 Ok(w) => out.push(w),
                 Err(()) => {
+                    // `many` stops on a failure that consumed nothing; one that
+                    // consumed ends the parse, as a trailing `\` does.
+                    if self.idx != m.idx {
+                        self.committed = true;
+                    }
                     self.reset(m);
                     break;
                 }
@@ -1056,7 +1061,17 @@ impl Parser {
 
     fn read_array_body(&mut self) -> PResult<Token> {
         let start = self.pos();
+        let opening = self.pos();
         self.char('(')?;
+        if self.peek() == Some('(') {
+            self.problem_at(
+                opening.clone(),
+                opening,
+                Severity::ErrorC,
+                1116,
+                "Missing $ on a $((..)) expression? (or use ( ( for arrays).",
+            );
+        }
         let mut elems = Vec::new();
         loop {
             self.allspacing();
@@ -1096,9 +1111,22 @@ impl Parser {
                     ));
                 }
                 if !indices.is_empty() && self.char('=').is_ok() {
-                    let value = match self.read_normal_word() {
-                        Ok(w) => w,
-                        Err(()) => self.empty_literal_word(),
+                    // `value <- readRegular <|> nothing`, and readRegular is
+                    // itself `readArray <|> readNormalWord`.
+                    let value = if self.peek() == Some('(') {
+                        let vm = self.mark();
+                        match self.read_array() {
+                            Ok(a) => a,
+                            Err(()) => {
+                                self.reset(vm);
+                                self.empty_literal_word()
+                            }
+                        }
+                    } else {
+                        match self.read_normal_word() {
+                            Ok(w) => w,
+                            Err(()) => self.empty_literal_word(),
+                        }
                     };
                     let eid = self.next_id_between(estart, self.pos());
                     elems.push(Token::new(
@@ -1109,12 +1137,26 @@ impl Parser {
                 }
                 self.reset(em);
             }
+            // `readRegular = readArray <|> readNormalWord`: an element may
+            // itself be an array, as in `a=(1 [2]=(3 4))`.
+            if self.peek() == Some('(') {
+                let am = self.mark();
+                match self.read_array() {
+                    Ok(a) => {
+                        elems.push(a);
+                        continue;
+                    }
+                    Err(()) => self.reset(am),
+                }
+            }
             match self.read_normal_word() {
                 Ok(w) => elems.push(w),
                 Err(()) => break,
             }
         }
-        self.char(')')?;
+        if self.char(')').is_err() {
+            return self.fail_with("Expected ) to close array assignment");
+        }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Array(elems)))
     }
