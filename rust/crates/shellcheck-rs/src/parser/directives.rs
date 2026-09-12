@@ -54,6 +54,9 @@ impl Parser {
 
     fn read_annotation_keys(&mut self) -> PResult<Vec<Annotation>> {
         let mut out = Vec::new();
+        // `many1 readKey` counts keys, not annotations: a key whose value
+        // parses to nothing (`disable=`) is still a key.
+        let mut keys = 0;
         // `many1 readKey`
         loop {
             match self.peek() {
@@ -73,13 +76,29 @@ impl Parser {
             if self.char('=').is_err() {
                 return self.fail_with("Expected '=' after directive key");
             }
-            let mut anns = self.read_annotation_value(&key, key_pos);
+            let mut anns = self.read_annotation_value(&key, key_pos)?;
+            keys += 1;
             out.append(&mut anns);
             while self.line_whitespace().is_ok() {}
         }
-        if out.is_empty() {
+        if keys == 0 {
             // `many1` needs one key; `# shellcheck` alone has none.
             return self.fail_with("");
+        }
+        // `void linefeed <|> eof <|> do { SC1125; many (noneOf "\n"); .. }`:
+        // anything left on the line was not a key=value pair.
+        if !self.eof() && self.peek() != Some('\n') && self.peek() != Some('\r') {
+            let pos = self.pos();
+            self.note_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1125,
+                "Invalid key=value pair? Ignoring the rest of this directive starting here.",
+            );
+            while matches!(self.peek(), Some(c) if c != '\n') {
+                self.bump();
+            }
         }
         // consume trailing newline
         let _ = self.carriage_return();
@@ -132,16 +151,134 @@ impl Parser {
         }
     }
 
+    /// `"disable" -> plainOrQuoted $ readElement `sepBy` char ','`, parsed
+    /// rather than split: a malformed element is a parse failure at a precise
+    /// position, and what it leaves unread is what SC1125 reports.
+    fn read_disable_value(&mut self) -> PResult<Vec<Annotation>> {
+        self.plain_or_quoted(|p| p.read_disable_elements())
+    }
+
+    fn read_disable_elements(&mut self) -> PResult<Vec<Annotation>> {
+        let mut out = Vec::new();
+        let m = self.mark();
+        match self.read_disable_element() {
+            Ok(a) => out.push(a),
+            Err(()) => {
+                // `sepBy` allows none at all, but only if the first attempt
+                // consumed nothing.
+                if self.idx != m.idx {
+                    return Err(());
+                }
+                self.reset(m);
+                return Ok(out);
+            }
+        }
+        while self.char(',').is_ok() {
+            out.push(self.read_disable_element()?);
+        }
+        Ok(out)
+    }
+
+    /// `readElement = readRange <|> readAll`
+    fn read_disable_element(&mut self) -> PResult<Annotation> {
+        let m = self.mark();
+        match self.read_disable_range() {
+            Ok(a) => return Ok(a),
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+            }
+        }
+        self.string("all")?;
+        Ok(Annotation::DisableComment(0, 1_000_000))
+    }
+
+    /// `readRange`: a code, optionally `-` and another; a lone code covers
+    /// itself alone.
+    fn read_disable_range(&mut self) -> PResult<Annotation> {
+        let from = self.read_disable_code()?;
+        let m = self.mark();
+        let to = if self.char('-').is_ok() {
+            self.read_disable_code()?
+        } else {
+            self.reset(m);
+            from + 1
+        };
+        Ok(Annotation::DisableComment(from, to))
+    }
+
+    /// `readCode = optional (string "SC") >> many1 digit`. Parsec's `string`
+    /// consumes what matched before failing, so a lone `S` takes the whole
+    /// directive down -- while reporting at the `S`, where the string began.
+    fn read_disable_code(&mut self) -> PResult<i64> {
+        if self.peek() == Some('S') {
+            let start = self.mark();
+            self.bump();
+            if self.peek() != Some('C') {
+                let consumed = self.mark();
+                self.reset(start);
+                self.fail_implicitly();
+                self.reset(consumed);
+                return Err(());
+            }
+            self.bump();
+        }
+        let m = self.mark();
+        let mut s = String::new();
+        while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+            s.push(self.bump().unwrap());
+        }
+        if s.is_empty() {
+            self.reset(m);
+            self.fail_implicitly();
+            return Err(());
+        }
+        s.parse().map_err(|_| ())
+    }
+
+    /// `plainOrQuoted p = quoted p <|> p`: the value may be wrapped in quotes,
+    /// in which case `p` runs on what is inside them.
+    fn plain_or_quoted<T>(&mut self, p: impl Fn(&mut Self) -> PResult<T>) -> PResult<T> {
+        let m = self.mark();
+        if let Some(q) = self.peek() {
+            if q == '\'' || q == '"' {
+                self.bump();
+                let start = self.pos();
+                let mut inner = String::new();
+                while let Some(c) = self.peek() {
+                    if c == q || c == '\n' {
+                        break;
+                    }
+                    inner.push(c);
+                    self.bump();
+                }
+                if inner.is_empty() || self.char(q).is_err() {
+                    // `many1 $ noneOf (c:"\n")` then `char c <|> fail ..`
+                    self.reset(m);
+                } else {
+                    let mut sub = self.sub_parser(&inner, &start);
+                    let r = p(&mut sub);
+                    let (contexts, failure) = (sub.contexts.clone(), sub.failure.clone());
+                    self.merge_sub(sub);
+                    if r.is_err() {
+                        self.contexts = contexts;
+                        self.failure = failure;
+                    }
+                    return r;
+                }
+            }
+        }
+        p(self)
+    }
+
     pub(super) fn read_annotation_value(
         &mut self,
         key: &str,
         key_pos: Position,
-    ) -> Vec<Annotation> {
-        match key {
-            "disable" => {
-                let raw = self.read_annotation_raw_value();
-                raw.split(',').filter_map(parse_disable_element).collect()
-            }
+    ) -> PResult<Vec<Annotation>> {
+        Ok(match key {
+            "disable" => return self.read_disable_value(),
             "enable" => {
                 let raw = self.read_annotation_raw_value();
                 raw.split(',')
@@ -198,30 +335,6 @@ impl Parser {
                 );
                 Vec::new()
             }
-        }
-    }
-}
-
-fn parse_disable_element(s: &str) -> Option<Annotation> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    if s == "all" {
-        return Some(Annotation::DisableComment(0, 1_000_000));
-    }
-    // [SC]nnnn optionally -[SC]nnnn
-    let parse_code = |x: &str| -> Option<i64> {
-        let x = x.trim();
-        let x = x.strip_prefix("SC").unwrap_or(x);
-        x.parse::<i64>().ok()
-    };
-    if let Some((a, b)) = s.split_once('-') {
-        let from = parse_code(a)?;
-        let to = parse_code(b)?;
-        Some(Annotation::DisableComment(from, to))
-    } else {
-        let from = parse_code(s)?;
-        Some(Annotation::DisableComment(from, from + 1))
+        })
     }
 }

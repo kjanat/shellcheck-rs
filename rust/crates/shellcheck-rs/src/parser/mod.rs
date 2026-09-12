@@ -531,20 +531,21 @@ impl Parser {
             // a recovered inner failure is not necessarily this frame.
             self.pop_ctx();
         }
-        if r.is_err() {
-            if self.idx == start_idx {
-                // This production bowed out cleanly, so Haskell would have
-                // popped its frame before reading the stack at the end. Drop it
-                // from the failure's snapshot too, but only when it is still on
-                // top: a frame left behind by a consuming failure below stays.
-                let popped = self.contexts.len() + 1;
-                if let Some(f) = &mut self.failure {
-                    if f.contexts.len() == popped && f.contexts[popped - 1].serial == serial {
-                        f.contexts.truncate(popped - 1);
-                    }
+        if r.is_err() && self.idx == start_idx {
+            // This production bowed out cleanly, so Haskell would have
+            // popped its frame before reading the stack at the end. Drop it
+            // from the failure's snapshot too, but only when it is still on
+            // top: a frame left behind by a consuming failure below stays.
+            let popped = self.contexts.len() + 1;
+            if let Some(f) = &mut self.failure {
+                if f.contexts.len() == popped && f.contexts[popped - 1].serial == serial {
+                    f.contexts.truncate(popped - 1);
                 }
             }
-            self.record_failure("", false);
+            // `parsecBracket`'s `<|> (after val *> fail "")` is only reached
+            // when the failure consumed nothing: `<|>` cannot take over from
+            // one that did, so no error is raised here at all.
+            self.record_failure_as("", false, false);
         }
         r
     }
@@ -906,9 +907,11 @@ impl Parser {
         let m = self.mark();
         for c in s.chars() {
             if self.char(c).is_err() {
-                // `string` is not a `try`: it has already consumed what
-                // matched, and that is where Parsec's error sits.
+                // Parsec's `tokens` reports a mismatch at the position the
+                // string started at, however far into it the mismatch was --
+                // so `optional (string "SC")` on `S]` fails at the `S`.
                 self.reset(m);
+                self.fail_implicitly();
                 return Err(());
             }
         }
@@ -1036,7 +1039,12 @@ impl Parser {
                 );
                 Ok(' ')
             }
-            _ => Err(()),
+            _ => {
+                // `oneOf`: a failure here is an error at this position, like
+                // any other primitive's.
+                self.fail_implicitly();
+                Err(())
+            }
         }
     }
 
