@@ -400,7 +400,7 @@ fn check_muncher(params: &Parameters, while_id: Id, t: &Token, out: &mut Out) {
                 if let InnerToken::T_SimpleCommand { assignments, words } = &*cmd.inner {
                     for w in assignments.iter().chain(words.iter()) {
                         for part in get_words(w) {
-                            for seq in get_command_sequences(&part) {
+                            for seq in get_command_sequences(part) {
                                 for c in &seq {
                                     check_muncher(params, while_id, c, out);
                                 }
