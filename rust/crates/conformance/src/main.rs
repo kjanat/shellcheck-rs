@@ -27,6 +27,7 @@ mod corpus;
 mod deviations;
 mod fuzz;
 mod oracle;
+mod shells;
 
 use std::process::ExitCode;
 
@@ -279,6 +280,8 @@ pub enum Command {
     #[default]
     Gate,
     Fuzz,
+    /// External validity: both tools against the shells, not against each other.
+    Shells,
     Extract,
 }
 
@@ -380,6 +383,7 @@ fn main() -> ExitCode {
     let res = match args.cmd {
         Command::Gate => gate(&args),
         Command::Fuzz => fuzz::run(&args),
+        Command::Shells => shells::run(&args),
         Command::Extract => {
             let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
             corpus::extract(&src).map(|e| {

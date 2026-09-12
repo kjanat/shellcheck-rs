@@ -352,6 +352,41 @@ unrelated lines.
 
 ---
 
+## Measuring this: `conformance shells`
+
+The entries above were found one at a time. `conformance shells` measures the
+same question in bulk: for every script in the corpus plus generated shell, it
+compares each tool's idea of "this parses" (no SC1073/SC1009/SC1072) against the
+real interpreter's (`<shell> -n`), per dialect — bash, dash for `sh`, **AT&T
+ksh93** for `ksh` (not mksh, which is a different shell), and `busybox sh`.
+
+2326 scripts per dialect, port vs oracle:
+
+| dialect | rejects-valid (port / oracle) | accepts-invalid (port / oracle) |
+| ------- | ----------------------------- | ------------------------------- |
+| bash    | 33 / 33                       | 60 / 61                         |
+| sh      | 30 / 30                       | 279 / 280                       |
+| ksh     | 37 / 37                       | 82 / 83                         |
+| busybox | 30 / 30                       | 253 / 254                       |
+
+**rejects-valid** is the expensive direction: the shell runs the script, the
+tool refuses to parse it, and the user gets no analysis at all. The port matches
+upstream exactly there, so every one of those is inherited rather than
+introduced. The smallest example is `{}` — a valid command word in all four
+shells, which both tools reject. Item 2 above is the same shape, and the only
+one the port currently fixes.
+
+**accepts-invalid** is a syntax error the tool does not report. The counts are
+high for `sh` and `busybox` because ShellCheck deliberately parses bash syntax
+in every dialect and reports it as SC3xxx ("In dash, X is not supported")
+instead of refusing the file — that is a feature, not a miss, and the number
+should be read as "how much bash-only syntax the generator produced", not as a
+defect count.
+
+Neither column gates anything yet. They are a baseline: the port must not drift
+above upstream in either, and `rejects-valid` is the list to mine for further
+sanctioned deviations.
+
 ## Reporting upstream
 
 Item 2 is the one with real consequences: bash runs `! # comment`, ShellCheck

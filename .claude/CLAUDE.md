@@ -92,6 +92,11 @@ cargo build --release                        # target/release/rshellcheck
 # Conformance, both against the Haskell binary as an oracle:
 cargo run --release -p conformance -- gate --oracle .cache/shellcheck-oracle
 cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle
+
+# External validity: both tools against the shells themselves (bash, dash,
+# ksh93, busybox sh via `-n`). Needs those interpreters installed; a missing
+# one is reported, never silently skipped.
+cargo run --release -p conformance -- shells --iterations 300
 ```
 
 `gate` takes the shell script out of every `prop_` property in

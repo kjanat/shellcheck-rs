@@ -333,6 +333,26 @@ fn script(r: &mut Rng) -> String {
     lines.join("\n") + "\n"
 }
 
+/// One input in the mix this module checks against the oracle: a mutated seed,
+/// a generated script, or a generated script mutated again. Shared so other
+/// modes measure the same population rather than inventing their own.
+pub fn generate(r: &mut Rng, seeds: &[String]) -> String {
+    let s = if r.chance(45) && !seeds.is_empty() {
+        let base = r.pick(seeds).clone();
+        mutate(r, &base, seeds)
+    } else if r.chance(50) {
+        script(r)
+    } else {
+        let g = script(r);
+        mutate(r, &g, seeds)
+    };
+    if s.len() > 4000 {
+        s[..4000].to_string()
+    } else {
+        s
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Mutation
 // ---------------------------------------------------------------------------
