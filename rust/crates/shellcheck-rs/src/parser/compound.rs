@@ -186,40 +186,187 @@ impl Parser {
 
     fn read_if_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
-        self.consume_keyword("if")?;
+        let pos = self.pos();
         let mut clauses: Vec<IfClause> = Vec::new();
-        let cond = self.read_condition_list()?;
-        self.allspacing();
-        self.consume_keyword("then")?;
-        let body = self.read_compound_list_or_empty();
-        clauses.push((cond, body));
+        clauses.push(self.read_if_part()?);
+        // `many` and `option` recover only from a failure that consumed
+        // nothing: an `elif`/`else` that was started and then went wrong is
+        // the if expression's failure, not an absent clause.
         loop {
             self.allspacing();
-            if self.keyword_ahead("elif") {
-                self.consume_keyword("elif")?;
-                let c = self.read_condition_list()?;
-                self.allspacing();
-                self.consume_keyword("then")?;
-                let b = self.read_compound_list_or_empty();
-                clauses.push((c, b));
-            } else {
-                break;
+            let m = self.mark();
+            match self.read_elif_part() {
+                Ok(c) => clauses.push(c),
+                Err(()) => {
+                    if self.idx != m.idx {
+                        return Err(());
+                    }
+                    self.reset(m);
+                    break;
+                }
             }
         }
         self.allspacing();
-        let elses = if self.keyword_ahead("else") {
-            self.consume_keyword("else")?;
-            self.read_compound_list_or_empty()
-        } else {
-            Vec::new()
+        let m = self.mark();
+        let elses = match self.read_else_part() {
+            Ok(e) => e,
+            Err(()) => {
+                if self.idx != m.idx {
+                    return Err(());
+                }
+                self.reset(m);
+                Vec::new()
+            }
         };
         self.allspacing();
-        self.consume_keyword("fi")?;
+        if self.consume_keyword("fi").is_err() {
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1046,
+                "Couldn't find 'fi' for this 'if'.",
+            );
+            let here = self.pos();
+            self.problem_at(
+                here.clone(),
+                here,
+                Severity::ErrorC,
+                1047,
+                "Expected 'fi' matching previously mentioned 'if'.",
+            );
+            return self.fail_with("Expected 'fi'");
+        }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
             InnerToken::T_IfExpression { clauses, elses },
         ))
+    }
+
+    fn read_if_part(&mut self) -> PResult<IfClause> {
+        let pos = self.pos();
+        self.consume_keyword("if")?;
+        self.allspacing();
+        let condition = self.read_condition_list()?;
+        if self.at_if_branch_keyword() {
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1049,
+                "Did you forget the 'then' for this 'if'?",
+            );
+        }
+        self.called("then clause", |p| {
+            p.allspacing();
+            if p.consume_keyword("then").is_err() {
+                let here = p.pos();
+                p.problem_at(
+                    here.clone(),
+                    here,
+                    Severity::ErrorC,
+                    1050,
+                    "Expected 'then'.",
+                );
+                return p.fail_with("Expected 'then'");
+            }
+            p.accept_but_warn_semi(1051, "then");
+            p.allspacing();
+            p.verify_not_empty_if("then");
+            let action = p.read_term().ok_or(())?;
+            Ok((condition, action))
+        })
+    }
+
+    fn read_elif_part(&mut self) -> PResult<IfClause> {
+        self.called("elif clause", |p| {
+            let pos = p.pos();
+            p.consume_keyword("elif")?;
+            p.allspacing();
+            let condition = p.read_condition_list()?;
+            if p.at_if_branch_keyword() {
+                p.problem_at(
+                    pos.clone(),
+                    pos,
+                    Severity::ErrorC,
+                    1049,
+                    "Did you forget the 'then' for this 'elif'?",
+                );
+            }
+            p.allspacing();
+            p.consume_keyword("then")?;
+            p.accept_but_warn_semi(1052, "then");
+            p.allspacing();
+            p.verify_not_empty_if("then");
+            let action = p.read_term().ok_or(())?;
+            Ok((condition, action))
+        })
+    }
+
+    fn read_else_part(&mut self) -> PResult<Vec<Token>> {
+        self.called("else clause", |p| {
+            let pos = p.pos();
+            p.consume_keyword("else")?;
+            // `else if` is a nested `if` needing its own `fi`, which is almost
+            // always a typo for `elif`.
+            let m = p.mark();
+            p.spacing();
+            let nested_if = p.keyword_ahead("if");
+            p.reset(m);
+            if nested_if {
+                p.problem_at(
+                    pos.clone(),
+                    pos,
+                    Severity::ErrorC,
+                    1075,
+                    "Use 'elif' instead of 'else if' (or put 'if' on new line if nesting).",
+                );
+            }
+            p.accept_but_warn_semi(1053, "else");
+            p.allspacing();
+            p.verify_not_empty_if("else");
+            p.read_term().ok_or(())
+        })
+    }
+
+    /// `ifNextToken (g_Fi <|> g_Elif <|> g_Else)`.
+    fn at_if_branch_keyword(&self) -> bool {
+        ["fi", "elif", "else"].iter().any(|k| self.keyword_ahead(k))
+    }
+
+    /// `verifyNotEmptyIf`: the clause runs straight into what closes it.
+    fn verify_not_empty_if(&mut self, clause: &str) {
+        if self.at_if_branch_keyword() {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1048,
+                &format!("Can't have empty {clause} clauses (use 'true' as a no-op)."),
+            );
+        }
+    }
+
+    /// `acceptButWarn g_Semi`: a `;` right after `then`/`else` is a syntax
+    /// error the parser forgives after saying so.
+    fn accept_but_warn_semi(&mut self, code: i64, after: &str) {
+        let m = self.mark();
+        self.spacing();
+        if self.peek() == Some(';') && self.peek_at(1) != Some(';') {
+            let pos = self.pos();
+            self.bump();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                code,
+                &format!("Semicolons directly after '{after}' are not allowed. Just remove it."),
+            );
+        } else {
+            self.reset(m);
+        }
     }
 
     pub(super) fn read_condition_list(&mut self) -> PResult<Vec<Token>> {

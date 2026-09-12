@@ -619,14 +619,15 @@ impl Parser {
 
     fn record_failure_as(&mut self, message: &str, explicit: bool, consumed: bool) {
         // Rank failures the way Parsec picks one: furthest position first,
-        // then a production that had committed to what it was reading over an
-        // alternative that bailed immediately, then a deliberate failure over
-        // one that was merely backtracked out of, then one with something to
-        // say over one that ran out of input.
-        let rank = (self.reach, consumed, explicit, !message.is_empty());
+        // then — since `getStringFromParsec` keeps only explicit, non-empty
+        // `Message`s and discards everything Parsec itself produced — one with
+        // something to say, then a deliberate failure over one that was merely
+        // backtracked out of, then a production that had committed to what it
+        // was reading over an alternative that bailed immediately.
+        let rank = (self.reach, !message.is_empty(), explicit, consumed);
         let better = match &self.failure {
             None => true,
-            Some(f) => rank > (f.reach, f.consumed, f.explicit, !f.message.is_empty()),
+            Some(f) => rank > (f.reach, !f.message.is_empty(), f.explicit, f.consumed),
         };
         if better {
             self.failure = Some(Failure {

@@ -925,8 +925,16 @@ impl Parser {
 
     fn read_assignment_word_body(&mut self) -> PResult<Token> {
         let start = self.pos();
+        // Everything up to and including the `=` is read inside a `try`: a word
+        // that turns out not to be an assignment must leave the cursor where it
+        // started, so the enclosing `called` unwinds and leaves no context
+        // behind either.
+        let prefix = self.mark();
         // name
-        let name = self.read_variable_name()?;
+        let Ok(name) = self.read_variable_name() else {
+            self.reset(prefix);
+            return Err(());
+        };
         // optional [index] indices -> T_UnparsedIndex (like top-level readArrayIndex)
         let mut indices = Vec::new();
         while self.peek() == Some('[') {
@@ -947,7 +955,10 @@ impl Parser {
                 self.bump();
                 raw.push(c);
             }
-            self.char(']')?;
+            if self.char(']').is_err() {
+                self.reset(prefix);
+                return Err(());
+            }
             let idx_id = self.next_id_between(istart, self.pos());
             indices.push(Token::new(
                 idx_id,
@@ -964,6 +975,7 @@ impl Parser {
         } else if self.char('=').is_ok() {
             AssignmentMode::Assign
         } else {
+            self.reset(prefix);
             return Err(());
         };
         // value: array (..) or word (possibly empty)
