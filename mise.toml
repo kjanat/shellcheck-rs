@@ -12,13 +12,16 @@ min_version = "2026.7.3"
 
 [tools]
 # rustfmt is needed by dprint (it formats .rs via rustfmt); clippy by `cargo lint`.
-rust             = { version = "latest", components = ["rustfmt", "clippy"] }  # Rust port (edition 2024)
-cabal            = "latest"                                                    # Haskell build tool for the oracle (Aqua backend)
-python           = "latest"                                                    # conformance harness (rust/harness/*.py)
-ghcup            = "latest"                                                    # GHCup itself, so the compiler is reproducible
-"mise-ghcup:ghc" = "latest"                                                    # GHC 9.x via GHCup; mise's default ghc backend caps at 8.10.7
-dprint           = "latest"                                                    # formatter
-tombi            = "latest"                                                    # TOML toolkit (format/lint)
+cabal  = "latest"                                                    # Haskell build tool for the oracle (Aqua backend)
+dprint = "latest"                                                    # formatter
+ghc    = "latest"                                                    # GHC 9.x via GHCup; mise's default ghc backend caps at 8.10.7
+ghcup  = "latest"                                                    # GHCup itself, so the compiler is reproducible
+python = "latest"                                                    # conformance harness (rust/harness/*.py)
+rust   = { version = "latest", components = ["rustfmt", "clippy"] }  # Rust port (edition 2024)
+tombi  = "latest"                                                    # TOML toolkit (format/lint)
+
+[tool_alias]
+ghc = "mise-ghcup:ghc"
 
 [plugins]
 "vfox-backend:mise-ghcup" = "https://github.com/wasp-lang/mise-ghcup.git"
@@ -26,3 +29,9 @@ tombi            = "latest"                                                    #
 [settings]
 # Backend plugins are experimental, so they must be enabled explicitly.
 experimental = true
+
+[tasks]
+[tasks.fmt]
+alias = "f"
+tools = { tombi = "latest" }
+run   = "dprint fmt"
