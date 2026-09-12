@@ -185,8 +185,10 @@ impl Parser {
                 "Test expression was opened with single [ but closed with double ]]. Make sure they match.",
             );
         }
-        self.spacing();
         let id = self.next_id_between(start, self.pos());
+        // `endSpan` before the trailing `spacing`, so the span ends at the
+        // closing bracket.
+        self.spacing();
         Ok(Token::new(id, InnerToken::T_Condition { typ, token }))
     }
 
@@ -766,6 +768,11 @@ impl Parser {
                 return Some(op.to_string());
             }
         }
+        // `anyOp = flagOp <|> flaglessOp <|> fail ..`: the message is recorded
+        // wherever the operator was expected -- inside the quotes of a
+        // `readEscaped` attempt, that is past the opening quote.
+        let _: PResult<()> =
+            self.fail_recoverable("Expected comparison operator (don't wrap commands in []/[[]])");
         None
     }
 

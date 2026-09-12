@@ -307,6 +307,9 @@ impl Parser {
             return self.fail_with("Expected ) closing the subshell");
         }
         let id = self.next_id_between(start, self.pos());
+        // The trailing `spacing` comes after `endSpan`, so it is outside this
+        // token's span but inside whatever span encloses it (a function's).
+        self.spacing();
         Ok(Token::new(id, InnerToken::T_Subshell(list)))
     }
 
@@ -360,6 +363,8 @@ impl Parser {
             return self.fail_with("Missing '}'");
         }
         let id = self.next_id_between(start, self.pos());
+        // Trailing `spacing` after `endSpan`, as in `readSubshell`.
+        self.spacing();
         Ok(Token::new(id, InnerToken::T_BraceGroup(list)))
     }
 

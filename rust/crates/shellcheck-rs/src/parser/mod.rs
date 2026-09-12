@@ -901,12 +901,16 @@ impl Parser {
 
     fn string(&mut self, s: &str) -> PResult<()> {
         let m = self.mark();
+        // `tokens` is one primitive: matching the string char by char is an
+        // implementation detail that records no errors of its own.
+        let saved = self.failure.clone();
         for c in s.chars() {
             if self.char(c).is_err() {
                 // Parsec's `tokens` reports a mismatch at the position the
                 // string started at, however far into it the mismatch was --
                 // so `optional (string "SC")` on `S]` fails at the `S`.
                 self.reset(m);
+                self.failure = saved;
                 self.fail_implicitly();
                 return Err(());
             }

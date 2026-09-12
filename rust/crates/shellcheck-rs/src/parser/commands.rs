@@ -491,7 +491,14 @@ impl Parser {
         let start = self.pos();
         self.char('!')?;
         let id = self.next_id_between(start, self.pos());
+        let m = self.mark();
         if self.spacing1().is_err() {
+            // `void spacing1 <|> parseProblemAt ..`: the alternative is only
+            // reachable while nothing was consumed. `!#` reads the comment and
+            // still has no whitespace to show for it, so the `!` is fatal.
+            if self.idx != m.idx {
+                return Err(());
+            }
             let pos = self.pos();
             self.problem_at(
                 pos.clone(),
