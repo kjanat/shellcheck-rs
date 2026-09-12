@@ -306,8 +306,15 @@ impl Parser {
 
     /// `literalBraces`: a curly brace that is not part of an expansion is
     /// taken literally, which is usually a missing `;` or a forgotten quote.
+    ///
+    /// Buffered as a note rather than a problem, though Haskell uses
+    /// `parseProblemAt`: this parser also reaches here by backtracking out of
+    /// a brace group whose body failed (`function f { "`), where Parsec would
+    /// have committed and never re-read the `{` as a word. A note is dropped
+    /// when the parse fails, which is exactly those cases; on a successful
+    /// parse the two channels are identical.
     fn literal_brace_problem(&mut self, c: char, pos: Position) {
-        self.problem_at(
+        self.note_at(
             pos.clone(),
             pos,
             Severity::WarningC,
