@@ -51,58 +51,20 @@ pub fn register(c: &mut Checker) {
     c.node(check_single_bracket_operators);
     c.node(check_double_bracket_operators);
 
-    // checkConditionalAndOrs: SC2107/2108/2110/2166 are emitted by batches
-    // f/g/k. Only SC2109 ([ a || b ]) is unported; register just that code.
-    c.node(|p, t, out| {
-        let mut tmp = Out::new();
-        check_conditional_and_ors(p, t, &mut tmp);
-        out.extend(tmp.into_iter().filter(|c| c.comment.code == 2109));
-    });
+    c.node(check_conditional_and_ors);
 
     // checkGlobbedRegex (SC2049): now registered. The shared parser preserves
     // backslash escapes on the regex RHS, so `[[ $x =~ \* ]]` keeps the raw
     // "\*" and is distinguishable from the glob `[[ $x =~ * ]]`. No extra.
     c.node(check_globbed_regex);
 
-    // checkConstantIfs: SC2050 is emitted by batch_c. Register only SC2193.
-    c.node(|p, t, out| {
-        let mut tmp = Out::new();
-        check_constant_ifs(p, t, &mut tmp);
-        out.extend(tmp.into_iter().filter(|c| c.comment.code == 2193));
-    });
+    c.node(check_constant_ifs);
 
-    // checkConstantNullary: SC2078 is emitted by batch_c. Register the
-    // constant-literal cases SC2158/2159/2160/2161.
-    c.node(|p, t, out| {
-        let mut tmp = Out::new();
-        check_constant_nullary(p, t, &mut tmp);
-        // Explicit list of SC codes registered here, not a numeric range;
-        // kept enumerated for parity with the other code-filter sites.
-        #[allow(clippy::manual_range_patterns)]
-        out.extend(
-            tmp.into_iter()
-                .filter(|c| matches!(c.comment.code, 2158 | 2159 | 2160 | 2161)),
-        );
-    });
+    c.node(check_constant_nullary);
 
-    // checkValidCondOps: SC2057 (binary) and SC2058 (unary). The shared parser
-    // now anchors the TC_Unary node on the operator alone (e.g. `[ -M a ]` ->
-    // cols 3-5), matching the oracle, so SC2058 is registered too.
-    c.node(|p, t, out| {
-        let mut tmp = Out::new();
-        check_valid_cond_ops(p, t, &mut tmp);
-        out.extend(
-            tmp.into_iter()
-                .filter(|c| matches!(c.comment.code, 2057 | 2058)),
-        );
-    });
+    c.node(check_valid_cond_ops);
 
-    // checkComparisonAgainstGlob: SC2053/2081 in batch_c. Register only SC2330.
-    c.node(|p, t, out| {
-        let mut tmp = Out::new();
-        check_comparison_against_glob(p, t, &mut tmp);
-        out.extend(tmp.into_iter().filter(|c| c.comment.code == 2330));
-    });
+    c.node(check_comparison_against_glob);
 
     c.node(check_case_against_glob);
     c.node(check_or_neq);
@@ -110,32 +72,14 @@ pub fn register(c: &mut Checker) {
     c.node(check_subshell_as_test);
     c.node(check_empty_condition);
     c.node(check_bad_test_and_or);
-    // checkSecondArgIsComparison: batch_n emits only SC2283. Register the
-    // uncovered SC2284/2285 branches here.
-    c.node(|p, t, out| {
-        let mut tmp = Out::new();
-        check_second_arg_is_comparison(p, t, &mut tmp);
-        out.extend(
-            tmp.into_iter()
-                .filter(|c| matches!(c.comment.code, 2284 | 2285)),
-        );
-    });
+    c.node(check_second_arg_is_comparison);
     c.node(check_trailing_bracket);
     // checkUnaryTestA (SC2331): now registered. The shared parser anchors the
     // TC_Unary node on the `-a` operator alone (cols 3-5 in `[ -a foo ]`),
     // matching the oracle span; the autofix (replaceStart) was already correct.
     c.node(check_unary_test_a);
 
-    // checkUnmatchableCases: SC2194 (constant word) is emitted by batch_n.
-    // Register only the pattern-shadowing codes SC2195/2221/2222.
-    c.node(|p, t, out| {
-        let mut tmp = Out::new();
-        check_unmatchable_cases(p, t, &mut tmp);
-        out.extend(
-            tmp.into_iter()
-                .filter(|c| matches!(c.comment.code, 2195 | 2221 | 2222)),
-        );
-    });
+    c.node(check_unmatchable_cases);
 
     c.node(check_char_range_glob);
 }

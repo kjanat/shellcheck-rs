@@ -47,7 +47,6 @@ pub fn register(c: &mut Checker) {
     // Enabled now that the parser anchors T_OrIf/T_AndIf/TC_And/TC_Or on the
     // operator token (matching ShellCheck). SC2128 still needs dataflow (skipped).
     c.node(check_shorthand_if);
-    c.node(check_conditional_and_ors);
 }
 
 // ---------------------------------------------------------------------------
@@ -212,33 +211,3 @@ fn check_shorthand_if(params: &Parameters, x: &Token, out: &mut Out) {
 // ---------------------------------------------------------------------------
 // SC2166 — checkConditionalAndOrs (SC2166 branches only)
 // ---------------------------------------------------------------------------
-
-fn check_conditional_and_ors(_params: &Parameters, t: &Token, out: &mut Out) {
-    match &*t.inner {
-        InnerToken::TC_And {
-            typ: ConditionType::SingleBracket,
-            op,
-            ..
-        } if op == "-a" => {
-            warn(
-                out,
-                t.id(),
-                2166,
-                "Prefer [ p ] && [ q ] as [ p -a q ] is not well defined.",
-            );
-        }
-        InnerToken::TC_Or {
-            typ: ConditionType::SingleBracket,
-            op,
-            ..
-        } if op == "-o" => {
-            warn(
-                out,
-                t.id(),
-                2166,
-                "Prefer [ p ] || [ q ] as [ p -o q ] is not well defined.",
-            );
-        }
-        _ => {}
-    }
-}

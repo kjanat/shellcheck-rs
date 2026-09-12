@@ -41,7 +41,6 @@ pub fn register(c: &mut Checker) {
     c.node(check_pipe_wc);
     c.node(check_catastrophic_rm);
     // Enabled now that TC_Or is anchored on its operator token.
-    c.node(check_conditional_or);
 }
 
 // ---------------------------------------------------------------------------
@@ -123,24 +122,6 @@ fn check_mkdir_dash_pm(_params: &Parameters, t: &Token, out: &mut Out) {
 // SC2219 — checkLetUsage
 // ---------------------------------------------------------------------------
 
-fn check_let_usage(params: &Parameters, t: &Token, out: &mut Out) {
-    let name = match simple_command_name(t) {
-        Some(n) => n,
-        None => return,
-    };
-    if name != "let" {
-        return;
-    }
-    if matches!(params.shell, Shell::Bash | Shell::Ksh) {
-        style(
-            out,
-            t.id(),
-            2219,
-            "Instead of 'let expr', prefer (( expr )) .",
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
 // SC2126 — checkPipePitfalls (grep | wc -l)
 // ---------------------------------------------------------------------------
@@ -213,14 +194,6 @@ fn check_pipe_wc(_params: &Parameters, t: &Token, out: &mut Out) {
 // ---------------------------------------------------------------------------
 // SC2110 — checkConditionalAndOrs (only the `[[ .. -o .. ]]` branch)
 // ---------------------------------------------------------------------------
-
-fn check_conditional_or(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TC_Or { typ, op, .. } = &*t.inner {
-        if *typ == ConditionType::DoubleBracket && op == "-o" {
-            err(out, t.id(), 2110, "In [[..]], use || instead of -o.");
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // SC2114 / SC2115 — checkCatastrophicRm (rm of a system directory)

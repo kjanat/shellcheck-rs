@@ -34,14 +34,9 @@ use std::collections::HashMap;
 pub fn register(c: &mut Checker) {
     c.node(check_bad_parameter_substitution);
     c.node(check_tilde_in_quotes);
-    // checkInexplicablyUnquoted: the full function (2026/2027/2140) is ported as
-    // `check_inexplicably_unquoted` and covered by prop tests, but SC2027/SC2140
-    // are already owned by batch_b/batch_e. Only the SC2026 branch is registered.
-    c.node(check_inexplicably_unquoted_2026);
+    c.node(check_inexplicably_unquoted);
     c.node(check_lonely_dot_dash);
-    // checkSpuriousExpansion: full function (2084/2091/2092) is ported; SC2091/2092
-    // are owned by batch_d, so only the SC2084 branch is registered.
-    c.node(check_spurious_expansion_2084);
+    c.node(check_spurious_expansion);
     c.node(check_dollar_brackets);
     c.node(check_ssh_here_doc);
     c.node(check_prefix_assignment_reference);
@@ -50,10 +45,7 @@ pub fn register(c: &mut Checker) {
     c.node(check_redirected_nowhere);
     c.node(check_redirection_to_number);
     c.node(check_redirection_to_command);
-    // checkPipeToNowhere: full function (with SC2261) is ported for prop tests as
-    // `check_pipe_to_nowhere`; SC2261 is owned by batch_q's check_competing_redirections,
-    // so a variant that omits warnAboutDupes is registered here.
-    c.node(check_pipe_to_nowhere_no_dupes);
+    c.node(check_pipe_to_nowhere);
     c.node(check_expansion_with_redirection);
     c.tree(check_array_assignment_indices);
     c.node(check_unquoted_parameter_expansion_pattern);
@@ -360,29 +352,6 @@ fn iu_check(params: &Parameters, window: &[Token], out: &mut Out) {
     }
 }
 
-/// Registered variant: only the SC2026 branch.
-fn check_inexplicably_unquoted_2026(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_NormalWord(tokens) = &*t.inner {
-        for start in 0..tokens.len() {
-            let window = &tokens[start..];
-            if window.len() >= 2 {
-                if let InnerToken::T_SingleQuoted(_) = &*window[0].inner {
-                    if let InnerToken::T_Literal(str) = &*window[1].inner {
-                        if !str.is_empty() && str.chars().all(|c| c.is_alphanumeric()) {
-                            info(
-                                out,
-                                window[1].id(),
-                                2026,
-                                "This word is outside of quotes. Did you intend to 'nest '\"'single quotes'\"' instead'? ",
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // SC2083 — checkLonelyDotDash
 // ---------------------------------------------------------------------------
@@ -434,26 +403,6 @@ fn check_spurious_expansion(params: &Parameters, t: &Token, out: &mut Out) {
             if let InnerToken::T_NormalWord(parts) = &*words[0].inner {
                 if parts.len() == 1 {
                     se_check(&parts[0], out);
-                }
-            }
-        }
-    }
-}
-
-/// Registered variant: only SC2084 (SC2091/2092 owned by batch_d).
-fn check_spurious_expansion_2084(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_SimpleCommand { assignments, words } = &*t.inner {
-        if assignments.is_empty() && words.len() == 1 {
-            if let InnerToken::T_NormalWord(parts) = &*words[0].inner {
-                if parts.len() == 1 {
-                    if let InnerToken::T_DollarArithmetic(_) = &*parts[0].inner {
-                        err(
-                            out,
-                            parts[0].id(),
-                            2084,
-                            "Remove '$' or use '_=$((expr))' to avoid executing output.",
-                        );
-                    }
                 }
             }
         }
@@ -878,11 +827,6 @@ fn ptn_fd_str(n: i64) -> String {
 /// Full checkPipeToNowhere (with warnAboutDupes / SC2261) — used by prop tests.
 fn check_pipe_to_nowhere(params: &Parameters, t: &Token, out: &mut Out) {
     ptn_impl(params, t, true, out);
-}
-
-/// Registered variant without warnAboutDupes (SC2261 owned by batch_q).
-fn check_pipe_to_nowhere_no_dupes(params: &Parameters, t: &Token, out: &mut Out) {
-    ptn_impl(params, t, false, out);
 }
 
 fn ptn_impl(params: &Parameters, t: &Token, emit_dupes: bool, out: &mut Out) {

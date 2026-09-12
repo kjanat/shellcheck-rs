@@ -43,7 +43,6 @@ pub fn register(c: &mut Checker) {
     c.node(check_stderr_redirect);
     c.node(check_redirect_to_same);
     c.node(check_multiple_appends);
-    c.node(check_subshelled_tests);
 }
 
 // ---------------------------------------------------------------------------
@@ -471,43 +470,6 @@ fn check_multiple_appends(_params: &Parameters, t: &Token, out: &mut Out) {
 // ---------------------------------------------------------------------------
 // SC2233 / SC2234 — checkSubshelledTests (2233/2234 branches only)
 // ---------------------------------------------------------------------------
-
-fn check_subshelled_tests(params: &Parameters, t: &Token, out: &mut Out) {
-    let list = match &*t.inner {
-        InnerToken::T_Subshell(list) => list,
-        _ => return,
-    };
-    if !list.iter().all(is_test_structure) {
-        return;
-    }
-    if has_assignment(t) {
-        return;
-    }
-    // getPath (parentMap params) t = [t, parent, grandparent, ...]
-    let mut path: Vec<&Token> = vec![t];
-    let mut cur = params.parent(t);
-    while let Some(node) = cur {
-        path.push(node);
-        cur = params.parent(node);
-    }
-
-    if is_compound_condition(&path) {
-        style(
-            out,
-            t.id(),
-            2233,
-            "Remove superfluous (..) around condition to avoid subshell overhead.",
-        );
-    } else if is_single_test(list) && !is_function_body(&path) {
-        style(
-            out,
-            t.id(),
-            2234,
-            "Remove superfluous (..) around test command to avoid subshell overhead.",
-        );
-    }
-    // General case (SC2235) intentionally not emitted; see module docs.
-}
 
 fn is_single_test(cmds: &[Token]) -> bool {
     cmds.len() == 1 && is_test_command(&cmds[0])

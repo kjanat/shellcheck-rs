@@ -29,7 +29,6 @@ use crate::interface::Shell;
 use std::sync::OnceLock;
 
 pub fn register(c: &mut Checker) {
-    c.node(check_conditional_and_ors);
     c.node(check_quoted_cond_regex);
     c.node(check_ps1_assignments);
     c.node(check_test_argument_splitting_arrays);
@@ -44,31 +43,6 @@ pub fn register(c: &mut Checker) {
 // ---------------------------------------------------------------------------
 // SC2107 / SC2108 — checkConditionalAndOrs (only these two branches)
 // ---------------------------------------------------------------------------
-
-fn check_conditional_and_ors(_params: &Parameters, t: &Token, out: &mut Out) {
-    match &*t.inner {
-        InnerToken::TC_And {
-            typ: ConditionType::SingleBracket,
-            op,
-            ..
-        } if op == "&&" => {
-            err(
-                out,
-                t.id(),
-                2107,
-                "Instead of [ a && b ], use [ a ] && [ b ].",
-            );
-        }
-        InnerToken::TC_And {
-            typ: ConditionType::DoubleBracket,
-            op,
-            ..
-        } if op == "-a" => {
-            err(out, t.id(), 2108, "In [[..]], use && instead of -a.");
-        }
-        _ => {}
-    }
-}
 
 // ---------------------------------------------------------------------------
 // SC2076 — checkQuotedCondRegex

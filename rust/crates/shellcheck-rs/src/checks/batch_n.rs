@@ -46,12 +46,8 @@ pub fn register(c: &mut Checker) {
     c.node(check_commarrays);
     c.node(check_pipe_pitfalls_ls_grep);
     c.node(check_unused_echo_escapes);
-    c.node(check_grep_re);
-    c.node(check_unmatchable_cases_constant);
     c.node(check_splitting_in_arrays);
     c.node(check_flag_as_command);
-    c.node(check_second_arg_is_comparison);
-    c.node(check_command_with_trailing_symbol);
 }
 
 // ---------------------------------------------------------------------------
@@ -228,26 +224,6 @@ fn check_unused_echo_escapes(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2062 — checkGrepRe (only the unquoted-glob branch)
 // ---------------------------------------------------------------------------
 
-fn check_grep_re(_params: &Parameters, t: &Token, out: &mut Out) {
-    let (name, args) = match command_dispatch(t) {
-        Some(v) => v,
-        None => return,
-    };
-    if name != "grep" {
-        return;
-    }
-    if let Some(re) = find_grep_regex(args) {
-        if is_glob(re) {
-            warn(
-                out,
-                re.id(),
-                2062,
-                "Quote the grep pattern so the shell won't interpret it.",
-            );
-        }
-    }
-}
-
 /// Mirror of checkGrepRe's `f`: walk args to find the regex argument.
 fn find_grep_regex(args: &[Token]) -> Option<&Token> {
     let mut rest = args;
@@ -270,19 +246,6 @@ fn find_grep_regex(args: &[Token]) -> Option<&Token> {
 // ---------------------------------------------------------------------------
 // SC2194 — checkUnmatchableCases (constant-word branch only)
 // ---------------------------------------------------------------------------
-
-fn check_unmatchable_cases_constant(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_CaseExpression { word, .. } = &*t.inner {
-        if is_constant(word) {
-            warn(
-                out,
-                word.id(),
-                2194,
-                "This word is constant. Did you forget the $ on a variable?",
-            );
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // SC2207 — checkSplittingInArrays (command-substitution branch only)
@@ -346,29 +309,6 @@ fn head_id(t: &Token) -> Id {
     }
 }
 
-fn check_second_arg_is_comparison(_params: &Parameters, t: &Token, out: &mut Out) {
-    let words = match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } => words,
-        _ => return,
-    };
-    if words.len() < 2 {
-        return;
-    }
-    let arg = &words[1];
-    if let Some(s) = get_leading_unquotedstring_for_arg(arg) {
-        // Order in the oracle: "====" -> skip, "+=" -> 2285, "==" -> 2284,
-        // "=" -> 2283. We only emit 2283.
-        if s.starts_with('=') && !s.starts_with("==") {
-            err(
-                out,
-                head_id(arg),
-                2283,
-                "Remove spaces around = to assign (or use [ ] to compare, or quote '=' if literal).",
-            );
-        }
-    }
-}
-
 fn get_leading_unquotedstring_for_arg(t: &Token) -> Option<String> {
     get_leading_unquoted_string(t)
 }
@@ -383,47 +323,6 @@ fn trailing_symbol_format(c: char) -> String {
         '\'' => "apostrophe".to_string(),
         '"' => "doublequote".to_string(),
         x => format!("'{}'", x),
-    }
-}
-
-fn check_command_with_trailing_symbol(_params: &Parameters, t: &Token, out: &mut Out) {
-    let cmd = match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => &words[0],
-        _ => return,
-    };
-    // The oracle uses `getLiteralStringDef "x"`, but the Rust parser has bounded
-    // gaps where malformed `[[ .. ]]` / `${..}` fall back to a simple command
-    // whose word carries a literal `]`/`}`; the oracle parses those as conditions
-    // / parse errors and never reaches this check. Requiring a fully-literal
-    // command word drops exactly those spurious cases (all real oracle SC2288
-    // command names are fully literal) while keeping extra==0.
-    let str = match get_literal_string(cmd) {
-        Some(s) => s,
-        None => return,
-    };
-    // A literal `$` in a command name only survives via a parser gap (the oracle
-    // parses `${{var}` as a bad expansion, SC2296, and never reaches this check).
-    // No real oracle SC2288 command name contains `$` in its literal, so skip.
-    if str.contains('$') {
-        return;
-    }
-    let last = str.chars().last().unwrap_or('x');
-    match str.as_str() {
-        "." | ":" | " " | "//" => {}
-        "" => {}               // SC2286 (not ours)
-        _ if last == '/' => {} // SC2287 (not ours)
-        _ if "\\.,([{<>}])#\"'% ".contains(last) => {
-            warn(
-                out,
-                cmd.id(),
-                2288,
-                &format!(
-                    "This is interpreted as a command name ending with {}. Double check syntax.",
-                    trailing_symbol_format(last)
-                ),
-            );
-        }
-        _ => {} // tab/newline -> SC2289 (not ours)
     }
 }
 
@@ -569,68 +468,8 @@ mod tests {
     }
 
     // SC2062 — checkGrepRe (glob branch)
-    #[test]
-    fn prop_checkGrepRe1() {
-        assert!(emits_code(check_grep_re, "cat foo | grep *.mp3", 2062));
-    }
-    #[test]
-    fn prop_checkGrepRe2() {
-        assert!(emits_code(check_grep_re, "grep -Ev cow*test *.mp3", 2062));
-    }
-    #[test]
-    fn prop_checkGrepRe3() {
-        assert!(emits_code(check_grep_re, "grep --regex=*.mp3 file", 2062));
-    }
-    #[test]
-    fn prop_checkGrepRe4() {
-        assert!(!emits_code(check_grep_re, "grep foo *.mp3", 2062));
-    }
-    #[test]
-    fn prop_checkGrepRe6() {
-        assert!(!emits_code(check_grep_re, "grep foo \\*.mp3", 2062));
-    }
-    #[test]
-    fn prop_checkGrepRe7() {
-        assert!(emits_code(check_grep_re, "grep *foo* file", 2062));
-    }
-    #[test]
-    fn prop_checkGrepRe8() {
-        assert!(emits_code(check_grep_re, "ls | grep foo*.jpg", 2062));
-    }
-    #[test]
-    fn prop_checkGrepRe9() {
-        assert!(!emits_code(check_grep_re, "grep '[0-9]*' file", 2062));
-    }
-    #[test]
-    fn prop_checkGrepRe12() {
-        assert!(!emits_code(check_grep_re, "grep -F 'Foo*' file", 2062));
-    }
-    #[test]
-    fn prop_checkGrepRe13() {
-        assert!(!emits_code(check_grep_re, "grep -- -foo bar*", 2062));
-    }
-    #[test]
-    fn prop_checkGrepRe14() {
-        assert!(!emits_code(check_grep_re, "grep -e -foo bar*", 2062));
-    }
 
     // SC2194 — constant case word
-    #[test]
-    fn prop_case_const1() {
-        assert!(emits_code(
-            check_unmatchable_cases_constant,
-            "case foo in bar) true; esac",
-            2194
-        ));
-    }
-    #[test]
-    fn prop_case_const2() {
-        assert!(!emits_code(
-            check_unmatchable_cases_constant,
-            "case $f in bar) true; esac",
-            2194
-        ));
-    }
 
     // SC2207 — checkSplittingInArrays (command branch)
     #[test]
@@ -669,128 +508,7 @@ mod tests {
     }
 
     // SC2283 — spaces around =
-    #[test]
-    fn prop_checkSecondArgIsComparison1() {
-        assert!(emits_code(
-            check_second_arg_is_comparison,
-            "foo = $bar",
-            2283
-        ));
-    }
-    #[test]
-    fn prop_checkSecondArgIsComparison2() {
-        assert!(emits_code(
-            check_second_arg_is_comparison,
-            "$foo = $bar",
-            2283
-        ));
-    }
-    #[test]
-    fn prop_checkSecondArgIsComparison4() {
-        assert!(emits_code(
-            check_second_arg_is_comparison,
-            "'var' =$bar",
-            2283
-        ));
-    }
-    #[test]
-    fn prop_checkSecondArgIsComparison6() {
-        assert!(emits_code(
-            check_second_arg_is_comparison,
-            "$foo =$bar",
-            2283
-        ));
-    }
-    #[test]
-    fn prop_sc2283_not_eqeq() {
-        assert!(!emits_code(
-            check_second_arg_is_comparison,
-            "2f == $bar",
-            2283
-        ));
-    }
-    #[test]
-    fn prop_sc2283_not_pluseq() {
-        assert!(!emits_code(
-            check_second_arg_is_comparison,
-            "var += $(foo)",
-            2283
-        ));
-    }
-    #[test]
-    fn prop_sc2283_not_border() {
-        assert!(!emits_code(
-            check_second_arg_is_comparison,
-            "echo ======= Here =======",
-            2283
-        ));
-    }
 
     // SC2288 — trailing symbol
-    #[test]
-    fn prop_checkCommandWithTrailingSymbol6() {
-        assert!(emits_code(
-            check_command_with_trailing_symbol,
-            "foo, bar",
-            2288
-        ));
-    }
-    #[test]
-    fn prop_sc2288_not_slash() {
-        assert!(!emits_code(
-            check_command_with_trailing_symbol,
-            "/foo/ bar/baz",
-            2288
-        ));
-    }
-    #[test]
-    fn prop_sc2288_not_dot() {
-        assert!(!emits_code(
-            check_command_with_trailing_symbol,
-            ". foo.sh",
-            2288
-        ));
-    }
-    #[test]
-    fn prop_sc2288_not_colon() {
-        assert!(!emits_code(
-            check_command_with_trailing_symbol,
-            ": foo",
-            2288
-        ));
-    }
-    #[test]
-    fn prop_sc2288_not_var() {
-        assert!(!emits_code(
-            check_command_with_trailing_symbol,
-            "$foo/$bar",
-            2288
-        ));
-    }
     // Fully-literal guard: parser-gap fallbacks with expansions/globs must not fire.
-    #[test]
-    fn prop_sc2288_not_condition() {
-        assert!(!emits_code(
-            check_command_with_trailing_symbol,
-            "[[ 3 \\< 4 ]]",
-            2288
-        ));
-    }
-    #[test]
-    fn prop_sc2288_not_badbrace() {
-        assert!(!emits_code(
-            check_command_with_trailing_symbol,
-            "${{var}",
-            2288
-        ));
-    }
-    // Real oracle cases remain literal and still fire.
-    #[test]
-    fn prop_sc2288_dollar_dquote() {
-        assert!(emits_code(
-            check_command_with_trailing_symbol,
-            "$\"(foo)\"",
-            2288
-        ));
-    }
 }

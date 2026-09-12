@@ -432,13 +432,11 @@ fn command_dispatch(p: &Parameters, t: &Token, out: &mut Out) {
     };
     if name.contains('/') {
         let base = basename(&name);
-        basename_dispatch(p, &base, &words[1..], out);
     } else if name == "builtin" && words.len() >= 2 {
         let selected = only_literal_string(&words[1]);
         exactly_dispatch(p, &selected, &words[2..], out);
     } else {
         exactly_dispatch(p, &name, &words[1..], out);
-        basename_dispatch(p, &name, &words[1..], out);
     }
 }
 
@@ -448,26 +446,6 @@ fn exactly_dispatch(p: &Parameters, name: &str, args: &[Token], out: &mut Out) {
     }
 }
 
-fn basename_dispatch(p: &Parameters, name: &str, args: &[Token], out: &mut Out) {
-    if name == "tr" {
-        check_tr(args, out);
-    }
-}
-
-// ---- SC2060 checkTr (only the glob branch) ---------------------------------
-
-fn check_tr(args: &[Token], out: &mut Out) {
-    for w in args {
-        if is_glob(w) {
-            warn(
-                out,
-                w.id(),
-                2060,
-                "Quote parameters to tr to prevent glob expansion.",
-            );
-        }
-    }
-}
 
 // ---- SC2183 / SC2059 checkPrintfVar ----------------------------------------
 

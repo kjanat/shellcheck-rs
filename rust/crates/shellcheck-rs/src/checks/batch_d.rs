@@ -27,7 +27,6 @@ use std::collections::HashMap;
 
 /// Register this batch's checks.
 pub fn register(c: &mut Checker) {
-    c.node(check_spurious_expansion);
     c.node(check_read_without_r);
     c.node(check_cd_and_back);
     c.node(check_unchecked_cd_pushd_popd);
@@ -298,35 +297,6 @@ fn shebang_flag_matches(s: &str, c: u8) -> bool {
 // ---------------------------------------------------------------------------
 // SC2091 / SC2092 — checkSpuriousExpansion
 // ---------------------------------------------------------------------------
-
-fn check_spurious_expansion(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-        if words.len() != 1 {
-            return;
-        }
-        if let InnerToken::T_NormalWord(parts) = &*words[0].inner {
-            if parts.len() != 1 {
-                return;
-            }
-            let word = &parts[0];
-            match &*word.inner {
-                InnerToken::T_DollarExpansion(_) => warn(
-                    out,
-                    word.id(),
-                    2091,
-                    "Remove surrounding $() to avoid executing output (or use eval if intentional).",
-                ),
-                InnerToken::T_Backticked(_) => warn(
-                    out,
-                    word.id(),
-                    2092,
-                    "Remove backticks to avoid executing output (or use eval if intentional).",
-                ),
-                _ => {}
-            }
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // SC2162 — checkReadWithoutR

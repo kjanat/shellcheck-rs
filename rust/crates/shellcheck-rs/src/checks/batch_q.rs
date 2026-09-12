@@ -25,13 +25,13 @@ use crate::interface::{Fix, Replacement, Shell};
 /// Register this batch's checks.
 pub fn register(c: &mut Checker) {
     c.node(check_for_in_cat);
+    c.node(check_splitting_in_arrays);
     // check_redirection_to_number (SC2210) is implemented and tested but NOT
     // registered: for a glued fd like `foo 1>2` the Rust parser gives the
     // T_IoFile id a span that starts at the fd digit (col 5), whereas the
     // oracle anchors SC2210 at the redirection operator (col 6). This is a
     // parser span discrepancy (the fd belongs to T_FdRedirect, not T_IoFile),
     // fixable only in the parser, so registering it yields extra > 0.
-    c.node(check_splitting_in_arrays);
     c.node(check_comparison_with_leading_x);
     c.node(check_echo_sed);
     c.node(check_spurious_exec);
@@ -46,7 +46,6 @@ pub fn register(c: &mut Checker) {
     // `&>` is parsed as `&` + `>` rather than a combined redirect. Registering
     // it produces extra > 0 on those codes. The SC2261 dupe logic is unaffected
     // by those gaps, so it is split out and registered here.
-    c.node(check_competing_redirections);
     c.node(check_subshelled_tests);
 }
 
@@ -140,36 +139,9 @@ fn is_line_based(cmd: &Token) -> bool {
 // SC2210 — checkRedirectionToNumber
 // ---------------------------------------------------------------------------
 
-fn check_redirection_to_number(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_IoFile { file, .. } = &*t.inner {
-        if let Some(f) = get_unquoted_literal(file) {
-            if f.chars().all(|c| c.is_ascii_digit()) {
-                warn(
-                    out,
-                    t.id(),
-                    2210,
-                    "This is a file redirection. Was it supposed to be a comparison or fd operation?",
-                );
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // SC2206 / SC2207 — checkSplittingInArrays
 // ---------------------------------------------------------------------------
-
-fn check_splitting_in_arrays(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Array(elements) = &*t.inner {
-        for word in elements {
-            if let InnerToken::T_NormalWord(parts) = &*word.inner {
-                for part in parts {
-                    check_splitting_part(params, part, out);
-                }
-            }
-        }
-    }
-}
 
 fn check_splitting_part(params: &Parameters, part: &Token, out: &mut Out) {
     match &*part.inner {
@@ -921,349 +893,6 @@ const NON_READING_COMMANDS: &[&str] = &[
 
 const INTERACTIVE_FLAG_CMDS: &[&str] = &["cp", "mv", "rm"];
 
-/// Port of `getAllFlags = getFlagsUntil (== "--")` on a command token.
-fn ptn_get_all_flags(cmd: &Token) -> Vec<(&Token, String)> {
-    let words = match &*cmd.inner {
-        InnerToken::T_SimpleCommand { words, .. } => words,
-        _ => return Vec::new(),
-    };
-    // Skip the command name (first word).
-    let args = if words.len() > 1 {
-        &words[1..]
-    } else {
-        &[][..]
-    };
-    let token_and_text: Vec<(&Token, String)> = args
-        .iter()
-        .map(|x| (x, crate::cfg::oversimplify(x).concat()))
-        .collect();
-    // break (== "--")
-    let stop = token_and_text.iter().position(|(_, t)| t == "--");
-    let (flag_args, rest) = match stop {
-        Some(i) => (&token_and_text[..i], &token_and_text[i..]),
-        None => (&token_and_text[..], &[][..]),
-    };
-    let mut out: Vec<(&Token, String)> = Vec::new();
-    for (x, text) in flag_args {
-        if let Some(arg) = text.strip_prefix("--") {
-            out.push((x, arg.split('=').next().unwrap_or("").to_string()));
-        } else if let Some(a) = text.strip_prefix('-') {
-            for v in a.chars() {
-                out.push((x, v.to_string()));
-            }
-        } else {
-            out.push((x, String::new()));
-        }
-    }
-    for (x, _) in rest {
-        out.push((x, String::new()));
-    }
-    out
-}
-
-fn ptn_has_flag(cmd: &Token, flag: &str) -> bool {
-    ptn_get_all_flags(cmd).iter().any(|(_, s)| s == flag)
-}
-
-fn ptn_has_interactive_flag(cmd: &Token) -> bool {
-    ptn_has_flag(cmd, "i") || ptn_has_flag(cmd, "interactive")
-}
-
-fn ptn_command_specific_exception(name: &str, cmd: &Token) -> bool {
-    match name {
-        "du" => ptn_get_all_flags(cmd)
-            .iter()
-            .any(|(_, s)| s == "exclude-from" || s == "files0-from"),
-        _ if INTERACTIVE_FLAG_CMDS.contains(&name) => ptn_has_interactive_flag(cmd),
-        _ => false,
-    }
-}
-
-fn ptn_tree_contains(pred: fn(&Token) -> bool, t: &Token) -> bool {
-    let mut found = false;
-    t.visit_preorder(&mut |n| {
-        if pred(n) {
-            found = true;
-        }
-    });
-    found
-}
-
-fn ptn_may_consume(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_ProcSub { op, .. } if op == "<" => true,
-        InnerToken::T_Backticked(_) => true,
-        InnerToken::T_DollarExpansion(_) => true,
-        _ => false,
-    }
-}
-
-fn ptn_may_produce(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_ProcSub { op, .. } if op == ">")
-}
-
-fn ptn_get_op_id(t: &Token) -> Id {
-    match &*t.inner {
-        InnerToken::T_FdRedirect { target, .. } => ptn_get_op_id(target),
-        InnerToken::T_IoFile { op, .. } => op.id(),
-        _ => t.id(),
-    }
-}
-
-fn ptn_get_default_fds(redir: &Token) -> Option<Vec<i64>> {
-    match &*redir.inner {
-        InnerToken::T_HereDoc { .. } => Some(vec![0]),
-        InnerToken::T_HereString(_) => Some(vec![0]),
-        InnerToken::T_IoFile { op, .. } => match &*op.inner {
-            InnerToken::T_Less => Some(vec![0]),
-            InnerToken::T_Greater => Some(vec![1]),
-            InnerToken::T_DGREAT => Some(vec![1]),
-            InnerToken::T_GREATAND => Some(vec![1, 2]),
-            InnerToken::T_CLOBBER => Some(vec![1]),
-            InnerToken::T_IoDuplicate { op: inner, num } if num == "-" => {
-                ptn_get_default_fds(inner)
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn ptn_get_redirection_fds(t: &Token) -> Option<Vec<i64>> {
-    if let InnerToken::T_FdRedirect { fd, target } = &*t.inner {
-        if fd.is_empty() {
-            ptn_get_default_fds(target)
-        } else if fd == "&" {
-            Some(vec![1, 2])
-        } else if !fd.is_empty() && fd.chars().all(|c| c.is_ascii_digit()) {
-            // Don't report the number unless we know what it is.
-            ptn_get_default_fds(target)?;
-            fd.parse::<i64>().ok().map(|n| vec![n])
-        } else {
-            None
-        }
-    } else {
-        None
-    }
-}
-
-fn ptn_redirects_stdin(t: &Token) -> bool {
-    ptn_get_redirection_fds(t).map_or(false, |fds| fds.contains(&0))
-}
-
-fn ptn_pipe_type(t: &Token) -> PipeType {
-    match &*t.inner {
-        InnerToken::T_Pipe(s) if s == "|" => PipeType::StdoutPipe,
-        InnerToken::T_Pipe(s) if s == "|&" => PipeType::StdoutStderrPipe,
-        _ => PipeType::NoPipe,
-    }
-}
-
-fn ptn_fd_str(n: i64) -> String {
-    match n {
-        0 => "stdin".to_string(),
-        1 => "stdout".to_string(),
-        2 => "stderr".to_string(),
-        _ => format!("FD {}", n),
-    }
-}
-
-fn check_pipe_to_nowhere(params: &Parameters, t: &Token, out: &mut Out) {
-    match &*t.inner {
-        InnerToken::T_Pipeline {
-            separators,
-            commands,
-        } => {
-            let pipe_types: Vec<PipeType> = separators.iter().map(ptn_pipe_type).collect();
-            for (i, stage) in commands.iter().enumerate() {
-                let input = if i == 0 {
-                    PipeType::NoPipe
-                } else {
-                    pipe_types.get(i - 1).copied().unwrap_or(PipeType::NoPipe)
-                };
-                let output = pipe_types.get(i).copied().unwrap_or(PipeType::NoPipe);
-                ptn_check_pipe(params, input, stage, output, out);
-            }
-        }
-        InnerToken::T_Redirecting { redirs, cmd } => {
-            if redirs.iter().any(ptn_redirects_stdin) {
-                ptn_check_redir(params, cmd, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn ptn_check_pipe(
-    params: &Parameters,
-    input: PipeType,
-    stage: &Token,
-    output: PipeType,
-    out: &mut Out,
-) {
-    let has_consumers = ptn_tree_contains(ptn_may_consume, stage);
-    let has_producers = ptn_tree_contains(ptn_may_produce, stage);
-
-    // SC2216
-    if let Some(cmd) = get_command(stage) {
-        if let Some(name) = get_command_basename(cmd) {
-            if NON_READING_COMMANDS.contains(&name.as_str())
-                && !has_consumers
-                && input != PipeType::NoPipe
-                && !ptn_command_specific_exception(&name, cmd)
-            {
-                let suggestion = if name == "echo" {
-                    "Did you want 'cat' instead?"
-                } else {
-                    "Wrong command or missing xargs?"
-                };
-                warn(
-                    out,
-                    cmd.id(),
-                    2216,
-                    &format!(
-                        "Piping to '{}', a command that doesn't read stdin. {}",
-                        name, suggestion
-                    ),
-                );
-            }
-        }
-    }
-
-    // fd analysis (SC2259 / SC2260 / SC2261)
-    if let InnerToken::T_Redirecting { redirs, .. } = &*stage.inner {
-        // mapM getRedirectionFds: any None -> skip the whole block.
-        let mut all_fds: Vec<Vec<i64>> = Vec::with_capacity(redirs.len());
-        for r in redirs {
-            match ptn_get_redirection_fds(r) {
-                Some(fds) => all_fds.push(fds),
-                None => return,
-            }
-        }
-        // fdMap = fromListWith (++): later entries prepend, so per-fd list is
-        // in reverse insertion order (head = last-inserted redirection).
-        let mut fd_map: Vec<(i64, Vec<&Token>)> = Vec::new();
-        for (fds, redir) in all_fds.iter().zip(redirs.iter()) {
-            for &n in fds {
-                if let Some(entry) = fd_map.iter_mut().find(|(k, _)| *k == n) {
-                    entry.1.insert(0, redir);
-                } else {
-                    fd_map.push((n, vec![redir]));
-                }
-            }
-        }
-
-        // inputWarning (SC2259)
-        if input != PipeType::NoPipe && !has_consumers {
-            if let Some((_, list)) = fd_map.iter().find(|(k, _)| *k == 0) {
-                if let Some(override_) = list.first() {
-                    err(
-                        out,
-                        ptn_get_op_id(override_),
-                        2259,
-                        "This redirection overrides piped input. To use both, merge or pass filenames.",
-                    );
-                }
-            }
-        }
-        // outputWarning (SC2260)
-        if output == PipeType::StdoutPipe && !has_producers {
-            if let Some((_, list)) = fd_map.iter().find(|(k, _)| *k == 1) {
-                if let Some(override_) = list.first() {
-                    err(
-                        out,
-                        ptn_get_op_id(override_),
-                        2260,
-                        "This redirection overrides the output pipe. Use 'tee' to output to both.",
-                    );
-                }
-            }
-        }
-        // warnAboutDupes (SC2261)
-        for (n, list) in &fd_map {
-            if list.len() >= 2 {
-                for c in list {
-                    err(
-                        out,
-                        ptn_get_op_id(c),
-                        2261,
-                        &format!(
-                            "Multiple redirections compete for {}. Use cat, tee, or pass filenames instead.",
-                            ptn_fd_str(*n)
-                        ),
-                    );
-                }
-            }
-        }
-    }
-}
-
-fn ptn_check_redir(params: &Parameters, cmd: &Token, out: &mut Out) {
-    if let Some(name) = get_command_basename(cmd) {
-        if NON_READING_COMMANDS.contains(&name.as_str())
-            && !ptn_tree_contains(ptn_may_consume, cmd)
-            && !(INTERACTIVE_FLAG_CMDS.contains(&name.as_str()) && ptn_has_interactive_flag(cmd))
-        {
-            let suggestion = if name == "echo" {
-                "Did you want 'cat' instead?"
-            } else {
-                "Bad quoting, wrong command or missing xargs?"
-            };
-            warn(
-                out,
-                cmd.id(),
-                2217,
-                &format!(
-                    "Redirecting to '{}', a command that doesn't read stdin. {}",
-                    name, suggestion
-                ),
-            );
-        }
-    }
-}
-
-/// SC2261 only — the fd-competition (`warnAboutDupes`) branch of
-/// checkPipeToNowhere, isolated so it can be registered without the
-/// parser-gap-sensitive SC2259/SC2216 branches. Every T_Redirecting is a
-/// pipeline stage exactly once, so visiting T_Redirecting nodes directly
-/// reproduces the per-stage dupe analysis.
-fn check_competing_redirections(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Redirecting { redirs, .. } = &*t.inner {
-        let mut all_fds: Vec<Vec<i64>> = Vec::with_capacity(redirs.len());
-        for r in redirs {
-            match ptn_get_redirection_fds(r) {
-                Some(fds) => all_fds.push(fds),
-                None => return,
-            }
-        }
-        let mut fd_map: Vec<(i64, Vec<&Token>)> = Vec::new();
-        for (fds, redir) in all_fds.iter().zip(redirs.iter()) {
-            for &n in fds {
-                if let Some(entry) = fd_map.iter_mut().find(|(k, _)| *k == n) {
-                    entry.1.insert(0, redir);
-                } else {
-                    fd_map.push((n, vec![redir]));
-                }
-            }
-        }
-        for (n, list) in &fd_map {
-            if list.len() >= 2 {
-                for c in list {
-                    err(
-                        out,
-                        ptn_get_op_id(c),
-                        2261,
-                        &format!(
-                            "Multiple redirections compete for {}. Use cat, tee, or pass filenames instead.",
-                            ptn_fd_str(*n)
-                        ),
-                    );
-                }
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // SC2233/SC2234/SC2235 — checkSubshelledTests (target code SC2235)
 // ---------------------------------------------------------------------------
@@ -1403,6 +1032,18 @@ fn check_subshelled_tests(params: &Parameters, t: &Token, out: &mut Out) {
     }
 }
 
+fn check_splitting_in_arrays(params: &Parameters, t: &Token, out: &mut Out) {
+    if let InnerToken::T_Array(elements) = &*t.inner {
+        for word in elements {
+            if let InnerToken::T_NormalWord(parts) = &*word.inner {
+                for part in parts {
+                    check_splitting_part(params, part, out);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
@@ -1478,56 +1119,8 @@ mod tests {
     }
 
     // ---- SC2210 checkRedirectionToNumber ----
-    #[test]
-    fn prop_checkRedirectionToNumber1() {
-        assert!(emits(check_redirection_to_number, "( 1 > 2 )"));
-    }
-    #[test]
-    fn prop_checkRedirectionToNumber2() {
-        assert!(emits(check_redirection_to_number, "foo 1>2"));
-    }
-    #[test]
-    fn prop_checkRedirectionToNumber3() {
-        assert!(!emits(check_redirection_to_number, "echo foo > '2'"));
-    }
-    #[test]
-    fn prop_checkRedirectionToNumber4() {
-        assert!(!emits(check_redirection_to_number, "foo 1>&2"));
-    }
 
     // ---- SC2206 / SC2207 checkSplittingInArrays ----
-    #[test]
-    fn prop_checkSplittingInArrays1() {
-        assert!(emits(check_splitting_in_arrays, "a=( $var )"));
-    }
-    #[test]
-    fn prop_checkSplittingInArrays2() {
-        assert!(emits(check_splitting_in_arrays, "a=( $(cmd) )"));
-    }
-    #[test]
-    fn prop_checkSplittingInArrays3() {
-        assert!(!emits(check_splitting_in_arrays, "a=( \"$var\" )"));
-    }
-    #[test]
-    fn prop_checkSplittingInArrays4() {
-        assert!(!emits(check_splitting_in_arrays, "a=( \"$(cmd)\" )"));
-    }
-    #[test]
-    fn prop_checkSplittingInArrays5() {
-        assert!(!emits(check_splitting_in_arrays, "a=( $! $$ $# )"));
-    }
-    #[test]
-    fn prop_checkSplittingInArrays6() {
-        assert!(!emits(check_splitting_in_arrays, "a=( ${#arr[@]} )"));
-    }
-    #[test]
-    fn prop_checkSplittingInArrays7() {
-        assert!(!emits(check_splitting_in_arrays, "a=( foo{1,2} )"));
-    }
-    #[test]
-    fn prop_checkSplittingInArrays8() {
-        assert!(!emits(check_splitting_in_arrays, "a=( * )"));
-    }
 
     // ---- SC2268 checkComparisonWithLeadingX ----
     #[test]
@@ -1877,108 +1470,6 @@ mod tests {
     }
 
     // ---- SC2216/2217/2259/2260/2261 checkPipeToNowhere ----
-    #[test]
-    fn prop_checkPipeToNowhere1() {
-        assert!(emits(check_pipe_to_nowhere, "foo | echo bar"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere2() {
-        assert!(emits(check_pipe_to_nowhere, "basename < file.txt"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere3() {
-        assert!(emits(check_pipe_to_nowhere, "printf 'Lol' <<< str"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere4() {
-        assert!(emits(
-            check_pipe_to_nowhere,
-            "printf 'Lol' << eof\nlol\neof\n"
-        ));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere5() {
-        assert!(!emits(check_pipe_to_nowhere, "echo foo | xargs du"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere6() {
-        assert!(!emits(check_pipe_to_nowhere, "ls | echo $(cat)"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere7() {
-        assert!(!emits(check_pipe_to_nowhere, "echo foo | var=$(cat) ls"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere9() {
-        assert!(!emits(check_pipe_to_nowhere, "mv -i f . < /dev/stdin"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere10() {
-        assert!(emits(check_pipe_to_nowhere, "ls > file | grep foo"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere11() {
-        assert!(emits(check_pipe_to_nowhere, "ls | grep foo < file"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere12() {
-        assert!(emits(check_pipe_to_nowhere, "ls > foo > bar"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere13() {
-        assert!(emits(check_pipe_to_nowhere, "ls > foo 2> bar > baz"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere14() {
-        assert!(emits(check_pipe_to_nowhere, "ls > foo &> bar"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere15() {
-        assert!(!emits(
-            check_pipe_to_nowhere,
-            "ls > foo 2> bar |& grep 'No space left'"
-        ));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere16() {
-        assert!(!emits(
-            check_pipe_to_nowhere,
-            "echo World | cat << EOF\nhello $(cat)\nEOF\n"
-        ));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere17() {
-        assert!(emits(
-            check_pipe_to_nowhere,
-            "echo World | cat << 'EOF'\nhello $(cat)\nEOF\n"
-        ));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere18() {
-        assert!(!emits(check_pipe_to_nowhere, "ls 1>&3 3>&1 3>&- | wc -l"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere19() {
-        assert!(!emits(
-            check_pipe_to_nowhere,
-            "find . -print0 | du --files0-from=/dev/stdin"
-        ));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere20() {
-        assert!(!emits(
-            check_pipe_to_nowhere,
-            "find . | du --exclude-from=/dev/fd/0"
-        ));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere21() {
-        assert!(!emits(check_pipe_to_nowhere, "yes | cp -ri foo/* bar"));
-    }
-    #[test]
-    fn prop_checkPipeToNowhere22() {
-        assert!(!emits(check_pipe_to_nowhere, "yes | rm --interactive *"));
-    }
 
     // ---- SC2233/2234/2235 checkSubshelledTests ----
     #[test]
@@ -2021,5 +1512,37 @@ mod tests {
             check_subshelled_tests,
             "# shellcheck disable=SC2234\nf() ( [[ x ]] )"
         ));
+    }
+    #[test]
+    fn prop_checkSplittingInArrays1() {
+        assert!(emits(check_splitting_in_arrays, "a=( $var )"));
+    }
+    #[test]
+    fn prop_checkSplittingInArrays2() {
+        assert!(emits(check_splitting_in_arrays, "a=( $(cmd) )"));
+    }
+    #[test]
+    fn prop_checkSplittingInArrays3() {
+        assert!(!emits(check_splitting_in_arrays, "a=( \"$var\" )"));
+    }
+    #[test]
+    fn prop_checkSplittingInArrays4() {
+        assert!(!emits(check_splitting_in_arrays, "a=( \"$(cmd)\" )"));
+    }
+    #[test]
+    fn prop_checkSplittingInArrays5() {
+        assert!(!emits(check_splitting_in_arrays, "a=( $! $$ $# )"));
+    }
+    #[test]
+    fn prop_checkSplittingInArrays6() {
+        assert!(!emits(check_splitting_in_arrays, "a=( ${#arr[@]} )"));
+    }
+    #[test]
+    fn prop_checkSplittingInArrays7() {
+        assert!(!emits(check_splitting_in_arrays, "a=( foo{1,2} )"));
+    }
+    #[test]
+    fn prop_checkSplittingInArrays8() {
+        assert!(!emits(check_splitting_in_arrays, "a=( * )"));
     }
 }

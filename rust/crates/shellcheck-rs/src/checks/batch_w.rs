@@ -89,17 +89,7 @@ pub fn register(c: &mut Checker) {
     c.tree(check_alias_used_in_same_parsing_unit);
     c.node(check_blatant_recursion);
     c.node(check_assign_to_self);
-    // checkCommandWithTrailingSymbol: register only SC2287. SC2288 is owned by
-    // batch_n; SC2286/SC2289 are out of this batch's scope.
-    c.node(|p, t, out| {
-        let mut tmp = Out::new();
-        check_command_with_trailing_symbol(p, t, &mut tmp);
-        for c in tmp {
-            if c.comment.code == 2287 {
-                out.push(c);
-            }
-        }
-    });
+    c.node(check_command_with_trailing_symbol);
     c.node(check_bats_test_does_not_use_negation);
 }
 

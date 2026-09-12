@@ -36,10 +36,7 @@ use crate::interface::Shell;
 /// Register this batch's checks.
 pub fn register(c: &mut Checker) {
     c.node(check_literal_breaking_test);
-    c.node(check_constant_nullary);
-    c.node(check_comparison_against_glob);
     // Enabled: TC_Binary is now anchored on its operator token.
-    c.node(check_constant_ifs);
 }
 
 // ---------------------------------------------------------------------------
@@ -55,28 +52,6 @@ const ARITHMETIC_BINARY_TEST_OPS: [&str; 6] = ["-eq", "-ne", "-lt", "-le", "-gt"
 // ---------------------------------------------------------------------------
 // Checks
 // ---------------------------------------------------------------------------
-
-/// SC2050 — `checkConstantIfs`.
-fn check_constant_ifs(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TC_Binary { typ, op, lhs, rhs } = &*t.inner {
-        let is_dynamic = (ARITHMETIC_BINARY_TEST_OPS.contains(&op.as_str())
-            && *typ == ConditionType::DoubleBracket)
-            || matches!(op.as_str(), "-nt" | "-ot" | "-ef");
-        if is_dynamic {
-            return;
-        }
-        if is_constant(lhs) && is_constant(rhs) {
-            warn(
-                out,
-                t.id(),
-                2050,
-                "This expression is constant. Did you forget the $ on a variable?",
-            );
-        }
-        // The `else` branch (SC2193 "arguments can never be equal") needs the
-        // `wordsCanBeEqual` glob machinery; not ported here.
-    }
-}
 
 /// SC2077 / SC2157 — `checkLiteralBreakingTest`.
 fn check_literal_breaking_test(params: &Parameters, t: &Token, out: &mut Out) {
@@ -123,71 +98,5 @@ fn check_literal_breaking_test(params: &Parameters, t: &Token, out: &mut Out) {
             }
         }
         _ => {}
-    }
-}
-
-/// SC2078 — `checkConstantNullary` (only the generic constant case).
-fn check_constant_nullary(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TC_Nullary { token, .. } = &*t.inner {
-        if is_constant(token) {
-            let s = astlib::get_literal_string(token).unwrap_or_default();
-            match s.as_str() {
-                // SC2158/2159/2160/2161: left to their owning batch.
-                "false" | "0" | "true" | "1" => {}
-                _ => err(
-                    out,
-                    token.id(),
-                    2078,
-                    "This expression is constant. Did you forget a $ somewhere?",
-                ),
-            }
-        }
-    }
-}
-
-/// SC2053 / SC2081 — `checkComparisonAgainstGlob`.
-fn check_comparison_against_glob(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TC_Binary {
-        typ,
-        op,
-        lhs: _,
-        rhs,
-    } = &*t.inner
-    {
-        let is_eq_op = matches!(op.as_str(), "=" | "==" | "!=");
-        match typ {
-            ConditionType::DoubleBracket => {
-                // SC2053: RHS is a single unquoted expansion, e.g. `[[ $x == $y ]]`.
-                if is_eq_op {
-                    if let InnerToken::T_NormalWord(parts) = &*rhs.inner {
-                        if parts.len() == 1 {
-                            if let InnerToken::T_DollarBraced { .. } = &*parts[0].inner {
-                                warn(
-                                    out,
-                                    rhs.id(),
-                                    2053,
-                                    &format!(
-                                        "Quote the right-hand side of {} in [[ ]] to prevent glob matching.",
-                                        op
-                                    ),
-                                );
-                            }
-                        }
-                    }
-                }
-                // SC2330 (BusyBox glob in [[ ]]) is not assigned; skipped.
-            }
-            ConditionType::SingleBracket => {
-                // SC2081: `[ .. = glob ]`.
-                if is_eq_op && is_glob(rhs) {
-                    let msg = if matches!(params.shell, Shell::Bash | Shell::Ksh) {
-                        "[ .. ] can't match globs. Use [[ .. ]] or case statement."
-                    } else {
-                        "[ .. ] can't match globs. Use a case statement."
-                    };
-                    err(out, rhs.id(), 2081, msg);
-                }
-            }
-        }
     }
 }

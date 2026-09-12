@@ -29,7 +29,6 @@ use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {
     c.node(check_single_quoted_variables);
-    c.node(check_inexplicably_unquoted);
 }
 
 // ---------------------------------------------------------------------------
@@ -354,53 +353,4 @@ fn is_special(params: &Parameters, trapped: &Token) -> bool {
         cur = params.parent(node);
     }
     false
-}
-
-fn check_inexplicably_unquoted(params: &Parameters, t: &Token, out: &mut Out) {
-    let tokens = match &*t.inner {
-        InnerToken::T_NormalWord(l) => l,
-        _ => return,
-    };
-    // mapM_ check (tails tokens): examine each suffix's leading triple.
-    for start in 0..tokens.len() {
-        let a = &tokens[start];
-        let trapped = match tokens.get(start + 1) {
-            Some(x) => x,
-            None => break,
-        };
-        let b = match tokens.get(start + 2) {
-            Some(x) => x,
-            None => break,
-        };
-        let (a_parts, b_parts) = match (&*a.inner, &*b.inner) {
-            (InnerToken::T_DoubleQuoted(ap), InnerToken::T_DoubleQuoted(bp)) => (ap, bp),
-            _ => continue,
-        };
-        match &*trapped.inner {
-            InnerToken::T_DollarExpansion(_) | InnerToken::T_DollarBraced { .. } => {
-                warn(
-                    out,
-                    trapped.id(),
-                    2027,
-                    "The surrounding quotes actually unquote this. Remove or escape them.",
-                );
-            }
-            InnerToken::T_Literal(s) => {
-                let excluded = (quotes_single_thing(a_parts) && quotes_single_thing(b_parts))
-                    || s == "="
-                    || s == ":"
-                    || s == "/"
-                    || is_special(params, trapped);
-                if !excluded {
-                    warn(
-                        out,
-                        trapped.id(),
-                        2140,
-                        "Word is of the form \"A\"B\"C\" (B indicated). Did you mean \"ABC\" or \"A\\\"B\\\"C\"?",
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
 }
