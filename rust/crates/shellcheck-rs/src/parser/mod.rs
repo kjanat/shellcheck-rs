@@ -700,11 +700,6 @@ impl Parser {
         out
     }
 
-    /// `subParse`: a parser over a different input, continuing this one's id
-    /// space, context stack and annotation scope. Parsec's state is swapped,
-    /// but everything in the `StateT` underneath it -- contexts, problems --
-    /// carries straight through, so the sub-parse's diagnostics name the
-
     /// `readStringForParser p`: the raw text `p` would consume, with everything
     /// it read and everything it reported forgotten -- `inSeparateContext
     /// $ lookAhead (p >> getPosition)`, then `anyChar` up to that position.
@@ -733,6 +728,11 @@ impl Parser {
         }
         Ok(str)
     }
+
+    /// `subParse`: a parser over a different input, continuing this one's id
+    /// space, context stack and annotation scope. Parsec's state is swapped,
+    /// but everything in the `StateT` underneath it -- contexts, problems --
+    /// carries straight through, so the sub-parse's diagnostics name the
     /// productions that contain it.
     pub(super) fn sub_parser(&self, input: &str, start: &Position) -> Parser {
         let mut sub = Parser::new(&self.filename, input);
