@@ -86,10 +86,31 @@ impl Parser {
                     Ok(Token::new(id, InnerToken::T_Literal(c.to_string())))
                 }
                 '<' | '>' if self.peek_at(1) == Some('(') => self.read_proc_sub(),
+                // `readUnicodeQuote`: a curly quote is a literal, and a warning.
+                _ if UNICODE_SINGLE_QUOTES.contains(c) || UNICODE_DOUBLE_QUOTES.contains(c) => {
+                    self.read_unicode_quote()
+                }
                 '{' | '}' => self.read_brace_or_literal(),
                 _ => self.read_normal_literal(end),
             },
         }
+    }
+
+    /// `readUnicodeQuote`: a curly quote where a real one was meant. It reads
+    /// as an ordinary literal, with a warning.
+    fn read_unicode_quote(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let c = self.bump().ok_or(())?;
+        let end = self.pos();
+        let id = self.next_id_between(start.clone(), end.clone());
+        self.problem_at(
+            start,
+            end,
+            Severity::WarningC,
+            1110,
+            "This is a unicode quote. Delete and retype it (or quote to make literal).",
+        );
+        Ok(Token::new(id, InnerToken::T_Literal(c.to_string())))
     }
 
     pub(super) fn read_single_quoted(&mut self) -> PResult<Token> {
@@ -100,12 +121,47 @@ impl Parser {
         let start = self.pos();
         self.char('\'')?;
         let mut s = String::new();
-        while let Some(c) = self.peek() {
-            if c == '\'' {
-                break;
+        // `readSingleQuotedPart`: literal runs, `readSingleEscaped` (the
+        // backslash stays literal, but escaping a quote this way does not
+        // work), and a curly quote, which is worth a warning.
+        loop {
+            match self.peek() {
+                None | Some('\'') => break,
+                Some('\\') => {
+                    let pos = self.pos();
+                    self.bump();
+                    if self.eof() {
+                        // `lookAhead anyChar` after the backslash.
+                        return Err(());
+                    }
+                    if self.peek() == Some('\'') {
+                        self.problem_at(
+                            pos.clone(),
+                            pos,
+                            Severity::InfoC,
+                            1003,
+                            "Want to escape a single quote? echo 'This is how it'\\''s done'.",
+                        );
+                    }
+                    s.push('\\');
+                }
+                Some(c) if UNICODE_SINGLE_QUOTES.contains(c) => {
+                    let pos = self.pos();
+                    self.bump();
+                    self.problem_at(
+                        pos.clone(),
+                        pos,
+                        Severity::WarningC,
+                        1112,
+                        "This is a unicode quote. Delete and retype it (or ignore/doublequote for literal).",
+                    );
+                    s.push(c);
+                }
+                Some(c) => {
+                    self.bump();
+                    s.push(c);
+                }
             }
-            self.bump();
-            s.push(c);
         }
         let end = self.pos();
         if self.char('\'').is_err() {
@@ -153,6 +209,21 @@ impl Parser {
                     parts.push(self.read_double_literal_run()?);
                 }
                 Some('`') => parts.push(self.read_backticked(true)?),
+                // `readUnicodeQuote`, the double-quoted variant.
+                Some(c) if UNICODE_DOUBLE_QUOTES.contains(c) => {
+                    let pos = self.pos();
+                    self.bump();
+                    let end = self.pos();
+                    let id = self.next_id_between(pos.clone(), end.clone());
+                    self.problem_at(
+                        pos,
+                        end,
+                        Severity::WarningC,
+                        1111,
+                        "This is a unicode quote. Delete and retype it (or ignore/singlequote for literal).",
+                    );
+                    parts.push(Token::new(id, InnerToken::T_Literal(c.to_string())));
+                }
                 _ => parts.push(self.read_double_literal_run()?),
             }
         }
@@ -198,7 +269,8 @@ impl Parser {
                 s.push('\\');
                 continue;
             }
-            if DOUBLE_QUOTABLE.contains(c) {
+            // `readDoubleLiteral` stops at `doubleQuotableChars ++ unicodeDoubleQuotes`.
+            if DOUBLE_QUOTABLE.contains(c) || UNICODE_DOUBLE_QUOTES.contains(c) {
                 break;
             }
             self.bump();
@@ -222,7 +294,12 @@ impl Parser {
         loop {
             match self.peek() {
                 Some('\\') => s.push_str(&self.read_normal_escaped()?),
-                Some(c) if !custom_end.contains(c) && !standard_end.contains(c) => {
+                Some(c)
+                    if !custom_end.contains(c)
+                        && !standard_end.contains(c)
+                        && !UNICODE_DOUBLE_QUOTES.contains(c)
+                        && !UNICODE_SINGLE_QUOTES.contains(c) =>
+                {
                     self.bump();
                     s.push(c);
                 }
@@ -732,7 +809,7 @@ impl Parser {
             return Ok(t);
         }
         self.reset(m);
-        self.read_dollar_lonely()
+        self.read_dollar_lonely(false)
     }
 
     pub(super) fn read_double_quoted_dollar(&mut self) -> PResult<Token> {
@@ -744,7 +821,7 @@ impl Parser {
             return Ok(t);
         }
         self.reset(m);
-        self.read_dollar_lonely()
+        self.read_dollar_lonely(true)
     }
 
     pub(super) fn read_dollar_exp(&mut self) -> PResult<Token> {
@@ -974,6 +1051,16 @@ impl Parser {
                 let name = self.read_variable_name()?;
                 let word = self.make_literal_word(&name, word_pos);
                 let id = self.next_id_between(start, self.pos());
+                if self.peek() == Some('[') {
+                    // `parseNoteAt pos` in Haskell is zero-width at the `$`.
+                    self.note_at(
+                        pos.clone(),
+                        pos.clone(),
+                        Severity::ErrorC,
+                        1087,
+                        "Use braces when expanding arrays, e.g. ${array[idx]} (or ${var}[.. to quiet).",
+                    );
+                }
                 return Ok(Token::new(
                     id,
                     InnerToken::T_DollarBraced {
@@ -1008,11 +1095,38 @@ impl Parser {
         Ok(s)
     }
 
-    pub(super) fn read_dollar_lonely(&mut self) -> PResult<Token> {
+    pub(super) fn read_dollar_lonely(&mut self, quoted: bool) -> PResult<Token> {
         let start = self.pos();
         self.char('$')?;
-        let id = self.next_id_between(start, self.pos());
+        let end = self.pos();
+        let id = self.next_id_between(start.clone(), end.clone());
+        if quoted && self.quote_for_escape() {
+            self.problem_at(
+                start,
+                end,
+                Severity::StyleC,
+                1135,
+                "Prefer escape over ending quote to make $ literal. Instead of \"It costs $\"5, use \"It costs \\$5\".",
+            );
+        }
         Ok(Token::new(id, InnerToken::T_Literal("$".to_string())))
+    }
+
+    /// `quoteForEscape`: a `"` that ends the string only so the `$` before it
+    /// stays literal, with a variable name right after. `"$"*` and `"$"$x` are
+    /// patterns rather than that trick.
+    fn quote_for_escape(&mut self) -> bool {
+        let m = self.mark();
+        let mut ok = false;
+        if self.char('"').is_ok() {
+            let _ = self.char('"');
+            if let Some(c) = self.peek() {
+                let any_var = c == '_' || c.is_ascii_alphanumeric() || "-$?!#@*".contains(c);
+                ok = any_var && c != '*' && c != '$';
+            }
+        }
+        self.reset(m);
+        ok
     }
 
     pub(super) fn read_dollar_single_quote(&mut self) -> PResult<Token> {

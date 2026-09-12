@@ -8,18 +8,12 @@ impl Parser {
         Token::new(id, InnerToken::T_Literal(String::new()))
     }
 
+    /// `readShebang`: the first line, in any of the forms people get wrong.
     pub(super) fn read_shebang(&mut self) -> Option<Token> {
-        // #! (optionally with spaces / swapped), then rest of first line.
         let start = self.pos();
         let m = self.mark();
-        let ok = if self.string("#!").is_ok() {
-            true
-        } else {
-            self.reset(m);
-            // "#! " with spaces already covered; try "# !"? keep simple.
-            false
-        };
-        if !ok {
+        // `anyShebang <|> try readMissingBang <|> withHeader`
+        if !(self.any_shebang() || self.read_missing_bang() || self.shebang_with_header()) {
             self.reset(m);
             return None;
         }
@@ -33,9 +27,158 @@ impl Parser {
             s.push(c);
         }
         let id = self.next_id_between(start, self.pos());
-        let _ = self.char('\r');
+        let _ = self.carriage_return();
         let _ = self.char('\n');
         Some(Token::new(id, InnerToken::T_Literal(s)))
+    }
+
+    /// `anyShebang`: `#!`, or one of the three near misses, each behind a `try`.
+    fn any_shebang(&mut self) -> bool {
+        if self.string("#!").is_ok() {
+            return true;
+        }
+        // `readSwapped`
+        let m = self.mark();
+        let start = self.pos();
+        if self.string("!#").is_ok() {
+            let end = self.pos();
+            self.problem_at(
+                start,
+                end,
+                Severity::ErrorC,
+                1084,
+                "Use #!, not !#, for the shebang.",
+            );
+            return true;
+        }
+        self.reset(m);
+        // `readTooManySpaces`
+        let start_pos = self.pos();
+        let start_spaces = self.skip_line_whitespace();
+        if self.char('#').is_ok() {
+            let middle_pos = self.pos();
+            let middle_spaces = self.skip_line_whitespace();
+            if self.char('!').is_ok() {
+                if start_spaces {
+                    self.problem_at(
+                        start_pos.clone(),
+                        start_pos,
+                        Severity::ErrorC,
+                        1114,
+                        "Remove leading spaces before the shebang.",
+                    );
+                }
+                if middle_spaces {
+                    self.problem_at(
+                        middle_pos.clone(),
+                        middle_pos,
+                        Severity::ErrorC,
+                        1115,
+                        "Remove spaces between # and ! in the shebang.",
+                    );
+                }
+                return true;
+            }
+        }
+        self.reset(m);
+        // `readMissingHash`
+        let pos = self.pos();
+        if self.char('!').is_ok() && self.ensure_path_ahead() {
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1104,
+                "Use #!, not just !, for the shebang.",
+            );
+            return true;
+        }
+        self.reset(m);
+        false
+    }
+
+    /// `readMissingBang`: a `#` where a `#!` was meant, path and all.
+    fn read_missing_bang(&mut self) -> bool {
+        let m = self.mark();
+        if self.char('#').is_ok() {
+            let pos = self.pos();
+            if self.ensure_path_ahead() {
+                self.problem_at(
+                    pos.clone(),
+                    pos,
+                    Severity::ErrorC,
+                    1113,
+                    "Use #!, not just #, for the shebang.",
+                );
+                return true;
+            }
+        }
+        self.reset(m);
+        false
+    }
+
+    /// `withHeader`: a shebang below a block of comments and blank lines.
+    fn shebang_with_header(&mut self) -> bool {
+        let m = self.mark();
+        if !self.shebang_header_line() {
+            self.reset(m);
+            return false;
+        }
+        while self.shebang_header_line() {}
+        let pos = self.pos();
+        if self.any_shebang() {
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1128,
+                "The shebang must be on the first line. Delete blanks and move comments.",
+            );
+            return true;
+        }
+        self.reset(m);
+        false
+    }
+
+    /// `headerLine`: whitespace and at most a comment, ending in a linefeed —
+    /// and not itself a shebang.
+    fn shebang_header_line(&mut self) -> bool {
+        let m = self.mark();
+        // `notFollowedBy2 anyShebang`. What it reports on the way is not rolled
+        // back (problems live outside Parsec), but `anyShebang` runs again once
+        // the header ends, and `nub` collapses the repeat.
+        let sm = self.mark();
+        if self.any_shebang() {
+            self.reset(sm);
+            self.reset(m);
+            return false;
+        }
+        self.reset(sm);
+        self.skip_line_whitespace();
+        let _ = self.read_any_comment();
+        if self.char('\n').is_ok() {
+            return true;
+        }
+        self.reset(m);
+        false
+    }
+
+    /// `skipSpaces`: true when there was whitespace to skip.
+    fn skip_line_whitespace(&mut self) -> bool {
+        let mut any = false;
+        while self.line_whitespace().is_ok() {
+            any = true;
+        }
+        any
+    }
+
+    /// `ensurePathAhead`: a `/` after optional whitespace, not consumed.
+    fn ensure_path_ahead(&mut self) -> bool {
+        let m = self.mark();
+        self.skip_line_whitespace();
+        let ok = self.peek() == Some('/');
+        self.reset(m);
+        ok
     }
 
     // ---- separators --------------------------------------------------------
@@ -291,22 +434,33 @@ impl Parser {
         }
     }
 
-    pub(super) fn read_banged(&mut self) -> PResult<Token> {
-        let m = self.mark();
-        // '!' as a word by itself
-        if self.peek() == Some('!') {
-            // ensure followed by space (bang keyword)
-            let after = self.peek_at(1);
-            if after == Some(' ') || after == Some('\t') {
-                let start = self.pos();
-                self.bump();
-                let bang_id = self.next_id_between(start, self.pos());
-                self.spacing();
-                let inner = self.read_banged()?;
-                return Ok(Token::new(bang_id, InnerToken::T_Banged(inner)));
-            }
+    /// `g_Bang`: a `!` in command position. The space after it is required, so
+    /// a missing one is a problem rather than a reason to read `!` as a word.
+    fn g_bang(&mut self) -> PResult<Id> {
+        let start = self.pos();
+        self.char('!')?;
+        let id = self.next_id_between(start, self.pos());
+        if self.spacing1().is_err() {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1035,
+                "You are missing a required space after the !.",
+            );
         }
-        self.reset(m);
+        Ok(id)
+    }
+
+    pub(super) fn read_banged(&mut self) -> PResult<Token> {
+        // `readBanged parser = (g_Bang >> readBanged parser) <|> parser`: past
+        // the `!` there is no alternative left.
+        if self.peek() == Some('!') {
+            let bang_id = self.g_bang()?;
+            let inner = self.read_banged()?;
+            return Ok(Token::new(bang_id, InnerToken::T_Banged(inner)));
+        }
         self.read_pipe_sequence()
     }
 
@@ -315,19 +469,11 @@ impl Parser {
     /// `read_banged`, the fallback reads a single command, not a whole pipe
     /// sequence, so it can be used per-stage inside `read_pipe_sequence`.
     pub(super) fn read_banged_command(&mut self) -> PResult<Token> {
-        let m = self.mark();
         if self.peek() == Some('!') {
-            let after = self.peek_at(1);
-            if after == Some(' ') || after == Some('\t') {
-                let start = self.pos();
-                self.bump();
-                let bang_id = self.next_id_between(start, self.pos());
-                self.spacing();
-                let inner = self.read_banged_command()?;
-                return Ok(Token::new(bang_id, InnerToken::T_Banged(inner)));
-            }
+            let bang_id = self.g_bang()?;
+            let inner = self.read_banged_command()?;
+            return Ok(Token::new(bang_id, InnerToken::T_Banged(inner)));
         }
-        self.reset(m);
         self.read_command()
     }
 

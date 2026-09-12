@@ -326,6 +326,11 @@ const NBSP: char = '\u{A0}';
 /// quotes. Includes `doubleQuotableChars`.
 const QUOTABLE_CHARS: &str = "|&;<>()\\ '\t\n\r\u{A0}\\\"$`";
 
+/// `unicodeDoubleQuotes` / `unicodeSingleQuotes`: the curly quotes an editor
+/// substitutes for the real ones, which the shell treats as ordinary text.
+const UNICODE_DOUBLE_QUOTES: &str = "\u{201C}\u{201D}\u{2033}\u{2036}";
+const UNICODE_SINGLE_QUOTES: &str = "\u{2018}\u{2019}";
+
 /// `almostSpace`'s character set: the unicode spaces that a shell does *not*
 /// treat as whitespace, so a script containing one behaves unexpectedly.
 const ALMOST_SPACE_CHARS: &str =
@@ -892,6 +897,22 @@ impl Parser {
         Ok(s)
     }
 
+    /// `readAnyComment`: a `#` comment, directive or not, to the end of the
+    /// line. Unlike `readComment` it neither spares annotations nor keeps the
+    /// CR.
+    fn read_any_comment(&mut self) -> PResult<String> {
+        self.char('#')?;
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            if c == '\n' || c == '\r' {
+                break;
+            }
+            self.bump();
+            s.push(c);
+        }
+        Ok(s)
+    }
+
     /// Non-consuming lookahead for `#` (spaces) `shellcheck` `<ws>`.
     fn at_annotation_prefix(&self) -> bool {
         let mut i = self.idx;
@@ -915,9 +936,27 @@ impl Parser {
         )
     }
 
+    /// `carriageReturn`: a literal CR, which the shell keeps as part of the
+    /// word and which is therefore always worth reporting.
+    fn carriage_return(&mut self) -> PResult<char> {
+        if self.peek() != Some('\r') {
+            return Err(());
+        }
+        let pos = self.pos();
+        self.bump();
+        self.problem_at(
+            pos.clone(),
+            pos,
+            Severity::ErrorC,
+            1017,
+            "Literal carriage return. Run script through tr -d '\\r' .",
+        );
+        Ok('\r')
+    }
+
     fn linefeed(&mut self) -> PResult<char> {
         // optional carriage return, then '\n', then read pending heredocs
-        let _ = self.char('\r');
+        let _ = self.carriage_return();
         self.char('\n')?;
         self.read_pending_heredocs()?;
         Ok('\n')
@@ -927,15 +966,10 @@ impl Parser {
         if let Ok(c) = self.line_whitespace() {
             return Ok(c);
         }
-        // carriage return
-        let m = self.mark();
-        if self.char('\r').is_ok() {
-            // lone CR (not part of CRLF handled by linefeed) -> treat as space-ish
-            if self.peek() == Some('\n') {
-                self.reset(m);
-            } else {
-                return Ok('\r');
-            }
+        // `whitespace = oneOf " \t" <|> carriageReturn <|> almostSpace <|> linefeed`:
+        // a CR is whitespace on its own, CRLF or not.
+        if let Ok(c) = self.carriage_return() {
+            return Ok(c);
         }
         self.linefeed()
     }
