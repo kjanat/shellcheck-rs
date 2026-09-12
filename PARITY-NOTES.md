@@ -3,12 +3,20 @@
 Findings about **ShellCheck 0.11.0's own diagnostics**, collected while building a
 faithful port and gating it against the Haskell binary as an oracle.
 
-Every item here is reproduced by the port **on purpose**, except where an entry's
-**Port** line says otherwise. Parity is the goal, so a reader who spots one of
-these in the port's output and files it as a port bug would be wrong — and a
-"fix" would show up as a conformance divergence. That is what this file is for:
-to say which oddities are inherited, what a user actually experiences, and why
-upstream behaves that way.
+Most items here are reproduced by the port **on purpose**; an entry's **Port**
+line says when it is not. A fix that makes the port better than the oracle needs
+a *sanctioned deviation* — a class the conformance harness can justify from
+evidence it gathers while comparing, not a blessed list of scripts. Today there
+is one class, `upstream-false-parse-error`: the oracle rejects the file, the port
+does not, and `<shell> -n` agrees with the port. See
+`rust/crates/conformance/src/deviations.rs`; no shell to ask means the difference
+counts as a divergence, so it fails closed.
+
+Everything else is inherited on purpose, so a reader who spots one of these in
+the port's output and files it as a port bug would be wrong — and "fixing" it
+would show up as a conformance divergence. That is what this file is for: to say
+which oddities are inherited, which are not, what a user actually experiences,
+and why upstream behaves that way.
 
 Each entry is runnable. `shellcheck` below is the Haskell binary; every output
 block is verbatim from 0.11.0 with no shebang in the input, so the SC2148 line
@@ -123,6 +131,21 @@ ShellCheck complaining is correct. For a bash target it is not.
    not parse, so nothing in it is analysed. A script bash runs fine gets no
    checking at all, and the reported column points at the end of a comment rather
    than at the `!`.
+
+**Port: fixed, not reproduced.** Deviation `upstream-false-parse-error`. The
+port follows the shells: a `!` with nothing to negate parses when the dialect is
+bash, so the rest of the file is analysed —
+
+```
+-:3:6: warning: undefined is referenced but not assigned. [SC2154]
+-:3:6: note: Double quote to prevent globbing and word splitting. [SC2086]
+```
+
+— and still fails for `sh`, `dash`, `ksh` and `busybox`, where dash's error is
+the correct one. It also still fails for every shape bash itself rejects: `! &`,
+`! ;;`, `! | true`, `! && true`, `( ! )`. This is the port's only dialect-aware
+parse decision; the parser learns the dialect from `--shell`, else a file-wide
+`shell=` directive, else the shebang, else bash.
 
 **Why.** The code is `void spacing1 <|> parseProblemAt pos ErrorC 1035 ...`.
 `spacing` consumes a trailing comment while returning no whitespace, so

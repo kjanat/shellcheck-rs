@@ -19,7 +19,7 @@
 
 use crate::ast::*;
 use crate::ast_lib;
-use crate::interface::{Position, Severity};
+use crate::interface::{Position, Severity, Shell};
 use std::collections::BTreeMap;
 
 mod arithmetic;
@@ -292,6 +292,15 @@ pub struct Parser {
     /// dead there, so that is the stack `notesForContext` reads at the end --
     /// whatever this parser goes on to push while it unwinds.
     frozen_contexts: Option<Vec<Context>>,
+    /// The dialect the script is being checked as, as far as it is known while
+    /// parsing: `--shell` or a file-wide `shell=` directive, else the shebang,
+    /// else `None` — which means the same as bash, the dialect ShellCheck
+    /// assumes when nothing says otherwise.
+    ///
+    /// Upstream's parser never asks, because every construct it accepts is
+    /// accepted by every shell it supports — with one exception, a `!` with
+    /// nothing to negate. See `empty_negation_ok` and `PARITY-NOTES.md`.
+    shell_hint: Option<Shell>,
     /// Whether the caller passed `--shell`, which like a `shell=` directive
     /// means the shebang no longer decides anything and is not checked.
     shell_flag_specified: bool,
@@ -383,14 +392,21 @@ fn is_glob_class_terminator(c: char) -> bool {
 
 impl Parser {
     pub fn new(filename: &str, script: &str) -> Parser {
-        Parser::with_shell_flag(filename, script, false)
+        Parser::with_shell_flag(filename, script, false, None)
     }
 
     /// `shell_flag_specified` mirrors Haskell's `shellTypeOverride`: `--shell`
     /// suppresses the shebang checks just as a `# shellcheck shell=` directive
     /// does, because the caller has already said what dialect this is.
-    pub fn with_shell_flag(filename: &str, script: &str, shell_flag_specified: bool) -> Parser {
+    /// `shell_hint` is that dialect, when the caller or the filename named one.
+    pub fn with_shell_flag(
+        filename: &str,
+        script: &str,
+        shell_flag_specified: bool,
+        shell_hint: Option<Shell>,
+    ) -> Parser {
         Parser {
+            shell_hint,
             shell_flag_specified,
             input: script.chars().collect(),
             idx: 0,
@@ -1248,12 +1264,18 @@ impl Parser {
 
 /// Public entry point mirroring `ShellCheck.Parser.parseScript`.
 pub fn parse_script(filename: &str, script: &str) -> ParseOutput {
-    parse_script_with(filename, script, false)
+    parse_script_with(filename, script, false, None)
 }
 
-/// Parse a script, telling the parser whether the caller supplied `--shell`.
-pub fn parse_script_with(filename: &str, script: &str, shell_flag_specified: bool) -> ParseOutput {
-    let mut p = Parser::with_shell_flag(filename, script, shell_flag_specified);
+/// Parse a script, telling the parser whether the caller supplied `--shell`,
+/// and which dialect the caller or the filename named if either did.
+pub fn parse_script_with(
+    filename: &str,
+    script: &str,
+    shell_flag_specified: bool,
+    shell_hint: Option<Shell>,
+) -> ParseOutput {
+    let mut p = Parser::with_shell_flag(filename, script, shell_flag_specified, shell_hint);
     let root = p.read_script_file();
     // A production that failed after consuming input means the script does not
     // parse, even if backtracking found some other way to read the rest of it:

@@ -516,10 +516,55 @@ impl Parser {
         // the `!` there is no alternative left.
         if self.peek() == Some('!') {
             let bang_id = self.g_bang()?;
-            let inner = self.read_banged()?;
-            return Ok(Token::new(bang_id, InnerToken::T_Banged(inner)));
+            let m = self.mark();
+            match self.read_banged() {
+                Ok(inner) => return Ok(Token::new(bang_id, InnerToken::T_Banged(inner))),
+                Err(()) => {
+                    if self.idx != m.idx
+                        || self.has_committed_failure()
+                        || !self.empty_negation_ok()
+                    {
+                        return Err(());
+                    }
+                    // A deliberate deviation from upstream, which rejects this
+                    // for every dialect and so throws away the whole file's
+                    // analysis over a line bash runs. See PARITY-NOTES.md,
+                    // `upstream-false-parse-error`.
+                    let here = self.pos();
+                    let id = self.next_id_between(here.clone(), here);
+                    let nothing = Token::new(
+                        id,
+                        InnerToken::T_Pipeline {
+                            separators: Vec::new(),
+                            commands: Vec::new(),
+                        },
+                    );
+                    return Ok(Token::new(bang_id, InnerToken::T_Banged(nothing)));
+                }
+            }
         }
         self.read_pipe_sequence()
+    }
+
+    /// May a `!` stand with nothing to negate here?
+    ///
+    /// bash takes it — `!` negates the null command, so `! ; echo $?` prints 1
+    /// — while dash and the other POSIX shells reject it. The shells only allow
+    /// it before the end of a line or a single `;`: `! &`, `! ;;`, `! | x`,
+    /// `! && x` and `( ! )` are syntax errors in bash too.
+    ///
+    /// `!#` is not this case at all: `#` opens a comment only at the start of a
+    /// word, so `!#` is one word and every shell treats it as a command name.
+    /// That keeps upstream's reading, and its error.
+    fn empty_negation_ok(&self) -> bool {
+        if self.shell_hint.unwrap_or(Shell::Bash) != Shell::Bash {
+            return false;
+        }
+        match self.peek() {
+            None | Some('\n') | Some('\r') => true,
+            Some(';') => self.peek_at(1) != Some(';'),
+            _ => false,
+        }
     }
 
     /// `readBanged readCommand`: a single pipeline stage, which may itself be
@@ -2209,6 +2254,23 @@ impl Parser {
             || file_annotations
                 .iter()
                 .any(|a| matches!(a, Annotation::ShellOverride(_)));
+
+        // Settle the dialect before the body is read, in the order the analyzer
+        // resolves it: what the caller said (already in `shell_hint`), then a
+        // file-wide `shell=` directive, then the shebang. Only one parse
+        // decision consults it -- see `empty_negation_ok`.
+        if self.shell_hint.is_none() {
+            self.shell_hint = file_annotations.iter().find_map(|a| match a {
+                Annotation::ShellOverride(s) => crate::data::shell_for_executable(s),
+                _ => None,
+            });
+        }
+        if self.shell_hint.is_none() {
+            if let InnerToken::T_Literal(sb) = &*shebang.inner {
+                self.shell_hint =
+                    crate::data::shell_for_executable(&ast_lib::executable_from_shebang(sb));
+            }
+        }
         let mut unsupported_shell = false;
         if !ignore_shebang {
             if let InnerToken::T_Literal(sb) = &*shebang.inner {

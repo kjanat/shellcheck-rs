@@ -755,4 +755,85 @@ mod coproc_glob_dollar_tests {
         assert!(!has_note("echo hi", 1127));
         assert!(!has_note("/bin/sh", 1127));
     }
+
+    // ---- `!` with nothing to negate ---------------------------------------
+    //
+    // The port's one deliberate departure from upstream's parse decisions: bash
+    // negates the null command, upstream rejects the file for every dialect and
+    // so analyses none of it. See PARITY-NOTES.md.
+
+    /// Parse as a named dialect, as `--shell` would.
+    fn parses_as(shell: Option<Shell>, script: &str) -> bool {
+        let out = parse_script_with("-", script, shell.is_some(), shell);
+        out.root.is_some()
+    }
+
+    #[test]
+    fn bare_bang_parses_for_bash() {
+        for script in [
+            "! ",
+            "! # negate what, exactly",
+            "! ;",
+            "! ; echo hi",
+            "! !",
+            "if ! ; then echo a; fi",
+            "f() { ! ; }",
+        ] {
+            assert!(
+                parses_as(Some(Shell::Bash), script),
+                "bash accepts {script:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_bang_still_fails_for_posix_shells() {
+        // dash rejects every one of these, so upstream's error is right there.
+        for shell in [Shell::Sh, Shell::Dash, Shell::Ksh, Shell::BusyboxSh] {
+            assert!(
+                !parses_as(Some(shell), "! # c"),
+                "{shell:?} must still reject a bare `!`"
+            );
+        }
+        // The shebang settles it when no flag does.
+        assert!(!parses_as(None, "#!/bin/sh\n! # c\n"));
+        assert!(parses_as(None, "#!/bin/bash\n! # c\n"));
+        // Nothing said: ShellCheck assumes bash.
+        assert!(parses_as(None, "! # c"));
+    }
+
+    #[test]
+    fn bare_bang_fails_where_bash_itself_fails() {
+        // Verified against bash 5.2: only end-of-line and a single `;` are ok.
+        for script in ["! &", "! ;;", "! | true", "! && true", "(!)"] {
+            assert!(
+                !parses_as(Some(Shell::Bash), script),
+                "bash rejects {script:?} too"
+            );
+        }
+        // `!#` keeps upstream's reading: the `!` is the negation operator and
+        // the missing space is an error. (On line 1 it is the shebang check
+        // SC1084 instead, and that parses.)
+        assert!(!parses_as(Some(Shell::Bash), "echo hi\n!#\n"));
+    }
+
+    #[test]
+    fn a_bare_bang_does_not_stop_the_rest_being_analysed() {
+        // The point of the deviation: line 3 still gets checked.
+        let spec = crate::interface::CheckSpec {
+            filename: "-".to_string(),
+            script: "#!/bin/bash\n! # c\necho $undefined\n".to_string(),
+            ..crate::interface::CheckSpec::default()
+        };
+        let codes: Vec<i64> = crate::check_script(&spec)
+            .comments
+            .iter()
+            .map(|c| c.comment.code)
+            .collect();
+        assert!(codes.contains(&2154), "got {codes:?}");
+        assert!(
+            !codes.iter().any(|c| [1072, 1073, 1009].contains(c)),
+            "no fatal parse codes, got {codes:?}"
+        );
+    }
 }

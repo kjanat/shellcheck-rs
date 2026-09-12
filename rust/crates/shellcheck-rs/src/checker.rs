@@ -15,6 +15,8 @@ pub fn check_script(spec: &CheckSpec) -> CheckResult {
         &spec.filename,
         &spec.script,
         spec.shell_type_override.is_some(),
+        spec.shell_type_override
+            .or_else(|| shell_from_filename(&spec.filename)),
     );
 
     // Parse comments (SC1xxx): already positioned.
