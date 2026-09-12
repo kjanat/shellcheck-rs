@@ -270,6 +270,9 @@ pub struct Parser {
 struct Context {
     pos: Position,
     name: &'static str,
+    /// Input index where this production started. A failure past it has
+    /// consumed input, which in Parsec means `<|>` can no longer recover.
+    start_idx: usize,
 }
 
 /// The deepest parse failure, with the contexts that were open at the time.
@@ -279,6 +282,11 @@ struct Failure {
     pos: Position,
     message: String,
     contexts: Vec<Context>,
+    /// True when the failing production had already consumed input. Parsec's
+    /// `<|>` only tries the next alternative if the previous one failed
+    /// *without* consuming, so such a failure both describes the error better
+    /// and, when it came from an explicit `fail`, ends the parse outright.
+    consumed: bool,
 }
 
 const DOUBLE_QUOTABLE: &str = "\\\"$`";
@@ -415,7 +423,12 @@ impl Parser {
     /// [`Parser::called`] does that for a whole production body.
     fn push_ctx(&mut self, name: &'static str) {
         let pos = self.pos();
-        self.contexts.push(Context { pos, name });
+        let start_idx = self.idx;
+        self.contexts.push(Context {
+            pos,
+            name,
+            start_idx,
+        });
     }
 
     fn pop_ctx(&mut self) {
@@ -444,6 +457,12 @@ impl Parser {
     fn fail_with<T>(&mut self, message: &str) -> PResult<T> {
         self.record_failure(message);
         Err(())
+    }
+
+    /// Whether a failure here has consumed input since the innermost
+    /// production began, and so cannot be backtracked out of.
+    fn has_consumed(&self) -> bool {
+        self.contexts.last().is_some_and(|c| self.idx > c.start_idx)
     }
 
     /// The diagnostics a fatal parse failure reports: the innermost two open
@@ -494,23 +513,23 @@ impl Parser {
     /// the productions open around it. Mirrors Parsec keeping the error from
     /// the furthest position reached.
     fn record_failure(&mut self, message: &str) {
-        let replace = match &self.failure {
+        let consumed = self.has_consumed();
+        // Rank failures the way Parsec picks one: furthest position first,
+        // then a production that had committed to what it was reading over an
+        // alternative that bailed immediately, then one that had something to
+        // say over one that merely ran out of input.
+        let rank = (self.reach, consumed, !message.is_empty());
+        let better = match &self.failure {
             None => true,
-            Some(f) => {
-                self.reach > f.reach
-                    // At equal depth, a production that failed with something
-                    // to say describes the error better than an alternative
-                    // that merely ran out of input: ShellCheck's SC1072 text
-                    // comes from exactly those explicit `fail` messages.
-                    || (self.reach == f.reach && !message.is_empty() && f.message.is_empty())
-            }
+            Some(f) => rank > (f.reach, f.consumed, !f.message.is_empty()),
         };
-        if replace {
+        if better {
             self.failure = Some(Failure {
                 reach: self.reach,
                 pos: self.reach_pos.clone(),
                 message: message.to_string(),
                 contexts: self.contexts.clone(),
+                consumed,
             });
         }
     }
@@ -755,7 +774,17 @@ impl Parser {
 pub fn parse_script(filename: &str, script: &str) -> ParseOutput {
     let mut p = Parser::new(filename, script);
     let root = p.read_script_file();
-    if root.is_none() {
+    // A production that failed after committing to what it was reading means
+    // the script does not parse, even if backtracking found some other way to
+    // read the rest of it.
+    // Only an explicit `fail` past the point of commitment ends the parse:
+    // that is where ShellCheck's grammar has decided what it is reading, and
+    // where Parsec's `<|>` can no longer offer an alternative.
+    let committed_failure = p
+        .failure
+        .as_ref()
+        .is_some_and(|f| f.consumed && !f.message.is_empty());
+    if root.is_none() || committed_failure {
         // Haskell `parseShell`'s `Left err` branch: prRoot = Nothing, so no
         // analysis runs at all, the buffered parse *notes* are discarded, and
         // only the fatal *problems* survive alongside the failure itself.

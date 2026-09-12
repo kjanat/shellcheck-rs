@@ -476,6 +476,10 @@ impl Parser {
     }
 
     pub(super) fn read_backticked(&mut self, quoted: bool) -> PResult<Token> {
+        self.called("backtick expansion", |p| p.read_backticked_body(quoted))
+    }
+
+    fn read_backticked_body(&mut self, quoted: bool) -> PResult<Token> {
         let start = self.pos();
         self.char('`')?;
         // collect raw until closing backtick, then unescape + subparse
@@ -855,7 +859,9 @@ impl Parser {
                 _ => parts.push(self.read_double_literal_run()?),
             }
         }
-        self.char('"')?;
+        if self.char('"').is_err() {
+            return self.fail_with("Expected end of translated double quoted string");
+        }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_DollarDoubleQuoted(parts)))
     }

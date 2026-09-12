@@ -1471,22 +1471,53 @@ impl Parser {
         // `verifyShebang` (Parser.hs readScriptFile): warn on an unrecognized
         // interpreter, unless a `# shellcheck shell=...` directive overrides the
         // shebang. Emitted at the start of the file, like `parseProblemAt pos`.
-        let shell_annotation_specified = file_annotations
+        let ignore_shebang = file_annotations
             .iter()
             .any(|a| matches!(a, Annotation::ShellOverride(_)));
-        if !shell_annotation_specified {
+        let mut unsupported_shell = false;
+        if !ignore_shebang {
             if let InnerToken::T_Literal(sb) = &*shebang.inner {
                 let exe = ast_lib::executable_from_shebang(sb);
-                if Self::is_valid_shell(&exe).is_none() {
-                    self.problem_at(
-                        start.clone(),
-                        start.clone(),
-                        Severity::ErrorC,
-                        1008,
-                        "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify.",
-                    );
+                match Self::is_valid_shell(&exe) {
+                    Some(true) => {}
+                    Some(false) => {
+                        self.problem_at(
+                            start.clone(),
+                            start.clone(),
+                            Severity::ErrorC,
+                            1071,
+                            "ShellCheck only supports sh/bash/dash/ksh/'busybox sh' scripts. Sorry!",
+                        );
+                        unsupported_shell = true;
+                    }
+                    None => {
+                        self.problem_at(
+                            start.clone(),
+                            start.clone(),
+                            Severity::ErrorC,
+                            1008,
+                            "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify.",
+                        );
+                    }
                 }
             }
+        }
+
+        // A shebang for a shell ShellCheck does not implement: the body is not
+        // parsed at all (`many anyChar`), leaving a script whose only content
+        // is the shebang, so the checks that look at the shebang still run and
+        // nothing else does. Mirrors `readScriptFile`'s else branch, including
+        // its dropping of the annotations.
+        if unsupported_shell {
+            while self.bump().is_some() {}
+            let id = self.next_id_between(start.clone(), self.pos());
+            return Some(Token::new(
+                id,
+                InnerToken::T_Script {
+                    shebang,
+                    commands: Vec::new(),
+                },
+            ));
         }
 
         let commands = self.read_compound_list_or_empty();
