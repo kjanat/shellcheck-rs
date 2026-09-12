@@ -765,7 +765,13 @@ impl Parser {
             self.reset(m);
         }
         if self.peek() == Some('$') && self.peek_at(1) == Some('{') {
-            return self.read_dollar_braced();
+            // Past `try (string "${")` there is no alternative left: a failure
+            // here is the parse error, not a literal `$` and a stray brace.
+            let r = self.read_dollar_braced();
+            if r.is_err() {
+                self.committed = true;
+            }
+            return r;
         }
         self.read_dollar_variable()
     }
@@ -869,33 +875,16 @@ impl Parser {
     fn read_dollar_braced_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("${")?;
+        // `readDollarBracedWord`: the contents are read as parts rather than
+        // scanned for a matching brace, so an unterminated quote inside is the
+        // parse error it is in the shell. A bare `{` is an ordinary literal
+        // here (`readDollarBracedLiteral` stops only at `bracedQuotable`,
+        // `}"$'` + backtick), and nesting comes only from a `${` part.
         let word_start = self.pos();
-        // read braced word: everything up to matching }. A bare `{` is an
-        // ordinary literal char here (Parser.hs `readDollarBracedLiteral` stops
-        // only at `bracedQuotable` = `}"$'` + backtick); so e.g. `${{var}`
-        // parses the `${...}` as one expansion whose word is `{var`. Nesting is
-        // introduced only by a `${` sub-expansion, so depth increments on `${`
-        // (a `{` preceded by `$`), not on a bare `{`.
-        let mut raw = String::new();
-        let mut depth = 1;
-        let mut prev = '\0';
-        while let Some(c) = self.peek() {
-            if c == '{' && prev == '$' {
-                depth += 1;
-            } else if c == '}' {
-                depth -= 1;
-                if depth == 0 {
-                    break;
-                }
-            }
-            self.bump();
-            raw.push(c);
-            prev = c;
-        }
-        self.char('}').map_err(|_| ())?;
-        // Parse the braced content into parts so nested expansions (e.g.
-        // `${x:+$y}`) become real child tokens and are seen by the analyses.
-        let inner = self.make_braced_word(&raw, &word_start);
+        let parts = self.read_braced_parts()?;
+        let wid = self.next_id_between(word_start, self.pos());
+        let inner = Token::new(wid, InnerToken::T_NormalWord(parts));
+        self.char('}')?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
@@ -1064,75 +1053,50 @@ impl Parser {
 
     /// Parse the raw content of a `${...}` into a word whose parts include any
     /// nested expansions, single/double quotes and literal runs.
-    pub(super) fn make_braced_word(&mut self, raw: &str, start: &Position) -> Token {
-        let mut sub = Parser::new(&self.filename, raw);
-        sub.line = start.line;
-        sub.col = start.column;
-        sub.next_id = self.next_id;
-        let parts = sub.read_braced_parts();
-        for (k, v) in sub.positions.iter() {
-            self.positions.insert(*k, v.clone());
-        }
-        self.notes.append(&mut sub.notes);
-        self.problems.append(&mut sub.problems);
-        self.next_id = sub.next_id;
-        let wid = self.next_id_between(start.clone(), self.pos());
-        Token::new(wid, InnerToken::T_NormalWord(parts))
-    }
-
-    pub(super) fn read_braced_parts(&mut self) -> Vec<Token> {
+    /// `readDollarBracedWord`'s `many readDollarBracedPart`, read inline. Stops
+    /// at the closing brace; a part that fails after consuming input (an
+    /// unterminated quote, say) fails the whole expansion.
+    pub(super) fn read_braced_parts(&mut self) -> PResult<Vec<Token>> {
         let mut parts = Vec::new();
         loop {
-            match self.peek() {
-                None => break,
-                Some('\'') => match self.read_single_quoted() {
-                    Ok(t) => parts.push(t),
-                    Err(()) => parts.push(self.braced_literal_char()),
-                },
-                Some('"') => match self.read_double_quoted() {
-                    Ok(t) => parts.push(t),
-                    Err(()) => parts.push(self.braced_literal_char()),
-                },
-                Some('`') => match self.read_backticked(false) {
-                    Ok(t) => parts.push(t),
-                    Err(()) => parts.push(self.braced_literal_char()),
-                },
-                Some('$') => {
-                    let m = self.mark();
-                    match self.read_normal_dollar() {
-                        Ok(t) => parts.push(t),
-                        Err(()) => {
-                            self.reset(m);
-                            parts.push(self.braced_literal_char());
-                        }
+            let before = self.idx;
+            let r = match self.peek() {
+                None | Some('}') => break,
+                Some('\'') => self.read_single_quoted(),
+                Some('"') => self.read_double_quoted(),
+                Some('`') => self.read_backticked(false),
+                Some('$') => self.read_normal_dollar(),
+                Some(_) => self.read_braced_literal(),
+            };
+            match r {
+                Ok(t) => parts.push(t),
+                Err(()) => {
+                    if self.idx != before {
+                        return Err(());
                     }
-                }
-                Some(_) => {
-                    let start = self.pos();
-                    let mut s = String::new();
-                    while let Some(c) = self.peek() {
-                        if "$`'\"".contains(c) {
-                            break;
-                        }
-                        s.push(c);
-                        self.bump();
-                    }
-                    if s.is_empty() {
-                        break;
-                    }
-                    let id = self.next_id_between(start, self.pos());
-                    parts.push(Token::new(id, InnerToken::T_Literal(s)));
+                    break;
                 }
             }
         }
-        parts
+        Ok(parts)
     }
 
-    pub(super) fn braced_literal_char(&mut self) -> Token {
+    /// `readDollarBracedLiteral`: a run of anything but `bracedQuotable`.
+    fn read_braced_literal(&mut self) -> PResult<Token> {
         let start = self.pos();
-        let c = self.bump().unwrap_or('\0');
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            if "}$`'\"".contains(c) {
+                break;
+            }
+            s.push(c);
+            self.bump();
+        }
+        if s.is_empty() {
+            return Err(());
+        }
         let id = self.next_id_between(start, self.pos());
-        Token::new(id, InnerToken::T_Literal(c.to_string()))
+        Ok(Token::new(id, InnerToken::T_Literal(s)))
     }
 
     pub(super) fn make_literal_word(&mut self, s: &str, start: Position) -> Token {

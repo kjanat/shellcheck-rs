@@ -733,6 +733,12 @@ impl Parser {
     }
 
     fn problem_at(&mut self, start: Position, end: Position, sev: Severity, code: i64, msg: &str) {
+        if self.committed {
+            // Parsing is over as far as Haskell is concerned: everything this
+            // parser reads past the point of no return is phantom, and its
+            // diagnostics would be ones the oracle never had a chance to emit.
+            return;
+        }
         self.problems.push(ParseNote {
             start,
             end,
