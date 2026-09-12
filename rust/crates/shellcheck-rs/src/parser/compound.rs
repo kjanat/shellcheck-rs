@@ -230,6 +230,20 @@ impl Parser {
             }
             Ok(())
         } else {
+            // `anycaseString` consumes the prefix that matched before failing,
+            // and that is where Parsec's error sits -- `case '' i` reports the
+            // end of input rather than the start of the missing `in`.
+            let m = self.mark();
+            for c in kw.chars() {
+                match self.peek() {
+                    Some(p) if p.eq_ignore_ascii_case(&c) => {
+                        self.bump();
+                    }
+                    _ => break,
+                }
+            }
+            self.fail_implicitly();
+            self.reset(m);
             Err(())
         }
     }
@@ -947,13 +961,13 @@ impl Parser {
             let _ = p.char('(');
             p.spacing();
             // `readPattern`: words separated by `|`.
-            let mut pats = Vec::new();
-            while let Ok(w) = p.read_pattern_word() {
-                pats.push(w);
+            // `readPattern` is a `sepBy1`: a case item needs at least one
+            // pattern word, and without one it is not an item at all.
+            let mut pats = vec![p.read_pattern_word()?];
+            p.spacing();
+            while p.char('|').is_ok() {
                 p.spacing();
-                if p.char('|').is_err() {
-                    break;
-                }
+                pats.push(p.read_pattern_word()?);
                 p.spacing();
             }
             if p.char(')').is_err() {

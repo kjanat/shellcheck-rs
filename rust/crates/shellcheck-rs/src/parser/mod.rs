@@ -453,6 +453,16 @@ impl Parser {
 
     fn bump(&mut self) -> Option<char> {
         let c = self.input.get(self.idx).copied()?;
+        // In Parsec an error travels with the reply, not in the state: when a
+        // parser consumes input successfully, `parserBind` returns the consumed
+        // reply as it is and whatever error had accumulated is dropped. So the
+        // failure a parse finally reports is the furthest one since the last
+        // input it managed to read, not the furthest one overall. Past a
+        // commitment there is no more reading in Parsec at all, so the failure
+        // that ended the parse stands.
+        if !self.committed {
+            self.failure = None;
+        }
         self.idx += 1;
         if self.idx > self.reach {
             self.reach = self.idx;
@@ -815,11 +825,20 @@ impl Parser {
 
     // ---- char-class combinators -------------------------------------------
 
+    /// Parsec records an error for every failure, implicit ones included, and
+    /// reports the one that got furthest. `getStringFromParsec` keeps only
+    /// explicit `Message`s, so an implicit failure contributes its position and
+    /// nothing else -- which is why `case '' i` reports no message at all.
+    pub(super) fn fail_implicitly(&mut self) {
+        self.record_failure_as("", false, false);
+    }
+
     fn char(&mut self, c: char) -> PResult<char> {
         if self.peek() == Some(c) {
             self.bump();
             Ok(c)
         } else {
+            self.fail_implicitly();
             Err(())
         }
     }
@@ -830,7 +849,10 @@ impl Parser {
                 self.bump();
                 Ok(c)
             }
-            _ => Err(()),
+            _ => {
+                self.fail_implicitly();
+                Err(())
+            }
         }
     }
 
@@ -838,6 +860,8 @@ impl Parser {
         let m = self.mark();
         for c in s.chars() {
             if self.char(c).is_err() {
+                // `string` is not a `try`: it has already consumed what
+                // matched, and that is where Parsec's error sits.
                 self.reset(m);
                 return Err(());
             }
