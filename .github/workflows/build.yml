@@ -159,7 +159,7 @@ jobs:
           TAGS="$(cat source/tags)"
           export TAGS
           mkdir -p deploy
-          cp -r ./*.bin/* deploy
+          cp -R ./*.bin/* deploy
           cd deploy
           ../.prepare_deploy
           rm -rf ./*/ ./README* ./LICENSE*

@@ -281,9 +281,67 @@ fn extract_text(file: &str, text: &str) -> Vec<Entry> {
     out
 }
 
+/// Every `prop_` name a Haskell source defines, whether or not it names a
+/// script: a definition starts at the beginning of a line.
+fn property_names(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("prop_")?;
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '\''))
+                .unwrap_or(rest.len());
+            Some(format!("prop_{}", &rest[..end]))
+        })
+        .collect()
+}
+
+/// What the corpus covers, and what it does not.
+///
+/// Not every `prop_` property names a shell script: many test the Fixer, the
+/// Checker's IO, `ASTLib` helpers or the formatters, and there is nothing to
+/// replay through a shell linter. Counting them here keeps the gap visible
+/// rather than leaving "2026 properties" to be read as "all of them".
+pub struct Coverage {
+    /// Properties with a script, which is what the gate replays.
+    pub entries: Vec<Entry>,
+    /// Property names with no extractable script, by the file defining them.
+    pub skipped: Vec<(String, String)>,
+}
+
+impl Coverage {
+    /// One line for the gate and fuzz banners.
+    pub fn summary(&self) -> String {
+        let total = self.entries.len() + self.skipped.len();
+        let mut by_file: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for (file, _) in &self.skipped {
+            *by_file.entry(file.as_str()).or_default() += 1;
+        }
+        let mut worst: Vec<(&&str, &usize)> = by_file.iter().collect();
+        worst.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let where_ = worst
+            .iter()
+            .take(3)
+            .map(|(f, n)| format!("{f} {n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "corpus: {} of {total} properties have a script to replay; \
+             {} have none ({where_}, ...)",
+            self.entries.len(),
+            self.skipped.len(),
+        )
+    }
+}
+
 /// Read every `prop_` property out of the Haskell tree rooted at `src_dir`
 /// (normally `<repo>/src/ShellCheck`), sorted by id for a stable order.
 pub fn extract(src_dir: &Path) -> Result<Vec<Entry>, String> {
+    Ok(coverage(src_dir)?.entries)
+}
+
+/// As [`extract`], but also reporting the properties it could not extract.
+pub fn coverage(src_dir: &Path) -> Result<Coverage, String> {
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     let mut stack = vec![src_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -300,13 +358,24 @@ pub fn extract(src_dir: &Path) -> Result<Vec<Entry>, String> {
     }
     files.sort();
     let mut out = Vec::new();
+    let mut skipped = Vec::new();
     for f in &files {
         let text = std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
         let name = f
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        out.extend(extract_text(&name, &text));
+        let entries = extract_text(&name, &text);
+        // Every property the file defines, so the ones with no script to
+        // replay are counted rather than passed over in silence.
+        let extracted: std::collections::HashSet<&str> =
+            entries.iter().map(|e| e.id.as_str()).collect();
+        for prop in property_names(&text) {
+            if !extracted.contains(prop.as_str()) {
+                skipped.push((name.clone(), prop));
+            }
+        }
+        out.extend(entries);
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     // Two modules can define the same property name -- Analytics.hs and
@@ -328,7 +397,11 @@ pub fn extract(src_dir: &Path) -> Result<Vec<Entry>, String> {
         }
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(out)
+    skipped.sort();
+    Ok(Coverage {
+        entries: out,
+        skipped,
+    })
 }
 
 #[cfg(test)]

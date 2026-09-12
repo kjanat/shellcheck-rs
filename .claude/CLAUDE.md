@@ -107,8 +107,10 @@ pipeline, comparing the whole json1 payload. It must stay at 0 divergences.
 Two things it is not. It does not call the helper the property called
 (`verifyTree`, `verifyCodes`, …), so it is a corpus *derived from* the upstream
 properties rather than an execution of them. And it covers only the properties
-with an extractable script — 2026 of 2238 distinct names; the rest test the
-Fixer, the Checker's IO, `ASTLib` helpers and the like.
+with an extractable script — 2026 of 2252 definitions, the count its own banner
+prints; the other 226 test the Fixer, the Checker's IO, `ASTLib` helpers and the
+like, and have no shell to replay. (2252 definitions, 2238 distinct names: a
+dozen names are defined in two modules, and both are replayed.)
 
 `fuzz` runs the same comparison over generated and mutated shell; it is the only
 one of the two that can say anything about parity, because `gate` only ever

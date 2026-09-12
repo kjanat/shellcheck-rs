@@ -25,9 +25,10 @@ The `gate` is clean, so none of these is exposed by the extracted upstream
 fuzzer. That is a weaker statement than "no upstream test covers them": the gate
 replays the *script* each property names through the whole pipeline, not the
 isolated helper (`verifyTree`, `verifyCodes`, …) the property originally called,
-and it only covers the 2026 properties whose script it can extract, out of 2238
-distinct `prop_` names. The rest test the Fixer, the Checker's IO, `ASTLib`
-helpers and the like, and have no shell snippet to replay.
+and it only covers the properties whose script it can extract — 2026 of 2252
+definitions, which the gate now prints on every run rather than leaving implied.
+The other 226 test the Fixer, the Checker's IO, `ASTLib` helpers and the like,
+and have no shell snippet to replay.
 
 Where an entry's port-side half can be checked without the oracle, it also has a
 `#[should_panic]` test in `rust/crates/shellcheck-rs/src/parser/tests.rs`

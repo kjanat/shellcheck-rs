@@ -203,7 +203,11 @@ fn oracle_keys(comments: &[Value]) -> Vec<CommentKey> {
 
 fn gate(args: &Args) -> Result<bool, String> {
     let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
-    let mut entries = corpus::extract(&src)?;
+    let coverage = corpus::coverage(&src)?;
+    // Say what the corpus cannot reach before saying how well it did on the
+    // rest: "2026 agree" means nothing without the denominator it left out.
+    println!("{}", coverage.summary());
+    let mut entries = coverage.entries;
     if let Some(n) = args.limit {
         entries.truncate(n);
     }
