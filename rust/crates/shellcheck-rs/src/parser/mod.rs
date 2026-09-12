@@ -18,7 +18,7 @@
 //!   `parseProblem`.)
 
 use crate::ast::*;
-use crate::astlib;
+use crate::ast_lib;
 use crate::interface::{Position, Severity};
 use std::collections::BTreeMap;
 
@@ -646,7 +646,7 @@ fn get_associative_arrays(root: &Token) -> std::collections::HashSet<String> {
             // Collect flag chars (getAllFlags).
             let mut has_a = false;
             for a in args {
-                if let Some(s) = crate::astlib::get_literal_string(a) {
+                if let Some(s) = crate::ast_lib::get_literal_string(a) {
                     if let Some(rest) = s.strip_prefix("--") {
                         let _ = rest;
                     } else if let Some(chars) = s.strip_prefix('-') {
@@ -661,7 +661,7 @@ fn get_associative_arrays(root: &Token) -> std::collections::HashSet<String> {
             }
             for a in args {
                 // non-flag args only
-                let lit = crate::astlib::get_literal_string(a);
+                let lit = crate::ast_lib::get_literal_string(a);
                 if let Some(ref s) = lit {
                     if s.starts_with('-') {
                         continue;

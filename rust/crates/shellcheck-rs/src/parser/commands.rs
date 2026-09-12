@@ -1460,7 +1460,7 @@ impl Parser {
             .any(|a| matches!(a, Annotation::ShellOverride(_)));
         if !shell_annotation_specified {
             if let InnerToken::T_Literal(sb) = &*shebang.inner {
-                let exe = astlib::executable_from_shebang(sb);
+                let exe = ast_lib::executable_from_shebang(sb);
                 if Self::is_valid_shell(&exe).is_none() {
                     self.problem_at(
                         start.clone(),

@@ -293,7 +293,7 @@ impl Parser {
         }
         let guard_ok = match elements.len() {
             0 => false,
-            1 => astlib::only_literal_string(&elements[0]).contains(".."),
+            1 => ast_lib::only_literal_string(&elements[0]).contains(".."),
             _ => true,
         };
         if !guard_ok {

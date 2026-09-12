@@ -4,12 +4,10 @@
 //! checker applies.
 #![cfg(test)]
 
-use crate::analyzer_lib::{Out, Parameters, get_path, make_parameters};
-use crate::ast::{Annotation, InnerToken, Token};
+use crate::analyzer_lib::{Check, Out, Parameters, get_path, make_parameters};
+use crate::ast::{Annotation, InnerToken};
 use crate::interface::{Code, Shell};
 use crate::parser::parse_script;
-
-type Check = fn(&Parameters, &Token, &mut Out);
 
 pub(crate) fn params_for(script: &str) -> Parameters {
     let p = parse_script("test", script);
@@ -40,55 +38,57 @@ fn is_ignored(params: &Parameters, code: Code, id: crate::ast::Id) -> bool {
     })
 }
 
-fn run_node(params: &Parameters, f: Check) -> Out {
+fn run_node(params: &Parameters, f: impl Check) -> Out {
     let mut out = Out::new();
-    params.root.visit_preorder(&mut |t| f(params, t, &mut out));
+    params
+        .root
+        .visit_preorder(&mut |t| f.run(params, t, &mut out));
     out.retain(|c| !is_ignored(params, c.comment.code, c.id));
     out
 }
 
 /// Every comment a node check emits over the script.
-pub(crate) fn collect(f: Check, s: &str) -> Out {
+pub(crate) fn collect(f: impl Check, s: &str) -> Out {
     run_node(&params_for(s), f)
 }
 
 /// `verify`: does the node check emit anything?
-pub(crate) fn produces(f: Check, s: &str) -> bool {
+pub(crate) fn produces(f: impl Check, s: &str) -> bool {
     !collect(f, s).is_empty()
 }
-pub(crate) fn emits(f: Check, s: &str) -> bool {
+pub(crate) fn emits(f: impl Check, s: &str) -> bool {
     produces(f, s)
 }
-pub(crate) fn node_emits(f: Check, s: &str) -> bool {
+pub(crate) fn node_emits(f: impl Check, s: &str) -> bool {
     produces(f, s)
 }
 
 /// `verifyTree`: run a tree check on the root only.
-pub(crate) fn tree_emits(f: Check, s: &str) -> bool {
+pub(crate) fn tree_emits(f: impl Check, s: &str) -> bool {
     let params = params_for(s);
     let mut out = Out::new();
-    f(&params, &params.root, &mut out);
+    f.run(&params, &params.root, &mut out);
     out.retain(|c| !is_ignored(&params, c.comment.code, c.id));
     !out.is_empty()
 }
 
-pub(crate) fn emits_code(f: Check, s: &str, code: i64) -> bool {
+pub(crate) fn emits_code(f: impl Check, s: &str, code: i64) -> bool {
     collect(f, s).iter().any(|c| c.comment.code == code)
 }
 
 /// The distinct codes a node check emits, sorted.
-pub(crate) fn codes(f: Check, s: &str) -> Vec<i64> {
+pub(crate) fn codes(f: impl Check, s: &str) -> Vec<i64> {
     let mut v: Vec<i64> = collect(f, s).iter().map(|c| c.comment.code).collect();
     v.sort();
     v.dedup();
     v
 }
 
-pub(crate) fn emits_shell(f: Check, s: &str, shell: Shell) -> bool {
+pub(crate) fn emits_shell(f: impl Check, s: &str, shell: Shell) -> bool {
     !run_node(&params_for_shell(s, shell), f).is_empty()
 }
 
-pub(crate) fn emits_code_shell(f: Check, s: &str, code: i64, shell: Shell) -> bool {
+pub(crate) fn emits_code_shell(f: impl Check, s: &str, code: i64, shell: Shell) -> bool {
     run_node(&params_for_shell(s, shell), f)
         .iter()
         .any(|c| c.comment.code == code)

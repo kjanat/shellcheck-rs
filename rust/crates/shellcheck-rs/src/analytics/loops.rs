@@ -7,12 +7,12 @@ use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 
-use crate::astlib;
-use crate::astlib::get_literal_string;
-use crate::astlib::is_function;
-use crate::astlib::is_glob;
-use crate::astlib::oversimplify;
-use crate::astlib::{is_quoteable_expansion, will_split};
+use crate::ast_lib;
+use crate::ast_lib::get_literal_string;
+use crate::ast_lib::is_function;
+use crate::ast_lib::is_glob;
+use crate::ast_lib::oversimplify;
+use crate::ast_lib::{is_quoteable_expansion, will_split};
 use crate::cfg::get_gnu_opts;
 use crate::cfg::get_unquoted_literal;
 use crate::cfg::may_become_multiple_args;
@@ -31,7 +31,7 @@ pub(super) fn check_for_in_quoted(params: &Parameters, t: &Token, out: &mut Out)
                 if let InnerToken::T_DoubleQuoted(list) = &*nw[0].inner {
                     let word = &nw[0];
                     let guard1 = (list.iter().any(will_split) && !may_become_multiple_args(word))
-                        || astlib::get_literal_string(word)
+                        || ast_lib::get_literal_string(word)
                             .map(|s| would_have_been_glob(&s))
                             .unwrap_or(false);
                     if guard1 {
@@ -95,7 +95,7 @@ pub(super) fn check_for_in_quoted(params: &Parameters, t: &Token, out: &mut Out)
     // Equation 4: multiple (or a single item that fell through) -> SC2258
     for arg in items {
         if let Some(suffix) = get_trailing_unquoted_literal(arg) {
-            if let Some(string) = astlib::get_literal_string(suffix) {
+            if let Some(string) = ast_lib::get_literal_string(suffix) {
                 if string.ends_with(',') {
                     warn_with_fix(
                         out,
@@ -463,7 +463,7 @@ fn run_munch_check(kind: MunchCheck, flag: &str, cmd: &Token) -> bool {
         MunchCheck::HasArgument => get_command_argv(cmd)
             .map(|argv| {
                 argv.iter()
-                    .filter_map(astlib::get_literal_string)
+                    .filter_map(ast_lib::get_literal_string)
                     .any(|s| s == flag)
             })
             .unwrap_or(false),

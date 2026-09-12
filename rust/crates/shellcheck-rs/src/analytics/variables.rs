@@ -3,10 +3,10 @@ use super::common::*;
 use crate::analyzer_lib::is_true_assignment_source;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
-use crate::astlib::is_command_substitution;
-use crate::astlib::is_literal;
-use crate::astlib::oversimplify;
+use crate::ast_lib;
+use crate::ast_lib::is_command_substitution;
+use crate::ast_lib::is_literal;
+use crate::ast_lib::oversimplify;
 use crate::cfg;
 use crate::cfg::get_word_parts;
 use crate::interface::Fix;
@@ -78,7 +78,7 @@ pub(super) fn check_array_without_index(params: &Parameters, _root: &Token, out:
             StackData::Reference(_base, place, _name) => {
                 // readF _ (T_DollarBraced id _ token) _
                 if let InnerToken::T_DollarBraced { op, .. } = &*place.inner {
-                    if let Some(name) = astlib::get_literal_string(op) {
+                    if let Some(name) = ast_lib::get_literal_string(op) {
                         if arrays.contains(&name) {
                             warn(
                                 out,
@@ -253,7 +253,7 @@ pub(super) fn check_dollar_brackets(_params: &Parameters, t: &Token, out: &mut O
 
 pub(super) fn check_prefix_assignment_reference(params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
-        let name = cfg::get_braced_reference(&astlib::oversimplify_concat(op));
+        let name = cfg::get_braced_reference(&ast_lib::oversimplify_concat(op));
         let path = get_path(params, t);
         let id_path: Vec<Id> = path.iter().map(|x| x.id()).collect();
         // check: walk path until a T_SimpleCommand with vars and non-empty words.
@@ -390,7 +390,7 @@ pub(super) fn check_assign_to_self(_params: &Parameters, t: &Token, out: &mut Ou
         let parts = get_word_parts(value);
         if parts.len() == 1 {
             if let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner {
-                if astlib::get_literal_string(op).as_deref() == Some(name.as_str()) {
+                if ast_lib::get_literal_string(op).as_deref() == Some(name.as_str()) {
                     info(
                         out,
                         var.id(),
@@ -485,7 +485,7 @@ fn is_unmodified_parameter_expansion(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_DollarBraced { braced: false, .. } => true,
         InnerToken::T_DollarBraced { op, .. } => {
-            let str = astlib::oversimplify_concat(op);
+            let str = ast_lib::oversimplify_concat(op);
             cfg::get_braced_reference(&str) == str
         }
         _ => false,
@@ -634,7 +634,7 @@ fn caai_get_associative_arrays(root: &Token) -> std::collections::HashSet<String
             let args = &words[1..];
             let mut has_a = false;
             for a in args {
-                if let Some(s) = astlib::get_literal_string(a) {
+                if let Some(s) = ast_lib::get_literal_string(a) {
                     if s.starts_with("--") {
                     } else if let Some(chars) = s.strip_prefix('-') {
                         if chars.contains('A') {
@@ -647,7 +647,7 @@ fn caai_get_associative_arrays(root: &Token) -> std::collections::HashSet<String
                 return;
             }
             for a in args {
-                let lit = astlib::get_literal_string(a);
+                let lit = ast_lib::get_literal_string(a);
                 if let Some(ref s) = lit {
                     if s.starts_with('-') {
                         continue;
@@ -730,7 +730,7 @@ fn avi_get_array_name(t: &Token) -> Option<String> {
     let parts = word_parts(t);
     if parts.len() == 1 {
         if let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner {
-            let str = astlib::oversimplify_concat(op);
+            let str = ast_lib::oversimplify_concat(op);
             if cfg::get_braced_modifier(&str) == "[@]" && !str.starts_with('!') {
                 return Some(cfg::get_braced_reference(&str));
             }
@@ -747,7 +747,7 @@ fn avi_get_array_if_used_as_index<'a>(
 ) -> Option<(Token, String)> {
     match &*t.inner {
         InnerToken::T_DollarBraced { op, .. } => {
-            let reference = cfg::get_braced_reference(&astlib::oversimplify_concat(op));
+            let reference = cfg::get_braced_reference(&ast_lib::oversimplify_concat(op));
             if reference != name {
                 return None;
             }
@@ -773,7 +773,7 @@ fn avi_get_array_if_used_as_index<'a>(
             if !matches!(&*gp_parts[2].inner, InnerToken::T_Literal(_)) {
                 return None;
             }
-            let str = astlib::oversimplify_concat(parent_word);
+            let str = ast_lib::oversimplify_concat(parent_word);
             let modifier = cfg::get_braced_modifier(&str);
             if index.id() != t.id() {
                 return None;
@@ -789,13 +789,13 @@ fn avi_get_array_if_used_as_index<'a>(
                 InnerToken::T_DollarBraced { op, .. } => op,
                 _ => return None,
             };
-            let str = astlib::oversimplify_concat(t);
+            let str = ast_lib::oversimplify_concat(t);
             let modifier = cfg::get_braced_modifier(&str);
             let _ = parent_list;
             if !modifier.starts_with(&format!("[{}]", name)) {
                 return None;
             }
-            let pstr = astlib::oversimplify_concat(match &*parent.inner {
+            let pstr = ast_lib::oversimplify_concat(match &*parent.inner {
                 InnerToken::T_DollarBraced { op, .. } => op,
                 _ => return None,
             });

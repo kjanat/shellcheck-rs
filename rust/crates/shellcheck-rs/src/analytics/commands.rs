@@ -7,15 +7,15 @@ use crate::analyzer_lib::is_command;
 use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib::get_command_sequences;
-use crate::astlib::get_literal_string_def;
-use crate::astlib::is_glob;
-use crate::astlib::is_quotes;
-use crate::astlib::is_unquoted_flag;
-use crate::astlib::only_literal_string;
-use crate::astlib::oversimplify;
+use crate::ast_lib::get_command_sequences;
+use crate::ast_lib::get_literal_string_def;
+use crate::ast_lib::is_glob;
+use crate::ast_lib::is_quotes;
+use crate::ast_lib::is_unquoted_flag;
+use crate::ast_lib::only_literal_string;
+use crate::ast_lib::oversimplify;
 
-use crate::astlib;
+use crate::ast_lib;
 use crate::cfg::get_unquoted_literal;
 use crate::cfg::will_become_multiple_args;
 use crate::data::COMMON_COMMANDS;
@@ -123,7 +123,7 @@ pub(super) fn check_uuoe_var(_params: &Parameters, t: &Token, out: &mut Out) {
         InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => words,
         _ => return,
     };
-    let cmd_name = match astlib::get_literal_string(&words[0]) {
+    let cmd_name = match ast_lib::get_literal_string(&words[0]) {
         Some(n) => n,
         None => return,
     };
@@ -198,7 +198,7 @@ pub(super) fn check_find_exec(_params: &Parameters, t: &Token, out: &mut Out) {
                 }
             }
         }
-        v = match astlib::get_literal_string(w).as_deref() {
+        v = match ast_lib::get_literal_string(w).as_deref() {
             Some("-exec") | Some("-execdir") | Some("-ok") | Some("-okdir") => true,
             Some("+") | Some(";") => false,
             _ => v,
@@ -261,7 +261,7 @@ pub(super) fn check_globs_as_options(params: &Parameters, t: &Token, out: &mut O
         }
         for w in words.iter().skip(1) {
             // stop at end-of-args markers
-            if let Some(lit) = astlib::get_literal_string(w) {
+            if let Some(lit) = ast_lib::get_literal_string(w) {
                 if lit == "--" || lit == ":::" || lit == "::::" {
                     break;
                 }
@@ -524,7 +524,7 @@ pub(super) fn check_equals_in_command(params: &Parameters, original: &Token, out
         if let InnerToken::T_DollarBraced { braced, op } = &*leading[0].inner {
             if s.starts_with('=') {
                 let db_id = leading[0].id();
-                let variable_str = crate::astlib::oversimplify(op).concat();
+                let variable_str = crate::ast_lib::oversimplify(op).concat();
                 let variable_reference = crate::cfg::get_braced_reference(&variable_str);
                 let variable_modifier = crate::cfg::get_braced_modifier(&variable_str);
                 let is_plain = crate::cfg::is_variable_name(&variable_str);
@@ -972,7 +972,7 @@ fn comment_if_exec(t: &Token, out: &mut Out) {
         InnerToken::T_Redirecting { cmd, .. } => {
             if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
                 if words.len() >= 2
-                    && astlib::get_literal_string(&words[0]).as_deref() == Some("exec")
+                    && ast_lib::get_literal_string(&words[0]).as_deref() == Some("exec")
                 {
                     warn(
                         out,
@@ -1037,7 +1037,7 @@ fn may_be_variable_name(leading: &[&Token]) -> bool {
     let fb = |_: &InnerToken| Some("x".to_string());
     let mut s = String::new();
     for p in leading {
-        s.push_str(&astlib::get_literal_string_ext(p, &fb).unwrap_or_default());
+        s.push_str(&ast_lib::get_literal_string_ext(p, &fb).unwrap_or_default());
     }
     crate::cfg::is_variable_name(&s)
 }
@@ -1084,7 +1084,7 @@ fn trailing_symbol_format(x: char) -> String {
 /// Basename of a simple command's command word (first word), if literal.
 fn command_basename(words: &[Token]) -> Option<String> {
     let first = words.first()?;
-    let s = astlib::get_literal_string(first)?;
+    let s = ast_lib::get_literal_string(first)?;
     Some(s.rsplit('/').next().unwrap_or(&s).to_string())
 }
 

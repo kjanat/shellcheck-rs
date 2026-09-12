@@ -77,3 +77,23 @@ Always use the sugared pattern aliases when matching or constructing AST nodes, 
 - Account for equivalent command forms (e.g. `echo > foo bar` vs `echo bar > foo`).
 - Always verify `cabal test` passes cleanly.
 - Verify new and modified checks end-to-end via `cabal run shellcheck - <<< 'bad code'` (or `./quickrun`) to confirm the warning fires as expected.
+
+## Rust port (`rust/`)
+
+A structural port of the Haskell code lives in the `rust/` workspace and is
+gated against the Haskell binary as an oracle. Toolchain via `mise` (`mise.toml`).
+
+```sh
+cargo lint                                   # clippy, -D warnings; must be clean
+mise run fmt                                 # dprint; run before committing
+cargo test --workspace                       # prop_ tests ported from the Haskell
+cargo build --release                        # target/release/rshellcheck
+ORACLE=.cache/shellcheck-oracle PORT=target/release/rshellcheck \
+  python3 rust/harness/run_conformance.py --gate   # must stay 1659/1659, 0 extras
+```
+
+Layout mirrors the Haskell modules one-to-one (`rust/DESIGN.md`, "Workspace
+layout"); the porting loop and the check-authoring API are in `rust/PORTING.md`.
+Rules that apply to every change there: one definition per helper (grep before
+adding one), no blanket `#![allow(..)]`, every touched file clippy-clean, and a
+check is only registered when the gate shows `extra == 0` for its codes.

@@ -5,14 +5,14 @@ use crate::analyzer_lib::is_sourced;
 use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
-use crate::astlib::basename;
-use crate::astlib::e4m;
-use crate::astlib::get_command_sequences;
-use crate::astlib::get_literal_string_def;
-use crate::astlib::get_word_parts;
-use crate::astlib::is_command_substitution;
-use crate::astlib::oversimplify;
+use crate::ast_lib;
+use crate::ast_lib::basename;
+use crate::ast_lib::e4m;
+use crate::ast_lib::get_command_sequences;
+use crate::ast_lib::get_literal_string_def;
+use crate::ast_lib::get_word_parts;
+use crate::ast_lib::is_command_substitution;
+use crate::ast_lib::oversimplify;
 use crate::cfg::get_braced_modifier;
 use crate::cfg::get_unquoted_literal;
 use crate::cfg::is_variable_name;
@@ -66,7 +66,7 @@ pub(super) fn check_functions_used_externally(params: &Parameters, root: &Token,
         let name = basename(&name_str);
         let args = skip_over(cmd_token, argv);
         let arg_strings: Vec<(String, Token)> =
-            args.iter().map(|x| (astlib::only_literal_string(x), x.clone())).collect();
+            args.iter().map(|x| (ast_lib::only_literal_string(x), x.clone())).collect();
         let candidates = get_potential_commands(&name, &arg_strings);
         let cmd_id = cmd_token.id();
         for (_, arg) in candidates {
@@ -127,7 +127,7 @@ pub(super) fn check_unpassed_in_functions(params: &Parameters, root: &Token, out
     root.visit_preorder(&mut |t| {
         if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
             if let Some((cmd, args)) = words.split_first() {
-                if let Some(str) = astlib::get_literal_string(cmd) {
+                if let Some(str) = ast_lib::get_literal_string(cmd) {
                     if function_map.contains_key(&str) {
                         reference_list.push((str, args.is_empty(), t.clone()));
                     }
@@ -199,7 +199,7 @@ pub(super) fn check_shebang(params: &Parameters, t: &Token, out: &mut Out) {
                         "Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.",
                     );
                 }
-                if astlib::executable_from_shebang(sb) == "ash" {
+                if ast_lib::executable_from_shebang(sb) == "ash" {
                     warn(
                         out,
                         id,
@@ -256,7 +256,7 @@ pub(super) fn check_use_before_definition(params: &Parameters, root: &Token, out
             if let Some(cmd) = words.first() {
                 let id = t.id();
                 (|| {
-                    let name = crate::astlib::get_literal_string(cmd)?;
+                    let name = crate::ast_lib::get_literal_string(cmd)?;
                     let invocations = funcs.get(&name)?;
                     // Is the function definitely being defined later?
                     if !invocations.iter().any(|&c| cfga.does_post_dominate(c, id)) {
@@ -423,7 +423,7 @@ pub(super) fn check_command_is_unreachable(params: &Parameters, t: &Token, out: 
 
 pub(super) fn check_overwritten_exit_code(params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
-        if crate::astlib::get_literal_string(op).as_deref() == Some("?") {
+        if crate::ast_lib::get_literal_string(op).as_deref() == Some("?") {
             overwritten_check(params, t, out);
         }
     }
@@ -444,7 +444,7 @@ pub(super) fn check_source_not_followed(params: &Parameters, t: &Token, out: &mu
     // literalFile: override `mplus` literal `mplus` stripDynamicPrefix, then
     // reject a literal `~/` prefix.
     let literal_file = get_source_override(params, t)
-        .or_else(|| file.and_then(astlib::get_literal_string))
+        .or_else(|| file.and_then(ast_lib::get_literal_string))
         .or_else(|| file.and_then(strip_dynamic_prefix))
         .filter(|name| !name.starts_with("~/"));
 
@@ -490,7 +490,7 @@ fn functions_and_aliases(root: &Token) -> HashMap<String, Id> {
             if !words.is_empty() && is_unqualified_command(t, "alias") =>
         {
             for arg in &words[1..] {
-                let string = astlib::only_literal_string(arg);
+                let string = ast_lib::only_literal_string(arg);
                 if string.contains('=') {
                     let key: String = string.chars().take_while(|c| *c != '=').collect();
                     aliases.entry(key).or_insert_with(|| arg.id());
@@ -683,7 +683,7 @@ fn direct_command_name_and_token(cmd: &Token) -> (Option<String>, &Token) {
     if let Some(c) = get_command_local(cmd) {
         if let InnerToken::T_SimpleCommand { words, .. } = &*c.inner {
             if let Some(w) = words.first() {
-                if let Some(s) = astlib::get_literal_string(w) {
+                if let Some(s) = ast_lib::get_literal_string(w) {
                     return (Some(s), w);
                 }
             }
@@ -820,7 +820,7 @@ fn is_source_command_word(cmd: &Token) -> bool {
 /// `getFile args'`: the token naming the sourced file, honouring `--` and `-p`.
 fn get_source_file(args: &[Token]) -> Option<&Token> {
     let (first, rest) = args.split_first()?;
-    match astlib::get_literal_string(first).as_deref() {
+    match ast_lib::get_literal_string(first).as_deref() {
         Some("--") => rest.first(),
         Some("-p") => rest.get(1),
         _ => Some(first),
@@ -850,7 +850,7 @@ fn strip_dynamic_prefix(word: &Token) -> Option<String> {
         Id(0),
         InnerToken::T_NormalWord(rest.iter().map(|t| (*t).clone()).collect()),
     );
-    let str = astlib::get_literal_string(&rest_word)?;
+    let str = ast_lib::get_literal_string(&rest_word)?;
     if !str.starts_with('/') {
         return None;
     }

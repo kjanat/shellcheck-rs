@@ -7,9 +7,9 @@
 //! pushes diagnostics into an output vector.
 
 use crate::ast::*;
-use crate::astlib;
-use crate::astlib::{get_literal_string, is_annotation_ignoring_code};
-use crate::astlib::{get_literal_string_def, oversimplify_concat};
+use crate::ast_lib;
+use crate::ast_lib::is_annotation_ignoring_code;
+use crate::ast_lib::{get_literal_string_def, oversimplify_concat};
 use crate::cfg::CFGParameters;
 use crate::cfg_analysis::{self, CFGAnalysis};
 use crate::interface::{Code, Comment, Fix, PositionMap, Severity, Shell, TokenComment};
@@ -214,7 +214,20 @@ pub fn fix_with(replacements: Vec<Replacement>) -> Fix {
 }
 
 /// A single tree- or node-level check: `Parameters -> Token -> Writer [TokenComment] ()`.
-pub type CheckFn = Box<dyn Fn(&Parameters, &Token, &mut Out)>;
+/// A check over one token: Haskell's `Parameters -> Token -> Writer [TokenComment] ()`.
+/// Plain functions and closures implement it directly; `CommandCheck` and
+/// `ForShell` implement it with their dispatch in front.
+pub trait Check {
+    fn run(&self, params: &Parameters, t: &Token, out: &mut Out);
+}
+
+impl<F: Fn(&Parameters, &Token, &mut Out)> Check for F {
+    fn run(&self, params: &Parameters, t: &Token, out: &mut Out) {
+        self(params, t, out)
+    }
+}
+
+pub type CheckFn = Box<dyn Check>;
 
 /// `ShellCheck.AnalyzerLib.Checker` — a set of tree- and node-level checks.
 #[derive(Default)]
@@ -228,12 +241,12 @@ impl Checker {
         Checker::default()
     }
 
-    pub fn tree<F: Fn(&Parameters, &Token, &mut Out) + 'static>(&mut self, f: F) {
-        self.tree_checks.push(Box::new(f));
+    pub fn tree<C: Check + 'static>(&mut self, c: C) {
+        self.tree_checks.push(Box::new(c));
     }
 
-    pub fn node<F: Fn(&Parameters, &Token, &mut Out) + 'static>(&mut self, f: F) {
-        self.node_checks.push(Box::new(f));
+    pub fn node<C: Check + 'static>(&mut self, c: C) {
+        self.node_checks.push(Box::new(c));
     }
 
     pub fn merge(&mut self, mut other: Checker) {
@@ -246,12 +259,12 @@ impl Checker {
 pub fn run_checker(params: &Parameters, checker: &Checker) -> Out {
     let mut out = Out::new();
     for c in &checker.tree_checks {
-        c(params, &params.root, &mut out);
+        c.run(params, &params.root, &mut out);
     }
     if !checker.node_checks.is_empty() {
         params.root.visit_preorder(&mut |t| {
             for c in &checker.node_checks {
-                c(params, t, &mut out);
+                c.run(params, t, &mut out);
             }
         });
     }
@@ -286,7 +299,7 @@ fn get_candidate(t: &Token) -> String {
 
 fn from_shebang(shebang: &Token) -> String {
     if let InnerToken::T_Literal(s) = &*shebang.inner {
-        astlib::executable_from_shebang(s)
+        ast_lib::executable_from_shebang(s)
     } else {
         String::new()
     }
@@ -323,7 +336,7 @@ pub fn is_option_set(opt: &str, root: &Token) -> bool {
         }
         if let InnerToken::T_SimpleCommand { .. } = &*t.inner {
             let name = get_command_name(t);
-            let has_opt = || astlib::oversimplify(t).iter().any(|w| w == opt);
+            let has_opt = || ast_lib::oversimplify(t).iter().any(|w| w == opt);
             found = match name.as_deref() {
                 Some("shopt") => has_opt(),
                 Some("set") => has_opt() || get_all_flags(t).iter().any(|(_, f)| f == "o"),
@@ -354,7 +367,7 @@ pub fn contains_noglob(root: &Token) -> bool {
             },
             InnerToken::T_SimpleCommand { .. } => {
                 get_command_name(t).as_deref() == Some("set")
-                    && (astlib::oversimplify(t).iter().any(|w| w == "noglob")
+                    && (ast_lib::oversimplify(t).iter().any(|w| w == "noglob")
                         || get_all_flags(t).iter().any(|(_, f)| f == "f"))
             }
             _ => false,
@@ -385,7 +398,7 @@ pub(crate) fn get_flags_until_args<'a>(
 ) -> Vec<(&'a Token, String)> {
     let texts: Vec<(&Token, String)> = args
         .iter()
-        .map(|x| (x, astlib::oversimplify(x).concat()))
+        .map(|x| (x, ast_lib::oversimplify(x).concat()))
         .collect();
     let split = texts
         .iter()
@@ -435,7 +448,7 @@ pub fn contains_set_e(root: &Token) -> bool {
             },
             InnerToken::T_SimpleCommand { .. } => {
                 get_command_name(t).as_deref() == Some("set")
-                    && (astlib::oversimplify(t).iter().any(|w| w == "errexit")
+                    && (ast_lib::oversimplify(t).iter().any(|w| w == "errexit")
                         || get_all_flags(t).iter().any(|(_, f)| f == "e"))
             }
             _ => false,
@@ -673,7 +686,7 @@ fn match_format_re(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
 
 /// `getWordParts`.
 pub(crate) fn word_parts(t: &Token) -> Vec<&Token> {
-    astlib::get_word_parts(t)
+    ast_lib::get_word_parts(t)
 }
 
 /// `getPath tree t`: the token and its ancestors up to the root (owned clones).
@@ -731,10 +744,10 @@ pub(crate) fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<Str
     if let Some(cmd) = get_command(t) {
         if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
             if let Some((w, rest)) = words.split_first() {
-                if let Some(s) = astlib::get_literal_string(w) {
+                if let Some(s) = ast_lib::get_literal_string(w) {
                     if !direct {
                         if let Some(actual) = get_effective_command_token(&s, rest) {
-                            return (astlib::get_literal_string(actual), actual);
+                            return (ast_lib::get_literal_string(actual), actual);
                         }
                     }
                     return (Some(s), w);
@@ -998,9 +1011,9 @@ fn is_declaration_assignment_word(params: &Parameters, word: &Token) -> bool {
 }
 
 fn decl_command_name(words: &[Token]) -> Option<String> {
-    let n0 = astlib::get_literal_string(&words[0])?;
+    let n0 = ast_lib::get_literal_string(&words[0])?;
     if n0 == "builtin" && words.len() >= 2 {
-        Some(astlib::only_literal_string(&words[1]))
+        Some(ast_lib::only_literal_string(&words[1]))
     } else {
         Some(n0)
     }
@@ -1232,7 +1245,7 @@ fn is_closing_file_op(op: &Token) -> bool {
 
 /// `getVariableForTestDashV`.
 fn get_variable_for_test_dash_v(t: &Token) -> Option<String> {
-    let full = astlib::get_literal_string_ext(t, &|inner| match inner {
+    let full = ast_lib::get_literal_string_ext(t, &|inner| match inner {
         InnerToken::T_Glob(s) => Some(s.clone()),
         _ => Some("\0".to_string()),
     })?;
@@ -1394,7 +1407,7 @@ fn get_modified_variables(t: &Token) -> Vec<(Token, Token, String, DataType)> {
         )],
         T_CoProc {
             name: Some(token), ..
-        } => match astlib::get_literal_string(token) {
+        } => match ast_lib::get_literal_string(token) {
             Some(name) => vec![(
                 t.clone(),
                 t.clone(),
@@ -1479,7 +1492,7 @@ fn get_modifier_param(
                 return vec![];
             }
             // Bare declared variable.
-            match astlib::get_literal_string(t) {
+            match ast_lib::get_literal_string(t) {
                 Some(name) if is_variable_name(&name) => vec![(
                     base.clone(),
                     t.clone(),
@@ -1503,7 +1516,7 @@ fn get_literal_of_data_type(
     t: &Token,
     d: DataType,
 ) -> Option<(Token, Token, String, DataType)> {
-    let s = astlib::get_literal_string(t)?;
+    let s = ast_lib::get_literal_string(t)?;
     if s.starts_with('-') {
         return None;
     }
@@ -1537,12 +1550,12 @@ fn let_param_to_literal(base: &Token, token: &Token) -> Vec<(Token, Token, Strin
 }
 
 fn get_set_params(tokens: &[Token]) -> Option<Vec<Token>> {
-    if tokens.len() >= 2 && astlib::get_literal_string(&tokens[0]).as_deref() == Some("-o") {
+    if tokens.len() >= 2 && ast_lib::get_literal_string(&tokens[0]).as_deref() == Some("-o") {
         return get_set_params(&tokens[2..]);
     }
     let first = tokens.first()?;
     let rest = &tokens[1..];
-    match astlib::get_literal_string(first) {
+    match ast_lib::get_literal_string(first) {
         Some(s) if s == "--" => Some(rest.to_vec()),
         Some(s) if s.starts_with('-') => get_set_params(rest),
         _ => {
@@ -1561,7 +1574,7 @@ fn get_flag_assigned_variable(
 ) -> Option<(Token, Token, String, DataType)> {
     let flags = maybe_flags?;
     let (_, (_flag, value)) = flags.iter().find(|(f, _)| f == flag_name)?;
-    let variable_name = astlib::get_literal_string_ext(value, &|_| Some("!".to_string()))?;
+    let variable_name = ast_lib::get_literal_string_ext(value, &|_| Some("!".to_string()))?;
     let base_name: String = variable_name.chars().take_while(|c| *c != '[').collect();
     let has_index = base_name.chars().count() != variable_name.chars().count();
     let dt = if has_index {
@@ -1585,7 +1598,7 @@ fn get_mapfile_array(base: &Token, rest: &[Token]) -> Option<(Token, Token, Stri
                 DataType::DataArray(DataSource::SourceExternal),
             )),
             Some((_, (_, y))) => {
-                let name = astlib::get_literal_string(y)?;
+                let name = ast_lib::get_literal_string(y)?;
                 if !is_variable_name(&name) {
                     return None;
                 }
@@ -1600,7 +1613,7 @@ fn get_mapfile_array(base: &Token, rest: &[Token]) -> Option<(Token, Token, Stri
     };
     let fallback = || -> Option<(Token, Token, String, DataType)> {
         for tok in rest.iter().rev() {
-            if let Some(name) = astlib::get_literal_string(tok) {
+            if let Some(name) = ast_lib::get_literal_string(tok) {
                 if is_variable_name(&name) {
                     return Some((
                         base.clone(),
@@ -1618,7 +1631,7 @@ fn get_mapfile_array(base: &Token, rest: &[Token]) -> Option<(Token, Token, Stri
 
 fn get_flag_variable(base: &Token, rest: &[Token]) -> Option<(Token, Token, String, DataType)> {
     if rest.len() >= 2 {
-        let name = astlib::get_literal_string(&rest[0])?;
+        let name = ast_lib::get_literal_string(&rest[0])?;
         Some((
             base.clone(),
             rest[0].clone(),
@@ -2083,7 +2096,7 @@ pub(crate) fn find_grep_regex(args: &[Token]) -> Option<&Token> {
     let mut rest = args;
     loop {
         let (x, tail) = rest.split_first()?;
-        let s = astlib::get_literal_string_def("_", x);
+        let s = ast_lib::get_literal_string_def("_", x);
         if s == "--" || s == "-e" || s == "--regex" {
             return tail.first(); // Regex is *after* this
         }
@@ -2254,15 +2267,6 @@ pub(crate) fn should_ignore_code(params: &Parameters, code: i64, t: &Token) -> b
         .any(|p| is_annotation_ignoring_code(code, p))
 }
 
-/// The literal command name of a `T_SimpleCommand`, if it has one.
-pub(crate) fn simple_command_name(t: &Token) -> Option<String> {
-    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-        let cmd = words.first()?;
-        return get_literal_string(cmd);
-    }
-    None
-}
-
 /// `hasFlag`.
 pub(crate) fn has_flag(t: &Token, flag: &str) -> bool {
     get_all_flags(t).iter().any(|(_, f)| f == flag)
@@ -2273,7 +2277,7 @@ pub(crate) fn has_flag(t: &Token, flag: &str) -> bool {
 pub(crate) fn token_is_just_command_output(t: &Token) -> bool {
     // check: exactly one command, and it isn't only a redirection.
     fn check(cmds: &[Token]) -> bool {
-        cmds.len() == 1 && !astlib::is_only_redirection(&cmds[0])
+        cmds.len() == 1 && !ast_lib::is_only_redirection(&cmds[0])
     }
     if let InnerToken::T_NormalWord(parts) = &*t.inner {
         if parts.len() == 1 {

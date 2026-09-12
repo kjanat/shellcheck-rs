@@ -10,18 +10,18 @@ use crate::analyzer_lib::is_function_body;
 use crate::analyzer_lib::is_test_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
-use crate::astlib::get_leading_unquoted_string;
-use crate::astlib::get_literal_string;
-use crate::astlib::get_literal_string_def;
-use crate::astlib::get_word_parts;
-use crate::astlib::is_assignment;
-use crate::astlib::is_constant;
-use crate::astlib::is_glob;
-use crate::astlib::is_literal;
-use crate::astlib::is_quoteable_expansion;
-use crate::astlib::is_quotes;
-use crate::astlib::oversimplify;
+use crate::ast_lib;
+use crate::ast_lib::get_leading_unquoted_string;
+use crate::ast_lib::get_literal_string;
+use crate::ast_lib::get_literal_string_def;
+use crate::ast_lib::get_word_parts;
+use crate::ast_lib::is_assignment;
+use crate::ast_lib::is_constant;
+use crate::ast_lib::is_glob;
+use crate::ast_lib::is_literal;
+use crate::ast_lib::is_quoteable_expansion;
+use crate::ast_lib::is_quotes;
+use crate::ast_lib::oversimplify;
 use crate::cfg::{get_braced_reference, is_variable_name};
 use crate::cfg_analysis::NumericalStatus;
 use crate::data::ARITHMETIC_BINARY_TEST_OPS;
@@ -186,8 +186,8 @@ pub(super) fn check_double_bracket_operators(_params: &Parameters, t: &Token, ou
 
 /// SC2077 / SC2157 — `checkLiteralBreakingTest`.
 pub(super) fn check_literal_breaking_test(_params: &Parameters, t: &Token, out: &mut Out) {
-    let has_equals = |x: &Token| astlib::get_literal_string(x).is_some_and(|s| s.contains('='));
-    let is_nonempty = |x: &Token| astlib::get_literal_string(x).is_some_and(|s| !s.is_empty());
+    let has_equals = |x: &Token| ast_lib::get_literal_string(x).is_some_and(|s| s.contains('='));
+    let is_nonempty = |x: &Token| ast_lib::get_literal_string(x).is_some_and(|s| !s.is_empty());
 
     match &*t.inner {
         InnerToken::TC_Nullary { token: w, .. } => {
@@ -236,7 +236,7 @@ pub(super) fn check_literal_breaking_test(_params: &Parameters, t: &Token, out: 
 pub(super) fn check_constant_nullary(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TC_Nullary { token, .. } = &*t.inner {
         if is_constant(token) {
-            match astlib::only_literal_string(token).as_str() {
+            match ast_lib::only_literal_string(token).as_str() {
                 "false" => err(
                     out,
                     token.id(),
@@ -1046,9 +1046,9 @@ pub(super) fn check_comparison_with_leading_x(params: &Parameters, t: &Token, ou
         InnerToken::T_SimpleCommand { words, .. } if words.len() == 4 => {
             let cmd = &words[0];
             let op = &words[2];
-            if astlib::get_literal_string(cmd).as_deref() == Some("test")
+            if ast_lib::get_literal_string(cmd).as_deref() == Some("test")
                 && matches!(
-                    astlib::get_literal_string(op).as_deref(),
+                    ast_lib::get_literal_string(op).as_deref(),
                     Some("=") | Some("==") | Some("!=")
                 )
             {
@@ -1408,7 +1408,7 @@ fn num_char(c: char) -> bool {
 
 /// `isNonNum t = not . all numChar $ onlyLiteralString t`.
 fn is_non_num(t: &Token) -> bool {
-    !astlib::only_literal_string(t).chars().all(num_char)
+    !ast_lib::only_literal_string(t).chars().all(num_char)
 }
 
 /// The set of variable names assigned anywhere per the linear `variableFlow`.
@@ -1702,7 +1702,7 @@ fn sst_is_assignment_node(t: &Token) -> bool {
         InnerToken::TA_Assignment { .. } => true,
         InnerToken::TA_Unary { op, .. } => op.contains("++") || op.contains("--"),
         InnerToken::T_DollarBraced { op, .. } => {
-            let str = crate::astlib::oversimplify(op).concat();
+            let str = crate::ast_lib::oversimplify(op).concat();
             let modifier = crate::cfg::get_braced_modifier(&str);
             modifier.starts_with('=') || modifier.starts_with(":=")
         }
@@ -1733,7 +1733,7 @@ const UNARY_TEST_OPS: &[&str] = &[
 
 /// Recursive literal extractor mirroring Haskell `getLiteralStringExt (const Nothing)`,
 /// including the `TA_Expansion` and `T_ParamSubSpecialChar` cases (which the
-/// crate's `astlib::get_literal_string` omits).
+/// crate's `ast_lib::get_literal_string` omits).
 fn get_literal_string_local(t: &Token) -> Option<String> {
     use InnerToken::*;
     fn go(t: &Token, out: &mut String) -> bool {
@@ -1978,7 +1978,7 @@ fn subshell_check(id: Id, t: &Token, out: &mut Out) {
 }
 
 fn subshell_check_params(id: Id, first: &Token, second: &Token, out: &mut Out) {
-    if astlib::get_literal_string(first).is_some_and(|s| UNARY_TEST_OPS.contains(&s.as_str())) {
+    if ast_lib::get_literal_string(first).is_some_and(|s| UNARY_TEST_OPS.contains(&s.as_str())) {
         err(
             out,
             id,
@@ -1986,7 +1986,7 @@ fn subshell_check_params(id: Id, first: &Token, second: &Token, out: &mut Out) {
             "(..) is a subshell. Did you mean [ .. ], a test expression?",
         );
     }
-    if astlib::get_literal_string(second).is_some_and(|s| BINARY_TEST_OPS.contains(&s.as_str())) {
+    if ast_lib::get_literal_string(second).is_some_and(|s| BINARY_TEST_OPS.contains(&s.as_str())) {
         warn(
             out,
             id,

@@ -5,11 +5,11 @@ use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::get_command_basename;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
-use crate::astlib::get_command_sequences;
-use crate::astlib::is_assignment;
-use crate::astlib::is_constant;
-use crate::astlib::oversimplify;
+use crate::ast_lib;
+use crate::ast_lib::get_command_sequences;
+use crate::ast_lib::is_assignment;
+use crate::ast_lib::is_constant;
+use crate::ast_lib::oversimplify;
 use crate::cfg::get_unquoted_literal;
 use crate::data::COMMON_COMMANDS;
 use crate::interface::Shell;
@@ -940,7 +940,7 @@ fn ewr_walk(t: &Token) -> EwrStep {
         if fd.is_empty() || fd == "1" {
             if let InnerToken::T_IoFile { op, file } = &*target.inner {
                 if matches!(&*op.inner, InnerToken::T_DGREAT | InnerToken::T_Greater) {
-                    let suggest = astlib::get_literal_string(file).as_deref() != Some("/dev/null");
+                    let suggest = ast_lib::get_literal_string(file).as_deref() != Some("/dev/null");
                     return EwrStep::Emit(t.id(), suggest);
                 }
             }

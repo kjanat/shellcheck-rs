@@ -1795,7 +1795,7 @@ mod tests {
         for t in all {
             if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
                 if let Some(w) = words.first() {
-                    if crate::astlib::get_literal_string(w).as_deref() == Some(name) {
+                    if crate::ast_lib::get_literal_string(w).as_deref() == Some(name) {
                         out.push(t.id);
                     }
                 }

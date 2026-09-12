@@ -2,95 +2,103 @@
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::get_leading_flags;
-use crate::analyzer_lib::{Checker, Out, Parameters, err, style, warn};
+use crate::analyzer_lib::{Check, Checker, Out, Parameters, err, style, warn};
 use crate::ast::*;
-use crate::astlib::is_flag;
-use crate::astlib::is_glob;
-use crate::astlib::is_only_redirection;
-use crate::astlib::oversimplify_concat;
-use crate::astlib::{get_literal_string, only_literal_string};
+use crate::ast_lib::is_flag;
+use crate::ast_lib::is_glob;
+use crate::ast_lib::is_only_redirection;
+use crate::ast_lib::oversimplify_concat;
+use crate::ast_lib::{get_literal_string, only_literal_string};
 use crate::cfg::{get_braced_modifier, get_braced_reference, is_variable_name};
 use crate::interface::Shell;
 
+/// `ForShell shells f`: runs `f` only when the script's dialect is one of
+/// `shells`.
+pub(crate) struct ForShell {
+    shells: &'static [Shell],
+    f: fn(&Parameters, &Token, &mut Out),
+}
+
+impl ForShell {
+    pub(crate) fn new(shells: &'static [Shell], f: fn(&Parameters, &Token, &mut Out)) -> ForShell {
+        ForShell { shells, f }
+    }
+}
+
+impl Check for ForShell {
+    fn run(&self, params: &Parameters, t: &Token, out: &mut Out) {
+        if self.shells.contains(&params.shell) {
+            (self.f)(params, t, out);
+        }
+    }
+}
+
 pub fn register(c: &mut Checker) {
-    c.node(check_for_decimals_gated);
-    c.node(check_bashisms);
-    c.node(check_echo_sed);
-    c.node(check_brace_expansion_vars_gated);
-    c.node(check_multi_dimensional_arrays_gated);
-    c.node(check_multiple_bangs_gated);
-    c.node(check_bang_after_pipe_gated);
-    c.node(check_negated_unary_ops_gated);
+    c.node(check_for_decimals());
+    c.node(check_bashisms());
+    c.node(check_echo_sed());
+    c.node(check_brace_expansion_vars());
+    c.node(check_multi_dimensional_arrays());
+    c.node(check_multiple_bangs());
+    c.node(check_bang_after_pipe());
+    c.node(check_negated_unary_ops());
     // checkPS1Assignments: the Analytics.hs copy (registered there) covers it.
 }
 
-fn check_for_decimals_gated(p: &Parameters, t: &Token, out: &mut Out) {
-    if matches!(
-        p.shell,
-        Shell::Sh | Shell::Dash | Shell::BusyboxSh | Shell::Bash
-    ) {
-        check_for_decimals(p, t, out);
-    }
+pub(super) fn check_for_decimals() -> ForShell {
+    ForShell::new(
+        &[Shell::Sh, Shell::Dash, Shell::BusyboxSh, Shell::Bash],
+        for_decimals,
+    )
 }
 
-fn check_bashisms(p: &Parameters, t: &Token, out: &mut Out) {
-    if matches!(p.shell, Shell::Sh | Shell::Dash | Shell::BusyboxSh) {
-        bashism(p, t, out);
-    }
+pub(super) fn check_bashisms() -> ForShell {
+    ForShell::new(&[Shell::Sh, Shell::Dash, Shell::BusyboxSh], bashism)
 }
 
-fn check_echo_sed(params: &Parameters, t: &Token, out: &mut Out) {
-    if !matches!(params.shell, Shell::Bash | Shell::Ksh) {
-        return;
-    }
+pub(super) fn check_echo_sed() -> ForShell {
+    ForShell::new(&[Shell::Bash, Shell::Ksh], echo_sed)
+}
+
+pub(super) fn check_brace_expansion_vars() -> ForShell {
+    ForShell::new(&[Shell::Bash], brace_expansion_vars)
+}
+
+pub(super) fn check_multi_dimensional_arrays() -> ForShell {
+    ForShell::new(&[Shell::Bash], multi_dimensional_arrays)
+}
+
+pub(super) fn check_multiple_bangs() -> ForShell {
+    ForShell::new(&[Shell::Dash, Shell::BusyboxSh, Shell::Sh], multiple_bangs)
+}
+
+pub(super) fn check_bang_after_pipe() -> ForShell {
+    ForShell::new(
+        &[Shell::Dash, Shell::BusyboxSh, Shell::Sh, Shell::Bash],
+        bang_after_pipe,
+    )
+}
+
+pub(super) fn check_negated_unary_ops() -> ForShell {
+    ForShell::new(&[Shell::Bash], negated_unary_ops)
+}
+
+fn echo_sed(_params: &Parameters, t: &Token, out: &mut Out) {
     match &*t.inner {
         InnerToken::T_Redirecting { redirs, cmd } => {
             if redirs.iter().any(redirect_here_string) {
-                let rcmd = crate::astlib::oversimplify(cmd);
+                let rcmd = crate::ast_lib::oversimplify(cmd);
                 check_sed(t.id(), &rcmd, out);
             }
         }
         InnerToken::T_Pipeline { commands, .. } if commands.len() == 2 => {
-            let acmd = crate::astlib::oversimplify(&commands[0]);
+            let acmd = crate::ast_lib::oversimplify(&commands[0]);
             if acmd == ["echo", "${VAR}"] {
-                let bcmd = crate::astlib::oversimplify(&commands[1]);
+                let bcmd = crate::ast_lib::oversimplify(&commands[1]);
                 check_sed(t.id(), &bcmd, out);
             }
         }
         _ => {}
-    }
-}
-
-fn check_brace_expansion_vars_gated(p: &Parameters, t: &Token, out: &mut Out) {
-    if p.shell == Shell::Bash {
-        check_brace_expansion_vars(p, t, out);
-    }
-}
-
-fn check_multi_dimensional_arrays_gated(p: &Parameters, t: &Token, out: &mut Out) {
-    if p.shell == Shell::Bash {
-        check_multi_dimensional_arrays(p, t, out);
-    }
-}
-
-fn check_multiple_bangs_gated(p: &Parameters, t: &Token, out: &mut Out) {
-    if matches!(p.shell, Shell::Dash | Shell::BusyboxSh | Shell::Sh) {
-        check_multiple_bangs(p, t, out);
-    }
-}
-
-fn check_bang_after_pipe_gated(p: &Parameters, t: &Token, out: &mut Out) {
-    if matches!(
-        p.shell,
-        Shell::Dash | Shell::BusyboxSh | Shell::Sh | Shell::Bash
-    ) {
-        check_bang_after_pipe(p, t, out);
-    }
-}
-
-fn check_negated_unary_ops_gated(p: &Parameters, t: &Token, out: &mut Out) {
-    if p.shell == Shell::Bash {
-        check_negated_unary_ops(p, t, out);
     }
 }
 
@@ -149,7 +157,7 @@ fn warn_msg(out: &mut Out, p: &Parameters, id: Id, code: i64, s: &str) {
 }
 
 /// Faithful `getLiteralStringExt (const Nothing)` — unlike the crate's
-/// `astlib::get_literal_string`, this one also flattens `TA_Expansion`
+/// `ast_lib::get_literal_string`, this one also flattens `TA_Expansion`
 /// (needed by `checkForDecimals`).
 fn lit_string(t: &Token) -> Option<String> {
     fn go(t: &Token, out: &mut String) -> bool {
@@ -177,7 +185,7 @@ fn lit_string(t: &Token) -> Option<String> {
     if go(t, &mut s) { Some(s) } else { None }
 }
 
-fn check_for_decimals(_p: &Parameters, t: &Token, out: &mut Out) {
+fn for_decimals(_p: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TA_Expansion(_) = &*t.inner {
         if let Some(s) = lit_string(t) {
             let mut chars = s.chars();
@@ -196,7 +204,7 @@ fn check_for_decimals(_p: &Parameters, t: &Token, out: &mut Out) {
     }
 }
 
-fn check_brace_expansion_vars(p: &Parameters, t: &Token, out: &mut Out) {
+fn brace_expansion_vars(p: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_BraceExpansion(list) = &*t.inner {
         let id = t.id();
         for element in list {
@@ -254,7 +262,7 @@ fn is_evaled(p: &Parameters, t: &Token) -> bool {
     }
 }
 
-fn check_multi_dimensional_arrays(_p: &Parameters, t: &Token, out: &mut Out) {
+fn multi_dimensional_arrays(_p: &Parameters, t: &Token, out: &mut Out) {
     match &*t.inner {
         InnerToken::T_Assignment { indices, .. } if indices.len() >= 2 => {
             about(out, &indices[1]);
@@ -308,7 +316,7 @@ fn matches_bracket_bracket(s: &str) -> bool {
     i < cs.len()
 }
 
-fn check_multiple_bangs(_p: &Parameters, t: &Token, out: &mut Out) {
+fn multiple_bangs(_p: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_Banged(inner) = &*t.inner {
         if let InnerToken::T_Banged(_) = &*inner.inner {
             err(
@@ -321,7 +329,7 @@ fn check_multiple_bangs(_p: &Parameters, t: &Token, out: &mut Out) {
     }
 }
 
-fn check_bang_after_pipe(_p: &Parameters, t: &Token, out: &mut Out) {
+fn bang_after_pipe(_p: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_Pipeline { commands, .. } = &*t.inner {
         for cmd in commands {
             if let InnerToken::T_Banged(_) = &*cmd.inner {
@@ -336,7 +344,7 @@ fn check_bang_after_pipe(_p: &Parameters, t: &Token, out: &mut Out) {
     }
 }
 
-fn check_negated_unary_ops(_p: &Parameters, t: &Token, out: &mut Out) {
+fn negated_unary_ops(_p: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TC_Unary {
         typ: ConditionType::SingleBracket,
         op,
@@ -1110,7 +1118,7 @@ mod tests {
     #[test]
     fn prop_checkEchoSed1() {
         assert!(emits_code(
-            check_echo_sed,
+            echo_sed,
             "FOO=$(echo \"$cow\" | sed 's/foo/bar/g')",
             2001
         ));
@@ -1119,7 +1127,7 @@ mod tests {
     #[test]
     fn prop_checkEchoSed1b() {
         assert!(emits_code(
-            check_echo_sed,
+            echo_sed,
             "FOO=$(sed 's/foo/bar/g' <<< \"$cow\")",
             2001
         ));
@@ -1128,7 +1136,7 @@ mod tests {
     #[test]
     fn prop_checkEchoSed2() {
         assert!(emits_code(
-            check_echo_sed,
+            echo_sed,
             "rm $(echo $cow | sed -e 's,foo,bar,')",
             2001
         ));
@@ -1137,7 +1145,7 @@ mod tests {
     #[test]
     fn prop_checkEchoSed2b() {
         assert!(emits_code(
-            check_echo_sed,
+            echo_sed,
             "rm $(sed -e 's,foo,bar,' <<< $cow)",
             2001
         ));
@@ -1147,17 +1155,17 @@ mod tests {
 
     #[test]
     fn prop_checkForDecimals1() {
-        assert!(emits(check_for_decimals, "((3.14*c))"));
+        assert!(emits(for_decimals, "((3.14*c))"));
     }
 
     #[test]
     fn prop_checkForDecimals2() {
-        assert!(emits(check_for_decimals, "foo[1.2]=bar"));
+        assert!(emits(for_decimals, "foo[1.2]=bar"));
     }
 
     #[test]
     fn prop_checkForDecimals3() {
-        assert!(!emits(check_for_decimals, "declare -A foo; foo[1.2]=bar"));
+        assert!(!emits(for_decimals, "declare -A foo; foo[1.2]=bar"));
     }
 
     // ---- checkBashisms (full SC30xx family) ----
@@ -1979,115 +1987,109 @@ mod tests {
 
     #[test]
     fn prop_checkBraceExpansionVars1() {
-        assert!(emits(check_brace_expansion_vars, "echo {1..$n}"));
+        assert!(emits(brace_expansion_vars, "echo {1..$n}"));
     }
 
     #[test]
     fn prop_checkBraceExpansionVars2() {
-        assert!(!emits(check_brace_expansion_vars, "echo {1,3,$n}"));
+        assert!(!emits(brace_expansion_vars, "echo {1,3,$n}"));
     }
 
     #[test]
     fn prop_checkBraceExpansionVars3() {
-        assert!(emits(
-            check_brace_expansion_vars,
-            "eval echo DSC{0001..$n}.jpg"
-        ));
+        assert!(emits(brace_expansion_vars, "eval echo DSC{0001..$n}.jpg"));
     }
 
     #[test]
     fn prop_checkBraceExpansionVars4() {
-        assert!(emits(check_brace_expansion_vars, "echo {$i..100}"));
+        assert!(emits(brace_expansion_vars, "echo {$i..100}"));
     }
 
     // ---- checkMultiDimensionalArrays (SC2180) ----
 
     #[test]
     fn prop_checkMultiDimensionalArrays1() {
-        assert!(emits(check_multi_dimensional_arrays, "foo[a][b]=3"));
+        assert!(emits(multi_dimensional_arrays, "foo[a][b]=3"));
     }
 
     #[test]
     fn prop_checkMultiDimensionalArrays2() {
-        assert!(!emits(check_multi_dimensional_arrays, "foo[a]=3"));
+        assert!(!emits(multi_dimensional_arrays, "foo[a]=3"));
     }
 
     #[test]
     fn prop_checkMultiDimensionalArrays3() {
-        assert!(emits(check_multi_dimensional_arrays, "foo=( [a][b]=c )"));
+        assert!(emits(multi_dimensional_arrays, "foo=( [a][b]=c )"));
     }
 
     #[test]
     fn prop_checkMultiDimensionalArrays4() {
-        assert!(!emits(check_multi_dimensional_arrays, "foo=( [a]=c )"));
+        assert!(!emits(multi_dimensional_arrays, "foo=( [a]=c )"));
     }
 
     #[test]
     fn prop_checkMultiDimensionalArrays5() {
-        assert!(emits(
-            check_multi_dimensional_arrays,
-            "echo ${foo[bar][baz]}"
-        ));
+        assert!(emits(multi_dimensional_arrays, "echo ${foo[bar][baz]}"));
     }
 
     #[test]
     fn prop_checkMultiDimensionalArrays6() {
-        assert!(!emits(check_multi_dimensional_arrays, "echo ${foo[bar]}"));
+        assert!(!emits(multi_dimensional_arrays, "echo ${foo[bar]}"));
     }
 
     // ---- checkMultipleBangs (SC2325) ----
 
     #[test]
     fn prop_checkMultipleBangs1() {
-        assert!(emits(check_multiple_bangs, "! ! true"));
+        assert!(emits(multiple_bangs, "! ! true"));
     }
 
     #[test]
     fn prop_checkMultipleBangs2() {
-        assert!(!emits(check_multiple_bangs, "! true"));
+        assert!(!emits(multiple_bangs, "! true"));
     }
 
     // ---- checkBangAfterPipe (SC2326) ----
 
     #[test]
     fn prop_checkBangAfterPipe1() {
-        assert!(emits(check_bang_after_pipe, "true | ! true"));
+        assert!(emits(bang_after_pipe, "true | ! true"));
     }
 
     #[test]
     fn prop_checkBangAfterPipe2() {
-        assert!(!emits(check_bang_after_pipe, "true | ( ! true )"));
+        assert!(!emits(bang_after_pipe, "true | ( ! true )"));
     }
 
     #[test]
     fn prop_checkBangAfterPipe3() {
-        assert!(!emits(check_bang_after_pipe, "! ! true | true"));
+        assert!(!emits(bang_after_pipe, "! ! true | true"));
     }
 
     // ---- checkNegatedUnaryOps (SC2332) ----
 
     #[test]
     fn prop_checkNegatedUnaryOps1() {
-        assert!(emits(check_negated_unary_ops, "[ ! -o braceexpand ]"));
+        assert!(emits(negated_unary_ops, "[ ! -o braceexpand ]"));
     }
 
     #[test]
     fn prop_checkNegatedUnaryOps2() {
-        assert!(!emits(check_negated_unary_ops, "[ -o braceexpand ]"));
+        assert!(!emits(negated_unary_ops, "[ -o braceexpand ]"));
     }
 
     #[test]
     fn prop_checkNegatedUnaryOps3() {
-        assert!(!emits(check_negated_unary_ops, "[[ ! -o braceexpand ]]"));
+        assert!(!emits(negated_unary_ops, "[[ ! -o braceexpand ]]"));
     }
 
     #[test]
     fn prop_checkNegatedUnaryOps4() {
-        assert!(!emits(check_negated_unary_ops, "! [ -o braceexpand ]"));
+        assert!(!emits(negated_unary_ops, "! [ -o braceexpand ]"));
     }
 
     #[test]
     fn prop_checkNegatedUnaryOps5() {
-        assert!(emits(check_negated_unary_ops, "[ ! -a file ]"));
+        assert!(emits(negated_unary_ops, "[ ! -a file ]"));
     }
 }

@@ -1,9 +1,9 @@
 //! Arithmetic-context checks from `ShellCheck.Analytics`.
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
-use crate::astlib::get_word_parts;
-use crate::astlib::oversimplify_concat;
+use crate::ast_lib;
+use crate::ast_lib::get_word_parts;
+use crate::ast_lib::oversimplify_concat;
 use crate::cfg::get_braced_reference;
 use crate::cfg::get_unquoted_literal;
 use crate::interface::Shell;
@@ -282,7 +282,7 @@ fn arith_deref_is_exception(s: &str) -> bool {
 
 /// `getGlobOrLiteralString`.
 fn get_glob_or_literal_string(t: &Token) -> Option<String> {
-    astlib::get_literal_string_ext(t, &|inner| match inner {
+    ast_lib::get_literal_string_ext(t, &|inner| match inner {
         InnerToken::T_Glob(s) => Some(s.clone()),
         _ => None,
     })
@@ -330,7 +330,7 @@ fn match_wrong_arith(s: &str) -> Option<(String, char)> {
 }
 
 /// `getLiteralString` mirroring `getLiteralStringExt (const Nothing)`, including
-/// the `TA_Expansion` / `T_ParamSubSpecialChar` cases the shared astlib helper
+/// the `TA_Expansion` / `T_ParamSubSpecialChar` cases the shared ast_lib helper
 /// omits. (decodeEscapes on `T_DollarSingleQuoted` is not needed for our uses.)
 fn full_literal_string(t: &Token) -> Option<String> {
     fn go(t: &Token, out: &mut String) -> bool {

@@ -18,9 +18,9 @@
 //! Public entry point: [`build_graph`] (Haskell `buildGraph`).
 
 use crate::ast::*;
-use crate::astlib::get_literal_string;
-use crate::astlib::will_split;
-use crate::astlib::{get_literal_string_def, oversimplify_concat};
+use crate::ast_lib::get_literal_string;
+use crate::ast_lib::will_split;
+use crate::ast_lib::{get_literal_string_def, oversimplify_concat};
 use crate::data::{FLAGS_FOR_MAPFILE, FLAGS_FOR_READ};
 use std::collections::{BTreeSet, HashMap, HashSet};
 

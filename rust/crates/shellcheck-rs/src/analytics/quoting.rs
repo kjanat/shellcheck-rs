@@ -10,11 +10,11 @@ use crate::analyzer_lib::is_quote_free_element;
 use crate::analyzer_lib::simple_command_words;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
-use crate::astlib::get_literal_string;
-use crate::astlib::get_word_parts;
-use crate::astlib::oversimplify;
-use crate::astlib::will_split;
+use crate::ast_lib;
+use crate::ast_lib::get_literal_string;
+use crate::ast_lib::get_word_parts;
+use crate::ast_lib::oversimplify;
+use crate::ast_lib::will_split;
 use crate::cfg;
 use crate::cfg::get_braced_modifier;
 use crate::cfg::is_variable_char;
@@ -372,7 +372,7 @@ pub(super) fn check_tilde_in_path(_params: &Parameters, t: &Token, out: &mut Out
                 InnerToken::T_DoubleQuoted(_) | InnerToken::T_SingleQuoted(_)
             )
         };
-        let has_tilde = |x: &Token| astlib::only_literal_string(x).contains('~');
+        let has_tilde = |x: &Token| ast_lib::only_literal_string(x).contains('~');
         if parts.iter().any(|x| is_quoted(x) && has_tilde(x)) {
             warn(
                 out,
@@ -448,7 +448,7 @@ pub(super) fn check_unquoted_parameter_expansion_pattern(
     {
         // T_NormalWord _ (T_Literal _ s : rest@(_:_))
         if word_parts.len() >= 2 && matches!(&*word_parts[0].inner, InnerToken::T_Literal(_)) {
-            let modifier = cfg::get_braced_modifier(&astlib::oversimplify_concat(op));
+            let modifier = cfg::get_braced_modifier(&ast_lib::oversimplify_concat(op));
             if modifier.starts_with('%') || modifier.starts_with('#') {
                 for r in &word_parts[1..] {
                     upep_check(params, r, out);
@@ -591,7 +591,7 @@ fn get_find_command(cmd: &Token) -> String {
         Some(w) => w,
         None => return "find".to_string(),
     };
-    let lits: Vec<Option<String>> = words.iter().map(astlib::get_literal_string).collect();
+    let lits: Vec<Option<String>> = words.iter().map(ast_lib::get_literal_string).collect();
     let exec_flags = ["-exec", "-execdir", "-ok", "-okdir"];
     // dropWhile (not in exec_flags)
     let start = lits.iter().position(|x| {
@@ -613,7 +613,7 @@ fn get_find_command(cmd: &Token) -> String {
 
 fn get_git_command(cmd: &Token) -> String {
     if let Some(words) = simple_command_words(cmd) {
-        let lits: Vec<Option<String>> = words.iter().map(astlib::get_literal_string).collect();
+        let lits: Vec<Option<String>> = words.iter().map(ast_lib::get_literal_string).collect();
         if lits.first().and_then(|x| x.as_deref()) == Some("git")
             && lits.get(1).and_then(|x| x.as_deref()) == Some("filter-branch")
         {
@@ -625,7 +625,7 @@ fn get_git_command(cmd: &Token) -> String {
 
 fn get_mumps_command(cmd: &Token) -> String {
     if let Some(words) = simple_command_words(cmd) {
-        let lits: Vec<Option<String>> = words.iter().map(astlib::get_literal_string).collect();
+        let lits: Vec<Option<String>> = words.iter().map(ast_lib::get_literal_string).collect();
         if lits.first().and_then(|x| x.as_deref()) == Some("mumps")
             && lits.get(1).and_then(|x| x.as_deref()) == Some("-run")
         {
@@ -790,7 +790,7 @@ fn check_splitting_part(params: &Parameters, part: &Token, out: &mut Out) {
         }
         InnerToken::T_DollarBraced { op, .. } => {
             let reference =
-                crate::cfg::get_braced_reference(&crate::astlib::oversimplify(op).concat());
+                crate::cfg::get_braced_reference(&crate::ast_lib::oversimplify(op).concat());
             if !is_counting_reference(part)
                 && !is_quoted_alternative_reference(part)
                 && !VARIABLES_WITHOUT_SPACES.contains(&reference.as_str())

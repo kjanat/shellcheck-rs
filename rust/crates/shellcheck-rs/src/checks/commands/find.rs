@@ -1,170 +1,175 @@
 //! `find` checks from `ShellCheck.Checks.Commands`.
 use super::common::*;
+use super::{CommandCheck, CommandName::*};
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib::get_literal_string_def;
-use crate::astlib::is_glob;
-use crate::astlib::{get_literal_string, only_literal_string};
+use crate::ast_lib::get_literal_string_def;
+use crate::ast_lib::is_glob;
+use crate::ast_lib::{get_literal_string, only_literal_string};
 
-pub(super) fn check_find_name_glob(_p: &Parameters, t: &Token, out: &mut Out) {
-    let words = match matched_words(t, CmdKind::Basename, "find") {
-        Some(w) => w,
-        None => return,
-    };
-    let args = word_args(words);
-    // Consecutive pairs (a, b): warn on b when a is a glob-accepting flag and b
-    // is a glob.
-    for pair in args.windows(2) {
-        let a = &pair[0];
-        let b = &pair[1];
-        if let Some(s) = get_literal_string(a) {
-            if find_accepts_glob(&s) && is_glob(b) {
-                warn(
-                    out,
-                    b.id(),
-                    2061,
-                    &format!(
-                        "Quote the parameter to {} so the shell won't interpret it.",
-                        s
-                    ),
-                );
+pub(super) fn check_find_name_glob() -> CommandCheck {
+    CommandCheck::new(Basename("find"), |_p, t, out| {
+        let Some(words) = simple_command_words(t) else {
+            return;
+        };
+        let args = word_args(words);
+        // Consecutive pairs (a, b): warn on b when a is a glob-accepting flag and b
+        // is a glob.
+        for pair in args.windows(2) {
+            let a = &pair[0];
+            let b = &pair[1];
+            if let Some(s) = get_literal_string(a) {
+                if find_accepts_glob(&s) && is_glob(b) {
+                    warn(
+                        out,
+                        b.id(),
+                        2061,
+                        &format!(
+                            "Quote the parameter to {} so the shell won't interpret it.",
+                            s
+                        ),
+                    );
+                }
             }
         }
-    }
+    })
 }
 
-pub(super) fn check_find_exec_with_single_argument(_p: &Parameters, t: &Token, out: &mut Out) {
-    let words = match matched_words(t, CmdKind::Basename, "find") {
-        Some(w) => w,
-        None => return,
-    };
-    let args = word_args(words);
-    // mapMaybe check . tails
-    for i in 0..args.len() {
-        let window = &args[i..];
-        if window.len() < 3 {
-            continue;
-        }
-        let exec = &window[0];
-        let arg = &window[1];
-        let term = &window[2];
-        let exec_s = match get_literal_string(exec) {
-            Some(s) => s,
-            None => continue,
+pub(super) fn check_find_exec_with_single_argument() -> CommandCheck {
+    CommandCheck::new(Basename("find"), |_p, t, out| {
+        let Some(words) = simple_command_words(t) else {
+            return;
         };
-        let term_s = match get_literal_string(term) {
-            Some(s) => s,
-            None => continue,
-        };
-        let cmd_s = get_literal_string_def(" ", arg);
-        if !matches!(exec_s.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir") {
-            continue;
-        }
-        if !matches!(term_s.as_str(), ";" | "+") {
-            continue;
-        }
-        if !cmd_s.chars().any(|c| c == ' ' || c == '|' || c == ';') {
-            continue;
-        }
-        warn(
-            out,
-            exec.id(),
-            2150,
-            &format!(
-                "{0} does not invoke a shell. Rewrite or use {0} sh -c .. .",
-                exec_s
-            ),
-        );
-    }
-}
-
-pub(super) fn check_injectable_find_sh(_p: &Parameters, t: &Token, out: &mut Out) {
-    let words = match matched_words(t, CmdKind::Basename, "find") {
-        Some(w) => w,
-        None => return,
-    };
-    let id_strings: Vec<(Id, String)> = word_args(words)
-        .iter()
-        .map(|x| (x.id(), only_literal_string(x)))
-        .collect();
-    injectable_match(0, &id_strings, out);
-}
-
-pub(super) fn check_find_action_precedence(_p: &Parameters, t: &Token, out: &mut Out) {
-    let words = match matched_words(t, CmdKind::Basename, "find") {
-        Some(w) => w,
-        None => return,
-    };
-    let list: Vec<&Token> = word_args(words).iter().collect();
-    // pattern = [isMatch, const True, isParam ["-o","-or"], isMatch, const True, isAction]
-    const PLEN: usize = 6;
-    let mut start = 0;
-    while start + PLEN <= list.len() {
-        let w = &list[start..start + PLEN];
-        if fap_is_match(w[0])
-            && fap_is_param(w[2], &["-o", "-or"])
-            && fap_is_match(w[3])
-            && fap_is_action(w[5])
-        {
+        let args = word_args(words);
+        // mapMaybe check . tails
+        for i in 0..args.len() {
+            let window = &args[i..];
+            if window.len() < 3 {
+                continue;
+            }
+            let exec = &window[0];
+            let arg = &window[1];
+            let term = &window[2];
+            let exec_s = match get_literal_string(exec) {
+                Some(s) => s,
+                None => continue,
+            };
+            let term_s = match get_literal_string(term) {
+                Some(s) => s,
+                None => continue,
+            };
+            let cmd_s = get_literal_string_def(" ", arg);
+            if !matches!(exec_s.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir") {
+                continue;
+            }
+            if !matches!(term_s.as_str(), ";" | "+") {
+                continue;
+            }
+            if !cmd_s.chars().any(|c| c == ' ' || c == '|' || c == ';') {
+                continue;
+            }
             warn(
                 out,
-                w[5].id(),
-                2146,
-                "This action ignores everything before the -o. Use \\( \\) to group.",
+                exec.id(),
+                2150,
+                &format!(
+                    "{0} does not invoke a shell. Rewrite or use {0} sh -c .. .",
+                    exec_s
+                ),
             );
-            return;
         }
-        start += 1;
-    }
+    })
 }
 
-pub(super) fn check_find_without_path(_p: &Parameters, t: &Token, out: &mut Out) {
-    let words = match matched_words(t, CmdKind::Basename, "find") {
-        Some(w) => w,
-        None => return,
-    };
-    let cmd = &words[0];
-    let args = word_args(words);
-    if !(word_has_flag(words, "help") || find_has_path(args)) {
-        info(
-            out,
-            cmd.id(),
-            2185,
-            "Some finds don't have a default path. Specify '.' explicitly.",
-        );
-    }
+pub(super) fn check_injectable_find_sh() -> CommandCheck {
+    CommandCheck::new(Basename("find"), |_p, t, out| {
+        let Some(words) = simple_command_words(t) else {
+            return;
+        };
+        let id_strings: Vec<(Id, String)> = word_args(words)
+            .iter()
+            .map(|x| (x.id(), only_literal_string(x)))
+            .collect();
+        injectable_match(0, &id_strings, out);
+    })
 }
 
-pub(super) fn check_find_redirections(params: &Parameters, t: &Token, out: &mut Out) {
-    if matched_words(t, CmdKind::Basename, "find").is_none() {
-        return;
-    }
-    let redirecting = match get_closest_command(params, t) {
-        Some(r) => r,
-        None => return,
-    };
-    if let InnerToken::T_Redirecting { redirs, cmd } = &*redirecting.inner {
-        if redirs.is_empty() {
+pub(super) fn check_find_action_precedence() -> CommandCheck {
+    CommandCheck::new(Basename("find"), |_p, t, out| {
+        let Some(words) = simple_command_words(t) else {
             return;
-        }
-        if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-            if words.len() < 2 {
-                return;
-            }
-            let min_redir = redirs.iter().map(|r| r.id().0).min().unwrap();
-            let max_arg = words.iter().map(|w| w.id().0).max().unwrap();
-            if min_redir < max_arg {
-                let min_id = redirs.iter().min_by_key(|r| r.id().0).unwrap().id();
+        };
+        let list: Vec<&Token> = word_args(words).iter().collect();
+        // pattern = [isMatch, const True, isParam ["-o","-or"], isMatch, const True, isAction]
+        const PLEN: usize = 6;
+        let mut start = 0;
+        while start + PLEN <= list.len() {
+            let w = &list[start..start + PLEN];
+            if fap_is_match(w[0])
+                && fap_is_param(w[2], &["-o", "-or"])
+                && fap_is_match(w[3])
+                && fap_is_action(w[5])
+            {
                 warn(
                     out,
-                    min_id,
-                    2227,
-                    "Redirection applies to the find command itself. Rewrite to work per action (or move to end).",
+                    w[5].id(),
+                    2146,
+                    "This action ignores everything before the -o. Use \\( \\) to group.",
                 );
+                return;
+            }
+            start += 1;
+        }
+    })
+}
+
+pub(super) fn check_find_without_path() -> CommandCheck {
+    CommandCheck::new(Basename("find"), |_p, t, out| {
+        let Some(words) = simple_command_words(t) else {
+            return;
+        };
+        let cmd = &words[0];
+        let args = word_args(words);
+        if !(word_has_flag(words, "help") || find_has_path(args)) {
+            info(
+                out,
+                cmd.id(),
+                2185,
+                "Some finds don't have a default path. Specify '.' explicitly.",
+            );
+        }
+    })
+}
+
+pub(super) fn check_find_redirections() -> CommandCheck {
+    CommandCheck::new(Basename("find"), |params, t, out| {
+        let redirecting = match get_closest_command(params, t) {
+            Some(r) => r,
+            None => return,
+        };
+        if let InnerToken::T_Redirecting { redirs, cmd } = &*redirecting.inner {
+            if redirs.is_empty() {
+                return;
+            }
+            if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
+                if words.len() < 2 {
+                    return;
+                }
+                let min_redir = redirs.iter().map(|r| r.id().0).min().unwrap();
+                let max_arg = words.iter().map(|w| w.id().0).max().unwrap();
+                if min_redir < max_arg {
+                    let min_id = redirs.iter().min_by_key(|r| r.id().0).unwrap().id();
+                    warn(
+                        out,
+                        min_id,
+                        2227,
+                        "Redirection applies to the find command itself. Rewrite to work per action (or move to end).",
+                    );
+                }
             }
         }
-    }
+    })
 }
 
 pub(super) fn word_has_flag(words: &[Token], flag: &str) -> bool {
@@ -277,62 +282,65 @@ mod tests {
 
     #[test]
     fn prop_checkFindNameGlob1() {
-        assert!(emits(check_find_name_glob, "find / -name *.php"));
+        assert!(emits(check_find_name_glob(), "find / -name *.php"));
     }
 
     #[test]
     fn prop_checkFindNameGlob2() {
-        assert!(emits(check_find_name_glob, "find / -type f -ipath *(foo)"));
+        assert!(emits(
+            check_find_name_glob(),
+            "find / -type f -ipath *(foo)"
+        ));
     }
 
     #[test]
     fn prop_checkFindNameGlob3() {
-        assert!(!emits(check_find_name_glob, "find * -name '*.php'"));
+        assert!(!emits(check_find_name_glob(), "find * -name '*.php'"));
     }
 
     // ---- SC2062/2063/2022 checkGrepRe ----
 
     #[test]
     fn prop_checkFindWithoutPath1() {
-        assert!(emits(check_find_without_path, "find -type f"));
+        assert!(emits(check_find_without_path(), "find -type f"));
     }
 
     #[test]
     fn prop_checkFindWithoutPath2() {
-        assert!(emits(check_find_without_path, "find"));
+        assert!(emits(check_find_without_path(), "find"));
     }
 
     #[test]
     fn prop_checkFindWithoutPath3() {
-        assert!(!emits(check_find_without_path, "find . -type f"));
+        assert!(!emits(check_find_without_path(), "find . -type f"));
     }
 
     #[test]
     fn prop_checkFindWithoutPath4() {
         assert!(!emits(
-            check_find_without_path,
+            check_find_without_path(),
             "find -H -L \"$path\" -print"
         ));
     }
 
     #[test]
     fn prop_checkFindWithoutPath5() {
-        assert!(!emits(check_find_without_path, "find -O3 ."));
+        assert!(!emits(check_find_without_path(), "find -O3 ."));
     }
 
     #[test]
     fn prop_checkFindWithoutPath6() {
-        assert!(!emits(check_find_without_path, "find -D exec ."));
+        assert!(!emits(check_find_without_path(), "find -D exec ."));
     }
 
     #[test]
     fn prop_checkFindWithoutPath7() {
-        assert!(!emits(check_find_without_path, "find --help"));
+        assert!(!emits(check_find_without_path(), "find --help"));
     }
 
     #[test]
     fn prop_checkFindWithoutPath8() {
-        assert!(!emits(check_find_without_path, "find -Hx . -print"));
+        assert!(!emits(check_find_without_path(), "find -Hx . -print"));
     }
 
     // ---- SC2253 checkChmodDashr ----
@@ -340,7 +348,7 @@ mod tests {
     #[test]
     fn prop_checkFindExecWithSingleArgument1() {
         assert!(emits(
-            check_find_exec_with_single_argument,
+            check_find_exec_with_single_argument(),
             "find . -exec 'cat {} | wc -l' \\;"
         ));
     }
@@ -348,7 +356,7 @@ mod tests {
     #[test]
     fn prop_checkFindExecWithSingleArgument2() {
         assert!(emits(
-            check_find_exec_with_single_argument,
+            check_find_exec_with_single_argument(),
             "find . -execdir 'cat {} | wc -l' +"
         ));
     }
@@ -356,7 +364,7 @@ mod tests {
     #[test]
     fn prop_checkFindExecWithSingleArgument3() {
         assert!(!emits(
-            check_find_exec_with_single_argument,
+            check_find_exec_with_single_argument(),
             "find . -exec wc -l {} \\;"
         ));
     }
@@ -366,7 +374,7 @@ mod tests {
     #[test]
     fn prop_checkInjectableFindSh1() {
         assert!(emits(
-            check_injectable_find_sh,
+            check_injectable_find_sh(),
             "find . -exec sh -c 'echo {}' \\;"
         ));
     }
@@ -374,7 +382,7 @@ mod tests {
     #[test]
     fn prop_checkInjectableFindSh2() {
         assert!(emits(
-            check_injectable_find_sh,
+            check_injectable_find_sh(),
             "find . -execdir bash -c 'rm \"{}\"' ';'"
         ));
     }
@@ -382,7 +390,7 @@ mod tests {
     #[test]
     fn prop_checkInjectableFindSh3() {
         assert!(!emits(
-            check_injectable_find_sh,
+            check_injectable_find_sh(),
             "find . -ok sh -c 'rm \"$@\"' _ {} \\;"
         ));
     }
@@ -392,7 +400,7 @@ mod tests {
     #[test]
     fn prop_checkFindActionPrecedence1() {
         assert!(emits(
-            check_find_action_precedence,
+            check_find_action_precedence(),
             "find . -name '*.wav' -o -name '*.au' -exec rm {} +"
         ));
     }
@@ -400,7 +408,7 @@ mod tests {
     #[test]
     fn prop_checkFindActionPrecedence2() {
         assert!(!emits(
-            check_find_action_precedence,
+            check_find_action_precedence(),
             "find . -name '*.wav' -o \\( -name '*.au' -exec rm {} + \\)"
         ));
     }
@@ -408,7 +416,7 @@ mod tests {
     #[test]
     fn prop_checkFindActionPrecedence3() {
         assert!(!emits(
-            check_find_action_precedence,
+            check_find_action_precedence(),
             "find . -name '*.wav' -o -name '*.au'"
         ));
     }
@@ -418,7 +426,7 @@ mod tests {
     #[test]
     fn prop_checkFindRedirections1() {
         assert!(emits(
-            check_find_redirections,
+            check_find_redirections(),
             "find . -exec echo {} > file \\;"
         ));
     }
@@ -426,7 +434,7 @@ mod tests {
     #[test]
     fn prop_checkFindRedirections2() {
         assert!(!emits(
-            check_find_redirections,
+            check_find_redirections(),
             "find . -exec echo {} \\; > file"
         ));
     }
@@ -434,7 +442,7 @@ mod tests {
     #[test]
     fn prop_checkFindRedirections3() {
         assert!(!emits(
-            check_find_redirections,
+            check_find_redirections(),
             "find . -execdir sh -c 'foo > file' \\;"
         ));
     }

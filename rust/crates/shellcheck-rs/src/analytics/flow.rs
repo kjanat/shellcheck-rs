@@ -1,7 +1,7 @@
 //! Data-flow checks (CFG based) from `ShellCheck.Analytics`.
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib::oversimplify_concat;
+use crate::ast_lib::oversimplify_concat;
 use crate::cfg::{CFVariableProp, get_braced_modifier, get_braced_reference, is_variable_char};
 use crate::cfg_analysis::SpaceStatus;
 use crate::data::{COMMON_COMMANDS, INTERNAL_VARIABLES, SPECIAL_VARIABLES_WITHOUT_SPACES};
@@ -36,7 +36,7 @@ pub(super) fn check_unused_assignments(params: &Parameters, _root: &Token, out: 
     let mut assignments: BTreeMap<String, Token> = BTreeMap::new();
     for sd in flow {
         if let StackData::Assignment(_, token, name, _) = sd {
-            if astlib_is_variable_name(name) {
+            if crate::cfg::is_variable_name(name) {
                 assignments.insert(name.clone(), token.clone());
             }
         }
@@ -116,7 +116,7 @@ fn check_unassigned_references_impl(
 
     let written_vars: Vec<String> = write_map
         .keys()
-        .filter(|k| astlib_is_variable_name(k))
+        .filter(|k| crate::cfg::is_variable_name(k))
         .cloned()
         .collect();
 
@@ -125,7 +125,7 @@ fn check_unassigned_references_impl(
         if write_map.contains_key(var) || default_assigned.contains(var.as_str()) {
             continue;
         }
-        if !astlib_is_variable_name(var) {
+        if !crate::cfg::is_variable_name(var) {
             continue;
         }
         if is_exception(params, var, place) || is_guarded(place) {
@@ -240,10 +240,6 @@ fn guard_regex_match(s: &str) -> bool {
         i += 1;
     }
     i < b.len() && (b[i] == '-' || b[i] == '?')
-}
-
-fn astlib_is_variable_name(s: &str) -> bool {
-    crate::cfg::is_variable_name(s)
 }
 
 fn check_spacefulness_cfg_impl(

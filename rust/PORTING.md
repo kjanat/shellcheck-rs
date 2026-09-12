@@ -20,10 +20,28 @@ matching the oracle with `extra == 0`.
    - *Needs dataflow/CFG* (`variableFlow`, `cfgAnalysis` — SC2154, SC2086,
      SC2034, ...): blocked until the CFG subsystem is ported.
      Skip blocked checks and record them.
-3. **Port** into a batch module under `crates/shellcheck-rs/src/checks/` with a
-   `pub fn register(c: &mut Checker)`. Emit via `warn/err/info/style[_with_fix]`.
-   Build fixes with `replace_start` / `replace_end` / `replace_token` +
-   `fix_with` (precedence is computed from the parent-path depth automatically).
+3. **Port** it into the module that mirrors its Haskell home (see
+   `DESIGN.md`, "Workspace layout"):
+   - `Analytics.hs` checks go in `src/analytics/<theme>.rs` and are registered
+     in `src/analytics/mod.rs`, at the position the Haskell `nodeChecks` /
+     `treeChecks` list gives them.
+   - `Checks/Commands.hs` checks go in `src/checks/commands/<group>.rs` as
+     `pub(super) fn check_x() -> CommandCheck { CommandCheck::new(Basename("x"), |params, t, out| { .. }) }`
+     — the same `CommandCheck (Basename "x") f` shape as Haskell — and are
+     registered in `src/checks/commands/mod.rs` in `commandChecks` order.
+     Parametrised checks (`checkSudoArgs cmd`) take the name as an argument.
+   - `Checks/ShellSupport.hs` checks go in `src/checks/shell_support.rs` as
+     `pub(super) fn check_x() -> ForShell { ForShell::new(&[Shell::Sh, ..], body) }`.
+   - Shared word lists belong in `src/data.rs` (`ShellCheck.Data`); helpers
+     that several themes of one family need go in that family's `common.rs`;
+     helpers from `ASTLib` / `AnalyzerLib` go in `ast_lib.rs` / `analyzer_lib.rs`.
+     Never copy a helper into a check module: grep for it first.
+     Emit via `warn/err/info/style[_with_fix]`. Build fixes with `replace_start` /
+     `replace_end` / `replace_token` + `fix_with` (precedence is computed from the
+     parent-path depth automatically). Port the check's `prop_` tests next to it,
+     using `crate::test_support::{produces, tree_emits, ..}` (`verify` /
+     `verifyTree`); parametrised checks are tested as in Haskell:
+     `produces(check_sudo_args("sudo"), "sudo cd /root")`.
 4. **Build**: `cargo build -p shellcheck-rs` (from `rust/`).
 5. **Verify** against the oracle:
 
@@ -64,14 +82,16 @@ the pipeline landed; keep it that way.
 - AST: `token.inner` is an `InnerToken`; match with the Haskell constructor
   names (`T_SimpleCommand { assignments, words }`, `T_DollarBraced { braced, op }`,
   ...). `token.children()` yields child refs; equality on `Token` ignores ids.
-- Helpers in `astlib`: `get_literal_string`, `oversimplify`,
+- Helpers in `ast_lib`: `get_literal_string`, `oversimplify`,
   `executable_from_shebang`, `shell_for_executable`. Add more as needed.
 
 ## Reference port
 
-`analytics::check_backticks` (SC2006, with an autofix) and
-`analytics::check_shebang` (SC2148, a tree check) are worked examples that match
-the oracle exactly, including fix replacements and precedence.
+`analytics::quoting::check_backticks` (SC2006, with an autofix),
+`analytics::script::check_shebang` (SC2148, a tree check),
+`checks::commands::coreutils::check_tr` (a `CommandCheck`) and
+`checks::shell_support::check_bashisms` (a `ForShell`) are worked examples that
+match the oracle exactly, including fix replacements and precedence.
 
 ## Current status
 
@@ -85,29 +105,18 @@ Strict comparison = ordered comment-key sequence identical **and** process exit
 code identical, over the scripts the oracle itself parses (oracle-errored
 scripts are counted in their own bucket, not silently folded into the rate).
 
-- **Strict exact-match parity: 1651 / 1659 comparable scripts (99.52%)**, with
+- **Strict exact-match parity: 1659 / 1659 comparable scripts (100%)**, with
   **0 check-level false positives** (`extra == 0` on every code), **0 order
-  mismatches**, and **0 oracle-errored scripts**.
-- The **8 non-exact scripts are all missing-only SC1xxx notes** (the port emits
-  a strict subset of the oracle's diagnostics — never a spurious one):
-  - `SC1091` ×5 — the port does not resolve/follow `source`d files, so it can't
-    emit the informational "Not following sourced file" note.
-  - `SC1008` ×1 — unrecognized-shebang note not yet ported.
-  - `SC1014` ×1 — "test as command" parser note not yet ported.
-  - `SC1127` ×1 — "comment/unexpected token" parser note not yet ported.
-- **3 exit-code mismatches** (`prop_checkShebang16`, `prop_checkSourceArgs2`,
-  `prop_checkSourceArgs3`) are a direct *consequence* of the above: on those
-  scripts the un-ported SC1xxx note is the **only** diagnostic, so the port
-  finds no issues and exits 0 while the oracle exits 1. They are pinned in
-  `baseline.json` (`exit_mismatch_ids`); the gate still fails on any *new* exit
-  mismatch or any increase in count.
-- Conditions (`[ ]`/`[[ ]]`), `select`, POSIX `name(){}`, and bats `@test` all
-  parse; the parser handles the full corpus with **0 crashes and 0 spurious
-  SC1072** (the earlier `time (..)`/`coproc` parser gaps are closed).
-- Biggest remaining work, in order: (1) `source`-file resolution to unblock the
-  SC1091 notes and their 3 dependent exit-code cases, (2) the remaining SC1xxx
-  parser notes (SC1008/SC1014/SC1127), (3) the long tail of self-contained
-  checks (fan out via batches).
+  mismatches**, **0 exit-code mismatches** and **0 oracle-errored scripts**.
+- Every check the Haskell registers in `nodeChecks`, `treeChecks`,
+  `commandChecks` and ShellSupport's `checks` is ported and registered; the
+  registration lists in `analytics/mod.rs` and `checks/commands/mod.rs` are
+  generated from the Haskell lists, so a missing check would appear there as a
+  `not ported` line.
+- Not yet ported, in order of impact: (1) `source`-file resolution (`-x`, `-P`,
+  `-a`; SC1091/SC1094 are emitted from a placeholder check until then), (2) the
+  optional checks (`--enable`, `optionalTreeChecks` / `optionalCommandChecks`),
+  (3) the remaining SC1xxx parser notes (SC1008/SC1014/SC1071/SC1082/SC1127).
 
 The gate baseline (`harness/baseline.json`) is committed; the derived caches
 (`goldens.jsonl`, `port.jsonl`, `coverage.json`) are regenerated and gitignored.

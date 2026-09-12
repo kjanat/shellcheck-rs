@@ -25,19 +25,26 @@ rust/
   Cargo.toml                     # workspace (resolver 3, edition 2024)
   crates/
     shellcheck-rs/               # CORE library (LSP-embeddable, std + regex)
-      src/interface.rs           # ShellCheck.Interface  (Position, Comment, Fix, Shell, specs)
+      src/interface.rs           # ShellCheck.Interface   (Position, Comment, Fix, Shell, specs)
       src/ast.rs                 # ShellCheck.AST         (Token/InnerToken, traversal)
-      src/astlib.rs              # ShellCheck.ASTLib      (getLiteralString, oversimplify, ...)
-      src/regex.rs               # ShellCheck.Regex
-      src/parser.rs              # ShellCheck.Parser      (recursive descent)
-      src/analyzer_lib.rs        # ShellCheck.AnalyzerLib (Parameters, Checker, warn/err/...)
-      src/analytics.rs           # ShellCheck.Analytics   (node/tree checks: SC2xxx)
-      src/checks/commands.rs     # ShellCheck.Checks.Commands
-      src/checks/control_flow.rs # ShellCheck.Checks.ControlFlow
-      src/checks/shell_support.rs# ShellCheck.Checks.ShellSupport
+      src/ast_lib.rs             # ShellCheck.ASTLib      (getLiteralString, oversimplify, ...)
+      src/data.rs                # ShellCheck.Data        (word lists, declaringCommands, ...)
+      src/parser/                # ShellCheck.Parser      (recursive descent), by grammar area:
+        mod.rs                   #   Parser state, cursor primitives, parse_script, post-passes
+        words.rs, arithmetic.rs, commands.rs, compound.rs, conditions.rs, directives.rs, tests.rs
+      src/analyzer_lib.rs        # ShellCheck.AnalyzerLib (Parameters, Check, Checker, warn/err/...)
+      src/analytics/             # ShellCheck.Analytics   (node/tree checks: SC2xxx), by theme:
+        mod.rs                   #   registration in the Haskell treeChecks/nodeChecks order
+        quoting.rs, conditions.rs, arithmetic.rs, loops.rs, redirections.rs,
+        commands.rs, variables.rs, script.rs, flow.rs, common.rs
+      src/checks/mod.rs          # ShellCheck.Analyzer    (stacks the checkers)
+      src/checks/commands/       # ShellCheck.Checks.Commands
+        mod.rs                   #   CommandName, CommandCheck (= checkCommand dispatch), registration
+        find.rs, coreutils.rs, builtins.rs, sudo.rs, common.rs
+      src/checks/shell_support.rs# ShellCheck.Checks.ShellSupport (ForShell + the SC30xx checks)
       src/cfg.rs, cfg_analysis.rs# ShellCheck.CFG / CFGAnalysis
       src/checker.rs             # ShellCheck.Checker     (pipeline glue)
-      src/fixer.rs               # ShellCheck.Fixer
+      src/test_support.rs        # verify / verifyNot / verifyTree for the prop_ tests
     shellcheck-cli/              # CLI + formatters (consumer of the core)
       src/bin/shellcheck.rs
       src/formatter/{tty,json,json1,gcc,checkstyle,diff,quiet}.rs
@@ -92,6 +99,6 @@ rust/
 
 ## Porting order (dependency-first)
 
-interface/ast (done) → regex/astlib → parser → analyzer_lib → checker + json1 +
+interface/ast (done) → regex/ast_lib → parser → analyzer_lib → checker + json1 +
 CLI (first end-to-end number) → checks fanned out per module/code, each gated by
 the harness → formatters → fixer → CFG-dependent checks → iterate to 100%.
