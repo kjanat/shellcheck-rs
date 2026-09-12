@@ -1387,18 +1387,23 @@ impl Parser {
     /// argument and array indices. `$(..)`, `<(..)` and `${ ..; }` parse their
     /// contents in place.
     pub(super) fn subparse_commands(&mut self, raw: &str, start: Position) -> Vec<Token> {
-        let mut sub = Parser::new(&self.filename, raw);
-        sub.line = start.line;
-        sub.col = start.column;
-        sub.next_id = self.next_id;
+        let mut sub = self.sub_parser(raw, &start);
+        // `subParser = readCompoundListOrEmpty >> verifyEof`, and `verifyEof`
+        // reports rather than fails, so the only way this fails is a consuming
+        // failure inside the commands.
         let cmds = sub.read_compound_list_or_empty();
-        // merge
-        self.next_id = sub.next_id;
-        for (k, v) in sub.positions {
-            self.positions.entry(k).or_insert(v);
+        let failed = sub.has_committed_failure();
+        if !failed && !sub.eof() {
+            sub.verify_eof();
         }
-        self.notes.extend(sub.notes);
-        self.problems.extend(sub.problems);
+        let (contexts, failure) = (sub.contexts.clone(), sub.failure.clone());
+        self.merge_sub(sub);
+        if failed {
+            // `tryWithErrors .. <|> return []`: the error and the contexts it
+            // happened in are reported, and the expansion holds nothing.
+            self.report_sub_failure(contexts, failure);
+            return Vec::new();
+        }
         cmds
     }
 }

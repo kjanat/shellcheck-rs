@@ -290,7 +290,7 @@ pub struct Parser {
 
 /// One open production, mirroring Haskell's `ContextName pos str`.
 #[derive(Debug, Clone, PartialEq)]
-struct Context {
+pub(super) struct Context {
     pos: Position,
     name: &'static str,
     /// Identifies this entry into the production, so a frame kept in a
@@ -300,7 +300,7 @@ struct Context {
 
 /// The deepest parse failure, with the context stack as it stood at the time.
 #[derive(Debug, Clone)]
-struct Failure {
+pub(super) struct Failure {
     reach: usize,
     pos: Position,
     message: String,
@@ -664,6 +664,52 @@ impl Parser {
         // `isIgnored`: a `disable=` directive in scope silences these too.
         out.retain(|n| !self.code_is_disabled(n.code));
         out
+    }
+
+    /// `subParse`: a parser over a different input, continuing this one's id
+    /// space, context stack and annotation scope. Parsec's state is swapped,
+    /// but everything in the `StateT` underneath it -- contexts, problems --
+    /// carries straight through, so the sub-parse's diagnostics name the
+    /// productions that contain it.
+    pub(super) fn sub_parser(&self, input: &str, start: &Position) -> Parser {
+        let mut sub = Parser::new(&self.filename, input);
+        sub.line = start.line;
+        sub.col = start.column;
+        sub.next_id = self.next_id;
+        sub.contexts = self.contexts.clone();
+        sub.next_serial = self.next_serial;
+        sub.disabled_codes = self.disabled_codes.clone();
+        sub
+    }
+
+    /// Take back what a sub-parser produced: ids, spans and diagnostics.
+    pub(super) fn merge_sub(&mut self, sub: Parser) {
+        self.next_id = sub.next_id;
+        self.next_serial = sub.next_serial;
+        for (k, v) in sub.positions {
+            self.positions.entry(k).or_insert(v);
+        }
+        self.notes.extend(sub.notes);
+        self.problems.extend(sub.problems);
+    }
+
+    /// `tryWithErrors`: a sub-parse whose failure is reported rather than
+    /// propagated -- the error itself plus the contexts it was left in -- after
+    /// which the caller carries on with nothing (`<|> return []`).
+    pub(super) fn report_sub_failure(&mut self, contexts: Vec<Context>, failure: Option<Failure>) {
+        let outer = std::mem::replace(&mut self.contexts, contexts);
+        let saved = std::mem::replace(&mut self.failure, failure);
+        let notes = self.failure_notes();
+        self.contexts = outer;
+        self.failure = saved;
+        // `addParseProblem (makeErrorFor err)` then `notesForContext`, so the
+        // error comes first.
+        if let Some(err) = notes.iter().find(|n| n.code == 1072) {
+            self.problems.push(err.clone());
+        }
+        for n in notes.into_iter().filter(|n| n.code != 1072) {
+            self.problems.push(n);
+        }
     }
 
     /// Remember this failure if it is deeper than any seen so far, along with

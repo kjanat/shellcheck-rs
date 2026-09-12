@@ -774,13 +774,55 @@ impl Parser {
                 words: cmd_args,
             },
         );
-        Ok(Token::new(
+        let result = Token::new(
             id1,
             InnerToken::T_Redirecting {
                 redirs,
                 cmd: simple,
             },
-        ))
+        );
+        if Self::command_literal_name_of(&result).as_deref() == Some("trap") {
+            self.syntax_check_trap(&result);
+        }
+        Ok(result)
+    }
+
+    /// The literal command name of an assembled `T_Redirecting`, if it has one.
+    fn command_literal_name_of(t: &Token) -> Option<String> {
+        let InnerToken::T_Redirecting { cmd, .. } = &*t.inner else {
+            return None;
+        };
+        let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner else {
+            return None;
+        };
+        Self::command_literal_name(words.first()?)
+    }
+
+    /// `syntaxCheckTrap`: a trap action is shell code, so it is parsed too --
+    /// with its failures reported rather than propagated, since the trap itself
+    /// parsed fine.
+    fn syntax_check_trap(&mut self, t: &Token) {
+        let arg = {
+            let InnerToken::T_Redirecting { cmd, .. } = &*t.inner else {
+                return;
+            };
+            let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner else {
+                return;
+            };
+            match words.get(1) {
+                Some(a) => a.clone(),
+                None => return,
+            }
+        };
+        let Some(str) = ast_lib::get_literal_string(&arg) else {
+            return;
+        };
+        // A flag is not a command.
+        if str.starts_with('-') {
+            return;
+        }
+        let (start, _) = self.span_for(arg.id());
+        self.subparse_commands(&str, start);
     }
 
     /// `readTimeSuffix`: `time [-p ...] <pipeline>`. Reads optional flag words
@@ -1788,7 +1830,7 @@ impl Parser {
                     let lit_id = self.next_id_between(doc_start, doc_end);
                     vec![Token::new(lit_id, InnerToken::T_Literal(body))]
                 }
-                Quoted::Unquoted => self.read_here_data(&body, doc_start),
+                Quoted::Unquoted => self.read_here_data(&body, doc_start)?,
             };
             self.heredoc_bodies.insert(hd.id, tokens);
         }
@@ -1996,54 +2038,65 @@ impl Parser {
     /// same token stream a double-quoted string produces (literals, dollar
     /// expansions, backtick command substitutions), with `"` and other
     /// non-`` `$\ `` characters kept literal via `readHereLiteral`.
-    pub(super) fn read_here_data(&mut self, body: &str, start: Position) -> Vec<Token> {
-        let mut sub = Parser::new(&self.filename, body);
-        sub.line = start.line;
-        sub.col = start.column;
-        sub.next_id = self.next_id;
+    pub(super) fn read_here_data(&mut self, body: &str, start: Position) -> PResult<Vec<Token>> {
+        let mut sub = self.sub_parser(body, &start);
+        let r = sub.read_here_data_parts();
+        let (contexts, failure) = (sub.contexts.clone(), sub.failure.clone());
+        self.merge_sub(sub);
+        match r {
+            Ok(parts) => Ok(parts),
+            Err(()) => {
+                // A plain `subParse`, not `tryWithErrors`: the failure comes
+                // straight back out, and the contexts it was left in -- the
+                // here document's own among them -- are what gets reported.
+                self.contexts = contexts;
+                self.failure = failure;
+                self.committed = true;
+                Err(())
+            }
+        }
+    }
+
+    /// `many $ doubleQuotedPart <|> readHereLiteral`, on the body's own input.
+    fn read_here_data_parts(&mut self) -> PResult<Vec<Token>> {
         let mut parts = Vec::new();
-        while !sub.eof() {
-            let progressed_from = sub.idx;
-            match sub.peek() {
+        while !self.eof() {
+            let progressed_from = self.idx;
+            match self.peek() {
                 // `readDoubleQuotedDollar` always succeeds on `$` (falls back to
                 // a literal `$` via `readDollarLonely`).
                 Some('$') => {
-                    if let Ok(t) = sub.read_double_quoted_dollar() {
+                    if let Ok(t) = self.read_double_quoted_dollar() {
                         parts.push(t);
                     }
                 }
-                // `readQuotedBackTicked`: a `` `..` `` command substitution.
-                Some('`') => match sub.read_backticked(true) {
+                // `readQuotedBackTicked`: a `` `..` `` command substitution. An
+                // unterminated one has consumed the backtick, so `many` fails
+                // rather than leaving it to `readHereLiteral` (which excludes
+                // backticks anyway).
+                Some('`') => match self.read_backticked(true) {
                     Ok(t) => parts.push(t),
-                    // An unterminated backtick can't be consumed by
-                    // `readHereLiteral` either (it excludes `` ` ``); stop.
-                    Err(()) => break,
+                    Err(()) => return Err(()),
                 },
                 // `readDoubleLiteral` (escapes + run up to a double-quotable
                 // char), else `readHereLiteral` (run up to `` `$\ ``, so `"` and
                 // ordinary text are literal).
                 _ => {
-                    if let Ok(t) = sub.read_double_literal_run() {
+                    if let Ok(t) = self.read_double_literal_run() {
                         parts.push(t);
-                    } else if let Ok(t) = sub.read_here_literal() {
+                    } else if let Ok(t) = self.read_here_literal() {
                         parts.push(t);
                     } else {
                         break;
                     }
                 }
             }
-            if sub.idx == progressed_from {
+            if self.idx == progressed_from {
                 // No progress (shouldn't happen); guard against an infinite loop.
                 break;
             }
         }
-        self.next_id = sub.next_id;
-        for (k, v) in sub.positions {
-            self.positions.entry(k).or_insert(v);
-        }
-        self.notes.extend(sub.notes);
-        self.problems.extend(sub.problems);
-        parts
+        Ok(parts)
     }
 
     /// `readHereLiteral`: a run of characters that are not `` ` ``, `$` or `\`.
@@ -2072,7 +2125,7 @@ impl Parser {
     /// fatal — ShellCheck keeps the tree it managed to build and still
     /// analyses it, which is why `r=\$(` yields SC1036/SC1088 alongside its
     /// ordinary warnings instead of a parse failure.
-    fn verify_eof(&mut self) {
+    pub(super) fn verify_eof(&mut self) {
         let p = self.pos();
         let (code, message) = if self.peek() == Some('(') {
             (1088, "Parsing stopped here. Invalid use of parentheses?")
