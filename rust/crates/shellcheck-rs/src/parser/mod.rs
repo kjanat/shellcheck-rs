@@ -255,6 +255,11 @@ pub struct Parser {
     /// the same stack as `ContextName pos str` and reports the innermost two
     /// when a parse fails (`notesForContext`).
     contexts: Vec<Context>,
+    /// Input index where each *currently* open production began, which
+    /// [`Parser::contexts`] no longer tracks now that it keeps failed frames.
+    /// A failure past the innermost of these has consumed input, which in
+    /// Parsec means `<|>` can no longer recover.
+    open_starts: Vec<usize>,
     /// The furthest input index the parser has ever reached. Parsec reports
     /// the error from the furthest failing alternative, not the last one
     /// tried, so failures are ranked by this rather than by the live cursor.
@@ -263,6 +268,10 @@ pub struct Parser {
     reach_pos: Position,
     /// The deepest failure seen, which is the one a fatal parse reports.
     failure: Option<Failure>,
+    /// Set when a production gave up after consuming input and no enclosing
+    /// alternative could take over. Parsec propagates such a failure straight
+    /// out of `readScript`, so the parse is over and no tree survives.
+    committed: bool,
     /// Whether the caller passed `--shell`, which like a `shell=` directive
     /// means the shebang no longer decides anything and is not checked.
     shell_flag_specified: bool,
@@ -273,17 +282,18 @@ pub struct Parser {
 struct Context {
     pos: Position,
     name: &'static str,
-    /// Input index where this production started. A failure past it has
-    /// consumed input, which in Parsec means `<|>` can no longer recover.
-    start_idx: usize,
 }
 
-/// The deepest parse failure, with the contexts that were open at the time.
+/// The deepest parse failure, with the context stack as it stood at the time.
 #[derive(Debug, Clone)]
 struct Failure {
     reach: usize,
     pos: Position,
     message: String,
+    /// Haskell reads `contextStack` once, after the parse has given up. This
+    /// parser backtracks in places Parsec would not, and those recoveries pop
+    /// frames off the top, so the stack is captured with the failure that will
+    /// be reported instead of read at the end.
     contexts: Vec<Context>,
     /// True when the failing production had already consumed input. Parsec's
     /// `<|>` only tries the next alternative if the previous one failed
@@ -363,6 +373,8 @@ impl Parser {
             pending_heredocs: Vec::new(),
             heredoc_bodies: BTreeMap::new(),
             contexts: Vec::new(),
+            open_starts: Vec::new(),
+            committed: false,
             reach: 0,
             reach_pos: Position {
                 file: filename.to_string(),
@@ -446,12 +458,7 @@ impl Parser {
     /// [`Parser::called`] does that for a whole production body.
     fn push_ctx(&mut self, name: &'static str) {
         let pos = self.pos();
-        let start_idx = self.idx;
-        self.contexts.push(Context {
-            pos,
-            name,
-            start_idx,
-        });
+        self.contexts.push(Context { pos, name });
     }
 
     fn pop_ctx(&mut self) {
@@ -465,12 +472,21 @@ impl Parser {
         name: &'static str,
         body: impl FnOnce(&mut Self) -> PResult<T>,
     ) -> PResult<T> {
+        let start_idx = self.idx;
         self.push_ctx(name);
+        self.open_starts.push(start_idx);
         let r = body(self);
+        self.open_starts.pop();
+        if r.is_ok() || self.idx == start_idx {
+            // `parsecBracket`: `after val` (popContext) runs when the body
+            // succeeds, and on the `<|>` branch taken when it failed without
+            // consuming. Note that it pops the *top* of the stack, which after
+            // a recovered inner failure is not necessarily this frame.
+            self.pop_ctx();
+        }
         if r.is_err() {
             self.record_failure("", false);
         }
-        self.pop_ctx();
         r
     }
 
@@ -478,6 +494,45 @@ impl Parser {
     /// reaches the user as SC1072 when this turns out to be the deepest
     /// failure; an empty one is still a deliberate failure, as `fail ""` is in
     /// the Haskell, and is what ends the parse rather than backtracking out.
+    /// `readAmbiguous`: a prefix that two productions both claim. Try the
+    /// expected one; then the alternative, whose diagnostics are forgotten if
+    /// it fails too (`forgetOnFailure`); and if both fail, run the expected one
+    /// a second time, so the error reported is the one from the production the
+    /// author most likely meant rather than from the fallback.
+    fn read_ambiguous(
+        &mut self,
+        expected: impl Fn(&mut Self) -> PResult<Token>,
+        alternative: impl Fn(&mut Self) -> PResult<Token>,
+        warn: impl FnOnce(&mut Self, Position),
+    ) -> PResult<Token> {
+        let pos = self.pos();
+        let m = self.mark();
+        // `try` rewinds Parsec's own state, which holds the buffered notes.
+        let notes = self.notes.len();
+        let failure = self.failure.clone();
+        if let Ok(t) = expected(self) {
+            return Ok(t);
+        }
+        self.reset(m);
+        self.notes.truncate(notes);
+        // Problems and contexts live outside Parsec, so the first attempt's
+        // survive: `forgetOnFailure` only rewinds what the *alternative* adds.
+        let problems = self.problems.len();
+        let contexts = self.contexts.clone();
+        if let Ok(t) = alternative(self) {
+            warn(self, pos);
+            return Ok(t);
+        }
+        self.notes.truncate(notes);
+        self.problems.truncate(problems);
+        self.contexts = contexts;
+        // Both attempts sat behind `try`, so neither error escapes; the last
+        // run consumes input and its error alone is what Parsec propagates.
+        self.failure = failure;
+        self.reset(m);
+        expected(self)
+    }
+
     fn fail_with<T>(&mut self, message: &str) -> PResult<T> {
         self.record_failure(message, true);
         Err(())
@@ -486,15 +541,17 @@ impl Parser {
     /// Whether a failure here has consumed input since the innermost
     /// production began, and so cannot be backtracked out of.
     fn has_consumed(&self) -> bool {
-        self.contexts.last().is_some_and(|c| self.idx > c.start_idx)
+        self.open_starts.last().is_some_and(|&s| self.idx > s)
     }
 
     /// Whether a production has failed outright past the point of commitment,
     /// which is what ends the parse.
     pub(super) fn has_committed_failure(&self) -> bool {
-        self.failure
-            .as_ref()
-            .is_some_and(|f| f.consumed && f.explicit)
+        self.committed
+            || self
+                .failure
+                .as_ref()
+                .is_some_and(|f| f.consumed && f.explicit)
     }
 
     /// The diagnostics a fatal parse failure reports: the innermost two open
@@ -505,6 +562,9 @@ impl Parser {
             return Vec::new();
         };
         let mut out = Vec::new();
+        // `contextStack` lives in the state *outside* Parsec, so nothing
+        // backtracks it: a production that failed after consuming input leaves
+        // its frame behind, and that residue is what the report names.
         // Haskell's stack has the innermost context first; ours has it last.
         let mut inner = f.contexts.iter().rev();
         if let Some(c) = inner.next() {

@@ -302,8 +302,19 @@ impl Parser {
         if self.at_command_terminator() {
             return Err(());
         }
-        if let Ok(t) = self.read_compound_command() {
-            return Ok(t);
+        // `choice` is a fold of bare `<|>`: once a compound command has
+        // consumed input there is no going back to a simple one, so `((`
+        // reports an unfinished arithmetic command rather than quietly
+        // becoming a word.
+        let m = self.mark();
+        match self.read_compound_command() {
+            Ok(t) => return Ok(t),
+            Err(()) => {
+                if self.idx != m.idx {
+                    self.committed = true;
+                    return Err(());
+                }
+            }
         }
         if let Ok(t) = self.read_condition_command() {
             return Ok(t);
@@ -406,6 +417,10 @@ impl Parser {
     // ---- compound commands -------------------------------------------------
 
     pub(super) fn read_arithmetic_command(&mut self) -> PResult<Token> {
+        self.called("((..)) command", |p| p.read_arithmetic_command_body())
+    }
+
+    fn read_arithmetic_command_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("((")?;
         let c = self.read_arithmetic_contents()?;

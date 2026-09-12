@@ -2,21 +2,29 @@
 use super::*;
 
 impl Parser {
+    /// `readAmbiguous "((" readArithmeticExpression readSubshell`: `((` opens
+    /// an arithmetic command in most shells and nested subshells in others.
+    fn read_ambiguous_arithmetic(&mut self) -> PResult<Token> {
+        self.read_ambiguous(
+            |p| p.read_arithmetic_command(),
+            |p| p.read_subshell(),
+            |p, pos| {
+                p.note_at(
+                    pos.clone(),
+                    pos,
+                    Severity::ErrorC,
+                    1105,
+                    "Shells disambiguate (( differently or not at all. For subshell, add spaces around ( . For ((, fix parsing errors.",
+                );
+            },
+        )
+    }
+
     pub(super) fn read_compound_command(&mut self) -> PResult<Token> {
         let c = self.peek();
         let m = self.mark();
         let cmd = match c {
-            Some('(') if self.peek_at(1) == Some('(') => {
-                // readAmbiguous "((" readArithmeticExpression readSubshell
-                let mm = self.mark();
-                match self.read_arithmetic_command() {
-                    Ok(t) => Ok(t),
-                    Err(()) => {
-                        self.reset(mm);
-                        self.read_subshell()
-                    }
-                }
-            }
+            Some('(') if self.peek_at(1) == Some('(') => self.read_ambiguous_arithmetic(),
             Some('(') => self.read_subshell(),
             Some('{') if self.is_word_boundary_after(1) => self.read_brace_group(),
             _ => {
@@ -35,14 +43,7 @@ impl Parser {
                 } else if self.keyword_ahead("function") {
                     self.read_function_def()
                 } else if self.peek() == Some('(') && self.peek_at(1) == Some('(') {
-                    let mm = self.mark();
-                    match self.read_arithmetic_command() {
-                        Ok(t) => Ok(t),
-                        Err(()) => {
-                            self.reset(mm);
-                            self.read_subshell()
-                        }
-                    }
+                    self.read_ambiguous_arithmetic()
                 } else if self.string_peek("@test ") {
                     self.read_bats_test()
                 } else if self.looks_like_posix_function() {
@@ -65,7 +66,11 @@ impl Parser {
                 Ok(Token::new(id, InnerToken::T_Redirecting { redirs, cmd: t }))
             }
             Err(()) => {
-                self.reset(m);
+                // The cursor is left where the attempt gave up: callers need it
+                // to tell a recoverable failure from one that has committed.
+                if self.idx == m.idx {
+                    self.reset(m);
+                }
                 Err(())
             }
         }
