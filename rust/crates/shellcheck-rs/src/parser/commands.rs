@@ -223,11 +223,25 @@ impl Parser {
         self.read_banged()
     }
 
-    /// The length of the `readKeyword` token ahead, if any.
-    pub(super) fn keyword_len(&self) -> Option<usize> {
+    /// `readKeyword`: how long the closing keyword ahead is, plus the
+    /// missing-space warning each word token leaves behind even when the
+    /// lookahead that called it goes on to reject the keyword.
+    pub(super) fn keyword_len(&mut self) -> Option<usize> {
         const WORDS: [&str; 7] = ["then", "else", "elif", "fi", "do", "done", "esac"];
-        if let Some(w) = WORDS.iter().find(|k| self.keyword_ahead(k)) {
-            return Some(w.len());
+        // Every alternative in the `choice` is attempted, so a longer keyword
+        // sharing a prefix with a shorter one still gets its own warning.
+        let mut found = None;
+        for w in WORDS {
+            if !self.word_matches(w) {
+                continue;
+            }
+            self.warn_keyword_needs_space(w);
+            if found.is_none() && self.at_keyword_separator(w.len()) {
+                found = Some(w.len());
+            }
+        }
+        if found.is_some() {
+            return found;
         }
         match self.peek() {
             // `g_Rbrace` is a bare `char '}'` with no word boundary, so that

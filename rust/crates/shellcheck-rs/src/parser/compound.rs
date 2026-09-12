@@ -28,6 +28,15 @@ impl Parser {
             Some('(') => self.read_subshell(),
             Some('{') => self.read_brace_group(),
             _ => {
+                // Each of these is a `tryWordToken`, whose missing-space
+                // warning outlives the attempt.
+                // `function` is a plain `string`, not a word token, so it has no
+                // missing-space warning of its own.
+                for kw in ["if", "while", "until", "for", "case", "select"] {
+                    if self.word_matches(kw) {
+                        self.warn_keyword_needs_space(kw);
+                    }
+                }
                 if self.keyword_ahead("if") {
                     self.read_if_clause()
                 } else if self.keyword_ahead("while") {
@@ -116,21 +125,68 @@ impl Parser {
         }
     }
 
+    /// True if the input starts with `kw`, ignoring what follows.
+    pub(super) fn word_matches(&self, kw: &str) -> bool {
+        kw.chars()
+            .enumerate()
+            .all(|(i, ch)| self.peek_at(i) == Some(ch))
+    }
+
     /// True if the upcoming token is exactly `kw` followed by a word boundary.
     pub(super) fn keyword_ahead(&self, kw: &str) -> bool {
-        let chars: Vec<char> = kw.chars().collect();
-        for (i, &ch) in chars.iter().enumerate() {
-            if self.peek_at(i) != Some(ch) {
-                return false;
-            }
-        }
-        match self.peek_at(chars.len()) {
+        self.word_matches(kw) && self.at_keyword_separator(kw.chars().count())
+    }
+
+    /// `keywordSeparator`: end of input, whitespace (a comment counts, since
+    /// `spacing` eats one), or one of `;()[<>&|`. Notably *not* `$`, `'` or
+    /// `{`, so `if$(x)` and `case''` are ordinary words.
+    pub(super) fn at_keyword_separator(&self, offset: usize) -> bool {
+        match self.peek_at(offset) {
             None => true,
-            Some(c) => !(c == '_' || c.is_ascii_alphanumeric()),
+            Some('\\') => self.peek_at(offset + 1) == Some('\n'),
+            Some(c) => {
+                c == ' '
+                    || c == '\t'
+                    || c == '\n'
+                    || c == '\r'
+                    || c == '#'
+                    || ALMOST_SPACE_CHARS.contains(c)
+                    || ";()[<>&|".contains(c)
+            }
         }
     }
 
+    /// `tryParseWordToken`'s warning: the keyword is there but runs straight
+    /// into something that should have been a separate word. Reported whenever
+    /// the keyword text matches, even when the token is then rejected — Haskell
+    /// writes it to the problem channel, which no backtracking undoes.
+    pub(super) fn warn_keyword_needs_space(&mut self, kw: &str) {
+        let offset = kw.chars().count();
+        let Some(c) = self.peek_at(offset) else {
+            return;
+        };
+        let code = match c {
+            '[' => 1069,
+            '#' => 1099,
+            '!' => 1129,
+            ':' => 1130,
+            _ => return,
+        };
+        let mut pos = self.pos();
+        pos.column += offset as i64;
+        self.problem_at(
+            pos.clone(),
+            pos,
+            Severity::ErrorC,
+            code,
+            &format!("You need a space before the {c}."),
+        );
+    }
+
     pub(super) fn consume_keyword(&mut self, kw: &str) -> PResult<()> {
+        if self.word_matches(kw) {
+            self.warn_keyword_needs_space(kw);
+        }
         if self.keyword_ahead(kw) {
             for _ in 0..kw.chars().count() {
                 self.bump();
@@ -250,6 +306,9 @@ impl Parser {
             );
         }
         let do_pos = self.pos();
+        if self.has_committed_failure() {
+            return Err(());
+        }
         if self.consume_keyword("do").is_err() {
             let here = self.pos();
             self.problem_at(here.clone(), here, Severity::ErrorC, 1058, "Expected 'do'.");
@@ -393,6 +452,9 @@ impl Parser {
         }
         self.called("then clause", |p| {
             p.allspacing();
+            if p.has_committed_failure() {
+                return Err(());
+            }
             if p.consume_keyword("then").is_err() {
                 let here = p.pos();
                 p.problem_at(
@@ -755,6 +817,9 @@ impl Parser {
                 p.spacing();
             }
             if p.char(')').is_err() {
+                if p.has_committed_failure() {
+                    return Err(());
+                }
                 let pos = p.pos();
                 p.problem_at(
                     pos.clone(),

@@ -272,6 +272,8 @@ pub struct Parser {
     reach_pos: Position,
     /// The deepest failure seen, which is the one a fatal parse reports.
     failure: Option<Failure>,
+    /// Counter behind `Context::serial`.
+    next_serial: u64,
     /// Set when a production gave up after consuming input and no enclosing
     /// alternative could take over. Parsec propagates such a failure straight
     /// out of `readScript`, so the parse is over and no tree survives.
@@ -286,6 +288,9 @@ pub struct Parser {
 struct Context {
     pos: Position,
     name: &'static str,
+    /// Identifies this entry into the production, so a frame kept in a
+    /// failure snapshot can be told apart from a later one at the same depth.
+    serial: u64,
 }
 
 /// The deepest parse failure, with the context stack as it stood at the time.
@@ -378,6 +383,7 @@ impl Parser {
             heredoc_bodies: BTreeMap::new(),
             contexts: Vec::new(),
             open_starts: Vec::new(),
+            next_serial: 0,
             committed: false,
             reach: 0,
             reach_pos: Position {
@@ -462,7 +468,9 @@ impl Parser {
     /// [`Parser::called`] does that for a whole production body.
     fn push_ctx(&mut self, name: &'static str) {
         let pos = self.pos();
-        self.contexts.push(Context { pos, name });
+        self.next_serial += 1;
+        let serial = self.next_serial;
+        self.contexts.push(Context { pos, name, serial });
     }
 
     fn pop_ctx(&mut self) {
@@ -478,6 +486,7 @@ impl Parser {
     ) -> PResult<T> {
         let start_idx = self.idx;
         self.push_ctx(name);
+        let serial = self.contexts.last().map_or(0, |c| c.serial);
         self.open_starts.push(start_idx);
         let r = body(self);
         self.open_starts.pop();
@@ -489,6 +498,18 @@ impl Parser {
             self.pop_ctx();
         }
         if r.is_err() {
+            if self.idx == start_idx {
+                // This production bowed out cleanly, so Haskell would have
+                // popped its frame before reading the stack at the end. Drop it
+                // from the failure's snapshot too, but only when it is still on
+                // top: a frame left behind by a consuming failure below stays.
+                let popped = self.contexts.len() + 1;
+                if let Some(f) = &mut self.failure {
+                    if f.contexts.len() == popped && f.contexts[popped - 1].serial == serial {
+                        f.contexts.truncate(popped - 1);
+                    }
+                }
+            }
             self.record_failure("", false);
         }
         r
