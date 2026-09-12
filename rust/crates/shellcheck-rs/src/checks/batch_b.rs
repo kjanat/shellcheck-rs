@@ -18,7 +18,6 @@ use crate::astlib::only_literal_string;
 pub fn register(c: &mut Checker) {
     c.node(check_uuoe_cmd);
     c.node(check_uuoe_var);
-    c.node(check_inexplicably_unquoted_2027);
     c.node(check_concatenated_dollar_at);
 }
 
@@ -166,38 +165,6 @@ fn check_uuoe_var(_params: &Parameters, t: &Token, out: &mut Out) {
             2116,
             "Useless echo? Instead of 'cmd $(echo foo)', just use 'cmd foo'.",
         );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SC2027 — checkInexplicablyUnquoted (only the expansion branch)
-// ---------------------------------------------------------------------------
-
-fn check_inexplicably_unquoted_2027(_params: &Parameters, t: &Token, out: &mut Out) {
-    let tokens = match &*t.inner {
-        InnerToken::T_NormalWord(l) => l,
-        _ => return,
-    };
-    // mapM_ check (tails tokens): each consecutive triple starting at position i.
-    for w in tokens.windows(3) {
-        let a = &w[0];
-        let trapped = &w[1];
-        let b = &w[2];
-        if matches!(&*a.inner, InnerToken::T_DoubleQuoted(_))
-            && matches!(&*b.inner, InnerToken::T_DoubleQuoted(_))
-        {
-            match &*trapped.inner {
-                InnerToken::T_DollarExpansion(_) | InnerToken::T_DollarBraced { .. } => {
-                    warn(
-                        out,
-                        trapped.id(),
-                        2027,
-                        "The surrounding quotes actually unquote this. Remove or escape them.",
-                    );
-                }
-                _ => {}
-            }
-        }
     }
 }
 

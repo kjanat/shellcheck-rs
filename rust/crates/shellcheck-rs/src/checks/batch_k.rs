@@ -14,20 +14,16 @@
 //!   is tangled with SC2194/2195/2221; not self-contained, out of scope here.
 //! - SC2223  checkSpacefulnessCfg — dataflow/CFG (`isClean`, variable flow); blocked.
 use crate::analyzer_lib::in_condition;
-use crate::analyzer_lib::is_array_expansion;
 use crate::analyzer_lib::is_function_body;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib::get_literal_string;
-use crate::astlib::get_word_parts;
-use crate::astlib::is_glob;
 use crate::astlib::oversimplify;
 use std::sync::OnceLock;
 
 pub fn register(c: &mut Checker) {
     c.node(check_quoted_cond_regex);
     c.node(check_ps1_assignments);
-    c.node(check_test_argument_splitting_arrays);
     c.node(check_useless_bang);
 }
 
@@ -111,58 +107,6 @@ fn check_ps1_assignments(_params: &Parameters, t: &Token, out: &mut Out) {
                 );
             }
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SC2199 — checkTestArgumentSplitting (only the array-in-[[ ]] branch)
-// ---------------------------------------------------------------------------
-//
-// In the Haskell `checkTestArgumentSplitting`, `checkArrays` runs on every
-// DoubleBracket operand (Nullary token, Unary operand, and both Binary
-// operands), except a Unary operand that is itself a glob (which takes the
-// glob branch that skips `checkArrays`). The SingleBracket case emits SC2198,
-// which is out of scope here.
-
-fn check_array_operand(token: &Token, out: &mut Out) {
-    if get_word_parts(token).iter().any(|p| is_array_expansion(p)) {
-        err(
-            out,
-            token.id(),
-            2199,
-            "Arrays implicitly concatenate in [[ ]]. Use a loop (or explicit * instead of @).",
-        );
-    }
-}
-
-fn check_test_argument_splitting_arrays(_params: &Parameters, t: &Token, out: &mut Out) {
-    match &*t.inner {
-        InnerToken::TC_Nullary {
-            typ: ConditionType::DoubleBracket,
-            token,
-        } => {
-            check_array_operand(token, out);
-        }
-        InnerToken::TC_Unary {
-            typ: ConditionType::DoubleBracket,
-            token,
-            ..
-        } => {
-            // The glob branch in the oracle does not run checkArrays.
-            if !is_glob(token) {
-                check_array_operand(token, out);
-            }
-        }
-        InnerToken::TC_Binary {
-            typ: ConditionType::DoubleBracket,
-            lhs,
-            rhs,
-            ..
-        } => {
-            check_array_operand(lhs, out);
-            check_array_operand(rhs, out);
-        }
-        _ => {}
     }
 }
 

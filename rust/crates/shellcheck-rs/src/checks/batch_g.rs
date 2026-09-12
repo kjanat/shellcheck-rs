@@ -3,7 +3,6 @@
 //! Command-argument / pipeline / condition checks:
 //! - SC2174  checkMkdirDashPM     (Checks/Commands.hs) — `mkdir -m` with `-p`
 //! - SC2219  checkLetUsage        (Checks/Commands.hs) — `let` -> `(( ))`
-//! - SC2126  checkPipePitfalls    (Analytics.hs)       — `grep | wc -l` -> grep -c
 //! - SC2110  checkConditionalAndOrs (Analytics.hs)     — `[[ .. -o .. ]]` -> `||`
 //! - SC2114/SC2115 checkCatastrophicRm (Checks/Commands.hs) — rm of a system dir
 //!
@@ -12,12 +11,10 @@
 //! exactly as the Haskell `mapM_ (mapM_ checkWord . braceExpand)` does.
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::get_all_flags;
-use crate::analyzer_lib::get_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
 use crate::astlib::basename;
-use crate::astlib::oversimplify;
 use crate::astlib::{get_literal_string, get_literal_string_ext};
 
 /// Register this batch's checks.
@@ -36,7 +33,6 @@ use crate::astlib::{get_literal_string, get_literal_string_ext};
 ///   bare `String` with no id, so the position cannot be matched (extra == 1).
 pub fn register(c: &mut Checker) {
     c.node(check_mkdir_dash_pm);
-    c.node(check_pipe_wc);
     c.node(check_catastrophic_rm);
     // Enabled now that TC_Or is anchored on its operator token.
 }
@@ -119,75 +115,6 @@ fn check_mkdir_dash_pm(_params: &Parameters, t: &Token, out: &mut Out) {
 // ---------------------------------------------------------------------------
 // SC2219 — checkLetUsage
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// SC2126 — checkPipePitfalls (grep | wc -l)
-// ---------------------------------------------------------------------------
-
-fn command_flag_names(cmd_element: &Token) -> Vec<String> {
-    match get_command(cmd_element) {
-        Some(c) => get_all_flags(c).into_iter().map(|(_, f)| f).collect(),
-        None => vec![],
-    }
-}
-
-fn check_pipe_wc(_params: &Parameters, t: &Token, out: &mut Out) {
-    let commands = match &*t.inner {
-        InnerToken::T_Pipeline { commands, .. } => commands,
-        _ => return,
-    };
-    if commands.len() < 2 {
-        return;
-    }
-    let names: Vec<String> = commands
-        .iter()
-        .map(|c| oversimplify(c).into_iter().next().unwrap_or_default())
-        .collect();
-
-    const GREP_EXCL: &[&str] = &[
-        "l",
-        "files-with-matches",
-        "L",
-        "files-without-matches",
-        "o",
-        "only-matching",
-        "r",
-        "R",
-        "recursive",
-        "A",
-        "after-context",
-        "B",
-        "before-context",
-    ];
-    const WC_EXCL: &[&str] = &[
-        "m",
-        "chars",
-        "w",
-        "words",
-        "c",
-        "bytes",
-        "L",
-        "max-line-length",
-    ];
-
-    for i in 0..commands.len() - 1 {
-        if names[i] == "grep" && names[i + 1] == "wc" {
-            let flags_grep = command_flag_names(&commands[i]);
-            let flags_wc = command_flag_names(&commands[i + 1]);
-            let excluded = flags_grep.iter().any(|f| GREP_EXCL.contains(&f.as_str()))
-                || flags_wc.iter().any(|f| WC_EXCL.contains(&f.as_str()))
-                || flags_wc.is_empty();
-            if !excluded {
-                style(
-                    out,
-                    commands[i].id(),
-                    2126,
-                    "Consider using 'grep -c' instead of 'grep|wc -l'.",
-                );
-            }
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // SC2110 — checkConditionalAndOrs (only the `[[ .. -o .. ]]` branch)

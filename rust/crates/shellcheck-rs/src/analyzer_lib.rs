@@ -2192,3 +2192,53 @@ mod set_option_tests {
         assert!(!is_option_set("pipefail", &root("set -- -o vi")));
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod printf_format_tests {
+    use super::get_printf_formats;
+
+    #[test]
+    fn prop_checkGetPrintfFormats1() {
+        assert_eq!(get_printf_formats("%s"), "s");
+    }
+    #[test]
+    fn prop_checkGetPrintfFormats2() {
+        assert_eq!(get_printf_formats("%0*s"), "*s");
+    }
+    #[test]
+    fn prop_checkGetPrintfFormats3() {
+        assert_eq!(get_printf_formats("%(%s)T"), "T");
+    }
+    #[test]
+    fn prop_checkGetPrintfFormats4() {
+        assert_eq!(get_printf_formats("%d%%%(%s)T"), "dT");
+    }
+    #[test]
+    fn prop_checkGetPrintfFormats5() {
+        assert_eq!(
+            get_printf_formats("%bPassed: %d, %bFailed: %d%b, Skipped: %d, %bErrored: %d%b\\n"),
+            "bdbdbdbdb"
+        );
+    }
+    #[test]
+    fn prop_checkGetPrintfFormats6() {
+        assert_eq!(get_printf_formats("%s%s"), "ss");
+    }
+    #[test]
+    fn prop_checkGetPrintfFormats7() {
+        assert_eq!(get_printf_formats("%s\n%s"), "ss");
+    }
+    #[test]
+    fn prop_checkGetPrintfFormats8() {
+        assert_eq!(get_printf_formats("%ld"), "d");
+    }
+    #[test]
+    fn prop_checkGetPrintfFormats9() {
+        assert_eq!(get_printf_formats("%lld"), "d");
+    }
+    #[test]
+    fn prop_checkGetPrintfFormats10() {
+        assert_eq!(get_printf_formats("%Q"), "Q");
+    }
+}

@@ -16,17 +16,11 @@ use crate::analyzer_lib::get_command_name_and_token;
 use crate::analyzer_lib::is_quote_free;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib::basename;
 use crate::astlib::get_literal_string;
-use crate::astlib::is_literal;
-use crate::astlib::only_literal_string;
-use crate::astlib::oversimplify_concat;
-use crate::cfg::may_become_multiple_args;
 
 /// Register this batch's checks.
 pub fn register(c: &mut Checker) {
     c.node(check_unquoted_expansions);
-    c.node(command_dispatch);
 }
 
 // ===========================================================================
@@ -116,123 +110,6 @@ fn should_be_split(t: &Token) -> bool {
         get_command_name_from_expansion(t).as_deref(),
         Some("seq") | Some("pgrep")
     )
-}
-
-// ===========================================================================
-// SC2183 / SC2059 — checkPrintfVar    &    SC2060 — checkTr
-// Dispatched like ShellCheck.Checks.Commands.checkCommand.
-// ===========================================================================
-
-fn command_dispatch(p: &Parameters, t: &Token, out: &mut Out) {
-    let words = match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => words,
-        _ => return,
-    };
-    let name = match get_literal_string(&words[0]) {
-        Some(n) => n,
-        None => return,
-    };
-    if name.contains('/') {
-        let _base = basename(&name);
-    } else if name == "builtin" && words.len() >= 2 {
-        let selected = only_literal_string(&words[1]);
-        exactly_dispatch(p, &selected, &words[2..], out);
-    } else {
-        exactly_dispatch(p, &name, &words[1..], out);
-    }
-}
-
-fn exactly_dispatch(p: &Parameters, name: &str, args: &[Token], out: &mut Out) {
-    if name == "printf" {
-        check_printf(p, args, out);
-    }
-}
-
-// ---- SC2183 / SC2059 checkPrintfVar ----------------------------------------
-
-fn check_printf(p: &Parameters, args: &[Token], out: &mut Out) {
-    // f: skip leading `--`, `-v var`, `-vVAR`.
-    let mut rest = args;
-    loop {
-        let first = match rest.first() {
-            Some(f) => f,
-            None => return,
-        };
-        let s = get_literal_string(first);
-        if s.as_deref() == Some("--") {
-            rest = &rest[1..];
-            continue;
-        }
-        if s.as_deref() == Some("-v") && rest.len() >= 2 {
-            rest = &rest[2..];
-            continue;
-        }
-        if let Some(st) = &s {
-            if st.len() >= 3 && st.starts_with("-v") {
-                rest = &rest[1..];
-                continue;
-            }
-        }
-        // format = first, params = rest[1..]
-        check_printf_format(p, first, &rest[1..], out);
-        return;
-    }
-}
-
-fn check_printf_format(_p: &Parameters, format: &Token, more: &[Token], out: &mut Out) {
-    // SC2183: variable/argument count mismatch.
-    if let Some(string) = get_literal_string(format) {
-        let formats = get_printf_formats(&string);
-        let format_count = formats.chars().count();
-        let arg_count = more.len();
-
-        if arg_count == 0 && format_count == 0 {
-            // fine
-        } else if format_count == 0 && arg_count > 0 {
-            // SC2182 — owned by another batch; not emitted here.
-        } else if more.iter().any(may_become_multiple_args) {
-            // Unknown; trust the user.
-        } else if arg_count < format_count && only_trailing_ts(&formats, arg_count) {
-            // Allow trailing %()Ts (they use the current time).
-        } else if arg_count > 0 && format_count > 0 && arg_count % format_count == 0 {
-            // A suitable number of arguments.
-        } else {
-            let pl_var = if format_count == 1 {
-                "variable"
-            } else {
-                "variables"
-            };
-            let pl_arg = if arg_count == 1 {
-                "argument"
-            } else {
-                "arguments"
-            };
-            warn(
-                out,
-                format.id(),
-                2183,
-                &format!(
-                    "This format string has {} {}, but is passed {} {}.",
-                    format_count, pl_var, arg_count, pl_arg
-                ),
-            );
-        }
-    }
-
-    // SC2059: variables in the printf format string.
-    let has_percent = oversimplify_concat(format).contains('%');
-    if !(has_percent || is_literal(format)) {
-        info(
-            out,
-            format.id(),
-            2059,
-            "Don't use variables in the printf format string. Use printf '..%s..' \"$foo\".",
-        );
-    }
-}
-
-fn only_trailing_ts(formats: &str, arg_count: usize) -> bool {
-    formats.chars().skip(arg_count).all(|c| c == 'T')
 }
 
 // ---- mayBecomeMultipleArgs (ASTLib) ----------------------------------------

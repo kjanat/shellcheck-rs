@@ -17,8 +17,7 @@
 //!   * SC2184 — checkUnsetGlobs
 //!   * SC2168 — checkLocalScope
 //!   * SC2155 — checkMaskedReturns
-//!   * SC2182 — checkPrintfVar (ONLY the "no variables" branch; SC2183/SC2059
-//!     live in batch_i)
+//!   * SC2182 / SC2183 / SC2059 — checkPrintfVar
 //!   * SC2029 — checkSshCommandString
 //!   * SC2291 — checkUnquotedEchoSpaces
 //!   * SC2293 / SC2294 — checkEvalArray
@@ -26,8 +25,7 @@
 //!   * SC2232 — checkSudoArgs
 //!   * SC2024 — checkSudoRedirect
 //!   * SC2213 / SC2214 / SC2220 — checkWhileGetoptsCase
-//!   * SC2313 — checkReadExpansions (ONLY the array-index branch; SC2229 lives
-//!     in batch_p)
+//!   * SC2229 / SC2313 — checkReadExpansions
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::get_closest_command;
@@ -46,7 +44,9 @@ use crate::astlib::is_literal;
 use crate::astlib::oversimplify_concat;
 use crate::cfg::may_become_multiple_args;
 use crate::cfg::will_become_multiple_args;
-use crate::cfg::{get_braced_modifier, get_braced_reference, get_bsd_opts, is_variable_name};
+use crate::cfg::{
+    get_braced_modifier, get_braced_reference, get_bsd_opts, get_gnu_opts, is_variable_name,
+};
 use crate::interface::{Code, Shell};
 use std::collections::{HashMap, HashSet};
 
@@ -71,7 +71,7 @@ pub fn register(c: &mut Checker) {
     c.node(check_sudo_args);
     c.node(check_sudo_redirect);
     c.node(check_while_getopts_case);
-    c.node(check_read_array);
+    c.node(check_read_expansions);
 }
 
 // ===========================================================================
@@ -594,7 +594,7 @@ fn check_masked_returns(params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 // ===========================================================================
-// SC2182 — checkPrintfVar (ONLY the "no variables" branch)
+// SC2182 / SC2183 / SC2059 — checkPrintfVar
 // ===========================================================================
 
 fn check_printf_var(_params: &Parameters, t: &Token, out: &mut Out) {
@@ -624,26 +624,66 @@ fn check_printf_var(_params: &Parameters, t: &Token, out: &mut Out) {
                 continue;
             }
         }
-        // format = first, params = rest[1..]
-        let format = first;
-        let more = &rest[1..];
-        if let Some(string) = astlib::get_literal_string(format) {
-            let format_count = get_printf_formats(&string).chars().count();
-            let arg_count = more.len();
-            // The SC2182 branch: formatCount == 0 && argCount > 0. (The
-            // argCount == 0 && formatCount == 0 case is handled first and is
-            // fine; every other branch requires formatCount > 0.)
-            if format_count == 0 && arg_count > 0 {
-                err(
-                    out,
-                    format.id(),
-                    2182,
-                    "This printf format string has no variables. Other arguments are ignored.",
-                );
-            }
-        }
+        printf_check(first, &rest[1..], out);
         return;
     }
+}
+
+/// `check format more`.
+fn printf_check(format: &Token, more: &[Token], out: &mut Out) {
+    if let Some(string) = astlib::get_literal_string(format) {
+        let formats = get_printf_formats(&string);
+        let format_count = formats.chars().count();
+        let arg_count = more.len();
+        let pluralise = |word: &str, n: usize| {
+            if n == 1 {
+                word.to_string()
+            } else {
+                format!("{}s", word)
+            }
+        };
+        if arg_count == 0 && format_count == 0 {
+            // This is fine
+        } else if format_count == 0 && arg_count > 0 {
+            err(
+                out,
+                format.id(),
+                2182,
+                "This printf format string has no variables. Other arguments are ignored.",
+            );
+        } else if more.iter().any(may_become_multiple_args) {
+            // We don't know so trust the user
+        } else if arg_count < format_count && printf_only_trailing_ts(&formats, arg_count) {
+            // Allow trailing %()Ts since they use the current time
+        } else if arg_count > 0 && arg_count % format_count == 0 {
+            // Great: a suitable number of arguments
+        } else {
+            warn(
+                out,
+                format.id(),
+                2183,
+                &format!(
+                    "This format string has {} {}, but is passed {}{}.",
+                    format_count,
+                    pluralise("variable", format_count),
+                    arg_count,
+                    pluralise(" argument", arg_count)
+                ),
+            );
+        }
+    }
+    if !(oversimplify_concat(format).contains('%') || is_literal(format)) {
+        info(
+            out,
+            format.id(),
+            2059,
+            "Don't use variables in the printf format string. Use printf '..%s..' \"$foo\".",
+        );
+    }
+}
+
+fn printf_only_trailing_ts(formats: &str, arg_count: usize) -> bool {
+    formats.chars().skip(arg_count).all(|c| c == 'T')
 }
 
 // ===========================================================================
@@ -1148,19 +1188,44 @@ fn getopts_check(opts: &[String], case_id: Id, cases: &[CaseClause], out: &mut O
 }
 
 // ===========================================================================
-// SC2313 — checkReadExpansions (array-index branch only; SC2229 is in batch_p)
+// SC2229 / SC2313 — checkReadExpansions
 // ===========================================================================
 
 fn read_is_unquoted_bracket(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_Glob(s) if s.starts_with('['))
 }
 
-fn check_read_array(_params: &Parameters, t: &Token, out: &mut Out) {
+const FLAGS_FOR_READ: &str = "sreu:n:N:i:p:a:t:";
+
+fn check_read_expansions(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_exactly(t, "read") {
         Some(x) => x,
         None => return,
     };
-    for word in arguments(&te) {
+    let args = arguments(&te);
+    // getVars: the option values for positional arguments and `-a`.
+    if let Some(opts) = get_gnu_opts(FLAGS_FOR_READ, args) {
+        for (x, (_, y)) in &opts {
+            if x.is_empty() || x == "a" {
+                // dollarWarning
+                if let Some(name) = get_single_unmodified_braced_string(y) {
+                    if is_variable_name(&name) {
+                        warn(
+                            out,
+                            y.id(),
+                            2229,
+                            &format!(
+                                "This does not read '{}'. Remove $/${{}} for that, or use ${{var?}} to quiet.",
+                                name
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    // arrayWarning
+    for word in args {
         if get_word_parts(word)
             .iter()
             .any(|p| read_is_unquoted_bracket(p))
@@ -1558,7 +1623,27 @@ mod tests {
         ));
     }
 
-    // checkPrintfVar (SC2182 only)
+    // checkPrintfVar
+    #[test]
+    fn prop_checkPrintfVar1() {
+        assert!(produces(check_printf_var, "printf \"Lol: $s\""));
+    }
+    #[test]
+    fn prop_checkPrintfVar2() {
+        assert!(!produces(check_printf_var, "printf 'Lol: $s'"));
+    }
+    #[test]
+    fn prop_checkPrintfVar3() {
+        assert!(produces(check_printf_var, "printf -v cow $(cmd)"));
+    }
+    #[test]
+    fn prop_checkPrintfVar4() {
+        assert!(!produces(check_printf_var, "printf \"%${count}s\" var"));
+    }
+    #[test]
+    fn prop_checkPrintfVar5() {
+        assert!(produces(check_printf_var, "printf '%s %s %s' foo bar"));
+    }
     #[test]
     fn prop_checkPrintfVar6() {
         assert!(produces(check_printf_var, "printf foo bar baz"));
@@ -1568,20 +1653,75 @@ mod tests {
         assert!(produces(check_printf_var, "printf -- foo bar baz"));
     }
     #[test]
-    fn prop_checkPrintfVar_novar_only() {
-        assert!(!produces(check_printf_var, "printf 'foo'"));
+    fn prop_checkPrintfVar8() {
+        assert!(!produces(
+            check_printf_var,
+            "printf '%s %s %s' \"${var[@]}\""
+        ));
     }
     #[test]
-    fn prop_checkPrintfVar5() {
-        assert!(!produces(check_printf_var, "printf '%s %s %s' foo bar"));
+    fn prop_checkPrintfVar9() {
+        assert!(!produces(check_printf_var, "printf '%s %s %s\\n' *.png"));
     }
     #[test]
-    fn prop_checkPrintfVar23() {
-        assert!(!produces(check_printf_var, "printf -vTODAY '%(%Y)T'"));
+    fn prop_checkPrintfVar10() {
+        assert!(!produces(check_printf_var, "printf '%s %s %s' foo bar baz"));
+    }
+    #[test]
+    fn prop_checkPrintfVar11() {
+        assert!(!produces(check_printf_var, "printf '%(%s%s)T' -1"));
+    }
+    #[test]
+    fn prop_checkPrintfVar12() {
+        assert!(produces(check_printf_var, "printf '%s %s\\n' 1 2 3"));
+    }
+    #[test]
+    fn prop_checkPrintfVar13() {
+        assert!(!produces(check_printf_var, "printf '%s %s\\n' 1 2 3 4"));
+    }
+    #[test]
+    fn prop_checkPrintfVar14() {
+        assert!(produces(check_printf_var, "printf '%*s\\n' 1"));
+    }
+    #[test]
+    fn prop_checkPrintfVar15() {
+        assert!(!produces(check_printf_var, "printf '%*s\\n' 1 2"));
     }
     #[test]
     fn prop_checkPrintfVar16() {
         assert!(!produces(check_printf_var, "printf $'string'"));
+    }
+    #[test]
+    fn prop_checkPrintfVar17() {
+        assert!(produces(check_printf_var, "printf '%-*s\\n' 1"));
+    }
+    #[test]
+    fn prop_checkPrintfVar18() {
+        assert!(!produces(check_printf_var, "printf '%-*s\\n' 1 2"));
+    }
+    #[test]
+    fn prop_checkPrintfVar19() {
+        assert!(!produces(check_printf_var, "printf '%(%s)T'"));
+    }
+    #[test]
+    fn prop_checkPrintfVar20() {
+        assert!(!produces(check_printf_var, "printf '%d %(%s)T' 42"));
+    }
+    #[test]
+    fn prop_checkPrintfVar21() {
+        assert!(produces(check_printf_var, "printf '%d %(%s)T'"));
+    }
+    #[test]
+    fn prop_checkPrintfVar22() {
+        assert!(produces(
+            check_printf_var,
+            "printf '%s
+%s' foo"
+        ));
+    }
+    #[test]
+    fn prop_checkPrintfVar23() {
+        assert!(!produces(check_printf_var, "printf -vTODAY '%(%Y)T'"));
     }
 
     // checkSshCommandString
@@ -1818,13 +1958,41 @@ mod tests {
         ));
     }
 
-    // checkReadExpansions (SC2313 branch)
+    // checkReadExpansions
     #[test]
-    fn prop_checkReadExpansions9() {
-        assert!(produces(check_read_array, "read arr[val]"));
+    fn prop_checkReadExpansions1() {
+        assert!(produces(check_read_expansions, "read $var"));
     }
     #[test]
-    fn prop_checkReadArray_negative() {
-        assert!(!produces(check_read_array, "read foo"));
+    fn prop_checkReadExpansions2() {
+        assert!(produces(check_read_expansions, "read -r $var"));
+    }
+    #[test]
+    fn prop_checkReadExpansions3() {
+        assert!(!produces(check_read_expansions, "read -p $var"));
+    }
+    #[test]
+    fn prop_checkReadExpansions4() {
+        assert!(!produces(check_read_expansions, "read -rd $delim name"));
+    }
+    #[test]
+    fn prop_checkReadExpansions5() {
+        assert!(produces(check_read_expansions, "read \"$var\""));
+    }
+    #[test]
+    fn prop_checkReadExpansions6() {
+        assert!(produces(check_read_expansions, "read -a $var"));
+    }
+    #[test]
+    fn prop_checkReadExpansions7() {
+        assert!(!produces(check_read_expansions, "read $1"));
+    }
+    #[test]
+    fn prop_checkReadExpansions8() {
+        assert!(!produces(check_read_expansions, "read ${var?}"));
+    }
+    #[test]
+    fn prop_checkReadExpansions9() {
+        assert!(produces(check_read_expansions, "read arr[val]"));
     }
 }

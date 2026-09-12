@@ -14,7 +14,6 @@
 //! The variable-flow checks lean on the linear `variableFlow`
 //! (`params.variable_flow`) / `get_variable_flow`, which the Rust port produces
 //! faithfully (see `analyzer_lib::get_variable_flow`).
-use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
@@ -23,8 +22,8 @@ use crate::astlib::basename;
 use crate::astlib::e4m;
 use crate::astlib::is_annotation_ignoring_code;
 use crate::astlib::oversimplify;
+use crate::cfg::get_braced_modifier;
 use crate::cfg::get_unquoted_literal;
-use crate::cfg::{get_braced_modifier, get_braced_reference, get_gnu_opts, is_variable_name};
 use crate::interface::Shell;
 use std::collections::HashMap;
 
@@ -32,7 +31,6 @@ pub fn register(c: &mut Checker) {
     c.tree(check_functions_used_externally);
     c.tree(check_unpassed_in_functions);
     c.tree(check_quotes_in_literals);
-    c.node(check_read_expansions);
 }
 
 // ---------------------------------------------------------------------------
@@ -412,96 +410,6 @@ fn check_quotes_in_literals(params: &Parameters, _root: &Token, out: &mut Out) {
 }
 
 // ===========================================================================
-// SC2229 — checkReadExpansions (dollarWarning branch)
-// ===========================================================================
-
-const FLAGS_FOR_READ: &str = "sreu:n:N:i:p:a:t:";
-
-/// `getSingleUnmodifiedBracedString word`.
-fn get_single_unmodified_braced_string(word: &Token) -> Option<String> {
-    let parts = word_parts(word);
-    if parts.len() == 1 {
-        if let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner {
-            let contents = oversimplify(op).concat();
-            let name = get_braced_reference(&contents);
-            if contents == name {
-                return Some(contents);
-            }
-        }
-    }
-    None
-}
-
-fn check_read_expansions(_params: &Parameters, t: &Token, out: &mut Out) {
-    // CommandCheck (Exactly "read")
-    if !is_read_command(t) {
-        return;
-    }
-    let cmd = match arguments_of_read(t) {
-        Some(a) => a,
-        None => return,
-    };
-    // getVars: option values for positional args ("") and `-a`.
-    let opts = match get_gnu_opts(FLAGS_FOR_READ, &cmd) {
-        Some(o) => o,
-        None => return,
-    };
-    for (x, (_, y)) in &opts {
-        if x.is_empty() || x == "a" {
-            // dollarWarning y
-            if let Some(name) = get_single_unmodified_braced_string(y) {
-                if is_variable_name(&name) {
-                    warn(
-                        out,
-                        y.id(),
-                        2229,
-                        &format!(
-                            "This does not read '{}'. Remove $/${{}} for that, or use ${{var?}} to quiet.",
-                            name
-                        ),
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// `Exactly "read"` dispatch: is this a `read` (or `builtin read`) command?
-fn is_read_command(t: &Token) -> bool {
-    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-        if let Some(cmd) = words.first() {
-            if let Some(name) = astlib::get_literal_string(cmd) {
-                if name.contains('/') {
-                    return false;
-                }
-                if name == "read" {
-                    return true;
-                }
-                if name == "builtin" {
-                    if let Some(h) = words.get(1) {
-                        return astlib::only_literal_string(h) == "read";
-                    }
-                }
-            }
-        }
-    }
-    false
-}
-
-/// The argument list of the (possibly `builtin`-prefixed) read command.
-fn arguments_of_read(t: &Token) -> Option<Vec<Token>> {
-    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-        let name = astlib::get_literal_string(words.first()?)?;
-        if name == "builtin" {
-            // t' = command with the "builtin" word dropped; arguments = words[2..].
-            return Some(words.get(2..).map(|s| s.to_vec()).unwrap_or_default());
-        }
-        return Some(arguments(t).to_vec());
-    }
-    None
-}
-
-// ===========================================================================
 // Tests
 // ===========================================================================
 
@@ -523,13 +431,6 @@ mod tests {
         f(&params, &params.root, &mut out);
         !out.is_empty()
     }
-    fn node_emits(f: fn(&Parameters, &Token, &mut Out), s: &str) -> bool {
-        let params = params_for(s);
-        let mut out = Out::new();
-        params.root.visit_preorder(&mut |t| f(&params, t, &mut out));
-        !out.is_empty()
-    }
-
     // SC2032 / SC2033 — checkFunctionsUsedExternally
     #[test]
     fn prop_checkFunctionsUsedExternally1() {
@@ -821,39 +722,5 @@ mod tests {
             check_quotes_in_literals,
             "param=\"/foo/'bar baz'/etc\"; rm ${#param}"
         ));
-    }
-
-    // SC2229 — checkReadExpansions (dollarWarning branch)
-    #[test]
-    fn prop_checkReadExpansions1() {
-        assert!(node_emits(check_read_expansions, "read $var"));
-    }
-    #[test]
-    fn prop_checkReadExpansions2() {
-        assert!(node_emits(check_read_expansions, "read -r $var"));
-    }
-    #[test]
-    fn prop_checkReadExpansions3() {
-        assert!(!node_emits(check_read_expansions, "read -p $var"));
-    }
-    #[test]
-    fn prop_checkReadExpansions4() {
-        assert!(!node_emits(check_read_expansions, "read -rd $delim name"));
-    }
-    #[test]
-    fn prop_checkReadExpansions5() {
-        assert!(node_emits(check_read_expansions, "read \"$var\""));
-    }
-    #[test]
-    fn prop_checkReadExpansions6() {
-        assert!(node_emits(check_read_expansions, "read -a $var"));
-    }
-    #[test]
-    fn prop_checkReadExpansions7() {
-        assert!(!node_emits(check_read_expansions, "read $1"));
-    }
-    #[test]
-    fn prop_checkReadExpansions8() {
-        assert!(!node_emits(check_read_expansions, "read ${var?}"));
     }
 }
