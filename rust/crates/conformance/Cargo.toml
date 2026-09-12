@@ -10,6 +10,7 @@ name = "conformance"
 path = "src/main.rs"
 
 [dependencies]
+clap.workspace           = true
 serde.workspace          = true
 serde_json.workspace     = true
 shellcheck-cli.workspace = true

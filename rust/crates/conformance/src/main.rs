@@ -29,6 +29,7 @@ mod oracle;
 
 use std::process::ExitCode;
 
+use clap::{ArgAction, Parser, ValueEnum};
 use serde_json::Value;
 use shellcheck_cli::formatter::{fixer, json1};
 use shellcheck_rs::interface::CheckSpec;
@@ -208,10 +209,10 @@ fn gate(args: &Args) -> Result<bool, String> {
         return Err(format!("no prop_ properties found under {}", src.display()));
     }
 
-    let oracle = oracle::Oracle::new(&args.oracle)?;
+    let oracle = oracle::Oracle::new(args.oracle())?;
     println!(
         "{}",
-        oracle::verify(&oracle, &args.repo, args.any_oracle_version)?
+        oracle::verify(&oracle, &args.repo, args.any_oracle_version())?
     );
     // Name each script after its property so a divergence names itself.
     let named: Vec<(String, String)> = entries
@@ -260,108 +261,115 @@ fn gate(args: &Args) -> Result<bool, String> {
 // Arguments
 // ---------------------------------------------------------------------------
 
+/// What to run. `gate` when nothing is named, since that is the check that
+/// must pass.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum Command {
+    #[default]
+    Gate,
+    Fuzz,
+    Extract,
+}
+
+#[derive(Parser)]
+#[command(
+    name = "conformance",
+    about = "Differential conformance for the ShellCheck Rust port",
+    long_about = "Runs the Haskell ShellCheck (the oracle) and the Rust port over the same \
+                  input and reports every disagreement.\n\n\
+                  Exit codes: 0 = agreement, 1 = at least one divergence, 2 = harness error.",
+    disable_help_subcommand = true
+)]
 pub struct Args {
-    cmd: String,
-    oracle: String,
+    /// What to run: the property gate, the fuzzer, or a listing of the corpus.
+    #[arg(value_enum, default_value_t)]
+    cmd: Command,
+
+    /// ShellCheck to trust as the oracle: a path, or a name to find on PATH.
+    ///
+    /// Unset, it is the binary built from this tree if there is one, else
+    /// whatever `shellcheck` is installed.
+    #[arg(long, env = "ORACLE")]
+    oracle: Option<String>,
+
+    /// The ShellCheck source tree to take properties and versions from.
+    #[arg(long, default_value = ".")]
     pub repo: String,
+
+    /// Check only the first N properties (gate), or list N of them (extract).
+    #[arg(long)]
     limit: Option<usize>,
+
+    /// Dialect to check as, as `--shell` would name it to either tool.
+    #[arg(long)]
     shell: Option<String>,
+
+    /// Print only the verdict.
+    #[arg(long)]
     quiet: bool,
-    // fuzz
+
+    /// Compare against an oracle whose version is not this tree's.
+    ///
+    /// The banner then says MISMATCH, because the numbers describe that
+    /// binary rather than this source. `ORACLE_ANY_VERSION` in the
+    /// environment does the same, for any value but `0`, `false` or empty.
+    #[arg(long, action = ArgAction::SetTrue)]
+    any_oracle_version: bool,
+
+    /// Seed for the generator, so a run can be replayed.
+    #[arg(long, default_value_t = 0, help_heading = "Fuzzing")]
     pub seed: u64,
+
+    /// How many generated scripts to check.
+    #[arg(long, default_value_t = 2000, help_heading = "Fuzzing")]
     pub iterations: usize,
+
+    /// Stop after this many distinct divergences.
+    #[arg(long, default_value_t = 25, help_heading = "Fuzzing")]
     pub max_findings: usize,
+
+    /// Check every dialect rather than one per script.
+    #[arg(long, help_heading = "Fuzzing")]
     pub all_shells: bool,
-    pub any_oracle_version: bool,
 }
 
-/// Where the oracle comes from when `--oracle` is not given: `$ORACLE`, else
-/// the binary built from this tree if it is there, else whatever `shellcheck`
-/// is on `PATH`. The last one is what makes an installed release usable as the
-/// oracle with no build of its own.
-fn default_oracle() -> String {
-    // An empty `ORACLE=` reads as "not set", so it can be cleared in a shell
-    // without naming a binary called "".
-    if let Some(explicit) = std::env::var("ORACLE").ok().filter(|s| !s.is_empty()) {
-        return explicit;
-    }
-    let built = ".cache/shellcheck-oracle";
-    if std::path::Path::new(built).is_file() {
-        return built.to_string();
-    }
-    "shellcheck".to_string()
-}
-
-fn parse_args(argv: &[String]) -> Result<Args, String> {
-    let mut a = Args {
-        cmd: "gate".to_string(),
-        oracle: default_oracle(),
-        repo: ".".to_string(),
-        limit: None,
-        shell: None,
-        quiet: false,
-        seed: 0,
-        iterations: 2000,
-        max_findings: 25,
-        all_shells: false,
-        any_oracle_version: std::env::var("ORACLE_ANY_VERSION").is_ok_and(|v| v != "0"),
-    };
-    let mut i = 0;
-    if let Some(first) = argv.first()
-        && !first.starts_with("--")
-    {
-        a.cmd = first.clone();
-        i = 1;
-    }
-    while i < argv.len() {
-        let arg = &argv[i];
-        let next = |i: &mut usize| -> Result<String, String> {
-            *i += 1;
-            argv.get(*i)
-                .cloned()
-                .ok_or_else(|| format!("{arg} needs a value"))
-        };
-        match arg.as_str() {
-            "--oracle" => a.oracle = next(&mut i)?,
-            "--repo" => a.repo = next(&mut i)?,
-            "--limit" => {
-                a.limit = Some(next(&mut i)?.parse().map_err(|e| format!("--limit: {e}"))?)
+impl Args {
+    /// Where the oracle comes from when `--oracle`/`$ORACLE` says nothing: the
+    /// binary built from this tree if it is there, else whatever `shellcheck`
+    /// is on `PATH`. The latter is what makes an installed release usable as
+    /// the oracle with no build of its own.
+    fn oracle(&self) -> &str {
+        // An empty `ORACLE=` reads as "not set", so it can be cleared in a
+        // shell without naming a binary called "".
+        match self.oracle.as_deref() {
+            Some(explicit) if !explicit.is_empty() => explicit,
+            _ => {
+                let built = ".cache/shellcheck-oracle";
+                if std::path::Path::new(built).is_file() {
+                    built
+                } else {
+                    "shellcheck"
+                }
             }
-            "--shell" => a.shell = Some(next(&mut i)?),
-            "--seed" => a.seed = next(&mut i)?.parse().map_err(|e| format!("--seed: {e}"))?,
-            "--iterations" => {
-                a.iterations = next(&mut i)?
-                    .parse()
-                    .map_err(|e| format!("--iterations: {e}"))?
-            }
-            "--max-findings" => {
-                a.max_findings = next(&mut i)?
-                    .parse()
-                    .map_err(|e| format!("--max-findings: {e}"))?
-            }
-            "--all-shells" => a.all_shells = true,
-            "--any-oracle-version" => a.any_oracle_version = true,
-            "--quiet" => a.quiet = true,
-            other => return Err(format!("unknown argument {other}")),
         }
-        i += 1;
     }
-    Ok(a)
+
+    /// The flag, or `ORACLE_ANY_VERSION` in the environment. Read here rather
+    /// than through clap's `env`, which for a flag insists on the literal
+    /// `true`/`false` and would reject the `=1` this has always accepted.
+    pub fn any_oracle_version(&self) -> bool {
+        self.any_oracle_version
+            || std::env::var("ORACLE_ANY_VERSION")
+                .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false"))
+    }
 }
 
 fn main() -> ExitCode {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-    let args = match parse_args(&argv) {
-        Ok(a) => a,
-        Err(msg) => {
-            eprintln!("conformance: {msg}");
-            return ExitCode::from(2);
-        }
-    };
-    let res = match args.cmd.as_str() {
-        "gate" => gate(&args),
-        "fuzz" => fuzz::run(&args),
-        "extract" => {
+    let args = Args::parse();
+    let res = match args.cmd {
+        Command::Gate => gate(&args),
+        Command::Fuzz => fuzz::run(&args),
+        Command::Extract => {
             let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
             corpus::extract(&src).map(|e| {
                 println!("{} properties", e.len());
@@ -371,7 +379,6 @@ fn main() -> ExitCode {
                 true
             })
         }
-        other => Err(format!("unknown command {other} (gate|fuzz|extract)")),
     };
     match res {
         Ok(true) => ExitCode::SUCCESS,
@@ -453,16 +460,45 @@ mod tests {
         assert!(render_keys(&[ck(2086, "hi")]).contains("SC2086"));
     }
 
+    fn parse(argv: &[&str]) -> Args {
+        Args::try_parse_from(std::iter::once("conformance").chain(argv.iter().copied())).unwrap()
+    }
+
     #[test]
     fn args_default_to_gate() {
-        let a = parse_args(&[]).unwrap();
-        assert_eq!(a.cmd, "gate");
+        assert!(parse(&[]).cmd == Command::Gate);
     }
 
     #[test]
     fn args_take_a_subcommand_and_flags() {
-        let a = parse_args(&["fuzz".into(), "--seed".into(), "7".into()]).unwrap();
-        assert_eq!(a.cmd, "fuzz");
+        let a = parse(&["fuzz", "--seed", "7"]);
+        assert!(a.cmd == Command::Fuzz);
         assert_eq!(a.seed, 7);
+    }
+
+    #[test]
+    fn unknown_argument_is_an_error() {
+        assert!(Args::try_parse_from(["conformance", "--nope"]).is_err());
+    }
+
+    /// The oracle falls back to PATH only when nothing names one, and an empty
+    /// `ORACLE=` counts as naming nothing.
+    #[test]
+    fn oracle_default_and_override() {
+        assert_eq!(parse(&["--oracle", "/bin/sc"]).oracle(), "/bin/sc");
+        let mut a = parse(&[]);
+        a.oracle = Some(String::new());
+        assert!(matches!(
+            a.oracle(),
+            ".cache/shellcheck-oracle" | "shellcheck"
+        ));
+    }
+
+    /// clap validates the definition itself: conflicting flags, a bad default,
+    /// a duplicated long name.
+    #[test]
+    fn command_definition_is_well_formed() {
+        use clap::CommandFactory;
+        Args::command().debug_assert();
     }
 }
