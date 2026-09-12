@@ -22,10 +22,9 @@ use crate::astlib;
 use crate::astlib::basename;
 use crate::astlib::e4m;
 use crate::astlib::is_annotation_ignoring_code;
+use crate::astlib::oversimplify;
 use crate::cfg::get_unquoted_literal;
-use crate::cfg::{
-    get_braced_modifier, get_braced_reference, get_gnu_opts, is_variable_name, oversimplify,
-};
+use crate::cfg::{get_braced_modifier, get_braced_reference, get_gnu_opts, is_variable_name};
 use crate::interface::Shell;
 use std::collections::HashMap;
 

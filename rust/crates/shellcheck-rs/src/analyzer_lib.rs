@@ -8,6 +8,7 @@
 
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::{get_literal_string_def, oversimplify_concat};
 use crate::cfg::CFGParameters;
 use crate::cfg_analysis::{self, CFGAnalysis};
 use crate::interface::{Code, Comment, Fix, PositionMap, Severity, Shell, TokenComment};
@@ -371,10 +372,16 @@ pub(crate) fn get_flags_until<'a>(
     stop: &dyn Fn(&str) -> bool,
     t: &'a Token,
 ) -> Vec<(&'a Token, String)> {
-    let args: &[Token] = match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => &words[1..],
-        _ => return Vec::new(),
-    };
+    get_flags_until_args(stop, arguments(t))
+}
+
+/// The body of `getFlagsUntil` over an already-extracted argument list, for
+/// checks that (like `checkCommand`'s `builtin x ..` rewrite) operate on a
+/// word slice rather than the `T_SimpleCommand` token.
+pub(crate) fn get_flags_until_args<'a>(
+    stop: &dyn Fn(&str) -> bool,
+    args: &'a [Token],
+) -> Vec<(&'a Token, String)> {
     let texts: Vec<(&Token, String)> = args
         .iter()
         .map(|x| (x, astlib::oversimplify(x).concat()))
@@ -528,16 +535,139 @@ use crate::cfg::{
     get_braced_modifier, get_braced_reference, get_bsd_opts as cfg_get_bsd_opts,
     get_generic_opts as cfg_get_generic_opts, get_gnu_opts as cfg_get_gnu_opts,
     get_index_references, get_offset_references, is_variable_char, is_variable_name,
-    oversimplify as cfg_oversimplify,
 };
 
-pub(crate) fn concat_over(t: &Token) -> String {
-    cfg_oversimplify(t).concat()
+/// `getPrintfFormats` from `ShellCheck.Checks.Commands`: the format string's
+/// conversions as a string of type characters, `*` for each argument-consuming
+/// width/precision — e.g. `"Hello %s"` -> `"s"`, `"%(%s)T %0*d\n"` -> `"T*d"`.
+pub(crate) fn get_printf_formats(s: &str) -> String {
+    let cs: Vec<char> = s.chars().collect();
+    get_formats(&cs)
 }
 
-/// `getLiteralStringDef def t`.
-pub(crate) fn get_literal_string_def(t: &Token, def: &str) -> String {
-    astlib::get_literal_string_ext(t, &|_| Some(def.to_string())).unwrap_or_default()
+fn get_formats(cs: &[char]) -> String {
+    if cs.is_empty() {
+        return String::new();
+    }
+    if cs[0] == '%' {
+        if cs.get(1) == Some(&'%') {
+            return get_formats(&cs[2..]);
+        }
+        if cs.get(1) == Some(&'(') {
+            let rest = &cs[2..];
+            if let Some(pos) = rest.iter().position(|&c| c == ')') {
+                if pos + 1 < rest.len() {
+                    let c = rest[pos + 1];
+                    let trailing = &rest[pos + 2..];
+                    let mut out = String::new();
+                    out.push(c);
+                    out.push_str(&get_formats(trailing));
+                    return out;
+                }
+            }
+            return String::new();
+        }
+        return regex_based_get_formats(&cs[1..]);
+    }
+    get_formats(&cs[1..])
+}
+
+fn regex_based_get_formats(rest: &[char]) -> String {
+    match match_format_re(rest) {
+        Some((width_star, prec_star, typ, remaining)) => {
+            let mut out = String::new();
+            if width_star {
+                out.push('*');
+            }
+            if prec_star {
+                out.push('*');
+            }
+            out.push(typ);
+            out.push_str(&get_formats(remaining));
+            out
+        }
+        None => {
+            let mut out = String::new();
+            if let Some(&c) = rest.first() {
+                out.push(c);
+            }
+            out.push_str(&get_formats(rest));
+            out
+        }
+    }
+}
+
+const PRINTF_TYPE_CHARS: &str = "diouxXfFeEgGaAcsbqQSC";
+
+/// Manual match of
+/// `^#?-?\+? ?0?(\*|\d*)\.?(\d*|\*)(hh|h|l|ll|q|L|j|z|Z|t)?([diouxXfFeEgGaAcsbqQSC])((\n|.)*)`
+/// Returns (width_is_star, precision_is_star, type_char, remaining_after_type).
+fn match_format_re(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
+    let mut i = 0usize;
+    // flags: #? -? +? space? 0?  (each optional, fixed order)
+    if rest.get(i) == Some(&'#') {
+        i += 1;
+    }
+    if rest.get(i) == Some(&'-') {
+        i += 1;
+    }
+    if rest.get(i) == Some(&'+') {
+        i += 1;
+    }
+    if rest.get(i) == Some(&' ') {
+        i += 1;
+    }
+    if rest.get(i) == Some(&'0') {
+        i += 1;
+    }
+    // width: (\*|\d*)
+    let width_star;
+    if rest.get(i) == Some(&'*') {
+        width_star = true;
+        i += 1;
+    } else {
+        width_star = false;
+        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
+            i += 1;
+        }
+    }
+    // \.?
+    if rest.get(i) == Some(&'.') {
+        i += 1;
+    }
+    // precision: (\d*|\*) — '*' only via backtracking; equivalently, '*' here is star.
+    let prec_star;
+    if rest.get(i) == Some(&'*') {
+        prec_star = true;
+        i += 1;
+    } else {
+        prec_star = false;
+        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
+            i += 1;
+        }
+    }
+    // length modifier (hh|h|l|ll|q|L|j|z|Z|t)? — greedy, but only if a type char
+    // then follows (regex backtracking). Alternation preference order preserved.
+    let type_at = |j: usize| -> Option<char> {
+        rest.get(j)
+            .copied()
+            .filter(|c| PRINTF_TYPE_CHARS.contains(*c))
+    };
+    let mods = ["hh", "h", "l", "ll", "q", "L", "j", "z", "Z", "t"];
+    let mut chosen_len = 0usize;
+    for m in mods {
+        let mc: Vec<char> = m.chars().collect();
+        if i + mc.len() <= rest.len()
+            && rest[i..i + mc.len()] == mc[..]
+            && type_at(i + mc.len()).is_some()
+        {
+            chosen_len = mc.len();
+            break;
+        }
+    }
+    let type_pos = i + chosen_len;
+    let typ = type_at(type_pos)?;
+    Some((width_star, prec_star, typ, &rest[type_pos + 1..]))
 }
 
 /// `getWordParts`.
@@ -657,7 +787,7 @@ fn get_all_flags_words(words: &[Token]) -> Vec<(Token, String)> {
     let mut flag_args: Vec<(Token, String)> = vec![];
     let mut rest: Vec<Token> = vec![];
     for x in args {
-        let txt = concat_over(x);
+        let txt = oversimplify_concat(x);
         if !broken && txt == "--" {
             broken = true;
         }
@@ -691,7 +821,7 @@ fn get_all_flags_words(words: &[Token]) -> Vec<(Token, String)> {
 pub(crate) fn is_array_expansion(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_DollarBraced { op, .. } => {
-            let s = concat_over(op);
+            let s = oversimplify_concat(op);
             s.starts_with('@') || (!s.starts_with('#') && s.contains("[@]"))
         }
         _ => false,
@@ -701,7 +831,7 @@ pub(crate) fn is_array_expansion(t: &Token) -> bool {
 /// `isCountingReference` — `${#var}`.
 pub(crate) fn is_counting_reference(t: &Token) -> bool {
     match &*t.inner {
-        InnerToken::T_DollarBraced { op, .. } => concat_over(op).starts_with('#'),
+        InnerToken::T_DollarBraced { op, .. } => oversimplify_concat(op).starts_with('#'),
         _ => false,
     }
 }
@@ -710,7 +840,7 @@ pub(crate) fn is_counting_reference(t: &Token) -> bool {
 pub(crate) fn is_quoted_alternative_reference(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_DollarBraced { op, .. } => {
-            let m = get_braced_modifier(&concat_over(op));
+            let m = get_braced_modifier(&oversimplify_concat(op));
             // (^|\]):?\+
             if m.starts_with('+') || m.starts_with(":+") {
                 return true;
@@ -946,7 +1076,7 @@ fn get_variables_from_literal(s: &str) -> Vec<String> {
 }
 
 fn get_variables_from_literal_token(t: &Token) -> Vec<String> {
-    get_variables_from_literal(&get_literal_string_def(t, " "))
+    get_variables_from_literal(&get_literal_string_def(" ", t))
 }
 
 // ---- special variable data (ShellCheck.Data) -------------------------------
@@ -1119,7 +1249,7 @@ fn mark_as_checked(place: &Token, token: &Token) -> Vec<(Token, Token, String, D
     let mut out = Vec::new();
     for part in word_parts(token) {
         if let InnerToken::T_DollarBraced { op, .. } = &*part.inner {
-            let str = get_braced_reference(&concat_over(op));
+            let str = get_braced_reference(&oversimplify_concat(op));
             if is_variable_name(&str) {
                 out.push((
                     place.clone(),
@@ -1229,7 +1359,7 @@ fn get_modified_variables(t: &Token) -> Vec<(Token, Token, String, DataType)> {
         TC_Nullary { token, .. } => mark_as_checked(t, token),
 
         T_DollarBraced { op, .. } => {
-            let string = concat_over(op);
+            let string = oversimplify_concat(op);
             let modifier = get_braced_modifier(&string);
             if modifier.starts_with('=') || modifier.starts_with(":=") {
                 vec![(
@@ -1389,7 +1519,7 @@ fn get_literal_array_c(base: &Token, t: &Token) -> Option<(Token, Token, String,
 }
 
 fn let_param_to_literal(base: &Token, token: &Token) -> Vec<(Token, Token, String, DataType)> {
-    let s = concat_over(token);
+    let s = oversimplify_concat(token);
     let after_sign: String = s.chars().skip_while(|c| *c == '+' || *c == '-').collect();
     let var: String = after_sign
         .chars()
@@ -1677,7 +1807,7 @@ fn get_referenced_variables(ctx: &FlowCtx, t: &Token) -> Vec<(Token, Token, Stri
     use InnerToken::*;
     match &*t.inner {
         T_DollarBraced { op, .. } => {
-            let str = concat_over(op);
+            let str = oversimplify_concat(op);
             let mut out = vec![(t.clone(), t.clone(), get_braced_reference(&str))];
             let l = op.clone();
             let mut idx = get_index_references(&str);

@@ -26,7 +26,6 @@
 //! batch_i / batch_n; re-emitting them here from the faithful whole-function
 //! port is safe because the pipeline `nub`s identical positioned comments, and
 //! the token id / message / (absent) fix are identical.
-use crate::analyzer_lib::concat_over;
 use crate::analyzer_lib::find_grep_regex;
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::is_confused_glob_regex;
@@ -37,6 +36,7 @@ use crate::astlib::get_literal_string_def;
 use crate::astlib::is_flag;
 use crate::astlib::is_glob;
 use crate::astlib::list_to_args;
+use crate::astlib::oversimplify_concat;
 use crate::astlib::{get_literal_string, only_literal_string};
 use crate::interface::Shell;
 
@@ -117,32 +117,8 @@ fn arguments(words: &[Token]) -> &[Token] {
 
 // ---- getFlagsUntil / getAllFlags / getLeadingFlags / hasFlag --------------
 
-fn get_flags_until<F: Fn(&str) -> bool>(words: &[Token], stop: F) -> Vec<(&Token, String)> {
-    let args = arguments(words);
-    let mut broken = false;
-    let mut out: Vec<(&Token, String)> = vec![];
-    for x in args {
-        let txt = concat_over(x);
-        if !broken && stop(&txt) {
-            broken = true;
-        }
-        if broken {
-            out.push((x, String::new()));
-        } else if let Some(a) = txt.strip_prefix("--") {
-            out.push((x, a.split('=').next().unwrap_or("").to_string()));
-        } else if let Some(a) = txt.strip_prefix('-') {
-            for v in a.chars() {
-                out.push((x, v.to_string()));
-            }
-        } else {
-            out.push((x, String::new()));
-        }
-    }
-    out
-}
-
 fn get_all_flags(words: &[Token]) -> Vec<(&Token, String)> {
-    get_flags_until(words, |x| x == "--")
+    get_flags_until_args(&|x| x == "--", arguments(words))
 }
 
 fn has_flag(words: &[Token], flag: &str) -> bool {
@@ -454,7 +430,7 @@ fn check_grep_re(_p: &Parameters, t: &Token, out: &mut Out) {
 
     let flags: Vec<String> = get_all_flags(words).into_iter().map(|(_, f)| f).collect();
     if !GREP_GLOB_FLAGS.iter().any(|g| flags.iter().any(|f| f == g)) {
-        let string = concat_over(re);
+        let string = oversimplify_concat(re);
         if is_confused_glob_regex(&string) {
             warn(
                 out,
@@ -743,7 +719,7 @@ fn check_time_parameters(p: &Parameters, t: &Token, out: &mut Out) {
         return;
     }
     let cmd = &words[0];
-    let s = concat_over(&words[1]);
+    let s = oversimplify_concat(&words[1]);
     if s.starts_with('-') && s != "-p" {
         info(
             out,

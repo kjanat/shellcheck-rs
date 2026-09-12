@@ -15,9 +15,8 @@ use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
 use crate::astlib::is_quotes;
-use crate::cfg::{
-    get_braced_reference, get_literal_string_def, get_word_parts, is_variable_name, oversimplify,
-};
+use crate::astlib::{get_literal_string_def, oversimplify};
+use crate::cfg::{get_braced_reference, get_word_parts, is_variable_name};
 use crate::cfg_analysis::NumericalStatus;
 use crate::interface::Shell;
 
@@ -191,7 +190,7 @@ fn check_string(
     assigned: &[String],
     out: &mut Out,
 ) {
-    let as_string = get_literal_string_def(t, "\0");
+    let as_string = get_literal_string_def("\0", t);
     let is_var = is_variable_name(&as_string);
     let kind = if is_var {
         "a variable"

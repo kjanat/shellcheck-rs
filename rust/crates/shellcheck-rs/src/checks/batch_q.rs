@@ -155,7 +155,7 @@ fn check_splitting_part(params: &Parameters, part: &Token, out: &mut Out) {
         }
         InnerToken::T_DollarBraced { op, .. } => {
             let reference =
-                crate::cfg::get_braced_reference(&crate::cfg::oversimplify(op).concat());
+                crate::cfg::get_braced_reference(&crate::astlib::oversimplify(op).concat());
             if !is_counting_reference(part)
                 && !is_quoted_alternative_reference(part)
                 && !VARIABLES_WITHOUT_SPACES.contains(&reference.as_str())
@@ -255,14 +255,14 @@ fn check_echo_sed(params: &Parameters, t: &Token, out: &mut Out) {
     match &*t.inner {
         InnerToken::T_Redirecting { redirs, cmd } => {
             if redirs.iter().any(redirect_here_string) {
-                let rcmd = crate::cfg::oversimplify(cmd);
+                let rcmd = crate::astlib::oversimplify(cmd);
                 check_sed(t.id(), &rcmd, out);
             }
         }
         InnerToken::T_Pipeline { commands, .. } if commands.len() == 2 => {
-            let acmd = crate::cfg::oversimplify(&commands[0]);
+            let acmd = crate::astlib::oversimplify(&commands[0]);
             if acmd == ["echo", "${VAR}"] {
-                let bcmd = crate::cfg::oversimplify(&commands[1]);
+                let bcmd = crate::astlib::oversimplify(&commands[1]);
                 check_sed(t.id(), &bcmd, out);
             }
         }
@@ -627,7 +627,7 @@ fn check_equals_in_command(params: &Parameters, original: &Token, out: &mut Out)
         if let InnerToken::T_DollarBraced { braced, op } = &*leading[0].inner {
             if s.starts_with('=') {
                 let db_id = leading[0].id();
-                let variable_str = crate::cfg::oversimplify(op).concat();
+                let variable_str = crate::astlib::oversimplify(op).concat();
                 let variable_reference = crate::cfg::get_braced_reference(&variable_str);
                 let variable_modifier = crate::cfg::get_braced_modifier(&variable_str);
                 let is_plain = crate::cfg::is_variable_name(&variable_str);
@@ -954,7 +954,7 @@ fn sst_is_assignment_node(t: &Token) -> bool {
         InnerToken::TA_Assignment { .. } => true,
         InnerToken::TA_Unary { op, .. } => op.contains("++") || op.contains("--"),
         InnerToken::T_DollarBraced { op, .. } => {
-            let str = crate::cfg::oversimplify(op).concat();
+            let str = crate::astlib::oversimplify(op).concat();
             let modifier = crate::cfg::get_braced_modifier(&str);
             modifier.starts_with('=') || modifier.starts_with(":=")
         }

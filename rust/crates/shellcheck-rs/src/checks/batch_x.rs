@@ -15,10 +15,11 @@
 //!   * SC2321       — `checkUnnecessaryArithmeticExpansionIndex` (node)
 //!   * SC2322/2323  — `checkUnnecessaryParens`        (node)
 
+use crate::analyzer_lib::is_sourced;
 use crate::analyzer_lib::*;
-use crate::analyzer_lib::{concat_over, is_sourced};
 use crate::ast::*;
 use crate::astlib::get_word_parts;
+use crate::astlib::oversimplify_concat;
 use crate::cfg::get_braced_reference;
 use crate::cfg::get_unquoted_literal;
 use crate::interface::Shell;
@@ -75,7 +76,7 @@ fn full_literal_string(t: &Token) -> Option<String> {
 /// `getUnmodifiedParameterExpansion`.
 fn get_unmodified_parameter_expansion(t: &Token) -> Option<String> {
     if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
-        let str = concat_over(op);
+        let str = oversimplify_concat(op);
         if get_braced_reference(&str) == str {
             Some(str)
         } else {

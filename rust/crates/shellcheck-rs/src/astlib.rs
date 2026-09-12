@@ -454,6 +454,11 @@ pub(crate) fn get_literal_string_def(def: &str, t: &Token) -> String {
     get_literal_string_ext(t, &|_| Some(def.to_string())).unwrap_or_default()
 }
 
+/// `concat $ oversimplify t`, the form nearly every caller wants.
+pub(crate) fn oversimplify_concat(t: &Token) -> String {
+    oversimplify(t).concat()
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {

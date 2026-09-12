@@ -62,7 +62,7 @@ fn is_unmodified_parameter_expansion(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_DollarBraced { braced: false, .. } => true,
         InnerToken::T_DollarBraced { op, .. } => {
-            let str = cfg::oversimplify_concat(op);
+            let str = astlib::oversimplify_concat(op);
             cfg::get_braced_reference(&str) == str
         }
         _ => false,
@@ -450,7 +450,7 @@ fn sshd_check_here_doc(r: &Token, out: &mut Out) {
 
 fn check_prefix_assignment_reference(params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
-        let name = cfg::get_braced_reference(&cfg::oversimplify_concat(op));
+        let name = cfg::get_braced_reference(&astlib::oversimplify_concat(op));
         let path = get_path(params, t);
         let id_path: Vec<Id> = path.iter().map(|x| x.id()).collect();
         // check: walk path until a T_SimpleCommand with vars and non-empty words.
@@ -682,7 +682,7 @@ fn ptn_get_all_flags(cmd: &Token) -> Vec<(&Token, String)> {
     };
     let token_and_text: Vec<(&Token, String)> = args
         .iter()
-        .map(|x| (x, cfg::oversimplify(x).concat()))
+        .map(|x| (x, astlib::oversimplify(x).concat()))
         .collect();
     let stop = token_and_text.iter().position(|(_, t)| t == "--");
     let (flag_args, rest) = match stop {
@@ -1205,7 +1205,7 @@ fn check_unquoted_parameter_expansion_pattern(params: &Parameters, x: &Token, ou
     {
         // T_NormalWord _ (T_Literal _ s : rest@(_:_))
         if word_parts.len() >= 2 && matches!(&*word_parts[0].inner, InnerToken::T_Literal(_)) {
-            let modifier = cfg::get_braced_modifier(&cfg::oversimplify_concat(op));
+            let modifier = cfg::get_braced_modifier(&astlib::oversimplify_concat(op));
             if modifier.starts_with('%') || modifier.starts_with('#') {
                 for r in &word_parts[1..] {
                     upep_check(params, r, out);
@@ -1241,7 +1241,7 @@ fn avi_get_array_name(t: &Token) -> Option<String> {
     let parts = word_parts(t);
     if parts.len() == 1 {
         if let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner {
-            let str = cfg::oversimplify_concat(op);
+            let str = astlib::oversimplify_concat(op);
             if cfg::get_braced_modifier(&str) == "[@]" && !str.starts_with('!') {
                 return Some(cfg::get_braced_reference(&str));
             }
@@ -1258,7 +1258,7 @@ fn avi_get_array_if_used_as_index<'a>(
 ) -> Option<(Token, String)> {
     match &*t.inner {
         InnerToken::T_DollarBraced { op, .. } => {
-            let reference = cfg::get_braced_reference(&cfg::oversimplify_concat(op));
+            let reference = cfg::get_braced_reference(&astlib::oversimplify_concat(op));
             if reference != name {
                 return None;
             }
@@ -1284,7 +1284,7 @@ fn avi_get_array_if_used_as_index<'a>(
             if !matches!(&*gp_parts[2].inner, InnerToken::T_Literal(_)) {
                 return None;
             }
-            let str = cfg::oversimplify_concat(parent_word);
+            let str = astlib::oversimplify_concat(parent_word);
             let modifier = cfg::get_braced_modifier(&str);
             if index.id() != t.id() {
                 return None;
@@ -1300,13 +1300,13 @@ fn avi_get_array_if_used_as_index<'a>(
                 InnerToken::T_DollarBraced { op, .. } => op,
                 _ => return None,
             };
-            let str = cfg::oversimplify_concat(t);
+            let str = astlib::oversimplify_concat(t);
             let modifier = cfg::get_braced_modifier(&str);
             let _ = parent_list;
             if !modifier.starts_with(&format!("[{}]", name)) {
                 return None;
             }
-            let pstr = cfg::oversimplify_concat(match &*parent.inner {
+            let pstr = astlib::oversimplify_concat(match &*parent.inner {
                 InnerToken::T_DollarBraced { op, .. } => op,
                 _ => return None,
             });

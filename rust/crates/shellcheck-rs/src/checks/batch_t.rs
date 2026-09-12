@@ -38,12 +38,13 @@ use crate::ast::*;
 use crate::astlib;
 use crate::astlib::basename;
 use crate::astlib::e4m;
+use crate::astlib::get_literal_string_def;
 use crate::astlib::get_word_parts;
 use crate::astlib::is_constant;
 use crate::astlib::is_glob;
 use crate::astlib::is_literal;
+use crate::astlib::oversimplify_concat;
 use crate::cfg::may_become_multiple_args;
-use crate::cfg::oversimplify_concat;
 use crate::cfg::will_become_multiple_args;
 use crate::cfg::{get_braced_modifier, get_braced_reference, get_bsd_opts, is_variable_name};
 use crate::interface::{Code, Shell};
@@ -450,7 +451,7 @@ fn check_aliases_uses_args(_params: &Parameters, t: &Token, out: &mut Out) {
         None => return,
     };
     for arg in arguments(&te) {
-        let string = get_literal_string_def(arg, "_");
+        let string = get_literal_string_def("_", arg);
         if string.contains('=') && matches_positional_ref(&string) {
             err(
                 out,
@@ -643,125 +644,6 @@ fn check_printf_var(_params: &Parameters, t: &Token, out: &mut Out) {
         }
         return;
     }
-}
-
-// ---- getPrintfFormats (faithful port of the regex-based scanner) -----------
-
-fn get_printf_formats(s: &str) -> String {
-    let cs: Vec<char> = s.chars().collect();
-    printf_get_formats(&cs)
-}
-fn printf_get_formats(cs: &[char]) -> String {
-    if cs.is_empty() {
-        return String::new();
-    }
-    if cs[0] == '%' {
-        if cs.get(1) == Some(&'%') {
-            return printf_get_formats(&cs[2..]);
-        }
-        if cs.get(1) == Some(&'(') {
-            let rest = &cs[2..];
-            if let Some(pos) = rest.iter().position(|&c| c == ')') {
-                if pos + 1 < rest.len() {
-                    let c = rest[pos + 1];
-                    let trailing = &rest[pos + 2..];
-                    let mut out = String::new();
-                    out.push(c);
-                    out.push_str(&printf_get_formats(trailing));
-                    return out;
-                }
-            }
-            return String::new();
-        }
-        return printf_regex_based(&cs[1..]);
-    }
-    printf_get_formats(&cs[1..])
-}
-fn printf_regex_based(rest: &[char]) -> String {
-    match printf_match_format(rest) {
-        Some((width_star, prec_star, typ, remaining)) => {
-            let mut out = String::new();
-            if width_star {
-                out.push('*');
-            }
-            if prec_star {
-                out.push('*');
-            }
-            out.push(typ);
-            out.push_str(&printf_get_formats(remaining));
-            out
-        }
-        None => {
-            let mut out = String::new();
-            if let Some(&c) = rest.first() {
-                out.push(c);
-            }
-            out.push_str(&printf_get_formats(rest));
-            out
-        }
-    }
-}
-const PRINTF_TYPE_CHARS: &str = "diouxXfFeEgGaAcsbqQSC";
-fn printf_match_format(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
-    let mut i = 0usize;
-    if rest.get(i) == Some(&'#') {
-        i += 1;
-    }
-    if rest.get(i) == Some(&'-') {
-        i += 1;
-    }
-    if rest.get(i) == Some(&'+') {
-        i += 1;
-    }
-    if rest.get(i) == Some(&' ') {
-        i += 1;
-    }
-    if rest.get(i) == Some(&'0') {
-        i += 1;
-    }
-    let width_star;
-    if rest.get(i) == Some(&'*') {
-        width_star = true;
-        i += 1;
-    } else {
-        width_star = false;
-        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
-            i += 1;
-        }
-    }
-    if rest.get(i) == Some(&'.') {
-        i += 1;
-    }
-    let prec_star;
-    if rest.get(i) == Some(&'*') {
-        prec_star = true;
-        i += 1;
-    } else {
-        prec_star = false;
-        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
-            i += 1;
-        }
-    }
-    let type_at = |j: usize| -> Option<char> {
-        rest.get(j)
-            .copied()
-            .filter(|c| PRINTF_TYPE_CHARS.contains(*c))
-    };
-    let mods = ["hh", "h", "l", "ll", "q", "L", "j", "z", "Z", "t"];
-    let mut chosen_len = 0usize;
-    for m in mods {
-        let mc: Vec<char> = m.chars().collect();
-        if i + mc.len() <= rest.len()
-            && rest[i..i + mc.len()] == mc[..]
-            && type_at(i + mc.len()).is_some()
-        {
-            chosen_len = mc.len();
-            break;
-        }
-    }
-    let type_pos = i + chosen_len;
-    let typ = type_at(type_pos)?;
-    Some((width_star, prec_star, typ, &rest[type_pos + 1..]))
 }
 
 // ===========================================================================

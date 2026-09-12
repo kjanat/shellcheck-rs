@@ -24,10 +24,9 @@ use crate::ast::*;
 use crate::astlib::is_flag;
 use crate::astlib::is_glob;
 use crate::astlib::is_only_redirection;
+use crate::astlib::oversimplify_concat;
 use crate::astlib::{get_literal_string, only_literal_string};
-use crate::cfg::{
-    get_braced_modifier, get_braced_reference, is_variable_name, oversimplify_concat,
-};
+use crate::cfg::{get_braced_modifier, get_braced_reference, is_variable_name};
 use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {

@@ -37,15 +37,17 @@ use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
 use crate::astlib::get_command_sequences;
+use crate::astlib::get_literal_string_def;
 use crate::astlib::is_annotation_ignoring_code;
 use crate::astlib::is_command_substitution;
 use crate::astlib::is_function;
 use crate::astlib::is_glob;
 use crate::astlib::is_literal;
+use crate::astlib::oversimplify;
 use crate::cfg::get_unquoted_literal;
 use crate::cfg::may_become_multiple_args;
 use crate::cfg::will_become_multiple_args;
-use crate::cfg::{get_word_parts, is_variable_name, oversimplify};
+use crate::cfg::{get_word_parts, is_variable_name};
 use crate::interface::Shell;
 use std::collections::HashMap;
 
@@ -1414,7 +1416,7 @@ fn process_alias_node(
 }
 
 fn add_alias(arg: &Token, aliases: &mut HashMap<String, Token>) {
-    let full = get_literal_string_def(arg, "-");
+    let full = get_literal_string_def("-", arg);
     let (name, value) = match full.find('=') {
         Some(i) => (&full[..i], &full[i..]),
         None => (full.as_str(), ""),
@@ -1549,7 +1551,7 @@ fn check_command_with_trailing_symbol(_params: &Parameters, t: &Token, out: &mut
     let Some(cmd) = words.first() else {
         return;
     };
-    let str = get_literal_string_def(cmd, "x");
+    let str = get_literal_string_def("x", cmd);
     let last = str.chars().last().unwrap_or('x');
     match str.as_str() {
         "." | ":" | " " | "//" => {}

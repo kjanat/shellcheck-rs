@@ -11,7 +11,6 @@
 //!
 //! Not ported here (belong to other batches / codes): SC2182 (printf, no
 //! variables), SC2018/2019/2020/2021 (tr literal-string advice).
-use crate::analyzer_lib::concat_over;
 use crate::analyzer_lib::get_command_name;
 use crate::analyzer_lib::get_command_name_and_token;
 use crate::analyzer_lib::is_quote_free;
@@ -21,6 +20,7 @@ use crate::astlib::basename;
 use crate::astlib::get_literal_string;
 use crate::astlib::is_literal;
 use crate::astlib::only_literal_string;
+use crate::astlib::oversimplify_concat;
 use crate::cfg::may_become_multiple_args;
 
 /// Register this batch's checks.
@@ -220,7 +220,7 @@ fn check_printf_format(_p: &Parameters, format: &Token, more: &[Token], out: &mu
     }
 
     // SC2059: variables in the printf format string.
-    let has_percent = concat_over(format).contains('%');
+    let has_percent = oversimplify_concat(format).contains('%');
     if !(has_percent || is_literal(format)) {
         info(
             out,
@@ -236,135 +236,3 @@ fn only_trailing_ts(formats: &str, arg_count: usize) -> bool {
 }
 
 // ---- mayBecomeMultipleArgs (ASTLib) ----------------------------------------
-
-// ---- getPrintfFormats (faithful port of the regex-based scanner) -----------
-
-fn get_printf_formats(s: &str) -> String {
-    let cs: Vec<char> = s.chars().collect();
-    get_formats(&cs)
-}
-
-fn get_formats(cs: &[char]) -> String {
-    if cs.is_empty() {
-        return String::new();
-    }
-    if cs[0] == '%' {
-        if cs.get(1) == Some(&'%') {
-            return get_formats(&cs[2..]);
-        }
-        if cs.get(1) == Some(&'(') {
-            let rest = &cs[2..];
-            if let Some(pos) = rest.iter().position(|&c| c == ')') {
-                if pos + 1 < rest.len() {
-                    let c = rest[pos + 1];
-                    let trailing = &rest[pos + 2..];
-                    let mut out = String::new();
-                    out.push(c);
-                    out.push_str(&get_formats(trailing));
-                    return out;
-                }
-            }
-            return String::new();
-        }
-        return regex_based_get_formats(&cs[1..]);
-    }
-    get_formats(&cs[1..])
-}
-
-fn regex_based_get_formats(rest: &[char]) -> String {
-    match match_format_re(rest) {
-        Some((width_star, prec_star, typ, remaining)) => {
-            let mut out = String::new();
-            if width_star {
-                out.push('*');
-            }
-            if prec_star {
-                out.push('*');
-            }
-            out.push(typ);
-            out.push_str(&get_formats(remaining));
-            out
-        }
-        None => {
-            let mut out = String::new();
-            if let Some(&c) = rest.first() {
-                out.push(c);
-            }
-            out.push_str(&get_formats(rest));
-            out
-        }
-    }
-}
-
-const PRINTF_TYPE_CHARS: &str = "diouxXfFeEgGaAcsbqQSC";
-
-/// Manual match of
-/// `^#?-?\+? ?0?(\*|\d*)\.?(\d*|\*)(hh|h|l|ll|q|L|j|z|Z|t)?([diouxXfFeEgGaAcsbqQSC])((\n|.)*)`
-/// Returns (width_is_star, precision_is_star, type_char, remaining_after_type).
-fn match_format_re(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
-    let mut i = 0usize;
-    // flags: #? -? +? space? 0?  (each optional, fixed order)
-    if rest.get(i) == Some(&'#') {
-        i += 1;
-    }
-    if rest.get(i) == Some(&'-') {
-        i += 1;
-    }
-    if rest.get(i) == Some(&'+') {
-        i += 1;
-    }
-    if rest.get(i) == Some(&' ') {
-        i += 1;
-    }
-    if rest.get(i) == Some(&'0') {
-        i += 1;
-    }
-    // width: (\*|\d*)
-    let width_star;
-    if rest.get(i) == Some(&'*') {
-        width_star = true;
-        i += 1;
-    } else {
-        width_star = false;
-        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
-            i += 1;
-        }
-    }
-    // \.?
-    if rest.get(i) == Some(&'.') {
-        i += 1;
-    }
-    // precision: (\d*|\*) — '*' only via backtracking; equivalently, '*' here is star.
-    let prec_star;
-    if rest.get(i) == Some(&'*') {
-        prec_star = true;
-        i += 1;
-    } else {
-        prec_star = false;
-        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
-            i += 1;
-        }
-    }
-    // length modifier (hh|h|l|ll|q|L|j|z|Z|t)? — greedy, but only if a type char
-    // then follows (regex backtracking). Alternation preference order preserved.
-    let type_at = |j: usize| -> Option<char> {
-        rest.get(j)
-            .copied()
-            .filter(|c| PRINTF_TYPE_CHARS.contains(*c))
-    };
-    let mods = ["hh", "h", "l", "ll", "q", "L", "j", "z", "Z", "t"];
-    let mut chosen_len = 0usize;
-    for m in mods {
-        let mc: Vec<char> = m.chars().collect();
-        if i + mc.len() <= rest.len()
-            && rest[i..i + mc.len()] == mc[..]
-            && type_at(i + mc.len()).is_some()
-        {
-            chosen_len = mc.len();
-            break;
-        }
-    }
-    let type_pos = i + chosen_len;
-    let typ = type_at(type_pos)?;
-    Some((width_star, prec_star, typ, &rest[type_pos + 1..]))
-}

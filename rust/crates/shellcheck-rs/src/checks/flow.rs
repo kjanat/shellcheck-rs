@@ -8,6 +8,7 @@
 
 use crate::analyzer_lib::*;
 use crate::ast::*;
+use crate::astlib::oversimplify_concat;
 use crate::cfg::{CFVariableProp, get_braced_modifier, get_braced_reference, is_variable_char};
 use crate::cfg_analysis::SpaceStatus;
 use crate::interface::Shell;
@@ -527,7 +528,7 @@ fn get_best_match(var: &str, written_vars: &[String]) -> Option<String> {
 fn is_exception(params: &Parameters, var: &str, t: &Token) -> bool {
     for anc in get_path(params, t) {
         if let InnerToken::T_DollarBraced { op, .. } = &*anc.inner {
-            let str = concat_over(op);
+            let str = oversimplify_concat(op);
             let reference = get_braced_reference(&str);
             let modifier = get_braced_modifier(&str);
             if reference != var || modifier.starts_with('+') || modifier.starts_with(":+") {
@@ -541,7 +542,7 @@ fn is_exception(params: &Parameters, var: &str, t: &Token) -> bool {
 /// `isGuarded (T_DollarBraced ...)`: `:?`/`:-` (with optional index) modifier.
 fn is_guarded(t: &Token) -> bool {
     if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
-        let name = concat_over(op);
+        let name = oversimplify_concat(op);
         // dropWhile (`elem` "#!") then dropWhile isVariableChar
         let rest: String = name
             .chars()
@@ -596,7 +597,7 @@ fn check_spacefulness_cfg_impl(
         _ => return,
     };
 
-    let braced_string = concat_over(op);
+    let braced_string = oversimplify_concat(op);
     let name = get_braced_reference(&braced_string);
 
     let needs_quoting = !is_array_expansion(token)

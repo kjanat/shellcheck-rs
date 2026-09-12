@@ -19,6 +19,7 @@
 
 use crate::ast::*;
 use crate::astlib::get_literal_string;
+use crate::astlib::{get_literal_string_def, oversimplify_concat};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use regex::Regex;
@@ -1383,7 +1384,7 @@ impl Builder {
                     }
                 }
                 _ => {
-                    let literal = get_literal_string_def(a, "\0");
+                    let literal = get_literal_string_def("\0", a);
                     let is_known = !literal.contains('\0');
                     let m = var_assign_match(&literal);
                     let name = m.clone().unwrap_or_else(|| literal.clone());
@@ -2080,11 +2081,6 @@ pub(crate) fn is_variable_name(s: &str) -> bool {
     }
 }
 
-/// `getLiteralStringDef def t` — non-literals contribute `def`.
-pub(crate) fn get_literal_string_def(t: &Token, def: &str) -> String {
-    crate::astlib::get_literal_string_ext(t, &|_| Some(def.to_string())).unwrap_or_default()
-}
-
 /// `getUnquotedLiteral`.
 pub(crate) fn get_unquoted_literal(t: &Token) -> Option<String> {
     match &*t.inner {
@@ -2100,15 +2096,6 @@ pub(crate) fn get_unquoted_literal(t: &Token) -> Option<String> {
         }
         _ => None,
     }
-}
-
-/// `oversimplify`: delegates to the single faithful implementation in `astlib`.
-pub(crate) fn oversimplify(t: &Token) -> Vec<String> {
-    crate::astlib::oversimplify(t)
-}
-
-pub(crate) fn oversimplify_concat(t: &Token) -> String {
-    oversimplify(t).concat()
 }
 
 /// `getBracedReference`.
@@ -2527,7 +2514,7 @@ fn get_opts(
         }
         let token = &args[0];
         let rest = &args[1..];
-        let s = get_literal_string_def(token, "\0");
+        let s = get_literal_string_def("\0", token);
         if s == "--" {
             return Some(list_to_args(rest));
         }
@@ -2582,7 +2569,7 @@ pub(crate) fn get_generic_opts(args: &[Token]) -> Vec<(String, (Token, Token))> 
     }
     let token = &args[0];
     let rest = &args[1..];
-    let s = get_literal_string_def(token, "\0");
+    let s = get_literal_string_def("\0", token);
     if s == "--" {
         return rest
             .iter()
@@ -2603,7 +2590,7 @@ pub(crate) fn get_generic_opts(args: &[Token]) -> Vec<(String, (Token, Token))> 
         let opts: String = optstring.chars().take_while(|c| *c != '\0').collect();
         let opt_chars: Vec<char> = opts.chars().collect();
         match rest.first() {
-            Some(next) if get_literal_string_def(next, "\0").starts_with('-') => {
+            Some(next) if get_literal_string_def("\0", next).starts_with('-') => {
                 let mut out: Vec<(String, (Token, Token))> = opt_chars
                     .iter()
                     .map(|c| (c.to_string(), (token.clone(), token.clone())))

@@ -10,12 +10,12 @@
 //! - SC2211  checkGlobAsCommand    (Analytics.hs) — a glob used as a command name.
 //! - SC2065  checkTestRedirects    (Analytics.hs) — `>`/`<` in `test` args read
 //!   as a redirection, not a comparison.
-use crate::analyzer_lib::concat_over;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib::get_literal_string;
 use crate::astlib::is_glob;
 use crate::astlib::is_unquoted_flag;
+use crate::astlib::oversimplify_concat;
 use crate::cfg::get_unquoted_literal;
 use crate::interface::Shell;
 
@@ -56,7 +56,7 @@ fn check_arithmetic_deref(params: &Parameters, t: &Token, out: &mut Out) {
         InnerToken::T_DollarBraced { op, .. } => (list[0].id(), op),
         _ => return,
     };
-    if arith_deref_is_exception(&concat_over(op)) {
+    if arith_deref_is_exception(&oversimplify_concat(op)) {
         return;
     }
     // fromMaybe noWarning . msum . map warningFor $ parents params t
