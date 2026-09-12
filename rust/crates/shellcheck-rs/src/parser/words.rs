@@ -9,8 +9,9 @@ impl Parser {
         self.read_normalish_word(&["do", "done", "then", "fi", "esac"])
     }
 
-    pub(super) fn read_normalish_word(&mut self, _terms: &[&str]) -> PResult<Token> {
+    pub(super) fn read_normalish_word(&mut self, terms: &[&str]) -> PResult<Token> {
         let start = self.pos();
+        let pos = self.pos();
         let mut parts = Vec::new();
         loop {
             let before = self.idx;
@@ -29,6 +30,18 @@ impl Parser {
         }
         if parts.is_empty() {
             return Err(());
+        }
+        // `checkPossibleTermination`: a whole word that is just a closing
+        // keyword was probably meant to close the block.
+        if let [only] = parts.as_slice() {
+            if let InnerToken::T_Literal(s) = only.inner() {
+                if terms.contains(&s.as_str()) {
+                    let msg = format!(
+                        "Use semicolon or linefeed before '{s}' (or quote to make it literal)."
+                    );
+                    self.problem_at(pos.clone(), pos, Severity::WarningC, 1010, &msg);
+                }
+            }
         }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_NormalWord(parts)))

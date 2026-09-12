@@ -275,6 +275,9 @@ impl Parser {
                 found = Some(w.len());
             }
         }
+        for w in WORDS {
+            self.miscased_keyword(w);
+        }
         if found.is_some() {
             return found;
         }

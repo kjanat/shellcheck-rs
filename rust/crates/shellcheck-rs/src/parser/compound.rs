@@ -36,6 +36,7 @@ impl Parser {
                     if self.word_matches(kw) {
                         self.warn_keyword_needs_space(kw);
                     }
+                    self.miscased_keyword(kw);
                 }
                 if self.keyword_ahead("if") {
                     self.read_if_clause()
@@ -130,6 +131,42 @@ impl Parser {
         kw.chars()
             .enumerate()
             .all(|(i, ch)| self.peek_at(i) == Some(ch))
+    }
+
+    /// `anycaseString`: the keyword as actually written, if it is there in any
+    /// mixture of cases.
+    pub(super) fn word_matches_anycase(&self, kw: &str) -> Option<String> {
+        let mut written = String::new();
+        for (i, ch) in kw.chars().enumerate() {
+            let c = self.peek_at(i)?;
+            if !c.eq_ignore_ascii_case(&ch) {
+                return None;
+            }
+            written.push(c);
+        }
+        Some(written)
+    }
+
+    /// `tryParseWordToken`: a keyword in the wrong case is recognised and
+    /// reported, then rejected — inside a `try`, so the word goes on to parse
+    /// as an ordinary one while the problem stands.
+    pub(super) fn miscased_keyword(&mut self, kw: &str) {
+        let Some(written) = self.word_matches_anycase(kw) else {
+            return;
+        };
+        if written == kw || !self.at_keyword_separator(kw.chars().count()) {
+            return;
+        }
+        let pos = self.pos();
+        self.problem_at(
+            pos.clone(),
+            pos,
+            Severity::ErrorC,
+            1081,
+            &format!(
+                "Scripts are case sensitive. Use '{kw}', not '{written}' (or quote if literal)."
+            ),
+        );
     }
 
     /// True if the upcoming token is exactly `kw` followed by a word boundary.
