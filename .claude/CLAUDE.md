@@ -94,13 +94,21 @@ cargo run --release -p conformance -- gate --oracle .cache/shellcheck-oracle
 cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle
 ```
 
-`gate` replays every `prop_` property in `src/ShellCheck/**/*.hs` (extracted
-from the sources at run time, so there is no corpus file to go stale) and must
-stay at 0 divergences. `fuzz` runs the same comparison over generated and
-mutated shell; it is the only one of the two that can say anything about
-parity, because `gate` only ever covers what upstream already wrote a test for.
-A green `gate` with a divergent `fuzz` means the port is incomplete, not
-correct.
+`gate` takes the shell script out of every `prop_` property in
+`src/ShellCheck/**/*.hs` that has one (extracted from the sources at run time,
+so there is no corpus file to go stale) and runs it through both tools' full
+pipeline, comparing the whole json1 payload. It must stay at 0 divergences.
+
+Two things it is not. It does not call the helper the property called
+(`verifyTree`, `verifyCodes`, …), so it is a corpus *derived from* the upstream
+properties rather than an execution of them. And it covers only the properties
+with an extractable script — 2026 of 2238 distinct names; the rest test the
+Fixer, the Checker's IO, `ASTLib` helpers and the like.
+
+`fuzz` runs the same comparison over generated and mutated shell; it is the only
+one of the two that can say anything about parity, because `gate` only ever
+covers what upstream already wrote a test for. A green `gate` with a divergent
+`fuzz` means the port is incomplete, not correct.
 
 Layout mirrors the Haskell modules one-to-one: `ast_lib.rs` = `ASTLib.hs`,
 `data.rs` = `Data.hs`, `parser/` = `Parser.hs`, `analytics/` = `Analytics.hs`,

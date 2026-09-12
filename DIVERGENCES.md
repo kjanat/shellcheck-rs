@@ -20,8 +20,14 @@ printf '%s' '<the script>' | shellcheck  -s <dialect> -f gcc -
 printf '%s' '<the script>' | rshellcheck -s <dialect> -f gcc -
 ```
 
-The `gate` (ShellCheck's own 2013 `prop_` properties) is clean, so nothing below
-is covered by an upstream test — which is the point of the fuzzer.
+The `gate` is clean, so none of these is exposed by the extracted upstream
+`prop_` corpus under full-pipeline comparison — which is the point of the
+fuzzer. That is a weaker statement than "no upstream test covers them": the gate
+replays the *script* each property names through the whole pipeline, not the
+isolated helper (`verifyTree`, `verifyCodes`, …) the property originally called,
+and it only covers the 2026 properties whose script it can extract, out of 2238
+distinct `prop_` names. The rest test the Fixer, the Checker's IO, `ASTLib`
+helpers and the like, and have no shell snippet to replay.
 
 Where an entry's port-side half can be checked without the oracle, it also has a
 `#[should_panic]` test in `rust/crates/shellcheck-rs/src/parser/tests.rs`
@@ -48,9 +54,11 @@ printf '%s' 'time |y' | shellcheck -s dash -f gcc -
 | port   | `SC1073` "Couldn't parse this simple command", `SC1072` |
 
 Shrunk from `${a/}$()\|time \|s{,}``$(e>t)`, where it costs 11 findings.
-`time` with nothing to time is a command upstream accepts; the port's
-`read_command` rejects it and commits, so the pipeline and everything after it
-is lost.
+
+In dash `time` is an ordinary command name, and `dash -n` accepts this; bash,
+where `time` is a keyword, rejects it. So upstream is right to parse it for a
+POSIX target, and the port's `read_command` rejects it and commits, losing the
+pipeline and everything after it.
 
 ### A2. `!` glued to a keyword inside a loop
 
@@ -81,11 +89,14 @@ printf '%s' 'function | { x; }' | shellcheck -s dash -f gcc -
 | oracle | nothing: it parses                                |
 | port   | `SC1073` "Couldn't parse this function", `SC1072` |
 
-Shrunk from a three-line generated script where it costs 13 findings. This is a
-command called `function` piped into a brace group — odd, but valid, and every
-shell runs it. Upstream's `try readFunctionSignature` rewinds cleanly when the
-name turns out to be `|`; the port's attempt consumes and commits, so the
-pipeline reading is never tried.
+Shrunk from a three-line generated script where it costs 13 findings.
+
+In dash `function` is not a keyword, so this is a command named `function` piped
+into a brace group, and `dash -n` accepts it. (bash, where `function` *is* a
+keyword, rejects it — which is why this entry is dialect-specific.) Upstream's
+`try readFunctionSignature` rewinds cleanly when the name turns out to be `|`;
+the port's attempt consumes and commits, so the pipeline reading is never
+tried.
 
 ## B. The port accepts what upstream rejects
 

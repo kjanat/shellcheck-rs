@@ -19,7 +19,7 @@
 			}
 		]
 	},
-	"excludes": ["shellcheck.1.md", " .github/ISSUE_TEMPLATE/*.md"],
+	"excludes": ["shellcheck.1.md", ".github/ISSUE_TEMPLATE/*.md"],
 	"shfmt": {
 		"associations": [
 			"test/*",

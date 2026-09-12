@@ -309,7 +309,25 @@ pub fn extract(src_dir: &Path) -> Result<Vec<Entry>, String> {
         out.extend(extract_text(&name, &text));
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
-    out.dedup_by(|a, b| a.id == b.id);
+    // Two modules can define the same property name -- Analytics.hs and
+    // Checks/Commands.hs both have `prop_checkPS13`, and there are a dozen more
+    // like it. Dropping either would silently cost the gate a property, so
+    // qualify both with the file they came from instead.
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for e in &out {
+        *seen.entry(e.id.as_str()).or_default() += 1;
+    }
+    let dupes: std::collections::HashSet<String> = seen
+        .iter()
+        .filter(|(_, n)| **n > 1)
+        .map(|(k, _)| (*k).to_string())
+        .collect();
+    for e in &mut out {
+        if dupes.contains(&e.id) {
+            e.id = format!("{}:{}", e.file, e.id);
+        }
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(out)
 }
 
