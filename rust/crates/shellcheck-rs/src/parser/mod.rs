@@ -792,7 +792,7 @@ impl Parser {
     pub(super) fn report_sub_failure(&mut self, contexts: Vec<Context>, failure: Option<Failure>) {
         // The sub-parse reports against its own stack, which is the one it
         // froze when it committed.
-        let outer = std::mem::replace(&mut self.frozen_contexts, Some(contexts));
+        let outer = self.frozen_contexts.replace(contexts);
         let saved = std::mem::replace(&mut self.failure, failure);
         let notes = self.failure_notes();
         self.frozen_contexts = outer;
