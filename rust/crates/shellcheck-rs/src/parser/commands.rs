@@ -680,9 +680,10 @@ impl Parser {
         self.string("((")?;
         let c = self.read_arithmetic_contents()?;
         self.string("))")?;
-        // `spacing`, not `allspacing`: the node ends on its own line.
-        self.spacing();
+        // `endSpan` comes before the trailing `spacing`, so the node does not
+        // stretch over it.
         let id = self.next_id_between(start, self.pos());
+        self.spacing();
         Ok(Token::new(id, InnerToken::T_Arithmetic(c)))
     }
 
@@ -1068,10 +1069,11 @@ impl Parser {
         sub.line = pos.line;
         sub.col = pos.column;
         sub.next_id = self.next_id;
-        sub.spacing();
+        // `readSequence` skips its own leading arithmetic spacing.
         let tok = sub.read_arithmetic_contents().ok()?;
-        // require eof (readArithmeticContents <* eof)
-        sub.spacing();
+        // `readArithmeticContents <* eof`, with no spacing in between: a comment
+        // left over from `readCmdWord`'s `spacing` makes this fail, and the
+        // argument is read as an ordinary word instead.
         if !sub.eof() {
             return None;
         }
@@ -1097,53 +1099,21 @@ impl Parser {
         Some(tok)
     }
 
-    /// Read one raw `let` argument word (tracking quotes), returning the raw
-    /// text and its start position. Mirrors `readStringForParser readCmdWord`.
+    /// `readStringForParser readCmdWord`: the raw text of one `let` argument,
+    /// trailing spacing included, and the position it starts at.
     pub(super) fn read_let_arg_raw(&mut self) -> Option<(String, Position)> {
         let start = self.pos();
-        let mut raw = String::new();
-        let mut in_single = false;
-        let mut in_double = false;
-        while let Some(c) = self.peek() {
-            if in_single {
-                raw.push(c);
-                self.bump();
-                if c == '\'' {
-                    in_single = false;
-                }
-                continue;
-            }
-            if in_double {
-                raw.push(c);
-                self.bump();
-                if c == '"' {
-                    in_double = false;
-                }
-                continue;
-            }
-            match c {
-                ' ' | '\t' | '\n' | '\r' | ';' | '&' | '|' | ')' => break,
-                '\'' => {
-                    in_single = true;
-                    raw.push(c);
-                    self.bump();
-                }
-                '"' => {
-                    in_double = true;
-                    raw.push(c);
-                    self.bump();
-                }
-                _ => {
-                    raw.push(c);
-                    self.bump();
-                }
-            }
-        }
+        let raw = self
+            .read_string_for_parser(|p| {
+                p.read_normal_word()?;
+                p.spacing();
+                Ok(())
+            })
+            .ok()?;
         if raw.is_empty() {
-            None
-        } else {
-            Some((raw, start))
+            return None;
         }
+        Some((raw, start))
     }
 
     /// `readLetSuffix`: parse `let` arguments as arithmetic expressions.
@@ -1752,27 +1722,7 @@ impl Parser {
     /// one -- a here document really does work with CRLF, because the CR ends
     /// up part of the token.
     pub(super) fn read_heredoc_delim(&mut self) -> PResult<(String, Quoted)> {
-        let m = self.mark();
-        let notes = self.notes.len();
-        let problems = self.problems.len();
-        let contexts = self.contexts.clone();
-        let failure = self.failure.clone();
-        let committed = self.committed;
-        let r = self.read_normal_word();
-        let end = self.idx;
-        // `inSeparateContext $ lookAhead ..`: nothing the word reported, and
-        // nothing it read, survives.
-        self.reset(m);
-        self.notes.truncate(notes);
-        self.problems.truncate(problems);
-        self.contexts = contexts;
-        self.failure = failure;
-        self.committed = committed;
-        r?;
-        let mut str: String = self.input[m.idx..end].iter().collect();
-        while self.idx < end {
-            self.bump();
-        }
+        let mut str = self.read_string_for_parser(|p| p.read_normal_word().map(|_| ()))?;
         if self.carriage_return().is_ok() {
             str.push('\r');
         }

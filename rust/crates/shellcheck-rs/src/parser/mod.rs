@@ -704,6 +704,35 @@ impl Parser {
     /// space, context stack and annotation scope. Parsec's state is swapped,
     /// but everything in the `StateT` underneath it -- contexts, problems --
     /// carries straight through, so the sub-parse's diagnostics name the
+
+    /// `readStringForParser p`: the raw text `p` would consume, with everything
+    /// it read and everything it reported forgotten -- `inSeparateContext
+    /// $ lookAhead (p >> getPosition)`, then `anyChar` up to that position.
+    pub(super) fn read_string_for_parser(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> PResult<()>,
+    ) -> PResult<String> {
+        let m = self.mark();
+        let notes = self.notes.len();
+        let problems = self.problems.len();
+        let contexts = self.contexts.clone();
+        let failure = self.failure.clone();
+        let committed = self.committed;
+        let r = f(self);
+        let end = self.idx;
+        self.reset(m);
+        self.notes.truncate(notes);
+        self.problems.truncate(problems);
+        self.contexts = contexts;
+        self.failure = failure;
+        self.committed = committed;
+        r?;
+        let str: String = self.input[m.idx..end].iter().collect();
+        while self.idx < end {
+            self.bump();
+        }
+        Ok(str)
+    }
     /// productions that contain it.
     pub(super) fn sub_parser(&self, input: &str, start: &Position) -> Parser {
         let mut sub = Parser::new(&self.filename, input);
