@@ -1621,12 +1621,21 @@ impl Parser {
         // (`lookAhead $ readIoFileOp <|> string "<<"`). Consume the `&` here so
         // the following operator (`>`/`>>`/`<`/`<<`/...) is parsed as the
         // redirection, matching Parser.hs (`ls &> bar`, `ls &>> bar`).
-        if fd.is_empty()
-            && self.peek() == Some('&')
-            && matches!(self.peek_at(1), Some('<') | Some('>'))
-        {
-            self.bump(); // &
-            fd = "&".to_string();
+        if fd.is_empty() && self.peek() == Some('&') {
+            if matches!(self.peek_at(1), Some('<') | Some('>')) {
+                self.bump(); // &
+                fd = "&".to_string();
+            } else {
+                // `string "&"` consumes before the `lookAhead` turns the source
+                // down, and in Parsec an error outlives the `try` that rewinds
+                // the input -- so a `&` that starts no redirection still leaves
+                // a failure recorded from past itself, which is the position a
+                // doomed parse then reports.
+                let m = self.mark();
+                self.bump();
+                self.fail_implicitly();
+                self.reset(m);
+            }
         }
         // `op_start` is the position after the fd source, where the redirection
         // operator begins. Parser.hs captures `startSpan` for the inner redir

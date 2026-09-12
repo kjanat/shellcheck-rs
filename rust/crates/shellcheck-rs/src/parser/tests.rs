@@ -756,6 +756,52 @@ mod coproc_glob_dollar_tests {
         assert!(!has_note("/bin/sh", 1127));
     }
 
+    // ---- known divergences ------------------------------------------------
+    //
+    // These assert what the *oracle* does, and are marked `should_panic`
+    // because the port does not do it yet — Rust's nearest thing to Vitest's
+    // `test.fails` / bun's `test.failing`. Fixing the port makes the assertion
+    // pass, which makes the test fail, which is the reminder to delete the
+    // marker and the `DIVERGENCES.md` entry together. Only the port-side half
+    // of an entry can live here; the oracle's output is not available in a unit
+    // test, so the full comparison stays in the conformance harness.
+
+    #[test]
+    #[should_panic(expected = "DIVERGENCES.md A1")]
+    fn a_bare_time_before_a_pipe_should_parse() {
+        assert!(
+            parses_as(Some(Shell::Dash), "time |y"),
+            "DIVERGENCES.md A1: upstream parses a bare `time` before a pipe"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "DIVERGENCES.md A3")]
+    fn function_as_a_command_name_should_parse() {
+        assert!(
+            parses_as(Some(Shell::Dash), "function | { x; }"),
+            "DIVERGENCES.md A3: `function` piped into a brace group is a command, not a definition"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "DIVERGENCES.md B1")]
+    fn a_test_expression_starting_with_hash_should_not_parse() {
+        assert!(
+            !parses_as(Some(Shell::Ksh), "[[# =x ]]"),
+            "DIVERGENCES.md B1: upstream rejects `[[#`, the port reads the `#` as a word"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "DIVERGENCES.md B2")]
+    fn an_unterminated_quoted_directive_value_should_not_parse() {
+        assert!(
+            !parses_as(None, "#shellcheck disable=\"\nfor f in $();do :;done\n"),
+            "DIVERGENCES.md B2: upstream makes `disable=\"` a parse error"
+        );
+    }
+
     // ---- `!` with nothing to negate ---------------------------------------
     //
     // The port's one deliberate departure from upstream's parse decisions: bash
