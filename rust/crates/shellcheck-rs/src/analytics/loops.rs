@@ -494,10 +494,10 @@ fn build_munch_fix(params: &Parameters, fixkind: MunchFix, flag: &str, cmd: &Tok
 }
 
 /// `getWords`: for a T_Assignment, its value's word parts; else its own.
-fn get_words(t: &Token) -> Vec<Token> {
+fn get_words(t: &Token) -> Vec<&Token> {
     match &*t.inner {
-        InnerToken::T_Assignment { value, .. } => crate::cfg::get_word_parts(value),
-        _ => crate::cfg::get_word_parts(t),
+        InnerToken::T_Assignment { value, .. } => ast_lib::get_word_parts(value),
+        _ => ast_lib::get_word_parts(t),
     }
 }
 

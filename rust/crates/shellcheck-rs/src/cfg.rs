@@ -2312,16 +2312,6 @@ enum PseudoGlob {
     PGChar(char),
 }
 
-pub(crate) fn get_word_parts(t: &Token) -> Vec<Token> {
-    use InnerToken::*;
-    match &*t.inner {
-        T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
-        T_DoubleQuoted(l) => l.clone(),
-        TA_Expansion(l) => l.iter().flat_map(get_word_parts).collect(),
-        _ => vec![t.clone()],
-    }
-}
-
 /// `wordToExactPseudoGlob` = `wordToPseudoGlob' True`.
 fn word_to_exact_pseudo_glob(word: &Token) -> Option<Vec<PseudoGlob>> {
     fn f(x: &Token) -> Option<Vec<PseudoGlob>> {
@@ -2335,9 +2325,8 @@ fn word_to_exact_pseudo_glob(word: &Token) -> Option<Vec<PseudoGlob>> {
         }
     }
     // toGlob: the '~' branch requires not exact, so it never applies here.
-    let parts = get_word_parts(word);
     let mut out = Vec::new();
-    for p in &parts {
+    for p in crate::ast_lib::get_word_parts(word) {
         out.extend(f(p)?);
     }
     Some(simplify_pseudo_glob(out))
