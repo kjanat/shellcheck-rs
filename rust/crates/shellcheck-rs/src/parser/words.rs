@@ -49,6 +49,10 @@ impl Parser {
     }
 
     pub(super) fn read_single_quoted(&mut self) -> PResult<Token> {
+        self.called("single quoted string", |p| p.read_single_quoted_body())
+    }
+
+    fn read_single_quoted_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.char('\'')?;
         let mut s = String::new();
@@ -59,12 +63,18 @@ impl Parser {
             self.bump();
             s.push(c);
         }
-        self.char('\'').map_err(|_| ())?;
+        if self.char('\'').is_err() {
+            return self.fail_with("Expected end of single quoted string");
+        }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_SingleQuoted(s)))
     }
 
     pub(super) fn read_double_quoted(&mut self) -> PResult<Token> {
+        self.called("double quoted string", |p| p.read_double_quoted_body())
+    }
+
+    fn read_double_quoted_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.char('"')?;
         let mut parts = Vec::new();
@@ -83,7 +93,9 @@ impl Parser {
                 _ => parts.push(self.read_double_literal_run()?),
             }
         }
-        self.char('"').map_err(|_| ())?;
+        if self.char('"').is_err() {
+            return self.fail_with("Expected end of double quoted string");
+        }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_DoubleQuoted(parts)))
     }
@@ -407,6 +419,10 @@ impl Parser {
     }
 
     pub(super) fn read_proc_sub(&mut self) -> PResult<Token> {
+        self.called("process substitution", |p| p.read_proc_sub_body())
+    }
+
+    fn read_proc_sub_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         let dir = self.one_of("<>")?;
         self.char('(')?;
@@ -424,6 +440,10 @@ impl Parser {
     }
 
     pub(super) fn read_extglob(&mut self) -> PResult<Token> {
+        self.called("extglob", |p| p.read_extglob_body())
+    }
+
+    fn read_extglob_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         let op = self.one_of("?*@!+")?;
         self.char('(')?;
@@ -561,6 +581,10 @@ impl Parser {
     }
 
     pub(super) fn read_dollar_arithmetic(&mut self) -> PResult<Token> {
+        self.called("$((..)) expression", |p| p.read_dollar_arithmetic_body())
+    }
+
+    fn read_dollar_arithmetic_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("$((")?;
         let c = self.read_arithmetic_contents()?;
@@ -574,6 +598,12 @@ impl Parser {
     }
 
     pub(super) fn read_dollar_brace_command_expansion(&mut self) -> PResult<Token> {
+        self.called("ksh-style ${ ..; } command expansion", |p| {
+            p.read_dollar_brace_command_expansion_body()
+        })
+    }
+
+    fn read_dollar_brace_command_expansion_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("${")?;
         let piped = if self.char('|').is_ok() {
@@ -614,6 +644,10 @@ impl Parser {
     }
 
     pub(super) fn read_dollar_bracket(&mut self) -> PResult<Token> {
+        self.called("$[..] expression", |p| p.read_dollar_bracket_body())
+    }
+
+    fn read_dollar_bracket_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("$[")?;
         let c = self.read_arithmetic_contents()?;
@@ -623,16 +657,26 @@ impl Parser {
     }
 
     pub(super) fn read_dollar_expansion(&mut self) -> PResult<Token> {
+        self.called("command expansion", |p| p.read_dollar_expansion_body())
+    }
+
+    fn read_dollar_expansion_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("$(")?;
         let sub_start = self.pos();
-        let raw = self.read_balanced_parens_until_close()?;
+        let Ok(raw) = self.read_balanced_parens_until_close() else {
+            return self.fail_with("Expected end of $(..) expression");
+        };
         let cmds = self.subparse_commands(&raw, sub_start);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_DollarExpansion(cmds)))
     }
 
     pub(super) fn read_dollar_braced(&mut self) -> PResult<Token> {
+        self.called("parameter expansion", |p| p.read_dollar_braced_body())
+    }
+
+    fn read_dollar_braced_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("${")?;
         let word_start = self.pos();
@@ -765,6 +809,10 @@ impl Parser {
     }
 
     pub(super) fn read_dollar_single_quote(&mut self) -> PResult<Token> {
+        self.called("$'..' expression", |p| p.read_dollar_single_quote_body())
+    }
+
+    fn read_dollar_single_quote_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("$'")?;
         let mut s = String::new();

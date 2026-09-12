@@ -251,6 +251,34 @@ pub struct Parser {
     pending_heredocs: Vec<PendingHereDoc>,
     // body text collected for each pending heredoc, keyed by id
     heredoc_bodies: BTreeMap<Id, Vec<Token>>,
+    /// The productions currently being parsed, innermost last. Haskell keeps
+    /// the same stack as `ContextName pos str` and reports the innermost two
+    /// when a parse fails (`notesForContext`).
+    contexts: Vec<Context>,
+    /// The furthest input index the parser has ever reached. Parsec reports
+    /// the error from the furthest failing alternative, not the last one
+    /// tried, so failures are ranked by this rather than by the live cursor.
+    reach: usize,
+    /// The source position of [`Parser::reach`].
+    reach_pos: Position,
+    /// The deepest failure seen, which is the one a fatal parse reports.
+    failure: Option<Failure>,
+}
+
+/// One open production, mirroring Haskell's `ContextName pos str`.
+#[derive(Debug, Clone)]
+struct Context {
+    pos: Position,
+    name: &'static str,
+}
+
+/// The deepest parse failure, with the contexts that were open at the time.
+#[derive(Debug, Clone)]
+struct Failure {
+    reach: usize,
+    pos: Position,
+    message: String,
+    contexts: Vec<Context>,
 }
 
 const DOUBLE_QUOTABLE: &str = "\\\"$`";
@@ -303,6 +331,14 @@ impl Parser {
             problems: Vec::new(),
             pending_heredocs: Vec::new(),
             heredoc_bodies: BTreeMap::new(),
+            contexts: Vec::new(),
+            reach: 0,
+            reach_pos: Position {
+                file: filename.to_string(),
+                line: 1,
+                column: 1,
+            },
+            failure: None,
         }
     }
 
@@ -346,6 +382,9 @@ impl Parser {
     fn bump(&mut self) -> Option<char> {
         let c = self.input.get(self.idx).copied()?;
         self.idx += 1;
+        if self.idx > self.reach {
+            self.reach = self.idx;
+        }
         match c {
             '\n' => {
                 self.line += 1;
@@ -357,11 +396,123 @@ impl Parser {
             }
             _ => self.col += 1,
         }
+        if self.idx >= self.reach {
+            self.reach_pos = Position {
+                file: self.filename.clone(),
+                line: self.line,
+                column: self.col,
+            };
+        }
         Some(c)
     }
 
     fn eof(&self) -> bool {
         self.idx >= self.input.len()
+    }
+
+    /// Enter a named production, Haskell `called "name"`. Every `push_ctx`
+    /// must be matched by a `pop_ctx` on both the success and failure path;
+    /// [`Parser::called`] does that for a whole production body.
+    fn push_ctx(&mut self, name: &'static str) {
+        let pos = self.pos();
+        self.contexts.push(Context { pos, name });
+    }
+
+    fn pop_ctx(&mut self) {
+        let _ = self.contexts.pop();
+    }
+
+    /// Run `body` as the named production, so that a failure inside it can
+    /// report "Couldn't parse this <name>".
+    fn called<T>(
+        &mut self,
+        name: &'static str,
+        body: impl FnOnce(&mut Self) -> PResult<T>,
+    ) -> PResult<T> {
+        self.push_ctx(name);
+        let r = body(self);
+        if r.is_err() {
+            self.record_failure("");
+        }
+        self.pop_ctx();
+        r
+    }
+
+    /// Fail the current production with an explicit message, Haskell
+    /// `fail "msg"`. The message reaches the user as SC1072 when this turns
+    /// out to be the deepest failure.
+    fn fail_with<T>(&mut self, message: &str) -> PResult<T> {
+        self.record_failure(message);
+        Err(())
+    }
+
+    /// The diagnostics a fatal parse failure reports: the innermost two open
+    /// productions as SC1073 / SC1009, and the failure itself as SC1072.
+    /// Mirrors `notesForContext ++ [makeErrorFor err]`.
+    fn failure_notes(&self) -> Vec<ParseNote> {
+        let Some(f) = &self.failure else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        // Haskell's stack has the innermost context first; ours has it last.
+        let mut inner = f.contexts.iter().rev();
+        if let Some(c) = inner.next() {
+            out.push(ParseNote {
+                start: c.pos.clone(),
+                end: c.pos.clone(),
+                severity: Severity::ErrorC,
+                code: 1073,
+                message: format!("Couldn't parse this {}. Fix to allow more checks.", c.name),
+            });
+        }
+        if let Some(c) = inner.next() {
+            out.push(ParseNote {
+                start: c.pos.clone(),
+                end: c.pos.clone(),
+                severity: Severity::InfoC,
+                code: 1009,
+                message: format!("The mentioned syntax error was in this {}.", c.name),
+            });
+        }
+        // `getStringFromParsec`: the explicit message, then the fixed tail.
+        let detail = if f.message.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", f.message)
+        };
+        out.push(ParseNote {
+            start: f.pos.clone(),
+            end: f.pos.clone(),
+            severity: Severity::ErrorC,
+            code: 1072,
+            message: format!("{detail} Fix any mentioned problems and try again."),
+        });
+        out
+    }
+
+    /// Remember this failure if it is deeper than any seen so far, along with
+    /// the productions open around it. Mirrors Parsec keeping the error from
+    /// the furthest position reached.
+    fn record_failure(&mut self, message: &str) {
+        let replace = match &self.failure {
+            None => true,
+            Some(f) => {
+                self.reach > f.reach
+                    // At equal depth, a production that failed with something
+                    // to say describes the error better than an alternative
+                    // that merely ran out of input: ShellCheck's SC1072 text
+                    // comes from exactly those explicit `fail` messages.
+                    || (self.reach == f.reach && !message.is_empty() && f.message.is_empty())
+            }
+        };
+        if replace {
+            self.failure = Some(Failure {
+                reach: self.reach,
+                pos: self.reach_pos.clone(),
+                message: message.to_string(),
+                contexts: self.contexts.clone(),
+            });
+        }
     }
 
     // ---- char-class combinators -------------------------------------------
@@ -604,6 +755,18 @@ impl Parser {
 pub fn parse_script(filename: &str, script: &str) -> ParseOutput {
     let mut p = Parser::new(filename, script);
     let root = p.read_script_file();
+    if root.is_none() {
+        // Haskell `parseShell`'s `Left err` branch: prRoot = Nothing, so no
+        // analysis runs at all, the buffered parse *notes* are discarded, and
+        // only the fatal *problems* survive alongside the failure itself.
+        let mut notes = p.problems.clone();
+        notes.extend(p.failure_notes());
+        return ParseOutput {
+            root: None,
+            notes,
+            positions: BTreeMap::new(),
+        };
+    }
     // Reattach here-doc bodies collected during parsing.
     let root = root.map(|r| reattach_heredocs(r, &p.heredoc_bodies));
     // Reparse array indices as arithmetic / index words (reparseIndices).

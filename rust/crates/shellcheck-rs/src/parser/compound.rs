@@ -104,16 +104,31 @@ impl Parser {
     }
 
     pub(super) fn read_subshell(&mut self) -> PResult<Token> {
+        self.called("explicit subshell", |p| p.read_subshell_body())
+    }
+
+    fn read_subshell_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.char('(')?;
         let list = self.read_compound_list_or_empty();
         self.allspacing();
-        self.char(')')?;
+        if list.is_empty() && self.eof() {
+            // `readCompoundList` is a non-empty list: with nothing in the
+            // subshell and no `)` to come, Haskell reports the missing command.
+            return self.fail_with("Expected a command");
+        }
+        if self.char(')').is_err() {
+            return self.fail_with("Expected ) closing the subshell");
+        }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Subshell(list)))
     }
 
     pub(super) fn read_brace_group(&mut self) -> PResult<Token> {
+        self.called("brace group", |p| p.read_brace_group_body())
+    }
+
+    fn read_brace_group_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.char('{')?;
         self.allspacing();
@@ -126,6 +141,10 @@ impl Parser {
     }
 
     pub(super) fn read_if_clause(&mut self) -> PResult<Token> {
+        self.called("if expression", |p| p.read_if_clause_body())
+    }
+
+    fn read_if_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword("if")?;
         let mut clauses: Vec<IfClause> = Vec::new();
@@ -170,6 +189,10 @@ impl Parser {
     }
 
     pub(super) fn read_while_clause(&mut self) -> PResult<Token> {
+        self.called("while loop", |p| p.read_while_clause_body())
+    }
+
+    fn read_while_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword("while")?;
         let cond = self.read_condition_list()?;
@@ -194,6 +217,10 @@ impl Parser {
     }
 
     pub(super) fn read_until_clause(&mut self) -> PResult<Token> {
+        self.called("until loop", |p| p.read_until_clause_body())
+    }
+
+    fn read_until_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword("until")?;
         let cond = self.read_condition_list()?;
@@ -216,6 +243,10 @@ impl Parser {
     }
 
     pub(super) fn read_for_clause(&mut self) -> PResult<Token> {
+        self.called("for loop", |p| p.read_for_clause_body())
+    }
+
+    fn read_for_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword("for")?;
         // ShellCheck reuses the `for` keyword id for the whole T_ForIn/T_ForArithmetic
@@ -296,6 +327,10 @@ impl Parser {
     /// `readBatsTest`: `@test <name> { ... }`, where <name> is everything on the
     /// line up to the last ` {`.
     pub(super) fn read_bats_test(&mut self) -> PResult<Token> {
+        self.called("bats @test", |p| p.read_bats_test_body())
+    }
+
+    fn read_bats_test_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.string("@test ")?;
         self.spacing();
@@ -318,6 +353,10 @@ impl Parser {
     }
 
     pub(super) fn read_select_clause(&mut self) -> PResult<Token> {
+        self.called("select loop", |p| p.read_select_clause_body())
+    }
+
+    fn read_select_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword("select")?;
         // ShellCheck reuses the `select` keyword id for the whole T_SelectIn node.
@@ -351,6 +390,10 @@ impl Parser {
     }
 
     pub(super) fn read_case_clause(&mut self) -> PResult<Token> {
+        self.called("case expression", |p| p.read_case_clause_body())
+    }
+
+    fn read_case_clause_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword("case")?;
         self.spacing();
@@ -512,6 +555,10 @@ impl Parser {
     }
 
     pub(super) fn read_function_def(&mut self) -> PResult<Token> {
+        self.called("function", |p| p.read_function_def_body())
+    }
+
+    fn read_function_def_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword("function")?;
         self.spacing();

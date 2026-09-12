@@ -318,6 +318,10 @@ impl Parser {
     /// a compound form (optional name word + compound command body) or a simple
     /// form (a simple-command body). The body is wrapped in `T_CoProcBody`.
     pub(super) fn read_coproc(&mut self) -> PResult<Token> {
+        self.called("coproc", |p| p.read_coproc_inner())
+    }
+
+    fn read_coproc_inner(&mut self) -> PResult<Token> {
         let start = self.pos();
         let m = self.mark();
         // try { string "coproc"; spacing1 }
@@ -414,11 +418,15 @@ impl Parser {
     // ---- simple command ----------------------------------------------------
 
     pub(super) fn read_simple_command(&mut self) -> PResult<Token> {
+        self.called("simple command", |p| p.read_simple_command_body())
+    }
+
+    fn read_simple_command_body(&mut self) -> PResult<Token> {
         let prefix = self.read_cmd_prefix();
         self.spacing();
         let cmd = self.read_cmd_name();
         if prefix.is_empty() && cmd.is_none() {
-            return Err(());
+            return self.fail_with("Expected a command");
         }
         let mut suffix = Vec::new();
         if let Some(ref c) = cmd {
@@ -871,6 +879,10 @@ impl Parser {
     }
 
     pub(super) fn read_assignment_word(&mut self) -> PResult<Token> {
+        self.called("variable assignment", |p| p.read_assignment_word_body())
+    }
+
+    fn read_assignment_word_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         // name
         let name = self.read_variable_name()?;
@@ -948,6 +960,10 @@ impl Parser {
     }
 
     pub(super) fn read_array(&mut self) -> PResult<Token> {
+        self.called("array assignment", |p| p.read_array_body())
+    }
+
+    fn read_array_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.char('(')?;
         let mut elems = Vec::new();
@@ -1479,14 +1495,10 @@ impl Parser {
         // slice we record a generic problem but still return the tree.
         self.allspacing();
         if !self.eof() {
-            let p = self.pos();
-            self.problem_at(
-                p.clone(),
-                p,
-                Severity::ErrorC,
-                1072,
-                "Unexpected input near here.",
-            );
+            // Input the grammar could not consume: the parse has failed, and
+            // ShellCheck reports the deepest failure rather than this point.
+            self.record_failure("");
+            return None;
         }
         let script_id = self.next_id_between(start.clone(), self.pos());
         let script = Token::new(script_id, InnerToken::T_Script { shebang, commands });

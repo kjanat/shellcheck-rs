@@ -24,6 +24,10 @@ impl Parser {
     }
 
     pub(super) fn read_condition(&mut self) -> PResult<Token> {
+        self.called("test expression", |p| p.read_condition_body())
+    }
+
+    fn read_condition_body(&mut self) -> PResult<Token> {
         if self.peek() != Some('[') {
             return Err(());
         }
@@ -554,6 +558,10 @@ impl Parser {
     /// unquoted `]]`/`)` inside a `( .. )` group does not terminate the
     /// condition, while unquoted whitespace outside a group ends the regex.
     pub(super) fn read_regex(&mut self) -> PResult<Token> {
+        self.called("regex", |p| p.read_regex_body())
+    }
+
+    fn read_regex_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         let mut parts = Vec::new();
         loop {
