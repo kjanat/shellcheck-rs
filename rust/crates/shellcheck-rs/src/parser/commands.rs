@@ -417,7 +417,13 @@ impl Parser {
                 }
             }
         }
-        self.read_simple_command()
+        // The last alternative in the `choice`: nothing can take over from a
+        // simple command that failed after consuming input.
+        let r = self.read_simple_command();
+        if r.is_err() && self.idx != m.idx {
+            self.committed = true;
+        }
+        r
     }
 
     /// Faithful port of `readCoProc` (Parser.hs). `coproc` + spacing, then either
@@ -571,7 +577,7 @@ impl Parser {
             if effective.as_deref() == Some("let") {
                 suffix = self.read_let_suffix();
             } else if effective.as_deref() == Some("time") {
-                suffix = self.read_time_suffix();
+                suffix = self.read_time_suffix()?;
             } else {
                 suffix = self.read_cmd_suffix(is_modifier);
             }
@@ -636,7 +642,7 @@ impl Parser {
     /// suffix of the `time` simple command (Parser.hs `readTimeSuffix`). If no
     /// pipeline follows, nothing is consumed and the suffix is empty (mirroring
     /// `option []` over a non-consuming failure).
-    pub(super) fn read_time_suffix(&mut self) -> Vec<Token> {
+    pub(super) fn read_time_suffix(&mut self) -> PResult<Vec<Token>> {
         let m = self.mark();
         let mut out = Vec::new();
         // many readFlag ; readFlag = lookAhead '-' >> readCmdWord
@@ -656,13 +662,17 @@ impl Parser {
         match self.read_pipeline() {
             Ok(p) => {
                 out.push(p);
-                out
+                Ok(out)
             }
             Err(()) => {
-                // No pipeline: undo any consumed flags and behave as a bare
-                // `time` command with no suffix.
+                // `option []` recovers only from a suffix that consumed
+                // nothing: bare `time` is a command, `time -` is a flag with
+                // nothing to time.
+                if self.idx != m.idx {
+                    return Err(());
+                }
                 self.reset(m);
-                Vec::new()
+                Ok(Vec::new())
             }
         }
     }
