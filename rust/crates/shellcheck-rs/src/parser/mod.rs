@@ -236,6 +236,10 @@ struct PendingHereDoc {
     delim: String,
     // id of the T_HereDoc token to fill in once the body is read
     id: Id,
+    /// The context stack as it stood at the `<<`. `readPendingHereDocs` runs
+    /// under `swapContext`, so a body that never terminates is reported
+    /// against the redirection rather than whatever line it ran into.
+    contexts: Vec<Context>,
 }
 
 pub struct Parser {
@@ -863,7 +867,7 @@ impl Parser {
         // optional carriage return, then '\n', then read pending heredocs
         let _ = self.char('\r');
         self.char('\n')?;
-        self.read_pending_heredocs();
+        self.read_pending_heredocs()?;
         Ok('\n')
     }
 

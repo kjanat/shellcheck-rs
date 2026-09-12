@@ -1261,18 +1261,39 @@ impl Parser {
         op_start: Position,
         fd: String,
     ) -> PResult<Token> {
-        // << , <<- , <<<
-        self.string("<<")?;
-        if self.char('<').is_ok() {
-            // here string: `readHereString` spans just `<<<` (id captured before
-            // the word is read).
-            let hs_id = self.next_id_between(op_start.clone(), self.pos());
-            self.spacing();
-            let word = self.read_normal_word()?;
-            let hs = Token::new(hs_id, InnerToken::T_HereString(word));
-            let id = self.next_id_between(start, self.pos());
-            return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: hs }));
+        if !self.string_peek("<<") {
+            return Err(());
         }
+        if self.string_peek("<<<") {
+            return self.read_here_string(start, op_start, fd);
+        }
+        self.called("here document", |p| p.read_here_doc(start, op_start, fd))
+    }
+
+    fn read_here_string(
+        &mut self,
+        start: Position,
+        op_start: Position,
+        fd: String,
+    ) -> PResult<Token> {
+        self.string("<<<")?;
+        // here string: `readHereString` spans just `<<<` (id captured before
+        // the word is read).
+        let hs_id = self.next_id_between(op_start, self.pos());
+        self.spacing();
+        let word = self.read_normal_word()?;
+        let hs = Token::new(hs_id, InnerToken::T_HereString(word));
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: hs }))
+    }
+
+    fn read_here_doc(
+        &mut self,
+        start: Position,
+        _op_start: Position,
+        fd: String,
+    ) -> PResult<Token> {
+        self.string("<<")?;
         let dashed = if self.char('-').is_ok() {
             Dashed::Dashed
         } else {
@@ -1291,6 +1312,7 @@ impl Parser {
             quoted,
             delim: delim.clone(),
             id: hd_id,
+            contexts: self.contexts.clone(),
         });
         let hd = Token::new(
             hd_id,
@@ -1352,49 +1374,42 @@ impl Parser {
         }
     }
 
-    pub(super) fn read_pending_heredocs(&mut self) {
+    pub(super) fn read_pending_heredocs(&mut self) -> PResult<()> {
         if self.pending_heredocs.is_empty() {
-            return;
+            return Ok(());
         }
         let pending: Vec<PendingHereDoc> = std::mem::take(&mut self.pending_heredocs);
         for hd in pending {
+            // `swapContext`: the body is read long after the redirection was
+            // parsed, so the diagnostics name the `<<` and what contained it.
+            let outer = std::mem::replace(&mut self.contexts, hd.contexts.clone());
+            let r = self.read_pending_here_doc(&hd);
+            if r.is_ok() {
+                self.contexts = outer;
+            }
+            r?;
+        }
+        Ok(())
+    }
+
+    fn read_pending_here_doc(&mut self, hd: &PendingHereDoc) -> PResult<()> {
+        {
             // `docStartPos`: the position of the first byte of the body (this is
             // invoked right after the `<<EOF` line's newline).
             let doc_start = self.pos();
-            // consume lines until a line equal to delim (trimmed if dashed)
-            let mut body = String::new();
-            loop {
-                if self.eof() {
-                    break;
-                }
-                // read one line
-                let line_start = self.idx;
-                let mut line = String::new();
-                while let Some(c) = self.peek() {
-                    if c == '\n' {
-                        break;
-                    }
-                    self.bump();
-                    line.push(c);
-                }
-                let terminator = if hd.dashed == Dashed::Dashed {
-                    line.trim_start_matches('\t')
-                } else {
-                    line.as_str()
-                };
-                if terminator == hd.delim {
-                    // consume trailing newline
-                    let _ = self.char('\n');
-                    break;
-                }
-                let _ = line_start;
-                body.push_str(&line);
-                body.push('\n');
-                if self.char('\n').is_err() {
-                    break;
-                }
-            }
+            let (terminated, was_warned, lines) = self.read_doc_lines(hd);
             let doc_end = self.pos();
+            let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+            if !terminated {
+                if !was_warned {
+                    self.debug_here_doc(hd, &body);
+                }
+                // Reached from `linefeed`, deep inside `spacing`: in Parsec the
+                // consuming failure propagates straight out of `readScript`,
+                // with nothing above it able to recover.
+                self.committed = true;
+                return self.fail_with("Here document was not correctly terminated");
+            }
             // `parseHereData`: a quoted delimiter keeps the body verbatim as one
             // literal; an unquoted delimiter sub-parses the body for expansions
             // (`$(..)`, `` `..` ``, `${..}`, `$var`) exactly like a double-quoted
@@ -1407,6 +1422,197 @@ impl Parser {
                 Quoted::Unquoted => self.read_here_data(&body, doc_start),
             };
             self.heredoc_bodies.insert(hd.id, tokens);
+        }
+        Ok(())
+    }
+
+    /// `readDocLines`: the body lines up to the end token, with whether it was
+    /// found and whether a near-miss was already explained.
+    fn read_doc_lines(&mut self, hd: &PendingHereDoc) -> (bool, bool, Vec<String>) {
+        let mut lines = Vec::new();
+        let mut warned = false;
+        loop {
+            let line_pos = self.pos();
+            let mut line = String::new();
+            while let Some(c) = self.peek() {
+                if c == '\n' {
+                    break;
+                }
+                self.bump();
+                line.push(c);
+            }
+            let at_eof = self.char('\n').is_err();
+            let (is_end, was_warned) = self.check_here_doc_end(hd, &line, &line_pos);
+            warned = warned || was_warned;
+            if is_end {
+                return (true, warned, lines);
+            }
+            lines.push(line);
+            if at_eof {
+                return (false, warned, lines);
+            }
+        }
+    }
+
+    /// `checkEnd`: is this line the end token, and if it only looks like it,
+    /// say why it isn't.
+    fn check_here_doc_end(
+        &mut self,
+        hd: &PendingHereDoc,
+        line: &str,
+        line_pos: &Position,
+    ) -> (bool, bool) {
+        // `linewhitespace \`reluctantlyTill\` string endToken`: blanks, then the
+        // token. Reluctant, so the blanks stop at the first position where the
+        // token matches — an end token that itself starts with a space still
+        // lines up. Anything else in front and this is an ordinary body line.
+        let mut split = None;
+        for (i, c) in line
+            .char_indices()
+            .chain(std::iter::once((line.len(), '\0')))
+        {
+            if line[i..].starts_with(hd.delim.as_str()) {
+                split = Some(i);
+                break;
+            }
+            if c != ' ' && c != '\t' {
+                break;
+            }
+        }
+        let Some(split) = split else {
+            return (false, false);
+        };
+        let leading = line[..split].to_string();
+        let after = &line[split + hd.delim.len()..];
+        let trailing: String = after
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let trailer = &after[trailing.len()..];
+
+        let leading_spaces_are_tabs = leading.chars().all(|c| c == '\t');
+        let leader_is_ok =
+            leading.is_empty() || (hd.dashed == Dashed::Dashed && leading_spaces_are_tabs);
+        if leader_is_ok && trailing.is_empty() && trailer.is_empty() {
+            return (true, false);
+        }
+
+        let col = |offset: usize| Position {
+            file: line_pos.file.clone(),
+            line: line_pos.line,
+            column: line_pos.column + offset as i64,
+        };
+        let trailing_pos = col(leading.len() + hd.delim.chars().count());
+        let trailer_pos = col(leading.len() + hd.delim.chars().count() + trailing.len());
+        let mut ppt = |pos: Position, code: i64, msg: &str| {
+            self.problems.push(ParseNote {
+                start: pos.clone(),
+                end: pos,
+                severity: Severity::ErrorC,
+                code,
+                message: msg.to_string(),
+            });
+        };
+        match trailer.chars().next() {
+            Some(')') => {
+                ppt(
+                    trailer_pos,
+                    1119,
+                    "Add a linefeed between end token and terminating ')'.",
+                );
+                (false, true)
+            }
+            Some('#') => {
+                ppt(
+                    trailer_pos,
+                    1120,
+                    "No comments allowed after here-doc token. Comment the next line instead.",
+                );
+                (false, true)
+            }
+            Some(c) if ";>|&".contains(c) => {
+                ppt(
+                    trailer_pos,
+                    1121,
+                    "Add ;/& terminators (and other syntax) on the line with the <<, not here.",
+                );
+                (false, true)
+            }
+            Some(_) if !trailing.is_empty() => {
+                ppt(
+                    trailer_pos,
+                    1122,
+                    "Nothing allowed after end token. To continue a command, put it on the line with the <<.",
+                );
+                (false, true)
+            }
+            // The end token is only a prefix of this line's first word.
+            Some(_) => (false, false),
+            None if !trailing.is_empty() && leader_is_ok => {
+                ppt(
+                    trailing_pos,
+                    1118,
+                    "Delete whitespace after the here-doc end token.",
+                );
+                // Taken as the end anyway, as ShellCheck does.
+                (true, true)
+            }
+            None if hd.dashed == Dashed::Undashed && !leading.is_empty() => {
+                ppt(
+                    col(0),
+                    1039,
+                    "Remove indentation before end token (or use <<- and indent with tabs).",
+                );
+                (false, true)
+            }
+            None if hd.dashed == Dashed::Dashed && !leading_spaces_are_tabs => {
+                ppt(
+                    col(0),
+                    1040,
+                    "When using <<-, you can only indent with tabs.",
+                );
+                (false, true)
+            }
+            None => (false, false),
+        }
+    }
+
+    /// `debugHereDoc`: the end token was never found, so guess at why.
+    fn debug_here_doc(&mut self, hd: &PendingHereDoc, doc: &str) {
+        let (start, end) = self.span_for(hd.id);
+        let mut at_token = |code: i64, msg: String| {
+            self.problems.push(ParseNote {
+                start: start.clone(),
+                end: end.clone(),
+                severity: Severity::ErrorC,
+                code,
+                message: msg,
+            });
+        };
+        let token = &hd.delim;
+        if doc.contains(token.as_str()) {
+            at_token(
+                1041,
+                format!("Found '{token}' further down, but not on a separate line."),
+            );
+            for line in doc.lines() {
+                if line.contains(token.as_str()) {
+                    at_token(
+                        1042,
+                        format!("Close matches include '{line}' (!= '{token}')."),
+                    );
+                }
+            }
+        } else if doc.to_lowercase().contains(&token.to_lowercase()) {
+            at_token(
+                1043,
+                format!("Found {token} further down, but with wrong casing."),
+            );
+        } else {
+            at_token(
+                1044,
+                format!("Couldn't find end token `{token}' in the here document."),
+            );
         }
     }
 
@@ -1605,7 +1811,7 @@ impl Parser {
         }
 
         let commands = self.read_compound_list_or_empty();
-        self.read_pending_heredocs();
+        self.read_pending_heredocs().ok()?;
         // verify EOF: if not at end, it's a parse problem (SC1072-ish). For the
         // slice we record a generic problem but still return the tree.
         self.allspacing();
