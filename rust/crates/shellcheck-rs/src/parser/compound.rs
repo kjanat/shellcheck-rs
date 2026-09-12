@@ -87,10 +87,11 @@ impl Parser {
         let m = self.mark();
         let notes = self.notes.len();
         let pos = self.pos();
+        // `many1 readNormalWord`, which does not skip spacing, so this stops at
+        // the first gap — and never crosses a line.
         let mut any = false;
         while self.read_normal_word().is_ok() {
             any = true;
-            self.spacing();
         }
         let pos_end = self.pos();
         self.reset(m);
@@ -197,6 +198,9 @@ impl Parser {
         }
         let list = self.read_term().ok_or(())?;
         self.allspacing();
+        if self.has_committed_failure() {
+            return Err(());
+        }
         if self.char('}').is_err() {
             let pos = self.pos();
             self.problem_at(
@@ -267,6 +271,10 @@ impl Parser {
         }
         let commands = self.read_term().ok_or(())?;
         self.allspacing();
+        if self.has_committed_failure() {
+            // Something inside gave up for good; that failure is the report.
+            return Err(());
+        }
         if self.consume_keyword("done").is_err() {
             self.problem_at(
                 do_pos.clone(),
@@ -341,6 +349,9 @@ impl Parser {
             }
         };
         self.allspacing();
+        if self.has_committed_failure() {
+            return Err(());
+        }
         if self.consume_keyword("fi").is_err() {
             self.problem_at(
                 pos.clone(),

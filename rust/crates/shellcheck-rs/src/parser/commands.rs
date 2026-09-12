@@ -230,7 +230,9 @@ impl Parser {
             return Some(w.len());
         }
         match self.peek() {
-            Some('}') if self.is_word_boundary_after(1) => Some(1),
+            // `g_Rbrace` is a bare `char '}'` with no word boundary, so that
+            // ksh's `${ foo; }bar` closes where it should.
+            Some('}') => Some(1),
             Some(')') => Some(1),
             Some(';') if self.peek_at(1) == Some(';') => Some(2),
             _ => None,
@@ -466,7 +468,8 @@ impl Parser {
         self.string("((")?;
         let c = self.read_arithmetic_contents()?;
         self.string("))")?;
-        self.arith_spacing();
+        // `spacing`, not `allspacing`: the node ends on its own line.
+        self.spacing();
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Arithmetic(c)))
     }
