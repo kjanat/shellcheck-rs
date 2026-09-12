@@ -371,6 +371,12 @@ pub(crate) const SAMPLE_WORDS: &[&str] = &[
 /// `arithmeticBinaryTestOps`.
 pub(crate) const ARITHMETIC_BINARY_TEST_OPS: &[&str] = &["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
 
+/// `ShellCheck.Data.binaryTestOps`.
+pub(crate) const BINARY_TEST_OPS: &[&str] = &[
+    "-nt", "-ot", "-ef", "==", "!=", "<=", ">=", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "=~",
+    ">", "<", "=", "\\<", "\\>", "\\<=", "\\>=",
+];
+
 /// `flagsForRead`.
 pub(crate) const FLAGS_FOR_READ: &str = "sreu:n:N:i:p:a:t:";
 

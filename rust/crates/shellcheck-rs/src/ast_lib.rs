@@ -456,6 +456,18 @@ pub(crate) fn oversimplify_concat(t: &Token) -> String {
     oversimplify(t).concat()
 }
 
+/// `getTrailingUnquotedLiteral`: the word's last part, when it is an unquoted
+/// literal.
+pub fn get_trailing_unquoted_literal(t: &Token) -> Option<&Token> {
+    if let InnerToken::T_NormalWord(list) = t.inner() {
+        let last = list.last()?;
+        if matches!(last.inner(), InnerToken::T_Literal(_)) {
+            return Some(last);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {

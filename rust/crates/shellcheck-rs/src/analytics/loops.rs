@@ -94,7 +94,7 @@ pub(super) fn check_for_in_quoted(params: &Parameters, t: &Token, out: &mut Out)
 
     // Equation 4: multiple (or a single item that fell through) -> SC2258
     for arg in items {
-        if let Some(suffix) = get_trailing_unquoted_literal(arg) {
+        if let Some(suffix) = crate::ast_lib::get_trailing_unquoted_literal(arg) {
             if let Some(string) = ast_lib::get_literal_string(suffix) {
                 if string.ends_with(',') {
                     warn_with_fix(
@@ -578,17 +578,6 @@ fn is_loop(t: &Token) -> bool {
             | InnerToken::T_ForArithmetic { .. }
             | InnerToken::T_SelectIn { .. }
     )
-}
-
-/// `getTrailingUnquotedLiteral`.
-fn get_trailing_unquoted_literal(t: &Token) -> Option<&Token> {
-    if let InnerToken::T_NormalWord(list) = &*t.inner {
-        let last = list.last()?;
-        if matches!(&*last.inner, InnerToken::T_Literal(_)) {
-            return Some(last);
-        }
-    }
-    None
 }
 
 /// `wouldHaveBeenGlob s = '*' `elem` s`.

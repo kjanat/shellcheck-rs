@@ -611,6 +611,24 @@ impl Parser {
         } else {
             self.reset(m);
         }
+        // `checkTrailingOp`: a word ending in a test operator ran into it.
+        if let Some(lit) = ast_lib::get_trailing_unquoted_literal(&x) {
+            if let InnerToken::T_Literal(s) = lit.inner() {
+                if let Some(op) = crate::data::BINARY_TEST_OPS
+                    .iter()
+                    .find(|o| s.ends_with(**o))
+                {
+                    let (ls, le) = self.span_for(lit.id());
+                    self.problem_at(
+                        ls,
+                        le,
+                        Severity::ErrorC,
+                        1108,
+                        &format!("You need a space before and after the {op} ."),
+                    );
+                }
+            }
+        }
         let typ = self.cond_typ(single);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::TC_Nullary { typ, token: x }))

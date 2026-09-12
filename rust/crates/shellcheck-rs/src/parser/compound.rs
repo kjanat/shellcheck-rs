@@ -980,6 +980,11 @@ impl Parser {
         while matches!(self.input.get(i), Some(' ') | Some('\t')) {
             i += 1;
         }
+        // `readParens` accepts a botched parameter list too, reporting SC1065
+        // and skipping to the `)`, so anything up to one on this line counts.
+        while matches!(self.input.get(i), Some(&c) if c != '\n' && c != ')' && c != '{') {
+            i += 1;
+        }
         self.input.get(i) == Some(&')')
     }
 
@@ -997,15 +1002,21 @@ impl Parser {
             return Err(());
         }
         self.spacing();
-        self.char('(')?;
-        self.spacing();
-        self.char(')')?;
+        self.read_function_parens()?;
         self.allspacing();
         let body = if self.peek() == Some('{') {
             self.read_brace_group()?
         } else if self.peek() == Some('(') {
             self.read_subshell()?
         } else {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1064,
+                "Expected a { to open the function definition.",
+            );
             return Err(());
         };
         let id = self.next_id_between(start, self.pos());
@@ -1020,6 +1031,28 @@ impl Parser {
         ))
     }
 
+    /// `readParens`: `( )` with anything between it reported as a doomed
+    /// attempt at a parameter list, then skipped.
+    fn read_function_parens(&mut self) -> PResult<()> {
+        self.char('(')?;
+        self.spacing();
+        if self.char(')').is_ok() {
+            return Ok(());
+        }
+        let pos = self.pos();
+        self.problem_at(
+            pos.clone(),
+            pos,
+            Severity::ErrorC,
+            1065,
+            "Trying to declare parameters? Don't. Use () and refer to params as $1, $2..",
+        );
+        while matches!(self.peek(), Some(c) if c != '\n' && c != ')' && c != '{') {
+            self.bump();
+        }
+        self.char(')').map(|_| ())
+    }
+
     pub(super) fn read_function_def(&mut self) -> PResult<Token> {
         self.called("function", |p| p.read_function_def_body())
     }
@@ -1028,18 +1061,45 @@ impl Parser {
         let start = self.pos();
         self.consume_keyword("function")?;
         self.spacing();
-        let name = self.read_function_name()?;
+        let name = self.read_function_name_ext(true)?;
+        let before_spaces = self.idx;
         self.spacing();
+        let had_spaces = self.idx != before_spaces;
         // optional ()
-        let has_parens = if self.char('(').is_ok() {
-            self.spacing();
-            self.char(')')?;
+        let has_parens = if self.peek() == Some('(') {
+            self.read_function_parens()?;
             true
         } else {
             false
         };
+        if !has_parens && !had_spaces && matches!(self.peek(), Some('{') | Some('(')) {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1095,
+                "You need a space or linefeed between the function name and body.",
+            );
+        }
         self.allspacing();
-        let body = self.read_command()?;
+        // `readBraceGroup <|> readSubshell`, after a lookahead that says which
+        // it should have been.
+        let body = if self.peek() == Some('{') {
+            self.read_brace_group()?
+        } else if self.peek() == Some('(') {
+            self.read_subshell()?
+        } else {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1064,
+                "Expected a { to open the function definition.",
+            );
+            return Err(());
+        };
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
@@ -1052,16 +1112,35 @@ impl Parser {
         ))
     }
 
+    /// `functionStartChars` then `many functionChars`, which unlike the start
+    /// set includes `#` — so `foo#bar` is one name, not a name and a comment.
+    /// After the `function` keyword both sets also take `[]*=!`.
     pub(super) fn read_function_name(&mut self) -> PResult<String> {
+        self.read_function_name_ext(false)
+    }
+
+    pub(super) fn read_function_name_ext(&mut self, extended: bool) -> PResult<String> {
+        let extra = if extended { "[]*=!" } else { "" };
+        let is_start =
+            |c: char| c.is_ascii_alphanumeric() || "_:+?-./^@,".contains(c) || extra.contains(c);
+        let is_cont =
+            |c: char| c.is_ascii_alphanumeric() || "_#:+?-./^@,".contains(c) || extra.contains(c);
         let mut s = String::new();
+        match self.peek() {
+            Some(c) if is_start(c) => {
+                self.bump();
+                s.push(c);
+            }
+            _ => return Err(()),
+        }
         while let Some(c) = self.peek() {
-            if c.is_ascii_alphanumeric() || "_:+?-./^@,".contains(c) {
+            if is_cont(c) {
                 self.bump();
                 s.push(c);
             } else {
                 break;
             }
         }
-        if s.is_empty() { Err(()) } else { Ok(s) }
+        Ok(s)
     }
 }
