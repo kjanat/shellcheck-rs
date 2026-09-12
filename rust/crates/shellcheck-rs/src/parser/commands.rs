@@ -205,7 +205,33 @@ impl Parser {
     }
 
     pub(super) fn read_pipeline(&mut self) -> PResult<Token> {
+        // `unexpecting "keyword/token" readKeyword`: a word that closes a
+        // compound command cannot start one. The keyword is read and then
+        // rejected, so the error lands past it, and the whole thing sits in a
+        // `try`, so an enclosing alternative can still take over.
+        if let Some(n) = self.keyword_len() {
+            let m = self.mark();
+            for _ in 0..n {
+                self.bump();
+            }
+            self.reset(m);
+            return self.fail_recoverable("Unexpected keyword/token");
+        }
         self.read_banged()
+    }
+
+    /// The length of the `readKeyword` token ahead, if any.
+    fn keyword_len(&self) -> Option<usize> {
+        const WORDS: [&str; 7] = ["then", "else", "elif", "fi", "do", "done", "esac"];
+        if let Some(w) = WORDS.iter().find(|k| self.keyword_ahead(k)) {
+            return Some(w.len());
+        }
+        match self.peek() {
+            Some('}') if self.is_word_boundary_after(1) => Some(1),
+            Some(')') => Some(1),
+            Some(';') if self.peek_at(1) == Some(';') => Some(2),
+            _ => None,
+        }
     }
 
     pub(super) fn read_banged(&mut self) -> PResult<Token> {

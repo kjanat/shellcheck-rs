@@ -538,6 +538,14 @@ impl Parser {
         Err(())
     }
 
+    /// Fail deliberately from inside a `try`, as `unexpecting` does: the
+    /// message is still the one reported if nothing gets further, but the
+    /// failure reads as non-consuming so an enclosing alternative may recover.
+    fn fail_recoverable<T>(&mut self, message: &str) -> PResult<T> {
+        self.record_failure_as(message, true, false);
+        Err(())
+    }
+
     /// Whether a failure here has consumed input since the innermost
     /// production began, and so cannot be backtracked out of.
     fn has_consumed(&self) -> bool {
@@ -606,6 +614,10 @@ impl Parser {
     /// the furthest position reached.
     fn record_failure(&mut self, message: &str, explicit: bool) {
         let consumed = self.has_consumed();
+        self.record_failure_as(message, explicit, consumed);
+    }
+
+    fn record_failure_as(&mut self, message: &str, explicit: bool, consumed: bool) {
         // Rank failures the way Parsec picks one: furthest position first,
         // then a production that had committed to what it was reading over an
         // alternative that bailed immediately, then a deliberate failure over

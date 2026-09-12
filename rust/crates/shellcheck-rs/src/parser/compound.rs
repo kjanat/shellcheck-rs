@@ -26,7 +26,7 @@ impl Parser {
         let cmd = match c {
             Some('(') if self.peek_at(1) == Some('(') => self.read_ambiguous_arithmetic(),
             Some('(') => self.read_subshell(),
-            Some('{') if self.is_word_boundary_after(1) => self.read_brace_group(),
+            Some('{') => self.read_brace_group(),
             _ => {
                 if self.keyword_ahead("if") {
                     self.read_if_clause()
@@ -137,11 +137,45 @@ impl Parser {
     fn read_brace_group_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.char('{')?;
+        let spaced = {
+            let before = self.idx;
+            self.allspacing();
+            self.idx != before
+        };
+        // `{(` is legal, so only an ordinary word needs the space.
+        if !spaced && !matches!(self.peek(), None | Some('(')) {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1054,
+                "You need a space after the '{'.",
+            );
+        }
+        if self.peek() == Some('}') {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1055,
+                "You need at least one command here. Use 'true;' as a no-op.",
+            );
+        }
+        let list = self.read_term().ok_or(())?;
         self.allspacing();
-        let list = self.read_compound_list_or_empty();
-        self.allspacing();
-        self.consume_keyword("}")
-            .or_else(|_| self.char('}').map(|_| ()))?;
+        if self.char('}').is_err() {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1056,
+                "Expected a '}'. If you have one, try a ; or \\n in front of it.",
+            );
+            return self.fail_with("Missing '}'");
+        }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_BraceGroup(list)))
     }
@@ -530,7 +564,13 @@ impl Parser {
     }
 
     /// `readWithoutFunction`: `name ( )` then a brace-group or subshell body.
+    /// Both this and the `function` keyword form are one `called "function"`
+    /// production in Haskell, so both name the function in SC1073/SC1009.
     pub(super) fn read_posix_function(&mut self) -> PResult<Token> {
+        self.called("function", |p| p.read_posix_function_body())
+    }
+
+    fn read_posix_function_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         let name = self.read_function_name()?;
         if name == "time" {
