@@ -14,6 +14,12 @@ Each entry is runnable. `shellcheck` below is the Haskell binary; every output
 block is verbatim from 0.11.0 with no shebang in the input, so the SC2148 line
 ("add a shebang") is omitted for brevity where it appears.
 
+Every entry was also run through the shells themselves — **bash 5.2.21** and
+**dash 0.5.12** — and says what they do with the same input. That comparison is
+the arbiter here: a diagnostic that disagrees with the shell it is checking is a
+defect, and one that merely reads oddly while describing real shell behaviour is
+not.
+
 Two groups:
 
 - **Looks like a bug** — the diagnostic misinforms the reader, or a diagnostic
@@ -48,6 +54,16 @@ printf '%s' '((())' | shellcheck -
 -:1:5: error:  Fix any mentioned problems and try again. [SC1072]
 ```
 
+**What the shells do**
+
+```
+bash: line 1: unexpected EOF while looking for matching `}'      # ${
+bash: line 3: syntax error: unexpected end of file               # ((())
+```
+
+Both are genuine syntax errors, so ShellCheck is right to fail — the complaint
+is only about which construct it blames.
+
 **What's wrong.** SC1073 and SC1009 are meant to bracket the failure: "the
 construct that failed" and "the construct the error was inside". In the first
 case there is no simple command anywhere in `${ ` — the SC1009 line names a
@@ -73,37 +89,59 @@ divergence, not a decision to differ.
 
 ---
 
-### 2. `!` followed by a comment: the intended error never fires, and the position is past the comment
+### 2. `! # comment` is valid bash, and ShellCheck refuses to parse the file
 
 **Reproduce**
 
 ```sh
-printf '%s' '! # negate what, exactly'  | shellcheck -
-printf '%s\n' "''" '!#' | shellcheck -
+printf '#!/bin/bash\n! # negate what, exactly\n' | bash;       echo "bash: $?"
+printf '#!/bin/bash\n! # negate what, exactly\n' | shellcheck -
 ```
+
+**What the shells do**
+
+```
+bash: 1            # accepted: ! negates the null command, so the script exits 1
+```
+
+dash rejects it (`Syntax error: newline unexpected`), so for a POSIX target
+ShellCheck complaining is correct. For a bash target it is not.
 
 **You get**
 
 ```
--:1:25: error: Expected a command. Fix any mentioned problems and try again. [SC1072]
+-:2:25: error: Expected a command. Fix any mentioned problems and try again. [SC1072]
 ```
 
-```
--:2:3: error: Expected whitespace. Fix any mentioned problems and try again. [SC1072]
-```
+**What's wrong.** Two things, and the second is the serious one.
 
-**What's wrong.** `g_Bang` contains an error message written precisely for this
-input — SC1035 *"You are missing a required space after the !."* — and it cannot
-fire when a comment follows the `!`. The user is told "Expected a command" at
-column 25, i.e. at the end of the comment, or "Expected whitespace" at the end
-of the line. Neither mentions the `!` that is the actual problem, and the column
-points at whitespace the user cannot see.
+1. `g_Bang` contains an error message written precisely for a missing space after
+   `!` — SC1035 *"You are missing a required space after the !."* — and it cannot
+   fire when a comment follows, so the user never sees the one message that would
+   explain the problem.
+2. With a bash shebang, this is a **fatal** SC1072 at column 25: the file does
+   not parse, so nothing in it is analysed. A script bash runs fine gets no
+   checking at all, and the reported column points at the end of a comment rather
+   than at the `!`.
 
 **Why.** The code is `void spacing1 <|> parseProblemAt pos ErrorC 1035 ...`.
-`spacing` happily consumes a trailing comment while returning no whitespace, so
+`spacing` consumes a trailing comment while returning no whitespace, so
 `spacing1` fails *having consumed input* — and Parsec's `<|>` cannot reach the
 right-hand side of an alternation once the left side consumed. The recovery arm
-is dead code for exactly the input it was written for.
+is dead code for exactly the input it was written for, and the failure escalates
+to a parse error instead.
+
+**Not this, though:** `!#` on its own line.
+
+```sh
+printf '!#\n' | bash          # bash: !#: command not found  (exit 127)
+printf '!#\n' | dash          # dash: !#: not found          (exit 127)
+```
+
+`#` only opens a comment at the start of a word, so `!#` is a single word and
+both shells treat it as a command *name*. ShellCheck reads the `!` as the
+negation operator and then errors — a heuristic ("you meant `! foo`"), not a
+misreading of shell grammar, and defensible as such.
 
 ---
 
@@ -122,6 +160,15 @@ printf 'echo $((1 \xe2\x80\x93 2))\n' | shellcheck -   # en dash instead of minu
 -:1:6: warning: Quote this to prevent word splitting. [SC2046]
 -:1:6: note: Useless echo? Instead of 'echo $(cmd)', just use 'cmd'. [SC2005]
 ```
+
+**What the shell does**
+
+```
+bash: line 1: 1 – 2: syntax error: invalid arithmetic operator (error token is "– 2")
+```
+
+bash keeps it as arithmetic and names the offending token. ShellCheck is the only
+one of the two that decides it was a command substitution.
 
 **What's wrong.** The script is arithmetic with a typo'd minus sign — an en dash
 pasted from a document or an editor's smart-punctuation. All three diagnostics
@@ -156,9 +203,19 @@ printf '%s' "[* '" | shellcheck -
 -:1:5: error: Expected comparison operator (don't wrap commands in []/[[]]). Fix any mentioned problems and try again. [SC1072]
 ```
 
+**What the shell does**
+
+```
+bash: line 1: unexpected EOF while looking for matching `''
+```
+
+bash names the real problem: the quote is never closed. Close it and bash reports
+`[*: command not found`, i.e. it never reads `[*` as a test at all.
+
 **What a reader sees.** The input is four characters; the error is at column 5,
 i.e. one past the end, and the message asks for a comparison operator at a point
-where the user wrote a single quote.
+where the user wrote a single quote. The unterminated quote — the thing bash
+leads with — is not mentioned.
 
 **Why.** ShellCheck supports quoted test operators (`[ 1 '-eq' 2 ]`) through
 `readEscaped`'s `withQuotes`: it consumes the quote and then runs the operator
@@ -212,13 +269,30 @@ SC1087  column 6, endColumn 6     "Use braces when expanding arrays, e.g. ${arra
 SC2154  column 6, endColumn 10    (the expansion itself)
 ```
 
-**What a reader sees.** In a terminal the caret is a single column under the `$`,
-while the analysis codes on the same line underline the whole expansion. Any
-tool that renders spans — an editor's squiggle, a diff view, a fixer — gets a
-zero-width range for a diagnostic about a multi-character construct.
+**What the shell does** — the checks themselves are exactly right:
 
-**Why.** These are `parseNoteAt pos`, and `pos` was captured before the name was
-read. `parseNoteAt` has no end position, so start and end coincide.
+```sh
+bash -c 'set -- A B C; echo "[$10]" "[${10}]" "[${1}0]"'
+# [A0] [] [A0]
+```
+
+`$10` is `${1}` followed by a literal `0`, never positional parameter 10, which
+is what SC1037 says. With no arguments set, `echo $10` prints `0` — the empty
+`$1` plus the `0` — which is why it looks like it "worked". SC1087 is the same
+story for `$arr[0]`. Nothing about the diagnoses is in question here.
+
+**What a reader sees.** Only the *span*. In a terminal the caret is a single
+column under the `$`, while the analysis codes on the same line underline the
+whole expansion. Any tool that renders ranges — an editor's squiggle, a diff
+view, a fixer — gets a zero-width range for a diagnostic about a
+multi-character construct.
+
+**Why, and the case for it.** These are `parseNoteAt pos`, whose `pos` was
+captured before the name was read; `parseNoteAt` takes no end position, so start
+and end coincide. There is a reading in which the `$` is the *best* single
+column to point at: the fix is to insert `{` right there. So this is filed as
+surprising rather than wrong — it only bites tools that expect a span to cover
+the construct it describes.
 
 ---
 
@@ -257,9 +331,11 @@ unrelated lines.
 
 ## Reporting upstream
 
-Items 1 and 2 are defects with no upside: a misattributed context and an
-unreachable error message. Item 3 is a missing hint on a path that already knows
-the right words for it. Those three are worth a bug report against
+Item 2 is the one with real consequences: bash runs `! # comment`, ShellCheck
+declares the file unparseable and checks none of it. Item 1 is a misattributed
+context on input that genuinely is a syntax error, and item 3 is a missing hint
+on a path that already has the right words for it — both cosmetic next to 2.
+Those three are worth a bug report against
 [koalaman/shellcheck](https://github.com/koalaman/shellcheck).
 
 Items 4–7 are working as designed, or as Parsec dictates. Changing them would
