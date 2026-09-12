@@ -28,6 +28,21 @@
 //!   * SC2313 — checkReadExpansions (ONLY the array-index branch; SC2229 lives
 //!     in batch_p)
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::cfg::oversimplify_concat;
+use crate::cfg::will_become_multiple_args;
+use crate::cfg::will_concat_in_assignment;
+use crate::analyzer_lib::get_all_flags;
+use crate::analyzer_lib::is_array_expansion;
+use crate::astlib::basename;
+use crate::analyzer_lib::is_true_assignment_source;
+use crate::analyzer_lib::get_closest_command;
+use crate::analyzer_lib::arguments;
+use crate::astlib::e4m;
+use crate::astlib::is_literal;
+use crate::astlib::is_constant;
+use crate::astlib::is_glob;
+use crate::astlib::has_split_range;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -76,90 +91,6 @@ pub fn register(c: &mut Checker) {
 const DECLARING_COMMANDS: [&str; 6] = ["local", "declare", "export", "readonly", "typeset", "let"];
 const PRIVILEGE_ELEVATION_COMMANDS: [&str; 3] = ["sudo", "doas", "run0"];
 
-fn basename(s: &str) -> String {
-    s.rsplit('/').next().unwrap_or(s).to_string()
-}
-
-/// The words after the command name of a `T_SimpleCommand`.
-fn arguments(t: &Token) -> &[Token] {
-    match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => &words[1..],
-        _ => &[],
-    }
-}
-
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
-        InnerToken::T_DoubleQuoted(l) => l.iter().collect(),
-        InnerToken::TA_Expansion(l) => l.iter().flat_map(get_word_parts).collect(),
-        _ => vec![t],
-    }
-}
-
-/// `oversimplify` concatenated to a single string.
-fn oversimplify_concat(t: &Token) -> String {
-    oversimplify(t).concat()
-}
-
-/// `isLiteral t = isJust $ getLiteralString t`.
-fn is_literal(t: &Token) -> bool {
-    astlib::get_literal_string(t).is_some()
-}
-
-/// `isConstant`.
-fn is_constant(token: &Token) -> bool {
-    use InnerToken::*;
-    match &*token.inner {
-        T_NormalWord(l) => {
-            if let Some(first) = l.first() {
-                if let T_Literal(s) = &*first.inner {
-                    if s.starts_with('~') {
-                        return false;
-                    }
-                }
-            }
-            l.iter().all(is_constant)
-        }
-        T_DoubleQuoted(l) => l.iter().all(is_constant),
-        T_SingleQuoted(_) => true,
-        T_Literal(_) => true,
-        _ => false,
-    }
-}
-
-/// `isGlob`.
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
-        _ => false,
-    }
-}
-fn has_split_range(l: &[Token]) -> bool {
-    let after: Vec<&Token> = l
-        .iter()
-        .skip_while(|t| !matches!(&*t.inner, InnerToken::T_Literal(s) if s == "["))
-        .collect();
-    after
-        .iter()
-        .any(|t| matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']')))
-}
-
-/// `isArrayExpansion`.
-fn is_array_expansion(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_DollarBraced { op, .. } => {
-            let s = oversimplify_concat(op);
-            s.starts_with('@') || (!s.starts_with('#') && s.contains("[@]"))
-        }
-        _ => false,
-    }
-}
-
 /// `willSplit`.
 fn will_split(t: &Token) -> bool {
     use InnerToken::*;
@@ -192,28 +123,6 @@ fn mbma_f(quoted: bool, t: &Token) -> bool {
         _ => false,
     }
 }
-fn will_become_multiple_args(t: &Token) -> bool {
-    will_concat_in_assignment(t) || wbma_f(t)
-}
-fn wbma_f(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_BraceExpansion(_) => true,
-        T_NormalWord(parts) => parts.iter().any(wbma_f),
-        _ => false,
-    }
-}
-fn will_concat_in_assignment(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_DollarBraced { .. } => is_array_expansion(t),
-        T_DoubleQuoted(parts) => parts.iter().any(will_concat_in_assignment),
-        T_NormalWord(parts) => parts.iter().any(will_concat_in_assignment),
-        _ => false,
-    }
-}
 
 /// `isFunctionLike`.
 fn is_function_like(t: &Token) -> bool {
@@ -221,70 +130,6 @@ fn is_function_like(t: &Token) -> bool {
         &*t.inner,
         InnerToken::T_Function { .. } | InnerToken::T_BatsTest { .. }
     )
-}
-
-/// `escapeForMessage` (`e4m`).
-fn e4m(s: &str) -> String {
-    let mut out = String::new();
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{1B}' => out.push_str("\\e"),
-            _ => {
-                let should_escape = c.is_control() || (!c.is_ascii() && !c.is_alphabetic());
-                if should_escape {
-                    let n = c as u32;
-                    if n < 256 {
-                        out.push_str(&format!("\\x{:02X}", n));
-                    } else {
-                        out.push_str(&format!("\\U{:04X}", n));
-                    }
-                } else {
-                    out.push(c);
-                }
-            }
-        }
-    }
-    out
-}
-
-/// `getFlagsUntil (== "--")` over a command token: returns (token, flagName)
-/// pairs (flagName is "" for operands / after `--`).
-fn get_all_flags(t: &Token) -> Vec<(Token, String)> {
-    let args = arguments(t);
-    let mut broken = false;
-    let mut flag_args: Vec<(Token, String)> = vec![];
-    let mut rest: Vec<Token> = vec![];
-    for x in args {
-        let txt = oversimplify_concat(x);
-        if !broken && txt == "--" {
-            broken = true;
-        }
-        if broken {
-            rest.push(x.clone());
-        } else {
-            flag_args.push((x.clone(), txt));
-        }
-    }
-    let mut out: Vec<(Token, String)> = vec![];
-    for (x, txt) in flag_args {
-        if let Some(arg) = txt.strip_prefix("--") {
-            out.push((x, arg.split('=').next().unwrap_or("").to_string()));
-        } else if let Some(a) = txt.strip_prefix('-') {
-            for v in a.chars() {
-                out.push((x.clone(), v.to_string()));
-            }
-        } else {
-            out.push((x, String::new()));
-        }
-    }
-    for x in rest {
-        out.push((x, String::new()));
-    }
-    out
 }
 
 // ---- checkCommand dispatch -------------------------------------------------
@@ -992,18 +837,6 @@ fn check_ssh_command_string(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2291 — checkUnquotedEchoSpaces
 // ===========================================================================
 
-fn get_closest_command<'a>(params: &'a Parameters, t: &'a Token) -> Option<&'a Token> {
-    let mut cur = t;
-    loop {
-        match &*cur.inner {
-            InnerToken::T_Redirecting { .. } => return Some(cur),
-            InnerToken::T_Script { .. } => return None,
-            _ => {}
-        }
-        cur = params.parent(cur)?;
-    }
-}
-
 fn check_unquoted_echo_spaces(params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_basename(t, "echo") {
         Some(x) => x,
@@ -1103,12 +936,12 @@ fn check_eval_array(params: &Parameters, t: &Token, out: &mut Out) {
 
 fn missing_destination(te: &Token, out: &mut Out, handler: impl Fn(&mut Out, Id)) {
     let args = get_all_flags(te);
-    let params_ops: Vec<&(Token, String)> = args.iter().filter(|(_, x)| x.is_empty()).collect();
+    let params_ops: Vec<&(&Token, String)> = args.iter().filter(|(_, x)| x.is_empty()).collect();
     let has_target = args
         .iter()
         .any(|(_, x)| !x.is_empty() && "target-directory".starts_with(x.as_str()));
     if params_ops.len() == 1 {
-        let single = &params_ops[0].0;
+        let single: &Token = params_ops[0].0;
         if !(has_target || may_become_multiple_args(single)) {
             handler(out, te.id());
         }
@@ -1201,17 +1034,6 @@ fn check_sudo_args(params: &Parameters, t: &Token, out: &mut Out) {
 // ===========================================================================
 // SC2213 / SC2214 / SC2220 — checkWhileGetoptsCase
 // ===========================================================================
-
-/// `isTrueAssignmentSource`.
-fn is_true_assignment_source(dt: &DataType) -> bool {
-    !matches!(
-        dt,
-        DataType::DataString(DataSource::SourceChecked)
-            | DataType::DataString(DataSource::SourceDeclaration)
-            | DataType::DataArray(DataSource::SourceChecked)
-            | DataType::DataArray(DataSource::SourceDeclaration)
-    )
-}
 
 fn modifies_variable(params: &Parameters, token: &Token, name: &str) -> bool {
     let flow = get_variable_flow(

@@ -21,6 +21,8 @@
 //! - SC2295  checkUnquotedParameterExpansionPattern
 //! - SC2302/2303  checkArrayValueUsedAsIndex
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::cfg::get_unquoted_literal;
+use crate::astlib::is_constant;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -62,23 +64,6 @@ pub fn register(c: &mut Checker) {
 // Shared local helpers (ported from ASTLib; kept private).
 // ---------------------------------------------------------------------------
 
-/// `ShellCheck.ASTLib.getUnquotedLiteral`.
-fn get_unquoted_literal(t: &Token) -> Option<String> {
-    if let InnerToken::T_NormalWord(list) = &*t.inner {
-        let mut s = String::new();
-        for p in list {
-            if let InnerToken::T_Literal(x) = &*p.inner {
-                s.push_str(x);
-            } else {
-                return None;
-            }
-        }
-        Some(s)
-    } else {
-        None
-    }
-}
-
 /// `ShellCheck.ASTLib.isCommandSubstitution`.
 fn is_command_substitution(t: &Token) -> bool {
     matches!(
@@ -87,26 +72,6 @@ fn is_command_substitution(t: &Token) -> bool {
             | InnerToken::T_DollarBraceCommandExpansion { .. }
             | InnerToken::T_Backticked(_)
     )
-}
-
-/// `ShellCheck.ASTLib.isConstant`.
-fn is_constant(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) => {
-            if let Some(first) = l.first() {
-                if let InnerToken::T_Literal(s) = &*first.inner {
-                    if s.starts_with('~') {
-                        return false;
-                    }
-                }
-            }
-            l.iter().all(is_constant)
-        }
-        InnerToken::T_DoubleQuoted(l) => l.iter().all(is_constant),
-        InnerToken::T_SingleQuoted(_) => true,
-        InnerToken::T_Literal(_) => true,
-        _ => false,
-    }
 }
 
 /// `ShellCheck.ASTLib.isUnmodifiedParameterExpansion`.

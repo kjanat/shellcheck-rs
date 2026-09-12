@@ -14,6 +14,12 @@
 //!   is tangled with SC2194/2195/2221; not self-contained, out of scope here.
 //! - SC2223  checkSpacefulnessCfg — dataflow/CFG (`isClean`, variable flow); blocked.
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::is_array_expansion;
+use crate::astlib::is_glob;
+use crate::astlib::is_closing_range;
+use crate::astlib::is_half_open_range;
+use crate::astlib::has_split_range;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -34,52 +40,6 @@ pub fn register(c: &mut Checker) {
 // Private helpers (ported from ASTLib/AnalyzerLib; kept local so this module
 // does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
-
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    use InnerToken::*;
-    match &*t.inner {
-        T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
-        T_DoubleQuoted(l) => l.iter().collect(),
-        _ => vec![t],
-    }
-}
-
-/// `isArrayExpansion`: an expansion of multiple array items.
-fn is_array_expansion(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_DollarBraced { op, .. } => {
-            let string = oversimplify(op).concat();
-            string.starts_with('@') || (!string.starts_with('#') && string.contains("[@]"))
-        }
-        _ => false,
-    }
-}
-
-/// `isGlob`.
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
-        _ => false,
-    }
-}
-
-fn has_split_range(l: &[Token]) -> bool {
-    // foo[x${var}y] gets parsed as foo,[,x,$var,y]
-    let after_bracket = l.iter().skip_while(|t| !is_half_open_range(t));
-    after_bracket.clone().next().is_some() && after_bracket.skip(1).any(is_closing_range)
-}
-
-fn is_half_open_range(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Literal(s) if s == "[")
-}
-
-fn is_closing_range(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']'))
-}
 
 // ---------------------------------------------------------------------------
 // SC2107 / SC2108 — checkConditionalAndOrs (only these two branches)

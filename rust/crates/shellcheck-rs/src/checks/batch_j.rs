@@ -20,6 +20,18 @@
 //! match; the `T_DollarBraced` (`${x:=y}`) and `T_DollarBraceCommandExpansion`
 //! cases (which do parse) are ported so their negative tests stay negative.
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::cfg::is_special_variable_char;
+use crate::cfg::is_variable_char;
+use crate::cfg::is_variable_start_char;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::get_command;
+use crate::astlib::basename;
+use crate::analyzer_lib::get_closest_command;
+use crate::astlib::drop_hashbang_prefix;
+use crate::astlib::is_function;
+use crate::astlib::is_assignment;
+use crate::astlib::is_flag;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -38,42 +50,6 @@ pub fn register(c: &mut Checker) {
 // Shared private helpers (ported from ASTLib/AnalyzerLib; kept local so this
 // module does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
-
-fn basename(path: &str) -> String {
-    match path.rsplit('/').next() {
-        Some(x) => x.to_string(),
-        None => path.to_string(),
-    }
-}
-
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    use InnerToken::*;
-    match &*t.inner {
-        T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
-        T_DoubleQuoted(l) => l.iter().collect(),
-        TA_Expansion(l) => l.iter().flat_map(get_word_parts).collect(),
-        _ => vec![t],
-    }
-}
-
-/// `isFlag`: word whose first part is an unquoted `-...` literal.
-fn is_flag(t: &Token) -> bool {
-    match get_word_parts(t).first() {
-        Some(w) => matches!(&*w.inner, InnerToken::T_Literal(s) if s.starts_with('-')),
-        None => false,
-    }
-}
-
-/// `getCommand`: unwrap redirections/annotations to the T_SimpleCommand.
-fn get_command(t: &Token) -> Option<&Token> {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => get_command(cmd),
-        InnerToken::T_Annotation { token, .. } => get_command(token),
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => Some(t),
-        _ => None,
-    }
-}
 
 fn simple_command_words(t: &Token) -> Option<&Vec<Token>> {
     let cmd = get_command(t)?;
@@ -128,56 +104,8 @@ fn exec_effective(args: &[Token]) -> Option<&Token> {
     None
 }
 
-/// `getCommandName`: resolving `command`/`builtin`/`busybox`/`run`/`exec`.
-fn get_command_name(t: &Token) -> Option<String> {
-    let words = simple_command_words(t)?;
-    let w = words.first()?;
-    let s = astlib::get_literal_string(w)?;
-    let rest = &words[1..];
-    let effective: Option<&Token> = match s.as_str() {
-        "busybox" | "builtin" | "command" | "run" => rest.first().filter(|a| !is_flag(a)),
-        "exec" => exec_effective(rest),
-        _ => None,
-    };
-    match effective {
-        Some(tok) => astlib::get_literal_string(tok),
-        None => Some(s),
-    }
-}
-
 fn get_command_basename(t: &Token) -> Option<String> {
     get_command_name(t).map(|s| basename(&s))
-}
-
-/// `getClosestCommand`: nearest enclosing T_Redirecting on the path to root.
-fn get_closest_command<'a>(params: &'a Parameters, t: &'a Token) -> Option<&'a Token> {
-    let mut cur = t;
-    loop {
-        match &*cur.inner {
-            InnerToken::T_Redirecting { .. } => return Some(cur),
-            InnerToken::T_Script { .. } => return None,
-            _ => {}
-        }
-        cur = params.parent(cur)?;
-    }
-}
-
-/// `isAssignment`.
-fn is_assignment(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => is_assignment(cmd),
-        InnerToken::T_SimpleCommand { assignments, words } => {
-            !assignments.is_empty() && words.is_empty()
-        }
-        InnerToken::T_Assignment { .. } => true,
-        InnerToken::T_Annotation { token, .. } => is_assignment(token),
-        _ => false,
-    }
-}
-
-/// `isFunction`.
-fn is_function(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Function { .. })
 }
 
 /// Pre-order traversal of every node in `t`'s subtree (`doAnalysis` order).
@@ -744,23 +672,6 @@ fn arith_has_assignment(s: &str) -> bool {
 // ---------------------------------------------------------------------------
 // getBracedModifier (ported from ASTLib; used by hasAssignment above)
 // ---------------------------------------------------------------------------
-
-fn is_variable_start_char(c: char) -> bool {
-    c == '_' || c.is_ascii_lowercase() || c.is_ascii_uppercase()
-}
-fn is_variable_char(c: char) -> bool {
-    is_variable_start_char(c) || c.is_ascii_digit()
-}
-fn is_special_variable_char(c: char) -> bool {
-    matches!(c, '*' | '@' | '#' | '?' | '-' | '$' | '!')
-}
-
-fn drop_hashbang_prefix(s: &str) -> &str {
-    match s.chars().next() {
-        Some(c) if c == '!' || c == '#' => &s[c.len_utf8()..],
-        _ => s,
-    }
-}
 
 fn take_name(s: &str) -> Option<String> {
     let name: String = s.chars().take_while(|c| is_variable_char(*c)).collect();

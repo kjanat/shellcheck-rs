@@ -9,6 +9,12 @@
 //! Helpers are private to this module (ported from ASTLib / AnalyzerLib), so
 //! the module does not touch shared files that parallel agents also edit.
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::cfg::oversimplify_concat;
+use crate::cfg::will_become_multiple_args;
+use crate::cfg::will_concat_in_assignment;
+use crate::analyzer_lib::is_array_expansion;
+use crate::analyzer_lib::arguments;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -25,40 +31,6 @@ pub fn register(c: &mut Checker) {
 // Shared local helpers (ported from ASTLib).
 // ===========================================================================
 
-/// The words after the command name of a `T_SimpleCommand`.
-fn arguments(t: &Token) -> &[Token] {
-    match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => &words[1..],
-        _ => &[],
-    }
-}
-
-/// `oversimplify` concatenated to a single string.
-fn oversimplify_concat(t: &Token) -> String {
-    oversimplify(t).concat()
-}
-
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
-        InnerToken::T_DoubleQuoted(l) => l.iter().collect(),
-        InnerToken::TA_Expansion(l) => l.iter().flat_map(get_word_parts).collect(),
-        _ => vec![t],
-    }
-}
-
-/// `isArrayExpansion`.
-fn is_array_expansion(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_DollarBraced { op, .. } => {
-            let s = oversimplify_concat(op);
-            s.starts_with('@') || (!s.starts_with('#') && s.contains("[@]"))
-        }
-        _ => false,
-    }
-}
-
 /// `willSplit`.
 fn will_split(t: &Token) -> bool {
     use InnerToken::*;
@@ -71,30 +43,6 @@ fn will_split(t: &Token) -> bool {
         T_Extglob { .. } => true,
         T_DoubleQuoted(l) => l.iter().any(will_become_multiple_args),
         T_NormalWord(l) => l.iter().any(will_split),
-        _ => false,
-    }
-}
-
-/// `willBecomeMultipleArgs`.
-fn will_become_multiple_args(t: &Token) -> bool {
-    will_concat_in_assignment(t) || wbma_f(t)
-}
-fn wbma_f(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_BraceExpansion(_) => true,
-        T_NormalWord(parts) => parts.iter().any(wbma_f),
-        _ => false,
-    }
-}
-fn will_concat_in_assignment(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_DollarBraced { .. } => is_array_expansion(t),
-        T_DoubleQuoted(parts) => parts.iter().any(will_concat_in_assignment),
-        T_NormalWord(parts) => parts.iter().any(will_concat_in_assignment),
         _ => false,
     }
 }

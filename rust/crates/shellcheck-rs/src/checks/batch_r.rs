@@ -20,6 +20,13 @@
 //! so the `prop_` tests exercise them the same way the QuickCheck props do.
 #![allow(unused_imports, unused_variables, dead_code)]
 
+use crate::analyzer_lib::get_closest_command;
+use crate::analyzer_lib::arguments;
+use crate::astlib::is_only_redirection;
+use crate::astlib::is_flag;
+use crate::astlib::is_glob;
+use crate::astlib::has_split_range;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::{Checker, Out, Parameters, err, info, style, warn};
 use crate::ast::*;
 use crate::astlib::{self, get_literal_string, only_literal_string};
@@ -104,24 +111,6 @@ fn lit_string(t: &Token) -> Option<String> {
     }
     let mut s = String::new();
     if go(t, &mut s) { Some(s) } else { None }
-}
-
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
-        InnerToken::T_DoubleQuoted(l) => l.iter().collect(),
-        InnerToken::TA_Expansion(l) => l.iter().flat_map(get_word_parts).collect(),
-        _ => vec![t],
-    }
-}
-
-/// `isFlag`.
-fn is_flag(t: &Token) -> bool {
-    match get_word_parts(t).first() {
-        Some(p) => matches!(&*p.inner, InnerToken::T_Literal(s) if s.starts_with('-')),
-        None => false,
-    }
 }
 
 // ===========================================================================
@@ -224,21 +213,6 @@ fn is_evaled(p: &Parameters, t: &Token) -> bool {
         Some(cmd) => crate::analyzer_lib::get_command_name(cmd).as_deref() == Some("eval"),
         None => false,
     }
-}
-
-/// `getClosestCommand`: the closest ancestor (incl. self) `T_Redirecting`,
-/// stopping at `T_Script`.
-fn get_closest_command<'a>(p: &'a Parameters, t: &'a Token) -> Option<&'a Token> {
-    let mut cur: Option<&Token> = Some(t);
-    while let Some(node) = cur {
-        match &*node.inner {
-            InnerToken::T_Redirecting { .. } => return Some(node),
-            InnerToken::T_Script { .. } => return None,
-            _ => {}
-        }
-        cur = p.parent(node);
-    }
-    None
 }
 
 // ===========================================================================
@@ -629,47 +603,7 @@ fn matches_radix(s: &str) -> bool {
 
 // ---- glob / redirection predicates ----
 
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
-        _ => false,
-    }
-}
-fn has_split_range(l: &[Token]) -> bool {
-    let after: Vec<&Token> = l
-        .iter()
-        .skip_while(|t| !matches!(&*t.inner, InnerToken::T_Literal(s) if s == "["))
-        .collect();
-    after
-        .iter()
-        .any(|t| matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']')))
-}
-
-fn is_only_redirection(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => {
-            is_only_redirection(&commands[0])
-        }
-        InnerToken::T_Annotation { token, .. } => is_only_redirection(token),
-        InnerToken::T_Redirecting { redirs, cmd } if !redirs.is_empty() => is_only_redirection(cmd),
-        InnerToken::T_SimpleCommand { assignments, words } => {
-            assignments.is_empty() && words.is_empty()
-        }
-        _ => false,
-    }
-}
-
 // ---- leading flags (`getLeadingFlags` / `getFlagsUntil`) ----
-
-fn arguments(t: &Token) -> &[Token] {
-    match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => &words[1..],
-        _ => &[],
-    }
-}
 
 fn get_leading_flags(t: &Token) -> Vec<(&Token, String)> {
     let args = arguments(t);

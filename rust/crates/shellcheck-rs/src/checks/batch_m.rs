@@ -9,6 +9,8 @@
 //! Both lean on the linear `variableFlow` (`params.variable_flow`), which the
 //! Rust port now produces faithfully (see `analyzer_lib::get_variable_flow`).
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::get_all_flags;
+use crate::analyzer_lib::is_true_assignment_source;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -27,17 +29,6 @@ pub fn register(c: &mut Checker) {
 // ===========================================================================
 // SC2030 / SC2031 — subshellAssignmentCheck / findSubshelled
 // ===========================================================================
-
-/// `isTrueAssignmentSource` from `ShellCheck.AnalyzerLib`.
-fn is_true_assignment_source(dt: &DataType) -> bool {
-    !matches!(
-        dt,
-        DataType::DataString(DataSource::SourceChecked)
-            | DataType::DataString(DataSource::SourceDeclaration)
-            | DataType::DataArray(DataSource::SourceChecked)
-            | DataType::DataArray(DataSource::SourceDeclaration)
-    )
-}
 
 fn subshell_should_ignore(name: &str) -> bool {
     matches!(name, "@" | "*" | "_" | "IFS")
@@ -387,43 +378,6 @@ fn get_words(t: &Token) -> Vec<Token> {
         InnerToken::T_Assignment { value, .. } => crate::cfg::get_word_parts(value),
         _ => crate::cfg::get_word_parts(t),
     }
-}
-
-/// `getAllFlags = getFlagsUntil (== "--")`.
-fn get_all_flags(cmd: &Token) -> Vec<(Token, String)> {
-    let words = match &*cmd.inner {
-        InnerToken::T_SimpleCommand { words, .. } => words,
-        _ => return vec![],
-    };
-    if words.is_empty() {
-        return vec![];
-    }
-    let args = &words[1..];
-    let token_and_text: Vec<(Token, String)> = args
-        .iter()
-        .map(|x| (x.clone(), oversimplify(x).concat()))
-        .collect();
-    let break_at = token_and_text.iter().position(|(_, s)| s == "--");
-    let (flag_args, rest): (&[(Token, String)], &[(Token, String)]) = match break_at {
-        Some(i) => (&token_and_text[..i], &token_and_text[i..]),
-        None => (&token_and_text[..], &[]),
-    };
-    let mut out: Vec<(Token, String)> = Vec::new();
-    for (x, text) in flag_args {
-        if let Some(arg) = text.strip_prefix("--") {
-            out.push((x.clone(), arg.split('=').next().unwrap_or("").to_string()));
-        } else if let Some(a) = text.strip_prefix('-') {
-            for v in a.chars() {
-                out.push((x.clone(), v.to_string()));
-            }
-        } else {
-            out.push((x.clone(), String::new()));
-        }
-    }
-    for (x, _) in rest {
-        out.push((x.clone(), String::new()));
-    }
-    out
 }
 
 /// `getCommandArgv t`: the name+arguments of a command.

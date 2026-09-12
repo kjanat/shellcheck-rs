@@ -1818,6 +1818,42 @@ fn get_referenced_variable_command(base: &Token) -> Vec<(Token, Token, String)> 
     }
 }
 
+// ---- helpers consolidated from the check batches (ports of AnalyzerLib) ----
+
+/// The words after the command name of a `T_SimpleCommand`.
+pub(crate) fn arguments(t: &Token) -> &[Token] {
+    match &*t.inner {
+        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => &words[1..],
+        _ => &[],
+    }
+}
+
+/// `getClosestCommand`: nearest enclosing `T_Redirecting` on the path, stopping
+/// at the enclosing `T_Script`.
+pub(crate) fn get_closest_command<'a>(params: &'a Parameters, t: &'a Token) -> Option<&'a Token> {
+    // `findFirst findCommand $ getPath tree t`, walking the path by reference.
+    let mut cur = t;
+    loop {
+        match &*cur.inner {
+            InnerToken::T_Redirecting { .. } => return Some(cur),
+            InnerToken::T_Script { .. } => return None,
+            _ => {}
+        }
+        cur = params.parent(cur)?;
+    }
+}
+
+/// `isTrueAssignmentSource` from `ShellCheck.AnalyzerLib`.
+pub(crate) fn is_true_assignment_source(dt: &DataType) -> bool {
+    !matches!(
+        dt,
+        DataType::DataString(DataSource::SourceChecked)
+            | DataType::DataString(DataSource::SourceDeclaration)
+            | DataType::DataArray(DataSource::SourceChecked)
+            | DataType::DataArray(DataSource::SourceDeclaration)
+    )
+}
+
 #[cfg(test)]
 mod set_option_tests {
     //! Unit tests for `contains_set_e` / `contains_noglob` / `is_option_set`,

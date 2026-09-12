@@ -6,6 +6,17 @@
 //! require arithmetic (`TA_*`) structure or that would mismatch the oracle's
 //! token positions are skipped (see the notes on each and the module tail).
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::is_command;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::get_command;
+use crate::astlib::only_literal_string;
+use crate::analyzer_lib::arguments;
+use crate::astlib::list_to_args;
+use crate::astlib::is_only_redirection;
+use crate::astlib::is_flag;
+use crate::astlib::is_glob;
+use crate::astlib::has_split_range;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -44,64 +55,6 @@ fn warn_msg(out: &mut Out, p: &Parameters, id: Id, code: i64, s: &str) {
 
 fn concat_over(t: &Token) -> String {
     oversimplify(t).concat()
-}
-
-/// `onlyLiteralString`: literal parts concatenated, non-literals skipped.
-fn only_literal_string(t: &Token) -> String {
-    astlib::get_literal_string_ext(t, &|_| Some(String::new())).unwrap_or_default()
-}
-
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) => l.iter().flat_map(|x| get_word_parts(x)).collect(),
-        InnerToken::T_DoubleQuoted(l) => l.iter().collect(),
-        InnerToken::TA_Expansion(l) => l.iter().flat_map(|x| get_word_parts(x)).collect(),
-        _ => vec![t],
-    }
-}
-
-/// `isFlag`: word whose first part is a `-`-prefixed literal.
-fn is_flag(t: &Token) -> bool {
-    match get_word_parts(t).first() {
-        Some(p) => matches!(&*p.inner, InnerToken::T_Literal(s) if s.starts_with('-')),
-        None => false,
-    }
-}
-
-/// `isGlob`.
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
-        _ => false,
-    }
-}
-fn has_split_range(l: &[Token]) -> bool {
-    let after: Vec<&Token> = l
-        .iter()
-        .skip_while(|t| !matches!(&*t.inner, InnerToken::T_Literal(s) if s == "["))
-        .collect();
-    after
-        .iter()
-        .any(|t| matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']')))
-}
-
-/// `isOnlyRedirection`.
-fn is_only_redirection(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => {
-            is_only_redirection(&commands[0])
-        }
-        InnerToken::T_Annotation { token, .. } => is_only_redirection(token),
-        InnerToken::T_Redirecting { redirs, cmd } if !redirs.is_empty() => is_only_redirection(cmd),
-        InnerToken::T_SimpleCommand { assignments, words } => {
-            assignments.is_empty() && words.is_empty()
-        }
-        _ => false,
-    }
 }
 
 /// `isVariableName`.
@@ -174,22 +127,6 @@ fn name_expansion(cs: &[char]) -> Option<String> {
 
 use std::collections::HashMap;
 
-fn get_command(t: &Token) -> Option<&Token> {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => get_command(cmd),
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => Some(t),
-        InnerToken::T_Annotation { token, .. } => get_command(token),
-        _ => None,
-    }
-}
-
-fn arguments(t: &Token) -> &[Token] {
-    match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => &words[1..],
-        _ => &[],
-    }
-}
-
 fn parse_flag_list(spec: &str) -> Vec<(String, bool)> {
     let mut out = vec![];
     let chars: Vec<char> = spec.chars().collect();
@@ -217,10 +154,6 @@ fn get_bsd_opts<'a>(
         flag_map.insert(k, v);
     }
     opts_process(false, &flag_map, args)
-}
-
-fn list_to_args<'a>(args: &'a [Token]) -> Vec<(String, (&'a Token, &'a Token))> {
-    args.iter().map(|x| (String::new(), (x, x))).collect()
 }
 
 fn opts_process<'a>(
@@ -341,18 +274,6 @@ fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Toke
         }
     }
     (None, t)
-}
-
-fn get_command_name(t: &Token) -> Option<String> {
-    get_command_name_and_token(false, t).0
-}
-
-/// `isCommand token str` — matches `str` or any `/str` suffix.
-fn is_command(t: &Token, name: &str) -> bool {
-    match get_command_name(t) {
-        Some(cmd) => cmd == name || cmd.ends_with(&format!("/{}", name)),
-        None => false,
-    }
 }
 
 // ---- getFlagsUntil (leading) ----------------------------------------------

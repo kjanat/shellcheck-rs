@@ -12,6 +12,7 @@
 //! `isNum` / `isNonNum` machinery (cfg numerical status + `variableFlow`
 //! assigned-variable set), so they are ported together.
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::astlib::is_quotes;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -160,14 +161,6 @@ fn num_char(c: char) -> bool {
 /// `isNonNum t = not . all numChar $ onlyLiteralString t`.
 fn is_non_num(t: &Token) -> bool {
     !astlib::only_literal_string(t).chars().all(num_char)
-}
-
-/// `isQuotes` (ASTLib).
-fn is_quotes(t: &Token) -> bool {
-    matches!(
-        &*t.inner,
-        InnerToken::T_DoubleQuoted(_) | InnerToken::T_SingleQuoted(_)
-    )
 }
 
 /// The set of variable names assigned anywhere per the linear `variableFlow`.

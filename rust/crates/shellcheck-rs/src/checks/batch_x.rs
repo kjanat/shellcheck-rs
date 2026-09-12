@@ -16,6 +16,8 @@
 //!   * SC2322/2323  — `checkUnnecessaryParens`        (node)
 #![allow(clippy::collapsible_if)]
 
+use crate::cfg::get_unquoted_literal;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::cfg::{get_braced_reference, oversimplify as cfg_oversimplify};
@@ -75,23 +77,6 @@ fn full_literal_string(t: &Token) -> Option<String> {
     if go(t, &mut s) { Some(s) } else { None }
 }
 
-/// `getUnquotedLiteral`.
-fn get_unquoted_literal(t: &Token) -> Option<String> {
-    if let InnerToken::T_NormalWord(list) = &*t.inner {
-        let mut s = String::new();
-        for p in list {
-            if let InnerToken::T_Literal(x) = &*p.inner {
-                s.push_str(x);
-            } else {
-                return None;
-            }
-        }
-        Some(s)
-    } else {
-        None
-    }
-}
-
 /// `getUnmodifiedParameterExpansion`.
 fn get_unmodified_parameter_expansion(t: &Token) -> Option<String> {
     if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
@@ -116,11 +101,6 @@ fn is_sourced(params: &Parameters, t: &Token) -> bool {
 /// `hasFloatingPoint params`.
 fn has_floating_point(params: &Parameters) -> bool {
     params.shell == Shell::Ksh
-}
-
-/// `getWordParts` (owned, matching `analyzer_lib::word_parts`).
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    word_parts(t)
 }
 
 // ===========================================================================

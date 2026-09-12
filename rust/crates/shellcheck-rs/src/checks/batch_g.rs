@@ -11,6 +11,10 @@
 //! `astlib::brace_expand` and runs the per-word check on every expanded word,
 //! exactly as the Haskell `mapM_ (mapM_ checkWord . braceExpand)` does.
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::get_all_flags;
+use crate::analyzer_lib::get_command;
+use crate::astlib::basename;
+use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -45,32 +49,6 @@ pub fn register(c: &mut Checker) {
 // shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
 
-/// `basename`: the part after the last '/'.
-fn basename(path: &str) -> String {
-    match path.rfind('/') {
-        Some(i) => path[i + 1..].to_string(),
-        None => path.to_string(),
-    }
-}
-
-/// `getCommand`: unwrap redirects/annotations to reach a `T_SimpleCommand`.
-fn get_command(t: &Token) -> Option<&Token> {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => get_command(cmd),
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => Some(t),
-        InnerToken::T_Annotation { token, .. } => get_command(token),
-        _ => None,
-    }
-}
-
-/// The words after the command name of a `T_SimpleCommand`.
-fn arguments(t: &Token) -> &[Token] {
-    match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => &words[1..],
-        _ => &[],
-    }
-}
-
 /// The literal name of the first word of a `T_SimpleCommand`, if any.
 fn simple_command_name(t: &Token) -> Option<String> {
     if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
@@ -78,41 +56,6 @@ fn simple_command_name(t: &Token) -> Option<String> {
         return get_literal_string(cmd);
     }
     None
-}
-
-/// `getAllFlags` = `getFlagsUntil (== "--")`. Returns (token, flag-name) pairs.
-fn get_all_flags(t: &Token) -> Vec<(&Token, String)> {
-    let args = arguments(t);
-    let mut broken = false;
-    let mut flag_args: Vec<(&Token, String)> = vec![];
-    let mut rest: Vec<&Token> = vec![];
-    for x in args {
-        let txt = oversimplify(x).concat();
-        if !broken && txt == "--" {
-            broken = true;
-        }
-        if broken {
-            rest.push(x);
-        } else {
-            flag_args.push((x, txt));
-        }
-    }
-    let mut out: Vec<(&Token, String)> = vec![];
-    for (x, txt) in flag_args {
-        if let Some(arg) = txt.strip_prefix("--") {
-            out.push((x, arg.split('=').next().unwrap_or("").to_string()));
-        } else if let Some(a) = txt.strip_prefix('-') {
-            for v in a.chars() {
-                out.push((x, v.to_string()));
-            }
-        } else {
-            out.push((x, String::new()));
-        }
-    }
-    for x in rest {
-        out.push((x, String::new()));
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------

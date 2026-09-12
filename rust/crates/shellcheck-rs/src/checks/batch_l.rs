@@ -11,6 +11,12 @@
 //! - SC2065  checkTestRedirects    (Analytics.hs) — `>`/`<` in `test` args read
 //!   as a redirection, not a comparison.
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::cfg::get_unquoted_literal;
+use crate::astlib::is_unquoted_flag;
+use crate::astlib::get_leading_unquoted_string;
+use crate::astlib::is_glob;
+use crate::astlib::has_split_range;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -33,80 +39,6 @@ pub fn register(c: &mut Checker) {
 
 fn concat_over(t: &Token) -> String {
     oversimplify(t).concat()
-}
-
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) => l.iter().flat_map(|x| get_word_parts(x)).collect(),
-        InnerToken::T_DoubleQuoted(l) => l.iter().collect(),
-        _ => vec![t],
-    }
-}
-
-/// `ShellCheck.ASTLib.isGlob`.
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
-        _ => false,
-    }
-}
-fn has_split_range(l: &[Token]) -> bool {
-    let after: Vec<&Token> = l
-        .iter()
-        .skip_while(|t| !matches!(&*t.inner, InnerToken::T_Literal(s) if s == "["))
-        .collect();
-    after
-        .iter()
-        .any(|t| matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']')))
-}
-
-/// `ShellCheck.ASTLib.getLeadingUnquotedString`.
-fn get_leading_unquoted_string(t: &Token) -> Option<String> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(list) => match list.first() {
-            Some(first) => match &*first.inner {
-                InnerToken::T_Literal(s) => {
-                    let mut out = s.clone();
-                    for r in &list[1..] {
-                        match &*r.inner {
-                            InnerToken::T_Literal(s2) => out.push_str(s2),
-                            _ => break,
-                        }
-                    }
-                    Some(out)
-                }
-                _ => None,
-            },
-            None => None,
-        },
-        _ => None,
-    }
-}
-
-/// `ShellCheck.ASTLib.isUnquotedFlag`.
-fn is_unquoted_flag(t: &Token) -> bool {
-    matches!(get_leading_unquoted_string(t), Some(s) if s.starts_with('-'))
-}
-
-/// `ShellCheck.ASTLib.getUnquotedLiteral` — Some only if every part is a plain
-/// unquoted literal.
-fn get_unquoted_literal(t: &Token) -> Option<String> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(list) => {
-            let mut out = String::new();
-            for part in list {
-                match &*part.inner {
-                    InnerToken::T_Literal(s) => out.push_str(s),
-                    _ => return None,
-                }
-            }
-            Some(out)
-        }
-        _ => None,
-    }
 }
 
 // ===========================================================================

@@ -16,6 +16,12 @@
 //! (no such construct hits SC2140 in the corpus); the T_Redirecting and
 //! T_DollarBraced clauses of `isSpecial` are ported.
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::get_command;
+use crate::astlib::basename;
+use crate::analyzer_lib::get_closest_command;
+use crate::astlib::is_flag;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -30,42 +36,6 @@ pub fn register(c: &mut Checker) {
 // Private helper predicates (ported from ASTLib/AnalyzerLib; kept local so this
 // module does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
-
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    use InnerToken::*;
-    match &*t.inner {
-        T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
-        T_DoubleQuoted(l) => l.iter().collect(),
-        TA_Expansion(l) => l.iter().flat_map(get_word_parts).collect(),
-        _ => vec![t],
-    }
-}
-
-/// `isFlag`: word whose first part is an unquoted `-...` literal.
-fn is_flag(t: &Token) -> bool {
-    match get_word_parts(t).first() {
-        Some(w) => matches!(&*w.inner, InnerToken::T_Literal(s) if s.starts_with('-')),
-        None => false,
-    }
-}
-
-fn basename(path: &str) -> String {
-    match path.rsplit('/').next() {
-        Some(x) => x.to_string(),
-        None => path.to_string(),
-    }
-}
-
-/// `getCommand`: unwrap redirections/annotations to the T_SimpleCommand.
-fn get_command(t: &Token) -> Option<&Token> {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => get_command(cmd),
-        InnerToken::T_Annotation { token, .. } => get_command(token),
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => Some(t),
-        _ => None,
-    }
-}
 
 fn simple_command_words(t: &Token) -> Option<&Vec<Token>> {
     let cmd = get_command(t)?;
@@ -126,39 +96,8 @@ fn exec_effective(args: &[Token]) -> Option<&Token> {
     None
 }
 
-/// `getCommandName`: the logical command name of a T_Redirecting/T_SimpleCommand,
-/// resolving `command`/`builtin`/`busybox`/`run`/`exec` prefixes.
-fn get_command_name(t: &Token) -> Option<String> {
-    let words = simple_command_words(t)?;
-    let w = words.first()?;
-    let s = astlib::get_literal_string(w)?;
-    let rest = &words[1..];
-    let effective: Option<&Token> = match s.as_str() {
-        "busybox" | "builtin" | "command" | "run" => rest.first().filter(|a| !is_flag(a)),
-        "exec" => exec_effective(rest),
-        _ => None,
-    };
-    match effective {
-        Some(tok) => astlib::get_literal_string(tok),
-        None => Some(s),
-    }
-}
-
 fn get_command_basename(t: &Token) -> Option<String> {
     get_command_name(t).map(|s| basename(&s))
-}
-
-/// `getClosestCommand`: nearest enclosing T_Redirecting on the path to root.
-fn get_closest_command<'a>(params: &'a Parameters, t: &'a Token) -> Option<&'a Token> {
-    let mut cur = t;
-    loop {
-        match &*cur.inner {
-            InnerToken::T_Redirecting { .. } => return Some(cur),
-            InnerToken::T_Script { .. } => return None,
-            _ => {}
-        }
-        cur = params.parent(cur)?;
-    }
 }
 
 // ---------------------------------------------------------------------------

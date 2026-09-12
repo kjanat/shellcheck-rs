@@ -23,6 +23,18 @@
 //!   exact autofix; not self-contained enough to keep extra==0. Left out.
 //! - SC2261  checkMultipleRedirections — needs FD-map / pipe dataflow. Left out.
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::get_command;
+use crate::astlib::basename;
+use crate::astlib::is_unquoted_flag;
+use crate::astlib::get_leading_unquoted_string;
+use crate::astlib::is_constant;
+use crate::astlib::is_flag;
+use crate::astlib::is_glob;
+use crate::astlib::is_closing_range;
+use crate::astlib::is_half_open_range;
+use crate::astlib::has_split_range;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -52,103 +64,9 @@ fn literal_string_def(t: &Token, def: &str) -> String {
     get_literal_string_ext(t, &|_| Some(def.clone())).unwrap_or_default()
 }
 
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    use InnerToken::*;
-    match &*t.inner {
-        T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
-        T_DoubleQuoted(l) => l.iter().collect(),
-        _ => vec![t],
-    }
-}
-
-/// `getLeadingUnquotedString`.
-fn get_leading_unquoted_string(t: &Token) -> Option<String> {
-    if let InnerToken::T_NormalWord(list) = &*t.inner {
-        if let Some((first, rest)) = list.split_first() {
-            if let InnerToken::T_Literal(s) = &*first.inner {
-                let mut out = s.clone();
-                for p in rest {
-                    match &*p.inner {
-                        InnerToken::T_Literal(s2) => out.push_str(s2),
-                        _ => break,
-                    }
-                }
-                return Some(out);
-            }
-        }
-    }
-    None
-}
-
-/// `isConstant`.
-fn is_constant(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_NormalWord(l) => {
-            // This ignores some cases like ~"foo":
-            if let Some(first) = l.first() {
-                if let T_Literal(s) = &*first.inner {
-                    if s.starts_with('~') {
-                        return false;
-                    }
-                }
-            }
-            l.iter().all(is_constant)
-        }
-        T_DoubleQuoted(l) => l.iter().all(is_constant),
-        T_SingleQuoted(_) => true,
-        T_Literal(_) => true,
-        _ => false,
-    }
-}
-
-/// `isUnquotedFlag`.
-fn is_unquoted_flag(t: &Token) -> bool {
-    matches!(get_leading_unquoted_string(t), Some(s) if s.starts_with('-'))
-}
-
 // --- isGlob (ported from ASTLib / batch_k) --------------------------------
 
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
-        _ => false,
-    }
-}
-
-fn has_split_range(l: &[Token]) -> bool {
-    let after_bracket = l.iter().skip_while(|t| !is_half_open_range(t));
-    after_bracket.clone().next().is_some() && after_bracket.skip(1).any(is_closing_range)
-}
-fn is_half_open_range(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Literal(s) if s == "[")
-}
-fn is_closing_range(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']'))
-}
-
 // --- command helpers (subset of ASTLib, matching batch_d) -----------------
-
-/// `getCommand`: unwrap redirects/annotations to reach a `T_SimpleCommand`.
-fn get_command(t: &Token) -> Option<&Token> {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => get_command(cmd),
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => Some(t),
-        InnerToken::T_Annotation { token, .. } => get_command(token),
-        _ => None,
-    }
-}
-
-fn is_flag(t: &Token) -> bool {
-    match get_word_parts(t).first().map(|x| &*x.inner) {
-        Some(InnerToken::T_Literal(s)) => s.starts_with('-'),
-        _ => false,
-    }
-}
 
 /// `getCommandNameAndToken False` (effective command, no exec-opts parsing).
 fn get_command_name_and_token(t: &Token) -> (Option<String>, &Token) {
@@ -177,9 +95,6 @@ fn effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> 
     }
 }
 
-fn get_command_name(t: &Token) -> Option<String> {
-    get_command_name_and_token(t).0
-}
 fn get_command_token_or_this(t: &Token) -> &Token {
     get_command_name_and_token(t).1
 }
@@ -235,13 +150,6 @@ fn check_pipe_pitfalls_ls_grep(_params: &Parameters, t: &Token, out: &mut Out) {
 // ---------------------------------------------------------------------------
 // Command-dispatch (mirrors Checks/Commands.hs `checkCommand`)
 // ---------------------------------------------------------------------------
-
-fn basename(s: &str) -> &str {
-    match s.rfind('/') {
-        Some(i) => &s[i + 1..],
-        None => s,
-    }
-}
 
 /// Returns (matched command name, args slice) for a `T_SimpleCommand`, matching
 /// the Basename/Exactly dispatch in `checkCommand`. `builtin X ...` dispatches

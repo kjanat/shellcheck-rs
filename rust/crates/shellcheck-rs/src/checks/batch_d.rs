@@ -8,6 +8,15 @@
 //! - SC2164         checkUncheckedCdPushdPopd (Analytics.hs) — cd/pushd/popd without `|| exit`
 //! - SC2181         checkReturnAgainstZero (Analytics.hs) — checking `$?` indirectly
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::get_all_flags;
+use crate::analyzer_lib::is_command;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::get_command;
+use crate::analyzer_lib::get_closest_command;
+use crate::analyzer_lib::arguments;
+use crate::astlib::list_to_args;
+use crate::astlib::is_flag;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -32,42 +41,6 @@ pub fn register(c: &mut Checker) {
 
 fn concat_strings(v: Vec<String>) -> String {
     v.concat()
-}
-
-/// `getCommand`: unwrap redirects/annotations to reach a `T_SimpleCommand`.
-fn get_command(t: &Token) -> Option<&Token> {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => get_command(cmd),
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => Some(t),
-        InnerToken::T_Annotation { token, .. } => get_command(token),
-        _ => None,
-    }
-}
-
-/// The words after the command name of a `T_SimpleCommand`.
-fn arguments(t: &Token) -> &[Token] {
-    match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => &words[1..],
-        _ => &[],
-    }
-}
-
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) => l.iter().flat_map(|x| get_word_parts(x)).collect(),
-        InnerToken::T_DoubleQuoted(l) => l.iter().collect(),
-        InnerToken::TA_Expansion(l) => l.iter().flat_map(|x| get_word_parts(x)).collect(),
-        _ => vec![t],
-    }
-}
-
-/// `isFlag`: word whose first part is a `-`-prefixed literal.
-fn is_flag(t: &Token) -> bool {
-    match get_word_parts(t).first() {
-        Some(p) => matches!(&*p.inner, InnerToken::T_Literal(s) if s.starts_with('-')),
-        None => false,
-    }
 }
 
 // ---- getOpts / getGnuOpts / getBsdOpts -------------------------------------
@@ -117,10 +90,6 @@ fn get_opts<'a>(
         flag_map.insert(k, v);
     }
     opts_process(gnu, arbitrary, &flag_map, args)
-}
-
-fn list_to_args<'a>(args: &'a [Token]) -> Vec<(String, (&'a Token, &'a Token))> {
-    args.iter().map(|x| (String::new(), (x, x))).collect()
 }
 
 fn opts_process<'a>(
@@ -216,41 +185,6 @@ fn short_to_opts<'a>(
     }
 }
 
-/// `getFlagsUntil (== "--")`.
-fn get_all_flags(t: &Token) -> Vec<(&Token, String)> {
-    let args = arguments(t);
-    let mut broken = false;
-    let mut flag_args: Vec<(&Token, String)> = vec![];
-    let mut rest: Vec<&Token> = vec![];
-    for x in args {
-        let txt = concat_strings(oversimplify(x));
-        if !broken && txt == "--" {
-            broken = true;
-        }
-        if broken {
-            rest.push(x);
-        } else {
-            flag_args.push((x, txt));
-        }
-    }
-    let mut out: Vec<(&Token, String)> = vec![];
-    for (x, txt) in flag_args {
-        if let Some(arg) = txt.strip_prefix("--") {
-            out.push((x, arg.split('=').next().unwrap_or("").to_string()));
-        } else if let Some(a) = txt.strip_prefix('-') {
-            for v in a.chars() {
-                out.push((x, v.to_string()));
-            }
-        } else {
-            out.push((x, String::new()));
-        }
-    }
-    for x in rest {
-        out.push((x, String::new()));
-    }
-    out
-}
-
 /// `getCommandNameAndToken direct`.
 fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Token) {
     if let Some(cmd) = get_command(t) {
@@ -286,20 +220,8 @@ fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Tok
     }
 }
 
-fn get_command_name(t: &Token) -> Option<String> {
-    get_command_name_and_token(false, t).0
-}
-
 fn get_command_token_or_this(t: &Token) -> &Token {
     get_command_name_and_token(false, t).1
-}
-
-/// `isCommand token str` — matches `str` or any `/str` suffix.
-fn is_command(t: &Token, str: &str) -> bool {
-    match get_command_name(t) {
-        Some(cmd) => cmd == str || cmd.ends_with(&format!("/{}", str)),
-        None => false,
-    }
 }
 
 /// `isUnqualifiedCommand token str` — exact command-name match.
@@ -703,18 +625,6 @@ fn is_only_test_in_command(params: &Parameters, t: &Token) -> bool {
             InnerToken::TA_Parenthesis(_) => cur = p,
             _ => return false,
         }
-    }
-}
-
-fn get_closest_command<'a>(params: &'a Parameters, t: &'a Token) -> Option<&'a Token> {
-    let mut cur = t;
-    loop {
-        match &*cur.inner {
-            InnerToken::T_Redirecting { .. } => return Some(cur),
-            InnerToken::T_Script { .. } => return None,
-            _ => {}
-        }
-        cur = params.parent(cur)?;
     }
 }
 

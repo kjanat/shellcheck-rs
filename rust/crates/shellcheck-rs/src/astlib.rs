@@ -154,7 +154,9 @@ fn part_choices(part: &Token) -> Vec<Token> {
     }
 }
 
-fn basename(path: &str) -> String {
+/// `basename = reverse . takeWhile (/= '/') . reverse`: the part after the
+/// last `/` (the whole string if there is none).
+pub(crate) fn basename(path: &str) -> String {
     match path.rsplit('/').next() {
         Some(x) => x.to_string(),
         None => path.to_string(),
@@ -270,5 +272,200 @@ mod tests {
     fn prop_getLiteralString_param_sub_special_char() {
         let t = Token::new(Id(1), InnerToken::T_ParamSubSpecialChar("%".to_string()));
         assert_eq!(get_literal_string(&t), Some("%".to_string()));
+    }
+}
+
+
+// ---- helpers consolidated from the check batches (ports of ASTLib) ----
+
+/// `getWordParts`.
+pub(crate) fn get_word_parts(t: &Token) -> Vec<&Token> {
+    use InnerToken::*;
+    match &*t.inner {
+        T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
+        T_DoubleQuoted(l) => l.iter().collect(),
+        TA_Expansion(l) => l.iter().flat_map(get_word_parts).collect(),
+        _ => vec![t],
+    }
+}
+
+pub(crate) fn has_split_range(l: &[Token]) -> bool {
+    let after: Vec<&Token> = l
+        .iter()
+        .skip_while(|t| !matches!(&*t.inner, InnerToken::T_Literal(s) if s == "["))
+        .collect();
+    after
+        .iter()
+        .any(|t| matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']')))
+}
+
+pub(crate) fn is_half_open_range(t: &Token) -> bool {
+    matches!(&*t.inner, InnerToken::T_Literal(s) if s == "[")
+}
+
+pub(crate) fn is_closing_range(t: &Token) -> bool {
+    matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']'))
+}
+
+/// Faithful port of `ShellCheck.ASTLib.isGlob`.
+pub(crate) fn is_glob(t: &Token) -> bool {
+    use InnerToken::*;
+    match &*t.inner {
+        T_Extglob { .. } => true,
+        T_Glob(_) => true,
+        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
+        _ => false,
+    }
+}
+
+/// `isFlag`: word whose first part is a `-`-prefixed literal.
+pub(crate) fn is_flag(t: &Token) -> bool {
+    match get_word_parts(t).first() {
+        Some(p) => matches!(&*p.inner, InnerToken::T_Literal(s) if s.starts_with('-')),
+        None => false,
+    }
+}
+
+/// Faithful port of `ShellCheck.ASTLib.isConstant`.
+pub(crate) fn is_constant(token: &Token) -> bool {
+    use InnerToken::*;
+    match &*token.inner {
+        // This ignores some cases like ~"foo": a word whose first part is a
+        // literal starting with '~' is treated as non-constant.
+        T_NormalWord(l) => {
+            if let Some(first) = l.first() {
+                if let T_Literal(s) = &*first.inner {
+                    if s.starts_with('~') {
+                        return false;
+                    }
+                }
+            }
+            l.iter().all(is_constant)
+        }
+        T_DoubleQuoted(l) => l.iter().all(is_constant),
+        T_SingleQuoted(_) => true,
+        T_Literal(_) => true,
+        _ => false,
+    }
+}
+
+/// `getLeadingUnquotedString`.
+pub(crate) fn get_leading_unquoted_string(t: &Token) -> Option<String> {
+    if let InnerToken::T_NormalWord(list) = &*t.inner {
+        if let Some((first, rest)) = list.split_first() {
+            if let InnerToken::T_Literal(s) = &*first.inner {
+                let mut out = s.clone();
+                for p in rest {
+                    match &*p.inner {
+                        InnerToken::T_Literal(s2) => out.push_str(s2),
+                        _ => break,
+                    }
+                }
+                return Some(out);
+            }
+        }
+    }
+    None
+}
+
+/// `ShellCheck.ASTLib.isUnquotedFlag`.
+pub(crate) fn is_unquoted_flag(t: &Token) -> bool {
+    matches!(get_leading_unquoted_string(t), Some(s) if s.starts_with('-'))
+}
+
+/// `isLiteral t = isJust $ getLiteralString t`.
+pub(crate) fn is_literal(t: &Token) -> bool {
+    get_literal_string(t).is_some()
+}
+
+/// `isOnlyRedirection` (ASTLib).
+pub(crate) fn is_only_redirection(t: &Token) -> bool {
+    match &*t.inner {
+        InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => {
+            is_only_redirection(&commands[0])
+        }
+        InnerToken::T_Annotation { token, .. } => is_only_redirection(token),
+        InnerToken::T_Redirecting { redirs, cmd } if !redirs.is_empty() => is_only_redirection(cmd),
+        InnerToken::T_SimpleCommand { assignments, words } => {
+            assignments.is_empty() && words.is_empty()
+        }
+        _ => false,
+    }
+}
+
+/// `isAssignment`.
+pub(crate) fn is_assignment(t: &Token) -> bool {
+    match &*t.inner {
+        InnerToken::T_Redirecting { cmd, .. } => is_assignment(cmd),
+        InnerToken::T_SimpleCommand { assignments, words } => {
+            !assignments.is_empty() && words.is_empty()
+        }
+        InnerToken::T_Assignment { .. } => true,
+        InnerToken::T_Annotation { token, .. } => is_assignment(token),
+        _ => false,
+    }
+}
+
+/// `isFunction`.
+pub(crate) fn is_function(t: &Token) -> bool {
+    matches!(&*t.inner, InnerToken::T_Function { .. })
+}
+
+/// `isQuotes` (ASTLib).
+pub(crate) fn is_quotes(t: &Token) -> bool {
+    matches!(
+        &*t.inner,
+        InnerToken::T_DoubleQuoted(_) | InnerToken::T_SingleQuoted(_)
+    )
+}
+
+/// `isAnnotationIgnoringCode code t`.
+pub(crate) fn is_annotation_ignoring_code(code: i64, t: &Token) -> bool {
+    if let InnerToken::T_Annotation { annotations, .. } = &*t.inner {
+        annotations.iter().any(|a| match a {
+            Annotation::DisableComment(from, to) => code >= *from && code < *to,
+            _ => false,
+        })
+    } else {
+        false
+    }
+}
+
+/// `escapeForMessage` (`e4m`).
+pub(crate) fn e4m(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{1B}' => out.push_str("\\e"),
+            _ => {
+                let should_escape = c.is_control() || (!c.is_ascii() && !c.is_alphabetic());
+                if should_escape {
+                    let n = c as u32;
+                    if n < 256 {
+                        out.push_str(&format!("\\x{:02X}", n));
+                    } else {
+                        out.push_str(&format!("\\U{:04X}", n));
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+        }
+    }
+    out
+}
+
+pub(crate) fn list_to_args<'a>(args: &'a [Token]) -> Vec<(String, (&'a Token, &'a Token))> {
+    args.iter().map(|x| (String::new(), (x, x))).collect()
+}
+
+pub(crate) fn drop_hashbang_prefix(s: &str) -> &str {
+    match s.chars().next() {
+        Some(c) if c == '!' || c == '#' => &s[c.len_utf8()..],
+        _ => s,
     }
 }

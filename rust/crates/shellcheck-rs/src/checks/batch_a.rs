@@ -6,6 +6,13 @@
 //! - SC2068  checkUnquotedDollarAt (Analytics.hs)
 //! - SC2124  checkArrayAsString    (Analytics.hs) — also emits SC2125 (glob/brace branch)
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::cfg::is_special_variable_char;
+use crate::cfg::is_variable_char;
+use crate::cfg::is_variable_start_char;
+use crate::cfg::will_become_multiple_args;
+use crate::cfg::will_concat_in_assignment;
+use crate::analyzer_lib::is_array_expansion;
+use crate::astlib::drop_hashbang_prefix;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -25,16 +32,6 @@ pub fn register(c: &mut Checker) {
 // this module does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
 
-fn is_variable_start_char(c: char) -> bool {
-    c == '_' || c.is_ascii_lowercase() || c.is_ascii_uppercase()
-}
-fn is_variable_char(c: char) -> bool {
-    is_variable_start_char(c) || c.is_ascii_digit()
-}
-fn is_special_variable_char(c: char) -> bool {
-    matches!(c, '*' | '@' | '#' | '?' | '-' | '$' | '!')
-}
-
 /// `getBracedReference`: the variable name from `${var:-foo}` etc.
 fn get_braced_reference(s: &str) -> String {
     if let Some(r) = name_expansion(s) {
@@ -51,13 +48,6 @@ fn get_braced_reference(s: &str) -> String {
         return r;
     }
     s.to_string()
-}
-
-fn drop_hashbang_prefix(s: &str) -> &str {
-    match s.chars().next() {
-        Some(c) if c == '!' || c == '#' => &s[c.len_utf8()..],
-        _ => s,
-    }
 }
 
 fn take_name(s: &str) -> Option<String> {
@@ -107,17 +97,6 @@ fn get_braced_modifier(s: &str) -> String {
     String::new()
 }
 
-/// `isArrayExpansion`: an expansion of multiple array items.
-fn is_array_expansion(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_DollarBraced { op, .. } => {
-            let string = oversimplify(op).concat();
-            string.starts_with('@') || (!string.starts_with('#') && string.contains("[@]"))
-        }
-        _ => false,
-    }
-}
-
 /// `isQuotedAlternativeReference`: matches the regex `(^|\])​:?\+` on the modifier.
 fn is_quoted_alternative_reference(t: &Token) -> bool {
     match &*t.inner {
@@ -149,31 +128,6 @@ fn matches_alternative_regex(m: &str) -> bool {
         }
     }
     false
-}
-
-/// `willConcatInAssignment`: does this token cause implicit concatenation in an
-/// assignment (i.e. an array expansion embedded in a scalar assignment)?
-fn will_concat_in_assignment(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_DollarBraced { .. } => is_array_expansion(t),
-        InnerToken::T_DoubleQuoted(parts) => parts.iter().any(will_concat_in_assignment),
-        InnerToken::T_NormalWord(parts) => parts.iter().any(will_concat_in_assignment),
-        _ => false,
-    }
-}
-
-/// `willBecomeMultipleArgs`: certain to expand to multiple words.
-fn will_become_multiple_args(t: &Token) -> bool {
-    will_concat_in_assignment(t) || will_become_multiple_args_f(t)
-}
-fn will_become_multiple_args_f(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Extglob { .. } => true,
-        InnerToken::T_Glob(_) => true,
-        InnerToken::T_BraceExpansion(_) => true,
-        InnerToken::T_NormalWord(parts) => parts.iter().any(will_become_multiple_args_f),
-        _ => false,
-    }
 }
 
 // ---- isStrictlyQuoteFree (AnalyzerLib.isQuoteFreeNode strict=True) ----------

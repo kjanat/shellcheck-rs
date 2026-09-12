@@ -12,6 +12,11 @@
 //! - SC2233/SC2234/SC2235 checkSubshelledTests (Analytics.hs).
 //! - SC2261/... checkPipeToNowhere  (Analytics.hs).
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::cfg::will_become_multiple_args;
+use crate::cfg::will_concat_in_assignment;
+use crate::cfg::get_unquoted_literal;
+use crate::astlib::is_quotes;
+use crate::astlib::is_glob;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -85,24 +90,6 @@ const VARIABLES_WITHOUT_SPACES: &[&str] = &[
     "FLAGS_FALSE",
     "FLAGS_TRUE",
 ];
-
-/// `ShellCheck.ASTLib.getUnquotedLiteral`: the literal string of a word, only
-/// if the whole word is unquoted literal parts.
-fn get_unquoted_literal(t: &Token) -> Option<String> {
-    if let InnerToken::T_NormalWord(list) = &*t.inner {
-        let mut s = String::new();
-        for p in list {
-            if let InnerToken::T_Literal(x) = &*p.inner {
-                s.push_str(x);
-            } else {
-                return None;
-            }
-        }
-        Some(s)
-    } else {
-        None
-    }
-}
 
 // ---------------------------------------------------------------------------
 // SC2013 — checkForInCat
@@ -459,36 +446,6 @@ fn comment_if_exec(t: &Token, out: &mut Out) {
 // SC2270-2282 — checkEqualsInCommand (target code SC2281)
 // ---------------------------------------------------------------------------
 
-fn is_quotes(t: &Token) -> bool {
-    matches!(
-        &*t.inner,
-        InnerToken::T_DoubleQuoted(_) | InnerToken::T_SingleQuoted(_)
-    )
-}
-
-fn will_concat_in_assignment(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_DollarBraced { .. } => is_array_expansion(t),
-        InnerToken::T_DoubleQuoted(parts) | InnerToken::T_NormalWord(parts) => {
-            parts.iter().any(will_concat_in_assignment)
-        }
-        _ => false,
-    }
-}
-
-fn will_become_multiple_args(t: &Token) -> bool {
-    fn f(t: &Token) -> bool {
-        match &*t.inner {
-            InnerToken::T_Extglob { .. }
-            | InnerToken::T_Glob(_)
-            | InnerToken::T_BraceExpansion(_) => true,
-            InnerToken::T_NormalWord(parts) => parts.iter().any(f),
-            _ => false,
-        }
-    }
-    will_concat_in_assignment(t) || f(t)
-}
-
 fn eic_has_equals(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains('='))
 }
@@ -772,17 +729,6 @@ fn check_equals_in_command(params: &Parameters, original: &Token, out: &mut Out)
 // ---------------------------------------------------------------------------
 
 const ARITHMETIC_BINARY_TEST_OPS: [&str; 6] = ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
-
-/// Faithful port of `ShellCheck.ASTLib.isGlob`.
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || glob_has_split_range(l),
-        _ => false,
-    }
-}
 
 fn glob_has_split_range(l: &[Token]) -> bool {
     let after: Vec<&Token> = l

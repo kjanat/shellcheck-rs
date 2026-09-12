@@ -6,6 +6,9 @@
 //! - SC2027  checkInexplicablyUnquoted (Analytics.hs, 2027 branch only)
 //! - SC2145  checkConcatenatedDollarAt (Analytics.hs)
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::is_array_expansion;
+use crate::astlib::only_literal_string;
+use crate::astlib::is_only_redirection;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -22,27 +25,6 @@ pub fn register(c: &mut Checker) {
 // ---------------------------------------------------------------------------
 // Shared helper predicates (ported privately; astlib.rs is owned elsewhere).
 // ---------------------------------------------------------------------------
-
-/// `getLiteralStringDef ""` a.k.a. `onlyLiteralString`: literal string,
-/// substituting "" for any non-literal part.
-fn only_literal_string(t: &Token) -> String {
-    astlib::get_literal_string_ext(t, &|_| Some(String::new())).unwrap_or_default()
-}
-
-/// `isOnlyRedirection` (ASTLib).
-fn is_only_redirection(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => {
-            is_only_redirection(&commands[0])
-        }
-        InnerToken::T_Annotation { token, .. } => is_only_redirection(token),
-        InnerToken::T_Redirecting { redirs, cmd } if !redirs.is_empty() => is_only_redirection(cmd),
-        InnerToken::T_SimpleCommand { assignments, words } => {
-            assignments.is_empty() && words.is_empty()
-        }
-        _ => false,
-    }
-}
 
 /// `tokenIsJustCommandOutput` (AnalyzerLib): a word that is entirely the output
 /// of a single command substitution.
@@ -82,16 +64,6 @@ fn get_word_parts<'a>(t: &'a Token, out: &mut Vec<&'a Token>) {
             }
         }
         _ => out.push(t),
-    }
-}
-
-/// `isArrayExpansion` (ASTLib).
-fn is_array_expansion(t: &Token) -> bool {
-    if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
-        let string: String = astlib::oversimplify(op).concat();
-        string.starts_with('@') || (!string.starts_with('#') && string.contains("[@]"))
-    } else {
-        false
     }
 }
 

@@ -22,6 +22,12 @@
 //!   condition operator its own span. The SC2193 "can never be equal" branch is
 //!   likewise skipped (needs `wordsCanBeEqual` pattern machinery).
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::astlib::is_constant;
+use crate::astlib::is_glob;
+use crate::astlib::is_closing_range;
+use crate::astlib::is_half_open_range;
+use crate::astlib::has_split_range;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -44,77 +50,7 @@ pub fn register(c: &mut Checker) {
 /// `ShellCheck.Data.arithmeticBinaryTestOps`.
 const ARITHMETIC_BINARY_TEST_OPS: [&str; 6] = ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
 
-/// Faithful port of `ShellCheck.ASTLib.isConstant`.
-fn is_constant(token: &Token) -> bool {
-    use InnerToken::*;
-    match &*token.inner {
-        // This ignores some cases like ~"foo": a word whose first part is a
-        // literal starting with '~' is treated as non-constant.
-        T_NormalWord(l) => {
-            if let Some(first) = l.first() {
-                if let T_Literal(s) = &*first.inner {
-                    if s.starts_with('~') {
-                        return false;
-                    }
-                }
-            }
-            l.iter().all(is_constant)
-        }
-        T_DoubleQuoted(l) => l.iter().all(is_constant),
-        T_SingleQuoted(_) => true,
-        T_Literal(_) => true,
-        _ => false,
-    }
-}
-
-/// Faithful port of `ShellCheck.ASTLib.isGlob`.
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
-        _ => false,
-    }
-}
-
 // foo[x${var}y] gets parsed as foo,[,x,$var,y], so check for such an interval.
-fn has_split_range(l: &[Token]) -> bool {
-    let after: Vec<&Token> = l.iter().skip_while(|t| !is_half_open_range(t)).collect();
-    after.iter().any(|t| is_closing_range(t))
-}
-
-fn is_half_open_range(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Literal(s) if s == "[")
-}
-
-fn is_closing_range(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']'))
-}
-
-/// Faithful port of `ShellCheck.ASTLib.getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    let mut out = Vec::new();
-    fn go<'a>(t: &'a Token, out: &mut Vec<&'a Token>) {
-        use InnerToken::*;
-        match &*t.inner {
-            T_NormalWord(l) => {
-                for p in l {
-                    go(p, out);
-                }
-            }
-            T_DoubleQuoted(l) => out.extend(l.iter()),
-            TA_Expansion(l) => {
-                for p in l {
-                    go(p, out);
-                }
-            }
-            _ => out.push(t),
-        }
-    }
-    go(t, &mut out);
-    out
-}
 
 // ---------------------------------------------------------------------------
 // Checks

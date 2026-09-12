@@ -27,6 +27,16 @@
 //! - SC2194/2195/2221/2222 checkUnmatchableCases(register: SC2195/2221/2222; SC2194 in b_n)
 //! - SC2101/2102  checkCharRangeGlob            (register: full)
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::cfg::get_unquoted_literal;
+use crate::analyzer_lib::is_command;
+use crate::astlib::is_literal;
+use crate::astlib::get_leading_unquoted_string;
+use crate::astlib::is_constant;
+use crate::astlib::is_glob;
+use crate::astlib::is_closing_range;
+use crate::astlib::is_half_open_range;
+use crate::astlib::has_split_range;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -146,73 +156,6 @@ const UNARY_TEST_OPS: &[&str] = &[
     "-u", "-w", "-x", "-O", "-G", "-N", "-z", "-n", "-o", "-v", "-R",
 ];
 
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    let mut out = Vec::new();
-    fn go<'a>(t: &'a Token, out: &mut Vec<&'a Token>) {
-        use InnerToken::*;
-        match &*t.inner {
-            T_NormalWord(l) => {
-                for p in l {
-                    go(p, out);
-                }
-            }
-            T_DoubleQuoted(l) => out.extend(l.iter()),
-            TA_Expansion(l) => {
-                for p in l {
-                    go(p, out);
-                }
-            }
-            _ => out.push(t),
-        }
-    }
-    go(t, &mut out);
-    out
-}
-
-/// Faithful port of `ShellCheck.ASTLib.isConstant`.
-fn is_constant(token: &Token) -> bool {
-    use InnerToken::*;
-    match &*token.inner {
-        T_NormalWord(l) => {
-            if let Some(first) = l.first() {
-                if let T_Literal(s) = &*first.inner {
-                    if s.starts_with('~') {
-                        return false;
-                    }
-                }
-            }
-            l.iter().all(is_constant)
-        }
-        T_DoubleQuoted(l) => l.iter().all(is_constant),
-        T_SingleQuoted(_) => true,
-        T_Literal(_) => true,
-        _ => false,
-    }
-}
-
-/// Faithful port of `ShellCheck.ASTLib.isGlob`.
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
-        _ => false,
-    }
-}
-
-fn has_split_range(l: &[Token]) -> bool {
-    let after: Vec<&Token> = l.iter().skip_while(|t| !is_half_open_range(t)).collect();
-    after.iter().any(|t| is_closing_range(t))
-}
-fn is_half_open_range(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Literal(s) if s == "[")
-}
-fn is_closing_range(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']'))
-}
-
 /// Recursive literal extractor mirroring Haskell `getLiteralStringExt (const Nothing)`,
 /// including the `TA_Expansion` and `T_ParamSubSpecialChar` cases (which the
 /// crate's `astlib::get_literal_string` omits).
@@ -235,11 +178,6 @@ fn get_literal_string_local(t: &Token) -> Option<String> {
     }
     let mut s = String::new();
     if go(t, &mut s) { Some(s) } else { None }
-}
-
-/// `isLiteral`.
-fn is_literal(t: &Token) -> bool {
-    get_literal_string_local(t).is_some()
 }
 
 /// `isLiteralNumber`.
@@ -269,57 +207,6 @@ fn is_quoteable_expansion(t: &Token) -> bool {
         T_DollarBraced { .. } => true,
         T_DollarExpansion(_) | T_DollarBraceCommandExpansion { .. } | T_Backticked(_) => true,
         _ => false,
-    }
-}
-
-/// `getLeadingUnquotedString`.
-fn get_leading_unquoted_string(t: &Token) -> Option<String> {
-    use InnerToken::*;
-    match &*t.inner {
-        T_NormalWord(list) => match list.split_first() {
-            Some((first, rest)) => {
-                if let T_Literal(s) = &*first.inner {
-                    let mut out = s.clone();
-                    for r in rest {
-                        if let T_Literal(rs) = &*r.inner {
-                            out.push_str(rs);
-                        } else {
-                            break;
-                        }
-                    }
-                    Some(out)
-                } else {
-                    None
-                }
-            }
-            None => None,
-        },
-        _ => None,
-    }
-}
-
-/// `getUnquotedLiteral`.
-fn get_unquoted_literal(t: &Token) -> Option<String> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(list) => {
-            let mut out = String::new();
-            for p in list {
-                match &*p.inner {
-                    InnerToken::T_Literal(s) => out.push_str(s),
-                    _ => return None,
-                }
-            }
-            Some(out)
-        }
-        _ => None,
-    }
-}
-
-/// `cmd \`isCommand\` "test"` (also matches /usr/bin/test).
-fn is_command(t: &Token, str: &str) -> bool {
-    match get_command_name(t) {
-        Some(cmd) => cmd == str || cmd.ends_with(&format!("/{}", str)),
-        None => false,
     }
 }
 

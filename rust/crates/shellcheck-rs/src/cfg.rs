@@ -2077,7 +2077,7 @@ pub(crate) fn get_literal_string_def(t: &Token, def: &str) -> String {
 }
 
 /// `getUnquotedLiteral`.
-fn get_unquoted_literal(t: &Token) -> Option<String> {
+pub(crate) fn get_unquoted_literal(t: &Token) -> Option<String> {
     match &*t.inner {
         InnerToken::T_NormalWord(list) => {
             let mut out = String::new();
@@ -2289,7 +2289,7 @@ fn will_split(t: &Token) -> bool {
     }
 }
 
-fn will_become_multiple_args(t: &Token) -> bool {
+pub(crate) fn will_become_multiple_args(t: &Token) -> bool {
     will_concat_in_assignment(t) || {
         use InnerToken::*;
         match &*t.inner {
@@ -2302,7 +2302,7 @@ fn will_become_multiple_args(t: &Token) -> bool {
     }
 }
 
-fn will_concat_in_assignment(t: &Token) -> bool {
+pub(crate) fn will_concat_in_assignment(t: &Token) -> bool {
     use InnerToken::*;
     match &*t.inner {
         T_DollarBraced { .. } => is_array_expansion(t),

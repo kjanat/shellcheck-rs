@@ -12,6 +12,19 @@
 //! Not ported here (belong to other batches / codes): SC2182 (printf, no
 //! variables), SC2018/2019/2020/2021 (tr literal-string advice).
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::cfg::will_become_multiple_args;
+use crate::cfg::will_concat_in_assignment;
+use crate::analyzer_lib::is_array_expansion;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::get_command;
+use crate::astlib::only_literal_string;
+use crate::astlib::basename;
+use crate::astlib::list_to_args;
+use crate::astlib::is_literal;
+use crate::astlib::is_flag;
+use crate::astlib::is_glob;
+use crate::astlib::has_split_range;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -34,70 +47,9 @@ fn concat_over(t: &Token) -> String {
     oversimplify(t).concat()
 }
 
-/// `onlyLiteralString`: literal parts concatenated, non-literals skipped.
-fn only_literal_string(t: &Token) -> String {
-    astlib::get_literal_string_ext(t, &|_| Some(String::new())).unwrap_or_default()
-}
-
-/// `isLiteral t = isJust $ getLiteralString t`.
-fn is_literal(t: &Token) -> bool {
-    get_literal_string(t).is_some()
-}
-
-fn basename(s: &str) -> String {
-    match s.rfind('/') {
-        Some(i) => s[i + 1..].to_string(),
-        None => s.to_string(),
-    }
-}
-
 // ---- getWordParts / isFlag / isGlob (ported from ASTLib) --------------------
 
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) => l.iter().flat_map(|x| get_word_parts(x)).collect(),
-        InnerToken::T_DoubleQuoted(l) => l.iter().collect(),
-        _ => vec![t],
-    }
-}
-
-fn is_flag(t: &Token) -> bool {
-    match get_word_parts(t).first() {
-        Some(p) => matches!(&*p.inner, InnerToken::T_Literal(s) if s.starts_with('-')),
-        None => false,
-    }
-}
-
-/// `isGlob`.
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
-        _ => false,
-    }
-}
-fn has_split_range(l: &[Token]) -> bool {
-    let after: Vec<&Token> = l
-        .iter()
-        .skip_while(|t| !matches!(&*t.inner, InnerToken::T_Literal(s) if s == "["))
-        .collect();
-    after
-        .iter()
-        .any(|t| matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']')))
-}
-
 // ---- command name resolution (ported from ASTLib, proven in batch_h) -------
-
-fn get_command(t: &Token) -> Option<&Token> {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => get_command(cmd),
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => Some(t),
-        InnerToken::T_Annotation { token, .. } => get_command(token),
-        _ => None,
-    }
-}
 
 fn parse_flag_list(spec: &str) -> Vec<(String, bool)> {
     let mut out = vec![];
@@ -126,10 +78,6 @@ fn get_bsd_opts<'a>(
         flag_map.insert(k, v);
     }
     opts_process(false, &flag_map, args)
-}
-
-fn list_to_args<'a>(args: &'a [Token]) -> Vec<(String, (&'a Token, &'a Token))> {
-    args.iter().map(|x| (String::new(), (x, x))).collect()
 }
 
 fn opts_process<'a>(
@@ -250,10 +198,6 @@ fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Toke
         }
     }
     (None, t)
-}
-
-fn get_command_name(t: &Token) -> Option<String> {
-    get_command_name_and_token(false, t).0
 }
 
 fn get_command_token_or_this(t: &Token) -> &Token {
@@ -626,38 +570,6 @@ fn mbma_f(quoted: bool, t: &Token) -> bool {
         }
         T_DoubleQuoted(parts) => parts.iter().any(|x| mbma_f(true, x)),
         T_NormalWord(parts) => parts.iter().any(|x| mbma_f(quoted, x)),
-        _ => false,
-    }
-}
-
-fn will_become_multiple_args(t: &Token) -> bool {
-    will_concat_in_assignment(t) || wbma_f(t)
-}
-fn wbma_f(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_BraceExpansion(_) => true,
-        T_NormalWord(parts) => parts.iter().any(wbma_f),
-        _ => false,
-    }
-}
-fn will_concat_in_assignment(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_DollarBraced { .. } => is_array_expansion(t),
-        T_DoubleQuoted(parts) => parts.iter().any(will_concat_in_assignment),
-        T_NormalWord(parts) => parts.iter().any(will_concat_in_assignment),
-        _ => false,
-    }
-}
-fn is_array_expansion(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_DollarBraced { op, .. } => {
-            let string = concat_over(op);
-            string.starts_with('@') || (!string.starts_with('#') && string.contains("[@]"))
-        }
         _ => false,
     }
 }

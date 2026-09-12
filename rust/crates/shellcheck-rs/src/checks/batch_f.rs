@@ -31,6 +31,13 @@
 //! Note: `checkConditionalAndOrs` in Haskell also emits SC2107/2108/2109/2110;
 //! only the SC2166 branches are ported here (the others are out of scope).
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::is_command;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::get_command;
+use crate::astlib::basename;
+use crate::astlib::is_assignment;
+use crate::astlib::is_flag;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -47,42 +54,6 @@ pub fn register(c: &mut Checker) {
 // Private helper predicates (ported from ASTLib/AnalyzerLib; kept local so this
 // module does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
-
-fn basename(path: &str) -> String {
-    match path.rsplit('/').next() {
-        Some(x) => x.to_string(),
-        None => path.to_string(),
-    }
-}
-
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    use InnerToken::*;
-    match &*t.inner {
-        T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
-        T_DoubleQuoted(l) => l.iter().collect(),
-        TA_Expansion(l) => l.iter().flat_map(get_word_parts).collect(),
-        _ => vec![t],
-    }
-}
-
-/// `isFlag`: word whose first part is an unquoted `-...` literal.
-fn is_flag(t: &Token) -> bool {
-    match get_word_parts(t).first() {
-        Some(w) => matches!(&*w.inner, InnerToken::T_Literal(s) if s.starts_with('-')),
-        None => false,
-    }
-}
-
-/// `getCommand`: unwrap redirections/annotations to the T_SimpleCommand.
-fn get_command(t: &Token) -> Option<&Token> {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => get_command(cmd),
-        InnerToken::T_Annotation { token, .. } => get_command(token),
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => Some(t),
-        _ => None,
-    }
-}
 
 fn simple_command_words(t: &Token) -> Option<&Vec<Token>> {
     let cmd = get_command(t)?;
@@ -137,46 +108,8 @@ fn exec_effective(args: &[Token]) -> Option<&Token> {
     None
 }
 
-/// `getCommandName`: resolving `command`/`builtin`/`busybox`/`run`/`exec` prefixes.
-fn get_command_name(t: &Token) -> Option<String> {
-    let words = simple_command_words(t)?;
-    let w = words.first()?;
-    let s = astlib::get_literal_string(w)?;
-    let rest = &words[1..];
-    let effective: Option<&Token> = match s.as_str() {
-        "busybox" | "builtin" | "command" | "run" => rest.first().filter(|a| !is_flag(a)),
-        "exec" => exec_effective(rest),
-        _ => None,
-    };
-    match effective {
-        Some(tok) => astlib::get_literal_string(tok),
-        None => Some(s),
-    }
-}
-
 fn get_command_basename(t: &Token) -> Option<String> {
     get_command_name(t).map(|s| basename(&s))
-}
-
-/// `isCommand token str`: command name equals `str` or ends with `/str`.
-fn is_command(t: &Token, str: &str) -> bool {
-    match get_command_name(t) {
-        Some(name) => name == str || name.ends_with(&format!("/{}", str)),
-        None => false,
-    }
-}
-
-/// `isAssignment`.
-fn is_assignment(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => is_assignment(cmd),
-        InnerToken::T_SimpleCommand { assignments, words } => {
-            !assignments.is_empty() && words.is_empty()
-        }
-        InnerToken::T_Assignment { .. } => true,
-        InnerToken::T_Annotation { token, .. } => is_assignment(token),
-        _ => false,
-    }
 }
 
 /// `isTestCommand`.

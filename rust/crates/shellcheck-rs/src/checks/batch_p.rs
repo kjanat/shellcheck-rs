@@ -15,6 +15,11 @@
 //! (`params.variable_flow`) / `get_variable_flow`, which the Rust port produces
 //! faithfully (see `analyzer_lib::get_variable_flow`).
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::cfg::get_unquoted_literal;
+use crate::astlib::basename;
+use crate::analyzer_lib::arguments;
+use crate::astlib::e4m;
+use crate::astlib::is_annotation_ignoring_code;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -41,73 +46,11 @@ fn supports_arrays(shell: Shell) -> bool {
     matches!(shell, Shell::Bash | Shell::Ksh)
 }
 
-/// `basename = reverse . takeWhile (/= '/') . reverse`.
-fn basename(s: &str) -> String {
-    s.rsplit('/').next().unwrap_or(s).to_string()
-}
-
-/// `getUnquotedLiteral (T_NormalWord _ list)` — only if every part is a literal.
-fn get_unquoted_literal(t: &Token) -> Option<String> {
-    if let InnerToken::T_NormalWord(list) = &*t.inner {
-        let mut out = String::new();
-        for p in list {
-            if let InnerToken::T_Literal(s) = &*p.inner {
-                out.push_str(s);
-            } else {
-                return None;
-            }
-        }
-        Some(out)
-    } else {
-        None
-    }
-}
-
-/// `isAnnotationIgnoringCode code t`.
-fn is_annotation_ignoring_code(code: i64, t: &Token) -> bool {
-    if let InnerToken::T_Annotation { annotations, .. } = &*t.inner {
-        annotations.iter().any(|a| match a {
-            Annotation::DisableComment(from, to) => code >= *from && code < *to,
-            _ => false,
-        })
-    } else {
-        false
-    }
-}
-
 /// `shouldIgnoreCode params code t`.
 fn should_ignore_code(params: &Parameters, code: i64, t: &Token) -> bool {
     get_path(params, t)
         .iter()
         .any(|p| is_annotation_ignoring_code(code, p))
-}
-
-/// `escapeForMessage` (`e4m`).
-fn e4m(s: &str) -> String {
-    let mut out = String::new();
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{1B}' => out.push_str("\\e"),
-            _ => {
-                let should_escape = c.is_control() || (!c.is_ascii() && !c.is_alphabetic());
-                if should_escape {
-                    let n = c as u32;
-                    if n < 256 {
-                        out.push_str(&format!("\\x{:02X}", n));
-                    } else {
-                        out.push_str(&format!("\\U{:04X}", n));
-                    }
-                } else {
-                    out.push(c);
-                }
-            }
-        }
-    }
-    out
 }
 
 // ===========================================================================
@@ -479,14 +422,6 @@ fn check_quotes_in_literals(params: &Parameters, _root: &Token, out: &mut Out) {
 // ===========================================================================
 
 const FLAGS_FOR_READ: &str = "sreu:n:N:i:p:a:t:";
-
-/// The words after the command name of a `T_SimpleCommand`.
-fn arguments(t: &Token) -> &[Token] {
-    match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => &words[1..],
-        _ => &[],
-    }
-}
 
 /// `getSingleUnmodifiedBracedString word`.
 fn get_single_unmodified_braced_string(word: &Token) -> Option<String> {

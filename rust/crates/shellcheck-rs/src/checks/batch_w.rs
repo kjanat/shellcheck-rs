@@ -36,6 +36,15 @@
 //!                                   scope); SC2288 (batch_n) filtered out.
 //! - checkBatsTestDoesNotUseNegation SC2314/SC2315
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::cfg::will_become_multiple_args;
+use crate::cfg::will_concat_in_assignment;
+use crate::cfg::get_unquoted_literal;
+use crate::analyzer_lib::get_all_flags;
+use crate::astlib::is_annotation_ignoring_code;
+use crate::astlib::is_function;
+use crate::astlib::is_literal;
+use crate::astlib::get_leading_unquoted_string;
+use crate::astlib::is_glob;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -109,10 +118,6 @@ fn is_loop(t: &Token) -> bool {
     )
 }
 
-fn is_function(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Function { .. })
-}
-
 /// `willSplit`.
 fn will_split(t: &Token) -> bool {
     use InnerToken::*;
@@ -127,33 +132,6 @@ fn will_split(t: &Token) -> bool {
         T_NormalWord(l) => l.iter().any(will_split),
         _ => false,
     }
-}
-
-/// `willConcatInAssignment`.
-fn will_concat_in_assignment(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_DollarBraced { .. } => is_array_expansion(t),
-        T_DoubleQuoted(parts) | T_NormalWord(parts) => parts.iter().any(will_concat_in_assignment),
-        _ => false,
-    }
-}
-
-/// `willBecomeMultipleArgs`.
-fn will_become_multiple_args(t: &Token) -> bool {
-    use InnerToken::*;
-    if will_concat_in_assignment(t) {
-        return true;
-    }
-    fn f(t: &Token) -> bool {
-        use InnerToken::*;
-        match &*t.inner {
-            T_Extglob { .. } | T_Glob(_) | T_BraceExpansion(_) => true,
-            T_NormalWord(parts) => parts.iter().any(f),
-            _ => false,
-        }
-    }
-    f(t)
 }
 
 /// `mayBecomeMultipleArgs`.
@@ -176,68 +154,12 @@ fn may_become_multiple_args(t: &Token) -> bool {
     f(false, t)
 }
 
-/// `isGlob`.
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } | T_Glob(_) => true,
-        T_NormalWord(l) => {
-            if l.iter().any(is_glob) {
-                return true;
-            }
-            // foo[x${var}y] parses as foo,[,x,$var,y]: detect a half-open range
-            // "[" followed later by a literal containing "]".
-            let is_half_open = |t: &Token| matches!(&*t.inner, T_Literal(s) if s == "[");
-            let is_closing = |t: &Token| matches!(&*t.inner, T_Literal(s) if s.contains(']'));
-            let after: Vec<&Token> = l.iter().skip_while(|x| !is_half_open(x)).collect();
-            after.iter().any(|x| is_closing(x))
-        }
-        _ => false,
-    }
-}
-
-/// `getUnquotedLiteral`.
-fn get_unquoted_literal(t: &Token) -> Option<String> {
-    if let InnerToken::T_NormalWord(list) = &*t.inner {
-        let mut out = String::new();
-        for p in list {
-            if let InnerToken::T_Literal(s) = &*p.inner {
-                out.push_str(s);
-            } else {
-                return None;
-            }
-        }
-        Some(out)
-    } else {
-        None
-    }
-}
-
 /// `getTrailingUnquotedLiteral`.
 fn get_trailing_unquoted_literal(t: &Token) -> Option<&Token> {
     if let InnerToken::T_NormalWord(list) = &*t.inner {
         let last = list.last()?;
         if matches!(&*last.inner, InnerToken::T_Literal(_)) {
             return Some(last);
-        }
-    }
-    None
-}
-
-/// `getLeadingUnquotedString`.
-fn get_leading_unquoted_string(t: &Token) -> Option<String> {
-    if let InnerToken::T_NormalWord(list) = &*t.inner {
-        if let Some(first) = list.first() {
-            if let InnerToken::T_Literal(s) = &*first.inner {
-                let mut out = s.clone();
-                for p in &list[1..] {
-                    match &*p.inner {
-                        InnerToken::T_Literal(s2) => out.push_str(s2),
-                        _ => break,
-                    }
-                }
-                return Some(out);
-            }
         }
     }
     None
@@ -254,11 +176,6 @@ fn get_glob_or_literal_string(t: &Token) -> Option<String> {
         InnerToken::T_Glob(s) => Some(s.clone()),
         _ => None,
     })
-}
-
-/// `isLiteral`.
-fn is_literal(t: &Token) -> bool {
-    astlib::get_literal_string(t).is_some()
 }
 
 /// `isCommandSubstitution`.
@@ -279,51 +196,6 @@ fn is_quoteable_expansion(t: &Token) -> bool {
 /// `isUnqualifiedCommand token str` — exact command-name match (no path).
 fn is_unqualified_command(t: &Token, name: &str) -> bool {
     get_command_name(t).as_deref() == Some(name)
-}
-
-/// `getAllFlags` (== `getFlagsUntil (== "--")`), on a T_SimpleCommand token.
-fn get_all_flags(t: &Token) -> Vec<(Token, String)> {
-    let words = match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } => words,
-        _ => return vec![],
-    };
-    if words.is_empty() {
-        return vec![];
-    }
-    let args = &words[1..];
-    let token_and_text: Vec<(Token, String)> = args
-        .iter()
-        .map(|x| (x.clone(), oversimplify(x).concat()))
-        .collect();
-    let mut flag_args: Vec<(Token, String)> = vec![];
-    let mut rest: Vec<(Token, String)> = vec![];
-    let mut broken = false;
-    for (x, txt) in token_and_text {
-        if !broken && txt == "--" {
-            broken = true;
-        }
-        if broken {
-            rest.push((x, txt));
-        } else {
-            flag_args.push((x, txt));
-        }
-    }
-    let mut out: Vec<(Token, String)> = vec![];
-    for (x, txt) in flag_args {
-        if let Some(arg) = txt.strip_prefix("--") {
-            out.push((x, arg.split('=').next().unwrap_or("").to_string()));
-        } else if let Some(a) = txt.strip_prefix('-') {
-            for v in a.chars() {
-                out.push((x.clone(), v.to_string()));
-            }
-        } else {
-            out.push((x, String::new()));
-        }
-    }
-    for (x, _) in rest {
-        out.push((x, String::new()));
-    }
-    out
 }
 
 /// `getCommand`.
@@ -1537,17 +1409,6 @@ fn group_by_link<'a, F: Fn(&Token, &Token) -> bool>(
         out.push(current);
     }
     out
-}
-
-fn is_annotation_ignoring_code(code: i64, t: &Token) -> bool {
-    if let InnerToken::T_Annotation { annotations, .. } = &*t.inner {
-        annotations.iter().any(|a| match a {
-            Annotation::DisableComment(from, to) => code >= *from && code < *to,
-            _ => false,
-        })
-    } else {
-        false
-    }
 }
 
 fn should_ignore_code(params: &Parameters, code: i64, t: &Token) -> bool {

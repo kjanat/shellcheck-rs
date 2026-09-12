@@ -27,6 +27,13 @@
 //! port is safe because the pipeline `nub`s identical positioned comments, and
 //! the token id / message / (absent) fix are identical.
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::astlib::basename;
+use crate::analyzer_lib::get_closest_command;
+use crate::astlib::list_to_args;
+use crate::astlib::is_flag;
+use crate::astlib::is_glob;
+use crate::astlib::has_split_range;
+use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -71,51 +78,6 @@ fn concat_over(t: &Token) -> String {
 /// non-literal part contributes `def`, so the result is always `Some`.
 fn get_literal_string_def(def: &str, t: &Token) -> String {
     astlib::get_literal_string_ext(t, &|_| Some(def.to_string())).unwrap_or_default()
-}
-
-/// `getWordParts`.
-fn get_word_parts(t: &Token) -> Vec<&Token> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) => l.iter().flat_map(|x| get_word_parts(x)).collect(),
-        InnerToken::T_DoubleQuoted(l) => l.iter().collect(),
-        InnerToken::TA_Expansion(l) => l.iter().flat_map(|x| get_word_parts(x)).collect(),
-        _ => vec![t],
-    }
-}
-
-/// `isGlob`.
-fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
-        _ => false,
-    }
-}
-fn has_split_range(l: &[Token]) -> bool {
-    let after: Vec<&Token> = l
-        .iter()
-        .skip_while(|t| !matches!(&*t.inner, InnerToken::T_Literal(s) if s == "["))
-        .collect();
-    after
-        .iter()
-        .any(|t| matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']')))
-}
-
-/// `isFlag`: word whose first part is a `-`-prefixed literal.
-fn is_flag(t: &Token) -> bool {
-    match get_word_parts(t).first() {
-        Some(p) => matches!(&*p.inner, InnerToken::T_Literal(s) if s.starts_with('-')),
-        None => false,
-    }
-}
-
-fn basename(path: &str) -> String {
-    match path.rsplit('/').next() {
-        Some(x) => x.to_string(),
-        None => path.to_string(),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -220,10 +182,6 @@ fn parse_flag_list(spec: &str) -> Vec<(String, bool)> {
         }
     }
     out
-}
-
-fn list_to_args<'a>(args: &'a [Token]) -> Vec<(String, (&'a Token, &'a Token))> {
-    args.iter().map(|x| (String::new(), (x, x))).collect()
 }
 
 fn get_bsd_opts<'a>(
@@ -336,19 +294,6 @@ fn get_path<'a>(params: &'a Parameters, t: &'a Token) -> Vec<&'a Token> {
         cur = p;
     }
     out
-}
-
-/// `getClosestCommand`: nearest enclosing `T_Redirecting` on the path, stopping
-/// at the enclosing `T_Script`.
-fn get_closest_command<'a>(params: &'a Parameters, t: &'a Token) -> Option<&'a Token> {
-    for node in get_path(params, t) {
-        match &*node.inner {
-            InnerToken::T_Redirecting { .. } => return Some(node),
-            InnerToken::T_Script { .. } => return None,
-            _ => {}
-        }
-    }
-    None
 }
 
 fn when_shell(p: &Parameters, shells: &[Shell]) -> bool {
