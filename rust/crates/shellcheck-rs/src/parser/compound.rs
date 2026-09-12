@@ -113,8 +113,9 @@ impl Parser {
         let list = self.read_compound_list_or_empty();
         self.allspacing();
         if list.is_empty() && self.eof() {
-            // `readCompoundList` is a non-empty list: with nothing in the
-            // subshell and no `)` to come, Haskell reports the missing command.
+            // Haskell reads the body with `readCompoundList`, which is a
+            // non-empty term: with nothing inside and nothing left to read,
+            // the failure it reports is the missing command, not the `)`.
             return self.fail_with("Expected a command");
         }
         if self.char(')').is_err() {
