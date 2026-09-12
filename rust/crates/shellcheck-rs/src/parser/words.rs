@@ -48,12 +48,25 @@ impl Parser {
     }
 
     pub(super) fn read_normal_word_part(&mut self) -> PResult<Token> {
-        // Not ported: `checkForParenthesis`, which reports SC1036 for a `(`
-        // that cannot start a word part. Haskell reaches it only after
-        // `notFollowedBy2 (oneOf end)`, and this parser has no `end` set here,
-        // so emitting it unconditionally fires on the `(` of a process
-        // substitution — `read -ra arr <(ls)` and `ls >(cat)` — which the
-        // oracle accepts. Needs the terminator set threaded through first.
+        self.read_normal_word_part_end("")
+    }
+
+    /// `readNormalWordPart end`: `end` is the caller's terminator set, which
+    /// only the literal run needs (an index span ends at `]`).
+    pub(super) fn read_normal_word_part_end(&mut self, end: &str) -> PResult<Token> {
+        // `checkForParenthesis`: no word part can start with `(`. A process
+        // substitution never reaches here with one, since `readProcSub` takes
+        // the `<`/`>` first.
+        if self.peek() == Some('(') {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1036,
+                "'(' is invalid here. Did you forget to escape it?",
+            );
+        }
         match self.peek() {
             None => Err(()),
             Some(c) => match c {
@@ -74,7 +87,7 @@ impl Parser {
                 }
                 '<' | '>' if self.peek_at(1) == Some('(') => self.read_proc_sub(),
                 '{' | '}' => self.read_brace_or_literal(),
-                _ => self.read_normal_literal(""),
+                _ => self.read_normal_literal(end),
             },
         }
     }

@@ -1010,6 +1010,77 @@ impl Parser {
         None
     }
 
+    /// `readArrayIndex`: `[`, then the index taken verbatim, then `]`. The end
+    /// is found by parsing the contents as an index span
+    /// (`readStringForParser readIndexSpan`), so an unterminated quote inside
+    /// fails the index instead of being swallowed as raw text; the characters
+    /// themselves are kept unparsed for `reparseIndices` to revisit.
+    pub(super) fn read_array_index(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        self.char('[')?;
+        let pos = self.pos();
+        // `inSeparateContext $ lookAhead ..` rolls its state back whether it
+        // succeeded or not, so nothing the span leaves behind survives.
+        let m = self.mark();
+        let notes = self.notes.len();
+        let problems = self.problems.len();
+        let contexts = self.contexts.clone();
+        let failure = self.failure.clone();
+        let spanned = self.read_index_span();
+        let end_idx = self.idx;
+        self.reset(m);
+        self.notes.truncate(notes);
+        self.problems.truncate(problems);
+        self.contexts = contexts;
+        self.failure = failure;
+        spanned?;
+        let raw: String = self.input[m.idx..end_idx].iter().collect();
+        while self.idx < end_idx {
+            self.bump();
+        }
+        self.char(']')?;
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(
+            id,
+            InnerToken::T_UnparsedIndex { pos, str: raw },
+        ))
+    }
+
+    /// `readIndexSpan`: `many (readNormalWordPart "]" <|> someSpace <|>
+    /// otherLiteral)`. Only consumes; the caller keeps the raw text.
+    fn read_index_span(&mut self) -> PResult<()> {
+        loop {
+            // `notFollowedBy2 (oneOf "]")`
+            if matches!(self.peek(), None | Some(']')) {
+                return Ok(());
+            }
+            let before = self.idx;
+            let m = self.mark();
+            match self.read_normal_word_part_end("]") {
+                Ok(_) if self.idx != before => continue,
+                Ok(_) => self.reset(m),
+                Err(()) => {
+                    if self.idx != before {
+                        return Err(());
+                    }
+                    self.reset(m);
+                }
+            }
+            if self.spacing1().is_ok() {
+                continue;
+            }
+            // `otherLiteral`: a run of the characters a word part cannot take.
+            let mut any = false;
+            while matches!(self.peek(), Some(c) if QUOTABLE_CHARS.contains(c)) {
+                self.bump();
+                any = true;
+            }
+            if !any {
+                return Ok(());
+            }
+        }
+    }
+
     pub(super) fn read_assignment_word(&mut self) -> PResult<Token> {
         self.called("variable assignment", |p| p.read_assignment_word_body())
     }
@@ -1026,35 +1097,16 @@ impl Parser {
             self.reset(prefix);
             return Err(());
         };
-        // optional [index] indices -> T_UnparsedIndex (like top-level readArrayIndex)
+        // `many readArrayIndex`
         let mut indices = Vec::new();
         while self.peek() == Some('[') {
-            let istart = self.pos();
-            self.bump();
-            let pos = self.pos();
-            let mut raw = String::new();
-            let mut depth = 1;
-            while let Some(c) = self.peek() {
-                if c == '[' {
-                    depth += 1;
-                } else if c == ']' {
-                    depth -= 1;
-                    if depth == 0 {
-                        break;
-                    }
+            match self.read_array_index() {
+                Ok(i) => indices.push(i),
+                Err(()) => {
+                    self.reset(prefix);
+                    return Err(());
                 }
-                self.bump();
-                raw.push(c);
             }
-            if self.char(']').is_err() {
-                self.reset(prefix);
-                return Err(());
-            }
-            let idx_id = self.next_id_between(istart, self.pos());
-            indices.push(Token::new(
-                idx_id,
-                InnerToken::T_UnparsedIndex { pos, str: raw },
-            ));
         }
         // The T_Assignment span ends here (variable name + indices), before the
         // `=` — matching ShellCheck's `id <- endSpan start` placement, so that
@@ -1165,31 +1217,10 @@ impl Parser {
                 let estart = self.pos();
                 let mut indices = Vec::new();
                 while self.peek() == Some('[') {
-                    let istart = self.pos();
-                    self.bump();
-                    let pos = self.pos();
-                    let mut raw = String::new();
-                    let mut depth = 1;
-                    while let Some(c) = self.peek() {
-                        if c == '[' {
-                            depth += 1;
-                        } else if c == ']' {
-                            depth -= 1;
-                            if depth == 0 {
-                                break;
-                            }
-                        }
-                        self.bump();
-                        raw.push(c);
+                    match self.read_array_index() {
+                        Ok(i) => indices.push(i),
+                        Err(()) => break,
                     }
-                    if self.char(']').is_err() {
-                        break;
-                    }
-                    let idx_id = self.next_id_between(istart, self.pos());
-                    indices.push(Token::new(
-                        idx_id,
-                        InnerToken::T_UnparsedIndex { pos, str: raw },
-                    ));
                 }
                 if !indices.is_empty() && self.char('=').is_ok() {
                     // `value <- readRegular <|> nothing`, and readRegular is
@@ -1405,6 +1436,9 @@ impl Parser {
             (Some('>'), Some('>')) => (InnerToken::T_DGREAT, 2),
             (Some('<'), Some('>')) => (InnerToken::T_LESSGREAT, 2),
             (Some('>'), Some('|')) => (InnerToken::T_CLOBBER, 2),
+            // `redirToken` ends with `notFollowedBy2 (char '(')`, so `<(`/`>(`
+            // stay whole for `readProcSub` to take as a word.
+            (Some('<'), Some('(')) | (Some('>'), Some('(')) => return None,
             (Some('<'), _) => (InnerToken::T_Less, 1),
             (Some('>'), _) => (InnerToken::T_Greater, 1),
             _ => return None,
