@@ -42,7 +42,7 @@ pub fn check_script(spec: &CheckSpec) -> CheckResult {
     positioned = nub(positioned);
 
     // sort by (file, line, column, severity, code, message).
-    positioned.sort_by(|a, b| order_key(a).cmp(&order_key(b)));
+    positioned.sort_by_key(order_key);
 
     CheckResult {
         filename: spec.filename.clone(),

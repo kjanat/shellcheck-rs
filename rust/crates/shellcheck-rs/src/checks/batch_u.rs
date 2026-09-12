@@ -27,20 +27,24 @@
 //! - SC2194/2195/2221/2222 checkUnmatchableCases(register: SC2195/2221/2222; SC2194 in b_n)
 //! - SC2101/2102  checkCharRangeGlob            (register: full)
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::cfg::get_unquoted_literal;
+use crate::analyzer_lib::get_closest_command;
+use crate::analyzer_lib::head_id;
 use crate::analyzer_lib::is_command;
-use crate::astlib::is_literal;
-use crate::astlib::get_leading_unquoted_string;
-use crate::astlib::is_constant;
-use crate::astlib::is_glob;
-use crate::astlib::is_closing_range;
-use crate::astlib::is_half_open_range;
-use crate::astlib::has_split_range;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::is_confused_glob_regex;
+use crate::analyzer_lib::is_test_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::get_leading_unquoted_string;
+use crate::astlib::get_word_parts;
+use crate::astlib::has_split_range;
+use crate::astlib::is_closing_range;
+use crate::astlib::is_constant;
+use crate::astlib::is_glob;
+use crate::astlib::is_half_open_range;
+use crate::astlib::is_literal;
 use crate::astlib::oversimplify;
+use crate::cfg::get_unquoted_literal;
 use crate::interface::Shell;
 
 // ===========================================================================
@@ -132,26 +136,16 @@ fn is_literal_number(t: &Token) -> bool {
     }
 }
 
-/// `isConfusedGlobRegex`.
-fn is_confused_glob_regex(s: &str) -> bool {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.first() == Some(&'*') {
-        return true;
-    }
-    if chars.len() == 2 && chars[1] == '*' && chars[0] != '\\' && chars[0] != '.' {
-        return true;
-    }
-    false
-}
-
 /// `isQuoteableExpansion`.
 fn is_quoteable_expansion(t: &Token) -> bool {
     use InnerToken::*;
-    match &*t.inner {
-        T_DollarBraced { .. } => true,
-        T_DollarExpansion(_) | T_DollarBraceCommandExpansion { .. } | T_Backticked(_) => true,
-        _ => false,
-    }
+    matches!(
+        &*t.inner,
+        T_DollarBraced { .. }
+            | T_DollarExpansion(_)
+            | T_DollarBraceCommandExpansion { .. }
+            | T_Backticked(_)
+    )
 }
 
 fn is_command_match(t: &Token, matcher: impl Fn(&str) -> bool) -> bool {
@@ -161,34 +155,9 @@ fn is_command_match(t: &Token, matcher: impl Fn(&str) -> bool) -> bool {
     }
 }
 
-/// `isTestCommand`.
-fn is_test_command(t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Condition { .. } => true,
-        T_SimpleCommand { .. } => is_command(t, "test"),
-        T_Redirecting { cmd, .. } => is_test_command(cmd),
-        T_Annotation { token, .. } => is_test_command(token),
-        T_Pipeline { commands, .. } if commands.len() == 1 => is_test_command(&commands[0]),
-        _ => false,
-    }
-}
-
 /// `isDereferencingBinaryOp`.
 fn is_dereferencing_binary_op(op: &str) -> bool {
     ARITHMETIC_BINARY_TEST_OPS.contains(&op)
-}
-
-/// `getClosestCommand`: nearest enclosing `T_Redirecting` before a `T_Script`.
-fn get_closest_command(params: &Parameters, t: &Token) -> Option<Token> {
-    for node in get_path(params, t) {
-        match &*node.inner {
-            InnerToken::T_Redirecting { .. } => return Some(node.clone()),
-            InnerToken::T_Script { .. } => return None,
-            _ => {}
-        }
-    }
-    None
 }
 
 // ---- Pseudoglobs (ASTLib) --------------------------------------------------
@@ -231,10 +200,8 @@ fn to_glob(exact: bool, word: &Token) -> Option<Vec<PseudoGlob>> {
                     // tail: concatMap getWordParts rest, then f each
                     let mut tail = Vec::new();
                     for part in rest.iter().flat_map(get_word_parts) {
-                        match glob_part(exact, part) {
-                            Some(mut g) => tail.append(&mut g),
-                            None => return None,
-                        }
+                        let mut g = glob_part(exact, part)?;
+                        tail.append(&mut g);
                     }
                     this.append(&mut tail);
                     return Some(this);
@@ -244,10 +211,8 @@ fn to_glob(exact: bool, word: &Token) -> Option<Vec<PseudoGlob>> {
     }
     let mut out = Vec::new();
     for part in get_word_parts(word) {
-        match glob_part(exact, part) {
-            Some(mut g) => out.append(&mut g),
-            None => return None,
-        }
+        let mut g = glob_part(exact, part)?;
+        out.append(&mut g);
     }
     Some(out)
 }
@@ -540,15 +505,11 @@ fn check_constant_nullary(params: &Parameters, t: &Token, out: &mut Out) {
 /// SC2057 / SC2058 — `checkValidCondOps`.
 fn check_valid_cond_ops(params: &Parameters, t: &Token, out: &mut Out) {
     match &*t.inner {
-        InnerToken::TC_Binary { op, .. } => {
-            if !BINARY_TEST_OPS.contains(&op.as_str()) {
-                warn(out, t.id(), 2057, "Unknown binary operator.");
-            }
+        InnerToken::TC_Binary { op, .. } if !BINARY_TEST_OPS.contains(&op.as_str()) => {
+            warn(out, t.id(), 2057, "Unknown binary operator.");
         }
-        InnerToken::TC_Unary { op, .. } => {
-            if !UNARY_TEST_OPS.contains(&op.as_str()) {
-                warn(out, t.id(), 2058, "Unknown unary operator.");
-            }
+        InnerToken::TC_Unary { op, .. } if !UNARY_TEST_OPS.contains(&op.as_str()) => {
+            warn(out, t.id(), 2058, "Unknown unary operator.");
         }
         _ => {}
     }
@@ -871,7 +832,7 @@ fn subshell_check(id: Id, t: &Token, out: &mut Out) {
 }
 
 fn subshell_check_params(id: Id, first: &Token, second: &Token, out: &mut Out) {
-    if astlib::get_literal_string(first).map_or(false, |s| UNARY_TEST_OPS.contains(&s.as_str())) {
+    if astlib::get_literal_string(first).is_some_and(|s| UNARY_TEST_OPS.contains(&s.as_str())) {
         err(
             out,
             id,
@@ -879,7 +840,7 @@ fn subshell_check_params(id: Id, first: &Token, second: &Token, out: &mut Out) {
             "(..) is a subshell. Did you mean [ .. ], a test expression?",
         );
     }
-    if astlib::get_literal_string(second).map_or(false, |s| BINARY_TEST_OPS.contains(&s.as_str())) {
+    if astlib::get_literal_string(second).is_some_and(|s| BINARY_TEST_OPS.contains(&s.as_str())) {
         warn(
             out,
             id,
@@ -1000,13 +961,6 @@ fn check_second_arg_is_comparison(params: &Parameters, t: &Token, out: &mut Out)
                 }
             }
         }
-    }
-}
-
-fn head_id(t: &Token) -> Id {
-    match &*t.inner {
-        InnerToken::T_NormalWord(list) if !list.is_empty() => list[0].id(),
-        _ => t.id(),
     }
 }
 
@@ -1197,7 +1151,7 @@ fn has_dupes(contents: &str) -> bool {
 
 fn is_ignored_command(params: &Parameters, t: &Token) -> bool {
     match get_closest_command(params, t) {
-        Some(cmd) => is_command_match(&cmd, |s| s == "tr" || s == "read"),
+        Some(cmd) => is_command_match(cmd, |s| s == "tr" || s == "read"),
         None => false,
     }
 }

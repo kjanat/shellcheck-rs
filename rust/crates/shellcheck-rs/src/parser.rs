@@ -461,14 +461,9 @@ impl Parser {
         loop {
             let mut progressed = false;
             // many1 linewhitespace
-            loop {
-                match self.line_whitespace() {
-                    Ok(c) => {
-                        out.push(c);
-                        progressed = true;
-                    }
-                    Err(()) => break,
-                }
+            while let Ok(c) = self.line_whitespace() {
+                out.push(c);
+                progressed = true;
             }
             // continuation: "\\\n"
             let m = self.mark();
@@ -611,11 +606,8 @@ impl Parser {
     fn read_normalish_word(&mut self, _terms: &[&str]) -> PResult<Token> {
         let start = self.pos();
         let mut parts = Vec::new();
-        loop {
-            match self.read_normal_word_part() {
-                Ok(p) => parts.push(p),
-                Err(()) => break,
-            }
+        while let Ok(p) = self.read_normal_word_part() {
+            parts.push(p);
         }
         if parts.is_empty() {
             return Err(());
@@ -1435,8 +1427,8 @@ impl Parser {
         for (k, v) in sub.positions.iter() {
             self.positions.insert(*k, v.clone());
         }
-        self.notes.extend(sub.notes.drain(..));
-        self.problems.extend(sub.problems.drain(..));
+        self.notes.append(&mut sub.notes);
+        self.problems.append(&mut sub.problems);
         self.next_id = sub.next_id;
         let wid = self.next_id_between(start.clone(), self.pos());
         Token::new(wid, InnerToken::T_NormalWord(parts))
@@ -4777,10 +4769,7 @@ impl Parser {
             self.reset(m);
         }
 
-        let contents = match self.read_cond_contents(single) {
-            Ok(c) => Some(c),
-            Err(()) => None,
-        };
+        let contents = self.read_cond_contents(single).ok();
         let token = match contents {
             Some(c) => c,
             None => {

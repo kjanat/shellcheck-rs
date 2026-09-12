@@ -12,7 +12,7 @@
 //!   * 1 = problems found (decided by the caller after running the analysis)
 //!   * 2 = runtime/IO error (decided by the caller)
 //!   * 3 = SyntaxFailure  (getOpt/usage error: unknown flag, missing argument,
-//!         bad number, bad boolean)
+//!     bad number, bad boolean)
 //!   * 4 = SupportFailure (unknown format / shell / severity / color value)
 //!
 //! The parser is intentionally IO-free and returns an [`Outcome`]; the binary
@@ -625,9 +625,8 @@ pub fn parse(argv: &[String]) -> Outcome {
                 }
                 // csIncludedWarnings = if null new then old else Just new <> old
                 if !new.is_empty() {
-                    match &mut spec.included_warnings {
-                        Some(old) => new.append(old),
-                        None => {}
+                    if let Some(old) = &mut spec.included_warnings {
+                        new.append(old);
                     }
                     spec.included_warnings = Some(new);
                 }

@@ -20,22 +20,28 @@
 //! match; the `T_DollarBraced` (`${x:=y}`) and `T_DollarBraceCommandExpansion`
 //! cases (which do parse) are ported so their negative tests stay negative.
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::cfg::is_special_variable_char;
-use crate::cfg::is_variable_char;
-use crate::cfg::is_variable_start_char;
-use crate::analyzer_lib::get_command_name;
-use crate::analyzer_lib::get_command;
-use crate::astlib::basename;
 use crate::analyzer_lib::get_closest_command;
-use crate::astlib::drop_hashbang_prefix;
-use crate::astlib::is_function;
-use crate::astlib::is_assignment;
-use crate::astlib::is_flag;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::get_command;
+use crate::analyzer_lib::get_command_basename;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::is_function_body;
+use crate::analyzer_lib::is_test_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::basename;
+use crate::astlib::drop_hashbang_prefix;
+use crate::astlib::get_command_sequences;
+use crate::astlib::get_word_parts;
+use crate::astlib::is_assignment;
+use crate::astlib::is_flag;
+use crate::astlib::is_function;
 use crate::astlib::oversimplify;
+use crate::cfg::get_braced_modifier;
+use crate::cfg::get_braced_reference;
+use crate::cfg::is_special_variable_char;
+use crate::cfg::is_variable_char;
+use crate::cfg::is_variable_start_char;
 use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {
@@ -49,63 +55,6 @@ pub fn register(c: &mut Checker) {
 // Shared private helpers (ported from ASTLib/AnalyzerLib; kept local so this
 // module does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
-
-fn simple_command_words(t: &Token) -> Option<&Vec<Token>> {
-    let cmd = get_command(t)?;
-    if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-        Some(words)
-    } else {
-        None
-    }
-}
-
-/// `getEffectiveCommandToken` for exec: parse `getBsdOpts "cla:"`.
-fn exec_effective(args: &[Token]) -> Option<&Token> {
-    fn needs_arg(c: char) -> Option<bool> {
-        match c {
-            'c' | 'l' => Some(false),
-            'a' => Some(true),
-            _ => None,
-        }
-    }
-    let mut i = 0;
-    while i < args.len() {
-        let s = astlib::get_literal_string(&args[i]).unwrap_or_else(|| "\0".to_string());
-        if s == "--" {
-            return args.get(i + 1);
-        } else if s.starts_with("--") {
-            return None;
-        } else if s.starts_with('-') && s.len() > 1 {
-            let cluster: Vec<char> = s[1..].chars().collect();
-            let mut ci = 0;
-            loop {
-                if ci >= cluster.len() {
-                    i += 1;
-                    break;
-                }
-                match needs_arg(cluster[ci]) {
-                    None => return None,
-                    Some(false) => ci += 1,
-                    Some(true) => {
-                        if ci + 1 == cluster.len() {
-                            i += 2;
-                        } else {
-                            i += 1;
-                        }
-                        break;
-                    }
-                }
-            }
-        } else {
-            return Some(&args[i]);
-        }
-    }
-    None
-}
-
-fn get_command_basename(t: &Token) -> Option<String> {
-    get_command_name(t).map(|s| basename(&s))
-}
 
 /// Pre-order traversal of every node in `t`'s subtree (`doAnalysis` order).
 fn all_nodes<'a>(t: &'a Token, out: &mut Vec<&'a Token>) {
@@ -176,8 +125,7 @@ fn check_stderr_redirect(params: &Parameters, redir: &Token, out: &mut Out) {
         return;
     }
     // First: T_FdRedirect id "2" (T_IoDuplicate _ (T_GREATAND _) "1")
-    let first_id;
-    match &*redirs[0].inner {
+    let first_id = match &*redirs[0].inner {
         InnerToken::T_FdRedirect { fd, target } if fd == "2" => {
             match &*target.inner {
                 InnerToken::T_IoDuplicate { op, num } if num == "1" => {
@@ -187,10 +135,10 @@ fn check_stderr_redirect(params: &Parameters, redir: &Token, out: &mut Out) {
                 }
                 _ => return,
             }
-            first_id = redirs[0].id();
+            redirs[0].id()
         }
         _ => return,
-    }
+    };
     // Second: T_FdRedirect _ _ (T_IoFile _ op _) where op is > or >>
     match &*redirs[1].inner {
         InnerToken::T_FdRedirect { target, .. } => match &*target.inner {
@@ -378,34 +326,6 @@ fn contains_assignment(params: &Parameters, arg: &Token) -> bool {
 // SC2129 — checkMultipleAppends
 // ---------------------------------------------------------------------------
 
-/// `getCommandSequences`.
-fn get_command_sequences(t: &Token) -> Vec<&[Token]> {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Script { commands, .. } => vec![&commands[..]],
-        T_BraceGroup(cmds) => vec![&cmds[..]],
-        T_Subshell(cmds) => vec![&cmds[..]],
-        T_WhileExpression { condition, body } => vec![&condition[..], &body[..]],
-        T_UntilExpression { condition, body } => vec![&condition[..], &body[..]],
-        T_ForIn { body, .. } => vec![&body[..]],
-        T_ForArithmetic { body, .. } => vec![&body[..]],
-        T_IfExpression { clauses, elses } => {
-            let mut out: Vec<&[Token]> = vec![];
-            for (a, b) in clauses {
-                out.push(&a[..]);
-                out.push(&b[..]);
-            }
-            out.push(&elses[..]);
-            out
-        }
-        T_Annotation { token, .. } => get_command_sequences(token),
-        T_DollarExpansion(cmds) => vec![&cmds[..]],
-        T_DollarBraceCommandExpansion { list, .. } => vec![&list[..]],
-        T_Backticked(cmds) => vec![&cmds[..]],
-        _ => vec![],
-    }
-}
-
 /// `getTarget`: (append-file, redirecting-id) for a command that appends (`>>`).
 fn get_target(t: &Token) -> Option<(&Token, Id)> {
     match &*t.inner {
@@ -475,11 +395,6 @@ fn is_single_test(cmds: &[Token]) -> bool {
     cmds.len() == 1 && is_test_command(&cmds[0])
 }
 
-fn is_function_body(path: &[&Token]) -> bool {
-    // (_ :| f : _) -> isFunction f
-    path.get(1).map(|f| is_function(f)).unwrap_or(false)
-}
-
 fn is_test_structure(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_Banged(inner) => is_test_structure(inner),
@@ -505,36 +420,6 @@ fn is_test_structure(t: &Token) -> bool {
             _ => is_test_command(t),
         },
         _ => is_test_command(t),
-    }
-}
-
-fn is_test_command(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Pipeline {
-            separators,
-            commands,
-        } if separators.is_empty() => match commands.as_slice() {
-            [only] => {
-                if let InnerToken::T_Redirecting { cmd, .. } = &*only.inner {
-                    match &*cmd.inner {
-                        InnerToken::T_Condition { .. } => true,
-                        _ => is_command_test(cmd),
-                    }
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-/// `cmd \`isCommand\` "test"`.
-fn is_command_test(t: &Token) -> bool {
-    match get_command_name(t) {
-        Some(name) => name == "test" || name.ends_with("/test"),
-        None => false,
     }
 }
 
@@ -634,63 +519,3 @@ fn arith_has_assignment(s: &str) -> bool {
 // ---------------------------------------------------------------------------
 // getBracedModifier (ported from ASTLib; used by hasAssignment above)
 // ---------------------------------------------------------------------------
-
-fn take_name(s: &str) -> Option<String> {
-    let name: String = s.chars().take_while(|c| is_variable_char(*c)).collect();
-    if name.is_empty() { None } else { Some(name) }
-}
-
-fn get_special(s: &str) -> Option<String> {
-    match s.chars().next() {
-        Some(c) if is_special_variable_char(c) => Some(c.to_string()),
-        _ => None,
-    }
-}
-
-fn name_expansion(s: &str) -> Option<String> {
-    let mut chars = s.chars();
-    if chars.next()? != '!' {
-        return None;
-    }
-    let next = chars.next()?;
-    if !is_variable_char(next) {
-        return None;
-    }
-    let first = chars.find(|c| !is_variable_char(*c))?;
-    if matches!(first, '*' | '?' | '@') {
-        Some(String::new())
-    } else {
-        None
-    }
-}
-
-fn get_braced_reference(s: &str) -> String {
-    if let Some(r) = name_expansion(s) {
-        return r;
-    }
-    let no_prefix = drop_hashbang_prefix(s);
-    if let Some(r) = take_name(no_prefix) {
-        return r;
-    }
-    if let Some(r) = get_special(no_prefix) {
-        return r;
-    }
-    if let Some(r) = get_special(s) {
-        return r;
-    }
-    s.to_string()
-}
-
-fn get_braced_modifier(s: &str) -> String {
-    let var = get_braced_reference(s);
-    let candidates: Vec<&str> = match s.chars().next() {
-        Some(c) if c == '#' || c == '!' => vec![&s[c.len_utf8()..], s],
-        _ => vec![s],
-    };
-    for a in candidates {
-        if let Some(rest) = a.strip_prefix(var.as_str()) {
-            return rest.to_string();
-        }
-    }
-    String::new()
-}

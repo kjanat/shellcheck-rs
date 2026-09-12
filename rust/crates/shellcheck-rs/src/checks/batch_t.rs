@@ -28,24 +28,26 @@
 //!   * SC2313 — checkReadExpansions (ONLY the array-index branch; SC2229 lives
 //!     in batch_p)
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::cfg::oversimplify_concat;
-use crate::cfg::will_become_multiple_args;
-use crate::cfg::will_concat_in_assignment;
-use crate::analyzer_lib::get_all_flags;
-use crate::analyzer_lib::is_array_expansion;
-use crate::astlib::basename;
-use crate::analyzer_lib::is_true_assignment_source;
-use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::arguments;
-use crate::astlib::e4m;
-use crate::astlib::is_literal;
-use crate::astlib::is_constant;
-use crate::astlib::is_glob;
-use crate::astlib::has_split_range;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::get_all_flags;
+use crate::analyzer_lib::get_closest_command;
+use crate::analyzer_lib::is_array_expansion;
+use crate::analyzer_lib::is_true_assignment_source;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::basename;
+use crate::astlib::e4m;
+use crate::astlib::get_word_parts;
+use crate::astlib::has_split_range;
+use crate::astlib::is_constant;
+use crate::astlib::is_glob;
+use crate::astlib::is_literal;
+use crate::cfg::may_become_multiple_args;
+use crate::cfg::mbma_f;
+use crate::cfg::oversimplify_concat;
+use crate::cfg::will_become_multiple_args;
+use crate::cfg::will_concat_in_assignment;
 use crate::cfg::{
     get_braced_modifier, get_braced_reference, get_bsd_opts, get_gnu_opts, is_variable_name,
     oversimplify,
@@ -103,23 +105,6 @@ fn will_split(t: &Token) -> bool {
         T_Extglob { .. } => true,
         T_DoubleQuoted(l) => l.iter().any(will_become_multiple_args),
         T_NormalWord(l) => l.iter().any(will_split),
-        _ => false,
-    }
-}
-
-/// `mayBecomeMultipleArgs`.
-fn may_become_multiple_args(t: &Token) -> bool {
-    will_become_multiple_args(t) || mbma_f(false, t)
-}
-fn mbma_f(quoted: bool, t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_DollarBraced { op, .. } => {
-            let s = oversimplify_concat(op);
-            !quoted || s.starts_with('!')
-        }
-        T_DoubleQuoted(parts) => parts.iter().any(|x| mbma_f(true, x)),
-        T_NormalWord(parts) => parts.iter().any(|x| mbma_f(quoted, x)),
         _ => false,
     }
 }
@@ -257,15 +242,13 @@ fn check_expr(params: &Parameters, t: &Token, out: &mut Out) {
                         2304,
                         "* must be escaped to multiply: \\*. Modern $((x * y)) avoids this issue.",
                     ),
-                    InnerToken::T_Literal(s) if s == ":" => {
-                        if is_glob(rhs) {
-                            warn(
-                                out,
-                                rhs.id(),
-                                2305,
-                                "Quote regex argument to expr to avoid it expanding as a glob.",
-                            );
-                        }
+                    InnerToken::T_Literal(s) if s == ":" && is_glob(rhs) => {
+                        warn(
+                            out,
+                            rhs.id(),
+                            2305,
+                            "Quote regex argument to expr to avoid it expanding as a glob.",
+                        );
                     }
                     _ => {}
                 }
@@ -333,16 +316,14 @@ fn return_is_invalid(s: &str) -> bool {
     s.is_empty()
         || s.chars().any(|c| !c.is_ascii_digit())
         || s.chars().count() > 5
-        || s.parse::<u64>().map_or(false, |v| v > 255)
+        || s.parse::<u64>().is_ok_and(|v| v > 255)
 }
 
 fn return_or_exit(args: &[Token], out: &mut Out, multi: (Code, &str), invalid: (Code, &str)) {
     match args {
         [first, _second, ..] => err(out, first.id(), multi.0, multi.1),
-        [value] => {
-            if return_is_invalid(&return_lit(value)) {
-                err(out, value.id(), invalid.0, invalid.1);
-            }
+        [value] if return_is_invalid(&return_lit(value)) => {
+            err(out, value.id(), invalid.0, invalid.1);
         }
         _ => {}
     }
@@ -756,7 +737,7 @@ fn printf_match_format(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
         i += 1;
     } else {
         width_star = false;
-        while rest.get(i).map_or(false, |c| c.is_ascii_digit()) {
+        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
             i += 1;
         }
     }
@@ -769,7 +750,7 @@ fn printf_match_format(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
         i += 1;
     } else {
         prec_star = false;
-        while rest.get(i).map_or(false, |c| c.is_ascii_digit()) {
+        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
             i += 1;
         }
     }
@@ -996,7 +977,7 @@ const SUDO_BUILTINS: [&str; 25] = [
 ];
 
 fn check_sudo_args(params: &Parameters, t: &Token, out: &mut Out) {
-    let te = match {
+    let found_te = {
         let mut found = None;
         for cmd in PRIVILEGE_ELEVATION_COMMANDS {
             if let Some(x) = dispatch_basename(t, cmd) {
@@ -1005,7 +986,8 @@ fn check_sudo_args(params: &Parameters, t: &Token, out: &mut Out) {
             }
         }
         found
-    } {
+    };
+    let te = match found_te {
         Some(x) => x,
         None => return,
     };

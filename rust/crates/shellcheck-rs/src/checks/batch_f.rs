@@ -31,16 +31,20 @@
 //! Note: `checkConditionalAndOrs` in Haskell also emits SC2107/2108/2109/2110;
 //! only the SC2166 branches are ported here (the others are out of scope).
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::analyzer_lib::is_command;
-use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::condition_children;
 use crate::analyzer_lib::get_command;
-use crate::astlib::basename;
-use crate::astlib::is_assignment;
-use crate::astlib::is_flag;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::get_command_basename;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::in_condition;
+use crate::analyzer_lib::is_command;
+use crate::analyzer_lib::is_test_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::basename;
+use crate::astlib::get_word_parts;
+use crate::astlib::is_assignment;
+use crate::astlib::is_flag;
 use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {
@@ -53,115 +57,6 @@ pub fn register(c: &mut Checker) {
 // Private helper predicates (ported from ASTLib/AnalyzerLib; kept local so this
 // module does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
-
-fn simple_command_words(t: &Token) -> Option<&Vec<Token>> {
-    let cmd = get_command(t)?;
-    if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-        Some(words)
-    } else {
-        None
-    }
-}
-
-/// `getEffectiveCommandToken` for exec: parse `getBsdOpts "cla:"`.
-fn exec_effective(args: &[Token]) -> Option<&Token> {
-    fn needs_arg(c: char) -> Option<bool> {
-        match c {
-            'c' | 'l' => Some(false),
-            'a' => Some(true),
-            _ => None,
-        }
-    }
-    let mut i = 0;
-    while i < args.len() {
-        let s = astlib::get_literal_string(&args[i]).unwrap_or_else(|| "\0".to_string());
-        if s == "--" {
-            return args.get(i + 1);
-        } else if s.starts_with("--") {
-            return None;
-        } else if s.starts_with('-') && s.len() > 1 {
-            let cluster: Vec<char> = s[1..].chars().collect();
-            let mut ci = 0;
-            loop {
-                if ci >= cluster.len() {
-                    i += 1;
-                    break;
-                }
-                match needs_arg(cluster[ci]) {
-                    None => return None,
-                    Some(false) => ci += 1,
-                    Some(true) => {
-                        if ci + 1 == cluster.len() {
-                            i += 2;
-                        } else {
-                            i += 1;
-                        }
-                        break;
-                    }
-                }
-            }
-        } else {
-            return Some(&args[i]);
-        }
-    }
-    None
-}
-
-fn get_command_basename(t: &Token) -> Option<String> {
-    get_command_name(t).map(|s| basename(&s))
-}
-
-/// `isTestCommand`.
-fn is_test_command(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Condition { .. } => true,
-        InnerToken::T_SimpleCommand { .. } => is_command(t, "test"),
-        InnerToken::T_Redirecting { cmd, .. } => is_test_command(cmd),
-        InnerToken::T_Annotation { token, .. } => is_test_command(token),
-        InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => {
-            is_test_command(&commands[0])
-        }
-        _ => false,
-    }
-}
-
-/// Condition-children of a parent node, per `isCondition`'s `getConditionChildren`.
-fn condition_children(t: &Token) -> Vec<&Token> {
-    match &*t.inner {
-        InnerToken::T_AndIf { lhs, .. } => vec![lhs],
-        InnerToken::T_OrIf { lhs, .. } => vec![lhs],
-        InnerToken::T_IfExpression { clauses, .. } => {
-            // concatMap (take 1 . reverse . fst) conditions
-            clauses.iter().filter_map(|(cond, _)| cond.last()).collect()
-        }
-        InnerToken::T_WhileExpression { condition, .. } => condition.last().into_iter().collect(),
-        InnerToken::T_UntilExpression { condition, .. } => condition.last().into_iter().collect(),
-        _ => vec![],
-    }
-}
-
-/// `isCondition (getPath ..)`: walking from `t` up to the root, is each node a
-/// condition-child of its parent (or is any node a bats test)?
-fn in_condition(params: &Parameters, t: &Token) -> bool {
-    let mut child = t;
-    loop {
-        // `go _ _ T_BatsTest{} = True`: any node examined that is a bats test.
-        if matches!(&*child.inner, InnerToken::T_BatsTest { .. }) {
-            return true;
-        }
-        let parent = match params.parent(child) {
-            Some(p) => p,
-            None => return false,
-        };
-        if condition_children(parent)
-            .iter()
-            .any(|c| c.id() == child.id())
-        {
-            return true;
-        }
-        child = parent;
-    }
-}
 
 // ---------------------------------------------------------------------------
 // SC2015 — checkShorthandIf

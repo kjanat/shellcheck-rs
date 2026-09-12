@@ -12,14 +12,14 @@
 //! - SC2233/SC2234/SC2235 checkSubshelledTests (Analytics.hs).
 //! - SC2261/... checkPipeToNowhere  (Analytics.hs).
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::cfg::will_become_multiple_args;
-use crate::cfg::will_concat_in_assignment;
-use crate::cfg::get_unquoted_literal;
-use crate::astlib::is_quotes;
-use crate::astlib::is_glob;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::is_glob;
+use crate::astlib::is_quotes;
+use crate::cfg::get_unquoted_literal;
+use crate::cfg::will_become_multiple_args;
+use crate::cfg::will_concat_in_assignment;
 use crate::interface::{Fix, Replacement, Shell};
 
 /// Register this batch's checks.
@@ -341,7 +341,7 @@ fn spurious_cleanup(t: &Token) -> bool {
     if let InnerToken::T_Pipeline { commands, .. } = &*t.inner {
         if commands.len() == 1 {
             let cmd = &commands[0];
-            let is_match = get_command_name(cmd).map_or(false, |name| {
+            let is_match = get_command_name(cmd).is_some_and(|name| {
                 matches!(name.as_str(), ":" | "echo" | "exit" | "printf" | "return")
             });
             return is_match || spurious_is_assignment(cmd);
@@ -876,13 +876,6 @@ fn check_test_argument_splitting(params: &Parameters, t: &Token, out: &mut Out) 
 // SC2216/SC2217/SC2259/SC2260/SC2261 — checkPipeToNowhere (target code SC2261)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PipeType {
-    StdoutPipe,
-    StdoutStderrPipe,
-    NoPipe,
-}
-
 /// `ShellCheck.Data.nonReadingCommands`.
 const NON_READING_COMMANDS: &[&str] = &[
     "alias", "basename", "bg", "cal", "cd", "chgrp", "chmod", "chown", "cp", "du", "echo",
@@ -951,7 +944,7 @@ fn is_function_tok(t: &Token) -> bool {
 
 fn sst_is_function_body(path: &[Token]) -> bool {
     // path[0] is the subshell itself; path[1] is its immediate parent.
-    path.get(1).map_or(false, is_function_tok)
+    path.get(1).is_some_and(is_function_tok)
 }
 
 fn sst_skippable(t: &Token) -> bool {

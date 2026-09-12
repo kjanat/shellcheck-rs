@@ -6,17 +6,22 @@
 //! - SC2068  checkUnquotedDollarAt (Analytics.hs)
 //! - SC2124  checkArrayAsString    (Analytics.hs) — also emits SC2125 (glob/brace branch)
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::assignment_is_quoting;
+use crate::analyzer_lib::is_array_expansion;
+use crate::analyzer_lib::is_assignment_param_to_command;
+use crate::analyzer_lib::is_quote_free_element;
+use crate::analyzer_lib::*;
+use crate::ast::*;
+use crate::astlib;
+use crate::astlib::drop_hashbang_prefix;
+use crate::astlib::oversimplify;
+use crate::cfg::get_braced_modifier;
+use crate::cfg::get_braced_reference;
 use crate::cfg::is_special_variable_char;
 use crate::cfg::is_variable_char;
 use crate::cfg::is_variable_start_char;
 use crate::cfg::will_become_multiple_args;
 use crate::cfg::will_concat_in_assignment;
-use crate::analyzer_lib::is_array_expansion;
-use crate::astlib::drop_hashbang_prefix;
-use crate::analyzer_lib::*;
-use crate::ast::*;
-use crate::astlib;
-use crate::astlib::oversimplify;
 use crate::interface::Shell;
 
 /// Register this batch's checks.
@@ -31,71 +36,6 @@ pub fn register(c: &mut Checker) {
 // Private helper predicates (ported from ASTLib/AnalyzerLib; kept local so
 // this module does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
-
-/// `getBracedReference`: the variable name from `${var:-foo}` etc.
-fn get_braced_reference(s: &str) -> String {
-    if let Some(r) = name_expansion(s) {
-        return r;
-    }
-    let no_prefix = drop_hashbang_prefix(s);
-    if let Some(r) = take_name(no_prefix) {
-        return r;
-    }
-    if let Some(r) = get_special(no_prefix) {
-        return r;
-    }
-    if let Some(r) = get_special(s) {
-        return r;
-    }
-    s.to_string()
-}
-
-fn take_name(s: &str) -> Option<String> {
-    let name: String = s.chars().take_while(|c| is_variable_char(*c)).collect();
-    if name.is_empty() { None } else { Some(name) }
-}
-
-fn get_special(s: &str) -> Option<String> {
-    match s.chars().next() {
-        Some(c) if is_special_variable_char(c) => Some(c.to_string()),
-        _ => None,
-    }
-}
-
-/// `nameExpansion "!foo*bar"` etc. — returns Some("") when it matches.
-fn name_expansion(s: &str) -> Option<String> {
-    let mut chars = s.chars();
-    if chars.next()? != '!' {
-        return None;
-    }
-    let next = chars.next()?;
-    if !is_variable_char(next) {
-        return None;
-    }
-    // `rest` = everything after `next`.
-    let first = chars.find(|c| !is_variable_char(*c))?;
-    if matches!(first, '*' | '?' | '@') {
-        Some(String::new())
-    } else {
-        None
-    }
-}
-
-/// `getBracedModifier`: the modifier like `/a/b` in `${var/a/b}`.
-fn get_braced_modifier(s: &str) -> String {
-    let var = get_braced_reference(s);
-    // dropModifier: if s starts with '#' or '!', try [rest, s]; else [s].
-    let candidates: Vec<&str> = match s.chars().next() {
-        Some(c) if c == '#' || c == '!' => vec![&s[c.len_utf8()..], s],
-        _ => vec![s],
-    };
-    for a in candidates {
-        if let Some(rest) = a.strip_prefix(var.as_str()) {
-            return rest.to_string();
-        }
-    }
-    String::new()
-}
 
 /// `isQuotedAlternativeReference`: matches the regex `(^|\])​:?\+` on the modifier.
 fn is_quoted_alternative_reference(t: &Token) -> bool {
@@ -132,36 +72,6 @@ fn matches_alternative_regex(m: &str) -> bool {
 
 // ---- isStrictlyQuoteFree (AnalyzerLib.isQuoteFreeNode strict=True) ----------
 
-fn is_assignment_param_to_command(params: &Parameters, id: Id) -> bool {
-    let parent = match params
-        .parent_map
-        .get(&id)
-        .and_then(|pid| params.id_map.get(pid))
-    {
-        Some(p) => p,
-        None => return false,
-    };
-    if let InnerToken::T_SimpleCommand { words, .. } = &*parent.inner {
-        if let Some((_first, args)) = words.split_first() {
-            return args.iter().any(|a| a.id() == id);
-        }
-    }
-    false
-}
-
-fn assignment_is_quoting(params: &Parameters, id: Id) -> bool {
-    let shell_parses_params_as_assignments = params.shell != Shell::Sh;
-    shell_parses_params_as_assignments || !is_assignment_param_to_command(params, id)
-}
-
-fn is_quote_free_element(params: &Parameters, t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Assignment { .. } => assignment_is_quoting(params, t.id()),
-        InnerToken::T_FdRedirect { .. } => true,
-        _ => false,
-    }
-}
-
 /// `isQuoteFreeContext` with `strict = True` (so for/select contexts are NOT
 /// treated as quoting).
 fn is_quote_free_context_strict(params: &Parameters, t: &Token) -> Option<bool> {
@@ -178,7 +88,7 @@ fn is_quote_free_context_strict(params: &Parameters, t: &Token) -> Option<bool> 
         } => Some(true),
         InnerToken::TA_Sequence(_) => Some(true),
         InnerToken::T_Arithmetic(_) => Some(true),
-        InnerToken::T_Assignment { .. } => Some(assignment_is_quoting(params, t.id())),
+        InnerToken::T_Assignment { .. } => Some(assignment_is_quoting(params, t)),
         InnerToken::T_Redirecting { .. } => Some(false),
         InnerToken::T_DoubleQuoted(_) => Some(true),
         InnerToken::T_DollarDoubleQuoted(_) => Some(true),

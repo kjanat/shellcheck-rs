@@ -246,7 +246,7 @@ fn is_stdin_read_command(t: &Token) -> bool {
                 let plaintext = oversimplify(cmd);
                 return plaintext.first().map(|s| s.as_str()) == Some("read")
                     && !plaintext.iter().any(|s| s == "-u")
-                    && !redirs.iter().any(|r| stdin_redirect(r));
+                    && !redirs.iter().any(stdin_redirect);
             }
         }
     }
@@ -288,7 +288,7 @@ fn check_muncher(params: &Parameters, while_id: Id, t: &Token, out: &mut Out) {
                     }
                 }
 
-                if !redirs.iter().any(|r| stdin_redirect(r)) {
+                if !redirs.iter().any(stdin_redirect) {
                     // Recurse into ifs/loops/groups/etc if this doesn't redirect.
                     for seq in get_command_sequences(cmd) {
                         for c in &seq {
@@ -342,7 +342,7 @@ fn run_munch_check(kind: MunchCheck, flag: &str, cmd: &Token) -> bool {
         MunchCheck::HasArgument => get_command_argv(cmd)
             .map(|argv| {
                 argv.iter()
-                    .filter_map(|a| astlib::get_literal_string(a))
+                    .filter_map(astlib::get_literal_string)
                     .any(|s| s == flag)
             })
             .unwrap_or(false),

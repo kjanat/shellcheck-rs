@@ -15,14 +15,15 @@
 //! (`params.variable_flow`) / `get_variable_flow`, which the Rust port produces
 //! faithfully (see `analyzer_lib::get_variable_flow`).
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::cfg::get_unquoted_literal;
-use crate::astlib::basename;
 use crate::analyzer_lib::arguments;
-use crate::astlib::e4m;
-use crate::astlib::is_annotation_ignoring_code;
+use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::basename;
+use crate::astlib::e4m;
+use crate::astlib::is_annotation_ignoring_code;
+use crate::cfg::get_unquoted_literal;
 use crate::cfg::{
     get_braced_modifier, get_braced_reference, get_gnu_opts, is_variable_name, oversimplify,
 };
@@ -68,14 +69,14 @@ fn functions_and_aliases(root: &Token) -> HashMap<String, Id> {
         InnerToken::T_Function { name, .. } => {
             functions.entry(name.clone()).or_insert_with(|| t.id());
         }
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => {
-            if is_unqualified_command(t, "alias") {
-                for arg in &words[1..] {
-                    let string = astlib::only_literal_string(arg);
-                    if string.contains('=') {
-                        let key: String = string.chars().take_while(|c| *c != '=').collect();
-                        aliases.entry(key).or_insert_with(|| arg.id());
-                    }
+        InnerToken::T_SimpleCommand { words, .. }
+            if !words.is_empty() && is_unqualified_command(t, "alias") =>
+        {
+            for arg in &words[1..] {
+                let string = astlib::only_literal_string(arg);
+                if string.contains('=') {
+                    let key: String = string.chars().take_while(|c| *c != '=').collect();
+                    aliases.entry(key).or_insert_with(|| arg.id());
                 }
             }
         }
@@ -87,11 +88,6 @@ fn functions_and_aliases(root: &Token) -> HashMap<String, Id> {
         combined.insert(k, v);
     }
     combined
-}
-
-/// `isUnqualifiedCommand token str`.
-fn is_unqualified_command(t: &Token, name: &str) -> bool {
-    get_command_name(t).as_deref() == Some(name)
 }
 
 /// `skipOver t list` = drop everything up to and including the token `t`.

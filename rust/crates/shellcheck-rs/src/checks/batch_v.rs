@@ -21,12 +21,14 @@
 //! - SC2295  checkUnquotedParameterExpansionPattern
 //! - SC2302/2303  checkArrayValueUsedAsIndex
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::cfg::get_unquoted_literal;
-use crate::astlib::is_constant;
+use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::is_command_substitution;
+use crate::astlib::is_constant;
 use crate::cfg;
+use crate::cfg::get_unquoted_literal;
 use crate::interface::{Fix, Replacement, Shell};
 use std::collections::HashMap;
 
@@ -56,16 +58,6 @@ pub fn register(c: &mut Checker) {
 // Shared local helpers (ported from ASTLib; kept private).
 // ---------------------------------------------------------------------------
 
-/// `ShellCheck.ASTLib.isCommandSubstitution`.
-fn is_command_substitution(t: &Token) -> bool {
-    matches!(
-        &*t.inner,
-        InnerToken::T_DollarExpansion(_)
-            | InnerToken::T_DollarBraceCommandExpansion { .. }
-            | InnerToken::T_Backticked(_)
-    )
-}
-
 /// `ShellCheck.ASTLib.isUnmodifiedParameterExpansion`.
 fn is_unmodified_parameter_expansion(t: &Token) -> bool {
     match &*t.inner {
@@ -76,10 +68,6 @@ fn is_unmodified_parameter_expansion(t: &Token) -> bool {
         }
         _ => false,
     }
-}
-
-fn is_unqualified_command(t: &Token, str: &str) -> bool {
-    get_command_name(t).as_deref() == Some(str)
 }
 
 /// `surroundWith`.
@@ -664,6 +652,8 @@ fn check_redirection_to_command(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2216 / SC2217 / SC2259 / SC2260 / SC2261 — checkPipeToNowhere
 // ---------------------------------------------------------------------------
 
+// Variant names mirror the Haskell constructors StdoutPipe / StdoutStderrPipe / NoPipe.
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PipeType {
     StdoutPipe,
@@ -804,7 +794,7 @@ fn ptn_get_redirection_fds(t: &Token) -> Option<Vec<i64>> {
 }
 
 fn ptn_redirects_stdin(t: &Token) -> bool {
-    ptn_get_redirection_fds(t).map_or(false, |fds| fds.contains(&0))
+    ptn_get_redirection_fds(t).is_some_and(|fds| fds.contains(&0))
 }
 
 fn ptn_pipe_type(t: &Token) -> PipeType {
@@ -846,10 +836,8 @@ fn ptn_impl(params: &Parameters, t: &Token, emit_dupes: bool, out: &mut Out) {
                 ptn_check_pipe(params, input, stage, output, emit_dupes, out);
             }
         }
-        InnerToken::T_Redirecting { redirs, cmd } => {
-            if redirs.iter().any(ptn_redirects_stdin) {
-                ptn_check_redir(params, cmd, out);
-            }
+        InnerToken::T_Redirecting { redirs, cmd } if redirs.iter().any(ptn_redirects_stdin) => {
+            ptn_check_redir(params, cmd, out);
         }
         _ => {}
     }
@@ -1213,17 +1201,15 @@ fn caai_check_element(params: &Parameters, is_associative: bool, t: &Token, out:
 // ---------------------------------------------------------------------------
 
 fn check_unquoted_parameter_expansion_pattern(params: &Parameters, x: &Token, out: &mut Out) {
-    if let InnerToken::T_DollarBraced { braced: true, op } = &*x.inner {
-        if let InnerToken::T_NormalWord(word_parts) = &*op.inner {
-            // T_NormalWord _ (T_Literal _ s : rest@(_:_))
-            if word_parts.len() >= 2 {
-                if matches!(&*word_parts[0].inner, InnerToken::T_Literal(_)) {
-                    let modifier = cfg::get_braced_modifier(&cfg::oversimplify_concat(op));
-                    if modifier.starts_with('%') || modifier.starts_with('#') {
-                        for r in &word_parts[1..] {
-                            upep_check(params, r, out);
-                        }
-                    }
+    if let InnerToken::T_DollarBraced { braced: true, op } = &*x.inner
+        && let InnerToken::T_NormalWord(word_parts) = &*op.inner
+    {
+        // T_NormalWord _ (T_Literal _ s : rest@(_:_))
+        if word_parts.len() >= 2 && matches!(&*word_parts[0].inner, InnerToken::T_Literal(_)) {
+            let modifier = cfg::get_braced_modifier(&cfg::oversimplify_concat(op));
+            if modifier.starts_with('%') || modifier.starts_with('#') {
+                for r in &word_parts[1..] {
+                    upep_check(params, r, out);
                 }
             }
         }

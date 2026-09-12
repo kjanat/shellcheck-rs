@@ -9,16 +9,17 @@
 //! Helpers are private to this module (ported from ASTLib / AnalyzerLib), so
 //! the module does not touch shared files that parallel agents also edit.
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::cfg::oversimplify_concat;
-use crate::cfg::will_become_multiple_args;
-use crate::cfg::will_concat_in_assignment;
-use crate::analyzer_lib::is_array_expansion;
 use crate::analyzer_lib::arguments;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::is_array_expansion;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::get_word_parts;
+use crate::astlib::is_command_substitution;
 use crate::cfg::oversimplify;
+use crate::cfg::oversimplify_concat;
+use crate::cfg::will_become_multiple_args;
+use crate::cfg::will_concat_in_assignment;
 use crate::interface::{Code, Shell};
 
 pub fn register(c: &mut Checker) {
@@ -58,15 +59,17 @@ fn will_split(t: &Token) -> bool {
 
 fn check_unquoted_n(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TC_Unary { typ, op, token } = &*t.inner {
-        if *typ == ConditionType::SingleBracket && op == "-n" && will_split(token) {
-            if !get_word_parts(token).iter().any(|p| is_array_expansion(p)) {
-                err(
-                    out,
-                    token.id(),
-                    2070,
-                    "-n doesn't work with unquoted arguments. Quote or use [[ ]].",
-                );
-            }
+        if *typ == ConditionType::SingleBracket
+            && op == "-n"
+            && will_split(token)
+            && !get_word_parts(token).iter().any(|p| is_array_expansion(p))
+        {
+            err(
+                out,
+                token.id(),
+                2070,
+                "-n doesn't work with unquoted arguments. Quote or use [[ ]].",
+            );
         }
     }
 }
@@ -195,15 +198,6 @@ fn get_source_file(args: &[Token]) -> Option<&Token> {
         Some("-p") => rest.get(1),
         _ => Some(first),
     }
-}
-
-/// `isCommandSubstitution`.
-fn is_command_substitution(t: &Token) -> bool {
-    use InnerToken::*;
-    matches!(
-        &*t.inner,
-        T_DollarExpansion(_) | T_DollarBraceCommandExpansion { .. } | T_Backticked(_)
-    )
 }
 
 /// `isStringExpansion`.

@@ -193,8 +193,7 @@ fn from_env_args(args: &[&str]) -> String {
             i += 1;
             continue;
         }
-        if a.starts_with("--split-string=") {
-            let rest = &a["--split-string=".len()..];
+        if let Some(rest) = a.strip_prefix("--split-string=") {
             if rest.is_empty() {
                 i += 1;
                 continue;
@@ -232,49 +231,6 @@ pub fn shell_for_executable(name: &str) -> Option<Shell> {
         _ => return None,
     })
 }
-
-#[cfg(test)]
-#[allow(non_snake_case)]
-mod tests {
-    use super::*;
-    use crate::ast::{Id, InnerToken, Token};
-
-    fn lit(s: &str) -> Token {
-        Token::new(Id(0), InnerToken::T_Literal(s.to_string()))
-    }
-
-    // getLiteralStringExt handles TA_Expansion by concatenating its literal parts
-    // (mirrors Haskell `g (TA_Expansion _ l) = allInList l`). Regression guard for
-    // SC2181 on `(( $? == 0 ))`, whose RHS `0` is a TA_Expansion.
-    #[test]
-    fn prop_getLiteralString_ta_expansion_literal() {
-        let t = Token::new(Id(1), InnerToken::TA_Expansion(vec![lit("0")]));
-        assert_eq!(get_literal_string(&t), Some("0".to_string()));
-    }
-
-    #[test]
-    fn prop_getLiteralString_ta_expansion_multipart() {
-        let t = Token::new(Id(1), InnerToken::TA_Expansion(vec![lit("1"), lit("2")]));
-        assert_eq!(get_literal_string(&t), Some("12".to_string()));
-    }
-
-    // A non-literal part (here a bare expansion) makes the whole thing non-literal.
-    #[test]
-    fn prop_getLiteralString_ta_expansion_nonliteral() {
-        let expansion = Token::new(Id(2), InnerToken::T_DollarExpansion(vec![]));
-        let t = Token::new(Id(1), InnerToken::TA_Expansion(vec![lit("0"), expansion]));
-        assert_eq!(get_literal_string(&t), None);
-    }
-
-    // getLiteralStringExt returns the raw string of T_ParamSubSpecialChar
-    // (Haskell `g (T_ParamSubSpecialChar _ s) = return s`).
-    #[test]
-    fn prop_getLiteralString_param_sub_special_char() {
-        let t = Token::new(Id(1), InnerToken::T_ParamSubSpecialChar("%".to_string()));
-        assert_eq!(get_literal_string(&t), Some("%".to_string()));
-    }
-}
-
 
 // ---- helpers consolidated from the check batches (ports of ASTLib) ----
 
@@ -459,7 +415,7 @@ pub(crate) fn e4m(s: &str) -> String {
     out
 }
 
-pub(crate) fn list_to_args<'a>(args: &'a [Token]) -> Vec<(String, (&'a Token, &'a Token))> {
+pub(crate) fn list_to_args(args: &[Token]) -> Vec<(String, (&Token, &Token))> {
     args.iter().map(|x| (String::new(), (x, x))).collect()
 }
 
@@ -467,5 +423,90 @@ pub(crate) fn drop_hashbang_prefix(s: &str) -> &str {
     match s.chars().next() {
         Some(c) if c == '!' || c == '#' => &s[c.len_utf8()..],
         _ => s,
+    }
+}
+
+/// `ShellCheck.ASTLib.isCommandSubstitution`.
+pub(crate) fn is_command_substitution(t: &Token) -> bool {
+    matches!(
+        &*t.inner,
+        InnerToken::T_DollarExpansion(_)
+            | InnerToken::T_DollarBraceCommandExpansion { .. }
+            | InnerToken::T_Backticked(_)
+    )
+}
+
+/// `getCommandSequences`.
+pub(crate) fn get_command_sequences(t: &Token) -> Vec<&[Token]> {
+    use InnerToken::*;
+    match &*t.inner {
+        T_Script { commands, .. } => vec![&commands[..]],
+        T_BraceGroup(cmds) => vec![&cmds[..]],
+        T_Subshell(cmds) => vec![&cmds[..]],
+        T_WhileExpression { condition, body } => vec![&condition[..], &body[..]],
+        T_UntilExpression { condition, body } => vec![&condition[..], &body[..]],
+        T_ForIn { body, .. } => vec![&body[..]],
+        T_ForArithmetic { body, .. } => vec![&body[..]],
+        T_IfExpression { clauses, elses } => {
+            let mut out: Vec<&[Token]> = vec![];
+            for (a, b) in clauses {
+                out.push(&a[..]);
+                out.push(&b[..]);
+            }
+            out.push(&elses[..]);
+            out
+        }
+        T_Annotation { token, .. } => get_command_sequences(token),
+        T_DollarExpansion(cmds) => vec![&cmds[..]],
+        T_DollarBraceCommandExpansion { list, .. } => vec![&list[..]],
+        T_Backticked(cmds) => vec![&cmds[..]],
+        _ => vec![],
+    }
+}
+
+/// `getLiteralStringDef def`: the literal string of a word, with `def` standing in for every non-literal part.
+pub(crate) fn get_literal_string_def(def: &str, t: &Token) -> String {
+    get_literal_string_ext(t, &|_| Some(def.to_string())).unwrap_or_default()
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+    use crate::ast::{Id, InnerToken, Token};
+
+    fn lit(s: &str) -> Token {
+        Token::new(Id(0), InnerToken::T_Literal(s.to_string()))
+    }
+
+    // getLiteralStringExt handles TA_Expansion by concatenating its literal parts
+    // (mirrors Haskell `g (TA_Expansion _ l) = allInList l`). Regression guard for
+    // SC2181 on `(( $? == 0 ))`, whose RHS `0` is a TA_Expansion.
+    #[test]
+    fn prop_getLiteralString_ta_expansion_literal() {
+        let t = Token::new(Id(1), InnerToken::TA_Expansion(vec![lit("0")]));
+        assert_eq!(get_literal_string(&t), Some("0".to_string()));
+    }
+
+    #[test]
+    fn prop_getLiteralString_ta_expansion_multipart() {
+        let t = Token::new(Id(1), InnerToken::TA_Expansion(vec![lit("1"), lit("2")]));
+        assert_eq!(get_literal_string(&t), Some("12".to_string()));
+    }
+
+    // A non-literal part (here a bare expansion) makes the whole thing non-literal.
+    #[test]
+    fn prop_getLiteralString_ta_expansion_nonliteral() {
+        let expansion = Token::new(Id(2), InnerToken::T_DollarExpansion(vec![]));
+        let t = Token::new(Id(1), InnerToken::TA_Expansion(vec![lit("0"), expansion]));
+        assert_eq!(get_literal_string(&t), None);
+    }
+
+    // getLiteralStringExt returns the raw string of T_ParamSubSpecialChar
+    // (Haskell `g (T_ParamSubSpecialChar _ s) = return s`).
+    #[test]
+    fn prop_getLiteralString_param_sub_special_char() {
+        let t = Token::new(Id(1), InnerToken::T_ParamSubSpecialChar("%".to_string()));
+        assert_eq!(get_literal_string(&t), Some("%".to_string()));
     }
 }

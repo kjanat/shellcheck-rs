@@ -748,1258 +748,941 @@ mod tests {
 
     #[test]
     fn prop_checkSpacefulnessCfg1() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a='cow moo'; echo $a"),
-            true
-        );
+        assert!(node_emits(check_spacefulness_cfg, "a='cow moo'; echo $a"));
     }
     #[test]
     fn prop_checkSpacefulnessCfg2() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a='cow moo'; [[ $a ]]"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "a='cow moo'; [[ $a ]]")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg3() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a='cow*.mp3'; echo \"$a\""),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "a='cow*.mp3'; echo \"$a\"")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg4() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "for f in *.mp3; do echo $f; done"),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "for f in *.mp3; do echo $f; done"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg4a() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "foo=3; foo=$(echo $foo)"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "foo=3; foo=$(echo $foo)")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg5() {
-        assert_eq!(
-            node_emits(
-                check_spacefulness_cfg,
-                "a='*'; b=$a; c=lol${b//foo/bar}; echo $c"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "a='*'; b=$a; c=lol${b//foo/bar}; echo $c"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg6() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a=foo$(lol); echo $a"),
-            true
-        );
+        assert!(node_emits(check_spacefulness_cfg, "a=foo$(lol); echo $a"));
     }
     #[test]
     fn prop_checkSpacefulnessCfg7() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a=foo\\ bar; rm $a"),
-            true
-        );
+        assert!(node_emits(check_spacefulness_cfg, "a=foo\\ bar; rm $a"));
     }
     #[test]
     fn prop_checkSpacefulnessCfg8() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a=foo\\ bar; a=foo; rm $a"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "a=foo\\ bar; a=foo; rm $a")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg10() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "rm $1"), true);
+        assert!(node_emits(check_spacefulness_cfg, "rm $1"));
     }
     #[test]
     fn prop_checkSpacefulnessCfg11() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "rm ${10//foo/bar}"),
-            true
-        );
+        assert!(node_emits(check_spacefulness_cfg, "rm ${10//foo/bar}"));
     }
     #[test]
     fn prop_checkSpacefulnessCfg12() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "(( $1 + 3 ))"), false);
+        assert!(!(node_emits(check_spacefulness_cfg, "(( $1 + 3 ))")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg13() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "if [[ $2 -gt 14 ]]; then true; fi"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "if [[ $2 -gt 14 ]]; then true; fi")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg14() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "foo=$3 env"), false);
+        assert!(!(node_emits(check_spacefulness_cfg, "foo=$3 env")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg15() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "local foo=$1"), false);
+        assert!(!(node_emits(check_spacefulness_cfg, "local foo=$1")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg16() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "declare foo=$1"), false);
+        assert!(!(node_emits(check_spacefulness_cfg, "declare foo=$1")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg17() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "echo foo=$1"), true);
+        assert!(node_emits(check_spacefulness_cfg, "echo foo=$1"));
     }
     #[test]
     fn prop_checkSpacefulnessCfg18() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "$1 --flags"), false);
+        assert!(!(node_emits(check_spacefulness_cfg, "$1 --flags")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg19() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "echo $PWD"), true);
+        assert!(node_emits(check_spacefulness_cfg, "echo $PWD"));
     }
     #[test]
     fn prop_checkSpacefulnessCfg20() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "n+='foo bar'"), false);
+        assert!(!(node_emits(check_spacefulness_cfg, "n+='foo bar'")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg21() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "select foo in $bar; do true; done"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "select foo in $bar; do true; done")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg22() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "echo $\"$1\""), false);
+        assert!(!(node_emits(check_spacefulness_cfg, "echo $\"$1\"")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg23() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a=(1); echo ${a[@]}"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "a=(1); echo ${a[@]}")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg24() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a='a    b'; cat <<< $a"),
-            true
-        );
+        assert!(node_emits(check_spacefulness_cfg, "a='a    b'; cat <<< $a"));
     }
     #[test]
     fn prop_checkSpacefulnessCfg25() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a='s/[0-9]//g'; sed $a"),
-            true
-        );
+        assert!(node_emits(check_spacefulness_cfg, "a='s/[0-9]//g'; sed $a"));
     }
     #[test]
     fn prop_checkSpacefulnessCfg26() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a='foo bar'; echo {1,2,$a}"),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "a='foo bar'; echo {1,2,$a}"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg27() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "echo ${a:+'foo'}"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "echo ${a:+'foo'}")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg28() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "exec {n}>&1; echo $n"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "exec {n}>&1; echo $n")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg29() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "n=$(stuff); exec {n}>&-;"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "n=$(stuff); exec {n}>&-;")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg30() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "file='foo bar'; echo foo > $file;"),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "file='foo bar'; echo foo > $file;"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg31() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "echo \"`echo \\\"$1\\\"`\""),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "echo \"`echo \\\"$1\\\"`\"")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg32() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "var=$1; [ -v var ]"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "var=$1; [ -v var ]")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg33() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "for file; do echo $file; done"),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "for file; do echo $file; done"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg34() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "declare foo$n=$1"), true);
+        assert!(node_emits(check_spacefulness_cfg, "declare foo$n=$1"));
     }
     #[test]
     fn prop_checkSpacefulnessCfg35() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "echo ${1+\"$1\"}"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "echo ${1+\"$1\"}")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg36() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "arg=$#; echo $arg"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "arg=$#; echo $arg")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg37() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_spacefulness_cfg,
                 "@test 'status' {\n [ $status -eq 0 ]\n}"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkSpacefulnessCfg37v() {
-        assert_eq!(
-            node_emits(spaceful_verbose, "@test 'status' {\n [ $status -eq 0 ]\n}"),
-            true
-        );
+        assert!(node_emits(
+            spaceful_verbose,
+            "@test 'status' {\n [ $status -eq 0 ]\n}"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg38() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "a=; echo $a"), true);
+        assert!(node_emits(check_spacefulness_cfg, "a=; echo $a"));
     }
     #[test]
     fn prop_checkSpacefulnessCfg39() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a=''\"\"''; b=x$a; echo $b"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "a=''\"\"''; b=x$a; echo $b")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg40() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "a=$((x+1)); echo $a"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "a=$((x+1)); echo $a")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg41() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "exec $1 --flags"), false);
+        assert!(!(node_emits(check_spacefulness_cfg, "exec $1 --flags")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg42() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "run $1 --flags"), false);
+        assert!(!(node_emits(check_spacefulness_cfg, "run $1 --flags")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg43() {
-        assert_eq!(node_emits(check_spacefulness_cfg, "$foo=42"), false);
+        assert!(!(node_emits(check_spacefulness_cfg, "$foo=42")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg44() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "#!/bin/sh\nexport var=$value"),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "#!/bin/sh\nexport var=$value"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg45() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "wait -zzx -p foo; echo $foo"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "wait -zzx -p foo; echo $foo")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg46() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "x=0; (( x += 1 )); echo $x"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "x=0; (( x += 1 )); echo $x")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg47() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "x=0; (( x-- )); echo $x"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "x=0; (( x-- )); echo $x")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg48() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "x=0; (( ++x )); echo $x"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "x=0; (( ++x )); echo $x")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg49() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "for i in 1 2 3; do echo $i; done"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "for i in 1 2 3; do echo $i; done")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg50() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "for i in 1 2 *; do echo $i; done"),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "for i in 1 2 *; do echo $i; done"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg51() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "x='foo bar'; x && x=1; echo $x"),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "x='foo bar'; x && x=1; echo $x"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg52() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_spacefulness_cfg,
                 "x=1; if f; then x='foo bar'; exit; fi; echo $x"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkSpacefulnessCfg53() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_spacefulness_cfg,
                 "s=1; f() { local s='a b'; }; f; echo $s"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkSpacefulnessCfg54() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "s='a b'; f() { s=1; }; f; echo $s"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "s='a b'; f() { s=1; }; f; echo $s")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg55() {
-        assert_eq!(
-            node_emits(
-                check_spacefulness_cfg,
-                "s='a b'; x && f() { s=1; }; f; echo $s"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "s='a b'; x && f() { s=1; }; f; echo $s"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg56() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "s=1; cat <(s='a b'); echo $s"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "s=1; cat <(s='a b'); echo $s")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg57() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "declare -i s=0; s=$(f); echo $s"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "declare -i s=0; s=$(f); echo $s")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg58() {
-        assert_eq!(
-            node_emits(
-                check_spacefulness_cfg,
-                "f() { declare -i s; }; f; s=$(var); echo $s"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "f() { declare -i s; }; f; s=$(var); echo $s"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg59() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_spacefulness_cfg,
                 "f() { declare -gi s; }; f; s=$(var); echo $s"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkSpacefulnessCfg60() {
-        assert_eq!(
-            node_emits(
-                check_spacefulness_cfg,
-                "declare -i s; declare +i s; s=$(foo); echo $s"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "declare -i s; declare +i s; s=$(foo); echo $s"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg61() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "declare -x X; y=foo$X; echo $y;"),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "declare -x X; y=foo$X; echo $y;"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg62() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_spacefulness_cfg,
                 "f() { declare -x X; y=foo$X; echo $y; }"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkSpacefulnessCfg63() {
-        assert_eq!(
-            node_emits(
-                check_spacefulness_cfg,
-                "f && declare -i s; s='x + y'; echo $s"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_spacefulness_cfg,
+            "f && declare -i s; s='x + y'; echo $s"
+        ));
     }
     #[test]
     fn prop_checkSpacefulnessCfg64() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_spacefulness_cfg,
                 "declare -i s; s='x + y'; x=$s; echo $x"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkSpacefulnessCfg65() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "f() { s=$?; echo $s; }; f"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "f() { s=$?; echo $s; }; f")));
     }
     #[test]
     fn prop_checkSpacefulnessCfg66() {
-        assert_eq!(
-            node_emits(check_spacefulness_cfg, "f() { s=$?; echo $s; }"),
-            false
-        );
+        assert!(!(node_emits(check_spacefulness_cfg, "f() { s=$?; echo $s; }")));
     }
     #[test]
     fn prop_checkUnused0() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "var=foo; echo $var"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "var=foo; echo $var")));
     }
     #[test]
     fn prop_checkUnused1() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "var=foo; echo $bar"),
-            true
-        );
+        assert!(tree_emits(check_unused_assignments, "var=foo; echo $bar"));
     }
     #[test]
     fn prop_checkUnused2() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "var=foo; export var;"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "var=foo; export var;")));
     }
     #[test]
     fn prop_checkUnused3() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "for f in *; do echo '$f'; done"),
-            true
-        );
+        assert!(tree_emits(
+            check_unused_assignments,
+            "for f in *; do echo '$f'; done"
+        ));
     }
     #[test]
     fn prop_checkUnused4() {
-        assert_eq!(tree_emits(check_unused_assignments, "local i=0"), true);
+        assert!(tree_emits(check_unused_assignments, "local i=0"));
     }
     #[test]
     fn prop_checkUnused5() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "read lol; echo $lol"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "read lol; echo $lol")));
     }
     #[test]
     fn prop_checkUnused6() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "var=4; (( var++ ))"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "var=4; (( var++ ))")));
     }
     #[test]
     fn prop_checkUnused7() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "var=2; $((var))"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "var=2; $((var))")));
     }
     #[test]
     fn prop_checkUnused8() {
-        assert_eq!(tree_emits(check_unused_assignments, "var=2; var=3;"), true);
+        assert!(tree_emits(check_unused_assignments, "var=2; var=3;"));
     }
     #[test]
     fn prop_checkUnused9() {
-        assert_eq!(tree_emits(check_unused_assignments, "read ''"), false);
+        assert!(!(tree_emits(check_unused_assignments, "read ''")));
     }
     #[test]
     fn prop_checkUnused10() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "read -p 'test: '"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "read -p 'test: '")));
     }
     #[test]
     fn prop_checkUnused11() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "bar=5; export foo[$bar]=3"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "bar=5; export foo[$bar]=3")));
     }
     #[test]
     fn prop_checkUnused12() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "read foo; echo ${!foo}"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "read foo; echo ${!foo}")));
     }
     #[test]
     fn prop_checkUnused13() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "x=(1); (( x[0] ))"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "x=(1); (( x[0] ))")));
     }
     #[test]
     fn prop_checkUnused14() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "x=(1); n=0; echo ${x[n]}"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "x=(1); n=0; echo ${x[n]}")));
     }
     #[test]
     fn prop_checkUnused15() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "x=(1); n=0; (( x[n] ))"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "x=(1); n=0; (( x[n] ))")));
     }
     #[test]
     fn prop_checkUnused16() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "foo=5; declare -x foo"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "foo=5; declare -x foo")));
     }
     #[test]
     fn prop_checkUnused16b() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unused_assignments,
                 "f() { local -x foo; foo=42; bar; }; f"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnused17() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unused_assignments,
                 "read -i 'foo' -e -p 'Input: ' bar; $bar;"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnused18() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unused_assignments,
                 "a=1; arr=( [$a]=42 ); echo \"${arr[@]}\""
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnused19() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "a=1; let b=a+1; echo $b"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "a=1; let b=a+1; echo $b")));
     }
     #[test]
     fn prop_checkUnused20() {
-        assert_eq!(tree_emits(check_unused_assignments, "a=1; PS1='$a'"), false);
+        assert!(!(tree_emits(check_unused_assignments, "a=1; PS1='$a'")));
     }
     #[test]
     fn prop_checkUnused21() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "a=1; trap 'echo $a' INT"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "a=1; trap 'echo $a' INT")));
     }
     #[test]
     fn prop_checkUnused22() {
-        assert_eq!(tree_emits(check_unused_assignments, "a=1; [ -v a ]"), false);
+        assert!(!(tree_emits(check_unused_assignments, "a=1; [ -v a ]")));
     }
     #[test]
     fn prop_checkUnused23() {
-        assert_eq!(tree_emits(check_unused_assignments, "a=1; [ -R a ]"), false);
+        assert!(!(tree_emits(check_unused_assignments, "a=1; [ -R a ]")));
     }
     #[test]
     fn prop_checkUnused24() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "mapfile -C a b; echo ${b[@]}"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "mapfile -C a b; echo ${b[@]}")));
     }
     #[test]
     fn prop_checkUnused25() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "readarray foo; echo ${foo[@]}"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "readarray foo; echo ${foo[@]}")));
     }
     #[test]
     fn prop_checkUnused26() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "declare -F foo"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "declare -F foo")));
     }
     #[test]
     fn prop_checkUnused27() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "var=3; [ var -eq 3 ]"),
-            true
-        );
+        assert!(tree_emits(check_unused_assignments, "var=3; [ var -eq 3 ]"));
     }
     #[test]
     fn prop_checkUnused28() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "var=3; [[ var -eq 3 ]]"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "var=3; [[ var -eq 3 ]]")));
     }
     #[test]
     fn prop_checkUnused29() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "var=(a b); declare -p var"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "var=(a b); declare -p var")));
     }
     #[test]
     fn prop_checkUnused30() {
-        assert_eq!(tree_emits(check_unused_assignments, "let a=1"), true);
+        assert!(tree_emits(check_unused_assignments, "let a=1"));
     }
     #[test]
     fn prop_checkUnused31() {
-        assert_eq!(tree_emits(check_unused_assignments, "let 'a=1'"), true);
+        assert!(tree_emits(check_unused_assignments, "let 'a=1'"));
     }
     #[test]
     fn prop_checkUnused32() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "let a=b=c; echo $a"),
-            true
-        );
+        assert!(tree_emits(check_unused_assignments, "let a=b=c; echo $a"));
     }
     #[test]
     fn prop_checkUnused33() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "a=foo; [[ foo =~ ^{$a}$ ]]"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "a=foo; [[ foo =~ ^{$a}$ ]]")));
     }
     #[test]
     fn prop_checkUnused34() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "foo=1; (( t = foo )); echo $t"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "foo=1; (( t = foo )); echo $t")));
     }
     #[test]
     fn prop_checkUnused35() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "a=foo; b=2; echo ${a:b}"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "a=foo; b=2; echo ${a:b}")));
     }
     #[test]
     fn prop_checkUnused36() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "if [[ -v foo ]]; then true; fi"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "if [[ -v foo ]]; then true; fi")));
     }
     #[test]
     fn prop_checkUnused37() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "fd=2; exec {fd}>&-"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "fd=2; exec {fd}>&-")));
     }
     #[test]
     fn prop_checkUnused38() {
-        assert_eq!(tree_emits(check_unused_assignments, "(( a=42 ))"), true);
+        assert!(tree_emits(check_unused_assignments, "(( a=42 ))"));
     }
     #[test]
     fn prop_checkUnused39() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "declare -x -f foo"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "declare -x -f foo")));
     }
     #[test]
     fn prop_checkUnused40() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unused_assignments,
                 "arr=(1 2); num=2; echo \"${arr[@]:num}\""
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnused41() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "@test 'foo' {\ntrue\n}\n"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "@test 'foo' {\ntrue\n}\n")));
     }
     #[test]
     fn prop_checkUnused42() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unused_assignments,
                 "DEFINE_string foo '' ''; echo \"${FLAGS_foo}\""
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnused43() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "DEFINE_string foo '' ''"),
-            true
-        );
+        assert!(tree_emits(
+            check_unused_assignments,
+            "DEFINE_string foo '' ''"
+        ));
     }
     #[test]
     fn prop_checkUnused44() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "DEFINE_string \"foo$ibar\" x y"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "DEFINE_string \"foo$ibar\" x y")));
     }
     #[test]
     fn prop_checkUnused45() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "readonly foo=bar"),
-            true
-        );
+        assert!(tree_emits(check_unused_assignments, "readonly foo=bar"));
     }
     #[test]
     fn prop_checkUnused46() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "readonly foo=(bar)"),
-            true
-        );
+        assert!(tree_emits(check_unused_assignments, "readonly foo=(bar)"));
     }
     #[test]
     fn prop_checkUnused47() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "a=1; alias hello='echo $a'"),
-            false
-        );
+        assert!(!(tree_emits(check_unused_assignments, "a=1; alias hello='echo $a'")));
     }
     #[test]
     fn prop_checkUnused48() {
-        assert_eq!(tree_emits(check_unused_assignments, "_a=1"), false);
+        assert!(!(tree_emits(check_unused_assignments, "_a=1")));
     }
     #[test]
     fn prop_checkUnused49() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unused_assignments,
                 "declare -A array; key=a; [[ -v array[$key] ]]"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnused50() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unused_assignments,
                 "foofunc() { :; }; typeset -fx foofunc"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnused51() {
-        assert_eq!(
-            tree_emits(check_unused_assignments, "x[y[z=1]]=1; echo ${x[@]}"),
-            true
-        );
+        assert!(tree_emits(
+            check_unused_assignments,
+            "x[y[z=1]]=1; echo ${x[@]}"
+        ));
     }
     #[test]
     fn prop_checkUnassignedReferences1() {
-        assert_eq!(tree_emits(check_unassigned_references, "echo $foo"), true);
+        assert!(tree_emits(check_unassigned_references, "echo $foo"));
     }
     #[test]
     fn prop_checkUnassignedReferences2() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "foo=hello; echo $foo"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "foo=hello; echo $foo")));
     }
     #[test]
     fn prop_checkUnassignedReferences3() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "MY_VALUE=3; echo $MYVALUE"),
-            true
-        );
+        assert!(tree_emits(
+            check_unassigned_references,
+            "MY_VALUE=3; echo $MYVALUE"
+        ));
     }
     #[test]
     fn prop_checkUnassignedReferences4() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "RANDOM2=foo; echo $RANDOM"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "RANDOM2=foo; echo $RANDOM")));
     }
     #[test]
     fn prop_checkUnassignedReferences5() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "declare -A foo=([bar]=baz); echo ${foo[bar]}"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences6() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "foo=..; echo ${foo-bar}"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "foo=..; echo ${foo-bar}")));
     }
     #[test]
     fn prop_checkUnassignedReferences7() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "getopts ':h' foo; echo $foo"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "getopts ':h' foo; echo $foo")));
     }
     #[test]
     fn prop_checkUnassignedReferences8() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "let 'foo = 1'; echo $foo"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "let 'foo = 1'; echo $foo")));
     }
     #[test]
     fn prop_checkUnassignedReferences9() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "echo ${foo-bar}"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "echo ${foo-bar}")));
     }
     #[test]
     fn prop_checkUnassignedReferences10() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "echo ${foo:?}"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "echo ${foo:?}")));
     }
     #[test]
     fn prop_checkUnassignedReferences11() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "declare -A foo; echo \"${foo[@]}\""
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences12() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "typeset -a foo; echo \"${foo[@]}\""
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences13() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "f() { local foo; echo $foo; }"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "f() { local foo; echo $foo; }")));
     }
     #[test]
     fn prop_checkUnassignedReferences14() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "foo=; echo $foo"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "foo=; echo $foo")));
     }
     #[test]
     fn prop_checkUnassignedReferences15() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "f() { true; }; export -f f"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "f() { true; }; export -f f")));
     }
     #[test]
     fn prop_checkUnassignedReferences16() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "declare -A foo=( [a b]=bar ); echo ${foo[a b]}"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences17() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "USERS=foo; echo $USER"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "USERS=foo; echo $USER")));
     }
     #[test]
     fn prop_checkUnassignedReferences18() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "FOOBAR=42; export FOOBAR="),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "FOOBAR=42; export FOOBAR=")));
     }
     #[test]
     fn prop_checkUnassignedReferences19() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "readonly foo=bar; echo $foo"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "readonly foo=bar; echo $foo")));
     }
     #[test]
     fn prop_checkUnassignedReferences20() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "printf -v foo bar; echo $foo"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "printf -v foo bar; echo $foo")));
     }
     #[test]
     fn prop_checkUnassignedReferences21() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "echo ${#foo}"),
-            true
-        );
+        assert!(tree_emits(check_unassigned_references, "echo ${#foo}"));
     }
     #[test]
     fn prop_checkUnassignedReferences22() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "echo ${!os*}"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "echo ${!os*}")));
     }
     #[test]
     fn prop_checkUnassignedReferences23() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "declare -a foo; foo[bar]=42;"),
-            true
-        );
+        assert!(tree_emits(
+            check_unassigned_references,
+            "declare -a foo; foo[bar]=42;"
+        ));
     }
     #[test]
     fn prop_checkUnassignedReferences24() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "declare -A foo; foo[bar]=42;"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "declare -A foo; foo[bar]=42;")));
     }
     #[test]
     fn prop_checkUnassignedReferences25() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "declare -A foo=(); foo[bar]=42;"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences26() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "a::b() { foo; }; readonly -f a::b"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences27() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, ": ${foo:=bar}"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, ": ${foo:=bar}")));
     }
     #[test]
     fn prop_checkUnassignedReferences28() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "#!/bin/ksh\necho \"${.sh.version}\"\n"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences29() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "if [[ -v foo ]]; then echo $foo; fi"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences30() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "if [[ -v foo[3] ]]; then echo ${foo[3]}; fi"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences31() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "X=1; if [[ -v foo[$X+42] ]]; then echo ${foo[$X+42]}; fi"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences32() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "if [[ -v \"foo[1]\" ]]; then echo ${foo[@]}; fi"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences33() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "f() { local -A foo; echo \"${foo[@]}\"; }"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences34() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "declare -A foo; (( foo[bar] ))"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences35() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "echo ${arr[foo-bar]:?fail}"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "echo ${arr[foo-bar]:?fail}")));
     }
     #[test]
     fn prop_checkUnassignedReferences36() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "read -a foo -r <<<\"foo bar\"; echo \"$foo\""
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences37() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "var=howdy; printf -v 'array[0]' %s \"$var\"; printf %s \"${array[0]}\";"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences38() {
-        assert_eq!(tree_emits(unassigned_globals, "echo $VAR"), true);
+        assert!(tree_emits(unassigned_globals, "echo $VAR"));
     }
     #[test]
     fn prop_checkUnassignedReferences39() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "builtin export var=4; echo $var"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences40() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, ": ${foo=bar}"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, ": ${foo=bar}")));
     }
     #[test]
     fn prop_checkUnassignedReferences41() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "mapfile -t files 123; echo \"${files[@]}\""
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences42() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "mapfile files -t; echo \"${files[@]}\""
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences43() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "mapfile --future files; echo \"${files[@]}\""
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences_minusNPlain() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "if [ -n \"$x\" ]; then echo $x; fi"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences_minusZPlain() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "if [ -z \"$x\" ]; then echo \"\"; fi"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences_minusNBraced() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "if [ -n \"${x}\" ]; then echo $x; fi"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences_minusZBraced() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "if [ -z \"${x}\" ]; then echo \"\"; fi"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences_minusNDefault() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "if [ -n \"${x:-}\" ]; then echo $x; fi"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences_minusZDefault() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_unassigned_references,
                 "if [ -z \"${x:-}\" ]; then echo \"\"; fi"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnassignedReferences50() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "echo ${foo:+bar}"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "echo ${foo:+bar}")));
     }
     #[test]
     fn prop_checkUnassignedReferences51() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "echo ${foo:+$foo}"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "echo ${foo:+$foo}")));
     }
     #[test]
     fn prop_checkUnassignedReferences52() {
-        assert_eq!(
-            tree_emits(check_unassigned_references, "wait -p pid; echo $pid"),
-            false
-        );
+        assert!(!(tree_emits(check_unassigned_references, "wait -p pid; echo $pid")));
     }
     #[test]
     fn prop_checkUnassignedReferences53() {
-        assert_eq!(tree_emits(check_unassigned_references, "x=($foo)"), true);
+        assert!(tree_emits(check_unassigned_references, "x=($foo)"));
     }
 }

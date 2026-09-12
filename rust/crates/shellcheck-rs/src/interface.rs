@@ -133,23 +133,12 @@ pub struct Fix {
 }
 
 /// `ShellCheck.Interface.PositionedComment`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PositionedComment {
     pub start: Position,
     pub end: Position,
     pub comment: Comment,
     pub fix: Option<Fix>,
-}
-
-impl Default for PositionedComment {
-    fn default() -> Self {
-        PositionedComment {
-            start: Position::default(),
-            end: Position::default(),
-            comment: Comment::default(),
-            fix: None,
-        }
-    }
 }
 
 /// `ShellCheck.Interface.TokenComment`: a comment attached to an AST node id,

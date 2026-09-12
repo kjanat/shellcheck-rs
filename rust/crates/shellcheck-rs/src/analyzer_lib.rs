@@ -211,11 +211,14 @@ pub fn fix_with(replacements: Vec<Replacement>) -> Fix {
     Fix { replacements }
 }
 
+/// A single tree- or node-level check: `Parameters -> Token -> Writer [TokenComment] ()`.
+pub type CheckFn = Box<dyn Fn(&Parameters, &Token, &mut Out)>;
+
 /// `ShellCheck.AnalyzerLib.Checker` — a set of tree- and node-level checks.
 #[derive(Default)]
 pub struct Checker {
-    pub tree_checks: Vec<Box<dyn Fn(&Parameters, &Token, &mut Out)>>,
-    pub node_checks: Vec<Box<dyn Fn(&Parameters, &Token, &mut Out)>>,
+    pub tree_checks: Vec<CheckFn>,
+    pub node_checks: Vec<CheckFn>,
 }
 
 impl Checker {
@@ -535,12 +538,7 @@ pub(crate) fn get_literal_string_def(t: &Token, def: &str) -> String {
 
 /// `getWordParts`.
 pub(crate) fn word_parts(t: &Token) -> Vec<&Token> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) => l.iter().flat_map(word_parts).collect(),
-        InnerToken::T_DoubleQuoted(l) => l.iter().collect(),
-        InnerToken::TA_Expansion(l) => l.iter().flat_map(word_parts).collect(),
-        _ => vec![t],
-    }
+    astlib::get_word_parts(t)
 }
 
 /// `getPath tree t`: the token and its ancestors up to the root (owned clones).
@@ -577,7 +575,7 @@ pub(crate) fn get_command(t: &Token) -> Option<&Token> {
     }
 }
 
-fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> {
+pub(crate) fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> {
     let first_arg = || -> Option<&'a Token> {
         let arg = args.first()?;
         if is_flag_word(arg) { None } else { Some(arg) }
@@ -594,7 +592,7 @@ fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Tok
     }
 }
 
-fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Token) {
+pub(crate) fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Token) {
     if let Some(cmd) = get_command(t) {
         if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
             if let Some((w, rest)) = words.split_first() {
@@ -794,7 +792,7 @@ pub(crate) fn is_quote_free(params: &Parameters, t: &Token) -> bool {
     false
 }
 
-fn is_quote_free_element(params: &Parameters, t: &Token) -> bool {
+pub(crate) fn is_quote_free_element(params: &Parameters, t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_Assignment { .. } => assignment_is_quoting(params, t),
         InnerToken::T_FdRedirect { .. } => true,
@@ -802,7 +800,7 @@ fn is_quote_free_element(params: &Parameters, t: &Token) -> bool {
     }
 }
 
-fn is_quote_free_context(params: &Parameters, t: &Token) -> Option<bool> {
+pub(crate) fn is_quote_free_context(params: &Parameters, t: &Token) -> Option<bool> {
     use InnerToken::*;
     match &*t.inner {
         TC_Nullary {
@@ -840,8 +838,7 @@ fn is_quote_free_context(params: &Parameters, t: &Token) -> Option<bool> {
 
 fn is_declaration_assignment_word(params: &Parameters, word: &Token) -> bool {
     let is_form = match &*word.inner {
-        InnerToken::T_NormalWord(parts) => parts.first().map_or(
-            false,
+        InnerToken::T_NormalWord(parts) => parts.first().is_some_and(
             |f| matches!(&*f.inner, InnerToken::T_Literal(s) if literal_is_assignment_prefix(s)),
         ),
         _ => false,
@@ -889,14 +886,14 @@ fn literal_is_assignment_prefix(s: &str) -> bool {
     i < c.len() && c[i] == '='
 }
 
-fn assignment_is_quoting(params: &Parameters, assign: &Token) -> bool {
+pub(crate) fn assignment_is_quoting(params: &Parameters, assign: &Token) -> bool {
     if params.shell != Shell::Sh {
         return true;
     }
     !is_assignment_param_to_command(params, assign)
 }
 
-fn is_assignment_param_to_command(params: &Parameters, assign: &Token) -> bool {
+pub(crate) fn is_assignment_param_to_command(params: &Parameters, assign: &Token) -> bool {
     if let Some(parent) = params.parent(assign) {
         if let InnerToken::T_SimpleCommand { words, .. } = &*parent.inner {
             if !words.is_empty() {
@@ -1854,6 +1851,127 @@ pub(crate) fn is_true_assignment_source(dt: &DataType) -> bool {
     )
 }
 
+/// `isUnqualifiedCommand token str` — exact command-name match.
+pub(crate) fn is_unqualified_command(t: &Token, str: &str) -> bool {
+    get_command_name(t).as_deref() == Some(str)
+}
+
+pub(crate) fn head_id(t: &Token) -> Id {
+    match &*t.inner {
+        InnerToken::T_NormalWord(list) if !list.is_empty() => list[0].id(),
+        _ => t.id(),
+    }
+}
+
+/// `isConfusedGlobRegex`.
+pub(crate) fn is_confused_glob_regex(s: &str) -> bool {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.first() == Some(&'*') {
+        return true;
+    }
+    if chars.len() == 2 && chars[1] == '*' && chars[0] != '\\' && chars[0] != '.' {
+        return true;
+    }
+    false
+}
+
+pub(crate) fn is_sourced(params: &Parameters, t: &Token) -> bool {
+    get_path(params, t)
+        .iter()
+        .any(|p| matches!(&*p.inner, InnerToken::T_SourceCommand { .. }))
+}
+
+/// Condition-children of a parent node, per `isCondition`'s `getConditionChildren`.
+pub(crate) fn condition_children(t: &Token) -> Vec<&Token> {
+    match &*t.inner {
+        InnerToken::T_AndIf { lhs, .. } => vec![lhs],
+        InnerToken::T_OrIf { lhs, .. } => vec![lhs],
+        InnerToken::T_IfExpression { clauses, .. } => {
+            // concatMap (take 1 . reverse . fst) conditions
+            clauses.iter().filter_map(|(cond, _)| cond.last()).collect()
+        }
+        InnerToken::T_WhileExpression { condition, .. } => condition.last().into_iter().collect(),
+        InnerToken::T_UntilExpression { condition, .. } => condition.last().into_iter().collect(),
+        _ => vec![],
+    }
+}
+
+/// `isCondition (getPath ..)`: walking from `t` up to the root, is each node a
+/// condition-child of its parent (or is any node a bats test)?
+pub(crate) fn in_condition(params: &Parameters, t: &Token) -> bool {
+    let mut child = t;
+    loop {
+        // `go _ _ T_BatsTest{} = True`: any node examined that is a bats test.
+        if matches!(&*child.inner, InnerToken::T_BatsTest { .. }) {
+            return true;
+        }
+        let parent = match params.parent(child) {
+            Some(p) => p,
+            None => return false,
+        };
+        if condition_children(parent)
+            .iter()
+            .any(|c| c.id() == child.id())
+        {
+            return true;
+        }
+        child = parent;
+    }
+}
+
+/// `isTestCommand`.
+pub(crate) fn is_test_command(t: &Token) -> bool {
+    use InnerToken::*;
+    match &*t.inner {
+        T_Condition { .. } => true,
+        T_SimpleCommand { .. } => is_command(t, "test"),
+        T_Redirecting { cmd, .. } => is_test_command(cmd),
+        T_Annotation { token, .. } => is_test_command(token),
+        T_Pipeline { commands, .. } if commands.len() == 1 => is_test_command(&commands[0]),
+        _ => false,
+    }
+}
+
+/// Is the immediate parent of `t` a `T_Function`?
+pub(crate) fn is_function_body(params: &Parameters, t: &Token) -> bool {
+    matches!(
+        params.parent(t).map(|p| &*p.inner),
+        Some(InnerToken::T_Function { .. })
+    )
+}
+
+/// `getLeadingFlags`: flags in the BSD way, up until the first non-flag argument or `--`.
+pub(crate) fn get_leading_flags(t: &Token) -> Vec<(&Token, String)> {
+    get_flags_until(&|x| x == "--" || !x.starts_with('-'), t)
+}
+
+/// checkGrepRe's `f`: walk args to find the regex argument.
+pub(crate) fn find_grep_regex(args: &[Token]) -> Option<&Token> {
+    let mut rest = args;
+    loop {
+        let (x, tail) = rest.split_first()?;
+        let s = astlib::get_literal_string_def("_", x);
+        if s == "--" || s == "-e" || s == "--regex" {
+            return tail.first(); // Regex is *after* this
+        }
+        // skippable: not "--regex=" prefix and starts with "-"
+        if !s.starts_with("--regex=") && s.starts_with('-') {
+            rest = tail; // Regex is elsewhere
+        } else {
+            return Some(x); // Regex is this
+        }
+    }
+}
+
+pub(crate) fn simple_command_words(t: &Token) -> Option<&Vec<Token>> {
+    let cmd = get_command(t)?;
+    if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
+        Some(words)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod set_option_tests {
     //! Unit tests for `contains_set_e` / `contains_noglob` / `is_option_set`,
@@ -1870,7 +1988,14 @@ mod set_option_tests {
 
     #[test]
     fn set_e_flag_forms() {
-        for s in ["set -e", "set -ue", "set -xe", "set -eu", "set -o errexit", "set errexit"] {
+        for s in [
+            "set -e",
+            "set -ue",
+            "set -xe",
+            "set -eu",
+            "set -o errexit",
+            "set errexit",
+        ] {
             assert!(contains_set_e(&root(s)), "{s}");
         }
     }
@@ -1885,14 +2010,27 @@ mod set_option_tests {
 
     #[test]
     fn set_e_negatives() {
-        for s in ["true", "set -u", "set -- -e", "set --errexit", "echo set -e", "shopt -s errexit"] {
+        for s in [
+            "true",
+            "set -u",
+            "set -- -e",
+            "set --errexit",
+            "echo set -e",
+            "shopt -s errexit",
+        ] {
             assert!(!contains_set_e(&root(s)), "{s}");
         }
     }
 
     #[test]
     fn noglob_forms() {
-        for s in ["set -f", "set -xf", "set -o noglob", "set noglob", "#!/bin/sh -f\ntrue"] {
+        for s in [
+            "set -f",
+            "set -xf",
+            "set -o noglob",
+            "set noglob",
+            "#!/bin/sh -f\ntrue",
+        ] {
             assert!(contains_noglob(&root(s)), "{s}");
         }
         for s in ["true", "set -- -f", "set -e", "echo set -f"] {

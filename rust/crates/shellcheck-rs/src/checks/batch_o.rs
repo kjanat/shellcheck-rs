@@ -12,10 +12,10 @@
 //! `isNum` / `isNonNum` machinery (cfg numerical status + `variableFlow`
 //! assigned-variable set), so they are ported together.
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::astlib::is_quotes;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::is_quotes;
 use crate::cfg::{
     get_braced_reference, get_literal_string_def, get_word_parts, is_variable_name, oversimplify,
 };

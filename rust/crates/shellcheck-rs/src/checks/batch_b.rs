@@ -6,12 +6,18 @@
 //! - SC2027  checkInexplicablyUnquoted (Analytics.hs, 2027 branch only)
 //! - SC2145  checkConcatenatedDollarAt (Analytics.hs)
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::assignment_is_quoting;
 use crate::analyzer_lib::is_array_expansion;
-use crate::astlib::only_literal_string;
-use crate::astlib::is_only_redirection;
+use crate::analyzer_lib::is_assignment_param_to_command;
+use crate::analyzer_lib::is_quote_free;
+use crate::analyzer_lib::is_quote_free_context;
+use crate::analyzer_lib::is_quote_free_element;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::get_word_parts;
+use crate::astlib::is_only_redirection;
+use crate::astlib::only_literal_string;
 use crate::interface::Shell;
 
 /// Register this batch's checks.
@@ -50,103 +56,7 @@ fn token_is_just_command_output(t: &Token) -> bool {
     false
 }
 
-/// `getWordParts` (ASTLib), collected as references.
-fn get_word_parts<'a>(t: &'a Token, out: &mut Vec<&'a Token>) {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) | InnerToken::TA_Expansion(l) => {
-            for x in l {
-                get_word_parts(x, out);
-            }
-        }
-        InnerToken::T_DoubleQuoted(l) => {
-            for x in l {
-                out.push(x);
-            }
-        }
-        _ => out.push(t),
-    }
-}
-
 // ---- isQuoteFree (AnalyzerLib.isQuoteFreeNode strict=False) ----------------
-
-/// Whether the assignment token `id`'s parent is a declaration-utility command
-/// (so the assignment is passed as an argument, e.g. `export FOO=bar`).
-fn is_assignment_param_to_command(params: &Parameters, id: Id) -> bool {
-    let parent = match params
-        .parent_map
-        .get(&id)
-        .and_then(|pid| params.id_map.get(pid))
-    {
-        Some(p) => p,
-        None => return false,
-    };
-    if let InnerToken::T_SimpleCommand { words, .. } = &*parent.inner {
-        if let Some((_, args)) = words.split_first() {
-            return args.iter().any(|a| a.id() == id);
-        }
-    }
-    false
-}
-
-fn assignment_is_quoting(params: &Parameters, id: Id) -> bool {
-    let shell_parses_params_as_assignments = params.shell != Shell::Sh;
-    shell_parses_params_as_assignments || !is_assignment_param_to_command(params, id)
-}
-
-/// `isQuoteFreeElement`: is this node self-quoting in itself?
-fn is_quote_free_element(params: &Parameters, t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Assignment { .. } => assignment_is_quoting(params, t.id()),
-        InnerToken::T_FdRedirect { .. } => true,
-        _ => false,
-    }
-}
-
-/// `isQuoteFreeContext` (with strict = False for the non-strict `isQuoteFree`).
-fn is_quote_free_context(params: &Parameters, t: &Token) -> Option<bool> {
-    use ConditionType::DoubleBracket;
-    match &*t.inner {
-        InnerToken::TC_Nullary {
-            typ: DoubleBracket, ..
-        } => Some(true),
-        InnerToken::TC_Unary {
-            typ: DoubleBracket, ..
-        } => Some(true),
-        InnerToken::TC_Binary {
-            typ: DoubleBracket, ..
-        } => Some(true),
-        InnerToken::TA_Sequence(_) => Some(true),
-        InnerToken::T_Arithmetic(_) => Some(true),
-        InnerToken::T_Assignment { .. } => Some(assignment_is_quoting(params, t.id())),
-        InnerToken::T_Redirecting { .. } => Some(false),
-        InnerToken::T_DoubleQuoted(_) => Some(true),
-        InnerToken::T_DollarDoubleQuoted(_) => Some(true),
-        InnerToken::T_CaseExpression { .. } => Some(true),
-        InnerToken::T_HereDoc { .. } => Some(true),
-        InnerToken::T_DollarBraced { .. } => Some(true),
-        // strict = False: pragmatically assume splitting is desirable here.
-        InnerToken::T_ForIn { .. } => Some(true),
-        InnerToken::T_SelectIn { .. } => Some(true),
-        _ => None,
-    }
-}
-
-/// `isQuoteFree` (non-strict).
-fn is_quote_free(params: &Parameters, t: &Token) -> bool {
-    if is_quote_free_element(params, t) {
-        return true;
-    }
-    // msum over `NE.tail (getPath tree t)` = ancestors from nearest to root;
-    // first `Just` wins.
-    let mut cur = t;
-    while let Some(p) = params.parent(cur) {
-        if let Some(v) = is_quote_free_context(params, p) {
-            return v;
-        }
-        cur = p;
-    }
-    false
-}
 
 // ---------------------------------------------------------------------------
 // SC2005 — checkUuoeCmd
@@ -306,7 +216,7 @@ fn check_concatenated_dollar_at(params: &Parameters, word: &Token, out: &mut Out
         return;
     }
     let mut parts: Vec<&Token> = Vec::new();
-    get_word_parts(word, &mut parts);
+    parts.extend(get_word_parts(word));
     // Guard: not quote-free AND more than one part.
     if is_quote_free(params, word) || parts.len() <= 1 {
         return;

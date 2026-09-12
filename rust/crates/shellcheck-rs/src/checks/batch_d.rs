@@ -8,20 +8,25 @@
 //! - SC2164         checkUncheckedCdPushdPopd (Analytics.hs) — cd/pushd/popd without `|| exit`
 //! - SC2181         checkReturnAgainstZero (Analytics.hs) — checking `$?` indirectly
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::analyzer_lib::get_all_flags;
-use crate::analyzer_lib::is_command;
-use crate::analyzer_lib::get_command_name;
-use crate::analyzer_lib::get_command;
-use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::arguments;
-use crate::astlib::list_to_args;
-use crate::astlib::is_flag;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::condition_children;
+use crate::analyzer_lib::get_all_flags;
+use crate::analyzer_lib::get_closest_command;
+use crate::analyzer_lib::get_command;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::get_command_name_and_token;
+use crate::analyzer_lib::get_effective_command_token;
+use crate::analyzer_lib::is_command;
+use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
-use crate::astlib::oversimplify;
+use crate::astlib::get_command_sequences;
 use crate::astlib::get_literal_string;
+use crate::astlib::get_word_parts;
+use crate::astlib::is_flag;
+use crate::astlib::list_to_args;
+use crate::astlib::oversimplify;
 use crate::interface::Shell;
 use std::collections::HashMap;
 
@@ -184,76 +189,8 @@ fn short_to_opts<'a>(
     }
 }
 
-/// `getCommandNameAndToken direct`.
-fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Token) {
-    if let Some(cmd) = get_command(t) {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-            if let Some((w, rest)) = words.split_first() {
-                if let Some(s) = get_literal_string(w) {
-                    if !direct {
-                        if let Some(actual) = get_effective_command_token(&s, rest) {
-                            return (get_literal_string(actual), actual);
-                        }
-                    }
-                    return (Some(s), w);
-                }
-            }
-        }
-    }
-    (None, t)
-}
-
-fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> {
-    let first_arg = || -> Option<&'a Token> {
-        let arg = args.first()?;
-        if is_flag(arg) { None } else { Some(arg) }
-    };
-    match s {
-        "busybox" | "builtin" | "command" | "run" => first_arg(),
-        "exec" => {
-            let opts = get_bsd_opts("cla:", args)?;
-            let (_, (t, _)) = opts.into_iter().find(|(name, _)| name.is_empty())?;
-            Some(t)
-        }
-        _ => None,
-    }
-}
-
 fn get_command_token_or_this(t: &Token) -> &Token {
     get_command_name_and_token(false, t).1
-}
-
-/// `isUnqualifiedCommand token str` — exact command-name match.
-fn is_unqualified_command(t: &Token, str: &str) -> bool {
-    get_command_name(t).as_deref() == Some(str)
-}
-
-/// `getCommandSequences`.
-fn get_command_sequences(t: &Token) -> Vec<&[Token]> {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Script { commands, .. } => vec![&commands[..]],
-        T_BraceGroup(cmds) => vec![&cmds[..]],
-        T_Subshell(cmds) => vec![&cmds[..]],
-        T_WhileExpression { condition, body } => vec![&condition[..], &body[..]],
-        T_UntilExpression { condition, body } => vec![&condition[..], &body[..]],
-        T_ForIn { body, .. } => vec![&body[..]],
-        T_ForArithmetic { body, .. } => vec![&body[..]],
-        T_IfExpression { clauses, elses } => {
-            let mut out: Vec<&[Token]> = vec![];
-            for (a, b) in clauses {
-                out.push(&a[..]);
-                out.push(&b[..]);
-            }
-            out.push(&elses[..]);
-            out
-        }
-        T_Annotation { token, .. } => get_command_sequences(token),
-        T_DollarExpansion(cmds) => vec![&cmds[..]],
-        T_DollarBraceCommandExpansion { list, .. } => vec![&list[..]],
-        T_Backticked(cmds) => vec![&cmds[..]],
-        _ => vec![],
-    }
 }
 
 /// `containsSetE`: `params.has_set_e` (which covers `set -e` commands) plus the
@@ -431,21 +368,6 @@ fn matches_safe_dir(s: &str) -> bool {
 fn is_safe_dir(t: &Token) -> bool {
     let o = oversimplify(t);
     o.len() == 2 && matches_safe_dir(&o[1])
-}
-
-fn condition_children(parent: &Token) -> Vec<&Token> {
-    use InnerToken::*;
-    match &*parent.inner {
-        T_AndIf { lhs, .. } => vec![lhs],
-        T_OrIf { lhs, .. } => vec![lhs],
-        T_IfExpression { clauses, .. } => clauses
-            .iter()
-            .filter_map(|(conds, _)| conds.last())
-            .collect(),
-        T_WhileExpression { condition, .. } => condition.last().into_iter().collect(),
-        T_UntilExpression { condition, .. } => condition.last().into_iter().collect(),
-        _ => vec![],
-    }
 }
 
 fn is_condition_path(params: &Parameters, t: &Token) -> bool {

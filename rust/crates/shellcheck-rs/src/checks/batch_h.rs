@@ -6,22 +6,28 @@
 //! require arithmetic (`TA_*`) structure or that would mismatch the oracle's
 //! token positions are skipped (see the notes on each and the module tail).
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::analyzer_lib::is_command;
-use crate::analyzer_lib::get_command_name;
-use crate::analyzer_lib::get_command;
-use crate::astlib::only_literal_string;
 use crate::analyzer_lib::arguments;
-use crate::astlib::list_to_args;
-use crate::astlib::is_only_redirection;
-use crate::astlib::is_flag;
-use crate::astlib::is_glob;
-use crate::astlib::has_split_range;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::concat_over;
+use crate::analyzer_lib::get_command;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::get_command_name_and_token;
+use crate::analyzer_lib::get_effective_command_token;
+use crate::analyzer_lib::get_leading_flags;
+use crate::analyzer_lib::is_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
-use crate::astlib::oversimplify;
 use crate::astlib::get_literal_string;
+use crate::astlib::get_word_parts;
+use crate::astlib::has_split_range;
+use crate::astlib::is_flag;
+use crate::astlib::is_glob;
+use crate::astlib::is_only_redirection;
+use crate::astlib::list_to_args;
+use crate::astlib::only_literal_string;
+use crate::astlib::oversimplify;
+use crate::cfg::get_braced_reference;
+use crate::cfg::is_variable_char as is_var_char;
 use crate::interface::Shell;
 
 /// Register this batch's checks.
@@ -53,10 +59,6 @@ fn warn_msg(out: &mut Out, p: &Parameters, id: Id, code: i64, s: &str) {
 // does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
 
-fn concat_over(t: &Token) -> String {
-    oversimplify(t).concat()
-}
-
 /// `isVariableName`.
 fn is_variable_name(s: &str) -> bool {
     let mut it = s.chars();
@@ -68,60 +70,8 @@ fn is_variable_name(s: &str) -> bool {
 fn is_var_start(c: char) -> bool {
     c == '_' || c.is_ascii_alphabetic()
 }
-fn is_var_char(c: char) -> bool {
-    is_var_start(c) || c.is_ascii_digit()
-}
-fn is_special_var_char(c: char) -> bool {
-    "*@#?-$!".contains(c)
-}
 
 // ---- getBracedReference ----------------------------------------------------
-
-fn get_braced_reference(s: &str) -> String {
-    let cs: Vec<char> = s.chars().collect();
-    if let Some(r) = name_expansion(&cs) {
-        return r;
-    }
-    let no_prefix = drop_prefix(&cs);
-    if let Some(r) = take_name(no_prefix) {
-        return r;
-    }
-    if let Some(r) = get_special(no_prefix) {
-        return r;
-    }
-    if let Some(r) = get_special(&cs) {
-        return r;
-    }
-    s.to_string()
-}
-fn drop_prefix(cs: &[char]) -> &[char] {
-    match cs.first() {
-        Some(&c) if c == '!' || c == '#' => &cs[1..],
-        _ => cs,
-    }
-}
-fn take_name(cs: &[char]) -> Option<String> {
-    let name: String = cs.iter().take_while(|&&c| is_var_char(c)).collect();
-    if name.is_empty() { None } else { Some(name) }
-}
-fn get_special(cs: &[char]) -> Option<String> {
-    match cs.first() {
-        Some(&c) if is_special_var_char(c) => Some(c.to_string()),
-        _ => None,
-    }
-}
-fn name_expansion(cs: &[char]) -> Option<String> {
-    // ${!foo*bar*} style: '!', varchar, then a later non-varchar in "*?@"
-    if cs.first() == Some(&'!') && cs.len() >= 2 && is_var_char(cs[1]) {
-        let first_non_var = cs[2..].iter().find(|&&c| !is_var_char(c));
-        if let Some(&c) = first_non_var {
-            if "*?@".contains(c) {
-                return Some(String::new());
-            }
-        }
-    }
-    None
-}
 
 // ---- command name resolution (ported from batch_d, proven) -----------------
 
@@ -242,69 +192,10 @@ fn short_to_opts<'a>(
     }
 }
 
-fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> {
-    let first_arg = || -> Option<&'a Token> {
-        let arg = args.first()?;
-        if is_flag(arg) { None } else { Some(arg) }
-    };
-    match s {
-        "busybox" | "builtin" | "command" | "run" => first_arg(),
-        "exec" => {
-            let opts = get_bsd_opts("cla:", args)?;
-            let (_, (t, _)) = opts.into_iter().find(|(name, _)| name.is_empty())?;
-            Some(t)
-        }
-        _ => None,
-    }
-}
-
-fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Token) {
-    if let Some(cmd) = get_command(t) {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-            if let Some((w, rest)) = words.split_first() {
-                if let Some(s) = get_literal_string(w) {
-                    if !direct {
-                        if let Some(actual) = get_effective_command_token(&s, rest) {
-                            return (get_literal_string(actual), actual);
-                        }
-                    }
-                    return (Some(s), w);
-                }
-            }
-        }
-    }
-    (None, t)
-}
+/// A bashism lookup: operator -> (code, shells where it is fine, message).
+type BashismTable = fn(&str) -> Option<(i64, &'static [Shell], String)>;
 
 // ---- getFlagsUntil (leading) ----------------------------------------------
-
-fn get_flags_until<'a, F: Fn(&str) -> bool>(t: &'a Token, stop: F) -> Vec<(&'a Token, String)> {
-    let args = arguments(t);
-    let mut broken = false;
-    let mut out: Vec<(&Token, String)> = vec![];
-    for x in args {
-        let txt = concat_over(x);
-        if !broken && stop(&txt) {
-            broken = true;
-        }
-        if broken {
-            out.push((x, String::new()));
-        } else if let Some(a) = txt.strip_prefix("--") {
-            out.push((x, a.split('=').next().unwrap_or("").to_string()));
-        } else if let Some(a) = txt.strip_prefix('-') {
-            for v in a.chars() {
-                out.push((x, v.to_string()));
-            }
-        } else {
-            out.push((x, String::new()));
-        }
-    }
-    out
-}
-
-fn get_leading_flags(t: &Token) -> Vec<(&Token, String)> {
-    get_flags_until(t, |x| x == "--" || !x.starts_with('-'))
-}
 
 // ---------------------------------------------------------------------------
 // Test-operator tables (`bashismBinaryTestFlags` / `bashismUnaryTestFlags`).
@@ -362,13 +253,7 @@ fn bashism_unary_test(op: &str) -> Option<(i64, &'static [Shell], String)> {
     })
 }
 
-fn check_test_op(
-    out: &mut Out,
-    p: &Parameters,
-    id: Id,
-    op: &str,
-    table: fn(&str) -> Option<(i64, &'static [Shell], String)>,
-) {
+fn check_test_op(out: &mut Out, p: &Parameters, id: Id, op: &str, table: BashismTable) {
     if let Some((code, exempt, msg)) = table(op) {
         if !exempt.contains(&p.shell) {
             warn_msg(out, p, id, code, &msg);

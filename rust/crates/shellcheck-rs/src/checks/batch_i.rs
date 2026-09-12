@@ -12,24 +12,34 @@
 //! Not ported here (belong to other batches / codes): SC2182 (printf, no
 //! variables), SC2018/2019/2020/2021 (tr literal-string advice).
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::cfg::will_become_multiple_args;
-use crate::cfg::will_concat_in_assignment;
-use crate::analyzer_lib::is_array_expansion;
-use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::assignment_is_quoting;
+use crate::analyzer_lib::concat_over;
 use crate::analyzer_lib::get_command;
-use crate::astlib::only_literal_string;
-use crate::astlib::basename;
-use crate::astlib::list_to_args;
-use crate::astlib::is_literal;
-use crate::astlib::is_flag;
-use crate::astlib::is_glob;
-use crate::astlib::has_split_range;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::get_command_name_and_token;
+use crate::analyzer_lib::get_effective_command_token;
+use crate::analyzer_lib::is_array_expansion;
+use crate::analyzer_lib::is_assignment_param_to_command;
+use crate::analyzer_lib::is_quote_free;
+use crate::analyzer_lib::is_quote_free_context;
+use crate::analyzer_lib::is_quote_free_element;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
-use crate::astlib::oversimplify;
+use crate::astlib::basename;
 use crate::astlib::get_literal_string;
+use crate::astlib::get_word_parts;
+use crate::astlib::has_split_range;
+use crate::astlib::is_flag;
+use crate::astlib::is_glob;
+use crate::astlib::is_literal;
+use crate::astlib::list_to_args;
+use crate::astlib::only_literal_string;
+use crate::astlib::oversimplify;
+use crate::cfg::may_become_multiple_args;
+use crate::cfg::mbma_f;
+use crate::cfg::will_become_multiple_args;
+use crate::cfg::will_concat_in_assignment;
 use crate::interface::Shell;
 use std::collections::HashMap;
 
@@ -42,10 +52,6 @@ pub fn register(c: &mut Checker) {
 // ===========================================================================
 // Shared helpers (ported privately; parallel agents own other .rs files).
 // ===========================================================================
-
-fn concat_over(t: &Token) -> String {
-    oversimplify(t).concat()
-}
 
 // ---- getWordParts / isFlag / isGlob (ported from ASTLib) --------------------
 
@@ -166,40 +172,6 @@ fn short_to_opts<'a>(
     }
 }
 
-fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> {
-    let first_arg = || -> Option<&'a Token> {
-        let arg = args.first()?;
-        if is_flag(arg) { None } else { Some(arg) }
-    };
-    match s {
-        "busybox" | "builtin" | "command" | "run" => first_arg(),
-        "exec" => {
-            let opts = get_bsd_opts("cla:", args)?;
-            let (_, (t, _)) = opts.into_iter().find(|(name, _)| name.is_empty())?;
-            Some(t)
-        }
-        _ => None,
-    }
-}
-
-fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Token) {
-    if let Some(cmd) = get_command(t) {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-            if let Some((w, rest)) = words.split_first() {
-                if let Some(s) = get_literal_string(w) {
-                    if !direct {
-                        if let Some(actual) = get_effective_command_token(&s, rest) {
-                            return (get_literal_string(actual), actual);
-                        }
-                    }
-                    return (Some(s), w);
-                }
-            }
-        }
-    }
-    (None, t)
-}
-
 fn get_command_token_or_this(t: &Token) -> &Token {
     get_command_name_and_token(false, t).1
 }
@@ -223,73 +195,10 @@ fn get_command_name_from_expansion(t: &Token) -> Option<String> {
     }
 }
 
-/// `isQuoteFree` = `isQuoteFreeNode False` (parent-context walk, no CFG).
-fn is_quote_free(p: &Parameters, t: &Token) -> bool {
-    is_quote_free_element(p, t) || {
-        let mut node = p.parent(t);
-        let mut result = false;
-        while let Some(a) = node {
-            if let Some(b) = is_quote_free_context(p, a) {
-                result = b;
-                break;
-            }
-            node = p.parent(a);
-        }
-        result
-    }
-}
-
-fn is_quote_free_element(p: &Parameters, t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Assignment { .. } => assignment_is_quoting(p, t),
-        InnerToken::T_FdRedirect { .. } => true,
-        _ => false,
-    }
-}
-
-fn is_quote_free_context(p: &Parameters, t: &Token) -> Option<bool> {
-    use InnerToken::*;
-    match &*t.inner {
-        TC_Nullary {
-            typ: ConditionType::DoubleBracket,
-            ..
-        } => Some(true),
-        TC_Unary {
-            typ: ConditionType::DoubleBracket,
-            ..
-        } => Some(true),
-        TC_Binary {
-            typ: ConditionType::DoubleBracket,
-            ..
-        } => Some(true),
-        T_Arithmetic(_) => Some(true),
-        T_DollarArithmetic(_) => Some(true),
-        T_Assignment { .. } => Some(assignment_is_quoting(p, t)),
-        T_Redirecting { .. } => Some(false),
-        T_DoubleQuoted(_) => Some(true),
-        T_DollarDoubleQuoted(_) => Some(true),
-        T_CaseExpression { .. } => Some(true),
-        T_HereDoc { .. } => Some(true),
-        T_DollarBraced { .. } => Some(true),
-        // strict == False: pragmatically assume splitting is desirable here.
-        T_ForIn { .. } => Some(true),
-        T_SelectIn { .. } => Some(true),
-        // A `name=...` argument word to a declaration utility (declare/export/
-        // local/readonly/typeset). ShellCheck's parser reads these as
-        // T_Assignment nodes; this parser keeps them as plain words, so the
-        // equivalent quoting context (`assignmentIsQuoting` on a command
-        // parameter = shell parses params as assignments = shell /= Sh) is
-        // reconstructed here.
-        T_NormalWord(_) if is_declaration_assignment_word(p, t) => Some(p.shell != Shell::Sh),
-        _ => None,
-    }
-}
-
 /// True if `word` is a `name=` / `name+=` argument to a declaration utility.
 fn is_declaration_assignment_word(p: &Parameters, word: &Token) -> bool {
     let is_form = match &*word.inner {
-        InnerToken::T_NormalWord(parts) => parts.first().map_or(
-            false,
+        InnerToken::T_NormalWord(parts) => parts.first().is_some_and(
             |f| matches!(&*f.inner, InnerToken::T_Literal(s) if literal_is_assignment_prefix(s)),
         ),
         _ => false,
@@ -336,26 +245,6 @@ fn literal_is_assignment_prefix(s: &str) -> bool {
         i += 1;
     }
     i < c.len() && c[i] == '='
-}
-
-/// `assignmentIsQuoting`: recognized assignment passed to a declaration utility.
-fn assignment_is_quoting(p: &Parameters, assign: &Token) -> bool {
-    // shellParsesParamsAsAssignments = shell /= Sh
-    if p.shell != Shell::Sh {
-        return true;
-    }
-    !is_assignment_param_to_command(p, assign)
-}
-
-fn is_assignment_param_to_command(p: &Parameters, assign: &Token) -> bool {
-    if let Some(parent) = p.parent(assign) {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*parent.inner {
-            if !words.is_empty() {
-                return words[1..].iter().any(|w| w.id() == assign.id());
-            }
-        }
-    }
-    false
 }
 
 /// `usedAsCommandName`: is the token the first word of a T_SimpleCommand?
@@ -446,7 +335,6 @@ fn exactly_dispatch(p: &Parameters, name: &str, args: &[Token], out: &mut Out) {
     }
 }
 
-
 // ---- SC2183 / SC2059 checkPrintfVar ----------------------------------------
 
 fn check_printf(p: &Parameters, args: &[Token], out: &mut Out) {
@@ -535,22 +423,6 @@ fn only_trailing_ts(formats: &str, arg_count: usize) -> bool {
 }
 
 // ---- mayBecomeMultipleArgs (ASTLib) ----------------------------------------
-
-fn may_become_multiple_args(t: &Token) -> bool {
-    will_become_multiple_args(t) || mbma_f(false, t)
-}
-fn mbma_f(quoted: bool, t: &Token) -> bool {
-    use InnerToken::*;
-    match &*t.inner {
-        T_DollarBraced { op, .. } => {
-            let string = concat_over(op);
-            !quoted || string.starts_with('!')
-        }
-        T_DoubleQuoted(parts) => parts.iter().any(|x| mbma_f(true, x)),
-        T_NormalWord(parts) => parts.iter().any(|x| mbma_f(quoted, x)),
-        _ => false,
-    }
-}
 
 // ---- getPrintfFormats (faithful port of the regex-based scanner) -----------
 
@@ -641,7 +513,7 @@ fn match_format_re(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
         i += 1;
     } else {
         width_star = false;
-        while rest.get(i).map_or(false, |c| c.is_ascii_digit()) {
+        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
             i += 1;
         }
     }
@@ -656,7 +528,7 @@ fn match_format_re(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
         i += 1;
     } else {
         prec_star = false;
-        while rest.get(i).map_or(false, |c| c.is_ascii_digit()) {
+        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
             i += 1;
         }
     }

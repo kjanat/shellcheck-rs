@@ -10,10 +10,7 @@
 //! - checkPipedAssignment            SC2036
 //! - checkArithmeticOpCommand        SC2099
 //! - checkWrongArithmeticAssignment  SC2100  (variable_flow)
-//! - checkPipePitfalls               SC2038 + SC2012 registered; SC2009/SC2011
-//!                                   ported+tested but unregistered (out of this
-//!                                   batch's scope); SC2010 (batch_n) / SC2126
-//!                                   (batch_g) filtered out to avoid duplication.
+//! - checkPipePitfalls               SC2009/SC2010/SC2011/SC2012/SC2038
 //! - checkShebangParameters          SC2096 (tree)
 //! - checkForInQuoted                SC2066/SC2041/SC2042/SC2043/SC2258
 //! - checkFindExec                   SC2014/SC2067
@@ -31,23 +28,26 @@
 //! - checkAliasUsedInSameParsingUnit SC2262/SC2263 (tree)
 //! - checkBlatantRecursion           SC2264
 //! - checkAssignToSelf               SC2269
-//! - checkCommandWithTrailingSymbol  SC2287 registered; SC2286/SC2289
-//!                                   ported+tested but unregistered (out of
-//!                                   scope); SC2288 (batch_n) filtered out.
+//! - checkCommandWithTrailingSymbol  SC2286/SC2287/SC2288/SC2289
 //! - checkBatsTestDoesNotUseNegation SC2314/SC2315
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::cfg::will_become_multiple_args;
-use crate::cfg::will_concat_in_assignment;
-use crate::cfg::get_unquoted_literal;
 use crate::analyzer_lib::get_all_flags;
-use crate::astlib::is_annotation_ignoring_code;
-use crate::astlib::is_function;
-use crate::astlib::is_literal;
-use crate::astlib::get_leading_unquoted_string;
-use crate::astlib::is_glob;
+use crate::analyzer_lib::is_sourced;
+use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::get_command_sequences;
+use crate::astlib::get_leading_unquoted_string;
+use crate::astlib::is_annotation_ignoring_code;
+use crate::astlib::is_command_substitution;
+use crate::astlib::is_function;
+use crate::astlib::is_glob;
+use crate::astlib::is_literal;
+use crate::cfg::get_unquoted_literal;
+use crate::cfg::may_become_multiple_args;
+use crate::cfg::will_become_multiple_args;
+use crate::cfg::will_concat_in_assignment;
 use crate::cfg::{get_braced_reference, get_word_parts, is_variable_name, oversimplify};
 use crate::interface::Shell;
 use std::collections::HashMap;
@@ -114,26 +114,6 @@ fn will_split(t: &Token) -> bool {
     }
 }
 
-/// `mayBecomeMultipleArgs`.
-fn may_become_multiple_args(t: &Token) -> bool {
-    if will_become_multiple_args(t) {
-        return true;
-    }
-    fn f(quoted: bool, t: &Token) -> bool {
-        use InnerToken::*;
-        match &*t.inner {
-            T_DollarBraced { op, .. } => {
-                let string = oversimplify(op).concat();
-                !quoted || string.starts_with('!')
-            }
-            T_DoubleQuoted(parts) => parts.iter().any(|p| f(true, p)),
-            T_NormalWord(parts) => parts.iter().any(|p| f(quoted, p)),
-            _ => false,
-        }
-    }
-    f(false, t)
-}
-
 /// `getTrailingUnquotedLiteral`.
 fn get_trailing_unquoted_literal(t: &Token) -> Option<&Token> {
     if let InnerToken::T_NormalWord(list) = &*t.inner {
@@ -158,24 +138,9 @@ fn get_glob_or_literal_string(t: &Token) -> Option<String> {
     })
 }
 
-/// `isCommandSubstitution`.
-fn is_command_substitution(t: &Token) -> bool {
-    matches!(
-        &*t.inner,
-        InnerToken::T_DollarExpansion(_)
-            | InnerToken::T_DollarBraceCommandExpansion { .. }
-            | InnerToken::T_Backticked(_)
-    )
-}
-
 /// `isQuoteableExpansion`.
 fn is_quoteable_expansion(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_DollarBraced { .. }) || is_command_substitution(t)
-}
-
-/// `isUnqualifiedCommand token str` — exact command-name match (no path).
-fn is_unqualified_command(t: &Token, name: &str) -> bool {
-    get_command_name(t).as_deref() == Some(name)
 }
 
 /// `getCommand`.
@@ -209,15 +174,13 @@ fn check_echo_wc(_params: &Parameters, t: &Token, out: &mut Out) {
     }
     let acmd = oversimplify(&commands[0]);
     let bcmd = oversimplify(&commands[1]);
-    if acmd == ["echo", "${VAR}"] {
-        if bcmd == ["wc", "-c"] || bcmd == ["wc", "-m"] {
-            style(
-                out,
-                t.id(),
-                2000,
-                "See if you can use ${#variable} instead.",
-            );
-        }
+    if acmd == ["echo", "${VAR}"] && (bcmd == ["wc", "-c"] || bcmd == ["wc", "-m"]) {
+        style(
+            out,
+            t.id(),
+            2000,
+            "See if you can use ${#variable} instead.",
+        );
     }
 }
 
@@ -1339,33 +1302,6 @@ fn check_for_loop_glob_variables(_params: &Parameters, t: &Token, out: &mut Out)
 // checkAliasUsedInSameParsingUnit — SC2262/SC2263 (tree)
 // ===========================================================================
 
-fn get_command_sequences<'a>(t: &'a Token) -> Vec<&'a [Token]> {
-    use InnerToken::*;
-    match &*t.inner {
-        T_Script { commands, .. } => vec![&commands[..]],
-        T_BraceGroup(cmds) => vec![&cmds[..]],
-        T_Subshell(cmds) => vec![&cmds[..]],
-        T_WhileExpression { condition, body } => vec![&condition[..], &body[..]],
-        T_UntilExpression { condition, body } => vec![&condition[..], &body[..]],
-        T_ForIn { body, .. } => vec![&body[..]],
-        T_ForArithmetic { body, .. } => vec![&body[..]],
-        T_IfExpression { clauses, elses } => {
-            let mut out: Vec<&[Token]> = vec![];
-            for (a, b) in clauses {
-                out.push(&a[..]);
-                out.push(&b[..]);
-            }
-            out.push(&elses[..]);
-            out
-        }
-        T_Annotation { token, .. } => get_command_sequences(token),
-        T_DollarExpansion(cmds) => vec![&cmds[..]],
-        T_DollarBraceCommandExpansion { list, .. } => vec![&list[..]],
-        T_Backticked(cmds) => vec![&cmds[..]],
-        _ => vec![],
-    }
-}
-
 /// `groupByLink`: group consecutive elements where each adjacent pair links.
 fn group_by_link<'a, F: Fn(&Token, &Token) -> bool>(
     f: F,
@@ -1395,12 +1331,6 @@ fn should_ignore_code(params: &Parameters, code: i64, t: &Token) -> bool {
     get_path(params, t)
         .iter()
         .any(|p| is_annotation_ignoring_code(code, p))
-}
-
-fn is_sourced(params: &Parameters, t: &Token) -> bool {
-    get_path(params, t)
-        .iter()
-        .any(|p| matches!(&*p.inner, InnerToken::T_SourceCommand { .. }))
 }
 
 fn check_alias_used_in_same_parsing_unit(params: &Parameters, root: &Token, out: &mut Out) {

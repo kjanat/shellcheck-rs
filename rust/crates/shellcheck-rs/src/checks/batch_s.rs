@@ -27,16 +27,20 @@
 //! port is safe because the pipeline `nub`s identical positioned comments, and
 //! the token id / message / (absent) fix are identical.
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::astlib::basename;
+use crate::analyzer_lib::concat_over;
+use crate::analyzer_lib::find_grep_regex;
 use crate::analyzer_lib::get_closest_command;
-use crate::astlib::list_to_args;
-use crate::astlib::is_flag;
-use crate::astlib::is_glob;
-use crate::astlib::has_split_range;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::is_confused_glob_regex;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::basename;
+use crate::astlib::get_literal_string_def;
+use crate::astlib::get_word_parts;
+use crate::astlib::has_split_range;
+use crate::astlib::is_flag;
+use crate::astlib::is_glob;
+use crate::astlib::list_to_args;
 use crate::astlib::oversimplify;
 use crate::astlib::{get_literal_string, only_literal_string};
 use crate::interface::Shell;
@@ -69,16 +73,6 @@ pub fn register(c: &mut Checker) {
 // ===========================================================================
 // Shared helpers (ported privately; parallel agents own other .rs files).
 // ===========================================================================
-
-fn concat_over(t: &Token) -> String {
-    oversimplify(t).concat()
-}
-
-/// `getLiteralStringDef def = getLiteralStringExt (const (return def))` — every
-/// non-literal part contributes `def`, so the result is always `Some`.
-fn get_literal_string_def(def: &str, t: &Token) -> String {
-    astlib::get_literal_string_ext(t, &|_| Some(def.to_string())).unwrap_or_default()
-}
 
 // ---------------------------------------------------------------------------
 // Command-name dispatch (mirror of `ShellCheck.Checks.Commands.checkCommand`).
@@ -128,10 +122,7 @@ fn arguments(words: &[Token]) -> &[Token] {
 
 // ---- getFlagsUntil / getAllFlags / getLeadingFlags / hasFlag --------------
 
-fn get_flags_until<'a, F: Fn(&str) -> bool>(
-    words: &'a [Token],
-    stop: F,
-) -> Vec<(&'a Token, String)> {
+fn get_flags_until<F: Fn(&str) -> bool>(words: &[Token], stop: F) -> Vec<(&Token, String)> {
     let args = arguments(words);
     let mut broken = false;
     let mut out: Vec<(&Token, String)> = vec![];
@@ -351,19 +342,18 @@ fn tr_arg(word: &Token, out: &mut Out) {
                     "tr replaces sets of chars, not words (mentioned due to duplicates).",
                 );
             }
-            if !(s.starts_with("[:") || s.starts_with("[=")) {
-                if s.starts_with('[')
-                    && s.ends_with(']')
-                    && s.chars().count() > 2
-                    && !s.contains('*')
-                {
-                    info(
-                        out,
-                        word.id(),
-                        2021,
-                        "Don't use [] around classes in tr, it replaces literal square brackets.",
-                    );
-                }
+            if !(s.starts_with("[:") || s.starts_with("[="))
+                && s.starts_with('[')
+                && s.ends_with(']')
+                && s.chars().count() > 2
+                && !s.contains('*')
+            {
+                info(
+                    out,
+                    word.id(),
+                    2021,
+                    "Don't use [] around classes in tr, it replaces literal square brackets.",
+                );
             }
         }
         None => {}
@@ -490,34 +480,6 @@ fn check_grep_re(_p: &Parameters, t: &Token, out: &mut Out) {
             );
         }
     }
-}
-
-/// checkGrepRe's `f`: walk args to find the regex argument.
-fn find_grep_regex(args: &[Token]) -> Option<&Token> {
-    let mut rest = args;
-    loop {
-        let (x, tail) = rest.split_first()?;
-        let s = get_literal_string_def("_", x);
-        if s == "--" || s == "-e" || s == "--regex" {
-            return tail.first(); // Regex is *after* this
-        }
-        // skippable: not "--regex=" prefix and starts with "-"
-        if !s.starts_with("--regex=") && s.starts_with('-') {
-            rest = tail; // Regex is elsewhere
-        } else {
-            return Some(x); // Regex is this
-        }
-    }
-}
-
-/// `isConfusedGlobRegex`.
-fn is_confused_glob_regex(s: &str) -> bool {
-    let cs: Vec<char> = s.chars().collect();
-    if cs.first() == Some(&'*') {
-        return true;
-    }
-    // [x, '*'] with x `notElem` "\\."
-    cs.len() == 2 && cs[1] == '*' && cs[0] != '\\' && cs[0] != '.'
 }
 
 /// `getSuspiciousRegexWildcard`: first `[A-Za-z1-9]` immediately followed by

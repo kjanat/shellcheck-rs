@@ -11,17 +11,18 @@
 //! - SC2065  checkTestRedirects    (Analytics.hs) — `>`/`<` in `test` args read
 //!   as a redirection, not a comparison.
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::cfg::get_unquoted_literal;
-use crate::astlib::is_unquoted_flag;
-use crate::astlib::get_leading_unquoted_string;
-use crate::astlib::is_glob;
-use crate::astlib::has_split_range;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::concat_over;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
-use crate::astlib::oversimplify;
+use crate::astlib::get_leading_unquoted_string;
 use crate::astlib::get_literal_string;
+use crate::astlib::get_word_parts;
+use crate::astlib::has_split_range;
+use crate::astlib::is_glob;
+use crate::astlib::is_unquoted_flag;
+use crate::astlib::oversimplify;
+use crate::cfg::get_unquoted_literal;
 use crate::interface::Shell;
 
 /// Register this batch's checks.
@@ -36,10 +37,6 @@ pub fn register(c: &mut Checker) {
 // ===========================================================================
 // Shared helpers (ported privately; parallel agents own other .rs files).
 // ===========================================================================
-
-fn concat_over(t: &Token) -> String {
-    oversimplify(t).concat()
-}
 
 // ===========================================================================
 // SC2004 — checkArithmeticDeref

@@ -58,9 +58,7 @@ fn cute_indent(c: &PositionedComment) -> String {
     } else {
         "^--".to_string()
     };
-    let indent: String = std::iter::repeat(' ')
-        .take((col - 1).max(0) as usize)
-        .collect();
+    let indent = " ".repeat((col - 1).max(0) as usize);
     format!(
         "{indent}{arrow} SC{} ({}): {}",
         c.comment.code,
@@ -179,7 +177,7 @@ pub fn render_file(
 pub fn render_wiki(entries: &[WikiEntry], wiki_link_count: usize, out: &mut String) {
     // sort by ranking, then nub by ranking (keep first), then take N.
     let mut sorted = entries.to_vec();
-    sorted.sort_by(|a, b| a.ranking.cmp(&b.ranking));
+    sorted.sort_by_key(|e| e.ranking);
     let mut seen: Vec<(char, Severity, i64)> = Vec::new();
     let mut deduped: Vec<&WikiEntry> = Vec::new();
     for e in &sorted {

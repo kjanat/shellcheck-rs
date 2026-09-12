@@ -16,15 +16,17 @@
 //! (no such construct hits SC2140 in the corpus); the T_Redirecting and
 //! T_DollarBraced clauses of `isSpecial` are ported.
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::analyzer_lib::get_command_name;
-use crate::analyzer_lib::get_command;
-use crate::astlib::basename;
 use crate::analyzer_lib::get_closest_command;
-use crate::astlib::is_flag;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::get_command;
+use crate::analyzer_lib::get_command_basename;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::simple_command_words;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::basename;
+use crate::astlib::get_word_parts;
+use crate::astlib::is_flag;
 use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {
@@ -35,69 +37,6 @@ pub fn register(c: &mut Checker) {
 // Private helper predicates (ported from ASTLib/AnalyzerLib; kept local so this
 // module does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
-
-fn simple_command_words(t: &Token) -> Option<&Vec<Token>> {
-    let cmd = get_command(t)?;
-    if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-        Some(words)
-    } else {
-        None
-    }
-}
-
-/// `getEffectiveCommandToken` for exec: parse `getBsdOpts "cla:"` and return the
-/// first positional argument token. Returns None if the option string is
-/// unrecognized (Haskell `getBsdOpts` returns Nothing) or no positional exists.
-fn exec_effective(args: &[Token]) -> Option<&Token> {
-    fn needs_arg(c: char) -> Option<bool> {
-        match c {
-            'c' | 'l' => Some(false),
-            'a' => Some(true),
-            _ => None,
-        }
-    }
-    let mut i = 0;
-    while i < args.len() {
-        let s = astlib::get_literal_string(&args[i]).unwrap_or_else(|| "\0".to_string());
-        if s == "--" {
-            return args.get(i + 1);
-        } else if s.starts_with("--") {
-            // Unknown long option (no longopts in "cla:") -> getBsdOpts Nothing.
-            return None;
-        } else if s.starts_with('-') && s.len() > 1 {
-            let cluster: Vec<char> = s[1..].chars().collect();
-            let mut ci = 0;
-            loop {
-                if ci >= cluster.len() {
-                    i += 1;
-                    break;
-                }
-                match needs_arg(cluster[ci]) {
-                    None => return None, // unknown flag -> parse failure
-                    Some(false) => ci += 1,
-                    Some(true) => {
-                        if ci + 1 == cluster.len() {
-                            // arg is the next token
-                            i += 2;
-                        } else {
-                            // arg is the rest of the cluster
-                            i += 1;
-                        }
-                        break;
-                    }
-                }
-            }
-        } else {
-            // positional (gnu = false)
-            return Some(&args[i]);
-        }
-    }
-    None
-}
-
-fn get_command_basename(t: &Token) -> Option<String> {
-    get_command_name(t).map(|s| basename(&s))
-}
 
 // ---------------------------------------------------------------------------
 // SC2016 — checkSingleQuotedVariables

@@ -11,13 +11,13 @@
 //! `astlib::brace_expand` and runs the per-word check on every expanded word,
 //! exactly as the Haskell `mapM_ (mapM_ checkWord . braceExpand)` does.
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::get_command;
-use crate::astlib::basename;
-use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::basename;
 use crate::astlib::oversimplify;
 use crate::astlib::{get_literal_string, get_literal_string_ext};
 use crate::interface::Shell;

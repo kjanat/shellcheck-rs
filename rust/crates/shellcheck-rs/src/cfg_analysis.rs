@@ -189,6 +189,8 @@ fn unknown_function_value() -> FunctionValue {
 }
 
 /// Dependencies on values, used to key the DFA cache.
+// Variant names mirror the Haskell constructors DepState / DepProperties / ...
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum StateDependency {
     DepState(Scope, String, VariableState),

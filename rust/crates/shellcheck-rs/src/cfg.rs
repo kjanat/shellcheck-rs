@@ -241,7 +241,7 @@ impl MutGraph {
 
     /// `context g n` = (incoming, node, label, outgoing) with adjacency in
     /// `(neighbor, label)` form. Returns empty adjacency for a missing node.
-    fn context(&self, n: Node) -> (Vec<(Node, CFEdge)>, Node, CFNode, Vec<(Node, CFEdge)>) {
+    fn context(&self, n: Node) -> Context {
         let incoming = self.pred.get(&n).cloned().unwrap_or_default();
         let outgoing = self.succ.get(&n).cloned().unwrap_or_default();
         let label = self
@@ -322,7 +322,14 @@ fn node_to_range(n: Node) -> Range {
     Range(n, n)
 }
 
+/// fgl's `Adj b`: adjacency as `(neighbor, label)` pairs.
+type Adj = Vec<(Node, CFEdge)>;
+/// fgl's `Context a b`: `(incoming, node, label, outgoing)`.
+type Context = (Adj, Node, CFNode, Adj);
+
 /// `CFW` — the writer output: (nodes, edges, id->range mapping, id->node assoc).
+// The name mirrors the Haskell type `CFW`.
+#[allow(clippy::upper_case_acronyms)]
 type CFW = (
     Vec<(Node, CFNode)>,
     Vec<(Node, Node, CFEdge)>,
@@ -1758,7 +1765,7 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
         .filter(|(a, b, _)| candidate_nodes.contains(a) && candidate_nodes.contains(b))
         .collect();
     // Emulate S.fromList: dedup + sorted order (affects fromList "last wins").
-    edges_to_collapse.sort_by(|x, y| (x.0, x.1, x.2).cmp(&(y.0, y.1, y.2)));
+    edges_to_collapse.sort_by_key(|x| (x.0, x.1, x.2));
     edges_to_collapse.dedup();
     let edges_to_collapse_set: HashSet<(Node, Node, CFEdge)> =
         edges_to_collapse.iter().copied().collect();
@@ -1869,6 +1876,8 @@ fn find_terminal_nodes(g: &MutGraph) -> Vec<Node> {
 }
 
 /// Change all subshell invocations to instead link directly to their contents.
+// The working tuple mirrors the shape used in CFG.hs inlineSubshells.
+#[allow(clippy::type_complexity)]
 fn inline_subshells(g: &mut MutGraph) {
     // Collect subshells with their (original) incoming/outgoing.
     let mut subs: Vec<(
@@ -2324,6 +2333,8 @@ fn is_array_expansion(t: &Token) -> bool {
 
 // --- pseudoglob (for case catch-all detection) ---
 
+// Variant names mirror the Haskell constructors PGAny / PGMany / PGChar.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PseudoGlob {
     PGAny,
@@ -2629,6 +2640,23 @@ pub(crate) fn get_generic_opts(args: &[Token]) -> Vec<(String, (Token, Token))> 
 // ===========================================================================
 // Tests (ported from CFG.hs prop_*)
 // ===========================================================================
+
+pub(crate) fn may_become_multiple_args(t: &Token) -> bool {
+    will_become_multiple_args(t) || mbma_f(false, t)
+}
+
+pub(crate) fn mbma_f(quoted: bool, t: &Token) -> bool {
+    use InnerToken::*;
+    match &*t.inner {
+        T_DollarBraced { op, .. } => {
+            let string = oversimplify_concat(op);
+            !quoted || string.starts_with('!')
+        }
+        T_DoubleQuoted(parts) => parts.iter().any(|x| mbma_f(true, x)),
+        T_NormalWord(parts) => parts.iter().any(|x| mbma_f(quoted, x)),
+        _ => false,
+    }
+}
 
 #[cfg(test)]
 mod tests {

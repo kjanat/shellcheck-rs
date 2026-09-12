@@ -4,9 +4,9 @@
 //! `src/ShellCheck/Checks/ShellSupport.hs`:
 //!
 //!   * `checkBashisms`              — the full SC30xx family (implemented WHOLE
-//!                                    here for parity + tests; see the module
-//!                                    tail for why only a *gap-filling* subset
-//!                                    is registered).
+//!     here for parity + tests; see the module
+//!     tail for why only a *gap-filling* subset
+//!     is registered).
 //!   * `checkForDecimals`          — SC2079
 //!   * `checkBraceExpansionVars`   — SC2051 / SC2175
 //!   * `checkMultiDimensionalArrays` — SC2180
@@ -20,15 +20,16 @@
 //! so the `prop_` tests exercise them the same way the QuickCheck props do.
 #![allow(unused_imports, unused_variables, dead_code)]
 
-use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::arguments;
-use crate::astlib::is_only_redirection;
-use crate::astlib::is_flag;
-use crate::astlib::is_glob;
-use crate::astlib::has_split_range;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::get_closest_command;
+use crate::analyzer_lib::get_leading_flags;
 use crate::analyzer_lib::{Checker, Out, Parameters, err, info, style, warn};
 use crate::ast::*;
+use crate::astlib::get_word_parts;
+use crate::astlib::has_split_range;
+use crate::astlib::is_flag;
+use crate::astlib::is_glob;
+use crate::astlib::is_only_redirection;
 use crate::astlib::{self, get_literal_string, only_literal_string};
 use crate::cfg::{
     get_braced_modifier, get_braced_reference, is_variable_char, is_variable_name, oversimplify,
@@ -234,10 +235,8 @@ fn check_multi_dimensional_arrays(_p: &Parameters, t: &Token, out: &mut Out) {
         InnerToken::T_IndexedElement { indices, .. } if indices.len() >= 2 => {
             about(out, &indices[1]);
         }
-        InnerToken::T_DollarBraced { op, .. } => {
-            if is_multi_dim(op) {
-                about(out, t);
-            }
+        InnerToken::T_DollarBraced { op, .. } if is_multi_dim(op) => {
+            about(out, t);
         }
         _ => {}
     }
@@ -413,13 +412,10 @@ fn bashism_unary_test(op: &str) -> Option<(i64, &'static [Shell], String)> {
     })
 }
 
-fn check_test_op(
-    out: &mut Out,
-    p: &Parameters,
-    id: Id,
-    op: &str,
-    table: fn(&str) -> Option<(i64, &'static [Shell], String)>,
-) {
+/// A bashism lookup: operator -> (code, shells where it is fine, message).
+type BashismTable = fn(&str) -> Option<(i64, &'static [Shell], String)>;
+
+fn check_test_op(out: &mut Out, p: &Parameters, id: Id, op: &str, table: BashismTable) {
     if let Some((code, exempt, msg)) = table(op) {
         if !exempt.contains(&p.shell) {
             warn_msg(out, p, id, code, &msg);
@@ -604,30 +600,6 @@ fn matches_radix(s: &str) -> bool {
 // ---- glob / redirection predicates ----
 
 // ---- leading flags (`getLeadingFlags` / `getFlagsUntil`) ----
-
-fn get_leading_flags(t: &Token) -> Vec<(&Token, String)> {
-    let args = arguments(t);
-    let mut broken = false;
-    let mut out: Vec<(&Token, String)> = vec![];
-    for x in args {
-        let txt = oversimplify_concat(x);
-        if !broken && (txt == "--" || !txt.starts_with('-')) {
-            broken = true;
-        }
-        if broken {
-            out.push((x, String::new()));
-        } else if let Some(a) = txt.strip_prefix("--") {
-            out.push((x, a.split('=').next().unwrap_or("").to_string()));
-        } else if let Some(a) = txt.strip_prefix('-') {
-            for v in a.chars() {
-                out.push((x, v.to_string()));
-            }
-        } else {
-            out.push((x, String::new()));
-        }
-    }
-    out
-}
 
 // ---- the ungated body ----
 

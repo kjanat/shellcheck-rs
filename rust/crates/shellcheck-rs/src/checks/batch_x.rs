@@ -16,11 +16,12 @@
 //!   * SC2322/2323  — `checkUnnecessaryParens`        (node)
 #![allow(clippy::collapsible_if)]
 
-use crate::cfg::get_unquoted_literal;
-use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
+use crate::analyzer_lib::{concat_over, is_sourced};
 use crate::ast::*;
-use crate::cfg::{get_braced_reference, oversimplify as cfg_oversimplify};
+use crate::astlib::get_word_parts;
+use crate::cfg::get_braced_reference;
+use crate::cfg::get_unquoted_literal;
 use crate::interface::Shell;
 use std::collections::BTreeMap;
 
@@ -40,11 +41,6 @@ pub fn register(c: &mut Checker) {
 // ===========================================================================
 // Shared local helpers
 // ===========================================================================
-
-/// `concat $ oversimplify t`.
-fn concat_over(t: &Token) -> String {
-    cfg_oversimplify(t).concat()
-}
 
 /// `getLiteralString` mirroring `getLiteralStringExt (const Nothing)`, including
 /// the `TA_Expansion` / `T_ParamSubSpecialChar` cases the shared astlib helper
@@ -89,13 +85,6 @@ fn get_unmodified_parameter_expansion(t: &Token) -> Option<String> {
     } else {
         None
     }
-}
-
-/// `isSourced params t`: any ancestor is a `T_SourceCommand`.
-fn is_sourced(params: &Parameters, t: &Token) -> bool {
-    get_path(params, t)
-        .iter()
-        .any(|a| matches!(&*a.inner, InnerToken::T_SourceCommand { .. }))
 }
 
 /// `hasFloatingPoint params`.
@@ -634,392 +623,314 @@ mod tests {
     // --- SC2017 checkDivBeforeMult ---
     #[test]
     fn prop_checkDivBeforeMult() {
-        assert_eq!(node_emits(check_div_before_mult, "echo $((c/n*100))"), true);
+        assert!(node_emits(check_div_before_mult, "echo $((c/n*100))"));
     }
     #[test]
     fn prop_checkDivBeforeMult2() {
-        assert_eq!(
-            node_emits(check_div_before_mult, "echo $((c*100/n))"),
-            false
-        );
+        assert!(!(node_emits(check_div_before_mult, "echo $((c*100/n))")));
     }
     #[test]
     fn prop_checkDivBeforeMult3() {
-        assert_eq!(
-            node_emits(check_div_before_mult, "echo $((c/10*10))"),
-            false
-        );
+        assert!(!(node_emits(check_div_before_mult, "echo $((c/10*10))")));
     }
 
     // --- SC2080 checkArithmeticBadOctal ---
     #[test]
     fn prop_checkArithmeticBadOctal1() {
-        assert_eq!(node_emits(check_arithmetic_bad_octal, "(( 0192 ))"), true);
+        assert!(node_emits(check_arithmetic_bad_octal, "(( 0192 ))"));
     }
     #[test]
     fn prop_checkArithmeticBadOctal2() {
-        assert_eq!(node_emits(check_arithmetic_bad_octal, "(( 0x192 ))"), false);
+        assert!(!(node_emits(check_arithmetic_bad_octal, "(( 0x192 ))")));
     }
     #[test]
     fn prop_checkArithmeticBadOctal3() {
-        assert_eq!(
-            node_emits(check_arithmetic_bad_octal, "(( 1 ^ 0777 ))"),
-            false
-        );
+        assert!(!(node_emits(check_arithmetic_bad_octal, "(( 1 ^ 0777 ))")));
     }
 
     // --- SC2257 checkModifiedArithmeticInRedirection ---
     #[test]
     fn prop_checkModifiedArithmeticInRedirection1() {
-        assert_eq!(
-            node_emits(check_modified_arithmetic_in_redirection, "ls > $((i++))"),
-            true
-        );
+        assert!(node_emits(
+            check_modified_arithmetic_in_redirection,
+            "ls > $((i++))"
+        ));
     }
     #[test]
     fn prop_checkModifiedArithmeticInRedirection2() {
-        assert_eq!(
-            node_emits(
-                check_modified_arithmetic_in_redirection,
-                "cat < \"foo$((i++)).txt\""
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_modified_arithmetic_in_redirection,
+            "cat < \"foo$((i++)).txt\""
+        ));
     }
     #[test]
     fn prop_checkModifiedArithmeticInRedirection3() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_modified_arithmetic_in_redirection,
                 "while true; do true; done > $((i++))"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkModifiedArithmeticInRedirection4() {
-        assert_eq!(
-            node_emits(check_modified_arithmetic_in_redirection, "cat <<< $((i++))"),
-            true
-        );
+        assert!(node_emits(
+            check_modified_arithmetic_in_redirection,
+            "cat <<< $((i++))"
+        ));
     }
     #[test]
     fn prop_checkModifiedArithmeticInRedirection5() {
-        assert_eq!(
-            node_emits(
-                check_modified_arithmetic_in_redirection,
-                "cat << foo\n$((i++))\nfoo\n"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_modified_arithmetic_in_redirection,
+            "cat << foo\n$((i++))\nfoo\n"
+        ));
     }
     #[test]
     fn prop_checkModifiedArithmeticInRedirection6() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_modified_arithmetic_in_redirection,
                 "#!/bin/dash\nls > $((i=i+1))"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkModifiedArithmeticInRedirection7() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_modified_arithmetic_in_redirection,
                 "#!/bin/busybox sh\ncat << foo\n$((i++))\nfoo\n"
-            ),
-            false
+            ))
         );
     }
 
     // --- SC2321 checkUnnecessaryArithmeticExpansionIndex ---
     #[test]
     fn prop_checkUnnecessaryArithmeticExpansionIndex1() {
-        assert_eq!(
-            node_emits(
-                check_unnecessary_arithmetic_expansion_index,
-                "a[$((1+1))]=n"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_unnecessary_arithmetic_expansion_index,
+            "a[$((1+1))]=n"
+        ));
     }
     #[test]
     fn prop_checkUnnecessaryArithmeticExpansionIndex2() {
-        assert_eq!(
-            node_emits(check_unnecessary_arithmetic_expansion_index, "a[1+1]=n"),
-            false
-        );
+        assert!(!(node_emits(check_unnecessary_arithmetic_expansion_index, "a[1+1]=n")));
     }
     #[test]
     fn prop_checkUnnecessaryArithmeticExpansionIndex3() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_unnecessary_arithmetic_expansion_index,
                 "a[$(echo $((1+1)))]=n"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUnnecessaryArithmeticExpansionIndex4() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_unnecessary_arithmetic_expansion_index,
                 "declare -A a; a[$((1+1))]=val"
-            ),
-            false
+            ))
         );
     }
 
     // --- SC2322/2323 checkUnnecessaryParens ---
     #[test]
     fn prop_checkUnnecessaryParens1() {
-        assert_eq!(
-            node_emits(check_unnecessary_parens, "echo $(( ((1+1)) ))"),
-            true
-        );
+        assert!(node_emits(check_unnecessary_parens, "echo $(( ((1+1)) ))"));
     }
     #[test]
     fn prop_checkUnnecessaryParens2() {
-        assert_eq!(node_emits(check_unnecessary_parens, "x[((1+1))+1]=1"), true);
+        assert!(node_emits(check_unnecessary_parens, "x[((1+1))+1]=1"));
     }
     #[test]
     fn prop_checkUnnecessaryParens3() {
-        assert_eq!(node_emits(check_unnecessary_parens, "x[(1+1)]=1"), true);
+        assert!(node_emits(check_unnecessary_parens, "x[(1+1)]=1"));
     }
     #[test]
     fn prop_checkUnnecessaryParens4() {
-        assert_eq!(node_emits(check_unnecessary_parens, "$(( (x) ))"), true);
+        assert!(node_emits(check_unnecessary_parens, "$(( (x) ))"));
     }
     #[test]
     fn prop_checkUnnecessaryParens5() {
-        assert_eq!(node_emits(check_unnecessary_parens, "(( (x) ))"), true);
+        assert!(node_emits(check_unnecessary_parens, "(( (x) ))"));
     }
     #[test]
     fn prop_checkUnnecessaryParens6() {
-        assert_eq!(node_emits(check_unnecessary_parens, "x[(1+1)+1]=1"), false);
+        assert!(!(node_emits(check_unnecessary_parens, "x[(1+1)+1]=1")));
     }
     #[test]
     fn prop_checkUnnecessaryParens7() {
-        assert_eq!(node_emits(check_unnecessary_parens, "(( (1*1)+1 ))"), false);
+        assert!(!(node_emits(check_unnecessary_parens, "(( (1*1)+1 ))")));
     }
     #[test]
     fn prop_checkUnnecessaryParens8() {
-        assert_eq!(node_emits(check_unnecessary_parens, "(( (1)+1 ))"), false);
+        assert!(!(node_emits(check_unnecessary_parens, "(( (1)+1 ))")));
     }
 
     // --- SC2218 checkUseBeforeDefinition ---
     #[test]
     fn prop_checkUseBeforeDefinition1() {
-        assert_eq!(
-            tree_emits(check_use_before_definition, "f; f() { true; }"),
-            true
-        );
+        assert!(tree_emits(check_use_before_definition, "f; f() { true; }"));
     }
     #[test]
     fn prop_checkUseBeforeDefinition2() {
-        assert_eq!(
-            tree_emits(check_use_before_definition, "f() { true; }; f"),
-            false
-        );
+        assert!(!(tree_emits(check_use_before_definition, "f() { true; }; f")));
     }
     #[test]
     fn prop_checkUseBeforeDefinition3() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_use_before_definition,
                 "if ! mycmd --version; then mycmd() { true; }; fi"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkUseBeforeDefinition4() {
-        assert_eq!(
-            tree_emits(check_use_before_definition, "mycmd || mycmd() { f; }"),
-            false
-        );
+        assert!(!(tree_emits(check_use_before_definition, "mycmd || mycmd() { f; }")));
     }
     #[test]
     fn prop_checkUseBeforeDefinition5() {
-        assert_eq!(
-            tree_emits(
-                check_use_before_definition,
-                "false || mycmd; mycmd() { f; }"
-            ),
-            true
-        );
+        assert!(tree_emits(
+            check_use_before_definition,
+            "false || mycmd; mycmd() { f; }"
+        ));
     }
     #[test]
     fn prop_checkUseBeforeDefinition6() {
-        assert_eq!(
-            tree_emits(
+        assert!(
+            !(tree_emits(
                 check_use_before_definition,
                 "f() { one; }; f; f() { two; }; f"
-            ),
-            false
+            ))
         );
     }
 
     // --- SC2317/2329 checkCommandIsUnreachable ---
     #[test]
     fn prop_checkCommandIsUnreachable1() {
-        assert_eq!(
-            node_emits(check_command_is_unreachable, "foo; bar; exit; baz"),
-            true
-        );
+        assert!(node_emits(
+            check_command_is_unreachable,
+            "foo; bar; exit; baz"
+        ));
     }
     #[test]
     fn prop_checkCommandIsUnreachable2() {
-        assert_eq!(
-            node_emits(
-                check_command_is_unreachable,
-                "die() { exit; }; foo; bar; die; baz"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_command_is_unreachable,
+            "die() { exit; }; foo; bar; die; baz"
+        ));
     }
     #[test]
     fn prop_checkCommandIsUnreachable3() {
-        assert_eq!(
-            node_emits(check_command_is_unreachable, "foo; bar || exit; baz"),
-            false
-        );
+        assert!(!(node_emits(check_command_is_unreachable, "foo; bar || exit; baz")));
     }
     #[test]
     fn prop_checkCommandIsUnreachable4() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_command_is_unreachable,
                 "f() { foo; };    # Maybe sourced"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkCommandIsUnreachable5() {
-        assert_eq!(
-            node_emits(
-                check_command_is_unreachable,
-                "f() { foo; }; exit  # Not sourced"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_command_is_unreachable,
+            "f() { foo; }; exit  # Not sourced"
+        ));
     }
 
     // --- SC2319/2320 checkOverwrittenExitCode ---
     #[test]
     fn prop_checkOverwrittenExitCode1() {
-        assert_eq!(
-            node_emits(
-                check_overwritten_exit_code,
-                "x; [ $? -eq 1 ] || [ $? -eq 2 ]"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_overwritten_exit_code,
+            "x; [ $? -eq 1 ] || [ $? -eq 2 ]"
+        ));
     }
     #[test]
     fn prop_checkOverwrittenExitCode2() {
-        assert_eq!(
-            node_emits(check_overwritten_exit_code, "x; [ $? -eq 1 ]"),
-            false
-        );
+        assert!(!(node_emits(check_overwritten_exit_code, "x; [ $? -eq 1 ]")));
     }
     #[test]
     fn prop_checkOverwrittenExitCode3() {
-        assert_eq!(
-            node_emits(
-                check_overwritten_exit_code,
-                "x; echo \"Exit is $?\"; [ $? -eq 0 ]"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_overwritten_exit_code,
+            "x; echo \"Exit is $?\"; [ $? -eq 0 ]"
+        ));
     }
     #[test]
     fn prop_checkOverwrittenExitCode4() {
-        assert_eq!(
-            node_emits(
+        assert!(
+            !(node_emits(
                 check_overwritten_exit_code,
                 "x; [ $? -eq 0 ] && echo Success"
-            ),
-            false
+            ))
         );
     }
     #[test]
     fn prop_checkOverwrittenExitCode5() {
-        assert_eq!(
-            node_emits(
-                check_overwritten_exit_code,
-                "x; if [ $? -eq 0 ]; then var=$?; fi"
-            ),
-            true
-        );
+        assert!(node_emits(
+            check_overwritten_exit_code,
+            "x; if [ $? -eq 0 ]; then var=$?; fi"
+        ));
     }
     #[test]
     fn prop_checkOverwrittenExitCode6() {
-        assert_eq!(
-            node_emits(check_overwritten_exit_code, "x; [ $? -gt 0 ] && fail=$?"),
-            true
-        );
+        assert!(node_emits(
+            check_overwritten_exit_code,
+            "x; [ $? -gt 0 ] && fail=$?"
+        ));
     }
     #[test]
     fn prop_checkOverwrittenExitCode7() {
-        assert_eq!(
-            node_emits(check_overwritten_exit_code, "[ 1 -eq 2 ]; status=$?"),
-            false
-        );
+        assert!(!(node_emits(check_overwritten_exit_code, "[ 1 -eq 2 ]; status=$?")));
     }
     #[test]
     fn prop_checkOverwrittenExitCode8() {
-        assert_eq!(
-            node_emits(check_overwritten_exit_code, "[ 1 -eq 2 ]; exit $?"),
-            false
-        );
+        assert!(!(node_emits(check_overwritten_exit_code, "[ 1 -eq 2 ]; exit $?")));
     }
 
     // --- SC2324 checkPlusEqualsNumber ---
     #[test]
     fn prop_checkPlusEqualsNumber1() {
-        assert_eq!(node_emits(check_plus_equals_number, "x+=1"), true);
+        assert!(node_emits(check_plus_equals_number, "x+=1"));
     }
     #[test]
     fn prop_checkPlusEqualsNumber2() {
-        assert_eq!(node_emits(check_plus_equals_number, "x+=42"), true);
+        assert!(node_emits(check_plus_equals_number, "x+=42"));
     }
     #[test]
     fn prop_checkPlusEqualsNumber3() {
-        assert_eq!(node_emits(check_plus_equals_number, "(( x += 1 ))"), false);
+        assert!(!(node_emits(check_plus_equals_number, "(( x += 1 ))")));
     }
     #[test]
     fn prop_checkPlusEqualsNumber4() {
-        assert_eq!(
-            node_emits(check_plus_equals_number, "declare -i x=0; x+=1"),
-            false
-        );
+        assert!(!(node_emits(check_plus_equals_number, "declare -i x=0; x+=1")));
     }
     #[test]
     fn prop_checkPlusEqualsNumber5() {
-        assert_eq!(node_emits(check_plus_equals_number, "x+='1'"), false);
+        assert!(!(node_emits(check_plus_equals_number, "x+='1'")));
     }
     #[test]
     fn prop_checkPlusEqualsNumber6() {
-        assert_eq!(node_emits(check_plus_equals_number, "n=foo; x+=n"), false);
+        assert!(!(node_emits(check_plus_equals_number, "n=foo; x+=n")));
     }
     #[test]
     fn prop_checkPlusEqualsNumber7() {
-        assert_eq!(node_emits(check_plus_equals_number, "n=4; x+=n"), true);
+        assert!(node_emits(check_plus_equals_number, "n=4; x+=n"));
     }
     #[test]
     fn prop_checkPlusEqualsNumber8() {
-        assert_eq!(node_emits(check_plus_equals_number, "n=4; x+=$n"), true);
+        assert!(node_emits(check_plus_equals_number, "n=4; x+=$n"));
     }
     #[test]
     fn prop_checkPlusEqualsNumber9() {
-        assert_eq!(
-            node_emits(check_plus_equals_number, "declare -ia var; var[x]+=1"),
-            false
-        );
+        assert!(!(node_emits(check_plus_equals_number, "declare -ia var; var[x]+=1")));
     }
 }

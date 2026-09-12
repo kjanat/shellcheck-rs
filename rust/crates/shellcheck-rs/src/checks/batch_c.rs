@@ -3,34 +3,20 @@
 //! Ported checks (condition-based; work with the current T_Condition/TC_* AST):
 //! - SC2077  checkLiteralBreakingTest (Analytics.hs) — missing spaces around `=` etc.
 //! - SC2157  checkLiteralBreakingTest (Analytics.hs) — `-n`/`-z`/implicit-`-n` on literal.
-//! - SC2078  checkConstantNullary     (Analytics.hs) — constant `[ ]` expression.
-//!           (The false/0/true/1 special cases SC2158/2159/2160/2161 are left to
-//!           their owning batch; we emit only SC2078.)
-//! - SC2053  checkComparisonAgainstGlob (Analytics.hs) — `[[ $x == $unquoted ]]`.
-//! - SC2081  checkComparisonAgainstGlob (Analytics.hs) — `[ .. = glob ]`.
-//!           (The BusyBox `[[ ]]` SC2330 branch is skipped: not assigned.)
 //!
-//! Skipped:
-//! - SC2050  checkConstantIfs — the check itself ports cleanly (see
-//!   `check_constant_ifs` below), but the oracle reports SC2050 at the *operator*
-//!   token's span, whereas the current Rust parser gives `TC_Binary` the span of
-//!   the whole expression (lhs..rhs). The operator is not a token in the Rust
-//!   AST (`TC_Binary.op` is a plain `String`), so there is no id whose position
-//!   maps to the operator; a comment's span is derived solely from its id via
-//!   `token_positions`. Every emission therefore mismatches the oracle span
-//!   (extra > 0), so the check is left UNREGISTERED until the parser gives the
-//!   condition operator its own span. The SC2193 "can never be equal" branch is
-//!   likewise skipped (needs `wordsCanBeEqual` pattern machinery).
+//! The other checks this batch once carried (checkConstantNullary,
+//! checkComparisonAgainstGlob, checkConstantIfs) now live in batch_u as single
+//! complete ports.
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::astlib::is_constant;
-use crate::astlib::is_glob;
-use crate::astlib::is_closing_range;
-use crate::astlib::is_half_open_range;
-use crate::astlib::has_split_range;
-use crate::astlib::get_word_parts;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::get_word_parts;
+use crate::astlib::has_split_range;
+use crate::astlib::is_closing_range;
+use crate::astlib::is_constant;
+use crate::astlib::is_glob;
+use crate::astlib::is_half_open_range;
 use crate::interface::Shell;
 
 /// Register this batch's checks.
@@ -55,8 +41,8 @@ const ARITHMETIC_BINARY_TEST_OPS: [&str; 6] = ["-eq", "-ne", "-lt", "-le", "-gt"
 
 /// SC2077 / SC2157 — `checkLiteralBreakingTest`.
 fn check_literal_breaking_test(params: &Parameters, t: &Token, out: &mut Out) {
-    let has_equals = |x: &Token| astlib::get_literal_string(x).map_or(false, |s| s.contains('='));
-    let is_nonempty = |x: &Token| astlib::get_literal_string(x).map_or(false, |s| !s.is_empty());
+    let has_equals = |x: &Token| astlib::get_literal_string(x).is_some_and(|s| s.contains('='));
+    let is_nonempty = |x: &Token| astlib::get_literal_string(x).is_some_and(|s| !s.is_empty());
 
     match &*t.inner {
         InnerToken::TC_Nullary { token: w, .. } => {

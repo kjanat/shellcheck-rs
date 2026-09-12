@@ -14,17 +14,20 @@
 //!   is tangled with SC2194/2195/2221; not self-contained, out of scope here.
 //! - SC2223  checkSpacefulnessCfg — dataflow/CFG (`isClean`, variable flow); blocked.
 #![allow(unused_imports, unused_variables, dead_code)]
+use crate::analyzer_lib::condition_children;
+use crate::analyzer_lib::in_condition;
 use crate::analyzer_lib::is_array_expansion;
-use crate::astlib::is_glob;
-use crate::astlib::is_closing_range;
-use crate::astlib::is_half_open_range;
-use crate::astlib::has_split_range;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::is_function_body;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
-use crate::astlib::oversimplify;
 use crate::astlib::get_literal_string;
+use crate::astlib::get_word_parts;
+use crate::astlib::has_split_range;
+use crate::astlib::is_closing_range;
+use crate::astlib::is_glob;
+use crate::astlib::is_half_open_range;
+use crate::astlib::oversimplify;
 use crate::interface::Shell;
 use std::sync::OnceLock;
 
@@ -174,51 +177,8 @@ fn check_test_argument_splitting_arrays(_params: &Parameters, t: &Token, out: &m
 // SC2251 — checkUselessBang
 // ---------------------------------------------------------------------------
 
-/// Condition-children of a parent node, per `isCondition`'s `getConditionChildren`.
-fn condition_children(t: &Token) -> Vec<&Token> {
-    match &*t.inner {
-        InnerToken::T_AndIf { lhs, .. } => vec![lhs],
-        InnerToken::T_OrIf { lhs, .. } => vec![lhs],
-        InnerToken::T_IfExpression { clauses, .. } => {
-            clauses.iter().filter_map(|(cond, _)| cond.last()).collect()
-        }
-        InnerToken::T_WhileExpression { condition, .. } => condition.last().into_iter().collect(),
-        InnerToken::T_UntilExpression { condition, .. } => condition.last().into_iter().collect(),
-        _ => vec![],
-    }
-}
-
-/// `isCondition (getPath ..)`.
-fn in_condition(params: &Parameters, t: &Token) -> bool {
-    let mut child = t;
-    loop {
-        if matches!(&*child.inner, InnerToken::T_BatsTest { .. }) {
-            return true;
-        }
-        let parent = match params.parent(child) {
-            Some(p) => p,
-            None => return false,
-        };
-        if condition_children(parent)
-            .iter()
-            .any(|c| c.id() == child.id())
-        {
-            return true;
-        }
-        child = parent;
-    }
-}
-
 fn drop_last<T>(v: &[T]) -> &[T] {
     if v.is_empty() { v } else { &v[..v.len() - 1] }
-}
-
-/// Is the immediate parent of `t` a `T_Function`?
-fn is_function_body(params: &Parameters, t: &Token) -> bool {
-    matches!(
-        params.parent(t).map(|p| &*p.inner),
-        Some(InnerToken::T_Function { .. })
-    )
 }
 
 /// `getNonReturningCommands`.

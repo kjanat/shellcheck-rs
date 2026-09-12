@@ -23,21 +23,24 @@
 //!   exact autofix; not self-contained enough to keep extra==0. Left out.
 //! - SC2261  checkMultipleRedirections — needs FD-map / pipe dataflow. Left out.
 #![allow(unused_imports, unused_variables, dead_code)]
-use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::find_grep_regex;
 use crate::analyzer_lib::get_command;
-use crate::astlib::basename;
-use crate::astlib::is_unquoted_flag;
-use crate::astlib::get_leading_unquoted_string;
-use crate::astlib::is_constant;
-use crate::astlib::is_flag;
-use crate::astlib::is_glob;
-use crate::astlib::is_closing_range;
-use crate::astlib::is_half_open_range;
-use crate::astlib::has_split_range;
-use crate::astlib::get_word_parts;
+use crate::analyzer_lib::get_command_name;
+use crate::analyzer_lib::get_command_name_and_token;
+use crate::analyzer_lib::head_id;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
+use crate::astlib::basename;
+use crate::astlib::get_leading_unquoted_string;
+use crate::astlib::get_word_parts;
+use crate::astlib::has_split_range;
+use crate::astlib::is_closing_range;
+use crate::astlib::is_constant;
+use crate::astlib::is_flag;
+use crate::astlib::is_glob;
+use crate::astlib::is_half_open_range;
+use crate::astlib::is_unquoted_flag;
 use crate::astlib::{get_literal_string, get_literal_string_ext, only_literal_string};
 use crate::interface::Shell;
 use std::sync::OnceLock;
@@ -52,45 +55,12 @@ pub fn register(c: &mut Checker) {
 // Private helpers (ported from ASTLib; kept local to avoid touching shared files).
 // ---------------------------------------------------------------------------
 
-/// `getLiteralStringDef def`.
-fn literal_string_def(t: &Token, def: &str) -> String {
-    let def = def.to_string();
-    get_literal_string_ext(t, &|_| Some(def.clone())).unwrap_or_default()
-}
-
 // --- isGlob (ported from ASTLib / batch_k) --------------------------------
 
 // --- command helpers (subset of ASTLib, matching batch_d) -----------------
 
-/// `getCommandNameAndToken False` (effective command, no exec-opts parsing).
-fn get_command_name_and_token(t: &Token) -> (Option<String>, &Token) {
-    if let Some(cmd) = get_command(t) {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-            if let Some((w, rest)) = words.split_first() {
-                if let Some(s) = get_literal_string(w) {
-                    if let Some(actual) = effective_command_token(&s, rest) {
-                        return (get_literal_string(actual), actual);
-                    }
-                    return (Some(s), w);
-                }
-            }
-        }
-    }
-    (None, t)
-}
-
-fn effective_command_token<'a>(s: &str, args: &'a [Token]) -> Option<&'a Token> {
-    match s {
-        "busybox" | "builtin" | "command" | "run" => {
-            let arg = args.first()?;
-            if is_flag(arg) { None } else { Some(arg) }
-        }
-        _ => None,
-    }
-}
-
 fn get_command_token_or_this(t: &Token) -> &Token {
-    get_command_name_and_token(t).1
+    get_command_name_and_token(false, t).1
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +93,6 @@ fn check_commarrays(_params: &Parameters, t: &Token, out: &mut Out) {
 // ---------------------------------------------------------------------------
 // SC2010 — checkPipePitfalls (`ls | grep`)
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // Command-dispatch (mirrors Checks/Commands.hs `checkCommand`)
@@ -206,25 +175,6 @@ fn check_unused_echo_escapes(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2062 — checkGrepRe (only the unquoted-glob branch)
 // ---------------------------------------------------------------------------
 
-/// Mirror of checkGrepRe's `f`: walk args to find the regex argument.
-fn find_grep_regex(args: &[Token]) -> Option<&Token> {
-    let mut rest = args;
-    loop {
-        let (x, tail) = rest.split_first()?;
-        let str = literal_string_def(x, "_");
-        if str == "--" || str == "-e" || str == "--regex" {
-            // Regex is *after* this
-            return tail.first();
-        }
-        // skippable: not "--regex=" prefix and starts with "-"
-        if !str.starts_with("--regex=") && str.starts_with('-') {
-            rest = tail; // Regex is elsewhere
-        } else {
-            return Some(x); // Regex is this
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // SC2194 — checkUnmatchableCases (constant-word branch only)
 // ---------------------------------------------------------------------------
@@ -257,13 +207,6 @@ fn check_flag_as_command(_params: &Parameters, t: &Token, out: &mut Out) {
 // ---------------------------------------------------------------------------
 // SC2283 — checkSecondArgIsComparison (only the single `=` branch)
 // ---------------------------------------------------------------------------
-
-fn head_id(t: &Token) -> Id {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) if !l.is_empty() => l[0].id(),
-        _ => t.id(),
-    }
-}
 
 fn get_leading_unquotedstring_for_arg(t: &Token) -> Option<String> {
     get_leading_unquoted_string(t)
