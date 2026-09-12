@@ -414,12 +414,14 @@ impl Parser {
     pub(super) fn read_cond_group(&mut self, single: bool) -> PResult<Token> {
         let m = self.mark();
         let start = self.pos();
-        // `readRegularOrEscaped`: either form parses, and the wrong one for
-        // this bracket type is reported rather than rejected.
-        let lparen = if self.string("\\(").is_ok() {
-            "\\("
+        // `readRegularOrEscaped (string "(")`: `\(`, `'('` and `"("` all read as
+        // an escaped paren -- the quotes are a way of writing one without
+        // reading a whole shell word -- and the wrong form for this bracket
+        // type is reported rather than rejected.
+        let lparen = if let Some(s) = self.read_cond_escaped_lit("(") {
+            s
         } else if self.char('(').is_ok() {
-            "("
+            "(".to_string()
         } else {
             self.reset(m);
             return Err(());
@@ -434,10 +436,10 @@ impl Parser {
             }
         };
         let cpos = self.pos();
-        let rparen = if self.string("\\)").is_ok() {
-            "\\)"
+        let rparen = if let Some(s) = self.read_cond_escaped_lit(")") {
+            s
         } else if self.char(')').is_ok() {
-            ")"
+            ")".to_string()
         } else {
             self.reset(m);
             return Err(());
@@ -447,6 +449,30 @@ impl Parser {
         let typ = self.cond_typ(single);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::TC_Group { typ, token: inner }))
+    }
+
+    /// `readEscaped (string lit)`: the literal behind a backslash or inside a
+    /// pair of quotes, with the backslash put back by `escaped`.
+    fn read_cond_escaped_lit(&mut self, lit: &str) -> Option<String> {
+        let m = self.mark();
+        match self.peek() {
+            Some('\\') => {
+                self.bump();
+                if self.string(lit).is_ok() {
+                    return Some(Self::escape_cond_op(lit));
+                }
+            }
+            Some(q @ ('\'' | '"')) => {
+                self.bump();
+                if self.string(lit).is_ok() && self.peek() == Some(q) {
+                    self.bump();
+                    return Some(Self::escape_cond_op(lit));
+                }
+            }
+            _ => return None,
+        }
+        self.reset(m);
+        None
     }
 
     /// `singleWarning` / `doubleWarning`: `[ ]` needs the parens escaped and

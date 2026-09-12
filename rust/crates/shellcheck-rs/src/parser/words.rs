@@ -219,11 +219,11 @@ impl Parser {
                 Some(c) if UNICODE_DOUBLE_QUOTES.contains(c) => {
                     let pos = self.pos();
                     self.bump();
-                    let end = self.pos();
-                    let id = self.next_id_between(pos.clone(), end.clone());
+                    let id = self.next_id_between(pos.clone(), self.pos());
+                    // `parseProblemAt pos`, so zero-width at the quote.
                     self.problem_at(
+                        pos.clone(),
                         pos,
-                        end,
                         Severity::WarningC,
                         1111,
                         "This is a unicode quote. Delete and retype it (or ignore/singlequote for literal).",
@@ -468,14 +468,11 @@ impl Parser {
             // stopping on `]`/EOF or any char in `customEnd ++ standardEnd`.
             match self.peek() {
                 Some(']') | None => break,
-                // readNormalEscaped: backslash + the escaped char.
+                // `readNormalEscaped` yields the text the escape stands for, so
+                // `[\|]` is a class holding a `|`, not a backslash and a pipe.
                 Some('\\') => {
-                    self.bump();
-                    body.push('\\');
-                    if let Some(n) = self.peek() {
-                        self.bump();
-                        body.push(n);
-                    }
+                    let s = self.read_normal_escaped()?;
+                    body.push_str(&s);
                     had = true;
                 }
                 // globchars = oneOf ("![" ++ extglobStartChars): accepted as a
