@@ -845,6 +845,21 @@ impl Parser {
     }
 
     pub(super) fn read_cmd_name(&mut self) -> Option<Token> {
+        // `optional . try $ char '\\' >> lookAhead (variableChars <|> oneOf ":.")`:
+        // a leading backslash here suppresses alias expansion, so it is not an
+        // escape and reports nothing.
+        let bm = self.mark();
+        if self.char('\\').is_ok() {
+            if !matches!(self.peek(), Some(c) if c == '_'
+                || c.is_ascii_alphanumeric()
+                || c == ':'
+                || c == '.')
+            {
+                self.reset(bm);
+            }
+        } else {
+            self.reset(bm);
+        }
         let m = self.mark();
         // don't treat keywords as command names in command position handled by caller
         match self.read_normal_word() {

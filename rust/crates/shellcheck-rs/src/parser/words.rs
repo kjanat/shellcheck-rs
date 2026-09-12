@@ -9,6 +9,12 @@ impl Parser {
         self.read_normalish_word(&["do", "done", "then", "fi", "esac"])
     }
 
+    /// `readPatternWord`: only `esac` can be the keyword a case pattern was
+    /// meant to close.
+    pub(super) fn read_pattern_word(&mut self) -> PResult<Token> {
+        self.read_normalish_word(&["esac"])
+    }
+
     pub(super) fn read_normalish_word(&mut self, terms: &[&str]) -> PResult<Token> {
         let start = self.pos();
         let pos = self.pos();
@@ -1313,11 +1319,43 @@ impl Parser {
     }
 
     /// `readDollarBracedLiteral`: a run of anything but `bracedQuotable`.
+    /// `readDollarBracedLiteral`: characters up to the next `bracedQuotable`
+    /// (`}"$'` or a backtick), where `readBraceEscaped` lets a backslash carry
+    /// one of those through -- `${foo#\}}` ends at the second brace.
     fn read_braced_literal(&mut self) -> PResult<Token> {
         let start = self.pos();
         let mut s = String::new();
         while let Some(c) = self.peek() {
-            if "}$`'\"".contains(c) {
+            if c == '\\' {
+                match self.peek_at(1) {
+                    // A line continuation stands for nothing at all.
+                    Some('\n') => {
+                        self.bump();
+                        self.bump();
+                        continue;
+                    }
+                    Some(n) if BRACED_QUOTABLE.contains(n) => {
+                        self.bump();
+                        self.bump();
+                        s.push(n);
+                        continue;
+                    }
+                    Some(n) => {
+                        self.bump();
+                        self.bump();
+                        s.push('\\');
+                        s.push(n);
+                        continue;
+                    }
+                    // A trailing backslash is just a backslash.
+                    None => {
+                        self.bump();
+                        s.push('\\');
+                        continue;
+                    }
+                }
+            }
+            if BRACED_QUOTABLE.contains(c) {
                 break;
             }
             s.push(c);

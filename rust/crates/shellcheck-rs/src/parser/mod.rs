@@ -328,6 +328,9 @@ const QUOTABLE_CHARS: &str = "|&;<>()\\ '\t\n\r\u{A0}\\\"$`";
 
 /// `unicodeDoubleQuotes` / `unicodeSingleQuotes`: the curly quotes an editor
 /// substitutes for the real ones, which the shell treats as ordinary text.
+/// `bracedQuotable`: what a backslash escapes inside `${..}`.
+const BRACED_QUOTABLE: &str = "}\"$`'";
+
 const UNICODE_DOUBLE_QUOTES: &str = "\u{201C}\u{201D}\u{2033}\u{2036}";
 const UNICODE_SINGLE_QUOTES: &str = "\u{2018}\u{2019}";
 
@@ -865,6 +868,23 @@ impl Parser {
                 progressed = true;
                 // whitespace after continuation
                 while self.line_whitespace().is_ok() {}
+                // The line was continued. A comment on the next line ending in a
+                // backslash does not continue it any further.
+                let cm = self.mark();
+                match self.read_comment() {
+                    Ok(c) if c.ends_with('\\') => {
+                        let pos = self.pos();
+                        self.problem_at(
+                            pos.clone(),
+                            pos,
+                            Severity::ErrorC,
+                            1143,
+                            "This backslash is part of a comment and does not continue the line.",
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(()) => self.reset(cm),
+                }
             } else {
                 self.reset(m);
             }

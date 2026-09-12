@@ -948,7 +948,7 @@ impl Parser {
             p.spacing();
             // `readPattern`: words separated by `|`.
             let mut pats = Vec::new();
-            while let Ok(w) = p.read_normal_word() {
+            while let Ok(w) = p.read_pattern_word() {
                 pats.push(w);
                 p.spacing();
                 if p.char('|').is_err() {
