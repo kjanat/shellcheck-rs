@@ -541,11 +541,15 @@ impl Parser {
         // `try` rewinds Parsec's own state, which holds the buffered notes.
         let notes = self.notes.len();
         let failure = self.failure.clone();
+        // Both attempts sit behind `try`, so a consuming failure in either is
+        // caught rather than propagated: the parse is not over.
+        let committed = self.committed;
         if let Ok(t) = expected(self) {
             return Ok(t);
         }
         self.reset(m);
         self.notes.truncate(notes);
+        self.committed = committed;
         // Problems and contexts live outside Parsec, so the first attempt's
         // survive: `forgetOnFailure` only rewinds what the *alternative* adds.
         let problems = self.problems.len();
@@ -560,6 +564,7 @@ impl Parser {
         // Both attempts sat behind `try`, so neither error escapes; the last
         // run consumes input and its error alone is what Parsec propagates.
         self.failure = failure;
+        self.committed = committed;
         self.reset(m);
         expected(self)
     }

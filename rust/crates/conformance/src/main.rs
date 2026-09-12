@@ -233,14 +233,15 @@ fn gate(args: &Args) -> Result<bool, String> {
     }
 
     if !args.quiet {
-        const MAX: usize = 25;
-        for (id, port, oracle) in divergent.iter().take(MAX) {
+        // `--max-findings` caps how many are spelled out, as it does for `fuzz`.
+        let max = args.max_findings;
+        for (id, port, oracle) in divergent.iter().take(max) {
             println!("DIVERGE {id}");
             println!("  oracle: {}", render_keys(oracle));
             println!("  port:   {}", render_keys(port));
         }
-        if divergent.len() > MAX {
-            println!("... and {} more", divergent.len() - MAX);
+        if divergent.len() > max {
+            println!("... and {} more", divergent.len() - max);
         }
     }
     println!(

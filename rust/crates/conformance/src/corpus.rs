@@ -30,18 +30,24 @@ pub struct Entry {
     pub id: String,
     /// Source file the property came from, e.g. `Analytics.hs`.
     pub file: String,
-    /// `verify`, `verifyNot`, `verifyTree`, `verifyNotTree` or `verifyCodes`.
+    /// `verify`, `verifyNot`, `verifyTree`, `verifyNotTree`, `verifyCodes`, or
+    /// one of Parser.hs's `isOk`, `isWarning` and `isNotOk`.
     pub helper: String,
     /// The shell script under test, with Haskell escapes resolved.
     pub script: String,
 }
 
-const HELPERS: [&str; 5] = [
+const HELPERS: [&str; 8] = [
     "verifyNotTree",
     "verifyNot",
     "verifyTree",
     "verifyCodes",
     "verify",
+    // Parser.hs states its properties with these instead, and they are the
+    // only tests upstream has for the parser itself.
+    "isNotOk",
+    "isWarning",
+    "isOk",
 ];
 
 /// ASCII mnemonic escapes, longest first so `\SOH` wins over `\SO`.

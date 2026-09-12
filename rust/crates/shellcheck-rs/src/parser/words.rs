@@ -773,7 +773,14 @@ impl Parser {
             return r;
         }
         if self.peek() == Some('$') && self.peek_at(1) == Some('(') {
-            return self.read_dollar_expansion();
+            // Past `try (string "$(")` the `<|>` fold in `readDollarExp` has no
+            // alternative left: a failure here is the parse error, not a
+            // literal `$` followed by a subshell.
+            let r = self.read_dollar_expansion();
+            if r.is_err() {
+                self.committed = true;
+            }
+            return r;
         }
         if self.peek() == Some('$') && self.peek_at(1) == Some('[') {
             return self.read_dollar_bracket();
