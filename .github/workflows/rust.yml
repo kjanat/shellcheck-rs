@@ -49,23 +49,28 @@ jobs:
             ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust/**/Cargo.toml', '.cargo/**', '.github/workflows/rust.yml') }}-
             ${{ env.CACHE_PREFIX }}-
 
-      # (b) Haskell oracle — mirror build.yml's GHC/cabal setup.
+      # (b) Haskell oracle. The cached executable is looked up FIRST, keyed on
+      #     the pinned GHC version and every Haskell input, so on a hit the GHC
+      #     toolchain is not installed at all (that install alone is ~2 minutes
+      #     of every run). Only an exact match may reuse the executable.
+      - name: Cache Haskell oracle
+        id: oracle
+        uses: actions/cache@v6
+        with:
+          path: .cache/shellcheck-oracle
+          key: ${{ runner.os }}-${{ runner.arch }}-oracle-ghc9.6.6-${{ hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs', '.github/workflows/rust.yml') }}
+
+      # Everything below runs only when the oracle must be (re)built.
       - name: Setup Haskell
+        if: steps.oracle.outputs.cache-hit != 'true'
         id: haskell
         uses: haskell-actions/setup@v2
         with:
           ghc-version: "9.6.6"
 
       - name: Plan Haskell oracle build
+        if: steps.oracle.outputs.cache-hit != 'true'
         run: cabal build shellcheck --dry-run
-
-      # Only an exact match may reuse the executable; dependency changes also invalidate it.
-      - name: Cache Haskell oracle
-        id: oracle
-        uses: actions/cache@v6
-        with:
-          path: .cache/shellcheck-oracle
-          key: ${{ runner.os }}-${{ runner.arch }}-oracle-${{ steps.haskell.outputs.ghc-version }}-${{ steps.haskell.outputs.cabal-version }}-${{ hashFiles('dist-newstyle/cache/plan.json', 'ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs', '.github/workflows/rust.yml') }}
 
       - name: Cache Haskell build
         if: steps.oracle.outputs.cache-hit != 'true'
