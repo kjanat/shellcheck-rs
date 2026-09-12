@@ -23,6 +23,9 @@
 //!   * SC2293 / SC2294 — checkEvalArray
 //!   * SC2224 / SC2225 / SC2226 — checkMv/Cp/LnArguments (missingDestination)
 //!   * SC2232 — checkSudoArgs
+//!   * SC2290 — checkArgComparison
+//!   * SC2316 — checkMultipleDeclaring
+//!   * SC2318 — checkBackreferencingDeclaration
 //!   * SC2024 — checkSudoRedirect
 //!   * SC2213 / SC2214 / SC2220 — checkWhileGetoptsCase
 //!   * SC2229 / SC2313 — checkReadExpansions
@@ -45,10 +48,11 @@ use crate::astlib::oversimplify_concat;
 use crate::cfg::may_become_multiple_args;
 use crate::cfg::will_become_multiple_args;
 use crate::cfg::{
-    get_braced_modifier, get_braced_reference, get_bsd_opts, get_gnu_opts, is_variable_name,
+    get_braced_modifier, get_braced_reference, get_bsd_opts, get_gnu_opts, get_unquoted_literal,
+    is_variable_name,
 };
 use crate::interface::{Code, Shell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub fn register(c: &mut Checker) {
     c.node(check_expr);
@@ -70,6 +74,9 @@ pub fn register(c: &mut Checker) {
     c.node(check_ln_arguments);
     c.node(check_sudo_args);
     c.node(check_sudo_redirect);
+    c.node(check_arg_comparison);
+    c.node(check_multiple_declaring);
+    c.node(check_backreferencing_declaration);
     c.node(check_while_getopts_case);
     c.node(check_read_expansions);
 }
@@ -983,6 +990,146 @@ fn sudo_redirect_warn_about(redir: &Token, out: &mut Out) {
 }
 
 // ===========================================================================
+// SC2290 — checkArgComparison
+// ===========================================================================
+
+/// `map checkArgComparison ("alias" : declaringCommands)`.
+fn check_arg_comparison(_params: &Parameters, t: &Token, out: &mut Out) {
+    let targets = [
+        "alias", "local", "declare", "export", "readonly", "typeset", "let",
+    ];
+    let te = match dispatch_exactly_any(t, &targets) {
+        Some(x) => x,
+        None => return,
+    };
+    for arg in arguments(&te) {
+        let Some(s) = astlib::get_leading_unquoted_string(arg) else {
+            continue;
+        };
+        if s.starts_with('=') {
+            err(out, head_id(arg), 2290, "Remove spaces around = to assign.");
+        } else if s.starts_with("+=") {
+            err(
+                out,
+                head_id(arg),
+                2290,
+                "Remove spaces around += to append.",
+            );
+        }
+    }
+}
+
+// ===========================================================================
+// SC2316 — checkMultipleDeclaring
+// ===========================================================================
+
+/// `map checkMultipleDeclaring declaringCommands`.
+fn check_multiple_declaring(_params: &Parameters, t: &Token, out: &mut Out) {
+    let te = match dispatch_exactly_any(t, &DECLARING_COMMANDS) {
+        Some(x) => x,
+        None => return,
+    };
+    let Some(cmd) = get_command_name(&te) else {
+        return;
+    };
+    for arg in arguments(&te) {
+        let Some(lit) = get_unquoted_literal(arg) else {
+            continue;
+        };
+        if DECLARING_COMMANDS.contains(&lit.as_str()) {
+            err(
+                out,
+                get_command_token_or_this(arg).id(),
+                2316,
+                &format!(
+                    "This applies {} to the variable named {}, which is probably not what you want. Use a separate command or the appropriate `declare` options instead.",
+                    cmd, lit
+                ),
+            );
+        }
+    }
+}
+
+// ===========================================================================
+// SC2318 — checkBackreferencingDeclaration
+// ===========================================================================
+
+/// `map checkBackreferencingDeclaration declaringCommands`: an argument of a
+/// declaring command that reads a variable assigned earlier in the same
+/// command, where that assignment has not taken effect yet.
+fn check_backreferencing_declaration(params: &Parameters, t: &Token, out: &mut Out) {
+    let te = match dispatch_exactly_any(t, &DECLARING_COMMANDS) {
+        Some(x) => x,
+        None => return,
+    };
+    let Some(cfga) = params.cfg_analysis.as_ref() else {
+        return;
+    };
+    let Some(cmd) = get_command_name(&te) else {
+        return;
+    };
+    // foldM_ (perArg cfga) M.empty (arguments t)
+    let mut left_args: BTreeMap<String, Id> = BTreeMap::new();
+    for arg in arguments(&te) {
+        match &*arg.inner {
+            InnerToken::T_Assignment {
+                var,
+                indices,
+                value,
+                ..
+            } => {
+                let mut l: Vec<&Token> = vec![value];
+                l.extend(indices.iter());
+                backref_warn(cfga, &left_args, &l, &cmd, out);
+                left_args.insert(var.clone(), arg.id());
+            }
+            _ => backref_warn(cfga, &left_args, &[arg], &cmd, out),
+        }
+    }
+}
+
+/// `warnIfBackreferencing cfga backrefs l`.
+fn backref_warn(
+    cfga: &crate::cfg_analysis::CFGAnalysis,
+    backrefs: &BTreeMap<String, Id>,
+    list: &[&Token],
+    cmd: &str,
+    out: &mut Out,
+) {
+    // findReferences: every CFReadVariable effect on the CFG nodes of `list`.
+    let mut nodes: BTreeSet<crate::cfg::Node> = BTreeSet::new();
+    for t in list {
+        if let Some(ns) = cfga.token_to_nodes.get(&t.id()) {
+            nodes.extend(ns.iter().copied());
+        }
+    }
+    let mut references: BTreeMap<String, Id> = BTreeMap::new();
+    for n in nodes {
+        if let Some(crate::cfg::CFNode::CFApplyEffects(effects)) = cfga.graph.lab(n) {
+            for e in effects {
+                if let crate::cfg::CFEffect::CFReadVariable(name) = &e.value {
+                    references.insert(name.clone(), e.id);
+                }
+            }
+        }
+    }
+    // M.intersection backrefs references: keys of both, values from backrefs.
+    for (name, id) in backrefs {
+        if references.contains_key(name) {
+            warn(
+                out,
+                *id,
+                2318,
+                &format!(
+                    "This assignment is used again in this '{}', but won't have taken effect. Use two '{}'s.",
+                    cmd, cmd
+                ),
+            );
+        }
+    }
+}
+
+// ===========================================================================
 // SC2213 / SC2214 / SC2220 — checkWhileGetoptsCase
 // ===========================================================================
 
@@ -1838,6 +1985,126 @@ mod tests {
     #[test]
     fn prop_checkMvArguments9() {
         assert!(!produces(check_mv_arguments, "mv \"${!var}\""));
+    }
+
+    // checkArgComparison
+    #[test]
+    fn prop_checkArgComparison1() {
+        assert!(produces(check_arg_comparison, "declare a = b"));
+    }
+    #[test]
+    fn prop_checkArgComparison2() {
+        assert!(produces(check_arg_comparison, "declare a =b"));
+    }
+    #[test]
+    fn prop_checkArgComparison3() {
+        assert!(!produces(check_arg_comparison, "declare a=b"));
+    }
+    #[test]
+    fn prop_checkArgComparison4() {
+        assert!(produces(check_arg_comparison, "export a +=b"));
+    }
+    #[test]
+    fn prop_checkArgComparison7() {
+        assert!(!produces(check_arg_comparison, "declare -a +i foo"));
+    }
+    #[test]
+    fn prop_checkArgComparison8() {
+        assert!(produces(check_arg_comparison, "let x = 0"));
+    }
+    #[test]
+    fn prop_checkArgComparison9() {
+        assert!(produces(check_arg_comparison, "alias x =0"));
+    }
+
+    // checkMultipleDeclaring
+    #[test]
+    fn prop_checkMultipleDeclaring1() {
+        assert!(produces(
+            check_multiple_declaring,
+            "q() { local readonly var=1; }"
+        ));
+    }
+    #[test]
+    fn prop_checkMultipleDeclaring2() {
+        assert!(!produces(check_multiple_declaring, "q() { local var=1; }"));
+    }
+    #[test]
+    fn prop_checkMultipleDeclaring3() {
+        assert!(produces(check_multiple_declaring, "readonly local foo=5"));
+    }
+    #[test]
+    fn prop_checkMultipleDeclaring4() {
+        assert!(produces(check_multiple_declaring, "export readonly foo=5"));
+    }
+    #[test]
+    fn prop_checkMultipleDeclaring5() {
+        assert!(!produces(
+            check_multiple_declaring,
+            "f() { local -r foo=5; }"
+        ));
+    }
+    #[test]
+    fn prop_checkMultipleDeclaring6() {
+        assert!(!produces(check_multiple_declaring, "declare -rx foo=5"));
+    }
+    #[test]
+    fn prop_checkMultipleDeclaring7() {
+        assert!(!produces(
+            check_multiple_declaring,
+            "readonly 'local' foo=5"
+        ));
+    }
+
+    // checkBackreferencingDeclaration
+    #[test]
+    fn prop_checkBackreferencingDeclaration1() {
+        assert!(produces(
+            check_backreferencing_declaration,
+            "declare x=1 y=foo$x"
+        ));
+    }
+    #[test]
+    fn prop_checkBackreferencingDeclaration2() {
+        assert!(produces(
+            check_backreferencing_declaration,
+            "readonly x=1 y=$((1+x))"
+        ));
+    }
+    #[test]
+    fn prop_checkBackreferencingDeclaration3() {
+        assert!(produces(
+            check_backreferencing_declaration,
+            "local x=1 y=$(echo $x)"
+        ));
+    }
+    #[test]
+    fn prop_checkBackreferencingDeclaration4() {
+        assert!(produces(
+            check_backreferencing_declaration,
+            "local x=1 y[$x]=z"
+        ));
+    }
+    #[test]
+    fn prop_checkBackreferencingDeclaration5() {
+        assert!(produces(
+            check_backreferencing_declaration,
+            "declare x=var $x=1"
+        ));
+    }
+    #[test]
+    fn prop_checkBackreferencingDeclaration6() {
+        assert!(produces(
+            check_backreferencing_declaration,
+            "declare x=var $x=1"
+        ));
+    }
+    #[test]
+    fn prop_checkBackreferencingDeclaration7() {
+        assert!(produces(
+            check_backreferencing_declaration,
+            "declare x=var $k=$x"
+        ));
     }
 
     // checkSudoRedirect

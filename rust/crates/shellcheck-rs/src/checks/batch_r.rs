@@ -7,6 +7,7 @@
 //!   * `checkForDecimals`          — SC2079
 //!   * `checkBraceExpansionVars`   — SC2051 / SC2175
 //!   * `checkMultiDimensionalArrays` — SC2180
+//!   * `checkMultipleBangs`        — SC2325
 //!   * `checkBangAfterPipe`        — SC2326
 //!   * `checkNegatedUnaryOps`      — SC2332
 //!
@@ -34,6 +35,7 @@ pub fn register(c: &mut Checker) {
     c.node(check_brace_expansion_vars_gated);
     c.node(check_multi_dimensional_arrays_gated);
     c.node(check_bashisms);
+    c.node(check_multiple_bangs_gated);
     c.node(check_bang_after_pipe_gated);
     c.node(check_negated_unary_ops_gated);
 }
@@ -253,6 +255,30 @@ fn matches_bracket_bracket(s: &str) -> bool {
         i += 1;
     }
     i < cs.len()
+}
+
+// ===========================================================================
+// checkMultipleBangs — SC2325
+// ForShell [Dash, BusyboxSh, Sh]
+// ===========================================================================
+
+fn check_multiple_bangs_gated(p: &Parameters, t: &Token, out: &mut Out) {
+    if matches!(p.shell, Shell::Dash | Shell::BusyboxSh | Shell::Sh) {
+        check_multiple_bangs(p, t, out);
+    }
+}
+
+fn check_multiple_bangs(_p: &Parameters, t: &Token, out: &mut Out) {
+    if let InnerToken::T_Banged(inner) = &*t.inner {
+        if let InnerToken::T_Banged(_) = &*inner.inner {
+            err(
+                out,
+                t.id(),
+                2325,
+                "Multiple ! in front of pipelines are a bash/ksh extension. Use only 0 or 1.",
+            );
+        }
+    }
 }
 
 // ===========================================================================
@@ -1816,6 +1842,16 @@ mod tests {
     #[test]
     fn prop_checkMultiDimensionalArrays6() {
         assert!(!emits(check_multi_dimensional_arrays, "echo ${foo[bar]}"));
+    }
+
+    // ---- checkMultipleBangs (SC2325) ----
+    #[test]
+    fn prop_checkMultipleBangs1() {
+        assert!(emits(check_multiple_bangs, "! ! true"));
+    }
+    #[test]
+    fn prop_checkMultipleBangs2() {
+        assert!(!emits(check_multiple_bangs, "! true"));
     }
 
     // ---- checkBangAfterPipe (SC2326) ----
