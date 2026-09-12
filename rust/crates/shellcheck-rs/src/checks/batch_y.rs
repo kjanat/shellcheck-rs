@@ -8,7 +8,6 @@
 //!
 //! Helpers are private to this module (ported from ASTLib / AnalyzerLib), so
 //! the module does not touch shared files that parallel agents also edit.
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::is_array_expansion;
 use crate::analyzer_lib::*;
@@ -16,11 +15,8 @@ use crate::ast::*;
 use crate::astlib;
 use crate::astlib::get_word_parts;
 use crate::astlib::is_command_substitution;
-use crate::cfg::oversimplify;
-use crate::cfg::oversimplify_concat;
 use crate::cfg::will_become_multiple_args;
-use crate::cfg::will_concat_in_assignment;
-use crate::interface::{Code, Shell};
+use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {
     c.node(check_unquoted_n);

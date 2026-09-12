@@ -30,22 +30,12 @@
 //!
 //! Note: `checkConditionalAndOrs` in Haskell also emits SC2107/2108/2109/2110;
 //! only the SC2166 branches are ported here (the others are out of scope).
-#![allow(unused_imports, unused_variables, dead_code)]
-use crate::analyzer_lib::condition_children;
-use crate::analyzer_lib::get_command;
 use crate::analyzer_lib::get_command_basename;
-use crate::analyzer_lib::get_command_name;
 use crate::analyzer_lib::in_condition;
-use crate::analyzer_lib::is_command;
 use crate::analyzer_lib::is_test_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
-use crate::astlib::basename;
-use crate::astlib::get_word_parts;
 use crate::astlib::is_assignment;
-use crate::astlib::is_flag;
-use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {
     // Enabled now that the parser anchors T_OrIf/T_AndIf/TC_And/TC_Or on the

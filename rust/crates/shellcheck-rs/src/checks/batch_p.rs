@@ -14,7 +14,6 @@
 //! The variable-flow checks lean on the linear `variableFlow`
 //! (`params.variable_flow`) / `get_variable_flow`, which the Rust port produces
 //! faithfully (see `analyzer_lib::get_variable_flow`).
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
@@ -434,7 +433,7 @@ fn get_single_unmodified_braced_string(word: &Token) -> Option<String> {
     None
 }
 
-fn check_read_expansions(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_read_expansions(_params: &Parameters, t: &Token, out: &mut Out) {
     // CommandCheck (Exactly "read")
     if !is_read_command(t) {
         return;

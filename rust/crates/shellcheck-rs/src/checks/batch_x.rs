@@ -14,7 +14,6 @@
 //!   * SC2257       — `checkModifiedArithmeticInRedirection` (node)
 //!   * SC2321       — `checkUnnecessaryArithmeticExpansionIndex` (node)
 //!   * SC2322/2323  — `checkUnnecessaryParens`        (node)
-#![allow(clippy::collapsible_if)]
 
 use crate::analyzer_lib::*;
 use crate::analyzer_lib::{concat_over, is_sourced};

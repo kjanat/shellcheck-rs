@@ -27,7 +27,6 @@
 //!   * SC2213 / SC2214 / SC2220 — checkWhileGetoptsCase
 //!   * SC2313 — checkReadExpansions (ONLY the array-index branch; SC2229 lives
 //!     in batch_p)
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::get_closest_command;
@@ -39,19 +38,13 @@ use crate::astlib;
 use crate::astlib::basename;
 use crate::astlib::e4m;
 use crate::astlib::get_word_parts;
-use crate::astlib::has_split_range;
 use crate::astlib::is_constant;
 use crate::astlib::is_glob;
 use crate::astlib::is_literal;
 use crate::cfg::may_become_multiple_args;
-use crate::cfg::mbma_f;
 use crate::cfg::oversimplify_concat;
 use crate::cfg::will_become_multiple_args;
-use crate::cfg::will_concat_in_assignment;
-use crate::cfg::{
-    get_braced_modifier, get_braced_reference, get_bsd_opts, get_gnu_opts, is_variable_name,
-    oversimplify,
-};
+use crate::cfg::{get_braced_modifier, get_braced_reference, get_bsd_opts, is_variable_name};
 use crate::interface::{Code, Shell};
 use std::collections::{HashMap, HashSet};
 
@@ -71,16 +64,9 @@ pub fn register(c: &mut Checker) {
     c.node(check_unquoted_echo_spaces);
     c.node(check_eval_array);
     c.node(check_mv_arguments);
-    // Held back (implemented + unit-tested, but NOT registered): the corpus has
-    // no script that exercises SC2225 / SC2226 / SC2232 (checkCpArguments and
-    // checkLnArguments have no `prop_` tests, and checkSudoArgs's props use the
-    // parameterized `checkSudoArgs "sudo"` form the corpus extractor skips), so
-    // each check's sole code has matched == 0. They emit zero extras, but the
-    // guardrail only registers a check once at least one of its codes matches
-    // the oracle on the corpus.
-    //   c.node(check_cp_arguments);   // SC2225
-    //   c.node(check_ln_arguments);   // SC2226
-    //   c.node(check_sudo_args);      // SC2232
+    c.node(check_cp_arguments);
+    c.node(check_ln_arguments);
+    c.node(check_sudo_args);
     c.node(check_while_getopts_case);
     c.node(check_read_array);
 }
@@ -210,7 +196,7 @@ fn expr_check_op(side: &Token, out: &mut Out) {
     }
 }
 
-fn check_expr(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_expr(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_basename(t, "expr") {
         Some(x) => x,
         None => return,
@@ -329,7 +315,7 @@ fn return_or_exit(args: &[Token], out: &mut Out, multi: (Code, &str), invalid: (
     }
 }
 
-fn check_return(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_return(_params: &Parameters, t: &Token, out: &mut Out) {
     if let Some(te) = dispatch_exactly(t, "return") {
         return_or_exit(
             arguments(&te),
@@ -346,7 +332,7 @@ fn check_return(params: &Parameters, t: &Token, out: &mut Out) {
     }
 }
 
-fn check_exit(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_exit(_params: &Parameters, t: &Token, out: &mut Out) {
     if let Some(te) = dispatch_exactly(t, "exit") {
         return_or_exit(
             arguments(&te),
@@ -375,7 +361,7 @@ fn set_literal(t: &Token) -> String {
     }
 }
 
-fn check_set_assignment(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_set_assignment(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_exactly(t, "set") {
         Some(x) => x,
         None => return,
@@ -413,7 +399,7 @@ fn get_single_unmodified_braced_string(word: &Token) -> Option<String> {
     None
 }
 
-fn check_exported_expansions(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_exported_expansions(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_exactly(t, "export") {
         Some(x) => x,
         None => return,
@@ -456,7 +442,7 @@ fn matches_positional_ref(s: &str) -> bool {
     false
 }
 
-fn check_aliases_uses_args(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_aliases_uses_args(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_exactly(t, "alias") {
         Some(x) => x,
         None => return,
@@ -478,7 +464,7 @@ fn check_aliases_uses_args(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2139 — checkAliasesExpandEarly
 // ===========================================================================
 
-fn check_aliases_expand_early(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_aliases_expand_early(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_exactly(t, "alias") {
         Some(x) => x,
         None => return,
@@ -501,7 +487,7 @@ fn check_aliases_expand_early(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2184 — checkUnsetGlobs
 // ===========================================================================
 
-fn check_unset_globs(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_unset_globs(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_exactly(t, "unset") {
         Some(x) => x,
         None => return,
@@ -608,7 +594,7 @@ fn check_masked_returns(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2182 — checkPrintfVar (ONLY the "no variables" branch)
 // ===========================================================================
 
-fn check_printf_var(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_printf_var(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_exactly(t, "printf") {
         Some(x) => x,
         None => return,
@@ -784,7 +770,7 @@ fn ssh_is_option(x: &Token) -> bool {
     oversimplify_concat(x).starts_with('-')
 }
 
-fn check_ssh_command_string(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_ssh_command_string(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_basename(t, "ssh") {
         Some(x) => x,
         None => return,
@@ -883,7 +869,7 @@ fn eval_is_escaped(q: &Token) -> bool {
     }
 }
 
-fn check_eval_array(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_eval_array(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_exactly(t, "eval") {
         Some(x) => x,
         None => return,
@@ -929,7 +915,7 @@ fn missing_destination(te: &Token, out: &mut Out, handler: impl Fn(&mut Out, Id)
     }
 }
 
-fn check_mv_arguments(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_mv_arguments(_params: &Parameters, t: &Token, out: &mut Out) {
     if let Some(te) = dispatch_basename(t, "mv") {
         missing_destination(&te, out, |o, id| {
             err(
@@ -941,7 +927,7 @@ fn check_mv_arguments(params: &Parameters, t: &Token, out: &mut Out) {
         });
     }
 }
-fn check_cp_arguments(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_cp_arguments(_params: &Parameters, t: &Token, out: &mut Out) {
     if let Some(te) = dispatch_basename(t, "cp") {
         missing_destination(&te, out, |o, id| {
             err(
@@ -953,7 +939,7 @@ fn check_cp_arguments(params: &Parameters, t: &Token, out: &mut Out) {
         });
     }
 }
-fn check_ln_arguments(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_ln_arguments(_params: &Parameters, t: &Token, out: &mut Out) {
     if let Some(te) = dispatch_basename(t, "ln") {
         missing_destination(&te, out, |o, id| {
             warn(
@@ -976,7 +962,7 @@ const SUDO_BUILTINS: [&str; 25] = [
     "ulimit", "umask", "unset", "wait", "builtin",
 ];
 
-fn check_sudo_args(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_sudo_args(_params: &Parameters, t: &Token, out: &mut Out) {
     let found_te = {
         let mut found = None;
         for cmd in PRIVILEGE_ELEVATION_COMMANDS {
@@ -1226,7 +1212,7 @@ fn read_is_unquoted_bracket(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_Glob(s) if s.starts_with('['))
 }
 
-fn check_read_array(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_read_array(_params: &Parameters, t: &Token, out: &mut Out) {
     let te = match dispatch_exactly(t, "read") {
         Some(x) => x,
         None => return,

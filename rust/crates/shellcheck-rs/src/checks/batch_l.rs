@@ -10,18 +10,12 @@
 //! - SC2211  checkGlobAsCommand    (Analytics.hs) — a glob used as a command name.
 //! - SC2065  checkTestRedirects    (Analytics.hs) — `>`/`<` in `test` args read
 //!   as a redirection, not a comparison.
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::concat_over;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
-use crate::astlib::get_leading_unquoted_string;
 use crate::astlib::get_literal_string;
-use crate::astlib::get_word_parts;
-use crate::astlib::has_split_range;
 use crate::astlib::is_glob;
 use crate::astlib::is_unquoted_flag;
-use crate::astlib::oversimplify;
 use crate::cfg::get_unquoted_literal;
 use crate::interface::Shell;
 
@@ -432,12 +426,6 @@ mod tests {
         let p = parse_script("test", script);
         let root = p.root.expect("parse produced no root");
         make_parameters(root, p.positions, Some(shell), None)
-    }
-    fn emits_code(f: fn(&Parameters, &Token, &mut Out), s: &str, code: i64) -> bool {
-        let params = params_for(s);
-        let mut out = Out::new();
-        params.root.visit_preorder(&mut |t| f(&params, t, &mut out));
-        out.iter().any(|c| c.comment.code == code)
     }
     fn emits_code_shell(
         f: fn(&Parameters, &Token, &mut Out),

@@ -5,7 +5,6 @@
 //!
 //! SC2154/SC2034 use the linear `variableFlow`; SC2086 uses the CFG incoming
 //! state. Faithful port; see the referenced Haskell for the exact semantics.
-#![allow(clippy::collapsible_if)]
 
 use crate::analyzer_lib::*;
 use crate::ast::*;

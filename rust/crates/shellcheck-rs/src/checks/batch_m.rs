@@ -8,14 +8,13 @@
 //!
 //! Both lean on the linear `variableFlow` (`params.variable_flow`), which the
 //! Rust port now produces faithfully (see `analyzer_lib::get_variable_flow`).
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::is_true_assignment_source;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
 use crate::astlib::oversimplify;
-use crate::interface::{Fix, Shell};
+use crate::interface::Fix;
 use std::collections::{HashMap, HashSet};
 
 pub fn register(c: &mut Checker) {

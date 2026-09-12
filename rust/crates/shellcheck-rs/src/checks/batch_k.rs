@@ -13,22 +13,15 @@
 //!   (`wordToPseudoGlob`, `pseudoGlobIsSuperSetof`, `pseudoGlobsCanOverlap`) that
 //!   is tangled with SC2194/2195/2221; not self-contained, out of scope here.
 //! - SC2223  checkSpacefulnessCfg — dataflow/CFG (`isClean`, variable flow); blocked.
-#![allow(unused_imports, unused_variables, dead_code)]
-use crate::analyzer_lib::condition_children;
 use crate::analyzer_lib::in_condition;
 use crate::analyzer_lib::is_array_expansion;
 use crate::analyzer_lib::is_function_body;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
 use crate::astlib::get_literal_string;
 use crate::astlib::get_word_parts;
-use crate::astlib::has_split_range;
-use crate::astlib::is_closing_range;
 use crate::astlib::is_glob;
-use crate::astlib::is_half_open_range;
 use crate::astlib::oversimplify;
-use crate::interface::Shell;
 use std::sync::OnceLock;
 
 pub fn register(c: &mut Checker) {

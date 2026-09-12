@@ -7,27 +7,21 @@
 //! - SC2103         checkCdAndBack         (Analytics.hs) — `cd ..` back-and-forth
 //! - SC2164         checkUncheckedCdPushdPopd (Analytics.hs) — cd/pushd/popd without `|| exit`
 //! - SC2181         checkReturnAgainstZero (Analytics.hs) — checking `$?` indirectly
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::condition_children;
 use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::get_closest_command;
-use crate::analyzer_lib::get_command;
 use crate::analyzer_lib::get_command_name;
 use crate::analyzer_lib::get_command_name_and_token;
-use crate::analyzer_lib::get_effective_command_token;
 use crate::analyzer_lib::is_command;
 use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
 use crate::astlib::get_command_sequences;
 use crate::astlib::get_literal_string;
 use crate::astlib::get_word_parts;
-use crate::astlib::is_flag;
 use crate::astlib::list_to_args;
 use crate::astlib::oversimplify;
-use crate::interface::Shell;
 use std::collections::HashMap;
 
 /// Register this batch's checks.
@@ -72,13 +66,6 @@ fn get_gnu_opts<'a>(
     args: &'a [Token],
 ) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
     get_opts(true, false, spec, &[], args)
-}
-
-fn get_bsd_opts<'a>(
-    spec: &str,
-    args: &'a [Token],
-) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
-    get_opts(false, false, spec, &[], args)
 }
 
 fn get_opts<'a>(
@@ -241,7 +228,7 @@ fn shebang_flag_matches(s: &str, c: u8) -> bool {
 
 const FLAGS_FOR_READ: &str = "sreu:n:N:i:p:a:t:";
 
-fn check_read_without_r(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_read_without_r(_params: &Parameters, t: &Token, out: &mut Out) {
     if !matches!(&*t.inner, InnerToken::T_SimpleCommand { .. }) {
         return;
     }

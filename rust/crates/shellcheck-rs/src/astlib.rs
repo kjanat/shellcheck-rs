@@ -255,14 +255,6 @@ pub(crate) fn has_split_range(l: &[Token]) -> bool {
         .any(|t| matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']')))
 }
 
-pub(crate) fn is_half_open_range(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Literal(s) if s == "[")
-}
-
-pub(crate) fn is_closing_range(t: &Token) -> bool {
-    matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']'))
-}
-
 /// Faithful port of `ShellCheck.ASTLib.isGlob`.
 pub(crate) fn is_glob(t: &Token) -> bool {
     use InnerToken::*;
@@ -417,13 +409,6 @@ pub(crate) fn e4m(s: &str) -> String {
 
 pub(crate) fn list_to_args(args: &[Token]) -> Vec<(String, (&Token, &Token))> {
     args.iter().map(|x| (String::new(), (x, x))).collect()
-}
-
-pub(crate) fn drop_hashbang_prefix(s: &str) -> &str {
-    match s.chars().next() {
-        Some(c) if c == '!' || c == '#' => &s[c.len_utf8()..],
-        _ => s,
-    }
 }
 
 /// `ShellCheck.ASTLib.isCommandSubstitution`.

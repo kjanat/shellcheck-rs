@@ -20,7 +20,6 @@
 //! - SC2190/2191/2192  checkArrayAssignmentIndices
 //! - SC2295  checkUnquotedParameterExpansionPattern
 //! - SC2302/2303  checkArrayValueUsedAsIndex
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
@@ -29,7 +28,7 @@ use crate::astlib::is_command_substitution;
 use crate::astlib::is_constant;
 use crate::cfg;
 use crate::cfg::get_unquoted_literal;
-use crate::interface::{Fix, Replacement, Shell};
+use crate::interface::Fix;
 use std::collections::HashMap;
 
 /// Register this batch's checks.
@@ -189,7 +188,7 @@ fn bps_check_first(first: &Token, out: &mut Out) {
     }
 }
 
-fn check_bad_parameter_substitution(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_bad_parameter_substitution(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
         if let InnerToken::T_NormalWord(contents) = &*op.inner {
             if let Some(first) = contents.first() {
@@ -218,7 +217,7 @@ fn tiq_verify(id: Id, str: &str, out: &mut Out) {
     }
 }
 
-fn check_tilde_in_quotes(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_tilde_in_quotes(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_NormalWord(list) = &*t.inner {
         match list.first().map(|x| &*x.inner) {
             Some(InnerToken::T_SingleQuoted(str)) => {
@@ -344,7 +343,7 @@ fn iu_check(params: &Parameters, window: &[Token], out: &mut Out) {
 // SC2083 — checkLonelyDotDash
 // ---------------------------------------------------------------------------
 
-fn check_lonely_dot_dash(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_lonely_dot_dash(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_Redirecting { .. } = &*t.inner {
         if is_unqualified_command(t, "./") {
             err(
@@ -385,7 +384,7 @@ fn se_check(word: &Token, out: &mut Out) {
     }
 }
 
-fn check_spurious_expansion(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_spurious_expansion(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_SimpleCommand { assignments, words } = &*t.inner {
         if assignments.is_empty() && words.len() == 1 {
             if let InnerToken::T_NormalWord(parts) = &*words[0].inner {
@@ -401,7 +400,7 @@ fn check_spurious_expansion(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2007 — checkDollarBrackets
 // ---------------------------------------------------------------------------
 
-fn check_dollar_brackets(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_dollar_brackets(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_DollarBracket(_) = &*t.inner {
         style(out, t.id(), 2007, "Use $((..)) instead of deprecated $[..]");
     }
@@ -411,8 +410,8 @@ fn check_dollar_brackets(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2087 — checkSshHereDoc
 // ---------------------------------------------------------------------------
 
-fn check_ssh_here_doc(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Redirecting { redirs, cmd } = &*t.inner {
+fn check_ssh_here_doc(_params: &Parameters, t: &Token, out: &mut Out) {
+    if let InnerToken::T_Redirecting { redirs, cmd: _ } = &*t.inner {
         if is_command(t, "ssh") {
             for r in redirs {
                 sshd_check_here_doc(r, out);
@@ -610,7 +609,7 @@ fn check_redirected_nowhere(params: &Parameters, token: &Token, out: &mut Out) {
 // SC2210 — checkRedirectionToNumber
 // ---------------------------------------------------------------------------
 
-fn check_redirection_to_number(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_redirection_to_number(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_IoFile { file, .. } = &*t.inner {
         if let Some(f) = get_unquoted_literal(file) {
             if !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()) {
@@ -629,7 +628,7 @@ fn check_redirection_to_number(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2238 — checkRedirectionToCommand
 // ---------------------------------------------------------------------------
 
-fn check_redirection_to_command(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_redirection_to_command(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_IoFile { file, .. } = &*t.inner {
         if let InnerToken::T_NormalWord(parts) = &*file.inner {
             if parts.len() == 1 {
@@ -844,7 +843,7 @@ fn ptn_impl(params: &Parameters, t: &Token, emit_dupes: bool, out: &mut Out) {
 }
 
 fn ptn_check_pipe(
-    params: &Parameters,
+    _params: &Parameters,
     input: PipeType,
     stage: &Token,
     output: PipeType,
@@ -946,7 +945,7 @@ fn ptn_check_pipe(
     }
 }
 
-fn ptn_check_redir(params: &Parameters, cmd: &Token, out: &mut Out) {
+fn ptn_check_redir(_params: &Parameters, cmd: &Token, out: &mut Out) {
     if let Some(name) = get_command_basename(cmd) {
         if NON_READING_COMMANDS.contains(&name.as_str())
             && !ptn_tree_contains(ptn_may_consume, cmd)
@@ -1035,7 +1034,7 @@ fn ewr_walk(t: &Token) -> EwrStep {
     EwrStep::Continue
 }
 
-fn ewr_check_cmd(params: &Parameters, capture_id: Id, redir_cmd: &Token, out: &mut Out) {
+fn ewr_check_cmd(_params: &Parameters, capture_id: Id, redir_cmd: &Token, out: &mut Out) {
     if let InnerToken::T_Redirecting { redirs, .. } = &*redir_cmd.inner {
         for r in redirs {
             match ewr_walk(r) {
@@ -1579,7 +1578,7 @@ const COMMON_COMMANDS: &[&str] = &[
 mod tests {
     use super::*;
     use crate::analyzer_lib::make_parameters;
-    use crate::interface::Shell;
+
     use crate::parser::parse_script;
 
     fn params_for(script: &str) -> Parameters {

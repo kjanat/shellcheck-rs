@@ -7,17 +7,11 @@
 //! The other checks this batch once carried (checkConstantNullary,
 //! checkComparisonAgainstGlob, checkConstantIfs) now live in batch_u as single
 //! complete ports.
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
 use crate::astlib::get_word_parts;
-use crate::astlib::has_split_range;
-use crate::astlib::is_closing_range;
 use crate::astlib::is_constant;
-use crate::astlib::is_glob;
-use crate::astlib::is_half_open_range;
-use crate::interface::Shell;
 
 /// Register this batch's checks.
 pub fn register(c: &mut Checker) {
@@ -30,9 +24,6 @@ pub fn register(c: &mut Checker) {
 // does not touch shared files that parallel agents also edit).
 // ---------------------------------------------------------------------------
 
-/// `ShellCheck.Data.arithmeticBinaryTestOps`.
-const ARITHMETIC_BINARY_TEST_OPS: [&str; 6] = ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
-
 // foo[x${var}y] gets parsed as foo,[,x,$var,y], so check for such an interval.
 
 // ---------------------------------------------------------------------------
@@ -40,7 +31,7 @@ const ARITHMETIC_BINARY_TEST_OPS: [&str; 6] = ["-eq", "-ne", "-lt", "-le", "-gt"
 // ---------------------------------------------------------------------------
 
 /// SC2077 / SC2157 — `checkLiteralBreakingTest`.
-fn check_literal_breaking_test(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_literal_breaking_test(_params: &Parameters, t: &Token, out: &mut Out) {
     let has_equals = |x: &Token| astlib::get_literal_string(x).is_some_and(|s| s.contains('='));
     let is_nonempty = |x: &Token| astlib::get_literal_string(x).is_some_and(|s| !s.is_empty());
 

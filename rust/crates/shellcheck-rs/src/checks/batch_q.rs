@@ -11,7 +11,6 @@
 //! - SC2198/SC2199/... checkTestArgumentSplitting (Analytics.hs).
 //! - SC2233/SC2234/SC2235 checkSubshelledTests (Analytics.hs).
 //! - SC2261/... checkPipeToNowhere  (Analytics.hs).
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -19,7 +18,6 @@ use crate::astlib::is_glob;
 use crate::astlib::is_quotes;
 use crate::cfg::get_unquoted_literal;
 use crate::cfg::will_become_multiple_args;
-use crate::cfg::will_concat_in_assignment;
 use crate::interface::{Fix, Replacement, Shell};
 
 /// Register this batch's checks.
@@ -94,7 +92,7 @@ const VARIABLES_WITHOUT_SPACES: &[&str] = &[
 // SC2013 — checkForInCat
 // ---------------------------------------------------------------------------
 
-fn check_for_in_cat(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_for_in_cat(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_ForIn { items, .. } = &*t.inner {
         if items.len() == 1 {
             if let InnerToken::T_NormalWord(w) = &*items[0].inner {
@@ -702,21 +700,11 @@ fn check_equals_in_command(params: &Parameters, original: &Token, out: &mut Out)
 
 const ARITHMETIC_BINARY_TEST_OPS: [&str; 6] = ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
 
-fn glob_has_split_range(l: &[Token]) -> bool {
-    let after: Vec<&Token> = l
-        .iter()
-        .skip_while(|t| !matches!(&*t.inner, InnerToken::T_Literal(s) if s == "["))
-        .collect();
-    after
-        .iter()
-        .any(|t| matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains(']')))
-}
-
 fn is_brace_expansion(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_BraceExpansion(_))
 }
 
-fn tas_check_arrays(params: &Parameters, typ: ConditionType, token: &Token, out: &mut Out) {
+fn tas_check_arrays(_params: &Parameters, typ: ConditionType, token: &Token, out: &mut Out) {
     if word_parts(token).iter().any(|p| is_array_expansion(p)) {
         if typ == ConditionType::SingleBracket {
             warn(
@@ -736,7 +724,7 @@ fn tas_check_arrays(params: &Parameters, typ: ConditionType, token: &Token, out:
     }
 }
 
-fn tas_check_braces(params: &Parameters, typ: ConditionType, token: &Token, out: &mut Out) {
+fn tas_check_braces(_params: &Parameters, typ: ConditionType, token: &Token, out: &mut Out) {
     if word_parts(token).iter().any(|p| is_brace_expansion(p)) {
         if typ == ConditionType::SingleBracket {
             warn(
@@ -756,7 +744,7 @@ fn tas_check_braces(params: &Parameters, typ: ConditionType, token: &Token, out:
     }
 }
 
-fn tas_check_globs(params: &Parameters, typ: ConditionType, token: &Token, out: &mut Out) {
+fn tas_check_globs(_params: &Parameters, typ: ConditionType, token: &Token, out: &mut Out) {
     if is_glob(token) {
         if typ == ConditionType::SingleBracket {
             warn(
@@ -875,16 +863,6 @@ fn check_test_argument_splitting(params: &Parameters, t: &Token, out: &mut Out) 
 // ---------------------------------------------------------------------------
 // SC2216/SC2217/SC2259/SC2260/SC2261 — checkPipeToNowhere (target code SC2261)
 // ---------------------------------------------------------------------------
-
-/// `ShellCheck.Data.nonReadingCommands`.
-const NON_READING_COMMANDS: &[&str] = &[
-    "alias", "basename", "bg", "cal", "cd", "chgrp", "chmod", "chown", "cp", "du", "echo",
-    "export", "fg", "fuser", "getconf", "getopt", "getopts", "ipcrm", "ipcs", "jobs", "kill", "ln",
-    "ls", "locale", "mv", "printf", "ps", "pwd", "readlink", "realpath", "renice", "rm", "rmdir",
-    "set", "sleep", "touch", "trap", "ulimit", "unalias", "uname",
-];
-
-const INTERACTIVE_FLAG_CMDS: &[&str] = &["cp", "mv", "rm"];
 
 // ---------------------------------------------------------------------------
 // SC2233/SC2234/SC2235 — checkSubshelledTests (target code SC2235)
@@ -1042,18 +1020,12 @@ fn check_splitting_in_arrays(params: &Parameters, t: &Token, out: &mut Out) {
 mod tests {
     use super::*;
     use crate::analyzer_lib::make_parameters;
-    use crate::interface::Shell;
     use crate::parser::parse_script;
 
     fn params_for(script: &str) -> Parameters {
         let p = parse_script("test", script);
         let root = p.root.expect("parse produced no root");
         make_parameters(root, p.positions, None, None)
-    }
-    fn params_for_shell(script: &str, shell: Shell) -> Parameters {
-        let p = parse_script("test", script);
-        let root = p.root.expect("parse produced no root");
-        make_parameters(root, p.positions, Some(shell), None)
     }
     fn emits(f: fn(&Parameters, &Token, &mut Out), s: &str) -> bool {
         let params = params_for(s);

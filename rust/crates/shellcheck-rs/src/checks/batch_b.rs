@@ -5,20 +5,14 @@
 //! - SC2116  checkUuoeVar            (Analytics.hs)       — useless `cmd $(echo foo)`
 //! - SC2027  checkInexplicablyUnquoted (Analytics.hs, 2027 branch only)
 //! - SC2145  checkConcatenatedDollarAt (Analytics.hs)
-#![allow(unused_imports, unused_variables, dead_code)]
-use crate::analyzer_lib::assignment_is_quoting;
 use crate::analyzer_lib::is_array_expansion;
-use crate::analyzer_lib::is_assignment_param_to_command;
 use crate::analyzer_lib::is_quote_free;
-use crate::analyzer_lib::is_quote_free_context;
-use crate::analyzer_lib::is_quote_free_element;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
 use crate::astlib::get_word_parts;
 use crate::astlib::is_only_redirection;
 use crate::astlib::only_literal_string;
-use crate::interface::Shell;
 
 /// Register this batch's checks.
 pub fn register(c: &mut Checker) {
@@ -116,7 +110,7 @@ fn could_be_optimized(t: &Token) -> bool {
     }
 }
 
-fn check_uuoe_var(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_uuoe_var(_params: &Parameters, t: &Token, out: &mut Out) {
     let (id, cmds) = match &*t.inner {
         InnerToken::T_Backticked(cmds) => (t.id(), cmds),
         InnerToken::T_DollarExpansion(cmds) => (t.id(), cmds),
@@ -179,7 +173,7 @@ fn check_uuoe_var(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2027 — checkInexplicablyUnquoted (only the expansion branch)
 // ---------------------------------------------------------------------------
 
-fn check_inexplicably_unquoted_2027(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_inexplicably_unquoted_2027(_params: &Parameters, t: &Token, out: &mut Out) {
     let tokens = match &*t.inner {
         InnerToken::T_NormalWord(l) => l,
         _ => return,

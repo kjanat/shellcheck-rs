@@ -15,19 +15,12 @@
 //! SC2140's `isSpecial` (the `TC_Binary "=~"` clause) is intentionally left out
 //! (no such construct hits SC2140 in the corpus); the T_Redirecting and
 //! T_DollarBraced clauses of `isSpecial` are ported.
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::get_closest_command;
-use crate::analyzer_lib::get_command;
 use crate::analyzer_lib::get_command_basename;
-use crate::analyzer_lib::get_command_name;
 use crate::analyzer_lib::simple_command_words;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
-use crate::astlib::basename;
-use crate::astlib::get_word_parts;
-use crate::astlib::is_flag;
-use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {
     c.node(check_single_quoted_variables);
@@ -257,39 +250,3 @@ fn check_single_quoted_variables(params: &Parameters, t: &Token, out: &mut Out) 
 // ---------------------------------------------------------------------------
 // SC2027 / SC2140 — checkInexplicablyUnquoted
 // ---------------------------------------------------------------------------
-
-/// `quotesSingleThing`: the inner token list of a "..." is a single expansion.
-fn quotes_single_thing(parts: &[Token]) -> bool {
-    parts.len() == 1
-        && matches!(
-            &*parts[0].inner,
-            InnerToken::T_DollarExpansion(_)
-                | InnerToken::T_DollarBraced { .. }
-                | InnerToken::T_Backticked(_)
-        )
-}
-
-/// `isSpecial` over `getPath trapped`. Regexes in `[[ .. =~ re ]]` and the
-/// contents of `${x+"foo" "bar"}` parse metacharacters as unquoted literals, so
-/// avoid overtriggering there.
-fn is_special(params: &Parameters, trapped: &Token) -> bool {
-    // getPath = [trapped, parent, grandparent, ...]; recurse tail-wise.
-    let mut cur = Some(trapped);
-    while let Some(node) = cur {
-        match &*node.inner {
-            InnerToken::T_Redirecting { .. } => return false,
-            InnerToken::T_DollarBraced { .. } => return true,
-            _ => {}
-        }
-        // (a : TC_Binary _ _ "=~" lhs rhs : rest) -> getId a == getId rhs
-        if let Some(parent) = params.parent(node) {
-            if let InnerToken::TC_Binary { op, rhs, .. } = &*parent.inner {
-                if op == "=~" && rhs.id() == node.id() {
-                    return true;
-                }
-            }
-        }
-        cur = params.parent(node);
-    }
-    false
-}

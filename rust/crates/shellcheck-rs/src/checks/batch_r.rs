@@ -18,22 +18,23 @@
 //! wrapper. The check bodies themselves are ungated (mirroring Haskell's
 //! `ForShell [..] f`, whose `f` runs regardless of shell under `testChecker`),
 //! so the `prop_` tests exercise them the same way the QuickCheck props do.
-#![allow(unused_imports, unused_variables, dead_code)]
+// This module still carries a second, unregistered copy of the checkBashisms
+// machinery (batch_h registers the live one). It is kept only because it holds
+// the complete prop_checkBashisms* suite; task #36 merges the two ports and
+// re-homes those tests, after which this allow goes away with the copy.
+#![allow(dead_code)]
 
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::get_leading_flags;
-use crate::analyzer_lib::{Checker, Out, Parameters, err, info, style, warn};
+use crate::analyzer_lib::{Checker, Out, Parameters, err, style, warn};
 use crate::ast::*;
-use crate::astlib::get_word_parts;
-use crate::astlib::has_split_range;
 use crate::astlib::is_flag;
 use crate::astlib::is_glob;
 use crate::astlib::is_only_redirection;
-use crate::astlib::{self, get_literal_string, only_literal_string};
+use crate::astlib::{get_literal_string, only_literal_string};
 use crate::cfg::{
-    get_braced_modifier, get_braced_reference, is_variable_char, is_variable_name, oversimplify,
-    oversimplify_concat,
+    get_braced_modifier, get_braced_reference, is_variable_name, oversimplify_concat,
 };
 use crate::interface::Shell;
 
@@ -1191,7 +1192,7 @@ fn check_bashisms_gaps(p: &Parameters, t: &Token, out: &mut Out) {
 mod tests {
     use super::*;
     use crate::analyzer_lib::make_parameters;
-    use crate::interface::Shell;
+
     use crate::parser::parse_script;
 
     fn params_auto(script: &str) -> Parameters {

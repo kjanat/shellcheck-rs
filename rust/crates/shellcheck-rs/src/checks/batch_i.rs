@@ -11,37 +11,17 @@
 //!
 //! Not ported here (belong to other batches / codes): SC2182 (printf, no
 //! variables), SC2018/2019/2020/2021 (tr literal-string advice).
-#![allow(unused_imports, unused_variables, dead_code)]
-use crate::analyzer_lib::assignment_is_quoting;
 use crate::analyzer_lib::concat_over;
-use crate::analyzer_lib::get_command;
 use crate::analyzer_lib::get_command_name;
 use crate::analyzer_lib::get_command_name_and_token;
-use crate::analyzer_lib::get_effective_command_token;
-use crate::analyzer_lib::is_array_expansion;
-use crate::analyzer_lib::is_assignment_param_to_command;
 use crate::analyzer_lib::is_quote_free;
-use crate::analyzer_lib::is_quote_free_context;
-use crate::analyzer_lib::is_quote_free_element;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
 use crate::astlib::basename;
 use crate::astlib::get_literal_string;
-use crate::astlib::get_word_parts;
-use crate::astlib::has_split_range;
-use crate::astlib::is_flag;
-use crate::astlib::is_glob;
 use crate::astlib::is_literal;
-use crate::astlib::list_to_args;
 use crate::astlib::only_literal_string;
-use crate::astlib::oversimplify;
 use crate::cfg::may_become_multiple_args;
-use crate::cfg::mbma_f;
-use crate::cfg::will_become_multiple_args;
-use crate::cfg::will_concat_in_assignment;
-use crate::interface::Shell;
-use std::collections::HashMap;
 
 /// Register this batch's checks.
 pub fn register(c: &mut Checker) {
@@ -56,121 +36,6 @@ pub fn register(c: &mut Checker) {
 // ---- getWordParts / isFlag / isGlob (ported from ASTLib) --------------------
 
 // ---- command name resolution (ported from ASTLib, proven in batch_h) -------
-
-fn parse_flag_list(spec: &str) -> Vec<(String, bool)> {
-    let mut out = vec![];
-    let chars: Vec<char> = spec.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if i + 1 < chars.len() && chars[i + 1] == ':' {
-            out.push((c.to_string(), true));
-            i += 2;
-        } else {
-            out.push((c.to_string(), false));
-            i += 1;
-        }
-    }
-    out
-}
-
-fn get_bsd_opts<'a>(
-    spec: &str,
-    args: &'a [Token],
-) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
-    let mut flag_map: HashMap<String, bool> = HashMap::new();
-    flag_map.insert(String::new(), false);
-    for (k, v) in parse_flag_list(spec) {
-        flag_map.insert(k, v);
-    }
-    opts_process(false, &flag_map, args)
-}
-
-fn opts_process<'a>(
-    gnu: bool,
-    flag_map: &HashMap<String, bool>,
-    tokens: &'a [Token],
-) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
-    if tokens.is_empty() {
-        return Some(vec![]);
-    }
-    let token = &tokens[0];
-    let rest = &tokens[1..];
-    let s = get_literal_string(token).unwrap_or_else(|| "\0".to_string());
-
-    if s == "--" {
-        return Some(list_to_args(rest));
-    }
-    if let Some(word) = s.strip_prefix("--") {
-        let (name, arg): (&str, &str) = match word.find('=') {
-            Some(i) => (&word[..i], &word[i..]),
-            None => (word, ""),
-        };
-        let needs_arg = *flag_map.get(name)?;
-        if needs_arg && arg.is_empty() {
-            if rest.is_empty() {
-                return None;
-            }
-            let a = &rest[0];
-            let mut more = opts_process(gnu, flag_map, &rest[1..])?;
-            let mut out = vec![(name.to_string(), (token, a))];
-            out.append(&mut more);
-            return Some(out);
-        } else {
-            let mut more = opts_process(gnu, flag_map, rest)?;
-            let mut out = vec![(name.to_string(), (token, token))];
-            out.append(&mut more);
-            return Some(out);
-        }
-    }
-    if let Some(opts) = s.strip_prefix('-') {
-        return short_to_opts(gnu, flag_map, opts, token, rest);
-    }
-    if gnu {
-        let mut more = opts_process(gnu, flag_map, rest)?;
-        let mut out = vec![(String::new(), (token, token))];
-        out.append(&mut more);
-        Some(out)
-    } else {
-        Some(list_to_args(tokens))
-    }
-}
-
-fn short_to_opts<'a>(
-    gnu: bool,
-    flag_map: &HashMap<String, bool>,
-    opts: &str,
-    token: &'a Token,
-    args: &'a [Token],
-) -> Option<Vec<(String, (&'a Token, &'a Token))>> {
-    let chars: Vec<char> = opts.chars().collect();
-    if chars.is_empty() {
-        return opts_process(gnu, flag_map, args);
-    }
-    let c = chars[0].to_string();
-    let rest_opts: String = chars[1..].iter().collect();
-    let needs_arg = *flag_map.get(&c)?;
-    if needs_arg && rest_opts.is_empty() {
-        if args.is_empty() {
-            return None;
-        }
-        let next = &args[0];
-        let mut more = opts_process(gnu, flag_map, &args[1..])?;
-        let mut out = vec![(c, (token, next))];
-        out.append(&mut more);
-        Some(out)
-    } else if needs_arg {
-        let mut more = opts_process(gnu, flag_map, args)?;
-        let mut out = vec![(c, (token, token))];
-        out.append(&mut more);
-        Some(out)
-    } else {
-        let mut more = short_to_opts(gnu, flag_map, &rest_opts, token, args)?;
-        let mut out = vec![(c, (token, token))];
-        out.append(&mut more);
-        Some(out)
-    }
-}
 
 fn get_command_token_or_this(t: &Token) -> &Token {
     get_command_name_and_token(false, t).1
@@ -193,58 +58,6 @@ fn get_command_name_from_expansion(t: &Token) -> Option<String> {
         T_Pipeline { commands, .. } if commands.len() == 1 => get_command_name(&commands[0]),
         _ => None,
     }
-}
-
-/// True if `word` is a `name=` / `name+=` argument to a declaration utility.
-fn is_declaration_assignment_word(p: &Parameters, word: &Token) -> bool {
-    let is_form = match &*word.inner {
-        InnerToken::T_NormalWord(parts) => parts.first().is_some_and(
-            |f| matches!(&*f.inner, InnerToken::T_Literal(s) if literal_is_assignment_prefix(s)),
-        ),
-        _ => false,
-    };
-    if !is_form {
-        return false;
-    }
-    let parent = match p.parent(word) {
-        Some(x) => x,
-        None => return false,
-    };
-    if let InnerToken::T_SimpleCommand { words, .. } = &*parent.inner {
-        if words.is_empty() || !words[1..].iter().any(|w| w.id() == word.id()) {
-            return false;
-        }
-        return matches!(
-            decl_command_name(words).as_deref(),
-            Some("declare") | Some("export") | Some("local") | Some("readonly") | Some("typeset")
-        );
-    }
-    false
-}
-
-fn decl_command_name(words: &[Token]) -> Option<String> {
-    let n0 = get_literal_string(&words[0])?;
-    if n0 == "builtin" && words.len() >= 2 {
-        Some(only_literal_string(&words[1]))
-    } else {
-        Some(n0)
-    }
-}
-
-/// `name` / `name+` followed by `=` at the start of a literal.
-fn literal_is_assignment_prefix(s: &str) -> bool {
-    let c: Vec<char> = s.chars().collect();
-    if c.is_empty() || !(c[0] == '_' || c[0].is_ascii_alphabetic()) {
-        return false;
-    }
-    let mut i = 1;
-    while i < c.len() && (c[i] == '_' || c[i].is_ascii_alphanumeric()) {
-        i += 1;
-    }
-    if i < c.len() && c[i] == '+' {
-        i += 1;
-    }
-    i < c.len() && c[i] == '='
 }
 
 /// `usedAsCommandName`: is the token the first word of a T_SimpleCommand?
@@ -320,7 +133,7 @@ fn command_dispatch(p: &Parameters, t: &Token, out: &mut Out) {
         None => return,
     };
     if name.contains('/') {
-        let base = basename(&name);
+        let _base = basename(&name);
     } else if name == "builtin" && words.len() >= 2 {
         let selected = only_literal_string(&words[1]);
         exactly_dispatch(p, &selected, &words[2..], out);
@@ -366,7 +179,7 @@ fn check_printf(p: &Parameters, args: &[Token], out: &mut Out) {
     }
 }
 
-fn check_printf_format(p: &Parameters, format: &Token, more: &[Token], out: &mut Out) {
+fn check_printf_format(_p: &Parameters, format: &Token, more: &[Token], out: &mut Out) {
     // SC2183: variable/argument count mismatch.
     if let Some(string) = get_literal_string(format) {
         let formats = get_printf_formats(&string);

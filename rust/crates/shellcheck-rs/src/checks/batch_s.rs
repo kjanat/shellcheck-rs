@@ -26,22 +26,17 @@
 //! batch_i / batch_n; re-emitting them here from the faithful whole-function
 //! port is safe because the pipeline `nub`s identical positioned comments, and
 //! the token id / message / (absent) fix are identical.
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::concat_over;
 use crate::analyzer_lib::find_grep_regex;
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::is_confused_glob_regex;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
 use crate::astlib::basename;
 use crate::astlib::get_literal_string_def;
-use crate::astlib::get_word_parts;
-use crate::astlib::has_split_range;
 use crate::astlib::is_flag;
 use crate::astlib::is_glob;
 use crate::astlib::list_to_args;
-use crate::astlib::oversimplify;
 use crate::astlib::{get_literal_string, only_literal_string};
 use crate::interface::Shell;
 

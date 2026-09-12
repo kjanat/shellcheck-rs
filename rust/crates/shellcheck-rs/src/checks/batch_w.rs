@@ -30,7 +30,6 @@
 //! - checkAssignToSelf               SC2269
 //! - checkCommandWithTrailingSymbol  SC2286/SC2287/SC2288/SC2289
 //! - checkBatsTestDoesNotUseNegation SC2314/SC2315
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::is_sourced;
 use crate::analyzer_lib::is_unqualified_command;
@@ -38,7 +37,6 @@ use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
 use crate::astlib::get_command_sequences;
-use crate::astlib::get_leading_unquoted_string;
 use crate::astlib::is_annotation_ignoring_code;
 use crate::astlib::is_command_substitution;
 use crate::astlib::is_function;
@@ -47,8 +45,7 @@ use crate::astlib::is_literal;
 use crate::cfg::get_unquoted_literal;
 use crate::cfg::may_become_multiple_args;
 use crate::cfg::will_become_multiple_args;
-use crate::cfg::will_concat_in_assignment;
-use crate::cfg::{get_braced_reference, get_word_parts, is_variable_name, oversimplify};
+use crate::cfg::{get_word_parts, is_variable_name, oversimplify};
 use crate::interface::Shell;
 use std::collections::HashMap;
 

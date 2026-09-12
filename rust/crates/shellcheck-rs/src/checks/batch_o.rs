@@ -11,7 +11,6 @@
 //! This mirrors the single Haskell function; all of its branches share the
 //! `isNum` / `isNonNum` machinery (cfg numerical status + `variableFlow`
 //! assigned-variable set), so they are ported together.
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::astlib;
@@ -84,8 +83,6 @@ fn invert(op: &str) -> &'static str {
         _ => "",
     }
 }
-
-const FLOAT_REGEX: &str = r"^[-+]?[0-9]+\.[0-9]+$";
 
 fn is_fraction(t: &Token) -> bool {
     let o = oversimplify(t);
@@ -187,7 +184,7 @@ fn check_decimals(params: &Parameters, hs: &Token, out: &mut Out) {
 }
 
 fn check_string(
-    params: &Parameters,
+    _params: &Parameters,
     typ: ConditionType,
     op: &str,
     t: &Token,

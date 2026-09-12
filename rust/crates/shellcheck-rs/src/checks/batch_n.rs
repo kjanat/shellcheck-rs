@@ -22,26 +22,11 @@
 //!   (SC2270/2271/2273-2280/2282) plus getBracedReference/getBracedModifier and an
 //!   exact autofix; not self-contained enough to keep extra==0. Left out.
 //! - SC2261  checkMultipleRedirections — needs FD-map / pipe dataflow. Left out.
-#![allow(unused_imports, unused_variables, dead_code)]
-use crate::analyzer_lib::find_grep_regex;
-use crate::analyzer_lib::get_command;
-use crate::analyzer_lib::get_command_name;
-use crate::analyzer_lib::get_command_name_and_token;
-use crate::analyzer_lib::head_id;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
 use crate::astlib::basename;
-use crate::astlib::get_leading_unquoted_string;
-use crate::astlib::get_word_parts;
-use crate::astlib::has_split_range;
-use crate::astlib::is_closing_range;
-use crate::astlib::is_constant;
-use crate::astlib::is_flag;
-use crate::astlib::is_glob;
-use crate::astlib::is_half_open_range;
 use crate::astlib::is_unquoted_flag;
-use crate::astlib::{get_literal_string, get_literal_string_ext, only_literal_string};
+use crate::astlib::{get_literal_string, only_literal_string};
 use crate::interface::Shell;
 use std::sync::OnceLock;
 
@@ -58,10 +43,6 @@ pub fn register(c: &mut Checker) {
 // --- isGlob (ported from ASTLib / batch_k) --------------------------------
 
 // --- command helpers (subset of ASTLib, matching batch_d) -----------------
-
-fn get_command_token_or_this(t: &Token) -> &Token {
-    get_command_name_and_token(false, t).1
-}
 
 // ---------------------------------------------------------------------------
 // SC2054 — checkCommarrays
@@ -208,22 +189,9 @@ fn check_flag_as_command(_params: &Parameters, t: &Token, out: &mut Out) {
 // SC2283 — checkSecondArgIsComparison (only the single `=` branch)
 // ---------------------------------------------------------------------------
 
-fn get_leading_unquotedstring_for_arg(t: &Token) -> Option<String> {
-    get_leading_unquoted_string(t)
-}
-
 // ---------------------------------------------------------------------------
 // SC2288 — checkCommandWithTrailingSymbol (only the symbol branch)
 // ---------------------------------------------------------------------------
-
-fn trailing_symbol_format(c: char) -> String {
-    match c {
-        ' ' => "space".to_string(),
-        '\'' => "apostrophe".to_string(),
-        '"' => "doublequote".to_string(),
-        x => format!("'{}'", x),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -234,7 +202,7 @@ fn trailing_symbol_format(c: char) -> String {
 mod tests {
     use super::*;
     use crate::analyzer_lib::make_parameters;
-    use crate::interface::Shell;
+
     use crate::parser::parse_script;
 
     fn params_for(script: &str) -> Parameters {
@@ -263,9 +231,6 @@ mod tests {
 
     fn emits(f: fn(&Parameters, &Token, &mut Out), s: &str) -> bool {
         !collect(f, s).is_empty()
-    }
-    fn emits_code(f: fn(&Parameters, &Token, &mut Out), s: &str, code: i64) -> bool {
-        collect(f, s).iter().any(|c| c.comment.code == code)
     }
 
     // SC2054 — checkCommarrays

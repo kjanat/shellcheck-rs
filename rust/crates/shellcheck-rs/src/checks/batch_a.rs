@@ -5,24 +5,16 @@
 //! - SC2048  checkDollarStar       (Analytics.hs)
 //! - SC2068  checkUnquotedDollarAt (Analytics.hs)
 //! - SC2124  checkArrayAsString    (Analytics.hs) — also emits SC2125 (glob/brace branch)
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::assignment_is_quoting;
 use crate::analyzer_lib::is_array_expansion;
-use crate::analyzer_lib::is_assignment_param_to_command;
 use crate::analyzer_lib::is_quote_free_element;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
-use crate::astlib::drop_hashbang_prefix;
 use crate::astlib::oversimplify;
 use crate::cfg::get_braced_modifier;
-use crate::cfg::get_braced_reference;
-use crate::cfg::is_special_variable_char;
 use crate::cfg::is_variable_char;
-use crate::cfg::is_variable_start_char;
 use crate::cfg::will_become_multiple_args;
 use crate::cfg::will_concat_in_assignment;
-use crate::interface::Shell;
 
 /// Register this batch's checks.
 pub fn register(c: &mut Checker) {
@@ -121,7 +113,7 @@ fn is_strictly_quote_free(params: &Parameters, t: &Token) -> bool {
 // SC2045 — checkForInLs (and SC2044 for the `find` branch)
 // ---------------------------------------------------------------------------
 
-fn check_for_in_ls(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_for_in_ls(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_ForIn { items, .. } = &*t.inner {
         if items.len() != 1 {
             return;
@@ -242,7 +234,7 @@ fn check_unquoted_dollar_at(params: &Parameters, t: &Token, out: &mut Out) {
 // SC2124 — checkArrayAsString (and SC2125 for the glob/brace branch)
 // ---------------------------------------------------------------------------
 
-fn check_array_as_string(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_array_as_string(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_Assignment { value, .. } = &*t.inner {
         if will_concat_in_assignment(value) {
             warn(

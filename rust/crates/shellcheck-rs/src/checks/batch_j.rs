@@ -19,30 +19,14 @@
 //! parsed into `TA_*` (it is a placeholder literal), so those sub-cases can never
 //! match; the `T_DollarBraced` (`${x:=y}`) and `T_DollarBraceCommandExpansion`
 //! cases (which do parse) are ported so their negative tests stay negative.
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::get_closest_command;
-use crate::analyzer_lib::get_command;
 use crate::analyzer_lib::get_command_basename;
 use crate::analyzer_lib::get_command_name;
-use crate::analyzer_lib::is_function_body;
-use crate::analyzer_lib::is_test_command;
 use crate::analyzer_lib::*;
 use crate::ast::*;
-use crate::astlib;
-use crate::astlib::basename;
-use crate::astlib::drop_hashbang_prefix;
 use crate::astlib::get_command_sequences;
-use crate::astlib::get_word_parts;
 use crate::astlib::is_assignment;
-use crate::astlib::is_flag;
-use crate::astlib::is_function;
 use crate::astlib::oversimplify;
-use crate::cfg::get_braced_modifier;
-use crate::cfg::get_braced_reference;
-use crate::cfg::is_special_variable_char;
-use crate::cfg::is_variable_char;
-use crate::cfg::is_variable_start_char;
-use crate::interface::Shell;
 
 pub fn register(c: &mut Checker) {
     c.node(check_trap_quotes);
@@ -390,131 +374,6 @@ fn check_multiple_appends(_params: &Parameters, t: &Token, out: &mut Out) {
 // ---------------------------------------------------------------------------
 // SC2233 / SC2234 — checkSubshelledTests (2233/2234 branches only)
 // ---------------------------------------------------------------------------
-
-fn is_single_test(cmds: &[Token]) -> bool {
-    cmds.len() == 1 && is_test_command(&cmds[0])
-}
-
-fn is_test_structure(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Banged(inner) => is_test_structure(inner),
-        InnerToken::T_AndIf { lhs, rhs } | InnerToken::T_OrIf { lhs, rhs } => {
-            is_test_structure(lhs) && is_test_structure(rhs)
-        }
-        InnerToken::T_Pipeline {
-            separators,
-            commands,
-        } if separators.is_empty() => match commands.as_slice() {
-            [only] => {
-                if let InnerToken::T_Redirecting { cmd, .. } = &*only.inner {
-                    match &*cmd.inner {
-                        InnerToken::T_BraceGroup(ts) | InnerToken::T_Subshell(ts) => {
-                            ts.iter().all(is_test_structure)
-                        }
-                        _ => is_test_command(t),
-                    }
-                } else {
-                    is_test_command(t)
-                }
-            }
-            _ => is_test_command(t),
-        },
-        _ => is_test_command(t),
-    }
-}
-
-/// `isCompoundCondition`: after skipping wrappers, is the enclosing construct an
-/// if/while/until?
-fn is_compound_condition(path: &[&Token]) -> bool {
-    // dropWhile skippable (tail path)
-    let mut idx = 1;
-    while idx < path.len() && skippable(path[idx]) {
-        idx += 1;
-    }
-    match path.get(idx) {
-        Some(node) => matches!(
-            &*node.inner,
-            InnerToken::T_IfExpression { .. }
-                | InnerToken::T_WhileExpression { .. }
-                | InnerToken::T_UntilExpression { .. }
-        ),
-        None => false,
-    }
-}
-
-fn skippable(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Redirecting { redirs, .. } => redirs.is_empty(),
-        InnerToken::T_Pipeline { separators, .. } => separators.is_empty(),
-        InnerToken::T_Annotation { .. } => true,
-        _ => false,
-    }
-}
-
-/// `hasAssignment t = isNothing $ doAnalysis guardNotAssignment t`: true iff any
-/// descendant node "is an assignment" per `guardNotAssignment`.
-fn has_assignment(t: &Token) -> bool {
-    let mut nodes: Vec<&Token> = vec![];
-    all_nodes(t, &mut nodes);
-    nodes.iter().any(|n| node_is_assignment(n))
-}
-
-fn node_is_assignment(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::TA_Assignment { .. } => true,
-        InnerToken::TA_Unary { op, .. } => op.contains("++") || op.contains("--"),
-        InnerToken::T_DollarBraced { op, .. } => {
-            let str = oversimplify(op).concat();
-            let modifier = get_braced_modifier(&str);
-            modifier.starts_with('=') || modifier.starts_with(":=")
-        }
-        InnerToken::T_DollarBraceCommandExpansion { .. } => true,
-        // Arithmetic is not yet parsed into `TA_*` (the contents of `$((..))` are
-        // a placeholder literal), so the `TA_Assignment`/`TA_Unary "++"/"--"`
-        // cases of `guardNotAssignment` can never match structurally. Recover the
-        // increment/assignment cases (e.g. `$((i++))`, `$((i+=1))`) by scanning
-        // the placeholder text; this keeps `( [[ $((i++)) = 10 ]] )` from firing.
-        InnerToken::T_DollarArithmetic(inner) => astlib::get_literal_string(inner)
-            .map(|s| arith_has_assignment(&s))
-            .unwrap_or(false),
-        _ => false,
-    }
-}
-
-/// Does an arithmetic expression string contain an assignment or `++`/`--`?
-/// Matches the arithmetic assignment operators (`=`, `+=`, `-=`, `*=`, `/=`,
-/// `%=`, `<<=`, `>>=`, `&=`, `|=`, `^=`) and the increment/decrement operators,
-/// while excluding the comparisons `==`, `!=`, `<=`, `>=`.
-fn arith_has_assignment(s: &str) -> bool {
-    let b = s.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        let c = b[i];
-        if (c == b'+' || c == b'-') && i + 1 < b.len() && b[i + 1] == c {
-            return true; // ++ or --
-        }
-        if c == b'=' {
-            let next = b.get(i + 1).copied();
-            let prev = if i > 0 { Some(b[i - 1]) } else { None };
-            if next != Some(b'=') {
-                match prev {
-                    // `==` second half, or `!=`.
-                    Some(b'=') | Some(b'!') => {}
-                    // `<=`/`>=` comparisons unless doubled to `<<=`/`>>=`.
-                    Some(b'<') | Some(b'>') => {
-                        let pp = if i >= 2 { Some(b[i - 2]) } else { None };
-                        if pp == prev {
-                            return true;
-                        }
-                    }
-                    _ => return true,
-                }
-            }
-        }
-        i += 1;
-    }
-    false
-}
 
 // ---------------------------------------------------------------------------
 // getBracedModifier (ported from ASTLib; used by hasAssignment above)

@@ -26,10 +26,8 @@
 //! - SC2331       checkUnaryTestA               (register: full)
 //! - SC2194/2195/2221/2222 checkUnmatchableCases(register: SC2195/2221/2222; SC2194 in b_n)
 //! - SC2101/2102  checkCharRangeGlob            (register: full)
-#![allow(unused_imports, unused_variables, dead_code)]
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::head_id;
-use crate::analyzer_lib::is_command;
 use crate::analyzer_lib::is_confused_glob_regex;
 use crate::analyzer_lib::is_test_command;
 use crate::analyzer_lib::*;
@@ -37,14 +35,10 @@ use crate::ast::*;
 use crate::astlib;
 use crate::astlib::get_leading_unquoted_string;
 use crate::astlib::get_word_parts;
-use crate::astlib::has_split_range;
-use crate::astlib::is_closing_range;
 use crate::astlib::is_constant;
 use crate::astlib::is_glob;
-use crate::astlib::is_half_open_range;
 use crate::astlib::is_literal;
 use crate::astlib::oversimplify;
-use crate::cfg::get_unquoted_literal;
 use crate::interface::Shell;
 
 // ===========================================================================
@@ -333,7 +327,7 @@ fn check_single_bracket_operators(params: &Parameters, t: &Token, out: &mut Out)
 }
 
 /// SC2075 — `checkDoubleBracketOperators`.
-fn check_double_bracket_operators(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_double_bracket_operators(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TC_Binary {
         typ: ConditionType::DoubleBracket,
         op,
@@ -352,7 +346,7 @@ fn check_double_bracket_operators(params: &Parameters, t: &Token, out: &mut Out)
 }
 
 /// SC2107/2108/2109/2110/2166 — `checkConditionalAndOrs`.
-fn check_conditional_and_ors(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_conditional_and_ors(_params: &Parameters, t: &Token, out: &mut Out) {
     use ConditionType::*;
     use InnerToken::*;
     match &*t.inner {
@@ -423,7 +417,7 @@ fn check_conditional_and_ors(params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 /// SC2049 — `checkGlobbedRegex`.
-fn check_globbed_regex(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_globbed_regex(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TC_Binary {
         typ: ConditionType::DoubleBracket,
         op,
@@ -446,7 +440,7 @@ fn check_globbed_regex(params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 /// SC2050 / SC2193 — `checkConstantIfs`.
-fn check_constant_ifs(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_constant_ifs(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TC_Binary { typ, op, lhs, rhs } = &*t.inner {
         let is_dynamic = (ARITHMETIC_BINARY_TEST_OPS.contains(&op.as_str())
             && *typ == ConditionType::DoubleBracket)
@@ -473,7 +467,7 @@ fn check_constant_ifs(params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 /// SC2158/2159/2160/2161/2078 — `checkConstantNullary`.
-fn check_constant_nullary(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_constant_nullary(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TC_Nullary { token, .. } = &*t.inner {
         if is_constant(token) {
             match astlib::only_literal_string(token).as_str() {
@@ -503,7 +497,7 @@ fn check_constant_nullary(params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 /// SC2057 / SC2058 — `checkValidCondOps`.
-fn check_valid_cond_ops(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_valid_cond_ops(_params: &Parameters, t: &Token, out: &mut Out) {
     match &*t.inner {
         InnerToken::TC_Binary { op, .. } if !BINARY_TEST_OPS.contains(&op.as_str()) => {
             warn(out, t.id(), 2057, "Unknown binary operator.");
@@ -561,7 +555,7 @@ fn check_comparison_against_glob(params: &Parameters, t: &Token, out: &mut Out) 
 }
 
 /// SC2254 — `checkCaseAgainstGlob`.
-fn check_case_against_glob(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_case_against_glob(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_CaseExpression { cases, .. } = &*t.inner {
         for (_, patterns, _) in cases {
             for expr in patterns {
@@ -581,7 +575,7 @@ fn check_case_against_glob(params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 /// SC2055 / SC2056 / SC2252 — `checkOrNeq`.
-fn check_or_neq(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
     use InnerToken::*;
     match &*t.inner {
         // Test-level "or": [ x != y -o x != z ]
@@ -708,7 +702,7 @@ fn check_and_eq_operands(op: &str, rhs1: &Token, rhs2: &Token) -> bool {
 }
 
 /// SC2333 / SC2334 — `checkAndEq`.
-fn check_and_eq(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_and_eq(_params: &Parameters, t: &Token, out: &mut Out) {
     use InnerToken::*;
     match &*t.inner {
         // Test-level "and": [ x = y -a x = z ]
@@ -804,7 +798,7 @@ fn check_and_eq(params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 /// SC2204 / SC2205 — `checkSubshellAsTest`.
-fn check_subshell_as_test(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_subshell_as_test(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_Subshell(list) = &*t.inner {
         if list.len() == 1 {
             subshell_check(t.id(), &list[0], out);
@@ -851,7 +845,7 @@ fn subshell_check_params(id: Id, first: &Token, second: &Token, out: &mut Out) {
 }
 
 /// SC2212 — `checkEmptyCondition`.
-fn check_empty_condition(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_empty_condition(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::TC_Empty { .. } = &*t.inner {
         style(
             out,
@@ -871,7 +865,7 @@ fn check_bad_test_and_or(params: &Parameters, t: &Token, out: &mut Out) {
             commands,
         } if commands.len() >= 2 => {
             // zip3 (Nothing:seps) cmds (seps ++ [Nothing])
-            let n = commands.len();
+            let _n = commands.len();
             for (i, cmd) in commands.iter().enumerate() {
                 if is_test_command(cmd) {
                     // before = seps[i-1] (i>0), after = seps[i] (i < seps.len())
@@ -913,7 +907,7 @@ fn check_ands(params: &Parameters, id: Id, t: &Token, out: &mut Out) {
         T_Pipeline { commands, .. } if !commands.is_empty() => {
             check_ands(params, id, commands.last().unwrap(), out)
         }
-        cmd => {
+        _cmd => {
             if is_test_command(t) {
                 err_with_fix(
                     out,
@@ -928,7 +922,7 @@ fn check_ands(params: &Parameters, id: Id, t: &Token, out: &mut Out) {
 }
 
 /// SC2283 / SC2284 / SC2285 — `checkSecondArgIsComparison`.
-fn check_second_arg_is_comparison(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_second_arg_is_comparison(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
         if words.len() >= 2 {
             let arg = &words[1];
@@ -965,7 +959,7 @@ fn check_second_arg_is_comparison(params: &Parameters, t: &Token, out: &mut Out)
 }
 
 /// SC2171 — `checkTrailingBracket`.
-fn check_trailing_bracket(params: &Parameters, t: &Token, out: &mut Out) {
+fn check_trailing_bracket(_params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
         if let Some(last) = words.last() {
             trailing_check(last, t, out);
@@ -1198,7 +1192,7 @@ fn check_unary_test_a_impl(params: &Parameters, t: &Token, out: &mut Out) {
 mod tests {
     use super::*;
     use crate::analyzer_lib::make_parameters;
-    use crate::interface::Shell;
+
     use crate::parser::parse_script;
 
     fn params_for(script: &str) -> Parameters {
