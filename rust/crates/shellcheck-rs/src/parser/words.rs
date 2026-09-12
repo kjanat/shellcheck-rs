@@ -281,14 +281,39 @@ impl Parser {
                 return Ok(t);
             }
             self.reset(m);
+            // `findParam`: `{}` is the find -exec placeholder and passes
+            // without comment; a lone brace is flagged by `literalBraces`.
+            if self.peek_at(1) == Some('}') {
+                self.bump();
+                self.bump();
+                let id = self.next_id_between(start, self.pos());
+                return Ok(Token::new(id, InnerToken::T_Literal("{}".to_string())));
+            }
+            self.literal_brace_problem('{', start.clone());
             self.bump();
             let id = self.next_id_between(start, self.pos());
             return Ok(Token::new(id, InnerToken::T_Literal("{".to_string())));
         }
         // bare '}'
-        self.char('}')?;
+        if self.peek() != Some('}') {
+            return Err(());
+        }
+        self.literal_brace_problem('}', start.clone());
+        self.bump();
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Literal("}".to_string())))
+    }
+
+    /// `literalBraces`: a curly brace that is not part of an expansion is
+    /// taken literally, which is usually a missing `;` or a forgotten quote.
+    fn literal_brace_problem(&mut self, c: char, pos: Position) {
+        self.problem_at(
+            pos.clone(),
+            pos,
+            Severity::WarningC,
+            1083,
+            &format!("This {c} is literal. Check expression (missing ;/\\n?) or quote it."),
+        );
     }
 
     /// `readBraced = try braceExpansion` (Parser.hs). A brace expansion is
