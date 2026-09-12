@@ -11,12 +11,58 @@ impl Parser {
         let cond = match self.read_condition() {
             Ok(c) => c,
             Err(()) => {
+                // As in `readCommand`'s `choice`: once the test expression has
+                // consumed input there is no falling back to a simple command.
+                if self.idx != m.idx {
+                    self.committed = true;
+                    return Err(());
+                }
                 self.reset(m);
                 return Err(());
             }
         };
         let redirs = self.read_redirect_list();
         let id = self.next_id_between(start, self.pos());
+        let pos = self.pos();
+        let has_dash_ao = ["-o", "-a", "or", "and"]
+            .into_iter()
+            .find(|s| self.string_peek(s));
+        if let Some(c) = has_dash_ao {
+            let mut end = pos.clone();
+            end.column += c.len() as i64;
+            let alt = match c {
+                "or" | "-o" => "||",
+                _ => "&&",
+            };
+            self.problem_at(
+                pos.clone(),
+                end,
+                Severity::ErrorC,
+                1139,
+                &format!("Use {alt} instead of '{c}' between test commands."),
+            );
+        }
+        // A keyword here is reported by readNormalWord instead, and `-o`/`and`
+        // already got SC1139; anything else is a stray parameter.
+        let has_keyword = self.keyword_len().is_some();
+        let has_word = {
+            let w = self.mark();
+            let notes = self.notes.len();
+            let ok = self.read_normal_word().is_ok();
+            self.reset(w);
+            self.notes.truncate(notes);
+            ok
+        };
+        if has_word && !has_keyword && has_dash_ao.is_none() {
+            let pos_end = self.pos();
+            self.problem_at(
+                pos,
+                pos_end,
+                Severity::ErrorC,
+                1140,
+                "Unexpected parameters after condition. Missing &&/||, or bad expression?",
+            );
+        }
         Ok(Token::new(
             id,
             InnerToken::T_Redirecting { redirs, cmd: cond },
@@ -46,7 +92,30 @@ impl Parser {
         };
 
         // required space after the bracket
+        let space_pos = self.pos();
         let space = self.cond_spacing();
+        if space.is_empty() {
+            self.problem_at(
+                start.clone(),
+                space_pos.clone(),
+                Severity::ErrorC,
+                1035,
+                if single {
+                    "You need a space after the [ and before the ]."
+                } else {
+                    "You need a space after the [[ and before the ]]."
+                },
+            );
+        }
+        if single && space.contains('\n') {
+            self.problem_at(
+                space_pos.clone(),
+                space_pos,
+                Severity::ErrorC,
+                1080,
+                "You need \\ before line feeds to break lines in [ ].",
+            );
+        }
 
         // SC1014: mirror Parser.hs `readConditionContents`'s `attempting`
         // lookahead — peek a variable name followed by whitespace; if it names a
@@ -69,7 +138,13 @@ impl Parser {
             self.reset(m);
         }
 
+        let contents_start = self.mark();
         let contents = self.read_cond_contents(single).ok();
+        if contents.is_none() && self.idx != contents_start.idx {
+            // The contents committed before failing, so the `<|>` that would
+            // have made this an empty condition is never reached.
+            return Err(());
+        }
         let token = match contents {
             Some(c) => c,
             None => {
@@ -81,22 +156,63 @@ impl Parser {
                 Token::new(id, InnerToken::TC_Empty { typ })
             }
         };
-        // closing bracket
-        let closed = if dbl {
-            self.string("]]").is_ok()
+        // `try (string "]]") <|> string "]"`: whichever bracket is actually
+        // there, so a mismatched pair still parses and gets reported.
+        let close_pos = self.pos();
+        let close = if self.string("]]").is_ok() {
+            "]]"
+        } else if self.char(']').is_ok() {
+            "]"
         } else {
-            // single ] but not ]]
-            self.peek() == Some(']') && {
-                self.bump();
-                true
-            }
+            return self.fail_with("Expected test to end here (don't wrap commands in []/[[]])");
         };
-        if !closed {
-            return Err(());
+        if dbl && close != "]]" {
+            self.problem_at(
+                close_pos.clone(),
+                close_pos,
+                Severity::ErrorC,
+                1033,
+                "Test expression was opened with double [[ but closed with single ]. Make sure they match.",
+            );
+        }
+        if single && close != "]" {
+            self.problem_at(
+                start.clone(),
+                start.clone(),
+                Severity::ErrorC,
+                1034,
+                "Test expression was opened with single [ but closed with double ]]. Make sure they match.",
+            );
         }
         self.spacing();
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Condition { typ, token }))
+    }
+
+    /// `condSpacing`: spacing within a condition, where the shell needs it and
+    /// where a bare line feed inside `[ ]` does not continue the expression.
+    pub(super) fn cond_spacing_checked(&mut self, single: bool, required: bool) -> String {
+        let pos = self.pos();
+        let space = self.cond_spacing();
+        if required && space.is_empty() {
+            self.problem_at(
+                pos.clone(),
+                pos.clone(),
+                Severity::ErrorC,
+                1035,
+                "You are missing a required space here.",
+            );
+        }
+        if single && space.contains('\n') {
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1080,
+                "When breaking lines in [ ], you need \\ before the linefeed.",
+            );
+        }
+        space
     }
 
     /// Spacing within a condition (spaces, tabs, line continuations, newlines in
@@ -143,7 +259,8 @@ impl Parser {
             let op_start = self.pos();
             if let Some(op) = self.read_cond_and_op() {
                 let op_end = self.pos();
-                self.cond_spacing();
+                // `readAndOrOp .. requiresSpacing`: only the word forms need it.
+                self.cond_spacing_checked(single, op.starts_with('-'));
                 match self.read_cond_and(single) {
                     Ok(right) => {
                         let typ = self.cond_typ(single);
@@ -178,7 +295,7 @@ impl Parser {
             let op_start = self.pos();
             if let Some(op) = self.read_cond_or_op() {
                 let op_end = self.pos();
-                self.cond_spacing();
+                self.cond_spacing_checked(single, op.starts_with('-'));
                 match self.read_cond_term(single) {
                     Ok(right) => {
                         let typ = self.cond_typ(single);
@@ -261,7 +378,7 @@ impl Parser {
         } else {
             self.read_cond_expr(single)?
         };
-        self.cond_spacing();
+        self.cond_spacing_checked(single, false);
         Ok(t)
     }
 
@@ -271,7 +388,7 @@ impl Parser {
         // `readCondNot`: the TC_Unary id spans the `!` alone (`endSpan start`
         // immediately after `char '!'`), not the whole negated expression.
         let id = self.next_id_between(start, self.pos());
-        self.cond_spacing();
+        self.cond_spacing_checked(single, true);
         let expr = self.read_cond_expr(single)?;
         let typ = self.cond_typ(single);
         Ok(Token::new(
@@ -306,7 +423,7 @@ impl Parser {
             self.reset(m);
             return Err(());
         }
-        self.cond_spacing();
+        self.cond_spacing_checked(single, single);
         let inner = match self.read_cond_contents(single) {
             Ok(c) => c,
             Err(()) => {
@@ -323,7 +440,7 @@ impl Parser {
             self.reset(m);
             return Err(());
         }
-        self.cond_spacing();
+        self.cond_spacing_checked(single, single);
         let typ = self.cond_typ(single);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::TC_Group { typ, token: inner }))
@@ -354,7 +471,7 @@ impl Parser {
             self.reset(m);
             return Err(());
         }
-        match self.read_cond_word() {
+        match self.read_cond_word(single) {
             Ok(word) => {
                 let typ = self.cond_typ(single);
                 let id = self.next_id_between(start, op_end);
@@ -399,20 +516,20 @@ impl Parser {
 
     pub(super) fn read_cond_nullary_or_binary(&mut self, single: bool) -> PResult<Token> {
         let start = self.pos();
-        let x = self.read_cond_word()?;
+        let x = self.read_cond_word(single)?;
         // try binary op
         let m = self.mark();
         let op_start = self.pos();
         // `regexOperatorAhead`: a lookahead (non-consuming) for `=~`/`~=`. When
         // true the RHS is read as a regex rather than a normal condition word.
         let is_regex = self.regex_operator_ahead();
-        if let Some((op, op_end)) = self.read_cond_binary_op() {
+        if let Some((op, op_end)) = self.read_cond_binary_op(single) {
             // TC_Binary inherits the operator token's span (ShellCheck's
             // `getOp`: `startSpan .. endSpan`), so checks emit on the operator.
             let y = if is_regex {
                 self.read_regex()
             } else {
-                self.read_cond_word()
+                self.read_cond_word(single)
             };
             match y {
                 Ok(y) => {
@@ -429,6 +546,18 @@ impl Parser {
                     ));
                 }
                 Err(()) => {
+                    if !is_regex {
+                        // The operator was there, so there is no falling back to
+                        // a nullary expression: what is missing is its argument.
+                        self.problem_at(
+                            op_start.clone(),
+                            op_start,
+                            Severity::ErrorC,
+                            1027,
+                            "Expected another argument for this operator.",
+                        );
+                        return Err(());
+                    }
                     self.reset(m);
                 }
             }
@@ -450,19 +579,19 @@ impl Parser {
     /// Returns the operator string (with a leading `\` re-added for escaped/quoted
     /// `<`/`>`/`(`/`)`, matching `escaped`) and the position just after the
     /// operator (before spacing), used for the TC_Binary span.
-    pub(super) fn read_cond_binary_op(&mut self) -> Option<(String, Position)> {
+    pub(super) fn read_cond_binary_op(&mut self, single: bool) -> Option<(String, Position)> {
         let m = self.mark();
         // readEscaped anyOp  (\op  or  'op' / "op")
         if let Some(op) = self.read_cond_escaped_op() {
             let end = self.pos();
-            self.cond_spacing();
+            self.cond_spacing_checked(single, true);
             return Some((op, end));
         }
         self.reset(m);
         // plain anyOp
         if let Some(op) = self.read_cond_any_op() {
             let end = self.pos();
-            self.cond_spacing();
+            self.cond_spacing_checked(single, true);
             return Some((op, end));
         }
         self.reset(m);
@@ -537,12 +666,64 @@ impl Parser {
 
     /// A condition word: a normal word, not the closing bracket. Stops at
     /// whitespace/operators/brackets like the normal word reader.
-    pub(super) fn read_cond_word(&mut self) -> PResult<Token> {
-        // don't read the closing ] / ]] as a word
-        if self.peek() == Some(']') {
-            return Err(());
+    pub(super) fn read_cond_word(&mut self, single: bool) -> PResult<Token> {
+        // `notFollowedBy2 (try (spacing >> string "]"))`: the closing bracket is
+        // not a word. The error is recorded from past it, where the `fail`
+        // inside the lookahead happens.
+        {
+            let m = self.mark();
+            self.spacing();
+            if self.char(']').is_ok() {
+                let r = self.fail_recoverable("Unexpected ");
+                self.reset(m);
+                return r;
+            }
+            self.reset(m);
         }
         let w = self.read_normal_word()?;
+        let pos = self.pos();
+        // A word ending in the closing bracket swallowed it, unless it is an
+        // array index (`$x[1]`) — which starts with a literal `[`.
+        let tail = match w.inner() {
+            InnerToken::T_NormalWord(parts) => match parts.last().map(Token::inner) {
+                Some(InnerToken::T_Literal(s)) => s.clone(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        };
+        let is_array_index = match w.inner() {
+            InnerToken::T_NormalWord(parts) => {
+                matches!(parts.get(1).map(Token::inner), Some(InnerToken::T_Literal(t)) if t == "[")
+            }
+            _ => false,
+        };
+        let contains_open_bracket = match w.inner() {
+            InnerToken::T_NormalWord(parts) => parts
+                .iter()
+                .any(|p| matches!(p.inner(), InnerToken::T_Literal(s) if s.contains('['))),
+            _ => false,
+        };
+        if !is_array_index && tail.ends_with(']') && !contains_open_bracket {
+            let bracket = if single { "]" } else { "]]" };
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1020,
+                &format!("You need a space before the {bracket}."),
+            );
+            return self.fail_with("Missing space before ]");
+        }
+        if single && tail.ends_with(')') {
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1021,
+                "You need a space before the \\)",
+            );
+            return self.fail_with("Missing space before )");
+        }
         self.cond_spacing_line();
         Ok(w)
     }

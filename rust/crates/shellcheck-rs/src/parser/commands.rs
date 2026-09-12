@@ -345,11 +345,23 @@ impl Parser {
                 }
             }
         }
-        if let Ok(t) = self.read_condition_command() {
-            return Ok(t);
+        match self.read_condition_command() {
+            Ok(t) => return Ok(t),
+            Err(()) => {
+                if self.idx != m.idx {
+                    self.committed = true;
+                    return Err(());
+                }
+            }
         }
-        if let Ok(t) = self.read_coproc() {
-            return Ok(t);
+        match self.read_coproc() {
+            Ok(t) => return Ok(t),
+            Err(()) => {
+                if self.idx != m.idx {
+                    self.committed = true;
+                    return Err(());
+                }
+            }
         }
         self.read_simple_command()
     }
