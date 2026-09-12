@@ -115,10 +115,23 @@ impl Parser {
         let notes = self.notes.len();
         let pos = self.pos();
         // `many1 readNormalWord`, which does not skip spacing, so this stops at
-        // the first gap — and never crosses a line.
+        // the first gap — and never crosses a line. There is no `try` inside
+        // this `lookAhead`, so a word that fails after consuming propagates:
+        // `if true; then :; fi \`` is a parse error in the backtick.
         let mut any = false;
-        while self.read_normal_word().is_ok() {
-            any = true;
+        loop {
+            let wm = self.mark();
+            match self.read_normal_word() {
+                Ok(_) => any = true,
+                Err(()) => {
+                    if self.idx != wm.idx {
+                        self.commit();
+                        return;
+                    }
+                    self.reset(wm);
+                    break;
+                }
+            }
         }
         let pos_end = self.pos();
         self.reset(m);

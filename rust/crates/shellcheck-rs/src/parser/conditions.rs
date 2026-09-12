@@ -45,12 +45,13 @@ impl Parser {
         // A keyword here is reported by readNormalWord instead, and `-o`/`and`
         // already got SC1139; anything else is a stray parameter.
         let has_keyword = self.keyword_len().is_some();
+        // `isFollowedBy p = (lookAhead . try $ p $> True) <|> return False`: the
+        // `try` catches a word that fails after consuming, so an unterminated
+        // backtick after the condition is not a parse error here.
         let has_word = {
             let w = self.mark();
-            let notes = self.notes.len();
-            let ok = self.read_normal_word().is_ok();
+            let ok = self.try_parse(|p| p.read_normal_word().map(|_| ())).is_ok();
             self.reset(w);
-            self.notes.truncate(notes);
             ok
         };
         if has_word && !has_keyword && has_dash_ao.is_none() {

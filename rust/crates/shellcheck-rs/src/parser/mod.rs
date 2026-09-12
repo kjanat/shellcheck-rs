@@ -624,10 +624,6 @@ impl Parser {
     /// which is what ends the parse.
     pub(super) fn has_committed_failure(&self) -> bool {
         self.committed
-            || self
-                .failure
-                .as_ref()
-                .is_some_and(|f| f.consumed && f.explicit)
     }
 
     /// The parse is over: no enclosing alternative can recover, so Parsec
