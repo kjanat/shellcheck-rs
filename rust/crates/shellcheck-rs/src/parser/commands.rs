@@ -627,11 +627,9 @@ impl Parser {
             return Err(());
         }
         // choice [ try readCompoundCoProc, readSimpleCoProc ]
-        let mc = self.mark();
-        if let Ok(t) = self.read_compound_coproc(start.clone()) {
+        if let Ok(t) = self.try_parse(|p| p.read_compound_coproc(start.clone())) {
             return Ok(t);
         }
-        self.reset(mc);
         self.read_simple_coproc(start)
     }
 
@@ -643,24 +641,24 @@ impl Parser {
         if is_assign {
             return Err(());
         }
-        // choice [ try (body only, no name), (name word + body) ]
-        let m1 = self.mark();
-        if let Ok(body) = self.read_coproc_body(true) {
+        // choice [ try (body only, no name), try (name word + body) ]
+        if let Ok(body) = self.try_parse(|p| p.read_coproc_body(true)) {
             let id = self.next_id_between(start.clone(), self.pos());
             return Ok(Token::new(id, InnerToken::T_CoProc { name: None, body }));
         }
-        self.reset(m1);
-        let var = self.read_normal_word()?;
-        self.spacing();
-        let body = self.read_coproc_body(true)?;
-        let id = self.next_id_between(start, self.pos());
-        Ok(Token::new(
-            id,
-            InnerToken::T_CoProc {
-                name: Some(var),
-                body,
-            },
-        ))
+        self.try_parse(|p| {
+            let var = p.read_normal_word()?;
+            p.spacing();
+            let body = p.read_coproc_body(true)?;
+            let id = p.next_id_between(start, p.pos());
+            Ok(Token::new(
+                id,
+                InnerToken::T_CoProc {
+                    name: Some(var),
+                    body,
+                },
+            ))
+        })
     }
 
     pub(super) fn read_simple_coproc(&mut self, start: Position) -> PResult<Token> {

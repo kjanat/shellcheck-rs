@@ -640,6 +640,27 @@ impl Parser {
         }
     }
 
+    /// `try p`: on failure the cursor goes back, and so does Parsec's own state
+    /// -- the buffered parse notes, and with them the commitment, since a
+    /// consuming failure inside a `try` is caught rather than propagated. The
+    /// context stack and the problems live in the `StateT` underneath and stay.
+    pub(super) fn try_parse<T>(&mut self, f: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
+        let m = self.mark();
+        let notes = self.notes.len();
+        let committed = self.committed;
+        let frozen = self.frozen_contexts.clone();
+        match f(self) {
+            Ok(v) => Ok(v),
+            Err(()) => {
+                self.reset(m);
+                self.notes.truncate(notes);
+                self.committed = committed;
+                self.frozen_contexts = frozen;
+                Err(())
+            }
+        }
+    }
+
     fn code_is_disabled(&self, code: i64) -> bool {
         self.disabled_codes
             .iter()
