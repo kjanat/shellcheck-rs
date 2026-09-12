@@ -1681,51 +1681,36 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: hd }))
     }
 
+    /// `readToken`: the end token is the raw text of whatever `readNormalWord`
+    /// accepts, with its diagnostics forgotten, plus a trailing CR if there is
+    /// one -- a here document really does work with CRLF, because the CR ends
+    /// up part of the token.
     pub(super) fn read_heredoc_delim(&mut self) -> PResult<(String, Quoted)> {
-        match self.peek() {
-            Some('\'') => {
-                self.bump();
-                let mut s = String::new();
-                while let Some(c) = self.peek() {
-                    if c == '\'' {
-                        break;
-                    }
-                    self.bump();
-                    s.push(c);
-                }
-                self.char('\'')?;
-                Ok((s, Quoted::Quoted))
-            }
-            Some('"') => {
-                self.bump();
-                let mut s = String::new();
-                while let Some(c) = self.peek() {
-                    if c == '"' {
-                        break;
-                    }
-                    self.bump();
-                    s.push(c);
-                }
-                self.char('"')?;
-                Ok((s, Quoted::Quoted))
-            }
-            _ => {
-                let mut s = String::new();
-                while let Some(c) = self.peek() {
-                    if c.is_ascii_alphanumeric() || "_-.!/".contains(c) {
-                        self.bump();
-                        s.push(c);
-                    } else {
-                        break;
-                    }
-                }
-                if s.is_empty() {
-                    Err(())
-                } else {
-                    Ok((s, Quoted::Unquoted))
-                }
-            }
+        let m = self.mark();
+        let notes = self.notes.len();
+        let problems = self.problems.len();
+        let contexts = self.contexts.clone();
+        let failure = self.failure.clone();
+        let committed = self.committed;
+        let r = self.read_normal_word();
+        let end = self.idx;
+        // `inSeparateContext $ lookAhead ..`: nothing the word reported, and
+        // nothing it read, survives.
+        self.reset(m);
+        self.notes.truncate(notes);
+        self.problems.truncate(problems);
+        self.contexts = contexts;
+        self.failure = failure;
+        self.committed = committed;
+        r?;
+        let mut str: String = self.input[m.idx..end].iter().collect();
+        while self.idx < end {
+            self.bump();
         }
+        if self.carriage_return().is_ok() {
+            str.push('\r');
+        }
+        Ok(unquote_here_delim(&str))
     }
 
     pub(super) fn read_pending_heredocs(&mut self) -> PResult<()> {
@@ -1737,9 +1722,20 @@ impl Parser {
             // `swapContext`: the body is read long after the redirection was
             // parsed, so the diagnostics name the `<<` and what contained it.
             let outer = std::mem::replace(&mut self.contexts, hd.contexts.clone());
+            let from = self.idx;
             let r = self.read_pending_here_doc(&hd);
-            if r.is_ok() {
-                self.contexts = outer;
+            // `parsecBracket` restores the outer stack unless the body both
+            // failed and consumed: an unterminated document with no lines at
+            // all leaves nothing behind to name.
+            if r.is_ok() || self.idx == from {
+                self.contexts = outer.clone();
+                // The restore happens before the failure reaches the top, so
+                // the report names the restored stack.
+                if let Some(f) = &mut self.failure {
+                    if f.contexts == hd.contexts {
+                        f.contexts = outer;
+                    }
+                }
             }
             r?;
         }
@@ -1761,8 +1757,12 @@ impl Parser {
                 // Reached from `linefeed`, deep inside `spacing`: in Parsec the
                 // consuming failure propagates straight out of `readScript`,
                 // with nothing above it able to recover.
+                // Record the failure before committing: the commitment is what
+                // makes it the last word, so it must not suppress its own
+                // message.
+                let r: PResult<()> = self.fail_with("Here document was not correctly terminated");
                 self.committed = true;
-                return self.fail_with("Here document was not correctly terminated");
+                return r;
             }
             // `parseHereData`: a quoted delimiter keeps the body verbatim as one
             // literal; an unquoted delimiter sub-parses the body for expansions
@@ -1943,29 +1943,36 @@ impl Parser {
                 message: msg,
             });
         };
+        // The containment tests use the raw text; only the messages are escaped.
         let token = &hd.delim;
+        let tok = ast_lib::e4m(token);
         if doc.contains(token.as_str()) {
             at_token(
                 1041,
-                format!("Found '{token}' further down, but not on a separate line."),
+                format!("Found '{tok}' further down, but not on a separate line."),
             );
-            for line in doc.lines() {
+            // Haskell's `lines` keeps a trailing CR; Rust's `str::lines` strips
+            // it, and the CR is exactly what makes a close match not a match.
+            for line in haskell_lines(doc) {
                 if line.contains(token.as_str()) {
                     at_token(
                         1042,
-                        format!("Close matches include '{line}' (!= '{token}')."),
+                        format!(
+                            "Close matches include '{}' (!= '{tok}').",
+                            ast_lib::e4m(line)
+                        ),
                     );
                 }
             }
         } else if doc.to_lowercase().contains(&token.to_lowercase()) {
             at_token(
                 1043,
-                format!("Found {token} further down, but with wrong casing."),
+                format!("Found {tok} further down, but with wrong casing."),
             );
         } else {
             at_token(
                 1044,
-                format!("Couldn't find end token `{token}' in the here document."),
+                format!("Couldn't find end token `{tok}' in the here document."),
             );
         }
     }
@@ -2187,4 +2194,37 @@ impl Parser {
         );
         Some(root)
     }
+}
+
+/// `unquote`: a delimiter wrapped in matching quotes is quoted and loses them;
+/// otherwise a backslash anywhere makes it quoted, and the backslashes go.
+fn unquote_here_delim(s: &str) -> (String, Quoted) {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() < 2 {
+        return (s.to_string(), Quoted::Unquoted);
+    }
+    let first = chars[0];
+    let last = chars[chars.len() - 1];
+    if first == last && (first == '"' || first == '\'') {
+        return (chars[1..chars.len() - 1].iter().collect(), Quoted::Quoted);
+    }
+    if s.contains('\\') {
+        return (s.chars().filter(|c| *c != '\\').collect(), Quoted::Quoted);
+    }
+    (s.to_string(), Quoted::Unquoted)
+}
+
+/// Haskell's `lines`: split on `\n`, and no empty piece after a trailing one.
+/// Unlike `str::lines` it leaves a `\r` where it found it.
+fn haskell_lines(s: &str) -> impl Iterator<Item = &str> {
+    let body = s.strip_suffix('\n').unwrap_or(s);
+    let mut done = false;
+    std::iter::from_fn(move || {
+        if done {
+            return None;
+        }
+        done = true;
+        Some(body)
+    })
+    .flat_map(|b| b.split('\n'))
 }

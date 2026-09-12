@@ -289,7 +289,7 @@ pub struct Parser {
 }
 
 /// One open production, mirroring Haskell's `ContextName pos str`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Context {
     pos: Position,
     name: &'static str,
@@ -620,7 +620,12 @@ impl Parser {
         // `contextStack` lives in the state *outside* Parsec, so nothing
         // backtracks it: a production that failed after consuming input leaves
         // its frame behind, and that residue is what the report names.
-        // Haskell's stack has the innermost context first; ours has it last.
+        // Haskell reports `notesForContext (contextStack state)`, the stack as it
+        // stands when the parse gives up. Since a commitment stops Parsec dead,
+        // that is the stack as the failure that ended the parse saw it -- give or
+        // take the frames a `parsecBracket` pops on the way out, which the
+        // brackets fix up in the snapshot themselves. Haskell has the innermost
+        // context first; ours has it last.
         let mut inner = f.contexts.iter().rev();
         if let Some(c) = inner.next() {
             out.push(ParseNote {
