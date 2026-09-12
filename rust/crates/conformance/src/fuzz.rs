@@ -520,6 +520,9 @@ pub fn run(args: &Args) -> Result<bool, String> {
     let mut rng = Rng::new(args.seed.wrapping_add(1));
 
     let mut seen: HashSet<String> = HashSet::new();
+    // Deviation ids already announced, so one class is reported once rather
+    // than for every generated spelling of it.
+    let mut sanctioned: HashSet<&'static str> = HashSet::new();
     let mut found: Vec<Finding> = Vec::new();
     let mut checked = 0usize;
 
@@ -563,6 +566,14 @@ pub fn run(args: &Args) -> Result<bool, String> {
             let path = oracle.dir().join(name);
             let pk = port_keys(source, &path.to_string_lossy(), shell.as_deref());
             if keys_match(&pk, &ok) {
+                continue;
+            }
+            // A difference the port is entitled to (see `deviations`) is not a
+            // finding, however the generator spelled it.
+            if let Some(d) = crate::deviations::sanctioned(source, shell.as_deref(), &pk, &ok) {
+                if sanctioned.insert(d.id) && !args.quiet {
+                    println!("sanctioned deviation [{}]: {}", d.id, d.what);
+                }
                 continue;
             }
             let sig = signature(&pk, &ok, shell.as_deref());

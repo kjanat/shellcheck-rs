@@ -24,6 +24,7 @@
 //! Exit codes: 0 = agreement, 1 = at least one divergence, 2 = harness error.
 
 mod corpus;
+mod deviations;
 mod fuzz;
 mod oracle;
 
@@ -222,6 +223,7 @@ fn gate(args: &Args) -> Result<bool, String> {
     let by_name = oracle.check(&named, args.shell.as_deref())?;
 
     let mut divergent: Vec<(String, Vec<CommentKey>, Vec<CommentKey>)> = Vec::new();
+    let mut deviations: Vec<(String, &'static deviations::Deviation)> = Vec::new();
     let mut compared = 0usize;
     for (entry, (name, script)) in entries.iter().zip(&named) {
         let Some(ocomments) = by_name.get(name) else {
@@ -231,8 +233,13 @@ fn gate(args: &Args) -> Result<bool, String> {
         let path = oracle.dir().join(name);
         let ok = oracle_keys(ocomments);
         let pk = port_keys(script, &path.to_string_lossy(), args.shell.as_deref());
-        if !keys_match(&pk, &ok) {
-            divergent.push((entry.id.clone(), pk, ok));
+        if keys_match(&pk, &ok) {
+            continue;
+        }
+        // A difference the port is entitled to is not a divergence.
+        match deviations::sanctioned(script, args.shell.as_deref(), &pk, &ok) {
+            Some(d) => deviations.push((entry.id.clone(), d)),
+            None => divergent.push((entry.id.clone(), pk, ok)),
         }
     }
 
@@ -247,12 +254,16 @@ fn gate(args: &Args) -> Result<bool, String> {
         if divergent.len() > max {
             println!("... and {} more", divergent.len() - max);
         }
+        for (id, d) in deviations.iter().take(max) {
+            println!("DEVIATION {id} [{}]: {}", d.id, d.what);
+        }
     }
     println!(
-        "gate: {} properties, {} agree, {} diverge",
+        "gate: {} properties, {} agree, {} diverge, {} sanctioned deviations",
         compared,
-        compared - divergent.len(),
-        divergent.len()
+        compared - divergent.len() - deviations.len(),
+        divergent.len(),
+        deviations.len()
     );
     Ok(divergent.is_empty())
 }
