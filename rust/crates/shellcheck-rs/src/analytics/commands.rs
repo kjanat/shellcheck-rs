@@ -1,5 +1,4 @@
 //! Checks on how commands are invoked, from `ShellCheck.Analytics`.
-use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::condition_children;
 use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::get_command_name;
@@ -34,16 +33,6 @@ pub(super) fn check_unchecked_cd_pushd_popd(params: &Parameters, t: &Token, out:
         None => return,
     };
     if !matches!(name.as_str(), "cd" | "pushd" | "popd") {
-        return;
-    }
-    // Parser-gap workaround: this port's parser cannot yet parse POSIX-style
-    // function definitions (`name() { ...; }`) — they fail with a spurious
-    // SC1072, and a `cd()` header is misparsed as a bare `cd` command with no
-    // arguments, which would fire a false SC2164. The oracle never flags such a
-    // `cd()` definition. No legitimate zero-argument `cd` fires in the corpus
-    // (bare `popd`/`pushd` still do, and are preserved), so suppress only a
-    // bare `cd`. Remove once the parser handles `name()` definitions.
-    if name == "cd" && arguments(t).is_empty() {
         return;
     }
     if is_safe_dir(t) {

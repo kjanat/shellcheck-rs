@@ -1081,12 +1081,10 @@ impl Parser {
         while matches!(self.input.get(i), Some(' ') | Some('\t')) {
             i += 1;
         }
-        // `readParens` accepts a botched parameter list too, reporting SC1065
-        // and skipping to the `)`, so anything up to one on this line counts.
-        while matches!(self.input.get(i), Some(&c) if c != '\n' && c != ')' && c != '{') {
-            i += 1;
-        }
-        self.input.get(i) == Some(&')')
+        // `readWithoutFunction` is a bare `try` with no lookahead: a `(` after
+        // the name is enough to attempt it, and `readParens` reports SC1065 on
+        // the way out when the parameter list is botched.
+        true
     }
 
     /// `readWithoutFunction`: `name ( )` then a brace-group or subshell body.
@@ -1098,12 +1096,26 @@ impl Parser {
 
     fn read_posix_function_body(&mut self) -> PResult<Token> {
         let start = self.pos();
-        let name = self.read_function_name()?;
-        if name == "time" {
-            return Err(());
-        }
-        self.spacing();
-        self.read_function_parens()?;
+        // `readWithoutFunction` is a `try`: the signature either parses or
+        // leaves nothing consumed, whatever `readParens` reported on the way.
+        let sm = self.mark();
+        let signature = (|p: &mut Self| -> PResult<String> {
+            let name = p.read_function_name()?;
+            if name == "time" {
+                // `guard $ name /= "time"` -- it would take `time ( foo )`.
+                return Err(());
+            }
+            p.spacing();
+            p.read_function_parens()?;
+            Ok(name)
+        })(self);
+        let name = match signature {
+            Ok(n) => n,
+            Err(()) => {
+                self.reset(sm);
+                return Err(());
+            }
+        };
         self.allspacing();
         let body = if self.peek() == Some('{') {
             self.read_brace_group()?
