@@ -11,7 +11,11 @@ use crate::parser::{self, ParseNote};
 
 /// `checkScript`.
 pub fn check_script(spec: &CheckSpec) -> CheckResult {
-    let parse = parser::parse_script(&spec.filename, &spec.script);
+    let parse = parser::parse_script_with(
+        &spec.filename,
+        &spec.script,
+        spec.shell_type_override.is_some(),
+    );
 
     // Parse comments (SC1xxx): already positioned.
     let mut positioned: Vec<PositionedComment> =

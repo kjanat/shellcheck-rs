@@ -1471,9 +1471,10 @@ impl Parser {
         // `verifyShebang` (Parser.hs readScriptFile): warn on an unrecognized
         // interpreter, unless a `# shellcheck shell=...` directive overrides the
         // shebang. Emitted at the start of the file, like `parseProblemAt pos`.
-        let ignore_shebang = file_annotations
-            .iter()
-            .any(|a| matches!(a, Annotation::ShellOverride(_)));
+        let ignore_shebang = self.shell_flag_specified
+            || file_annotations
+                .iter()
+                .any(|a| matches!(a, Annotation::ShellOverride(_)));
         let mut unsupported_shell = false;
         if !ignore_shebang {
             if let InnerToken::T_Literal(sb) = &*shebang.inner {

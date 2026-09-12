@@ -263,6 +263,9 @@ pub struct Parser {
     reach_pos: Position,
     /// The deepest failure seen, which is the one a fatal parse reports.
     failure: Option<Failure>,
+    /// Whether the caller passed `--shell`, which like a `shell=` directive
+    /// means the shebang no longer decides anything and is not checked.
+    shell_flag_specified: bool,
 }
 
 /// One open production, mirroring Haskell's `ContextName pos str`.
@@ -327,7 +330,15 @@ fn is_glob_class_terminator(c: char) -> bool {
 
 impl Parser {
     pub fn new(filename: &str, script: &str) -> Parser {
+        Parser::with_shell_flag(filename, script, false)
+    }
+
+    /// `shell_flag_specified` mirrors Haskell's `shellTypeOverride`: `--shell`
+    /// suppresses the shebang checks just as a `# shellcheck shell=` directive
+    /// does, because the caller has already said what dialect this is.
+    pub fn with_shell_flag(filename: &str, script: &str, shell_flag_specified: bool) -> Parser {
         Parser {
+            shell_flag_specified,
             input: script.chars().collect(),
             idx: 0,
             line: 1,
@@ -772,7 +783,12 @@ impl Parser {
 
 /// Public entry point mirroring `ShellCheck.Parser.parseScript`.
 pub fn parse_script(filename: &str, script: &str) -> ParseOutput {
-    let mut p = Parser::new(filename, script);
+    parse_script_with(filename, script, false)
+}
+
+/// Parse a script, telling the parser whether the caller supplied `--shell`.
+pub fn parse_script_with(filename: &str, script: &str, shell_flag_specified: bool) -> ParseOutput {
+    let mut p = Parser::with_shell_flag(filename, script, shell_flag_specified);
     let root = p.read_script_file();
     // A production that failed after committing to what it was reading means
     // the script does not parse, even if backtracking found some other way to
