@@ -859,32 +859,36 @@ mod coproc_glob_dollar_tests {
         assert!(!has_note("/bin/sh", 1127));
     }
 
-    // ---- known divergences ------------------------------------------------
-    //
-    // These assert what the *oracle* does, and are marked `should_panic`
-    // because the port does not do it yet — Rust's nearest thing to Vitest's
-    // `test.fails` / bun's `test.failing`. Fixing the port makes the assertion
-    // pass, which makes the test fail, which is the reminder to delete the
-    // marker and the `DIVERGENCES.md` entry together. Only the port-side half
-    // of an entry can live here; the oracle's output is not available in a unit
-    // test, so the full comparison stays in the conformance harness.
-
     #[test]
-    #[should_panic(expected = "DIVERGENCES.md A3")]
-    fn function_as_a_command_name_should_parse() {
-        assert!(
-            parses_as(Some(Shell::Dash), "function | { x; }"),
-            "DIVERGENCES.md A3: `function` piped into a brace group is a command, not a definition"
-        );
+    fn function_as_a_command_name_parses() {
+        // `functionSignature <- try readFunctionSignature` covers everything up
+        // to the body, so a word that cannot be a function name rewinds to the
+        // keyword and `function` is read as the command name it is in a POSIX
+        // shell.
+        assert!(parses_as(Some(Shell::Dash), "function | { x; }"));
+        // The definition itself still parses as one.
+        assert!(parses_as(Some(Shell::Bash), "function f { x; }"));
     }
 
     #[test]
-    #[should_panic(expected = "DIVERGENCES.md B2")]
-    fn an_unterminated_quoted_directive_value_should_not_parse() {
-        assert!(
-            !parses_as(None, "#shellcheck disable=\"\nfor f in $();do :;done\n"),
-            "DIVERGENCES.md B2: upstream makes `disable=\"` a parse error"
-        );
+    fn an_unterminated_quoted_directive_value_does_not_parse() {
+        // `quoted` reads the opening quote before `many1 (noneOf (c:"\n"))`
+        // and `char c`, so both failures have consumed and `plainOrQuoted`'s
+        // `<|>` cannot fall back to the unquoted reading. The wiki's SC1072
+        // page documents an incomplete directive as a parse error.
+        assert!(!parses_as(
+            None,
+            "#shellcheck disable=\"\nfor f in $();do :;done\n"
+        ));
+        assert!(!parses_as(
+            None,
+            "#shellcheck disable=\"SC2086\nfor f in $();do :;done\n"
+        ));
+        // A properly closed one still parses.
+        assert!(parses_as(
+            None,
+            "#shellcheck disable=\"SC2086\"\nfor f in $();do :;done\n"
+        ));
     }
 
     // ---- `!` with nothing to negate ---------------------------------------

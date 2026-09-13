@@ -1236,29 +1236,36 @@ impl Parser {
 
     fn read_function_def_body(&mut self) -> PResult<Token> {
         let start = self.pos();
-        self.consume_keyword("function")?;
-        self.spacing();
-        let name = self.read_function_name_ext(true)?;
-        let before_spaces = self.idx;
-        self.spacing();
-        let had_spaces = self.idx != before_spaces;
-        // optional ()
-        let has_parens = if self.peek() == Some('(') {
-            self.read_function_parens()?;
-            true
-        } else {
-            false
-        };
-        if !has_parens && !had_spaces && matches!(self.peek(), Some('{') | Some('(')) {
-            let pos = self.pos();
-            self.problem_at(
-                pos.clone(),
-                pos,
-                Severity::ErrorC,
-                1095,
-                "You need a space or linefeed between the function name and body.",
-            );
-        }
+        // `functionSignature <- try readFunctionSignature`: everything up to
+        // the body is one `try`, so a word that is not a function name leaves
+        // the cursor at the keyword and `readCommand` goes on to read
+        // `function` as the ordinary command name it is in a POSIX shell.
+        let (name, has_parens) = self.try_parse(|p| {
+            p.consume_keyword("function")?;
+            p.spacing();
+            let name = p.read_function_name_ext(true)?;
+            let before_spaces = p.idx;
+            p.spacing();
+            let had_spaces = p.idx != before_spaces;
+            // optional ()
+            let has_parens = if p.peek() == Some('(') {
+                p.read_function_parens()?;
+                true
+            } else {
+                false
+            };
+            if !has_parens && !had_spaces && matches!(p.peek(), Some('{') | Some('(')) {
+                let pos = p.pos();
+                p.problem_at(
+                    pos.clone(),
+                    pos,
+                    Severity::ErrorC,
+                    1095,
+                    "You need a space or linefeed between the function name and body.",
+                );
+            }
+            Ok((name, has_parens))
+        })?;
         self.allspacing();
         // `readBraceGroup <|> readSubshell`, after a lookahead that says which
         // it should have been.

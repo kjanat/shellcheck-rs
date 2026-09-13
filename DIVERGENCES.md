@@ -9,7 +9,7 @@ Reproduce the whole set (deterministic, seed 0):
 
 ```sh
 cargo conformance-fuzz --max-findings 40
-# fuzz: 2000 inputs checked, 12 distinct divergences
+# fuzz: 2000 inputs checked, 2 distinct divergences
 # oracle crashed on 1 input(s) -- an upstream defect, not a divergence
 ```
 
@@ -18,10 +18,19 @@ compare against (`PARITY-NOTES.md` items 4 and 5, and **Z3** below). The harness
 re-runs such a batch one script at a time, so the crash costs that one input and
 nothing else.
 
-A seed covers what it happens to generate. One entry below (A3) was found by
-another seed and is still open under this one; a run at `--seed 1013
---iterations 4000` finds around 40, the extra ones being further spellings of
-the classes already listed here.
+A seed covers what it happens to generate, and this file only classifies what
+seed 0 finds. A wider run still finds more:
+
+```sh
+cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle \
+    --seed 1013 --iterations 4000 --max-findings 60
+# fuzz: 4000 inputs checked, 18 distinct divergences
+```
+
+Those 18 are down from around 40 before this round and have not been grouped
+into classes yet; several are shapes no entry here covers (`coproc $COPROC`,
+`#shellcheck shell= d`, `for((i;{ `). Do not read the seed-0 count as the size
+of the problem.
 
 Reproduce one entry: run its command against both binaries. `shellcheck` is the
 oracle, `rshellcheck` the port.
@@ -41,11 +50,13 @@ definitions, which the gate now prints on every run rather than leaving implied.
 The other 226 test the Fixer, the Checker's IO, `ASTLib` helpers and the like,
 and have no shell snippet to replay.
 
-Where an entry's port-side half can be checked without the oracle, it also has a
-`#[should_panic]` test in `rust/crates/shellcheck-rs/src/parser/tests.rs`
-("known divergences"), which asserts what upstream does. Fixing the port makes
-the assertion pass, which makes the test *fail* — the reminder to delete the
-marker and the entry here in the same commit.
+Where an entry's port-side half can be checked without the oracle, it gets a
+`#[should_panic]` test in `rust/crates/shellcheck-rs/src/parser/tests.rs`, which
+asserts what upstream does. Fixing the port makes the assertion pass, which
+makes the test *fail* — the reminder to delete the marker and the entry here in
+the same commit. That is how A1, A3, B1, B2 and E1 came to be closed; there are
+no markers left, since the one entry that remains cannot be checked without the
+oracle.
 
 Grouped by cause, worst user impact first.
 
@@ -64,38 +75,6 @@ the contract.
 Recorded so the trade is explicit, not so it is kept. Each is still a divergence
 and each is still due to be matched to upstream.
 
-### Z1. An empty SC1072 message where the port has a real one
-
-```sh
-printf '%s' '[#' | shellcheck -s sh -f gcc -
-```
-
-|        |                                                                                |
-| ------ | ------------------------------------------------------------------------------ |
-| oracle | `1:3: error:  Fix any mentioned problems and try again. [SC1072]` — no message |
-| port   | `1:3: error: Expected test to end here (don't wrap commands in []/[[]]). ...`  |
-
-Upstream's SC1072 carries the empty string here, so the rendered line has two
-spaces after `error:` and tells the reader nothing. The port names the actual
-expectation. Same class as the `S=('` / `y=("` pair in **D1**, where the two
-tools name different-but-equally-true expectations; this is the sub-case where
-one of them names none at all.
-
-### Z2. A whole file discarded over one unterminated directive value
-
-```sh
-printf '#shellcheck disable="\nfor f in $();do t$(d)"" $n;done\nx=(*)\n' | shellcheck -s sh -f gcc -
-```
-
-|        |                                                                               |
-| ------ | ----------------------------------------------------------------------------- |
-| oracle | SC1073 + SC1072 and nothing else: the file is unparseable, no analysis at all |
-| port   | SC1125 (invalid key=value pair) and then the file's 10 real findings          |
-
-A stray quote in a comment costs the user every diagnostic in the file upstream.
-The port reports the malformed directive and analyses the script anyway, which
-is what a person would want. It is still **B2**, and still has to be matched.
-
 ### Z3. Two inputs that kill upstream outright
 
 `x=$(coproc foo)` and `$'\U110000'` end the Haskell process with a pattern-match
@@ -107,169 +86,43 @@ and the harness counts them separately as `oracle crashed on N input(s)`.
 ### Z4. `! # comment`
 
 The one *sanctioned* deviation: upstream declares the file unparseable, bash
-runs it, and `bash -n` agrees with the port. Unlike Z1–Z3 this one is kept,
-because the harness can justify it from a shell's verdict rather than from
-taste. See `PARITY-NOTES.md` item 2 and
+runs it, and `bash -n` agrees with the port. Unlike Z3 this one is kept, because
+the harness can justify it from a shell's verdict rather than from taste — and
+only from a shell's verdict: for `-s dash`, which rejects `! # c`, the sanction
+is refused and the divergence stands. See `PARITY-NOTES.md` item 2 and
 `rust/crates/conformance/src/deviations.rs`.
 
-## A. The port gives up where upstream carries on
+## F. Which failure wins inside `[ .. ]`
 
-The expensive class: a parse failure costs the file its whole analysis, so the
-user loses every real finding in it.
+Sections A through D are gone; their entries are all in **Fixed** below. This
+one keeps a fresh letter so a closed `A1` and an open one never share a name.
 
-### A2. `!` glued to a keyword inside a loop
-
-```sh
-printf '%s' 'until x; !do y;done' | shellcheck -s sh -f gcc -
-```
-
-|        |                                                                                          |
-| ------ | ---------------------------------------------------------------------------------------- |
-| oracle | SC1057 "Did you forget the 'do'", SC1035, SC1010, SC1058 "Expected 'do'", SC1073, SC1072 |
-| port   | SC1073, SC1035, SC1072                                                                   |
-
-Shrunk from `printf $r\ncoproc E {until [[ ?() ]];!do $@;done`, where it costs
-10 findings — including every finding on line 1, which is syntactically fine.
-Both sides fail, but upstream fails *later* and reports the loop diagnostics
-(SC1057/SC1058) on the way; the port commits at the `!do` and never reaches
-them. Related to `g_Bang`: `!do` has no space, so SC1035 fires and the `do`
-should then be read as a word (SC1010).
-
-### A3. `function` used as a command name
+### F1. An unterminated quote before a redirection operator
 
 ```sh
-printf '%s' 'function | { x; }' | shellcheck -s dash -f gcc -
-```
-
-|        |                                                   |
-| ------ | ------------------------------------------------- |
-| oracle | nothing: it parses                                |
-| port   | `SC1073` "Couldn't parse this function", `SC1072` |
-
-Shrunk from a three-line generated script where it costs 13 findings.
-
-In dash `function` is not a keyword, so this is a command named `function` piped
-into a brace group, and `dash -n` accepts it. (bash, where `function` *is* a
-keyword, rejects it — which is why this entry is dialect-specific.) Upstream's
-`try readFunctionSignature` rewinds cleanly when the name turns out to be `|`;
-the port's attempt consumes and commits, so the pipeline reading is never
-tried.
-
-## B. The port accepts what upstream rejects
-
-The port is too lenient here, so it reports analysis findings on a file upstream
-refuses outright. Whether upstream or the port is *right* is a separate
-question — the shells accept neither — but they must agree.
-
-### B2. An unterminated quoted directive value
-
-```sh
-printf '#shellcheck disable="\nfor f in $();do $(d)$n;done\nfor f in ${}$@;do $[1] ; done\n' | shellcheck -s ksh -f gcc -
-```
-
-|        |                                                                            |
-| ------ | -------------------------------------------------------------------------- |
-| oracle | `SC1073` "Couldn't parse this shellcheck directive" at 1:1, SC1072 at 1:22 |
-| port   | SC1125, then SC2046, SC2154, SC2086, SC2034, SC2068, SC2007                |
-
-`disable="` with no closing quote is a parse error upstream. The port's
-`plain_or_quoted` falls back to the unquoted reading, emits SC1125 and analyses
-the file.
-
-## C. The wrong production is named on a parse failure
-
-SC1073 names the construct that failed and SC1009 the one it was inside. The
-port picks different frames than upstream. Same class as `PARITY-NOTES.md` item
-1 — upstream's pairing is itself residue from abandoned productions, which is
-why matching it exactly is fiddly.
-
-### C1. ksh-style `${ ..; }`
-
-```sh
-printf '%s' '${ '                 | shellcheck -s sh   -f gcc -
-printf '%s' "select x in ''\${ "  | shellcheck -s dash -f gcc -
-```
-
-|                |                                                                                                             |
-| -------------- | ----------------------------------------------------------------------------------------------------------- |
-| oracle (`${ `) | SC1073 "ksh-style `${ ..; }` command expansion", SC1009 "simple command", SC1072 "Expected a command"       |
-| port           | SC1073 "parameter expansion", SC1009 "ksh-style `${ ..; }` command expansion", SC1072 with an empty message |
-
-The `select` variant differs further: upstream names the select loop in SC1009
-and the port emits no SC1009 at all.
-
-### C2. Regex grouping in `[ .. =~ .. ]`
-
-```sh
-printf '%s' '[x =~""("' | shellcheck -f gcc -
+printf '%s' '[o ">'        | shellcheck -s busybox -f gcc -
+printf '%s' "until['' '-g" | shellcheck -s sh      -f gcc -
 ```
 
 |        |                                                                              |
 | ------ | ---------------------------------------------------------------------------- |
-| oracle | SC1009 "in this regex grouping" at 1:8, SC1073 "double quoted string" at 1:9 |
-| port   | SC1009 "in this regex" at 1:6, SC1073 "regex grouping" at 1:8                |
+| oracle | `1:6: error:  Fix any mentioned problems and try again.` — no message        |
+| port   | `1:4: error: Expected test to end here (don't wrap commands in []/[[]]). ..` |
 
-`[o =~ $"` is the same entry with a translated string in place of the grouping:
-upstream names the regex in SC1009 and the double quoted string in SC1073, the
-port names the test expression and the regex.
+Both agree on SC1035 and SC1073; only the SC1072 differs. Upstream's error sits
+one past the `>` — the position `readProcSub` reaches when it has read the
+operator and gone looking for the `(` — and carries no message, so something
+reached further into the line than the port ever does. `[o >` and `[o >x`, with
+no quote in the way, already agree exactly, so the `"` is what diverts the port.
 
-### C4. A failed subshell inside a backtick expansion
-
-```sh
-printf '%s' '`(){``' | shellcheck -f gcc -
-```
-
-|        |                                                                                                                                                           |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| oracle | SC1009 "backtick expansion", SC1009 "simple command", SC1073 "explicit subshell" at 1:2, SC1072 at 1:4, SC1073 "backtick expansion" at 1:6, SC1072 at 1:7 |
-| port   | SC1009 "simple command", **SC1070** "Parsing stopped here" at 1:4, SC1073 "backtick expansion", SC1072                                                    |
-
-The port loses the inner failure's own SC1073/SC1009 pair — the subshell frame
-is gone by the time the backtick expansion reports — and emits SC1070 instead,
-which upstream only uses when nothing better is known.
-
-### C3. Array assignment vs the simple command around it
-
-```sh
-printf '%s' 'S[]=$"' | shellcheck -s sh -f gcc -
-```
-
-|        |                                                               |
-| ------ | ------------------------------------------------------------- |
-| oracle | SC1073 "variable assignment", SC1009 "simple command", SC1072 |
-| port   | SC1073 "simple command", **no SC1009**, SC1072                |
-
-## D. Which failure wins, and what it says
-
-The port and the oracle fail on the same input, at nearly the same place, but
-disagree about the position by one column or about whether the message is the
-explicit one or Parsec's empty one. Cosmetic for a human, fatal for the gate.
-
-### D1. Empty message where upstream has an explicit one
-
-```sh
-printf '%s' 'x=((`'     | shellcheck -s ksh  -f gcc -   # oracle: empty  / port: "Expected ) to close array assignment"
-printf '%s' '$((())'    | shellcheck -s dash -f gcc -   # oracle: "Expected a double )) to end the $((..))" / port: empty
-printf '%s' "<<'"       | shellcheck -s sh   -f gcc -   # oracle: "Expected end of single quoted string" at 1:4 / port: empty at 1:3
-printf '%s' 'y=("'      | shellcheck -f gcc -           # oracle: "Expected end of double quoted string" / port: "Expected ) to close array assignment"
-printf '%s' "S=('"      | shellcheck -s ksh  -f gcc -   # oracle: "Expected end of single quoted string" / port: "Expected ) to close array assignment"
-printf '%s' '[#'        | shellcheck -s sh   -f gcc -   # oracle: empty / port: "Expected test to end here (don't wrap commands in []/[[]])"
-```
-
-Instances in *both* directions, so the cause is not one missing message: it is
-which recorded failure wins the ranking. The port ranks by (position,
-has-a-message, explicit, consumed); Parsec merges by position alone and drops
-empty-message errors when merging at equal positions. The `y=("` and `S=('`
-pair shows the shape: at the same column the port keeps the outer array
-assignment's expectation, upstream the inner string's.
-
-### D2. Off-by-one column
-
-```sh
-printf '%s' 'until ];do ];do ' | shellcheck -f gcc -            # oracle 1:17 "Unexpected keyword/token" / port 1:16, empty
-printf '%s' '(} '              | shellcheck -s busybox -f gcc -  # oracle 1:3 / port 1:4
-printf '%s' 'while e;done'     | shellcheck -f gcc -             # oracle 1:13 "Unexpected keyword/token" / port 1:11 "Expected whitespace"
-```
+The shape is verified but the cause is not: the reading that gets upstream past
+the `"` has not been identified, and the obvious candidate is ruled out —
+`readDoubleQuoted`'s close is `doubleQuote <|> fail "Expected end of double
+quoted string"`, which would put a *message* at that position, and upstream's is
+empty. A general fix was tried and rejected: making every `reset` restore the
+failure its rewound reads had dropped (Parsec merges rather than drops on a
+`try` that fails) changes nothing here and breaks `prop_readHereDoc4` in the
+gate. That merge now lives only at `consume_keyword`, where it is justified.
 
 ## E. A check the port has not got
 
@@ -333,3 +186,70 @@ Kept so a reader can tell a closed entry from a missed one.
   `readLineBreak`.
 - `readonly f=(` — `readModifierSuffix`'s assignment failure consumed input and
   was retried as a word, giving SC1036/SC1088 where upstream fails the command.
+
+- `time |y`, `time ||cd` (was **A1**) — `readTimeSuffix` sits under `option []`,
+  and on a pipe `readPipeline` fails without consuming, so bare `time` is a
+  command. The port took its mark before the space after the name, which
+  `readCmdWord`'s `<* spacing` has already eaten, so a suffix that had only
+  stepped over that space looked like it had consumed. A whole file's analysis.
+- `until x; !do y;done` (was **A2**) — fixed by the same round; upstream fails
+  later and reports the loop diagnostics on the way.
+- `function | { x; }` (was **A3**) — `functionSignature <- try
+  readFunctionSignature` covers everything up to the body, so a word that cannot
+  be a function name rewinds to the keyword and `function` is the command name
+  it is in a POSIX shell. The port propagated the name failure instead.
+- `[[# =x ]]`, `[ -x# ]` (was **B1**) — `condSpacing` reads `allspacing`, which
+  ends in `optional readComment`, so the `#` opens a comment and the `-x` is
+  left with no argument. The port read it as a word and carried on.
+- `#shellcheck disable="` (was **B2** and **Z2**) — `quoted` reads the opening
+  quote before `many1 (noneOf (c:"\n"))` and `char c`, so both failures have
+  consumed and `plainOrQuoted`'s `<|>` cannot fall back to the unquoted reading.
+  The wiki's SC1072 page documents an incomplete directive as a parse error, so
+  upstream's behaviour here is intended rather than incidental. The port emitted
+  SC1125 and analysed the file.
+- `${ `, `select x in ''${ ` (was **C1**) — `readDollarBraceCommandExpansion`
+  consumes `${` and the space inside its own `try`, so past that the `<|>` has
+  no `readDollarBraced` to fall back to. The port fell through and stacked a
+  second frame, and SC1073 named the wrong one.
+- `[x =~""("`, `[1 =~ .(` (was **C2**) — `many1 readPart` in a regex takes a
+  consuming failure down with it, and `readLiteralString ")"` records an error
+  where it stood. The port did neither.
+- ``` `(){``` `` (was **C4**) — `readSubshell`'s body is `readCompoundList`, a
+  non-empty term, so `()` is a subshell missing its command rather than an empty
+  one. The port parsed it and then tripped over the leftover `{` with SC1070.
+- `S[]=$"` (was **C3**) — `value <- readArray <|> readNormalWord` has nothing
+  after it, so a word that failed having consumed takes the assignment with it
+  and the `called "variable assignment"` frame names the failure.
+- `x=((` ` `` `, `y=("`, `S=('` (was **D1**) — `readElement `reluctantlyTill` char ')'` ends on `<|> return []`, out of reach of a consuming failure, so the
+  element's own error stands rather than "Expected ) to close array assignment".
+- `$((())` (was **D1**) — the message was in the port as a comment and never
+  passed to the failure.
+- `<<'`, `<<>`, `<<$(` (was **D1**) — `readStringForParser` restored the outer
+  failure over the inner one. `parseForgettingContext` fails with `fail ""` and
+  the `<|>` above it merges, so the further of the two stands.
+- `[#` (was **D1** and **Z1**) — same cause; upstream's empty message is what
+  the merge leaves, and the port's own expectation is not what Parsec reports.
+- `until ];do ];do `, `(} `, `while e;done`, `f(){:;until :;done` (was **D2**) —
+  two causes. `g_Rbrace` is a bare `char '}'` while every other keyword token is
+  a `tryToken`/`tryWordToken` that ends `spacing`, so `}` must not take the
+  spacing with it; and a `try` that fails merges its error with the one before
+  it rather than dropping it, which `consume_keyword`'s rewound reads were not
+  doing, so the `do` inside `done` buried `readPipeline`'s complaint.
+- ``for f in "``, ``for i in ""$()"`` — `readInClause <|> (optional readSequentialSep
+  >> return [])``recovers only while``g_In``has not matched; past the keyword a
+  >> failed word list has consumed. The port went looking for``do` and invented an
+  >> SC1058.
+- `a[$(` — `readArrayIndex` was a second, stale copy of `readStringForParser`
+  that also forgot to restore the commitment, so the parse ended committed with
+  no failure recorded and **reported nothing at all**. It now calls the one
+  definition.
+- `builtin ` `` ` `` , `"";builtin {d}>` — the `builtin` first-argument peek is
+  `ignoreProblemsOf . optionMaybe . try . lookAhead`, and `optionMaybe` makes it
+  total, so `p <* put systemState` always runs and puts back the problems and
+  the context frames. The port kept both.
+- `{c|}` — `unexpecting readKeyword` belongs at the top of `readPipeline`, once
+  per statement. Hoisted into `read_command` it also rejected the command after
+  a `|`, so the `}` was never read as the word it is.
+- `if[ ]{` — Parsec records an error for running out of input like any other,
+  and the port returned a bare failure, so the furthest position reached was
+  short and a nearer error won.

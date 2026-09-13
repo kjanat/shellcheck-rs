@@ -240,7 +240,6 @@ impl Parser {
     /// `plainOrQuoted p = quoted p <|> p`: the value may be wrapped in quotes,
     /// in which case `p` runs on what is inside them.
     fn plain_or_quoted<T>(&mut self, p: impl Fn(&mut Self) -> PResult<T>) -> PResult<T> {
-        let m = self.mark();
         if let Some(q) = self.peek() {
             if q == '\'' || q == '"' {
                 self.bump();
@@ -253,10 +252,20 @@ impl Parser {
                     inner.push(c);
                     self.bump();
                 }
-                if inner.is_empty() || self.char(q).is_err() {
-                    // `many1 $ noneOf (c:"\n")` then `char c <|> fail ..`
-                    self.reset(m);
-                } else {
+                // Past the opening quote both of these have consumed, so the
+                // `<|>` in `plainOrQuoted` cannot fall back to the unquoted
+                // reading: an unterminated quote is a parse error, which is
+                // what the wiki's SC1072 page describes for an incomplete
+                // directive.
+                if inner.is_empty() {
+                    // `many1 $ noneOf (c:"\n")` with nothing to take.
+                    self.fail_implicitly();
+                    return Err(());
+                }
+                if self.char(q).is_err() {
+                    return self.fail_with("Missing terminating quote for directive.");
+                }
+                {
                     let mut sub = self.sub_parser(&inner, &start);
                     let r = p(&mut sub);
                     let (contexts, failure) = (sub.contexts.clone(), sub.failure.clone());

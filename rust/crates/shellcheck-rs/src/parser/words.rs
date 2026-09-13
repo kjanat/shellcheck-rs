@@ -1113,8 +1113,7 @@ impl Parser {
         let c = self.read_arithmetic_contents()?;
         self.char(')')?;
         if self.char(')').is_err() {
-            // Haskell: char ')' <|> fail "Expected a double )) to end the $((..))"
-            return Err(());
+            return self.fail_with("Expected a double )) to end the $((..))");
         }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_DollarArithmetic(c)))
