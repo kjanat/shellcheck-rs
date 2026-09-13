@@ -119,10 +119,13 @@ opens: `error` for a divergence, `warning` for an input the oracle crashed on,
 annotates the `prop_` that produced it, by file and line in `src/ShellCheck/`
 (a test pins every one of the 2026 paths and lines, because an annotation on
 the wrong line blames code that is fine); a *fuzz* divergence carries its
-shrunk reproducer instead, since the input exists nowhere. This turns itself on
-when `GITHUB_ACTIONS=true`, or with `--annotate` locally. Nothing needs to be
-installed: `actions-rs/*` is archived, and all it did here was print the same
-lines any process can print.
+shrunk reproducer instead, since the input exists nowhere. The counts also go
+to `$GITHUB_OUTPUT` and the job summary. There is no flag: the
+[`actions-rs`](https://crates.io/crates/actions-rs) crate decides, from
+`GITHUB_ACTIONS`, whether a run is in CI, and escaping (`%`, CR, LF
+everywhere; `:` and `,` inside properties) and the `line`/`col` property
+spelling are its problem rather than ours. Do not confuse it with the archived
+`actions-rs/*` GitHub Actions org — different thing, unrelated.
 
 `gate` takes the shell script out of every `prop_` property in
 `src/ShellCheck/**/*.hs` that has one (extracted from the sources at run time,

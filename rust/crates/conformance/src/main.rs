@@ -23,7 +23,6 @@
 //!
 //! Exit codes: 0 = agreement, 1 = at least one divergence, 2 = harness error.
 
-mod annotate;
 mod bench;
 mod corpus;
 mod deviations;
@@ -34,6 +33,7 @@ mod snapshot;
 
 use std::process::ExitCode;
 
+use actions_rs::{Annotation, Cell, Summary, log, output};
 use clap::{ArgAction, Parser, ValueEnum};
 use serde_json::Value;
 use shellcheck_cli::formatter::{fixer, json1};
@@ -211,6 +211,31 @@ fn oracle_keys(comments: &[Value]) -> Vec<CommentKey> {
     comments.iter().map(key_from_value).collect()
 }
 
+/// Publish a run's numbers as step outputs and a job-summary table.
+pub fn job_summary(headline: &str, stats: &[(&str, usize)]) {
+    if !actions_rs::env::is_github_actions() {
+        return;
+    }
+    for (name, value) in stats {
+        if let Err(e) = output::set_output(name, value) {
+            log::warning(format!("could not set output {name}: {e}"));
+        }
+    }
+    let mut s = Summary::new();
+    s.heading("Conformance", 2);
+    s.raw(headline, true);
+    s.table(
+        std::iter::once(vec![Cell::header("Measure"), Cell::header("Count")]).chain(
+            stats
+                .iter()
+                .map(|(n, v)| vec![Cell::new(*n), Cell::new(v.to_string())]),
+        ),
+    );
+    if let Err(e) = s.write() {
+        log::warning(format!("could not write the job summary: {e}"));
+    }
+}
+
 /// Report the inputs the oracle died on, separately from divergences.
 ///
 /// There is no comparison to make for these — the reference implementation
@@ -226,7 +251,9 @@ fn report_crashes(oracle: &oracle::Oracle, max: usize, quiet: bool) -> usize {
         for (script, why) in crashes.iter().take(max) {
             println!("ORACLE CRASH ({why})");
             println!("  script: {script:?}");
-            annotate::oracle_crash(script, why);
+            if actions_rs::env::is_github_actions() {
+                log::warning(format!("Oracle crashed: {why}\nscript: {script:?}"));
+            }
         }
         if crashes.len() > max {
             println!("... and {} more", crashes.len() - max);
@@ -249,6 +276,9 @@ fn gate(args: &Args) -> Result<bool, String> {
     // Say what the corpus cannot reach before saying how well it did on the
     // rest: "2026 agree" means nothing without the denominator it left out.
     println!("{}", coverage.summary());
+    // The denominator the summary table needs: properties the corpus cannot
+    // reach at all, which a count of agreements would otherwise hide.
+    let coverage_skipped = coverage.skipped.len();
     let mut entries = coverage.entries;
     if let Some(n) = args.limit {
         entries.truncate(n);
@@ -327,36 +357,62 @@ fn gate(args: &Args) -> Result<bool, String> {
     }
 
     if !args.quiet {
-        // `--max-findings` caps how many are spelled out, as it does for `fuzz`.
         let max = args.max_findings;
-        for (id, port, oracle) in divergent.iter().take(max) {
-            println!("DIVERGE {id}");
-            println!("  oracle: {}", render_keys(oracle));
-            println!("  port:   {}", render_keys(port));
-            // A gate divergence came from a property, so the annotation can
-            // point at the line that defines it.
-            let place = where_of.get(id).map(|(f, l)| annotate::Where::at(f, *l));
-            annotate::divergence(id, place.as_ref(), &render_keys(oracle), &render_keys(port));
-        }
-        if divergent.len() > max {
-            println!("... and {} more", divergent.len() - max);
-        }
-        for (id, d) in deviations.iter().take(max) {
-            println!("DEVIATION {id} [{}]: {}", d.id, d.what);
-            annotate::deviation(&format!("{id} [{}]", d.id), d.what);
+        let ci = actions_rs::env::is_github_actions();
+        let report = || {
+            for (id, port, oracle) in divergent.iter().take(max) {
+                println!("DIVERGE {id}");
+                println!("  oracle: {}", render_keys(oracle));
+                println!("  port:   {}", render_keys(port));
+                if ci {
+                    let mut a = Annotation::new().title(format!("Divergence: {id}"));
+                    if let Some((file, line)) = where_of.get(id) {
+                        a = a.file(file).line(u32::try_from(*line).unwrap_or(u32::MAX));
+                    }
+                    a.error(format!(
+                        "oracle: {}\nport:   {}",
+                        render_keys(oracle),
+                        render_keys(port)
+                    ));
+                }
+            }
+            if divergent.len() > max {
+                println!("... and {} more", divergent.len() - max);
+            }
+            for (id, d) in deviations.iter().take(max) {
+                println!("DEVIATION {id} [{}]: {}", d.id, d.what);
+                if ci {
+                    log::notice(format!("Sanctioned deviation {id} [{}]: {}", d.id, d.what));
+                }
+            }
+        };
+        if ci {
+            log::group("Divergences".to_string(), report);
+        } else {
+            report();
         }
     }
-    report_crashes(&oracle, args.max_findings, args.quiet);
+    let crashes = report_crashes(&oracle, args.max_findings, args.quiet);
+    let agree = compared + optional_checked - divergent.len() - deviations.len();
     let line = format!(
-        "gate: {} properties + {optional_checked} optional-check examples, \
-         {} agree, {} diverge, {} sanctioned deviations",
-        compared,
-        compared + optional_checked - divergent.len() - deviations.len(),
+        "gate: {compared} properties + {optional_checked} optional-check examples, \
+         {agree} agree, {} diverge, {} sanctioned deviations",
         divergent.len(),
         deviations.len()
     );
     println!("{line}");
-    annotate::summary(&line);
+    job_summary(
+        &line,
+        &[
+            ("properties", compared),
+            ("optional_examples", optional_checked),
+            ("agree", agree),
+            ("divergences", divergent.len()),
+            ("deviations", deviations.len()),
+            ("oracle_crashes", crashes),
+            ("unreplayable_properties", coverage_skipped),
+        ],
+    );
     Ok(divergent.is_empty())
 }
 
@@ -510,15 +566,6 @@ pub struct Args {
     #[arg(long, help_heading = "Snapshot")]
     pub write: bool,
 
-    /// Also print findings as GitHub Actions workflow commands.
-    ///
-    /// On by default when `GITHUB_ACTIONS=true`, so CI annotates a run without
-    /// being told to, and a local run stays quiet. A gate divergence annotates
-    /// the `prop_` that produced it in `src/ShellCheck/`; a fuzz divergence
-    /// carries its shrunk reproducer, since the input exists nowhere.
-    #[arg(long)]
-    pub annotate: bool,
-
     /// Lines of generated shell to benchmark.
     #[arg(long, default_value_t = 4000, help_heading = "Bench")]
     pub lines: usize,
@@ -573,7 +620,6 @@ impl Args {
 
 fn main() -> ExitCode {
     let args = Args::parse();
-    annotate::set_enabled(args.annotate);
     let res = match args.cmd {
         Command::Gate => gate(&args),
         Command::Fuzz => fuzz::run(&args),

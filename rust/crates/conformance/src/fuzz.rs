@@ -15,6 +15,8 @@
 
 use std::collections::HashSet;
 
+use actions_rs::Annotation;
+
 use crate::corpus;
 use crate::oracle::Oracle;
 use crate::{Args, CommentKey, keys_match, port_keys, render_keys};
@@ -660,15 +662,26 @@ pub fn run(args: &Args) -> Result<bool, String> {
         println!("  port:   {}", render_keys(&pk));
         // A generated script exists nowhere in the repository, so the
         // annotation carries the shrunk reproducer instead of a location.
-        crate::annotate::divergence(
-            &format!("{sig} on {small:?}"),
-            None,
-            &render_keys(&ok),
-            &render_keys(&pk),
-        );
+        if actions_rs::env::is_github_actions() {
+            Annotation::new()
+                .title(format!("Divergence: {sig} on {small:?}"))
+                .error(format!(
+                    "oracle: {}\nport:   {}",
+                    render_keys(&ok),
+                    render_keys(&pk)
+                ));
+        }
     }
-    crate::report_crashes(&oracle, args.max_findings, args.quiet);
-    crate::annotate::summary(&summary_line);
+    let crashes = crate::report_crashes(&oracle, args.max_findings, args.quiet);
+    crate::job_summary(
+        &summary_line,
+        &[
+            ("inputs", checked),
+            ("divergences", found.len()),
+            ("oracle_crashes", crashes),
+            ("seed", args.seed as usize),
+        ],
+    );
     Ok(found.is_empty())
 }
 
