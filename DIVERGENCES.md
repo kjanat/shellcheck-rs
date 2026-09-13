@@ -9,7 +9,7 @@ Reproduce the whole set (deterministic, seed 0):
 
 ```sh
 cargo conformance-fuzz --max-findings 40
-# fuzz: 2000 inputs checked, 2 distinct divergences
+# fuzz: 2000 inputs checked, 0 distinct divergences
 # oracle crashed on 1 input(s) -- an upstream defect, not a divergence
 ```
 
@@ -18,19 +18,21 @@ compare against (`PARITY-NOTES.md` items 4 and 5, and **Z3** below). The harness
 re-runs such a batch one script at a time, so the crash costs that one input and
 nothing else.
 
-A seed covers what it happens to generate, and this file only classifies what
-seed 0 finds. A wider run still finds more:
+A seed covers what it happens to generate, and seed 0 is now clean. Wider runs
+are not, and CI fuzzes with a fresh seed every run (`--seed $GITHUB_RUN_NUMBER
+--iterations 4000`), so this file lists what the last two wide runs found:
 
 ```sh
 cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle \
     --seed 1013 --iterations 4000 --max-findings 60
-# fuzz: 4000 inputs checked, 18 distinct divergences
+# fuzz: 4000 inputs checked, 13 distinct divergences
+cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle \
+    --seed 148 --iterations 4000
+# fuzz: 4000 inputs checked, 1 distinct divergences
 ```
 
-Those 18 are down from around 40 before this round and have not been grouped
-into classes yet; several are shapes no entry here covers (`coproc $COPROC`,
-`#shellcheck shell= d`, `for((i;{ `). Do not read the seed-0 count as the size
-of the problem.
+Those 14 are in **G** below. Do not read the seed-0 count as the size of the
+problem.
 
 Reproduce one entry: run its command against both binaries. `shellcheck` is the
 oracle, `rshellcheck` the port.
@@ -54,9 +56,10 @@ Where an entry's port-side half can be checked without the oracle, it gets a
 `#[should_panic]` test in `rust/crates/shellcheck-rs/src/parser/tests.rs`, which
 asserts what upstream does. Fixing the port makes the assertion pass, which
 makes the test *fail* — the reminder to delete the marker and the entry here in
-the same commit. That is how A1, A3, B1, B2 and E1 came to be closed; there are
-no markers left, since the one entry that remains cannot be checked without the
-oracle.
+the same commit. That is how A1, A3, B1, B2 and E1 came to be closed. There are
+no markers at the moment: the entries in **G** were found by a wide run and have
+not been dug into yet, so nothing can be asserted about them beyond the
+oracle's output.
 
 Grouped by cause, worst user impact first.
 
@@ -92,37 +95,29 @@ only from a shell's verdict: for `-s dash`, which rejects `! # c`, the sanction
 is refused and the divergence stands. See `PARITY-NOTES.md` item 2 and
 `rust/crates/conformance/src/deviations.rs`.
 
-## F. Which failure wins inside `[ .. ]`
+## G. Found by the wide runs, not yet dug into
 
-Sections A through D are gone; their entries are all in **Fixed** below. This
+Sections A through F are gone; their entries are all in **Fixed** below. This
 one keeps a fresh letter so a closed `A1` and an open one never share a name.
+Each row is one shrunk reproducer as the fuzzer printed it; the dialect is the
+`-s` it was found under, and `none` means no `-s` and no shebang.
 
-### F1. An unterminated quote before a redirection operator
-
-```sh
-printf '%s' '[o ">'        | shellcheck -s busybox -f gcc -
-printf '%s' "until['' '-g" | shellcheck -s sh      -f gcc -
-```
-
-|        |                                                                              |
-| ------ | ---------------------------------------------------------------------------- |
-| oracle | `1:6: error:  Fix any mentioned problems and try again.` — no message        |
-| port   | `1:4: error: Expected test to end here (don't wrap commands in []/[[]]). ..` |
-
-Both agree on SC1035 and SC1073; only the SC1072 differs. Upstream's error sits
-one past the `>` — the position `readProcSub` reaches when it has read the
-operator and gone looking for the `(` — and carries no message, so something
-reached further into the line than the port ever does. `[o >` and `[o >x`, with
-no quote in the way, already agree exactly, so the `"` is what diverts the port.
-
-The shape is verified but the cause is not: the reading that gets upstream past
-the `"` has not been identified, and the obvious candidate is ruled out —
-`readDoubleQuoted`'s close is `doubleQuote <|> fail "Expected end of double
-quoted string"`, which would put a *message* at that position, and upstream's is
-empty. A general fix was tried and rejected: making every `reset` restore the
-failure its rewound reads had dropped (Parsec merges rather than drops on a
-`try` that fails) changes nothing here and breaks `prop_readHereDoc4` in the
-gate. That merge now lives only at `consume_keyword`, where it is justified.
+| dialect | script                                          | what differs                                                        |
+| ------- | ----------------------------------------------- | ------------------------------------------------------------------- |
+| bash    | `case "" in x)while[$() ]do '';done\n""!()""\n` | SC1072 message: upstream `Expected a command`, port none            |
+| ksh     | `case } in *)t\n`                               | same shape as the row above                                         |
+| sh      | `e<;<<$`                                        | port adds SC1044 for a here document the failed parse never got to  |
+| sh      | `['' =~$"e\n"$`                                 | port misses SC1078/SC1079 on the suspicious quote                   |
+| none    | `a[$(echo $))]=`                                | port misses SC2116 inside an array index                            |
+| none    | `"${a[]s[]}"`                                   | port adds SC2180 for an index that is not two-dimensional           |
+| none    | `for((i;{ `                                     | SC1072: upstream `1:10 Unexpected .`, port `1:9` with no message    |
+| none    | `o{1..$n}\t`                                    | SC2051 span: upstream the whole brace expansion, port one character |
+| sh      | `(read _ '');$_`                                | port adds SC3028 for `$_`                                           |
+| sh      | `#shellcheck shell= d`                          | SC1072: upstream `1:19` with no message, port `1:21 Expected '='..` |
+| dash    | `<<foo $('\nfoo`                                | SC1072 at `2:4` upstream, `2:1` port                                |
+| dash    | `case - in[)for x in '' do eval(`               | port misses SC1098 from `eval(`                                     |
+| sh      | `{coproc { for((;;))do c """`                   | SC1073/SC1009 name different frames, and different positions        |
+| busybox | `coproc $COPROC`                                | port adds SC3028 for `COPROC`                                       |
 
 ## E. A check the port has not got
 
@@ -253,3 +248,39 @@ Kept so a reader can tell a closed entry from a missed one.
 - `if[ ]{` — Parsec records an error for running out of input like any other,
   and the port returned a bare failure, so the furthest position reached was
   short and a nearer error won.
+- `[o ">`, `[x '>`, `until['' '-g` (was **F1**) — `readEscaped`'s `withQuotes`
+  reads the quote and the operator and then fails on `char c` at the end of
+  the input; the `try` around it rewinds the cursor, not the error, and
+  nothing later gets further. The port recorded nothing there, so its own
+  "Expected test to end here" at the operator won instead. Not a redirection
+  at all, whatever the earlier entry guessed.
+- `[(z "` — same `try`, the other direction: a `try` that fails *merges* its
+  error with the one before it, so the "Expected comparison operator" left at
+  the same position by the operator attempt survives `readEscaped (string
+  ")")`. The port's quote read had dropped it.
+- `[ ` — `readConditionContents <|> (guard ..; lookAhead (string "]"); ..)`:
+  with nothing where the bracket belongs the alternative fails too, and the
+  `fail "Expected test to end here"` a line later is never reached. The port
+  built an empty condition and went on to ask for the bracket.
+- `[-z$('` — `option Nothing $ Just <$> readCmdName` cannot recover from a
+  name that consumed, and the cursor stays past it. The port rewound, so the
+  `called "simple command"` around it took the failure for a clean one and
+  popped the frame the single quoted string had left, and SC1073 named the
+  wrong production.
+- `echo >#` then a newline — `readFilename`'s `many1` reading nothing is a
+  failure Parsec records at the newline. The port recorded nothing, ended the
+  parse committed with no failure to report, and **reported nothing at all**.
+- `let "`, `let '` — `readLetSuffix = many1 (readIoRedirect <|> try
+  readLetExpression <|> readCmdWord)`: only the expression is behind a `try`,
+  so the word's consuming failure is the command's. The port dropped the
+  argument and analysed a `let` with none.
+- `let $(source x)` — `subParse` runs on the same parser state, so the SC1090
+  that `readSource` notes inside the arithmetic stays noted. The port's
+  arithmetic sub-parser kept only the tree.
+- `r= $()`, `r[]=x $()` — `checkSpuriousExpansion` matches `T_SimpleCommand _
+  _ [T_NormalWord _ [word]]` and never looks at the assignments. The port
+  required there to be none.
+- `while [[ -e foo ]]$ do ..` — `isFollowedBy readNormalWord`: when the word
+  reads, `lookAhead` replies with an unknown error at its own position, which
+  loses the merge against what stood before, so the failures the word ran into
+  finding its end are not the furthest one. Same for the `builtin` peek.

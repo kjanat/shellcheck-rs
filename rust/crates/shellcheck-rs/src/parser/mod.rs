@@ -745,15 +745,23 @@ impl Parser {
     /// and Parsec's own state back, and `ignoreProblemsOf`'s `p <* put
     /// systemState` -- total, because `optionMaybe` swallows the failure --
     /// puts back the `StateT` underneath, which is where the problems and the
-    /// context frames live. Only the answer survives.
-    pub(super) fn peek_ahead<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+    /// context frames live. Only the answer survives -- and, when `p`
+    /// succeeded, not even the error it accumulated getting there: `lookAhead`
+    /// then replies with an unknown error at its own position, which loses
+    /// the merge against whatever stood before. A failure keeps its error,
+    /// as `try` does.
+    pub(super) fn peek_ahead<T>(&mut self, f: impl FnOnce(&mut Self) -> PResult<T>) -> Option<T> {
         let m = self.mark();
         let notes = self.notes.len();
         let problems = self.problems.len();
         let contexts = self.contexts.clone();
         let committed = self.committed;
         let frozen = self.frozen_contexts.clone();
-        let out = f(self);
+        let failure = self.failure.clone();
+        let out = f(self).ok();
+        if out.is_some() {
+            self.failure = failure;
+        }
         self.reset(m);
         self.notes.truncate(notes);
         self.problems.truncate(problems);

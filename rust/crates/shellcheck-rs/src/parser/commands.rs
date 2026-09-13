@@ -790,7 +790,7 @@ impl Parser {
     fn read_simple_command_body(&mut self) -> PResult<Token> {
         let prefix = self.read_cmd_prefix();
         self.spacing();
-        let cmd = self.read_cmd_name();
+        let cmd = self.read_cmd_name()?;
         if prefix.is_empty() && cmd.is_none() {
             return self.fail_with("Expected a command");
         }
@@ -814,10 +814,10 @@ impl Parser {
                 // failure names it twice.
                 self.peek_ahead(|p| {
                     p.spacing();
-                    p.read_normal_word()
-                        .ok()
-                        .and_then(|w| Self::command_literal_name(&w))
+                    let w = p.read_normal_word()?;
+                    Ok(Self::command_literal_name(&w))
                 })
+                .flatten()
             } else {
                 name
             };
@@ -830,7 +830,7 @@ impl Parser {
                     | Some("typeset")
             );
             if effective.as_deref() == Some("let") {
-                suffix = self.read_let_suffix();
+                suffix = self.read_let_suffix()?;
             } else if effective.as_deref() == Some("time") {
                 suffix = self.read_time_suffix()?;
             } else {
@@ -1244,7 +1244,11 @@ impl Parser {
         out
     }
 
-    pub(super) fn read_cmd_name(&mut self) -> Option<Token> {
+    /// `option Nothing $ Just <$> readCmdName`: `None` when there is no name
+    /// to read, an error when reading one failed after consuming input, since
+    /// `option` recovers only from a failure that consumed nothing and the
+    /// cursor stays where that failure left it.
+    pub(super) fn read_cmd_name(&mut self) -> PResult<Option<Token>> {
         // `optional . try $ char '\\' >> lookAhead (variableChars <|> oneOf ":.")`:
         // a leading backslash here suppresses alias expansion, so it is not an
         // escape and reports nothing.
@@ -1263,16 +1267,20 @@ impl Parser {
         let m = self.mark();
         // don't treat keywords as command names in command position handled by caller
         match self.read_normal_word() {
-            Ok(w) => Some(w),
+            Ok(w) => Ok(Some(w)),
             Err(()) => {
                 // `readCmdName` is not behind a `try`, so a word that failed
                 // after consuming input ends the parse rather than leaving the
-                // command nameless.
+                // command nameless -- and the cursor is not rewound, or the
+                // `called "simple command"` around this would take the failure
+                // for one that consumed nothing and pop a frame the word left
+                // behind (`[-z$('` names the single quoted string).
                 if self.idx != m.idx {
                     self.commit();
+                    return Err(());
                 }
                 self.reset(m);
-                None
+                Ok(None)
             }
         }
     }
@@ -1426,23 +1434,24 @@ impl Parser {
     /// Sub-parse `src` (starting at `pos`) as arithmetic contents, merging the
     /// sub-parser's positions and id counter. Mirrors ShellCheck's `subParse`.
     pub(super) fn sub_parse_arithmetic(&mut self, pos: &Position, src: &str) -> Option<Token> {
-        let mut sub = Parser::new(&self.filename, src);
-        sub.line = pos.line;
-        sub.col = pos.column;
-        sub.next_id = self.next_id;
+        // `subParse` runs on the same parser state, so whatever the
+        // arithmetic reports stays reported: `let $(source x)` sources a file
+        // from inside its expression, and that is where SC1090 comes from.
+        let mut sub = self.sub_parser(src, pos);
         // `readSequence` skips its own leading arithmetic spacing.
-        let tok = sub.read_arithmetic_contents().ok()?;
+        let tok = sub.read_arithmetic_contents().ok();
         // `readArithmeticContents <* eof`, with no spacing in between: a comment
         // left over from `readCmdWord`'s `spacing` makes this fail, and the
         // argument is read as an ordinary word instead.
-        if !sub.eof() {
+        let tok = tok.filter(|_| sub.eof());
+        if tok.is_none() {
+            // `try readLetExpression`: Parsec's own state goes back, and the
+            // notes with it; the problems live outside it and stay.
+            self.problems.extend(sub.problems);
             return None;
         }
-        for (k, v) in sub.positions.iter() {
-            self.positions.insert(*k, v.clone());
-        }
-        self.next_id = sub.next_id;
-        Some(tok)
+        self.merge_sub(sub);
+        tok
     }
 
     /// Sub-parse `src` (at `pos`) as an associative-array index word.
@@ -1477,14 +1486,26 @@ impl Parser {
         Some((raw, start))
     }
 
-    /// `readLetSuffix`: parse `let` arguments as arithmetic expressions.
-    pub(super) fn read_let_suffix(&mut self) -> Vec<Token> {
+    /// `readLetSuffix = many1 (readIoRedirect <|> try readLetExpression <|>
+    /// readCmdWord)`: `let` arguments as arithmetic expressions. Only the
+    /// expression sits behind a `try`, so a redirection or a word that failed
+    /// after consuming input fails the suffix, and with it the command:
+    /// `let "` is an unterminated string, not a `let` with no arguments.
+    pub(super) fn read_let_suffix(&mut self) -> PResult<Vec<Token>> {
         let mut out = Vec::new();
         loop {
             self.spacing();
-            if let Ok(r) = self.read_io_redirect() {
-                out.push(r);
-                continue;
+            let rm = self.mark();
+            match self.read_io_redirect() {
+                Ok(r) => {
+                    out.push(r);
+                    continue;
+                }
+                Err(()) => {
+                    if self.idx != rm.idx {
+                        return Err(());
+                    }
+                }
             }
             let m = self.mark();
             if let Some((raw, start)) = self.read_let_arg_raw() {
@@ -1505,14 +1526,21 @@ impl Parser {
                     continue;
                 }
             }
-            // Fall back to a normal word.
+            // `try readLetExpression` rewinds; `readCmdWord` reads the word
+            // for what it is, and a failure that consumed is the command's.
             self.reset(m);
             match self.read_normal_word() {
                 Ok(w) => out.push(w),
-                Err(()) => break,
+                Err(()) => {
+                    if self.idx != m.idx {
+                        self.commit();
+                        return Err(());
+                    }
+                    break;
+                }
             }
         }
-        out
+        Ok(out)
     }
 
     /// `validateCommand` (Parser.hs): emit SC1127 when a command word is really

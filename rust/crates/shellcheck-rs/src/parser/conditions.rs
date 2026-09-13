@@ -50,7 +50,15 @@ impl Parser {
         // backtick after the condition is not a parse error here.
         let has_word = {
             let w = self.mark();
+            let failure = self.failure.clone();
             let ok = self.try_parse(|p| p.read_normal_word().map(|_| ())).is_ok();
+            if ok {
+                // `lookAhead` replies with an unknown error at its own position
+                // when `p` succeeds, which loses the merge against whatever
+                // stood before: the failures the word ran into finding its
+                // end -- past the `$` in `]]$ do` -- are not the furthest one.
+                self.failure = failure;
+            }
             self.reset(w);
             ok
         };
@@ -149,8 +157,13 @@ impl Parser {
         let token = match contents {
             Some(c) => c,
             None => {
-                // empty condition: only valid if there was space and a closing ] follows
-                if space.is_empty() {
+                // `guard (not (null space)); lookAhead (string "]")`: an empty
+                // condition is one whose closing bracket comes next. With
+                // anything else there this alternative fails too, and so does
+                // the whole `readCondition` -- the line that would have asked
+                // for the bracket, message and all, is never reached.
+                if space.is_empty() || self.peek() != Some(']') {
+                    self.fail_implicitly();
                     return Err(());
                 }
                 let id = self.next_id_between(start.clone(), self.pos());
@@ -445,6 +458,12 @@ impl Parser {
     /// pair of quotes, with the backslash put back by `escaped`.
     fn read_cond_escaped_lit(&mut self, lit: &str) -> Option<String> {
         let m = self.mark();
+        // `readEscaped` is a `try`: when it fails, its error merges with the one
+        // standing before it rather than replacing it, so the quote it read
+        // on the way must not take that one down -- for `[(z "` the message
+        // the operator attempt left at the same position is what upstream
+        // reports.
+        let saved = self.failure.clone();
         match self.peek() {
             Some('\\') => {
                 self.bump();
@@ -454,14 +473,18 @@ impl Parser {
             }
             Some(q @ ('\'' | '"')) => {
                 self.bump();
-                if self.string(lit).is_ok() && self.peek() == Some(q) {
-                    self.bump();
-                    return Some(Self::escape_cond_op(lit));
+                if self.string(lit).is_ok() {
+                    if self.peek() == Some(q) {
+                        self.bump();
+                        return Some(Self::escape_cond_op(lit));
+                    }
+                    self.fail_implicitly();
                 }
             }
             _ => return None,
         }
         self.reset(m);
+        self.restore_failure(saved);
         None
     }
 
@@ -750,14 +773,15 @@ impl Parser {
     /// backslash is re-added to the returned string.
     pub(super) fn read_cond_escaped_op(&mut self) -> Option<String> {
         let m = self.mark();
+        // A `try`, as `read_cond_escaped_lit` is: what stood before it merges
+        // with what it leaves.
+        let saved = self.failure.clone();
         match self.peek() {
             Some('\\') => {
                 self.bump();
                 if let Some(s) = self.read_cond_any_op() {
                     return Some(Self::escape_cond_op(&s));
                 }
-                self.reset(m);
-                None
             }
             Some(q @ ('\'' | '"')) => {
                 self.bump();
@@ -766,12 +790,18 @@ impl Parser {
                         self.bump();
                         return Some(Self::escape_cond_op(&s));
                     }
+                    // `char c` on something else: `readEscaped` is a `try`, so
+                    // the cursor comes back, but the error was recorded past
+                    // the operator -- for `[x '>` the end of the input, and
+                    // the furthest the parse ever gets.
+                    self.fail_implicitly();
                 }
-                self.reset(m);
-                None
             }
-            _ => None,
+            _ => return None,
         }
+        self.reset(m);
+        self.restore_failure(saved);
+        None
     }
 
     pub(super) fn escape_cond_op(s: &str) -> String {

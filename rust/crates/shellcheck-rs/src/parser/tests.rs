@@ -833,6 +833,132 @@ mod coproc_glob_dollar_tests {
         }
     }
 
+    fn fatal_notes(script: &str) -> Vec<(i64, i64, String)> {
+        parse_script("-", script)
+            .notes
+            .iter()
+            .filter(|n| [1072, 1073, 1009].contains(&n.code))
+            .map(|n| (n.code, n.start.column, n.message.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_redirection_whose_target_is_a_comment_fails_at_the_newline() {
+        // `readIoFile`'s `spacing` takes the comment, and `readFilename` then
+        // finds the newline: `many1` reading nothing is a failure recorded
+        // there, and it is the furthest one.
+        let notes = fatal_notes("echo >#\n");
+        assert!(
+            notes.contains(&(1072, 8, " Fix any mentioned problems and try again.".into())),
+            "{notes:?}"
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|(c, _, m)| *c == 1073 && m.contains("redirection")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn an_unterminated_string_after_let_is_a_parse_error() {
+        // `readLetSuffix = many1 (.. <|> try readLetExpression <|> readCmdWord)`:
+        // only the expression is behind a `try`, so the word's failure is the
+        // command's, and the frame it left behind names the string.
+        for (script, frame) in [
+            ("let \"", "double quoted string"),
+            ("let '", "single quoted string"),
+            ("let x \"", "double quoted string"),
+        ] {
+            let notes = fatal_notes(script);
+            assert!(
+                notes
+                    .iter()
+                    .any(|(c, _, m)| *c == 1073 && m.contains(frame)),
+                "{script}: {notes:?}"
+            );
+            assert!(
+                notes
+                    .iter()
+                    .any(|(c, _, m)| *c == 1009 && m.contains("simple command")),
+                "{script}: {notes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_test_with_only_space_fails_before_asking_for_its_bracket() {
+        // `readConditionContents .. <|> (guard ..; lookAhead (string "]"); ..)`:
+        // with nothing where the bracket belongs, `condition <-` itself fails,
+        // and the `fail "Expected test to end here"` after it is never run.
+        let notes = fatal_notes("[ ");
+        assert!(
+            notes.contains(&(1072, 3, " Fix any mentioned problems and try again.".into())),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn a_quoted_operator_missing_its_closing_quote_reports_from_the_end() {
+        // `readEscaped`'s `withQuotes` reads the quote and the operator, then
+        // `char c` fails at the end of the input. The `try` rewinds the cursor,
+        // not the error: nothing later gets further, so that is the failure.
+        let notes = fatal_notes("[x '>");
+        assert!(
+            notes.contains(&(1072, 6, " Fix any mentioned problems and try again.".into())),
+            "{notes:?}"
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|(c, _, m)| *c == 1073 && m.contains("test expression")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_escaped_paren_merges_with_the_operator_message_before_it() {
+        // Two failures at the end of `[(z "`: the operator attempt's "Expected
+        // comparison operator", then `readEscaped (string ")")`, which reads
+        // the quote and fails at the same position. Both sit behind a `try`,
+        // so Parsec merges them, and the message is the one that survives.
+        let notes = fatal_notes("[(z \"");
+        assert!(
+            notes.iter().any(|(c, col, m)| *c == 1072
+                && *col == 6
+                && m.starts_with("Expected comparison operator")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn a_command_name_that_fails_after_consuming_keeps_its_frames() {
+        // `option Nothing $ Just <$> readCmdName` cannot recover from a name
+        // that consumed input, and the cursor stays past it -- so the frames
+        // the failure left behind stay too, innermost first.
+        let notes = fatal_notes("[-z$('");
+        assert!(
+            notes
+                .iter()
+                .any(|(c, col, m)| *c == 1073 && *col == 6 && m.contains("single quoted string")),
+            "{notes:?}"
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|(c, col, m)| *c == 1009 && *col == 6 && m.contains("simple command")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn what_a_let_expression_reports_stays_reported() {
+        // `subParse` runs the arithmetic on the same parser state, so the
+        // SC1090 that `readSource` notes inside `$(..)` survives the sub-parse.
+        assert!(has_note("let $(source ``)", 1090));
+        assert!(has_note("let \"$(source ``)\"", 1090));
+    }
+
     // ---- SC1127: command word that looks like a comment -------------------
 
     #[test]

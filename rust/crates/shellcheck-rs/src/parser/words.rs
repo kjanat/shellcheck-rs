@@ -375,8 +375,12 @@ impl Parser {
             }
         }
         // `many1`, so what matters is that a part was read — a line
-        // continuation is a part that stands for no text at all.
+        // continuation is a part that stands for no text at all. Reading none
+        // is a failure Parsec records at this position like any other, and
+        // for a redirection whose target is a comment it is the furthest one:
+        // `echo >#` then a newline fails at the newline.
         if self.idx == from {
+            self.fail_implicitly();
             return Err(());
         }
         let id = self.next_id_between(start, self.pos());

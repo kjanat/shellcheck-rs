@@ -196,8 +196,10 @@ pub(super) fn check_tilde_in_quotes(_params: &Parameters, t: &Token, out: &mut O
 }
 
 pub(super) fn check_spurious_expansion(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_SimpleCommand { assignments, words } = &*t.inner {
-        if assignments.is_empty() && words.len() == 1 {
+    // `T_SimpleCommand _ _ [T_NormalWord _ [word]]`: the assignments are not
+    // looked at, so `r= $()` is still a command that is nothing but its output.
+    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
+        if words.len() == 1 {
             if let InnerToken::T_NormalWord(parts) = &*words[0].inner {
                 if parts.len() == 1 {
                     se_check(&parts[0], out);
@@ -1267,6 +1269,14 @@ mod tests {
     #[test]
     fn prop_checkSpuriousExpansion4() {
         assert!(node_emits(check_spurious_expansion, "$((i++))"));
+    }
+
+    #[test]
+    fn an_expansion_run_as_the_command_after_an_assignment_is_still_spurious() {
+        // The pattern `T_SimpleCommand _ _ [T_NormalWord _ [word]]` ignores
+        // the assignments, so `r= $()` fires like `$()` on its own.
+        assert!(node_emits(check_spurious_expansion, "r= $()"));
+        assert!(node_emits(check_spurious_expansion, "r[]=x $()"));
     }
 
     // ---- SC2007 checkDollarBrackets ----
