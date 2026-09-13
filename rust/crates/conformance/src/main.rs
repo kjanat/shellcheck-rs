@@ -28,6 +28,7 @@ mod deviations;
 mod fuzz;
 mod oracle;
 mod shells;
+mod snapshot;
 
 use std::process::ExitCode;
 
@@ -417,6 +418,8 @@ pub enum Command {
     Extract,
     /// Where the port rewinds over a commitment instead of using a `try`.
     Audit,
+    /// Freeze the port's own behaviour, or check nothing changed since.
+    Snapshot,
 }
 
 #[derive(Parser)]
@@ -479,6 +482,13 @@ pub struct Args {
     /// Check every dialect rather than one per script.
     #[arg(long, help_heading = "Fuzzing")]
     pub all_shells: bool,
+
+    /// Re-freeze the snapshot instead of checking against it.
+    ///
+    /// Every write is a claim that the behaviour change is intended, so the
+    /// diff of `rust/snapshot.txt` belongs in the commit that causes it.
+    #[arg(long, help_heading = "Snapshot")]
+    pub write: bool,
 }
 
 impl Args {
@@ -519,6 +529,7 @@ fn main() -> ExitCode {
         Command::Fuzz => fuzz::run(&args),
         Command::Shells => shells::run(&args),
         Command::Audit => audit(&args),
+        Command::Snapshot => snapshot::run(&args),
         Command::Extract => {
             let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
             corpus::extract(&src).map(|e| {

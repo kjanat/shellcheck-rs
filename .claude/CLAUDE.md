@@ -101,8 +101,16 @@ cargo run --release -p conformance -- shells --iterations 300
 # Where the port rewinds over a commitment instead of using a `try`. Needs no
 # oracle, but does need a debug build: the instrumentation is behind
 # debug_assertions, so do NOT pass --release.
-cargo run -p conformance -- audit
+cargo conformance-audit
+
+# Refactor safety net (no oracle needed). See "Before refactoring" below.
+mise run snapshot          # did any observable behaviour change? (--write to re-freeze)
+mise run coverage          # what the snapshot corpus exercises, per file
+mise run mutants -- --file rust/crates/shellcheck-rs/src/cfg.rs
 ```
+
+`cargo conformance-*` aliases live in `.cargo/config.toml`; everything runs from
+the repository root, which is the Cargo workspace root (`members = ["rust/crates/*"]`).
 
 `gate` takes the shell script out of every `prop_` property in
 `src/ShellCheck/**/*.hs` that has one (extracted from the sources at run time,
@@ -130,3 +138,30 @@ Layout mirrors the Haskell modules one-to-one: `ast_lib.rs` = `ASTLib.hs`,
 Rules for every change there: one definition per helper (grep before adding
 one), no blanket `#![allow(..)]`, every touched file clippy-clean, and a check
 is only registered once both conformance commands agree about its codes.
+
+### Before refactoring
+
+The safety net today is that structure: the port reads like the Haskell, so a
+divergence can be traced to a line in `Parser.hs`, and an invented condition
+stands out as one. A refactor to idiomatic Rust gives that up, and then three
+instruments are all that is left.
+
+| Instrument | Question it answers                            |
+| ---------- | ---------------------------------------------- |
+| `snapshot` | Did any observable output change, anywhere?    |
+| `coverage` | Which code does the corpus actually reach?     |
+| `mutants`  | Would the tests have noticed if it were wrong? |
+
+`snapshot` is what a refactor is gated on, and it is deliberately *not* a
+comparison against the oracle: the port still diverges in places
+(`DIVERGENCES.md`), so "still diverges identically" is success, and only a
+record of the port's own behaviour can express that. `rust/snapshot.txt` holds
+one line per input (2026 property scripts + 2000 generated, each checked in all
+six dialect settings); the output hash decides the comparison, the codes, spans
+and message hash beside it make the diff readable. Every `--write` claims that a
+behaviour change was intended, so its diff belongs in the commit causing it.
+
+`coverage` reports what that corpus reaches: 85.1% of regions and 84.7% of lines
+of `shellcheck-rs`, against 82.7% for the unit tests alone. `mutants` answers
+what coverage cannot -- 7499 mutants workspace-wide, so run it scoped or
+sharded, and treat each survivor as a place the refactor could break silently.

@@ -229,6 +229,7 @@ struct Mark {
     /// Whether the parse had already committed when the mark was taken, so a
     /// `reset` can tell "we backtracked over a point of no return" from an
     /// ordinary rewind. See [`Parser::backtracked_over_commitment`].
+    #[cfg(debug_assertions)]
     committed: bool,
 }
 
@@ -453,6 +454,7 @@ impl Parser {
             idx: self.idx,
             line: self.line,
             col: self.col,
+            #[cfg(debug_assertions)]
             committed: self.committed,
         }
     }

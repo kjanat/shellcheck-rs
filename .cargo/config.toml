@@ -1,11 +1,16 @@
 [alias]
-bwa                = "build --workspace --all-targets"
-conformance-fuzz   = "cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle"
-conformance-gate   = "cargo run --release -p conformance -- gate --oracle .cache/shellcheck-oracle"
-conformance-shells = "cargo run --release -p conformance -- shells --iterations 300"
-fmt-check          = "fmt --check"
-install-bin        = "install --path=rust/crates/shellcheck-cli --bin=rshellcheck --force"
-lint               = "clippy --workspace --all-targets --all-features -- -D warnings -D clippy::all"
-rb                 = "run --bin"
-rbr                = "run --release --bin"
-shellcheck         = "rbr rshellcheck --"
+bwa                  = "build --workspace --all-targets"
+# An alias is the *arguments* to cargo, so it must not start with "cargo":
+# `cargo conformance-gate` would expand to `cargo cargo run ..` and fail with
+# "no such command: cargo".
+conformance-audit    = "run -q -p conformance -- audit"
+conformance-fuzz     = "run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle"
+conformance-gate     = "run --release -p conformance -- gate --oracle .cache/shellcheck-oracle"
+conformance-shells   = "run --release -p conformance -- shells --iterations 300"
+conformance-snapshot = "run --release -q -p conformance -- snapshot"
+fmt-check            = "fmt --check"
+install-bin          = "install --path=rust/crates/shellcheck-cli --bin=rshellcheck --force"
+lint                 = "clippy --workspace --all-targets --all-features -- -D warnings -D clippy::all"
+rb                   = "run --bin"
+rbr                  = "run --release --bin"
+shellcheck           = "rbr rshellcheck --"

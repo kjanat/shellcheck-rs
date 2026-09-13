@@ -31,3 +31,7 @@ target/
 
 # Locally built Haskell oracle binary (also where rust.yml stages it).
 /.cache/
+
+# cargo-mutants working directories (the report is read, not kept).
+/mutants.out/
+/mutants.out.old/
