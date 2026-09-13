@@ -158,6 +158,63 @@ pub enum ColorOption {
     ColorNever,
 }
 
+/// A half-open range of codes `[from, to)`, as carried by
+/// `Annotation.DisableComment from to`. `disable=SC2086` is the single-code
+/// range `2086..2087`, `disable=SC1000-SC2000` is `1000..2000`, and
+/// `disable=all` is `0..1000000`. Membership is tested, never enumerated:
+/// `shouldIgnoreCode`/`contextItemDisablesCode` compare against the endpoints
+/// (`code >= n && code < m`), so an enormous range costs nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisableRange {
+    pub from: Code,
+    pub to: Code,
+}
+
+impl DisableRange {
+    /// `disabling' (DisableComment n m) = code >= n && code < m`.
+    pub fn contains(&self, code: Code) -> bool {
+        code >= self.from && code < self.to
+    }
+}
+
+/// A configuration file that failed to parse, as reported by SC1134.
+///
+/// The Haskell driver reads the rc file inside the parser
+/// (`Parser.readConfigFile`), so a failure there becomes a parse problem on the
+/// script being checked. This port reads rc files in the CLI, so the failure
+/// travels on the spec instead and the checker emits the comment; the message
+/// is assembled exactly as `errorFor` does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RcParseProblem {
+    /// The rc file path, as it was used to open the file.
+    pub filename: String,
+    /// 1-based line of the parse failure (`sourceLine $ errorPos err`).
+    pub line: i64,
+    /// `getStringFromParsec`'s suggestion: the explicit `fail` message plus a
+    /// period, or empty when the failure carried no message.
+    pub suggestion: String,
+}
+
+/// What an rc file contributes to a check that the other `CheckSpec` fields
+/// cannot express.
+///
+/// Upstream the rc file is read by the parser and its directives become
+/// annotations on the root `T_Annotation`, so `shell`, `extended-analysis` and
+/// `enable` land on the existing spec fields and only these two need a home of
+/// their own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RcDirectives {
+    /// Code ranges disabled by `disable=` directives.
+    ///
+    /// As `DisableComment` annotations upstream, these suppress a code wherever
+    /// it comes from and regardless of `csIncludedWarnings`. They are kept as
+    /// endpoints, never enumerated: the range may be arbitrarily wide.
+    pub disabled_ranges: Vec<DisableRange>,
+    /// Set when the rc file itself could not be parsed; the checker turns it
+    /// into the SC1134 comment and no rc directive takes effect.
+    pub parse_problem: Option<RcParseProblem>,
+}
+
 /// `ShellCheck.Interface.CheckSpec`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckSpec {
@@ -171,6 +228,9 @@ pub struct CheckSpec {
     pub min_severity: Severity,
     pub extended_analysis: Option<bool>,
     pub optional_checks: Vec<String>,
+    /// Whatever an rc file contributed that has no `csXxx` counterpart. Boxed
+    /// so that a spec without an rc file costs one pointer.
+    pub rc: Option<Box<RcDirectives>>,
 }
 
 impl Default for CheckSpec {
@@ -187,6 +247,7 @@ impl Default for CheckSpec {
             min_severity: Severity::StyleC,
             extended_analysis: None,
             optional_checks: Vec::new(),
+            rc: None,
         }
     }
 }

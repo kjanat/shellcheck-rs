@@ -5,7 +5,8 @@ use crate::analytics;
 use crate::analyzer_lib;
 use crate::ast::Id;
 use crate::interface::{
-    CheckResult, CheckSpec, Comment, Position, PositionedComment, Severity, Shell, TokenComment,
+    CheckResult, CheckSpec, Comment, Position, PositionedComment, RcParseProblem, Severity, Shell,
+    TokenComment,
 };
 use crate::parser::{self, ParseNote};
 
@@ -22,6 +23,13 @@ pub fn check_script(spec: &CheckSpec) -> CheckResult {
     // Parse comments (SC1xxx): already positioned.
     let mut positioned: Vec<PositionedComment> =
         parse.notes.iter().map(note_to_positioned).collect();
+
+    // An unparsable rc file is a parse *problem* on this script
+    // (`readConfigFile` -> `parseProblem ErrorC 1134`), emitted at the start of
+    // the file whether or not the script itself parses.
+    if let Some(problem) = spec.rc.as_ref().and_then(|rc| rc.parse_problem.as_ref()) {
+        positioned.push(rc_problem_comment(&spec.filename, problem));
+    }
 
     // Analysis comments (SC2xxx/SC3xxx): resolved from ids via the position map.
     if let Some(root) = parse.root.clone() {
@@ -83,6 +91,31 @@ fn annotation_ignores(params: &analyzer_lib::Parameters, id: Id, code: i64) -> b
     false
 }
 
+/// `readConfigFile`'s failure branch: `parseProblem ErrorC 1134 $ errorFor ..`,
+/// reported at the start of the script that pulled in the rc file.
+fn rc_problem_comment(script: &str, problem: &RcParseProblem) -> PositionedComment {
+    let pos = Position {
+        file: script.to_string(),
+        line: 1,
+        column: 1,
+    };
+    PositionedComment {
+        start: pos.clone(),
+        end: pos,
+        comment: Comment {
+            severity: Severity::ErrorC,
+            code: 1134,
+            message: format!(
+                "Failed to process {}, line {}: {} Fix any mentioned problems and try again.",
+                crate::ast_lib::e4m(&problem.filename),
+                problem.line,
+                problem.suggestion
+            ),
+        },
+        fix: None,
+    }
+}
+
 fn note_to_positioned(n: &ParseNote) -> PositionedComment {
     PositionedComment {
         start: n.start.clone(),
@@ -114,6 +147,14 @@ fn should_include(pc: &PositionedComment, spec: &CheckSpec) -> bool {
     let severity = pc.comment.severity;
     if severity > spec.min_severity {
         return false;
+    }
+    // rc `disable=` ranges are annotations upstream, so they suppress a code
+    // independently of the include/exclude lists. Membership is tested against
+    // the endpoints (`code >= n && code < m`), never enumerated.
+    if let Some(rc) = &spec.rc {
+        if rc.disabled_ranges.iter().any(|r| r.contains(code)) {
+            return false;
+        }
     }
     match &spec.included_warnings {
         None => !spec.excluded_warnings.contains(&code),
