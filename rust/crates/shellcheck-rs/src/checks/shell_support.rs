@@ -923,37 +923,18 @@ fn allowed_flags(name: &str, p: &Parameters) -> Option<Vec<&'static str>> {
     })
 }
 
-fn is_assignment_form(s: &str) -> bool {
-    let c: Vec<char> = s.chars().collect();
-    if c.is_empty() || !(c[0] == '_' || c[0].is_ascii_alphabetic()) {
-        return false;
-    }
-    let mut i = 1;
-    while i < c.len() && (c[i] == '_' || c[i].is_ascii_alphanumeric()) {
-        i += 1;
-    }
-    if i < c.len() && c[i] == '+' {
-        i += 1;
-    }
-    i < c.len() && c[i] == '='
-}
-
 fn check_general_command(p: &Parameters, t: &Token, words: &[Token], out: &mut Out) {
     let id = t.id();
     let cmd = &words[0];
     let name = crate::analyzer_lib::get_command_name(t).unwrap_or_default();
     let rest = &words[1..];
 
-    let ends_in_assignment = words.len() > 1
-        && words
-            .last()
-            .map(|w| is_assignment_form(&oversimplify_concat(w)))
-            .unwrap_or(false);
-
-    if name == "local" && !is_dash(p) && !ends_in_assignment {
+    // Upstream guards neither of these on the arguments: `local i=` and
+    // `declare "f"=x` are both the command, whatever follows it.
+    if name == "local" && !is_dash(p) {
         warn_msg(out, p, id, 3043, "'local' is");
     }
-    if UNSUPPORTED_COMMANDS.contains(&name.as_str()) && !ends_in_assignment {
+    if UNSUPPORTED_COMMANDS.contains(&name.as_str()) {
         warn_msg(out, p, id, 3044, &format!("'{}' is", name));
     }
 

@@ -1247,18 +1247,44 @@ impl Parser {
     }
 
     fn line_break(&mut self) {
-        // readLineBreak = optional (many linefeed-ish). Consume newlines + spacing.
+        // `readLineBreak = optional readNewlineList`: newlines and spacing,
+        // then the same bad-break check the newline list makes.
+        let mut any = false;
         loop {
             self.spacing();
             let m = self.mark();
-            if self.whitespace().is_ok() {
-                // keep going only if it was a newline-type space
-                continue;
-            } else {
-                self.reset(m);
-                break;
+            match self.whitespace() {
+                Ok('\n' | '\r') => any = true,
+                Ok(_) => {}
+                Err(()) => {
+                    self.reset(m);
+                    break;
+                }
             }
         }
+        if any {
+            self.check_bad_break();
+        }
+    }
+
+    /// `checkBadBreak`: after a line break, a line that *starts* with `|`, `||`
+    /// or `&&` is almost always a continuation the author meant to hang off the
+    /// previous line. `&>`/`&>>` is a redirection, not an operator, so it is
+    /// excluded (`notFollowedBy2 (string "&>")`).
+    pub(super) fn check_bad_break(&mut self) {
+        match self.peek() {
+            Some('|') => {}
+            Some('&') if self.peek_at(1) != Some('>') => {}
+            _ => return,
+        }
+        let pos = self.pos();
+        self.problem_at(
+            pos.clone(),
+            pos,
+            Severity::ErrorC,
+            1133,
+            "Unexpected start of line. If breaking lines, |/||/&& should be at the end of the previous one.",
+        );
     }
 }
 

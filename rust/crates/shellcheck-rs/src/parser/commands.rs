@@ -269,16 +269,22 @@ impl Parser {
     }
 
     pub(super) fn newline_list(&mut self) {
-        // `many1 ((linefeed <|> carriageReturn) `thenSkip` spacing)`: the
-        // spacing comes after each newline, so it takes a comment on the
-        // following line with it.
+        // `many1 ((linefeed <|> carriageReturn) `thenSkip` spacing) <*
+        // checkBadBreak`: the spacing comes after each newline, so it takes a
+        // comment on the following line with it, and the check only runs once
+        // at least one newline was consumed (`many1`).
+        let mut any = false;
         loop {
             let m = self.mark();
             if self.linefeed_or_carriage_return().is_err() {
                 self.reset(m);
                 break;
             }
+            any = true;
             self.spacing();
+        }
+        if any {
+            self.check_bad_break();
         }
     }
 
@@ -1038,11 +1044,23 @@ impl Parser {
             // well-formed assignments as T_Assignment (readModifierSuffix).
             if modifier {
                 let am = self.mark();
-                if let Ok(a) = self.read_assignment_word() {
-                    out.push(a);
-                    continue;
+                match self.read_assignment_word() {
+                    Ok(a) => {
+                        out.push(a);
+                        continue;
+                    }
+                    Err(()) => {
+                        // `readWellFormedAssignment` inside `many1`: a failure
+                        // that consumed input (`readonly f=(` with no `)`) ends
+                        // the whole suffix, rather than being retried as a word.
+                        if self.idx != am.idx {
+                            self.commit();
+                            self.reset(am);
+                            break;
+                        }
+                        self.reset(am);
+                    }
                 }
-                self.reset(am);
             }
             let m = self.mark();
             match self.read_normal_word() {

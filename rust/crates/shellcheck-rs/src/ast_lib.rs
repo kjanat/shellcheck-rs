@@ -164,12 +164,20 @@ pub(crate) fn basename(path: &str) -> String {
 
 /// `executableFromShebang`: extract the interpreter name from a shebang string.
 pub fn executable_from_shebang(sb: &str) -> String {
-    // Handle `/usr/bin/env` forms including -S / --split-string.
-    let words: Vec<&str> = sb.split_whitespace().collect();
-    // Detect `/env <flags> ...`
-    if let Some(env_idx) = words.iter().position(|w| basename(w) == "env") {
-        return from_env_args(&words[env_idx + 1..]);
+    use std::sync::OnceLock;
+    // `re = mkRegex "/env +(-S|--split-string=?)? *(.*)"`, unanchored and
+    // applied to the whole string, so it is the *path* `/env` that selects the
+    // env form -- not the word `env` appearing anywhere. `#!n\tenv bash` is an
+    // interpreter called `n`, not bash.
+    static ENV_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let env_re =
+        ENV_RE.get_or_init(|| regex::Regex::new(r"/env +(-S|--split-string=?)? *(.*)").unwrap());
+    if let Some(caps) = env_re.captures(sb) {
+        let rest = caps.get(2).map_or("", |m| m.as_str());
+        let args: Vec<&str> = rest.split_whitespace().collect();
+        return from_env_args(&args);
     }
+    let words: Vec<&str> = sb.split_whitespace().collect();
     match words.as_slice() {
         [] => String::new(),
         [x] => basename(x),
@@ -178,38 +186,23 @@ pub fn executable_from_shebang(sb: &str) -> String {
             "ash" => "busybox ash".to_string(),
             other => other.to_string(),
         },
+        // `(first:args) | basename first == "env" -> fromEnvArgs args`: only
+        // the leading word counts, and only once the regex above has declined.
+        [first, args @ ..] if basename(first) == "env" => from_env_args(args),
         [first, ..] => basename(first),
     }
 }
 
+/// `fromEnvArgs args = fromMaybe "" $ find (notElem '=') $ skipFlags args`.
+///
+/// Drop the leading flags, then take the first argument that is not a `VAR=val`
+/// assignment. The word is returned as written -- upstream applies no
+/// `basename` here, so `env /bin/bash` yields `/bin/bash` and is unrecognized.
 fn from_env_args(args: &[&str]) -> String {
-    // Skip -S / --split-string[=...] and VAR=val assignments; first bare word is
-    // the interpreter.
-    let mut i = 0;
-    while i < args.len() {
-        let a = args[i];
-        if a == "-S" || a == "--split-string" {
-            i += 1;
-            continue;
-        }
-        if let Some(rest) = a.strip_prefix("--split-string=") {
-            if rest.is_empty() {
-                i += 1;
-                continue;
-            }
-            if rest.contains('=') {
-                i += 1;
-                continue;
-            }
-            return basename(rest);
-        }
-        if a.contains('=') {
-            i += 1;
-            continue;
-        }
-        return basename(a);
-    }
-    String::new()
+    args.iter()
+        .skip_while(|a| a.starts_with('-'))
+        .find(|a| !a.contains('='))
+        .map_or_else(String::new, |a| (*a).to_string())
 }
 
 // ---- helpers consolidated from the check batches (ports of ASTLib) ----
@@ -476,6 +469,40 @@ mod tests {
 
     fn lit(s: &str) -> Token {
         Token::new(Id(0), InnerToken::T_Literal(s.to_string()))
+    }
+
+    // `prop_executableFromShebang1..11`, which the gate cannot replay: they
+    // test the helper, not a script.
+    #[test]
+    fn prop_executableFromShebang() {
+        for (sb, want) in [
+            ("/bin/sh", "sh"),
+            ("/bin/bash", "bash"),
+            ("/usr/bin/env ksh", "ksh"),
+            ("/usr/bin/env -S foo=bar bash -x", "bash"),
+            ("/usr/bin/env --split-string=bash -x", "bash"),
+            ("/usr/bin/env --split-string=foo=bar bash -x", "bash"),
+            ("/usr/bin/env --split-string bash -x", "bash"),
+            ("/usr/bin/env --split-string foo=bar bash -x", "bash"),
+            ("/usr/bin/env foo=bar dash", "dash"),
+            ("/bin/busybox sh", "busybox sh"),
+            ("/bin/busybox ash", "busybox ash"),
+        ] {
+            assert_eq!(executable_from_shebang(sb), want, "for {sb:?}");
+        }
+    }
+
+    // It is the path `/env` that makes a shebang an env shebang. A word `env`
+    // that is not the interpreter (here the argument of an interpreter called
+    // `n`) must not be mistaken for one, or the script looks like bash and the
+    // unrecognized-shebang warning never fires.
+    #[test]
+    fn executable_from_shebang_only_treats_leading_env_as_env() {
+        assert_eq!(executable_from_shebang("n\tenv bash"), "n");
+        assert_eq!(executable_from_shebang("/usr/bin/foo env bash"), "foo");
+        assert_eq!(executable_from_shebang("env bash"), "bash");
+        assert_eq!(executable_from_shebang("env"), "env");
+        assert_eq!(executable_from_shebang(""), "");
     }
 
     // getLiteralStringExt handles TA_Expansion by concatenating its literal parts

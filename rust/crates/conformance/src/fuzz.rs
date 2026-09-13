@@ -631,6 +631,7 @@ pub fn run(args: &Args) -> Result<bool, String> {
         println!("  oracle (exit {oexit}): {}", render_keys(&ok));
         println!("  port:   {}", render_keys(&pk));
     }
+    crate::report_crashes(&oracle, args.max_findings, args.quiet);
     Ok(found.is_empty())
 }
 

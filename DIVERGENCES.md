@@ -9,8 +9,18 @@ Reproduce the whole set (deterministic, seed 0):
 
 ```sh
 cargo run --release -p conformance -- fuzz --max-findings 40
-# fuzz: 2000 inputs checked, 15 distinct divergences
+# fuzz: 2000 inputs checked, 13 distinct divergences
+# oracle crashed on 1 input(s) -- an upstream defect, not a divergence
 ```
+
+The crash line is not one of these: the oracle dies on it and has no answer to
+compare against (`PARITY-NOTES.md` item 4). The harness re-runs such a batch one
+script at a time, so the crash costs that one input and nothing else.
+
+A seed covers what it happens to generate. Two entries below (A3, B1) were found
+by other seeds and are still open under this one; a run at `--seed 1013
+--iterations 4000` finds around 40, the extra ones being further spellings of
+the classes already listed here.
 
 Reproduce one entry: run its command against both binaries. `shellcheck` is the
 oracle, `rshellcheck` the port.
@@ -167,6 +177,25 @@ printf '%s' '[x =~""("' | shellcheck -f gcc -
 | oracle | SC1009 "in this regex grouping" at 1:8, SC1073 "double quoted string" at 1:9 |
 | port   | SC1009 "in this regex" at 1:6, SC1073 "regex grouping" at 1:8                |
 
+`[o =~ $"` is the same entry with a translated string in place of the grouping:
+upstream names the regex in SC1009 and the double quoted string in SC1073, the
+port names the test expression and the regex.
+
+### C4. A failed subshell inside a backtick expansion
+
+```sh
+printf '%s' '`(){``' | shellcheck -f gcc -
+```
+
+|        |                                                                                                                                                           |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| oracle | SC1009 "backtick expansion", SC1009 "simple command", SC1073 "explicit subshell" at 1:2, SC1072 at 1:4, SC1073 "backtick expansion" at 1:6, SC1072 at 1:7 |
+| port   | SC1009 "simple command", **SC1070** "Parsing stopped here" at 1:4, SC1073 "backtick expansion", SC1072                                                    |
+
+The port loses the inner failure's own SC1073/SC1009 pair — the subshell frame
+is gone by the time the backtick expansion reports — and emits SC1070 instead,
+which upstream only uses when nothing better is known.
+
 ### C3. Array assignment vs the simple command around it
 
 ```sh
@@ -190,18 +219,24 @@ explicit one or Parsec's empty one. Cosmetic for a human, fatal for the gate.
 printf '%s' 'x=((`'     | shellcheck -s ksh  -f gcc -   # oracle: empty  / port: "Expected ) to close array assignment"
 printf '%s' '$((())'    | shellcheck -s dash -f gcc -   # oracle: "Expected a double )) to end the $((..))" / port: empty
 printf '%s' "<<'"       | shellcheck -s sh   -f gcc -   # oracle: "Expected end of single quoted string" at 1:4 / port: empty at 1:3
+printf '%s' 'y=("'      | shellcheck -f gcc -           # oracle: "Expected end of double quoted string" / port: "Expected ) to close array assignment"
+printf '%s' "S=('"      | shellcheck -s ksh  -f gcc -   # oracle: "Expected end of single quoted string" / port: "Expected ) to close array assignment"
+printf '%s' '[#'        | shellcheck -s sh   -f gcc -   # oracle: empty / port: "Expected test to end here (don't wrap commands in []/[[]])"
 ```
 
-Three instances, and they point in *both* directions, so the cause is not one
-missing message: it is which recorded failure wins the ranking. The port ranks
-by (position, has-a-message, explicit, consumed); Parsec merges by position
-alone and drops empty-message errors when merging at equal positions.
+Instances in *both* directions, so the cause is not one missing message: it is
+which recorded failure wins the ranking. The port ranks by (position,
+has-a-message, explicit, consumed); Parsec merges by position alone and drops
+empty-message errors when merging at equal positions. The `y=("` and `S=('`
+pair shows the shape: at the same column the port keeps the outer array
+assignment's expectation, upstream the inner string's.
 
 ### D2. Off-by-one column
 
 ```sh
 printf '%s' 'until ];do ];do ' | shellcheck -f gcc -            # oracle 1:17 "Unexpected keyword/token" / port 1:16, empty
 printf '%s' '(} '              | shellcheck -s busybox -f gcc -  # oracle 1:3 / port 1:4
+printf '%s' 'while e;done'     | shellcheck -f gcc -             # oracle 1:13 "Unexpected keyword/token" / port 1:11 "Expected whitespace"
 ```
 
 ## E. A check the port has not got
@@ -241,3 +276,17 @@ Kept so a reader can tell a closed entry from a missed one.
 - `! &` — `readIoSource` consumes the `&` before its `lookAhead` turns the
   source down, and that error outlives the `try`, so the reported position is
   past the `&` (fixed in the commit that added this file).
+- `!/env -` and `#!n<TAB>env bash` — SC1008 fired on the first and not on the
+  second, because `executable_from_shebang` treated the word `env` *anywhere*
+  in the shebang as the env form, and its `fromEnvArgs` did not drop leading
+  flags. Now the `/env +(-S|--split-string=?)? *(.*)` regex decides, exactly as
+  `ASTLib.hs` does, and all 11 `prop_executableFromShebang` cases are tests.
+- `declare "f"=""` — no SC3044 (nor SC3043 for `local`), because the port
+  suppressed both when the last word looked like an assignment. Upstream has no
+  such condition.
+- `echo a` / `|| echo b` on the next line — SC1133 was not ported at all, so
+  every "you meant to put the operator at the end of the previous line" case was
+  silently missing. `checkBadBreak` now runs after `readNewlineList` and
+  `readLineBreak`.
+- `readonly f=(` — `readModifierSuffix`'s assignment failure consumed input and
+  was retried as a word, giving SC1036/SC1088 where upstream fails the command.

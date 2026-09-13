@@ -693,6 +693,53 @@ mod coproc_glob_dollar_tests {
         ));
     }
 
+    // ---- modifier suffix: an unterminated array assignment ----------------
+
+    #[test]
+    fn unterminated_array_after_a_modifier_command_fails_the_command() {
+        // `readModifierSuffix`'s assignment is inside `many1`, so a failure
+        // that consumed input ends the command: `readonly f=(` is an unclosed
+        // array assignment, not the word `(` after `readonly f=`.
+        let out = parse_script("-", "readonly f=(");
+        let codes: Vec<i64> = out.notes.iter().map(|n| n.code).collect();
+        assert!(codes.contains(&1073), "expected SC1073, got {codes:?}");
+        assert!(
+            !codes.contains(&1036),
+            "the `(` must not be re-read as a word: {codes:?}"
+        );
+        // A well-formed one still parses.
+        assert!(!has_note("readonly f=(1 2)\n", 1073));
+    }
+
+    // ---- SC1133: a line starting with |/||/&& -----------------------------
+
+    #[test]
+    fn sc1133_line_starting_with_an_operator() {
+        for script in ["echo a\n|| echo b\n", "echo a\n| cat\n", "echo a\n&& b\n"] {
+            assert!(has_note(script, 1133), "SC1133 must fire on {script:?}");
+        }
+        let note = parse_script("-", "echo a\n|| echo b\n")
+            .notes
+            .into_iter()
+            .find(|n| n.code == 1133)
+            .expect("SC1133");
+        assert_eq!(
+            (note.start.line, note.start.column),
+            (2, 1),
+            "SC1133 points at the start of the offending line"
+        );
+    }
+
+    #[test]
+    fn sc1133_not_for_redirections_or_well_formed_breaks() {
+        // `&>` and `&>>` start a redirection, not an operator.
+        assert!(!has_note("echo a\n&> /dev/null\n", 1133));
+        assert!(!has_note("echo a\n&>> log\n", 1133));
+        // The operator at the end of the previous line is the correct spelling.
+        assert!(!has_note("echo a ||\necho b\n", 1133));
+        assert!(!has_note("echo a\necho b\n", 1133));
+    }
+
     // ---- SC1014: command used as a test operand ---------------------------
 
     #[test]

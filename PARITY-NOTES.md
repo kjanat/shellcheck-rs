@@ -208,9 +208,79 @@ on it. Nothing on that path looks at *why* the arithmetic failed.
 
 ---
 
+### 4. `coproc` inside a command substitution crashes ShellCheck
+
+**Reproduce**
+
+```sh
+echo 'x=$(coproc foo)' | shellcheck -
+```
+
+**You get**
+
+```
+shellcheck-oracle: src/ShellCheck/Analytics.hs:5246:5-93: Non-exhaustive patterns in function checkCmd
+```
+
+Nothing else: no diagnostics, no JSON, exit status 1. Every spelling of the same
+shape does it — `` x=`coproc { :; }` ``, `echo $(coproc x)`, `x=${ coproc foo; }`,
+`x=$(foo | coproc bar)` — and each is valid bash (`bash -n` accepts them).
+
+**What the shell does**
+
+```
+$ bash -n <<< 'x=$(coproc foo)'      # accepts it
+```
+
+**What's wrong.** This is a crash, not a diagnostic, and it takes the whole
+invocation with it. One such line anywhere in a project means `shellcheck *.sh`
+prints the files it happened to reach first and then dies:
+
+```
+$ shellcheck a.sh b.sh               # b.sh contains x=$(coproc foo)
+In a.sh line 2:
+echo $x
+     ^-- SC2154 (warning): x is referenced but not assigned.
+...
+shellcheck-oracle: src/ShellCheck/Analytics.hs:5246:5-93: Non-exhaustive patterns in function checkCmd
+```
+
+With `--format=json1` there is no output at all, so an editor integration or a
+CI step consuming JSON sees an empty answer rather than an error it can report.
+Exit status 1 is indistinguishable from "found problems".
+
+**Why.** `checkExpansionWithRedirection` (`Analytics.hs`) takes the last element
+of the substituted pipeline and matches it:
+
+```haskell
+    check id pipe =
+        case pipe of
+            (T_Pipeline _ _ t@(_:_)) -> checkCmd id (last t)
+            _ -> return ()
+
+    checkCmd captureId (T_Redirecting _ redirs _) = foldr (walk captureId) (return ()) redirs
+```
+
+`checkCmd` has that one equation. A pipeline element is normally a
+`T_Redirecting`, but `coproc` parses to `T_CoProc`, which matches nothing — so
+the pattern match fails and the process aborts. `coproc` on its own
+(`coproc foo`) is fine; it only crashes inside `$(..)`, `` `..` `` or `${ ..; }`,
+which is where this check looks. Wrapping it in a group (`y=$( { coproc a; } )`)
+also avoids it, because the last element is then the `{ ...; }`.
+
+**Port.** The port does not crash: it reports SC2148 and SC2034 for
+`x=$(coproc foo)` and carries on. That is not a sanctioned deviation — there is
+no oracle output to deviate from — so the conformance harness records it
+separately. `Oracle::check` re-runs a batch one script at a time when the oracle
+dies, so one crashing input costs its own answer and not the other 199's, and
+both `gate` and `fuzz` end with `oracle crashed on N input(s)`. It was found by
+`fuzz`, not by hand.
+
+---
+
 ## Consistent but surprising
 
-### 4. An error positioned inside quotes that were never quotes
+### 5. An error positioned inside quotes that were never quotes
 
 **Reproduce**
 
@@ -248,7 +318,7 @@ meant as a string or was simply unterminated.
 
 ---
 
-### 5. Column of a failed multi-character token is where the token started
+### 6. Column of a failed multi-character token is where the token started
 
 **Reproduce**
 
@@ -273,7 +343,7 @@ string *started*, however far into it the mismatch occurred. The same rule makes
 
 ---
 
-### 6. Parser notes are zero-width, at the `$`, not on the thing they describe
+### 7. Parser notes are zero-width, at the `$`, not on the thing they describe
 
 **Reproduce**
 
@@ -319,7 +389,7 @@ the construct it describes.
 
 ---
 
-### 7. A parse note disappears if the parse fails later in the file
+### 8. A parse note disappears if the parse fails later in the file
 
 **Reproduce**
 
@@ -389,13 +459,15 @@ sanctioned deviations.
 
 ## Reporting upstream
 
-Item 2 is the one with real consequences: bash runs `! # comment`, ShellCheck
-declares the file unparseable and checks none of it. Item 1 is a misattributed
-context on input that genuinely is a syntax error, and item 3 is a missing hint
-on a path that already has the right words for it — both cosmetic next to 2.
-Those three are worth a bug report against
+Item 4 is the one to report first: it is a crash, it loses the analysis of every
+other file in the same invocation, and it produces no JSON for tooling to read.
+Item 2 is next: bash runs `! # comment`, ShellCheck declares the file
+unparseable and checks none of it. Item 1 is a misattributed context on input
+that genuinely is a syntax error, and item 3 is a missing hint on a path that
+already has the right words for it — both cosmetic next to 4 and 2.
+Those four are worth a bug report against
 [koalaman/shellcheck](https://github.com/koalaman/shellcheck).
 
-Items 4–7 are working as designed, or as Parsec dictates. Changing them would
+Items 5–8 are working as designed, or as Parsec dictates. Changing them would
 change output that existing users, tests and editor integrations depend on, so
 they belong here rather than in an upstream issue.

@@ -208,6 +208,33 @@ fn oracle_keys(comments: &[Value]) -> Vec<CommentKey> {
     comments.iter().map(key_from_value).collect()
 }
 
+/// Report the inputs the oracle died on, separately from divergences.
+///
+/// There is no comparison to make for these — the reference implementation
+/// produced no answer — so they are neither agreement nor divergence. They are
+/// still the most interesting thing a run can find, so they are printed, and
+/// the count is returned for the caller's summary line.
+fn report_crashes(oracle: &oracle::Oracle, max: usize, quiet: bool) -> usize {
+    let crashes = oracle.crashes();
+    if crashes.is_empty() {
+        return 0;
+    }
+    if !quiet {
+        for (script, why) in crashes.iter().take(max) {
+            println!("ORACLE CRASH ({why})");
+            println!("  script: {script:?}");
+        }
+        if crashes.len() > max {
+            println!("... and {} more", crashes.len() - max);
+        }
+    }
+    println!(
+        "oracle crashed on {} input(s) -- an upstream defect, not a divergence",
+        crashes.len()
+    );
+    crashes.len()
+}
+
 // ---------------------------------------------------------------------------
 // gate: ShellCheck's own prop_ properties
 // ---------------------------------------------------------------------------
@@ -302,6 +329,7 @@ fn gate(args: &Args) -> Result<bool, String> {
             println!("DEVIATION {id} [{}]: {}", d.id, d.what);
         }
     }
+    report_crashes(&oracle, args.max_findings, args.quiet);
     println!(
         "gate: {} properties + {optional_checked} optional-check examples, \
          {} agree, {} diverge, {} sanctioned deviations",

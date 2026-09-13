@@ -22,6 +22,11 @@ pub struct Oracle {
     binary: PathBuf,
     dir: PathBuf,
     counter: std::cell::Cell<u64>,
+    /// Inputs the oracle could not answer for: it crashed, or produced nothing
+    /// readable. Recorded rather than fatal, because a reference
+    /// implementation that dies on an input is a finding about *it* — and a
+    /// run that stops there tells us nothing about the rest of the corpus.
+    crashes: std::cell::RefCell<Vec<(String, String)>>,
 }
 
 /// How many scripts to check per oracle invocation.
@@ -90,6 +95,7 @@ impl Oracle {
             binary,
             dir,
             counter: std::cell::Cell::new(0),
+            crashes: std::cell::RefCell::new(Vec::new()),
         })
     }
 
@@ -150,8 +156,30 @@ impl Oracle {
                 .output()
                 .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
             let stdout = String::from_utf8_lossy(&res.stdout);
-            let v: Value = serde_json::from_str(stdout.trim())
-                .map_err(|e| format!("oracle json1: {e}: {}", &stdout[..stdout.len().min(200)]))?;
+            let v: Value = match serde_json::from_str(stdout.trim()) {
+                Ok(v) => v,
+                Err(_) => {
+                    // One input in this batch killed the oracle, and its answer
+                    // for the other 199 died with it. Re-run them one at a time
+                    // so the run continues and the culprit is named, rather than
+                    // ending the comparison on an upstream crash.
+                    for (name, body) in chunk {
+                        match self.check_one_enabled(body, shell, enable) {
+                            Ok((comments, _)) => {
+                                out.entry(name.clone()).or_default().extend(comments);
+                            }
+                            Err(why) => {
+                                self.crashes.borrow_mut().push((body.clone(), why));
+                                out.remove(name);
+                            }
+                        }
+                    }
+                    for p in &paths {
+                        let _ = std::fs::remove_file(p);
+                    }
+                    continue;
+                }
+            };
             for c in v
                 .get("comments")
                 .and_then(Value::as_array)
@@ -179,6 +207,16 @@ impl Oracle {
         script: &str,
         shell: Option<&str>,
     ) -> Result<(Vec<Value>, i32), String> {
+        self.check_one_enabled(script, shell, None)
+    }
+
+    /// As [`Oracle::check_one`], with an optional check enabled (`--enable`).
+    pub fn check_one_enabled(
+        &self,
+        script: &str,
+        shell: Option<&str>,
+        enable: Option<&str>,
+    ) -> Result<(Vec<Value>, i32), String> {
         let name = self.name();
         let p = self.dir.join(&name);
         std::fs::write(&p, script).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -187,6 +225,9 @@ impl Oracle {
         if let Some(s) = shell {
             cmd.arg(format!("--shell={s}"));
         }
+        if let Some(e) = enable {
+            cmd.arg(format!("--enable={e}"));
+        }
         cmd.arg(&p);
         cmd.env_remove("SHELLCHECK_OPTS");
         let res = cmd
@@ -194,14 +235,33 @@ impl Oracle {
             .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
         let _ = std::fs::remove_file(&p);
         let stdout = String::from_utf8_lossy(&res.stdout);
-        let v: Value =
-            serde_json::from_str(stdout.trim()).map_err(|e| format!("oracle json1: {e}"))?;
+        let v: Value = serde_json::from_str(stdout.trim()).map_err(|_| {
+            // Not "bad json": the process died before writing any. Carry the
+            // reason the oracle itself gave, which is what names the bug.
+            let stderr = String::from_utf8_lossy(&res.stderr);
+            let why = stderr
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("no output")
+                .trim()
+                .to_string();
+            format!("exit {}: {why}", res.status.code().unwrap_or(-1))
+        })?;
         let comments = v
             .get("comments")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
         Ok((comments, res.status.code().unwrap_or(-1)))
+    }
+
+    /// Inputs the oracle could not answer for, as (script, reason) pairs.
+    ///
+    /// These are not divergences — there is nothing to compare against — but
+    /// they are findings about the reference implementation, so a run reports
+    /// them separately rather than dropping them.
+    pub fn crashes(&self) -> Vec<(String, String)> {
+        self.crashes.borrow().clone()
     }
 }
 
@@ -288,5 +348,61 @@ pub fn verify(oracle: &Oracle, repo: &str, allow_mismatch: bool) -> Result<Strin
 impl Drop for Oracle {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The oracle binary, if this checkout has one. Every test below needs a
+    /// real ShellCheck to run, so without it there is nothing to assert; the
+    /// test says so rather than passing silently.
+    fn oracle() -> Option<Oracle> {
+        let spec = std::env::var("CONFORMANCE_ORACLE").unwrap_or_else(|_| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../.cache/shellcheck-oracle")
+                .to_string_lossy()
+                .into_owned()
+        });
+        match Oracle::new(&spec) {
+            Ok(o) => Some(o),
+            Err(_) => {
+                println!(
+                    "skipped: no oracle at {spec} (build one: cabal build shellcheck && \
+                     cp \"$(cabal list-bin shellcheck)\" .cache/shellcheck-oracle)"
+                );
+                None
+            }
+        }
+    }
+
+    /// An input that kills the oracle must not take the rest of the batch with
+    /// it: upstream 0.11.0 dies on `coproc` inside a command substitution
+    /// (`Analytics.hs` `checkExpansionWithRedirection`, non-exhaustive
+    /// `checkCmd`), and a run that stopped there would say nothing about the
+    /// other 199 scripts it was given.
+    #[test]
+    fn a_crashing_input_does_not_lose_the_rest_of_the_batch() {
+        let Some(o) = oracle() else { return };
+        let scripts = vec![
+            ("crasher".to_string(), "x=$(coproc foo)\n".to_string()),
+            ("healthy".to_string(), "echo $x\n".to_string()),
+        ];
+        let out = o.check(&scripts, None).expect("batch must not fail");
+        assert!(
+            !out.contains_key("crasher"),
+            "an unanswered script must have no answer, not an empty one"
+        );
+        let healthy = out.get("healthy").expect("the rest of the batch survives");
+        assert!(
+            healthy
+                .iter()
+                .any(|c| c.get("code").and_then(Value::as_i64) == Some(2086)),
+            "expected SC2086 for `echo $x`, got {healthy:?}"
+        );
+        let crashes = o.crashes();
+        assert_eq!(crashes.len(), 1, "one recorded crash: {crashes:?}");
+        assert!(crashes[0].0.contains("coproc"));
     }
 }
