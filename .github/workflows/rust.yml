@@ -11,6 +11,14 @@ on:
     branches: [master]
     paths: &PATHS
       - "rust/**"
+      # The workspace root: members, dependency resolution, rust-version and the
+      # cargo aliases live here, so a change to any of them changes what the
+      # build and the gate actually do.
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - "mise.toml"
+      - "mutants.toml"
       - ".github/workflows/rust.yml"
       - "ShellCheck.cabal"
       - "src/**"
