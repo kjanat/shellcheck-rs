@@ -107,10 +107,11 @@ impl Parser {
         Ok(out)
     }
 
+    /// `many1 (letter <|> char '-')`, and Parsec's `letter` is `isAlpha`.
     pub(super) fn read_annotation_key_name(&mut self) -> String {
         let mut s = String::new();
         while let Some(c) = self.peek() {
-            if c.is_ascii_alphabetic() || c == '-' {
+            if c.is_alphabetic() || c == '-' {
                 self.bump();
                 s.push(c);
             } else {
@@ -120,35 +121,95 @@ impl Parser {
         s
     }
 
-    /// Read a directive value (possibly single/double quoted). Returns the raw
-    /// string and whether it was quoted.
-    pub(super) fn read_annotation_raw_value(&mut self) -> String {
-        match self.peek() {
-            Some(q @ ('\'' | '"')) => {
+    /// `quoted (many1 anyChar) <|> (many1 $ noneOf " \n")`: the value of
+    /// `source=`, `source-path=` and `shell=`. Past an opening quote both of
+    /// `quoted`'s failures have consumed; unquoted, an empty value is a
+    /// failure at the character that ended it, and the key it belongs to has
+    /// consumed -- `shell= d` is a broken directive, not a `shell=` and a `d`.
+    fn read_directive_word(&mut self) -> PResult<String> {
+        if let Some(q) = self.peek() {
+            if q == '\'' || q == '"' {
                 self.bump();
                 let mut s = String::new();
                 while let Some(c) = self.peek() {
                     if c == q || c == '\n' {
                         break;
                     }
-                    self.bump();
                     s.push(c);
-                }
-                let _ = self.char(q);
-                s
-            }
-            _ => {
-                let mut s = String::new();
-                while let Some(c) = self.peek() {
-                    if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
-                        break;
-                    }
                     self.bump();
-                    s.push(c);
                 }
-                s
+                if s.is_empty() {
+                    // `many1 $ noneOf (c:"\n")` with nothing to take.
+                    self.fail_implicitly();
+                    return Err(());
+                }
+                if self.char(q).is_err() {
+                    return self.fail_with("Missing terminating quote for directive.");
+                }
+                return Ok(s);
             }
         }
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            if c == ' ' || c == '\n' {
+                break;
+            }
+            s.push(c);
+            self.bump();
+        }
+        if s.is_empty() {
+            self.fail_implicitly();
+            return Err(());
+        }
+        Ok(s)
+    }
+
+    /// `many1 letter`.
+    fn read_letters1(&mut self) -> PResult<String> {
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            if !c.is_alphabetic() {
+                break;
+            }
+            s.push(c);
+            self.bump();
+        }
+        if s.is_empty() {
+            self.fail_implicitly();
+            return Err(());
+        }
+        Ok(s)
+    }
+
+    /// `"enable" -> plainOrQuoted $ readName `sepBy` char ','` with `readName =
+    /// EnableComment <$> many1 (letter <|> char '-')`: `sepBy` takes none at
+    /// all, but once a comma has been read the name after it is required.
+    fn read_enable_names(&mut self) -> PResult<Vec<Annotation>> {
+        let mut out = Vec::new();
+        let Ok(first) = self.read_enable_name() else {
+            return Ok(out);
+        };
+        out.push(Annotation::EnableComment(first));
+        while self.char(',').is_ok() {
+            out.push(Annotation::EnableComment(self.read_enable_name()?));
+        }
+        Ok(out)
+    }
+
+    fn read_enable_name(&mut self) -> PResult<String> {
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            if !(c.is_alphabetic() || c == '-') {
+                break;
+            }
+            s.push(c);
+            self.bump();
+        }
+        if s.is_empty() {
+            self.fail_implicitly();
+            return Err(());
+        }
+        Ok(s)
     }
 
     /// `"disable" -> plainOrQuoted $ readElement `sepBy` char ','`, parsed
@@ -290,24 +351,12 @@ impl Parser {
     ) -> PResult<Vec<Annotation>> {
         Ok(match key {
             "disable" => return self.read_disable_value(),
-            "enable" => {
-                let raw = self.read_annotation_raw_value();
-                raw.split(',')
-                    .filter(|s| !s.is_empty())
-                    .map(|s| Annotation::EnableComment(s.to_string()))
-                    .collect()
-            }
-            "source" => {
-                let v = self.read_annotation_raw_value();
-                vec![Annotation::SourceOverride(v)]
-            }
-            "source-path" => {
-                let v = self.read_annotation_raw_value();
-                vec![Annotation::SourcePath(v)]
-            }
+            "enable" => self.plain_or_quoted(|p| p.read_enable_names())?,
+            "source" => vec![Annotation::SourceOverride(self.read_directive_word()?)],
+            "source-path" => vec![Annotation::SourcePath(self.read_directive_word()?)],
             "shell" => {
                 let pos = self.pos();
-                let v = self.read_annotation_raw_value();
+                let v = self.read_directive_word()?;
                 if crate::data::shell_for_executable(&v).is_none() {
                     self.note_at(
                         pos.clone(),
@@ -320,16 +369,26 @@ impl Parser {
                 vec![Annotation::ShellOverride(v)]
             }
             "extended-analysis" => {
-                let v = self.read_annotation_raw_value();
+                let pos = self.pos();
+                let v = self.plain_or_quoted(|p| p.read_letters1())?;
                 match v.as_str() {
                     "true" => vec![Annotation::ExtendedAnalysis(true)],
                     "false" => vec![Annotation::ExtendedAnalysis(false)],
-                    _ => Vec::new(),
+                    _ => {
+                        self.note_at(
+                            pos.clone(),
+                            pos,
+                            Severity::ErrorC,
+                            1146,
+                            "Unknown extended-analysis value. Expected true/false.",
+                        );
+                        Vec::new()
+                    }
                 }
             }
             "external-sources" => {
                 let pos = self.pos();
-                let v = self.read_annotation_raw_value();
+                let v = self.plain_or_quoted(|p| p.read_letters1())?;
                 match v.as_str() {
                     // `readAnnotationWithoutPrefix sandboxed`: this path is the
                     // sandboxed one (a script), where enabling external sources
@@ -346,11 +405,19 @@ impl Parser {
                         Vec::new()
                     }
                     "false" => vec![Annotation::ExternalSources(false)],
-                    _ => Vec::new(),
+                    _ => {
+                        self.note_at(
+                            pos.clone(),
+                            pos,
+                            Severity::ErrorC,
+                            1145,
+                            "Unknown external-sources value. Expected true/false.",
+                        );
+                        Vec::new()
+                    }
                 }
             }
             _ => {
-                let _ = self.read_annotation_raw_value();
                 self.note_at(
                     key_pos.clone(),
                     key_pos,
@@ -358,6 +425,18 @@ impl Parser {
                     1107,
                     "This directive is unknown. It will be ignored.",
                 );
+                // `anyChar `reluctantlyTill` whitespace`
+                while let Some(c) = self.peek() {
+                    if c == ' '
+                        || c == '\t'
+                        || c == '\r'
+                        || c == '\n'
+                        || ALMOST_SPACE_CHARS.contains(c)
+                    {
+                        break;
+                    }
+                    self.bump();
+                }
                 Vec::new()
             }
         })

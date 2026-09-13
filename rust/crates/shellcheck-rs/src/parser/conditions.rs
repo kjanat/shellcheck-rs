@@ -936,11 +936,16 @@ impl Parser {
             Some('\'') => return self.read_single_quoted(),
             Some('"') => return self.read_double_quoted(),
             Some('$') => {
+                // `readDollarExpression`, not `readNormalDollar`: there is no
+                // `$'..'`, `$".."` or lone `$` among its alternatives, so in a
+                // regex `$"e"` is the glob literal `$` and then a double quoted
+                // string, with the diagnostics a double quoted string gets.
                 let m = self.mark();
-                if let Ok(t) = self.read_normal_dollar() {
-                    return Ok(t);
+                match self.read_dollar_exp() {
+                    Ok(t) => return Ok(t),
+                    Err(()) if self.idx != m.idx => return Err(()),
+                    Err(()) => self.reset(m),
                 }
-                self.reset(m);
                 // fall through: bare `$` becomes a glob literal below
             }
             _ => {}
@@ -1020,23 +1025,28 @@ impl Parser {
             InnerToken::T_Literal("(".to_string()),
         );
         let mut parts = vec![p1];
+        // `many (readPart <|> readRegexLiteral)`: neither `<|>` nor `many`
+        // recovers from an alternative that consumed before failing.
         loop {
             let m = self.mark();
             let before = self.idx;
-            if let Ok(p) = self.read_regex_part() {
-                if self.idx != before {
+            match self.read_regex_part() {
+                Ok(p) if self.idx != before => {
                     parts.push(p);
                     continue;
                 }
-                self.reset(m);
-            } else {
-                self.reset(m);
+                Ok(_) => self.reset(m),
+                Err(()) if self.idx != before => return Err(()),
+                Err(()) => self.reset(m),
             }
-            if let Ok(p) = self.read_regex_literal() {
-                parts.push(p);
-                continue;
+            match self.read_regex_literal() {
+                Ok(p) => {
+                    parts.push(p);
+                    continue;
+                }
+                Err(()) if self.idx != before => return Err(()),
+                Err(()) => break,
             }
-            break;
         }
         if self.peek() != Some(')') {
             // `p2 <- readLiteralString ")"`: a `string` that does not match
@@ -1056,33 +1066,38 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_NormalWord(parts)))
     }
 
-    /// `readRegexLiteral`: `readGenericLiteral1` stopping at `'`, `"`, `$`,
-    /// backtick, `(` or `)` (keeping backslash escapes verbatim).
+    /// `readRegexLiteral = readGenericLiteral1 (singleQuote <|> doubleQuotable
+    /// <|> oneOf "()")`, and `doubleQuotable` is one of `\"$` and the
+    /// backtick -- the backslash included, so `readGenericEscaped` is never
+    /// reached and an escape is left for `readPart`'s normal literal.
     pub(super) fn read_regex_literal(&mut self) -> PResult<Token> {
+        const END: &str = "'\\\"$`()";
         let start = self.pos();
-        let mut s = String::new();
-        loop {
-            match self.peek() {
-                None => break,
-                Some('\\') => {
-                    self.bump();
-                    match self.bump() {
-                        Some('\n') => {}
-                        Some(c) => {
-                            s.push('\\');
-                            s.push(c);
-                        }
-                        None => s.push('\\'),
-                    }
-                }
-                Some('\'') | Some('"') | Some('$') | Some('`') | Some('(') | Some(')') => break,
-                Some(c) => {
-                    self.bump();
-                    s.push(c);
-                }
+        // `reluctantlyTill1` begins with `notFollowedBy2 end`, and `unexpecting`
+        // runs `try end` -- which reads the character it matches -- before it
+        // fails, all inside another `try`: on one of its own terminators the
+        // literal fails one past it, with "Unexpected " as the message, and
+        // the cursor comes back so the group can go on to its `)`.
+        if let Some(c) = self.peek() {
+            if END.contains(c) {
+                let m = self.mark();
+                self.bump();
+                let r = self.fail_recoverable("Unexpected ");
+                self.reset(m);
+                return r;
             }
         }
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            if END.contains(c) {
+                break;
+            }
+            self.bump();
+            s.push(c);
+        }
         if s.is_empty() {
+            // `anyChar` at the end of the input.
+            self.fail_implicitly();
             return Err(());
         }
         let id = self.next_id_between(start, self.pos());

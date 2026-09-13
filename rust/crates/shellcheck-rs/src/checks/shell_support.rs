@@ -2,7 +2,7 @@
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::get_leading_flags;
-use crate::analyzer_lib::{Check, Checker, Out, Parameters, err, style, warn};
+use crate::analyzer_lib::{Check, Checker, Out, Parameters, StackData, err, style, warn};
 use crate::ast::*;
 use crate::ast_lib::is_flag;
 use crate::ast_lib::is_glob;
@@ -298,22 +298,11 @@ fn matches_bracket_bracket(s: &str) -> bool {
     if cs.first() != Some(&'[') {
         return false;
     }
-    let mut i = 1;
-    while i < cs.len() && cs[i] != ']' {
-        i += 1;
-    }
-    // i at first ']'
-    while i < cs.len() && cs[i] != '[' {
-        i += 1;
-    }
-    // i at '[' after the ']'
-    if i >= cs.len() {
-        return false;
-    }
-    while i < cs.len() && cs[i] != ']' {
-        i += 1;
-    }
-    i < cs.len()
+    // `\]\[` is one adjacent pair, anywhere past the opening bracket (the
+    // first `.*` may be empty), with a `]` still to come after it: `[]s[]`
+    // has both brackets pairs but no `][`, and is not two-dimensional.
+    (1..cs.len().saturating_sub(1))
+        .any(|i| cs[i] == ']' && cs[i + 1] == '[' && cs[i + 2..].contains(&']'))
 }
 
 fn multiple_bangs(_p: &Parameters, t: &Token, out: &mut Out) {
@@ -488,10 +477,12 @@ const BASH_DYNAMIC_VARS: &[&str] = &[
 
 const DASH_VARS: &[&str] = &["_"];
 
+/// `isAssigned var = any f (variableFlow params)`: every assignment the flow
+/// knows about, so `read _` and `coproc` count as much as `_=`.
 fn is_assigned(p: &Parameters, name: &str) -> bool {
-    p.id_map
-        .values()
-        .any(|t| matches!(&*t.inner, InnerToken::T_Assignment { var, .. } if var == name))
+    p.variable_flow
+        .iter()
+        .any(|x| matches!(x, StackData::Assignment(_, _, var, _) if var == name))
 }
 
 fn is_bash_variable(p: &Parameters, var: &str) -> bool {
@@ -2016,6 +2007,38 @@ mod tests {
     #[test]
     fn prop_checkMultiDimensionalArrays6() {
         assert!(!emits(multi_dimensional_arrays, "echo ${foo[bar]}"));
+    }
+
+    #[test]
+    fn two_bracket_pairs_are_one_dimension_unless_adjacent() {
+        // `^\[.*\]\[.*\]` needs a `][`; `[]s[]` has none.
+        assert!(!emits(multi_dimensional_arrays, "echo \"${a[]s[]}\""));
+        assert!(emits(multi_dimensional_arrays, "echo ${a[][b]}"));
+    }
+
+    #[test]
+    fn a_variable_the_flow_assigns_is_not_a_bashism() {
+        // `isAssigned` reads `variableFlow`, so what `read` and `coproc`
+        // assign counts as much as `_=` would.
+        assert!(!emits_code_shell(
+            bashism,
+            "read _ x; echo $_",
+            3028,
+            Shell::Sh
+        ));
+        assert!(emits_code_shell(bashism, "echo $_", 3028, Shell::Sh));
+        assert!(!emits_code_shell(
+            bashism,
+            "coproc $COPROC",
+            3028,
+            Shell::BusyboxSh
+        ));
+        assert!(emits_code_shell(
+            bashism,
+            "echo $COPROC",
+            3028,
+            Shell::BusyboxSh
+        ));
     }
 
     // ---- checkMultipleBangs (SC2325) ----

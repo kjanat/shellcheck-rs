@@ -316,21 +316,27 @@ impl Parser {
     fn read_brace_group_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.char('{')?;
-        let spaced = {
-            let before = self.idx;
-            self.allspacing();
-            self.idx != before
-        };
-        // `{(` is legal, so only an ordinary word needs the space.
-        if !spaced && !matches!(self.peek(), None | Some('(')) {
-            let pos = self.pos();
-            self.problem_at(
-                pos.clone(),
-                pos,
-                Severity::ErrorC,
-                1054,
-                "You need a space after the '{'.",
-            );
+        // `void allspacingOrFail <|> optional (lookAhead (noneOf "(") >> ..)`:
+        // what `allspacing` returns is the whitespace alone, so a comment
+        // straight after the `{` reads as none -- and having consumed it,
+        // the `fail "Expected whitespace"` is one the `<|>` cannot recover.
+        let before = self.idx;
+        if self.allspacing().is_empty() {
+            if self.idx != before {
+                return self.fail_with("Expected whitespace");
+            }
+            let _: PResult<()> = self.fail_recoverable("Expected whitespace");
+            // `{(` is legal, so only an ordinary word needs the space.
+            if !matches!(self.peek(), None | Some('(')) {
+                let pos = self.pos();
+                self.problem_at(
+                    pos.clone(),
+                    pos,
+                    Severity::ErrorC,
+                    1054,
+                    "You need a space after the '{'.",
+                );
+            }
         }
         if self.peek() == Some('}') {
             let pos = self.pos();
@@ -1034,7 +1040,7 @@ impl Parser {
                 );
                 return p.fail_with("Expected ) to open a new case item");
             }
-            let body = p.read_case_body();
+            let body = p.read_case_body()?;
             // `readCaseSeparator`: the `;;` arm and the no-separator-before-esac
             // arm both yield CaseBreak. They are NOT interchangeable — the `;;`
             // condition consumes the separator, the fallback consumes nothing.
@@ -1060,13 +1066,17 @@ impl Parser {
                     );
                 }
                 // The last arm of `readCaseSeparator`: a line break and then
-                // `esac` ends the item without one. Anything else is a failure.
+                // `esac` ends the item without one. Anything else is a failure
+                // Parsec records where the `lookAhead` gave up, past the line
+                // break it read.
                 p.allspacing();
                 let at_esac = p.keyword_ahead("esac");
-                p.reset(m);
                 if !at_esac {
+                    p.fail_implicitly();
+                    p.reset(m);
                     return Err(());
                 }
+                p.reset(m);
                 CaseType::CaseBreak
             };
             Ok((ctype, pats, body))
@@ -1078,43 +1088,28 @@ impl Parser {
         self.peek() == Some(';') && matches!(self.peek_at(1), Some(';') | Some('&'))
     }
 
-    pub(super) fn read_case_body(&mut self) -> Vec<Token> {
-        // A compound list, stopping at a clause terminator (;;/;&/;;&) or esac.
-        // A plain `;` (not part of a terminator) is a statement separator.
+    /// `readLineBreak; list <- (lookAhead readCaseSeparator >> return []) <|>
+    /// readCompoundList`, and `readCompoundList = readTerm`: the same term
+    /// reader as everywhere else, whose separator refuses `;;`, `;&` and
+    /// `;;&`. A term keeps the separator it read -- `readTerm'` never gives a
+    /// line feed back -- so what fails after it fails where it stands, and a
+    /// `case` item whose last command is followed by nothing reports the
+    /// "Expected a command" that ended the term rather than an empty message.
+    pub(super) fn read_case_body(&mut self) -> PResult<Vec<Token>> {
         self.allspacing();
         if self.keyword_ahead("esac") || self.at_case_terminator() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        let first = match self.read_and_or() {
-            Ok(f) => f,
-            Err(()) => return Vec::new(),
-        };
-        let mut out = vec![first];
-        loop {
-            let m = self.mark();
-            self.spacing();
-            if self.at_case_terminator() {
-                self.reset(m);
-                break;
-            }
-            if self.read_separator().is_some() {
-                self.allspacing();
-                if self.at_case_terminator() || self.keyword_ahead("esac") {
-                    break;
+        let m = self.mark();
+        match self.read_term() {
+            Some(list) => Ok(list),
+            None => {
+                if self.idx != m.idx {
+                    self.commit();
                 }
-                match self.read_and_or() {
-                    Ok(n) => out.push(n),
-                    Err(()) => {
-                        self.reset(m);
-                        break;
-                    }
-                }
-            } else {
-                self.reset(m);
-                break;
+                Err(())
             }
         }
-        out
     }
 
     /// Non-consuming lookahead for a POSIX function definition:

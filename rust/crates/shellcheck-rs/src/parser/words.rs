@@ -726,6 +726,21 @@ impl Parser {
             )
         }
         let start = self.pos();
+        // `reluctantlyTill1` begins with `notFollowedBy2 end`, and `unexpecting`
+        // runs `try end` -- which consumes the character it matches -- before
+        // it fails. So a literal that starts on one of its own terminators
+        // fails one past it, with "Unexpected " as the message: for `{ ` in an
+        // arithmetic expression that is the furthest any parse gets, and the
+        // `try` around `braceExpansion` rewinds the cursor, not the error.
+        if let Some(c) = self.peek() {
+            if "{}\"$',".contains(c) || is_brace_ws(c) {
+                let m = self.mark();
+                self.bump();
+                let r = self.fail_recoverable("Unexpected ");
+                self.reset(m);
+                return r;
+            }
+        }
         let mut s = String::new();
         loop {
             match self.peek() {

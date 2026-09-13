@@ -112,6 +112,12 @@ fn real_col(line: &str, target: i64) -> i64 {
         }
         r += 1;
     }
+    // `real _ r v target | target <= v = r` comes before the end-of-line
+    // clause: a target reached by the line's last character -- a tab, which
+    // jumps `v` past it -- is that character's column, not a step back.
+    if target <= v {
+        return r;
+    }
     r + (target - v)
 }
 
@@ -479,6 +485,16 @@ mod tests {
         assert_eq!(lines("a\nb\n"), vec!["a", "b"]);
         assert_eq!(lines("\n"), vec![""]);
         assert_eq!(lines("a\n\nb"), vec!["a", "", "b"]);
+    }
+
+    #[test]
+    fn a_column_on_a_trailing_tab_is_that_tab() {
+        // `real`'s `target <= v` guard comes before its end-of-line clause: a
+        // tab as the last character jumps the virtual column past the target,
+        // and the answer is the tab's own column, not `r + (target - v)`.
+        assert_eq!(real_col("o{1..$n}\t", 9), 9);
+        assert_eq!(real_col("o{1..$n}\t", 8), 8);
+        assert_eq!(real_col("ab", 5), 5);
     }
 
     #[test]

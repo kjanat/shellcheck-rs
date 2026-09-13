@@ -959,6 +959,170 @@ mod coproc_glob_dollar_tests {
         assert!(has_note("let \"$(source ``)\"", 1090));
     }
 
+    #[test]
+    fn a_case_item_that_ends_the_input_reports_the_missing_command() {
+        // `readCompoundList = readTerm`, and `readTerm'` keeps the separator
+        // it read: the `readAndOr` that fails after it, at the end of the
+        // input, is what "Expected a command" comes from, and nothing later
+        // reads the line feed again.
+        let notes = fatal_notes("case x in *)t\n");
+        assert!(
+            notes
+                .iter()
+                .any(|(c, col, m)| *c == 1072 && *col == 1 && m.starts_with("Expected a command.")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn a_here_document_read_after_the_fatal_failure_reports_nothing() {
+        // Parsec never gets to the `<<x`: the redirection before it already
+        // ended the parse, so there is no body to find missing.
+        let notes = fatal_notes("e<;<<x");
+        assert!(!notes.is_empty(), "the parse must fail");
+        assert!(!has_note("e<;<<x", 1044));
+    }
+
+    #[test]
+    fn a_regex_reads_a_dollar_before_a_quote_as_a_literal() {
+        // `readDollarExpression` has no `$".."` among its alternatives, so in
+        // a regex the `$` is a glob literal and the string after it a double
+        // quoted string, with its own diagnostics.
+        assert!(has_note("[[ x =~ $\"e\n\"$ ]]", 1078));
+        assert!(has_note("[[ x =~ $\"e\n\"$ ]]", 1079));
+    }
+
+    #[test]
+    fn an_array_index_keeps_the_expansion_its_first_paren_closes() {
+        // `reparseIndices` runs `optional space >> readArithmeticContents`
+        // with no `eof`, so `$(echo $))` is an index with a command
+        // substitution in it and an unread `)` after.
+        let out = parse_script("-", "a[$(echo $))]=");
+        let root = out.root.expect("parses");
+        let mut expansions = 0;
+        root.visit_preorder(&mut |t| {
+            if matches!(&*t.inner, InnerToken::T_DollarExpansion(_)) {
+                expansions += 1;
+            }
+        });
+        assert_eq!(expansions, 1);
+    }
+
+    #[test]
+    fn a_brace_literal_that_starts_on_a_terminator_fails_past_it() {
+        // `reluctantlyTill1`'s `notFollowedBy2 end`: `unexpecting` runs `try
+        // end`, which reads the space, and fails after it with "Unexpected ".
+        let notes = fatal_notes("for((i;{ ");
+        assert!(
+            notes.contains(&(
+                1072,
+                10,
+                "Unexpected . Fix any mentioned problems and try again.".into()
+            )),
+            "{notes:?}"
+        );
+        assert!(fatal_notes("for((i;{").contains(&(
+            1072,
+            9,
+            " Fix any mentioned problems and try again.".into()
+        )));
+    }
+
+    #[test]
+    fn a_regex_literal_that_starts_on_a_terminator_fails_past_it() {
+        // `readRegexLiteral = readGenericLiteral1 (singleQuote <|>
+        // doubleQuotable <|> oneOf "()")`: `notFollowedBy2 end` reads the
+        // backtick and fails after it, having consumed, so the group and the
+        // regex fail with "Unexpected " one past it.
+        let notes = fatal_notes("[c =~(`");
+        assert!(
+            notes.contains(&(
+                1072,
+                8,
+                "Unexpected . Fix any mentioned problems and try again.".into()
+            )),
+            "{notes:?}"
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|(c, _, m)| *c == 1073 && m.contains("regex grouping")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn a_comment_straight_after_an_opening_brace_is_not_whitespace() {
+        // `allspacingOrFail` reads the comment but `allspacing` returns only
+        // the whitespace, so it fails "Expected whitespace" having consumed,
+        // out of reach of the `<|>` that would have reported SC1054.
+        let notes = fatal_notes("{#");
+        assert!(
+            notes.contains(&(
+                1072,
+                3,
+                "Expected whitespace. Fix any mentioned problems and try again.".into()
+            )),
+            "{notes:?}"
+        );
+        assert!(!has_note("{#", 1054));
+        assert!(has_note("{x; }", 1054));
+    }
+
+    #[test]
+    fn eval_warns_about_a_bare_paren_before_failing_on_it() {
+        // `readEvalSuffix`'s `evalFallback`: SC1098, then a `fail` that
+        // consumed nothing, so the suffix ends and the `(` is read as usual.
+        assert!(has_note("eval(", 1098));
+        assert!(has_note("eval x(", 1098));
+        assert!(!has_note("eval x", 1098));
+    }
+
+    #[test]
+    fn a_directive_value_that_is_missing_fails_the_directive() {
+        // `shell <- quoted (many1 anyChar) <|> (many1 $ noneOf " \n")`: with
+        // a space where the value should start both fail, the key has
+        // consumed, and the directive is a parse error at the space.
+        let notes = fatal_notes("#shellcheck shell= d");
+        assert!(
+            notes.contains(&(
+                1072,
+                19,
+                " Fix any mentioned problems and try again.".into()
+            )),
+            "{notes:?}"
+        );
+        // `plainOrQuoted $ many1 letter`, then SC1146 on anything but true/false.
+        assert!(has_note(
+            "# shellcheck extended-analysis=maybe\necho\n",
+            1146
+        ));
+        // `readName `sepBy` char ','`: once a comma is read the name after it
+        // is required.
+        assert!(!parses_as(None, "# shellcheck enable=a,,b\necho\n"));
+        assert!(parses_as(None, "# shellcheck enable=a,b\necho\n"));
+    }
+
+    #[test]
+    fn a_word_that_fails_inside_a_tried_coproc_body_leaves_its_frames() {
+        // `readCmdSuffix` is `many1`, so the word's failure is the command's,
+        // and the frames it left stay for the simple coproc's successful
+        // `called`s to pop from the top -- what is left names the failure.
+        let notes = fatal_notes("{coproc { for((;;))do c \"\"\"");
+        assert!(
+            notes
+                .iter()
+                .any(|(c, col, m)| *c == 1073 && *col == 23 && m.contains("simple command")),
+            "{notes:?}"
+        );
+        assert!(
+            notes.iter().any(|(c, col, m)| *c == 1009
+                && *col == 14
+                && m.contains("arithmetic for condition")),
+            "{notes:?}"
+        );
+    }
+
     // ---- SC1127: command word that looks like a comment -------------------
 
     #[test]

@@ -1,6 +1,16 @@
 //! Lists, pipelines, simple commands, redirections, here-docs and the script entry (`ShellCheck.Parser` readScript / readSimpleCommand family).
 use super::*;
 
+/// Which `readCmdSuffix` variant a command's arguments get: the plain one,
+/// `readModifierSuffix` (assignments stay assignments) or `readEvalSuffix`
+/// (a bare `(` is warned about before it fails).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CmdSuffix {
+    Plain,
+    Modifier,
+    Eval,
+}
+
 impl Parser {
     pub(super) fn empty_literal(&mut self) -> Token {
         let p = self.pos();
@@ -224,14 +234,19 @@ impl Parser {
                 }
                 Some('&')
             }
-            Some(';') if self.peek_at(1) == Some(';') => {
-                // `g_Semi = notFollowedBy2 g_DSEMI >> tryToken ";"`, and
-                // `notFollowedBy2` is `unexpecting ""`: it reads the `;;` (and
-                // the spacing after it, as `tryToken` does) and then fails with
-                // "Unexpected ", which is where Parsec's error ends up.
+            Some(';') if matches!(self.peek_at(1), Some(';') | Some('&')) => {
+                // `notFollowedBy2 (void g_AND_IF <|> void readCaseSeparator)`,
+                // and `notFollowedBy2` is `unexpecting ""`: it reads the case
+                // separator -- `;;&`, `;&` or `;;`, and the spacing after it,
+                // as `tryToken` does -- and then fails with "Unexpected ",
+                // which is where Parsec's error ends up.
                 let m = self.mark();
+                let dsemi = self.peek_at(1) == Some(';');
                 self.bump();
                 self.bump();
+                if dsemi && self.peek() == Some('&') {
+                    self.bump();
+                }
                 self.spacing();
                 let _: PResult<()> = self.fail_recoverable("Unexpected ");
                 self.reset(m);
@@ -834,7 +849,13 @@ impl Parser {
             } else if effective.as_deref() == Some("time") {
                 suffix = self.read_time_suffix()?;
             } else {
-                suffix = self.read_cmd_suffix(is_modifier);
+                suffix = self.read_cmd_suffix(if is_modifier {
+                    CmdSuffix::Modifier
+                } else if effective.as_deref() == Some("eval") {
+                    CmdSuffix::Eval
+                } else {
+                    CmdSuffix::Plain
+                })?;
             }
         }
         // assemble
@@ -1285,17 +1306,31 @@ impl Parser {
         }
     }
 
-    pub(super) fn read_cmd_suffix(&mut self, modifier: bool) -> Vec<Token> {
+    /// `readCmdSuffix = many1 (readIoRedirect <|> readCmdWord)` and its two
+    /// variants. `many1` recovers only from a failure that consumed nothing,
+    /// so a redirection, assignment or word that failed past its first
+    /// character fails the command, and the cursor stays where it failed: a
+    /// command that "succeeded" with a shorter suffix would pop a frame the
+    /// failure left behind, and name the wrong production.
+    pub(super) fn read_cmd_suffix(&mut self, kind: CmdSuffix) -> PResult<Vec<Token>> {
         let mut out = Vec::new();
         loop {
             self.spacing();
-            if let Ok(r) = self.read_io_redirect() {
-                out.push(r);
-                continue;
+            let rm = self.mark();
+            match self.read_io_redirect() {
+                Ok(r) => {
+                    out.push(r);
+                    continue;
+                }
+                Err(()) => {
+                    if self.idx != rm.idx {
+                        return Err(());
+                    }
+                }
             }
             // Modifier commands (declare/export/local/readonly/typeset) parse
             // well-formed assignments as T_Assignment (readModifierSuffix).
-            if modifier {
+            if kind == CmdSuffix::Modifier {
                 let am = self.mark();
                 match self.read_assignment_word() {
                     Ok(a) => {
@@ -1305,11 +1340,10 @@ impl Parser {
                     Err(()) => {
                         // `readWellFormedAssignment` inside `many1`: a failure
                         // that consumed input (`readonly f=(` with no `)`) ends
-                        // the whole suffix, rather than being retried as a word.
+                        // the whole command, rather than being retried as a word.
                         if self.idx != am.idx {
                             self.commit();
-                            self.reset(am);
-                            break;
+                            return Err(());
                         }
                         self.reset(am);
                     }
@@ -1323,13 +1357,32 @@ impl Parser {
                     // consumed ends the parse, as a trailing `\` does.
                     if self.idx != m.idx {
                         self.commit();
+                        return Err(());
                     }
                     self.reset(m);
+                    // `evalFallback`: `lookAhead (char '(')`, a warning, and a
+                    // `fail` that consumed nothing, so the suffix simply ends
+                    // here and the `(` is reported by whatever reads it next.
+                    if kind == CmdSuffix::Eval && self.peek() == Some('(') {
+                        let pos = self.pos();
+                        self.problem_at(
+                            pos.clone(),
+                            pos,
+                            Severity::WarningC,
+                            1098,
+                            "Quote/escape special characters when using eval, e.g. eval \"a=(b)\".",
+                        );
+                        // The message ends in a period, and `getStringFromParsec`
+                        // adds another: that is what upstream prints.
+                        let _: PResult<()> = self.fail_recoverable(
+                            "Unexpected parentheses. Make sure to quote when eval'ing as shell parsers differ.",
+                        );
+                    }
                     break;
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// `reparseIndices`: reparse each `T_UnparsedIndex` as arithmetic (indexed
@@ -1375,7 +1428,7 @@ impl Parser {
                     let newtok = if is_assoc {
                         self.sub_parse_index_word(&pos, &src)
                     } else {
-                        self.sub_parse_arithmetic(&pos, &src)
+                        self.sub_parse_array_index(&pos, &src)
                     };
                     if let Some(nt) = newtok {
                         // Re-fetch the indices vec (borrow released after sub_parse).
@@ -1418,7 +1471,7 @@ impl Parser {
                 let newtok = if is_assoc {
                     self.sub_parse_index_word(&pos, &src)
                 } else {
-                    self.sub_parse_arithmetic(&pos, &src)
+                    self.sub_parse_array_index(&pos, &src)
                 };
                 if let Some(nt) = newtok {
                     if let InnerToken::T_IndexedElement { indices, .. } = elem.inner_mut() {
@@ -1433,7 +1486,9 @@ impl Parser {
 
     /// Sub-parse `src` (starting at `pos`) as arithmetic contents, merging the
     /// sub-parser's positions and id counter. Mirrors ShellCheck's `subParse`.
-    pub(super) fn sub_parse_arithmetic(&mut self, pos: &Position, src: &str) -> Option<Token> {
+    /// `subParse newPos (readArithmeticContents <* eof) unQuoted`, the
+    /// expression of a `let` argument.
+    pub(super) fn sub_parse_let_expression(&mut self, pos: &Position, src: &str) -> Option<Token> {
         // `subParse` runs on the same parser state, so whatever the
         // arithmetic reports stays reported: `let $(source x)` sources a file
         // from inside its expression, and that is where SC1090 comes from.
@@ -1452,6 +1507,19 @@ impl Parser {
         }
         self.merge_sub(sub);
         tok
+    }
+
+    /// `subParse pos (called "arithmetic array index expression" $ optional
+    /// space >> readArithmeticContents) src`, the index of an indexed array
+    /// when `reparseIndices` gets to it. No `eof`: whatever the expression
+    /// leaves unread is simply left, so `a[$(echo $))]=` has the command
+    /// substitution its first `)` closes, and the checks see it.
+    pub(super) fn sub_parse_array_index(&mut self, pos: &Position, src: &str) -> Option<Token> {
+        let mut sub = self.sub_parser(src, pos);
+        let _ = sub.one_of(" \t\n\r");
+        let tok = sub.read_arithmetic_contents().ok()?;
+        self.merge_sub(sub);
+        Some(tok)
     }
 
     /// Sub-parse `src` (at `pos`) as an associative-array index word.
@@ -1521,7 +1589,7 @@ impl Parser {
                 } else {
                     (raw.clone(), start.clone())
                 };
-                if let Some(tok) = self.sub_parse_arithmetic(&adj_pos, &unquoted) {
+                if let Some(tok) = self.sub_parse_let_expression(&adj_pos, &unquoted) {
                     out.push(tok);
                     continue;
                 }
@@ -2111,7 +2179,10 @@ impl Parser {
     }
 
     pub(super) fn read_pending_heredocs(&mut self) -> PResult<()> {
-        if self.pending_heredocs.is_empty() {
+        // Past a commitment the parse is over in Parsec: a `<<` read after
+        // the failure that ended it (`e<;<<x`) has no body to look for, and
+        // reports nothing.
+        if self.pending_heredocs.is_empty() || self.committed {
             return Ok(());
         }
         let pending: Vec<PendingHereDoc> = std::mem::take(&mut self.pending_heredocs);

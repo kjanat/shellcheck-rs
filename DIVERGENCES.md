@@ -18,21 +18,21 @@ compare against (`PARITY-NOTES.md` items 4 and 5, and **Z3** below). The harness
 re-runs such a batch one script at a time, so the crash costs that one input and
 nothing else.
 
-A seed covers what it happens to generate, and seed 0 is now clean. Wider runs
-are not, and CI fuzzes with a fresh seed every run (`--seed $GITHUB_RUN_NUMBER
---iterations 4000`), so this file lists what the last two wide runs found:
+A seed covers what it happens to generate, so a clean seed 0 says nothing
+about the next one. The two wide runs this file has tracked are clean too:
 
 ```sh
 cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle \
     --seed 1013 --iterations 4000 --max-findings 60
-# fuzz: 4000 inputs checked, 13 distinct divergences
+# fuzz: 4000 inputs checked, 0 distinct divergences
 cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle \
     --seed 148 --iterations 4000
-# fuzz: 4000 inputs checked, 1 distinct divergences
+# fuzz: 4000 inputs checked, 0 distinct divergences
 ```
 
-Those 14 are in **G** below. Do not read the seed-0 count as the size of the
-problem.
+CI fuzzes with a fresh seed every run (`--seed $GITHUB_RUN_NUMBER --iterations
+4000`), and each run that finds something is a new batch for this file. Do not
+read any of these counts as the size of the problem.
 
 Reproduce one entry: run its command against both binaries. `shellcheck` is the
 oracle, `rshellcheck` the port.
@@ -57,9 +57,7 @@ Where an entry's port-side half can be checked without the oracle, it gets a
 asserts what upstream does. Fixing the port makes the assertion pass, which
 makes the test *fail* — the reminder to delete the marker and the entry here in
 the same commit. That is how A1, A3, B1, B2 and E1 came to be closed. There are
-no markers at the moment: the entries in **G** were found by a wide run and have
-not been dug into yet, so nothing can be asserted about them beyond the
-oracle's output.
+no markers at the moment, because there is no open entry to mark.
 
 Grouped by cause, worst user impact first.
 
@@ -95,29 +93,11 @@ only from a shell's verdict: for `-s dash`, which rejects `! # c`, the sanction
 is refused and the divergence stands. See `PARITY-NOTES.md` item 2 and
 `rust/crates/conformance/src/deviations.rs`.
 
-## G. Found by the wide runs, not yet dug into
+## No open entries
 
-Sections A through F are gone; their entries are all in **Fixed** below. This
-one keeps a fresh letter so a closed `A1` and an open one never share a name.
-Each row is one shrunk reproducer as the fuzzer printed it; the dialect is the
-`-s` it was found under, and `none` means no `-s` and no shebang.
-
-| dialect | script                                          | what differs                                                        |
-| ------- | ----------------------------------------------- | ------------------------------------------------------------------- |
-| bash    | `case "" in x)while[$() ]do '';done\n""!()""\n` | SC1072 message: upstream `Expected a command`, port none            |
-| ksh     | `case } in *)t\n`                               | same shape as the row above                                         |
-| sh      | `e<;<<$`                                        | port adds SC1044 for a here document the failed parse never got to  |
-| sh      | `['' =~$"e\n"$`                                 | port misses SC1078/SC1079 on the suspicious quote                   |
-| none    | `a[$(echo $))]=`                                | port misses SC2116 inside an array index                            |
-| none    | `"${a[]s[]}"`                                   | port adds SC2180 for an index that is not two-dimensional           |
-| none    | `for((i;{ `                                     | SC1072: upstream `1:10 Unexpected .`, port `1:9` with no message    |
-| none    | `o{1..$n}\t`                                    | SC2051 span: upstream the whole brace expansion, port one character |
-| sh      | `(read _ '');$_`                                | port adds SC3028 for `$_`                                           |
-| sh      | `#shellcheck shell= d`                          | SC1072: upstream `1:19` with no message, port `1:21 Expected '='..` |
-| dash    | `<<foo $('\nfoo`                                | SC1072 at `2:4` upstream, `2:1` port                                |
-| dash    | `case - in[)for x in '' do eval(`               | port misses SC1098 from `eval(`                                     |
-| sh      | `{coproc { for((;;))do c """`                   | SC1073/SC1009 name different frames, and different positions        |
-| busybox | `coproc $COPROC`                                | port adds SC3028 for `COPROC`                                       |
+Sections A through G are gone; their entries are all in **Fixed** below. The
+next batch takes the letter **H**, so a closed `A1` and an open one never
+share a name.
 
 ## E. A check the port has not got
 
@@ -284,3 +264,43 @@ Kept so a reader can tell a closed entry from a missed one.
   reads, `lookAhead` replies with an unknown error at its own position, which
   loses the merge against what stood before, so the failures the word ran into
   finding its end are not the furthest one. Same for the `builtin` peek.
+- `case x in *)t` then a line feed (was **G**) — the case item's body is
+  `readCompoundList = readTerm`, whose `readTerm'` keeps the separator it read;
+  the port had a hand-rolled list that gave the line feed back, read it again
+  for the separator, and lost the "Expected a command" that ended the term.
+- `e<;<<x` (was **G**) — a here document read after the failure that ended the
+  parse has no body to find missing; the port reported SC1044 for it.
+- `[[ x =~ $"e` … (was **G**) — `readDollarExpression` has no `$".."`, so in a
+  regex `$"` is a `$` literal and then a double quoted string with SC1078 and
+  SC1079. The port read a translated string.
+- `a[$(echo $))]=` (was **G**) — `reparseIndices` runs `optional space >>
+  readArithmeticContents` with no `eof`; the port demanded one and left the
+  index unparsed, so SC2116 never saw the `$(echo ..)`.
+- `"${a[]s[]}"` (was **G**) — `^\[.*\]\[.*\]` needs an adjacent `][`; the port
+  matched the four brackets in order.
+- ``for((i;{ ``, ```[c =~(\`` (was **G**) — ```reluctantlyTill1``begins with``notFollowedBy2 end``, and ``unexpecting``runs``try end``-- which reads the
+  character -- before failing with "Unexpected ", all inside another``try`.
+  The port's brace and regex literals reported nothing there.
+- `o{1..$n}` then a tab (was **G**) — `removeTabStops`' `real` checks `target
+  <= v` before its end-of-line clause; the port's loop checked it only at the
+  top, so a column on a trailing tab came back as `r + (target - v)`.
+- `(read _ '');$_`, `coproc $COPROC` (was **G**) — `isAssigned` reads
+  `variableFlow`; the port looked only at `T_Assignment` nodes, so what `read`
+  and `coproc` assign did not count and SC3028 fired.
+- `#shellcheck shell= d` (was **G**) — every directive value is now read the way
+  `readKey` reads it: `quoted (many1 anyChar) <|> many1 (noneOf " \n")` for
+  `source`, `source-path` and `shell`, `plainOrQuoted (many1 letter)` with
+  SC1146 / SC1145 for the booleans, `readName sepBy ','` for `enable`, and
+  `anyChar reluctantlyTill whitespace` for an unknown key. The port split on
+  commas and stopped at any whitespace.
+- `<<foo $('` then `foo` (was **G**) — closed by the `readCmdName` fix above:
+  the quote runs through the would-be body to the end of the input.
+- `case - in[)for x in '' do eval(` (was **G**) — `readEvalSuffix`'s
+  `evalFallback` (SC1098, then a non-consuming `fail`) was not ported.
+- `{coproc { for((;;))do c """` (was **G**) — `readCmdSuffix` is `many1`, so a
+  word that fails after consuming fails the command and the cursor stays. The
+  port returned a shorter suffix instead, its `called` popped the frame the
+  failure had left, and SC1073 named the wrong production.
+- `{#` — `allspacingOrFail` returns the whitespace alone, so a comment straight
+  after the `{` fails "Expected whitespace" having consumed. The port counted
+  the comment as spacing.
