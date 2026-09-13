@@ -97,6 +97,11 @@ cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle
 # ksh93, busybox sh via `-n`). Needs those interpreters installed; a missing
 # one is reported, never silently skipped.
 cargo run --release -p conformance -- shells --iterations 300
+
+# Where the port rewinds over a commitment instead of using a `try`. Needs no
+# oracle, but does need a debug build: the instrumentation is behind
+# debug_assertions, so do NOT pass --release.
+cargo run -p conformance -- audit
 ```
 
 `gate` takes the shell script out of every `prop_` property in

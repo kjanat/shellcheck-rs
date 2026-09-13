@@ -226,6 +226,10 @@ struct Mark {
     idx: usize,
     line: i64,
     col: i64,
+    /// Whether the parse had already committed when the mark was taken, so a
+    /// `reset` can tell "we backtracked over a point of no return" from an
+    /// ordinary rewind. See [`Parser::backtracked_over_commitment`].
+    committed: bool,
 }
 
 type PResult<T> = Result<T, ()>;
@@ -288,6 +292,10 @@ pub struct Parser {
     /// alternative could take over. Parsec propagates such a failure straight
     /// out of `readScript`, so the parse is over and no tree survives.
     committed: bool,
+    /// Audit for the `try` emulation: `reset` call sites that rewound over a
+    /// commitment. See [`Parser::backtracked_over_commitment`].
+    #[cfg(debug_assertions)]
+    commitment_backtracks: std::collections::BTreeSet<String>,
     /// The context stack as it stood when the parse committed. Parsec stops
     /// dead there, so that is the stack `notesForContext` reads at the end --
     /// whatever this parser goes on to push while it unwinds.
@@ -424,6 +432,8 @@ impl Parser {
             disabled_codes: Vec::new(),
             next_serial: 0,
             committed: false,
+            #[cfg(debug_assertions)]
+            commitment_backtracks: std::collections::BTreeSet::new(),
             frozen_contexts: None,
             reach: 0,
             reach_pos: Position {
@@ -443,14 +453,38 @@ impl Parser {
             idx: self.idx,
             line: self.line,
             col: self.col,
+            committed: self.committed,
         }
     }
 
     #[inline]
+    #[cfg_attr(debug_assertions, track_caller)]
     fn reset(&mut self, m: Mark) {
+        // A rewind past a point of no return is `try`'s job, not a plain
+        // `reset`'s: `try` puts the commitment back, a `reset` leaves the parse
+        // committed and everything reported after it is silently dropped. That
+        // asymmetry is what hid SC1019, so every site where it happens is
+        // recorded for the audit rather than being left to the eye.
+        #[cfg(debug_assertions)]
+        if self.committed && !m.committed {
+            self.commitment_backtracks
+                .insert(std::panic::Location::caller().to_string());
+        }
         self.idx = m.idx;
         self.line = m.line;
         self.col = m.col;
+    }
+
+    /// The `reset` call sites that rewound over a commitment during this parse.
+    ///
+    /// Each is a place where the Haskell either wraps the attempt in `try` (and
+    /// the port must too) or never commits in the first place. Empty is the
+    /// goal; debug builds only.
+    #[cfg(debug_assertions)]
+    pub fn backtracked_over_commitment(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.commitment_backtracks.iter().cloned().collect();
+        v.sort();
+        v
     }
 
     #[inline]
@@ -1288,6 +1322,16 @@ pub fn parse_script(filename: &str, script: &str) -> ParseOutput {
 
 /// Parse a script, telling the parser whether the caller supplied `--shell`,
 /// and which dialect the caller or the filename named if either did.
+/// Parse `script` and report the `reset` sites that rewound over a commitment
+/// (see [`Parser::backtracked_over_commitment`]). For the `try`-emulation
+/// audit; debug builds only, and the parse result itself is discarded.
+#[cfg(debug_assertions)]
+pub fn audit_commitment_backtracks(filename: &str, script: &str) -> Vec<String> {
+    let mut p = Parser::new(filename, script);
+    let _ = p.read_script_file();
+    p.backtracked_over_commitment()
+}
+
 pub fn parse_script_with(
     filename: &str,
     script: &str,

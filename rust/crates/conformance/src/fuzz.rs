@@ -527,6 +527,33 @@ impl Shrinker<'_> {
 // ---------------------------------------------------------------------------
 // Driver
 // ---------------------------------------------------------------------------
+/// The generator's inputs on their own, with no oracle involved.
+///
+/// `run` interleaves generation with checking; a caller that only needs shell
+/// to feed somewhere else (`audit`) gets the same stream from here, for the
+/// same seed.
+pub fn sample_scripts(seeds: &[String], seed: u64, count: usize) -> Vec<String> {
+    let mut rng = Rng::new(seed.wrapping_add(1));
+    (0..count)
+        .map(|_| {
+            let s = if rng.chance(45) && !seeds.is_empty() {
+                let base = rng.pick(seeds).clone();
+                mutate(&mut rng, &base, seeds)
+            } else if rng.chance(50) {
+                script(&mut rng)
+            } else {
+                let g = script(&mut rng);
+                mutate(&mut rng, &g, seeds)
+            };
+            if s.len() > 4000 {
+                s[..4000].to_string()
+            } else {
+                s
+            }
+        })
+        .collect()
+}
+
 pub fn run(args: &Args) -> Result<bool, String> {
     let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
     let seeds: Vec<String> = corpus::extract(&src)

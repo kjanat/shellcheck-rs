@@ -342,6 +342,66 @@ fn gate(args: &Args) -> Result<bool, String> {
 }
 
 // ---------------------------------------------------------------------------
+// audit: the `try` emulation
+// ---------------------------------------------------------------------------
+
+/// Report every `reset` site that rewinds over a commitment.
+///
+/// The port emulates Parsec's `try` with an explicit commitment flag: a
+/// production that fails after consuming input sets it, and `problem_at` then
+/// reports nothing, because Haskell's parse is over at that point. `try_parse`
+/// puts the flag back; a bare `mark`/`reset` does not. Wherever the Haskell
+/// wraps an attempt in `try` and the port used `reset`, the parse stays
+/// committed and every diagnostic after it is silently dropped -- which is
+/// exactly how SC1019 went missing on `[ -n $(`.
+///
+/// This runs the corpus through a debug build and prints the sites reached, so
+/// the list is generated rather than eyeballed over 130-odd `mark()` calls.
+/// Each is either a genuine `try` in the Haskell (fix it) or a production that
+/// cannot commit (harmless). Needs no oracle.
+fn audit(args: &Args) -> Result<bool, String> {
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = args;
+        Err(
+            "audit needs a debug build (drop --release): the instrumentation is \
+             behind debug_assertions"
+                .to_string(),
+        )
+    }
+    #[cfg(debug_assertions)]
+    {
+        let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
+        let coverage = corpus::coverage(&src)?;
+        let mut sites: std::collections::BTreeMap<String, (usize, String)> =
+            std::collections::BTreeMap::new();
+        let mut scripts: Vec<String> = coverage.entries.iter().map(|e| e.script.clone()).collect();
+        // The generated corpus reaches recovery paths the properties never do.
+        let generated = fuzz::sample_scripts(&scripts.clone(), args.seed, args.iterations);
+        scripts.extend(generated);
+        for script in &scripts {
+            for site in shellcheck_rs::parser::audit_commitment_backtracks("-", script) {
+                let e = sites.entry(site).or_insert((0, script.clone()));
+                e.0 += 1;
+                if script.len() < e.1.len() {
+                    e.1 = script.clone();
+                }
+            }
+        }
+        println!(
+            "audit: {} scripts, {} reset site(s) rewound over a commitment",
+            scripts.len(),
+            sites.len()
+        );
+        for (site, (hits, smallest)) in &sites {
+            println!("  {site}  ({hits} hits)");
+            println!("    smallest input: {smallest:?}");
+        }
+        Ok(sites.is_empty())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Arguments
 // ---------------------------------------------------------------------------
 
@@ -355,6 +415,8 @@ pub enum Command {
     /// External validity: both tools against the shells, not against each other.
     Shells,
     Extract,
+    /// Where the port rewinds over a commitment instead of using a `try`.
+    Audit,
 }
 
 #[derive(Parser)]
@@ -456,6 +518,7 @@ fn main() -> ExitCode {
         Command::Gate => gate(&args),
         Command::Fuzz => fuzz::run(&args),
         Command::Shells => shells::run(&args),
+        Command::Audit => audit(&args),
         Command::Extract => {
             let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
             corpus::extract(&src).map(|e| {
