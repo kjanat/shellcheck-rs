@@ -820,6 +820,19 @@ mod coproc_glob_dollar_tests {
         assert!(!has_note("[ test =~ foo ]", 1072));
     }
 
+    #[test]
+    fn a_comment_is_spacing_inside_a_condition() {
+        // `condSpacing`'s `allspacing` ends in `optional readComment`, so the
+        // `#` opens a comment rather than starting a word: the `-x` is left
+        // with no argument and the test expression does not parse.
+        for script in ["[[# =x ]]", "[ -x# ]"] {
+            assert!(
+                !parses_as(Some(Shell::Ksh), script),
+                "{script} must not parse: the `#` is a comment, not a word"
+            );
+        }
+    }
+
     // ---- SC1127: command word that looks like a comment -------------------
 
     #[test]
@@ -862,15 +875,6 @@ mod coproc_glob_dollar_tests {
         assert!(
             parses_as(Some(Shell::Dash), "function | { x; }"),
             "DIVERGENCES.md A3: `function` piped into a brace group is a command, not a definition"
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "DIVERGENCES.md B1")]
-    fn a_test_expression_starting_with_hash_should_not_parse() {
-        assert!(
-            !parses_as(Some(Shell::Ksh), "[[# =x ]]"),
-            "DIVERGENCES.md B1: upstream rejects `[[#`, the port reads the `#` as a word"
         );
     }
 

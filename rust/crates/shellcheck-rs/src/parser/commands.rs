@@ -442,20 +442,40 @@ impl Parser {
         // compound command cannot start one. The keyword is read and then
         // rejected, so the error lands past it, and the whole thing sits in a
         // `try`, so an enclosing alternative can still take over.
-        if let Some(n) = self.keyword_len() {
+        if let Some(n) = self.keyword_end() {
             let m = self.mark();
+            // The `fail` inside the inner `try` happens from where the keyword
+            // token left off -- before the outer one rewinds -- so that is
+            // where the error lands.
             for _ in 0..n {
                 self.bump();
             }
-            // `readKeyword` is a `tryWordToken`, which takes the spacing after
-            // the keyword with it, and the `fail` inside the inner `try`
-            // happens from there -- before the outer one rewinds.
-            self.spacing();
             let r = self.fail_recoverable("Unexpected keyword/token");
             self.reset(m);
             return r;
         }
         self.read_banged()
+    }
+
+    /// How far past the closing keyword ahead `readKeyword` leaves the cursor:
+    /// its length, and then the spacing after it for every one of them but
+    /// `}`. `tryToken` and `tryWordToken` both end `spacing`; `g_Rbrace` is a
+    /// bare `char '}'`, handled specially so ksh's `${ foo; }bar` closes where
+    /// it should. A caller that reads the keyword only to reject it still has
+    /// to stop where Parsec would, since that is where the error is reported.
+    pub(super) fn keyword_end(&mut self) -> Option<usize> {
+        let n = self.keyword_len()?;
+        let takes_spacing = self.peek() != Some('}');
+        let m = self.mark();
+        for _ in 0..n {
+            self.bump();
+        }
+        if takes_spacing {
+            self.spacing();
+        }
+        let end = self.idx;
+        self.reset(m);
+        Some(end - m.idx)
     }
 
     /// `readKeyword`: how long the closing keyword ahead is, plus the
@@ -630,12 +650,6 @@ impl Parser {
     }
 
     pub(super) fn read_command(&mut self) -> PResult<Token> {
-        // Reserved words that close a compound list must not be read as command
-        // names (mirrors `readPipeline`'s `unexpecting readKeyword`). Without
-        // this, e.g. `for..do..done`'s body swallows `done` and the loop fails.
-        if self.at_command_terminator() {
-            return Err(());
-        }
         // `choice` is a fold of bare `<|>`: once a compound command has
         // consumed input there is no going back to a simple one, so `((`
         // reports an unfinished arithmetic command rather than quietly
@@ -749,21 +763,6 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_CoProcBody(body)))
     }
 
-    /// True if the upcoming token is a reserved word/operator that terminates a
-    /// command list (`then else elif fi do done esac`, `}`).
-    pub(super) fn at_command_terminator(&self) -> bool {
-        for kw in ["then", "else", "elif", "fi", "do", "done", "esac"] {
-            if self.keyword_ahead(kw) {
-                return true;
-            }
-        }
-        // A bare `}` closing a brace group (word-bounded).
-        if self.peek() == Some('}') && self.is_word_boundary_after(1) {
-            return true;
-        }
-        false
-    }
-
     // ---- compound commands -------------------------------------------------
 
     pub(super) fn read_arithmetic_command(&mut self) -> PResult<Token> {
@@ -805,14 +804,20 @@ impl Parser {
             // first argument's name.
             let name = Self::command_literal_name(c);
             let effective = if name.as_deref() == Some("builtin") {
-                let m = self.mark();
-                self.spacing();
-                let peeked = self
-                    .read_normal_word()
-                    .ok()
-                    .and_then(|w| Self::command_literal_name(&w));
-                self.reset(m);
-                peeked
+                // `ignoreProblemsOf . optionMaybe . try . lookAhead $
+                // readCmdWord`. `optionMaybe` makes it total, so
+                // `ignoreProblemsOf`'s `p <* put systemState` always runs and
+                // puts the whole SystemState back -- the problems this peek
+                // reported and the context frames it left behind. Without
+                // that, a word that failed after consuming (a `` ` `` with no
+                // closing one) leaves its frame on the stack and the real
+                // failure names it twice.
+                self.peek_ahead(|p| {
+                    p.spacing();
+                    p.read_normal_word()
+                        .ok()
+                        .and_then(|w| Self::command_literal_name(&w))
+                })
             } else {
                 name
             };
@@ -1573,25 +1578,8 @@ impl Parser {
         let start = self.pos();
         self.char('[')?;
         let pos = self.pos();
-        // `inSeparateContext $ lookAhead ..` rolls its state back whether it
-        // succeeded or not, so nothing the span leaves behind survives.
-        let m = self.mark();
-        let notes = self.notes.len();
-        let problems = self.problems.len();
-        let contexts = self.contexts.clone();
-        let failure = self.failure.clone();
-        let spanned = self.read_index_span();
-        let end_idx = self.idx;
-        self.reset(m);
-        self.notes.truncate(notes);
-        self.problems.truncate(problems);
-        self.contexts = contexts;
-        self.failure = failure;
-        spanned?;
-        let raw: String = self.input[m.idx..end_idx].iter().collect();
-        while self.idx < end_idx {
-            self.bump();
-        }
+        // `str <- readStringForParser readIndexSpan`.
+        let raw = self.read_string_for_parser(|p| p.read_index_span())?;
         self.char(']')?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
@@ -1715,6 +1703,11 @@ impl Parser {
             let m = self.mark();
             match self.read_normal_word() {
                 Ok(w) => w,
+                // `value <- readArray <|> readNormalWord`, with nothing after
+                // it: a word that failed having consumed takes the assignment
+                // down with it, and the frame `called "variable assignment"`
+                // left behind is what names the failure.
+                Err(()) if self.idx != m.idx => return Err(()),
                 Err(()) => {
                     self.reset(m);
                     // empty value

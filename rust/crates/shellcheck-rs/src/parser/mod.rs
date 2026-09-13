@@ -740,6 +740,29 @@ impl Parser {
         }
     }
 
+    /// `ignoreProblemsOf . optionMaybe . try . lookAhead $ p`: look at what `p`
+    /// would read without keeping any of it. `try . lookAhead` puts the cursor
+    /// and Parsec's own state back, and `ignoreProblemsOf`'s `p <* put
+    /// systemState` -- total, because `optionMaybe` swallows the failure --
+    /// puts back the `StateT` underneath, which is where the problems and the
+    /// context frames live. Only the answer survives.
+    pub(super) fn peek_ahead<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let m = self.mark();
+        let notes = self.notes.len();
+        let problems = self.problems.len();
+        let contexts = self.contexts.clone();
+        let committed = self.committed;
+        let frozen = self.frozen_contexts.clone();
+        let out = f(self);
+        self.reset(m);
+        self.notes.truncate(notes);
+        self.problems.truncate(problems);
+        self.contexts = contexts;
+        self.committed = committed;
+        self.frozen_contexts = frozen;
+        out
+    }
+
     /// `shouldIgnoreCode`: any frame in scope that disables this code, where a
     /// `ContextSource` frame disables *everything* unless `--check-sourced`
     /// (`contextItemDisablesCode`).
@@ -855,10 +878,21 @@ impl Parser {
         self.notes.truncate(notes);
         self.problems.truncate(problems);
         self.contexts = contexts;
-        self.failure = failure;
         self.committed = committed;
         self.frozen_contexts = frozen;
-        r?;
+        if r.is_err() {
+            // `parseForgettingContext`'s failure branch is `Ms.put c >> fail
+            // ""`, and the `<|>` above it merges that error with the one from
+            // the `try parser` branch: Parsec keeps whichever reached further,
+            // so the inner failure stands and only ties fall back to this
+            // empty one. Restoring the old failure here instead would throw
+            // away the only account of what actually went wrong -- `<<>` would
+            // report at the `<<` rather than past the `>` that `readProcSub`
+            // read before it went looking for a `(`.
+            self.record_failure_as("", true, false);
+            return Err(());
+        }
+        self.failure = failure;
         let str: String = self.input[m.idx..end].iter().collect();
         while self.idx < end {
             self.bump();
@@ -942,11 +976,7 @@ impl Parser {
         // On a tie the later failure wins: Parsec merges errors at the same
         // position, and what it reports the contexts from is the stack as it
         // stands then -- so the freshest snapshot is the right one.
-        let better = match &self.failure {
-            None => true,
-            Some(f) => rank >= (f.reach, !f.message.is_empty(), f.explicit, f.consumed),
-        };
-        if better {
+        if self.outranks_current(rank) {
             self.failure = Some(Failure {
                 reach: self.idx,
                 pos: self.pos(),
@@ -955,6 +985,33 @@ impl Parser {
                 consumed,
                 explicit,
             });
+        }
+    }
+
+    /// Whether a failure of this rank displaces the one held. On a tie the
+    /// later one wins: Parsec merges errors at the same position, and the
+    /// contexts it reports come from the stack as it stands then, so the
+    /// freshest snapshot is the right one.
+    fn outranks_current(&self, rank: (usize, bool, bool, bool)) -> bool {
+        match &self.failure {
+            None => true,
+            Some(f) => rank >= (f.reach, !f.message.is_empty(), f.explicit, f.consumed),
+        }
+    }
+
+    /// Put back a failure that was accumulated before an attempt which has
+    /// since been rewound, keeping whichever of the two ranks higher.
+    ///
+    /// Parsec drops the accumulated error when a parser *succeeds* having
+    /// consumed input, which is what [`Parser::bump`] models. A `try` that
+    /// fails is not that: it replies as though it consumed nothing, so the
+    /// error from before it is merged with its own rather than lost. Every
+    /// hand-rolled `try` -- read some, fail, `reset` -- has to say so, or the
+    /// reads it rewound take an unrelated failure down with them.
+    fn restore_failure(&mut self, saved: Option<Failure>) {
+        let Some(f) = saved else { return };
+        if self.outranks_current((f.reach, !f.message.is_empty(), f.explicit, f.consumed)) {
+            self.failure = Some(f);
         }
     }
 
@@ -1301,18 +1358,25 @@ impl Parser {
     }
 
     /// `allspacing`: whitespace including linefeeds and comments.
-    fn allspacing(&mut self) {
-        // `allspacing = spacing; option False (linefeed >> allspacing)`, so it
-        // is `spacing` -- line continuations and a comment included -- with
-        // linefeeds between.
+    /// `allspacing = do { s <- spacing; more <- option False (linefeed >> ..);
+    /// if more then s ++ "\n" ++ rest else s }`, so it is `spacing` -- line
+    /// continuations and a trailing comment included -- with linefeeds between.
+    /// The text is what tells a condition whether it was given any space at all
+    /// (SC1035) and whether a line was broken without a `\` (SC1080); a comment
+    /// counts as neither, which is why `spacing` leaves it out of what it
+    /// returns.
+    fn allspacing(&mut self) -> String {
+        let mut out = String::new();
         loop {
-            self.spacing();
+            out.push_str(&self.spacing());
             let m = self.mark();
             if self.linefeed().is_err() {
                 self.reset(m);
                 break;
             }
+            out.push('\n');
         }
+        out
     }
 
     fn line_break(&mut self) {

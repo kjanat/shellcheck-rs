@@ -74,7 +74,14 @@ impl Parser {
             );
         }
         match self.peek() {
-            None => Err(()),
+            // Parsec records an error for running out of input like any other,
+            // and it is the furthest one a word ever reaches. `many` swallows
+            // the failure but not the error, which is how `if[ ]{` reports past
+            // the `{` that `isFollowedBy readNormalWord` looked at.
+            None => {
+                self.fail_implicitly();
+                Err(())
+            }
             Some(c) => match c {
                 '\'' => self.read_single_quoted(),
                 '"' => self.read_double_quoted(),
@@ -1025,7 +1032,6 @@ impl Parser {
 
     pub(super) fn read_dollar_exp(&mut self) -> PResult<Token> {
         // arithmetic $((, expansion $(, bracket $[, braced ${, variable $x
-        let m = self.mark();
         if self.string_peek("$((") {
             // `readAmbiguous "$((" readDollarArithmetic readDollarExpansion`.
             // Its last attempt consumes, so `readNormalDollar`'s bare `<|>` can
@@ -1075,10 +1081,15 @@ impl Parser {
                 Some('|') | Some(' ') | Some('\t') | Some('\n') | Some('\r')
             )
         {
-            if let Ok(t) = self.read_dollar_brace_command_expansion() {
-                return Ok(t);
+            // The `try` inside covers only `string "${" >> (char '|' <|>
+            // whitespace)`, and the guard above is that same test, so it has
+            // succeeded: everything after it consumes for real and `<|>` cannot
+            // fall through to `readDollarBraced`.
+            let r = self.read_dollar_brace_command_expansion();
+            if r.is_err() {
+                self.commit();
             }
-            self.reset(m);
+            return r;
         }
         if self.peek() == Some('$') && self.peek_at(1) == Some('{') {
             // Past `try (string "${")` there is no alternative left: a failure

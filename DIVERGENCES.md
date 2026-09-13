@@ -18,8 +18,8 @@ compare against (`PARITY-NOTES.md` items 4 and 5, and **Z3** below). The harness
 re-runs such a batch one script at a time, so the crash costs that one input and
 nothing else.
 
-A seed covers what it happens to generate. Two entries below (A3, B1) were found
-by other seeds and are still open under this one; a run at `--seed 1013
+A seed covers what it happens to generate. One entry below (A3) was found by
+another seed and is still open under this one; a run at `--seed 1013
 --iterations 4000` finds around 40, the extra ones being further spellings of
 the classes already listed here.
 
@@ -160,20 +160,6 @@ tried.
 The port is too lenient here, so it reports analysis findings on a file upstream
 refuses outright. Whether upstream or the port is *right* is a separate
 question — the shells accept neither — but they must agree.
-
-### B1. `[[#` … `]]`
-
-```sh
-printf '%s' '[[# =x ]]' | shellcheck -s ksh -f gcc -
-```
-
-|        |                                                                |
-| ------ | -------------------------------------------------------------- |
-| oracle | SC1035, `SC1073` "Couldn't parse this test expression", SC1072 |
-| port   | SC1035, **SC2050** "This expression is constant", SC1035       |
-
-The port reads `#` as a word and carries on; upstream's test-expression parser
-rejects it.
 
 ### B2. An unterminated quoted directive value
 

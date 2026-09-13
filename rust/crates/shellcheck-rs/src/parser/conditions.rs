@@ -218,36 +218,11 @@ impl Parser {
         space
     }
 
-    /// Spacing within a condition (spaces, tabs, line continuations, newlines in
-    /// `[[ ]]`). Returns the consumed whitespace.
+    /// Spacing within a condition: `condSpacing`'s `space <- allspacing`, so a
+    /// comment counts as spacing here as it does anywhere else -- `[ -x# ]`
+    /// has no argument for the `-x` rather than a word beginning with `#`.
     pub(super) fn cond_spacing(&mut self) -> String {
-        let mut out = String::new();
-        loop {
-            let mut progressed = false;
-            while let Ok(c) = self.line_whitespace() {
-                out.push(c);
-                progressed = true;
-            }
-            let m = self.mark();
-            if self.string("\\\n").is_ok() {
-                out.push('\n');
-                progressed = true;
-            } else {
-                self.reset(m);
-            }
-            // allow bare newlines too (only meaningful in [[ ]], but harmless)
-            let m2 = self.mark();
-            if self.char('\n').is_ok() {
-                out.push('\n');
-                progressed = true;
-            } else {
-                self.reset(m2);
-            }
-            if !progressed {
-                break;
-            }
-        }
-        out
+        self.allspacing()
     }
 
     // contents = or-level (chained by && / -a → TC_And)
@@ -911,6 +886,11 @@ impl Parser {
                     }
                     parts.push(p);
                 }
+                // `many1 readPart`: a part that failed having consumed takes
+                // the whole regex down, so an unterminated group or quote
+                // inside it is the failure reported rather than the condition
+                // complaining that the test did not end here.
+                Err(()) if self.idx != before => return Err(()),
                 Err(()) => break,
             }
         }
@@ -1033,6 +1013,10 @@ impl Parser {
             break;
         }
         if self.peek() != Some(')') {
+            // `p2 <- readLiteralString ")"`: a `string` that does not match
+            // records an error where it stood, and here that is the furthest
+            // the regex ever reached.
+            self.fail_implicitly();
             return Err(());
         }
         let p2_start = self.pos();

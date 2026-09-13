@@ -93,15 +93,14 @@ impl Parser {
     fn warn_on_tokens_after_compound_command(&mut self) {
         // `notFollowedBy2 $ choice [readKeyword, g_Lbrace]`, and `readKeyword`
         // includes `}`, `)` and `;;` as well as the closing words. It is
-        // `unexpecting ""`, so a keyword that *is* there is read -- spacing and
-        // all, as `tryToken` does -- and then failed on with "Unexpected ",
-        // which is where Parsec's error ends up.
-        if let Some(n) = self.keyword_len() {
+        // `unexpecting ""`, so a keyword that *is* there is read -- as far as
+        // `keyword_end` says its token reaches -- and then failed on with
+        // "Unexpected ", which is where Parsec's error ends up.
+        if let Some(n) = self.keyword_end() {
             let m = self.mark();
             for _ in 0..n {
                 self.bump();
             }
-            self.spacing();
             // Inside `optional . lookAhead`, so the failure itself goes nowhere:
             // only its message and position survive.
             let _: PResult<()> = self.fail_recoverable("Unexpected ");
@@ -146,13 +145,6 @@ impl Parser {
                 1141,
                 "Unexpected tokens after compound command. Bad redirection or missing ;/&&/||/|?",
             );
-        }
-    }
-
-    pub(super) fn is_word_boundary_after(&self, n: usize) -> bool {
-        match self.peek_at(n) {
-            None => true,
-            Some(c) => c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ';',
         }
     }
 
@@ -264,6 +256,9 @@ impl Parser {
             // and that is where Parsec's error sits -- `case '' i` reports the
             // end of input rather than the start of the missing `in`.
             let m = self.mark();
+            // `tryWordToken` is a `try`: these reads are undone below, so the
+            // failure standing before them has to come back with them.
+            let before = self.failure.clone();
             let mut matched = 0;
             for c in kw.chars() {
                 match self.peek() {
@@ -284,6 +279,7 @@ impl Parser {
                 self.fail_implicitly();
             }
             self.reset(m);
+            self.restore_failure(before);
             Err(())
         }
     }
@@ -295,14 +291,14 @@ impl Parser {
     fn read_subshell_body(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.char('(')?;
-        let list = self.read_compound_list_or_empty();
         self.allspacing();
-        if list.is_empty() && self.eof() {
-            // Haskell reads the body with `readCompoundList`, which is a
-            // non-empty term: with nothing inside and nothing left to read,
-            // the failure it reports is the missing command, not the `)`.
-            return self.fail_with("Expected a command");
-        }
+        // `list <- readCompoundList`, which is `readTerm`: a non-empty term, so
+        // `()` is not an empty subshell but a subshell with no command in it,
+        // and the failure reported is the one from inside.
+        let Some(list) = self.read_term() else {
+            return Err(());
+        };
+        self.allspacing();
         if self.char(')').is_err() {
             return self.fail_with("Expected ) closing the subshell");
         }
