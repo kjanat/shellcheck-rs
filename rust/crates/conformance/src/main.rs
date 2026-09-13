@@ -23,6 +23,7 @@
 //!
 //! Exit codes: 0 = agreement, 1 = at least one divergence, 2 = harness error.
 
+mod annotate;
 mod bench;
 mod corpus;
 mod deviations;
@@ -225,6 +226,7 @@ fn report_crashes(oracle: &oracle::Oracle, max: usize, quiet: bool) -> usize {
         for (script, why) in crashes.iter().take(max) {
             println!("ORACLE CRASH ({why})");
             println!("  script: {script:?}");
+            annotate::oracle_crash(script, why);
         }
         if crashes.len() > max {
             println!("... and {} more", crashes.len() - max);
@@ -254,6 +256,14 @@ fn gate(args: &Args) -> Result<bool, String> {
     if entries.is_empty() {
         return Err(format!("no prop_ properties found under {}", src.display()));
     }
+
+    // Where each property is defined, so a divergence annotates the Haskell
+    // line that produced it rather than floating free in the log. Built before
+    // the entries are consumed by the comparison.
+    let where_of: std::collections::HashMap<String, (String, usize)> = entries
+        .iter()
+        .map(|e| (e.id.clone(), (e.path.clone(), e.line)))
+        .collect();
 
     let oracle = oracle::Oracle::new(args.oracle())?;
     println!(
@@ -323,16 +333,21 @@ fn gate(args: &Args) -> Result<bool, String> {
             println!("DIVERGE {id}");
             println!("  oracle: {}", render_keys(oracle));
             println!("  port:   {}", render_keys(port));
+            // A gate divergence came from a property, so the annotation can
+            // point at the line that defines it.
+            let place = where_of.get(id).map(|(f, l)| annotate::Where::at(f, *l));
+            annotate::divergence(id, place.as_ref(), &render_keys(oracle), &render_keys(port));
         }
         if divergent.len() > max {
             println!("... and {} more", divergent.len() - max);
         }
         for (id, d) in deviations.iter().take(max) {
             println!("DEVIATION {id} [{}]: {}", d.id, d.what);
+            annotate::deviation(&format!("{id} [{}]", d.id), d.what);
         }
     }
     report_crashes(&oracle, args.max_findings, args.quiet);
-    println!(
+    let line = format!(
         "gate: {} properties + {optional_checked} optional-check examples, \
          {} agree, {} diverge, {} sanctioned deviations",
         compared,
@@ -340,6 +355,8 @@ fn gate(args: &Args) -> Result<bool, String> {
         divergent.len(),
         deviations.len()
     );
+    println!("{line}");
+    annotate::summary(&line);
     Ok(divergent.is_empty())
 }
 
@@ -493,6 +510,15 @@ pub struct Args {
     #[arg(long, help_heading = "Snapshot")]
     pub write: bool,
 
+    /// Also print findings as GitHub Actions workflow commands.
+    ///
+    /// On by default when `GITHUB_ACTIONS=true`, so CI annotates a run without
+    /// being told to, and a local run stays quiet. A gate divergence annotates
+    /// the `prop_` that produced it in `src/ShellCheck/`; a fuzz divergence
+    /// carries its shrunk reproducer, since the input exists nowhere.
+    #[arg(long)]
+    pub annotate: bool,
+
     /// Lines of generated shell to benchmark.
     #[arg(long, default_value_t = 4000, help_heading = "Bench")]
     pub lines: usize,
@@ -547,6 +573,7 @@ impl Args {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    annotate::set_enabled(args.annotate);
     let res = match args.cmd {
         Command::Gate => gate(&args),
         Command::Fuzz => fuzz::run(&args),

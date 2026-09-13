@@ -30,6 +30,14 @@ pub struct Entry {
     pub id: String,
     /// Source file the property came from, e.g. `Analytics.hs`.
     pub file: String,
+    /// 1-based line the property is defined on, so a divergence can be
+    /// annotated against the property that produced it.
+    pub line: usize,
+    /// The file's path as the repository spells it, e.g.
+    /// `src/ShellCheck/Checks/Commands.hs`. [`Entry::file`] is only the base
+    /// name (it is what an id is qualified with), which is not a path: three
+    /// of the modules live under `Checks/`.
+    pub path: String,
     /// `verify`, `verifyNot`, `verifyTree`, `verifyNotTree`, `verifyCodes`, or
     /// one of Parser.hs's `isOk`, `isWarning` and `isNotOk`.
     pub helper: String,
@@ -241,6 +249,7 @@ fn extract_text(file: &str, text: &str) -> Vec<Entry> {
             i += 1;
             continue;
         }
+        let defined_at = i + 1;
         // Haskell layout: a property may continue on following indented lines.
         let mut joined = line.to_string();
         let mut j = i + 1;
@@ -274,6 +283,10 @@ fn extract_text(file: &str, text: &str) -> Vec<Entry> {
         out.push(Entry {
             id,
             file: file.to_string(),
+            line: defined_at,
+            // Filled in by `coverage`, which is the only caller that knows
+            // where the file sits in the tree.
+            path: String::new(),
             helper: (*helper).to_string(),
             script,
         });
@@ -425,7 +438,17 @@ pub fn coverage(src_dir: &Path) -> Result<Coverage, String> {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let entries = extract_text(&name, &text);
+        // `src/ShellCheck/...` as the repository spells it, so an annotation
+        // can name a file GitHub can find. `src_dir` is the tree's
+        // `src/ShellCheck`, which is the prefix to restore.
+        let rel = f
+            .strip_prefix(src_dir)
+            .map(|p| format!("src/ShellCheck/{}", p.to_string_lossy()))
+            .unwrap_or_else(|_| f.to_string_lossy().into_owned());
+        let mut entries = extract_text(&name, &text);
+        for e in &mut entries {
+            e.path = rel.clone();
+        }
         // Every property the file defines, so the ones with no script to
         // replay are counted rather than passed over in silence.
         let extracted: std::collections::HashSet<&str> =
@@ -475,6 +498,66 @@ mod tests {
         assert_eq!(e[0].id, "prop_checkFoo1");
         assert_eq!(e[0].helper, "verify");
         assert_eq!(e[0].script, "echo $x");
+    }
+
+    // The line a property is defined on is what a CI annotation points at, and
+    // an annotation on the wrong line is worse than none: it blames code that
+    // is fine. 1-based, and counted from the property's first line even when
+    // the definition continues onto following ones.
+    #[test]
+    fn property_line_is_where_the_definition_starts() {
+        let text = "module X where\n\
+                    \n\
+                    prop_a = verify checkFoo \"one\"\n\
+                    prop_b = verify checkFoo\n    \"two\"\n\
+                    prop_c = verify checkFoo \"three\"\n";
+        let e = extract_text("X.hs", text);
+        let at = |id: &str| e.iter().find(|x| x.id == id).map(|x| x.line);
+        assert_eq!(at("prop_a"), Some(3));
+        assert_eq!(
+            at("prop_b"),
+            Some(4),
+            "the first line, not the continuation"
+        );
+        assert_eq!(at("prop_c"), Some(6));
+    }
+
+    // The real tree, because the path has to exist for GitHub to resolve it,
+    // and three modules live under `Checks/` rather than beside the rest.
+    #[test]
+    fn every_entry_carries_a_path_that_exists() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../src/ShellCheck");
+        if !src.is_dir() {
+            println!("skipped: no {} in this checkout", src.display());
+            return;
+        }
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let entries = extract(&src).expect("extract");
+        let mut checked = 0;
+        for e in &entries {
+            assert!(
+                e.path.starts_with("src/ShellCheck/"),
+                "{} has path {:?}",
+                e.id,
+                e.path
+            );
+            let full = repo.join(&e.path);
+            assert!(full.is_file(), "{} points at {:?}", e.id, full);
+            // And the line really holds that property.
+            let text = std::fs::read_to_string(&full).expect("read");
+            let line = text.lines().nth(e.line - 1).unwrap_or("");
+            let bare = e.id.rsplit(':').next().unwrap_or(&e.id);
+            assert!(
+                line.starts_with(bare),
+                "{} says {}:{} but that line is {:?}",
+                e.id,
+                e.path,
+                e.line,
+                line
+            );
+            checked += 1;
+        }
+        assert!(checked > 2000, "expected the whole corpus, got {checked}");
     }
 
     #[test]

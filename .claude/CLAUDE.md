@@ -112,6 +112,18 @@ mise run mutants -- --file rust/crates/shellcheck-rs/src/cfg.rs
 `cargo conformance-*` aliases live in `.cargo/config.toml`; everything runs from
 the repository root, which is the Cargo workspace root (`members = ["rust/crates/*"]`).
 
+In CI every finding is also printed as a GitHub Actions workflow command, so a
+divergence becomes an annotation on the run instead of a line in a log nobody
+opens: `error` for a divergence, `warning` for an input the oracle crashed on,
+`notice` for a sanctioned deviation and for the summary. A *gate* divergence
+annotates the `prop_` that produced it, by file and line in `src/ShellCheck/`
+(a test pins every one of the 2026 paths and lines, because an annotation on
+the wrong line blames code that is fine); a *fuzz* divergence carries its
+shrunk reproducer instead, since the input exists nowhere. This turns itself on
+when `GITHUB_ACTIONS=true`, or with `--annotate` locally. Nothing needs to be
+installed: `actions-rs/*` is archived, and all it did here was print the same
+lines any process can print.
+
 `gate` takes the shell script out of every `prop_` property in
 `src/ShellCheck/**/*.hs` that has one (extracted from the sources at run time,
 so there is no corpus file to go stale) and runs it through both tools' full

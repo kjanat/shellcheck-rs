@@ -637,10 +637,11 @@ pub fn run(args: &Args) -> Result<bool, String> {
         }
     }
 
-    println!(
-        "\nfuzz: {checked} inputs checked, {} distinct divergences",
+    let summary_line = format!(
+        "fuzz: {checked} inputs checked, {} distinct divergences",
         found.len()
     );
+    println!("\n{summary_line}");
     for (sig, shell, source, _, _) in &found {
         let sh = shell.as_deref();
         let sm = Shrinker {
@@ -657,8 +658,17 @@ pub fn run(args: &Args) -> Result<bool, String> {
         println!("  script: {:?}", small);
         println!("  oracle (exit {oexit}): {}", render_keys(&ok));
         println!("  port:   {}", render_keys(&pk));
+        // A generated script exists nowhere in the repository, so the
+        // annotation carries the shrunk reproducer instead of a location.
+        crate::annotate::divergence(
+            &format!("{sig} on {small:?}"),
+            None,
+            &render_keys(&ok),
+            &render_keys(&pk),
+        );
     }
     crate::report_crashes(&oracle, args.max_findings, args.quiet);
+    crate::annotate::summary(&summary_line);
     Ok(found.is_empty())
 }
 
