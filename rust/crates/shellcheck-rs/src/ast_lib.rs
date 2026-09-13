@@ -16,10 +16,12 @@ pub fn get_literal_string_ext(
 ) -> Option<String> {
     fn go(t: &Token, fb: &dyn Fn(&InnerToken) -> Option<String>, out: &mut String) -> bool {
         match &*t.inner {
-            InnerToken::T_Literal(s)
-            | InnerToken::T_SingleQuoted(s)
-            | InnerToken::T_DollarSingleQuoted(s) => {
+            InnerToken::T_Literal(s) | InnerToken::T_SingleQuoted(s) => {
                 out.push_str(s);
+                true
+            }
+            InnerToken::T_DollarSingleQuoted(s) => {
+                out.push_str(&decode_escapes(s));
                 true
             }
             InnerToken::T_NormalWord(parts)
@@ -52,6 +54,112 @@ pub fn get_literal_string_ext(
         Some(s)
     } else {
         None
+    }
+}
+
+/// `decodeEscapes` from `getLiteralStringExt`: bash style `$'..'` decoding.
+///
+/// Faithful to the Haskell, including its quirks:
+///
+/// * `\x` reads up to 2 hex digits, `\u` up to 4, `\U` up to 8, all with
+///   Haskell's `readHex` semantics: it consumes the hex digit prefix of that
+///   window, emits the character, then emits the *rest of the window verbatim*
+///   (undecoded) before continuing after the window. So `$'\x1y'` is `\x01y`.
+/// * an unrecognised escape falls back to `readOct` over `\<c><2 more chars>`,
+///   with the value taken modulo 256.
+/// * when no digits can be read at all, `\x` yields a literal `\x`, and so do
+///   `\u` and `\U` (upstream emits `'\\':'x':` in all three branches);
+///   any other unreadable escape yields a literal backslash plus the char.
+///
+/// There is no `\c` (control char) case: upstream has none, so `$'\cA'` falls
+/// into the octal branch, fails to parse, and stays `\cA`.
+pub fn decode_escapes(s: &str) -> String {
+    let cs: Vec<char> = s.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] != '\\' || i + 1 >= cs.len() {
+            out.push(cs[i]);
+            i += 1;
+            continue;
+        }
+        let c = cs[i + 1];
+        let rest = &cs[i + 2..];
+        // The simple one-character escapes.
+        let simple = match c {
+            'a' => Some('\u{07}'),
+            'b' => Some('\u{08}'),
+            'e' | 'E' => Some('\u{1B}'),
+            'f' => Some('\u{0C}'),
+            'n' => Some('\n'),
+            'r' => Some('\r'),
+            't' => Some('\t'),
+            'v' => Some('\u{0B}'),
+            '\\' => Some('\\'),
+            '\'' => Some('\''),
+            '"' => Some('"'),
+            '?' => Some('?'),
+            _ => None,
+        };
+        if let Some(ch) = simple {
+            out.push(ch);
+            i += 2;
+            continue;
+        }
+        match c {
+            'x' | 'u' | 'U' => {
+                let width = match c {
+                    'x' => 2,
+                    'u' => 4,
+                    _ => 8,
+                };
+                let window = &rest[..width.min(rest.len())];
+                let digits = window.iter().take_while(|c| c.is_ascii_hexdigit()).count();
+                if digits == 0 {
+                    // `readHex` read nothing: upstream emits a literal "\x" in
+                    // the \x, \u and \U branches alike.
+                    out.push_str("\\x");
+                    i += 2;
+                    continue;
+                }
+                let value: String = window[..digits].iter().collect();
+                push_code_point(&mut out, u32::from_str_radix(&value, 16).ok());
+                out.extend(&window[digits..]);
+                i += 2 + window.len();
+            }
+            _ => {
+                // `readOct (c : take 2 cs)`, so the window includes `c` itself.
+                let mut window = vec![c];
+                window.extend(rest.iter().take(2));
+                let digits = window
+                    .iter()
+                    .take_while(|c| ('0'..='7').contains(c))
+                    .count();
+                if digits == 0 {
+                    out.push('\\');
+                    out.push(c);
+                    i += 2;
+                    continue;
+                }
+                let value: String = window[..digits].iter().collect();
+                push_code_point(
+                    &mut out,
+                    u32::from_str_radix(&value, 8).ok().map(|n| n % 256),
+                );
+                out.extend(&window[digits..]);
+                i += 2 + rest.len().min(2);
+            }
+        }
+    }
+    out
+}
+
+/// Append the character for a decoded escape's code point, if there is one.
+/// Haskell's `chr` accepts values Rust's `char` cannot hold (surrogates, and
+/// anything past U+10FFFF errors there); such an escape contributes nothing.
+fn push_code_point(out: &mut String, n: Option<u32>) {
+    if let Some(ch) = n.and_then(char::from_u32) {
+        out.push(ch);
     }
 }
 
@@ -469,6 +577,66 @@ mod tests {
 
     fn lit(s: &str) -> Token {
         Token::new(Id(0), InnerToken::T_Literal(s.to_string()))
+    }
+
+    fn dsq(s: &str) -> Token {
+        Token::new(Id(0), InnerToken::T_DollarSingleQuoted(s.to_string()))
+    }
+
+    // `prop_getLiteralString1..23`: $'..' contents are decoded, and the odd
+    // partial-window cases behave as in the Haskell.
+    #[test]
+    fn prop_getLiteralString() {
+        for (src, want) in [
+            ("\\x01", "\u{1}"),
+            ("\\xyz", "\\xyz"),
+            ("\\x1", "\u{1}"),
+            ("\\x1y", "\u{1}y"),
+            ("\\xy", "\\xy"),
+            ("\\x", "\\x"),
+            ("\\1x", "\u{1}x"),
+            ("\\12x", "\u{a}x"),
+            ("\\123x", "\u{53}x"),
+            ("\\1234", "\u{53}4"),
+            ("\\1", "\u{1}"),
+            ("\\12", "\u{a}"),
+            ("\\123", "\u{53}"),
+            ("\\e[1mfoo\\E[0mbar", "\u{1b}[1mfoo\u{1b}[0mbar"),
+            ("\\?", "?"),
+            ("\\u9", "\t"),
+            ("\\u2F", "/"),
+            ("\\u100", "\u{100}"),
+            ("\\u1d00", "\u{1d00}"),
+            ("\\u1D56C", "\u{1d56}C"),
+            ("\\U9z", "\tz"),
+            ("\\u1d00.", "\u{1d00}."),
+            ("\\U1D56C", "\u{1d56c}"),
+            // Negative cases: no escape at all, and escapes upstream does not
+            // recognise (there is no \c control-char case).
+            ("plain text", "plain text"),
+            ("\\cA", "\\cA"),
+            ("\\8", "\\8"),
+            ("\\", "\\"),
+            ("a\\", "a\\"),
+            ("\\n\\t\\r\\a\\b\\v\\f", "\n\t\r\u{7}\u{8}\u{b}\u{c}"),
+            ("\\\\\\'\\\"", "\\'\""),
+        ] {
+            assert_eq!(
+                get_literal_string(&dsq(src)).as_deref(),
+                Some(want),
+                "for {src:?}"
+            );
+        }
+    }
+
+    // The decoded value is what a surrounding word reports, too.
+    #[test]
+    fn dollar_single_quoted_decodes_inside_words() {
+        let word = Token::new(
+            Id(1),
+            InnerToken::T_NormalWord(vec![dsq("\\x65cho"), lit("!")]),
+        );
+        assert_eq!(get_literal_string(&word).as_deref(), Some("echo!"));
     }
 
     // `prop_executableFromShebang1..11`, which the gate cannot replay: they

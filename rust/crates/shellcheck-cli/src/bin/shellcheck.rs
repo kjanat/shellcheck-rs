@@ -6,13 +6,17 @@
 //! Output formatting mirrors `ShellCheck.Formatter.*`: tty (default), gcc,
 //! checkstyle, json, json1, quiet, and diff.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::{IsTerminal, Read, Write};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use shellcheck_cli::formatter::{self, checkstyle, diff, fixer, gcc, json, json1, tty};
 use shellcheck_cli::options::{self, Outcome, RunConfig};
 use shellcheck_cli::rc::{self, RcConfig};
-use shellcheck_rs::interface::{CheckSpec, PositionedComment};
+use shellcheck_rs::interface::{CheckSpec, ErrorMessage, PositionedComment, SystemInterface};
 
 fn main() -> ExitCode {
     // SHELLCHECK_OPTS is split on whitespace (Haskell `words`) and prepended to
@@ -25,7 +29,7 @@ fn main() -> ExitCode {
     argv.extend(std::env::args().skip(1));
 
     let config = match options::parse(&argv) {
-        Outcome::Run(c) => c,
+        Outcome::Run(c) => *c,
         Outcome::PrintVersion => {
             println!("{}", options::version_banner());
             return ExitCode::SUCCESS;
@@ -49,11 +53,203 @@ fn main() -> ExitCode {
     run(config)
 }
 
-/// One loaded input: either its parsed comments (already sorted/filtered) with
-/// the source contents, or a read error.
+/// Port of `ioInterface` (shellcheck.hs): the real filesystem, as seen by the
+/// parser when it follows a `source`.
+///
+/// A file may only be read if it was named as an input, unless `-x` (or an rc
+/// `external-sources=true`, which arrives as the annotation argument) says
+/// otherwise. `-P` and `source-path=` directives say where to look for it, with
+/// `SCRIPTDIR` standing for the checked script's own directory.
+struct IoSystemInterface {
+    /// The input filenames, normalized (`inputs <- mapM normalize files`).
+    inputs: Vec<String>,
+    /// `externalSources options` (`-x`).
+    external_sources: bool,
+    /// `sourcePaths options` (`-P`), in flag order.
+    source_paths: Vec<String>,
+    /// `inputFile`'s cache for inputs that cannot be reopened -- stdin. A
+    /// seekable file is re-read instead, exactly as upstream does.
+    cache: RefCell<HashMap<String, String>>,
+}
+
+impl IoSystemInterface {
+    fn new(config: &RunConfig) -> IoSystemInterface {
+        IoSystemInterface {
+            inputs: config.inputs.iter().map(|f| normalize(f)).collect(),
+            external_sources: config.external_sources,
+            source_paths: config.source_paths.clone(),
+            cache: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// `allowable`: an external file is readable only when a flag or directive
+    /// says so; otherwise it must be one of the inputs.
+    fn allowable(&self, external_sources: Option<bool>, file: &str) -> bool {
+        if external_sources.unwrap_or(self.external_sources) {
+            return true;
+        }
+        self.inputs.contains(&normalize(file))
+    }
+}
+
+impl SystemInterface for IoSystemInterface {
+    fn read_file(
+        &self,
+        external_sources: Option<bool>,
+        file: &str,
+    ) -> Result<String, ErrorMessage> {
+        if let Some(hit) = self.cache.borrow().get(file) {
+            return Ok(hit.clone());
+        }
+        if !self.allowable(external_sources, file) {
+            return Err(shellcheck_rs::interface::not_an_input(
+                external_sources,
+                file,
+            ));
+        }
+        let (contents, should_cache) = input_file(file)?;
+        if should_cache {
+            self.cache
+                .borrow_mut()
+                .insert(file.to_string(), contents.clone());
+        }
+        Ok(contents)
+    }
+
+    fn find_source(
+        &self,
+        current_script: &str,
+        external_sources: Option<bool>,
+        source_paths: &[String],
+        name: &str,
+    ) -> String {
+        // `findSourceFile`: an absolute name is also looked for relative to the
+        // search paths, with its drive (on POSIX, the leading slashes) removed;
+        // if nothing is found the original name stands.
+        let (_, relative) = split_drive(name);
+        let filename = if name.starts_with('/') {
+            relative
+        } else {
+            name
+        };
+        let scriptdir = drop_file_name(current_script);
+        let mut candidates = vec![adjust_path(filename, &scriptdir)];
+        for dir in self.source_paths.iter().chain(source_paths.iter()) {
+            candidates.push(haskell_join(&adjust_path(dir, &scriptdir), filename));
+        }
+        for candidate in candidates {
+            if self.allowable(external_sources, &candidate) && Path::new(&candidate).is_file() {
+                return candidate;
+            }
+        }
+        name.to_string()
+    }
+}
+
+/// `inputFile`: the contents, plus whether they must be cached because the
+/// input cannot be reopened (stdin).
+fn input_file(file: &str) -> Result<(String, bool), ErrorMessage> {
+    if file == "-" {
+        let mut s = String::new();
+        std::io::stdin()
+            .read_to_string(&mut s)
+            .map_err(|e| io_error_message(file, &e))?;
+        return Ok((s, true));
+    }
+    match std::fs::read_to_string(file) {
+        Ok(s) => Ok((s, false)),
+        Err(e) => Err(io_error_message(file, &e)),
+    }
+}
+
+/// `show (ex :: IOException)` for what `openBinaryFile` throws, which is the
+/// text that reaches the user after "Not following: " and after a failing
+/// input's name.
+fn io_error_message(file: &str, e: &std::io::Error) -> ErrorMessage {
+    use std::io::ErrorKind;
+    let detail = match e.kind() {
+        ErrorKind::NotFound => "does not exist (No such file or directory)".to_string(),
+        ErrorKind::PermissionDenied => "permission denied (Permission denied)".to_string(),
+        ErrorKind::IsADirectory => "inappropriate type (is a directory)".to_string(),
+        // `read_to_string` on a directory reports this on some platforms.
+        _ if Path::new(file).is_dir() => "inappropriate type (is a directory)".to_string(),
+        ErrorKind::InvalidData => "invalid byte sequence".to_string(),
+        _ => e.to_string(),
+    };
+    format!("{file}: openBinaryFile: {detail}")
+}
+
+/// `normalize`: `canonicalizePath`, falling back to making the path absolute
+/// and removing `.` / `..` lexically when it cannot be resolved.
+fn normalize(path: &str) -> String {
+    if let Ok(p) = std::fs::canonicalize(path) {
+        return p.to_string_lossy().into_owned();
+    }
+    let mut out = PathBuf::new();
+    let joined = if Path::new(path).is_absolute() {
+        PathBuf::from(path)
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    for c in joined.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out.to_string_lossy().into_owned()
+}
+
+/// `System.FilePath.Posix.splitDrive`: the leading run of slashes, then the rest.
+fn split_drive(path: &str) -> (&str, &str) {
+    let n = path.len() - path.trim_start_matches('/').len();
+    path.split_at(n)
+}
+
+/// `dropFileName`: everything up to and including the last separator, or `./`
+/// when there is none.
+fn drop_file_name(path: &str) -> String {
+    match path.rfind('/') {
+        Some(i) => path[..=i].to_string(),
+        None => "./".to_string(),
+    }
+}
+
+/// `System.FilePath.combine`.
+fn haskell_join(dir: &str, file: &str) -> String {
+    if file.starts_with('/') {
+        return file.to_string();
+    }
+    if dir.is_empty() {
+        return file.to_string();
+    }
+    if dir.ends_with('/') {
+        format!("{dir}{file}")
+    } else {
+        format!("{dir}/{file}")
+    }
+}
+
+/// `adjustPath`: a leading `SCRIPTDIR` component becomes the script's directory.
+fn adjust_path(path: &str, scriptdir: &str) -> String {
+    match path.strip_prefix("SCRIPTDIR") {
+        Some("") => scriptdir.to_string(),
+        Some(rest) if rest.starts_with('/') => {
+            haskell_join(scriptdir, rest.trim_start_matches('/'))
+        }
+        _ => path.to_string(),
+    }
+}
+
+/// One loaded input: either its parsed comments (already sorted/filtered), or a
+/// read error. The contents are not kept: a formatter re-reads whichever file
+/// each comment belongs to, which for a followed `source` is not this input.
 struct Loaded {
-    name: String,
-    contents: String,
     comments: Vec<PositionedComment>,
 }
 
@@ -62,53 +258,57 @@ enum Input {
     Err { name: String, message: String },
 }
 
-/// Load one input. `stdin_cache` holds the stdin contents once read, so that a
-/// repeated `-` (e.g. `shellcheck - -`, or `-` listed twice via --files-from)
-/// reuses the same script instead of reading EOF on the second pass, matching
-/// the oracle's cache of non-reopenable inputs. Reading is lazy: stdin is only
-/// touched when a `-` input is actually reached, preserving quiet-mode's
+/// Load one input, reading it through the system interface exactly as `process`
+/// does (`siReadFile sys Nothing filename`), so that the stdin cache and the
+/// error wording are the same ones a sourced file gets. Reading is lazy: stdin
+/// is only touched when a `-` input is actually reached, preserving quiet-mode's
 /// short-circuit (it must not block on stdin after an earlier file failed).
 fn load(
     name: &str,
     spec_template: &CheckSpec,
     rc: Option<&RcConfig>,
-    stdin_cache: &mut Option<String>,
+    sys: &Rc<IoSystemInterface>,
 ) -> Input {
-    let contents = if name == "-" {
-        if stdin_cache.is_none() {
-            let mut s = String::new();
-            if std::io::stdin().read_to_string(&mut s).is_err() {
-                return Input::Err {
-                    name: name.to_string(),
-                    message: "failed to read stdin".to_string(),
-                };
-            }
-            *stdin_cache = Some(s);
-        }
-        stdin_cache.clone().unwrap()
-    } else {
-        match std::fs::read_to_string(name) {
-            Ok(s) => s,
-            Err(e) => {
-                return Input::Err {
-                    name: name.to_string(),
-                    message: e.to_string(),
-                };
-            }
+    let contents = match sys.read_file(None, name) {
+        Ok(s) => s,
+        Err(message) => {
+            return Input::Err {
+                name: name.to_string(),
+                message,
+            };
         }
     };
     let mut spec = CheckSpec {
         filename: name.to_string(),
-        script: contents.clone(),
+        script: contents,
         ..spec_template.clone()
     };
     merge_rc(&mut spec, rc);
-    let result = shellcheck_rs::check_script(&spec);
+    let sys_dyn = Rc::clone(sys) as Rc<dyn SystemInterface>;
+    let result = shellcheck_rs::checker::check_script_with(sys_dyn, &spec);
     Input::Ok(Loaded {
-        name: name.to_string(),
-        contents,
         comments: result.comments,
     })
+}
+
+/// `NE.groupWith sourceFile`: split the comments into runs that share a start
+/// file. They are already sorted by file, so adjacent grouping is enough -- and
+/// a sourced file's comments come out under its own name, not the input's.
+fn file_groups(comments: &[PositionedComment]) -> Vec<(String, Vec<PositionedComment>)> {
+    let mut out: Vec<(String, Vec<PositionedComment>)> = Vec::new();
+    for c in comments {
+        match out.last_mut() {
+            Some((file, group)) if *file == c.start.file => group.push(c.clone()),
+            _ => out.push((c.start.file.clone(), vec![c.clone()])),
+        }
+    }
+    out
+}
+
+/// The contents a formatter realigns tabs against: `siReadFile sys (Just True)`,
+/// i.e. read regardless of `-x`, and an unreadable file counts as empty.
+fn group_contents(sys: &Rc<IoSystemInterface>, file: &str) -> String {
+    sys.read_file(Some(true), file).unwrap_or_default()
 }
 
 /// Merge rc directives into the per-input `CheckSpec`; see `rc::merge_into`,
@@ -120,6 +320,7 @@ fn merge_rc(spec: &mut CheckSpec, rc: Option<&RcConfig>) {
 }
 
 fn run(config: RunConfig) -> ExitCode {
+    let sys = Rc::new(IoSystemInterface::new(&config));
     let RunConfig {
         format,
         inputs,
@@ -127,6 +328,8 @@ fn run(config: RunConfig) -> ExitCode {
         color,
         wiki_link_count,
         rcfile,
+        source_paths: _,
+        external_sources: _,
     } = config;
 
     // Resolve the rc configuration policy up front (mirrors `getConfig`):
@@ -169,11 +372,10 @@ fn run(config: RunConfig) -> ExitCode {
     // the Haskell Quiet formatter, which folds inputs lazily and reports the
     // first failing result. A read failure counts as a problem (exit 1), not a
     // runtime error (2), matching the oracle.
-    let mut stdin_cache: Option<String> = None;
     if format == "quiet" {
         for i in &inputs {
             let rc = resolve_rc(i);
-            match load(i, &spec_template, rc.as_ref(), &mut stdin_cache) {
+            match load(i, &spec_template, rc.as_ref(), &sys) {
                 Input::Ok(l) if !l.comments.is_empty() => return ExitCode::from(1),
                 Input::Ok(_) => {}
                 Input::Err { .. } => return ExitCode::from(1),
@@ -184,7 +386,7 @@ fn run(config: RunConfig) -> ExitCode {
 
     let loaded: Vec<Input> = inputs
         .iter()
-        .map(|i| load(i, &spec_template, resolve_rc(i).as_ref(), &mut stdin_cache))
+        .map(|i| load(i, &spec_template, resolve_rc(i).as_ref(), &sys))
         .collect();
 
     let any_failure = loaded.iter().any(|i| matches!(i, Input::Err { .. }));
@@ -204,15 +406,19 @@ fn run(config: RunConfig) -> ExitCode {
         // "quiet" is handled by the streaming short-circuit above and never
         // reaches this match.
         "json1" => {
-            // Untab per file (makeNonVirtual); comments prepended per file
-            // (reverse file order), matching the Haskell IORef accumulation.
+            // Untab per file group (makeNonVirtual); each group prepended, so
+            // files and groups come out in reverse order of processing, matching
+            // the Haskell IORef accumulation.
             let mut all: Vec<PositionedComment> = Vec::new();
             for i in &loaded {
                 match i {
                     Input::Ok(l) => {
-                        let mut new = fixer::make_non_virtual(&l.comments, &l.contents);
-                        new.extend(std::mem::take(&mut all));
-                        all = new;
+                        for (file, comments) in file_groups(&l.comments) {
+                            let contents = group_contents(&sys, &file);
+                            let mut new = fixer::make_non_virtual(&comments, &contents);
+                            new.extend(std::mem::take(&mut all));
+                            all = new;
+                        }
                     }
                     Input::Err { name, message } => {
                         let _ = writeln!(err, "{name}: {message}");
@@ -223,15 +429,18 @@ fn run(config: RunConfig) -> ExitCode {
         }
 
         "json" => {
-            // Legacy array; no untab; per-file comments prepended (reverse file
-            // order), matching the Haskell IORef accumulation.
+            // Legacy array; no untab, and no grouping either: `collectResult`
+            // prepends the *whole* comment list once per file group, so a result
+            // spanning two files lists everything twice. Faithful to upstream.
             let mut all: Vec<PositionedComment> = Vec::new();
             for i in &loaded {
                 match i {
                     Input::Ok(l) => {
-                        let mut new = l.comments.clone();
-                        new.extend(std::mem::take(&mut all));
-                        all = new;
+                        for _ in file_groups(&l.comments) {
+                            let mut new = l.comments.clone();
+                            new.extend(std::mem::take(&mut all));
+                            all = new;
+                        }
                     }
                     Input::Err { name, message } => {
                         let _ = writeln!(err, "{name}: {message}");
@@ -245,9 +454,12 @@ fn run(config: RunConfig) -> ExitCode {
             for i in &loaded {
                 match i {
                     Input::Ok(l) => {
-                        let mut buf = String::new();
-                        gcc::render_file(&l.name, &l.contents, &l.comments, &mut buf);
-                        let _ = out.write_all(buf.as_bytes());
+                        for (file, comments) in file_groups(&l.comments) {
+                            let contents = group_contents(&sys, &file);
+                            let mut buf = String::new();
+                            gcc::render_file(&file, &contents, &comments, &mut buf);
+                            let _ = out.write_all(buf.as_bytes());
+                        }
                     }
                     Input::Err { name, message } => {
                         let _ = writeln!(err, "{}", gcc::render_failure(name, message));
@@ -261,9 +473,12 @@ fn run(config: RunConfig) -> ExitCode {
             for i in &loaded {
                 match i {
                     Input::Ok(l) => {
-                        let mut buf = String::new();
-                        checkstyle::render_file(&l.name, &l.contents, &l.comments, &mut buf);
-                        let _ = out.write_all(buf.as_bytes());
+                        for (file, comments) in file_groups(&l.comments) {
+                            let contents = group_contents(&sys, &file);
+                            let mut buf = String::new();
+                            checkstyle::render_file(&file, &contents, &comments, &mut buf);
+                            let _ = out.write_all(buf.as_bytes());
+                        }
                     }
                     Input::Err { name, message } => {
                         // CheckStyle onFailure writes to stdout.
@@ -278,14 +493,17 @@ fn run(config: RunConfig) -> ExitCode {
             let color_fn = |s: &str| diff::color_bold_red(use_color, s);
             let mut reported = false;
             // Rendered per file in input order (the Haskell formatter runs
-            // once per file as the driver folds over them).
+            // once per file of the fix map as the driver folds over inputs).
             for i in &loaded {
                 match i {
                     Input::Ok(l) => {
-                        let d = diff::render_file(use_color, &l.name, &l.contents, &l.comments);
-                        if d.reported {
-                            let _ = out.write_all(d.text.as_bytes());
-                            reported = true;
+                        for (file, comments) in file_groups(&l.comments) {
+                            let contents = group_contents(&sys, &file);
+                            let d = diff::render_file(use_color, &file, &contents, &comments);
+                            if d.reported {
+                                let _ = out.write_all(d.text.as_bytes());
+                                reported = true;
+                            }
                         }
                     }
                     Input::Err { name, message } => {
@@ -305,16 +523,22 @@ fn run(config: RunConfig) -> ExitCode {
             for i in &loaded {
                 match i {
                     Input::Ok(l) => {
-                        let mut buf = String::new();
-                        tty::render_file(
-                            &color_func,
-                            &l.name,
-                            &l.contents,
-                            &l.comments,
-                            &mut wiki,
-                            &mut buf,
-                        );
-                        let _ = out.write_all(buf.as_bytes());
+                        // `appendComments` runs over the whole result before the
+                        // file groups are rendered, so the wiki summary is in
+                        // result order rather than group order.
+                        for (file, comments) in file_groups(&l.comments) {
+                            let contents = group_contents(&sys, &file);
+                            let mut buf = String::new();
+                            tty::render_file(
+                                &color_func,
+                                &file,
+                                &contents,
+                                &comments,
+                                &mut wiki,
+                                &mut buf,
+                            );
+                            let _ = out.write_all(buf.as_bytes());
+                        }
                     }
                     Input::Err { name, message } => {
                         let _ = writeln!(
@@ -338,5 +562,169 @@ fn run(config: RunConfig) -> ExitCode {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shellcheck_rs::interface::{Comment, Position, Severity};
+
+    fn comment_in(file: &str, line: i64) -> PositionedComment {
+        let pos = Position {
+            file: file.to_string(),
+            line,
+            column: 1,
+        };
+        PositionedComment {
+            start: pos.clone(),
+            end: pos,
+            comment: Comment {
+                severity: Severity::InfoC,
+                code: 2086,
+                message: String::new(),
+            },
+            fix: None,
+        }
+    }
+
+    #[test]
+    fn file_groups_splits_adjacent_runs() {
+        // `NE.groupWith sourceFile` over comments already sorted by file: a
+        // followed source contributes its own group under its own name.
+        let comments = vec![
+            comment_in("./lib.sh", 1),
+            comment_in("./lib.sh", 2),
+            comment_in("main.sh", 3),
+        ];
+        let groups = file_groups(&comments);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, "./lib.sh");
+        assert_eq!(groups[0].1.len(), 2);
+        assert_eq!(groups[1].0, "main.sh");
+        assert!(file_groups(&[]).is_empty());
+    }
+
+    #[test]
+    fn drop_file_name_matches_haskell() {
+        assert_eq!(drop_file_name("psrc.sh"), "./");
+        assert_eq!(drop_file_name("dir/myscript"), "dir/");
+        assert_eq!(drop_file_name("/abs/script.sh"), "/abs/");
+    }
+
+    #[test]
+    fn adjust_path_expands_scriptdir() {
+        assert_eq!(adjust_path("SCRIPTDIR/inc", "./"), "./inc");
+        assert_eq!(adjust_path("SCRIPTDIR", "dir/"), "dir/");
+        assert_eq!(adjust_path("SCRIPTDIR/a/b", "dir/"), "dir/a/b");
+        // Only a leading component counts, and only the whole word.
+        assert_eq!(adjust_path("x/SCRIPTDIR", "dir/"), "x/SCRIPTDIR");
+        assert_eq!(adjust_path("SCRIPTDIRish", "dir/"), "SCRIPTDIRish");
+        assert_eq!(adjust_path("inc", "dir/"), "inc");
+    }
+
+    #[test]
+    fn haskell_join_follows_combine() {
+        assert_eq!(haskell_join("dir", "file"), "dir/file");
+        assert_eq!(haskell_join("dir/", "file"), "dir/file");
+        assert_eq!(haskell_join("", "file"), "file");
+        // An absolute second half wins outright.
+        assert_eq!(haskell_join("dir", "/file"), "/file");
+    }
+
+    #[test]
+    fn split_drive_takes_the_leading_slashes() {
+        assert_eq!(split_drive("/a/b"), ("/", "a/b"));
+        assert_eq!(split_drive("//a"), ("//", "a"));
+        assert_eq!(split_drive("a/b"), ("", "a/b"));
+    }
+
+    #[test]
+    fn io_error_message_reads_like_the_haskell_exception() {
+        let e = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(
+            io_error_message("./missing.sh", &e),
+            "./missing.sh: openBinaryFile: does not exist (No such file or directory)"
+        );
+        let e = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            io_error_message("x", &e),
+            "x: openBinaryFile: permission denied (Permission denied)"
+        );
+    }
+
+    #[test]
+    fn an_input_is_readable_but_an_unnamed_sibling_is_not() {
+        // `allowable`: the inputs are readable whatever the flags say; anything
+        // else needs -x or an `external-sources` directive.
+        let sys = IoSystemInterface {
+            inputs: vec![normalize("Cargo.toml")],
+            external_sources: false,
+            source_paths: Vec::new(),
+            cache: RefCell::new(HashMap::new()),
+        };
+        assert!(sys.allowable(None, "Cargo.toml"));
+        assert!(sys.allowable(None, "./Cargo.toml"));
+        assert!(!sys.allowable(None, "Cargo.lock"));
+        assert!(sys.allowable(Some(true), "Cargo.lock"));
+        assert_eq!(
+            sys.read_file(None, "Cargo.lock").unwrap_err(),
+            "Cargo.lock was not specified as input (see shellcheck -x)."
+        );
+        assert_eq!(
+            sys.read_file(Some(false), "Cargo.lock").unwrap_err(),
+            "Cargo.lock was not specified as input, and external files were disabled via directive."
+        );
+        // An input that is not there at all still reports the read failure.
+        let sys = IoSystemInterface {
+            inputs: vec![normalize("nope.sh")],
+            external_sources: false,
+            source_paths: Vec::new(),
+            cache: RefCell::new(HashMap::new()),
+        };
+        assert_eq!(
+            sys.read_file(None, "nope.sh").unwrap_err(),
+            "nope.sh: openBinaryFile: does not exist (No such file or directory)"
+        );
+    }
+
+    #[test]
+    fn find_source_searches_the_paths_and_falls_back_to_the_name() {
+        // This crate's own directory, so the lookups do not depend on the
+        // working directory the test happens to run in.
+        let dir = env!("CARGO_MANIFEST_DIR");
+        let sys = IoSystemInterface {
+            inputs: Vec::new(),
+            external_sources: true,
+            source_paths: vec!["SCRIPTDIR/src".to_string()],
+            cache: RefCell::new(HashMap::new()),
+        };
+        // SCRIPTDIR is the checked script's directory, not the sourcing file's.
+        assert_eq!(
+            sys.find_source(&format!("{dir}/x.sh"), None, &[], "options.rs"),
+            format!("{dir}/src/options.rs")
+        );
+        // An annotation path is searched too, after the flag paths.
+        let no_flags = IoSystemInterface {
+            inputs: Vec::new(),
+            external_sources: true,
+            source_paths: Vec::new(),
+            cache: RefCell::new(HashMap::new()),
+        };
+        assert_eq!(
+            no_flags.find_source("x.sh", None, &[format!("{dir}/src")], "rc.rs"),
+            format!("{dir}/src/rc.rs")
+        );
+        // An absolute name has its leading slash dropped before the search, and
+        // if that finds nothing the original name stands.
+        assert_eq!(
+            sys.find_source(&format!("{dir}/x.sh"), None, &[], "/options.rs"),
+            format!("{dir}/src/options.rs")
+        );
+        // Nothing found: the name stands, so the read error names it.
+        assert_eq!(
+            sys.find_source("x.sh", None, &[], "no/such/file"),
+            "no/such/file"
+        );
     }
 }

@@ -1,6 +1,5 @@
 //! Script-structure checks (shebang, functions, aliases, reachability) from `ShellCheck.Analytics`.
 use super::common::*;
-use crate::analyzer_lib::is_array_expansion;
 use crate::analyzer_lib::is_sourced;
 use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::*;
@@ -10,8 +9,6 @@ use crate::ast_lib::basename;
 use crate::ast_lib::e4m;
 use crate::ast_lib::get_command_sequences;
 use crate::ast_lib::get_literal_string_def;
-use crate::ast_lib::get_word_parts;
-use crate::ast_lib::is_command_substitution;
 use crate::ast_lib::oversimplify;
 use crate::cfg::get_braced_modifier;
 use crate::cfg::get_unquoted_literal;
@@ -429,52 +426,6 @@ pub(super) fn check_overwritten_exit_code(params: &Parameters, t: &Token, out: &
     }
 }
 
-pub(super) fn check_source_not_followed(params: &Parameters, t: &Token, out: &mut Out) {
-    let words = match &*t.inner {
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => words,
-        _ => return,
-    };
-    let cmd = &words[0];
-    if !is_source_command_word(cmd) {
-        return;
-    }
-    let args = &words[1..];
-    let file = get_source_file(args);
-
-    // literalFile: override `mplus` literal `mplus` stripDynamicPrefix, then
-    // reject a literal `~/` prefix.
-    let literal_file = get_source_override(params, t)
-        .or_else(|| file.and_then(ast_lib::get_literal_string))
-        .or_else(|| file.and_then(strip_dynamic_prefix))
-        .filter(|name| !name.starts_with("~/"));
-
-    // fileId = fromMaybe (getId cmd) (getId <$> file)
-    let file_id = file.map_or_else(|| cmd.id(), |f| f.id());
-
-    match literal_file {
-        None => warn(
-            out,
-            file_id,
-            1090,
-            "ShellCheck can't follow non-constant source. Use a directive to specify location.",
-        ),
-        Some(filename) => {
-            // /dev/null is always readable as "" and yields no note.
-            if filename == "/dev/null" {
-                return;
-            }
-            info(
-                out,
-                file_id,
-                1091,
-                &format!(
-                    "Not following: {filename} was not specified as input (see shellcheck -x)."
-                ),
-            );
-        }
-    }
-}
-
 /// `functions t` + `aliases t`, unioned left-biased (functions win).
 fn functions_and_aliases(root: &Token) -> HashMap<String, Id> {
     // functions: Map.fromList over the preorder list; last-in-list wins, i.e.
@@ -801,79 +752,6 @@ fn is_printing(t: &Token) -> bool {
         get_command_basename(t).as_deref(),
         Some("echo") | Some("printf")
     )
-}
-
-/// `isCommand ["source", "."] cmd`: the command word is a single `T_Literal`
-/// equal to `source` or `.`. (`builtin`/slash forms are deliberately excluded,
-/// matching the parser — unlike SC2240's dispatch.)
-fn is_source_command_word(cmd: &Token) -> bool {
-    if let InnerToken::T_NormalWord(parts) = &*cmd.inner {
-        if let [only] = &parts[..] {
-            if let InnerToken::T_Literal(s) = &*only.inner {
-                return s == "source" || s == ".";
-            }
-        }
-    }
-    false
-}
-
-/// `getFile args'`: the token naming the sourced file, honouring `--` and `-p`.
-fn get_source_file(args: &[Token]) -> Option<&Token> {
-    let (first, rest) = args.split_first()?;
-    match ast_lib::get_literal_string(first).as_deref() {
-        Some("--") => rest.first(),
-        Some("-p") => rest.get(1),
-        _ => Some(first),
-    }
-}
-
-/// `isStringExpansion`.
-fn is_string_expansion(t: &Token) -> bool {
-    use InnerToken::*;
-    is_command_substitution(t)
-        || match &*t.inner {
-            T_DollarArithmetic(_) => true,
-            T_DollarBraced { .. } => !is_array_expansion(t),
-            _ => false,
-        }
-}
-
-/// `stripDynamicPrefix`: for `$foo/bar` (a single leading string expansion
-/// followed by a literal `/...`), yield `"." ++ "/bar"`.
-fn strip_dynamic_prefix(word: &Token) -> Option<String> {
-    let parts = get_word_parts(word);
-    let (first, rest) = parts.split_first()?;
-    if !is_string_expansion(first) {
-        return None;
-    }
-    let rest_word = Token::new(
-        Id(0),
-        InnerToken::T_NormalWord(rest.iter().map(|t| (*t).clone()).collect()),
-    );
-    let str = ast_lib::get_literal_string(&rest_word)?;
-    if !str.starts_with('/') {
-        return None;
-    }
-    Some(format!(".{str}"))
-}
-
-/// `getSourceOverride`: the innermost in-scope `# shellcheck source=...`
-/// directive (stopping at a source frame, mirroring `takeWhile isSameFile`).
-fn get_source_override(params: &Parameters, t: &Token) -> Option<String> {
-    for a in crate::analyzer_lib::get_path(params, t) {
-        match &*a.inner {
-            InnerToken::T_SourceCommand { .. } => return None,
-            InnerToken::T_Annotation { annotations, .. } => {
-                for ann in annotations {
-                    if let Annotation::SourceOverride(s) = ann {
-                        return Some(s.clone());
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -1417,94 +1295,5 @@ mod tests {
     #[test]
     fn prop_checkOverwrittenExitCode8() {
         assert!(!(node_emits(check_overwritten_exit_code, "[ 1 -eq 2 ]; exit $?")));
-    }
-
-    // --- SC2324 checkPlusEqualsNumber ---
-
-    fn only_code(f: fn(&Parameters, &Token, &mut Out), s: &str) -> Vec<i32> {
-        let params = params_for(s);
-        let mut out = Out::new();
-        params.root.visit_preorder(&mut |t| f(&params, t, &mut out));
-        out.iter().map(|c| c.comment.code as i32).collect()
-    }
-
-    fn only_msg(f: fn(&Parameters, &Token, &mut Out), s: &str) -> Vec<String> {
-        let params = params_for(s);
-        let mut out = Out::new();
-        params.root.visit_preorder(&mut |t| f(&params, t, &mut out));
-        out.iter().map(|c| c.comment.message.clone()).collect()
-    }
-
-    #[test]
-    fn prop_source_dot_not_followed() {
-        // prop_checkCommandWithTrailingSymbol7 corpus input.
-        assert_eq!(only_code(check_source_not_followed, ". foo.sh"), vec![1091]);
-        assert_eq!(
-            only_msg(check_source_not_followed, ". foo.sh"),
-            vec!["Not following: foo.sh was not specified as input (see shellcheck -x)."]
-        );
-    }
-
-    #[test]
-    fn prop_source_keyword_not_followed() {
-        // prop_checkBashisms5 corpus input.
-        assert_eq!(
-            only_code(check_source_not_followed, "source file"),
-            vec![1091]
-        );
-        assert_eq!(
-            only_msg(check_source_not_followed, "source file"),
-            vec!["Not following: file was not specified as input (see shellcheck -x)."]
-        );
-    }
-
-    #[test]
-    fn prop_source_args_still_not_followed() {
-        // prop_checkSourceArgs1/3 corpus inputs: file arg is followed by more args.
-        assert_eq!(
-            only_msg(check_source_not_followed, "#!/bin/sh\n. script arg"),
-            vec!["Not following: script was not specified as input (see shellcheck -x)."]
-        );
-    }
-
-    #[test]
-    fn prop_devnull_is_not_flagged() {
-        // prop_canParseDevNull / prop_checkBashisms110: /dev/null yields no note.
-        assert!(only_code(check_source_not_followed, "source /dev/null").is_empty());
-        assert!(only_code(check_source_not_followed, ". /dev/null").is_empty());
-    }
-
-    #[test]
-    fn prop_cant_source_dynamic() {
-        // prop_cantSourceDynamic: a non-constant target is SC1090, not SC1091.
-        assert_eq!(only_code(check_source_not_followed, ". \"$1\""), vec![1090]);
-    }
-
-    #[test]
-    fn prop_cant_source_tilde() {
-        // prop_cantSourceDynamic2: literal `~/` is treated as non-constant.
-        assert_eq!(
-            only_code(check_source_not_followed, "source ~/foo"),
-            vec![1090]
-        );
-    }
-
-    #[test]
-    fn prop_source_override_directive_is_followed_constant() {
-        // A `source=` directive supplies a constant target -> SC1091, not SC1090.
-        assert_eq!(
-            only_msg(
-                check_source_not_followed,
-                "# shellcheck source=lib\n. \"$1\""
-            ),
-            vec!["Not following: lib was not specified as input (see shellcheck -x)."]
-        );
-    }
-
-    #[test]
-    fn prop_not_a_source_command() {
-        // A plain command is untouched; `builtin source` is not the parser form.
-        assert!(only_code(check_source_not_followed, "echo foo").is_empty());
-        assert!(only_code(check_source_not_followed, "builtin source lib").is_empty());
     }
 }

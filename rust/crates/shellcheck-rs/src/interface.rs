@@ -11,6 +11,144 @@ use std::collections::BTreeMap;
 pub type ErrorMessage = String;
 pub type Code = i64;
 
+/// `ShellCheck.Interface.SystemInterface`: everything the parser needs from the
+/// outside world while following `source` statements.
+///
+/// Upstream this is a record of monadic functions supplied by the driver
+/// (`shellcheck.hs`'s `ioInterface`) or by a test (`mockedSystemInterface`); the
+/// port makes it a trait for the same reason -- the analysis core does no IO of
+/// its own, and the caller decides what a sourced file may read.
+///
+/// `siGetConfig` has no counterpart here: this port reads rc files in the CLI
+/// (see `shellcheck_cli::rc`) rather than from inside the parser.
+pub trait SystemInterface {
+    /// `siReadFile`: given what annotations say about including external files
+    /// (`None` when nothing said anything) and a resolved filename from
+    /// [`SystemInterface::find_source`], read it or explain why not. The
+    /// explanation is what SC1091 prints after "Not following: ".
+    fn read_file(&self, external_sources: Option<bool>, file: &str)
+    -> Result<String, ErrorMessage>;
+
+    /// `siFindSource`: given the script being checked, what annotations say
+    /// about external files, the `source-path` annotations in effect (innermost
+    /// first) and the sourced name, produce the filename to read.
+    fn find_source(
+        &self,
+        current_script: &str,
+        external_sources: Option<bool>,
+        source_paths: &[String],
+        name: &str,
+    ) -> String;
+}
+
+/// `newSystemInterface`: reads nothing and resolves a name to itself.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NullSystemInterface;
+
+impl SystemInterface for NullSystemInterface {
+    fn read_file(
+        &self,
+        _external_sources: Option<bool>,
+        _file: &str,
+    ) -> Result<String, ErrorMessage> {
+        Err("Not implemented".to_string())
+    }
+
+    fn find_source(
+        &self,
+        _current_script: &str,
+        _external_sources: Option<bool>,
+        _source_paths: &[String],
+        name: &str,
+    ) -> String {
+        name.to_string()
+    }
+}
+
+/// The interface [`crate::checker::check_script`] uses when the caller supplies
+/// none: no file is ever read, and the refusal is worded exactly as the CLI
+/// words it for a file that was not given as an input.
+///
+/// This is what `shellcheck` does without `-x` for a sourced file it was not
+/// asked to check (`ioInterface`'s `allowable` branch), so an embedder that
+/// never wires up an interface gets the same diagnostics as the default CLI
+/// rather than a message about an unimplemented feature.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoExternalSources;
+
+impl SystemInterface for NoExternalSources {
+    fn read_file(
+        &self,
+        external_sources: Option<bool>,
+        file: &str,
+    ) -> Result<String, ErrorMessage> {
+        Err(not_an_input(external_sources, file))
+    }
+
+    fn find_source(
+        &self,
+        _current_script: &str,
+        _external_sources: Option<bool>,
+        _source_paths: &[String],
+        name: &str,
+    ) -> String {
+        name.to_string()
+    }
+}
+
+/// `ioInterface`'s two refusals for a file that is not among the inputs.
+pub fn not_an_input(external_sources: Option<bool>, file: &str) -> ErrorMessage {
+    if external_sources == Some(false) {
+        format!(
+            "{file} was not specified as input, and external files were disabled via directive."
+        )
+    } else {
+        format!("{file} was not specified as input (see shellcheck -x).")
+    }
+}
+
+/// `mockedSystemInterface`: a fixed list of (name, contents) pairs, with names
+/// resolved to themselves. Exported for the same reason the Haskell exports it:
+/// the checker's own tests source files that do not exist on disk.
+#[derive(Debug, Default, Clone)]
+pub struct MockSystemInterface {
+    files: Vec<(String, String)>,
+}
+
+impl MockSystemInterface {
+    pub fn new(files: &[(&str, &str)]) -> MockSystemInterface {
+        MockSystemInterface {
+            files: files
+                .iter()
+                .map(|(n, c)| ((*n).to_string(), (*c).to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl SystemInterface for MockSystemInterface {
+    fn read_file(
+        &self,
+        _external_sources: Option<bool>,
+        file: &str,
+    ) -> Result<String, ErrorMessage> {
+        match self.files.iter().find(|(n, _)| n == file) {
+            Some((_, contents)) => Ok(contents.clone()),
+            None => Err("File not included in mock.".to_string()),
+        }
+    }
+
+    fn find_source(
+        &self,
+        _current_script: &str,
+        _external_sources: Option<bool>,
+        _source_paths: &[String],
+        name: &str,
+    ) -> String {
+        name.to_string()
+    }
+}
+
 /// `ShellCheck.Interface.Shell`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Shell {

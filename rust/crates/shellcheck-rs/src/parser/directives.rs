@@ -317,9 +317,23 @@ impl Parser {
                 }
             }
             "external-sources" => {
+                let pos = self.pos();
                 let v = self.read_annotation_raw_value();
                 match v.as_str() {
-                    "true" => vec![Annotation::ExternalSources(true)],
+                    // `readAnnotationWithoutPrefix sandboxed`: this path is the
+                    // sandboxed one (a script), where enabling external sources
+                    // is refused. The rc-file parser (`shellcheck_cli::rc`) is
+                    // the unsandboxed caller and allows it.
+                    "true" => {
+                        self.note_at(
+                            pos.clone(),
+                            pos,
+                            Severity::ErrorC,
+                            1144,
+                            "external-sources can only be enabled in .shellcheckrc, not in individual files.",
+                        );
+                        Vec::new()
+                    }
                     "false" => vec![Annotation::ExternalSources(false)],
                     _ => Vec::new(),
                 }

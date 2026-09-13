@@ -885,10 +885,245 @@ impl Parser {
                 cmd: simple,
             },
         );
-        if Self::command_literal_name_of(&result).as_deref() == Some("trap") {
-            self.syntax_check_trap(&result);
+        // `case () of _ | isCommand ["source", "."] cmd -> readSource result ..`
+        match Self::command_literal_name_of(&result).as_deref() {
+            Some("source") | Some(".") => return Ok(self.read_source(result)),
+            Some("trap") => self.syntax_check_trap(&result),
+            _ => {}
         }
         Ok(result)
+    }
+
+    /// `readSource`: follow a `source`/`.` command, replacing the command with a
+    /// `T_SourceCommand` wrapping both it and the parsed contents of the file.
+    ///
+    /// Every way of not following ends with the original command and a note:
+    /// SC1090 (the name is not constant), SC1093 (already being sourced),
+    /// SC1091 (the interface would not read it) or SC1094 (it did not parse).
+    fn read_source(&mut self, t: Token) -> Token {
+        let (cmd_id, cmd, args) = {
+            let InnerToken::T_Redirecting { cmd: simple, .. } = &*t.inner else {
+                return t;
+            };
+            let InnerToken::T_SimpleCommand { words, .. } = &*simple.inner else {
+                return t;
+            };
+            let Some((first, rest)) = words.split_first() else {
+                return t;
+            };
+            (simple.id(), first.clone(), rest.to_vec())
+        };
+        let file = source_file_arg(&args).cloned();
+        let override_file = self.get_source_override();
+        // `literalFile`: the directive wins, then a literal name, then a name
+        // whose leading expansion can be stripped; a literal `~/` is not a path
+        // the parser can resolve, so it counts as non-constant.
+        let literal_file = override_file
+            .or_else(|| file.as_ref().and_then(ast_lib::get_literal_string))
+            .or_else(|| file.as_ref().and_then(strip_dynamic_prefix))
+            .filter(|name| !name.starts_with("~/"));
+        let file_id = file.as_ref().map_or_else(|| cmd.id(), |f| f.id());
+
+        let Some(filename) = literal_file else {
+            let (start, end) = self.span_for(file_id);
+            self.note_at(
+                start,
+                end,
+                Severity::WarningC,
+                1090,
+                "ShellCheck can't follow non-constant source. Use a directive to specify location.",
+            );
+            return t;
+        };
+
+        if !self.should_follow(&filename) {
+            // FIXME (upstream): this actually gets squashed without -a.
+            let (start, end) = self.span_for(file_id);
+            self.note_at(
+                start,
+                end,
+                Severity::InfoC,
+                1093,
+                "This file appears to be recursively sourced. Ignoring.",
+            );
+            return t;
+        }
+
+        let (input, resolved) = if filename == "/dev/null" {
+            // Always allow /dev/null.
+            (Ok(String::new()), filename.clone())
+        } else {
+            let annotations = self.current_annotations();
+            let paths: Vec<String> = annotations
+                .iter()
+                .filter_map(|a| match a {
+                    Annotation::SourcePath(p) => Some(p.clone()),
+                    _ => None,
+                })
+                .collect();
+            let external = annotations.iter().find_map(|a| match a {
+                Annotation::ExternalSources(b) => Some(*b),
+                _ => None,
+            });
+            let root = self.root_filename.clone();
+            let sys = std::rc::Rc::clone(&self.sys);
+            let resolved = sys.find_source(&root, external, &paths, &filename);
+            let contents = sys.read_file(external, &resolved);
+            (contents, resolved)
+        };
+
+        match input {
+            Err(err) => {
+                let (start, end) = self.span_for(file_id);
+                self.note_at(
+                    start,
+                    end,
+                    Severity::InfoC,
+                    1091,
+                    &format!("Not following: {err}"),
+                );
+                t
+            }
+            Ok(script) => {
+                // Both ids copy the span of the original command, and both are
+                // allocated before the file is read (`getNewIdFor cmdId`).
+                let (start, end) = self.span_for(cmd_id);
+                let id1 = self.next_id_between(start.clone(), end.clone());
+                let id2 = self.next_id_between(start, end);
+                match self.sub_read(&resolved, &script) {
+                    Some(src) => {
+                        let included = Token::new(id2, InnerToken::T_Include(src));
+                        Token::new(
+                            id1,
+                            InnerToken::T_SourceCommand {
+                                includer: t,
+                                included,
+                            },
+                        )
+                    }
+                    None => {
+                        let (start, end) = self.span_for(file_id);
+                        self.note_at(
+                            start,
+                            end,
+                            Severity::WarningC,
+                            1094,
+                            "Parsing of sourced file failed. Ignoring it.",
+                        );
+                        t
+                    }
+                }
+            }
+        }
+    }
+
+    /// `subRead`: parse `script` as a whole file of its own, under a
+    /// `ContextSource` frame.
+    ///
+    /// The frame is what makes everything the sourced file reports disappear
+    /// without `--check-sourced` (`contextItemDisablesCode`), and what the
+    /// recursion guard looks at. `inSeparateContext` throws away the sourced
+    /// file's parse *problems* either way -- only its notes, which the frame
+    /// filters, can reach the caller.
+    fn sub_read(&mut self, name: &str, script: &str) -> Option<Token> {
+        let mut sub = Parser::with_shell_flag(
+            name,
+            script,
+            self.shell_flag_specified,
+            // The dialect is the one being checked, not one derived from the
+            // sourced file's name (`prop_sourcedFileUsesOriginalShellExtension`).
+            self.shell_hint,
+        );
+        sub.next_id = self.next_id;
+        sub.next_serial = self.next_serial;
+        sub.contexts = self.contexts.clone();
+        sub.ann_contexts = self.ann_contexts.clone();
+        sub.ann_contexts
+            .push(super::AnnContext::Source(name.to_string()));
+        sub.sys = std::rc::Rc::clone(&self.sys);
+        sub.check_sourced = self.check_sourced;
+        sub.root_filename = self.root_filename.clone();
+        // `pendingHereDocs = []`: the caller's unread here documents are not the
+        // sourced file's business, and are put back afterwards.
+        let root = sub.read_script_file();
+        let failed = root.is_none() || sub.has_committed_failure();
+        if failed {
+            // `included <|> failed`: `try` rewinds the parse notes too, and
+            // `inSeparateContext` the problems, so nothing of the attempt is
+            // kept -- not even the ids, which Parsec's state holds as well.
+            return None;
+        }
+        // `readScriptFile` finishes each file itself: here documents reattached
+        // and array indices reparsed, within that file's own state.
+        let root = root.map(|r| super::reattach_heredocs(r, &sub.heredoc_bodies));
+        let root = root.map(|r| {
+            let assoc = super::get_associative_arrays(&r);
+            sub.reparse_indices_root(r, &assoc)
+        });
+        self.next_id = sub.next_id;
+        self.next_serial = sub.next_serial;
+        for (k, v) in sub.positions {
+            self.positions.entry(k).or_insert(v);
+        }
+        self.notes.extend(sub.notes);
+        root
+    }
+
+    /// `getSourceOverride`: the innermost `source=` directive in scope within
+    /// this file (`takeWhile isSameFile` stops at the enclosing source frame).
+    fn get_source_override(&self) -> Option<String> {
+        for frame in self.ann_contexts.iter().rev() {
+            match frame {
+                super::AnnContext::Source(_) => return None,
+                super::AnnContext::Annotations(list) => {
+                    for a in list {
+                        if let Annotation::SourceOverride(s) = a {
+                            return Some(s.clone());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// `getCurrentAnnotations True`: every annotation in scope, innermost
+    /// frame first, source frames included -- so a `source-path` in the outer
+    /// script still applies while reading a file it sourced.
+    fn current_annotations(&self) -> Vec<Annotation> {
+        let mut out = Vec::new();
+        for frame in self.ann_contexts.iter().rev() {
+            if let super::AnnContext::Annotations(list) = frame {
+                out.extend(list.iter().cloned());
+            }
+        }
+        out
+    }
+
+    /// `shouldFollow`: not if this file is already being read, and not past 100
+    /// nested `source` frames.
+    fn should_follow(&mut self, file: &str) -> bool {
+        let mut sources = 0;
+        for frame in &self.ann_contexts {
+            if let super::AnnContext::Source(name) = frame {
+                if name == file {
+                    return false;
+                }
+                sources += 1;
+            }
+        }
+        if sources >= 100 {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1092,
+                "Stopping at 100 'source' frames :O",
+            );
+            return false;
+        }
+        true
     }
 
     /// The literal command name of an assembled `T_Redirecting`, if it has one.
@@ -1823,7 +2058,7 @@ impl Parser {
             delim: delim.clone(),
             id: hd_id,
             contexts: self.contexts.clone(),
-            disabled_codes: self.disabled_codes.clone(),
+            ann_contexts: self.ann_contexts.clone(),
         });
         let hd = Token::new(
             hd_id,
@@ -1859,8 +2094,7 @@ impl Parser {
             // `swapContext`: the body is read long after the redirection was
             // parsed, so the diagnostics name the `<<` and what contained it.
             let outer = std::mem::replace(&mut self.contexts, hd.contexts.clone());
-            let outer_disabled =
-                std::mem::replace(&mut self.disabled_codes, hd.disabled_codes.clone());
+            let outer_disabled = std::mem::replace(&mut self.ann_contexts, hd.ann_contexts.clone());
             let from = self.idx;
             let r = self.read_pending_here_doc(&hd);
             // `parsecBracket` restores the outer stack unless the body both
@@ -1868,7 +2102,7 @@ impl Parser {
             // all leaves nothing behind to name.
             if r.is_ok() || self.idx == from {
                 self.contexts = outer.clone();
-                self.disabled_codes = outer_disabled;
+                self.ann_contexts = outer_disabled;
                 // The restore happens before the failure reaches the top, so
                 // the report names the restored stack.
                 if self.frozen_contexts.as_ref() == Some(&hd.contexts) {
@@ -2367,6 +2601,48 @@ impl Parser {
         );
         Some(root)
     }
+}
+
+/// `readSource`'s `getFile`: the argument naming the sourced file, honouring
+/// `--` and `source -p PATH file`.
+fn source_file_arg(args: &[Token]) -> Option<&Token> {
+    let (first, rest) = args.split_first()?;
+    match ast_lib::get_literal_string(first).as_deref() {
+        Some("--") => rest.first(),
+        Some("-p") => rest.get(1),
+        _ => Some(first),
+    }
+}
+
+/// `ASTLib.isStringExpansion`: an expansion that yields a string, as opposed to
+/// an array or a glob.
+fn is_string_expansion(t: &Token) -> bool {
+    ast_lib::is_command_substitution(t)
+        || match &*t.inner {
+            InnerToken::T_DollarArithmetic(_) => true,
+            InnerToken::T_DollarBraced { .. } => !crate::analyzer_lib::is_array_expansion(t),
+            _ => false,
+        }
+}
+
+/// `readSource`'s `stripDynamicPrefix`: a word whose single leading expansion is
+/// the directory part, as in `$foo/bar` (but not `${foo}-dir/bar` or
+/// `/foo/$file`), is looked for relative to the working directory instead.
+fn strip_dynamic_prefix(word: &Token) -> Option<String> {
+    let parts = ast_lib::get_word_parts(word);
+    let (first, rest) = parts.split_first()?;
+    if !is_string_expansion(first) {
+        return None;
+    }
+    let rest_word = Token::new(
+        Id(0),
+        InnerToken::T_NormalWord(rest.iter().map(|t| (*t).clone()).collect()),
+    );
+    let str = ast_lib::get_literal_string(&rest_word)?;
+    if !str.starts_with('/') {
+        return None;
+    }
+    Some(format!(".{str}"))
 }
 
 /// `unquote`: a delimiter wrapped in matching quotes is quoted and loses them;

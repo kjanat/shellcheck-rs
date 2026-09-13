@@ -19,8 +19,9 @@
 
 use crate::ast::*;
 use crate::ast_lib;
-use crate::interface::{Position, Severity, Shell};
+use crate::interface::{NoExternalSources, Position, Severity, Shell, SystemInterface};
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 mod arithmetic;
 mod commands;
@@ -245,11 +246,27 @@ struct PendingHereDoc {
     /// under `swapContext`, so a body that never terminates is reported
     /// against the redirection rather than whatever line it ran into.
     contexts: Vec<Context>,
-    /// The `disable=` ranges in scope at the `<<`, which in Haskell are
+    /// The annotation/source frames in scope at the `<<`, which in Haskell are
     /// `ContextAnnotation` frames on that same stack -- so a directive in
     /// front of the command covers what its here document reports, even
     /// though the body is read after the command is done.
-    disabled_codes: Vec<(i64, i64)>,
+    ann_contexts: Vec<AnnContext>,
+}
+
+/// The frames of Haskell's `contextStack` that carry meaning rather than a
+/// production name: `ContextAnnotation [Annotation]` and `ContextSource file`.
+///
+/// The stack is kept outermost-first (Haskell's is innermost-first, since it
+/// pushes to the front), so anything that reads it innermost-first iterates in
+/// reverse.
+#[derive(Debug, Clone)]
+pub(super) enum AnnContext {
+    /// `ContextAnnotation`: the directives in front of a command, in the order
+    /// they were written.
+    Annotations(Vec<Annotation>),
+    /// `ContextSource`: a file being read through `source`, by the name
+    /// `siFindSource` resolved it to.
+    Source(String),
 }
 
 pub struct Parser {
@@ -282,11 +299,12 @@ pub struct Parser {
     reach_pos: Position,
     /// The deepest failure seen, which is the one a fatal parse reports.
     failure: Option<Failure>,
-    /// Every `disable=` directive seen so far. Haskell scopes these through
-    /// `ContextAnnotation` frames and filters the parse-failure notes with
-    /// `isIgnored`; on a failed parse the frames in scope are the ones read
-    /// before the failure, which is what this collects.
-    disabled_codes: Vec<(i64, i64)>,
+    /// The `ContextAnnotation` / `ContextSource` frames in scope, outermost
+    /// first. Haskell keeps these on the same `contextStack` as the production
+    /// names and filters the parse-failure notes with `isIgnored`; on a failed
+    /// parse the frames in scope are the ones read before the failure, which is
+    /// what this collects.
+    ann_contexts: Vec<AnnContext>,
     /// Counter behind `Context::serial`.
     next_serial: u64,
     /// Set when a production gave up after consuming input and no enclosing
@@ -313,6 +331,15 @@ pub struct Parser {
     /// Whether the caller passed `--shell`, which like a `shell=` directive
     /// means the shebang no longer decides anything and is not checked.
     shell_flag_specified: bool,
+    /// `Environment.systemInterface`: how a sourced file is resolved and read.
+    sys: Rc<dyn SystemInterface>,
+    /// `Environment.checkSourced`: whether diagnostics from inside a sourced
+    /// file are kept (`-a`).
+    check_sourced: bool,
+    /// `Environment.currentFilename`: the script the check started from, which
+    /// stays put while sourced files are read -- `SCRIPTDIR` is relative to it,
+    /// not to whichever file the `source` was written in.
+    root_filename: String,
 }
 
 /// One open production, mirroring Haskell's `ContextName pos str`.
@@ -417,6 +444,9 @@ impl Parser {
         Parser {
             shell_hint,
             shell_flag_specified,
+            sys: Rc::new(NoExternalSources),
+            check_sourced: false,
+            root_filename: filename.to_string(),
             input: script.chars().collect(),
             idx: 0,
             line: 1,
@@ -430,7 +460,7 @@ impl Parser {
             heredoc_bodies: BTreeMap::new(),
             contexts: Vec::new(),
             open_starts: Vec::new(),
-            disabled_codes: Vec::new(),
+            ann_contexts: Vec::new(),
             next_serial: 0,
             committed: false,
             #[cfg(debug_assertions)]
@@ -710,10 +740,17 @@ impl Parser {
         }
     }
 
+    /// `shouldIgnoreCode`: any frame in scope that disables this code, where a
+    /// `ContextSource` frame disables *everything* unless `--check-sourced`
+    /// (`contextItemDisablesCode`).
     fn code_is_disabled(&self, code: i64) -> bool {
-        self.disabled_codes
-            .iter()
-            .any(|&(f, t)| code >= f && code < t)
+        self.ann_contexts.iter().any(|c| match c {
+            AnnContext::Annotations(list) => list.iter().any(|a| match a {
+                Annotation::DisableComment(from, to) => code >= *from && code < *to,
+                _ => false,
+            }),
+            AnnContext::Source(_) => !self.check_sourced,
+        })
     }
 
     /// `withAnnotations`: a `disable=` directive applies to the command it
@@ -726,22 +763,22 @@ impl Parser {
         anns: &[Annotation],
         f: impl FnOnce(&mut Self) -> PResult<T>,
     ) -> PResult<T> {
-        let from = self.disabled_codes.len();
+        let from = self.ann_contexts.len();
         let start_idx = self.idx;
         self.push_disables(anns);
         let r = f(self);
         if r.is_ok() || self.idx == start_idx {
-            self.disabled_codes.truncate(from);
+            self.ann_contexts.truncate(from);
         }
         r
     }
 
-    /// The `disable=` ranges of these annotations, pushed as a scope.
+    /// `withAnnotations`: these annotations, pushed as one `ContextAnnotation`
+    /// frame. An empty list pushes nothing (`if null anns then p else ..`).
     pub(super) fn push_disables(&mut self, anns: &[Annotation]) {
-        for a in anns {
-            if let Annotation::DisableComment(from, to) = a {
-                self.disabled_codes.push((*from, *to));
-            }
+        if !anns.is_empty() {
+            self.ann_contexts
+                .push(AnnContext::Annotations(anns.to_vec()));
         }
     }
 
@@ -841,7 +878,10 @@ impl Parser {
         sub.next_id = self.next_id;
         sub.contexts = self.contexts.clone();
         sub.next_serial = self.next_serial;
-        sub.disabled_codes = self.disabled_codes.clone();
+        sub.ann_contexts = self.ann_contexts.clone();
+        sub.sys = Rc::clone(&self.sys);
+        sub.check_sourced = self.check_sourced;
+        sub.root_filename = self.root_filename.clone();
         sub
     }
 
@@ -1334,13 +1374,63 @@ pub fn audit_commitment_backtracks(filename: &str, script: &str) -> Vec<String> 
     p.backtracked_over_commitment()
 }
 
+/// `ShellCheck.Interface.ParseSpec`: everything `parseScript` is given.
+///
+/// `shell_flag_specified` / `shell_hint` stand for `psShellTypeOverride` plus
+/// the filename-derived fallback the checker resolves before parsing.
+pub struct ParseSpec {
+    pub filename: String,
+    pub script: String,
+    /// `psCheckSourced`.
+    pub check_sourced: bool,
+    /// Whether `--shell` (or an equivalent) settled the dialect.
+    pub shell_flag_specified: bool,
+    /// The dialect as far as the caller knows it.
+    pub shell_hint: Option<Shell>,
+    /// How `source` statements are resolved and read.
+    pub sys: Rc<dyn SystemInterface>,
+}
+
+impl Default for ParseSpec {
+    /// `newParseSpec`, with the interface that refuses every source as
+    /// not-an-input (see [`NoExternalSources`]).
+    fn default() -> Self {
+        ParseSpec {
+            filename: String::new(),
+            script: String::new(),
+            check_sourced: false,
+            shell_flag_specified: false,
+            shell_hint: None,
+            sys: Rc::new(NoExternalSources),
+        }
+    }
+}
+
+/// `parseScript`: the full entry point, including source following.
+pub fn parse_script_spec(spec: &ParseSpec) -> ParseOutput {
+    let mut p = Parser::with_shell_flag(
+        &spec.filename,
+        &spec.script,
+        spec.shell_flag_specified,
+        spec.shell_hint,
+    );
+    p.sys = Rc::clone(&spec.sys);
+    p.check_sourced = spec.check_sourced;
+    p.root_filename = spec.filename.clone();
+    finish_parse(p)
+}
+
 pub fn parse_script_with(
     filename: &str,
     script: &str,
     shell_flag_specified: bool,
     shell_hint: Option<Shell>,
 ) -> ParseOutput {
-    let mut p = Parser::with_shell_flag(filename, script, shell_flag_specified, shell_hint);
+    let p = Parser::with_shell_flag(filename, script, shell_flag_specified, shell_hint);
+    finish_parse(p)
+}
+
+fn finish_parse(mut p: Parser) -> ParseOutput {
     let root = p.read_script_file();
     // A production that failed after consuming input means the script does not
     // parse, even if backtracking found some other way to read the rest of it:
@@ -1711,6 +1801,15 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
             fd,
             target: r!(target),
         },
+        // A sourced file has already had its own here documents reattached by
+        // the sub-parse that read it (`readScriptFile` does that per file), but
+        // the `source` command itself is an ordinary command that may carry
+        // one, so both halves are still walked.
+        T_SourceCommand { includer, included } => T_SourceCommand {
+            includer: r!(includer),
+            included: r!(included),
+        },
+        T_Include(t) => T_Include(r!(t)),
         other => other,
     }
 }

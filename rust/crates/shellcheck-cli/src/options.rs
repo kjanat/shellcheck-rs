@@ -29,8 +29,9 @@ pub const SUPPORTED_FORMATS: &[&str] =
 /// What the caller should do after parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Parsing succeeded; run the analysis with this configuration.
-    Run(RunConfig),
+    /// Parsing succeeded; run the analysis with this configuration. Boxed: it
+    /// dwarfs the other variants, which are a string at most.
+    Run(Box<RunConfig>),
     /// Print the version banner to stdout and exit 0.
     PrintVersion,
     /// Print the usage summary to stdout and exit 0.
@@ -56,6 +57,12 @@ pub struct RunConfig {
     /// `--rcfile <path>`: prefer this config file over directory search.
     /// `None` means normal `.shellcheckrc` discovery applies (unless `--norc`).
     pub rcfile: Option<String>,
+    /// `-P/--source-path`: directories searched for a sourced file, in flag
+    /// order. `SCRIPTDIR` in an entry stands for the checked script's directory.
+    pub source_paths: Vec<String>,
+    /// `-x/--external-sources`: allow reading sourced files that were not given
+    /// as inputs.
+    pub external_sources: bool,
 }
 
 /// Argument kind for a recognised option, following the Haskell `ArgDescr`.
@@ -580,6 +587,8 @@ pub fn parse(argv: &[String]) -> Outcome {
     let mut color = ColorOption::ColorAuto;
     let mut wiki_link_count: usize = 3;
     let mut rcfile: Option<String> = None;
+    let mut source_paths: Vec<String> = Vec::new();
+    let mut external_sources = false;
 
     for flag in &flags {
         match flag.key {
@@ -699,11 +708,13 @@ pub fn parse(argv: &[String]) -> Outcome {
                 }
             }
 
-            // --- Accepted-but-not-yet-effective (parsed, no core support yet). ---
-            // -P/--source-path: the source resolver is not ported.
-            "source-path" => {}
-            // -x/--external-sources: reading sources outside FILES is not ported.
-            "externals" => {}
+            // -P/--source-path: `sourcePaths = sourcePaths options ++ paths`,
+            // where each flag's value is one search path (`splitSearchPath`).
+            "source-path" => {
+                source_paths.extend(split_search_path(flag.value.as_deref().unwrap_or("")));
+            }
+            // -x/--external-sources: allow 'source' outside of FILES.
+            "externals" => external_sources = true,
             // --rcfile: captured here; resolved per input in the driver.
             // A later flag overwrites an earlier one (last-wins, matching the
             // Haskell fold `options { rcfile = Just str }`).
@@ -795,14 +806,25 @@ pub fn parse(argv: &[String]) -> Outcome {
         return Outcome::Error { message, code: 4 };
     }
 
-    Outcome::Run(RunConfig {
+    Outcome::Run(Box::new(RunConfig {
         format,
         inputs,
         spec_template: spec,
         color,
         wiki_link_count,
         rcfile,
-    })
+        source_paths,
+        external_sources,
+    }))
+}
+
+/// `System.FilePath.splitSearchPath` on POSIX: split on `:`, and an empty entry
+/// means the working directory.
+fn split_search_path(value: &str) -> Vec<String> {
+    value
+        .split(':')
+        .map(|p| if p.is_empty() { "." } else { p }.to_string())
+        .collect()
 }
 
 /// Build a SupportFailure (exit 4) error mirroring `parseEnum`.
@@ -832,7 +854,7 @@ mod tests {
 
     fn run(a: &[&str]) -> RunConfig {
         match parse(&args(a)) {
-            Outcome::Run(c) => c,
+            Outcome::Run(c) => *c,
             other => panic!("expected Run, got {other:?}"),
         }
     }
@@ -1054,14 +1076,45 @@ mod tests {
     }
 
     #[test]
-    fn accepted_but_inert_flags_parse() {
+    fn source_following_flags_are_wired() {
         // -P, -x, -a parse without error and do not become filenames.
-        // --rcfile is now captured into RunConfig (last-wins) but still does
-        // not become a filename.
+        // --rcfile is captured into RunConfig (last-wins) but still does not
+        // become a filename.
         let c = run(&["-x", "-a", "-P", "src", "--rcfile", "my.rc", "-"]);
         assert_eq!(c.inputs, vec!["-".to_string()]);
         assert!(c.spec_template.check_sourced);
+        assert!(c.external_sources);
+        assert_eq!(c.source_paths, vec!["src".to_string()]);
         assert_eq!(c.rcfile, Some("my.rc".to_string()));
+        // Neither is on by default.
+        let c = run(&["-"]);
+        assert!(!c.external_sources);
+        assert!(c.source_paths.is_empty());
+        assert!(!c.spec_template.check_sourced);
+    }
+
+    #[test]
+    fn source_paths_accumulate_in_flag_order() {
+        // `sourcePaths options ++ paths`, one flag's value split on ':'.
+        let c = run(&["-P", "a:b", "--source-path=c", "-P", "SCRIPTDIR/d", "-"]);
+        assert_eq!(
+            c.source_paths,
+            vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "SCRIPTDIR/d".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn split_search_path_turns_empty_entries_into_dot() {
+        // POSIX `splitSearchPath`.
+        assert_eq!(split_search_path("a:b"), vec!["a", "b"]);
+        assert_eq!(split_search_path(""), vec!["."]);
+        assert_eq!(split_search_path("a::b"), vec!["a", ".", "b"]);
+        assert_eq!(split_search_path(":a"), vec![".", "a"]);
     }
 
     #[test]

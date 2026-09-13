@@ -241,6 +241,15 @@ printf '%s' 'while e;done'     | shellcheck -f gcc -             # oracle 1:13 "
 
 ## E. A check the port has not got
 
+### ~~E1. SC3051 on `source`~~ — fixed
+
+Closed by the source resolver: `source /dev/null` under `-s sh` now gives
+SC3046 **and** SC3051 on both sides, and the two entries this moved in
+`rust/snapshot.txt` are both that. Kept here only so the numbering does not
+shift; the original text follows for the record.
+
+<details><summary>Original entry</summary>
+
 ### E1. SC3051 on `source`
 
 ```sh
@@ -256,6 +265,8 @@ Upstream emits the same text twice, from two different checks: `checkBashisms`
 (SC3046) and the source-following path (SC3051), which needs `T_SourceCommand`
 — i.e. the source resolver (`-x`/`-P`/`-a`), tracked as task #24 and not yet
 ported. Not a parser bug.
+
+</details>
 
 ## Fixed since this file was started
 

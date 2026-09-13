@@ -111,13 +111,18 @@ pub fn parse_contents(filename: &str, contents: &str) -> RcConfig {
 /// (`csShellTypeOverride` and `csExtendedAnalysis` are consulted before the
 /// annotations upstream), while `disable`/`enable` always add.
 pub fn merge_into(spec: &mut CheckSpec, rc: &RcConfig) {
-    let directives = spec.rc.get_or_insert_with(|| Box::new(RcDirectives::default()));
+    let directives = spec
+        .rc
+        .get_or_insert_with(|| Box::new(RcDirectives::default()));
     if let Some(problem) = &rc.parse_problem {
         directives.parse_problem = Some(problem.clone());
         return;
     }
-    directives.disabled_ranges.extend(rc.disabled.iter().copied());
-    spec.optional_checks.extend(rc.enabled_checks.iter().cloned());
+    directives
+        .disabled_ranges
+        .extend(rc.disabled.iter().copied());
+    spec.optional_checks
+        .extend(rc.enabled_checks.iter().cloned());
     if spec.shell_type_override.is_none() {
         spec.shell_type_override = rc.shell;
     }
@@ -151,7 +156,7 @@ impl Fail {
 /// `many`, while one that fails after consuming takes the whole file down.
 fn read_config_kvs(contents: &str) -> Result<Vec<Annotation>, Fail> {
     let mut p = ConfigParser::new(contents);
-    p.any_spacing_or_comment();
+    p.any_spacing_or_comment()?;
     let mut out = Vec::new();
     let mut parsed_any = false;
     loop {
@@ -160,7 +165,8 @@ fn read_config_kvs(contents: &str) -> Result<Vec<Annotation>, Fail> {
             Ok(mut annotations) => {
                 out.append(&mut annotations);
                 parsed_any = true;
-                p.any_spacing_or_comment();
+                // `ann <* anySpacingOrComment`: a failure here is the `many`'s.
+                p.any_spacing_or_comment()?;
             }
             Err(fail) => {
                 if p.idx != start {
@@ -247,10 +253,13 @@ impl ConfigParser {
         })
     }
 
-    fn line_whitespace(&mut self) {
+    /// `many linewhitespace`, returning what it matched.
+    fn line_whitespace(&mut self) -> String {
+        let mut out = String::new();
         while matches!(self.peek(), Some(' ' | '\t')) {
-            self.bump();
+            out.push(self.bump().unwrap());
         }
+        out
     }
 
     /// `readAnyComment`: `#` and the rest of the line.
@@ -265,16 +274,107 @@ impl ConfigParser {
     }
 
     /// `anySpacingOrComment = many (void allspacingOrFail <|> void readAnyComment)`.
-    fn any_spacing_or_comment(&mut self) {
+    ///
+    /// The `<|>` only reaches `readAnyComment` if `allspacingOrFail` failed
+    /// without consuming; having consumed, its failure is the whole parse's.
+    fn any_spacing_or_comment(&mut self) -> Result<(), Fail> {
         loop {
             let start = self.idx;
-            while matches!(self.peek(), Some(' ' | '\t' | '\n' | '\r')) {
-                self.bump();
-            }
-            if !self.read_any_comment() && self.idx == start {
-                return;
+            match self.allspacing_or_fail() {
+                Ok(()) => {}
+                Err(fail) => {
+                    if self.idx != start {
+                        return Err(fail);
+                    }
+                    if !self.read_any_comment() {
+                        return Ok(());
+                    }
+                }
             }
         }
+    }
+
+    /// `allspacingOrFail`: `allspacing` that must have collected something.
+    ///
+    /// Emptiness is about the *string* `allspacing` returns, not about input
+    /// consumed: a comment, and the trailing part of a line continuation,
+    /// contribute nothing to it. So `\<newline>` at the start of a line
+    /// consumes input and then fails, taking the file down with it.
+    fn allspacing_or_fail(&mut self) -> Result<(), Fail> {
+        if self.allspacing()?.is_empty() {
+            return self.fail_with("Expected whitespace");
+        }
+        Ok(())
+    }
+
+    /// `allspacing`: `spacing`, then a `linefeed` and as much again, returning
+    /// the spacing collected (a linefeed counts as a character).
+    ///
+    /// `linefeed = optional carriageReturn >> char '\n'`, so a carriage return
+    /// with no linefeed after it leaves `allspacing` having consumed input and
+    /// failing — which no caller can recover from.
+    fn allspacing(&mut self) -> Result<String, Fail> {
+        let mut out = String::new();
+        loop {
+            out.push_str(&self.spacing());
+            if self.peek() == Some('\r') {
+                self.bump();
+                if !self.eat('\n') {
+                    return self.fail();
+                }
+            } else if !self.eat('\n') {
+                return Ok(out);
+            }
+            out.push('\n');
+        }
+    }
+
+    /// `spacing`: `many (many1 linewhitespace <|> continuation)` then an
+    /// optional comment, returning `concat` of the whitespace it matched. Note
+    /// that a carriage return is NOT line whitespace, and that neither the
+    /// comment nor a continuation's `\<newline>` is part of the result.
+    fn spacing(&mut self) -> String {
+        let mut out = String::new();
+        loop {
+            let start = self.idx;
+            out.push_str(&self.line_whitespace());
+            // `continuation = try (string "\\\n") >> many linewhitespace >> ..`
+            if self.peek() == Some('\\') && self.chars.get(self.idx + 1) == Some(&'\n') {
+                self.bump();
+                self.bump();
+                out.push_str(&self.line_whitespace());
+                // `optional readComment` (its SC1143 is a discarded note).
+                self.read_comment();
+            }
+            if self.idx == start {
+                break;
+            }
+        }
+        // `optional readComment`
+        self.read_comment();
+        out
+    }
+
+    /// `readComment`: a comment that is not a `# shellcheck` directive, which
+    /// `anySpacingOrComment` picks up with `readAnyComment` instead.
+    fn read_comment(&mut self) -> bool {
+        if self.looks_like_annotation_prefix() {
+            return false;
+        }
+        self.read_any_comment()
+    }
+
+    /// `readAnnotationPrefix`: `#`, line whitespace, `shellcheck`.
+    fn looks_like_annotation_prefix(&self) -> bool {
+        let mut i = self.idx;
+        if self.chars.get(i) != Some(&'#') {
+            return false;
+        }
+        i += 1;
+        while matches!(self.chars.get(i), Some(' ' | '\t')) {
+            i += 1;
+        }
+        self.chars[i..].starts_with(&['s', 'h', 'e', 'l', 'l', 'c', 'h', 'e', 'c', 'k'])
     }
 
     /// `readAnnotationWithoutPrefix False`: one or more `key=value` pairs,
@@ -301,7 +401,20 @@ impl ConfigParser {
             return self.fail();
         }
         self.read_any_comment();
-        // `void linefeed <|> eof <|> do { SC1125; many (noneOf "\n"); .. }`
+        // `void linefeed <|> eof <|> do { SC1125; many (noneOf "\n"); .. }`,
+        // where `linefeed = optional carriageReturn >> char '\n'`: a carriage
+        // return that is not followed by one has consumed input, so neither
+        // `eof` nor the SC1125 recovery gets a turn and the file fails. (The
+        // SC1017 the return itself draws is a parse problem on the rc file,
+        // which this port has no channel for.)
+        if self.peek() == Some('\r') {
+            self.bump();
+            if !self.eat('\n') {
+                return self.fail();
+            }
+            self.line_whitespace();
+            return Ok(out);
+        }
         if !self.eat('\n') && !self.eof() {
             while matches!(self.peek(), Some(c) if c != '\n') {
                 self.bump();
@@ -362,10 +475,7 @@ impl ConfigParser {
 
     /// `plainOrQuoted p = quoted p <|> p`: run `p` on the contents of a quoted
     /// value, or on the input directly.
-    fn plain_or_quoted<T>(
-        &mut self,
-        p: impl Fn(&mut Self) -> Result<T, Fail>,
-    ) -> Result<T, Fail> {
+    fn plain_or_quoted<T>(&mut self, p: impl Fn(&mut Self) -> Result<T, Fail>) -> Result<T, Fail> {
         let quote = match self.peek() {
             Some(q @ ('\'' | '"')) => q,
             _ => return p(self),
@@ -691,7 +801,8 @@ mod tests {
         assert_eq!(c.shell, Some(Shell::Sh));
         assert!(c.parse_problem.is_none());
 
-        let c = parse("enable=require-variable-braces disable=SC1000-SC2000 extended-analysis=false");
+        let c =
+            parse("enable=require-variable-braces disable=SC1000-SC2000 extended-analysis=false");
         assert_eq!(
             c.enabled_checks,
             vec!["require-variable-braces".to_string()]
@@ -749,7 +860,10 @@ mod tests {
 
     #[test]
     fn extended_analysis_first_wins() {
-        assert_eq!(parse("extended-analysis=true").extended_analysis, Some(true));
+        assert_eq!(
+            parse("extended-analysis=true").extended_analysis,
+            Some(true)
+        );
         assert_eq!(
             parse("extended-analysis=false").extended_analysis,
             Some(false)
@@ -826,6 +940,46 @@ mod tests {
             problem("disable=x\n"),
             Some((1, "Expected '=' after directive key.".to_string()))
         );
+    }
+
+    #[test]
+    fn comments_and_continuations() {
+        assert!(parse("# c\n").parse_problem.is_none());
+        // A comment contributes nothing to `spacing`'s result, so a last one
+        // with no newline after it fails `allspacingOrFail` having consumed it.
+        assert_eq!(
+            problem("# c"),
+            Some((1, "Expected whitespace.".to_string()))
+        );
+        // An annotation-like comment is one `readComment` refuses, so it goes
+        // to `readAnyComment` instead -- and then even the newline is optional.
+        assert!(parse("# shellcheck disable=SC2086").parse_problem.is_none());
+        assert_eq!(
+            ranges("# shellcheck accepts this\ndisable=1234"),
+            vec![(1234, 1235)]
+        );
+        // `spacing` collects no characters for a line continuation, so
+        // `allspacingOrFail` fails after consuming one: the file is rejected.
+        assert_eq!(
+            problem("\\\ndisable=SC2086\n"),
+            Some((2, "Expected whitespace.".to_string()))
+        );
+        // ... unless something else on the line contributed whitespace.
+        assert_eq!(ranges("  \\\n  # c\ndisable=SC2086\n"), vec![(2086, 2087)]);
+    }
+
+    #[test]
+    fn carriage_returns() {
+        // `linefeed = optional carriageReturn >> char '\n'`: CRLF is fine
+        // (SC1017 aside, which is a problem on the rc file, not on the script).
+        assert_eq!(
+            ranges("disable=SC2086\r\ndisable=SC2154\r\n"),
+            vec![(2086, 2087), (2154, 2155)]
+        );
+        // A carriage return with no linefeed after it is fatal, wherever it is.
+        assert_eq!(problem("disable=SC2086\rjunk\n"), Some((1, String::new())));
+        assert_eq!(problem("disable=SC2086\r"), Some((1, String::new())));
+        assert_eq!(problem("\rdisable=SC2086\n"), Some((1, String::new())));
     }
 
     #[test]

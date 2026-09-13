@@ -138,10 +138,6 @@ pub fn checker() -> Checker {
     c.node(arithmetic::check_plus_equals_number);
     c.node(redirections::check_expansion_with_redirection);
     c.node(conditions::check_unary_test_a);
-    // Not in Analytics.hs: SC1091 (source not followed) is a parser note in
-    // Haskell, emitted while following `source`; it stays here until the
-    // source resolver is ported.
-    c.node(script::check_source_not_followed);
     crate::checks::register_all(&mut c);
     c
 }

@@ -278,9 +278,56 @@ both `gate` and `fuzz` end with `oracle crashed on N input(s)`. It was found by
 
 ---
 
+### 5. A `$'\U110000'` escape crashes ShellCheck
+
+**Reproduce**
+
+```sh
+printf "%s" "\$'\\U110000'" | shellcheck -
+```
+
+**You get**
+
+```
+shellcheck: Prelude.chr: bad argument: 1114112
+```
+
+Nothing else, and no JSON with `--format=json1` — the same shape as item 4, from
+a different cause. `$'\UFFFFFFFF'` does it too, and so does the escape in any
+position: a command name, `printf $'\U110000' foo`, `[ $'\U110000' = x ]`,
+`x=$'\U110000'`, `IFS=$'\U110000'`, or concatenated with a quoted string.
+
+**What the shell does**
+
+```
+$ bash -c "printf '%s' \$'\U110000' | xxd | head -1"   # bash prints the bytes and exits 0
+```
+
+bash accepts the escape; it is out of Unicode range, so bash emits it as raw
+bytes rather than refusing the script.
+
+**What's wrong.** Same as item 4: a crash, not a diagnostic, taking every other
+file in the invocation with it.
+
+**Why.** `decodeEscapes` in `ASTLib.hs` builds the character with `chr` on
+whatever `readHex` returns. `chr` is partial — it rejects anything above
+`0x10FFFF` — and nothing bounds the escape's value first. `\u` cannot reach the
+limit with four digits, so only `\U` is affected.
+
+**Port.** The port does not crash: `char::from_u32` declines the value and the
+escape contributes nothing, so `$'\U110000'` reads as an empty string (SC2286).
+That is a deviation with no oracle to compare against, like item 4, and the
+surrogate escapes `$'\uD800'`/`$'\uDFFF'` are the same story in reverse —
+Haskell's `chr` accepts a surrogate where Rust's `char` cannot hold one, so the
+port drops the character and the oracle keeps it. Found by the adversarial
+verifier for the ANSI-C decoder, not by the fuzzer, which does not invent
+`$'\x..'`.
+
+---
+
 ## Consistent but surprising
 
-### 5. An error positioned inside quotes that were never quotes
+### 6. An error positioned inside quotes that were never quotes
 
 **Reproduce**
 
@@ -318,7 +365,7 @@ meant as a string or was simply unterminated.
 
 ---
 
-### 6. Column of a failed multi-character token is where the token started
+### 7. Column of a failed multi-character token is where the token started
 
 **Reproduce**
 
@@ -343,7 +390,7 @@ string *started*, however far into it the mismatch occurred. The same rule makes
 
 ---
 
-### 7. Parser notes are zero-width, at the `$`, not on the thing they describe
+### 8. Parser notes are zero-width, at the `$`, not on the thing they describe
 
 **Reproduce**
 
@@ -389,7 +436,7 @@ the construct it describes.
 
 ---
 
-### 8. A parse note disappears if the parse fails later in the file
+### 9. A parse note disappears if the parse fails later in the file
 
 **Reproduce**
 
@@ -459,15 +506,17 @@ sanctioned deviations.
 
 ## Reporting upstream
 
-Item 4 is the one to report first: it is a crash, it loses the analysis of every
-other file in the same invocation, and it produces no JSON for tooling to read.
+Items 4 and 5 are the ones to report first: both are crashes, both lose the
+analysis of every other file in the same invocation, and both produce no JSON
+for tooling to read. They are also both one-line fixes upstream — a missing
+pattern and a partial `chr` — so they are worth reporting together.
 Item 2 is next: bash runs `! # comment`, ShellCheck declares the file
 unparseable and checks none of it. Item 1 is a misattributed context on input
 that genuinely is a syntax error, and item 3 is a missing hint on a path that
-already has the right words for it — both cosmetic next to 4 and 2.
-Those four are worth a bug report against
+already has the right words for it — both cosmetic next to the crashes and 2.
+Those five are worth a bug report against
 [koalaman/shellcheck](https://github.com/koalaman/shellcheck).
 
-Items 5–8 are working as designed, or as Parsec dictates. Changing them would
+Items 6–9 are working as designed, or as Parsec dictates. Changing them would
 change output that existing users, tests and editor integrations depend on, so
 they belong here rather than in an upstream issue.

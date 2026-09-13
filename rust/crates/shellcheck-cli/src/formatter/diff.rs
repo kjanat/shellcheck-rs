@@ -192,60 +192,79 @@ fn backward_costs(old: &[String], new: &[String], a: usize) -> Vec<i64> {
     prev
 }
 
-fn prepend(x: DiffElem, current: Vec<DiffElem>) -> Vec<DiffElem> {
-    let mut v = Vec::with_capacity(current.len() + 1);
-    v.push(x);
-    v.extend(current);
-    v
-}
-
-fn split_at_ctx(current: &[DiffElem], k: usize) -> (Vec<DiffElem>, Vec<DiffElem>) {
-    let head: Vec<DiffElem> = current.iter().take(k).cloned().collect();
-    let tail: Vec<DiffElem> = current.iter().skip(k).cloned().collect();
-    (head, tail)
-}
-
-fn reversed(mut v: Vec<DiffElem>) -> Vec<DiffElem> {
-    v.reverse();
-    v
-}
-
+/// `groupDiff`: split the diff into runs tagged with whether they are part of a
+/// hunk, keeping `CONTEXT` lines of context on each side.
+///
+/// This is upstream's mutually recursive `hunt`/`gather` written as a loop over
+/// the same two states. Upstream accumulates each run reversed and conses onto
+/// it; here `acc` holds the run the right way round and pushes onto the end, so
+/// `reverse current` is `acc` itself and `splitAt CONTEXT current` is the split
+/// of `acc` that many elements from its end. The loop avoids both the per-element
+/// copy of the accumulator and a recursion as deep as the diff is long, either of
+/// which makes a large script's diff unusable.
 fn group_diff(diffs: &[DiffElem]) -> Vec<(bool, Vec<DiffElem>)> {
-    hunt(Vec::new(), diffs)
-        .into_iter()
-        .filter(|(_, l)| !l.is_empty())
-        .collect()
-}
+    enum State {
+        /// `hunt`: outside a hunk.
+        Hunt,
+        /// `gather`: inside a hunk, having seen this many trailing `Both`s.
+        Gather(i64),
+    }
 
-fn hunt(current: Vec<DiffElem>, list: &[DiffElem]) -> Vec<(bool, Vec<DiffElem>)> {
-    if list.is_empty() {
-        return vec![(false, reversed(current))];
+    /// `splitAt k current`, in `acc` form: the trailing `k` elements are handed
+    /// on as the next run's leading context, the rest is this run.
+    fn split_off_context(acc: &mut Vec<DiffElem>, k: usize) -> Vec<DiffElem> {
+        let k = k.min(acc.len());
+        let at = acc.len() - k;
+        acc.split_off(at)
     }
-    if is_both(&list[0]) {
-        return hunt(prepend(list[0].clone(), current), &list[1..]);
+
+    let mut out: Vec<(bool, Vec<DiffElem>)> = Vec::new();
+    let mut acc: Vec<DiffElem> = Vec::new();
+    let mut state = State::Hunt;
+    let mut idx = 0usize;
+    loop {
+        match state {
+            State::Hunt => {
+                if idx == diffs.len() {
+                    out.push((false, acc));
+                    break;
+                }
+                if is_both(&diffs[idx]) {
+                    acc.push(diffs[idx].clone());
+                    idx += 1;
+                } else {
+                    let context = split_off_context(&mut acc, CONTEXT as usize);
+                    out.push((false, std::mem::replace(&mut acc, context)));
+                    state = State::Gather(0);
+                }
+            }
+            State::Gather(n) => {
+                if idx == diffs.len() {
+                    let extras = split_off_context(&mut acc, (n - CONTEXT).max(0) as usize);
+                    out.push((true, std::mem::take(&mut acc)));
+                    out.push((false, extras));
+                    break;
+                }
+                if is_both(&diffs[idx]) {
+                    if n == CONTEXT * 2 {
+                        let context = split_off_context(&mut acc, CONTEXT as usize);
+                        out.push((true, std::mem::replace(&mut acc, context)));
+                        state = State::Hunt;
+                    } else {
+                        acc.push(diffs[idx].clone());
+                        idx += 1;
+                        state = State::Gather(n + 1);
+                    }
+                } else {
+                    acc.push(diffs[idx].clone());
+                    idx += 1;
+                    state = State::Gather(0);
+                }
+            }
+        }
     }
-    let (context, previous) = split_at_ctx(&current, CONTEXT as usize);
-    let mut out = vec![(false, reversed(previous))];
-    out.extend(gather(context, 0, list));
+    out.retain(|(_, l)| !l.is_empty());
     out
-}
-
-fn gather(current: Vec<DiffElem>, n: i64, list: &[DiffElem]) -> Vec<(bool, Vec<DiffElem>)> {
-    if list.is_empty() {
-        let take = (n - CONTEXT).max(0) as usize;
-        let (extras, patch) = split_at_ctx(&current, take);
-        return vec![(true, reversed(patch)), (false, reversed(extras))];
-    }
-    if is_both(&list[0]) && n == CONTEXT * 2 {
-        let (context, previous) = split_at_ctx(&current, CONTEXT as usize);
-        let mut out = vec![(true, reversed(previous))];
-        out.extend(hunt(context, list));
-        return out;
-    }
-    if is_both(&list[0]) {
-        return gather(prepend(list[0].clone(), current), n + 1, &list[1..]);
-    }
-    gather(prepend(list[0].clone(), current), 0, &list[1..])
 }
 
 fn count_delta(run: &[DiffElem]) -> (i64, i64) {
@@ -750,6 +769,113 @@ mod tests {
         assert_eq!(got[2_000], DiffElem::First("line 2000".to_string()));
         assert_eq!(got[2_001], DiffElem::Second("changed".to_string()));
         assert_eq!(got.iter().filter(|d| is_both(d)).count(), 3_999);
+    }
+
+    /// Upstream's recursive `hunt`/`gather`, kept as the reference the loop in
+    /// `group_diff` must agree with.
+    fn group_diff_reference(diffs: &[DiffElem]) -> Vec<(bool, Vec<DiffElem>)> {
+        fn prepend(x: DiffElem, current: Vec<DiffElem>) -> Vec<DiffElem> {
+            let mut v = Vec::with_capacity(current.len() + 1);
+            v.push(x);
+            v.extend(current);
+            v
+        }
+        fn split_at_ctx(current: &[DiffElem], k: usize) -> (Vec<DiffElem>, Vec<DiffElem>) {
+            let head: Vec<DiffElem> = current.iter().take(k).cloned().collect();
+            let tail: Vec<DiffElem> = current.iter().skip(k).cloned().collect();
+            (head, tail)
+        }
+        fn reversed(mut v: Vec<DiffElem>) -> Vec<DiffElem> {
+            v.reverse();
+            v
+        }
+        fn hunt(current: Vec<DiffElem>, list: &[DiffElem]) -> Vec<(bool, Vec<DiffElem>)> {
+            if list.is_empty() {
+                return vec![(false, reversed(current))];
+            }
+            if is_both(&list[0]) {
+                return hunt(prepend(list[0].clone(), current), &list[1..]);
+            }
+            let (context, previous) = split_at_ctx(&current, CONTEXT as usize);
+            let mut out = vec![(false, reversed(previous))];
+            out.extend(gather(context, 0, list));
+            out
+        }
+        fn gather(current: Vec<DiffElem>, n: i64, list: &[DiffElem]) -> Vec<(bool, Vec<DiffElem>)> {
+            if list.is_empty() {
+                let take = (n - CONTEXT).max(0) as usize;
+                let (extras, patch) = split_at_ctx(&current, take);
+                return vec![(true, reversed(patch)), (false, reversed(extras))];
+            }
+            if is_both(&list[0]) && n == CONTEXT * 2 {
+                let (context, previous) = split_at_ctx(&current, CONTEXT as usize);
+                let mut out = vec![(true, reversed(previous))];
+                out.extend(hunt(context, list));
+                return out;
+            }
+            if is_both(&list[0]) {
+                return gather(prepend(list[0].clone(), current), n + 1, &list[1..]);
+            }
+            gather(prepend(list[0].clone(), current), 0, &list[1..])
+        }
+        hunt(Vec::new(), diffs)
+            .into_iter()
+            .filter(|(_, l)| !l.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn group_diff_matches_the_recursive_reference() {
+        // Every element sequence of length 0..=9 over {Both, First, Second}.
+        let mut corpus: Vec<Vec<DiffElem>> = vec![Vec::new()];
+        let mut frontier: Vec<Vec<DiffElem>> = vec![Vec::new()];
+        for _ in 0..9 {
+            let mut next = Vec::new();
+            for s in &frontier {
+                for k in 0..3 {
+                    let mut t = s.clone();
+                    let n = t.len() as i64;
+                    t.push(match k {
+                        0 => b(n),
+                        1 => l(n),
+                        _ => r(n),
+                    });
+                    next.push(t);
+                }
+            }
+            corpus.extend(next.iter().cloned());
+            frontier = next;
+        }
+        // Only the shapes with a long enough context run reach every state, so
+        // check the short ones exhaustively and a few long ones besides.
+        for s in &corpus {
+            assert_eq!(group_diff(s), group_diff_reference(s), "{s:?}");
+        }
+        let long: Vec<DiffElem> = (0..60)
+            .map(|i| match i % 11 {
+                4 => l(i),
+                9 => r(i),
+                _ => b(i),
+            })
+            .collect();
+        assert_eq!(group_diff(&long), group_diff_reference(&long));
+    }
+
+    #[test]
+    fn large_diff_groups_without_deep_recursion() {
+        // The recursive form recursed once per element and copied the whole
+        // accumulator each time, so this size used to overflow the stack.
+        let n = 20_000;
+        let old: Vec<String> = (0..n).map(|i| format!("line {i}")).collect();
+        let mut new = old.clone();
+        new[n / 2] = "changed".to_string();
+        let d = get_diff(&old, &new);
+        assert_eq!(d.len(), n + 1);
+        let hunks = group_diff(&d);
+        // One hunk around the change, with the untouched runs either side.
+        assert_eq!(hunks.len(), 3);
+        assert!(hunks[1].0);
+        assert_eq!(hunks[1].1.len(), 8);
     }
 
     #[test]
