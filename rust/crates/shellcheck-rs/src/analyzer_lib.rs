@@ -1008,63 +1008,8 @@ pub(crate) fn is_quote_free_context(params: &Parameters, t: &Token) -> Option<bo
         T_DollarBraced { .. } => Some(true),
         T_ForIn { .. } => Some(true),
         T_SelectIn { .. } => Some(true),
-        // Reconstruct a declaration-utility assignment word (this parser keeps
-        // `declare foo=$1` as a plain word, not a T_Assignment).
-        T_NormalWord(_) if is_declaration_assignment_word(params, t) => {
-            Some(params.shell != Shell::Sh)
-        }
         _ => None,
     }
-}
-
-fn is_declaration_assignment_word(params: &Parameters, word: &Token) -> bool {
-    let is_form = match &*word.inner {
-        InnerToken::T_NormalWord(parts) => parts.first().is_some_and(
-            |f| matches!(&*f.inner, InnerToken::T_Literal(s) if literal_is_assignment_prefix(s)),
-        ),
-        _ => false,
-    };
-    if !is_form {
-        return false;
-    }
-    let parent = match params.parent(word) {
-        Some(x) => x,
-        None => return false,
-    };
-    if let InnerToken::T_SimpleCommand { words, .. } = &*parent.inner {
-        if words.is_empty() || !words[1..].iter().any(|w| w.id() == word.id()) {
-            return false;
-        }
-        return matches!(
-            decl_command_name(words).as_deref(),
-            Some("declare") | Some("export") | Some("local") | Some("readonly") | Some("typeset")
-        );
-    }
-    false
-}
-
-fn decl_command_name(words: &[Token]) -> Option<String> {
-    let n0 = ast_lib::get_literal_string(&words[0])?;
-    if n0 == "builtin" && words.len() >= 2 {
-        Some(ast_lib::only_literal_string(&words[1]))
-    } else {
-        Some(n0)
-    }
-}
-
-fn literal_is_assignment_prefix(s: &str) -> bool {
-    let c: Vec<char> = s.chars().collect();
-    if c.is_empty() || !(c[0] == '_' || c[0].is_ascii_alphabetic()) {
-        return false;
-    }
-    let mut i = 1;
-    while i < c.len() && (c[i] == '_' || c[i].is_ascii_alphanumeric()) {
-        i += 1;
-    }
-    if i < c.len() && c[i] == '+' {
-        i += 1;
-    }
-    i < c.len() && c[i] == '='
 }
 
 pub(crate) fn assignment_is_quoting(params: &Parameters, assign: &Token) -> bool {
@@ -1477,24 +1422,6 @@ fn get_modified_variables(t: &Token) -> Vec<(Token, Token, String, DataType)> {
     }
 }
 
-/// Split a `name=...` / `name+=...` word into (name, whole-word-as-value).
-fn split_assignment_word(word: &Token) -> Option<String> {
-    if let InnerToken::T_NormalWord(parts) = &*word.inner {
-        if let Some(first) = parts.first() {
-            if let InnerToken::T_Literal(s) = &*first.inner {
-                if literal_is_assignment_prefix(s) {
-                    let name: String = s
-                        .chars()
-                        .take_while(|c| *c == '_' || c.is_ascii_alphanumeric())
-                        .collect();
-                    return Some(name);
-                }
-            }
-        }
-    }
-    None
-}
-
 /// `getModifierParam def t`.
 fn get_modifier_param(
     def: &DefCtor,
@@ -1511,20 +1438,10 @@ fn get_modifier_param(
             )]
         }
         InnerToken::T_NormalWord(_) => {
-            // Reconstruct declaration-utility assignment words that this parser
-            // keeps as plain words (`declare foo=bar`).
-            if let Some(name) = split_assignment_word(t) {
-                if is_variable_name(&name) {
-                    return vec![(
-                        base.clone(),
-                        t.clone(),
-                        name,
-                        apply_def(def, DataSource::SourceFrom(vec![t.clone()])),
-                    )];
-                }
-                return vec![];
-            }
-            // Bare declared variable.
+            // `getModifierParam def t@T_NormalWord{}`: the *whole* literal has
+            // to be a variable name. `declare foo=bar` is a T_Assignment by the
+            // time it gets here, and a word that merely looks like one
+            // (`declare a\=b`, `declare 'f=1'`) declares nothing.
             match ast_lib::get_literal_string(t) {
                 Some(name) if is_variable_name(&name) => vec![(
                     base.clone(),
@@ -1922,10 +1839,6 @@ fn get_reference(t: &Token) -> Vec<(Token, Token, String)> {
                         return vec![(t.clone(), t.clone(), name.clone())];
                     }
                 }
-            }
-            // Reconstructed `name=...` declaration-utility assignment word.
-            if let Some(name) = split_assignment_word(t) {
-                return vec![(t.clone(), t.clone(), name)];
             }
             vec![]
         }

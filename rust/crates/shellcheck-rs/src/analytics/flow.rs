@@ -1087,6 +1087,19 @@ mod tests {
         assert!(!(node_emits(check_spacefulness_cfg, "f() { s=$?; echo $s; }")));
     }
 
+    // `getModifierParam`'s word case needs the *whole* literal to be a variable
+    // name. A real `declare foo=bar` is a T_Assignment, so a word that merely
+    // looks like an assignment (the `\=` here is just an escaped `=`) declares
+    // nothing and must not be reported as an unused variable.
+    #[test]
+    fn declaration_word_that_only_looks_like_an_assignment_declares_nothing() {
+        assert!(!(tree_emits(check_unused_assignments, "f() { declare a\\=b; }")));
+        assert!(!(tree_emits(check_unused_assignments, "f() { declare 'q=1'; }")));
+        // The genuine forms still are.
+        assert!(tree_emits(check_unused_assignments, "f() { declare a=b; }"));
+        assert!(tree_emits(check_unused_assignments, "f() { declare a; }"));
+    }
+
     #[test]
     fn prop_checkUnused0() {
         assert!(!(tree_emits(check_unused_assignments, "var=foo; echo $var")));
