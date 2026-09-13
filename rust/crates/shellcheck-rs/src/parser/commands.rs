@@ -1700,20 +1700,12 @@ impl Parser {
         let value = if self.peek() == Some('(') {
             self.read_array()?
         } else {
-            let m = self.mark();
-            match self.read_normal_word() {
-                Ok(w) => w,
-                // `value <- readArray <|> readNormalWord`, with nothing after
-                // it: a word that failed having consumed takes the assignment
-                // down with it, and the frame `called "variable assignment"`
-                // left behind is what names the failure.
-                Err(()) if self.idx != m.idx => return Err(()),
-                Err(()) => {
-                    self.reset(m);
-                    // empty value
-                    self.empty_literal_word()
-                }
-            }
+            // `value <- readArray <|> readNormalWord`, with nothing after it:
+            // there is no falling back to an empty value here, and the frame
+            // `called "variable assignment"` left behind is what names the
+            // failure. An assignment that really has no value took the
+            // `readEmptyLiteral` branch above.
+            self.read_normal_word()?
         };
         let id = self.next_id_between(start, op_start);
         Ok(Token::new(

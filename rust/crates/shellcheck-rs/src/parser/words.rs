@@ -573,7 +573,12 @@ impl Parser {
         let start = self.pos();
         if self.peek() == Some('{') {
             let m = self.mark();
-            if let Ok(t) = self.read_braced() {
+            // `readBraced = try braceExpansion`: the `try` is the whole of it,
+            // so a commitment made while reading what turned out not to be an
+            // expansion goes back with the cursor. Without that, `o{$(` gives
+            // up inside the `$(` and the literal `{`'s SC1083 is dropped as
+            // something the parse never reached.
+            if let Ok(t) = self.try_parse(|p| p.read_braced()) {
                 return Ok(t);
             }
             self.reset(m);

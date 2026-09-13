@@ -421,21 +421,17 @@ impl Parser {
             return Err(());
         };
         self.warn_cond_paren(single, lparen == "(", &start);
+        // Only the opening paren is inside the `try`: past it the contents and
+        // the closing paren have consumed, so `[ \( ]` is a group with nothing
+        // in it rather than a word that happens to look like one.
         self.cond_spacing_checked(single, single);
-        let inner = match self.read_cond_contents(single) {
-            Ok(c) => c,
-            Err(()) => {
-                self.reset(m);
-                return Err(());
-            }
-        };
+        let inner = self.read_cond_contents(single)?;
         let cpos = self.pos();
         let rparen = if let Some(s) = self.read_cond_escaped_lit(")") {
             s
         } else if self.char(')').is_ok() {
             ")".to_string()
         } else {
-            self.reset(m);
             return Err(());
         };
         self.cond_spacing_checked(single, single);

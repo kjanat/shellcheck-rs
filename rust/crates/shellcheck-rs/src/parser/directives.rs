@@ -190,7 +190,9 @@ impl Parser {
                 }
             }
         }
-        self.string("all")?;
+        // `readAll = do { string "all"; .. }`, a bare `string`: a partial match
+        // has consumed and `readRange <|> readAll` cannot recover from it.
+        self.string_tokens("all")?;
         Ok(Annotation::DisableComment(0, 1_000_000))
     }
 

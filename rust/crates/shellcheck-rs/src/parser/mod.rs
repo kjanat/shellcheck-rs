@@ -1048,6 +1048,11 @@ impl Parser {
         }
     }
 
+    /// `try (string s)`, which is how ShellCheck writes nearly every one of
+    /// them: the cursor goes back on a mismatch, and the error is reported at
+    /// the position the string started at however far into it the mismatch was
+    /// -- so `optional (string "SC")` on `S]` fails at the `S`. For the handful
+    /// of places that write a bare `string`, see [`Parser::string_tokens`].
     fn string(&mut self, s: &str) -> PResult<()> {
         let m = self.mark();
         // `tokens` is one primitive: matching the string char by char is an
@@ -1055,14 +1060,49 @@ impl Parser {
         let saved = self.failure.clone();
         for c in s.chars() {
             if self.char(c).is_err() {
-                // Parsec's `tokens` reports a mismatch at the position the
-                // string started at, however far into it the mismatch was --
-                // so `optional (string "SC")` on `S]` fails at the `S`.
                 self.reset(m);
                 self.failure = saved;
                 self.fail_implicitly();
                 return Err(());
             }
+        }
+        Ok(())
+    }
+
+    /// A bare `string s`, with Parsec's `tokens` reply rules rather than a
+    /// `try`'s: a mismatch on the *first* character replies `eerr` and an
+    /// enclosing `<|>` may recover, while a mismatch past it replies `cerr`
+    /// and none can. Either way the error is reported from the start. So
+    /// `readAll`'s `string "all"` on `a` has read the `a`, and `disable=a` is
+    /// a parse error rather than a key that quietly takes no value.
+    fn string_tokens(&mut self, s: &str) -> PResult<()> {
+        let start_idx = self.idx;
+        let start_pos = self.pos();
+        let saved = self.failure.clone();
+        for (i, c) in s.chars().enumerate() {
+            if self.peek() == Some(c) {
+                self.bump();
+                continue;
+            }
+            // Whatever matched so far cleared the failure standing before it.
+            self.failure = saved;
+            if i == 0 {
+                // Nothing was read, so the cursor is still at the start.
+                self.fail_implicitly();
+            } else {
+                // The cursor stays where the mismatch found it, since that is
+                // what tells a caller the failure consumed; the error is
+                // reported from the start all the same.
+                self.restore_failure(Some(Failure {
+                    reach: start_idx,
+                    pos: start_pos,
+                    message: String::new(),
+                    contexts: self.contexts.clone(),
+                    consumed: true,
+                    explicit: false,
+                }));
+            }
+            return Err(());
         }
         Ok(())
     }
