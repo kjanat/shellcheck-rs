@@ -8,14 +8,15 @@ not, see `PARITY-NOTES.md`.
 Reproduce the whole set (deterministic, seed 0):
 
 ```sh
-cargo run --release -p conformance -- fuzz --max-findings 40
-# fuzz: 2000 inputs checked, 13 distinct divergences
+cargo conformance-fuzz --max-findings 40
+# fuzz: 2000 inputs checked, 12 distinct divergences
 # oracle crashed on 1 input(s) -- an upstream defect, not a divergence
 ```
 
 The crash line is not one of these: the oracle dies on it and has no answer to
-compare against (`PARITY-NOTES.md` item 4). The harness re-runs such a batch one
-script at a time, so the crash costs that one input and nothing else.
+compare against (`PARITY-NOTES.md` items 4 and 5, and **Z3** below). The harness
+re-runs such a batch one script at a time, so the crash costs that one input and
+nothing else.
 
 A seed covers what it happens to generate. Two entries below (A3, B1) were found
 by other seeds and are still open under this one; a run at `--seed 1013
@@ -47,6 +48,69 @@ the assertion pass, which makes the test *fail* — the reminder to delete the
 marker and the entry here in the same commit.
 
 Grouped by cause, worst user impact first.
+
+**A divergence is not a verdict.** "The port differs here" and "the port is worse
+here" are separate claims, and most entries below are only the first. For a
+drop-in replacement, direction does not matter: a *nicer* message that differs
+breaks a golden file, an editor integration or a tuned `# shellcheck disable=`
+line exactly as hard as a worse one, so every entry is a defect regardless.
+Where one side is genuinely the better diagnostic, the entry says so — including
+the cases where that side is this port, listed in **Z** below. Fixing those
+means deliberately making the port's output less useful, because agreement is
+the contract.
+
+## Z. Where the port's own output is the better one
+
+Recorded so the trade is explicit, not so it is kept. Each is still a divergence
+and each is still due to be matched to upstream.
+
+### Z1. An empty SC1072 message where the port has a real one
+
+```sh
+printf '%s' '[#' | shellcheck -s sh -f gcc -
+```
+
+|        |                                                                                |
+| ------ | ------------------------------------------------------------------------------ |
+| oracle | `1:3: error:  Fix any mentioned problems and try again. [SC1072]` — no message |
+| port   | `1:3: error: Expected test to end here (don't wrap commands in []/[[]]). ...`  |
+
+Upstream's SC1072 carries the empty string here, so the rendered line has two
+spaces after `error:` and tells the reader nothing. The port names the actual
+expectation. Same class as the `S=('` / `y=("` pair in **D1**, where the two
+tools name different-but-equally-true expectations; this is the sub-case where
+one of them names none at all.
+
+### Z2. A whole file discarded over one unterminated directive value
+
+```sh
+printf '#shellcheck disable="\nfor f in $();do t$(d)"" $n;done\nx=(*)\n' | shellcheck -s sh -f gcc -
+```
+
+|        |                                                                               |
+| ------ | ----------------------------------------------------------------------------- |
+| oracle | SC1073 + SC1072 and nothing else: the file is unparseable, no analysis at all |
+| port   | SC1125 (invalid key=value pair) and then the file's 10 real findings          |
+
+A stray quote in a comment costs the user every diagnostic in the file upstream.
+The port reports the malformed directive and analyses the script anyway, which
+is what a person would want. It is still **B2**, and still has to be matched.
+
+### Z3. Two inputs that kill upstream outright
+
+`x=$(coproc foo)` and `$'\U110000'` end the Haskell process with a pattern-match
+failure and a partial `chr` — no diagnostics, no JSON, every other file in the
+invocation lost. The port analyses both. There is no oracle output to agree
+with, so these are not divergences at all; see `PARITY-NOTES.md` items 4 and 5,
+and the harness counts them separately as `oracle crashed on N input(s)`.
+
+### Z4. `! # comment`
+
+The one *sanctioned* deviation: upstream declares the file unparseable, bash
+runs it, and `bash -n` agrees with the port. Unlike Z1–Z3 this one is kept,
+because the harness can justify it from a shell's verdict rather than from
+taste. See `PARITY-NOTES.md` item 2 and
+`rust/crates/conformance/src/deviations.rs`.
 
 ## A. The port gives up where upstream carries on
 
