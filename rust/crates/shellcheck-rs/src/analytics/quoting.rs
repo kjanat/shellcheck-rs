@@ -11,7 +11,6 @@ use crate::analyzer_lib::simple_command_words;
 use crate::analyzer_lib::*;
 use crate::ast::*;
 use crate::ast_lib;
-use crate::ast_lib::get_literal_string;
 use crate::ast_lib::get_word_parts;
 use crate::ast_lib::oversimplify;
 use crate::ast_lib::will_split;
@@ -698,17 +697,8 @@ fn used_as_command_name(p: &Parameters, token: &Token) -> bool {
                 node = p.parent(t);
             }
             T_SimpleCommand { words, .. } if !words.is_empty() => {
-                if words[0].id() == current_id || get_command_token_or_this(t).id() == current_id {
-                    return true;
-                }
-                // `time CMD`: the reserved word `time` is followed by the command
-                // being timed. ShellCheck's parser (readTimeSuffix) parses that
-                // word as the command; this parser keeps `time` as a plain
-                // command with the word as its first argument, so recognise it
-                // here to avoid a spurious split warning.
-                return words.len() >= 2
-                    && get_literal_string(&words[0]).as_deref() == Some("time")
-                    && words[1].id() == current_id;
+                return words[0].id() == current_id
+                    || get_command_token_or_this(t).id() == current_id;
             }
             _ => return false,
         }

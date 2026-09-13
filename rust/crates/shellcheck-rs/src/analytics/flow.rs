@@ -20,18 +20,6 @@ pub(super) fn check_unused_assignments(params: &Parameters, _root: &Token, out: 
     for v in INTERNAL_VARIABLES {
         references.insert((*v).to_string());
     }
-    // Variables embedded in unquoted globs (e.g. `foo[$key]`) are real
-    // references that ShellCheck sees by parsing `$key`; this parser keeps the
-    // glob as a flat string, so scan glob literals for `$var` names. SC2034
-    // uses references as a set, so this only suppresses (never misplaces).
-    params.root.visit_preorder(&mut |t| {
-        if let InnerToken::T_Glob(s) = &*t.inner {
-            for name in variables_in_glob(s) {
-                references.insert(name);
-            }
-        }
-    });
-
     // assignments: Map.fromList (last write per name), only real variable names.
     let mut assignments: BTreeMap<String, Token> = BTreeMap::new();
     for sd in flow {
@@ -330,15 +318,6 @@ pub(super) fn check_verbose_spacefulness_cfg(params: &Parameters, token: &Token,
 
 fn strip_suffix(name: &str) -> String {
     name.chars().take_while(|c| is_variable_char(*c)).collect()
-}
-
-fn variables_in_glob(s: &str) -> Vec<String> {
-    use std::sync::OnceLock;
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| regex::Regex::new(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)").unwrap());
-    re.captures_iter(s)
-        .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
-        .collect()
 }
 
 fn check_unassigned_references_impl(
