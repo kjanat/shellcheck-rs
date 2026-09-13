@@ -21,7 +21,7 @@ jobs:
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
-    steps: [uses: kjanat/actionlint@v1]
+    steps: [uses: actions/checkout@v7, uses: kjanat/actionlint@v1]
 
   lint:
     name: "Format, clippy, workflows"
