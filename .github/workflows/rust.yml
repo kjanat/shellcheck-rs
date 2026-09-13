@@ -1,21 +1,11 @@
 name: Rust port conformance
 
-# Separate from the Haskell-only build.yml. Runs only when the Rust port or
-# this workflow change. The `conformance-gate` job is the required check: it
-# builds the Haskell oracle and the Rust port from the same tree and compares
-# them directly, with no committed baseline to drift.
 on:
-  # On a PR, the pull_request event already runs the gate on every commit, so
-  # restrict push to the release branches to avoid running it twice per commit.
   push:
     branches: [master]
     paths: &PATHS
       - "rust/**"
-      # The workspace root: members, dependency resolution, rust-version and the
-      # cargo aliases live here, so a change to any of them changes what the
-      # build and the gate actually do.
-      - "Cargo.toml"
-      - "Cargo.lock"
+      - "**/Cargo.*"
       - ".cargo/**"
       - "mise.toml"
       - "mutants.toml"
@@ -25,24 +15,24 @@ on:
       - "shellcheck.hs"
   pull_request: { paths: *PATHS }
 
-# Cancel an in-flight gate run when a newer commit is pushed to the same ref.
-concurrency:
-  group: rust-${{ github.ref }}
-  cancel-in-progress: true
+concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
 
 jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps: [uses: kjanat/actionlint@v1]
+
   lint:
-    name: Format, clippy, workflows
+    name: "Format, clippy, workflows"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      # dprint formats .rs by shelling out to rustfmt, so install it first.
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+        with: { components: "rustfmt, clippy" }
 
       - name: Check formatting
         uses: kjanat/dprint-check@v3
@@ -50,17 +40,13 @@ jobs:
       - name: Clippy
         run: cargo lint
 
-      - name: Lint workflows
-        uses: kjanat/actionlint@v1
-
   conformance-gate:
-    name: Build oracle + port, run strict conformance gate
+    name: Build and run gates
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      # (a) Rust stable toolchain.
       - name: Install Rust stable
         id: rust
         uses: dtolnay/rust-toolchain@stable
@@ -74,15 +60,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust/**/Cargo.toml', '.cargo/**', '.github/workflows/rust.yml') }}-${{ hashFiles('rust/crates/**') }}
+          key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**', '.github/workflows/rust.yml') }}-${{ hashFiles('rust/crates/**') }}
           restore-keys: |
-            ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust/**/Cargo.toml', '.cargo/**', '.github/workflows/rust.yml') }}-
+            ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**', '.github/workflows/rust.yml') }}-
             ${{ env.CACHE_PREFIX }}-
 
-      # (b) Haskell oracle. The cached executable is looked up FIRST, keyed on
-      #     the pinned GHC version and every Haskell input, so on a hit the GHC
-      #     toolchain is not installed at all (that install alone is ~2 minutes
-      #     of every run). Only an exact match may reuse the executable.
       - name: Cache Haskell oracle
         id: oracle
         uses: actions/cache@v6
@@ -90,20 +72,18 @@ jobs:
           path: .cache/shellcheck-oracle
           key: ${{ runner.os }}-${{ runner.arch }}-oracle-ghc9.6.6-${{ hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs', '.github/workflows/rust.yml') }}
 
-      # Everything below runs only when the oracle must be (re)built.
       - name: Setup Haskell
-        if: steps.oracle.outputs.cache-hit != 'true'
+        if: &NoCacheHit steps.oracle.outputs.cache-hit != 'true'
         id: haskell
         uses: haskell-actions/setup@v2
-        with:
-          ghc-version: "9.6.6"
+        with: { ghc-version: "9.6.6" }
 
       - name: Plan Haskell oracle build
-        if: steps.oracle.outputs.cache-hit != 'true'
+        if: *NoCacheHit
         run: cabal build shellcheck --dry-run
 
       - name: Cache Haskell build
-        if: steps.oracle.outputs.cache-hit != 'true'
+        if: *NoCacheHit
         uses: actions/cache@v6
         env:
           CACHE_PREFIX: ${{ runner.os }}-${{ runner.arch }}-cabal-oracle-${{ steps.haskell.outputs.ghc-version }}-${{ steps.haskell.outputs.cabal-version }}
@@ -117,36 +97,26 @@ jobs:
             ${{ env.CACHE_PREFIX }}-
 
       - name: Build Haskell oracle
-        if: steps.oracle.outputs.cache-hit != 'true'
+        if: *NoCacheHit
         run: |
           cabal build shellcheck
           mkdir -p .cache
           ORACLE="$(cabal list-bin shellcheck)"
           cp "${ORACLE}" .cache/shellcheck-oracle
 
-      # (c) Build + test the Rust port.
       - name: Build Rust port (release)
-        working-directory: rust
         run: cargo build --release
 
       - name: Test shellcheck-rs
-        working-directory: rust
         run: cargo test -p shellcheck-rs
 
       - name: Test shellcheck-cli
-        working-directory: rust
         run: cargo test -p shellcheck-cli
 
-      # (d) The required check. Its banner says what the corpus cannot reach.
       - name: Conformance gate
-        run: cargo run --release -p conformance -- gate --repo . --oracle .cache/shellcheck-oracle
+        run: cargo conformance-gate
 
-      # (e) Allowed to fail; the open divergences are in DIVERGENCES.md.
-      #     Keep --max-findings well above their count, or the cap hides a new
-      #     one behind a number that looks stable.
       - name: Differential fuzz
-        continue-on-error: true
-        run: |
-          cargo run --release -p conformance -- fuzz --repo . \
-            --oracle .cache/shellcheck-oracle \
-            --seed "${GITHUB_RUN_NUMBER}" --iterations 4000 --max-findings 50
+        run: cargo conformance-fuzz
+          --seed "${GITHUB_RUN_NUMBER}"
+          --iterations 4000 # --max-findings 50
