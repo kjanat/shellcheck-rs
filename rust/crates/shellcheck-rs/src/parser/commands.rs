@@ -1170,6 +1170,11 @@ impl Parser {
     /// pipeline follows, nothing is consumed and the suffix is empty (mirroring
     /// `option []` over a non-consuming failure).
     pub(super) fn read_time_suffix(&mut self) -> PResult<Vec<Token>> {
+        // `readCmdWord` ends with `<* spacing`, so the space after the command
+        // name is gone before `readTimeSuffix` begins. The port reads the name
+        // without it, so take it here -- and before the mark, or the suffix
+        // looks like it consumed when all it did was step over that space.
+        self.spacing();
         let m = self.mark();
         let mut out = Vec::new();
         // many readFlag ; readFlag = lookAhead '-' >> readCmdWord
@@ -1800,9 +1805,16 @@ impl Parser {
                 elems.push(self.read_array()?);
                 continue;
             }
+            // `reluctantlyTill`'s trailing `<|> return []` ends the list on a
+            // failed element, but `<|>` cannot take over from a failure that
+            // consumed input: that one propagates out of `readArray` and ends
+            // the parse, so the error reported is the element's own rather
+            // than the missing `)` below.
+            let before = self.idx;
             match self.read_normal_word() {
                 Ok(w) => elems.push(w),
-                Err(()) => break,
+                Err(()) if self.idx == before => break,
+                Err(()) => return Err(()),
             }
         }
         if self.char(')').is_err() {

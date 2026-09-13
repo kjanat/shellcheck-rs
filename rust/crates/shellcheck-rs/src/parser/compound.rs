@@ -802,8 +802,14 @@ impl Parser {
         }
         let var = self.read_variable_name()?;
         self.allspacing();
+        let in_start = self.idx;
         let items = match self.read_in_clause() {
             Ok(v) => v,
+            // `readInClause <|> ...`: `g_In` is a `tryWordToken`, so a missing
+            // `in` backs out consuming nothing and the alternative runs. Once
+            // the keyword is read, a failure in the word list has consumed,
+            // and `<|>` cannot take over from that one.
+            Err(()) if self.idx != in_start => return Err(()),
             Err(()) => {
                 // `optional readSequentialSep >> return []`
                 let m = self.mark();
@@ -921,8 +927,11 @@ impl Parser {
         self.spacing();
         let var = self.read_variable_name()?;
         self.spacing();
+        let in_start = self.idx;
         let items = match self.read_in_clause() {
             Ok(v) => v,
+            // As in the `for` loop: `<|>` recovers only the `in`-less case.
+            Err(()) if self.idx != in_start => return Err(()),
             Err(()) => {
                 // `readSequentialSep >> return []`: required here, unlike the
                 // `for` loop's optional one.

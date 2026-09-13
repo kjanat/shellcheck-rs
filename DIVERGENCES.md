@@ -117,24 +117,6 @@ taste. See `PARITY-NOTES.md` item 2 and
 The expensive class: a parse failure costs the file its whole analysis, so the
 user loses every real finding in it.
 
-### A1. A bare `time` before a pipe
-
-```sh
-printf '%s' 'time |y' | shellcheck -s dash -f gcc -
-```
-
-|        |                                                         |
-| ------ | ------------------------------------------------------- |
-| oracle | nothing: it parses                                      |
-| port   | `SC1073` "Couldn't parse this simple command", `SC1072` |
-
-Shrunk from `${a/}$()\|time \|s{,}``$(e>t)`, where it costs 11 findings.
-
-In dash `time` is an ordinary command name, and `dash -n` accepts this; bash,
-where `time` is a keyword, rejects it. So upstream is right to parse it for a
-POSIX target, and the port's `read_command` rejects it and commits, losing the
-pipeline and everything after it.
-
 ### A2. `!` glued to a keyword inside a loop
 
 ```sh

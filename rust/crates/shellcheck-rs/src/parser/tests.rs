@@ -417,6 +417,23 @@ mod parser_gap_tests {
     }
 
     #[test]
+    fn bare_time_before_a_pipe_is_a_command() {
+        // `readTimeSuffix` fails here without consuming -- `readSimpleCommand`
+        // bails on `|` with `fail "Expected a command"` before reading
+        // anything -- so `option []` recovers and `time` stands alone as a
+        // simple command. In dash it is an ordinary command name, and the
+        // `||` that follows belongs to the enclosing and-or.
+        for script in ["time |y", "time ||cd"] {
+            let out = parse_script("-", script);
+            assert!(
+                !out.notes.iter().any(|n| n.code == 1072 || n.code == 1073),
+                "{script} must parse: {:?}",
+                out.notes
+            );
+        }
+    }
+
+    #[test]
     fn time_with_flag_and_compound() {
         // `time -p ( ls -l; )` parses without error.
         let out = parse_script("-", "time -p ( ls -l; )");
@@ -838,15 +855,6 @@ mod coproc_glob_dollar_tests {
     // marker and the `DIVERGENCES.md` entry together. Only the port-side half
     // of an entry can live here; the oracle's output is not available in a unit
     // test, so the full comparison stays in the conformance harness.
-
-    #[test]
-    #[should_panic(expected = "DIVERGENCES.md A1")]
-    fn a_bare_time_before_a_pipe_should_parse() {
-        assert!(
-            parses_as(Some(Shell::Dash), "time |y"),
-            "DIVERGENCES.md A1: upstream parses a bare `time` before a pipe"
-        );
-    }
 
     #[test]
     #[should_panic(expected = "DIVERGENCES.md A3")]
