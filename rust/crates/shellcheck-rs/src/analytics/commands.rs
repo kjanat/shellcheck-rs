@@ -128,15 +128,6 @@ pub(super) fn check_uuoe_var(_params: &Parameters, t: &Token, out: &mut Out) {
     if is_covered || only_literal_string(first).starts_with('-') {
         return;
     }
-    // Conformance-safety guard: an escaped nested backtick (`echo \`cmd\``) is
-    // not reassembled into a `T_Backticked` by the current parser — it leaves
-    // literal backtick characters in the arguments, which defeats the
-    // `is_covered` (SC2005) detection above and would over-fire here. A
-    // correctly parsed command substitution never appears as a literal
-    // backtick, so treat any such argument as unreliable and withhold.
-    if vars.iter().any(|v| only_literal_string(v).contains('`')) {
-        return;
-    }
     if vars.iter().all(could_be_optimized) {
         style(
             out,
@@ -1086,6 +1077,31 @@ mod tests {
     #[test]
     fn prop_checkAssignAteCommand1() {
         assert!(emits(check_assign_ate_command, "A=ls -l"));
+    }
+
+    // `prop_checkUuoeVar1..9`, plus the two cases a literal backtick in the
+    // arguments used to suppress. `couldBeOptimized` turns nothing down for a
+    // backtick -- only globs, extglobs and brace expansions.
+    #[test]
+    fn prop_checkUuoeVar() {
+        assert!(emits(
+            check_uuoe_var,
+            "for f in $(echo $tmp); do echo lol; done"
+        ));
+        assert!(emits(check_uuoe_var, "date +`echo \"$format\"`"));
+        assert!(!emits(check_uuoe_var, "foo \"$(echo -e '\\r')\""));
+        assert!(!emits(check_uuoe_var, "echo $tmp"));
+        assert!(emits(
+            check_uuoe_var,
+            "foo \"$(echo \"$(date) value:\" $value)\""
+        ));
+        assert!(!emits(check_uuoe_var, "foo \"$(echo files: *.png)\""));
+        assert!(!emits(check_uuoe_var, "foo $(echo $(bar))"));
+        assert!(!emits(check_uuoe_var, "#!/bin/sh\nz=$(echo)"));
+        assert!(emits(check_uuoe_var, "foo $(echo $(<file))"));
+        // A backtick as data, and one escaped inside the substitution.
+        assert!(emits(check_uuoe_var, "foo \"$(echo '`')\""));
+        assert!(emits(check_uuoe_var, "foo \"$(echo \\`bar\\`)\""));
     }
 
     #[test]

@@ -711,6 +711,32 @@ mod coproc_glob_dollar_tests {
         assert!(!has_note("readonly f=(1 2)\n", 1073));
     }
 
+    // ---- SC1017: a literal carriage return --------------------------------
+
+    #[test]
+    fn sc1017_carriage_return_in_a_comment() {
+        // `readComment` is `readAnyComment` after the annotation guard, and its
+        // body is `many $ noneOf "\r\n"` -- so the CR is left for
+        // `carriageReturn`, which is what reports it.
+        assert!(has_note("#\r\n", 1017));
+        assert!(has_note("# hello\r\necho hi\n", 1017));
+        assert!(has_note("{#\r", 1017));
+        assert!(!has_note("# hello\necho hi\n", 1017));
+    }
+
+    // ---- SC1019: a unary test operator with no argument -------------------
+
+    #[test]
+    fn sc1019_missing_argument_to_a_unary_condition() {
+        // `orFail = try parser <|> ..`: the argument attempt runs in a `try`,
+        // so it is reported whether reading the argument failed having consumed
+        // nothing (`[ -n `) or having consumed an unterminated expansion.
+        for script in ["[ -n ", "[ -n $(", "[-n$(", "[-z${", "[-a$("] {
+            assert!(has_note(script, 1019), "SC1019 must fire on {script:?}");
+        }
+        assert!(!has_note("[ -n x ]", 1019));
+    }
+
     // ---- SC1133: a line starting with |/||/&& -----------------------------
 
     #[test]

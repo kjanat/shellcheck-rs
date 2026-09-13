@@ -1127,21 +1127,14 @@ impl Parser {
         if self.at_annotation_prefix() {
             return Err(());
         }
-        self.bump();
-        let mut s = String::new();
-        while let Some(c) = self.peek() {
-            if c == '\n' {
-                break;
-            }
-            self.bump();
-            s.push(c);
-        }
-        Ok(s)
+        // `readComment = unexpecting "shellcheck annotation" .. >> readAnyComment`:
+        // the body is the same `many $ noneOf "\r\n"`, so a CR is left for
+        // `carriageReturn` to report as SC1017 rather than swallowed here.
+        self.read_any_comment()
     }
 
     /// `readAnyComment`: a `#` comment, directive or not, to the end of the
-    /// line. Unlike `readComment` it neither spares annotations nor keeps the
-    /// CR.
+    /// line. Unlike `readComment` it does not spare annotations.
     fn read_any_comment(&mut self) -> PResult<String> {
         self.char('#')?;
         let mut s = String::new();

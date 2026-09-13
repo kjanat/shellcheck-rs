@@ -539,8 +539,11 @@ impl Parser {
         // reported where it should have been -- not wherever the attempt to
         // read one gave up.
         let arg_pos = self.pos();
-        let wm = self.mark();
-        match self.read_cond_word(single) {
+        // `orFail = try parser <|> ..`: the attempt runs inside a `try`, so an
+        // argument that fails *after consuming* (`[ -n $(`) rewinds like any
+        // other -- commitment included. Without that, the point of no return
+        // set inside the argument would silence the SC1019 below.
+        match self.try_parse(|p| p.read_cond_word(single)) {
             Ok(word) => {
                 let typ = self.cond_typ(single);
                 let id = self.next_id_between(start, op_end);
@@ -554,10 +557,6 @@ impl Parser {
                 ))
             }
             Err(()) => {
-                // `orFail`: the operator is settled, so what is missing is its
-                // argument, not the whole unary expression. `try parser` has
-                // rewound by the time the message is raised, so that is where
-                // it sits.
                 self.problem_at(
                     arg_pos.clone(),
                     arg_pos,
@@ -565,7 +564,6 @@ impl Parser {
                     1019,
                     "Expected this to be an argument to the unary condition.",
                 );
-                self.reset(wm);
                 self.fail_with("Expected an argument for the unary operator")
             }
         }
