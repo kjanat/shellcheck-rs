@@ -1567,10 +1567,11 @@ fn unescape_backtick(raw: &str, quoted: bool) -> String {
 fn reattach_heredocs(t: Token, bodies: &BTreeMap<Id, Vec<Token>>) -> Token {
     // Rebuild the tree, filling T_HereDoc bodies by id.
     let Token { id, inner } = t;
-    let new_inner = map_children_inner(*inner, bodies, id);
+    let inner = std::rc::Rc::try_unwrap(inner).unwrap_or_else(|shared| (*shared).clone());
+    let new_inner = map_children_inner(inner, bodies, id);
     Token {
         id,
-        inner: Box::new(new_inner),
+        inner: std::rc::Rc::new(new_inner),
     }
 }
 

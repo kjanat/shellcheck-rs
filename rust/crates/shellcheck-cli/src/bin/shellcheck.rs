@@ -16,7 +16,9 @@ use std::rc::Rc;
 use shellcheck_cli::formatter::{self, checkstyle, diff, fixer, gcc, json, json1, tty};
 use shellcheck_cli::options::{self, Outcome, RunConfig};
 use shellcheck_cli::rc::{self, RcConfig};
-use shellcheck_rs::interface::{CheckSpec, ErrorMessage, PositionedComment, SystemInterface};
+use shellcheck_rs::interface::{
+    CheckSpec, ErrorMessage, PositionedComment, SystemInterface, decode_bytes,
+};
 
 fn main() -> ExitCode {
     // SHELLCHECK_OPTS is split on whitespace (Haskell `words`) and prepended to
@@ -26,7 +28,18 @@ fn main() -> ExitCode {
     if let Ok(opts) = std::env::var("SHELLCHECK_OPTS") {
         argv.extend(opts.split_whitespace().map(|s| s.to_string()));
     }
-    argv.extend(std::env::args().skip(1));
+    // `getArgs` hands Haskell every argument, whatever its bytes; a filename
+    // that is not valid UTF-8 is a filename like any other. `std::env::args`
+    // panics on one, so take the `OsString`s and keep the originals to open
+    // with -- the lossy text is only ever what gets parsed and printed.
+    let mut original_args: HashMap<String, std::ffi::OsString> = HashMap::new();
+    for arg in std::env::args_os().skip(1) {
+        let text = arg.to_string_lossy().into_owned();
+        if std::ffi::OsStr::new(&text) != arg {
+            original_args.insert(text.clone(), arg);
+        }
+        argv.push(text);
+    }
 
     let config = match options::parse(&argv) {
         Outcome::Run(c) => *c,
@@ -50,7 +63,7 @@ fn main() -> ExitCode {
         }
     };
 
-    run(config)
+    run(config, original_args)
 }
 
 /// Port of `ioInterface` (shellcheck.hs): the real filesystem, as seen by the
@@ -70,16 +83,34 @@ struct IoSystemInterface {
     /// `inputFile`'s cache for inputs that cannot be reopened -- stdin. A
     /// seekable file is re-read instead, exactly as upstream does.
     cache: RefCell<HashMap<String, String>>,
+    /// Command line arguments whose bytes are not valid UTF-8, keyed by the
+    /// lossy text they are known by everywhere else. Upstream never loses those
+    /// bytes (GHC round-trips them through the locale encoding), so opening the
+    /// file must use the original and not the lossy name.
+    original_args: HashMap<String, std::ffi::OsString>,
 }
 
 impl IoSystemInterface {
-    fn new(config: &RunConfig) -> IoSystemInterface {
+    fn new(
+        config: &RunConfig,
+        original_args: HashMap<String, std::ffi::OsString>,
+    ) -> IoSystemInterface {
         IoSystemInterface {
             inputs: config.inputs.iter().map(|f| normalize(f)).collect(),
             external_sources: config.external_sources,
             source_paths: config.source_paths.clone(),
             cache: RefCell::new(HashMap::new()),
+            original_args,
         }
+    }
+
+    /// The bytes to actually open `file` with: the original argument when the
+    /// name came from a command line that was not valid UTF-8, else the name.
+    fn os_path(&self, file: &str) -> std::ffi::OsString {
+        self.original_args
+            .get(file)
+            .cloned()
+            .unwrap_or_else(|| std::ffi::OsString::from(file))
     }
 
     /// `allowable`: an external file is readable only when a flag or directive
@@ -107,7 +138,7 @@ impl SystemInterface for IoSystemInterface {
                 file,
             ));
         }
-        let (contents, should_cache) = input_file(file)?;
+        let (contents, should_cache) = input_file(file, &self.os_path(file))?;
         if should_cache {
             self.cache
                 .borrow_mut()
@@ -148,16 +179,20 @@ impl SystemInterface for IoSystemInterface {
 
 /// `inputFile`: the contents, plus whether they must be cached because the
 /// input cannot be reopened (stdin).
-fn input_file(file: &str) -> Result<(String, bool), ErrorMessage> {
+fn input_file(file: &str, path: &std::ffi::OsStr) -> Result<(String, bool), ErrorMessage> {
+    // Upstream reads bytes (`openBinaryFile`/`hGetContents`) and decodes them
+    // with `decodeString`, which falls back to ISO-8859-1 for anything that is
+    // not valid UTF-8. Reading into a `String` directly would instead reject the
+    // file, so read bytes and decode them the same way.
     if file == "-" {
-        let mut s = String::new();
+        let mut bytes = Vec::new();
         std::io::stdin()
-            .read_to_string(&mut s)
+            .read_to_end(&mut bytes)
             .map_err(|e| io_error_message(file, &e))?;
-        return Ok((s, true));
+        return Ok((decode_bytes(&bytes), true));
     }
-    match std::fs::read_to_string(file) {
-        Ok(s) => Ok((s, false)),
+    match std::fs::read(path) {
+        Ok(bytes) => Ok((decode_bytes(&bytes), false)),
         Err(e) => Err(io_error_message(file, &e)),
     }
 }
@@ -319,8 +354,8 @@ fn merge_rc(spec: &mut CheckSpec, rc: Option<&RcConfig>) {
     }
 }
 
-fn run(config: RunConfig) -> ExitCode {
-    let sys = Rc::new(IoSystemInterface::new(&config));
+fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) -> ExitCode {
+    let sys = Rc::new(IoSystemInterface::new(&config, original_args));
     let RunConfig {
         format,
         inputs,
@@ -662,6 +697,7 @@ mod tests {
             external_sources: false,
             source_paths: Vec::new(),
             cache: RefCell::new(HashMap::new()),
+            original_args: HashMap::new(),
         };
         assert!(sys.allowable(None, "Cargo.toml"));
         assert!(sys.allowable(None, "./Cargo.toml"));
@@ -681,11 +717,35 @@ mod tests {
             external_sources: false,
             source_paths: Vec::new(),
             cache: RefCell::new(HashMap::new()),
+            original_args: HashMap::new(),
         };
         assert_eq!(
             sys.read_file(None, "nope.sh").unwrap_err(),
             "nope.sh: openBinaryFile: does not exist (No such file or directory)"
         );
+    }
+
+    #[test]
+    fn a_file_that_is_not_valid_utf8_is_read_and_not_rejected() {
+        // `inputFile` opens in binary mode and runs the bytes through
+        // `decodeString`, so a stray byte is analysable text, not a fatal
+        // "invalid byte sequence". The bytes after it keep their columns.
+        let path = std::env::temp_dir().join("rshellcheck-decode-test.sh");
+        std::fs::write(&path, b"#!/bin/sh\necho \xff\xfe $u\n").unwrap();
+        let name = path.to_str().unwrap().to_string();
+        let sys = IoSystemInterface {
+            inputs: vec![normalize(&name)],
+            external_sources: false,
+            source_paths: Vec::new(),
+            cache: RefCell::new(HashMap::new()),
+            original_args: HashMap::new(),
+        };
+        let contents = sys.read_file(None, &name).unwrap();
+        assert_eq!(contents, "#!/bin/sh\necho \u{ff}\u{fe} $u\n");
+        // Column of `$u` on line 2: 1-based, counting characters.
+        let line = contents.lines().nth(1).unwrap();
+        assert_eq!(line.chars().position(|c| c == '$').unwrap() + 1, 9);
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
@@ -698,6 +758,7 @@ mod tests {
             external_sources: true,
             source_paths: vec!["SCRIPTDIR/src".to_string()],
             cache: RefCell::new(HashMap::new()),
+            original_args: HashMap::new(),
         };
         // SCRIPTDIR is the checked script's directory, not the sourcing file's.
         assert_eq!(
@@ -710,6 +771,7 @@ mod tests {
             external_sources: true,
             source_paths: Vec::new(),
             cache: RefCell::new(HashMap::new()),
+            original_args: HashMap::new(),
         };
         assert_eq!(
             no_flags.find_source("x.sh", None, &[format!("{dir}/src")], "rc.rs"),

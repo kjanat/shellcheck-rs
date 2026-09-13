@@ -23,6 +23,7 @@
 //!
 //! Exit codes: 0 = agreement, 1 = at least one divergence, 2 = harness error.
 
+mod bench;
 mod corpus;
 mod deviations;
 mod fuzz;
@@ -420,6 +421,8 @@ pub enum Command {
     Audit,
     /// Freeze the port's own behaviour, or check nothing changed since.
     Snapshot,
+    /// Where the port's time goes, phase by phase, against the oracle's.
+    Bench,
 }
 
 #[derive(Parser)]
@@ -489,6 +492,22 @@ pub struct Args {
     /// diff of `rust/snapshot.txt` belongs in the commit that causes it.
     #[arg(long, help_heading = "Snapshot")]
     pub write: bool,
+
+    /// Lines of generated shell to benchmark.
+    #[arg(long, default_value_t = 4000, help_heading = "Bench")]
+    pub lines: usize,
+
+    /// Benchmark this file instead of generated shell.
+    #[arg(long, help_heading = "Bench")]
+    pub input: Option<String>,
+
+    /// Time the port this many times and keep the fastest run.
+    #[arg(long, default_value_t = 3, help_heading = "Bench")]
+    pub repeat: usize,
+
+    /// Write the benchmarked script here, so it can be re-run by hand.
+    #[arg(long, help_heading = "Bench")]
+    pub dump: Option<String>,
 }
 
 impl Args {
@@ -496,6 +515,10 @@ impl Args {
     /// binary built from this tree if it is there, else whatever `shellcheck`
     /// is on `PATH`. The latter is what makes an installed release usable as
     /// the oracle with no build of its own.
+    pub fn oracle_path(&self) -> &str {
+        self.oracle()
+    }
+
     fn oracle(&self) -> &str {
         // An empty `ORACLE=` reads as "not set", so it can be cleared in a
         // shell without naming a binary called "".
@@ -530,6 +553,7 @@ fn main() -> ExitCode {
         Command::Shells => shells::run(&args),
         Command::Audit => audit(&args),
         Command::Snapshot => snapshot::run(&args),
+        Command::Bench => bench::run(&args),
         Command::Extract => {
             let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
             corpus::extract(&src).map(|e| {

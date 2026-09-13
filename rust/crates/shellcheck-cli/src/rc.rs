@@ -30,7 +30,9 @@
 use std::path::{Path, PathBuf};
 
 use shellcheck_rs::ast::Annotation;
-use shellcheck_rs::interface::{CheckSpec, DisableRange, RcDirectives, RcParseProblem, Shell};
+use shellcheck_rs::interface::{
+    CheckSpec, DisableRange, RcDirectives, RcParseProblem, Shell, decode_bytes,
+};
 
 use crate::options::parse_shell;
 
@@ -638,7 +640,9 @@ impl ConfigParser {
 /// read (the caller prints the warning), mirroring `readConfig` returning
 /// `Nothing`. The path is reported verbatim in SC1134, as the oracle does.
 pub fn read_config_file(path: &Path) -> Option<RcConfig> {
-    let contents = std::fs::read_to_string(path).ok()?;
+    // `readConfig` goes through `inputFile`, so an rc file is decoded exactly
+    // like a script: bytes, with an ISO-8859-1 fallback for invalid UTF-8.
+    let contents = decode_bytes(&std::fs::read(path).ok()?);
     Some(parse_contents(&path.display().to_string(), &contents))
 }
 
@@ -656,8 +660,9 @@ pub fn discover(input_name: &str) -> Option<RcConfig> {
         // selected: the oracle reports the read error and uses an empty config,
         // rather than silently falling through to a parent or user config.
         if candidate.is_file() {
-            match std::fs::read_to_string(&candidate) {
-                Ok(contents) => {
+            match std::fs::read(&candidate) {
+                Ok(bytes) => {
+                    let contents = decode_bytes(&bytes);
                     return Some(parse_contents(&candidate.display().to_string(), &contents));
                 }
                 Err(e) => {
@@ -739,6 +744,21 @@ mod tests {
         parse(contents)
             .parse_problem
             .map(|p| (p.line, p.suggestion))
+    }
+
+    #[test]
+    fn an_rc_file_that_is_not_valid_utf8_still_applies() {
+        // `readConfig` reads the rc file through `inputFile` like any script,
+        // so a stray byte in a comment does not discard the directives.
+        let path = std::env::temp_dir().join("rshellcheck-rc-decode-test");
+        std::fs::write(&path, b"# comment \xff here\ndisable=SC2086\n").unwrap();
+        let config = read_config_file(&path).expect("rc file should be readable");
+        assert_eq!(
+            config.disabled.iter().map(|r| r.from).collect::<Vec<_>>(),
+            vec![2086]
+        );
+        assert!(config.parse_problem.is_none());
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

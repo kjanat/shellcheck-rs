@@ -139,7 +139,7 @@ pub struct CFGAnalysis {
     pub graph: CFGraph,
     pub token_to_range: HashMap<Id, (Node, Node)>,
     pub token_to_nodes: HashMap<Id, BTreeSet<Node>>,
-    pub post_dominators: Vec<Vec<Node>>,
+    pub post_dominators: crate::cfg::PostDominators,
     pub node_to_data: HashMap<Node, (ProgramState, ProgramState)>,
 }
 
@@ -161,8 +161,7 @@ impl CFGAnalysis {
         (|| {
             let (_, base_end) = self.token_to_range.get(&base)?;
             let (target_start, _) = self.token_to_range.get(&target)?;
-            let doms = self.post_dominators.get(*base_end)?;
-            Some(doms.contains(target_start))
+            Some(self.post_dominators.contains(*base_end, *target_start))
         })()
         .unwrap_or(false)
     }

@@ -887,7 +887,7 @@ fn is_condition_fallback_glob(first: &Token) -> bool {
 }
 
 fn has_execfail(params: &Parameters) -> bool {
-    params.shell == Shell::Bash && is_option_set("execfail", &params.root)
+    params.has_execfail
 }
 
 fn spurious_cleanup(t: &Token) -> bool {

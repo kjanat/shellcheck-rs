@@ -171,9 +171,9 @@ pub struct CFGResult {
     pub cf_id_to_range: HashMap<Id, (Node, Node)>,
     /// A set of all nodes belonging to an Id, recursively.
     pub cf_id_to_nodes: HashMap<Id, BTreeSet<Node>>,
-    /// `cf_post_dominators[to]` lists all nodes that post-dominate `to`.
-    /// Indexed by node id; holes (unused ids) are empty.
-    pub cf_post_dominators: Vec<Vec<Node>>,
+    /// Which nodes post-dominate a given node, queried through
+    /// [`PostDominators::contains`].
+    pub cf_post_dominators: PostDominators,
 }
 
 // ===========================================================================
@@ -1911,7 +1911,7 @@ fn find_post_dominators(
     mainexit: Node,
     nodes: &[(Node, CFNode)],
     only_real_edges: &[(Node, Node, CFEdge)],
-) -> Vec<Vec<Node>> {
+) -> PostDominators {
     let base = MutGraph::from(nodes, only_real_edges);
     let max_node = base.max_node();
 
@@ -1929,22 +1929,97 @@ fn find_post_dominators(
 
     // reverse and compute dominators from mainexit.
     inlined.grev();
-    let post_doms = dom(&inlined, mainexit);
+    let (idom, mut has_chain) = dom(&inlined, mainexit);
 
-    let mut arr: Vec<Vec<Node>> = vec![Vec::new(); max_node + 1];
-    for (node, doms) in post_doms {
-        if node <= max_node {
-            arr[node] = doms;
-        }
-    }
-    arr
+    // `listArray (0, maxNode)`: nodes past the end of the array have no entry,
+    // and an entry that was never written stays the empty list.
+    has_chain.truncate(max_node + 1);
+    has_chain.resize(max_node + 1, false);
+    PostDominators { idom, has_chain }
 }
 
-/// Dominators from `root`, following successor edges. Returns, for every node
-/// in the graph, its dominator chain `[node, idom, ..., root]`. Nodes not
-/// reachable from `root` get the full node set (matching fgl's `dom`).
-fn dom(g: &MutGraph, root: Node) -> Vec<(Node, Vec<Node>)> {
+/// The post-dominator relation, as `findPostDominators` produces it.
+///
+/// Upstream's is `Array Node [Node]`, holding for each node the chain
+/// `[n, idom n, .., root]`. Haskell only ever forces the chains
+/// `doesPostDominate` asks about, and its `elem` stops at the first hit;
+/// building all of them eagerly is quadratic, because in a script that is one
+/// long command sequence every chain is as long as the script. So the port
+/// keeps the immediate-dominator tree those chains are spelled out from and
+/// walks it per query — the same answer, for the work the original does.
+#[derive(Debug, Clone, Default)]
+pub struct PostDominators {
+    /// `idom[n]`: `n`'s immediate post-dominator, for every node reachable
+    /// from the exit; the root's is itself. `None` means unreachable.
+    idom: Vec<Option<Node>>,
+    /// Whether the array had a chain at `n` at all — `n` both labelled in the
+    /// graph and reachable. `false` is upstream's empty list.
+    has_chain: Vec<bool>,
+}
+
+impl PostDominators {
+    /// `target `elem` (postDominators ! base)`: is `target` on `base`'s
+    /// post-dominator chain? False for a `base` past the end of the array or
+    /// with an empty entry, exactly as indexing it and finding `[]` was.
+    pub fn contains(&self, base: Node, target: Node) -> bool {
+        if !self.has_chain.get(base).copied().unwrap_or(false) {
+            return false;
+        }
+        let mut cur = base;
+        loop {
+            if cur == target {
+                return true;
+            }
+            // Every node on a chain is reachable, so it has an immediate
+            // dominator; the root's is itself, which ends the chain.
+            let Some(next) = self.idom.get(cur).copied().flatten() else {
+                return false;
+            };
+            if next == cur {
+                return false;
+            }
+            cur = next;
+        }
+    }
+
+    /// The length of the array upstream indexes, for the bounds assertions.
+    pub fn len(&self) -> usize {
+        self.has_chain.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.has_chain.is_empty()
+    }
+}
+
+/// Dominators from `root`, following successor edges.
+///
+/// Returns `(idom, has_chain)`: `idom[n]` is `n`'s immediate dominator for
+/// every node reachable from `root` (the root's is itself), and `has_chain[n]`
+/// says whether fgl's `dom` would have produced an entry for `n` at all — the
+/// node is both in the graph and reachable. The dominator chain fgl spells out,
+/// `[n, idom n, .., root]`, is those two read together; see [`PostDominators`]
+/// for why the port stops at the tree instead of materializing every chain.
+///
+/// Node ids index both vectors directly. They are small and dense (the builder
+/// hands them out from a counter), and the chain walk below is the hot loop of
+/// the whole CFG phase, where a hash per step showed up as half the run.
+fn dom(g: &MutGraph, root: Node) -> (Vec<Option<Node>>, Vec<bool>) {
     let all_nodes = g.node_list();
+    // Wide enough for every node id the walk can touch: edge endpoints need
+    // not carry a label, so `node_list` alone is not a bound.
+    let cap = 1 + [
+        g.labels.keys().copied().max(),
+        g.succ.keys().copied().max(),
+        g.pred.keys().copied().max(),
+        g.succ.values().flatten().map(|(n, _)| *n).max(),
+        g.pred.values().flatten().map(|(n, _)| *n).max(),
+        Some(root),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+    .unwrap_or(0);
 
     // DFS from root over successors, produce postorder (reachable set).
     let mut visited: HashSet<Node> = HashSet::new();
@@ -1974,30 +2049,27 @@ fn dom(g: &MutGraph, root: Node) -> Vec<(Node, Vec<Node>)> {
     // Reverse postorder; assign numbers (root first).
     let mut rpo = postorder.clone();
     rpo.reverse();
-    let mut number: HashMap<Node, usize> = HashMap::new();
+    let mut number: Vec<Option<usize>> = vec![None; cap];
     for (i, n) in rpo.iter().enumerate() {
-        number.insert(*n, i);
+        number[*n] = Some(i);
     }
 
     // Cooper-Harvey-Kennedy iterative dominators.
-    let mut idom: HashMap<Node, Node> = HashMap::new();
-    idom.insert(root, root);
+    let mut idom: Vec<Option<Node>> = vec![None; cap];
+    idom[root] = Some(root);
 
-    let intersect = |mut a: Node,
-                     mut b: Node,
-                     idom: &HashMap<Node, Node>,
-                     number: &HashMap<Node, usize>|
-     -> Node {
-        while a != b {
-            while number[&a] > number[&b] {
-                a = idom[&a];
+    let intersect =
+        |mut a: Node, mut b: Node, idom: &[Option<Node>], number: &[Option<usize>]| -> Node {
+            while a != b {
+                while number[a] > number[b] {
+                    a = idom[a].expect("a node on a dominator chain has an idom");
+                }
+                while number[b] > number[a] {
+                    b = idom[b].expect("a node on a dominator chain has an idom");
+                }
             }
-            while number[&b] > number[&a] {
-                b = idom[&b];
-            }
-        }
-        a
-    };
+            a
+        };
 
     let mut changed = true;
     while changed {
@@ -2013,10 +2085,10 @@ fn dom(g: &MutGraph, root: Node) -> Vec<(Node, Vec<Node>)> {
                 .unwrap_or_default();
             let mut new_idom: Option<Node> = None;
             for &p in &preds {
-                if !number.contains_key(&p) {
+                if number[p].is_none() {
                     continue; // unreachable pred
                 }
-                if idom.contains_key(&p) {
+                if idom[p].is_some() {
                     new_idom = Some(match new_idom {
                         None => p,
                         Some(cur) => intersect(p, cur, &idom, &number),
@@ -2024,8 +2096,8 @@ fn dom(g: &MutGraph, root: Node) -> Vec<(Node, Vec<Node>)> {
                 }
             }
             if let Some(ni) = new_idom {
-                if idom.get(&n) != Some(&ni) {
-                    idom.insert(n, ni);
+                if idom[n] != Some(ni) {
+                    idom[n] = Some(ni);
                     changed = true;
                 }
             }
@@ -2042,19 +2114,13 @@ fn dom(g: &MutGraph, root: Node) -> Vec<(Node, Vec<Node>)> {
     // set: that would make every node "post-dominate" an unreachable node,
     // e.g. spuriously flagging the recursive calls inside a backgrounded,
     // self-referential function body (`:(){ :|:& };:`) as SC2218.
-    let mut result: Vec<(Node, Vec<Node>)> = Vec::new();
+    let mut has_chain: Vec<bool> = vec![false; cap];
     for &n in &all_nodes {
-        if number.contains_key(&n) {
-            let mut chain = vec![n];
-            let mut cur = n;
-            while cur != root {
-                cur = idom[&cur];
-                chain.push(cur);
-            }
-            result.push((n, chain));
+        if number[n].is_some() {
+            has_chain[n] = true;
         }
     }
-    result
+    (idom, has_chain)
 }
 
 // ===========================================================================
@@ -2625,6 +2691,55 @@ mod tests {
         CFNode::CFStructuralNode
     }
 
+    /// `PostDominators` answers what indexing upstream's `Array Node [Node]`
+    /// and running `elem` over the chain answered: membership anywhere on
+    /// `[n, idom n, .., root]`, and `False` for a node past the end of the
+    /// array or whose entry was the empty list.
+    #[test]
+    fn post_dominator_chain_membership() {
+        // 3 -> 2 -> 1 -> 0(root); node 4 is unreachable, node 5 out of range.
+        let pd = PostDominators {
+            idom: vec![Some(0), Some(0), Some(1), Some(2), None],
+            has_chain: vec![true, true, true, true, false],
+        };
+        // Every node post-dominates itself.
+        for n in 0..4 {
+            assert!(pd.contains(n, n), "{n} should be on its own chain");
+        }
+        // The whole chain upward, and nothing downward.
+        assert!(pd.contains(3, 2));
+        assert!(pd.contains(3, 1));
+        assert!(pd.contains(3, 0));
+        assert!(!pd.contains(0, 3));
+        assert!(!pd.contains(1, 2));
+        // Empty entry and out-of-range base are both "no".
+        assert!(!pd.contains(4, 4));
+        assert!(!pd.contains(5, 0));
+        assert_eq!(pd.len(), 5);
+        assert!(!pd.is_empty());
+    }
+
+    /// A long straight-line script is one long post-dominator chain: the exit
+    /// post-dominates the first command, and the first command does not
+    /// post-dominate the exit.
+    #[test]
+    fn post_dominators_span_a_long_command_sequence() {
+        let src = "echo a\n".repeat(200);
+        let root = crate::parser::parse_script("test.sh", &src)
+            .root
+            .expect("parses");
+        let result = build_graph(
+            CFGParameters {
+                cf_lastpipe: false,
+                cf_pipefail: false,
+            },
+            &root,
+        );
+        let (main_start, main_exit) = result.cf_id_to_range[&root.id];
+        assert!(result.cf_post_dominators.contains(main_start, main_exit));
+        assert!(!result.cf_post_dominators.contains(main_exit, main_start));
+    }
+
     #[test]
     fn prop_test_renumbering() {
         let before: CFW = (
@@ -2701,7 +2816,7 @@ mod tests {
         // The root's range must exist and its exit must be post-dominated by itself.
         let (_, main_exit) = result.cf_id_to_range[&root.id];
         assert!(main_exit < result.cf_post_dominators.len());
-        assert!(result.cf_post_dominators[main_exit].contains(&main_exit));
+        assert!(result.cf_post_dominators.contains(main_exit, main_exit));
         assert!(!result.cf_graph.nodes.is_empty());
     }
 
@@ -2730,7 +2845,7 @@ mod tests {
                 // Post-dominator array is well-formed and covers the exit node.
                 let (_, main_exit) = result.cf_id_to_range[&root.id];
                 assert!(main_exit < result.cf_post_dominators.len());
-                assert!(result.cf_post_dominators[main_exit].contains(&main_exit));
+                assert!(result.cf_post_dominators.contains(main_exit, main_exit));
             }
         }
     }

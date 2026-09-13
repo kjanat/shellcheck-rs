@@ -36,6 +36,8 @@ pub struct Parameters {
     /// never for ksh.
     pub has_inherit_errexit: bool,
     pub has_noglob: bool,
+    /// `hasExecfail`: `shopt -s execfail`, and bash only.
+    pub has_execfail: bool,
     /// A linear (bad) analysis of data flow (`ShellCheck.AnalyzerLib.variableFlow`).
     pub variable_flow: Vec<StackData>,
     /// Result of the Control Flow Graph data-flow analysis, when extended
@@ -505,6 +507,12 @@ pub fn make_parameters_ext(
         Shell::Ksh => true,
         _ => false,
     };
+    // `hasExecfail`, computed here once as upstream does. `checkSpuriousExec`
+    // consults it on every node, and `isOptionSet` walks the whole tree.
+    let has_execfail = match shell {
+        Shell::Bash => is_option_set("execfail", &root),
+        _ => false,
+    };
 
     // Linear variable-flow analysis (does not depend on itself or the CFG).
     let variable_flow = get_variable_flow(&parent_map, &id_map, has_lastpipe, &root);
@@ -537,6 +545,7 @@ pub fn make_parameters_ext(
         has_lastpipe,
         has_inherit_errexit,
         has_noglob,
+        has_execfail,
         variable_flow,
         cfg_analysis,
     }
@@ -2148,6 +2157,23 @@ mod set_option_tests {
         // every opt (`"o" elem map snd (getAllFlags t)`); mirrored on purpose.
         assert!(is_option_set("pipefail", &root("set -o vi")));
         assert!(!is_option_set("pipefail", &root("set -- -o vi")));
+    }
+
+    /// `hasExecfail` is a `Parameters` field upstream, computed once from the
+    /// root — bash only. `checkSpuriousExec` reads it on every node, so it
+    /// must not be recomputed per node.
+    #[test]
+    fn has_execfail_is_precomputed_and_bash_only() {
+        let params = |script: &str| {
+            let r = root(script);
+            make_parameters(r, PositionMap::new(), None, None)
+        };
+        assert!(params("#!/bin/bash\nshopt -s execfail; exec foo; bar").has_execfail);
+        assert!(!params("#!/bin/bash\nexec foo; bar").has_execfail);
+        assert!(!params("#!/bin/dash\nshopt -s execfail; exec foo; bar").has_execfail);
+        // And the value the check reads is the field, not a fresh tree walk.
+        let p = params("#!/bin/bash\nshopt -s execfail; exec foo; bar");
+        assert_eq!(p.has_execfail, is_option_set("execfail", &p.root));
     }
 }
 

@@ -3,8 +3,9 @@
 //! The Haskell AST is `newtype Id = Id Int` and
 //! `data Token = OuterToken Id (InnerToken Token)`, where `InnerToken` derives
 //! `Functor`/`Foldable`/`Traversable` over its child-token parameter. Here
-//! `InnerToken` holds `Token` children directly and `Token` boxes its inner to
-//! break the type cycle. Generic traversal is provided by [`Token::children`]
+//! `InnerToken` holds `Token` children directly and `Token` holds its inner
+//! behind an `Rc` to break the type cycle and to keep `clone` a pointer copy,
+//! as it is in Haskell. Generic traversal is provided by [`Token::children`]
 //! and the `visit_*`/`transform` helpers instead of derived typeclasses.
 //!
 //! IMPORTANT: Haskell defines `instance Eq Token` to compare **only the inner
@@ -74,10 +75,22 @@ pub type IfClause = (Vec<Token>, Vec<Token>);
 /// `data Token = OuterToken Id (InnerToken Token)`.
 ///
 /// Equality ignores `id` (see module docs).
+///
+/// The inner payload is behind an `Rc` rather than a `Box` purely for the cost
+/// of `clone`.
+///
+/// Haskell's `Token` is an immutable graph node: `getPath`, `parentMap` and
+/// every `Parameters` field hold the *same* nodes the tree holds, and copying
+/// one is a pointer copy. A `Box` here made `Token: Clone` a deep copy of the
+/// whole subtree, so the ancestor list `getPath` returns cost O(tree) per node
+/// and the per-node check walk became quadratic. `Rc` restores the sharing the
+/// original has; the few places that edit a tree go through
+/// [`Token::inner_mut`], whose copy-on-write duplicates only the nodes it is
+/// about to change.
 #[derive(Debug, Clone)]
 pub struct Token {
     pub id: Id,
-    pub inner: Box<InnerToken>,
+    pub inner: std::rc::Rc<InnerToken>,
 }
 
 impl PartialEq for Token {
@@ -92,8 +105,18 @@ impl Token {
     pub fn new(id: Id, inner: InnerToken) -> Token {
         Token {
             id,
-            inner: Box::new(inner),
+            inner: std::rc::Rc::new(inner),
         }
+    }
+
+    /// The inner payload for editing, copy-on-write.
+    ///
+    /// Only the tree rewrites have any business calling this: the parser's
+    /// fixups and `removeTransparentCommands`' local copy. Everything else
+    /// reads through `&*t.inner`.
+    #[inline]
+    pub fn inner_mut(&mut self) -> &mut InnerToken {
+        std::rc::Rc::make_mut(&mut self.inner)
     }
 
     /// `getId`.
@@ -753,5 +776,48 @@ impl Token {
             c.visit_stack(start, end);
         }
         end(self);
+    }
+}
+
+#[cfg(test)]
+mod sharing_tests {
+    use super::*;
+
+    fn word(s: &str) -> Token {
+        Token::new(
+            Id(1),
+            InnerToken::T_NormalWord(vec![Token::new(
+                Id(2),
+                InnerToken::T_Literal(s.to_string()),
+            )]),
+        )
+    }
+
+    /// Cloning a `Token` shares the subtree rather than copying it. This is
+    /// what makes `getPath`, `idMap` and the parent map affordable: the check
+    /// walk asks for a node's ancestors at every node, and a copying clone made
+    /// that O(tree) each time.
+    #[test]
+    fn clone_shares_the_subtree() {
+        let a = word("hello");
+        let b = a.clone();
+        assert!(std::rc::Rc::ptr_eq(&a.inner, &b.inner));
+        assert_eq!(a, b);
+    }
+
+    /// Editing through `inner_mut` is copy-on-write: the other holder of the
+    /// subtree keeps what it had.
+    #[test]
+    fn inner_mut_does_not_disturb_other_holders() {
+        let original = word("hello");
+        let mut edited = original.clone();
+        if let InnerToken::T_NormalWord(parts) = edited.inner_mut() {
+            parts.clear();
+        }
+        assert!(!std::rc::Rc::ptr_eq(&original.inner, &edited.inner));
+        assert_eq!(original.children().len(), 1);
+        assert_eq!(edited.children().len(), 0);
+        // Ids survive an edit, as `doTransform` requires.
+        assert_eq!(edited.id(), Id(1));
     }
 }

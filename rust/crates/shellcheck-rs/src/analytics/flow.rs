@@ -155,13 +155,13 @@ pub(super) fn check_extra_masked_returns(params: &Parameters, root: &Token, out:
 fn remove_transparent_commands(t: &Token) -> Token {
     /// `doTransform go`: every node, children first, ids preserved.
     fn go(n: &mut Token) {
-        for c in n.inner.children_mut() {
+        for c in n.inner_mut().children_mut() {
             go(c);
         }
         let is_time = matches!(&*n.inner, InnerToken::T_SimpleCommand { words, .. } if !words.is_empty())
             && get_command_basename(n).as_deref() == Some("time");
         if is_time {
-            if let InnerToken::T_SimpleCommand { words, .. } = &mut *n.inner {
+            if let InnerToken::T_SimpleCommand { words, .. } = n.inner_mut() {
                 words.remove(0);
             }
         }

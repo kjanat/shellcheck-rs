@@ -1337,7 +1337,7 @@ impl Parser {
         };
         if let Some(name) = name {
             let is_assoc = assoc.contains(&name);
-            let indices: Option<&mut Vec<Token>> = match &mut *t.inner {
+            let indices: Option<&mut Vec<Token>> = match t.inner_mut() {
                 InnerToken::T_Assignment { indices, .. } => Some(indices),
                 InnerToken::TA_Variable { indices, .. } => Some(indices),
                 _ => None,
@@ -1361,7 +1361,7 @@ impl Parser {
                     };
                     if let Some(nt) = newtok {
                         // Re-fetch the indices vec (borrow released after sub_parse).
-                        if let Some(slot) = match &mut *t.inner {
+                        if let Some(slot) = match t.inner_mut() {
                             InnerToken::T_Assignment { indices, .. } => indices.get_mut(i),
                             InnerToken::TA_Variable { indices, .. } => indices.get_mut(i),
                             _ => None,
@@ -1373,15 +1373,15 @@ impl Parser {
             }
             // Reparse T_IndexedElement indices inside a T_Assignment's array value,
             // using the assignment's array name (fixIndexElement).
-            if let InnerToken::T_Assignment { value, .. } = &mut *t.inner {
-                if let InnerToken::T_Array(elems) = &mut *value.inner {
+            if let InnerToken::T_Assignment { value, .. } = t.inner_mut() {
+                if let InnerToken::T_Array(elems) = value.inner_mut() {
                     for elem in elems.iter_mut() {
                         self.reparse_indexed_element(elem, is_assoc);
                     }
                 }
             }
         }
-        for c in t.inner.children_mut() {
+        for c in t.inner_mut().children_mut() {
             self.reparse_walk(c, assoc);
         }
     }
@@ -1403,7 +1403,7 @@ impl Parser {
                     self.sub_parse_arithmetic(&pos, &src)
                 };
                 if let Some(nt) = newtok {
-                    if let InnerToken::T_IndexedElement { indices, .. } = &mut *elem.inner {
+                    if let InnerToken::T_IndexedElement { indices, .. } = elem.inner_mut() {
                         if let Some(slot) = indices.get_mut(i) {
                             *slot = nt;
                         }

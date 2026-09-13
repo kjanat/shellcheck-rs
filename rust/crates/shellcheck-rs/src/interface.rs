@@ -107,6 +107,73 @@ pub fn not_an_input(external_sources: Option<bool>, file: &str) -> ErrorMessage 
     }
 }
 
+/// `decodeString` (shellcheck.hs): turn the raw bytes of a script into the
+/// character stream the parser sees.
+///
+/// Upstream opens every input with `openBinaryFile` and `hGetContents`, so each
+/// byte arrives as a `Char` with that byte's value, and `decodeString` then
+/// folds valid UTF-8 sequences into single characters. Anything that is not a
+/// valid sequence is kept as-is, one character per byte -- which is why a file
+/// with a stray `\xff` is analysed rather than rejected, and why the column of
+/// everything after it is unchanged.
+///
+/// This is the single place where bytes become a `String` in the port; every
+/// reader (main input, sourced file, rc file) goes through it, exactly as every
+/// upstream reader goes through `inputFile`.
+///
+/// One representational difference: Haskell's `chr` accepts surrogate
+/// codepoints (`\xD800`-`\xDFFF`), which a UTF-8 sequence can encode and a Rust
+/// `char` cannot hold. Such a sequence becomes U+FFFD -- still exactly one
+/// character, so columns continue to match; only the character's identity
+/// differs, and it is a non-syntactic character either way.
+pub fn decode_bytes(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if byte.is_ascii() {
+            out.push(byte as char);
+            i += 1;
+            continue;
+        }
+        // `num >= 0xF8` and `num < 0xC0` are `Nothing` outright; the rest name
+        // the low bits of the lead byte and how many continuation bytes follow.
+        let next = match byte {
+            0xF8..=0xFF => None,
+            0xF0..=0xF7 => construct_codepoint(u32::from(byte & 0x07), 3, bytes, i + 1),
+            0xE0..=0xEF => construct_codepoint(u32::from(byte & 0x0F), 2, bytes, i + 1),
+            0xC0..=0xDF => construct_codepoint(u32::from(byte & 0x1F), 1, bytes, i + 1),
+            _ => None,
+        };
+        match next {
+            Some((codepoint, rest)) => {
+                out.push(char::from_u32(codepoint).unwrap_or('\u{FFFD}'));
+                i = rest;
+            }
+            // `c : decode rest`: the byte stands for itself, as ISO-8859-1.
+            None => {
+                out.push(byte as char);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// `construct`: accumulate `n` continuation bytes onto `x`, or fail.
+fn construct_codepoint(x: u32, n: u32, bytes: &[u8], i: usize) -> Option<(u32, usize)> {
+    if n == 0 {
+        // `guard $ x <= 0x10FFFF`
+        return if x <= 0x10FFFF { Some((x, i)) } else { None };
+    }
+    let byte = *bytes.get(i)?;
+    if (0x80..=0xBF).contains(&byte) {
+        construct_codepoint((x << 6) | u32::from(byte & 0x3F), n - 1, bytes, i + 1)
+    } else {
+        None
+    }
+}
+
 /// `mockedSystemInterface`: a fixed list of (name, contents) pairs, with names
 /// resolved to themselves. Exported for the same reason the Haskell exports it:
 /// the checker's own tests source files that do not exist on disk.
@@ -399,3 +466,57 @@ pub struct CheckResult {
 
 /// Position span map: token id -> (start, end).
 pub type PositionMap = BTreeMap<crate::ast::Id, (Position, Position)>;
+
+#[cfg(test)]
+mod decode_tests {
+    use super::decode_bytes;
+
+    #[test]
+    fn ascii_and_valid_utf8_decode_to_themselves() {
+        assert_eq!(decode_bytes(b"echo hi\n"), "echo hi\n");
+        // "caf\u{e9}" as UTF-8 is one character, not two.
+        assert_eq!(decode_bytes(b"caf\xc3\xa9"), "caf\u{e9}");
+        assert_eq!(
+            decode_bytes("\u{FEFF}#!/bin/sh".as_bytes()),
+            "\u{FEFF}#!/bin/sh"
+        );
+        assert_eq!(decode_bytes("\u{1F600}".as_bytes()).chars().count(), 1);
+    }
+
+    #[test]
+    fn an_invalid_byte_stands_for_itself_and_shifts_nothing() {
+        // `decodeString`'s ISO-8859-1 fallback: one character per stray byte,
+        // so every column after it is the one the oracle reports.
+        assert_eq!(decode_bytes(b"echo \xff\xfe x"), "echo \u{ff}\u{fe} x");
+        assert_eq!(decode_bytes(b"echo \xff\xfe x").chars().count(), 9);
+        assert_eq!(decode_bytes(b"\xff"), "\u{ff}");
+        // A lead byte with a missing or bad continuation is not consumed.
+        assert_eq!(decode_bytes(b"\xc3"), "\u{c3}");
+        assert_eq!(decode_bytes(b"\xc3z"), "\u{c3}z");
+        assert_eq!(decode_bytes(b"\xe2\x82"), "\u{e2}\u{82}");
+        // `num >= 0xF8` is rejected outright, as is a continuation byte alone.
+        assert_eq!(decode_bytes(b"\xf8\x80"), "\u{f8}\u{80}");
+        assert_eq!(decode_bytes(b"\x80"), "\u{80}");
+    }
+
+    #[test]
+    fn overlong_and_out_of_range_sequences_follow_upstream() {
+        // `construct` checks only the continuation bytes and `x <= 0x10FFFF`,
+        // so an overlong encoding decodes to its codepoint...
+        assert_eq!(decode_bytes(b"\xc0\x80"), "\0");
+        // ...and anything above the maximum fails the guard and falls back to
+        // raw bytes: U+110000 is one past the last codepoint.
+        assert_eq!(
+            decode_bytes(b"\xf4\x90\x80\x80"),
+            "\u{f4}\u{90}\u{80}\u{80}"
+        );
+        assert_eq!(decode_bytes(b"\xf4\x8f\xbf\xbf"), "\u{10FFFF}");
+        assert_eq!(
+            decode_bytes(b"\xf7\xbf\xbf\xbf"),
+            "\u{f7}\u{bf}\u{bf}\u{bf}"
+        );
+        // A surrogate is a codepoint Haskell's `chr` accepts and Rust's `char`
+        // cannot: still exactly one character, so columns are unaffected.
+        assert_eq!(decode_bytes(b"\xed\xa0\x80"), "\u{FFFD}");
+    }
+}
