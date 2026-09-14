@@ -193,6 +193,26 @@ impl Parser {
 
     // ---- separators --------------------------------------------------------
 
+    /// `g_Semi = notFollowedBy2 g_DSEMI >> tryToken ";" T_Semi`: a single `;`,
+    /// and never the first half of a `;;`.
+    pub(super) fn g_semi(&mut self) -> PResult<()> {
+        if self.peek() == Some(';') && self.peek_at(1) == Some(';') {
+            // `unexpecting ""` reads `g_DSEMI` before failing, and `tryToken`
+            // takes the spacing after its string too, so the error sits past
+            // both characters and whatever followed them; the `try` keeps the
+            // cursor here.
+            self.fail_after("Unexpected ", |p| {
+                p.bump();
+                p.bump();
+                p.spacing();
+            });
+            return Err(());
+        }
+        self.char(';')?;
+        self.spacing();
+        Ok(())
+    }
+
     pub(super) fn read_separator_op(&mut self) -> Option<char> {
         // `notFollowedBy2 (void g_AND_IF <|> void readCaseSeparator)`, whose
         // last arm is `lookAhead (readLineBreak >> g_Esac)`: `g_Esac` reads as
@@ -1964,8 +1984,15 @@ impl Parser {
                         // recover.
                         self.read_array()?
                     } else {
+                        let before = self.idx;
                         match self.read_normal_word() {
                             Ok(w) => w,
+                            // `<|> nothing` is still an `<|>`: a value that
+                            // failed after consuming -- `[]=` and a backtick
+                            // that never closes -- is the element's failure
+                            // and the array's, and it is that failure the
+                            // parse reports rather than the missing `)`.
+                            Err(()) if self.idx != before => return Err(()),
                             Err(()) => self.empty_literal_word(),
                         }
                     };

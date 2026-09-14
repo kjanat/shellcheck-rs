@@ -331,8 +331,10 @@ impl Parser {
             self.bump();
             return Some("&&".to_string());
         }
-        if self.keyword_dash("-a") {
-            self.string("-a").ok();
+        // `readAndOrOp node "-a" True` is `try $ string op`: no word boundary
+        // is asked for, since `condSpacing True` is what reports a missing one
+        // (SC1035) once the operator has been read.
+        if self.string("-a").is_ok() {
             return Some("-a".to_string());
         }
         None
@@ -344,25 +346,10 @@ impl Parser {
             self.bump();
             return Some("||".to_string());
         }
-        if self.keyword_dash("-o") {
-            self.string("-o").ok();
+        if self.string("-o").is_ok() {
             return Some("-o".to_string());
         }
         None
-    }
-
-    /// A `-x` operator token that is word-bounded (followed by whitespace).
-    pub(super) fn keyword_dash(&self, s: &str) -> bool {
-        let chars: Vec<char> = s.chars().collect();
-        for (i, &c) in chars.iter().enumerate() {
-            if self.peek_at(i) != Some(c) {
-                return false;
-            }
-        }
-        matches!(
-            self.peek_at(chars.len()),
-            Some(' ') | Some('\t') | Some('\n') | None
-        )
     }
 
     pub(super) fn read_cond_term(&mut self, single: bool) -> PResult<Token> {

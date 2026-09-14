@@ -703,14 +703,25 @@ impl Parser {
     /// there is one, the cursor comes back, and what stood before merges
     /// with it rather than being dropped by the reading.
     pub(super) fn fail_past(&mut self, n: usize, message: &str) {
+        self.fail_after(message, |p| {
+            for _ in 0..n {
+                p.bump();
+            }
+        });
+    }
+
+    /// The same, for a `p` that is more than a run of characters -- a
+    /// `tryToken`, which reads the spacing after its string as well, so the
+    /// failure past a `;;` sits past what follows it too.
+    pub(super) fn fail_after(&mut self, message: &str, read: impl FnOnce(&mut Self)) {
         let saved = self.failure.clone();
         let m = self.mark();
-        for _ in 0..n {
-            self.bump();
-        }
+        let notes = self.notes.len();
+        read(self);
         self.record_failure_as(message, !message.is_empty(), false);
         self.restore_failure(saved);
         self.reset(m);
+        self.notes.truncate(notes);
     }
 
     /// The next attempt of a `many p` after an iteration that consumed.

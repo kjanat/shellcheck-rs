@@ -335,3 +335,21 @@ Kept so a reader can tell a closed entry from a missed one.
   inside it, so a word that fails after consuming fails
   `readCompoundCommand` itself; the `try` in `readCoProc` catches that and
   reads a simple coproc instead. The port ended the parse there.
+- `'\` — `readSingleEscaped`'s `lookAhead anyChar` fails at the end of the
+  input, and Parsec records an error for a failure of its own making as much as
+  for a deliberate one. The port returned without recording anything, so
+  nothing stood where the parse gave up and the file came back clean.
+- ``o=([]=` `` — `value <- readRegular <|> nothing` is still an `<|>`: a value
+  that fails after consuming is the element's failure and the array's, and that
+  is what the parse reports rather than the missing `)`.
+- `((t<<<`, `''$((t<<<` — each alternative of `readComboOp` is its own `try`:
+  `string "<="` reads the `<` before refusing the `=`, and the rewind brings
+  back the error the `<<` attempt left past the third `<`, which the reading
+  had dropped.
+- `for i in ;;` — `optional g_Semi`, and `g_Semi` is `notFollowedBy2 g_DSEMI >>
+  tryToken ";"`, so a `;;` is not half-taken: the `for` has no `do` where the
+  first `;` stands, and the failure the attempt leaves is past both characters
+  and the spacing `tryToken` reads after them.
+- `[ c -o]` — `readAndOrOp` is `try $ string op` with no word boundary asked
+  for; `condSpacing True` is what reports the missing space (SC1035) once the
+  operator has been read.

@@ -161,7 +161,11 @@ impl Parser {
                     let pos = self.pos();
                     self.bump();
                     if self.eof() {
-                        // `lookAhead anyChar` after the backslash.
+                        // `lookAhead anyChar` after the backslash, which at the
+                        // end of the input fails where it stands -- and says so,
+                        // since Parsec records an error for a failure of its own
+                        // making as much as for a deliberate one.
+                        self.fail_implicitly();
                         return Err(());
                     }
                     if self.peek() == Some('\'') {

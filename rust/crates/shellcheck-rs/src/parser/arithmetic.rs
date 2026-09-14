@@ -26,6 +26,11 @@ impl Parser {
         let mut matched: Option<String> = None;
         for op in ops {
             let m = self.mark();
+            // Each alternative is its own `try`: `string "<="` reads the `<` of
+            // `<<<` before refusing the `=`, and the rewind must bring back the
+            // error that stood before it -- the one the `<<` attempt left past
+            // the third `<` -- which the reading had dropped.
+            let saved = self.failure.clone();
             if self.string(op).is_ok() {
                 // `failIfIncompleteOp = notFollowedBy2 (oneOf "&|<>=")`, and
                 // `unexpecting` reads the character before it fails: `p|&`
@@ -37,6 +42,7 @@ impl Parser {
                 self.fail_past(1, "Unexpected ");
             }
             self.reset(m);
+            self.restore_failure(saved);
         }
         let op = match matched {
             Some(o) => o,

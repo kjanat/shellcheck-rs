@@ -945,8 +945,11 @@ impl Parser {
                 "You need a line feed or semicolon before the 'do'.",
             );
         } else {
+            // `optional g_Semi`, so a `;;` is not half-taken here: the `for`
+            // has no `do` and the failure the attempt leaves is past both
+            // characters.
             let m = self.mark();
-            if self.char(';').is_err() {
+            if self.g_semi().is_err() {
                 self.reset(m);
             }
             self.allspacing();
