@@ -179,6 +179,20 @@ pub const R_TIMING_NOT_PRESERVED: &str = "demanded-on-every-path-but-not-at-the-
 /// The construction this one is stored in escapes, so the field reads that
 /// reach it through the outer box are not all visible.
 pub const R_OUTER_ESCAPES: &str = "the-construction-holding-it-escapes";
+/// …and the holder is one of the program's own constructors. Split out so
+/// that M2.3f can tell a residue it can still close (the holder is in this
+/// population and in this program) from one it cannot.
+pub const R_OUTER_ESCAPES_PROGRAM: &str = "the-program-construction-holding-it-escapes";
+/// …and the holder is a library constructor.
+pub const R_OUTER_ESCAPES_LIBRARY: &str = "the-library-construction-holding-it-escapes";
+/// Stored in a **list cell**: M2.3c's population, and its flows say what
+/// happens to it.
+pub const R_STORED_IN_LIST_CELL: &str = "stored-in-a-list-cell";
+/// Stored in a **tuple** field: M2.2's population.
+pub const R_STORED_IN_TUPLE: &str = "stored-in-a-tuple-field";
+/// Stored in a constructor that is not in any of the three populations —
+/// an unsaturated or over-applied constructor application.
+pub const R_STORED_IN_OTHER: &str = "stored-in-a-construction-outside-every-population";
 
 /// How many rounds the nesting fixpoint may take before it is a bug.
 const NESTING_ROUNDS: usize = 32;
@@ -461,11 +475,20 @@ impl Client for FieldClient<'_> {
         _cx: &Ctx<'_, '_>,
         root: ExprId,
         idx: usize,
-        _dc: &DataConInfo,
+        dc: &DataConInfo,
         occ: &str,
     ) -> Option<&'static str> {
         if !self.population.contains(&root) {
-            return Some(flow::R_STORED_CON);
+            // Which population owns the holder decides who can close this
+            // residue, so say it here rather than leaving one reason for
+            // all of them.
+            return Some(if is_list_cons(&dc.name) {
+                R_STORED_IN_LIST_CELL
+            } else if tuple_con(&dc.name, dc.rep_arity).is_some() {
+                R_STORED_IN_TUPLE
+            } else {
+                R_STORED_IN_OTHER
+            });
         }
         self.nests = true;
         let Some(t) = self.nested.get(&(root, idx)) else {
@@ -482,7 +505,12 @@ impl Client for FieldClient<'_> {
             ),
         });
         if t.escaped {
-            w.escape_at(root, false, R_OUTER_ESCAPES, occ.to_string());
+            let why = if is_program_con(&dc.name) {
+                R_OUTER_ESCAPES_PROGRAM
+            } else {
+                R_OUTER_ESCAPES_LIBRARY
+            };
+            w.escape_at(root, false, why, occ.to_string());
         }
         for seed in &t.seeds {
             w.push(*seed, 0);

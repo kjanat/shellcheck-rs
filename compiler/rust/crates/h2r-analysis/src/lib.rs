@@ -15,6 +15,7 @@ pub mod shape;
 pub mod text;
 pub mod tuples;
 pub mod verify;
+pub mod verify_rep;
 
 #[cfg(test)]
 mod tests;

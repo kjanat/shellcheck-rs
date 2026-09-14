@@ -168,6 +168,22 @@ enum Command {
         #[arg(long)]
         heads: bool,
     },
+    /// Re-derive, with a second walk that shares nothing with them but the
+    /// IR, every M2.3 verdict whose being wrong would be a miscompile:
+    /// `Direct` and `Dead` fields, `VecCandidate`/`IteratorCandidate`
+    /// spines and `StrongStringCandidate` text.
+    VerifyRep {
+        dir: PathBuf,
+        /// Restrict to one module.
+        #[arg(long)]
+        module: Option<String>,
+        /// Emit the cross-check as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print every disagreement, not just the summary by reason.
+        #[arg(long)]
+        explain: bool,
+    },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
         dir: PathBuf,
@@ -248,6 +264,12 @@ fn main() -> Result<()> {
             explain,
             heads,
         } => text(&dir, module.as_deref(), json, explain, heads),
+        Command::VerifyRep {
+            dir,
+            module,
+            json,
+            explain,
+        } => verify_rep(&dir, module.as_deref(), json, explain),
         Command::Parsec {
             dir,
             module,
@@ -3730,4 +3752,430 @@ fn text(
         }
     }
     Ok(())
+}
+
+//------------------------------------------------------------------------------
+// verify-rep
+//------------------------------------------------------------------------------
+
+/// Re-derive every M2.3 verdict whose being wrong would be a miscompile,
+/// with `h2r_analysis::verify_rep` — a walk that shares nothing with
+/// `fields.rs`, `lists/` or `text.rs` beyond the IR, and does not use the
+/// generic aggregate walk those three are built on.
+fn verify_rep(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result<()> {
+    use h2r_analysis::fields::{FieldCensus, FieldRep};
+    use h2r_analysis::lists::{ListCensus, Recommendation};
+    use h2r_analysis::text::{Advisory, TextCensus};
+    use h2r_analysis::verify_rep::{Claim, ClaimKind, RepCrossCheck, cross_check};
+
+    let modules = load_dir(dir)?;
+    let selected: Vec<&Module> = match module {
+        Some(name) => vec![find_module(&modules, name)?],
+        None => modules.iter().collect(),
+    };
+    let census = Census::raw(selected.iter().copied());
+    let fc = FieldCensus::of_modules(&selected, &census);
+    let lc = ListCensus::of_modules(&selected, &census);
+    let tc = TextCensus::of_modules(&selected, &lc, &census);
+
+    // Collect every claim, per module, from the three censuses' published
+    // verdicts. Nothing but the verdict, its node and its rule crosses over.
+    let mut claims: BTreeMap<String, Vec<Claim>> = BTreeMap::new();
+    for f in &fc.flows {
+        for v in &f.verdicts {
+            let kind = match v.rep {
+                FieldRep::Direct => ClaimKind::FieldDirect,
+                FieldRep::Dead => ClaimKind::FieldDead,
+                FieldRep::Recursive => ClaimKind::FieldRecursive,
+                _ => continue,
+            };
+            claims.entry(f.module.clone()).or_default().push(Claim {
+                module: f.module.clone(),
+                kind,
+                at: f.construction,
+                field: v.index,
+                rule: v.rule,
+            });
+        }
+    }
+    for f in &lc.flows {
+        let kind = match f.rec {
+            Recommendation::VecCandidate => ClaimKind::ListVec,
+            Recommendation::IteratorCandidate => ClaimKind::ListIterator,
+            _ => {
+                if f.recursion == h2r_analysis::lists::Recursion::RecursiveKnot {
+                    ClaimKind::ListKnot
+                } else {
+                    continue;
+                }
+            }
+        };
+        claims.entry(f.module.clone()).or_default().push(Claim {
+            module: f.module.clone(),
+            kind,
+            at: f.producer,
+            field: 0,
+            rule: f.rec_rule,
+        });
+        if f.recursion == h2r_analysis::lists::Recursion::RecursiveKnot
+            && kind != ClaimKind::ListKnot
+        {
+            claims.entry(f.module.clone()).or_default().push(Claim {
+                module: f.module.clone(),
+                kind: ClaimKind::ListKnot,
+                at: f.producer,
+                field: 0,
+                rule: f.rec_rule,
+            });
+        }
+    }
+    for f in &tc.flows {
+        if f.advisory != Advisory::StrongStringCandidate {
+            continue;
+        }
+        claims.entry(f.module.clone()).or_default().push(Claim {
+            module: f.module.clone(),
+            kind: ClaimKind::TextStrong,
+            at: f.producer,
+            field: 0,
+            rule: f.advisory_rule,
+        });
+    }
+
+    let mut out = RepCrossCheck::default();
+    for m in &selected {
+        if let Some(cs) = claims.get(&m.name) {
+            cross_check(m, &census, cs, &mut out);
+        }
+    }
+
+    if json {
+        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        println!();
+        return Ok(());
+    }
+
+    println!("Independent re-derivation of the M2.3 representation verdicts");
+    println!();
+    println!("  The walk below shares nothing with fields.rs, lists/ or text.rs but the IR, and");
+    println!(
+        "  does not use the generic aggregate walk they are built on. Two things are asserted"
+    );
+    println!("  rather than derived anywhere and are therefore *consulted*, not re-invented: the");
+    println!(
+        "  library demand-semantics table and the text-head table (the argument position, the"
+    );
+    println!("  saturation and the head's import-ness are re-derived here), and M1's");
+    println!("  RecursiveValue verdicts.");
+    println!();
+    println!(
+        "  {:<34} {:>8} {:>10} {:>8}",
+        "claim", "checked", "re-derived", "refused"
+    );
+    for (k, n, ok) in &out.by_kind {
+        println!("  {:<34} {n:>8} {ok:>10} {:>8}", k.name(), n - ok);
+    }
+    println!(
+        "  {:<34} {:>8} {:>10} {:>8}",
+        "total",
+        out.checked,
+        out.agreed,
+        out.checked - out.agreed
+    );
+    println!();
+    println!("Direct, by the rule the census says proved the timing");
+    println!("  {:>7}  R1-STRICT-FIELD", out.r1_total);
+    println!("  {:>7}  R2-FIELD-IS-VALUE", out.r2_total);
+    println!(
+        "  {:>7}  …of which the *only* evidence is that the expression is a string literal",
+        out.r2_string_literal_only
+    );
+    println!("           (accepted on okForSpeculation grounds — total, terminating, cheap — and");
+    println!("            explicitly NOT because it is in WHNF; GHC's exprIsHNF rejects it)");
+    println!("  {:>7}  R3-SAME-FRONTIER", out.r3_total);
+    println!();
+    println!();
+    println!("The audited shapes, in this dump");
+    println!("  {:<58} {:>6}  example", "shape", "n");
+    for (name, n, at) in rep_patterns(&fc, &lc, &tc) {
+        println!("  {name:<58} {n:>6}  {at}");
+    }
+    println!();
+    println!(
+        "  {:<44} {:>8}",
+        "DISAGREEMENTS (the census claimed it, this walk refutes it)",
+        out.real_disagreements()
+    );
+    println!(
+        "  {:<44} {:>8}",
+        "coverage refusals (this walk is blunter, no claim)",
+        out.coverage_refusals()
+    );
+    println!();
+    if out.disagreements.is_empty() {
+        println!("Disagreements: none");
+        return Ok(());
+    }
+    let mut by: BTreeMap<(&str, &str), (usize, String, u32)> = BTreeMap::new();
+    for d in &out.disagreements {
+        let e = by
+            .entry((d.claim.kind.name(), d.refusal.why))
+            .or_insert((0, String::new(), 0));
+        e.0 += 1;
+        if e.1.is_empty() {
+            e.1 = d.claim.module.clone();
+            e.2 = d.refusal.at;
+        }
+    }
+    println!("Refusals by claim and reason (D = a disagreement, C = coverage only)");
+    let mut rows: Vec<_> = by.into_iter().collect();
+    rows.sort_by_key(|(_, v)| std::cmp::Reverse(v.0));
+    for ((kind, why), (n, m, at)) in rows {
+        let tag = if h2r_analysis::verify_rep::is_coverage_refusal(why) {
+            'C'
+        } else {
+            'D'
+        };
+        println!("  {n:>6}  {tag}  {kind:<28} {why}");
+        println!("          e.g. {m} node {at}");
+    }
+    if explain {
+        println!();
+        for d in &out.disagreements {
+            println!(
+                "  {} {} field {} node {} — {} ({})",
+                d.claim.module,
+                d.claim.kind.name(),
+                d.claim.field,
+                d.claim.at,
+                d.refusal.why,
+                d.refusal.detail
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The adversarial shapes M2.3e audits, counted in the real dump so that a
+/// hand-built regression test is never the only evidence a rule was
+/// exercised. Reporting only: every row reads published verdicts.
+#[allow(clippy::type_complexity)]
+fn rep_patterns(
+    fc: &h2r_analysis::fields::FieldCensus<'_>,
+    lc: &h2r_analysis::lists::ListCensus<'_>,
+    tc: &h2r_analysis::text::TextCensus,
+) -> Vec<(&'static str, usize, String)> {
+    use h2r_analysis::fields::{ConStrictness, FieldDemand, FieldRep, ObsKind};
+    use h2r_analysis::lists::{
+        ConsumerKind, PrefixBound, Recommendation, Recursion, Reuse, SpineDemand, Storage,
+    };
+    use h2r_analysis::text::{Advisory, TextShape};
+
+    let mut out: Vec<(&'static str, usize, String)> = Vec::new();
+    let mut row = |name: &'static str, hits: Vec<(String, u32)>| {
+        let at = hits
+            .first()
+            .map(|(m, n)| format!("{m} node {n}"))
+            .unwrap_or_else(|| "—".into());
+        out.push((name, hits.len(), at));
+    };
+
+    // 1 — observed at WHNF only: the bottom-preservation case.
+    row(
+        "1  observed only at WHNF, no field read — never Direct",
+        fc.flows
+            .iter()
+            .filter(|f| {
+                f.observations.iter().any(|o| o.kind == ObsKind::WhnfOnly)
+                    && !f
+                        .observations
+                        .iter()
+                        .any(|o| o.kind == ObsKind::FieldDemanded)
+                    && f.verdicts.iter().all(|v| v.rep != FieldRep::Direct)
+            })
+            .map(|f| (f.module.clone(), f.construction))
+            .collect(),
+    );
+    // 2 — an unused *lazy* field is Dead; an unused *strict* one is not.
+    row(
+        "2a an unused lazy field — Dead",
+        fc.flows
+            .iter()
+            .filter(|f| f.verdicts.iter().any(|v| v.rep == FieldRep::Dead))
+            .map(|f| (f.module.clone(), f.construction))
+            .collect(),
+    );
+    row(
+        "2b an unused STRICT field — forced at WHNF, never Dead",
+        fc.flows
+            .iter()
+            .filter(|f| {
+                f.verdicts.iter().any(|v| {
+                    v.demand == FieldDemand::Never
+                        && v.strictness == ConStrictness::StrictField
+                        && v.rep != FieldRep::Dead
+                })
+            })
+            .map(|f| (f.module.clone(), f.construction))
+            .collect(),
+    );
+    // 3 — demanded on one observation and not another.
+    row(
+        "3  demanded on some observations only — Deferred",
+        fc.flows
+            .iter()
+            .filter(|f| {
+                f.verdicts
+                    .iter()
+                    .any(|v| v.demand == FieldDemand::Conditional && v.rep == FieldRep::Deferred)
+            })
+            .map(|f| (f.module.clone(), f.construction))
+            .collect(),
+    );
+    // 4 — a literal prefix bound.
+    row(
+        "4  a bounded prefix with a literal count — never Vec",
+        lc.flows
+            .iter()
+            .filter(|f| {
+                matches!(f.spine, SpineDemand::Prefix(PrefixBound::Known(_)))
+                    && f.rec != Recommendation::VecCandidate
+            })
+            .map(|f| (f.module.clone(), f.producer))
+            .collect(),
+    );
+    // 5 — a short-circuiting consumer.
+    row(
+        "5  a short-circuiting consumer — data-dependent prefix, never Vec",
+        lc.flows
+            .iter()
+            .filter(|f| {
+                !f.short_circuit.no()
+                    && matches!(f.spine, SpineDemand::Prefix(PrefixBound::DataDependent))
+                    && f.rec != Recommendation::VecCandidate
+            })
+            .map(|f| (f.module.clone(), f.producer))
+            .collect(),
+    );
+    // 6 — two owners of one tail.
+    row(
+        "6  a tail that survives in a second place — Persistent, never Iterator",
+        lc.flows
+            .iter()
+            .filter(|f| {
+                matches!(f.reuse, Reuse::SharedTail { .. })
+                    && f.rec != Recommendation::IteratorCandidate
+            })
+            .map(|f| (f.module.clone(), f.producer))
+            .collect(),
+    );
+    // 7 — a recursive *function* building a finite list.
+    row(
+        "7  a finite recursive producer — FiniteProducer, not a knot",
+        lc.flows
+            .iter()
+            .filter(|f| {
+                f.recursion == Recursion::FiniteProducer
+                    && f.consumers
+                        .iter()
+                        .any(|c| matches!(c.kind, ConsumerKind::ConsedAsTail { .. }))
+                    && f.returned
+            })
+            .map(|f| (f.module.clone(), f.producer))
+            .collect(),
+    );
+    // 8 — an actual recursive list *value*.
+    row(
+        "8  a value knot — LazyCandidate",
+        lc.flows
+            .iter()
+            .filter(|f| {
+                f.recursion == Recursion::RecursiveKnot && f.rec == Recommendation::LazyCandidate
+            })
+            .map(|f| (f.module.clone(), f.producer))
+            .collect(),
+    );
+    // 9 — stored in another ADT, and followed or not.
+    row(
+        "9a stored in another ADT, the holder's field read structurally",
+        lc.flows
+            .iter()
+            .filter(|f| {
+                matches!(&f.storage, Storage::StoredIn(c) if c != ":")
+                    && f.spine > SpineDemand::None
+                    && f.spine != SpineDemand::Unknown
+            })
+            .map(|f| (f.module.clone(), f.producer))
+            .collect(),
+    );
+    row(
+        "9b stored in another ADT, the holder escapes — Unknown",
+        lc.flows
+            .iter()
+            .filter(|f| {
+                matches!(&f.storage, Storage::StoredIn(c) if c != ":")
+                    && f.rec == Recommendation::Unknown
+            })
+            .map(|f| (f.module.clone(), f.producer))
+            .collect(),
+    );
+    // 10 — a higher-order hop.
+    row(
+        "10 through a higher-order parameter — Unknown with a reason",
+        lc.flows
+            .iter()
+            .filter(|f| {
+                f.rec == Recommendation::Unknown
+                    && f.rec_reason
+                        .as_deref()
+                        .is_some_and(|r| r.contains("higher-order") || r.contains("unknown"))
+            })
+            .map(|f| (f.module.clone(), f.producer))
+            .collect(),
+    );
+    // 11 — text and structure at once.
+    row(
+        "11 [Char] used textually and structurally — never StrongString",
+        tc.flows
+            .iter()
+            .filter(|f| {
+                f.char_semantics_required
+                    && f.shape != TextShape::TextOnly
+                    && f.advisory != Advisory::StrongStringCandidate
+            })
+            .map(|f| (f.module.clone(), f.producer))
+            .collect(),
+    );
+    // 12 — the whole spine, streamed.
+    row(
+        "12 the whole spine, one pass, nothing retained — Iterator not Vec",
+        lc.flows
+            .iter()
+            .filter(|f| f.spine == SpineDemand::Whole && f.rec == Recommendation::IteratorCandidate)
+            .map(|f| (f.module.clone(), f.producer))
+            .collect(),
+    );
+    // 13 — the right operand of an append is the result's tail.
+    row(
+        "13 the right operand of an append — SharedTail on it",
+        lc.flows
+            .iter()
+            .filter(|f| {
+                f.consumers
+                    .iter()
+                    .any(|c| c.aliases && matches!(c.kind, ConsumerKind::Axiom { .. }))
+            })
+            .map(|f| (f.module.clone(), f.producer))
+            .collect(),
+    );
+    // 14 — an alias under an alternative this value cannot take.
+    row(
+        "14 a case-binder alias under an unreachable alternative — no escape",
+        fc.flows
+            .iter()
+            .filter(|f| f.alias_occurrences_unreachable > 0)
+            .map(|f| (f.module.clone(), f.construction))
+            .collect(),
+    );
+    out
 }

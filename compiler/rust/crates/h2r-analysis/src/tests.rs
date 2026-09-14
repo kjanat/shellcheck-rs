@@ -3834,3 +3834,270 @@ fn the_text_accounting_closes() {
     assert_eq!(a.text_flows + a.non_text + a.elem_unknown, a.list_flows);
     assert_eq!(a.type_only + a.structural_only + a.both, a.text_flows);
 }
+
+//------------------------------------------------------------------------------
+// M2.3e: the independent re-derivation of the representation verdicts
+//------------------------------------------------------------------------------
+
+/// Collect every claim the three censuses publish for one module and hand
+/// it to [`crate::verify_rep`], which re-derives it with a walk that shares
+/// nothing with them but the IR.
+fn rep_cross_check(m: &Module) -> crate::verify_rep::RepCrossCheck {
+    use crate::verify_rep::{Claim, ClaimKind, RepCrossCheck, cross_check};
+
+    let census = Census::raw([m]);
+    let modules = [m];
+    let fc = crate::fields::FieldCensus::of_modules(&modules, &census);
+    let lc = crate::lists::ListCensus::of_modules(&modules, &census);
+    let tc = TextCensus::of_modules(&modules, &lc, &census);
+
+    let mut claims = Vec::new();
+    for f in &fc.flows {
+        for v in &f.verdicts {
+            let kind = match v.rep {
+                FieldRep::Direct => ClaimKind::FieldDirect,
+                FieldRep::Dead => ClaimKind::FieldDead,
+                FieldRep::Recursive => ClaimKind::FieldRecursive,
+                _ => continue,
+            };
+            claims.push(Claim {
+                module: f.module.clone(),
+                kind,
+                at: f.construction,
+                field: v.index,
+                rule: v.rule,
+            });
+        }
+    }
+    for f in &lc.flows {
+        let kind = match f.rec {
+            crate::lists::Recommendation::VecCandidate => Some(ClaimKind::ListVec),
+            crate::lists::Recommendation::IteratorCandidate => Some(ClaimKind::ListIterator),
+            _ => None,
+        };
+        if f.recursion == crate::lists::Recursion::RecursiveKnot {
+            claims.push(Claim {
+                module: f.module.clone(),
+                kind: ClaimKind::ListKnot,
+                at: f.producer,
+                field: 0,
+                rule: f.rec_rule,
+            });
+        }
+        if let Some(kind) = kind {
+            claims.push(Claim {
+                module: f.module.clone(),
+                kind,
+                at: f.producer,
+                field: 0,
+                rule: f.rec_rule,
+            });
+        }
+    }
+    for f in &tc.flows {
+        if f.advisory == crate::text::Advisory::StrongStringCandidate {
+            claims.push(Claim {
+                module: f.module.clone(),
+                kind: ClaimKind::TextStrong,
+                at: f.producer,
+                field: 0,
+                rule: f.advisory_rule,
+            });
+        }
+    }
+    let mut out = RepCrossCheck::default();
+    cross_check(m, &census, &claims, &mut out);
+    out
+}
+
+/// The modules the adversarial cases are built on, in one place: every one
+/// of them goes through the independent re-derivation below.
+fn adversarial_modules() -> Vec<Module> {
+    vec![
+        // 1 — `Foo (error …)` observed only at WHNF.
+        top_module(
+            let1(
+                "r",
+                con_app("Foo", &[app(var("g"), var("a"))]),
+                case_force(var("r"), "seqw", var("u")),
+            ),
+            json!({"Foo": prog_con("Foo", 1), "g": callee(true)}),
+        ),
+        // 2a — an unused lazy field.
+        top_module(
+            let1(
+                "r",
+                con_app("Foo", &[app(var("g"), var("a"))]),
+                case_alts(var("r"), &[("Foo", vec!["x"], var("u"))]),
+            ),
+            json!({"Foo": prog_con("Foo", 1), "g": callee(true)}),
+        ),
+        // 2b — an unused *strict* field.
+        top_module(
+            let1(
+                "r",
+                con_app("Bar", &[app(var("g"), var("a"))]),
+                case_alts(var("r"), &[("Bar", vec!["x"], var("u"))]),
+            ),
+            json!({"Bar": prog_con_strict("Bar", 1), "g": callee(true)}),
+        ),
+        // 3 — forced on one observation only.
+        top_module(
+            let1(
+                "r",
+                con_app("Foo", &[app(var("g"), var("a"))]),
+                app(
+                    app(var("h"), case_force(var("r"), "seqw", var("u"))),
+                    case_alts(var("r"), &[("Foo", vec!["x"], app(var("k"), var("x")))]),
+                ),
+            ),
+            json!({"Foo": prog_con("Foo", 1), "g": callee(true), "k": callee(true)}),
+        ),
+        // 9 — a list stored in a program ADT.
+        top_module(
+            let1(
+                "xs",
+                cons_cell(var("x"), nil()),
+                con_app("Box", &[var("xs")]),
+            ),
+            list_ids(json!({"Box": prog_con("Box", 1)})),
+        ),
+        // 10 — a list through a higher-order parameter.
+        top_module(
+            lam(
+                &["f"],
+                let1("xs", cons_cell(var("x"), nil()), app(var("f"), var("xs"))),
+            ),
+            list_ids(json!({})),
+        ),
+        // 14 — a case-binder alias under an alternative this value cannot
+        // take: `case v of C x -> use x; D y -> store v` on a known `C`.
+        top_module(
+            let1(
+                "r",
+                con_app("C", &[app(var("g"), var("a"))]),
+                case_alts(
+                    var("r"),
+                    &[
+                        ("C", vec!["x"], app(var("k"), var("x"))),
+                        ("D", vec!["y"], con_app("Box", &[var("wild")])),
+                    ],
+                ),
+            ),
+            json!({
+                "C": prog_con("C", 1), "D": prog_con("D", 1),
+                "Box": prog_con("Box", 1), "g": callee(true), "k": callee(true)
+            }),
+        ),
+    ]
+}
+
+/// Every `Direct`, `Dead`, `Recursive`, `VecCandidate`,
+/// `IteratorCandidate` and `StrongStringCandidate` verdict the censuses
+/// reach on a hand-built module is re-derived from scratch by the
+/// independent walk — with **no** disagreement, and no coverage refusal
+/// either on shapes this small.
+#[test]
+fn the_rep_verifier_agrees_on_every_hand_built_module() {
+    let mut checked = 0usize;
+    for m in adversarial_modules() {
+        let out = rep_cross_check(&m);
+        checked += out.checked;
+        assert_eq!(
+            out.real_disagreements(),
+            0,
+            "{:?}",
+            out.disagreements
+                .iter()
+                .map(|d| (d.claim.kind, d.refusal.why))
+                .collect::<Vec<_>>()
+        );
+        // The only fact this walk declines to re-derive is `R3`, which is
+        // the census' own frontier walk; nothing else may be refused on
+        // shapes this small.
+        for d in &out.disagreements {
+            assert_eq!(d.refusal.why, crate::verify_rep::W_NO_R3_RULE);
+        }
+    }
+    assert!(checked > 0, "the cross-check examined nothing");
+}
+
+/// Case 2b. `data X = X !T` with the field never read is **not** `Dead`:
+/// the strictness is a forcing obligation that holds whenever `X` reaches
+/// WHNF, and nobody reading the field does not remove it. The verifier
+/// refuses a `Dead` claim on a strict field outright.
+#[test]
+fn an_unused_strict_field_is_not_dead() {
+    let m = top_module(
+        let1(
+            "r",
+            con_app("Bar", &[app(var("g"), var("a"))]),
+            case_alts(var("r"), &[("Bar", vec!["x"], var("u"))]),
+        ),
+        json!({"Bar": prog_con_strict("Bar", 1), "g": callee(true)}),
+    );
+    let f = field_census(&m);
+    let flow = one_con_flow(&f, "Bar");
+    let v = &flow.verdicts[0];
+    assert_eq!(v.demand, FieldDemand::Never);
+    assert_eq!(v.strictness, ConStrictness::StrictField);
+    assert_ne!(v.rep, FieldRep::Dead);
+    assert!(v.force_on_whnf, "the forcing obligation survives");
+
+    // And the independent walk refuses the claim the census does not make.
+    use crate::verify_rep::{Claim, ClaimKind, RepVerifier};
+    let census = Census::raw([&m]);
+    let mut v2 = RepVerifier::new(&m, &census);
+    let err = v2
+        .check(&Claim {
+            module: "M".into(),
+            kind: ClaimKind::FieldDead,
+            at: flow.construction,
+            field: 0,
+            rule: crate::fields::R5_DEAD,
+        })
+        .unwrap_err();
+    assert_eq!(err.why, crate::verify_rep::X_DEAD_FIELD_STRICT);
+}
+
+/// Case 14, from the verifier's side. `case v of { C x -> k x; D y ->
+/// Box wild }` on a value known to be `C`: the `D` alternative cannot run,
+/// so the store of the case binder under it is not an escape and the field
+/// verdict is not forced to `Unknown` by it. The independent walk selects
+/// alternatives constructor-relative for exactly this reason, and skips
+/// the case binder's occurrences that stand inside the other alternative.
+#[test]
+fn the_rep_verifier_skips_a_case_binder_under_an_unreachable_alternative() {
+    let m = top_module(
+        let1(
+            "r",
+            con_app("C", &[app(var("g"), var("a"))]),
+            case_alts(
+                var("r"),
+                &[
+                    ("C", vec!["x"], app(var("k"), var("x"))),
+                    ("D", vec!["y"], con_app("Box", &[var("wild")])),
+                ],
+            ),
+        ),
+        json!({
+            "C": prog_con("C", 1), "D": prog_con("D", 1), "Box": prog_con("Box", 1),
+            "g": callee(true), "k": callee(true)
+        }),
+    );
+    let f = field_census(&m);
+    let flow = one_con_flow(&f, "C");
+    assert!(
+        flow.alias_occurrences_unreachable > 0,
+        "the census skipped the unreachable case-binder occurrence"
+    );
+    assert_ne!(flow.verdicts[0].demand, FieldDemand::Unknown);
+
+    // The verifier reaches the same conclusion on its own: it never sees
+    // the store, so the value does not escape and the field is readable.
+    let out = rep_cross_check(&m);
+    assert_eq!(out.real_disagreements(), 0);
+    for d in &out.disagreements {
+        assert_eq!(d.refusal.why, crate::verify_rep::W_NO_R3_RULE);
+    }
+}

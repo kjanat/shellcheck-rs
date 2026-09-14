@@ -232,6 +232,15 @@ pub const R_UNKNOWN_SPINE: &str = "spine-demand-is-unknown";
 pub const R_UNKNOWN_HEAD: &str = "head-demand-is-unknown";
 pub const R_REUSE_ESCAPES: &str = "the-spine-escapes-what-the-walk-follows";
 pub const R_STORED_NO_DEMAND: &str = "stored-with-no-visible-spine-demand";
+/// …and the holder is a construction M2.3b's census knows the field reads
+/// of, so the residue is *this* flow's, not a missing hop: M2.3f can pick
+/// the holder's verdict up without re-analysing anything.
+pub const R_STORED_NO_DEMAND_HOLDER_KNOWN: &str =
+    "stored-with-no-visible-spine-demand-in-a-holder-the-field-census-knows";
+/// …and the holder is not in M2.3b's population at all, or is never taken
+/// apart in this module: whole-program work (M2.4).
+pub const R_STORED_NO_DEMAND_HOLDER_OPAQUE: &str =
+    "stored-with-no-visible-spine-demand-in-a-holder-this-module-never-takes-apart";
 pub const R_NO_MATCH: &str = "the-facts-match-no-recommendation";
 pub const R_NEVER_OBSERVED: &str = "no-reachable-consumer-observes-the-spine";
 
@@ -326,6 +335,20 @@ pub enum Reuse {
 }
 
 impl Reuse {
+    /// How much of the spine survives beside its consumers, weakest first.
+    /// A flow that is consed onto another cell is a **suffix** of that
+    /// longer spine, so whatever is true of the longer one's reuse is true
+    /// of this one: the join across [`L7_CONSED_AS_TAIL`] is a maximum of
+    /// this rank.
+    fn rank(&self) -> u8 {
+        match self {
+            Reuse::SinglePass => 0,
+            Reuse::MultiPass(_) => 1,
+            Reuse::Escapes(_) => 2,
+            Reuse::SharedTail { .. } => 3,
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Reuse::SinglePass => "SinglePass",
@@ -1156,7 +1179,11 @@ impl<'m> Lists<'m> {
         let rounds = self.propagate_successors();
         self.successor_rounds = rounds;
         for i in 0..self.flows.len() {
-            let (rec, rule, reason) = recommend(&self.flows[i]);
+            let holder_known = self.flows[i].consumers.iter().any(|c| {
+                matches!(c.kind, ConsumerKind::StoredIn { .. })
+                    && reads.keys().any(|(root, _)| *root == c.at)
+            });
+            let (rec, rule, reason) = recommend(&self.flows[i], holder_known);
             self.flows[i].rec = rec;
             self.flows[i].rec_rule = rule;
             self.flows[i].rec_reason = reason;
@@ -1658,24 +1685,34 @@ impl<'m> Lists<'m> {
                 out.extend(m.occurrences(*tail).iter().copied());
             }
         }
+        // A callee's parameter is only tail-derived if **every** call of it
+        // this flow reaches hands it a tail-derived argument. A parameter
+        // that also receives the whole spine from another call site is an
+        // independent entry into it, whatever the other call site does —
+        // the same union-over-call-sites rule the rest of the walk uses.
+        // Marking it tail-derived would *under*-count traversals, which is
+        // the unsafe direction for a representation decision.
+        let mut by_param: BTreeMap<(BinderId, u32), Vec<ExprId>> = BTreeMap::new();
+        for u in &w.consumers {
+            let ListUse::Flow(FlowUse::PassedTo {
+                call,
+                callee,
+                param,
+            }) = u
+            else {
+                continue;
+            };
+            let (_, args) = m.spine(*call);
+            let vargs = value_args(&self.scope, &args);
+            if let Some(arg) = vargs.get(*param as usize) {
+                by_param.entry((*callee, *param)).or_default().push(*arg);
+            }
+        }
         let mut rounds = 0;
         loop {
             let before = out.len();
-            for u in &w.consumers {
-                let ListUse::Flow(FlowUse::PassedTo {
-                    call,
-                    callee,
-                    param,
-                }) = u
-                else {
-                    continue;
-                };
-                let (_, args) = m.spine(*call);
-                let vargs = value_args(&self.scope, &args);
-                let Some(arg) = vargs.get(*param as usize) else {
-                    continue;
-                };
-                if !out.contains(arg) {
+            for ((callee, param), argv) in &by_param {
+                if !argv.iter().all(|a| out.contains(a)) {
                     continue;
                 }
                 let Some(rhs) = m.binding(*callee).rhs else {
@@ -1896,6 +1933,11 @@ impl<'m> Lists<'m> {
                 preds[*j].push(i);
             }
         }
+        // Entries into the spine the flow has on its own, before anything
+        // is inherited: a flow that is both consed onto a longer spine
+        // *and* has a spine consumer of its own has its cells walked by
+        // both, so it is entered at least twice ([`L15_MULTIPASS`]).
+        let own: Vec<usize> = self.flows.iter().map(|f| f.traversals).collect();
         let mut queued = vec![true; n];
         let mut work: Vec<usize> = (0..n).rev().collect();
         let mut updates = 0usize;
@@ -1904,12 +1946,13 @@ impl<'m> Lists<'m> {
             updates += 1;
             let mut changed = false;
             for j in &succ[i] {
-                let (spine, head, storage, sc, streaming) = {
+                let (spine, head, storage, reuse, sc, streaming) = {
                     let s = &self.flows[*j];
                     (
                         s.spine,
                         s.head,
                         s.storage.clone(),
+                        s.reuse.clone(),
                         s.short_circuit.yes.clone(),
                         s.streaming,
                     )
@@ -1926,6 +1969,24 @@ impl<'m> Lists<'m> {
                 }
                 if storage.rank() > f.storage.rank() {
                     f.storage = storage;
+                    changed = true;
+                }
+                // `L7` again: this spine is a suffix of the successor's, so
+                // a tail the successor shares, an entry the successor is
+                // walked by, and a head the successor escapes to are all
+                // reached through this spine too.
+                if reuse.rank() > f.reuse.rank() {
+                    if let Reuse::MultiPass(k) = reuse {
+                        f.traversals = f.traversals.max(k);
+                    }
+                    f.reuse = reuse;
+                    changed = true;
+                }
+                if spine > SpineDemand::None && own[i] > 0 && f.traversals <= own[i] {
+                    f.traversals = own[i] + 1;
+                    if f.reuse.rank() <= Reuse::MultiPass(0).rank() {
+                        f.reuse = Reuse::MultiPass(f.traversals);
+                    }
                     changed = true;
                 }
                 for x in sc {
@@ -2051,7 +2112,7 @@ fn crosses_lambda_from(m: &Module, producer: ExprId, at: ExprId) -> bool {
 
 /// Derive the advisory recommendation from the six facts. **Nothing below
 /// is a theorem**: the facts are.
-fn recommend(f: &ListFlow) -> (Recommendation, &'static str, Option<String>) {
+fn recommend(f: &ListFlow, holder_known: bool) -> (Recommendation, &'static str, Option<String>) {
     // A value knot is a knot whatever else is true of it.
     if f.recursion == Recursion::RecursiveKnot {
         return (
@@ -2122,8 +2183,10 @@ fn recommend(f: &ListFlow) -> (Recommendation, &'static str, Option<String>) {
             L_REC_UNKNOWN,
             Some(if f.storage == Storage::NotStored {
                 R_NEVER_OBSERVED.to_string()
+            } else if holder_known {
+                R_STORED_NO_DEMAND_HOLDER_KNOWN.to_string()
             } else {
-                R_STORED_NO_DEMAND.to_string()
+                R_STORED_NO_DEMAND_HOLDER_OPAQUE.to_string()
             }),
         );
     }
