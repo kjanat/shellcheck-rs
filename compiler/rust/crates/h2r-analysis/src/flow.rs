@@ -366,6 +366,15 @@ impl<U: Consumer> Walk<U> {
         self.consumers.push(u);
     }
 
+    /// Every value location the walk reached, as node ids. Read by a
+    /// client that has to know whether a *second* population's candidate
+    /// producer was already covered by this flow (see
+    /// [`crate::lists::ProducerKind::LocalCall`]); nothing in the walk
+    /// itself depends on it.
+    pub fn visited(&self) -> impl Iterator<Item = ExprId> + '_ {
+        self.seen.iter().map(|(n, _)| *n)
+    }
+
     /// The value leaves what this walk can follow. `preserve` says whether
     /// *where* it went proves it is a real value (a constructor field, a
     /// callee outside the module) as opposed to merely being unfollowable.

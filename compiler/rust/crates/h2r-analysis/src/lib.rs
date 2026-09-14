@@ -6,6 +6,7 @@ pub mod fields;
 pub mod flow;
 pub mod laziness;
 pub mod link;
+pub mod lists;
 pub mod metrics;
 pub mod parsec;
 pub mod scalar;

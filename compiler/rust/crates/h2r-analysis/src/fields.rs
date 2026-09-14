@@ -653,6 +653,19 @@ impl<'m> Fields<'m> {
         self.nesting_rounds = rounds;
     }
 
+    /// Where a construction's *i*-th field is read, for a **different**
+    /// population: the occurrences of the field binder at every alternative
+    /// that binds it, and whether the holder's own flow escaped. This is
+    /// [`D8_NESTED`]'s map, published so that M2.3c can mirror the rule for
+    /// a list stored in a constructor field — the case this census
+    /// deliberately stops at. Nothing here reads it; no verdict changes.
+    pub fn field_reads(&self) -> HashMap<(ExprId, usize), (Vec<ExprId>, bool)> {
+        self.nested_targets()
+            .into_iter()
+            .map(|(k, t)| (k, (t.seeds, t.escaped)))
+            .collect()
+    }
+
     /// Where a construction's *i*-th field goes: the occurrences of the
     /// field binder at every alternative that binds it.
     fn nested_targets(&self) -> Nested {
@@ -1132,7 +1145,7 @@ pub fn is_program_con(name: &str) -> bool {
 
 /// Does the parent of `child` evaluate it whenever the parent itself is
 /// evaluated?
-fn evaluates(s: &Scope, child: ExprId) -> bool {
+pub(crate) fn evaluates(s: &Scope, child: ExprId) -> bool {
     match s.m.edge[child as usize] {
         Edge::CaseScrut | Edge::AppFun | Edge::Cast | Edge::Tick | Edge::LetBody => true,
         // Only if the callee is strict in that argument.
@@ -1144,7 +1157,7 @@ fn evaluates(s: &Scope, child: ExprId) -> bool {
 /// Is `at` evaluated whenever `root` is — with only evaluating edges in
 /// between? An occurrence that *is* `root` is not: returning a binder does
 /// not force it.
-fn evaluated_within(s: &Scope, at: ExprId, root: ExprId) -> bool {
+pub(crate) fn evaluated_within(s: &Scope, at: ExprId, root: ExprId) -> bool {
     let m = s.m;
     let mut cur = at;
     if cur == root {

@@ -2874,3 +2874,589 @@ fn the_field_accounting_closes() {
     assert_eq!(fc.con_fields.len(), 1);
     assert_eq!(fc.con_fields[0].rep, FieldRep::Direct);
 }
+
+//------------------------------------------------------------------------------
+// Lists: when, and how much, of a spine is demanded (lists.rs)
+//------------------------------------------------------------------------------
+
+use crate::lists::{
+    ConsumerKind, Lists, PrefixBound, Recommendation, Recursion, Reuse, SpineDemand, Storage,
+    TailFate,
+};
+
+/// A global `Var` whose GHC stable name differs from its occurrence name:
+/// the axiom table is keyed on the stable name, and nothing else.
+fn gvar_named(occ: &str, name: &str) -> Value {
+    json!({"node": "Var", "name": name, "occ": occ, "unique": occ, "isGlobal": true})
+}
+
+fn cons_cell(h: Value, t: Value) -> Value {
+    app(app(gvar(":"), h), t)
+}
+
+fn nil() -> Value {
+    gvar("[]")
+}
+
+/// An imported non-constructor id, keyed in the table by its unique (which
+/// these fixtures make equal to the occurrence name).
+fn import_fn(occ: &str, arity: u32) -> Value {
+    let args: Vec<Value> = (0..arity).map(|_| demand(false, false)).collect();
+    json!({
+        "name": occ, "occ": occ, "arity": arity,
+        "dmdSig": {"args": args, "diverges": false, "pretty": ""},
+        "isJoinPoint": false, "dataCon": null
+    })
+}
+
+fn int_lit(n: u64) -> Value {
+    json!({"node": "Lit", "lit": {"kind": "Int", "pretty": n.to_string()}})
+}
+
+/// The list constructors, plus whatever else the fixture needs.
+fn list_ids(extra: Value) -> Value {
+    let mut ids = json!({
+        ":": data_con(":", "$ghc-prim$GHC.Types$:", 2),
+        "[]": data_con("[]", "$ghc-prim$GHC.Types$[]", 0),
+    });
+    if let Value::Object(o) = extra {
+        for (k, v) in o {
+            ids[k] = v;
+        }
+    }
+    ids
+}
+
+/// `case <scrut> of { [] -> nil_rhs; (y:ys) -> cons_rhs }`, with the list
+/// constructors named exactly as GHC names them — which is what makes the
+/// walk's constructor-relative alternative selection pick the right one.
+fn list_case(scrut: Value, nil_rhs: Value, binders: &[&str], cons_rhs: Value) -> Value {
+    json!({
+        "node": "Case", "scrut": scrut,
+        "binder": binder("wild", demand(false, false)), "type": "R",
+        "alts": [
+            {"con": {"kind": "DataAlt", "name": "$ghc-prim$GHC.Types$[]", "occ": "[]", "tag": 1},
+             "binders": [], "rhs": nil_rhs},
+            {"con": {"kind": "DataAlt", "name": "$ghc-prim$GHC.Types$:", "occ": ":", "tag": 1},
+             "binders": binders.iter().map(|b| binder(b, demand(false, false)))
+                 .collect::<Vec<_>>(),
+             "rhs": cons_rhs}
+        ]
+    })
+}
+
+fn list_census(m: &Module) -> Lists<'_> {
+    let census = Census::raw([m]);
+    let reads = crate::fields::Fields::of_module(m, &census).field_reads();
+    Lists::of_module(m, &census, &reads)
+}
+
+fn cons_flow<'a>(l: &'a Lists<'a>, n: usize) -> &'a crate::lists::ListFlow {
+    let all: Vec<&crate::lists::ListFlow> = l
+        .flows
+        .iter()
+        .filter(|f| f.kind == crate::lists::ProducerKind::ConsChain)
+        .collect();
+    assert!(
+        all.len() > n,
+        "expected more than {n} cons flow(s), got {}",
+        all.len()
+    );
+    all[n]
+}
+
+/// `let rec go = \ds -> case ds of { [] -> u; (y:ys) -> k (go ys) }` with
+/// `k` strict: every cell is reached before the consumer returns, and the
+/// spine is entered once.
+#[test]
+fn a_cons_chain_walked_by_a_recursive_consumer_demands_the_whole_spine() {
+    let loop_body = list_case(
+        var("ds"),
+        var("u"),
+        &["y", "ys"],
+        app(var("k"), app(var("go"), var("ys"))),
+    );
+    let m = top_module(
+        letrec1(
+            "go",
+            lam(&["ds"], loop_body),
+            let1("xs", cons_cell(var("a"), nil()), app(var("go"), var("xs"))),
+        ),
+        list_ids(json!({"k": callee(true)})),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.spine, SpineDemand::Whole, "{:?}", f.consumers);
+    assert_eq!(
+        f.head,
+        crate::lists::HeadDemand::None,
+        "the element is never forced"
+    );
+    assert_eq!(f.reuse, Reuse::SinglePass);
+    assert_eq!(f.storage, Storage::NotStored);
+    assert_eq!(f.recursion, Recursion::FiniteProducer);
+    assert!(f.short_circuit.no());
+    assert!(
+        f.consumers.iter().any(|c| matches!(
+            c.kind,
+            ConsumerKind::ConsAlt {
+                tail: TailFate::Loop { .. },
+                ..
+            }
+        )),
+        "the tail alias must close the loop back onto the same case: {:?}",
+        f.consumers
+    );
+}
+
+/// The same loop with the recursive call inside a constructor field is a
+/// `map`, not a `length`: one cell is reached per cell the *consumer* asks
+/// for, so the spine is `Incremental` and calling it `Whole` would be a
+/// lie.
+#[test]
+fn a_recursive_consumer_that_conses_its_result_is_incremental_not_whole() {
+    let loop_body = list_case(
+        var("ds"),
+        nil(),
+        &["y", "ys"],
+        cons_cell(var("y"), app(var("go"), var("ys"))),
+    );
+    let m = top_module(
+        letrec1(
+            "go",
+            lam(&["ds"], loop_body),
+            let1("xs", cons_cell(var("a"), nil()), app(var("go"), var("xs"))),
+        ),
+        list_ids(json!({})),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.spine, SpineDemand::Incremental, "{:?}", f.consumers);
+    assert!(f.consumers.iter().any(|c| matches!(
+        c.kind,
+        ConsumerKind::ConsAlt {
+            tail: TailFate::LoopIncremental { .. },
+            ..
+        }
+    )));
+}
+
+/// `take 1 (x : expensive)`: a bounded prefix, read off the literal, and
+/// nothing demands what comes after the first cell.
+#[test]
+fn take_with_a_literal_count_bounds_the_prefix() {
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(var("x"), app(var("expensive"), var("a"))),
+            app(
+                app(gvar_named("take", "$base$GHC.List$take"), int_lit(1)),
+                var("xs"),
+            ),
+        ),
+        list_ids(json!({"take": import_fn("take", 2), "expensive": callee(false)})),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(
+        f.spine,
+        SpineDemand::Prefix(PrefixBound::Known(1)),
+        "{:?}",
+        f.consumers
+    );
+    assert_eq!(f.head, crate::lists::HeadDemand::None);
+    assert!(
+        f.consumers
+            .iter()
+            .any(|c| matches!(&c.kind, ConsumerKind::Axiom { rule, .. } if *rule == "L-AX-TAKE"))
+    );
+}
+
+/// `find p xs`: a data-dependent prefix, and a consumer that may stop
+/// before the end.
+#[test]
+fn find_demands_a_data_dependent_prefix_and_short_circuits() {
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(var("x"), nil()),
+            app(
+                app(gvar_named("find", "$base$Data.Foldable$find"), var("p")),
+                var("xs"),
+            ),
+        ),
+        list_ids(json!({"find": import_fn("find", 2)})),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.spine, SpineDemand::Prefix(PrefixBound::DataDependent));
+    assert!(!f.short_circuit.no(), "find may stop at the first match");
+    assert_eq!(f.head, crate::lists::HeadDemand::Prefix);
+}
+
+/// Two consumers of one binder are two traversals of one spine.
+#[test]
+fn two_consumers_of_one_binder_are_two_passes() {
+    let len = |v: &str| app(gvar_named("length", "$base$GHC.List$length"), var(v));
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(var("x"), nil()),
+            app(app(var("h"), len("xs")), len("xs")),
+        ),
+        list_ids(json!({"length": import_fn("length", 1), "h": callee(true)})),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.spine, SpineDemand::Whole);
+    assert_eq!(f.traversals, 2, "{:?}", f.consumers);
+    assert_eq!(f.reuse, Reuse::MultiPass(2));
+}
+
+/// A `(y:ys)` alternative that stores the tail while the spine is also
+/// consumed elsewhere: the tail survives in two places.
+#[test]
+fn a_stored_tail_alias_is_a_shared_tail() {
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(var("x"), nil()),
+            app(
+                app(
+                    var("h"),
+                    app(gvar_named("length", "$base$GHC.List$length"), var("xs")),
+                ),
+                list_case(
+                    var("xs"),
+                    var("u"),
+                    &["y", "ys"],
+                    con_app("Box", &[var("ys")]),
+                ),
+            ),
+        ),
+        list_ids(json!({
+            "length": import_fn("length", 1), "h": callee(true),
+            "Box": prog_con("Box", 1)
+        })),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert!(
+        matches!(f.reuse, Reuse::SharedTail { .. }),
+        "reuse was {:?} with consumers {:?}",
+        f.reuse,
+        f.consumers
+    );
+    assert_eq!(f.rec, Recommendation::PersistentCandidate);
+}
+
+/// `let rec r = a : r`: a value knot, and the verdict is M1's — asserted
+/// here first, so that a change in M1 breaks this test rather than
+/// silently changing the answer.
+#[test]
+fn a_self_referential_cons_is_a_recursive_knot() {
+    let m = top_module(
+        letrec1(
+            "r",
+            cons_cell(var("a"), var("r")),
+            list_case(var("r"), var("u"), &["y", "ys"], app(var("k"), var("y"))),
+        ),
+        list_ids(json!({"k": callee(true)})),
+    );
+    let census = Census::raw([&m]);
+    assert!(
+        census
+            .bindings
+            .iter()
+            .any(|b| b.occ == "r" && b.class == Class::RecursiveValue),
+        "M1 must call this binding a recursive value first"
+    );
+    let reads = crate::fields::Fields::of_module(&m, &census).field_reads();
+    let l = Lists::of_module(&m, &census, &reads);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.recursion, Recursion::RecursiveKnot);
+    assert_eq!(f.rec, Recommendation::LazyCandidate);
+}
+
+/// A recursive *function* that builds a finite list is not a knot: M1 does
+/// not call it a recursive value, and neither does this.
+#[test]
+fn a_recursive_function_building_a_list_is_a_finite_producer() {
+    let m = top_module(
+        letrec1(
+            "f",
+            lam(
+                &["n"],
+                case_alts(
+                    var("n"),
+                    &[
+                        ("Z", vec![], nil()),
+                        ("S", vec!["p"], cons_cell(var("p"), app(var("f"), var("p")))),
+                    ],
+                ),
+            ),
+            app(var("f"), var("n0")),
+        ),
+        list_ids(json!({"Z": prog_con("Z", 0), "S": prog_con("S", 1)})),
+    );
+    let census = Census::raw([&m]);
+    assert!(
+        !census
+            .bindings
+            .iter()
+            .any(|b| b.occ == "f" && b.class == Class::RecursiveValue),
+        "M1 must not call a recursive function a recursive value"
+    );
+    let reads = crate::fields::Fields::of_module(&m, &census).field_reads();
+    let l = Lists::of_module(&m, &census, &reads);
+    for f in &l.flows {
+        assert_eq!(f.recursion, Recursion::FiniteProducer);
+    }
+}
+
+/// A list stored in a program ADT that nothing takes apart: the spine
+/// outlives every consumer this module can see.
+#[test]
+fn a_list_stored_in_an_adt_is_stored() {
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(var("x"), nil()),
+            con_app("Box", &[var("xs")]),
+        ),
+        list_ids(json!({"Box": prog_con("Box", 1)})),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.storage, Storage::StoredIn("Box".into()));
+    assert!(
+        f.consumers
+            .iter()
+            .any(|c| matches!(c.kind, ConsumerKind::StoredIn { .. }))
+    );
+}
+
+/// Handed to a higher-order parameter: nothing is claimed, and the reason
+/// says which rule refused.
+#[test]
+fn a_list_through_a_higher_order_parameter_is_unknown_with_a_reason() {
+    let m = top_module(
+        lam(
+            &["f"],
+            let1("xs", cons_cell(var("x"), nil()), app(var("f"), var("xs"))),
+        ),
+        list_ids(json!({})),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.spine, SpineDemand::Unknown);
+    assert_eq!(f.rec, Recommendation::Unknown);
+    assert_eq!(
+        f.rec_reason.as_deref(),
+        Some(crate::flow::R_HIGHER_ORDER),
+        "{:?}",
+        f.consumers
+    );
+}
+
+/// `foldl'` reaches every cell and is still a streaming consumer: the
+/// advisory verdict is an iterator, **not** a `Vec`. "The whole spine is
+/// eventually consumed" does not mean the whole spine has to exist.
+#[test]
+fn foldl_strict_over_a_whole_list_is_an_iterator_not_a_vec() {
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(var("x"), nil()),
+            app(
+                app(
+                    app(gvar_named("foldl'", "$base$GHC.List$foldl'"), var("k")),
+                    var("z"),
+                ),
+                var("xs"),
+            ),
+        ),
+        list_ids(json!({"foldl'": import_fn("foldl'", 3)})),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.spine, SpineDemand::Whole);
+    assert!(f.streaming, "foldl' retains nothing");
+    assert_eq!(f.reuse, Reuse::SinglePass);
+    assert_eq!(f.rec, Recommendation::IteratorCandidate);
+    assert_ne!(f.rec, Recommendation::VecCandidate);
+}
+
+/// `xs ++ ys`: the left spine is copied one cell at a time, and the right
+/// one is not walked at all — it *becomes* the result's tail, which is a
+/// shared tail.
+#[test]
+fn append_is_incremental_on_the_left_and_aliases_on_the_right() {
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(var("x"), nil()),
+            let1(
+                "ys",
+                cons_cell(var("y"), nil()),
+                app(
+                    app(gvar_named("++", "$base$GHC.Base$++"), var("xs")),
+                    var("ys"),
+                ),
+            ),
+        ),
+        list_ids(json!({"++": import_fn("++", 2)})),
+    );
+    let l = list_census(&m);
+    let left = cons_flow(&l, 0);
+    let right = cons_flow(&l, 1);
+    assert_eq!(left.spine, SpineDemand::Incremental, "{:?}", left.consumers);
+    assert_eq!(right.spine, SpineDemand::None, "{:?}", right.consumers);
+    assert!(
+        matches!(right.reuse, Reuse::SharedTail { .. }),
+        "the right argument is the result's own tail: {:?}",
+        right.reuse
+    );
+    assert!(left.consumers.iter().all(|c| !c.aliases));
+}
+
+/// An imported head with no table entry: the flow is `Unknown` and names
+/// the head, so the residual says exactly which axiom is missing.
+#[test]
+fn an_imported_head_without_an_axiom_is_unknown_and_names_it() {
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(var("x"), nil()),
+            app(
+                gvar_named("mysteryFn", "$somelib$Some.Module$mysteryFn"),
+                var("xs"),
+            ),
+        ),
+        list_ids(json!({"mysteryFn": import_fn("mysteryFn", 1)})),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.spine, SpineDemand::Unknown);
+    assert_eq!(
+        f.rec_reason.as_deref(),
+        Some("no-axiom-for($somelib$Some.Module$mysteryFn)")
+    );
+    assert!(f.consumers.iter().any(
+        |c| matches!(&c.kind, ConsumerKind::NoAxiom { name, in_table }
+                     if name == "$somelib$Some.Module$mysteryFn" && !*in_table)
+    ));
+}
+
+/// **A program function is never looked up in the axiom table.** A local
+/// `map` with the same occurrence name is followed by def-use, and an
+/// imported one from the program's own package gets no axiom at all.
+#[test]
+fn the_axiom_table_is_never_applied_to_a_program_function() {
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(var("x"), nil()),
+            app(gvar_named("map", "$main$ShellCheck.Mine$map"), var("xs")),
+        ),
+        list_ids(json!({"map": import_fn("map", 1)})),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.spine, SpineDemand::Unknown);
+    assert_eq!(
+        f.rec_reason.as_deref(),
+        Some("no-axiom-for($main$ShellCheck.Mine$map)"),
+        "an occurrence name of `map` must not reach GHC.Base's axiom"
+    );
+}
+
+/// A chain of conses built by one producer is **one** flow of many cells,
+/// and the `[]` that terminates it is a cell of it rather than a flow of
+/// its own.
+#[test]
+fn a_cons_chain_is_one_flow() {
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(var("a"), cons_cell(var("b"), cons_cell(var("c"), nil()))),
+            app(gvar_named("length", "$base$GHC.List$length"), var("xs")),
+        ),
+        list_ids(json!({"length": import_fn("length", 1)})),
+    );
+    let l = list_census(&m);
+    assert_eq!(l.flows.len(), 1, "one producer, one flow");
+    let f = &l.flows[0];
+    assert_eq!(f.cells.len(), 3);
+    assert!(f.nil_terminated);
+    assert_eq!(f.spine, SpineDemand::Whole);
+}
+
+/// A spine consed onto as the tail of another cell is not stored: it
+/// continues into that cell's flow, and the successor's demand comes back.
+#[test]
+fn a_spine_consed_onto_another_cell_inherits_that_flow_s_demand() {
+    // let inner = a : [] in let outer = b : inner in length outer
+    let m = top_module(
+        let1(
+            "inner",
+            cons_cell(var("a"), nil()),
+            let1(
+                "outer",
+                cons_cell(var("b"), var("inner")),
+                app(gvar_named("length", "$base$GHC.List$length"), var("outer")),
+            ),
+        ),
+        list_ids(json!({"length": import_fn("length", 1)})),
+    );
+    let l = list_census(&m);
+    assert_eq!(l.flows.len(), 2);
+    let inner = l
+        .flows
+        .iter()
+        .find(|f| f.bound.is_some_and(|b| m.binder(b).occ == "inner"))
+        .unwrap();
+    assert!(
+        inner
+            .consumers
+            .iter()
+            .any(|c| matches!(c.kind, ConsumerKind::ConsedAsTail { .. })),
+        "{:?}",
+        inner.consumers
+    );
+    assert_eq!(
+        inner.storage,
+        Storage::NotStored,
+        "a tail slot is not storage"
+    );
+    assert_eq!(
+        inner.spine,
+        SpineDemand::Whole,
+        "the successor's whole-spine demand reaches this flow"
+    );
+}
+
+/// The whole census closes: every flow in exactly one bucket of every
+/// table, and every one of the M2 census' list-cons sites mapped.
+#[test]
+fn the_list_accounting_closes() {
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(app(var("g"), var("a")), nil()),
+            app(gvar_named("length", "$base$GHC.List$length"), var("xs")),
+        ),
+        list_ids(json!({"length": import_fn("length", 1), "g": callee(true)})),
+    );
+    let modules = [&m];
+    let census = Census::raw(modules.iter().copied());
+    let lc = crate::lists::ListCensus::of_modules(&modules, &census);
+    lc.accounting.check();
+    assert_eq!(lc.accounting.flows, 1);
+    assert_eq!(lc.accounting.sites_unmapped, 0);
+    assert_eq!(
+        lc.accounting.sites.len(),
+        lc.accounting.sites_mapped,
+        "the census' list-cons sites all land on a cell"
+    );
+}

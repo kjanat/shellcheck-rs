@@ -35,9 +35,9 @@ ShellCheck Haskell
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the two canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), and which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent). Includes a depth-limited Core pretty-printer. |
-| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`). |
+| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census). Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`). Later: the lowering passes. |
 
 ## Usage
 
@@ -64,6 +64,9 @@ cargo run --release --bin h2r -- tuples ../core-json --module ShellCheck.CFG --s
 cargo run --release --bin h2r -- tuples ../core-json --boundaries  # can all the views be applied at once?
 cargo run --release --bin h2r -- fields ../core-json                        # constructor fields: what is evaluated, and when
 cargo run --release --bin h2r -- fields ../core-json --con OuterToken
+cargo run --release --bin h2r -- lists ../core-json                         # list flows: when is a spine demanded, and how much
+cargo run --release --bin h2r -- lists ../core-json --axioms                # the library demand-semantics table
+cargo run --release --bin h2r -- lists ../core-json --module ShellCheck.ASTLib --explain
 cargo run --release --bin h2r -- tuples ../core-json --module Main --boundaries --explain
 cargo run --release --bin h2r -- show ../core-json ShellCheck.Checks.Commands 4714   # + its tuple proof
 ```
@@ -1600,6 +1603,9 @@ type.
 cargo run --release --bin h2r -- fields ../core-json
 cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.AST --explain
 cargo run --release --bin h2r -- fields ../core-json --con OuterToken
+cargo run --release --bin h2r -- lists ../core-json                         # list flows: when is a spine demanded, and how much
+cargo run --release --bin h2r -- lists ../core-json --axioms                # the library demand-semantics table
+cargo run --release --bin h2r -- lists ../core-json --module ShellCheck.ASTLib --explain
 cargo run --release --bin h2r -- fields ../core-json --json
 ```
 
@@ -1822,6 +1828,272 @@ profiles:
   `rec` flag, under the same predicate.
 * **This section decides evaluation only.** A field can be `Deferred` and
   `Acyclic` with no decision made about how it is represented.
+
+## M2.3c — when, and how much, of a list's spine is demanded
+
+M2.3b asked what is evaluated when a constructor *field* is read, and
+deferred 1,310 of the M2 census' 1,996 constructor-field sites — the list
+cons — to here. This section answers a different question about those and
+about every other list: **when, and how much, of a spine is demanded, by
+whom, how often, and does anything alias its tail?**
+
+It deliberately does *not* start from `[]`/`(:)` and end at a Rust type.
+`foldl'` reaches every cell of a spine and is still a streaming consumer;
+"the whole spine is eventually consumed" does not mean the whole spine ever
+has to exist. So six **facts** are recorded per flow, each with its own
+rules and nodes, and an **advisory** recommendation is derived from them at
+the end and clearly labelled as advisory.
+
+Text (`[Char]`) is M2.3d and nothing here decides it. Every flow records
+the list type and the element type as GHC rendered them on the binder —
+corroboration-level evidence that no verdict reads — so M2.3d can select
+the `[Char]` flows out of these facts.
+
+```sh
+cargo run --release --bin h2r -- lists ../core-json
+cargo run --release --bin h2r -- lists ../core-json --axioms
+cargo run --release --bin h2r -- lists ../core-json --module ShellCheck.ASTLib --explain
+cargo run --release --bin h2r -- lists ../core-json --json
+```
+
+### The population: flows, not cells
+
+| Producer | | `-O1` |
+|---|---|---:|
+| `L0-CONS` | a saturated `(:)`, by `DataConInfo` and never by name, that is not itself the tail of another cons | 3,920 |
+| `L0-NIL` | a `[]`, likewise, that is not the tail of a cons in the population | 2,887 |
+| `L0-IMPORTED` | a saturated call to an imported function the [axiom table](#the-library-demand-semantics-table) says returns a list | 5,031 |
+| `L0-LOCAL` | a saturated call to a local function returning a list producer whose own flow could not reach this call site | 45 |
+| | **flows** | **11,883** |
+
+`L1-CHAIN`: a cons whose tail argument is another cons or a nil
+*construction* is a **cell of the same flow**, so `1 : 2 : 3 : []` is one
+flow of three cells, not four flows. 4,270 cons applications collapse into
+3,920 chains.
+
+`L0-LOCAL` is small on purpose. A call to a local list-producing function
+is normally *reached* — the producer's own flow leaves the function through
+`T6-RETURNED` and comes back at every call site through `T7-CALL-RESULT` —
+so it is a location of that flow rather than a new one, which is what keeps
+the population disjoint. The 45 are the cases where the return left the
+module and the call site is genuinely a new start.
+
+### Following a spine
+
+The [generic aggregate walk](#m22--which-tuples-are-transport-and-which-are-values)
+does the work, with the constructor-relative alternative selection M2.3b
+added: at `case xs of { [] -> …; (y:ys) -> … }` a cons flow selects the
+`(:)` alternative and a nil flow the `[]` one, and the other is unreachable
+for that flow (987 alternatives and 120 case-binder occurrences skipped).
+Three list-specific rules sit on top of it:
+
+* **`L2-TAIL-ALIAS`** — the `(:)` alternative's *second* binder is not a
+  field leaving the flow, it **is** the rest of this spine, and the walk
+  continues at its occurrences. This is what lets a recursive consumer
+  close a loop back onto the same `case` instead of stopping at the first
+  cell. The *first* binder is an element, and is what `HeadDemand` is
+  measured on (`L3-HEAD-BOUND`).
+* **`L7-CONSED-AS-TAIL`** — the value is the **tail** argument of another
+  cell: a `go`-loop accumulator, a cons built from a parameter. That is not
+  storage; the spine continues into that cell's flow, and the successor's
+  facts come back through a worklist fixpoint over the reverse edges
+  (9,880 hops, 2,873 updates to settle).
+* **`L18-STORED-FOLLOWED`** — the value is a field of a construction in
+  M2.3b's population, and that holder is taken apart somewhere visible: the
+  reads of the holder's field are reads of this spine. This is the exact
+  mirror of M2.3b's `D8-NESTED`, which stops at a list cell precisely
+  because this milestone owns it. It fires 3,191 times, and it is the
+  reason `Storage` and `SpineDemand` are separate facts: a spine can be
+  stored *and* have a fully visible demand.
+
+### The library demand-semantics table
+
+A call to `map`, `++` or `$wlenAcc` has no unfolding in the dump, so
+def-use can only say the list left the module. `lists/axioms.rs` restores
+the missing facts as an explicit, auditable table — 90 entries — each
+carrying a stable global name, a semantic rule id (`L-AX-…`), the spine
+demand on **each** list argument, the head demand, whether the result
+aliases the input or a tail, whether evaluation short-circuits, how the
+result list is produced (incremental / whole-before-first-cell /
+same-as-input / unbounded), and a note.
+
+It introduces a **new evidence level**, and where it sits is the point:
+
+> 1 lexical binder identity · 2 structural shape · 3 def-use dataflow ·
+> 4 GHC type compatibility · **5 library axiom** · 6 textual type
+> comparison · 7 names
+
+Below dataflow because it is *asserted*, not derived — nothing in the dump
+proves that `reverse` traverses its whole argument. Above textual types
+because it is a statement about semantics rather than spelling. The table
+was written against **base-4.18.3.0 / ghc-prim-0.10.0 (GHC 9.6.7)**, the
+versions in `compiler/matrix/A/plan.json`.
+
+**An axiom is only ever applied to an imported id.** The key is GHC's full
+stable name and the lookup happens only when `binding_of` says nothing in
+this module binds the head, so a program function called `map` is never
+looked up — there is a regression test for exactly that. List arguments are
+indexed **from the end** of the call's value arguments, which is what makes
+an entry survive a leading dictionary; an entry declares a minimum argument
+count and is not applied to a call supplying fewer.
+
+The flows reached **119 distinct imported heads**; 27 of them have an
+entry, and those 27 cover 4,973 of the 6,806 imported consumer sites
+(73%). The rest are reported as `Unknown` with
+`no-axiom-for(<stable name>)` — never guessed.
+
+| calls | axiom | head | | calls | axiom | head |
+|---:|---|---|---|---:|---|---|
+| 1,861 | yes | `GHC.Base.++` | | 394 | **no** | `ShellCheck.Interface.$wgo` |
+| 1,123 | yes | `GHC.Base.eqString` | | 168 | **no** | `GHC.Show.showLitString` |
+| 1,002 | yes | `GHC.CString.unpackAppendCString#` | | 88 | **no** | `Text.Parsec.Char.string1` |
+| 236 | yes | `GHC.List.elem` | | 72 | **no** | `GHC.Classes.$fOrdList_$s$ccompare1` |
+| 192 | yes | `Data.OldList.isPrefixOf` | | 66 | **no** | `GHC.Show.showList__` |
+| 144 | yes | `GHC.Base.++_$s++` | | 61 | **no** | `GHC.IO.Handle.Text.hPutStr2` |
+| 138 | yes | `GHC.List.reverse1` | | 61 | **no** | `GHC.Classes.$fEqList_$s$c==1` |
+| 129 | yes | `GHC.List.takeWhile` | | 49 | **no** | `Text.Regex.TDFA.String.compile` |
+
+Entries are written only where the semantics are certain. Several
+GHC-internal helpers occur whose argument order or sharing behaviour cannot
+be read off their names — `splitAt_$s$wsplitAt'`,
+`intercalate_$spoly_go1`, `dropLength`, `dropLengthMaybe`,
+`prependToAll`, `head1`, `init1`, `lvl` — and they get **no entry**. That
+residual is the honest measure of the table's coverage.
+
+### Six facts, and only then a recommendation
+
+| `SpineDemand` | | | `HeadDemand` | |
+|---|---:|---|---|---:|
+| Unknown | 5,649 | | Unknown | 5,649 |
+| None | 4,358 | | None | 5,048 |
+| Prefix(DataDependent) | 856 | | Prefix | 897 |
+| Incremental | 710 | | All | 270 |
+| Prefix(Known) | 178 | | First | 19 |
+| Whole | 132 | | | |
+
+| `Reuse` | | | `Storage` | | | `Recursion` | |
+|---|---:|---|---|---:|---|---|---:|
+| SinglePass | 5,489 | | StoredIn | 5,277 | | FiniteProducer | 11,852 |
+| Escapes | 4,347 | | NotStored | 4,332 | | RecursiveKnot | 31 |
+| SharedTail | 1,762 | | Returned | 1,460 | | | |
+| MultiPass | 285 | | Captured | 814 | | | |
+
+`ShortCircuit`: 1,096 flows have a consumer that may stop before the end,
+10,787 do not. 6,166 flows have only streaming spine consumers.
+
+The spine rules behind `SpineDemand`, beyond the axioms:
+
+| Rule | | `-O1` |
+|---|---|---:|
+| `L4-LOOP-WHOLE` | the tail alias is an argument of a saturated call to a local callee whose parameter *this same `case`* scrutinises, and the call runs whenever the alternative does with only evaluating edges in between → **Whole** | 27 |
+| `L17-LOOP-INCREMENTAL` | the same loop with the recursive call in a lazy position — a constructor field, a lazy argument, a lambda — so a cell is reached only when the consumer's own consumer asks → **Incremental**. This is the `map`-shaped loop, and calling it `Whole` would be a lie | 115 |
+| `L5-LOOP-SHORTCIRCUIT` | the same loop under a `case` inside the alternative → **Prefix(DataDependent)** and a short-circuit node | 195 |
+| `L6-TAIL-DROPPED` | the alternative binds the tail and never uses it → this cell only | 137 |
+| `L14-SHARED-TAIL` | an axiom whose result aliases the argument, or a tail-derived value that is stored or handed out | 1,762 |
+| `L15-MULTIPASS` | more than one consumer enters the spine without reaching it through another's tail alias | 285 |
+| `L13-RECURSIVE-KNOT` | **M1's** `Class::RecursiveValue`, read and not re-derived | 31 |
+
+`Recursion` is M1's definition and only M1's: a non-function member of a
+recursive group that refers to itself through the value. A recursive
+*function* building a finite list is `FiniteProducer`, and there is a test
+that asserts M1 does not call such a binding a recursive value.
+
+### The advisory recommendation
+
+| | | |
+|---:|---|---|
+| 49 | `VecCandidate` | whole spine, entered more than once or outliving its consumers, no shared tail, finite producer |
+| 740 | `IteratorCandidate` | one pass, nothing retained, every spine consumer streaming, finite producer |
+| 1,951 | `PersistentCandidate` | a tail survives in two places, or repeated entry with tails retained |
+| 31 | `LazyCandidate` | a value knot, or a short-circuiting consumer in front of an unbounded producer |
+| 9,112 | `Unknown` | any fact is `Unknown`, or the facts match no recommendation — with the reason |
+| **11,883** | | |
+
+Two orderings in the derivation are deliberate and stated rather than
+hidden. A **value knot** is a knot whatever else is true of it, so it is
+decided first. A **proven shared tail** decides the representation on its
+own even when the spine demand is `Unknown`: how much of the spine anyone
+walks does not change the fact that two owners see the same cells. That is
+the one place a positive structural fact outranks an `Unknown` one.
+
+`foldl'` over a whole list is the case the split exists for: `Whole` spine,
+`SinglePass`, `NotStored`, streaming — an `IteratorCandidate`, **not** a
+`VecCandidate`. There is a test that asserts exactly that.
+
+### The 1,310 list-cons census sites
+
+M2.3b mapped 686 of the M2 census' 1,996 constructor-field sites onto a
+(construction, field) pair and deferred the 1,310 list-cons ones here. They
+map onto this population exactly:
+
+| | |
+|---:|---|
+| 1,310 | mapped onto the cell they are an argument of |
+| 0 | unmapped |
+
+1,174 of them are the cell's **tail** and 136 its element — which is the
+shape of the thing: a lazy computation in a cons cell is usually the rest
+of the list.
+
+| by recommendation | | by `SpineDemand` | |
+|---:|---|---:|---|
+| 900 | Unknown | 684 | Unknown |
+| 351 | PersistentCandidate | 492 | None |
+| 40 | IteratorCandidate | 52 | Incremental |
+| 19 | VecCandidate | 40 | Prefix(DataDependent) |
+| | | 27 | Whole |
+| | | 15 | Prefix(Known) |
+
+### Accounting
+
+Asserted in code (`ListAccounting::check`), on `-O1` and on all six matrix
+profiles: every flow lands in exactly one bucket of the producer-kind,
+recommendation, spine, head, reuse, storage and recursion tables; every
+flow either has a short-circuiting consumer or has not; every imported head
+seen either has an axiom or has not; and every one of the census' list-cons
+sites maps onto exactly one cell or carries a reason.
+
+| profile | flows | ConsChain | Nil | Imported | Local | Vec | Iterator | Persistent | Lazy | Unknown |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `-O1` / A | 11,883 | 3,920 | 2,887 | 5,031 | 45 | 49 | 740 | 1,951 | 31 | 9,112 |
+| B | 12,235 | 3,989 | 3,024 | 5,172 | 50 | 81 | 705 | 1,931 | 31 | 9,487 |
+| C | 13,709 | 3,907 | 3,670 | 6,078 | 54 | 65 | 1,205 | 1,951 | 23 | 10,465 |
+| D | 23,871 | 6,291 | 8,516 | 9,010 | 54 | 69 | 1,789 | 2,600 | 83 | 19,330 |
+| E | 22,673 | 6,213 | 7,806 | 8,600 | 54 | 69 | 1,708 | 2,492 | 83 | 18,321 |
+| F | 22,792 | 6,262 | 7,839 | 8,637 | 54 | 69 | 1,690 | 2,462 | 83 | 18,488 |
+
+`h2r tuples`, `--verify`, `--boundaries`, `h2r laziness`, `h2r parsec` and
+`h2r fields` are byte-identical on `-O1` before and after this milestone.
+
+### Known limits, stated rather than hidden
+
+* **The axiom table is asserted.** Every `L-AX-…` entry is a claim about
+  base that the dump does not prove. The entries most worth re-reading are
+  the aliasing ones — `reverse1`'s accumulator becoming the result's tail,
+  `unpackAppendCString#`'s second argument, `dropWhile`/`drop`/`span`
+  returning a suffix of their input — because a wrong alias claim turns a
+  `PersistentCandidate` into an `IteratorCandidate`, which is the unsafe
+  direction. Nothing that could not be read off the function's contract
+  with certainty got an entry.
+* **2,849 flows are stored with no visible spine demand.** The holder is in
+  M2.3b's population but never taken apart in this module, or it is not a
+  construction at all. Whole-program (M2.4) work, not a missing rule here.
+* **1,700 flows reach a holder that escapes.** `L18-STORED-FOLLOWED`
+  inherits the holder's escapes, so a spine inside an escaping
+  `TokenComment` is `Unknown` rather than guessed.
+* **Traversal counting over-counts rather than under-counts.** A consumer
+  is treated as a new entry into the spine unless it is reached through
+  another consumer's tail alias, closed over known-local calls. Where that
+  closure cannot follow — a higher-order hop — two views of one traversal
+  are counted as two, which pushes a flow towards `MultiPass` and
+  `PersistentCandidate`: the conservative direction for a representation
+  decision.
+* **`Captured` is narrow.** A flow that crossed a parameter or a return is
+  never called captured, because a consumer inside the callee's lambdas is
+  where the value was *sent*, not where it was captured. That costs
+  coverage in the safe direction.
+* **This section decides demand and sharing only.** No Rust type is chosen
+  anywhere, and `[Char]` is not distinguished from any other element type.
 
 ## What ShellCheck actually needs
 

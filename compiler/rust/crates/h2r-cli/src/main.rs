@@ -133,6 +133,24 @@ enum Command {
         #[arg(long)]
         con: Option<String>,
     },
+    /// Census every list flow and prove, by def-use plus an explicit
+    /// library demand-semantics table, when and how much of each spine is
+    /// demanded, by whom, how often, and what aliases its tail.
+    Lists {
+        dir: PathBuf,
+        /// Restrict to one module.
+        #[arg(long)]
+        module: Option<String>,
+        /// Emit the flows and the accounting as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print every flow with its facts, consumers and node ids.
+        #[arg(long)]
+        explain: bool,
+        /// Print the library demand-semantics table.
+        #[arg(long)]
+        axioms: bool,
+    },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
         dir: PathBuf,
@@ -199,6 +217,13 @@ fn main() -> Result<()> {
             explain,
             con,
         } => fields(&dir, module.as_deref(), json, explain, con.as_deref()),
+        Command::Lists {
+            dir,
+            module,
+            json,
+            explain,
+            axioms,
+        } => lists(&dir, module.as_deref(), json, explain, axioms),
         Command::Parsec {
             dir,
             module,
@@ -2873,6 +2898,380 @@ fn one_con(fc: &h2r_analysis::fields::FieldCensus<'_>, name: &str) -> Result<()>
                 .collect::<Vec<_>>()
                 .join("  ")
         );
+    }
+    Ok(())
+}
+
+//------------------------------------------------------------------------------
+// lists
+//------------------------------------------------------------------------------
+
+/// The list census: when and how much of each spine is demanded, by whom,
+/// how often, and does anything alias its tail?
+fn lists(
+    dir: &Path,
+    module: Option<&str>,
+    json: bool,
+    explain: bool,
+    show_axioms: bool,
+) -> Result<()> {
+    use h2r_analysis::lists::axioms;
+    use h2r_analysis::lists::{ConsumerKind, ListCensus, Recommendation};
+
+    if show_axioms && module.is_none() && dir.as_os_str().is_empty() {
+        return print_axioms();
+    }
+
+    let modules = load_dir(dir)?;
+    let selected: Vec<&Module> = match module {
+        Some(name) => vec![find_module(&modules, name)?],
+        None => modules.iter().collect(),
+    };
+    // M1's census is read for two things only: its `RecursiveValue`
+    // verdicts (the knot definition is M1's) and its list-cons argument
+    // sites — the 1,310 the constructor-field census deferred here.
+    let census = Census::raw(selected.iter().copied());
+    let lc = ListCensus::of_modules(&selected, &census);
+    let acct = &lc.accounting;
+
+    if json {
+        let out = serde_json::json!({
+            "flows": lc.flows,
+            "accounting": acct,
+            "axioms": axioms::all(),
+            "baseVersion": axioms::BASE_VERSION,
+        });
+        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        println!();
+        return Ok(());
+    }
+
+    if show_axioms {
+        print_axioms()?;
+        println!();
+    }
+
+    println!("List flows — {} module(s)", selected.len());
+    println!();
+    println!(
+        "Flows                                                {:>7}",
+        acct.flows
+    );
+    println!(
+        "  cons cells built by those producers                {:>7}",
+        acct.cells
+    );
+    println!(
+        "  alternatives a value of the constructor cannot select, skipped   {:>7}",
+        acct.unreachable_alts
+    );
+    println!(
+        "  case-binder occurrences excluded by that reachability            {:>7}",
+        acct.alias_occurrences_unreachable
+    );
+    println!(
+        "  flows abandoned at the location budget             {:>7}",
+        acct.over_budget
+    );
+    println!(
+        "  successor fixpoint updates                         {:>7}",
+        lc.per_module
+            .iter()
+            .map(|l| l.successor_rounds)
+            .max()
+            .unwrap_or(0)
+    );
+
+    println!();
+    println!("By producer kind");
+    for (kind, n) in &acct.by_kind {
+        println!("  {n:>7}  {}", kind.name());
+    }
+
+    println!();
+    println!("The six facts, each recorded independently");
+    for (title, rows) in [
+        ("SpineDemand", &acct.by_spine),
+        ("HeadDemand", &acct.by_head),
+        ("Reuse", &acct.by_reuse),
+        ("Storage", &acct.by_storage),
+        ("Recursion", &acct.by_recursion),
+    ] {
+        println!("  {title}");
+        let mut rows: Vec<_> = rows.iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        for (name, n) in rows {
+            println!("    {n:>7}  {name}");
+        }
+    }
+    println!("  ShortCircuit");
+    println!(
+        "    {:>7}  yes (a consumer may stop before the end)",
+        acct.short_circuit_yes
+    );
+    println!("    {:>7}  no", acct.short_circuit_no);
+    println!(
+        "  of the flows, {} have only streaming spine consumers",
+        acct.streaming
+    );
+
+    println!();
+    println!("Recommendation (advisory — the theorem is the facts above)");
+    for r in [
+        Recommendation::VecCandidate,
+        Recommendation::IteratorCandidate,
+        Recommendation::PersistentCandidate,
+        Recommendation::LazyCandidate,
+        Recommendation::Unknown,
+    ] {
+        println!("  {:>7}  {}", acct.count(r), r.name());
+    }
+
+    println!();
+    println!("Recommendation x SpineDemand");
+    let mut grid: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for f in &lc.flows {
+        *grid.entry((f.rec.name(), f.spine.name())).or_default() += 1;
+    }
+    for ((rec, spine), n) in &grid {
+        println!("  {n:>7}  {rec:<20} {spine}");
+    }
+
+    println!();
+    println!(
+        "Imported heads the flows reached: {} ({} with an axiom, {} without)",
+        acct.heads.len(),
+        acct.heads_with_axiom,
+        acct.heads_without_axiom
+    );
+    println!("  (the table was written against {})", axioms::BASE_VERSION);
+    println!(
+        "  {:>7}  {:<6} {:<58} example",
+        "calls", "axiom", "stable name"
+    );
+    for (name, n, has, node) in &acct.heads {
+        println!(
+            "  {n:>7}  {:<6} {name:<58} node {node}",
+            if *has { "yes" } else { "NO" }
+        );
+    }
+
+    println!();
+    println!("Consumers by kind");
+    for (kind, n) in &acct.consumers_by_kind {
+        println!("  {n:>7}  {kind}");
+    }
+    println!();
+    println!("Rules, by the number of times each fired");
+    for (rule, n) in &acct.rules {
+        println!("  {n:>7}  {rule}");
+    }
+
+    // The 1,310 the constructor-field census deferred here.
+    println!();
+    println!(
+        "The M2 census' {} list-cons argument sites (deferred to M2.3c by the field census)",
+        acct.sites.len()
+    );
+    println!(
+        "  {:>7}  mapped onto the cell they are an argument of",
+        acct.sites_mapped
+    );
+    println!("  {:>7}  unmapped, with a reason", acct.sites_unmapped);
+    let mut unmapped: BTreeMap<&str, (usize, String, u32)> = BTreeMap::new();
+    for s in &acct.sites {
+        if let Some(r) = s.reason {
+            let e = unmapped.entry(r).or_insert((0, String::new(), 0));
+            e.0 += 1;
+            if e.1.is_empty() {
+                e.1 = s.module.clone();
+                e.2 = s.app;
+            }
+        }
+    }
+    for (reason, (n, md, node)) in &unmapped {
+        println!("    {n:>6}  {reason:<46} e.g. {md} node {node}");
+    }
+    println!();
+    println!("  by recommendation, and by the field of the cell they land in");
+    let mut by_rec: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut by_spine: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut by_field: BTreeMap<String, usize> = BTreeMap::new();
+    for s in &acct.sites {
+        *by_rec
+            .entry(s.rec.map(|r| r.name()).unwrap_or("unmapped"))
+            .or_default() += 1;
+        *by_spine
+            .entry(s.spine.map(|x| x.name()).unwrap_or("unmapped"))
+            .or_default() += 1;
+        *by_field
+            .entry(match s.field {
+                Some(0) => "field 0 (the element)".to_string(),
+                Some(1) => "field 1 (the tail)".to_string(),
+                Some(k) => format!("field {k}"),
+                None => "unmapped".to_string(),
+            })
+            .or_default() += 1;
+    }
+    for (rec, n) in &by_rec {
+        println!("    {n:>6}  {rec}");
+    }
+    println!();
+    println!("  and by SpineDemand");
+    for (spine, n) in &by_spine {
+        println!("    {n:>6}  {spine}");
+    }
+    println!();
+    for (field, n) in &by_field {
+        println!("    {n:>6}  {field}");
+    }
+
+    // Why the residual is what it is.
+    println!();
+    println!("Top Unknown reasons (top 10)");
+    let mut by: BTreeMap<String, (usize, String, u32)> = BTreeMap::new();
+    for f in &lc.flows {
+        if f.rec != Recommendation::Unknown {
+            continue;
+        }
+        let key = f
+            .rec_reason
+            .clone()
+            .unwrap_or_else(|| "unstated".to_string());
+        let e = by.entry(key).or_insert((0, String::new(), 0));
+        e.0 += 1;
+        if e.1.is_empty() {
+            e.1 = f.module.clone();
+            e.2 = f.producer;
+        }
+    }
+    let mut by: Vec<_> = by.into_iter().collect();
+    by.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+    for (reason, (n, md, node)) in by.iter().take(10) {
+        println!("  {n:>7}  {reason:<66} e.g. {md} node {node}");
+    }
+
+    println!();
+    println!("Element types, as GHC rendered them (corroboration only — M2.3d decides text)");
+    let mut tys: BTreeMap<String, usize> = BTreeMap::new();
+    for f in &lc.flows {
+        if let Some(t) = &f.elem_ty {
+            *tys.entry(t.clone()).or_default() += 1;
+        }
+    }
+    let mut tys: Vec<_> = tys.into_iter().collect();
+    tys.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    for (ty, n) in tys.iter().take(15) {
+        println!("  {n:>7}  {ty}");
+    }
+
+    if explain {
+        println!();
+        println!("Every flow");
+        for f in &lc.flows {
+            println!(
+                "{} node {} — {} [{} cell(s)]{}",
+                f.module,
+                f.producer,
+                f.kind.name(),
+                f.cells.len(),
+                if f.producer_name.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", f.producer_name)
+                }
+            );
+            println!(
+                "    facts  spine {} [{}], head {}, reuse {}, storage {}, {:?}, short-circuit {}",
+                f.spine.name(),
+                f.spine_rule,
+                f.head.name(),
+                f.reuse.name(),
+                f.storage.name(),
+                f.recursion,
+                if f.short_circuit.no() {
+                    "no".to_string()
+                } else {
+                    format!("{:?}", f.short_circuit.yes)
+                }
+            );
+            println!(
+                "    types  list {:?}, element {:?}",
+                f.list_ty.as_deref().unwrap_or("-"),
+                f.elem_ty.as_deref().unwrap_or("-")
+            );
+            for c in &f.consumers {
+                println!(
+                    "    use    {:<14} node {:<8} spine {:<22} head {:<8} {}{} [{}] {}",
+                    match &c.kind {
+                        ConsumerKind::Axiom { rule, .. } => (*rule).to_string(),
+                        k => h2r_analysis::lists::consumer_name(k).to_string(),
+                    },
+                    c.at,
+                    c.spine.name(),
+                    c.head.name(),
+                    if c.streaming {
+                        "streaming "
+                    } else {
+                        "retaining "
+                    },
+                    if c.tail_derived { "tail-derived" } else { "" },
+                    c.rule,
+                    c.detail
+                );
+            }
+            println!(
+                "    => {} [{}]{}",
+                f.rec.name(),
+                f.rec_rule,
+                f.rec_reason
+                    .as_ref()
+                    .map(|r| format!(" ({r})"))
+                    .unwrap_or_default()
+            );
+            for e in &f.evidence {
+                println!("    why    {} — {} {:?}", e.rule, e.note, e.nodes);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The library demand-semantics table, printed in full.
+fn print_axioms() -> Result<()> {
+    use h2r_analysis::lists::axioms;
+    println!(
+        "Library demand-semantics table — {} entries, written against {}",
+        axioms::all().len(),
+        axioms::BASE_VERSION
+    );
+    println!(
+        "Evidence level: library axiom (below def-use dataflow, above textual type comparison)."
+    );
+    println!("List arguments are indexed from the END of the call's value arguments.");
+    println!();
+    println!(
+        "  {:<26} {:<52} {:<3} {:<24} {:<8} {:<24} {:<3} {:<3} alias",
+        "rule", "stable name", "n", "list args (End(i)=spine)", "head", "result", "sc", "str"
+    );
+    for a in axioms::all() {
+        println!(
+            "  {:<26} {:<52} {:<3} {:<24} {:<8} {:<24} {:<3} {:<3} {:?}",
+            a.rule,
+            a.name,
+            a.min_args,
+            a.list_args
+                .iter()
+                .map(|(e, s)| format!("End({e})={s:?}"))
+                .collect::<Vec<_>>()
+                .join(" "),
+            a.head.name(),
+            format!("{:?}", a.produces),
+            if a.short_circuit { "yes" } else { "no" },
+            if a.streaming { "yes" } else { "no" },
+            a.alias
+        );
+        println!("  {:<26} {}", "", a.note);
     }
     Ok(())
 }
