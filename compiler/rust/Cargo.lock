@@ -105,11 +105,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "h2r-analysis"
+version = "0.1.0"
+dependencies = [
+ "h2r-core-ir",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "h2r-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "h2r-analysis",
  "h2r-core-ir",
  "serde_json",
 ]

@@ -8,8 +8,9 @@
 -- This is the front end of the Haskell-to-Rust compiler: GHC does the parsing,
 -- type checking, desugaring and optimisation, and we consume the result.  The
 -- dumped JSON carries the information the Rust backend needs to decide where
--- laziness can be erased -- in particular each binder's demand signature, CPR
--- signature, arity and occurrence info.
+-- laziness can be erased: for every binder its demand (strict / absent /
+-- used-once), occurrence info, one-shot info and signatures, and for every
+-- right-hand side whether it is already a value.
 --
 -- Usage:
 --
@@ -18,15 +19,21 @@ module H2R.CorePlugin (plugin) where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson
+import qualified Data.Aeson.Key as Key
 import qualified Data.ByteString.Lazy as BL
-import Data.List (isPrefixOf, stripPrefix)
+import Data.List (stripPrefix)
+import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>), (<.>))
 
 import GHC.Plugins
+import GHC.Core.Utils (exprIsCheap, exprIsHNF, exprIsTrivial, exprOkForSpeculation)
+import GHC.Types.Basic
 import GHC.Types.Cpr (CprSig)
-import GHC.Types.Demand (DmdSig)
+import GHC.Types.Demand
+import GHC.Types.Id (idOneShotInfo)
+import GHC.Types.Unique (getKey)
 
 plugin :: Plugin
 plugin = defaultPlugin
@@ -53,16 +60,65 @@ dumpPass outDir guts = do
     dflags <- getDynFlags
     let modName = moduleNameString (moduleName (mg_module guts))
         unitStr = unitString (moduleUnit (mg_module guts))
+        binds   = mg_binds guts
         doc     = object
-            [ "format"   .= (1 :: Int)
+            [ "format"   .= (3 :: Int)
             , "module"   .= modName
             , "unit"     .= unitStr
-            , "binds"    .= map (bindJ dflags) (mg_binds guts)
+            , "ids"      .= idTable dflags binds
+            , "binds"    .= map (bindJ dflags) binds
             ]
     liftIO $ do
         createDirectoryIfMissing True outDir
         BL.writeFile (outDir </> modName <.> "core.json") (encode doc)
     return guts
+
+--------------------------------------------------------------------------------
+-- Id table: facts about every Id *referenced* in the module, keyed by unique,
+-- so a `Var` node stays small and callee strictness is one lookup away.
+--------------------------------------------------------------------------------
+
+idTable :: DynFlags -> CoreProgram -> Value
+idTable dflags binds =
+    object [ (Key.fromString (sdoc dflags (ppr (varUnique v))), idInfoJ dflags v)
+           | v <- M.elems refs ]
+  where
+    refs = M.fromList [ (getKey (varUnique v), v) | v <- concatMap referenced binds, isId v ]
+
+    referenced = \case
+        NonRec _ e -> exprRefs e
+        Rec ps     -> concatMap (exprRefs . snd) ps
+
+    exprRefs = \case
+        Var v         -> [v]
+        Lit _         -> []
+        App f a       -> exprRefs f ++ exprRefs a
+        Lam _ e       -> exprRefs e
+        Let b e       -> referenced b ++ exprRefs e
+        Case s _ _ as -> exprRefs s ++ concat [exprRefs r | Alt _ _ r <- as]
+        Cast e _      -> exprRefs e
+        Tick _ e      -> exprRefs e
+        Type _        -> []
+        Coercion _    -> []
+
+idInfoJ :: DynFlags -> Id -> Value
+idInfoJ dflags v = object $
+    [ "name"       .= nameStableString (varName v)
+    , "occ"        .= getOccString v
+    , "arity"      .= idArity v
+    , "dmdSig"     .= dmdSigJ dflags (idDmdSig v)
+    , "isJoinPoint" .= isJoinId v
+    ] ++ case isDataConId_maybe v of
+        Just dc ->
+            [ "dataCon" .= object
+                [ "name"     .= nameStableString (dataConName dc)
+                , "repArity" .= dataConRepArity dc
+                , "tag"      .= dataConTag dc
+                , "strictFields" .= map (\m -> case m of { HsLazy -> False; _ -> True })
+                                        (dataConImplBangs dc)
+                ]
+            ]
+        Nothing -> []
 
 --------------------------------------------------------------------------------
 -- Core -> JSON
@@ -84,8 +140,14 @@ bindJ dflags = \case
 
 pairJ :: DynFlags -> CoreBndr -> CoreExpr -> Value
 pairJ dflags b e = object
-    [ "binder" .= binderJ dflags b
-    , "rhs"    .= exprJ dflags e
+    [ "binder"  .= binderJ dflags b
+    , "rhs"     .= exprJ dflags e
+    -- Shape facts about the RHS, computed by GHC's own predicates.
+    , "whnf"    .= exprIsHNF e
+    , "trivial" .= exprIsTrivial e
+    , "cheap"   .= exprIsCheap e
+    -- No bottom, no side effects, cheap: safe to evaluate eagerly.
+    , "okForSpec" .= exprOkForSpeculation e
     ]
 
 -- | Everything the backend needs to know about a binder, including the
@@ -97,10 +159,12 @@ binderJ dflags v
         , "arity"      .= idArity v
         , "callArity"  .= idCallArity v
         , "exported"   .= isExportedId v
-        , "dmdSig"     .= sdoc dflags (ppr (idDmdSig v :: DmdSig))
+        , "dmdSig"     .= dmdSigJ dflags (idDmdSig v)
         , "cprSig"     .= sdoc dflags (ppr (idCprSig v :: CprSig))
-        , "demand"     .= sdoc dflags (ppr (idDemandInfo v))
-        , "occInfo"    .= sdoc dflags (ppr (idOccInfo v))
+        -- How this binder itself is demanded at its binding site.
+        , "demand"     .= demandJ dflags (idDemandInfo v)
+        , "occInfo"    .= occInfoJ (idOccInfo v)
+        , "oneShot"    .= isOneShotInfo (idOneShotInfo v)
         , "details"    .= sdoc dflags (ppr (idDetails v))
         , "hasUnfolding" .= hasSomeUnfolding (realIdUnfolding v)
         , "isJoinPoint"  .= isJoinId v
@@ -115,6 +179,46 @@ binderJ dflags v
         , "unique" .= sdoc dflags (ppr (varUnique v))
         , "type"   .= sdoc dflags (ppr (varType v))
         ]
+
+-- | A demand, decomposed into the three facts the backend cares about.
+demandJ :: DynFlags -> Demand -> Value
+demandJ dflags d = object
+    [ "strict"   .= isStrictDmd d
+    , "absent"   .= isAbsDmd d
+    , "usedOnce" .= (case d of n :* _ -> isUsedOnce n)
+    , "pretty"   .= sdoc dflags (ppr d)
+    ]
+
+dmdSigJ :: DynFlags -> DmdSig -> Value
+dmdSigJ dflags sig = object
+    [ "args"      .= map (demandJ dflags) args
+    , "diverges"  .= isDeadEndDiv divergence
+    , "pretty"    .= sdoc dflags (ppr sig)
+    ]
+  where
+    (args, divergence) = splitDmdSig sig
+
+occInfoJ :: OccInfo -> Value
+occInfoJ = \case
+    IAmDead -> object [ "kind" .= ("dead" :: String) ]
+    ManyOccs { occ_tail = t } -> object
+        [ "kind" .= ("many" :: String)
+        , "tailCalled" .= tailJ t
+        ]
+    OneOcc { occ_in_lam = il, occ_n_br = n, occ_tail = t } -> object
+        [ "kind"       .= ("once" :: String)
+        , "insideLam"  .= (il == IsInsideLam)
+        , "branches"   .= n
+        , "tailCalled" .= tailJ t
+        ]
+    IAmALoopBreaker { occ_tail = t } -> object
+        [ "kind" .= ("loopBreaker" :: String)
+        , "tailCalled" .= tailJ t
+        ]
+  where
+    tailJ = \case
+        AlwaysTailCalled _ -> True
+        NoTailCallInfo     -> False
 
 exprJ :: DynFlags -> CoreExpr -> Value
 exprJ dflags = go
@@ -179,7 +283,7 @@ exprJ dflags = go
             [ "kind" .= ("DataAlt" :: String)
             , "name" .= nameStableString (dataConName dc)
             , "occ"  .= getOccString (dataConName dc)
-            , "tag"  .= sdoc dflags (ppr (dataConTag dc))
+            , "tag"  .= dataConTag dc
             ]
         LitAlt l -> object
             [ "kind" .= ("LitAlt" :: String)

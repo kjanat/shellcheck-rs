@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/h2r-core-ir",
     "crates/h2r-rt",
+    "crates/h2r-analysis",
     "crates/h2r-cli",
 ]
 
@@ -19,3 +20,4 @@ serde_json = { version = "1", features = ["unbounded_depth"] }
 walkdir = "2"
 h2r-core-ir = { path = "crates/h2r-core-ir" }
 h2r-rt = { path = "crates/h2r-rt" }
+h2r-analysis = { path = "crates/h2r-analysis" }
