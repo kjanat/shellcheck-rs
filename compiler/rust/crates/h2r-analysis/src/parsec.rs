@@ -119,7 +119,12 @@ pub fn strip_parens(ty: &str) -> &str {
         if !balanced {
             break;
         }
-        t = t[1..t.len() - 1].trim();
+        // `()` is a type, not a pair of redundant parentheses.
+        let inner = t[1..t.len() - 1].trim();
+        if inner.is_empty() {
+            break;
+        }
+        t = inner;
     }
     t
 }
@@ -189,6 +194,18 @@ pub fn alpha_normalise(ty: &str) -> String {
 pub fn is_state_ty(ty: &str) -> bool {
     let t = strip_forall(ty);
     t == "State" || t.starts_with("State ")
+}
+
+/// GHC's void token: `(# #)`, `Void#`, or the `State# RealWorld` of an
+/// `IO`/`ST` worker. It is a zero-width argument the code generator erases,
+/// inserted so that a worker with no other arguments is still a function
+/// rather than a CAF. It carries no value, so it is never part of what a
+/// result type erases to and is skipped by [`R1_TRAILING_ERASURE`].
+/// Evidence level: GHC type compatibility.
+pub fn is_void_ty(ty: &str) -> bool {
+    // `strip_parens` sees the outer parentheses of `(# #)` as redundant.
+    let t = strip_forall(ty).trim();
+    t == "# #" || t == "(# #)" || t == "Void#" || t.starts_with("State# ")
 }
 
 /// `ParseError`: the error *value*, not a continuation.
@@ -283,6 +300,211 @@ pub fn ty_kind(ty: &str) -> TyKind {
         }) => TyKind::ErrCont,
         _ => TyKind::Other,
     }
+}
+
+/// Split a pretty-printed type *application* into its head and arguments at
+/// the top level: `ReaderT (Environment m) (StateT SystemState m) b` gives
+/// `["ReaderT", "(Environment m)", "(StateT SystemState m)", "b"]`. Only
+/// meaningful for a type that has no top-level `->`.
+pub fn split_ty_app(ty: &str) -> Vec<&str> {
+    let t = strip_forall(ty);
+    let b = t.as_bytes();
+    let mut parts: Vec<&str> = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for (i, c) in b.iter().enumerate() {
+        match c {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            c if c.is_ascii_whitespace() && depth == 0 => {
+                if i > start {
+                    parts.push(t[start..i].trim());
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < t.len() {
+        parts.push(t[start..].trim());
+    }
+    parts.retain(|p| !p.is_empty());
+    parts
+}
+
+/// The extra value arguments a continuation's result type `r` erases to.
+///
+/// ShellCheck's parser monad is `ParsecT String UserState (SCBase m)` with
+/// `type SCBase m = ReaderT (Environment m) (StateT SystemState m)`
+/// (`ShellCheck.Interface`). The transformer newtypes *are* functions —
+/// `ReaderT r m a` is `r -> m a`, `StateT s m a` is `s -> m (a, s)` — so a
+/// continuation whose result is `SCBase m b` still takes an `Environment m`
+/// and a `SystemState` before it does anything, and GHC's eta-expansion is
+/// free to supply them at the binding site or at the call. That is what the
+/// trailing parameters of a region and the trailing arguments of
+/// [`R3_CONT_CALL_TRAILING`] are.
+///
+/// The expected count *and the expected types* are therefore derived, per
+/// region, from that region's own `r` — never assumed to be "at most two".
+/// A result type this table does not know (a bare `m b`, as in the inlined
+/// `parsec` code where the base monad is still a variable) erases to no
+/// extra arguments at all, which is the strict reading: such a region may
+/// not carry trailing parameters and its continuations may not be applied
+/// to trailing arguments.
+///
+/// Evidence level: GHC type compatibility (4) over the definitions of the
+/// transformers involved.
+pub fn trailing_types(result: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = strip_parens(strip_forall(result)).to_string();
+    // Each step either consumes one transformer layer or stops; the bound
+    // is belt and braces, and keeps this non-recursive like everything else.
+    for _ in 0..8 {
+        let parts = split_ty_app(&cur);
+        let Some((head, rest)) = parts.split_first() else {
+            break;
+        };
+        match (*head, rest.len()) {
+            ("SCBase", 2) => {
+                let (m, a) = (strip_parens(rest[0]), rest[1]);
+                cur = format!("ReaderT (Environment {m}) (StateT SystemState {m}) {a}");
+            }
+            ("ReaderT", 3) => {
+                out.push(strip_parens(rest[0]).to_string());
+                cur = format!("{} {}", strip_parens(rest[1]), rest[2]);
+            }
+            ("StateT", 3) => {
+                let s = strip_parens(rest[0]).to_string();
+                cur = format!("{} ({}, {s})", strip_parens(rest[1]), rest[2]);
+                out.push(s);
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+/// `ParsecT`'s `unParser` argument list, as read off a region's parameter
+/// types: the `a`, `s`, `u` and `r` of
+///
+/// ```text
+/// State s u
+///   -> (a -> State s u -> ParseError -> r)   -- cok
+///   -> (ParseError -> r)                     -- cerr
+///   -> (a -> State s u -> ParseError -> r)   -- eok
+///   -> (ParseError -> r)                     -- eerr
+///   -> r
+/// ```
+///
+/// Every field is *checked*, not assumed: see [`unparser_sig`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct UnParserSig {
+    /// `a`, the value an ok continuation receives.
+    pub value: Option<String>,
+    /// `State s u`, as printed.
+    pub state: Option<String>,
+    /// `s` of that `State s u`.
+    pub stream: Option<String>,
+    /// `u` of that `State s u`.
+    pub user: Option<String>,
+    /// `r`, the result every continuation returns.
+    pub result: String,
+    /// What `r` erases to: the value arguments a continuation still takes
+    /// after its own, and the region's permitted trailing parameters.
+    pub trailing: Vec<String>,
+}
+
+fn unify_ty(slot: &mut Option<String>, what: &str, ty: &str) -> Result<(), (&'static str, String)> {
+    match slot {
+        None => {
+            *slot = Some(strip_parens(ty).to_string());
+            Ok(())
+        }
+        Some(prev) if alpha_normalise(strip_parens(prev)) == alpha_normalise(strip_parens(ty)) => {
+            Ok(())
+        }
+        Some(prev) => Err((
+            R1_TYPE_AGREE,
+            format!(
+                "{what} is `{}` here and `{prev}` elsewhere",
+                strip_parens(ty)
+            ),
+        )),
+    }
+}
+
+/// Check a candidate region's parameter types against `ParsecT`'s
+/// `unParser` argument list and read `a`, `s`, `u`, `r` off them.
+///
+/// `conts` is the continuation run in parameter order, already known to
+/// embed into the `cok·cerr·eok·eerr` template (that is the *order* half of
+/// the check, and worker/wrapper is free to have dropped slots). This is
+/// the *shape* half:
+///
+/// * an ok continuation's arrow list must really be
+///   `a -> State s u -> ParseError -> r`, not merely "something, a state,
+///   an error";
+/// * an error continuation's must really be `ParseError -> r`;
+/// * `State` must be applied to exactly two arguments, which are `s` and `u`;
+/// * `a`, `State s u` and `r` must agree across the whole run, and the
+///   state type must agree with the state parameter when the chain has one.
+///
+/// Evidence: type compatibility (4) for the positions, alpha-normalised
+/// comparison (5) for the agreement — so the second half can only refuse.
+pub fn unparser_sig(
+    state_ty: Option<&str>,
+    conts: &[(ContKind, &str)],
+) -> Result<UnParserSig, (&'static str, String)> {
+    let mut sig = UnParserSig::default();
+    if let Some(s) = state_ty {
+        if !is_state_ty(s) {
+            return Err((
+                R1_UNPARSER_SIG,
+                format!("state parameter is `{s}`, not `State s u`"),
+            ));
+        }
+        unify_ty(&mut sig.state, "the state type", s)?;
+    }
+    let mut result: Option<String> = None;
+    for (kind, ty) in conts {
+        let a = split_arrows(ty);
+        match kind {
+            ContKind::Ok => {
+                if a.len() < 4 || !is_state_ty(a[1]) || !is_parse_error_ty(a[2]) {
+                    return Err((
+                        R1_UNPARSER_SIG,
+                        format!("`{ty}` is not `a -> State s u -> ParseError -> r`"),
+                    ));
+                }
+                unify_ty(&mut sig.value, "the value type a", a[0])?;
+                unify_ty(&mut sig.state, "the state type", a[1])?;
+                unify_ty(&mut result, "the result type r", &a[3..].join(" -> "))?;
+            }
+            ContKind::Err => {
+                if a.len() < 2 || !is_parse_error_ty(a[0]) {
+                    return Err((R1_UNPARSER_SIG, format!("`{ty}` is not `ParseError -> r`")));
+                }
+                unify_ty(&mut result, "the result type r", &a[1..].join(" -> "))?;
+            }
+        }
+    }
+    if let Some(st) = sig.state.clone() {
+        let p = split_ty_app(&st);
+        if p.len() != 3 || p[0] != "State" {
+            return Err((
+                R1_UNPARSER_SIG,
+                format!("`{st}` is not `State` applied to exactly s and u"),
+            ));
+        }
+        sig.stream = Some(p[1].to_string());
+        sig.user = Some(p[2].to_string());
+    }
+    let Some(r) = result else {
+        return Err((R1_UNPARSER_SIG, "no continuation in the run".to_string()));
+    };
+    sig.trailing = trailing_types(&r);
+    sig.result = r;
+    Ok(sig)
 }
 
 //------------------------------------------------------------------------------
@@ -451,6 +673,10 @@ pub enum EdgeKind {
 #[derive(Debug, Clone, Serialize)]
 pub struct Provenance {
     pub source_nodes: Vec<ExprId>,
+    /// The occurrence of [`Provenance::binder`] this edge is about — the
+    /// `Var` node itself, as opposed to the call it sits in. `None` for an
+    /// edge that is a property of a call rather than of one binder.
+    pub use_at: Option<ExprId>,
     /// The binder whose role this edge is evidence for. `None` for a
     /// [`EdgeKind::CallParser`] edge, which is a property of the call.
     pub binder: Option<BinderId>,
@@ -548,6 +774,9 @@ pub struct ParserRegion {
     pub module: String,
     /// The lambda chain head.
     pub entry: ExprId,
+    /// `unParser`'s argument list as read off — and checked against — this
+    /// chain's parameter types ([`R1_UNPARSER_SIG`]).
+    pub sig: UnParserSig,
     /// Every `Id` parameter of the chain, in order. A saturated call to
     /// this region lines its value arguments up with these one to one.
     pub params: Vec<BinderId>,
@@ -574,6 +803,10 @@ pub struct ParserRegion {
     /// Let-bound continuation values inside the region, promoted by
     /// [`R8_DERIVED_CONT`] and proved by the same rules.
     pub derived: Vec<BinderId>,
+    /// Let-bound values of continuation type inside the region that no
+    /// dataflow connects to it: they are *not* promoted, carry none of the
+    /// region's proof obligations, and are counted here instead.
+    pub derived_unconnected: Vec<BinderId>,
     pub edges: Vec<ParserEdge>,
     pub rejects: Vec<Reject>,
     pub evidence: Vec<Evidence>,
@@ -612,6 +845,18 @@ pub struct ParserRegion {
 /// is matched as a subsequence of the four-slot template.
 /// Evidence: structural shape (2) over the binder types (4).
 pub const R1_LAYOUT: &str = "R1-LAYOUT";
+/// The chain's parameter types *are* `ParsecT`'s `unParser` argument list:
+/// each ok continuation is `a -> State s u -> ParseError -> r`, each error
+/// continuation is `ParseError -> r`, `State` is applied to exactly `s` and
+/// `u`, and the run appears in `unParser`'s own order (that being the
+/// template embedding). Derived from the types at every region rather than
+/// discovered once from the dump and assumed thereafter.
+/// Evidence: type compatibility (4) over structural shape (2).
+pub const R1_UNPARSER_SIG: &str = "R1-UNPARSER-SIG";
+/// A region's trailing parameters are a prefix of what its own result type
+/// `r` erases to ([`trailing_types`]), matched by type — not "at most two".
+/// Evidence: type compatibility (4).
+pub const R1_TRAILING_ERASURE: &str = "R1-TRAILING-ERASURE";
 /// Every continuation of a region agrees on the state type and on the
 /// result type, and the ok continuations really take `State s u` then
 /// `ParseError`. Evidence: type compatibility (4) plus alpha-normalised
@@ -677,6 +922,10 @@ pub const R8_DERIVED_CONT: &str = "R8-DERIVED-CONT";
 /// saturated call forwarding them into the worker's parameters.
 pub const R9_WRAPPER_MAP: &str = "R9-WRAPPER-MAP";
 
+/// A continuation applied to more arguments than its own arity, where the
+/// extra ones are not (a prefix of) what its result type erases to.
+pub const REJ_TRAILING_ARGS: &str = "trailing-args-not-in-result-erasure";
+
 pub const REJ_STATE_APPLIED: &str = "state-applied";
 pub const REJ_STATE_SLOT: &str = "state-in-non-state-slot";
 pub const REJ_CONT_ARITY: &str = "cont-wrong-arity";
@@ -730,6 +979,9 @@ enum CallShape {
         kind: ContKind,
         arity: usize,
         n: usize,
+        /// How many trailing transformer arguments this continuation's own
+        /// result type erases to ([`R1_TRAILING_ERASURE`]).
+        trailing: usize,
     },
     /// Head is anything else, but the argument list carries the template.
     Parser {
@@ -739,15 +991,63 @@ enum CallShape {
     },
 }
 
+/// What the type-derived layout checks touched, and what they found.
+/// Reported by `h2r parsec` so the checks are visible even when — as on
+/// the `-O1` dump — they refuse nothing.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct Checks {
+    /// Chains whose parameter types were checked against `unParser`'s
+    /// argument list ([`R1_UNPARSER_SIG`]) — every candidate region.
+    pub sig_checked: usize,
+    /// …and refused by it: the continuation types are not `unParser`'s.
+    pub sig_refused: usize,
+    /// …refused by the agreement of `a`, `s`, `u`, `r` ([`R1_TYPE_AGREE`]).
+    pub agree_refused: usize,
+    /// Chains carrying continuation types in an order that is not a
+    /// subsequence of `cok·cerr·eok·eerr`. These form no region.
+    pub order_refused: usize,
+    /// Regions whose trailing parameters were checked against the erasure
+    /// of their own result type ([`R1_TRAILING_ERASURE`]).
+    pub trailing_params_checked: usize,
+    /// …and the number of trailing parameters so checked.
+    pub trailing_params: usize,
+    /// Chains refused because their trailing parameters are not a prefix of
+    /// that erasure.
+    pub trailing_params_refused: usize,
+    /// Recognised parser calls carrying trailing transformer arguments.
+    pub trailing_call_args: usize,
+    /// Calls the erasure refuses that the old fixed "at most two" accepted.
+    pub trailing_calls_refused: usize,
+    /// Continuation calls carrying trailing arguments
+    /// ([`R3_CONT_CALL_TRAILING`]).
+    pub trailing_cont_calls: usize,
+    /// Continuation calls refused by the erasure ([`REJ_TRAILING_ARGS`]).
+    pub trailing_cont_calls_refused: usize,
+    /// Let-bound continuation-typed binders inside a region, split by
+    /// whether dataflow connects them to it ([`R8_DERIVED_CONT`]).
+    pub derived_connected: usize,
+    pub derived_unconnected: usize,
+    /// An example of each refusal, for the report.
+    pub examples: BTreeMap<String, ExprId>,
+}
+
 pub struct Analysis<'m> {
     pub module: &'m Module,
     pub regions: Vec<ParserRegion>,
+    /// What the derived layout checks touched.
+    pub checks: Checks,
     /// Chains with continuation-typed parameters that did not form a region.
     pub skipped: Vec<SkippedChain>,
     /// Binding structure and scoped occurrence resolution, shared with the
     /// census so the two can never disagree about what a `Var` refers to.
     scope: Scope<'m>,
     role: HashMap<BinderId, RoleInfo>,
+    /// Let-bound continuation-typed binders inside a region that no
+    /// dataflow connects to it ([`R8_DERIVED_CONT`]). Their type is still
+    /// read when classifying a *call* to one, so the region's state being
+    /// passed to them stays explained; they carry no obligations, produce
+    /// no edges and can reject nothing.
+    unconnected: HashMap<BinderId, RoleInfo>,
     /// The binder a region's lambda chain is bound to, inverted.
     region_of_binder: HashMap<BinderId, usize>,
     /// Binders that are representation fields of a scrutinised `State s u`:
@@ -765,9 +1065,11 @@ impl<'m> Analysis<'m> {
         let mut a = Analysis {
             module: m,
             regions: Vec::new(),
+            checks: Checks::default(),
             skipped: Vec::new(),
             scope,
             role: HashMap::new(),
+            unconnected: HashMap::new(),
             region_of_binder: HashMap::new(),
             state_fields: HashMap::new(),
             region_at: HashMap::new(),
@@ -780,6 +1082,7 @@ impl<'m> Analysis<'m> {
         a.prove();
         a.find_parser_calls();
         a.index_edges();
+        a.trailing_audit();
         a
     }
 
@@ -812,6 +1115,7 @@ impl<'m> Analysis<'m> {
                 region: ri,
                 provenance: Provenance {
                     source_nodes: vec![at],
+                    use_at: None,
                     binder: None,
                     binder_unique: String::new(),
                     rule,
@@ -820,6 +1124,59 @@ impl<'m> Analysis<'m> {
                 },
             });
         }
+    }
+
+    /// Measure what [`R1_TRAILING_ERASURE`] does at call sites: how many
+    /// recognised calls carry trailing transformer arguments, and how many
+    /// calls it refuses that the old fixed "at most two" accepted. One
+    /// pass over the spine roots.
+    fn trailing_audit(&mut self) {
+        let m = self.module;
+        let mut carried = 0usize;
+        let mut refused = 0usize;
+        let mut example = None;
+        for id in 0..m.exprs.len() as ExprId {
+            if !matches!(m.expr(id), Expr::App { .. }) || m.spine_root(id) != id {
+                continue;
+            }
+            let strict = self.call_shape_with(id, true);
+            let loose = self.call_shape_with(id, false);
+            match (&strict, &loose) {
+                (Some(CallShape::Parser { slots, .. }), _) => {
+                    let (_, args) = m.spine(id);
+                    let n = value_args(&self.scope, &args).len();
+                    let end = slots.iter().map(|(i, _)| i + 1).max().unwrap_or(0);
+                    if n > end {
+                        carried += 1;
+                    }
+                }
+                (None, Some(CallShape::Parser { .. })) => {
+                    refused += 1;
+                    example.get_or_insert(id);
+                }
+                _ => {}
+            }
+        }
+        self.checks.trailing_call_args = carried;
+        self.checks.trailing_calls_refused = refused;
+        if let Some(e) = example {
+            self.checks
+                .examples
+                .entry("trailing-args-not-in-result-erasure".into())
+                .or_insert(e);
+        }
+        self.checks.trailing_cont_calls = self
+            .regions
+            .iter()
+            .flat_map(|r| r.edges.iter())
+            .filter(|e| e.provenance.rule == R3_CONT_CALL_TRAILING)
+            .count();
+        self.checks.trailing_cont_calls_refused = self
+            .regions
+            .iter()
+            .flat_map(|r| r.rejects.iter())
+            .filter(|j| j.reason == REJ_TRAILING_ARGS)
+            .count();
     }
 
     fn index_edges(&mut self) {
@@ -993,6 +1350,129 @@ impl<'m> Analysis<'m> {
         self.state_fields = found.into_iter().collect();
     }
 
+    /// Do these trailing *parameters* match, in order and by type, a prefix
+    /// of what the region's result type erases to ([`R1_TRAILING_ERASURE`])?
+    fn trailing_param_mismatch(&self, extra: &[BinderId], expected: &[String]) -> Option<String> {
+        let got: Vec<&str> = extra
+            .iter()
+            .map(|b| self.binder(*b).ty.as_str())
+            .filter(|t| !is_void_ty(t))
+            .collect();
+        Self::trailing_mismatch(&got, expected)
+    }
+
+    /// The same check over a list of argument types, `None` where an
+    /// argument's type cannot be read (corroboration only: an unreadable
+    /// trailing argument still counts against the permitted *number*).
+    fn trailing_mismatch_args(&self, args: &[Option<&str>], expected: &[String]) -> Option<String> {
+        let args: Vec<Option<&str>> = args
+            .iter()
+            .copied()
+            .filter(|t| !t.is_some_and(is_void_ty))
+            .collect();
+        if args.len() > expected.len() {
+            return Some(format!(
+                "{} trailing argument(s), the result type erases to {} ({expected:?})",
+                args.len(),
+                expected.len()
+            ));
+        }
+        for (i, got) in args.iter().enumerate() {
+            let Some(got) = got else { continue };
+            if alpha_normalise(strip_parens(got)) != alpha_normalise(strip_parens(&expected[i])) {
+                return Some(format!(
+                    "trailing argument {i} is `{got}`, the result type erases to `{}`",
+                    expected[i]
+                ));
+            }
+        }
+        None
+    }
+
+    fn trailing_mismatch(got: &[&str], expected: &[String]) -> Option<String> {
+        if got.len() > expected.len() {
+            return Some(format!(
+                "{} trailing parameter(s) {got:?}, the result type erases to {} ({expected:?})",
+                got.len(),
+                expected.len()
+            ));
+        }
+        for (i, g) in got.iter().enumerate() {
+            if alpha_normalise(strip_parens(g)) != alpha_normalise(strip_parens(&expected[i])) {
+                return Some(format!(
+                    "trailing parameter {i} is `{g}`, the result type erases to `{}`",
+                    expected[i]
+                ));
+            }
+        }
+        None
+    }
+
+    /// The full arrow decomposition of an argument's type, when the dump
+    /// lets it be read: a variable's binder type, or a lambda's parameter
+    /// types followed by the type of the variable it returns (GHC
+    /// eta-reduces continuations down to `\x -> k`).
+    fn arg_arrows(&self, e: ExprId) -> Option<Vec<&'m str>> {
+        let m = self.module;
+        let i = m.strip(e);
+        match m.expr(i) {
+            Expr::Var { .. } => Some(split_arrows(
+                self.scope.resolve(i).map(|b| self.binder(b).ty.as_str())?,
+            )),
+            Expr::Lam { .. } => {
+                let (params, body) = self.chain(i);
+                let mut arrows: Vec<&str> =
+                    params.iter().map(|b| self.binder(*b).ty.as_str()).collect();
+                arrows.extend(split_arrows(self.expr_ty(body)?));
+                Some(arrows)
+            }
+            _ => None,
+        }
+    }
+
+    /// The `r` of a continuation-typed argument, when it is readable.
+    fn cont_result_ty(&self, e: ExprId) -> Option<String> {
+        let arrows = self.arg_arrows(e)?;
+        let shape = cont_shape_of_arrows(&arrows)?;
+        if arrows.len() <= shape.arity {
+            return None;
+        }
+        Some(arrows[shape.arity..].join(" -> "))
+    }
+
+    /// What a *call* is allowed to carry after its continuation run: the
+    /// erasure of the result type the run's own continuations return, or —
+    /// when no argument in the run has a readable type — of the enclosing
+    /// region's result type. Nothing else is permitted, so a call carrying
+    /// trailing arguments the result type does not exhibit is not a parser
+    /// call. Derived, per call, from the types; never a fixed "at most two".
+    fn expected_trailing(&self, root: ExprId, run: &[ExprId]) -> Vec<String> {
+        for a in run {
+            if let Some(r) = self.cont_result_ty(*a) {
+                return trailing_types(&r);
+            }
+        }
+        match self.enclosing_region(root) {
+            Some(ri) => self.regions[ri].sig.trailing.clone(),
+            None => Vec::new(),
+        }
+    }
+
+    /// [`R1_TRAILING_ERASURE`] at a call site: are the arguments after the
+    /// continuation run a prefix, by type, of what the run's own result
+    /// type erases to?
+    fn trailing_args_mismatch(
+        &self,
+        root: ExprId,
+        vargs: &[ExprId],
+        start: usize,
+        end: usize,
+    ) -> Option<String> {
+        let expected = self.expected_trailing(root, &vargs[start..end]);
+        let got: Vec<Option<&str>> = vargs[end..].iter().map(|a| self.expr_ty(*a)).collect();
+        self.trailing_mismatch_args(&got, &expected)
+    }
+
     /// The three parameters before a continuation run that carry an unboxed
     /// `State s u`: any input type, a `SourcePos`, any user-state type.
     /// Evidence level: GHC type compatibility on the binder types.
@@ -1025,9 +1505,13 @@ impl<'m> Analysis<'m> {
                 .iter()
                 .map(|b| ty_kind(&self.binder(*b).ty))
                 .collect();
-            // The last maximal run of continuation-typed parameters that
-            // embeds into the template.
+            // Every maximal run of continuation-typed parameters. A run
+            // that does not embed into the template carries continuation
+            // types in an order `unParser` does not have: the chain is then
+            // not a region at all, and is *reported* rather than passed
+            // over in favour of some other run of the same chain.
             let mut best: Option<(Option<usize>, usize, usize, Vec<SlotSet>)> = None;
+            let mut out_of_order: Option<String> = None;
             let mut i = 0usize;
             while i < kinds.len() {
                 if !matches!(kinds[i], TyKind::OkCont | TyKind::ErrCont) {
@@ -1043,18 +1527,40 @@ impl<'m> Analysis<'m> {
                     }));
                     i += 1;
                 }
-                if let Some(sets) = slot_sets(&run) {
-                    let state = if start > 0 && kinds[start - 1] == TyKind::State {
-                        Some(start - 1)
-                    } else {
-                        None
-                    };
-                    // Without a state parameter to anchor it, a single
-                    // continuation is too weak to call a region.
-                    if state.is_some() || run.len() >= 2 {
-                        best = Some((state, start, i, sets));
+                match slot_sets(&run) {
+                    Some(sets) => {
+                        let state = if start > 0 && kinds[start - 1] == TyKind::State {
+                            Some(start - 1)
+                        } else {
+                            None
+                        };
+                        // Without a state parameter to anchor it, a single
+                        // continuation is too weak to call a region.
+                        if state.is_some() || run.len() >= 2 {
+                            best = Some((state, start, i, sets));
+                        }
+                    }
+                    None => {
+                        out_of_order = Some(format!(
+                            "parameters {start}..{i} are {:?}, which is not a subsequence of \
+                             unParser's cok·cerr·eok·eerr",
+                            &kinds[start..i]
+                        ));
                     }
                 }
+            }
+            if let Some(detail) = out_of_order {
+                self.checks.order_refused += 1;
+                self.checks
+                    .examples
+                    .entry("continuation-order-not-unparser".into())
+                    .or_insert(id);
+                self.skipped.push(SkippedChain {
+                    entry: id,
+                    reason: "continuation-order-not-unparser",
+                    detail,
+                });
+                continue;
             }
             let Some((state_idx, start, end, sets)) = best else {
                 if kinds
@@ -1078,40 +1584,60 @@ impl<'m> Analysis<'m> {
                 }
                 continue;
             };
-            // R1-TYPE-AGREE.
+            // R1-UNPARSER-SIG / R1-TYPE-AGREE: the parameter types have to
+            // *be* unParser's argument list, checked position by position.
             let state_ty = state_idx.map(|si| self.binder(params[si]).ty.as_str());
-            let mut result_tys: Vec<String> = Vec::new();
-            let mut agree = true;
-            for b in &params[start..end] {
-                let ty = self.binder(*b).ty.as_str();
-                let a = split_arrows(ty);
-                match ty_kind(ty) {
-                    TyKind::OkCont => {
-                        if !is_parse_error_ty(a[2])
-                            || state_ty.is_some_and(|s| {
-                                alpha_normalise(strip_parens(a[1]))
-                                    != alpha_normalise(strip_parens(s))
-                            })
-                        {
-                            agree = false;
-                        }
-                        result_tys.push(alpha_normalise(&a[3..].join("->")));
+            let cont_tys: Vec<(ContKind, &str)> = params[start..end]
+                .iter()
+                .map(|b| {
+                    let ty = self.binder(*b).ty.as_str();
+                    let k = match ty_kind(ty) {
+                        TyKind::OkCont => ContKind::Ok,
+                        _ => ContKind::Err,
+                    };
+                    (k, ty)
+                })
+                .collect();
+            self.checks.sig_checked += 1;
+            let sig = match unparser_sig(state_ty, &cont_tys) {
+                Ok(sig) => sig,
+                Err((rule, detail)) => {
+                    if rule == R1_TYPE_AGREE {
+                        self.checks.agree_refused += 1;
+                    } else {
+                        self.checks.sig_refused += 1;
                     }
-                    _ => result_tys.push(alpha_normalise(&a[1..].join("->"))),
+                    self.checks.examples.entry(rule.into()).or_insert(id);
+                    self.skipped.push(SkippedChain {
+                        entry: id,
+                        reason: if rule == R1_TYPE_AGREE {
+                            "type-disagreement"
+                        } else {
+                            "unparser-signature-mismatch"
+                        },
+                        detail: format!("[{rule}] {detail}"),
+                    });
+                    continue;
                 }
-            }
-            result_tys.sort();
-            result_tys.dedup();
-            if !agree || result_tys.len() != 1 {
+            };
+            // R1-TRAILING-ERASURE: whatever follows the run has to be a
+            // prefix of what this region's own result type erases to.
+            if let Some(detail) = self.trailing_param_mismatch(&params[end..], &sig.trailing) {
+                self.checks.trailing_params_refused += 1;
+                self.checks
+                    .examples
+                    .entry(R1_TRAILING_ERASURE.into())
+                    .or_insert(id);
                 self.skipped.push(SkippedChain {
                     entry: id,
-                    reason: "type-disagreement",
-                    detail: format!(
-                        "state {state_ty:?}, {} distinct result type(s): {result_tys:?}",
-                        result_tys.len()
-                    ),
+                    reason: "trailing-params-not-in-result-erasure",
+                    detail,
                 });
                 continue;
+            }
+            if end < params.len() {
+                self.checks.trailing_params_checked += 1;
+                self.checks.trailing_params += params.len() - end;
             }
 
             let ri = self.regions.len();
@@ -1167,12 +1693,28 @@ impl<'m> Analysis<'m> {
                 ),
             }];
             evidence.push(Evidence {
-                rule: R1_TYPE_AGREE,
+                rule: R1_UNPARSER_SIG,
+                node: id,
+                note: {
+                    let or = |x: &Option<String>| x.clone().unwrap_or_else(|| "-".into());
+                    format!(
+                        "unParser argument list: state {} (s {}, u {}), value a {}, result r {}",
+                        or(&sig.state),
+                        or(&sig.stream),
+                        or(&sig.user),
+                        or(&sig.value),
+                        sig.result
+                    )
+                },
+            });
+            evidence.push(Evidence {
+                rule: R1_TRAILING_ERASURE,
                 node: id,
                 note: format!(
-                    "one result type {:?}, state type {:?}",
-                    result_tys.first(),
-                    state_ty
+                    "result type erases to {} trailing argument(s) {:?}; the chain carries {}",
+                    sig.trailing.len(),
+                    sig.trailing,
+                    params.len() - end
                 ),
             });
             self.region_at.insert(id, ri);
@@ -1187,6 +1729,7 @@ impl<'m> Analysis<'m> {
             self.regions.push(ParserRegion {
                 module: m.name.clone(),
                 entry: id,
+                sig,
                 params: params.clone(),
                 run: (start, end),
                 unboxed_state,
@@ -1199,6 +1742,7 @@ impl<'m> Analysis<'m> {
                 extra: params[end..].to_vec(),
                 wrapper: None,
                 derived: Vec::new(),
+                derived_unconnected: Vec::new(),
                 edges: Vec::new(),
                 rejects: Vec::new(),
                 evidence,
@@ -1377,10 +1921,32 @@ impl<'m> Analysis<'m> {
     }
 
     /// R8: a let-bound value of continuation type inside a region is a
-    /// derived continuation and has to satisfy the same use rules.
+    /// derived continuation and has to satisfy the same use rules —
+    /// **provided some dataflow connects it to the region**.
+    ///
+    /// Continuation *type* alone is not evidence of anything: a region can
+    /// contain a let of continuation type that has nothing to do with
+    /// Parsec, and promoting it would load the region with proof
+    /// obligations it never owed (and could reject it for a use that is not
+    /// a Parsec use at all). A candidate is promoted only if its
+    /// right-hand side mentions one of the region's own continuation
+    /// parameters, its state (boxed or unboxed), or its trailing
+    /// parameters — transitively through other promoted candidates of the
+    /// same region, since GHC builds these in chains
+    /// (`let a = cok x; let b = a y`).
+    ///
+    /// Candidates that fail the test are recorded in
+    /// [`ParserRegion::derived_unconnected`] and carry **no** obligations.
+    /// Their *type* is still readable, so a call to one is still recognised
+    /// as a continuation call (which is what explains the region's state
+    /// being passed to it); what they no longer do is contribute edges,
+    /// evidence or rejects.
+    ///
+    /// Evidence: lexical binder identity (1) for the connection, type
+    /// compatibility (4) for the shape.
     fn promote_derived(&mut self) {
         let m = self.module;
-        let mut promote: Vec<(BinderId, usize, ContShape)> = Vec::new();
+        let mut cand: Vec<(BinderId, usize, ContShape, ExprId)> = Vec::new();
         for id in 0..m.exprs.len() as ExprId {
             let Expr::Let { bind, .. } = m.expr(id) else {
                 continue;
@@ -1395,9 +1961,67 @@ impl<'m> Analysis<'m> {
                 let Some(shape) = cont_shape_of_ty(&m.binder(p.binder).ty) else {
                     continue;
                 };
-                promote.push((p.binder, ri, shape));
+                cand.push((p.binder, ri, shape, p.rhs));
             }
         }
+        // What each candidate's right-hand side refers to. One iterative
+        // pre-order walk per candidate; nothing recurses.
+        let index: HashMap<BinderId, usize> =
+            cand.iter().enumerate().map(|(i, c)| (c.0, i)).collect();
+        let mut connected = vec![false; cand.len()];
+        let mut refs: Vec<Vec<usize>> = vec![Vec::new(); cand.len()];
+        for (i, (_, ri, _, rhs)) in cand.iter().enumerate() {
+            for n in m.preorder(*rhs) {
+                let Some(b) = m.resolve(n) else { continue };
+                if self.anchors(*ri).contains(&b) {
+                    connected[i] = true;
+                }
+                if let Some(&j) = index.get(&b)
+                    && cand[j].1 == *ri
+                    && j != i
+                {
+                    refs[i].push(j);
+                }
+            }
+        }
+        // Transitive closure, worklist-driven.
+        let mut work: Vec<usize> = (0..cand.len()).filter(|i| connected[*i]).collect();
+        // `refs[i]` lists what i refers to; invert it once.
+        let mut used_by: Vec<Vec<usize>> = vec![Vec::new(); cand.len()];
+        for (i, rs) in refs.iter().enumerate() {
+            for j in rs {
+                used_by[*j].push(i);
+            }
+        }
+        while let Some(j) = work.pop() {
+            for i in used_by[j].clone() {
+                if !connected[i] {
+                    connected[i] = true;
+                    work.push(i);
+                }
+            }
+        }
+        let mut promote: Vec<(BinderId, usize, ContShape)> = Vec::new();
+        for (i, (b, ri, shape, _)) in cand.into_iter().enumerate() {
+            if connected[i] {
+                promote.push((b, ri, shape));
+            } else {
+                let slots = match shape.kind {
+                    ContKind::Ok => SlotSet(0b0101),
+                    ContKind::Err => SlotSet(0b1010),
+                };
+                self.unconnected.insert(
+                    b,
+                    RoleInfo {
+                        region: ri,
+                        cont: Some((slots, shape.arity)),
+                    },
+                );
+                self.regions[ri].derived_unconnected.push(b);
+                self.checks.derived_unconnected += 1;
+            }
+        }
+        self.checks.derived_connected = promote.len();
         for (b, ri, shape) in promote {
             let slots = match shape.kind {
                 ContKind::Ok => SlotSet(0b0101),
@@ -1424,6 +2048,19 @@ impl<'m> Analysis<'m> {
                 ),
             });
         }
+    }
+
+    /// The binders a derived continuation has to reach to count as part of
+    /// the region: its continuation parameters, its state (boxed, or the
+    /// three fields worker/wrapper unboxed it into) and its trailing
+    /// transformer parameters.
+    fn anchors(&self, ri: usize) -> Vec<BinderId> {
+        let r = &self.regions[ri];
+        let mut v: Vec<BinderId> = r.conts.iter().map(|c| c.binder).collect();
+        v.extend(r.state);
+        v.extend(r.unboxed_state.into_iter().flatten());
+        v.extend(r.extra.iter().copied());
+        v
     }
 
     pub fn enclosing_region_of(&self, id: ExprId) -> Option<usize> {
@@ -1481,6 +2118,14 @@ impl<'m> Analysis<'m> {
 
     /// Classify the call rooted at `root`.
     fn call_shape(&self, root: ExprId) -> Option<CallShape> {
+        self.call_shape_with(root, true)
+    }
+
+    /// The same, with [`R1_TRAILING_ERASURE`] optionally switched off, so
+    /// [`Analysis::trailing_audit`] can measure exactly what the derived
+    /// check refuses that the old fixed "at most two transformer
+    /// arguments" accepted. Nothing but the audit passes `false`.
+    fn call_shape_with(&self, root: ExprId, trailing_check: bool) -> Option<CallShape> {
         let m = self.module;
         let (head, args) = m.spine(root);
         let vargs = value_args(&self.scope, &args);
@@ -1488,14 +2133,20 @@ impl<'m> Analysis<'m> {
         let hi = m.strip(head);
         if matches!(m.expr(hi), Expr::Var { .. })
             && let Some(b) = self.scope.resolve(hi)
-            && let Some(info) = self.role.get(&b)
+            && let Some(info) = self.role.get(&b).or_else(|| self.unconnected.get(&b))
             && let Some((slots, arity)) = info.cont
             && let Some(kind) = slots.kind()
         {
+            let ty = self.binder(b).ty.as_str();
+            let trailing = split_arrows(ty)
+                .get(arity..)
+                .map(|r| trailing_types(&r.join(" -> ")).len())
+                .unwrap_or(0);
             return Some(CallShape::Cont {
                 kind,
                 arity,
                 n: vargs.len(),
+                trailing,
             });
         }
         // A data constructor is never a parser: storing a continuation in a
@@ -1530,7 +2181,10 @@ impl<'m> Analysis<'m> {
             let run: Vec<RunItem> = (start..end).map(|k| items[k].1).collect();
             if !run.is_empty()
                 && run.iter().any(|r| matches!(r, RunItem::Cont(_)))
-                && items.len() - end <= 2
+                && (!trailing_check
+                    || self
+                        .trailing_args_mismatch(root, &vargs, start, end)
+                        .is_none())
                 && let Some(sets) = slot_sets(&run)
             {
                 let mut slots: Vec<(usize, SlotSet)> =
@@ -1559,7 +2213,10 @@ impl<'m> Analysis<'m> {
             }
             let run: Vec<RunItem> = (start..end).map(|k| items[k].1).collect();
             if run.len() >= 2
-                && items.len() - end <= 2
+                && (!trailing_check
+                    || self
+                        .trailing_args_mismatch(root, &vargs, start, end)
+                        .is_none())
                 && let Some(rule) = self.unboxed_state_explained(root, hi, &vargs, start)
                 && let Some(sets) = slot_sets(&run)
             {
@@ -1799,6 +2456,7 @@ impl<'m> Analysis<'m> {
         let bd = self.binder(b);
         let mut prov = Provenance {
             source_nodes: vec![use_at],
+            use_at: Some(use_at),
             binder: Some(b),
             binder_unique: bd.unique.clone(),
             rule: R1_LAYOUT,
@@ -1836,9 +2494,21 @@ impl<'m> Analysis<'m> {
                 let Some(kind) = slots.kind() else {
                     return (Err((REJ_MIXED_KIND, "ok/err not decided".into())), prov);
                 };
+                // R1-TRAILING-ERASURE decides how many extra arguments
+                // this continuation may take, from its own result type.
+                let expected = split_arrows(&bd.ty)
+                    .get(arity..)
+                    .map(|r| trailing_types(&r.join(" -> ")))
+                    .unwrap_or_default();
                 let rule = if n == arity {
                     Some(R3_CONT_CALL)
-                } else if n == arity + 2 {
+                } else if n > arity && n - arity <= expected.len() {
+                    let vargs = value_args(&self.scope, &args);
+                    let got: Vec<Option<&str>> =
+                        vargs[arity..].iter().map(|a| self.expr_ty(*a)).collect();
+                    if let Some(why) = self.trailing_mismatch_args(&got, &expected) {
+                        return (Err((REJ_TRAILING_ARGS, why)), prov);
+                    }
                     Some(R3_CONT_CALL_TRAILING)
                 } else if n < arity
                     && let Some(owed) = self.owed_at(root)
@@ -1884,10 +2554,17 @@ impl<'m> Analysis<'m> {
                     return (Err((REJ_ESCAPE, "type argument".into())), prov);
                 };
                 match self.call_shape(root) {
-                    Some(CallShape::Cont { kind, arity, n }) => {
-                        // (value, state, error) for ok, (error) for err;
-                        // an eta-reduced call has no readable layout.
-                        if n != arity && n != arity + 2 {
+                    Some(CallShape::Cont {
+                        kind,
+                        arity,
+                        n,
+                        trailing,
+                    }) => {
+                        // (value, state, error) for ok, (error) for err,
+                        // plus at most the trailing arguments the callee's
+                        // result type erases to; an eta-reduced call has no
+                        // readable layout.
+                        if n != arity && !(n > arity && n - arity <= trailing) {
                             return (
                                 Err((
                                     REJ_UNRECOGNISED_CALL,
@@ -2079,6 +2756,603 @@ impl<'m> Analysis<'m> {
     /// notion of an application root in the compiler.
     pub fn site_root(&self, app: ExprId) -> ExprId {
         self.module.spine_root(app)
+    }
+}
+
+//------------------------------------------------------------------------------
+// Provenance of one node
+//------------------------------------------------------------------------------
+
+/// Everything the proof object has to say about one Core node, in the shape
+/// `h2r show` prints it. Role **identity** and role **forwarding** stay
+/// apart here too: [`NodeProof::role`] states the intrinsic role first and
+/// what *this* use does with it second.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NodeProof {
+    pub node: ExprId,
+    /// What the census records for this site, e.g. `Parsec::EmptyOk`.
+    pub normalized: Option<String>,
+    /// The continuation this node is, or is an occurrence of.
+    pub continuation: Option<String>,
+    /// `intrinsic role: …; this use: …`.
+    pub role: Option<String>,
+    /// Rule id and what it says, strongest evidence first.
+    pub evidence: Vec<(&'static str, String)>,
+}
+
+impl NodeProof {
+    pub fn is_empty(&self) -> bool {
+        self.normalized.is_none()
+            && self.continuation.is_none()
+            && self.role.is_none()
+            && self.evidence.is_empty()
+    }
+}
+
+impl Analysis<'_> {
+    /// A one-word inline mark for a node: what `h2r show` writes next to it.
+    pub fn node_note(&self, id: ExprId) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(ri) = self.region_at.get(&id) {
+            parts.push(format!("region {ri} entry"));
+        }
+        if let Some(b) = self.scope.resolve(id)
+            && let Some(info) = self.role.get(&b)
+        {
+            parts.push(match info.cont {
+                Some((slots, _)) => format!("{} of region {}", slots_str(slots), info.region),
+                None => format!("state of region {}", info.region),
+            });
+        }
+        for (r, e) in self.edges_at(id) {
+            parts.push(match e.fact {
+                EdgeFact::RunParser => format!("CallParser {}", e.provenance.rule),
+                EdgeFact::Invoke => format!("{:?} {}", e.kind, e.provenance.rule),
+                EdgeFact::Forward => format!(
+                    "{}→{} {}",
+                    slots_str(e.source_role),
+                    slots_str(e.destination),
+                    e.provenance.rule
+                ),
+            });
+            let _ = r;
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("; "))
+        }
+    }
+
+    /// The same for a binder: the role of a region parameter.
+    pub fn binder_note(&self, b: BinderId) -> Option<String> {
+        let info = self.role.get(&b).or_else(|| self.unconnected.get(&b))?;
+        let r = &self.regions[info.region];
+        let derived = if r.params.contains(&b) {
+            ""
+        } else {
+            " derived"
+        };
+        Some(match info.cont {
+            Some((slots, _)) => format!("{}{derived}", slots_str(slots)),
+            None => "state".to_string(),
+        })
+    }
+
+    /// Everything proven about `node`, for the `h2r show` footer.
+    pub fn proof_at(&self, node: ExprId) -> NodeProof {
+        let mut p = NodeProof {
+            node,
+            ..Default::default()
+        };
+        // (a) a region's entry lambda.
+        if let Some(&ri) = self.region_at.get(&node) {
+            let r = &self.regions[ri];
+            p.normalized = Some(format!("Parsec::Region {ri}"));
+            p.continuation = Some(format!(
+                "region entry ({}), {} parameter(s), {} continuation(s), {} edge(s)",
+                if r.proven { "proven" } else { "rejected" },
+                r.params.len(),
+                r.conts.len(),
+                r.edges.len()
+            ));
+            for e in &r.evidence {
+                if e.node == node {
+                    p.evidence.push((e.rule, e.note.clone()));
+                }
+            }
+        }
+        // (b, c) a role binder, or an occurrence of one.
+        let subject = self
+            .scope
+            .resolve(node)
+            .filter(|b| self.role.contains_key(b));
+        if let Some(b) = subject
+            && let Some(info) = self.role.get(&b).copied()
+        {
+            let r = &self.regions[info.region];
+            let bd = self.binder(b);
+            match info.cont {
+                Some((slots, arity)) => {
+                    p.continuation = Some(format!(
+                        "{} (binder #{b}, region {} entry node {})",
+                        bd.occ, info.region, r.entry
+                    ));
+                    match r.params.iter().position(|x| *x == b) {
+                        Some(i) => p.evidence.push((
+                            R1_LAYOUT,
+                            format!(
+                                "lambda parameter {i} of region entry {}, type {}",
+                                r.entry, bd.ty
+                            ),
+                        )),
+                        None => p.evidence.push((
+                            R8_DERIVED_CONT,
+                            format!(
+                                "let-bound inside region entry {}, dataflow-connected to it, \
+                                 owing {arity} argument(s), type {}",
+                                r.entry, bd.ty
+                            ),
+                        )),
+                    }
+                    p.evidence.push((
+                        R1_UNPARSER_SIG,
+                        format!(
+                            "that region's unParser argument list: state {}, value {}, result {}",
+                            r.sig.state.clone().unwrap_or_else(|| "-".into()),
+                            r.sig.value.clone().unwrap_or_else(|| "-".into()),
+                            r.sig.result
+                        ),
+                    ));
+                    // What this particular use does with it.
+                    if let Some(e) = r.edges.iter().find(|e| {
+                        e.provenance.binder == Some(b) && e.provenance.use_at == Some(node)
+                    }) {
+                        p.normalized = Some(format!("Parsec::{:?}", e.kind));
+                        p.role = Some(format!(
+                            "{}; this use: {}",
+                            slots_str(e.source_role),
+                            match e.fact {
+                                EdgeFact::Invoke =>
+                                    format!("Invoke, control goes to {}", slots_str(e.destination)),
+                                _ => format!("Forward into slot {}", slots_str(e.destination)),
+                            }
+                        ));
+                        p.evidence.push((e.provenance.rule, self.edge_note(e)));
+                    } else {
+                        p.role = Some(format!("{}; this use: not an edge", slots_str(slots)));
+                    }
+                }
+                None => {
+                    p.continuation = Some(format!(
+                        "{} is the state of region {} (entry node {})",
+                        bd.occ, info.region, r.entry
+                    ));
+                    p.normalized = Some("Parsec::State".to_string());
+                    for e in &r.evidence {
+                        if e.node == node {
+                            p.evidence.push((e.rule, e.note.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        // (d) a spine root carrying edges.
+        for (_, e) in self.edges_at(node) {
+            if e.provenance.use_at == Some(node) {
+                continue;
+            }
+            p.evidence.push((e.provenance.rule, self.edge_note(e)));
+            if p.normalized.is_none() && e.fact == EdgeFact::RunParser {
+                p.normalized = Some("Parsec::CallParser".to_string());
+            }
+        }
+        p
+    }
+
+    fn edge_note(&self, e: &ParserEdge) -> String {
+        match e.fact {
+            EdgeFact::Invoke => {
+                let args: Vec<String> = self
+                    .cont_call_args(e.at, e.provenance.binder)
+                    .iter()
+                    .map(|a| a.role.clone())
+                    .collect();
+                format!(
+                    "{} applied to ({}) at node {}",
+                    e.provenance.label,
+                    args.join(", "),
+                    e.at
+                )
+            }
+            EdgeFact::Forward => format!(
+                "{} forwarded unchanged into slot {} of the parser call at node {}",
+                e.provenance.label,
+                slots_str(e.destination),
+                e.at
+            ),
+            EdgeFact::RunParser => format!("parser call at node {}", e.at),
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+// The recovered control-flow graph
+//------------------------------------------------------------------------------
+//
+// The deliverable of M2.1 is the *graph*, not code: for each region, what
+// its parameters are, and every edge out of it — each terminator with the
+// values it hands back, and each parser call with the continuation that
+// fills every one of its four slots, so a reader can follow every path from
+// the entry to a terminator. Nothing here lowers anything: there are no
+// Rust types and no `enum ParseResult`.
+
+/// Where the continuation filling a slot of a parser call comes from.
+#[derive(Debug, Clone, Serialize)]
+pub enum ContSource {
+    /// A continuation parameter of a region — usually the enclosing one,
+    /// but a nested region may forward an outer region's parameter.
+    Param {
+        region: usize,
+        binder: BinderId,
+        label: String,
+        role: SlotSet,
+    },
+    /// A let-bound continuation derived inside a region ([`R8_DERIVED_CONT`]).
+    Derived {
+        region: usize,
+        binder: BinderId,
+        label: String,
+        role: SlotSet,
+        /// False for one excluded from the region's obligations.
+        connected: bool,
+    },
+    /// A lambda written out at the call site that is itself a region: the
+    /// continuation is a nested parser.
+    NestedRegion { entry: ExprId },
+    /// A lambda written out at the call site that is not a region.
+    Lambda { at: ExprId },
+    /// Anything else — a computed value.
+    Other { at: ExprId },
+}
+
+impl ContSource {
+    pub fn describe(&self) -> String {
+        match self {
+            ContSource::Param {
+                label,
+                role,
+                binder,
+                ..
+            } => format!("{label} (own param #{binder}, role {})", slots_str(*role)),
+            ContSource::Derived {
+                label,
+                role,
+                binder,
+                connected,
+                ..
+            } => format!(
+                "{label} (derived #{binder}{}, role {})",
+                if *connected { "" } else { ", unconnected" },
+                slots_str(*role)
+            ),
+            ContSource::NestedRegion { entry } => {
+                format!("wrapped lambda = region at node {entry}")
+            }
+            ContSource::Lambda { at } => format!("wrapped lambda at node {at}"),
+            ContSource::Other { at } => format!("value at node {at}"),
+        }
+    }
+}
+
+pub fn slots_str(s: SlotSet) -> String {
+    let v: Vec<String> = s.iter().map(|x| format!("{x:?}")).collect();
+    if v.len() == 1 {
+        v[0].clone()
+    } else {
+        format!("{{{}}}", v.join("|"))
+    }
+}
+
+/// What one parameter of a region is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ParamRole {
+    /// The parser's own arguments, before the representation starts.
+    Leading,
+    State,
+    /// One of the three fields worker/wrapper unboxed `State s u` into.
+    UnboxedState(usize),
+    Cont(SlotSet),
+    /// A trailing transformer argument the result type erases to.
+    Trailing(usize),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CfgParam {
+    pub binder: BinderId,
+    pub role: ParamRole,
+    /// The binder's occurrence name. A label for humans — never evidence.
+    pub label: String,
+    pub ty: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CfgArg {
+    /// What this argument is in the continuation's own type: `value`,
+    /// `state`, `err`, or one of the trailing transformer arguments.
+    pub role: String,
+    pub at: ExprId,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CfgSucc {
+    pub slots: SlotSet,
+    pub at: ExprId,
+    pub source: ContSource,
+}
+
+/// One edge of the graph, as the reader sees it: a terminator, or a call.
+#[derive(Debug, Clone, Serialize)]
+pub struct CfgNode {
+    pub kind: EdgeKind,
+    pub at: ExprId,
+    pub rule: &'static str,
+    /// For a terminator: the role control goes to.
+    pub role: SlotSet,
+    /// For a terminator: the continuation invoked.
+    pub binder: Option<BinderId>,
+    pub label: String,
+    pub args: Vec<CfgArg>,
+    /// For a call: the parser being run, its state, and the continuation
+    /// filling each slot.
+    pub parser: Option<String>,
+    pub state: Option<CfgArg>,
+    pub succ: Vec<CfgSucc>,
+    /// The region edges this node accounts for. Every edge of the region
+    /// appears in exactly one node.
+    pub edges: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Cfg {
+    pub module: String,
+    pub region: usize,
+    pub entry: ExprId,
+    pub proven: bool,
+    pub sig: UnParserSig,
+    pub params: Vec<CfgParam>,
+    pub nodes: Vec<CfgNode>,
+    /// Region edges no node accounts for. Always empty; kept so the
+    /// invariant is visible in the JSON rather than asserted out of sight.
+    pub unplaced: Vec<usize>,
+}
+
+impl Analysis<'_> {
+    /// Render a short label for a node: `occ#id` for a variable, `\…#id`
+    /// for a lambda, `#id` otherwise. Diagnostic text only.
+    pub fn node_text(&self, e: ExprId) -> String {
+        let m = self.module;
+        let i = m.strip(e);
+        match m.expr(i) {
+            Expr::Var { occ, .. } => format!("{occ}#{i}"),
+            Expr::Lam { .. } => format!("\\…#{i}"),
+            Expr::Lit(l) => format!("{}#{i}", l.pretty),
+            _ => format!("#{i}"),
+        }
+    }
+
+    /// Where the continuation at `arg` comes from.
+    pub fn cont_source(&self, arg: ExprId) -> ContSource {
+        let m = self.module;
+        let i = m.strip(arg);
+        if let Some(b) = self.scope.resolve(i) {
+            if let Some(info) = self.role.get(&b).or_else(|| self.unconnected.get(&b)) {
+                let role = info.cont.map(|(s, _)| s).unwrap_or_default();
+                let label = self.binder(b).occ.clone();
+                let r = &self.regions[info.region];
+                let derived = r.derived.contains(&b);
+                let unconnected = r.derived_unconnected.contains(&b);
+                if derived || unconnected {
+                    return ContSource::Derived {
+                        region: info.region,
+                        binder: b,
+                        label,
+                        role,
+                        connected: derived,
+                    };
+                }
+                return ContSource::Param {
+                    region: info.region,
+                    binder: b,
+                    label,
+                    role,
+                };
+            }
+            return ContSource::Other { at: i };
+        }
+        if matches!(m.expr(i), Expr::Lam { .. }) {
+            return match self.region_at.get(&i) {
+                Some(_) => ContSource::NestedRegion { entry: i },
+                None => ContSource::Lambda { at: i },
+            };
+        }
+        ContSource::Other { at: i }
+    }
+
+    /// The region's control-flow graph: its parameters with their roles,
+    /// and every edge exactly once.
+    pub fn cfg(&self, ri: usize) -> Cfg {
+        let m = self.module;
+        let r = &self.regions[ri];
+        let (start, end) = r.run;
+        let mut params = Vec::new();
+        for (i, b) in r.params.iter().enumerate() {
+            let bd = self.binder(*b);
+            let role = if Some(*b) == r.state {
+                ParamRole::State
+            } else if (start..end).contains(&i) {
+                ParamRole::Cont(r.conts[i - start].slots)
+            } else if i >= end {
+                ParamRole::Trailing(i - end)
+            } else if r.unboxed_state.is_some_and(|f| f.contains(b)) {
+                ParamRole::UnboxedState(i + 3 - start)
+            } else {
+                ParamRole::Leading
+            };
+            params.push(CfgParam {
+                binder: *b,
+                role,
+                label: bd.occ.clone(),
+                ty: bd.ty.clone(),
+            });
+        }
+
+        // Terminators first, then one node per call site; forwardings are
+        // folded into the call they fill a slot of.
+        let mut nodes: Vec<CfgNode> = Vec::new();
+        let mut at_call: HashMap<ExprId, usize> = HashMap::new();
+        let mut placed = vec![false; r.edges.len()];
+        for (ei, e) in r.edges.iter().enumerate() {
+            match e.fact {
+                EdgeFact::Invoke => {
+                    placed[ei] = true;
+                    nodes.push(CfgNode {
+                        kind: e.kind,
+                        at: e.at,
+                        rule: e.provenance.rule,
+                        role: e.destination,
+                        binder: e.provenance.binder,
+                        label: e.provenance.label.clone(),
+                        args: self.cont_call_args(e.at, e.provenance.binder),
+                        parser: None,
+                        state: None,
+                        succ: Vec::new(),
+                        edges: vec![ei],
+                    });
+                }
+                EdgeFact::RunParser => {
+                    placed[ei] = true;
+                    at_call.insert(e.at, nodes.len());
+                    nodes.push(self.call_node(e.at, e.provenance.rule, vec![ei]));
+                }
+                EdgeFact::Forward => {}
+            }
+        }
+        for (ei, e) in r.edges.iter().enumerate() {
+            if e.fact != EdgeFact::Forward {
+                continue;
+            }
+            match at_call.get(&e.at) {
+                Some(ni) => {
+                    placed[ei] = true;
+                    nodes[*ni].edges.push(ei);
+                }
+                None => {
+                    // The call itself belongs to a nested region; the
+                    // forwarding is still this region's edge, so the call
+                    // is listed here too.
+                    placed[ei] = true;
+                    at_call.insert(e.at, nodes.len());
+                    nodes.push(self.call_node(e.at, e.provenance.rule, vec![ei]));
+                }
+            }
+        }
+        nodes.sort_by_key(|n| (n.at, n.kind));
+        Cfg {
+            module: m.name.clone(),
+            region: ri,
+            entry: r.entry,
+            proven: r.proven,
+            sig: r.sig.clone(),
+            params,
+            nodes,
+            unplaced: placed
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| !**p)
+                .map(|(i, _)| i)
+                .collect(),
+        }
+    }
+
+    /// The arguments of a continuation call, named by what the
+    /// continuation's own type says each one is.
+    fn cont_call_args(&self, root: ExprId, binder: Option<BinderId>) -> Vec<CfgArg> {
+        let m = self.module;
+        let (_, args) = m.spine(root);
+        let vargs = value_args(&self.scope, &args);
+        let (kind, arity) = match binder.and_then(|b| self.role.get(&b)).and_then(|i| i.cont) {
+            Some((slots, arity)) => (slots.kind(), arity),
+            None => (None, 0),
+        };
+        let named: Vec<&str> = match (kind, arity) {
+            (Some(ContKind::Ok), 3) => vec!["value", "state", "err"],
+            (Some(ContKind::Ok), 2) => vec!["state", "err"],
+            (Some(ContKind::Err), _) => vec!["err"],
+            _ => vec![],
+        };
+        let trailing = binder
+            .map(|b| {
+                split_arrows(&self.binder(b).ty)
+                    .get(arity..)
+                    .map(|r| trailing_types(&r.join(" -> ")))
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        vargs
+            .iter()
+            .enumerate()
+            .map(|(i, a)| CfgArg {
+                role: match named.get(i) {
+                    Some(n) => (*n).to_string(),
+                    None => match trailing.get(i.saturating_sub(named.len())) {
+                        Some(t) => t.clone(),
+                        None => format!("arg{i}"),
+                    },
+                },
+                at: *a,
+                text: self.node_text(*a),
+            })
+            .collect()
+    }
+
+    fn call_node(&self, root: ExprId, rule: &'static str, edges: Vec<usize>) -> CfgNode {
+        let m = self.module;
+        let (head, args) = m.spine(root);
+        let vargs = value_args(&self.scope, &args);
+        let mut state = None;
+        let mut succ = Vec::new();
+        if let Some(CallShape::Parser {
+            state: si, slots, ..
+        }) = self.call_shape(root)
+        {
+            state = si.map(|i| CfgArg {
+                role: "state".into(),
+                at: vargs[i],
+                text: self.node_text(vargs[i]),
+            });
+            for (i, set) in slots {
+                succ.push(CfgSucc {
+                    slots: set,
+                    at: vargs[i],
+                    source: self.cont_source(vargs[i]),
+                });
+            }
+        }
+        CfgNode {
+            kind: EdgeKind::CallParser,
+            at: root,
+            rule,
+            role: SlotSet::empty(),
+            binder: None,
+            label: String::new(),
+            args: Vec::new(),
+            parser: Some(self.node_text(head)),
+            state,
+            succ,
+            edges,
+        }
     }
 }
 
@@ -2381,6 +3655,17 @@ mod test {
             "node": "Case", "scrut": scrut, "binder": b("wild", "T"), "type": "R",
             "alts": [{"con": {"kind": "DataAlt", "name": con, "occ": con, "tag": 1},
                       "binders": binders, "rhs": rhs}]
+        })
+    }
+
+    fn let_in(pairs: Vec<(&str, &str, Value)>, body: Value) -> Value {
+        json!({
+            "node": "Let",
+            "bind": {"rec": false, "pairs": pairs.into_iter().map(|(n, ty, rhs)| json!({
+                "binder": b(n, ty), "rhs": rhs,
+                "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+            })).collect::<Vec<_>>()},
+            "body": body
         })
     }
 
@@ -3141,6 +4426,278 @@ mod test {
         let w = a.regions.iter().find(|r| r.params.len() == 3).unwrap();
         assert_eq!(w.conts[0].slots.len(), 2);
         assert!(w.wrapper.is_none());
+    }
+
+    /// The layout is derived from the types, not assumed: `unParser`'s
+    /// argument list is checked position by position.
+    #[test]
+    fn the_unparser_signature_is_read_off_the_types() {
+        let sig = unparser_sig(
+            Some(ST),
+            &[
+                (ContKind::Ok, OK),
+                (ContKind::Err, EK),
+                (ContKind::Ok, OK),
+                (ContKind::Err, EK),
+            ],
+        )
+        .expect("unParser's own argument list");
+        assert_eq!(sig.state.as_deref(), Some("State String UserState"));
+        assert_eq!(sig.stream.as_deref(), Some("String"));
+        assert_eq!(sig.user.as_deref(), Some("UserState"));
+        assert_eq!(sig.value.as_deref(), Some("Token"));
+        assert_eq!(sig.result, "SCBase m b");
+        // r erases to exactly the two transformer arguments, by type.
+        assert_eq!(sig.trailing, vec!["Environment m", "SystemState"]);
+
+        // An ok continuation whose middle argument is not a state.
+        assert!(
+            unparser_sig(None, &[(ContKind::Ok, "Token -> Int -> ParseError -> m b")]).is_err()
+        );
+        // Two continuations that disagree about the value type.
+        let disagree = unparser_sig(
+            Some(ST),
+            &[
+                (ContKind::Ok, OK),
+                (
+                    ContKind::Ok,
+                    "Char -> State String UserState -> ParseError -> SCBase m b",
+                ),
+            ],
+        );
+        assert_eq!(disagree.unwrap_err().0, R1_TYPE_AGREE);
+        // …and about the result type.
+        let disagree = unparser_sig(
+            Some(ST),
+            &[(ContKind::Ok, OK), (ContKind::Err, "ParseError -> IO b")],
+        );
+        assert_eq!(disagree.unwrap_err().0, R1_TYPE_AGREE);
+        // A state parameter that is not `State s u`.
+        assert_eq!(
+            unparser_sig(Some("StateT s Identity b"), &[(ContKind::Err, EK)])
+                .unwrap_err()
+                .0,
+            R1_UNPARSER_SIG
+        );
+    }
+
+    #[test]
+    fn the_trailing_arguments_come_from_the_result_type() {
+        // ReaderT r m a = r -> m a; StateT s m a = s -> m (a, s).
+        assert_eq!(
+            trailing_types("ReaderT (Environment m) (StateT SystemState m) b"),
+            vec!["Environment m", "SystemState"]
+        );
+        assert_eq!(
+            trailing_types("SCBase m b"),
+            vec!["Environment m", "SystemState"]
+        );
+        assert_eq!(
+            trailing_types("StateT SystemState m b"),
+            vec!["SystemState"]
+        );
+        // A base monad that is still a variable erases to nothing at all.
+        assert!(trailing_types("m b").is_empty());
+        assert!(trailing_types("IO b").is_empty());
+    }
+
+    /// A chain whose continuation types are present but not in unParser's
+    /// order forms no region, and says so.
+    #[test]
+    fn continuations_out_of_order_are_reported_not_accepted() {
+        let region = lam(
+            vec![
+                b("s1", ST),
+                b("eerr", EK),
+                b("cok", OK),
+                b("cerr", EK),
+                b("eok", OK),
+            ],
+            ap(v("cok"), vec![g("x"), v("s1"), g("e")]),
+        );
+        let m = module(region, json!({}));
+        let a = Analysis::of_module(&m);
+        assert!(
+            a.regions.is_empty(),
+            "err·ok·err·ok is not unParser's order"
+        );
+        assert_eq!(a.skipped.len(), 1);
+        assert_eq!(a.skipped[0].reason, "continuation-order-not-unparser");
+        assert_eq!(a.checks.order_refused, 1);
+    }
+
+    /// Trailing parameters are matched against the erasure of the region's
+    /// own result type, not against a hard-coded count of two.
+    #[test]
+    fn trailing_parameters_must_be_the_result_types_erasure() {
+        let five = || {
+            vec![
+                b("s1", ST),
+                b("cok", OK),
+                b("cerr", EK),
+                b("eok", OK),
+                b("eerr", EK),
+            ]
+        };
+        let body = || ap(v("cerr"), vec![g("e")]);
+        // `SCBase m b` erases to `Environment m` then `SystemState`.
+        let mut ps = five();
+        ps.push(b("env", "Environment m"));
+        ps.push(b("st", "SystemState"));
+        let m = module(lam(ps, body()), json!({}));
+        let a = Analysis::of_module(&m);
+        assert_eq!(a.regions.len(), 1);
+        assert_eq!(a.regions[0].extra.len(), 2);
+        assert_eq!(a.checks.trailing_params, 2);
+
+        // The same two in the wrong order is not that erasure.
+        let mut ps = five();
+        ps.push(b("st", "SystemState"));
+        ps.push(b("env", "Environment m"));
+        let m = module(lam(ps, body()), json!({}));
+        let a = Analysis::of_module(&m);
+        assert!(a.regions.is_empty());
+        assert_eq!(a.skipped[0].reason, "trailing-params-not-in-result-erasure");
+
+        // And one argument too many, however Parsec-shaped the chain is.
+        let mut ps = five();
+        ps.push(b("env", "Environment m"));
+        ps.push(b("st", "SystemState"));
+        ps.push(b("more", "Int"));
+        let m = module(lam(ps, body()), json!({}));
+        let a = Analysis::of_module(&m);
+        assert!(a.regions.is_empty());
+        assert_eq!(a.checks.trailing_params_refused, 1);
+    }
+
+    /// R8 promotes only the let-bound continuations some dataflow connects
+    /// to the region; an unconnected one carries none of its obligations —
+    /// not even a use that would otherwise reject the whole region.
+    #[test]
+    fn only_connected_lets_become_derived_continuations() {
+        // An ok continuation whose value has already been supplied: what
+        // GHC builds when it writes `let lvl = cok x`.
+        const OK2: &str = "State String UserState -> ParseError -> SCBase m b";
+        let region = lam(
+            vec![
+                b("s1", ST),
+                b("cok", OK),
+                b("cerr", EK),
+                b("eok", OK),
+                b("eerr", EK),
+            ],
+            // Connected: a partial application of the region's own cok.
+            let_in(
+                vec![("near", OK2, ap(v("cok"), vec![g("x")]))],
+                // Connected only through `near`.
+                let_in(
+                    vec![(
+                        "chained",
+                        OK2,
+                        lam(
+                            vec![b("s2", ST), b("e1", "ParseError")],
+                            ap(v("near"), vec![v("s2"), v("e1")]),
+                        ),
+                    )],
+                    // Unconnected: continuation-typed, but nothing ties it
+                    // to this region — and it escapes into an unknown
+                    // call, which would reject the region if R8 promoted
+                    // everything of continuation type.
+                    let_in(
+                        vec![("far", EK, ap(g("elsewhere"), vec![g("y")]))],
+                        case_alts(
+                            g("scrut"),
+                            vec![ap(v("cerr"), vec![g("e")]), ap(g("stash"), vec![v("far")])],
+                        ),
+                    ),
+                ),
+            ),
+        );
+        let m = module(region, json!({}));
+        let a = Analysis::of_module(&m);
+        let r = &a.regions[0];
+        let names = |v: &Vec<BinderId>| -> Vec<String> {
+            v.iter().map(|b| a.binder(*b).occ.clone()).collect()
+        };
+        let mut derived = names(&r.derived);
+        derived.sort();
+        assert_eq!(derived, vec!["chained", "near"]);
+        assert_eq!(names(&r.derived_unconnected), vec!["far"]);
+        assert_eq!(a.checks.derived_connected, 2);
+        assert_eq!(a.checks.derived_unconnected, 1);
+        assert!(r.proven, "rejects: {:?}", r.rejects);
+    }
+
+    /// The recovered graph is the deliverable: every parameter appears
+    /// exactly once, and every edge of the region exactly once.
+    #[test]
+    fn the_cfg_lists_every_parameter_and_every_edge_exactly_once() {
+        let region = lam(
+            vec![
+                b("s1", ST),
+                b("cok", OK),
+                b("cerr", EK),
+                b("eok", OK),
+                b("eerr", EK),
+            ],
+            case_alts(
+                g("scrut"),
+                vec![
+                    ap(v("cok"), vec![g("x"), v("s1"), g("e")]),
+                    ap(v("cerr"), vec![g("e")]),
+                    ap(v("eok"), vec![g("x"), v("s1"), g("e")]),
+                    ap(v("eerr"), vec![g("e")]),
+                    ap(
+                        g("p"),
+                        vec![v("s1"), v("cok"), v("cerr"), v("eok"), v("eerr")],
+                    ),
+                ],
+            ),
+        );
+        let m = module(region, json!({}));
+        let a = Analysis::of_module(&m);
+        let c = a.cfg(0);
+        let r = &a.regions[0];
+
+        // Every parameter, once, with its role.
+        assert_eq!(c.params.len(), r.params.len());
+        let mut seen: Vec<BinderId> = c.params.iter().map(|p| p.binder).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), r.params.len());
+        let roles: Vec<ParamRole> = c.params.iter().map(|p| p.role).collect();
+        assert_eq!(roles[0], ParamRole::State);
+        assert_eq!(roles[1], ParamRole::Cont(SlotSet::single(0)));
+        assert_eq!(roles[4], ParamRole::Cont(SlotSet::single(3)));
+
+        // Every edge, once. Four invocations, one call, four forwardings
+        // folded into that call.
+        let mut placed: Vec<usize> = c.nodes.iter().flat_map(|n| n.edges.clone()).collect();
+        assert!(c.unplaced.is_empty());
+        placed.sort_unstable();
+        let all: Vec<usize> = (0..r.edges.len()).collect();
+        assert_eq!(placed, all, "every edge exactly once");
+        assert_eq!(c.nodes.len(), 5, "four terminators and one call");
+        let call = c
+            .nodes
+            .iter()
+            .find(|n| n.kind == EdgeKind::CallParser)
+            .expect("the parser call");
+        assert_eq!(call.succ.len(), 4);
+        assert_eq!(call.edges.len(), 5, "the call plus its four forwardings");
+        assert!(call.state.is_some());
+        for s in &call.succ {
+            assert!(matches!(s.source, ContSource::Param { .. }));
+        }
+        // A terminator names its arguments by what the continuation's own
+        // type says they are.
+        let ok = c
+            .nodes
+            .iter()
+            .find(|n| n.kind == EdgeKind::ConsumedOk)
+            .expect("the cok edge");
+        let names: Vec<&str> = ok.args.iter().map(|a| a.role.as_str()).collect();
+        assert_eq!(names, vec!["value", "state", "err"]);
     }
 
     #[test]

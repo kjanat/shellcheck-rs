@@ -47,6 +47,12 @@ enum Command {
         /// Print the enclosing context this many ancestors up.
         #[arg(long, default_value_t = 0)]
         up: usize,
+        /// Do not load the Parsec proof object. It is loaded by default
+        /// whenever the module has recognised regions, which is what
+        /// annotates region entries, role binders, their occurrences and
+        /// the spine roots of proven edges, and prints the evidence footer.
+        #[arg(long)]
+        no_parsec: bool,
     },
     /// Compare census metrics across several Core dump directories
     /// (e.g. the GHC flag matrix). Arguments are `label=dir` or plain dirs.
@@ -64,6 +70,13 @@ enum Command {
         /// Print per-region evidence and per-reject reasons with node ids.
         #[arg(long)]
         explain: bool,
+        /// Print the recovered control-flow graph of the region whose entry
+        /// is this node (or of the innermost region containing it).
+        #[arg(long)]
+        cfg: Option<u32>,
+        /// Print one control-flow graph block per region. Use --module.
+        #[arg(long)]
+        cfg_all: bool,
     },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
@@ -95,7 +108,8 @@ fn main() -> Result<()> {
             node,
             depth,
             up,
-        } => show(&dir, &module, node, depth, up),
+            no_parsec,
+        } => show(&dir, &module, node, depth, up, !no_parsec),
         Command::Laziness {
             dir,
             module,
@@ -108,7 +122,9 @@ fn main() -> Result<()> {
             module,
             json,
             explain,
-        } => parsec(&dir, module.as_deref(), json, explain),
+            cfg,
+            cfg_all,
+        } => parsec(&dir, module.as_deref(), json, explain, cfg, cfg_all),
     })?
 }
 
@@ -263,16 +279,37 @@ fn binders(dir: &Path, module: &str) -> Result<()> {
 // show
 //------------------------------------------------------------------------------
 
-fn show(dir: &Path, module: &str, node: Option<u32>, depth: usize, up: usize) -> Result<()> {
+fn show(
+    dir: &Path,
+    module: &str,
+    node: Option<u32>,
+    depth: usize,
+    up: usize,
+    parsec: bool,
+) -> Result<()> {
     let modules = load_dir(dir)?;
     let m = find_module(&modules, module)?;
+    // The proof object is loaded once, by default, and only when this
+    // module actually has regions; `--no-parsec` skips it.
+    let analysis = match parsec {
+        true => {
+            let a = h2r_analysis::parsec::Analysis::of_module(m);
+            if a.regions.is_empty() { None } else { Some(a) }
+        }
+        false => None,
+    };
+    let note = |id: u32| analysis.as_ref().and_then(|a| a.node_note(id));
+    let bnote = |b: u32| analysis.as_ref().and_then(|a| a.binder_note(b));
     let pretty = h2r_core_ir::pretty::Pretty {
         module: m,
         max_depth: depth,
         ids: true,
+        note: Some(&note),
+        binder_note: Some(&bnote),
     };
     match node {
         Some(mut id) => {
+            let requested = id;
             for _ in 0..up {
                 match m.parent[id as usize] {
                     Some(p) => id = p,
@@ -297,6 +334,28 @@ fn show(dir: &Path, module: &str, node: Option<u32>, depth: usize, up: usize) ->
                 println!("-- in top-level binding {occ}, node {id}");
             }
             println!("{}", pretty.render(id));
+            if let Some(a) = &analysis {
+                let p = a.proof_at(requested);
+                if !p.is_empty() {
+                    println!();
+                    println!("node {}", p.node);
+                    if let Some(n) = &p.normalized {
+                        println!("  normalized as: {n}");
+                    }
+                    if let Some(c) = &p.continuation {
+                        println!("  continuation: {c}");
+                    }
+                    if let Some(r) = &p.role {
+                        println!("  intrinsic role: {r}");
+                    }
+                    if !p.evidence.is_empty() {
+                        println!("  evidence:");
+                        for (rule, note) in &p.evidence {
+                            println!("    {rule}: {note}");
+                        }
+                    }
+                }
+            }
         }
         None => {
             for bind in &m.top {
@@ -448,7 +507,141 @@ fn laziness(
 
 type ExprIdLike = (String, u32);
 
-fn parsec(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result<()> {
+/// The recovered parser graph, as an auditable object: for each region its
+/// parameters with their roles, then every edge — each terminator with the
+/// values it hands back, and each parser call with the continuation filling
+/// every slot, so a reader can follow every path from the entry to a
+/// terminator. No lowering: the graph *is* the deliverable.
+fn print_cfgs(
+    analyses: &[h2r_analysis::parsec::Analysis<'_>],
+    one: Option<u32>,
+    json: bool,
+) -> Result<()> {
+    use h2r_analysis::parsec::{Cfg, EdgeKind, ParamRole, slots_str};
+
+    let mut cfgs: Vec<Cfg> = Vec::new();
+    for a in analyses {
+        match one {
+            Some(node) => {
+                // Node ids are per module; a module whose arena is shorter
+                // simply does not contain this node.
+                if node as usize >= a.module.exprs.len() {
+                    continue;
+                }
+                let ri = a
+                    .regions
+                    .iter()
+                    .position(|r| r.entry == node)
+                    .or_else(|| a.enclosing_region_of(node));
+                if let Some(ri) = ri {
+                    cfgs.push(a.cfg(ri));
+                }
+            }
+            None => cfgs.extend((0..a.regions.len()).map(|ri| a.cfg(ri))),
+        }
+    }
+    if json {
+        serde_json::to_writer(std::io::stdout().lock(), &cfgs)?;
+        println!();
+        return Ok(());
+    }
+    if cfgs.is_empty() {
+        println!("no region found");
+        return Ok(());
+    }
+    for c in &cfgs {
+        println!(
+            "region {} of {} — entry node {} ({})",
+            c.region,
+            c.module,
+            c.entry,
+            if c.proven { "PROVEN" } else { "REJECTED" }
+        );
+        println!(
+            "  unParser: state {}, value {}, result {} (erases to {} trailing argument(s))",
+            c.sig.state.clone().unwrap_or_else(|| "-".into()),
+            c.sig.value.clone().unwrap_or_else(|| "-".into()),
+            c.sig.result,
+            c.sig.trailing.len()
+        );
+        println!("  parameters");
+        for p in &c.params {
+            let role = match p.role {
+                ParamRole::Leading => "argument".to_string(),
+                ParamRole::State => "state".to_string(),
+                ParamRole::UnboxedState(i) => format!("state field {i}"),
+                ParamRole::Cont(s) => slots_str(s),
+                ParamRole::Trailing(i) => format!("trailing {i}"),
+            };
+            println!(
+                "    #{:<6} {:<12} {:<14} :: {}",
+                p.binder, p.label, role, p.ty
+            );
+        }
+        println!("  edges");
+        for n in &c.nodes {
+            match n.kind {
+                EdgeKind::CallParser => {
+                    let mut parts: Vec<String> = Vec::new();
+                    parts.push(format!(
+                        "parser={}",
+                        n.parser.clone().unwrap_or_else(|| "?".into())
+                    ));
+                    if let Some(st) = &n.state {
+                        parts.push(format!("state={}", st.text));
+                    }
+                    for s in &n.succ {
+                        parts.push(format!(
+                            "{}←{}",
+                            slots_str(s.slots).to_lowercase(),
+                            s.source.describe()
+                        ));
+                    }
+                    println!(
+                        "    CallParser({}) at node {}   [{}]",
+                        parts.join(", "),
+                        n.at,
+                        n.rule
+                    );
+                }
+                k => {
+                    let args: Vec<String> = n
+                        .args
+                        .iter()
+                        .map(|a| format!("{}={}", a.role, a.text))
+                        .collect();
+                    println!(
+                        "    {k:?}({}) at node {}   [{}, {} role {}]",
+                        args.join(", "),
+                        n.at,
+                        n.rule,
+                        n.label,
+                        slots_str(n.role)
+                    );
+                }
+            }
+        }
+        let edges: usize = c.nodes.iter().map(|n| n.edges.len()).sum();
+        println!(
+            "  {} node(s), {} region edge(s) accounted for, {} unplaced",
+            c.nodes.len(),
+            edges,
+            c.unplaced.len()
+        );
+        println!();
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parsec(
+    dir: &Path,
+    module: Option<&str>,
+    json: bool,
+    explain: bool,
+    cfg: Option<u32>,
+    cfg_all: bool,
+) -> Result<()> {
     use h2r_analysis::parsec::{Analysis, Bucket, EdgeFact, account};
 
     let modules = load_dir(dir)?;
@@ -456,6 +649,10 @@ fn parsec(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result
         Some(name) => vec![find_module(&modules, name)?],
         None => modules.iter().collect(),
     };
+    if cfg.is_some() || cfg_all {
+        let analyses: Vec<Analysis> = selected.iter().map(|m| Analysis::of_module(m)).collect();
+        return print_cfgs(&analyses, cfg, json);
+    }
     // The raw census plus the analyses this command reports on: building
     // the integrated census would run the same recogniser a second time.
     let census = Census::raw(selected.iter().copied());
@@ -464,7 +661,12 @@ fn parsec(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result
 
     if json {
         let regions: Vec<_> = analyses.iter().flat_map(|a| a.regions.iter()).collect();
-        let out = serde_json::json!({"regions": regions, "accounting": acct});
+        let skipped: Vec<_> = analyses.iter().flat_map(|a| a.skipped.iter()).collect();
+        let checks: Vec<_> = analyses.iter().map(|a| &a.checks).collect();
+        let out = serde_json::json!({
+            "regions": regions, "skipped": skipped, "checks": checks,
+            "accounting": acct
+        });
         serde_json::to_writer(std::io::stdout().lock(), &out)?;
         println!();
         return Ok(());
@@ -515,6 +717,82 @@ fn parsec(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result
     }
     for (reason, (n, (md, node))) in &skip_by {
         println!("    {n:>5}  {reason:<38} e.g. {md} node {node}");
+    }
+
+    println!();
+    println!("Layout checks derived from the types (not assumed from the dump)");
+    let c = analyses
+        .iter()
+        .fold(h2r_analysis::parsec::Checks::default(), |mut a, x| {
+            let k = &x.checks;
+            a.sig_checked += k.sig_checked;
+            a.sig_refused += k.sig_refused;
+            a.agree_refused += k.agree_refused;
+            a.order_refused += k.order_refused;
+            a.trailing_params_checked += k.trailing_params_checked;
+            a.trailing_params += k.trailing_params;
+            a.trailing_params_refused += k.trailing_params_refused;
+            a.trailing_call_args += k.trailing_call_args;
+            a.trailing_calls_refused += k.trailing_calls_refused;
+            a.trailing_cont_calls += k.trailing_cont_calls;
+            a.trailing_cont_calls_refused += k.trailing_cont_calls_refused;
+            a.derived_connected += k.derived_connected;
+            a.derived_unconnected += k.derived_unconnected;
+            for (r, n) in &k.examples {
+                a.examples.entry(r.clone()).or_insert(*n);
+            }
+            a
+        });
+    println!(
+        "  R1-UNPARSER-SIG  chains checked against unParser's argument list {:>6}",
+        c.sig_checked
+    );
+    println!(
+        "    … refused: continuation types are not unParser's              {:>6}",
+        c.sig_refused
+    );
+    println!(
+        "    … refused: a / s / u / r do not agree (R1-TYPE-AGREE)         {:>6}",
+        c.agree_refused
+    );
+    println!(
+        "    … refused: continuation order is not cok·cerr·eok·eerr        {:>6}",
+        c.order_refused
+    );
+    println!(
+        "  R1-TRAILING-ERASURE  regions with trailing parameters checked   {:>6}  ({} parameter(s))",
+        c.trailing_params_checked, c.trailing_params
+    );
+    println!(
+        "    … refused: not a prefix of the result type's erasure          {:>6}",
+        c.trailing_params_refused
+    );
+    println!(
+        "    parser calls carrying trailing transformer arguments          {:>6}",
+        c.trailing_call_args
+    );
+    println!(
+        "    … calls refused that a fixed \"at most two\" would have taken   {:>6}",
+        c.trailing_calls_refused
+    );
+    println!(
+        "    continuation calls with trailing arguments (R3-…-TRAILING)    {:>6}",
+        c.trailing_cont_calls
+    );
+    println!(
+        "    … refused by the erasure                                     {:>6}",
+        c.trailing_cont_calls_refused
+    );
+    println!(
+        "  R8-DERIVED-CONT  let-bound continuations connected to a region  {:>6}",
+        c.derived_connected
+    );
+    println!(
+        "    … unconnected: excluded from the region's obligations         {:>6}",
+        c.derived_unconnected
+    );
+    for (r, n) in &c.examples {
+        println!("    e.g. {r} at node {n}");
     }
 
     println!();
@@ -1026,10 +1304,13 @@ fn report(c: &Census, n_modules: usize) {
             a.callee.resolution.tier() == Tier::Unresolved && a.callee.tier() != Tier::Unresolved
         })
         .count();
-    row(
-        "  of which proven only by the Parsec CPS recogniser",
-        from_parsec,
-        n,
+    println!();
+    println!(
+        "  note: the Parsec CPS recogniser moved {from_parsec} sites OUT of the unresolved\n        \
+         tier ({:.1}% of all lazy/unknown argument sites) — the head alone proves\n        \
+         nothing about them. They are *not* part of the {} still unresolved.",
+        100.0 * from_parsec as f64 / n as f64,
+        tiers.get(&Tier::Unresolved).copied().unwrap_or(0)
     );
     println!();
     println!("  by callee family");

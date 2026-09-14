@@ -11,6 +11,26 @@ pub struct Pretty<'a> {
     pub max_depth: usize,
     /// Show `[#id]` markers on every node.
     pub ids: bool,
+    /// Optional inline annotation for a node, printed after its id marker.
+    /// Used by `h2r show` to mark the nodes a proof object has something to
+    /// say about; the pretty-printer itself knows nothing about them.
+    #[allow(clippy::type_complexity)]
+    pub note: Option<&'a dyn Fn(ExprId) -> Option<String>>,
+    /// The same for a lambda's parameters, printed after the binder name.
+    #[allow(clippy::type_complexity)]
+    pub binder_note: Option<&'a dyn Fn(crate::BinderId) -> Option<String>>,
+}
+
+impl<'a> Pretty<'a> {
+    pub fn plain(module: &'a Module, max_depth: usize) -> Pretty<'a> {
+        Pretty {
+            module,
+            max_depth,
+            ids: true,
+            note: None,
+            binder_note: None,
+        }
+    }
 }
 
 impl Pretty<'_> {
@@ -21,10 +41,21 @@ impl Pretty<'_> {
     }
 
     fn tag(&self, id: ExprId) -> String {
+        let mark = match self.note.and_then(|f| f(id)) {
+            Some(n) => format!("{{{n}}}"),
+            None => String::new(),
+        };
         if self.ids {
-            format!("[#{id}]")
+            format!("[#{id}]{mark}")
         } else {
-            String::new()
+            mark
+        }
+    }
+
+    fn param(&self, b: crate::BinderId) -> String {
+        match self.binder_note.and_then(|f| f(b)) {
+            Some(n) => format!("{{{n}}}"),
+            None => String::new(),
         }
     }
 
@@ -79,7 +110,7 @@ impl Pretty<'_> {
                     let b = m.binder(*binder);
                     if b.kind == crate::BinderKind::Id {
                         let one = if b.one_shot == Some(true) { "¹" } else { "" };
-                        params.push(format!("{}{one}", b.occ));
+                        params.push(format!("{}{one}{}", b.occ, self.param(*binder)));
                     }
                     cur = *body;
                 }
