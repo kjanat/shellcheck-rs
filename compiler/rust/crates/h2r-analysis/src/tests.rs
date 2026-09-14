@@ -41,6 +41,13 @@ fn ty_list(elem: u32) -> Value {
            "args": [elem]})
 }
 
+/// `TyConApp <Class> [T]`: a class constraint on the fixtures' type `T`.
+fn class_ty_json(name: &str, occ: &str) -> Value {
+    json!({"kind": "TyConApp",
+           "tycon": {"name": name, "occ": occ, "unique": occ},
+           "args": [TY_T]})
+}
+
 fn ty_var(occ: &str) -> Value {
     json!({"kind": "TyVar", "name": format!("$_in${occ}"), "occ": occ, "unique": occ})
 }
@@ -51,6 +58,13 @@ const TY_CHAR: u32 = 2;
 const TY_STRING: u32 = 3;
 const TY_A: u32 = 4;
 const TY_LIST_A: u32 = 5;
+/// `Show T`, `Eq T`, `Ord T`: the class constraints the class-op fixtures
+/// give their dictionaries. A dictionary's *type* is what says which class
+/// it belongs to (`classops::K2_DICT_TYPE`), so the fixtures carry the real
+/// class `TyCon`s.
+const TY_SHOW_T: u32 = 6;
+const TY_EQ_T: u32 = 7;
+const TY_ORD_T: u32 = 8;
 
 /// The type table every hand-built module carries.
 fn ty_table() -> Value {
@@ -61,6 +75,9 @@ fn ty_table() -> Value {
         ty_list(TY_CHAR),
         ty_var("a"),
         ty_list(TY_A),
+        class_ty_json("$base$GHC.Show$Show", "Show"),
+        class_ty_json("$ghc-prim$GHC.Classes$Eq", "Eq"),
+        class_ty_json("$ghc-prim$GHC.Classes$Ord", "Ord"),
     ])
 }
 
@@ -4884,4 +4901,628 @@ fn the_structured_and_rendered_element_readings_agree() {
     for f in &lc.flows {
         assert_eq!(crate::text::elem_readings_disagree(f), None, "{f:?}");
     }
+}
+
+//------------------------------------------------------------------------------
+// Class-op dispatch: which instance and which method can run (classops.rs)
+//------------------------------------------------------------------------------
+
+use crate::classops::{self, Outcome, SourceKind, TargetKind};
+
+/// A binder with a class-constraint type: a dictionary.
+fn dict_binder(occ: &str, ty: u32) -> Value {
+    let mut b = binder(occ, demand(false, false));
+    b["ty"] = json!(ty);
+    b["type"] = json!("dict");
+    b
+}
+
+fn dict_lam_binder(occ: &str, ty: u32) -> Value {
+    let mut b = lam_binder(occ, false);
+    b["ty"] = json!(ty);
+    b["type"] = json!("dict");
+    b
+}
+
+/// A class-op selector, for the id table: GHC's own `isClassOpId`.
+fn class_op(occ: &str, module: &str) -> (String, Value) {
+    let name = format!("${module}${occ}");
+    (
+        name.clone(),
+        json!({
+            "name": name, "occ": occ, "arity": 1,
+            "dmdSig": {"args": [demand(true, false)], "diverges": false, "pretty": ""},
+            "isJoinPoint": false, "isClassOp": true, "details": "[gid[ClassOp]]",
+            "hasUnfolding": false
+        }),
+    )
+}
+
+/// A class's dictionary constructor, for the id table.
+fn dict_con(occ: &str, module: &str, arity: u32) -> (String, Value) {
+    let name = format!("${module}${occ}");
+    (name.clone(), data_con(occ, &name, arity))
+}
+
+/// `case <scrut> of wild { <con> d… -> <rhs> }` with dictionary-typed
+/// alternative binders.
+fn case_con_dict(scrut: Value, con: &str, binders: &[(&str, u32)], rhs: Value) -> Value {
+    json!({
+        "node": "Case", "scrut": scrut,
+        "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
+        "alts": [{
+            "con": {"kind": "DataAlt", "name": con, "occ": con, "tag": 1},
+            "binders": binders.iter().map(|(b, t)| dict_binder(b, *t)).collect::<Vec<_>>(),
+            "rhs": rhs
+        }]
+    })
+}
+
+/// A global `Var` with an explicit stable name.
+fn named_gvar(occ: &str, name: &str) -> Value {
+    json!({"node": "Var", "name": name, "occ": occ, "unique": occ, "isGlobal": true})
+}
+
+/// A saturated application of a dictionary constructor named by stable name.
+fn dict_con_app(occ: &str, name: &str, args: &[Value]) -> Value {
+    let mut e = named_gvar(occ, name);
+    for a in args {
+        e = app(e, a.clone());
+    }
+    e
+}
+
+/// A lambda chain over dictionary parameters.
+fn dict_lam(params: &[(&str, u32)], body: Value) -> Value {
+    let mut e = body;
+    for (p, ty) in params.iter().rev() {
+        e = json!({"node": "Lam", "binder": dict_lam_binder(p, *ty), "body": e});
+    }
+    e
+}
+
+/// A top-level binding whose binder carries a class-constraint type.
+fn dict_top(occ: &str, ty: u32, exported: bool) -> Value {
+    let mut b = dict_binder(occ, ty);
+    b["exported"] = json!(exported);
+    b
+}
+
+/// The id table every class-op fixture shares: the `Show`, `Eq` and `Ord`
+/// selectors and dictionary constructors GHC really uses.
+fn class_ids(extra: Vec<(String, Value)>) -> Value {
+    let mut ids = serde_json::Map::new();
+    for (k, v) in [
+        class_op("showsPrec", "base$GHC.Show"),
+        class_op("show", "base$GHC.Show"),
+        class_op("==", "ghc-prim$GHC.Classes"),
+        class_op("$p1Ord", "ghc-prim$GHC.Classes"),
+        dict_con("C:Show", "base$GHC.Show", 3),
+        dict_con("C:Eq", "ghc-prim$GHC.Classes", 2),
+        dict_con("C:Ord", "ghc-prim$GHC.Classes", 8),
+        ("g".to_string(), callee(false)),
+    ] {
+        ids.insert(k, v);
+    }
+    for (k, v) in extra {
+        ids.insert(k, v);
+    }
+    Value::Object(ids)
+}
+
+/// A module of top-level bindings whose id table is *not* rekeyed: these
+/// fixtures give every global its real stable name already.
+fn class_module(name: &str, pairs: Vec<(Value, Value)>, ids: Value) -> Module {
+    let binds: Vec<Value> = pairs
+        .into_iter()
+        .map(|(b, rhs)| {
+            json!({"rec": false, "pairs": [{
+                "binder": b, "rhs": rhs,
+                "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+            }]})
+        })
+        .collect();
+    let m = json!({
+        "format": raw::FORMAT, "module": name, "unit": "main",
+        "types": ty_table(), "ids": ids, "binds": binds
+    });
+    Module::from_raw(serde_json::from_value(m).unwrap()).unwrap()
+}
+
+const SHOWS_PREC: &str = "$base$GHC.Show$showsPrec";
+const EQ_EQ: &str = "$ghc-prim$GHC.Classes$==";
+const P1_ORD: &str = "$ghc-prim$GHC.Classes$$p1Ord";
+const C_SHOW: &str = "$base$GHC.Show$C:Show";
+const C_EQ: &str = "$ghc-prim$GHC.Classes$C:Eq";
+const C_ORD: &str = "$ghc-prim$GHC.Classes$C:Ord";
+
+/// `C:Show $cshowsPrec $cshow $cshowList`.
+fn show_dict() -> Value {
+    dict_con_app(
+        "C:Show",
+        C_SHOW,
+        &[var("$cshowsPrec"), var("$cshow"), var("$cshowList")],
+    )
+}
+
+fn class_census(ms: &[Module]) -> classops::Census {
+    let world = classops::World::new(ms);
+    let c = classops::Census::of_world(&world);
+    assert!(
+        classops::check_table(&world).is_empty(),
+        "class table disagrees with the dump"
+    );
+    c
+}
+
+fn one_class_site(c: &classops::Census) -> &classops::Site {
+    assert_eq!(c.sites.len(), 1, "expected exactly one class-op site");
+    &c.sites[0]
+}
+
+/// A selector applied to a dictionary this module builds: one origin, one
+/// method field, one target.
+#[test]
+fn a_selector_on_a_known_dfun_is_exact() {
+    let m = class_module(
+        "M",
+        vec![
+            (dict_top("$fShowT", TY_SHOW_T, false), show_dict()),
+            (
+                binder("use", demand(false, false)),
+                app(
+                    app(named_gvar("showsPrec", SHOWS_PREC), var("$fShowT")),
+                    var("x"),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[m]);
+    let site = one_class_site(&c);
+    assert_eq!(site.class.as_deref(), Some("$base$GHC.Show$Show"));
+    assert_eq!(site.field, Some(0));
+    match &site.outcome {
+        Outcome::Exact(t) => {
+            assert_eq!(t.occ, "$cshowsPrec");
+            assert_eq!(t.kind, TargetKind::GlobalBinding);
+        }
+        other => panic!("expected Exact, got {other:?}"),
+    }
+    assert!(site.facts.forces_dictionary);
+}
+
+/// A dfun applied to an argument dictionary: the instance's own method is
+/// the target.
+#[test]
+fn a_dfun_applied_to_an_argument_dictionary_resolves_through_the_instance() {
+    let inner = dict_con_app(
+        "C:Show",
+        C_SHOW,
+        &[var("$cshowsPrecL"), var("$cshowL"), var("$cshowListL")],
+    );
+    let m = class_module(
+        "M",
+        vec![
+            (dict_top("$fShowT", TY_SHOW_T, false), show_dict()),
+            (
+                dict_top("$fShowList", TY_SHOW_T, false),
+                dict_lam(&[("dShow", TY_SHOW_T)], inner),
+            ),
+            (
+                binder("use", demand(false, false)),
+                app(
+                    app(
+                        named_gvar("showsPrec", SHOWS_PREC),
+                        app(var("$fShowList"), var("$fShowT")),
+                    ),
+                    var("x"),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[m]);
+    match &one_class_site(&c).outcome {
+        Outcome::Exact(t) => assert_eq!(t.occ, "$cshowsPrecL"),
+        other => panic!("expected Exact, got {other:?}"),
+    }
+}
+
+/// A dictionary field that is one of the dfun's own parameters is the
+/// actual argument at the application that built the dictionary.
+#[test]
+fn a_dfun_parameter_in_a_field_is_the_actual_argument() {
+    let ord_dict = dict_con_app(
+        "C:Ord",
+        C_ORD,
+        &[
+            var("dEq"),
+            var("$ccompare"),
+            var("$c<"),
+            var("$c<="),
+            var("$c>"),
+            var("$c>="),
+            var("$cmax"),
+            var("$cmin"),
+        ],
+    );
+    let m = class_module(
+        "M",
+        vec![
+            (
+                dict_top("$fEqT", TY_EQ_T, false),
+                dict_con_app("C:Eq", C_EQ, &[var("$c=="), var("$c/=")]),
+            ),
+            (
+                dict_top("$fOrdT", TY_ORD_T, false),
+                dict_lam(&[("dEq", TY_EQ_T)], ord_dict),
+            ),
+            (
+                binder("use", demand(false, false)),
+                app(
+                    named_gvar("$p1Ord", P1_ORD),
+                    app(var("$fOrdT"), var("$fEqT")),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[m]);
+    match &one_class_site(&c).outcome {
+        Outcome::Exact(t) => assert_eq!(t.occ, "$fEqT"),
+        other => panic!("expected the argument dictionary, got {other:?}"),
+    }
+}
+
+/// The class the table names and the class the dictionary's type says must
+/// agree, or nothing is read.
+#[test]
+fn a_selector_over_the_wrong_class_dictionary_is_refused() {
+    let m = class_module(
+        "M",
+        vec![
+            (
+                dict_top("$fOrdT", TY_ORD_T, false),
+                dict_con_app(
+                    "C:Ord",
+                    C_ORD,
+                    &[
+                        var("$fEqT"),
+                        var("$ccompare"),
+                        var("$c<"),
+                        var("$c<="),
+                        var("$c>"),
+                        var("$c>="),
+                        var("$cmax"),
+                        var("$cmin"),
+                    ],
+                ),
+            ),
+            (
+                binder("use", demand(false, false)),
+                app(
+                    app(named_gvar("showsPrec", SHOWS_PREC), var("$fOrdT")),
+                    var("x"),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[m]);
+    assert!(
+        matches!(&one_class_site(&c).outcome,
+                 Outcome::Unresolved(r) if r.starts_with(classops::U_CLASS_MISMATCH)),
+        "{:?}",
+        one_class_site(&c).outcome
+    );
+}
+
+/// `$p1Ord d` selects the `Eq` superclass field, and the walk continues
+/// into the dictionary it finds there.
+#[test]
+fn a_superclass_selection_is_followed_to_the_superclass() {
+    let ord_dict = dict_con_app(
+        "C:Ord",
+        C_ORD,
+        &[
+            var("$fEqT"),
+            var("$ccompare"),
+            var("$c<"),
+            var("$c<="),
+            var("$c>"),
+            var("$c>="),
+            var("$cmax"),
+            var("$cmin"),
+        ],
+    );
+    let m = class_module(
+        "M",
+        vec![
+            (
+                dict_top("$fEqT", TY_EQ_T, false),
+                dict_con_app("C:Eq", C_EQ, &[var("$c=="), var("$c/=")]),
+            ),
+            (dict_top("$fOrdT", TY_ORD_T, false), ord_dict),
+            (
+                binder("use", demand(false, false)),
+                app(
+                    app(
+                        named_gvar("==", EQ_EQ),
+                        app(named_gvar("$p1Ord", P1_ORD), var("$fOrdT")),
+                    ),
+                    var("x"),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[m]);
+    // Two sites: the `==` and the `$p1Ord` that feeds it.
+    assert_eq!(c.sites.len(), 2);
+    let eq = c.sites.iter().find(|s| s.method == "==").unwrap();
+    match &eq.outcome {
+        Outcome::Exact(t) => assert_eq!(t.occ, "$c=="),
+        other => panic!("expected Exact, got {other:?}"),
+    }
+    let sup = c.sites.iter().find(|s| s.method == "$p1Ord").unwrap();
+    assert!(sup.is_superclass_sel);
+    match &sup.outcome {
+        Outcome::Exact(t) => assert_eq!(t.occ, "$fEqT"),
+        other => panic!("expected the superclass field, got {other:?}"),
+    }
+}
+
+/// A local function's dictionary parameter: the union over its call sites.
+#[test]
+fn two_call_sites_passing_different_dictionaries_give_a_finite_set() {
+    let other_dict = dict_con_app(
+        "C:Show",
+        C_SHOW,
+        &[var("$cshowsPrec2"), var("$cshow2"), var("$cshowList2")],
+    );
+    let m = class_module(
+        "M",
+        vec![
+            (dict_top("$fShowT", TY_SHOW_T, false), show_dict()),
+            (dict_top("$fShowT2", TY_SHOW_T, false), other_dict),
+            (
+                binder("f", demand(false, false)),
+                dict_lam(
+                    &[("d", TY_SHOW_T)],
+                    lam(
+                        &["x"],
+                        app(app(named_gvar("showsPrec", SHOWS_PREC), var("d")), var("x")),
+                    ),
+                ),
+            ),
+            (
+                binder("use", demand(false, false)),
+                app(
+                    app(app(var("f"), var("$fShowT")), var("a")),
+                    app(app(var("f"), var("$fShowT2")), var("b")),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[m]);
+    let site = one_class_site(&c);
+    match &site.outcome {
+        Outcome::FiniteSet(ts) => {
+            let mut occs: Vec<&str> = ts.iter().map(|t| t.occ.as_str()).collect();
+            occs.sort();
+            assert_eq!(occs, vec!["$cshowsPrec", "$cshowsPrec2"]);
+        }
+        other => panic!("expected FiniteSet(2), got {other:?}"),
+    }
+    assert!(site.rules.contains(&classops::K8_PARAM_UNION));
+}
+
+/// An exported function can be called from outside this module, so its
+/// dictionary parameter is not enumerable.
+#[test]
+fn an_exported_functions_dictionary_parameter_is_unresolved() {
+    let m = class_module(
+        "M",
+        vec![(
+            dict_top("f", TY_T, true),
+            dict_lam(
+                &[("d", TY_SHOW_T)],
+                lam(
+                    &["x"],
+                    app(app(named_gvar("showsPrec", SHOWS_PREC), var("d")), var("x")),
+                ),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[m]);
+    assert!(
+        matches!(&one_class_site(&c).outcome, Outcome::Unresolved(r) if r == classops::U_EXPORTED_PARAM),
+        "{:?}",
+        one_class_site(&c).outcome
+    );
+}
+
+/// A dictionary stored in a program constructor and read back is not
+/// followable: the constructor's field is whatever anyone put there.
+#[test]
+fn a_dictionary_read_from_a_constructor_field_is_unresolved() {
+    let m = class_module(
+        "M",
+        vec![(
+            binder("use", demand(false, false)),
+            case_con_dict(
+                var("box"),
+                "MkBox",
+                &[("d", TY_SHOW_T)],
+                app(app(named_gvar("showsPrec", SHOWS_PREC), var("d")), var("x")),
+            ),
+        )],
+        class_ids(vec![(
+            "MkBox".to_string(),
+            data_con("MkBox", "$main$M$MkBox", 1),
+        )]),
+    );
+    let c = class_census(&[m]);
+    assert!(
+        matches!(&one_class_site(&c).outcome, Outcome::Unresolved(r) if r == classops::U_FROM_FIELD),
+        "{:?}",
+        one_class_site(&c).outcome
+    );
+}
+
+/// A selector that is not applied to anything is a value, not a dispatch.
+#[test]
+fn a_partially_applied_selector_is_recorded_as_one() {
+    let m = class_module(
+        "M",
+        vec![(
+            binder("use", demand(false, false)),
+            app(var("g"), named_gvar("showsPrec", SHOWS_PREC)),
+        )],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[m]);
+    let site = one_class_site(&c);
+    assert_eq!(site.n_value_args, 0);
+    assert!(site.rules.contains(&classops::K12_PARTIAL));
+    assert!(
+        matches!(&site.outcome, Outcome::Unresolved(r) if r == classops::U_PARTIAL),
+        "{:?}",
+        site.outcome
+    );
+}
+
+/// A dictionary that is also handed to an unknown callee: the observation
+/// is recorded, and the method target is unaffected by it.
+#[test]
+fn a_dictionary_used_as_an_ordinary_value_is_recorded_but_still_resolves() {
+    let m = class_module(
+        "M",
+        vec![
+            (dict_top("$fShowT", TY_SHOW_T, false), show_dict()),
+            (
+                binder("f", demand(false, false)),
+                dict_lam(
+                    &[("d", TY_SHOW_T)],
+                    app(
+                        app(app(named_gvar("showsPrec", SHOWS_PREC), var("d")), var("x")),
+                        app(gvar("g"), var("d")),
+                    ),
+                ),
+            ),
+            (
+                binder("use", demand(false, false)),
+                app(var("f"), var("$fShowT")),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[m]);
+    let site = one_class_site(&c);
+    assert!(site.facts.dict_used_as_value);
+    assert!(site.rules.contains(&classops::K11_DICT_ESCAPES));
+    match &site.outcome {
+        Outcome::Exact(t) => assert_eq!(t.occ, "$cshowsPrec"),
+        other => panic!("expected Exact, got {other:?}"),
+    }
+}
+
+/// The dictionary sources of a module are enumerated by kind.
+#[test]
+fn dictionary_sources_are_enumerated_by_kind() {
+    let m = class_module(
+        "M",
+        vec![
+            (dict_top("$fShowT", TY_SHOW_T, false), show_dict()),
+            (
+                binder("f", demand(false, false)),
+                dict_lam(
+                    &[("d", TY_SHOW_T)],
+                    app(app(named_gvar("showsPrec", SHOWS_PREC), var("d")), var("x")),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[m]);
+    let a = c.accounting();
+    assert_eq!(a.sources.get(&SourceKind::Dfun), Some(&1));
+    assert_eq!(a.sources.get(&SourceKind::DictParam), Some(&1));
+    assert_eq!(a.population, 1);
+    a.check().unwrap();
+}
+
+/// A dfun defined in another module of the closed world: an import here, a
+/// top-level binding there, and the same stable name in both.
+#[test]
+fn a_dfun_in_another_module_is_followed_across_the_closed_world() {
+    let mut b = dict_binder("$fShowT", TY_SHOW_T);
+    b["name"] = json!("$main$A$$fShowT");
+    let a = class_module(
+        "A",
+        vec![
+            (b, show_dict()),
+            (
+                binder("$cshowsPrec", demand(false, false)),
+                lam(&["p", "v"], var("v")),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let m = class_module(
+        "B",
+        vec![(
+            binder("use", demand(false, false)),
+            app(
+                app(
+                    named_gvar("showsPrec", SHOWS_PREC),
+                    named_gvar("$fShowT", "$main$A$$fShowT"),
+                ),
+                var("x"),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[a, m]);
+    let site = c.sites.iter().find(|s| s.module == "B").unwrap();
+    match &site.outcome {
+        Outcome::Exact(t) => {
+            assert_eq!(t.occ, "$cshowsPrec");
+            assert_eq!(t.module, "A");
+        }
+        other => panic!("expected Exact across modules, got {other:?}"),
+    }
+}
+
+/// A dfun that is not in the dump at all: the instance is known exactly,
+/// the method body is not, and the site says so instead of guessing.
+#[test]
+fn an_imported_dfun_names_the_instance_and_refuses_the_method() {
+    let m = class_module(
+        "M",
+        vec![(
+            binder("use", demand(false, false)),
+            app(
+                app(
+                    named_gvar("showsPrec", SHOWS_PREC),
+                    named_gvar("$fShowInt", "$base$GHC.Show$$fShowInt"),
+                ),
+                var("x"),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let c = class_census(&[m]);
+    let site = one_class_site(&c);
+    assert_eq!(site.origins.len(), 1);
+    assert_eq!(site.origins[0].kind, classops::OriginKind::ImportedDfun);
+    assert_eq!(site.origins[0].name, "$base$GHC.Show$$fShowInt");
+    assert!(
+        matches!(&site.outcome, Outcome::Unresolved(r) if r.contains(classops::U_IMPORTED_DFUN)),
+        "{:?}",
+        site.outcome
+    );
 }

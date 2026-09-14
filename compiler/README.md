@@ -38,7 +38,8 @@ ShellCheck Haskell
 | **M2.2.1** | the generic aggregate def-use walk (`flow.rs`) lifted out of the tuple census, so every later population is a client of one walk | done |
 | **M2.3** | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link, **g** the correction to the axiom layer | done |
 | **M2.4a** | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged | done |
-| **M2.4** | **next.** Dictionary erasure and closed-world **class-op enumeration** (294 census sites, 3 tuple residuals); **higher-order representation agreement** — the 67 tuples handed into a local callee's parameter and the 187 + 134 + 114 that reach an imported call, a list cell or a program constructor through a closure; and the **41 Parsec edges** whose continuation target the region graph does not close over | next |
+| **M2.4b** | the closed-world class-op census: 565 dispatch sites, the 294 mapped 1:1, every class identified — and not one dictionary statically known | done |
+| **M2.4** | **next.** Dictionary erasure (M2.4c) and closed-world **class-op enumeration** (294 census sites, 3 tuple residuals); **higher-order representation agreement** — the 67 tuples handed into a local callee's parameter and the 187 + 134 + 114 that reach an imported call, a list cell or a program constructor through a closure; and the **41 Parsec edges** whose continuation target the region graph does not close over | next |
 
 ## Layout
 
@@ -48,9 +49,9 @@ ShellCheck Haskell
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), which imported Id an occurrence links to (its stable name), which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent), and what each type *is* (`Ty`, with `TyCon` identity and `alpha_eq`). Includes a depth-limited Core pretty-printer. |
-| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`). |
+| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`), and the closed-world class-op census with its asserted class table (`classops.rs`). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), and the `--view` / `--view-all` representation views `fields`, `lists` and `text` each carry. Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), and the `--view` / `--view-all` representation views `fields`, `lists` and `text` each carry. Later: the lowering passes. |
 
 ## Usage
 
@@ -83,6 +84,9 @@ cargo run --release --bin h2r -- lists ../core-json --module ShellCheck.ASTLib -
 cargo run --release --bin h2r -- text ../core-json                          # which list flows are text, and what is done with them
 cargo run --release --bin h2r -- text ../core-json --heads                  # the text-head table
 cargo run --release --bin h2r -- text ../core-json --module ShellCheck.Formatter.GCC --explain
+cargo run --release --bin h2r -- classops ../core-json                      # class-op dispatch: which instance, which method
+cargo run --release --bin h2r -- classops ../core-json --class Show --explain
+cargo run --release --bin h2r -- classops ../core-json --module ShellCheck.Fixer --json
 cargo run --release --bin h2r -- verify-rep ../core-json          # re-derive every M2.3 verdict independently
 cargo run --release --bin h2r -- verify-rep ../core-json --explain # …listing every refusal, plus the accounting and the M1 link
 cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.CFG --view 10329   # one construction, field by field
@@ -249,7 +253,7 @@ The 425 that remain unresolved are, exactly:
 
 | | |
 |---:|---|
-| 294 | class-op dispatch — waiting on closed-world instance enumeration |
+| 294 | class-op dispatch — enumerated in [M2.4b](#m24b--the-closed-world-class-op-census): all 294 map onto the 565-site class-op population, and every one dispatches on a run-time dictionary |
 | 99 | functional arguments of inlined folds and traversals (`f` 55, `f1` 14, `ww` 10, `ds1` 8, and 12 others), deliberately left alone as a control group |
 | 22 | closures computed by a `case` or `let` of function type |
 | 10 | heads the *name*-based family attribution called Parsec and the structural recogniser rejects: mtl plumbing (`RWST`, `StateT`) outside `ShellCheck.Parser` |
@@ -703,7 +707,7 @@ state costs.
 
 | | | |
 |---:|---|---|
-| 294 | class-op dispatch | closed-world instance enumeration |
+| 294 | class-op dispatch | closed-world instance enumeration ([M2.4b](#m24b--the-closed-world-class-op-census): enumerated, none statically known) |
 | 99 | functional arguments of inlined folds and traversals | deliberately untouched control group; a *residual*, not a proof |
 | 22 | closures computed by a `case` or `let` | returned-closure analysis |
 | 10 | mtl plumbing outside `ShellCheck.Parser` | rejected by the recogniser; the name-based family attribution called them Parsec |
@@ -3615,6 +3619,190 @@ make a fixture's rendering and its structure disagree on purpose to show
 which one a rule reads), `cargo clippy --all-targets` (0 warnings) and
 `cargo fmt --check` are clean.
 
+## M2.4b — the closed-world class-op census
+
+Two questions are easy to run together and must not be: *which instance and
+which method can run at this site?* and *can the dictionary disappear?*
+**A known method target is not a removable dictionary.** This milestone
+answers only the first. What bears on the second — is the dictionary
+forced, could it be bottom, is it also used as an ordinary value — is
+recorded as an *observation*, with no verdict attached; the verdict is
+M2.4c's.
+
+`h2r classops` takes as its population **every application spine whose head
+is a class-op selector**, decided by GHC's own `isClassOpId` through the one
+signature lookup (`K0-CLASSOP-SITE`), never by a name. On `-O1` that is
+**565 sites**. Superclass selectors (`$p1Ord`) *are* class ops, so
+superclass selection is both a member of the population and a dictionary
+source, and one mechanism handles both.
+
+The [residual-laziness census](#m2--who-receives-the-lazy-arguments) leaves
+**294** class-op *argument* sites in the unresolved tier. Each is an
+argument of exactly one population site, and the mapping is asserted: **294
+of 294 map**, on all seven dumps. The other 271 population sites are
+class-op applications the census never counted, because none of their
+arguments is a non-trivial computation in a lazy position.
+
+### The answer
+
+| | `-O1` | |
+|---|---:|---:|
+| population — class-op application sites | **565** | |
+| … `Exact(target)` | **0** | 0% |
+| … `FiniteSet(targets)` | **0** | 0% |
+| … `Unresolved` | **565** | 100% |
+| … partially-applied selectors (the selector is the value) | 0 | |
+
+`population = Exact + FiniteSet + Unresolved` is asserted, and so is the
+294 mapping.
+
+**Not one residual class-op site in ShellCheck has a statically known
+dictionary.** That is the finding, and it is not a weakness of the walk:
+the walk resolves dfuns, dfuns applied to argument dictionaries, superclass
+chains, dictionary-constructor fields read back by a `case`, lexical
+aliases and the parameters of local functions (its nine unit tests exercise
+each, and produce `Exact` and `FiniteSet(2)` where a dictionary is
+statically known). The reason it finds none here is that GHC has **already
+taken every such site**: a selector applied to a visible dfun is exactly
+what the simplifier rewrites to the instance method. What survives
+optimisation is, by construction, only the dispatch whose dictionary is a
+*run-time* parameter. Of the 565 dictionary arguments, 499 are lambda
+parameters, 41 are superclass selections applied to one, 19 are bound by a
+`case` alternative and 6 are `let`-bound superclass selections — **none is
+a dfun**.
+
+| by class | sites | | by class | sites |
+|---|---:|---|---|---:|
+| Applicative | 191 | | Monoid | 55 |
+| Show | 91 | | Eq | 54 |
+| Monad | 69 | | Functor | 38 |
+| Exception | 17 | | Ord | 11 |
+| Ranged (ShellCheck's own) | 11 | | MonadState | 9 |
+| MonadReader | 7 | | MonadWriter | 7 |
+| Num | 2 | | Semigroup | 2 |
+| Foldable | 1 | | | |
+
+Every site's class is identified, and 524 of the 565 from the *structured
+type* of the dictionary argument (`K2-DICT-TYPE`, level 4) rather than from
+any name; the remaining 41 are superclass selections, whose class the
+selector's own name gives (level 1) and whose table entry the dump's
+`repArity` checks.
+
+### Why each site is unresolved
+
+| | reason | representative |
+|---:|---|---|
+| 252 | the dictionary is a parameter of an **exported** function — callers outside this module cannot be enumerated | `ShellCheck.AST` node 3465 |
+| 280 | the dictionary is a parameter of an instance method (`$ctraverse` 220, `$cfoldMap` 53, `$cfoldMap'` 3, `$celem`/`$cmaximum`/`$cminimum`/`$csum`/`$cproduct` 1 each, `$fTraversableInnerToken` 2) — a function **reached only through dispatch**: its callers are the class-op sites that select it | `ShellCheck.AST` node 6559 |
+| 17 | the dictionary is read back from a **constructor field** (`SomeException`'s existential `Exception` dictionary, 11 in `Main` + 6 in `Paths_ShellCheck`) | `Main` node 659 |
+| 7 | the **instance method is not in the dump**: mtl's `$fMonadStatesReaderT` (5), `$fMonadStatesParsecT` (2) — the instance is known exactly, its body is in another package with no unfolding | `ShellCheck.Parser` node 128333 |
+| 6 | the dictionary expression reached is not a constructor application (the mtl chains above, at a second step) | `ShellCheck.Parser` node 138963 |
+
+The second row is the one that says what a closed-world specialiser would
+have to do. An instance method's dictionary parameter is bound at
+*dispatch* time, by whichever dictionary the selector site used; enumerating
+it means propagating dictionaries **forward through dispatch**, and that is
+only sound if no dictionary of that class escapes into code the dump cannot
+see. It does — 166 of the 565 sites have a dictionary that is also used as
+an ordinary value — so the union is not claimed here. Nothing is guessed.
+
+### Dictionary sources in the closed world
+
+| kind | `-O1` |
+|---|---:|
+| dfun — a top-level binding whose type is a class constraint | 259 |
+| dfun applied at a use site, building an instance dictionary | 609 |
+| dictionary-constructor application (`C:Show f g h`) | 10 |
+| superclass selection (`$p…`) | 72 |
+| local (`let`) dictionary binding | 206 |
+| dictionary parameter of a function | 216 |
+| dictionary bound by a `case` alternative | 35 |
+| … of all of these, admitted on their *name* because the class table does not carry their class | 838 |
+| … whose binding is not in the dump at all | 681 |
+
+The closed world is every module in the dump, indexed by stable name, so a
+dfun defined in `ShellCheck.AST` is followed from `ShellCheck.Analytics`;
+`--module` and `--class` restrict the *report*, never the resolution.
+
+### The class table, and why there is one
+
+One thing the dump cannot answer: **which field of a dictionary a selector
+reads**. Class-op selectors are globals, and format 5 carries no type and no
+unfolding for a global, so neither the selector's type (`C a => …`) nor its
+`case d of C:C … m … -> m` body is available. The field order is therefore
+asserted per class — 17 classes, in the style of the [list
+axioms](#the-axiom-layer) — and **every use of an entry is cross-checked
+against that dictionary constructor's own `repArity` in the dump**. Over all
+seven dumps the check reports **0 disagreements**, and **0** sites fall
+outside the table.
+
+### The rules
+
+| rule | level | what it says |
+|---|---:|---|
+| `K0-CLASSOP-SITE` | 5 | the spine head is a class-op selector — GHC's `isClassOpId` |
+| `K1-DICT-ARG` | 2 | the first value argument of a class-op application is the dictionary |
+| `K2-DICT-TYPE` | 4 | the class is the head `TyCon` of the dictionary's structured type |
+| `K3-CLASS-TABLE` | 5 | the method's field index, checked against `repArity` |
+| `K4-SUPERCLASS-SEL` | 1 | `$pN<Class>` selects superclass field N-1 |
+| `K5-ALIAS` | 3 | a `let`-/top-bound dictionary is followed to its right-hand side |
+| `K6-DFUN` | 3 | a global dictionary is followed to its binding in the closed world |
+| `K7-DICT-CON` | 2 | a saturated dictionary-constructor application is a dictionary |
+| `K8-PARAM-UNION` | 3 | a local function's dictionary parameter is the union over its call sites |
+| `K9-METHOD-FIELD` | 2 | the method target is the dictionary's field at the method's index |
+| `K10-FORCED` | 5 | a class-op application forces its dictionary (strict field selection) |
+| `K11-DICT-ESCAPES` | 3 | the dictionary is also used as an ordinary value |
+| `K12-PARTIAL` | 2 | the selector is applied to no value argument: the selector is the value |
+
+### Dictionary-evaluation observations (no verdict)
+
+| | `-O1` |
+|---|---:|
+| the selector application forces its dictionary (`K10`) | 565 |
+| the dictionary is a variable GHC records as strict at its binder | 247 |
+| … with no strictness recorded: nothing here says it is not bottom | 277 |
+| the dictionary is also used as an ordinary value (`K11`) | 166 |
+
+The first row is every site, and it is the fact M2.4c has to answer to: a
+class op is a strict field selection, so a site that dispatches on a
+dictionary also *evaluates* it. Whether that matters — whether the
+dictionary can be erased anyway — is the next milestone's question.
+
+### Across the flag matrix
+
+| | A `-O1` | B `-O2` | C | D | E | F |
+|---|---:|---:|---:|---:|---:|---:|
+| class-op sites (population) | 565 | 587 | 595 | 595 | 595 | 596 |
+| … resolved to a target | 0 | 0 | 0 | 0 | 0 | 0 |
+| census sites mapped 1:1 | 294/294 | 305/305 | 314/314 | 314/314 | 314/314 | 314/314 |
+| class-table disagreements | 0 | 0 | 0 | 0 | 0 | 0 |
+| classes outside the table | 0 | 0 | 0 | 0 | 0 | 0 |
+| dfun bindings | 259 | 259 | 271 | 282 | 282 | 282 |
+| dfun applications | 609 | 646 | 639 | 558 | 558 | 564 |
+
+### The gate
+
+Every earlier report — `laziness`, `parsec`, `tuples`, `tuples --verify`,
+`fields`, `lists`, `text`, `verify-rep` — is **byte-identical** before and
+after this milestone: the census adds a population, it changes no existing
+one. `cargo test` (**172** — thirteen new: a selector on a known dfun, a
+dfun applied to an argument dictionary, a dfun parameter appearing in a
+field, a superclass selection followed to its superclass, a class
+cross-check that refuses, a two-call-site union, an exported function's
+parameter, a dictionary read from a constructor field, a partially applied
+selector, a dictionary also used as a value, the source enumeration, a dfun
+followed across modules, and an imported dfun that names its instance and
+refuses the method), `cargo clippy --all-targets` (0 warnings) and `cargo
+fmt --check` are clean.
+
+Aggressive specialisation (D–F) does not resolve a single one, which is the
+same finding as the flag matrix's: GHC's specialiser has already taken
+everything it can take, and the residue is dispatch on a run-time
+dictionary. Closed-world specialisation is ours to do, and this census says
+exactly what it would have to prove: the dictionaries reaching 252 exported
+functions' parameters, and the dictionaries that reach 280 instance-method
+parameters through dispatch.
+
 ## What ShellCheck actually needs
 
 Surveyed against the tree at the repo root:
@@ -3718,6 +3906,10 @@ Findings:
   remaining dispatch is in code GHC cannot specialise (dictionaries stored
   in data, polymorphic recursion, unexposed instances). Closed-world
   specialisation is ours to do.
+  [M2.4b](#m24b--the-closed-world-class-op-census) measured what is left:
+  on every profile, **none** of the 565–596 class-op sites has a statically
+  known dictionary, because a selector applied to a visible dfun is exactly
+  what GHC has already rewritten.
 * **Full laziness is doing useful work for us.** Turning it off removes the
   `lvl…` float-outs and most CAFs as predicted, but the constant
   expressions it had hoisted to top level — string literals, partial

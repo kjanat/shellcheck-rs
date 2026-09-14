@@ -76,6 +76,24 @@ enum Command {
         #[arg(long)]
         no_text: bool,
     },
+    /// The closed-world class-op census: which instance and which method
+    /// can run at each dictionary-dispatch site, and where every
+    /// dictionary in the program comes from.
+    Classops {
+        dir: PathBuf,
+        /// Restrict to one module.
+        #[arg(long)]
+        module: Option<String>,
+        /// Emit the sites, the sources and the accounting as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print every site with its origin chain and node ids.
+        #[arg(long)]
+        explain: bool,
+        /// Restrict to one class, by its name (`Show`, `MonadState`, ...).
+        #[arg(long)]
+        class: Option<String>,
+    },
     /// Compare census metrics across several Core dump directories
     /// (e.g. the GHC flag matrix). Arguments are `label=dir` or plain dirs.
     Compare { dirs: Vec<String> },
@@ -344,6 +362,13 @@ fn main() -> Result<()> {
             json,
             explain,
         } => verify_rep(&dir, module.as_deref(), json, explain),
+        Command::Classops {
+            dir,
+            module,
+            json,
+            explain,
+            class,
+        } => classops(&dir, module.as_deref(), json, explain, class.as_deref()),
         Command::Parsec {
             dir,
             module,
@@ -4362,4 +4387,269 @@ fn rep_patterns(
             .collect(),
     );
     out
+}
+
+//------------------------------------------------------------------------------
+// classops
+//------------------------------------------------------------------------------
+
+fn classops(
+    dir: &Path,
+    module: Option<&str>,
+    json: bool,
+    explain: bool,
+    class: Option<&str>,
+) -> Result<()> {
+    use h2r_analysis::classops::{
+        CLASSES, Census, Outcome, RULES, SourceKind, TargetKind, check_table,
+    };
+
+    // The closed world is always every module in the dump: a dictionary
+    // defined in one module is followed from another. `--module` and
+    // `--class` restrict the *report*, never the resolution.
+    let modules = load_dir(dir)?;
+    if let Some(name) = module {
+        find_module(&modules, name)?;
+    }
+    let (mut census, world) = Census::of_modules(modules.iter());
+    census.filter(module, class);
+    let acct = census.accounting();
+    let mismatches = check_table(&world);
+
+    if json {
+        let out = serde_json::json!({
+            "sites": census.sites,
+            "sources": census.sources,
+            "accounting": acct,
+            "tableMismatches": mismatches,
+            "rules": RULES,
+        });
+        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        println!();
+        return Ok(());
+    }
+
+    println!(
+        "Class-op sites (population)                    {:>7}",
+        acct.population
+    );
+    println!(
+        "  Exact target                                {:>7}  {:>5.1}%",
+        acct.exact,
+        pct(acct.exact, acct.population)
+    );
+    println!(
+        "  Finite target set                           {:>7}  {:>5.1}%",
+        acct.finite,
+        pct(acct.finite, acct.population)
+    );
+    println!(
+        "  Unresolved                                  {:>7}  {:>5.1}%",
+        acct.unresolved,
+        pct(acct.unresolved, acct.population)
+    );
+    println!(
+        "  … of which partially-applied selectors      {:>7}",
+        acct.partial
+    );
+    println!();
+    if acct.filtered {
+        println!("(a --module/--class filter is in force: the counts above are a subset)");
+    }
+    println!(
+        "The residual-laziness census leaves {} class-op argument sites in the\n\
+         unresolved tier; {} of them map onto a population site (1:1 on the\n\
+         application spine). Population = Exact + FiniteSet + Unresolved: {}.",
+        acct.census_sites,
+        acct.census_mapped,
+        match acct.check() {
+            Ok(()) => "asserted".to_string(),
+            Err(e) => format!("FAILED: {e}"),
+        }
+    );
+    if !census.unmapped_census.is_empty() {
+        println!("  unmapped census sites: {:?}", census.unmapped_census);
+    }
+    if !mismatches.is_empty() {
+        println!();
+        println!("Class table DISAGREES with the dump:");
+        for x in &mismatches {
+            println!("  {x}");
+        }
+    }
+
+    println!();
+    println!("  by class");
+    println!(
+        "  {:<16} {:>7} {:>7} {:>9} {:>11}",
+        "class", "sites", "exact", "finite", "unresolved"
+    );
+    for (name, (n, e, f, u)) in &acct.by_class {
+        println!("  {name:<16} {n:>7} {e:>7} {f:>9} {u:>11}");
+    }
+
+    println!();
+    println!("  dictionary sources in the closed world");
+    for (kind, label) in [
+        (
+            SourceKind::Dfun,
+            "dfun (a top-level binding whose type is a constraint)",
+        ),
+        (
+            SourceKind::DfunApp,
+            "dfun applied at a use site (builds an instance dictionary)",
+        ),
+        (SourceKind::DictCon, "dictionary-constructor application"),
+        (SourceKind::SuperclassSel, "superclass selection ($p…)"),
+        (SourceKind::LocalDict, "local dictionary binding"),
+        (SourceKind::DictParam, "dictionary parameter of a function"),
+        (
+            SourceKind::DictFromField,
+            "dictionary bound by a case alternative",
+        ),
+    ] {
+        println!(
+            "  {label:<52} {:>7}",
+            acct.sources.get(&kind).copied().unwrap_or(0)
+        );
+    }
+
+    println!(
+        "  {:<52} {:>7}",
+        "… admitted on their name (class not in the table)", acct.sources_by_name
+    );
+    println!(
+        "  {:<52} {:>7}",
+        "… whose binding is not in the dump", acct.sources_outside_the_dump
+    );
+
+    println!();
+    println!("  method targets, by kind");
+    for (kind, label) in [
+        (
+            TargetKind::GlobalBinding,
+            "a top-level binding (the instance method)",
+        ),
+        (TargetKind::LocalLambda, "a local lambda"),
+        (TargetKind::LocalBinding, "a local binding"),
+        (TargetKind::KnownClosure, "a known closure expression"),
+    ] {
+        println!(
+            "  {label:<52} {:>7}",
+            acct.targets.get(&kind).copied().unwrap_or(0)
+        );
+    }
+
+    println!();
+    println!("  origin-chain depth (steps followed from the dictionary argument)");
+    for (d, n) in &acct.depths {
+        println!("  {d:>3} {n:>7}");
+    }
+
+    println!();
+    println!("  dictionary-evaluation observations (facts, no verdict)");
+    println!(
+        "  the selector forces its dictionary                   {:>7}",
+        acct.forces
+    );
+    println!(
+        "  the dictionary is a variable known strict at its binder {:>4}",
+        acct.known_strict
+    );
+    println!(
+        "  … with no strictness recorded (could be bottom)      {:>7}",
+        acct.could_be_bottom
+    );
+    println!(
+        "  the dictionary is also used as an ordinary value     {:>7}",
+        acct.used_as_value
+    );
+
+    println!();
+    println!("  unresolved reasons, with a representative node");
+    let mut reasons: Vec<_> = acct.reasons.iter().collect();
+    reasons.sort_by_key(|(k, n)| (std::cmp::Reverse(**n), (*k).clone()));
+    for (reason, n) in reasons.iter().take(10) {
+        let at = census.sites.iter().find(|s| {
+            matches!(&s.outcome, Outcome::Unresolved(r) if r.split(';').next().unwrap_or(r).trim() == reason.as_str())
+        });
+        match at {
+            Some(s) => println!(
+                "  {n:>5}  {reason}\n         e.g. {} node {}",
+                s.module, s.node
+            ),
+            None => println!("  {n:>5}  {reason}"),
+        }
+    }
+
+    println!();
+    println!("  rules");
+    for (id, level, meaning) in RULES {
+        println!("  {id:<20} level {level}  {meaning}");
+    }
+    println!();
+    println!(
+        "  class table: {} classes asserted, every use checked against the\n  \
+         dictionary constructor's repArity in the dump.",
+        CLASSES.len()
+    );
+
+    if explain {
+        println!();
+        for s in &census.sites {
+            println!(
+                "{} node {}  {}.{}  -> {}",
+                s.module,
+                s.node,
+                s.class_occ,
+                s.method,
+                match &s.outcome {
+                    Outcome::Exact(t) => format!("Exact {}.{}", t.module, t.occ),
+                    Outcome::FiniteSet(ts) => format!(
+                        "FiniteSet({}) {}",
+                        ts.len(),
+                        ts.iter()
+                            .map(|t| format!("{}.{}", t.module, t.occ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    Outcome::Unresolved(r) => format!("Unresolved {r}"),
+                }
+            );
+            if let Some(d) = s.dict_arg {
+                println!("    dictionary argument: node {d}, field {:?}", s.field);
+            }
+            for o in &s.origins {
+                println!(
+                    "    origin {:?} {} in {} node {} (depth {})",
+                    o.kind, o.name, o.module, o.node, o.depth
+                );
+                for step in &o.chain {
+                    println!("      via {step}");
+                }
+            }
+            println!(
+                "    facts: forces={} strict={} could-be-bottom={} used-as-value={}{}",
+                s.facts.forces_dictionary,
+                s.facts.dict_known_strict,
+                s.facts.dict_could_be_bottom,
+                s.facts.dict_used_as_value,
+                match s.facts.dict_value_use {
+                    Some(n) => format!(" (node {n})"),
+                    None => String::new(),
+                }
+            );
+            println!("    rules: {}", s.rules.join(" "));
+        }
+    }
+    Ok(())
+}
+
+/// A percentage of a total, with an empty total reading zero.
+fn pct(n: usize, total: usize) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        100.0 * n as f64 / total as f64
+    }
 }
