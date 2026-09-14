@@ -114,6 +114,25 @@ enum Command {
         #[arg(long)]
         boundaries: bool,
     },
+    /// Census every saturated non-tuple, non-list data-constructor
+    /// application and prove, per field, what the Core demands of it and
+    /// when.
+    Fields {
+        dir: PathBuf,
+        /// Restrict to one module.
+        #[arg(long)]
+        module: Option<String>,
+        /// Emit the flows and the accounting as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print every construction with its observations and evidence.
+        #[arg(long)]
+        explain: bool,
+        /// Print one data constructor's fields, with the per-construction
+        /// verdicts behind each one. Matches on the occurrence name.
+        #[arg(long)]
+        con: Option<String>,
+    },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
         dir: PathBuf,
@@ -173,6 +192,13 @@ fn main() -> Result<()> {
             scalar_all,
             boundaries,
         ),
+        Command::Fields {
+            dir,
+            module,
+            json,
+            explain,
+            con,
+        } => fields(&dir, module.as_deref(), json, explain, con.as_deref()),
         Command::Parsec {
             dir,
             module,
@@ -2476,5 +2502,377 @@ fn tuples(
         }
     }
 
+    Ok(())
+}
+
+//------------------------------------------------------------------------------
+// fields
+//------------------------------------------------------------------------------
+
+/// The constructor-field census: what does the optimised Core prove about
+/// *when* each field of each saturated construction is evaluated?
+fn fields(
+    dir: &Path,
+    module: Option<&str>,
+    json: bool,
+    explain: bool,
+    con: Option<&str>,
+) -> Result<()> {
+    use h2r_analysis::fields::{FieldCensus, FieldRep};
+
+    let modules = load_dir(dir)?;
+    let selected: Vec<&Module> = match module {
+        Some(name) => vec![find_module(&modules, name)?],
+        None => modules.iter().collect(),
+    };
+    // M1's census is read for two things and nothing else: its
+    // `RecursiveValue` verdicts (the knot definition is M1's) and its
+    // constructor-field argument sites.
+    let census = Census::raw(selected.iter().copied());
+    let fc = FieldCensus::of_modules(&selected, &census);
+    let acct = &fc.accounting;
+
+    if json {
+        let out = serde_json::json!({
+            "flows": fc.flows,
+            "accounting": acct,
+            "conFields": fc.con_fields,
+        });
+        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        println!();
+        return Ok(());
+    }
+
+    if let Some(name) = con {
+        return one_con(&fc, name);
+    }
+
+    println!("Constructor fields — {} module(s)", selected.len());
+    println!();
+    println!(
+        "Saturated non-tuple, non-list constructions          {:>7}",
+        acct.constructions
+    );
+    println!(
+        "  the program's own constructors                     {:>7}",
+        acct.constructions_program
+    );
+    println!(
+        "  library constructors                               {:>7}",
+        acct.constructions_library
+    );
+    println!(
+        "  observed / unobserved / escaped before observation  {} / {} / {}",
+        acct.observed, acct.unobserved, acct.escaped_before_observation
+    );
+    println!(
+        "  alternatives a value of the constructor cannot select, skipped   {:>7}",
+        acct.unreachable_alts
+    );
+    println!(
+        "  case-binder occurrences excluded by that reachability            {:>7}",
+        acct.alias_occurrences_unreachable
+    );
+    println!(
+        "  nesting fixpoint rounds                            {:>7}",
+        fc.per_module
+            .iter()
+            .map(|f| f.nesting_rounds)
+            .max()
+            .unwrap_or(0)
+    );
+
+    println!();
+    println!("Constructions by data constructor (top 25)");
+    let mut by_con: BTreeMap<(bool, String), usize> = BTreeMap::new();
+    for f in &fc.flows {
+        *by_con.entry((f.program, f.occ.clone())).or_default() += 1;
+    }
+    let mut rows: Vec<_> = by_con.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    println!("  {:>7}  {:<8} constructor", "n", "origin");
+    for ((program, occ), n) in rows.iter().take(25) {
+        println!(
+            "  {n:>7}  {:<8} {occ}",
+            if *program { "program" } else { "library" }
+        );
+    }
+
+    // The three orthogonal facts, before any rep is derived from them.
+    println!();
+    println!("The three facts per (construction, field), before any rep is derived");
+    println!(
+        "  {:<12} {:<13} {:<14} {:>8}",
+        "demand", "strictness", "recursion", "fields"
+    );
+    for c in &acct.facts {
+        println!(
+            "  {:<12} {:<13} {:<14} {:>8}",
+            format!("{:?}", c.demand),
+            format!("{:?}", c.strictness),
+            format!("{:?}", c.recursion),
+            c.n
+        );
+    }
+    println!(
+        "  {:<12} {:<13} {:<14} {:>8}",
+        "total", "", "", acct.fields_total
+    );
+    println!(
+        "  of which strict fields nothing demands (forced at WHNF, not Dead)   {:>7}",
+        acct.strict_unused
+    );
+
+    println!();
+    println!("Fields by rep, program/library x GHC-strict/lazy");
+    println!(
+        "  {:<10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "", "Dead", "Direct", "Deferred", "Recursive", "Unknown"
+    );
+    for (program, ghc_strict, label) in [
+        (true, true, "program !"),
+        (true, false, "program"),
+        (false, true, "library !"),
+        (false, false, "library"),
+    ] {
+        let cell = |rep: FieldRep| {
+            acct.by_class
+                .iter()
+                .find(|c| c.program == program && c.ghc_strict == ghc_strict && c.rep == rep)
+                .map(|c| c.n)
+                .unwrap_or(0)
+        };
+        println!(
+            "  {label:<10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            cell(FieldRep::Dead),
+            cell(FieldRep::Direct),
+            cell(FieldRep::Deferred),
+            cell(FieldRep::Recursive),
+            cell(FieldRep::Unknown)
+        );
+    }
+    println!(
+        "  {:<10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "total",
+        acct.count(FieldRep::Dead),
+        acct.count(FieldRep::Direct),
+        acct.count(FieldRep::Deferred),
+        acct.count(FieldRep::Recursive),
+        acct.count(FieldRep::Unknown)
+    );
+    println!("  (`!` is a GHC-strict field)");
+    println!();
+    println!("  Direct, by the rule that proved the timing");
+    for (rule, n) in &acct.direct_by_rule {
+        println!("    {n:>7}  {rule}");
+    }
+
+    println!();
+    println!("Observations by kind");
+    for (kind, n) in &acct.observations_by_kind {
+        println!("  {n:>7}  {kind}");
+    }
+    println!();
+    println!("Rules, by the number of times each fired");
+    for (rule, n) in &acct.rules {
+        println!("  {n:>7}  {rule}");
+    }
+
+    // The M2 census' constructor-field argument sites.
+    println!();
+    println!(
+        "The M2 census' {} constructor-field argument sites",
+        acct.sites.len()
+    );
+    println!(
+        "  {:>7}  mapped onto a (construction, field)",
+        acct.sites_mapped
+    );
+    println!(
+        "  {:>7}  deferred to M2.3c (the list cons)",
+        acct.sites_deferred_to_m23c
+    );
+    println!("  {:>7}  unmapped, with a reason", acct.sites_unmapped);
+    let mut unmapped: BTreeMap<&str, (usize, String, u32)> = BTreeMap::new();
+    for s in &acct.sites {
+        if s.list_cons {
+            continue;
+        }
+        if let Some(r) = s.reason {
+            let e = unmapped.entry(r).or_insert((0, String::new(), 0));
+            e.0 += 1;
+            if e.1.is_empty() {
+                e.1 = s.module.clone();
+                e.2 = s.app;
+            }
+        }
+    }
+    for (reason, (n, md, node)) in &unmapped {
+        println!("    {n:>6}  {reason:<46} e.g. {md} node {node}");
+    }
+    println!();
+    println!("  their FieldRep");
+    let mut site_rep: BTreeMap<String, usize> = BTreeMap::new();
+    for s in &acct.sites {
+        let key = match s.rep {
+            Some(r) => r.name().to_string(),
+            None if s.list_cons => "deferred to M2.3c".to_string(),
+            None => "unmapped".to_string(),
+        };
+        *site_rep.entry(key).or_default() += 1;
+    }
+    for (rep, n) in &site_rep {
+        println!("    {n:>6}  {rep}");
+    }
+
+    // Why the residual is what it is.
+    println!();
+    for (title, want) in [
+        ("Top Deferred reasons", FieldRep::Deferred),
+        ("Top Unknown reasons", FieldRep::Unknown),
+    ] {
+        let mut by: BTreeMap<String, (usize, String, u32)> = BTreeMap::new();
+        for f in &fc.flows {
+            for v in &f.verdicts {
+                if v.rep != want {
+                    continue;
+                }
+                let Some(key) = v.reason_key() else { continue };
+                let e = by.entry(key).or_insert((0, String::new(), 0));
+                e.0 += 1;
+                if e.1.is_empty() {
+                    e.1 = f.module.clone();
+                    e.2 = f.construction;
+                }
+            }
+        }
+        let mut by: Vec<_> = by.into_iter().collect();
+        by.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+        println!("{title} (top 10)");
+        for (reason, (n, md, node)) in by.iter().take(10) {
+            println!("  {n:>7}  {reason:<64} e.g. {md} node {node}");
+        }
+        println!();
+    }
+
+    // The program's own types, field by field.
+    println!("The program's own constructors, field by field (top 25 by constructions)");
+    println!(
+        "  {:>7}  {:<28} {:<6} {:<4} rep",
+        "n", "constructor", "field", "GHC"
+    );
+    for r in fc.con_fields.iter().filter(|r| r.program).take(25) {
+        println!(
+            "  {:>7}  {:<28} {:<6} {:<4} {:<10} {}",
+            r.constructions,
+            r.occ,
+            r.index,
+            if r.ghc_strict { "!" } else { "" },
+            r.rep.name(),
+            r.by_rep
+                .iter()
+                .map(|(rep, n)| format!("{} {n}", rep.name()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    if explain {
+        println!();
+        println!("Every construction");
+        for f in &fc.flows {
+            println!(
+                "{} node {} — {} of arity {} [{}]",
+                f.module,
+                f.construction,
+                f.occ,
+                f.arity,
+                if f.program { "program" } else { "library" }
+            );
+            for o in &f.observations {
+                println!(
+                    "    obs   {:<18} {:<10} node {:<8} {} [{}]",
+                    format!("{:?}", o.kind),
+                    o.field.map(|i| format!("field {i}")).unwrap_or_default(),
+                    o.at,
+                    o.detail,
+                    o.rule
+                );
+            }
+            for v in &f.verdicts {
+                println!(
+                    "    field {} — demand {:?}, {:?}, {:?} => {} [{}]{}",
+                    v.index,
+                    v.demand,
+                    v.strictness,
+                    v.recursion,
+                    v.rep.name(),
+                    v.rule,
+                    v.reason.map(|r| format!(" ({r})")).unwrap_or_default()
+                );
+                for e in &v.evidence {
+                    println!("            {} — {} {:?}", e.rule, e.note, e.nodes);
+                }
+            }
+            for e in &f.evidence {
+                println!("    why   {} — {} {:?}", e.rule, e.note, e.nodes);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One data constructor's fields, with the per-construction verdicts behind
+/// each of them.
+fn one_con(fc: &h2r_analysis::fields::FieldCensus<'_>, name: &str) -> Result<()> {
+    let rows: Vec<_> = fc
+        .con_fields
+        .iter()
+        .filter(|r| r.occ == name || r.con == name)
+        .collect();
+    if rows.is_empty() {
+        anyhow::bail!("no saturated construction of {name} in the selected module(s)");
+    }
+    println!("{name}");
+    for r in &rows {
+        println!(
+            "  field {} {:<2} {:<10} over {} construction(s): {}",
+            r.index,
+            if r.ghc_strict { "!" } else { "" },
+            r.rep.name(),
+            r.constructions,
+            r.by_rep
+                .iter()
+                .map(|(rep, n)| format!("{} {n}", rep.name()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    let all: Vec<_> = fc
+        .flows
+        .iter()
+        .filter(|f| f.occ == name || f.con == name)
+        .collect();
+    println!();
+    println!("  per construction ({} in all, first 25)", all.len());
+    for f in all.iter().take(25) {
+        println!(
+            "    {} node {:<8} {}",
+            f.module,
+            f.construction,
+            f.verdicts
+                .iter()
+                .map(|v| format!(
+                    "f{}={}{}",
+                    v.index,
+                    v.rep.name(),
+                    v.reason_key()
+                        .map(|r| format!(" [{r}]"))
+                        .unwrap_or_default()
+                ))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+    }
     Ok(())
 }

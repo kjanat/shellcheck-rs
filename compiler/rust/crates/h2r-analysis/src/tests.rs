@@ -2355,6 +2355,7 @@ fn the_generic_walk_follows_a_non_tuple_constructor() {
         top_pairs: &top_pairs,
         start: starts[0],
         arity: dc.rep_arity,
+        con: Some(dc),
     };
     let w = flow::walk(&cx, &mut Probe);
 
@@ -2408,4 +2409,468 @@ fn the_generic_walk_follows_a_non_tuple_constructor() {
     for want in [flow::T1_LET_BOUND, flow::T2_SCRUTINISED, flow::T9_STORED] {
         assert!(rules.contains(&want), "{want} in {rules:?}");
     }
+}
+
+//------------------------------------------------------------------------------
+// Constructor fields: what is evaluated, and when (fields.rs)
+//------------------------------------------------------------------------------
+
+use crate::fields::{ConStrictness, FieldDemand, FieldRep, Fields, ObsKind, ValueRecursion};
+
+/// `case <scrut> of wild { alts… }`, each alternative `(con, binders, rhs)`;
+/// a `con` of `"DEFAULT"` is the default alternative.
+fn case_alts(scrut: Value, alts: &[(&str, Vec<&str>, Value)]) -> Value {
+    let alts: Vec<Value> = alts
+        .iter()
+        .map(|(con, binders, rhs)| {
+            let c = if *con == "DEFAULT" {
+                json!({"kind": "DEFAULT"})
+            } else {
+                json!({"kind": "DataAlt", "name": format!("$main$M${con}"), "occ": con, "tag": 1})
+            };
+            json!({
+                "con": c,
+                "binders": binders.iter().map(|b| binder(b, demand(false, false)))
+                    .collect::<Vec<_>>(),
+                "rhs": rhs
+            })
+        })
+        .collect();
+    json!({
+        "node": "Case", "scrut": scrut,
+        "binder": binder("wild", demand(false, false)), "type": "R",
+        "alts": alts
+    })
+}
+
+/// A program data constructor, for the id table: its stable name puts it in
+/// this module, which is what the report's program/library split reads.
+fn prog_con(occ: &str, arity: u32) -> Value {
+    data_con(occ, &format!("$main$M${occ}"), arity)
+}
+
+fn prog_con_strict(occ: &str, arity: u32) -> Value {
+    let mut d = prog_con(occ, arity);
+    d["dataCon"]["strictFields"] = json!(vec![true; arity as usize]);
+    d
+}
+
+/// `let rec r = <rhs> in <body>`.
+fn letrec1(occ: &str, rhs: Value, body: Value) -> Value {
+    json!({"node": "Let", "bind": {"rec": true, "pairs": [{
+        "binder": binder(occ, demand(false, false)), "rhs": rhs,
+        "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+    }]}, "body": body})
+}
+
+fn field_census(m: &Module) -> Fields<'_> {
+    let census = Census::raw([m]);
+    Fields::of_module(m, &census)
+}
+
+fn one_con_flow<'a>(f: &'a Fields<'a>, occ: &str) -> &'a crate::fields::FieldFlow {
+    let mut it = f.flows.iter().filter(|x| x.occ == occ);
+    let first = it.next().unwrap_or_else(|| panic!("no {occ} construction"));
+    assert!(it.next().is_none(), "expected one {occ} construction");
+    first
+}
+
+/// `let r = Foo (g a) in seq r ()`: the constructor reaches WHNF and no
+/// field is read, so nothing demands the field. It is not `Direct` — that
+/// is the bottom-preservation case, `Foo (error …) `seq` 42` — and with a
+/// lazy field and no other obligation it is `Dead`.
+#[test]
+fn a_construction_observed_only_at_whnf_does_not_demand_its_field() {
+    let m = top_module(
+        let1(
+            "r",
+            con_app("Foo", &[app(var("g"), var("a"))]),
+            case_force(var("r"), "seqw", var("u")),
+        ),
+        json!({"Foo": prog_con("Foo", 1), "g": callee(true)}),
+    );
+    let f = field_census(&m);
+    let flow = one_con_flow(&f, "Foo");
+    assert!(flow.observed());
+    assert_eq!(
+        flow.observations
+            .iter()
+            .filter(|o| o.kind == ObsKind::WhnfOnly)
+            .count(),
+        1
+    );
+    let v = &flow.verdicts[0];
+    assert_eq!(v.demand, FieldDemand::Never);
+    assert_eq!(v.strictness, ConStrictness::LazyField);
+    assert_ne!(v.rep, FieldRep::Direct);
+    assert_eq!(v.rep, FieldRep::Dead);
+}
+
+/// A field bound by the pattern and never used: nothing demands it.
+#[test]
+fn a_field_bound_and_never_used_is_dead() {
+    let m = top_module(
+        let1(
+            "r",
+            con_app("Foo", &[app(var("g"), var("a"))]),
+            case_alts(var("r"), &[("Foo", vec!["x"], var("u"))]),
+        ),
+        json!({"Foo": prog_con("Foo", 1), "g": callee(true)}),
+    );
+    let f = field_census(&m);
+    let flow = one_con_flow(&f, "Foo");
+    assert!(
+        flow.observations
+            .iter()
+            .any(|o| o.kind == ObsKind::FieldBoundUnused)
+    );
+    assert_eq!(flow.verdicts[0].demand, FieldDemand::Never);
+    assert_eq!(flow.verdicts[0].rep, FieldRep::Dead);
+}
+
+/// Forced on one path and taken apart on another: the field is demanded,
+/// but not on every observation, so moving its evaluation to the
+/// construction would evaluate it on the path that only forces the box.
+#[test]
+fn a_field_demanded_on_one_observation_only_is_deferred() {
+    // let r = Foo (g a) in h (seq r ()) (case r of Foo x -> k x)
+    let m = top_module(
+        let1(
+            "r",
+            con_app("Foo", &[app(var("g"), var("a"))]),
+            app(
+                app(var("h"), case_force(var("r"), "seqw", var("u"))),
+                case_alts(var("r"), &[("Foo", vec!["x"], app(var("k"), var("x")))]),
+            ),
+        ),
+        json!({"Foo": prog_con("Foo", 1), "g": callee(true), "k": callee(true)}),
+    );
+    let f = field_census(&m);
+    let flow = one_con_flow(&f, "Foo");
+    let v = &flow.verdicts[0];
+    assert_eq!(v.demand, FieldDemand::Conditional);
+    assert_eq!(v.rep, FieldRep::Deferred);
+    assert_eq!(v.reason, Some(crate::fields::R_WHNF_WITHOUT_FIELD));
+}
+
+/// `case Foo (g a) of Foo x -> k x` with `k` strict: the field is demanded
+/// on every observation *and* the force stands at the construction's own
+/// evaluation frontier — no return, no lambda, no conditional in between —
+/// so evaluating it eagerly changes no timing.
+#[test]
+fn a_field_demanded_at_the_construction_s_own_frontier_is_direct() {
+    let m = top_module(
+        case_alts(
+            con_app("Foo", &[app(var("g"), var("a"))]),
+            &[("Foo", vec!["x"], app(var("k"), var("x")))],
+        ),
+        json!({"Foo": prog_con("Foo", 1), "g": callee(true), "k": callee(true)}),
+    );
+    let f = field_census(&m);
+    let flow = one_con_flow(&f, "Foo");
+    let v = &flow.verdicts[0];
+    assert_eq!(v.demand, FieldDemand::Always);
+    assert_eq!(v.rep, FieldRep::Direct);
+    assert_eq!(v.rule, crate::fields::R3_SAME_FRONTIER);
+}
+
+/// …and the same demand behind a lambda is not, because the field would be
+/// evaluated when the closure is built rather than when it is entered.
+#[test]
+fn the_same_demand_behind_a_lambda_is_not_direct() {
+    let m = top_module(
+        let1(
+            "r",
+            con_app("Foo", &[app(var("g"), var("a"))]),
+            lam(
+                &["y"],
+                case_alts(var("r"), &[("Foo", vec!["x"], app(var("k"), var("x")))]),
+            ),
+        ),
+        json!({"Foo": prog_con("Foo", 1), "g": callee(true), "k": callee(true)}),
+    );
+    let f = field_census(&m);
+    let v = &one_con_flow(&f, "Foo").verdicts[0];
+    assert_eq!(v.demand, FieldDemand::Always);
+    assert_eq!(v.rep, FieldRep::Deferred);
+    assert_eq!(v.reason, Some(crate::fields::R_TIMING_NOT_PRESERVED));
+}
+
+/// A GHC-strict field is forced when the constructor is built, whatever
+/// anyone does with it later: Direct on GHC's own evidence.
+#[test]
+fn a_ghc_strict_field_is_direct_by_ghc_s_evidence() {
+    let m = top_module(
+        let1(
+            "r",
+            con_app("Bang", &[app(var("g"), var("a"))]),
+            app(var("imported"), var("r")),
+        ),
+        json!({"Bang": prog_con_strict("Bang", 1), "g": callee(true), "imported": callee(false)}),
+    );
+    let f = field_census(&m);
+    let v = &one_con_flow(&f, "Bang").verdicts[0];
+    assert_eq!(v.strictness, ConStrictness::StrictField);
+    assert_eq!(v.rep, FieldRep::Direct);
+    assert_eq!(v.rule, crate::fields::R1_STRICT_FIELD);
+    // Nothing reads it, but it is not Dead: reaching WHNF forces it.
+    assert_eq!(v.demand, FieldDemand::Unknown);
+    let m2 = top_module(
+        let1(
+            "r",
+            con_app("Bang", &[app(var("g"), var("a"))]),
+            case_force(var("r"), "seqw", var("u")),
+        ),
+        json!({"Bang": prog_con_strict("Bang", 1), "g": callee(true)}),
+    );
+    let f2 = field_census(&m2);
+    let v2 = &one_con_flow(&f2, "Bang").verdicts[0];
+    assert_eq!(v2.demand, FieldDemand::Never);
+    assert!(v2.force_on_whnf, "a strict field nobody reads is not Dead");
+    assert_eq!(v2.rep, FieldRep::Direct);
+}
+
+/// A construction stored in a field of *another* construction, which is
+/// then taken apart: the flow continues through the outer's field binder.
+#[test]
+fn a_construction_stored_in_another_one_is_followed_through_it() {
+    // let i = Foo (g a) in
+    // let o = Box i in case o of Box b -> case b of Foo x -> k x
+    let m = top_module(
+        let1(
+            "i",
+            con_app("Foo", &[app(var("g"), var("a"))]),
+            let1(
+                "o",
+                con_app("Box", &[var("i")]),
+                case_alts(
+                    var("o"),
+                    &[(
+                        "Box",
+                        vec!["b"],
+                        case_alts(var("b"), &[("Foo", vec!["x"], app(var("k"), var("x")))]),
+                    )],
+                ),
+            ),
+        ),
+        json!({
+            "Foo": prog_con("Foo", 1), "Box": prog_con("Box", 1),
+            "g": callee(true), "k": callee(true)
+        }),
+    );
+    let f = field_census(&m);
+    let inner = one_con_flow(&f, "Foo");
+    assert!(
+        inner
+            .evidence
+            .iter()
+            .any(|e| e.rule == crate::fields::D8_NESTED),
+        "{:?}",
+        inner.evidence.iter().map(|e| e.rule).collect::<Vec<_>>()
+    );
+    assert!(!inner.escaped(), "{:?}", inner.escapes);
+    assert_eq!(inner.verdicts[0].demand, FieldDemand::Always);
+}
+
+/// A knot: `let rec r = Foo r in …`. The recursion verdict is M1's — the
+/// binding is a non-function member of a recursive group that refers to
+/// itself — and this only says which field carries the reference.
+#[test]
+fn a_field_that_refers_back_to_its_own_binding_is_recursive() {
+    let m = top_module(
+        letrec1(
+            "r",
+            con_app("Foo", &[var("r")]),
+            case_alts(var("r"), &[("Foo", vec!["x"], app(var("k"), var("x")))]),
+        ),
+        json!({"Foo": prog_con("Foo", 1), "k": callee(true)}),
+    );
+    let census = Census::raw([&m]);
+    assert!(
+        census
+            .bindings
+            .iter()
+            .any(|b| b.occ == "r" && b.class == Class::RecursiveValue),
+        "M1 must call this binding a recursive value"
+    );
+    let f = Fields::of_module(&m, &census);
+    let v = &one_con_flow(&f, "Foo").verdicts[0];
+    assert_eq!(v.recursion, ValueRecursion::RecursiveKnot);
+    assert_eq!(v.rep, FieldRep::Recursive);
+    assert_eq!(v.rule, crate::fields::R6_RECURSIVE);
+}
+
+/// Handed to an imported function: what is demanded of the field is not in
+/// this module, and the verdict says so rather than guessing.
+#[test]
+fn a_construction_passed_to_an_import_is_unknown_with_a_reason() {
+    let m = top_module(
+        let1(
+            "r",
+            con_app("Foo", &[app(var("g"), var("a"))]),
+            app(var("imported"), var("r")),
+        ),
+        json!({"Foo": prog_con("Foo", 1), "g": callee(true), "imported": callee(false)}),
+    );
+    let f = field_census(&m);
+    let flow = one_con_flow(&f, "Foo");
+    let v = &flow.verdicts[0];
+    assert_eq!(v.demand, FieldDemand::Unknown);
+    assert_eq!(v.rep, FieldRep::Unknown);
+    assert_eq!(v.reason, Some(crate::flow::R_IMPORTED_LAZY));
+}
+
+/// A sum type scrutinised by a case with one alternative per constructor:
+/// for each construction the alternative that names *its* constructor is
+/// the scrutiny, and the other two are unreachable for that value.
+#[test]
+fn a_sum_type_case_selects_the_alternative_for_each_construction() {
+    // let a = A (g p) in let b = B (g q) in
+    // h (case a of {A x -> k x; B y -> u; C z -> u})
+    //   (case b of {A x -> u; B y -> k y; C z -> u})
+    let scrut = |v: &str, which: usize| {
+        let mk = |i: usize, b: &str| {
+            if i == which {
+                app(var("k"), var(b))
+            } else {
+                var("u")
+            }
+        };
+        case_alts(
+            var(v),
+            &[
+                ("A", vec!["x"], mk(0, "x")),
+                ("B", vec!["y"], mk(1, "y")),
+                ("C", vec!["z"], mk(2, "z")),
+            ],
+        )
+    };
+    let m = top_module(
+        let1(
+            "a",
+            con_app("A", &[app(var("g"), var("p"))]),
+            let1(
+                "b",
+                con_app("B", &[app(var("g"), var("q"))]),
+                app(app(var("h"), scrut("a", 0)), scrut("b", 1)),
+            ),
+        ),
+        json!({
+            "A": prog_con("A", 1), "B": prog_con("B", 1), "C": prog_con("C", 1),
+            "g": callee(true), "k": callee(true)
+        }),
+    );
+    let f = field_census(&m);
+    for (occ, want) in [("A", FieldDemand::Always), ("B", FieldDemand::Always)] {
+        let flow = one_con_flow(&f, occ);
+        // Two cases are reached; only one of them names this constructor
+        // with a used binder, the other selects this constructor's own
+        // alternative and drops the field.
+        assert!(!flow.escaped(), "{occ}: {:?}", flow.escapes);
+        assert_eq!(
+            flow.unreachable_alts, 2,
+            "{occ}: one case reached, 2 dead alts"
+        );
+        assert!(
+            flow.verdicts[0].demand == want || flow.verdicts[0].demand == FieldDemand::Conditional
+        );
+    }
+}
+
+/// A `DEFAULT` alternative is an observation of the constructor to WHNF
+/// that binds no field of it — not an escape and not a read.
+#[test]
+fn a_default_alternative_is_a_whnf_observation() {
+    let m = top_module(
+        let1(
+            "r",
+            con_app("C", &[app(var("g"), var("a"))]),
+            case_alts(
+                var("r"),
+                &[
+                    ("A", vec!["x"], app(var("k"), var("x"))),
+                    ("DEFAULT", vec![], var("u")),
+                ],
+            ),
+        ),
+        json!({"C": prog_con("C", 1), "A": prog_con("A", 1), "g": callee(true), "k": callee(true)}),
+    );
+    let f = field_census(&m);
+    let flow = one_con_flow(&f, "C");
+    assert!(!flow.escaped(), "{:?}", flow.escapes);
+    let whnf: Vec<_> = flow
+        .observations
+        .iter()
+        .filter(|o| o.kind == ObsKind::WhnfOnly)
+        .collect();
+    assert_eq!(whnf.len(), 1);
+    assert_eq!(whnf[0].whnf, Some(crate::flow::WhnfHow::DefaultAlt));
+    assert_eq!(flow.verdicts[0].demand, FieldDemand::Never);
+}
+
+/// The case *binder* is in scope in every alternative but only the selected
+/// one runs. `case v of { C x -> k x; D y -> store v }` for a known `C`:
+/// the store under `D` is unreachable for this value and must not make the
+/// flow escape.
+#[test]
+fn an_alias_under_an_unreachable_alternative_is_not_an_escape() {
+    let m = top_module(
+        let1(
+            "r",
+            con_app("C", &[app(var("g"), var("a"))]),
+            case_alts(
+                var("r"),
+                &[
+                    ("C", vec!["x"], app(var("k"), var("x"))),
+                    ("D", vec!["y"], con_app("Box", &[var("wild")])),
+                ],
+            ),
+        ),
+        json!({
+            "C": prog_con("C", 1), "D": prog_con("D", 1), "Box": prog_con("Box", 1),
+            "g": callee(true), "k": callee(true)
+        }),
+    );
+    let f = field_census(&m);
+    let flow = one_con_flow(&f, "C");
+    assert!(
+        !flow.escaped(),
+        "the store under D is unreachable: {:?}",
+        flow.escapes
+    );
+    assert_eq!(flow.alias_occurrences_unreachable, 1);
+    assert_eq!(flow.unreachable_alts, 1);
+    assert_eq!(
+        flow.observations
+            .iter()
+            .filter(|o| o.kind != ObsKind::Escape)
+            .count(),
+        1
+    );
+    let v = &flow.verdicts[0];
+    assert_eq!(v.demand, FieldDemand::Always);
+    assert_eq!(v.recursion, ValueRecursion::Acyclic);
+}
+
+/// The whole census closes: every field in exactly one rep, every
+/// construction in exactly one observation bucket, every census site mapped
+/// or explained.
+#[test]
+fn the_field_accounting_closes() {
+    let m = top_module(
+        let1(
+            "r",
+            con_app("Foo", &[app(var("g"), var("a"))]),
+            case_alts(var("r"), &[("Foo", vec!["x"], app(var("k"), var("x")))]),
+        ),
+        json!({"Foo": prog_con("Foo", 1), "g": callee(true), "k": callee(true)}),
+    );
+    let modules = [&m];
+    let census = Census::raw(modules.iter().copied());
+    let fc = crate::fields::FieldCensus::of_modules(&modules, &census);
+    fc.accounting.check();
+    assert_eq!(fc.accounting.constructions, 1);
+    assert_eq!(fc.accounting.fields_total, 1);
+    assert_eq!(fc.con_fields.len(), 1);
+    assert_eq!(fc.con_fields[0].rep, FieldRep::Direct);
 }

@@ -35,9 +35,9 @@ ShellCheck Haskell
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the two canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), and which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent). Includes a depth-limited Core pretty-printer. |
-| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`). |
+| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting). Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census). Later: the lowering passes. |
 
 ## Usage
 
@@ -62,6 +62,8 @@ cargo run --release --bin h2r -- tuples ../core-json --verify    # the independe
 cargo run --release --bin h2r -- tuples ../core-json --module ShellCheck.Analytics --scalar 30892
 cargo run --release --bin h2r -- tuples ../core-json --module ShellCheck.CFG --scalar-all --json
 cargo run --release --bin h2r -- tuples ../core-json --boundaries  # can all the views be applied at once?
+cargo run --release --bin h2r -- fields ../core-json                        # constructor fields: what is evaluated, and when
+cargo run --release --bin h2r -- fields ../core-json --con OuterToken
 cargo run --release --bin h2r -- tuples ../core-json --module Main --boundaries --explain
 cargo run --release --bin h2r -- show ../core-json ShellCheck.Checks.Commands 4714   # + its tuple proof
 ```
@@ -1582,6 +1584,244 @@ re-derivation and the audited-shape table. All four are shown above.
   costs coverage in the safe direction. 331 of the 600 tuple-requesting
   producers at non-uniform boundaries are of that kind, so a sharper
   interprocedural representation analysis would recover some of the 247.
+
+## M2.3b — what is evaluated when a constructor field is read
+
+M2.2 asked which tuple *allocations* are plumbing. M2.3 asks the
+representation question for everything else, and it splits three ways:
+**M2.3b** (this section) is the constructor-**field** census, M2.3c is the
+list, M2.3d is text. This section decides exactly one thing and says so
+everywhere: for each field of each construction, what does the optimised
+Core prove about **when** the field's expression is evaluated? It answers
+nothing about ownership, about whether the box survives, or about a Rust
+type.
+
+```sh
+cargo run --release --bin h2r -- fields ../core-json
+cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.AST --explain
+cargo run --release --bin h2r -- fields ../core-json --con OuterToken
+cargo run --release --bin h2r -- fields ../core-json --json
+```
+
+### The population
+
+`D0-FIELD-CON`: every saturated application of a data constructor that is
+neither a tuple (M2.2's population) nor the list cons (M2.3c's), selected
+through the head's `DataConInfo` and never by name — 9,166 constructions on
+`-O1`, 2,703 of the program's own constructors and 6,463 of libraries',
+19,830 fields in all. The constructor *name* only splits the report into
+program and library, exactly as the M2 census' family attribution does; no
+verdict reads it.
+
+| constructions | | constructions | |
+|---:|---|---:|---|
+| 1,789 | `ParseError` | 386 | `I#` |
+| 677 | `Solo#` | 371 | `TyCon` |
+| 547 | `IS` | 335 | `Comment` |
+| 500 | `OuterToken` | 293 | `KindRepFun` |
+| 427 | `TrNameS` | 291 | `Just` |
+| 408 | `TokenComment` | 282 | `KindRepTyConApp` |
+
+### Sum types: which alternative is the scrutiny
+
+The [generic aggregate walk](#m22--which-tuples-are-transport-and-which-are-values)
+was written for tuples, and it accepted a `case` only when it had exactly
+**one** data alternative of the construction's arity. For a product type
+that is exact; for a sum type one alternative per constructor is the normal
+shape, and the rule reported it as unresolved. M2.3b makes alternative
+selection **constructor-relative**, the way GHC decides it:
+
+* the alternative whose data constructor is this one — matched on GHC's
+  stable name with the tag corroborating — is the scrutiny (`T2-SCRUTINISED`);
+* no such alternative, but a `DEFAULT`: that is what a value of this
+  constructor selects, and it binds no field — an observation to WHNF
+  (`T15-WHNF-ALT`), not an escape and not a read;
+* neither: nothing this value could select, which is conservatively an
+  escape (`R_ALTS`), never "the construction was not observed";
+* every other alternative is **unreachable for this value** and contributes
+  nothing to the field-demand theorem.
+
+Reachability applies to the case **binder** too. It is in scope in all the
+alternatives but only one of them runs, so `case v of { C x -> k x; D y ->
+store v }` on a known `C` is *not* an escape: the store under `D` cannot be
+reached by this value. On `-O1` that skips 1,113 unreachable alternatives
+and 14 case-binder occurrences that would otherwise have forced a flow to
+`Unknown`.
+
+Tuple behaviour is byte-identical under all of this — a tuple type has one
+constructor, so the constructor-relative rule only ever confirms what the
+single-alternative rule already said. `h2r tuples`, `--verify`,
+`--boundaries`, `--json`, `--scalar-all`, `h2r laziness`, `h2r parsec` and
+`h2r compare` produce identical output on `-O1` and on all six matrix
+profiles.
+
+### Three facts first, then a verdict
+
+Nothing is assigned a representation directly. Every (construction, field)
+records three **orthogonal** facts, and the rep is a function of them:
+
+| Fact | Values | Where it comes from |
+|---|---|---|
+| field demand | `Always` / `Conditional` / `Never` / `Unknown` | the walk's reachable observations |
+| construction strictness | `StrictField` / `LazyField` | GHC's `DataConInfo.strictFields` |
+| value recursion | `RecursiveKnot` / `Acyclic` | **M1's** `Class::RecursiveValue`, read not re-derived |
+
+The recursion fact is deliberately M1's and only M1's: a non-function member
+of a recursive group that refers to itself through the value. It does not
+mean "the field's type mentions the ADT" and it does not mean "produced by a
+recursive function".
+
+| demand | strictness | recursion | fields |
+|---|---|---|---:|
+| Always | LazyField | Acyclic | 175 |
+| Always | StrictField | Acyclic | 21 |
+| Conditional | LazyField | Acyclic | 896 |
+| Conditional | StrictField | Acyclic | 19 |
+| Never | LazyField | Acyclic | 9 |
+| Never | StrictField | Acyclic | 21 |
+| Unknown | LazyField | Acyclic | 15,418 |
+| Unknown | LazyField | RecursiveKnot | 9 |
+| Unknown | StrictField | Acyclic | 3,262 |
+| | | **total** | **19,830** |
+
+The `Never` / `StrictField` row is the one that says why the facts are kept
+apart. `data X = X !Int Int` with field 0 never read is **not** `Dead`: the
+field carries a forcing obligation whenever `X` reaches WHNF, and nothing
+about "nobody reads it" removes that. 21 fields are in exactly that
+position. `Dead` requires all three: never demanded, lazy, and acyclic.
+
+### Why `Direct` is narrow
+
+`Direct` claims that evaluating the field where the constructor is built is
+equivalent to leaving it where GHC put it — **timing**, not eventual
+demand. Two things make "something forces it eventually" insufficient:
+`Foo (error "boom") ``seq`` 42` must stay `42`, and a construction that
+crosses a return can sit while other work happens before anything reads it,
+so moving the field's evaluation to the construction moves the divergence.
+Only three rules establish it:
+
+| Rule | Evidence | What it proves |
+|---|---|---|
+| `R1-STRICT-FIELD` | GHC (4) | the field is already strict: forced at construction, nothing left to move |
+| `R2-FIELD-IS-VALUE` | structural (2) | the field expression is already a value — a literal, a lambda, a saturated construction, a partial application, a nullary constructor, a string literal, or a variable whose binding GHC marks `whnf` / `okForSpec` — so there is no evaluation to move |
+| `R3-SAME-FRONTIER` | 2 over 3 | every observation is a scrutiny that strictly demands the field and stands at the construction's own evaluation frontier: the walk crossed no return and no unknown call, and between the construction and each scrutiny there is no lambda, no conditional and no thunk boundary |
+
+Everything demanded at all and not proven by one of those is `Deferred`. A
+false `Direct` is a miscompile; a false `Deferred` is lost coverage, so the
+rules are deliberately one-sided.
+
+### Results on the `-O1` dump
+
+| | Dead | Direct | Deferred | Recursive | Unknown |
+|---|---:|---:|---:|---:|---:|
+| program, GHC-strict | 0 | 0 | 0 | 0 | 0 |
+| program, lazy | 4 | 1 | 206 | 1 | 6,524 |
+| library, GHC-strict | 0 | 3,323 | 0 | 0 | 0 |
+| library, lazy | 5 | 84 | 780 | 8 | 8,894 |
+| **total** | **9** | **3,408** | **986** | **9** | **15,418** |
+
+`Direct` by the rule that proved the timing: 3,323 `R1-STRICT-FIELD`, 85
+`R2-FIELD-IS-VALUE`, **0** `R3-SAME-FRONTIER`. The last is not a bug and it
+is worth stating: the shape `R3` recognises is a construction scrutinised in
+the same frame it was built in, which is precisely what GHC's
+case-of-known-constructor already eliminates, so none survives `-O1`. The
+rule has a hand-built regression test rather than a count in the dump, and
+the negative case — the same demand behind a lambda — has one too.
+
+Observations: 6,229 `FieldDemanded` (2,452 strict by GHC's demand on the
+alternative's binder, 12 strict by position, 3,765 lazy), 1,922
+`FieldBoundUnused`, 471 `WhnfOnly` (468 `seq`-shaped forces, 3
+`DEFAULT`-selected), 11,784 `Escape`. Constructions: 1,407 observed, 13
+never observed, 7,746 escaped before any observation. The nesting fixpoint
+settles in 3 rounds.
+
+| Top `Deferred` reason | |
+|---:|---|
+| 667 | demanded only lazily (passed on, stored, captured) |
+| 203 | bound and unused on some observation |
+| 90 | demanded on every path, but not at the same frontier |
+| 26 | demanded on some observations only |
+
+| Top `Unknown` reason | |
+|---:|---|
+| 2,264 | stored in a **list cell** — M2.3c's population |
+| 1,143 | an unknown higher-order callee (`eta`) |
+| 998 / 760 / 595 / 573 / 557 / 348 | the construction **holding** it escapes (`TokenComment`, `KindRepFun`, `TyCon`, `OuterToken`, `PushCallStack`, `Comment`) |
+| 565 | an unknown higher-order callee (`eok`) — a Parsec continuation |
+| 311 | stored in a **tuple** field — M2.2's population |
+
+The residual is dominated by three things that belong to other milestones
+rather than by a missing rule here: the list cell, the Parsec/higher-order
+callee, and the transitive escape of whatever holds the value. `D8-NESTED`
+does follow a construction stored in another construction **in this
+population** — through that field's binders at every scrutiny of the holder,
+inheriting the holder's own escapes — and fires 4,207 times; it stops at a
+list cell or a tuple because those are M2.3c's and M2.2's populations.
+
+### The M2 census' 1,996 constructor-field sites
+
+The [M2 baseline](#m2-baseline--who-receives-the-lazy-arguments) attributes
+1,996 lazy argument sites to the constructor-field strategy. They map onto
+this population exactly, with nothing unexplained:
+
+| | |
+|---:|---|
+| 1,310 | the list cons — **deferred to M2.3c**, not mapped here |
+| 686 | mapped onto a (construction, field) pair |
+| 0 | unmapped |
+
+and their `FieldRep` is 77 `Deferred`, 609 `Unknown`, 0 of anything else —
+which is the honest shape of the thing: a lazy *computation* in a
+constructor field is, by construction, not a value, so `R2` cannot fire, and
+these are the sites whose holders reach a list or an import. (1,994 of the
+1,996 are `Position::LazyField`; the other 2 are `Position::UnknownArg`,
+where the constructor's representation and source field counts differ. The
+population predicate is the census' own — a `Computation` in an escaping
+position with a `ProgramDataCon` / `LibraryDataCon` / `ListCons` family — so
+the 1,996 is the same 1,996.)
+
+### Accounting
+
+Asserted in code (`FieldAccounting::check`), on `-O1` and on all six matrix
+profiles:
+
+* every field lands in exactly one rep, and the program/library ×
+  GHC-strict/lazy split and the three-fact matrix each cover all 19,830;
+* `constructions = observed + unobserved + escaped-before-observation`
+  (9,166 = 1,407 + 13 + 7,746) and `= program + library`;
+* every census site is mapped, deferred to M2.3c, or carries a reason;
+* every `Direct` verdict names the rule that proved its timing.
+
+| profile | constructions | fields | Dead | Direct | Deferred | Recursive | Unknown |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `-O1` / A | 9,166 | 19,830 | 9 | 3,408 | 986 | 9 | 15,418 |
+| B | 10,171 | 22,111 | 30 | 4,264 | 1,023 | 9 | 16,785 |
+| C | 11,092 | 23,381 | 26 | 4,621 | 782 | 9 | 17,943 |
+| D | 26,014 | 52,024 | 253 | 14,348 | 979 | 6 | 36,438 |
+| E | 23,632 | 47,292 | 223 | 12,748 | 925 | 6 | 33,390 |
+| F | 23,734 | 47,332 | 223 | 12,736 | 926 | 6 | 33,441 |
+
+### Known limits, stated rather than hidden
+
+* **`D8-NESTED` stops at the other milestones' populations.** A value stored
+  in a list cell or a tuple field is `Unknown`, not followed. Following it
+  needs M2.3c and M2.2's flows respectively; it is a coverage loss in the
+  safe direction.
+* **Any escape makes every field of that construction `Unknown`**, including
+  an escape that is a *proven* real value (a store, an imported strict
+  parameter). What the callee demands of the field is outside the module, so
+  the analysis refuses rather than guessing — which is why 15,418 of 19,830
+  fields are `Unknown`.
+* **`R2` counts a string literal as a value.** `unpackCString# "…"#` is not
+  `exprIsHNF`, but it is total, terminating and cheap, so evaluating it
+  eagerly can neither diverge nor error. That is the one place `R2` argues
+  from `okForSpeculation`-style reasoning rather than from WHNF.
+* **The recursion fact is M1's at `let` level and the group flag at top
+  level.** M1 reports `Class::RecursiveValue` for `let`-bound bindings only;
+  a top-level construction in a recursive group is taken at the group's own
+  `rec` flag, under the same predicate.
+* **This section decides evaluation only.** A field can be `Deferred` and
+  `Acyclic` with no decision made about how it is represented.
 
 ## What ShellCheck actually needs
 

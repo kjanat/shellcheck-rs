@@ -46,6 +46,7 @@
 //! | [`T10_OPAQUE_CALL`] | a use is an argument of a call this module cannot see into |
 //! | [`T11_ESCAPE`] | anything else, with a machine-readable reason |
 //! | [`T14_FORCED`] | a use forces the value whole without reading a field |
+//! | [`T15_WHNF_ALT`] | a use is a `case` whose alternative for this constructor binds no field of it |
 //!
 //! # What a client adds
 //!
@@ -54,27 +55,40 @@
 //! [`Client::Use`]`: From<`[`FlowUse`]`>`, and (c) decides fates from the
 //! uses the walk accumulated. Four hooks let it intercept the places where
 //! a client-specific rule belongs: [`Client::on_binding`],
-//! [`Client::on_alt`], [`Client::on_stored`] and [`Client::on_call_arg`].
-//! [`crate::tuples`] uses all four (for re-tupling, lazy selection, nested
-//! tuples and Parsec continuation hops); a client with no extra rules
-//! implements none of them.
+//! [`Client::on_alt`], [`Client::on_whnf`], [`Client::on_stored`] and
+//! [`Client::on_call_arg`]. [`crate::tuples`] uses four of them (for
+//! re-tupling, lazy selection, nested tuples and Parsec continuation hops)
+//! and [`crate::fields`] two; a client with no extra rules implements none.
 //!
 //! Evidence hierarchy, strongest first (the same one [`crate::parsec`]
 //! uses): 1 lexical binder identity, 2 structural shape, 3 def-use
 //! dataflow, 4 GHC type compatibility, 5 textual type comparison, 6 names.
 //!
-//! # One product-type assumption to know about
+//! # Sum types: which alternative is the scrutiny
 //!
-//! [`scrutiny`] accepts a `case` only when it has exactly **one** data
-//! alternative whose binder count matches the construction's arity;
-//! anything else is an escape with [`R_ALTS`]. For a tuple that is exact —
-//! a tuple type has one constructor — but for a sum type a `case` with one
-//! alternative per constructor is the *normal* shape, and this rule will
-//! report it as unresolved rather than as a read of the fields. A client
-//! over a sum type has to handle that case itself in [`Client::on_alt`]…
-//! which is not reached, because the alternative is rejected before the
-//! hook. Extending the rule is M2.3b's job, not a behaviour change this
-//! module makes.
+//! A `case` on the value is classified against the construction's own
+//! [`DataConInfo`]: the alternative whose data constructor *is* this one —
+//! matched on GHC's stable name, with the constructor tag corroborating —
+//! is the scrutiny, and its binders are the fields ([`T2_SCRUTINISED`]).
+//! For a product type that is the only alternative there is; for a sum type
+//! a `case` with one alternative per constructor is the normal shape, and
+//! only one of them can be taken by a value of this constructor.
+//!
+//! When no alternative names this constructor, the alternative a value of
+//! it selects is the `DEFAULT` one, which binds no field: the case observes
+//! the constructor to WHNF and reads nothing ([`T15_WHNF_ALT`]). A `case`
+//! with only a `DEFAULT` alternative — `seq`, a force — is the same
+//! observation under its own rule ([`T14_FORCED`]), kept separate because
+//! it is the shape the tuple census established.
+//!
+//! Two things fall through to an escape with [`R_ALTS`]: an alternative
+//! that names this constructor but does not bind its `repArity` fields (an
+//! unboxed or existential field layout), and a `case` with neither a
+//! matching alternative nor a `DEFAULT` (nothing it could select).
+//!
+//! [`Client::on_alt`] is offered the matching alternative and
+//! [`Client::on_whnf`] the WHNF observation, so a client over a sum type
+//! can rescue either before the generic rule fires.
 
 use std::collections::HashSet;
 
@@ -137,6 +151,15 @@ pub const T10_OPAQUE_CALL: &str = "T10-OPAQUE-CALL";
 /// nor reads it — it is recorded as a consumer that reads no field.
 /// Evidence: structural shape (2).
 pub const T14_FORCED: &str = "T14-FORCED";
+/// A use is a `case` on the value whose alternatives contain none for this
+/// constructor, so the alternative a value of it selects is the `DEFAULT`
+/// one — or one that does name it but binds nothing. Either way the case
+/// observes the value to WHNF and reads no field. Which alternative a value
+/// of this constructor selects is decided by the construction's own
+/// [`DataConInfo`] against the alternatives' data constructors, matched on
+/// GHC's stable name with the tag corroborating. Evidence: structural shape
+/// (2) over the constructor's identity (4).
+pub const T15_WHNF_ALT: &str = "T15-WHNF-ALT";
 /// Any other use: the value applied as a function, bound to an exported
 /// binder, returned from an exported function, or reached through a closure
 /// whose call sites are not visible. Recorded with a machine-readable
@@ -204,6 +227,29 @@ pub struct Evidence {
     pub note: String,
 }
 
+/// How a `case` came to observe the value without reading a field of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub enum WhnfHow {
+    /// `case v of _ { DEFAULT -> … }`: a `seq` or a force ([`T14_FORCED`]).
+    Forced,
+    /// The case has alternatives, none of them for this constructor, so a
+    /// value of it selects the `DEFAULT` one ([`T15_WHNF_ALT`]).
+    DefaultAlt,
+    /// The alternative for this constructor binds no binder at all — a
+    /// nullary constructor, or a match that discards the fields.
+    NoFields,
+}
+
+impl WhnfHow {
+    pub fn name(self) -> &'static str {
+        match self {
+            WhnfHow::Forced => "forced-whole",
+            WhnfHow::DefaultAlt => "default-alternative",
+            WhnfHow::NoFields => "alternative-binds-no-field",
+        }
+    }
+}
+
 /// A use the generic rules produce. A client's own use type is built from
 /// these plus whatever kinds its extra rules add.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +261,9 @@ pub enum FlowUse {
     },
     /// Forced whole, without reading a field ([`T14_FORCED`]).
     Forced { case: ExprId },
+    /// Observed to WHNF by a `case` whose alternative for this constructor
+    /// binds no field of it ([`T15_WHNF_ALT`]).
+    Whnf { case: ExprId, how: WhnfHow },
     /// Value argument `param` of a saturated call to a known local callee;
     /// the flow continues at that parameter's occurrences
     /// ([`T5_PASSED_LOCAL`]).
@@ -243,7 +292,9 @@ pub trait Consumer: Copy {
 impl Consumer for FlowUse {
     fn at(self) -> ExprId {
         match self {
-            FlowUse::Scrutinised { case, .. } | FlowUse::Forced { case } => case,
+            FlowUse::Scrutinised { case, .. }
+            | FlowUse::Forced { case }
+            | FlowUse::Whnf { case, .. } => case,
             FlowUse::PassedTo { call, .. } | FlowUse::PassedToUnknown { call, .. } => call,
             FlowUse::StoredIn { con } => con,
             FlowUse::Escapes { at, .. } => at,
@@ -264,6 +315,9 @@ pub struct Scrutiny {
     pub at: ExprId,
     /// The alternative's binders, in field order.
     pub field_binders: Vec<BinderId>,
+    /// The alternative's right-hand side: the region in which those
+    /// binders' occurrences are reached.
+    pub rhs: ExprId,
 }
 
 /// The state one construction's walk accumulates.
@@ -290,6 +344,13 @@ pub struct Walk<U: Consumer> {
     /// Value locations visited: the size of the def-use proof.
     pub locations: usize,
     pub over_budget: bool,
+    /// Alternatives a value of this construction cannot select, skipped at
+    /// the `case`es the flow reached: the reachability the constructor
+    /// buys over a shape-only walk.
+    pub unreachable_alts: usize,
+    /// Occurrences of a case binder that alias this value but sit in an
+    /// alternative it cannot select, so they are not followed.
+    pub alias_occurrences_unreachable: usize,
 }
 
 impl<U: Consumer> Walk<U> {
@@ -350,6 +411,11 @@ pub struct Ctx<'a, 'm> {
     /// How many fields that construction has: the number of binders a
     /// `case` alternative must bind to count as a read of it.
     pub arity: u32,
+    /// The construction's data constructor, when the client identified one
+    /// (it always did, for a saturated construction). It is what decides
+    /// *which* alternative of a `case` a value of this construction
+    /// selects; `None` falls back to the single-alternative rule.
+    pub con: Option<&'m DataConInfo>,
 }
 
 impl Ctx<'_, '_> {
@@ -410,6 +476,23 @@ pub trait Client {
         false
     }
 
+    /// A `case` on the value that observes it to WHNF and binds no field of
+    /// this constructor ([`T15_WHNF_ALT`]) — the alternative a value of it
+    /// selects is a `DEFAULT`, or names it but binds nothing. `alt` is that
+    /// alternative when there is one. Return `true` to claim it before the
+    /// generic rule records it.
+    fn on_whnf(
+        &mut self,
+        _w: &mut Walk<Self::Use>,
+        _cx: &Ctx<'_, '_>,
+        _case: ExprId,
+        _v: ExprId,
+        _how: WhnfHow,
+        _alt: Option<&Alt>,
+    ) -> bool {
+        false
+    }
+
     /// The value (no debt) is value argument `idx` of a saturated
     /// application of the data constructor `dc`. Return the `preserve`
     /// reason for the generic [`T9_STORED`] rule, or `None` if the client
@@ -466,6 +549,8 @@ pub fn walk<C: Client>(cx: &Ctx<'_, '_>, client: &mut C) -> Walk<C::Use> {
         bound: None,
         locations: 0,
         over_budget: false,
+        unreachable_alts: 0,
+        alias_occurrences_unreachable: 0,
     };
     while let Some((v, owed)) = w.work.pop() {
         w.locations += 1;
@@ -619,7 +704,21 @@ fn applied<U: Consumer + From<FlowUse>>(cx: &Ctx<'_, '_>, w: &mut Walk<U>, v: Ex
 }
 
 /// `case v of …` ([`T2_SCRUTINISED`] / [`T8_CASE_BINDER_ALIAS`] /
-/// [`T14_FORCED`]).
+/// [`T14_FORCED`] / [`T15_WHNF_ALT`]).
+///
+/// Which alternative this *value* selects is decided by the construction's
+/// own constructor, the way GHC decides it: the alternative whose data
+/// constructor has the same stable name (the tag corroborates) is the one
+/// taken, and every other alternative is **unreachable for this value**.
+/// When no alternative names it, a `DEFAULT` is what it selects; when there
+/// is not even one, nothing here can be selected and the flow escapes
+/// rather than being called unobserved.
+///
+/// Reachability applies to the case *binder* too. It is in scope in every
+/// alternative, but only the selected one runs, so only its occurrences of
+/// the binder are value locations of this aggregate; an occurrence under
+/// another constructor's alternative cannot be reached by this value and is
+/// counted, not followed ([`Walk::alias_occurrences_unreachable`]).
 fn scrutiny<C: Client>(
     cx: &Ctx<'_, '_>,
     client: &mut C,
@@ -631,27 +730,13 @@ fn scrutiny<C: Client>(
     let Expr::Case { binder, alts, .. } = m.expr(case) else {
         return;
     };
-    // The case binder is an alias of the whole value: follow it too, so a
-    // match that also keeps the box is not mistaken for one that consumes
-    // it ([`T8_CASE_BINDER_ALIAS`]).
-    if !m.occurrences(*binder).is_empty() {
-        w.evidence.push(Evidence {
-            rule: T8_CASE_BINDER_ALIAS,
-            nodes: vec![case],
-            binder: Some(*binder),
-            note: format!(
-                "case binder {} aliases the tuple ({} occurrence(s))",
-                m.binder(*binder).occ,
-                m.occurrences(*binder).len()
-            ),
-        });
-        for occ in m.occurrences(*binder) {
-            w.push(*occ, 0);
-        }
-    }
     // Forcing the whole value without reading a field: a no-op on a
     // constructor application, and no field is read ([`T14_FORCED`]).
     if alts.len() == 1 && matches!(alts[0].con, AltCon::Default) && alts[0].binders.is_empty() {
+        alias_binder(cx, w, case, *binder, Some(0));
+        if client.on_whnf(w, cx, case, v, WhnfHow::Forced, Some(&alts[0])) {
+            return;
+        }
         w.use_(FlowUse::Forced { case }.into());
         w.evidence.push(Evidence {
             rule: T14_FORCED,
@@ -661,14 +746,28 @@ fn scrutiny<C: Client>(
         });
         return;
     }
-    // One data alternative binding exactly the construction's fields. See
-    // the module docs: for a product type that is the only shape there is,
-    // for a sum type it is not.
-    let Some(alt) = alts.first().filter(|a| {
-        alts.len() == 1
-            && matches!(a.con, AltCon::DataAlt { .. })
-            && a.binders.len() == cx.arity as usize
-    }) else {
+    // The alternative this constructor selects. Identity first: the
+    // alternative whose data constructor is this one. Failing that — no
+    // `DataConInfo` to compare against — a *single* data alternative
+    // binding exactly the construction's fields is the only one a value
+    // reaching this case can take, which is the rule the tuple census
+    // established and is still structurally exact.
+    let by_con = cx.con.and_then(|dc| {
+        alts.iter().position(|a| match &a.con {
+            AltCon::DataAlt { name, tag, .. } => *name == dc.name && *tag == dc.tag,
+            _ => false,
+        })
+    });
+    let arity = cx.con.map(|dc| dc.rep_arity).unwrap_or(cx.arity) as usize;
+    let single = (alts.len() == 1
+        && matches!(alts[0].con, AltCon::DataAlt { .. })
+        && alts[0].binders.len() == arity)
+        .then_some(0usize);
+    let default = alts.iter().position(|a| matches!(a.con, AltCon::Default));
+    let Some(sel) = by_con.or(single).or(default) else {
+        // Nothing this value could select: conservatively unresolved, never
+        // "the construction was not observed here".
+        alias_binder(cx, w, case, *binder, None);
         w.escape_at(
             case,
             false,
@@ -677,12 +776,52 @@ fn scrutiny<C: Client>(
         );
         return;
     };
+    w.unreachable_alts += alts.len() - 1;
+    alias_binder(cx, w, case, *binder, Some(sel));
+    let alt = &alts[sel];
+    let reads_fields = by_con.or(single) == Some(sel) && !alt.binders.is_empty();
+    if !reads_fields {
+        // The selected alternative binds no field of this constructor: the
+        // case observes the value to WHNF and reads nothing.
+        let how = if matches!(alt.con, AltCon::Default) {
+            WhnfHow::DefaultAlt
+        } else {
+            WhnfHow::NoFields
+        };
+        if client.on_whnf(w, cx, case, v, how, Some(alt)) {
+            return;
+        }
+        w.use_(FlowUse::Whnf { case, how }.into());
+        w.evidence.push(Evidence {
+            rule: T15_WHNF_ALT,
+            nodes: vec![case, v],
+            binder: None,
+            note: format!(
+                "{} of {} alternative(s); no field of this constructor is bound",
+                how.name(),
+                alts.len()
+            ),
+        });
+        return;
+    }
+    if alt.binders.len() != arity {
+        // This constructor's alternative, but it does not bind its
+        // representation fields: a layout the field rules cannot index.
+        w.escape_at(
+            case,
+            false,
+            R_ALTS,
+            format!("{} binder(s) for {arity} field(s)", alt.binders.len()),
+        );
+        return;
+    }
     // Expose which binder each field lands in, for clients that follow
     // fields rather than the whole value.
     w.scrutinies.push(Scrutiny {
         case,
         at: v,
         field_binders: alt.binders.clone(),
+        rhs: alt.rhs,
     });
     if client.on_alt(w, cx, case, v, alt) {
         return;
@@ -700,6 +839,63 @@ fn scrutiny<C: Client>(
         binder: None,
         note: format!("{} field binder(s) bound", alt.binders.len()),
     });
+}
+
+/// The case binder is an alias of the whole value ([`T8_CASE_BINDER_ALIAS`]),
+/// but only in the alternative this value selects: it is in scope in all of
+/// them and only one of them runs. Occurrences elsewhere are unreachable for
+/// this value and are counted instead of followed. `sel` is the selected
+/// alternative, or `None` when nothing is selectable.
+fn alias_binder<U: Consumer>(
+    cx: &Ctx<'_, '_>,
+    w: &mut Walk<U>,
+    case: ExprId,
+    binder: BinderId,
+    sel: Option<usize>,
+) {
+    let m = cx.m;
+    let occs = m.occurrences(binder);
+    if occs.is_empty() {
+        return;
+    }
+    let (reachable, unreachable): (Vec<ExprId>, Vec<ExprId>) = occs
+        .iter()
+        .copied()
+        .partition(|o| sel.is_some() && alt_of(m, case, *o) == sel);
+    w.alias_occurrences_unreachable += unreachable.len();
+    if reachable.is_empty() {
+        return;
+    }
+    w.evidence.push(Evidence {
+        rule: T8_CASE_BINDER_ALIAS,
+        nodes: vec![case],
+        binder: Some(binder),
+        note: format!(
+            "case binder {} aliases the tuple ({} occurrence(s))",
+            m.binder(binder).occ,
+            occs.len()
+        ),
+    });
+    for occ in reachable {
+        w.push(occ, 0);
+    }
+}
+
+/// Which alternative of `case` the node `at` sits in, by climbing the
+/// parent links to the `case` itself. `None` if it is not under one (the
+/// scrutinee, or not under this case at all).
+fn alt_of(m: &Module, case: ExprId, at: ExprId) -> Option<usize> {
+    let mut cur = at;
+    while let Some(p) = m.parent[cur as usize] {
+        if p == case {
+            return match m.edge[cur as usize] {
+                Edge::CaseAlt { alt } => Some(alt as usize),
+                _ => None,
+            };
+        }
+        cur = p;
+    }
+    None
 }
 
 /// The value at `v` — the aggregate when `owed` is 0, otherwise a closure

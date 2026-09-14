@@ -457,7 +457,7 @@ impl From<FlowUse> for TupleUse {
                 case,
                 all_fields_bound,
             },
-            FlowUse::Forced { case } => TupleUse::Forced { case },
+            FlowUse::Forced { case } | FlowUse::Whnf { case, .. } => TupleUse::Forced { case },
             FlowUse::PassedTo {
                 call,
                 callee,
@@ -948,6 +948,11 @@ impl<'m> Tuples<'m> {
             top_pairs: &self.top_pairs,
             start: self.flows[i].construction,
             arity: self.flows[i].arity,
+            // The construction's own constructor, which is what decides
+            // which alternative of a `case` a value of it selects. A tuple
+            // type has one constructor, so this only ever confirms what the
+            // single-alternative rule already said.
+            con: flow::saturated_con(&self.scope, self.flows[i].construction).map(|(dc, _, _)| dc),
         };
         let mut client = TupleClient {
             t: self,
