@@ -10,10 +10,8 @@
 
 use std::collections::HashMap;
 
-use h2r_core_ir::{Expr, ExprId, IdInfo, Module};
+use h2r_core_ir::{BinderId, Expr, ExprId, IdInfo, Module};
 use serde::Serialize;
-
-use crate::shape::value_args;
 
 /// How a local unique is bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,29 +23,48 @@ pub enum BindSite {
     AltBinder,
 }
 
+/// Where and how a local unique is bound. The binding-site binder is the
+/// authoritative source of a local's signature and arity: GHC does not keep
+/// the `IdInfo` on occurrence `Var`s up to date.
+#[derive(Debug, Clone, Copy)]
+pub struct BindInfo {
+    pub site: BindSite,
+    pub binder: BinderId,
+    /// The right-hand side, for let- and top-level-bound ids.
+    pub rhs: Option<ExprId>,
+}
+
 /// Binding site of every binder in the module, by unique.
-pub fn bind_sites(m: &Module) -> HashMap<&str, BindSite> {
+pub fn bind_sites(m: &Module) -> HashMap<&str, BindInfo> {
     let mut map = HashMap::new();
+    let mut put = |b: BinderId, site: BindSite, rhs: Option<ExprId>| {
+        map.insert(
+            m.binder(b).unique.as_str(),
+            BindInfo {
+                site,
+                binder: b,
+                rhs,
+            },
+        );
+    };
     for bind in &m.top {
         for p in &bind.pairs {
-            map.insert(m.binder(p.binder).unique.as_str(), BindSite::Top);
+            put(p.binder, BindSite::Top, Some(p.rhs));
         }
     }
     for e in &m.exprs {
         match e {
-            Expr::Lam { binder, .. } => {
-                map.insert(m.binder(*binder).unique.as_str(), BindSite::Lam);
-            }
+            Expr::Lam { binder, .. } => put(*binder, BindSite::Lam, None),
             Expr::Let { bind, .. } => {
                 for p in &bind.pairs {
-                    map.insert(m.binder(p.binder).unique.as_str(), BindSite::Let);
+                    put(p.binder, BindSite::Let, Some(p.rhs));
                 }
             }
             Expr::Case { binder, alts, .. } => {
-                map.insert(m.binder(*binder).unique.as_str(), BindSite::CaseBinder);
+                put(*binder, BindSite::CaseBinder, None);
                 for a in alts {
                     for b in &a.binders {
-                        map.insert(m.binder(*b).unique.as_str(), BindSite::AltBinder);
+                        put(*b, BindSite::AltBinder, None);
                     }
                 }
             }
@@ -72,9 +89,16 @@ pub enum Resolution {
     HigherOrderParam,
     /// A global id with no demand signature (nothing is known about it).
     ImportedOpaque,
-    /// The callee has a signature, but this argument lies past its arity:
+    /// A global with a signature, but this argument lies past its arity:
     /// it is applied to the *result* of the call.
     PastArity,
+    /// A local bound to a lambda, applied past its signature.
+    KnownLambdaShortSig,
+    /// A local bound to the result of a call to a known function or
+    /// constructor: the closure is statically traceable through the callee.
+    ClosureFromKnownCall,
+    /// A local bound to a case, let or other computation of function type.
+    ComputedClosure,
     /// The head is not a variable (a lambda, a case, a let).
     NonVarHead,
 }
@@ -144,13 +168,11 @@ pub struct Callee {
 /// at index `arg_index`.
 pub fn classify(
     m: &Module,
-    sites: &HashMap<&str, BindSite>,
+    sites: &HashMap<&str, BindInfo>,
     root: ExprId,
     arg_index: usize,
 ) -> Callee {
-    let (head, args) = m.spine(root);
-    let nvargs = value_args(m, &args).len();
-    let _ = nvargs;
+    let (head, _) = m.spine(root);
 
     let Expr::Var {
         unique,
@@ -167,37 +189,71 @@ pub fn classify(
         };
     };
     let info = m.ids.get(unique);
-    let site = sites.get(unique.as_str()).copied();
+    let bound = sites.get(unique.as_str()).copied();
     let (unit, module) = split_stable_name(name)
         .map(|(u, md, _)| (u, md))
         .unwrap_or(("", ""));
 
-    let resolution = match (info, site) {
-        (Some(i), _) if i.data_con.is_some() => Resolution::DataCon,
-        (Some(i), _) if i.is_class_op => Resolution::ClassOp,
-        (_, Some(BindSite::Lam | BindSite::CaseBinder | BindSite::AltBinder)) => {
-            Resolution::HigherOrderParam
+    // Signature arity: from the binding site for locals, the id table for
+    // globals.
+    let sig_args = match bound {
+        Some(b) if !*is_global => m
+            .binder(b.binder)
+            .dmd_sig
+            .as_ref()
+            .map(|s| s.args.len())
+            .unwrap_or(0),
+        _ => info.map(|i| i.dmd_sig.args.len()).unwrap_or(0),
+    };
+
+    let resolution = if info.is_some_and(|i| i.data_con.is_some()) {
+        Resolution::DataCon
+    } else if info.is_some_and(|i| i.is_class_op) {
+        Resolution::ClassOp
+    } else if *is_global {
+        if info.is_none() || sig_args == 0 {
+            Resolution::ImportedOpaque
+        } else if arg_index >= sig_args {
+            Resolution::PastArity
+        } else {
+            Resolution::ExactGlobal
         }
-        (Some(i), _) => {
-            if i.dmd_sig.args.is_empty() {
-                if *is_global {
-                    Resolution::ImportedOpaque
-                } else if matches!(site, Some(BindSite::Let | BindSite::Top)) {
-                    // A local with no signature: typically a value, not a
-                    // function, being applied — its result is unknown.
-                    Resolution::PastArity
+    } else {
+        match bound {
+            Some(BindInfo {
+                site: BindSite::Let | BindSite::Top,
+                rhs: Some(rhs),
+                ..
+            }) => {
+                if arg_index < sig_args {
+                    Resolution::ExactLocal
                 } else {
-                    Resolution::HigherOrderParam
+                    let inner = m.strip(rhs);
+                    match m.expr(inner) {
+                        Expr::Lam { .. } => Resolution::KnownLambdaShortSig,
+                        Expr::App { .. } | Expr::Var { .. } => {
+                            let (h, _) = m.spine(inner);
+                            let known = m.id_info(h).is_some_and(|i| {
+                                i.data_con.is_some() || !i.dmd_sig.args.is_empty()
+                            }) || matches!(
+                                m.expr(h),
+                                Expr::Var { unique, .. }
+                                    if sites.get(unique.as_str()).is_some_and(|b| {
+                                        matches!(b.site, BindSite::Let | BindSite::Top)
+                                    })
+                            );
+                            if known {
+                                Resolution::ClosureFromKnownCall
+                            } else {
+                                Resolution::ComputedClosure
+                            }
+                        }
+                        _ => Resolution::ComputedClosure,
+                    }
                 }
-            } else if arg_index >= i.dmd_sig.args.len() {
-                Resolution::PastArity
-            } else if *is_global {
-                Resolution::ExactGlobal
-            } else {
-                Resolution::ExactLocal
             }
+            _ => Resolution::HigherOrderParam,
         }
-        (None, _) => Resolution::HigherOrderParam,
     };
 
     let family = family_of(info, *is_global, unit, module, occ, resolution);
@@ -244,7 +300,10 @@ fn family_of(
     }
     if !is_global {
         return match resolution {
-            Resolution::ExactLocal | Resolution::PastArity => Family::LocalFunction,
+            Resolution::ExactLocal
+            | Resolution::KnownLambdaShortSig
+            | Resolution::ClosureFromKnownCall
+            | Resolution::ComputedClosure => Family::LocalFunction,
             _ if matches!(occ, "cok" | "cerr" | "eok" | "eerr") => Family::ParsecContinuation,
             _ if occ.starts_with("eta") => Family::EtaParam,
             _ => Family::Unknown,

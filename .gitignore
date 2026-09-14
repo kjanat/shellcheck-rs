@@ -32,3 +32,4 @@ compiler/build/
 compiler/core-json/
 compiler/rust/target/
 compiler/h2r-plugin/dist-newstyle/
+compiler/matrix/

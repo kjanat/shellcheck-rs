@@ -175,3 +175,56 @@ fn ghc_cardinality_overrides_syntax() {
     assert_eq!(b.multiplicity, Multiplicity::Once);
     assert_eq!(b.class, Class::LazyOnce);
 }
+
+#[test]
+fn returned_closure_is_traceable_through_its_producer() {
+    use crate::callee::Resolution;
+    // let f = g a in f (h b)   -- f has no signature; its RHS is a call to
+    // the known function g, so the closure is traceable.
+    let m = json!({
+        "format": raw::FORMAT, "module": "M", "unit": "main",
+        "ids": {"g": callee(true), "h": callee(true)},
+        "binds": [{"rec": false, "pairs": [{
+            "binder": binder("top", demand(false, false)),
+            "rhs": {"node": "Let", "bind": {"rec": false, "pairs": [{
+                "binder": binder("f", demand(false, false)), "rhs": app(var("g"), var("a")),
+                "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+            }]}, "body": app(var("f"), app(var("h"), var("b")))},
+            "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+        }]}]
+    });
+    let m = Module::from_raw(serde_json::from_value(m).unwrap()).unwrap();
+    let c = Census::of_modules([&m]);
+    let site = c
+        .args
+        .iter()
+        .find(|a| a.callee.occ == "f")
+        .expect("argument site headed by f");
+    assert_eq!(site.callee.resolution, Resolution::ClosureFromKnownCall);
+}
+
+#[test]
+fn local_signature_comes_from_the_binding_site() {
+    use crate::callee::Resolution;
+    // let k = \y -> ... with a one-argument signature on the *binder*, and
+    // no entry in the id table: k (h b) must resolve as an exact local call.
+    let mut k = binder("k", demand(false, false));
+    k["dmdSig"] = json!({"args": [demand(true, false)], "diverges": false, "pretty": "<S>"});
+    let m = json!({
+        "format": raw::FORMAT, "module": "M", "unit": "main",
+        "ids": {"h": callee(true)},
+        "binds": [{"rec": false, "pairs": [{
+            "binder": binder("top", demand(false, false)),
+            "rhs": {"node": "Let", "bind": {"rec": false, "pairs": [{
+                "binder": k,
+                "rhs": {"node": "Lam", "binder": lam_binder("y", false), "body": var("y")},
+                "whnf": true, "trivial": false, "cheap": true, "okForSpec": false
+            }]}, "body": app(var("k"), app(var("h"), var("b")))},
+            "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+        }]}]
+    });
+    let m = Module::from_raw(serde_json::from_value(m).unwrap()).unwrap();
+    let c = Census::of_modules([&m]);
+    let site = c.args.iter().find(|a| a.callee.occ == "k").unwrap();
+    assert_eq!(site.callee.resolution, Resolution::ExactLocal);
+}

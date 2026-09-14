@@ -48,6 +48,9 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         up: usize,
     },
+    /// Compare census metrics across several Core dump directories
+    /// (e.g. the GHC flag matrix). Arguments are `label=dir` or plain dirs.
+    Compare { dirs: Vec<String> },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
         dir: PathBuf,
@@ -71,6 +74,7 @@ fn main() -> Result<()> {
     with_big_stack(move || match cli.command {
         Command::Stats { dir, per_module } => stats(&dir, per_module),
         Command::Binders { dir, module } => binders(&dir, &module),
+        Command::Compare { dirs } => compare(&dirs),
         Command::Show {
             dir,
             module,
@@ -286,6 +290,47 @@ fn show(dir: &PathBuf, module: &str, node: Option<u32>, depth: usize, up: usize)
                 }
             }
         }
+    }
+    Ok(())
+}
+
+//------------------------------------------------------------------------------
+// compare
+//------------------------------------------------------------------------------
+
+fn compare(specs: &[String]) -> Result<()> {
+    let mut columns: Vec<(String, h2r_analysis::metrics::Metrics)> = Vec::new();
+    for spec in specs {
+        let (label, dir) = match spec.split_once('=') {
+            Some((l, d)) => (l.to_string(), PathBuf::from(d)),
+            None => (spec.clone(), PathBuf::from(spec)),
+        };
+        let modules = load_dir(&dir)?;
+        let census = Census::of_modules(modules.iter());
+        let core_nodes = modules.iter().map(|m| m.exprs.len()).sum();
+        let top = modules
+            .iter()
+            .map(|m| m.top.iter().map(|b| b.pairs.len()).sum::<usize>())
+            .sum();
+        columns.push((
+            label,
+            h2r_analysis::metrics::Metrics::of(&census, core_nodes, top),
+        ));
+    }
+    let Some((_, first)) = columns.first() else {
+        anyhow::bail!("no directories given");
+    };
+    print!("{:<32}", "");
+    for (label, _) in &columns {
+        print!(" {label:>9}");
+    }
+    println!();
+    for (i, (name, _)) in first.rows().iter().enumerate() {
+        print!("{name:<32}");
+        for (_, m) in &columns {
+            print!(" {:>9}", m.rows()[i].1);
+        }
+        println!();
     }
     Ok(())
 }
@@ -598,9 +643,18 @@ fn report(c: &Census, n_modules: usize) {
             Resolution::ImportedOpaque,
             "unknown: imported, no signature",
         ),
+        (Resolution::PastArity, "global applied past its signature"),
         (
-            Resolution::PastArity,
-            "unknown: past callee's arity (call result)",
+            Resolution::KnownLambdaShortSig,
+            "local lambda applied past its signature",
+        ),
+        (
+            Resolution::ClosureFromKnownCall,
+            "closure returned by a known call",
+        ),
+        (
+            Resolution::ComputedClosure,
+            "closure from a case/let computation",
         ),
         (Resolution::NonVarHead, "unknown: non-variable head"),
     ] {

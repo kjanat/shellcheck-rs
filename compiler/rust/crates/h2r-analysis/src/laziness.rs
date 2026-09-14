@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use h2r_core_ir::{Binder, BinderKind, Edge, Expr, ExprId, Module, Pair};
 use serde::Serialize;
 
-use crate::callee::{self, BindSite, Callee};
+use crate::callee::{self, BindInfo, Callee};
 use crate::shape::{
     ArgShape, Position, RhsKind, arg_shape, is_dictionary_head, position, value_args,
 };
@@ -286,7 +286,7 @@ impl Census {
         }
     }
 
-    fn arg_sites(&mut self, m: &Module, sites: &HashMap<&str, BindSite>, root: ExprId) {
+    fn arg_sites(&mut self, m: &Module, sites: &HashMap<&str, BindInfo>, root: ExprId) {
         let (_, args) = m.spine(root);
         for (i, arg) in value_args(m, &args).into_iter().enumerate() {
             let shape = arg_shape(m, arg);
