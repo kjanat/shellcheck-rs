@@ -380,7 +380,7 @@ fn node_name(e: &Expr) -> &'static str {
         Expr::Case { .. } => "Case",
         Expr::Cast(_) => "Cast",
         Expr::Tick(_) => "Tick",
-        Expr::Type(_) => "Type",
+        Expr::Type { .. } => "Type",
         Expr::Coercion => "Coercion",
     }
 }
@@ -3615,11 +3615,12 @@ fn text(
 
     println!("Text flows — {} module(s)", selected.len());
     println!();
-    println!("The caveat this milestone is built on");
-    println!("  The dump carries pretty-printed type strings, not TyCon identity.");
-    println!("  Reading `Char` off a rendered type is level-6 evidence (textual type");
-    println!("  comparison, corroboration) — not `TyConApp [] [Char]`. Every selection");
-    println!("  below says which evidence established it.");
+    println!("How the element type is read");
+    println!("  The dump carries structured types, so `Char` here is TyConApp with the");
+    println!("  TyCon GHC itself names $ghc-prim$GHC.Types$Char — level-4 evidence");
+    println!("  (structural TyCon identity), not a string that reads \"Char\". A type");
+    println!("  *variable* still proves nothing: such a flow is never assumed to be");
+    println!("  text. Every selection below says which evidence established it.");
 
     println!();
     println!("Selection, out of M2.3c's list flows");
@@ -3636,9 +3637,9 @@ fn text(
     println!();
     println!("  how Char was established, for the text flows");
     println!(
-        "  {:>7}  {} (level 6 only)",
+        "  {:>7}  {} (level 4: the element's TyCon is Char)",
         acct.type_only,
-        ElementTypeEvidence::TypeStringOnly.name()
+        ElementTypeEvidence::TypeOnly.name()
     );
     println!(
         "  {:>7}  {} (an unpack producer, a Char literal, a Char scrutiny, or a signature)",
@@ -3646,7 +3647,7 @@ fn text(
         ElementTypeEvidence::StructuralOnly.name()
     );
     println!(
-        "  {:>7}  {} (a rendered type and a structural fact agree)",
+        "  {:>7}  {} (the type and a fact that reads no type agree)",
         acct.both,
         ElementTypeEvidence::Both.name()
     );
@@ -3655,7 +3656,7 @@ fn text(
         acct.propagated
     );
     println!(
-        "  {:>7}  propagations refused: they would have contradicted a rendered element type",
+        "  {:>7}  propagations refused: they would have contradicted the element type",
         acct.propagation_refused
     );
     println!(

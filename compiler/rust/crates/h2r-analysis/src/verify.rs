@@ -175,7 +175,7 @@ impl<'m> Verifier<'m> {
             .filter(|a| {
                 !matches!(
                     self.m.expr(self.m.strip(*a)),
-                    Expr::Type(_) | Expr::Coercion
+                    Expr::Type { .. } | Expr::Coercion
                 )
             })
             .collect()
@@ -183,13 +183,13 @@ impl<'m> Verifier<'m> {
 
     /// The data constructor at the head of a spine, if the head is one.
     fn head_data_con(&self, head: ExprId) -> Option<&'m h2r_core_ir::DataConInfo> {
-        let Expr::Var { unique, .. } = self.m.expr(head) else {
+        let Expr::Var { name, .. } = self.m.expr(head) else {
             return None;
         };
         if self.m.resolve(head).is_some() {
             return None; // bound here: locals are never constructors
         }
-        self.m.ids.get(unique)?.data_con.as_ref()
+        self.m.ids.get(name)?.data_con.as_ref()
     }
 
     fn find_constructions(&mut self) {

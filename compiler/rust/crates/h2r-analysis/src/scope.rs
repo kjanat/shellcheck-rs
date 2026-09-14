@@ -104,7 +104,7 @@ impl<'m> Scope<'m> {
     /// to when it is bound in this module, from the id table otherwise.
     /// `None` when `head` is not a variable or nothing at all is known.
     pub fn head_sig(&self, head: ExprId) -> Option<HeadSig<'m>> {
-        let Expr::Var { unique, .. } = self.m.expr(head) else {
+        let Expr::Var { name, .. } = self.m.expr(head) else {
             return None;
         };
         if let Some(bound) = self.binding_of(head) {
@@ -120,8 +120,8 @@ impl<'m> Scope<'m> {
             });
         }
         // Linkage, not identity: the resolver has already said this
-        // occurrence is an import, so the unique is the table key.
-        let info = self.m.ids.get(unique)?;
+        // occurrence is an import, so its stable name is the table key.
+        let info = self.m.ids.get(name)?;
         Some(HeadSig {
             source: SigSource::IdTable,
             arity: info.arity,

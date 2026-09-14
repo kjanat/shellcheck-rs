@@ -16,10 +16,235 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-pub use raw::{AltCon, Binder, BinderKind, DataConInfo, Demand, DmdSig, IdInfo, Lit, OccInfo};
+pub use raw::{
+    AltCon, Binder, BinderKind, DataConInfo, Demand, DmdSig, IdInfo, Lit, OccInfo, TyConId, TyId,
+    TyVarId,
+};
 
 pub type ExprId = u32;
 pub type BinderId = u32;
+
+/// The stable name of GHC's list type constructor. GHC 9.6 calls it `List`;
+/// the dump is the authority and this is what it carries.
+pub const LIST_TYCON: &str = "$ghc-prim$GHC.Types$List";
+/// The stable name of `Char`.
+pub const CHAR_TYCON: &str = "$ghc-prim$GHC.Types$Char";
+
+/// A GHC `Type`, structurally.
+///
+/// This is the identity a type-based fact should rest on: `TyConApp` with a
+/// stable `TyCon` name is GHC type compatibility, where a comparison of
+/// GHC's *rendering* of the same type is textual and can be defeated by a
+/// synonym, a shadowed name or a type variable instantiated out of sight.
+///
+/// Synonyms are expanded by the plugin (`expandTypeSynonyms`), so `String`
+/// and `FilePath` both arrive here as `Con List [Con Char []]`. The
+/// unexpanded rendering is kept next to every use of a type
+/// ([`Binder::ty_pretty`], [`Expr::Type`]`::pretty`) for diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ty {
+    Var(TyVarId),
+    Con {
+        tycon: TyConId,
+        args: Vec<Ty>,
+    },
+    App {
+        fun: Box<Ty>,
+        arg: Box<Ty>,
+    },
+    Fun {
+        mult: Box<Ty>,
+        arg: Box<Ty>,
+        res: Box<Ty>,
+    },
+    ForAll {
+        binder: TyVarId,
+        body: Box<Ty>,
+    },
+    Lit {
+        kind: String,
+        text: String,
+    },
+    /// A `CastTy` or `CoercionTy`, kept only as GHC rendered it.
+    Opaque {
+        pretty: String,
+    },
+}
+
+impl Ty {
+    /// The type constructor at the head of a `TyConApp`, if this is one.
+    pub fn tycon(&self) -> Option<&TyConId> {
+        match self {
+            Ty::Con { tycon, .. } => Some(tycon),
+            _ => None,
+        }
+    }
+
+    /// The arguments of a `TyConApp`; empty for anything else.
+    pub fn args(&self) -> &[Ty] {
+        match self {
+            Ty::Con { args, .. } => args,
+            _ => &[],
+        }
+    }
+
+    /// Is this the type constructor `name`, applied to anything?
+    pub fn is_tycon(&self, name: &str) -> bool {
+        self.tycon().is_some_and(|t| t.name == name)
+    }
+
+    /// Is this a type *variable*? Nothing may be concluded from a type that
+    /// is one: it is instantiated somewhere this module cannot see.
+    pub fn is_ty_var(&self) -> bool {
+        matches!(self, Ty::Var(_))
+    }
+
+    /// `Char`.
+    pub fn is_char(&self) -> bool {
+        self.is_tycon(CHAR_TYCON) && self.args().is_empty()
+    }
+
+    /// The element type of a list, if this is one.
+    pub fn list_elem(&self) -> Option<&Ty> {
+        match self {
+            Ty::Con { tycon, args } if tycon.name == LIST_TYCON && args.len() == 1 => {
+                Some(&args[0])
+            }
+            _ => None,
+        }
+    }
+
+    /// Is this a list whose element type satisfies `elem`? `[Char]` is
+    /// `ty.is_list_of(&|e| e.is_char())`.
+    pub fn is_list_of(&self, elem: &dyn Fn(&Ty) -> bool) -> bool {
+        self.list_elem().is_some_and(elem)
+    }
+
+    /// The argument types of an arrow chain, outermost first, looking
+    /// through `forall`s. The result type is [`Ty::fun_result`]. Both are
+    /// iterative: a signature can be long.
+    pub fn fun_args(&self) -> Vec<&Ty> {
+        let mut out = Vec::new();
+        let mut cur = self;
+        loop {
+            match cur {
+                Ty::Fun { arg, res, .. } => {
+                    out.push(&**arg);
+                    cur = res;
+                }
+                Ty::ForAll { body, .. } => cur = body,
+                _ => return out,
+            }
+        }
+    }
+
+    /// What an arrow chain returns once every argument is supplied.
+    pub fn fun_result(&self) -> &Ty {
+        let mut cur = self;
+        loop {
+            match cur {
+                Ty::Fun { res, .. } | Ty::ForAll { body: res, .. } => cur = res,
+                _ => return cur,
+            }
+        }
+    }
+
+    /// Alpha-equivalence: the same type up to the names of bound type
+    /// variables. Free type variables are compared by unique, which is
+    /// sound because a type's free variables are all bound in the same
+    /// enclosing term.
+    ///
+    /// Iterative, over an explicit worklist, and over the *structured*
+    /// type — the textual `alpha_normalise` M2.1 uses on rendered types is
+    /// the thing this exists to replace.
+    pub fn alpha_eq(&self, other: &Ty) -> bool {
+        // Pairs still to compare, plus the bound-variable correspondence in
+        // force at each, as a depth into `bound`.
+        let mut work: Vec<(&Ty, &Ty, usize)> = vec![(self, other, 0)];
+        // (left unique, right unique) pairs introduced by `forall`s.
+        let mut bound: Vec<(&str, &str)> = Vec::new();
+        while let Some((a, b, depth)) = work.pop() {
+            bound.truncate(depth);
+            match (a, b) {
+                (Ty::Var(x), Ty::Var(y)) => {
+                    let corr = bound
+                        .iter()
+                        .rev()
+                        .find(|(l, r)| *l == x.unique || *r == y.unique);
+                    match corr {
+                        Some((l, r)) => {
+                            if *l != x.unique || *r != y.unique {
+                                return false;
+                            }
+                        }
+                        None if x.unique != y.unique => return false,
+                        None => {}
+                    }
+                }
+                (
+                    Ty::Con {
+                        tycon: t1,
+                        args: a1,
+                    },
+                    Ty::Con {
+                        tycon: t2,
+                        args: a2,
+                    },
+                ) => {
+                    if t1.name != t2.name || a1.len() != a2.len() {
+                        return false;
+                    }
+                    work.extend(a1.iter().zip(a2).map(|(x, y)| (x, y, depth)));
+                }
+                (Ty::App { fun: f1, arg: x1 }, Ty::App { fun: f2, arg: x2 }) => {
+                    work.push((f1, f2, depth));
+                    work.push((x1, x2, depth));
+                }
+                (
+                    Ty::Fun {
+                        mult: m1,
+                        arg: a1,
+                        res: r1,
+                    },
+                    Ty::Fun {
+                        mult: m2,
+                        arg: a2,
+                        res: r2,
+                    },
+                ) => {
+                    work.push((m1, m2, depth));
+                    work.push((a1, a2, depth));
+                    work.push((r1, r2, depth));
+                }
+                (
+                    Ty::ForAll {
+                        binder: v1,
+                        body: b1,
+                    },
+                    Ty::ForAll {
+                        binder: v2,
+                        body: b2,
+                    },
+                ) => {
+                    bound.push((v1.unique.as_str(), v2.unique.as_str()));
+                    work.push((b1, b2, depth + 1));
+                }
+                (Ty::Lit { kind: k1, text: t1 }, Ty::Lit { kind: k2, text: t2 }) => {
+                    if k1 != k2 || t1 != t2 {
+                        return false;
+                    }
+                }
+                (Ty::Opaque { pretty: p1 }, Ty::Opaque { pretty: p2 }) => {
+                    if p1 != p2 {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -45,12 +270,19 @@ pub enum Expr {
     Case {
         scrut: ExprId,
         binder: BinderId,
-        ty: String,
+        /// The `case`'s result type, structurally.
+        ty: TyId,
+        /// …and as GHC rendered it.
+        ty_pretty: String,
         alts: Vec<Alt>,
     },
     Cast(ExprId),
     Tick(ExprId),
-    Type(String),
+    /// A type argument: structurally, and as GHC rendered it.
+    Type {
+        ty: TyId,
+        pretty: String,
+    },
     Coercion,
 }
 
@@ -140,7 +372,12 @@ pub enum Ref {
 pub struct Module {
     pub name: String,
     pub unit: String,
+    /// Facts about the *global* Ids this module refers to, keyed by stable
+    /// name. Read it through [`Module::id_info`], never by unique.
     pub ids: HashMap<String, IdInfo>,
+    /// The module's types, rebuilt from the dump's hash-consed table.
+    /// Binders and `Type` nodes index into this.
+    pub types: Vec<Ty>,
     pub exprs: Vec<Expr>,
     pub binders: Vec<Binder>,
     pub parent: Vec<Option<ExprId>>,
@@ -164,6 +401,16 @@ impl Module {
         &self.binders[id as usize]
     }
 
+    /// A type from the module's table.
+    pub fn ty(&self, id: TyId) -> &Ty {
+        &self.types[id as usize]
+    }
+
+    /// A binder's type, structurally.
+    pub fn binder_ty(&self, id: BinderId) -> &Ty {
+        self.ty(self.binders[id as usize].ty)
+    }
+
     /// Direct children, in evaluation-ish order.
     pub fn children(&self, id: ExprId) -> Vec<ExprId> {
         match self.expr(id) {
@@ -180,7 +427,7 @@ impl Module {
                 v
             }
             Expr::Cast(e) | Expr::Tick(e) => vec![*e],
-            Expr::Var { .. } | Expr::Lit(_) | Expr::Type(_) | Expr::Coercion => vec![],
+            Expr::Var { .. } | Expr::Lit(_) | Expr::Type { .. } | Expr::Coercion => vec![],
         }
     }
 
@@ -446,7 +693,7 @@ impl Module {
                     stack.push(Op::Enter(*scrut));
                 }
                 Expr::Cast(e) | Expr::Tick(e) => stack.push(Op::Enter(*e)),
-                Expr::Lit(_) | Expr::Type(_) | Expr::Coercion => {}
+                Expr::Lit(_) | Expr::Type { .. } | Expr::Coercion => {}
             }
         }
         self.refs = refs;
@@ -506,12 +753,12 @@ impl Module {
 
     /// Facts about the *imported* Id a `Var` refers to, if the plugin
     /// recorded any. Only defined for an occurrence the resolver classified
-    /// as [`Ref::Global`]: the id table is keyed by unique and populated
-    /// from occurrences, so for a local it may name a different binder
-    /// altogether. For a local, read the binder.
+    /// as [`Ref::Global`]: the table holds globals only, keyed by stable
+    /// name. For a local, read the binder — it is the authoritative source
+    /// and the only one that exists.
     pub fn id_info(&self, id: ExprId) -> Option<&IdInfo> {
         match (self.expr(id), self.reference(id)) {
-            (Expr::Var { unique, .. }, Some(Ref::Global)) => self.ids.get(unique),
+            (Expr::Var { name, .. }, Some(Ref::Global)) => self.ids.get(name),
             _ => None,
         }
     }
@@ -519,12 +766,18 @@ impl Module {
     pub fn from_raw(raw: raw::RawModule) -> Result<Self> {
         if raw.format != raw::FORMAT {
             bail!(
-                "module {} has dump format {}, expected {}",
+                "module {} has dump format {}, expected {}: re-extract with the \
+                 current plugin (`. ~/.ghcup/env; ./compiler/extract.sh`). \
+                 Format {} keys the id table by stable name and carries \
+                 structured types; format {} did not.",
                 raw.module,
                 raw.format,
-                raw::FORMAT
+                raw::FORMAT,
+                raw::FORMAT,
+                raw.format
             );
         }
+        let types = build_types(&raw.types)?;
         let mut b = Builder::default();
         let mut top = Vec::with_capacity(raw.binds.len());
         let mut top_pair: u32 = 0;
@@ -540,6 +793,7 @@ impl Module {
             name: raw.module,
             unit: raw.unit,
             ids: raw.ids,
+            types,
             exprs: b
                 .exprs
                 .into_iter()
@@ -686,6 +940,7 @@ impl Builder {
                     scrut,
                     binder,
                     ty,
+                    ty_pretty,
                     alts,
                 } => {
                     let scrut = self.push(*scrut, p, Edge::CaseScrut);
@@ -703,17 +958,67 @@ impl Builder {
                         scrut,
                         binder,
                         ty,
+                        ty_pretty,
                         alts,
                     }
                 }
                 raw::RawExpr::Cast { expr } => Expr::Cast(self.push(*expr, p, Edge::Cast)),
                 raw::RawExpr::Tick { expr } => Expr::Tick(self.push(*expr, p, Edge::Tick)),
-                raw::RawExpr::Type { ty } => Expr::Type(ty),
+                raw::RawExpr::Type { ty, pretty } => Expr::Type { ty, pretty },
                 raw::RawExpr::Coercion => Expr::Coercion,
             };
             self.exprs[id as usize] = Some(expr);
         }
     }
+}
+
+/// Rebuild the module's types from the dump's flat, hash-consed table.
+///
+/// One forward pass, no recursion: the plugin interns a node only after its
+/// children, so every child index is smaller than its parent's and is
+/// already built by the time it is needed. An index that is not — a
+/// corrupt or hand-written dump — is an error rather than a panic.
+fn build_types(raw: &[raw::RawTy]) -> Result<Vec<Ty>> {
+    let mut out: Vec<Ty> = Vec::with_capacity(raw.len());
+    for (i, t) in raw.iter().enumerate() {
+        let get = |j: &TyId| -> Result<Ty> {
+            out.get(*j as usize)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("type table entry {i} refers forward to {j}"))
+        };
+        out.push(match t {
+            raw::RawTy::TyVar { name, occ, unique } => Ty::Var(TyVarId {
+                name: name.clone(),
+                occ: occ.clone(),
+                unique: unique.clone(),
+            }),
+            raw::RawTy::TyConApp { tycon, args } => Ty::Con {
+                tycon: tycon.clone(),
+                args: args.iter().map(&get).collect::<Result<Vec<_>>>()?,
+            },
+            raw::RawTy::AppTy { fun, arg } => Ty::App {
+                fun: Box::new(get(fun)?),
+                arg: Box::new(get(arg)?),
+            },
+            raw::RawTy::FunTy { mult, arg, res } => Ty::Fun {
+                mult: Box::new(get(mult)?),
+                arg: Box::new(get(arg)?),
+                res: Box::new(get(res)?),
+            },
+            raw::RawTy::ForAllTy { binder, body } => Ty::ForAll {
+                binder: binder.clone(),
+                body: Box::new(get(body)?),
+            },
+            raw::RawTy::LitTy { lit_kind, lit } => Ty::Lit {
+                kind: lit_kind.clone(),
+                text: lit.clone(),
+            },
+            raw::RawTy::Opaque { pretty } => Ty::Opaque {
+                pretty: pretty.clone(),
+            },
+        });
+    }
+    Ok(out)
 }
 
 /// Load every `*.core.json` under `dir`, sorted by module name.
@@ -759,7 +1064,7 @@ mod tests {
 
     fn binder(occ: &str, uniq: &str) -> serde_json::Value {
         serde_json::json!({
-            "kind": "id", "name": occ, "occ": occ, "unique": uniq, "type": "T",
+            "kind": "id", "name": occ, "occ": occ, "unique": uniq, "type": "T", "ty": 0,
             "arity": 0, "callArity": 0, "exported": false,
             "dmdSig": {"args": [], "diverges": false, "pretty": ""},
             "cprSig": "", "demand": {"strict": false, "absent": false, "usedOnce": false, "pretty": "L"},
@@ -776,7 +1081,7 @@ mod tests {
     fn sample() -> raw::RawModule {
         let rhs = serde_json::json!({"node": "App", "fun": var("f", "f"), "arg": var("a", "a")});
         let body = serde_json::json!({
-            "node": "Case", "scrut": var("p", "p"), "binder": binder("wild", "w"), "type": "R",
+            "node": "Case", "scrut": var("p", "p"), "binder": binder("wild", "w"), "type": "R", "ty": 0,
             "alts": [
                 {"con": {"kind": "DataAlt", "name": "A", "occ": "A", "tag": 1}, "binders": [], "rhs": var("x", "x")},
                 {"con": {"kind": "DataAlt", "name": "B", "occ": "B", "tag": 2}, "binders": [],
@@ -785,6 +1090,9 @@ mod tests {
         });
         let m = serde_json::json!({
             "format": raw::FORMAT, "module": "M", "unit": "main", "ids": {},
+            "types": [{"kind": "TyConApp",
+                       "tycon": {"name": "$main$M$T", "occ": "T", "unique": "T"},
+                       "args": []}],
             "binds": [{"rec": false, "pairs": [{
                 "binder": binder("top", "t"),
                 "rhs": {"node": "Let", "bind": {"rec": false, "pairs": [{
@@ -857,7 +1165,7 @@ mod tests {
             }]}, "body": var("x", "u")})
         };
         let body = serde_json::json!({
-            "node": "Case", "scrut": var("p", "p"), "binder": binder("wild", "w"), "type": "R",
+            "node": "Case", "scrut": var("p", "p"), "binder": binder("wild", "w"), "type": "R", "ty": 0,
             "alts": [
                 {"con": {"kind": "DataAlt", "name": "A", "occ": "A", "tag": 1}, "binders": [], "rhs": arm()},
                 {"con": {"kind": "DataAlt", "name": "B", "occ": "B", "tag": 2}, "binders": [], "rhs": arm()}
@@ -865,6 +1173,9 @@ mod tests {
         });
         let raw = serde_json::json!({
             "format": raw::FORMAT, "module": "M", "unit": "main", "ids": {},
+            "types": [{"kind": "TyConApp",
+                       "tycon": {"name": "$main$M$T", "occ": "T", "unique": "T"},
+                       "args": []}],
             "binds": [{"rec": false, "pairs": [{
                 "binder": binder("top", "t"), "rhs": body,
                 "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
@@ -921,5 +1232,136 @@ mod tests {
         let mut raw = sample();
         raw.format = 1;
         assert!(Module::from_raw(raw).is_err());
+    }
+
+    /// The previous format is rejected, and the message says what to do
+    /// about it rather than only that a number did not match.
+    #[test]
+    fn rejects_the_previous_format_with_an_actionable_message() {
+        let mut raw = sample();
+        raw.format = 4;
+        let err = Module::from_raw(raw).unwrap_err().to_string();
+        assert!(err.contains("dump format 4"), "{err}");
+        assert!(err.contains("extract.sh"), "{err}");
+    }
+
+    //--------------------------------------------------------------------------
+    // Structured types
+    //--------------------------------------------------------------------------
+
+    fn con(name: &str, args: Vec<Ty>) -> Ty {
+        Ty::Con {
+            tycon: TyConId {
+                name: name.to_string(),
+                occ: name.rsplit('$').next().unwrap().to_string(),
+                unique: name.to_string(),
+            },
+            args,
+        }
+    }
+
+    fn tv(u: &str) -> TyVarId {
+        TyVarId {
+            name: format!("$_in${u}"),
+            occ: u.to_string(),
+            unique: u.to_string(),
+        }
+    }
+
+    fn char_ty() -> Ty {
+        con(CHAR_TYCON, vec![])
+    }
+
+    fn list_ty(e: Ty) -> Ty {
+        con(LIST_TYCON, vec![e])
+    }
+
+    #[test]
+    fn a_list_of_char_is_recognised_by_tycon_not_by_spelling() {
+        let s = list_ty(char_ty());
+        assert!(s.is_list_of(&|e| e.is_char()));
+        assert!(s.list_elem().unwrap().is_char());
+        assert_eq!(s.tycon().unwrap().name, LIST_TYCON);
+
+        // A different `TyCon` that merely *renders* the same way is not it.
+        let impostor = con("$some-pkg$Other$List", vec![char_ty()]);
+        assert!(!impostor.is_list_of(&|e| e.is_char()));
+        // …and neither is a list of something else, or a bare `Char`.
+        assert!(!list_ty(Ty::Var(tv("a"))).is_list_of(&|e| e.is_char()));
+        assert!(!char_ty().is_list_of(&|e| e.is_char()));
+        assert!(Ty::Var(tv("a")).is_ty_var());
+        assert!(!s.is_ty_var());
+    }
+
+    #[test]
+    fn fun_args_peels_arrows_and_foralls() {
+        // forall a. a -> [Char] -> Int
+        let int = con("$ghc-prim$GHC.Types$Int", vec![]);
+        let arrow = |a: Ty, r: Ty| Ty::Fun {
+            mult: Box::new(con("$ghc-prim$GHC.Types$Many", vec![])),
+            arg: Box::new(a),
+            res: Box::new(r),
+        };
+        let t = Ty::ForAll {
+            binder: tv("a"),
+            body: Box::new(arrow(
+                Ty::Var(tv("a")),
+                arrow(list_ty(char_ty()), int.clone()),
+            )),
+        };
+        let args = t.fun_args();
+        assert_eq!(args.len(), 2);
+        assert!(args[0].is_ty_var());
+        assert!(args[1].is_list_of(&|e| e.is_char()));
+        assert_eq!(*t.fun_result(), int);
+        assert!(int.fun_args().is_empty());
+    }
+
+    #[test]
+    fn alpha_equivalence_is_up_to_bound_variable_names_only() {
+        let mk = |u: &str| Ty::ForAll {
+            binder: tv(u),
+            body: Box::new(list_ty(Ty::Var(tv(u)))),
+        };
+        assert!(mk("a").alpha_eq(&mk("b")), "bound names do not matter");
+        assert!(!mk("a").alpha_eq(&list_ty(Ty::Var(tv("a")))));
+
+        // Free variables are *not* interchangeable: they are bound
+        // somewhere this type does not reach.
+        assert!(!list_ty(Ty::Var(tv("a"))).alpha_eq(&list_ty(Ty::Var(tv("b")))));
+        assert!(list_ty(Ty::Var(tv("a"))).alpha_eq(&list_ty(Ty::Var(tv("a")))));
+
+        // forall a b. (a, b) is not forall a b. (b, a).
+        let pair = |x: &str, y: &str| Ty::ForAll {
+            binder: tv("a"),
+            body: Box::new(Ty::ForAll {
+                binder: tv("b"),
+                body: Box::new(con(
+                    "$ghc-prim$GHC.Tuple.Prim$(,)",
+                    vec![Ty::Var(tv(x)), Ty::Var(tv(y))],
+                )),
+            }),
+        };
+        assert!(pair("a", "b").alpha_eq(&pair("a", "b")));
+        assert!(!pair("a", "b").alpha_eq(&pair("b", "a")));
+        assert!(!char_ty().alpha_eq(&list_ty(char_ty())));
+    }
+
+    /// The type table is a DAG with every child before its parent, so it
+    /// rebuilds in one forward pass. A dump that violates that is an error,
+    /// not a panic and not a silently wrong type.
+    #[test]
+    fn a_forward_reference_in_the_type_table_is_an_error() {
+        let bad: Vec<raw::RawTy> = serde_json::from_value(serde_json::json!([
+            {"kind": "TyConApp",
+             "tycon": {"name": LIST_TYCON, "occ": "List", "unique": "3Q"},
+             "args": [1]},
+            {"kind": "TyConApp",
+             "tycon": {"name": CHAR_TYCON, "occ": "Char", "unique": "3g"},
+             "args": []}
+        ]))
+        .unwrap();
+        let err = build_types(&bad).unwrap_err().to_string();
+        assert!(err.contains("refers forward"), "{err}");
     }
 }

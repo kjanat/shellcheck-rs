@@ -130,7 +130,7 @@ fn brief(m: &Module, id: ExprId) -> String {
             };
             format!("{h} {}", vec!["…"; args.len().min(3)].join(" "))
         }
-        Expr::Type(t) => format!("@{t}"),
+        Expr::Type { pretty, .. } => format!("@{pretty}"),
         Expr::Coercion => "<coercion>".to_string(),
         Expr::Cast(_) | Expr::Tick(_) => "…".to_string(),
     }

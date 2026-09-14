@@ -37,16 +37,17 @@ ShellCheck Haskell
 | **M2.2** | which tuples are transport and which are values: 2,584 constructions, an independent verifier, a representation-boundary check, the scalar view | done |
 | **M2.2.1** | the generic aggregate def-use walk (`flow.rs`) lifted out of the tuple census, so every later population is a client of one walk | done |
 | **M2.3** | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link, **g** the correction to the axiom layer | done |
+| **M2.4a** | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged | done |
 | **M2.4** | **next.** Dictionary erasure and closed-world **class-op enumeration** (294 census sites, 3 tuple residuals); **higher-order representation agreement** — the 67 tuples handed into a local callee's parameter and the 187 + 134 + 114 that reach an imported call, a list cell or a program constructor through a closure; and the **41 Parsec edges** whose continuation target the region graph does not close over | next |
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `h2r-plugin/` | GHC plugin. Appends a Core pass after the whole optimisation pipeline and serialises each module's `CoreProgram` to JSON, including every binder's demand signature, CPR signature, arity and occurrence info. |
+| `h2r-plugin/` | GHC plugin. Appends a Core pass after the whole optimisation pipeline and serialises each module's `CoreProgram` to JSON (dump format 5), including every binder's demand signature, CPR signature, arity and occurrence info, every referenced **global** Id keyed by stable name, and every type **structurally** in a hash-consed per-module table. |
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
-| `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the two canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), and which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent). Includes a depth-limited Core pretty-printer. |
+| `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), which imported Id an occurrence links to (its stable name), which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent), and what each type *is* (`Ty`, with `TyCon` identity and `alpha_eq`). Includes a depth-limited Core pretty-printer. |
 | `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
 | `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), and the `--view` / `--view-all` representation views `fields`, `lists` and `text` each carry. Later: the lowering passes. |
@@ -205,9 +206,12 @@ on three axes:
 Every arity and demand-signature question goes through one lookup
 (`scope::Scope::head_sig`): the binding-site binder for anything bound in
 the module, the imported-id table otherwise. GHC does not keep the `IdInfo`
-on occurrence `Var`s of locals current, and the id table is populated from
-occurrences, so reading it for a local can return stale arity and
-strictness. Argument *position*, partial-application *shape* and callee
+on occurrence `Var`s of locals current, so reading an occurrence for a local
+can return stale arity and strictness; the binder at the binding site is
+authoritative. (Since [M2.4a](#m24a--stable-global-identity-and-structured-types)
+the id table holds *only* globals, keyed by stable name, so there is nothing
+there to read for a local at all.) Argument *position*,
+partial-application *shape* and callee
 *resolution* all read the same source and cannot disagree. A second guard
 follows GHC's demand transformer: a signature's argument demands apply only
 to calls that supply at least the signature's arity. An undersaturated call
@@ -351,7 +355,12 @@ level of evidence it rests on. The hierarchy, strongest first:
 5. **alpha-normalised textual type comparison** — candidate generation and
    corroboration only. It can equate two genuinely distinct type variables,
    so it is only ever used to *refuse* a region, never as the support for a
-   verdict;
+   verdict. The dump has carried *structured* types since
+   [M2.4a](#m24a--stable-global-identity-and-structured-types), and
+   `Ty::alpha_eq` is the structural replacement, but **the Parsec rules
+   below are deliberately not migrated yet**: they still read the rendered
+   types, and they stay at this level until a later milestone moves them
+   with its own gate;
 6. **binder names** — diagnostics only. Nothing reads one.
 
 | Rule | Evidence | Meaning |
@@ -412,8 +421,10 @@ therefore merges inlined copies of the same term.
 Variable identity is consequently settled once, in the IR: `Module::resolve`
 walks the module with an explicit environment stack and gives every local
 `Var` occurrence the `BinderId` that actually binds it; imports resolve to
-`Ref::Global`, whose unique is a linkage key into the imported-id table and
-nothing more. No analysis compares a local unique. `Module::binder_in_scope`
+`Ref::Global`, which is linked to the imported-id table by its **stable
+name** (`$unit$Module$occ`), not by its unique — see
+[M2.4a](#m24a--stable-global-identity-and-structured-types). No analysis
+compares a unique at all. `Module::binder_in_scope`
 and `Module::scoping_violations` check the result against the definition of
 lexical scope independently, and report 0 violations over all 107,929 local
 occurrences of the `-O1` dump (and 328,110 of profile D).
@@ -2272,28 +2283,29 @@ the Core, and every spine fact it needs (spine demand, head demand, shared
 tails, storage, escapes, recursion) is inherited with the `L…` rule id
 cited.
 
-### The caveat this whole milestone rests on
+### How `Char` is established
 
-**The dump carries pretty-printed type strings, not `TyCon` identity.**
+*Amended by [M2.4a](#m24a--stable-global-identity-and-structured-types).
+This section originally read "the caveat this whole milestone rests on" and
+described a level-6, textual type comparison. Dump format 5 carries
+structured types, so the rules below now read `TyCon` identity and the
+caveat is gone — with, as M2.4a's gate required, not one number changed.*
 
-Recognising `[Char]` from a rendered type — `[Char]`, `String`, a synonym
-GHC happened to print as `String`, a type variable instantiated somewhere
-this module cannot see — is evidence *from a rendered type*: **level 6,
-textual type comparison, corroboration**, exactly like M2.1's
-alpha-normalised type comparison. It is not `TyConApp [] [Char]` with a
-stable `TyCon`. Every rule below that reads a type string is marked level 6
-in its doc comment, and the report says it in the first paragraph it prints.
+`Char` is `TyConApp` with the `TyCon` GHC itself names
+`$ghc-prim$GHC.Types$Char`, and `[Char]` is that under
+`$ghc-prim$GHC.Types$List`: **level 4, structural `TyCon` identity — GHC
+type compatibility**. The plugin expands type synonyms before dumping, so
+`String` and `FilePath` arrive already in that form; they are not spellings
+anything has to recognise. GHC's rendering of each type still travels
+alongside and is what the reports print — a *label*, never a verdict.
 
-It is still far better than looking for `++`, and better still when a fact
-that reads no type at all agrees with it. Where a flow's element type is a
-type **variable** or unreadable, the flow is `element-type-unknown` and is
-**never** assumed to be text.
-
-> **For the next plugin-format bump:** expose *structured* types —
-> `TyConApp` with a stable `TyCon` identity, not a rendered string — so that
-> "the element is `Char`" becomes a structural (level 2/4) fact and this
-> caveat disappears. Nothing else in the pipeline needs the change; the
-> selection rules below would simply move up the hierarchy.
+What the milestone still refuses to conclude is unchanged. Where a flow's
+element type is a type **variable** — instantiated somewhere this module
+cannot see — or there is no type to read, the flow is
+`element-type-unknown` and is **never** assumed to be text. And a type is
+still only one of the ways in: a fact that reads no type at all agreeing
+with it is worth more than either alone, which is why every selection
+records how `Char` was established.
 
 ### The population, and the five ways in
 
@@ -2301,8 +2313,8 @@ A list flow is selected when **any** of these fires. Each stands alone.
 
 | rule | what it reads | level |
 |---|---|---|
-| `X0-ELEM-TYPE` | the `(:)` alternative's head binder is rendered `Char` | 6 |
-| `X1-LIST-TYPE` | the flow's own binder is rendered `[Char]`/`String`/`FilePath` | 6 |
+| `X0-ELEM-TYPE` | the `(:)` alternative's head binder is `TyConApp Char []` | 4 |
+| `X1-LIST-TYPE` | the flow's own binder is `TyConApp List [TyConApp Char []]` | 4 |
 | `X2-UNPACK-PRODUCER` | the producer is an `unpackCString#`-family call | 2 over 5 |
 | `X3-CHAR-LITERAL-HEAD` | a cell's element is a `Char` literal or a saturated `C#` | 2 |
 | `X4-CHAR-SCRUTINY` | a head binder is scrutinised by a `case` on `C#` or a `Char` literal | 1 over 2 |
@@ -2326,13 +2338,13 @@ and of the 4,431 text flows, how `Char` was established:
 
 | | flows |
 |---|---:|
-| type-string only (level 6 alone) | 58 |
-| structural only (no rendered type agreed, or there was none to read) | 1,772 |
-| both — a rendered type and a fact that reads no type agree | 2,601 |
+| type only (level 4: the element's `TyCon` is `Char`) | 58 |
+| structural only (the type did not agree, or there was none to read) | 1,772 |
+| both — the type and a fact that reads no type agree | 2,601 |
 
-90 of the structural selections came from `X24`. The type string alone
-carries only 58 flows; it is the *corroboration* it provides on 2,601 that
-it is good for.
+90 of the structural selections came from `X24`. The type alone carries
+only 58 flows; it is the *corroboration* it provides on 2,601 that it is
+good for.
 
 ### The text-head table
 
@@ -2497,9 +2509,9 @@ this milestone.
 
 ### Known limits, stated rather than hidden
 
-* **Selection by type is level 6, and always will be until the plugin
-  exposes structured types.** See the note above. 58 flows rest on it
-  alone.
+* **Selection by type is level 4** since M2.4a — `TyCon` identity, not a
+  rendered string. 58 flows rest on it alone. What it still cannot do is
+  see through a type *variable*, and it does not try.
 * **The text-head table is asserted.** The entries worth re-reading are the
   class overrides: calling `eqString` a *complete-output* consumer when its
   spine demand is a data-dependent prefix is a claim about what a
@@ -2937,7 +2949,7 @@ list view underneath, so the inherited facts are visible rather than cited:
 $ h2r text compiler/core-json --module ShellCheck.Formatter.GCC --view 11
 ShellCheck.Formatter.GCC node 11 — text flow, ImportedCall by both, shape TextOnly, advisory TextValueUndecided
     selection (how Char was established: both)
-        X1-LIST-TYPE: the flow's binder is rendered "[Char]" (level 6: a rendered type, not TyCon identity) (node(s) 11) [lvl#11]
+        X1-LIST-TYPE: the flow's binder is TyConApp List [Char] (level 4: structural TyCon identity), rendered "[Char]" (node(s) 11) [lvl#11]
         X2-UNPACK-PRODUCER: $ghc-prim$GHC.CString$unpackCString# produces [Char] by the primitive's type (node(s) 11)
         X5-AXIOM-FIXES-CHAR: GHC.Base.eqString: String -> String -> Bool: the whole text is the subject, though it stops at the first difference (node(s) 184)
     shape     TextOnly [X8-TEXT-ONLY], a string literal
@@ -2955,7 +2967,7 @@ ShellCheck.Formatter.GCC node 11 — text flow, ImportedCall by both, shape Text
 views as structured data. Each has a hand-built regression test: the field
 view lists every field once, the list view lists every consumer once, and
 the text view shows the selection evidence (`X5-AXIOM-FIXES-CHAR` on a flow
-no rendered type would have selected).
+no type would have selected).
 
 ### Provenance in `h2r show`
 
@@ -3209,11 +3221,11 @@ whole module and `--json` for any of them. All four are shown above.
 
 **Known limits, stated rather than hidden:**
 
-* **rendered types are level-6 evidence.** Selection of `[Char]` from a
-  pretty-printed type string is textual comparison, not `TyConApp` with a
-  stable `TyCon`. 58 of the 4,431 text flows rest on it alone. *For the next
-  plugin-format bump: expose structured types, and the caveat disappears —
-  nothing else in the pipeline needs the change.*
+* ~~**rendered types are level-6 evidence.**~~ **Fixed by
+  [M2.4a](#m24a--stable-global-identity-and-structured-types):** dump
+  format 5 carries structured types and selection of `[Char]` is `TyConApp`
+  with a stable `TyCon` (level 4). 58 of the 4,431 text flows rest on the
+  type alone; the population and every verdict are unchanged.
 * **`R3-SAME-FRONTIER` is exercised only by its tests.** GHC's
   case-of-known-constructor has already eliminated every construction
   scrutinised in the frame that built it, so `R3` fires on nothing in any
@@ -3224,7 +3236,7 @@ whole module and `--json` for any of them. All four are shown above.
   `L4-LOOP-WHOLE` rest on one walk, not two — and are therefore counted as
   unsupported.
 
-`cargo test` (151), `cargo clippy --all-targets` (0 warnings) and
+`cargo test` (159), `cargo clippy --all-targets` (0 warnings) and
 `cargo fmt --check` are clean; `h2r tuples`, `--verify`, `h2r laziness`,
 `h2r parsec` and `h2r compare` are byte-identical on `-O1` before and after
 M2.3f **and after M2.3g**. All four accounting checks close on all seven
@@ -3458,6 +3470,150 @@ effect-returning head is not a producer, only `DirectList` may produce,
 `concat` shares neither spine nor element, an element alias is not a shared
 tail, a predicate exposes without forcing, a primop does force, and a shared
 tail beside an unknown consumer is `Unknown` with a constraint).
+
+## M2.4a — stable global identity and structured types
+
+Two things the earlier milestones had to work around were properties of the
+*dump*, not of the program:
+
+* the imported-id table was keyed by GHC **unique**, which
+  [M2.1 showed is not an identity](#scoping-uniques-are-not-unique) — 116,340
+  binders share 42,572 uniques — so the one place a unique was still a
+  linkage key was the last place a merge could hide;
+* every type arrived only as GHC's **pretty-printed string**, so
+  "the element is a `Char`" was a textual comparison (level 6) against the
+  four spellings `Char`, `GHC.Types.Char`, `[Char]`, `String`, `FilePath`
+  that GHC might print.
+
+Dump format 5 removes both. The format bump is the whole of this milestone:
+**no analysis was allowed to change its mind about anything.**
+
+### The format
+
+```jsonc
+{ "format": 5,
+  "module": "ShellCheck.Parser", "unit": "ShellCheck-0.11.0-inplace",
+
+  // Every *global* Id referenced in the module, keyed by stable name.
+  // Locals are not here at all.
+  "ids": { "$base$GHC.Base$eqString": { "name": …, "arity": 2, "dmdSig": … } },
+
+  // The module's types, hash-consed. Children are indices, and every child
+  // index is smaller than its parent's, so the table rebuilds in one
+  // forward pass with no recursion.
+  "types": [
+    { "kind": "TyConApp", "tycon": { "name": "$ghc-prim$GHC.Types$Char",
+                                     "occ": "Char", "unique": "3g" },
+      "args": [] },                                        // 16
+    { "kind": "TyConApp", "tycon": { "name": "$ghc-prim$GHC.Types$List",
+                                     "occ": "List", "unique": "3Q" },
+      "args": [16] }                                       // 17  =  [Char]
+  ],
+  // … also TyVar{name,occ,unique}, AppTy{fun,arg}, FunTy{mult,arg,res},
+  //     ForAllTy{binder,body}, LitTy{litKind,lit}, Opaque{pretty}
+  //     (a CastTy or CoercionTy, which nothing downstream reads).
+
+  "binds": [ … ]   // every binder, every `Type` node and every `case`
+                   //   result type carries  "ty": <index>  next to the
+                   //   "type": "<rendering>" it already carried
+}
+```
+
+**Identity.** `nameStableString` is `$unit$Module$occ`. It is the key of the
+id table and of every `TyCon`. Uniques are still dumped — on `Var` nodes,
+binders, type variables and type constructors — and are now **diagnostics
+only**; the loader rejects format 4 with a message that says to re-extract.
+The check that this is sound is not an argument but a count: of the 44,992
+occurrences the resolver classifies as `Ref::Global` on the `-O1` dump,
+**0** carry `isGlobal = false` and **0** have no entry in the table, and the
+2,972 stable names in the new tables are in bijection with the 2,972
+distinct global uniques the old ones held.
+
+**Where the module's own top-level binders went.** Nowhere: they were never
+in the table. GHC globalises a module's top-level binders in CoreTidy, which
+runs *after* the simplifier, so at the point this plugin runs they are
+`LocalId`s and `isGlobalId` is false for them. That is the right answer
+anyway — they are bound in the module, so `Module::resolve` resolves their
+occurrences lexically to their binders, and a binder is the authoritative
+source for arity and demand where an occurrence's `IdInfo` may be stale.
+`Scope::head_sig` reads the id table only when nothing in the module binds
+the head.
+
+**Types.** The plugin emits the `expandTypeSynonyms` form, so `String` and
+`FilePath` arrive as `TyConApp List [TyConApp Char []]` and no consumer has
+to know either name. The unexpanded rendering stays alongside in `"type"`,
+which is what `h2r`'s reports print — a label, never a verdict. The Rust
+side rebuilds the table into owned `Ty` values and adds `Ty::is_char`,
+`list_elem`, `is_list_of`, `fun_args`/`fun_result`, `tycon` and
+`Ty::alpha_eq` (structural alpha-equivalence, iterative, over a worklist).
+
+**Size.** Interning matters: `ShellCheck.Parser` has 61,494 type occurrences
+over 1,041 distinct renderings, and its table has 9,516 entries (19,944 over
+all 28 modules). Emitting types inline would have multiplied the dump;
+emitting a table, and dropping the 32,789 local entries the id table no
+longer needs, made it **smaller** — 82,171,834 → 78,691,280 bytes on `-O1`,
+−4.2%.
+
+### What moved up the evidence hierarchy
+
+`X0-ELEM-TYPE` and `X1-LIST-TYPE` in [M2.3d](#m23d--which-of-those-flows-are-text-and-what-is-done-with-them),
+and the `X7`/`element-type-unknown` refusals with them, now read `TyCon`
+identity: **level 4, GHC type compatibility**, where they were level 6.
+Nothing else moved. In particular [M2.1's](#m21--proving-parsecs-cps-roles)
+`R1-LAYOUT`, `R1-UNPARSER-SIG`, `R1-TYPE-AGREE` and `R1-TRAILING-ERASURE`
+still read rendered types and still sit at levels 4/5 with
+`alpha_normalise`; migrating them is a later milestone's work and needs its
+own gate, so it was deliberately left alone here.
+
+### The gate
+
+The acceptance condition was that **not one semantic number changes**. All
+113 reports — `stats`, `laziness`, `parsec`, `tuples` (plus `--verify` and
+`--boundaries`), `fields`, `lists` (plus `--axioms`), `text` (plus
+`--heads` and `--explain`), `verify-rep` (plus `--explain`), the `--json`
+form of each, and `compare` — were captured on the old binary and the old
+dumps; the dumps were then re-extracted with the new plugin (`-O1` and all
+six matrix profiles) and every report re-captured and diffed.
+
+**86 of the 113 are byte-identical**, `h2r compare` over all six profiles
+among them. The 27 that are not:
+
+| what | diff |
+|---|---|
+| `text`, `text --heads` (×7 dumps) | 17 lines each: the header paragraph, and three labels that said "level 6" / "type-string" / "a rendered type". Every count identical. |
+| `text --explain` | 5,451 lines: 2,598 `X1-LIST-TYPE` and 61 `X0-ELEM-TYPE` evidence notes, 59 `type-string only` → `type only` labels, and the 17 above. |
+| `text --json` | the same 2,659 notes, plus 58 `element_type_evidence` values renamed `TypeStringOnly` → `TypeOnly`. |
+| `laziness --json` | 5,395 `unique` strings (below). Identical field-for-field once `unique` is removed. |
+| `parsec --json` | each region's edge *list order*, and `binder_unique` (below). Every region's edge multiset is identical modulo that field, and the accounting is identical. |
+| `parsec` on B, C, D | one line each: the `e.g.` exemplar of a reject-reason histogram. **Pre-existing nondeterminism**, reproduced by running the *same* binary on the *same* dump twice; the counts never move. Not introduced here and not fixed here. |
+| `matrix/<P>/provenance` (×6) | `date`, `repo_head`, `repo_dirty_inputs`, `plugin_sha256`, `binary_sha256`. `stripped_source_sha256`, `flags`, `ghc`, `cabal`, `modules` and `binary_version` are unchanged, and the module lists are identical. |
+
+**GHC renumbered the uniques, and nothing noticed.** Re-extracting with the
+new plugin shifted GHC's unique supply: **98,135 of the 116,340 binder
+uniques changed.** Compared field by field with uniques and the new type
+index excluded, the two dumps differ in **2,124 strings in total, all of
+them pretty-printed demand signatures that embed a unique** (`{a8Ia->M!P(L)
+…}` → `{a8Jr->M!P(L) …}`) — the Core is otherwise identical node for node,
+which is why every node id in every report is unchanged. That 98,135
+uniques can move without a single census number moving is the strongest
+statement available that no analysis keys by one; it is what
+[M2.1](#scoping-uniques-are-not-unique) set out to make true and what this
+milestone finished.
+
+**And the two element-type readings agree.** `rendered_element` is kept
+beside `structured_element`, and `elem_readings_disagree` compares them
+flow by flow. Over all **seven dumps — 11,818 / 11,818 / 12,146 / 13,647 /
+23,886 / 22,688 / 22,807 list flows — it reports 0 disagreements**: the
+structured reading selects exactly the flows the string reading did. The
+linkage check runs beside it: of the `Ref::Global` occurrences (44,992 on
+`-O1`, 99,824 on D), **0** carry `isGlobal = false` and **0** are missing
+from the stable-name id table, on every dump.
+
+`cargo test` (159 — eight new: the `Ty` helpers, `alpha_eq`, the type
+table's forward-reference refusal, the format-4 rejection, and three that
+make a fixture's rendering and its structure disagree on purpose to show
+which one a rule reads), `cargo clippy --all-targets` (0 warnings) and
+`cargo fmt --check` are clean.
 
 ## What ShellCheck actually needs
 

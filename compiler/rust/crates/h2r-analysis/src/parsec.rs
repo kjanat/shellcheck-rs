@@ -1226,7 +1226,10 @@ impl<'m> Analysis<'m> {
         let m = self.module;
         let i = m.strip(e);
         match m.expr(i) {
-            Expr::Var { .. } => self.scope.resolve(i).map(|b| self.binder(b).ty.as_str()),
+            Expr::Var { .. } => self
+                .scope
+                .resolve(i)
+                .map(|b| self.binder(b).ty_pretty.as_str()),
             _ => None,
         }
     }
@@ -1239,10 +1242,16 @@ impl<'m> Analysis<'m> {
         let m = self.module;
         let i = m.strip(e);
         let kind = match m.expr(i) {
-            Expr::Var { .. } => self.scope.resolve(i).map(|b| ty_kind(&self.binder(b).ty)),
+            Expr::Var { .. } => self
+                .scope
+                .resolve(i)
+                .map(|b| ty_kind(&self.binder(b).ty_pretty)),
             Expr::Lam { .. } => {
                 let (params, body) = self.chain(i);
-                let tys: Vec<&str> = params.iter().map(|b| self.binder(*b).ty.as_str()).collect();
+                let tys: Vec<&str> = params
+                    .iter()
+                    .map(|b| self.binder(*b).ty_pretty.as_str())
+                    .collect();
                 if tys.len() >= 3 && is_state_ty(tys[1]) && is_parse_error_ty(tys[2]) {
                     Some(TyKind::OkCont)
                 } else if !tys.is_empty() && is_parse_error_ty(tys[0]) {
@@ -1337,7 +1346,7 @@ impl<'m> Analysis<'m> {
                 // Three fields, the middle one a `SourcePos`: Parsec's
                 // `State`. The constructor's name corroborates it.
                 if alt.binders.len() != 3
-                    || strip_parens(&m.binder(alt.binders[1]).ty) != "SourcePos"
+                    || strip_parens(&m.binder(alt.binders[1]).ty_pretty) != "SourcePos"
                     || occ != "State"
                 {
                     continue;
@@ -1355,7 +1364,7 @@ impl<'m> Analysis<'m> {
     fn trailing_param_mismatch(&self, extra: &[BinderId], expected: &[String]) -> Option<String> {
         let got: Vec<&str> = extra
             .iter()
-            .map(|b| self.binder(*b).ty.as_str())
+            .map(|b| self.binder(*b).ty_pretty.as_str())
             .filter(|t| !is_void_ty(t))
             .collect();
         Self::trailing_mismatch(&got, expected)
@@ -1417,12 +1426,16 @@ impl<'m> Analysis<'m> {
         let i = m.strip(e);
         match m.expr(i) {
             Expr::Var { .. } => Some(split_arrows(
-                self.scope.resolve(i).map(|b| self.binder(b).ty.as_str())?,
+                self.scope
+                    .resolve(i)
+                    .map(|b| self.binder(b).ty_pretty.as_str())?,
             )),
             Expr::Lam { .. } => {
                 let (params, body) = self.chain(i);
-                let mut arrows: Vec<&str> =
-                    params.iter().map(|b| self.binder(*b).ty.as_str()).collect();
+                let mut arrows: Vec<&str> = params
+                    .iter()
+                    .map(|b| self.binder(*b).ty_pretty.as_str())
+                    .collect();
                 arrows.extend(split_arrows(self.expr_ty(body)?));
                 Some(arrows)
             }
@@ -1481,7 +1494,7 @@ impl<'m> Analysis<'m> {
             return None;
         }
         let f = [params[start - 3], params[start - 2], params[start - 1]];
-        if strip_parens(&self.binder(f[1]).ty) != "SourcePos" {
+        if strip_parens(&self.binder(f[1]).ty_pretty) != "SourcePos" {
             return None;
         }
         Some(f)
@@ -1503,7 +1516,7 @@ impl<'m> Analysis<'m> {
             }
             let kinds: Vec<TyKind> = params
                 .iter()
-                .map(|b| ty_kind(&self.binder(*b).ty))
+                .map(|b| ty_kind(&self.binder(*b).ty_pretty))
                 .collect();
             // Every maximal run of continuation-typed parameters. A run
             // that does not embed into the template carries continuation
@@ -1586,11 +1599,11 @@ impl<'m> Analysis<'m> {
             };
             // R1-UNPARSER-SIG / R1-TYPE-AGREE: the parameter types have to
             // *be* unParser's argument list, checked position by position.
-            let state_ty = state_idx.map(|si| self.binder(params[si]).ty.as_str());
+            let state_ty = state_idx.map(|si| self.binder(params[si]).ty_pretty.as_str());
             let cont_tys: Vec<(ContKind, &str)> = params[start..end]
                 .iter()
                 .map(|b| {
-                    let ty = self.binder(*b).ty.as_str();
+                    let ty = self.binder(*b).ty_pretty.as_str();
                     let k = match ty_kind(ty) {
                         TyKind::OkCont => ContKind::Ok,
                         _ => ContKind::Err,
@@ -1645,7 +1658,9 @@ impl<'m> Analysis<'m> {
             let mut slot_binder = [None; 4];
             for (k, b) in params[start..end].iter().enumerate() {
                 let bd = self.binder(*b);
-                let arity = cont_shape_of_ty(&bd.ty).map(|c| c.arity).unwrap_or(0);
+                let arity = cont_shape_of_ty(&bd.ty_pretty)
+                    .map(|c| c.arity)
+                    .unwrap_or(0);
                 if let Some(s) = sets[k].exact() {
                     slot_binder[s as usize] = Some(*b);
                 }
@@ -1654,7 +1669,7 @@ impl<'m> Analysis<'m> {
                     slots: sets[k],
                     arity,
                     label: bd.occ.clone(),
-                    ty: bd.ty.clone(),
+                    ty: bd.ty_pretty.clone(),
                 });
                 self.role.insert(
                     *b,
@@ -1680,7 +1695,7 @@ impl<'m> Analysis<'m> {
                     "parameters [{}] carry {}{} continuation slot(s) {}",
                     params
                         .iter()
-                        .map(|b| format!("{}::{}", self.binder(*b).occ, self.binder(*b).ty))
+                        .map(|b| format!("{}::{}", self.binder(*b).occ, self.binder(*b).ty_pretty))
                         .collect::<Vec<_>>()
                         .join(", "),
                     if state_idx.is_some() { "state + " } else { "" },
@@ -1958,7 +1973,7 @@ impl<'m> Analysis<'m> {
                 if self.role.contains_key(&p.binder) {
                     continue;
                 }
-                let Some(shape) = cont_shape_of_ty(&m.binder(p.binder).ty) else {
+                let Some(shape) = cont_shape_of_ty(&m.binder(p.binder).ty_pretty) else {
                     continue;
                 };
                 cand.push((p.binder, ri, shape, p.rhs));
@@ -2042,7 +2057,7 @@ impl<'m> Analysis<'m> {
                 note: format!(
                     "let-bound {} :: {} is a {:?} continuation owing {} argument(s)",
                     m.binder(b).occ,
-                    m.binder(b).ty,
+                    m.binder(b).ty_pretty,
                     shape.kind,
                     shape.arity
                 ),
@@ -2137,7 +2152,7 @@ impl<'m> Analysis<'m> {
             && let Some((slots, arity)) = info.cont
             && let Some(kind) = slots.kind()
         {
-            let ty = self.binder(b).ty.as_str();
+            let ty = self.binder(b).ty_pretty.as_str();
             let trailing = split_arrows(ty)
                 .get(arity..)
                 .map(|r| trailing_types(&r.join(" -> ")).len())
@@ -2338,7 +2353,7 @@ impl<'m> Analysis<'m> {
                 let Expr::Let { bind, .. } = m.expr(p) else {
                     return None;
                 };
-                cont_shape_of_ty(&m.binder(bind.pairs[pair as usize].binder).ty)
+                cont_shape_of_ty(&m.binder(bind.pairs[pair as usize].binder).ty_pretty)
             }
             _ => None,
         }
@@ -2496,7 +2511,7 @@ impl<'m> Analysis<'m> {
                 };
                 // R1-TRAILING-ERASURE decides how many extra arguments
                 // this continuation may take, from its own result type.
-                let expected = split_arrows(&bd.ty)
+                let expected = split_arrows(&bd.ty_pretty)
                     .get(arity..)
                     .map(|r| trailing_types(&r.join(" -> ")))
                     .unwrap_or_default();
@@ -2520,7 +2535,7 @@ impl<'m> Analysis<'m> {
                 };
                 if let Some(rule) = rule {
                     let vargs = value_args(&self.scope, &args);
-                    if let Some(why) = self.cont_call_arg_types(&bd.ty, &vargs, arity) {
+                    if let Some(why) = self.cont_call_arg_types(&bd.ty_pretty, &vargs, arity) {
                         return (Err((REJ_CONT_ARG_TY, why)), prov);
                     }
                     prov.rule = rule;
@@ -2893,7 +2908,7 @@ impl Analysis<'_> {
                             R1_LAYOUT,
                             format!(
                                 "lambda parameter {i} of region entry {}, type {}",
-                                r.entry, bd.ty
+                                r.entry, bd.ty_pretty
                             ),
                         )),
                         None => p.evidence.push((
@@ -2901,7 +2916,7 @@ impl Analysis<'_> {
                             format!(
                                 "let-bound inside region entry {}, dataflow-connected to it, \
                                  owing {arity} argument(s), type {}",
-                                r.entry, bd.ty
+                                r.entry, bd.ty_pretty
                             ),
                         )),
                     }
@@ -3214,7 +3229,7 @@ impl Analysis<'_> {
                 binder: *b,
                 role,
                 label: bd.occ.clone(),
-                ty: bd.ty.clone(),
+                ty: bd.ty_pretty.clone(),
             });
         }
 
@@ -3304,7 +3319,7 @@ impl Analysis<'_> {
         };
         let trailing = binder
             .map(|b| {
-                split_arrows(&self.binder(b).ty)
+                split_arrows(&self.binder(b).ty_pretty)
                     .get(arity..)
                     .map(|r| trailing_types(&r.join(" -> ")))
                     .unwrap_or_default()
@@ -3509,7 +3524,7 @@ pub fn verdict(a: &Analysis<'_>, site: &crate::laziness::ArgSite) -> Verdict {
             None => {
                 v.reason = Some("head-is-not-a-parsec-role-binder");
                 v.detail = match head {
-                    Some(b) => format!("head :: {}", a.binder(b).ty),
+                    Some(b) => format!("head :: {}", a.binder(b).ty_pretty),
                     None => "head is not a local binder".to_string(),
                 };
             }
@@ -3597,7 +3612,9 @@ pub fn account(census: &Census, analyses: &[Analysis<'_>]) -> Accounting {
             reason,
             detail,
             head_label: head.map(|b| a.binder(b).occ.clone()).unwrap_or_default(),
-            head_ty: head.map(|b| a.binder(b).ty.clone()).unwrap_or_default(),
+            head_ty: head
+                .map(|b| a.binder(b).ty_pretty.clone())
+                .unwrap_or_default(),
             region,
             edge,
         });
@@ -3627,7 +3644,7 @@ mod test {
     /// A binder with a real type; `occ` is a *label*, never evidence.
     fn b(occ: &str, ty: &str) -> Value {
         json!({
-            "kind": "id", "name": occ, "occ": occ, "unique": occ, "type": ty,
+            "kind": "id", "name": occ, "occ": occ, "unique": occ, "type": ty, "ty": 0,
             "arity": 0, "callArity": 0, "exported": false,
             "dmdSig": {"args": [], "diverges": false, "pretty": ""},
             "cprSig": "", "demand": dmd(),
@@ -3662,7 +3679,7 @@ mod test {
 
     fn case_of(scrut: Value, con: &str, binders: Vec<Value>, rhs: Value) -> Value {
         json!({
-            "node": "Case", "scrut": scrut, "binder": b("wild", "T"), "type": "R",
+            "node": "Case", "scrut": scrut, "binder": b("wild", "T"), "type": "R", "ty": 0,
             "alts": [{"con": {"kind": "DataAlt", "name": con, "occ": con, "tag": 1},
                       "binders": binders, "rhs": rhs}]
         })
@@ -3689,12 +3706,16 @@ mod test {
                        "binders": [], "rhs": rhs})
             })
             .collect();
-        json!({"node": "Case", "scrut": scrut, "binder": b("wild", "T"), "type": "R", "alts": alts})
+        json!({"node": "Case", "scrut": scrut, "binder": b("wild", "T"), "type": "R", "ty": 0, "alts": alts})
     }
 
     fn module(body: Value, ids: Value) -> h2r_core_ir::Module {
         let m = json!({
             "format": raw::FORMAT, "module": "M", "unit": "main", "ids": ids,
+            // Parsec's rules read the *rendered* type (level 6) and are
+            // deliberately not migrated yet, so one opaque entry is all the
+            // structured table needs to be here.
+            "types": [{"kind": "Opaque", "pretty": "?"}],
             "binds": [{"rec": false, "pairs": [{
                 "binder": b("top", "T"), "rhs": body,
                 "whnf": true, "trivial": false, "cheap": false, "okForSpec": false

@@ -9,9 +9,113 @@ fn demand(strict: bool, once: bool) -> Value {
     json!({"strict": strict, "absent": false, "usedOnce": once, "pretty": if strict {"S"} else {"L"}})
 }
 
+//------------------------------------------------------------------------------
+// Structured types
+//------------------------------------------------------------------------------
+//
+// Format 5 dumps every type structurally, into one hash-consed table per
+// module that binders and `Type` nodes index into. The fixtures carry a
+// fixed table with the handful of types they need; the constants below name
+// its entries, and `ty_of` maps the rendering a fixture writes to the entry
+// it means. That mapping lives *here only* — nothing in `crate::text` reads
+// a rendering.
+
+/// `TyConApp <occ> []`, with a stable name in the fixtures' own unit.
+fn ty_con(occ: &str) -> Value {
+    json!({"kind": "TyConApp",
+           "tycon": {"name": format!("$main$M${occ}"), "occ": occ, "unique": occ},
+           "args": []})
+}
+
+/// `TyConApp Char []`, with the `TyCon` GHC really uses.
+fn ty_char() -> Value {
+    json!({"kind": "TyConApp",
+           "tycon": {"name": h2r_core_ir::CHAR_TYCON, "occ": "Char", "unique": "3g"},
+           "args": []})
+}
+
+/// `TyConApp List [elem]`, with the `TyCon` GHC really uses.
+fn ty_list(elem: u32) -> Value {
+    json!({"kind": "TyConApp",
+           "tycon": {"name": h2r_core_ir::LIST_TYCON, "occ": "List", "unique": "3Q"},
+           "args": [elem]})
+}
+
+fn ty_var(occ: &str) -> Value {
+    json!({"kind": "TyVar", "name": format!("$_in${occ}"), "occ": occ, "unique": occ})
+}
+
+const TY_T: u32 = 0;
+const TY_R: u32 = 1;
+const TY_CHAR: u32 = 2;
+const TY_STRING: u32 = 3;
+const TY_A: u32 = 4;
+const TY_LIST_A: u32 = 5;
+
+/// The type table every hand-built module carries.
+fn ty_table() -> Value {
+    json!([
+        ty_con("T"),
+        ty_con("R"),
+        ty_char(),
+        ty_list(TY_CHAR),
+        ty_var("a"),
+        ty_list(TY_A),
+    ])
+}
+
+/// The table entry a fixture means by this rendering. Unknown renderings
+/// are a fixture bug, not a type to guess at.
+fn ty_of(rendered: &str) -> u32 {
+    match rendered {
+        "T" => TY_T,
+        "R" => TY_R,
+        "Char" => TY_CHAR,
+        "[Char]" | "String" | "FilePath" => TY_STRING,
+        "a" => TY_A,
+        "[a]" => TY_LIST_A,
+        other => panic!("fixture type {other:?} has no entry in ty_table()"),
+    }
+}
+
+/// Fixtures key the id table by occurrence name, because that is how they
+/// read; a real dump keys it by stable name. Rekey by the name the global
+/// `Var`s of this module actually carry, which is what the loader looks up.
+fn key_ids_by_stable_name(m: &mut Value) {
+    let mut occ_to_name: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut stack = vec![m["binds"].clone()];
+    while let Some(x) = stack.pop() {
+        match x {
+            Value::Object(o) => {
+                if o.get("node") == Some(&json!("Var"))
+                    && o.get("isGlobal") == Some(&json!(true))
+                    && let (Some(Value::String(occ)), Some(Value::String(name))) =
+                        (o.get("occ"), o.get("name"))
+                {
+                    occ_to_name.insert(occ.clone(), name.clone());
+                }
+                stack.extend(o.into_iter().map(|(_, v)| v));
+            }
+            Value::Array(a) => stack.extend(a),
+            _ => {}
+        }
+    }
+    let Value::Object(ids) = m["ids"].take() else {
+        return;
+    };
+    let mut out = serde_json::Map::new();
+    for (k, v) in ids {
+        let key = occ_to_name.get(&k).cloned().unwrap_or(k);
+        out.insert(key, v);
+    }
+    m["ids"] = Value::Object(out);
+}
+
 fn binder(occ: &str, dmd: Value) -> Value {
     json!({
-        "kind": "id", "name": occ, "occ": occ, "unique": occ, "type": "T",
+        "kind": "id", "name": occ, "occ": occ, "unique": occ,
+        "type": "T", "ty": TY_T,
         "arity": 0, "callArity": 0, "exported": false,
         "dmdSig": {"args": [], "diverges": false, "pretty": ""},
         "cprSig": "", "demand": dmd,
@@ -36,7 +140,7 @@ fn app(f: Value, a: Value) -> Value {
 
 fn case2(scrut: Value, a: Value, b: Value) -> Value {
     json!({
-        "node": "Case", "scrut": scrut, "binder": binder("wild", demand(false, false)), "type": "R",
+        "node": "Case", "scrut": scrut, "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
         "alts": [
             {"con": {"kind": "DataAlt", "name": "A", "occ": "A", "tag": 1}, "binders": [], "rhs": a},
             {"con": {"kind": "DataAlt", "name": "B", "occ": "B", "tag": 2}, "binders": [], "rhs": b}
@@ -48,7 +152,7 @@ fn case2(scrut: Value, a: Value, b: Value) -> Value {
 /// top-level binding, plus an id table for the callees.
 fn module(x_demand: Value, body: Value, ids: Value) -> Module {
     let m = json!({
-        "format": raw::FORMAT, "module": "M", "unit": "main", "ids": ids,
+        "format": raw::FORMAT, "module": "M", "unit": "main", "types": ty_table(), "ids": ids,
         "binds": [{"rec": false, "pairs": [{
             "binder": binder("top", demand(false, false)),
             "rhs": {"node": "Let", "bind": {"rec": false, "pairs": [{
@@ -58,6 +162,8 @@ fn module(x_demand: Value, body: Value, ids: Value) -> Module {
             "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
         }]}]
     });
+    let mut m = m;
+    key_ids_by_stable_name(&mut m);
     Module::from_raw(serde_json::from_value(m).unwrap()).unwrap()
 }
 
@@ -183,7 +289,7 @@ fn returned_closure_from_known_call_is_producer_known_only() {
     // the known function g. The producer is known; what g returns is not
     // followed, so the target stays unresolved.
     let m = json!({
-        "format": raw::FORMAT, "module": "M", "unit": "main",
+        "format": raw::FORMAT, "module": "M", "unit": "main", "types": ty_table(),
         "ids": {"g": callee(true), "h": callee(true)},
         "binds": [{"rec": false, "pairs": [{
             "binder": binder("top", demand(false, false)),
@@ -194,6 +300,8 @@ fn returned_closure_from_known_call_is_producer_known_only() {
             "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
         }]}]
     });
+    let mut m = m;
+    key_ids_by_stable_name(&mut m);
     let m = Module::from_raw(serde_json::from_value(m).unwrap()).unwrap();
     let c = Census::of_modules([&m]);
     let site = c
@@ -216,7 +324,7 @@ fn local_signature_comes_from_the_binding_site() {
     let mut k = binder("k", demand(false, false));
     k["dmdSig"] = json!({"args": [demand(true, false)], "diverges": false, "pretty": "<S>"});
     let m = json!({
-        "format": raw::FORMAT, "module": "M", "unit": "main",
+        "format": raw::FORMAT, "module": "M", "unit": "main", "types": ty_table(),
         "ids": {"h": callee(true)},
         "binds": [{"rec": false, "pairs": [{
             "binder": binder("top", demand(false, false)),
@@ -228,6 +336,8 @@ fn local_signature_comes_from_the_binding_site() {
             "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
         }]}]
     });
+    let mut m = m;
+    key_ids_by_stable_name(&mut m);
     let m = Module::from_raw(serde_json::from_value(m).unwrap()).unwrap();
     let c = Census::of_modules([&m]);
     let site = c.args.iter().find(|a| a.callee.occ == "k").unwrap();
@@ -238,12 +348,14 @@ fn local_signature_comes_from_the_binding_site() {
 /// `ids`, and no local lets: for testing argument sites directly.
 fn top_module(body: Value, ids: Value) -> Module {
     let m = json!({
-        "format": raw::FORMAT, "module": "M", "unit": "main", "ids": ids,
+        "format": raw::FORMAT, "module": "M", "unit": "main", "types": ty_table(), "ids": ids,
         "binds": [{"rec": false, "pairs": [{
             "binder": binder("top", demand(false, false)), "rhs": body,
             "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
         }]}]
     });
+    let mut m = m;
+    key_ids_by_stable_name(&mut m);
     Module::from_raw(serde_json::from_value(m).unwrap()).unwrap()
 }
 
@@ -267,7 +379,7 @@ fn stale_occurrence_metadata_never_wins_over_the_binder() {
         "isJoinPoint": false, "dataCon": null
     });
     let m = json!({
-        "format": raw::FORMAT, "module": "M", "unit": "main",
+        "format": raw::FORMAT, "module": "M", "unit": "main", "types": ty_table(),
         "ids": {"h": callee(true), "g": callee(false), "k": stale_k},
         "binds": [{"rec": false, "pairs": [{
             "binder": binder("top", demand(false, false)),
@@ -279,6 +391,8 @@ fn stale_occurrence_metadata_never_wins_over_the_binder() {
             "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
         }]}]
     });
+    let mut m = m;
+    key_ids_by_stable_name(&mut m);
     let m = Module::from_raw(serde_json::from_value(m).unwrap()).unwrap();
     let c = Census::of_modules([&m]);
 
@@ -523,7 +637,7 @@ fn con_app(occ: &str, args: &[Value]) -> Value {
 fn case_con(scrut: Value, con: &str, binders: &[&str], rhs: Value) -> Value {
     json!({
         "node": "Case", "scrut": scrut,
-        "binder": binder("wild", demand(false, false)), "type": "R",
+        "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
         "alts": [{
             "con": {"kind": "DataAlt", "name": con, "occ": con, "tag": 1},
             "binders": binders.iter().map(|b| binder(b, demand(false, false))).collect::<Vec<_>>(),
@@ -551,8 +665,10 @@ fn tops(pairs: Vec<(Value, Value)>, ids: Value) -> Module {
         })
         .collect();
     let m = json!({
-        "format": raw::FORMAT, "module": "M", "unit": "main", "ids": ids, "binds": binds
+        "format": raw::FORMAT, "module": "M", "unit": "main", "types": ty_table(), "ids": ids, "binds": binds
     });
+    let mut m = m;
+    key_ids_by_stable_name(&mut m);
     Module::from_raw(serde_json::from_value(m).unwrap()).unwrap()
 }
 
@@ -908,7 +1024,7 @@ fn exported(occ: &str) -> Value {
 fn case_named(scrut: Value, cb: &str, con: &str, binders: &[&str], rhs: Value) -> Value {
     json!({
         "node": "Case", "scrut": scrut,
-        "binder": binder(cb, demand(false, false)), "type": "R",
+        "binder": binder(cb, demand(false, false)), "type": "R", "ty": TY_R,
         "alts": [{
             "con": {"kind": "DataAlt", "name": con, "occ": con, "tag": 1},
             "binders": binders.iter().map(|b| binder(b, demand(false, false))).collect::<Vec<_>>(),
@@ -921,7 +1037,7 @@ fn case_named(scrut: Value, cb: &str, con: &str, binders: &[&str], rhs: Value) -
 fn case_force(scrut: Value, cb: &str, rhs: Value) -> Value {
     json!({
         "node": "Case", "scrut": scrut,
-        "binder": binder(cb, demand(false, false)), "type": "R",
+        "binder": binder(cb, demand(false, false)), "type": "R", "ty": TY_R,
         "alts": [{"con": {"kind": "DEFAULT"}, "binders": [], "rhs": rhs}]
     })
 }
@@ -2438,7 +2554,7 @@ fn case_alts(scrut: Value, alts: &[(&str, Vec<&str>, Value)]) -> Value {
         .collect();
     json!({
         "node": "Case", "scrut": scrut,
-        "binder": binder("wild", demand(false, false)), "type": "R",
+        "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
         "alts": alts
     })
 }
@@ -2934,7 +3050,7 @@ fn list_ids(extra: Value) -> Value {
 fn list_case(scrut: Value, nil_rhs: Value, binders: &[&str], cons_rhs: Value) -> Value {
     json!({
         "node": "Case", "scrut": scrut,
-        "binder": binder("wild", demand(false, false)), "type": "R",
+        "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
         "alts": [
             {"con": {"kind": "DataAlt", "name": "$ghc-prim$GHC.Types$[]", "occ": "[]", "tag": 1},
              "binders": [], "rhs": nil_rhs},
@@ -3802,12 +3918,32 @@ use crate::text::{
     Advisory, ConsumerClass, ConsumerShape, ElementTypeEvidence, TextCensus, TextFlow, TextShape,
 };
 
-/// A binder whose rendered type is what GHC printed. Every type-based rule
-/// in [`crate::text`] reads exactly this string, and nothing else.
+/// A binder carrying a type: the structured entry the rule reads, and the
+/// rendering the report prints. The rendering is written here because it is
+/// readable; [`ty_of`] is what turns it into the entry.
 fn binder_ty(occ: &str, ty: &str) -> Value {
     let mut b = binder(occ, demand(false, false));
     b["type"] = json!(ty);
+    b["ty"] = json!(ty_of(ty));
     b
+}
+
+/// A binder whose *rendering* and whose *structure* deliberately disagree,
+/// so a test can show which of the two a rule reads.
+fn binder_ty_ix(occ: &str, rendered: &str, ty: u32) -> Value {
+    let mut b = binder(occ, demand(false, false));
+    b["type"] = json!(rendered);
+    b["ty"] = json!(ty);
+    b
+}
+
+/// `let x :: ty = rhs in body`, with the binder's structured type given
+/// explicitly and its rendering alongside.
+fn let_ty_ix(occ: &str, rendered: &str, ty: u32, rhs: Value, body: Value) -> Value {
+    json!({"node": "Let", "bind": {"rec": false, "pairs": [{
+        "binder": binder_ty_ix(occ, rendered, ty), "rhs": rhs,
+        "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+    }]}, "body": body})
 }
 
 /// `let x :: ty = rhs in body`.
@@ -3823,7 +3959,7 @@ fn let_ty(occ: &str, ty: &str, rhs: Value, body: Value) -> Value {
 fn list_case_ty(scrut: Value, nil_rhs: Value, head_ty: &str, cons_rhs: Value) -> Value {
     json!({
         "node": "Case", "scrut": scrut,
-        "binder": binder("wild", demand(false, false)), "type": "R",
+        "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
         "alts": [
             {"con": {"kind": "DataAlt", "name": "$ghc-prim$GHC.Types$[]", "occ": "[]", "tag": 1},
              "binders": [], "rhs": nil_rhs},
@@ -4085,7 +4221,9 @@ fn an_unpack_producer_with_no_readable_type_is_selected_structurally() {
 }
 
 /// `eqString xs ys`: the axiom's signature fixes the argument to `[Char]`,
-/// which corroborates the rendered type rather than replacing it.
+/// which corroborates the type rather than replacing it. The binder's type
+/// renders as `String`; the plugin expands the synonym, so what the rule
+/// sees is `TyConApp List [TyConApp Char []]` and no spelling is involved.
 #[test]
 fn an_eq_string_consumer_corroborates_the_rendered_type() {
     let m = top_module(
@@ -4112,7 +4250,7 @@ fn an_eq_string_consumer_corroborates_the_rendered_type() {
         f.selection
             .iter()
             .any(|e| e.rule == crate::text::X1_LIST_TYPE),
-        "the rendered `String` is level-6 evidence"
+        "`String` expands to TyConApp List [Char]: level-4 evidence"
     );
     assert!(
         f.selection
@@ -4668,4 +4806,82 @@ fn the_route_set_shows_the_overlap_between_the_direct_rules() {
         "the field is strict, already a value, AND scrutinised at the construction's own \
          frontier — all three prove it, and the histogram must show all three"
     );
+}
+
+/// The selection reads the **structured** type, not GHC's rendering of it.
+/// Here the binder renders as `Path` — a name no rule knows and no
+/// spelling-based reading could accept — while its type *is*
+/// `TyConApp List [TyConApp Char []]`. The flow is text, on `X1-LIST-TYPE`.
+#[test]
+fn a_list_of_char_is_text_whatever_its_rendering_says() {
+    let m = top_module(
+        let_ty_ix(
+            "xs",
+            "Path",
+            TY_STRING,
+            cons_cell(var("a"), nil()),
+            put_str(var("xs")),
+        ),
+        text_ids(json!({})),
+    );
+    let (_la, tc) = text_census(&m);
+    let f = only_text(&tc);
+    assert_eq!(f.list_ty.as_deref(), Some("Path"), "the rendering is kept");
+    assert!(
+        f.selection
+            .iter()
+            .any(|e| e.rule == crate::text::X1_LIST_TYPE),
+        "{:?}",
+        f.selection
+    );
+    // `putStr` fixes `[Char]` too, so both kinds of evidence are present;
+    // the point here is that the type half fired on a rendering nothing
+    // could have parsed.
+    assert_eq!(f.element_type_evidence, ElementTypeEvidence::Both);
+}
+
+/// …and the converse: a binder that *renders* as `[Char]` but whose type is
+/// `[a]` is element-type-unknown. A rule that read the string would call
+/// this text; nothing does.
+#[test]
+fn a_rendering_that_says_char_over_a_type_variable_is_not_text() {
+    let m = top_module(
+        let_ty_ix(
+            "xs",
+            "[Char]",
+            TY_LIST_A,
+            cons_cell(var("q"), nil()),
+            var("u"),
+        ),
+        text_ids(json!({})),
+    );
+    let (la, tc) = text_census(&m);
+    assert_eq!(la.flows, 1);
+    assert_eq!(tc.flows.len(), 0, "a type variable proves nothing");
+    assert_eq!(tc.accounting.elem_unknown, 1);
+    assert_eq!(tc.accounting.non_text, 0);
+}
+
+/// The two readings of a flow's element type — the structured one the rules
+/// use and the rendered one M2.3d used to use — are checked against each
+/// other, so the move from level 6 to level 4 cannot silently reclassify a
+/// flow. They agree when the fixture does not force them apart.
+#[test]
+fn the_structured_and_rendered_element_readings_agree() {
+    let m = top_module(
+        let_ty(
+            "xs",
+            "String",
+            cons_cell(var("a"), nil()),
+            list_case_ty(var("xs"), var("u"), "Char", var("u")),
+        ),
+        text_ids(json!({})),
+    );
+    let census = Census::raw([&m]);
+    let modules = [&m];
+    let lc = crate::lists::ListCensus::of_modules(&modules, &census);
+    assert!(!lc.flows.is_empty());
+    for f in &lc.flows {
+        assert_eq!(crate::text::elem_readings_disagree(f), None, "{f:?}");
+    }
 }

@@ -60,7 +60,7 @@ impl RhsKind {
             Expr::Case { .. } => RhsKind::Case,
             Expr::Let { .. } => RhsKind::Let,
             Expr::Cast(_) | Expr::Tick(_) => unreachable!("stripped"),
-            Expr::Type(_) | Expr::Coercion => RhsKind::Other,
+            Expr::Type { .. } | Expr::Coercion => RhsKind::Other,
         };
         if cast && kind == RhsKind::Other {
             RhsKind::Cast
@@ -74,7 +74,7 @@ impl RhsKind {
 pub fn value_args(s: &Scope, args: &[ExprId]) -> Vec<ExprId> {
     args.iter()
         .copied()
-        .filter(|a| !matches!(s.m.expr(s.m.strip(*a)), Expr::Type(_) | Expr::Coercion))
+        .filter(|a| !matches!(s.m.expr(s.m.strip(*a)), Expr::Type { .. } | Expr::Coercion))
         .collect()
 }
 
@@ -104,7 +104,7 @@ pub fn arg_shape(s: &Scope, id: ExprId) -> ArgShape {
     let m = s.m;
     let inner = m.strip(id);
     match m.expr(inner) {
-        Expr::Var { .. } | Expr::Lit(_) | Expr::Type(_) | Expr::Coercion => ArgShape::Trivial,
+        Expr::Var { .. } | Expr::Lit(_) | Expr::Type { .. } | Expr::Coercion => ArgShape::Trivial,
         Expr::Lam { .. } => ArgShape::Closure,
         Expr::App { .. } => {
             let (head, args) = m.spine(inner);

@@ -88,7 +88,7 @@ pub mod axioms;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use h2r_core_ir::{BinderId, DataConInfo, Edge, Expr, ExprId, Lit, Module};
+use h2r_core_ir::{BinderId, DataConInfo, Edge, Expr, ExprId, Lit, Module, Ty};
 use serde::Serialize;
 
 use crate::callee::{Family, split_stable_name};
@@ -630,11 +630,20 @@ pub struct ListFlow {
     /// For the imported producer: the head's stable name (a diagnostic).
     pub producer_name: String,
     pub bound: Option<BinderId>,
-    /// The binder's type as GHC rendered it. **Corroboration only**: no
-    /// verdict below reads it. M2.3d selects `[Char]` on this.
+    /// The binder's type as GHC rendered it. **Display only**: no verdict
+    /// anywhere reads it — M2.3d selects `[Char]` on [`ListFlow::list_ty_s`].
     pub list_ty: Option<String>,
     /// The `(:)` alternative head binder's type, likewise.
     pub elem_ty: Option<String>,
+    /// The same binder's type, structurally. This is what M2.3d reads:
+    /// `Con List [Con Char []]` is GHC type compatibility, where the string
+    /// above is a rendering. Not serialised — the rendering is what a
+    /// report shows.
+    #[serde(skip)]
+    pub list_ty_s: Option<Ty>,
+    /// The `(:)` alternative head binder's type, structurally.
+    #[serde(skip)]
+    pub elem_ty_s: Option<Ty>,
     pub consumers: Vec<ListConsumer>,
     /// Escapes, as (reason, detail, node).
     pub escapes: Vec<(&'static str, String, ExprId)>,
@@ -1133,6 +1142,8 @@ impl<'m> Lists<'m> {
             bound: None,
             list_ty: None,
             elem_ty: None,
+            list_ty_s: None,
+            elem_ty_s: None,
             consumers: Vec::new(),
             escapes: Vec::new(),
             successors: Vec::new(),
@@ -1311,12 +1322,16 @@ impl<'m> Lists<'m> {
         let producer = self.flows[i].producer;
         let tail_derived = self.tail_derived(w);
 
-        // Types, for M2.3d — corroboration only.
-        let list_ty = w.bound.map(|b| m.binder(b).ty.clone());
-        let elem_ty = w.consumers.iter().find_map(|u| match u {
-            ListUse::ConsAlt { head, .. } => Some(m.binder(*head).ty.clone()),
+        // Types, for M2.3d. The structured form is what it reads; the
+        // rendering travels with it so a report can print what GHC printed.
+        let list_ty = w.bound.map(|b| m.binder(b).ty_pretty.clone());
+        let list_ty_s = w.bound.map(|b| m.binder_ty(b).clone());
+        let cons_head = w.consumers.iter().find_map(|u| match u {
+            ListUse::ConsAlt { head, .. } => Some(*head),
             _ => None,
         });
+        let elem_ty = cons_head.map(|b| m.binder(b).ty_pretty.clone());
+        let elem_ty_s = cons_head.map(|b| m.binder_ty(b).clone());
 
         let mut consumers: Vec<ListConsumer> = Vec::new();
         let mut short_circuit = ShortCircuit::default();
@@ -1812,6 +1827,8 @@ impl<'m> Lists<'m> {
         f.bound = w.bound;
         f.list_ty = list_ty;
         f.elem_ty = elem_ty;
+        f.list_ty_s = list_ty_s;
+        f.elem_ty_s = elem_ty_s;
         f.consumers = consumers;
         f.escapes = w
             .escapes

@@ -1562,7 +1562,7 @@ fn resolve_cont(
                 let vargs: Vec<ExprId> = args
                     .iter()
                     .copied()
-                    .filter(|x| !matches!(m.expr(m.strip(*x)), Expr::Type(_) | Expr::Coercion))
+                    .filter(|x| !matches!(m.expr(m.strip(*x)), Expr::Type { .. } | Expr::Coercion))
                     .collect();
                 if vargs.len() != r.params.len() {
                     return Err("a call of the region is not saturated exactly");
@@ -1585,7 +1585,7 @@ fn resolve_cont(
                     // Corroborated against the parameter's own type, so an
                     // eta-reduced lambda that starts with the state cannot
                     // be mistaken for one that starts with the value.
-                    Some(p) if !crate::parsec::is_state_ty(&m.binder(*p).ty) => out.push(*p),
+                    Some(p) if !crate::parsec::is_state_ty(&m.binder(*p).ty_pretty) => out.push(*p),
                     Some(_) => return Err("the continuation lambda starts with the state"),
                     None => return Err("the continuation lambda has no value parameter"),
                 },

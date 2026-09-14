@@ -80,7 +80,7 @@ impl Pretty<'_> {
             Expr::Lit(l) => {
                 let _ = write!(out, "{}{}", l.pretty, self.tag(id));
             }
-            Expr::Type(t) => {
+            Expr::Type { pretty: t, .. } => {
                 let _ = write!(out, "@({t})");
             }
             Expr::Coercion => out.push_str("@~"),
@@ -95,7 +95,7 @@ impl Pretty<'_> {
                 let _ = write!(out, "({}", self.tag(id));
                 self.expr(out, head, indent, depth + 1);
                 for a in args {
-                    if matches!(m.expr(m.strip(a)), Expr::Type(_) | Expr::Coercion) {
+                    if matches!(m.expr(m.strip(a)), Expr::Type { .. } | Expr::Coercion) {
                         continue;
                     }
                     out.push(' ');

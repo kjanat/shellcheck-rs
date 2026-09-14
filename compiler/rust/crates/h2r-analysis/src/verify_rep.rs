@@ -370,7 +370,7 @@ impl<'m> RepVerifier<'m> {
             .filter(|a| {
                 !matches!(
                     self.m.expr(self.m.strip(*a)),
-                    Expr::Type(_) | Expr::Coercion
+                    Expr::Type { .. } | Expr::Coercion
                 )
             })
             .collect()
@@ -379,13 +379,13 @@ impl<'m> RepVerifier<'m> {
     /// The data constructor at the head of a spine, if the head is an
     /// imported id with a `DataConInfo`.
     fn head_data_con(&self, head: ExprId) -> Option<&'m DataConInfo> {
-        let Expr::Var { unique, .. } = self.m.expr(head) else {
+        let Expr::Var { name, .. } = self.m.expr(head) else {
             return None;
         };
         if self.m.resolve(head).is_some() {
             return None;
         }
-        self.m.ids.get(unique)?.data_con.as_ref()
+        self.m.ids.get(name)?.data_con.as_ref()
     }
 
     /// The stable name of the head of a spine, if the head is an import.
@@ -508,10 +508,10 @@ impl<'m> RepVerifier<'m> {
                     .resolve(m.strip(head))
                     .map(|b| self.params_of(b).len())
                     .or_else(|| {
-                        let Expr::Var { unique, .. } = m.expr(head) else {
+                        let Expr::Var { name, .. } = m.expr(head) else {
                             return None;
                         };
-                        m.ids.get(unique).map(|i| i.arity as usize)
+                        m.ids.get(name).map(|i| i.arity as usize)
                     });
                 match arity {
                     Some(a) if vargs.len() < a => (true, false),

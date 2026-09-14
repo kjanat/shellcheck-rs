@@ -216,10 +216,10 @@ pub fn classify(s: &Scope, root: ExprId, arg_index: usize) -> Callee {
     let (head, _) = m.spine(root);
 
     let Expr::Var {
-        unique,
         name,
         occ,
         is_global,
+        ..
     } = m.expr(head)
     else {
         return Callee {
@@ -231,13 +231,12 @@ pub fn classify(s: &Scope, root: ExprId, arg_index: usize) -> Callee {
         };
     };
     let bound = s.binding_of(head);
-    // Linkage by unique is only ever valid for an occurrence the resolver
-    // classified as an import: a local's unique may name many binders and
-    // the id table is populated from occurrences.
+    // The id table holds globals only, keyed by stable name, and is read
+    // only for an occurrence the resolver classified as an import.
     let info = if bound.is_some() {
         None
     } else {
-        m.ids.get(unique)
+        m.ids.get(name)
     };
     let sig = s.head_sig(head);
     let (unit, module) = split_stable_name(name)

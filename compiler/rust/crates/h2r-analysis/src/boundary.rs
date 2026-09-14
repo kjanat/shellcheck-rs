@@ -509,7 +509,7 @@ impl<'m> Producers<'m> {
                 Expr::Let { body, .. } => work.push(*body),
                 Expr::Lam { .. } => self.push(id, call, ProducerKind::Lambda),
                 Expr::Lit(_) => self.push(id, call, ProducerKind::Literal),
-                Expr::Type(_) | Expr::Coercion => {}
+                Expr::Type { .. } | Expr::Coercion => {}
                 Expr::Cast(_) | Expr::Tick(_) => unreachable!("stripped above"),
                 Expr::Var { .. } => match m.reference(id) {
                     Some(Ref::Global) => self.push(id, call, ProducerKind::ImportedValue),

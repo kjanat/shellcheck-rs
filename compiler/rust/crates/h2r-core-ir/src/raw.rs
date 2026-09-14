@@ -1,23 +1,97 @@
-//! The JSON produced by `h2r-plugin` (format 2), one-to-one.
+//! The JSON produced by `h2r-plugin` (format 5), one-to-one.
 //!
 //! This nested form exists only to be deserialised; every pass works on the
 //! flattened [`crate::Module`] instead. Nothing here is walked recursively:
 //! the arena builder consumes it piecewise off an explicit stack.
+//!
+//! Two things in format 5 are *identity*, and both are deliberately not
+//! uniques: an imported Id is named by its stable name (`$unit$Module$occ`),
+//! and a type constructor likewise. Uniques are still dumped, on `Var`
+//! nodes, binders, type variables and type constructors, but only ever as a
+//! diagnostic — GHC's simplifier duplicates terms without freshening their
+//! binders, so a unique names a binder only within its own scope, and the
+//! IR resolves every local occurrence lexically instead
+//! ([`crate::Module::resolve`]).
 
 use std::collections::HashMap;
 
 use serde::Deserialize;
 
-pub const FORMAT: u32 = 4;
+pub const FORMAT: u32 = 5;
+
+/// An index into [`RawModule::types`] / [`crate::Module::types`].
+pub type TyId = u32;
 
 #[derive(Debug, Deserialize)]
 pub struct RawModule {
     pub format: u32,
     pub module: String,
     pub unit: String,
-    /// Facts about every Id referenced anywhere in the module, keyed by unique.
+    /// Facts about every *global* Id referenced anywhere in the module,
+    /// keyed by its stable name. Locals are never in here: they are bound
+    /// in this module, and the lexical resolver owns them.
     pub ids: HashMap<String, IdInfo>,
+    /// The module's hash-consed type table. Every child index is smaller
+    /// than its parent's, so the table can be rebuilt in one forward pass.
+    pub types: Vec<RawTy>,
     pub binds: Vec<RawBind>,
+}
+
+/// A type constructor's identity: its stable name. The unique is a
+/// diagnostic and nothing keys by it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TyConId {
+    pub name: String,
+    pub occ: String,
+    pub unique: String,
+}
+
+/// A type variable, as dumped. Type-variable *names* are internal, so they
+/// are not identities either; alpha-equivalence is structural
+/// ([`crate::Ty::alpha_eq`]).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TyVarId {
+    pub name: String,
+    pub occ: String,
+    pub unique: String,
+}
+
+/// One entry of the type table, with its children as indices.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind")]
+pub enum RawTy {
+    TyVar {
+        name: String,
+        occ: String,
+        unique: String,
+    },
+    TyConApp {
+        tycon: TyConId,
+        args: Vec<TyId>,
+    },
+    AppTy {
+        fun: TyId,
+        arg: TyId,
+    },
+    FunTy {
+        mult: TyId,
+        arg: TyId,
+        res: TyId,
+    },
+    ForAllTy {
+        binder: TyVarId,
+        body: TyId,
+    },
+    LitTy {
+        #[serde(rename = "litKind")]
+        lit_kind: String,
+        lit: String,
+    },
+    /// A `CastTy` or a `CoercionTy`: nothing downstream reads one, so the
+    /// plugin keeps only the rendering.
+    Opaque {
+        pretty: String,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -105,9 +179,15 @@ pub struct Binder {
     pub kind: BinderKind,
     pub name: String,
     pub occ: String,
+    /// Diagnostics only: see the module header.
     pub unique: String,
+    /// The binder's type, structurally: an index into the type table.
+    pub ty: TyId,
+    /// The same type as GHC rendered it, *before* synonym expansion. For
+    /// diagnostics and for the rules that have not been migrated to the
+    /// structured form yet.
     #[serde(rename = "type")]
-    pub ty: String,
+    pub ty_pretty: String,
 
     pub arity: Option<u32>,
     #[serde(rename = "callArity")]
@@ -179,8 +259,9 @@ pub enum RawExpr {
     Case {
         scrut: Box<RawExpr>,
         binder: Binder,
+        ty: TyId,
         #[serde(rename = "type")]
-        ty: String,
+        ty_pretty: String,
         alts: Vec<RawAlt>,
     },
     Cast {
@@ -190,8 +271,9 @@ pub enum RawExpr {
         expr: Box<RawExpr>,
     },
     Type {
+        ty: TyId,
         #[serde(rename = "type")]
-        ty: String,
+        pretty: String,
     },
     Coercion,
 }

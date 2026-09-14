@@ -10,56 +10,61 @@
 //! whole text needed or only a prefix, and does anything observe an
 //! individual character.
 //!
-//! # The honesty caveat that governs this milestone
+//! # How `Char` is established
 //!
-//! **The dump carries pretty-printed type strings, not `TyCon` identity.**
-//! Recognising `[Char]` from a rendered type — `[Char]`, `String`,
-//! `[GHC.Types.Char]`, a synonym GHC happened to print as `String`, a type
-//! variable instantiated somewhere this module cannot see — is evidence
-//! *from a rendered type*: **level 6, textual type comparison,
-//! corroboration**, exactly like M2.1's alpha-normalised type comparison.
-//! It is not `TyConApp [] [Char]` with a stable `TyCon`.
+//! **From the type's structure, not from its rendering.** Since dump
+//! format 5 the plugin emits every type as a [`Ty`] — synonyms expanded —
+//! so "the element is a `Char`" is `TyConApp` with the `TyCon` GHC itself
+//! names `$ghc-prim$GHC.Types$Char`, and "the flow is a list of them" is
+//! that `TyCon` under `$ghc-prim$GHC.Types$List`. That is **level 4,
+//! structural `TyCon` identity — GHC type compatibility**, not the level-6
+//! textual comparison this milestone was originally built on, where
+//! `[Char]`, `String`, `FilePath` and a synonym GHC happened to print as
+//! `String` were four spellings to be recognised by hand.
 //!
-//! It is still far better than looking for `++`, and it is far better
-//! still when a structural fact agrees with it, which is why every
-//! selection records *how* `Char` was established
-//! ([`ElementTypeEvidence`]) and why the structural corroborations
+//! What has *not* changed is what the milestone refuses to conclude: where
+//! a flow's element type is a **type variable** — instantiated somewhere
+//! this module cannot see — or there is no type to read, the flow is
+//! [`Selection::ElementTypeUnknown`] and is never assumed to be text.
+//!
+//! The type is still only one of the ways in, and corroboration by a fact
+//! that reads no type at all is still worth more than either alone, which
+//! is why every selection records *how* `Char` was established
+//! ([`ElementTypeEvidence`]) and why the term-level corroborations
 //! ([`X2_UNPACK_PRODUCER`], [`X3_CHAR_LITERAL_HEAD`],
 //! [`X4_CHAR_SCRUTINY`], [`X5_AXIOM_FIXES_CHAR`]) are recorded separately
 //! from the type reading ([`X0_ELEM_TYPE`], [`X1_LIST_TYPE`]).
 //!
-//! Where a flow's element type is a **type variable** or cannot be read at
-//! all, the flow is [`Selection::ElementTypeUnknown`] — never assumed to be
-//! text.
-//!
-//! *For the next plugin-format bump: expose structured types —
-//! `TyConApp` with a stable `TyCon` identity — so that "the element is
-//! `Char`" becomes a structural (level 2/4) fact instead of a string
-//! comparison, and this whole caveat goes away.*
+//! GHC's rendering of each type still travels alongside
+//! ([`crate::lists::ListFlow::list_ty`], `elem_ty`) and is what the reports
+//! print — it is a *label*, never a verdict. [`elem_readings_disagree`]
+//! is the check that the two readings select the same flows: 0
+//! disagreements over all seven dumps (11,818 flows on `-O1`) when the
+//! rules moved from level 6 to level 4.
 //!
 //! # The population
 //!
 //! A list flow is selected when **either**
 //!
-//! * its element type, as GHC rendered it, reads as `Char`
-//!   ([`X0_ELEM_TYPE`] on the `(:)` alternative's head binder,
-//!   [`X1_LIST_TYPE`] on the flow's own binder) — level 6; **or**
-//! * a fact that does not read a type string says the element is a `Char`:
+//! * its element type *is* `Char` ([`X0_ELEM_TYPE`] on the `(:)`
+//!   alternative's head binder, [`X1_LIST_TYPE`] on the flow's own
+//!   binder) — level 4; **or**
+//! * a fact that reads no type at all says the element is a `Char`:
 //!   the producer is a call in the `unpackCString#` family
 //!   ([`X2_UNPACK_PRODUCER`], level 2, and independent of what any type
-//!   string says), a cell's element is a `Char` literal
+//!   says), a cell's element is a `Char` literal
 //!   ([`X3_CHAR_LITERAL_HEAD`], level 2), an element is scrutinised as a
 //!   character ([`X4_CHAR_SCRUTINY`], level 1/2), or a consumer's signature
 //!   fixes the argument to `[Char]` ([`X5_AXIOM_FIXES_CHAR`], level 5).
 //!
-//! Each of those four stands on its own — none of them needs the rendered
-//! type to agree — which is why a flow can be selected with no readable
-//! type at all, and why [`ElementTypeEvidence`] records whether the two
-//! kinds of evidence agreed.
+//! Each of those four stands on its own — none of them needs the type to
+//! agree — which is why a flow can be selected with no readable type at
+//! all, and why [`ElementTypeEvidence`] records whether the two kinds of
+//! evidence agreed.
 //!
-//! Everything else is either a flow whose element type reads as something
-//! that is not `Char` (not text) or one whose element type could not be
-//! read (element-type-unknown). Those three buckets partition M2.3c's
+//! Everything else is either a flow whose element type is a concrete type
+//! that is not `Char` (not text) or one whose element type is a variable or
+//! absent (element-type-unknown). Those three buckets partition M2.3c's
 //! flows, and the accounting asserts it.
 //!
 //! # The text-head table
@@ -102,7 +107,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use h2r_core_ir::{AltCon, BinderId, Edge, Expr, ExprId, Module};
+use h2r_core_ir::{AltCon, BinderId, Edge, Expr, ExprId, Module, Ty};
 use serde::Serialize;
 
 use crate::callee::split_stable_name;
@@ -119,13 +124,15 @@ use crate::shape::value_args;
 // Rule ids
 //------------------------------------------------------------------------------
 
-/// **Selection.** The `(:)` alternative's head binder, whose type GHC
-/// rendered as `Char`. Evidence: **textual type comparison (6)** over the
-/// lexical identity of the binder (1) that M2.3c already established.
+/// **Selection.** The `(:)` alternative's head binder, whose type is
+/// `TyConApp Char []`. Evidence: **structural `TyCon` identity (4)** over
+/// the lexical identity of the binder (1) that M2.3c already established.
 pub const X0_ELEM_TYPE: &str = "X0-ELEM-TYPE";
-/// **Selection.** The flow's own binder, whose type GHC rendered as a list
-/// of `Char` (`[Char]`, `String`, `FilePath`, `[GHC.Types.Char]`).
-/// Evidence: **textual type comparison (6)**.
+/// **Selection.** The flow's own binder, whose type is
+/// `TyConApp List [TyConApp Char []]`. Synonyms are expanded by the plugin,
+/// so `String` and `FilePath` arrive here already in that form and are not
+/// spellings anything has to know. Evidence: **structural `TyCon`
+/// identity (4)**.
 pub const X1_LIST_TYPE: &str = "X1-LIST-TYPE";
 /// **Selection, structural.** The producer is a saturated call to a member
 /// of the `unpackCString#` family, whose result type is `[Char]` by the
@@ -147,11 +154,11 @@ pub const X4_CHAR_SCRUTINY: &str = "X4-CHAR-SCRUTINY";
 /// `words`, `showLitString`, `hPutStr`). Evidence: **library axiom (5)**.
 pub const X5_AXIOM_FIXES_CHAR: &str = "X5-AXIOM-FIXES-CHAR";
 /// The flow's element type is a type variable, or no binder of the flow
-/// carried a readable type: the flow is **not** assumed to be text.
+/// carried a type to read: the flow is **not** assumed to be text.
 /// Evidence: the refusal.
 pub const X6_ELEM_TYPE_UNKNOWN: &str = "X6-ELEM-TYPE-UNKNOWN";
-/// The flow's element type reads as something that is not `Char`.
-/// Evidence: textual type comparison (6).
+/// The flow's element type is a concrete type constructor that is not
+/// `Char`. Evidence: **structural `TyCon` identity (4)**.
 pub const X7_ELEM_TYPE_NOT_CHAR: &str = "X7-ELEM-TYPE-NOT-CHAR";
 
 /// **Fact.** Every consumer of the flow is a text-shaped consumer: an
@@ -815,11 +822,18 @@ fn is_literal_head(name: &str) -> bool {
 }
 
 //------------------------------------------------------------------------------
-// Rendered types: level 6, and labelled as such everywhere
+// Rendered types: the level-6 reading this milestone used to rest on.
+//
+// Nothing below is consulted by a verdict any more. It is kept for two
+// reasons: `rendered_elem_of_list` is how a *display* label for a non-text
+// element is taken out of GHC's rendering of the list, and the reading as a
+// whole is what `elem_readings_disagree` checks the structured one against,
+// which is the evidence that moving M2.3d from level 6 to level 4 moved no
+// flow between buckets.
 //------------------------------------------------------------------------------
 
 /// What a rendered type string says about an element type. Every verdict
-/// here is **level 6**.
+/// here is **level 6**, which is why none of them decides anything.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum RenderedElem {
     Char,
@@ -871,7 +885,9 @@ pub fn rendered_elem_of_list(t: &str) -> Option<String> {
     }
 }
 
-/// The element type a flow's rendered types say it has.
+/// The element type a flow's rendered types say it has. **Level 6.** Kept
+/// only so that [`structured_element`] can be checked against it; no verdict
+/// reads it (see [`elem_readings_disagree`]).
 fn rendered_element(f: &ListFlow) -> RenderedElem {
     let mut best = RenderedElem::Unknown;
     let mut candidates: Vec<String> = Vec::new();
@@ -895,15 +911,97 @@ fn rendered_element(f: &ListFlow) -> RenderedElem {
 }
 
 //------------------------------------------------------------------------------
+// Structured types: level 4, and the only thing a verdict reads
+//------------------------------------------------------------------------------
+
+/// What a flow's *structured* types say about its element type. Every
+/// verdict here is **level 4: structural `TyCon` identity**.
+///
+/// The three cases are exactly the three the selection needs. `Char` is
+/// `TyConApp Char []` — the `TyCon` GHC itself names
+/// `$ghc-prim$GHC.Types$Char`, not a string that happens to read `Char`.
+/// `Unknown` is a type *variable*: instantiated somewhere this module
+/// cannot see, so nothing may be concluded and the flow is never assumed to
+/// be text. Anything else is a concrete element type that is not `Char`.
+///
+/// The label carried by `Other` is GHC's rendering of that type. It is a
+/// *display* string for the report's histogram, never an identity: the
+/// verdict was already decided by the `TyCon` above it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum StructuredElem {
+    Char,
+    Other(String),
+    /// A type variable, or no type to read.
+    Unknown,
+}
+
+/// A flow's two element-type readings, in the order they are consulted: the
+/// `(:)` alternative head binder's own type ([`X0_ELEM_TYPE`]), then the
+/// element of the flow binder's list type ([`X1_LIST_TYPE`]). Each is
+/// paired with GHC's rendering *of that element*, which the report prints
+/// and no verdict reads.
+fn element_candidates(f: &ListFlow) -> Vec<(&Ty, Option<String>)> {
+    let mut out: Vec<(&Ty, Option<String>)> = Vec::new();
+    if let Some(e) = &f.elem_ty_s {
+        out.push((e, f.elem_ty.clone()));
+    }
+    if let Some(l) = &f.list_ty_s
+        && let Some(e) = l.list_elem()
+    {
+        out.push((e, f.list_ty.as_deref().and_then(rendered_elem_of_list)));
+    }
+    out
+}
+
+/// The element type a flow's structured types say it has.
+fn structured_element(f: &ListFlow) -> StructuredElem {
+    let mut best = StructuredElem::Unknown;
+    for (ty, rendered) in element_candidates(f) {
+        if ty.is_char() {
+            return StructuredElem::Char;
+        }
+        if !ty.is_ty_var() && best == StructuredElem::Unknown {
+            // The verdict is the `TyCon` above; this only names it.
+            best = StructuredElem::Other(rendered.unwrap_or_else(|| {
+                ty.tycon()
+                    .map(|t| t.occ.clone())
+                    .unwrap_or_else(|| "?".to_string())
+            }));
+        }
+    }
+    best
+}
+
+/// Do the structured reading and the rendered one disagree about a flow's
+/// element type? Nothing calls this in anger — it is the assertion that the
+/// migration from level 6 to level 4 changed no population, and it is
+/// exercised by the regression tests.
+pub fn elem_readings_disagree(f: &ListFlow) -> Option<(String, String)> {
+    let s = structured_element(f);
+    let r = rendered_element(f);
+    let agree = match (&s, &r) {
+        (StructuredElem::Char, RenderedElem::Char) => true,
+        (StructuredElem::Unknown, RenderedElem::Unknown) => true,
+        (StructuredElem::Other(a), RenderedElem::Other(b)) => a == b,
+        _ => false,
+    };
+    if agree {
+        None
+    } else {
+        Some((format!("{s:?}"), format!("{r:?}")))
+    }
+}
+
+//------------------------------------------------------------------------------
 // The facts
 //------------------------------------------------------------------------------
 
 /// How `Char` was established for a selected flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ElementTypeEvidence {
-    /// A rendered type read as `Char`, and no structural fact agreed.
-    TypeStringOnly,
-    /// A structural fact said `[Char]`, and no rendered type did.
+    /// The element's type is `Char`, and no fact that reads no type agreed.
+    TypeOnly,
+    /// A fact that reads no type said `[Char]`, and the type did not.
     StructuralOnly,
     /// Both.
     Both,
@@ -912,7 +1010,7 @@ pub enum ElementTypeEvidence {
 impl ElementTypeEvidence {
     pub fn name(self) -> &'static str {
         match self {
-            ElementTypeEvidence::TypeStringOnly => "type-string only",
+            ElementTypeEvidence::TypeOnly => "type only",
             ElementTypeEvidence::StructuralOnly => "structural only",
             ElementTypeEvidence::Both => "both",
         }
@@ -1695,7 +1793,7 @@ impl TextCensus {
 
         // Pass 1: what each flow's own evidence says about its element.
         struct Pre {
-            rendered: RenderedElem,
+            elem: StructuredElem,
             type_says_char: bool,
             structural: bool,
             fixes: bool,
@@ -1707,33 +1805,35 @@ impl TextCensus {
             let m = by_name[f.module.as_str()];
             let s = &scopes[f.module.as_str()];
 
-            let rendered = rendered_element(f);
+            let elem = structured_element(f);
             let mut selection: Vec<Evidence> = Vec::new();
-            let type_says_char = rendered == RenderedElem::Char;
+            let type_says_char = elem == StructuredElem::Char;
             if type_says_char {
-                if let Some(e) = &f.elem_ty
-                    && reads_as_char(e)
+                if let Some(e) = &f.elem_ty_s
+                    && e.is_char()
                 {
                     selection.push(Evidence {
                         rule: X0_ELEM_TYPE,
                         nodes: vec![f.producer],
                         binder: None,
                         note: format!(
-                            "the (:) alternative's head binder is rendered {e:?} \
-                             (level 6: a rendered type, not TyCon identity)"
+                            "the (:) alternative's head binder is TyConApp Char [] \
+                             (level 4: structural TyCon identity), rendered {:?}",
+                            f.elem_ty.as_deref().unwrap_or("-")
                         ),
                     });
                 }
-                if let Some(l) = &f.list_ty
-                    && rendered_elem_of_list(l).is_some_and(|e| reads_as_char(&e))
+                if let Some(l) = &f.list_ty_s
+                    && l.is_list_of(&|e| e.is_char())
                 {
                     selection.push(Evidence {
                         rule: X1_LIST_TYPE,
                         nodes: vec![f.producer],
                         binder: f.bound,
                         note: format!(
-                            "the flow's binder is rendered {l:?} \
-                             (level 6: a rendered type, not TyCon identity)"
+                            "the flow's binder is TyConApp List [Char] \
+                             (level 4: structural TyCon identity), rendered {:?}",
+                            f.list_ty.as_deref().unwrap_or("-")
                         ),
                     });
                 }
@@ -1780,7 +1880,7 @@ impl TextCensus {
                 });
             }
             pre.push(Pre {
-                rendered,
+                elem,
                 type_says_char,
                 structural,
                 fixes: fixes.is_some(),
@@ -1834,7 +1934,7 @@ impl TextCensus {
             if p.type_says_char || p.structural {
                 comp_char.entry(r).or_insert(lc.flows[i].producer);
             }
-            if matches!(p.rendered, RenderedElem::Other(_)) {
+            if matches!(p.elem, StructuredElem::Other(_)) {
                 comp_other.insert(r);
             }
         }
@@ -1846,9 +1946,7 @@ impl TextCensus {
             let p = &mut pre[i];
             let root = find(&mut uf, i);
             let own = p.type_says_char || p.structural;
-            if !own
-                && comp_char.contains_key(&root)
-                && !matches!(p.rendered, RenderedElem::Other(_))
+            if !own && comp_char.contains_key(&root) && !matches!(p.elem, StructuredElem::Other(_))
             {
                 if comp_other.contains(&root) {
                     acct.propagation_refused += 1;
@@ -1864,8 +1962,8 @@ impl TextCensus {
                 }
             }
             if !(p.type_says_char || p.structural) {
-                match &p.rendered {
-                    RenderedElem::Other(t) => {
+                match &p.elem {
+                    StructuredElem::Other(t) => {
                         acct.non_text += 1;
                         *non_text_types.entry(t.clone()).or_default() += 1;
                     }
@@ -1880,7 +1978,7 @@ impl TextCensus {
             }
             let element_type_evidence = match (p.type_says_char, p.structural) {
                 (true, true) => ElementTypeEvidence::Both,
-                (true, false) => ElementTypeEvidence::TypeStringOnly,
+                (true, false) => ElementTypeEvidence::TypeOnly,
                 (false, _) => ElementTypeEvidence::StructuralOnly,
             };
             index.insert(i, flows.len());
@@ -1909,7 +2007,7 @@ impl TextCensus {
         for t in &flows {
             acct.text_flows += 1;
             match t.element_type_evidence {
-                ElementTypeEvidence::TypeStringOnly => acct.type_only += 1,
+                ElementTypeEvidence::TypeOnly => acct.type_only += 1,
                 ElementTypeEvidence::StructuralOnly => acct.structural_only += 1,
                 ElementTypeEvidence::Both => acct.both += 1,
             }
