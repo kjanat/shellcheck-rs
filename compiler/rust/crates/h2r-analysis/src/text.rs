@@ -107,6 +107,7 @@ use serde::Serialize;
 
 use crate::callee::split_stable_name;
 use crate::flow::Evidence;
+use crate::lists::axioms::HeadExposure;
 use crate::lists::{
     ConsumerKind, HeadDemand, ListCensus, ListConsumer, ListFlow, ProducerKind, Recursion, Reuse,
     SpineDemand, Storage, TailFate,
@@ -258,6 +259,12 @@ pub const R_NO_DEMANDING_CONSUMER: &str = "no-consumer-demands-the-text";
 // char_semantics_required reasons.
 pub const CS_HEAD_BOUND: &str = "a-cons-alternative-binds-and-uses-the-head";
 pub const CS_HEAD_FORCED: &str = "an-element-is-forced";
+/// **M2.3g.** An element is handed to a predicate, a class method or any
+/// other callback. That still requires character semantics — the element
+/// has to exist as a `Char` value — but it is *not* a proof that anything
+/// forces it, and saying so would be claiming more than the axiom table
+/// knows. Split out of [`CS_HEAD_FORCED`].
+pub const CS_HEAD_EXPOSED: &str = "an-element-is-exposed-to-a-callback";
 pub const CS_CHAR_LITERAL: &str = "a-char-literal-is-an-element";
 pub const CS_CHAR_SCRUTINY: &str = "the-head-is-compared-against-a-char-literal";
 pub const CS_CHAR_CONSUMER: &str = "a-consumer-exposes-individual-characters";
@@ -1117,6 +1124,8 @@ pub struct TextFlow {
     pub escapes: Vec<(&'static str, String, ExprId)>,
     pub spine: SpineDemand,
     pub head: HeadDemand,
+    /// Fact 2b of the list census: what the elements are handed to (M2.3g).
+    pub head_exposure: HeadExposure,
     pub recursion: Recursion,
     /// The list flow's `Reuse::Escapes` reason, inherited.
     pub escaped: Option<&'static str>,
@@ -1933,6 +1942,7 @@ impl TextCensus {
                 let key: &'static str = [
                     CS_HEAD_BOUND,
                     CS_HEAD_FORCED,
+                    CS_HEAD_EXPOSED,
                     CS_CHAR_LITERAL,
                     CS_CHAR_SCRUTINY,
                     CS_CHAR_CONSUMER,
@@ -2241,10 +2251,20 @@ fn build(
             ));
         }
     }
+    // **M2.3g.** Proven forcing and mere exposure are two reasons, not
+    // one. Both set the flag — a character that reaches a callback has to
+    // exist as a character — but the evidence says which it was.
     if f.head != HeadDemand::None && f.head != HeadDemand::Unknown {
         char_reasons.push((
             crate::lists::L3_HEAD_BOUND,
             format!("{CS_HEAD_FORCED}({})", f.head.name()),
+            f.producer,
+        ));
+    }
+    if f.head_exposure != HeadExposure::NotExposed && f.head_exposure != HeadExposure::Unknown {
+        char_reasons.push((
+            crate::lists::L20_HEAD_EXPOSED,
+            format!("{CS_HEAD_EXPOSED}({})", f.head_exposure.name()),
             f.producer,
         ));
     }
@@ -2330,6 +2350,7 @@ fn build(
         escapes: f.escapes.clone(),
         spine: f.spine,
         head: f.head,
+        head_exposure: f.head_exposure,
         recursion: f.recursion,
         escaped,
         advisory: Advisory::Unknown,

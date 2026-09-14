@@ -2879,6 +2879,7 @@ fn the_field_accounting_closes() {
 // Lists: when, and how much, of a spine is demanded (lists.rs)
 //------------------------------------------------------------------------------
 
+use crate::lists::axioms::{CallbackKind, HeadExposure, ListKind, Produces};
 use crate::lists::{
     ConsumerKind, Lists, PrefixBound, Recommendation, Recursion, Reuse, SpineDemand, Storage,
     TailFate,
@@ -3091,7 +3092,14 @@ fn find_demands_a_data_dependent_prefix_and_short_circuits() {
     let f = cons_flow(&l, 0);
     assert_eq!(f.spine, SpineDemand::Prefix(PrefixBound::DataDependent));
     assert!(!f.short_circuit.no(), "find may stop at the first match");
-    assert_eq!(f.head, crate::lists::HeadDemand::Prefix);
+    // **M2.3g.** `find` hands each element it reaches to an arbitrary
+    // predicate, and `find (const True)` forces nothing: the elements are
+    // exposed, not forced.
+    assert_eq!(f.head, crate::lists::HeadDemand::None);
+    assert_eq!(
+        f.head_exposure,
+        HeadExposure::PassedToCallback(CallbackKind::Predicate)
+    );
 }
 
 /// Two consumers of one binder are two traversals of one spine.
@@ -3147,7 +3155,25 @@ fn a_stored_tail_alias_is_a_shared_tail() {
         f.reuse,
         f.consumers
     );
-    assert_eq!(f.rec, Recommendation::PersistentCandidate);
+    // **M2.3g.** The shared tail is a *constraint* whatever else is true.
+    // Whether it is also the recommendation depends on every other fact
+    // being known.
+    assert!(f.constraints.tail_sharing);
+    assert_eq!(
+        f.rec,
+        if f.spine == SpineDemand::Unknown
+            || f.head == crate::lists::HeadDemand::Unknown
+            || matches!(f.reuse, Reuse::Escapes(_))
+        {
+            Recommendation::Unknown
+        } else {
+            Recommendation::PersistentCandidate
+        },
+        "facts: spine {:?} head {:?} reuse {:?}",
+        f.spine,
+        f.head,
+        f.reuse
+    );
 }
 
 /// `let rec r = a : r`: a value knot, and the verdict is M1's — asserted
@@ -3434,6 +3460,313 @@ fn a_spine_consed_onto_another_cell_inherits_that_flow_s_demand() {
         SpineDemand::Whole,
         "the successor's whole-spine demand reaches this flow"
     );
+}
+
+//------------------------------------------------------------------------------
+// M2.3g — the corrected axiom layer
+//------------------------------------------------------------------------------
+
+/// Build `let xs = x : [] in <call>` around a single cons flow.
+fn one_list_into(call: Value, ids: Value) -> Module {
+    top_module(let1("xs", cons_cell(var("x"), nil()), call), list_ids(ids))
+}
+
+/// **A call that returns a PAIR of lists is not a list.** `span` returns
+/// `([a],[a])`: the call node's type is a tuple, so it starts no flow —
+/// the pair does. The demand and aliasing facts it puts on its *argument*
+/// are unaffected, and the second component being a suffix of the input
+/// still makes the input's tail shared.
+#[test]
+fn a_pair_returning_head_is_not_a_list_producer() {
+    let m = one_list_into(
+        app(
+            app(gvar_named("span", "$base$GHC.List$span"), var("p")),
+            var("xs"),
+        ),
+        json!({"span": import_fn("span", 2)}),
+    );
+    let l = list_census(&m);
+    assert!(
+        l.flows
+            .iter()
+            .all(|f| f.kind != crate::lists::ProducerKind::ImportedCall),
+        "span returns a pair: {:?}",
+        l.flows.iter().map(|f| f.kind).collect::<Vec<_>>()
+    );
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.spine, SpineDemand::Prefix(PrefixBound::DataDependent));
+    assert!(
+        matches!(f.reuse, Reuse::SharedTail { .. }),
+        "the second component is a suffix of the argument: {:?}",
+        f.reuse
+    );
+    assert!(f.constraints.tail_sharing);
+}
+
+/// The same for `unzip :: [(a,b)] -> ([a],[b])` and for `traverse`, whose
+/// result is `f [b]` — an action, not a list.
+#[test]
+fn a_product_or_effect_returning_head_is_not_a_list_producer() {
+    for (occ, name, args) in [
+        ("unzip", "$base$GHC.List$unzip", 1u32),
+        ("traverse", "$base$Data.Traversable$traverse", 2),
+    ] {
+        let call = if args == 1 {
+            app(gvar_named(occ, name), var("xs"))
+        } else {
+            app(app(gvar_named(occ, name), var("k")), var("xs"))
+        };
+        let m = one_list_into(call, json!({occ: import_fn(occ, args)}));
+        let l = list_census(&m);
+        assert!(
+            l.flows
+                .iter()
+                .all(|f| f.kind != crate::lists::ProducerKind::ImportedCall),
+            "{occ} does not return a list"
+        );
+        let ax = crate::lists::axioms::axiom(name).unwrap();
+        assert!(!ax.produces.is_direct_list(), "{occ}");
+    }
+}
+
+/// Every entry that says it returns a list says so of its **outer** return
+/// type, and every entry whose result merely contains one produces no
+/// flow. Read off the table so that a future entry cannot quietly
+/// reintroduce the M2.3g population bug.
+#[test]
+fn only_a_direct_list_result_can_be_a_producer() {
+    for a in crate::lists::axioms::all() {
+        match a.produces {
+            Produces::DirectList(_) => {}
+            p => assert!(
+                !p.is_direct_list(),
+                "{}: {} must not start a flow",
+                a.name,
+                p.name()
+            ),
+        }
+    }
+    // The four heads the audit moved off `DirectList`, named explicitly.
+    for name in [
+        "$base$GHC.List$span",
+        "$base$GHC.List$$wspan",
+        "$base$GHC.List$splitAt",
+        "$ghc-prim$GHC.Magic$lazy",
+    ] {
+        let a = crate::lists::axioms::axiom(name).unwrap();
+        assert!(!a.produces.is_direct_list(), "{name}");
+    }
+}
+
+/// **`cycle` consumes its argument incrementally and replays it.** Calling
+/// the demand `Whole` said that the call walks to the end of the spine
+/// before returning, which on an infinite argument never happens.
+#[test]
+fn cycle_is_incremental_and_replayed_never_whole() {
+    let m = one_list_into(
+        app(gvar_named("cycle", "$base$GHC.List$cycle"), var("xs")),
+        json!({"cycle": import_fn("cycle", 1)}),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.spine, SpineDemand::Incremental, "{:?}", f.consumers);
+    assert_ne!(f.spine, SpineDemand::Whole);
+    assert!(
+        matches!(f.reuse, Reuse::Replayed { .. }),
+        "reuse was {:?}",
+        f.reuse
+    );
+    assert!(f.constraints.replay);
+    assert_eq!(f.rec, Recommendation::PersistentCandidate);
+    let ax = crate::lists::axioms::axiom("$base$GHC.List$cycle").unwrap();
+    assert_eq!(ax.produces, Produces::DirectList(ListKind::Unbounded));
+    assert!(!ax.streaming, "it retains the argument");
+}
+
+/// **`isInfixOf`'s needle is replayed**, not walked whole: it is retried as
+/// a prefix at successive positions of the haystack.
+#[test]
+fn the_needle_of_is_infix_of_is_replayed() {
+    let m = top_module(
+        let1(
+            "needle",
+            cons_cell(var("a"), nil()),
+            let1(
+                "hay",
+                cons_cell(var("b"), nil()),
+                app(
+                    app(
+                        gvar_named("isInfixOf", "$base$Data.OldList$isInfixOf"),
+                        var("needle"),
+                    ),
+                    var("hay"),
+                ),
+            ),
+        ),
+        list_ids(json!({"isInfixOf": import_fn("isInfixOf", 2)})),
+    );
+    let l = list_census(&m);
+    let needle = cons_flow(&l, 0);
+    assert_eq!(
+        needle.spine,
+        SpineDemand::Prefix(PrefixBound::DataDependent),
+        "{:?}",
+        needle.consumers
+    );
+    assert_ne!(needle.spine, SpineDemand::Whole);
+    assert!(
+        matches!(needle.reuse, Reuse::Replayed { .. }),
+        "{:?}",
+        needle.reuse
+    );
+    assert!(needle.consumers.iter().any(|c| c.replays));
+}
+
+/// **`concat` shares nothing.** `concat = foldr (++) []` makes every inner
+/// list the LEFT operand of `(++)`, which copies it — even the last one,
+/// `xs ++ []`. So neither the `[[a]]` spine nor any inner `[a]` survives
+/// in the result, and the table must claim neither.
+#[test]
+fn concat_shares_neither_the_outer_spine_nor_an_element() {
+    let ax = crate::lists::axioms::axiom("$base$GHC.List$concat").unwrap();
+    assert_eq!(ax.alias, crate::lists::axioms::Alias::NoAlias);
+    assert!(!ax.aliases_spine(0, 1));
+    assert!(!ax.aliases_element(0, 1));
+    let m = one_list_into(
+        app(gvar_named("concat", "$base$GHC.List$concat"), var("xs")),
+        json!({"concat": import_fn("concat", 1)}),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert!(
+        !matches!(f.reuse, Reuse::SharedTail { .. }),
+        "concat copies: {:?}",
+        f.reuse
+    );
+    assert!(!f.constraints.tail_sharing);
+}
+
+/// `head :: [[a]] -> [a]` is where element sharing is real: the result
+/// **is** one of the elements. That puts nothing on the argument's own
+/// spine, which is the whole point of the separate variant.
+#[test]
+fn an_element_alias_is_not_a_shared_tail() {
+    let ax = crate::lists::axioms::axiom("$base$GHC.List$head").unwrap();
+    assert!(ax.aliases_element(0, 1));
+    assert!(!ax.aliases_spine(0, 1));
+    let m = one_list_into(
+        app(gvar_named("head", "$base$GHC.List$head"), var("xs")),
+        json!({"head": import_fn("head", 1)}),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert!(
+        !matches!(f.reuse, Reuse::SharedTail { .. }),
+        "an element is not a tail: {:?}",
+        f.reuse
+    );
+    assert!(f.consumers.iter().any(|c| c.aliases_element && !c.aliases));
+}
+
+/// **`any p xs` forces no element.** `p` may be `const True`. The elements
+/// are *exposed* to the predicate, which is a fact of its own and is what
+/// the text census must cite.
+#[test]
+fn a_predicate_exposes_elements_without_forcing_them() {
+    let m = one_list_into(
+        app(
+            app(gvar_named("any", "$base$GHC.List$any"), var("p")),
+            var("xs"),
+        ),
+        json!({"any": import_fn("any", 2)}),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(
+        f.head,
+        crate::lists::HeadDemand::None,
+        "an arbitrary predicate proves nothing about the elements"
+    );
+    assert_eq!(
+        f.head_exposure,
+        HeadExposure::PassedToCallback(CallbackKind::Predicate)
+    );
+}
+
+/// …while `eqString` really does force, because at `Char` the comparison
+/// is a primop and not a dictionary method.
+#[test]
+fn a_primitive_comparison_does_force_the_elements() {
+    let m = one_list_into(
+        app(
+            app(
+                gvar_named("eqString", "$base$GHC.Base$eqString"),
+                var("other"),
+            ),
+            var("xs"),
+        ),
+        json!({"eqString": import_fn("eqString", 2)}),
+    );
+    let l = list_census(&m);
+    let f = cons_flow(&l, 0);
+    assert_eq!(f.head, crate::lists::HeadDemand::Prefix);
+    assert_eq!(f.head_exposure, HeadExposure::NotExposed);
+}
+
+/// **A proven `SharedTail` beside one unknown consumer is not an
+/// advisory.** `ys` is the right operand of `(++)` — its tail survives in
+/// the result — and it is also handed to an import with no axiom. Before
+/// M2.3g the shared tail won and the flow was advised
+/// `PersistentCandidate`; it must be `Unknown`, with the sharing recorded
+/// as a constraint that the unknown does not erase.
+#[test]
+fn a_shared_tail_beside_an_unknown_consumer_is_unknown_with_a_constraint() {
+    let m = top_module(
+        let1(
+            "xs",
+            cons_cell(var("x"), nil()),
+            let1(
+                "ys",
+                cons_cell(var("y"), nil()),
+                app(
+                    app(
+                        var("h"),
+                        app(
+                            app(gvar_named("++", "$base$GHC.Base$++"), var("xs")),
+                            var("ys"),
+                        ),
+                    ),
+                    app(
+                        gvar_named("mystery", "$somelib$Some.Module$mystery"),
+                        var("ys"),
+                    ),
+                ),
+            ),
+        ),
+        list_ids(json!({
+            "++": import_fn("++", 2),
+            "mystery": import_fn("mystery", 1),
+            "h": callee(true)
+        })),
+    );
+    let l = list_census(&m);
+    let ys = cons_flow(&l, 1);
+    assert!(
+        matches!(ys.reuse, Reuse::SharedTail { .. }),
+        "{:?}",
+        ys.reuse
+    );
+    assert_eq!(ys.spine, SpineDemand::Unknown);
+    assert_eq!(ys.rec, Recommendation::Unknown);
+    assert_eq!(
+        ys.rec_reason.as_deref(),
+        Some("no-axiom-for($somelib$Some.Module$mystery)")
+    );
+    assert!(
+        ys.constraints.tail_sharing,
+        "the sharing survives the unknown"
+    );
+    assert_eq!(ys.constraints.names(), vec![crate::lists::C_TAIL_SHARING]);
 }
 
 /// The whole census closes: every flow in exactly one bucket of every
@@ -4236,13 +4569,16 @@ fn the_list_view_lists_every_consumer_once() {
         assert!(!c.rule.is_empty());
         assert!(c.headline.contains("spine ") && c.headline.contains("head "));
     }
-    // The six facts are all present, each with the rule that decided it.
+    // Every fact is present, each with the rule that decided it — including
+    // M2.3g's `HeadExposure`, which is recorded beside `HeadDemand` and
+    // never folded into it.
     let names: Vec<&str> = view.facts.iter().map(|(n, _, _)| *n).collect();
     assert_eq!(
         names,
         vec![
             "SpineDemand",
             "HeadDemand",
+            "HeadExposure",
             "Reuse",
             "Storage",
             "Recursion",

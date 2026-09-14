@@ -199,7 +199,7 @@ pub fn print_list_view(v: &ListView) {
         println!("        {}", c.headline);
         println!("            {}", c.what);
     }
-    println!("    the six facts");
+    println!("    the facts");
     for (name, value, rule) in &v.facts {
         println!("        {name:<13} {value:<28} [{rule}]");
     }
@@ -219,6 +219,15 @@ pub fn print_list_view(v: &ListView) {
             h2r_analysis::lists::L15_MULTIPASS
         } else {
             "one entry into the spine"
+        }
+    );
+    println!(
+        "        {:<13} {:<28} [what any representation must support, whatever the advisory says]",
+        "constraints",
+        if v.constraints.is_empty() {
+            "none".to_string()
+        } else {
+            v.constraints.join(" ∧ ")
         }
     );
     for e in &v.escapes {

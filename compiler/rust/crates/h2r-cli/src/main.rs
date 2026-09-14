@@ -3215,10 +3215,11 @@ fn lists(
     }
 
     println!();
-    println!("The six facts, each recorded independently");
+    println!("The seven facts, each recorded independently");
     for (title, rows) in [
         ("SpineDemand", &acct.by_spine),
-        ("HeadDemand", &acct.by_head),
+        ("HeadDemand (proven forcing only)", &acct.by_head),
+        ("HeadExposure (handed to a callback)", &acct.by_exposure),
         ("Reuse", &acct.by_reuse),
         ("Storage", &acct.by_storage),
         ("Recursion", &acct.by_recursion),
@@ -3239,6 +3240,18 @@ fn lists(
     println!(
         "  of the flows, {} have only streaming spine consumers",
         acct.streaming
+    );
+
+    println!();
+    println!(
+        "Constraints — positive facts a representation must support, whatever the advisory says"
+    );
+    for (name, n) in &acct.constraints {
+        println!("  {n:>7}  {name}");
+    }
+    println!(
+        "  {:>7}  flows whose recommendation is Unknown and that carry a constraint",
+        acct.unknown_with_constraints
     );
 
     println!();
@@ -3408,10 +3421,11 @@ fn lists(
                 }
             );
             println!(
-                "    facts  spine {} [{}], head {}, reuse {}, storage {}, {:?}, short-circuit {}",
+                "    facts  spine {} [{}], head {}, exposure {}, reuse {}, storage {}, {:?}, short-circuit {}",
                 f.spine.name(),
                 f.spine_rule,
                 f.head.name(),
+                f.head_exposure.name(),
                 f.reuse.name(),
                 f.storage.name(),
                 f.recursion,
@@ -3428,7 +3442,7 @@ fn lists(
             );
             for c in &f.consumers {
                 println!(
-                    "    use    {:<14} node {:<8} spine {:<22} head {:<8} {}{} [{}] {}",
+                    "    use    {:<14} node {:<8} spine {:<22} head {:<8} exposure {:<28} {}{}{} [{}] {}",
                     match &c.kind {
                         ConsumerKind::Axiom { rule, .. } => (*rule).to_string(),
                         k => h2r_analysis::lists::consumer_name(k).to_string(),
@@ -3436,6 +3450,8 @@ fn lists(
                     c.at,
                     c.spine.name(),
                     c.head.name(),
+                    c.head_exposure.name(),
+                    if c.replays { "replayed " } else { "" },
                     if c.streaming {
                         "streaming "
                     } else {
@@ -3476,14 +3492,26 @@ fn print_axioms() -> Result<()> {
         "Evidence level: library axiom (below def-use dataflow, above textual type comparison)."
     );
     println!("List arguments are indexed from the END of the call's value arguments.");
+    println!(
+        "`forced` is PROVEN forcing; `exposed` is what an element is handed to and is not a proof"
+    );
+    println!("that anything forces it. Only a DirectList result makes a call a list producer.");
     println!();
     println!(
-        "  {:<26} {:<52} {:<3} {:<24} {:<8} {:<24} {:<3} {:<3} alias",
-        "rule", "stable name", "n", "list args (End(i)=spine)", "head", "result", "sc", "str"
+        "  {:<26} {:<52} {:<3} {:<24} {:<8} {:<28} {:<38} {:<3} {:<3} alias",
+        "rule",
+        "stable name",
+        "n",
+        "list args (End(i)=spine)",
+        "forced",
+        "exposed",
+        "result (outer return type)",
+        "sc",
+        "str"
     );
     for a in axioms::all() {
         println!(
-            "  {:<26} {:<52} {:<3} {:<24} {:<8} {:<24} {:<3} {:<3} {:?}",
+            "  {:<26} {:<52} {:<3} {:<24} {:<8} {:<28} {:<38} {:<3} {:<3} {:?}{}",
             a.rule,
             a.name,
             a.min_args,
@@ -3493,10 +3521,23 @@ fn print_axioms() -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(" "),
             a.head.name(),
-            format!("{:?}", a.produces),
+            a.exposure.name(),
+            a.produces.name(),
             if a.short_circuit { "yes" } else { "no" },
             if a.streaming { "yes" } else { "no" },
-            a.alias
+            a.alias,
+            if a.replays.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " replays {}",
+                    a.replays
+                        .iter()
+                        .map(|e| format!("End({e})"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            }
         );
         println!("  {:<26} {}", "", a.note);
     }

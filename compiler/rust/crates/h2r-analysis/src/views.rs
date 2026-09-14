@@ -523,8 +523,11 @@ pub struct ListView {
     pub list_ty: Option<String>,
     pub elem_ty: Option<String>,
     pub consumers: Vec<ConsumerLine>,
-    /// The six facts, each with the rule that decided it.
+    /// The facts, each with the rule that decided it.
     pub facts: Vec<(&'static str, String, &'static str)>,
+    /// What any representation must support, whatever the advisory says
+    /// (M2.3g) — named, never empty-printed away.
+    pub constraints: Vec<&'static str>,
     pub traversals: usize,
     pub streaming: bool,
     pub advisory: Recommendation,
@@ -548,6 +551,11 @@ impl ListView {
         let facts = vec![
             ("SpineDemand", f.spine.name().to_string(), f.spine_rule),
             ("HeadDemand", f.head.name().to_string(), head_rule(f)),
+            (
+                "HeadExposure",
+                f.head_exposure.name().to_string(),
+                exposure_rule(f),
+            ),
             ("Reuse", f.reuse.name().to_string(), reuse_rule(f)),
             ("Storage", f.storage.name().to_string(), storage_rule(f)),
             (
@@ -602,6 +610,7 @@ impl ListView {
             elem_ty: f.elem_ty.clone(),
             consumers,
             facts,
+            constraints: f.constraints.names(),
             traversals: f.traversals,
             streaming: f.streaming,
             advisory: f.rec,
@@ -749,6 +758,7 @@ fn consumer_line(m: &Module, c: &ListConsumer) -> ConsumerLine {
 const NO_RULE_REUSE: &str = "no L14/L15 fired";
 const NO_RULE_STORAGE: &str = "no L10/L16 fired";
 const NO_RULE_HEAD: &str = "no (:) alternative bound a head";
+const NO_RULE_EXPOSURE: &str = "no consumer hands an element anywhere";
 const NO_RULE_SC: &str = "no short-circuiting consumer";
 const NO_RULE_REC: &str = "M1 does not call it a recursive value";
 
@@ -760,10 +770,21 @@ fn head_rule(f: &ListFlow) -> &'static str {
     }
 }
 
+/// Fact 2b's rule, or the absence of one (M2.3g).
+fn exposure_rule(f: &ListFlow) -> &'static str {
+    match f.head_exposure {
+        crate::lists::axioms::HeadExposure::Unknown => crate::lists::L9_NO_AXIOM,
+        crate::lists::axioms::HeadExposure::NotExposed => NO_RULE_EXPOSURE,
+        crate::lists::axioms::HeadExposure::BoundAndUsed => crate::lists::L3_HEAD_BOUND,
+        crate::lists::axioms::HeadExposure::PassedToCallback(_) => crate::lists::L20_HEAD_EXPOSED,
+    }
+}
+
 fn reuse_rule(f: &ListFlow) -> &'static str {
     match f.reuse {
         crate::lists::Reuse::SharedTail { .. } => crate::lists::L14_SHARED_TAIL,
         crate::lists::Reuse::MultiPass(_) => crate::lists::L15_MULTIPASS,
+        crate::lists::Reuse::Replayed { .. } => crate::lists::L19_REPLAYED,
         crate::lists::Reuse::Escapes(_) => crate::lists::L11_ESCAPE,
         crate::lists::Reuse::SinglePass => NO_RULE_REUSE,
     }

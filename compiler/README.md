@@ -36,7 +36,7 @@ ShellCheck Haskell
 | **M2.1** | proving Parsec's CPS roles structurally, and feeding the proof back into the census | done |
 | **M2.2** | which tuples are transport and which are values: 2,584 constructions, an independent verifier, a representation-boundary check, the scalar view | done |
 | **M2.2.1** | the generic aggregate def-use walk (`flow.rs`) lifted out of the tuple census, so every later population is a client of one walk | done |
-| **M2.3** | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link | done |
+| **M2.3** | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link, **g** the correction to the axiom layer | done |
 | **M2.4** | **next.** Dictionary erasure and closed-world **class-op enumeration** (294 census sites, 3 tuple residuals); **higher-order representation agreement** — the 67 tuples handed into a local callee's parameter and the 187 + 134 + 114 that reach an imported call, a list cell or a program constructor through a closure; and the **41 Parsec edges** whose continuation target the region graph does not close over | next |
 
 ## Layout
@@ -86,7 +86,7 @@ cargo run --release --bin h2r -- verify-rep ../core-json          # re-derive ev
 cargo run --release --bin h2r -- verify-rep ../core-json --explain # …listing every refusal, plus the accounting and the M1 link
 cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.CFG --view 10329   # one construction, field by field
 cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.AST --view-all --json
-cargo run --release --bin h2r -- lists ../core-json --module ShellCheck.ASTLib --view 1220  # one flow: cells, consumers, six facts
+cargo run --release --bin h2r -- lists ../core-json --module ShellCheck.ASTLib --view 1220  # one flow: cells, consumers, the facts
 cargo run --release --bin h2r -- text ../core-json --module ShellCheck.Formatter.GCC --view 11
 cargo run --release --bin h2r -- show ../core-json ShellCheck.AST 5293      # + its M2.3 footers
 cargo run --release --bin h2r -- tuples ../core-json --module Main --boundaries --explain
@@ -1932,14 +1932,18 @@ cargo run --release --bin h2r -- lists ../core-json --json
 |---|---|---:|
 | `L0-CONS` | a saturated `(:)`, by `DataConInfo` and never by name, that is not itself the tail of another cons | 3,920 |
 | `L0-NIL` | a `[]`, likewise, that is not the tail of a cons in the population | 2,887 |
-| `L0-IMPORTED` | a saturated call to an imported function the [axiom table](#the-library-demand-semantics-table) says returns a list | 5,065 |
+| `L0-IMPORTED` | a saturated call to an imported function whose [axiom](#the-library-demand-semantics-table) says the call's **own return type** is a list | 4,966 |
 | `L0-LOCAL` | a saturated call to a local function returning a list producer whose own flow could not reach this call site | 45 |
-| | **flows** | **11,917** |
+| | **flows** | **11,818** |
 
 > Every number in this section is **after** M2.3e, which added eleven audited
-> entries to the axiom table (so 34 more imported calls are producers) and
-> fixed two propagation bugs. The M2.3c column of each table, and what moved,
-> is in [M2.3e](#m23e--re-deriving-the-representation-verdicts-independently).
+> entries to the axiom table and fixed two propagation bugs, **and after
+> M2.3g**, which corrected the axiom table itself: a call whose result merely
+> *contains* a list (`span` returns a pair, `mapM` returns `m [b]`,
+> `GHC.Magic.lazy` returns whatever it was given) is no longer a producer,
+> which removed 99 structurally bogus flows. What moved, and why, is in
+> [M2.3e](#m23e--re-deriving-the-representation-verdicts-independently) and
+> in [Correction (M2.3g)](#correction-m23g--the-axiom-layer).
 
 `L1-CHAIN`: a cons whose tail argument is another cons or a nil
 *construction* is a **cell of the same flow**, so `1 : 2 : 3 : []` is one
@@ -1986,11 +1990,24 @@ Three list-specific rules sit on top of it:
 A call to `map`, `++` or `$wlenAcc` has no unfolding in the dump, so
 def-use can only say the list left the module. `lists/axioms.rs` restores
 the missing facts as an explicit, auditable table — 101 entries — each
-carrying a stable global name, a semantic rule id (`L-AX-…`), the spine
-demand on **each** list argument, the head demand, whether the result
-aliases the input or a tail, whether evaluation short-circuits, how the
-result list is produced (incremental / whole-before-first-cell /
-same-as-input / unbounded), and a note.
+carrying a stable global name, a semantic rule id (`L-AX-…`), a note, and
+six fields whose axes M2.3g separated because conflating them was a bug in
+each case:
+
+| field | what it says | what it deliberately does **not** say |
+|---|---|---|
+| `list_args` | `(end-index, ArgSpine)` for **each** list argument: `Whole`, `PrefixFromArg(i)`, `PrefixDataDependent`, `Incremental`, `NoDemand` | how often the spine is walked — that is `replays` |
+| `replays` | the end-indices of arguments the call **retains and traverses again from the front** (`cycle`, `isInfixOf`, `isSuffixOf`, `intercalate`'s separator) | nothing about how far each traversal gets |
+| `head` | `HeadDemand`: what the call **provably forces** of the elements it reaches — a primop (`eqString` at `Char`), a `case` (`and`, `words`) | that a callback forces anything: `any (const True)` does not |
+| `exposure` | `HeadExposure`: which callback the elements are handed to — `Predicate`, `Eq`, `Ord`, `Show`, `Other` | that the element is evaluated |
+| `alias` | `NoAlias` · `ResultIsTailOfArg(i)` · `ResultSharesArg(i)` · `ResultContainsSuffixOfArg(i)` (the suffix is inside a pair or a `Maybe`) · `ResultSharesElementOf(i)` (the result is one of the *elements*, which puts nothing on this spine) | whether the result is itself a list |
+| `produces` | the call's **outer return type**: `NotAList` · `DirectList(kind)` · `ProductContainsList{components}` · `EffectContainsList(kind)` · `OtherContainsList`, where `kind` is incremental / whole-before-first-cell / same-as-input / unbounded | which component of a product or effect the list is — that is tuple and effect normalisation's job, not this milestone's |
+
+**Only `DirectList` starts a flow.** The two axes are independent in both
+directions: `span` returns a pair *and* its second component is a suffix of
+its argument, so it is no producer and still puts a shared tail on its
+input; `GHC.Magic.lazy` is the identity *and* `a` is not a list at every
+call site, so it is no producer either although its result is its argument.
 
 It introduces a **new evidence level**, and where it sits is the point:
 
@@ -2012,26 +2029,27 @@ indexed **from the end** of the call's value arguments, which is what makes
 an entry survive a leading dictionary; an entry declares a minimum argument
 count and is not applied to a call supplying fewer.
 
-The flows reached **120 distinct imported heads**; 36 of them have an
-entry, and those 36 cover 6,460 of the 8,031 imported consumer sites
-(80%). The rest are reported as `Unknown` with
+The flows reached **116 distinct imported heads**; 36 of them have an
+entry, and those 36 cover 5,115 of the 6,660 imported consumer sites
+(77%). The rest are reported as `Unknown` with
 `no-axiom-for(<stable name>)` — never guessed. Eleven of the entries and
-three corrections came out of [M2.3e's audit](#the-axiom-audit), which
-checked every aliasing claim against base-4.18.3.0's own source and against
-a real call site in this dump.
+three corrections came out of [M2.3e's audit](#the-axiom-audit), and a
+further **46 of the 101 entries were corrected** by
+[M2.3g's audit](#correction-m23g--the-axiom-layer), which read base's own
+definition for every entry claiming a result type, a forcing or an alias.
 
 | calls | axiom | head | | calls | axiom | head |
 |---:|---|---|---|---:|---|---|
 | 1,861 | yes | `GHC.Base.++` | | 394 | **no** | `ShellCheck.Interface.$wgo` |
-| 1,123 | yes | `GHC.Base.eqString` | | 168 | **no** | `GHC.Show.showLitString` |
-| 1,002 | yes | `GHC.CString.unpackAppendCString#` | | 88 | **no** | `Text.Parsec.Char.string1` |
+| 1,121 | yes | `GHC.Base.eqString` | | 168 | **no** | `GHC.Show.showLitString` |
+| 999 | yes | `GHC.CString.unpackAppendCString#` | | 88 | **no** | `Text.Parsec.Char.string1` |
 | 236 | yes | `GHC.List.elem` | | 66 | **no** | `GHC.Show.showList__` |
 | 192 | yes | `Data.OldList.isPrefixOf` | | 61 | **no** | `GHC.IO.Handle.Text.hPutStr2` |
 | 144 | yes | `GHC.Base.++_$s++` | | 49 | **no** | `Text.Regex.TDFA.String.compile` |
 | 138 | yes | `GHC.List.reverse1` | | 45 | **no** | `Data.Set.Internal.$fDataSet1` |
 | 129 | yes | `GHC.List.takeWhile` | | 40 | **no** | `Text.Parsec.Error.$wmergeError` |
 | 81 | yes | `GHC.Classes.$fEqList_$s$c==1` (M2.3e) | | 39 | **no** | `GHC.Base.pure` |
-| 72 | yes | `GHC.Classes.$fOrdList_$s$ccompare1` (M2.3e) | | 36 | **no** | `ShellCheck.ASTLib.getBracedModifier` |
+| 72 | yes | `GHC.Classes.$fOrdList_$s$ccompare1` (M2.3e) | | 43 | **no** | `Data.Set.Internal.$fDataSet1` |
 
 Entries are written only where the semantics are certain. M2.3e read
 base-4.18.3.0's source for every helper M2.3c had left out and added the
@@ -2042,26 +2060,50 @@ ones it could confirm (`dropLength`, `dropLengthMaybe`, `prependToAll`,
 definition, and a shape read off a call site is a guess, not a contract.
 That residual is the honest measure of the table's coverage.
 
-### Six facts, and only then a recommendation
+### Seven facts, and only then a recommendation
 
-| `SpineDemand` | | | `HeadDemand` | |
+| `SpineDemand` | | | `HeadDemand` (**proven forcing only**) | |
 |---|---:|---|---|---:|
-| Unknown | 5,602 | | Unknown | 5,602 |
-| None | 4,359 | | None | 5,054 |
-| Prefix(DataDependent) | 921 | | Prefix | 972 |
+| Unknown | 5,503 | | Unknown | 5,503 |
+| None | 4,359 | | None | 5,482 |
+| Prefix(DataDependent) | 921 | | Prefix | 544 |
 | Incremental | 715 | | All | 270 |
 | Prefix(Known) | 179 | | First | 19 |
 | Whole | 141 | | | |
 
+`HeadExposure` is fact 2b, added by M2.3g and recorded **beside**
+`HeadDemand`, never folded into it: an element that reaches a predicate or
+a class method has to exist as a value, but nothing proves it is evaluated.
+
+| `HeadExposure` | | |
+|---|---:|---|
+| Unknown | 5,503 | a consumer is outside what this module proves |
+| NotExposed | 5,340 | |
+| BoundAndUsed | 460 | a `(:)` alternative binds the element and uses it |
+| PassedToCallback(Eq) | 401 | `elem`, `nub`, `isPrefixOf`, the specialised list `==` |
+| PassedToCallback(Other) | 61 | `map`, `foldr`, `zipWith`, `mapM_` |
+| PassedToCallback(Predicate) | 46 | `any`, `all`, `find`, `takeWhile`, `span` |
+| PassedToCallback(Ord) | 7 | `sort`, `maximum`, the specialised list `compare` |
+
 | `Reuse` | | | `Storage` | | | `Recursion` | |
 |---|---:|---|---|---:|---|---|---:|
-| Escapes | 5,330 | | StoredIn | 5,277 | | FiniteProducer | 11,886 |
-| SinglePass | 4,225 | | NotStored | 4,366 | | RecursiveKnot | 31 |
-| SharedTail | 1,867 | | Returned | 1,460 | | | |
+| Escapes | 5,238 | | StoredIn | 5,234 | | FiniteProducer | 11,787 |
+| SinglePass | 4,225 | | NotStored | 4,310 | | RecursiveKnot | 31 |
+| SharedTail | 1,860 | | Returned | 1,460 | | | |
 | MultiPass | 495 | | Captured | 814 | | | |
+| Replayed | 0 | | | | | | |
 
-`ShortCircuit`: 1,202 flows have a consumer that may stop before the end,
-10,715 do not. 6,239 flows have only streaming spine consumers.
+`ShortCircuit`: 1,181 flows have a consumer that may stop before the end,
+10,637 do not. 6,239 flows have only streaming spine consumers.
+
+`Reuse::Replayed` is M2.3g's fourth reuse shape — a consumer that retains
+the spine and walks it **again from the front**, which is neither a second
+independent entry (`MultiPass`) nor a surviving tail (`SharedTail`). Five
+axiom entries carry it (`cycle`, `isInfixOf` on both arguments,
+`isSuffixOf` on both, `intercalate`'s separator) and **none of them is
+called anywhere in these seven dumps**, so the fact has 0 firings. It is
+printed with its zero rather than left out: a rule that the program never
+exercises is a fact about the program.
 
 The spine rules behind `SpineDemand`, beyond the axioms:
 
@@ -2071,12 +2113,14 @@ The spine rules behind `SpineDemand`, beyond the axioms:
 | `L17-LOOP-INCREMENTAL` | the same loop with the recursive call in a lazy position — a constructor field, a lazy argument, a lambda — so a cell is reached only when the consumer's own consumer asks → **Incremental**. This is the `map`-shaped loop, and calling it `Whole` would be a lie | 115 |
 | `L5-LOOP-SHORTCIRCUIT` | the same loop under a `case` inside the alternative → **Prefix(DataDependent)** and a short-circuit node | 195 |
 | `L6-TAIL-DROPPED` | the alternative binds the tail and never uses it → this cell only | 137 |
-| `L14-SHARED-TAIL` | an axiom whose result aliases the argument, or a tail-derived value that is stored or handed out | 1,777 |
+| `L14-SHARED-TAIL` | an axiom whose result — or a list inside its result — is a suffix of the argument, or a tail-derived value that is stored or handed out | 1,770 |
 | `L15-MULTIPASS` | more than one consumer enters the spine without reaching it through another's tail alias | 330 |
 | `L13-RECURSIVE-KNOT` | **M1's** `Class::RecursiveValue`, read and not re-derived | 31 |
+| `L19-REPLAYED` | an axiom says the consumer retains this argument and walks it again from the front (M2.3g) | 0 |
+| `L20-HEAD-EXPOSED` | an element reaches a callback the analysis cannot see into — exposure, not forcing (M2.3g) | 723 |
 
 The rule counts are direct firings. The `Reuse` fact totals above are
-larger (1,867 `SharedTail`, 495 `MultiPass`) because M2.3e made `Reuse`
+larger (1,860 `SharedTail`, 495 `MultiPass`) because M2.3e made `Reuse`
 travel the `L7-CONSED-AS-TAIL` edges with the other facts: a spine consed
 onto a longer one is a **suffix** of it, so a tail the longer spine shares,
 an extra entry into it and a head it escapes to all reach these cells too.
@@ -2095,17 +2139,36 @@ that asserts M1 does not call such a binding a recursive value.
 |---:|---|---|
 | 32 | `VecCandidate` | whole spine, entered more than once or outliving its consumers, no shared tail, finite producer |
 | 727 | `IteratorCandidate` | one pass, nothing retained, every spine consumer streaming, finite producer |
-| 2,197 | `PersistentCandidate` | a tail survives in two places, or repeated entry with tails retained |
-| 31 | `LazyCandidate` | a value knot, or a short-circuiting consumer in front of an unbounded producer |
-| 8,930 | `Unknown` | any fact is `Unknown`, or the facts match no recommendation — with the reason |
-| **11,917** | | |
+| 1,925 | `PersistentCandidate` | a tail survives in two places, the spine is replayed, or repeated entry with tails retained |
+| 30 | `LazyCandidate` | a value knot, or a short-circuiting consumer in front of an unbounded producer |
+| 9,104 | `Unknown` | any fact is `Unknown`, or the facts match no recommendation — with the reason |
+| **11,818** | | |
 
-Two orderings in the derivation are deliberate and stated rather than
-hidden. A **value knot** is a knot whatever else is true of it, so it is
-decided first. A **proven shared tail** decides the representation on its
-own even when the spine demand is `Unknown`: how much of the spine anyone
-walks does not change the fact that two owners see the same cells. That is
-the one place a positive structural fact outranks an `Unknown` one.
+**The ordering, corrected at M2.3g.** An advisory is a claim that a
+representation is sufficient *given everything we know*, so **every**
+`Unknown` fact — spine, head, exposure, or a `Reuse::Escapes` — makes the
+recommendation `Unknown`, before any positive fact is consulted. Until
+M2.3g a proven `SharedTail` and M1's `RecursiveKnot` were decided *first*,
+which let "one known property points this way" be published as "this is
+sufficient": 266 flows were advised on that basis with another fact
+unknown.
+
+The positive facts are not lost. They are recorded as **constraints** on
+the flow — things any representation must support whatever the advisory
+says — and a constraint survives an `Unknown`:
+
+| constraint | | `-O1` | of which the recommendation is `Unknown` |
+|---|---|---:|---:|
+| `RequiresTailSharing` | a tail of this spine survives in a second place (`L14`) | 1,860 | 265 |
+| `RequiresRecursiveLaziness` | M1 calls the producer's binding a recursive value (`L13`) | 31 | 1 |
+| `RequiresReplay` | a consumer retains the spine and walks it again (`L19`) | 0 | 0 |
+
+Only then do the positive facts decide, in this order: a **value knot** is
+a knot whatever else is true of it; then a **proven shared tail**, because
+two owners seeing the same cells settles the representation; then a
+**replayed** spine, because the cells must still be there for the second
+walk; then the short-circuit-over-unbounded case, and last the
+multi-pass / whole / single-pass arithmetic.
 
 `foldl'` over a whole list is the case the split exists for: `Whole` spine,
 `SinglePass`, `NotStored`, streaming — an `IteratorCandidate`, **not** a
@@ -2128,8 +2191,8 @@ of the list.
 
 | by recommendation | | by `SpineDemand` | |
 |---:|---|---:|---|
-| 878 | Unknown | 682 | Unknown |
-| 388 | PersistentCandidate | 492 | None |
+| 977 | Unknown | 682 | Unknown |
+| 289 | PersistentCandidate | 492 | None |
 | 39 | IteratorCandidate | 52 | Incremental |
 | 5 | VecCandidate | 40 | Prefix(DataDependent) |
 | | | 29 | Whole |
@@ -2139,19 +2202,20 @@ of the list.
 
 Asserted in code (`ListAccounting::check`), on `-O1` and on all six matrix
 profiles: every flow lands in exactly one bucket of the producer-kind,
-recommendation, spine, head, reuse, storage and recursion tables; every
+recommendation, spine, head, **head-exposure**, reuse, storage and
+recursion tables; every
 flow either has a short-circuiting consumer or has not; every imported head
 seen either has an axiom or has not; and every one of the census' list-cons
 sites maps onto exactly one cell or carries a reason.
 
 | profile | flows | ConsChain | Nil | Imported | Local | Vec | Iterator | Persistent | Lazy | Unknown |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `-O1` / A | 11,917 | 3,920 | 2,887 | 5,065 | 45 | 32 | 727 | 2,197 | 31 | 8,930 |
-| B | 12,273 | 3,989 | 3,024 | 5,210 | 50 | 37 | 701 | 2,260 | 31 | 9,244 |
-| C | 13,748 | 3,907 | 3,670 | 6,117 | 54 | 31 | 1,231 | 2,234 | 23 | 10,229 |
-| D | 23,987 | 6,291 | 8,516 | 9,126 | 54 | 32 | 1,886 | 2,954 | 83 | 19,032 |
-| E | 22,789 | 6,213 | 7,806 | 8,716 | 54 | 32 | 1,817 | 2,832 | 83 | 18,025 |
-| F | 22,908 | 6,262 | 7,839 | 8,753 | 54 | 32 | 1,795 | 2,800 | 83 | 18,198 |
+| `-O1` / A | 11,818 | 3,920 | 2,887 | 4,966 | 45 | 32 | 727 | 1,925 | 30 | 9,104 |
+| B | 12,146 | 3,989 | 3,024 | 5,083 | 50 | 37 | 701 | 2,079 | 30 | 9,299 |
+| C | 13,647 | 3,907 | 3,670 | 6,016 | 54 | 31 | 1,231 | 1,839 | 22 | 10,524 |
+| D | 23,886 | 6,291 | 8,516 | 9,025 | 54 | 32 | 1,886 | 2,480 | 82 | 19,406 |
+| E | 22,688 | 6,213 | 7,806 | 8,615 | 54 | 32 | 1,817 | 2,382 | 82 | 18,375 |
+| F | 22,807 | 6,262 | 7,839 | 8,652 | 54 | 32 | 1,795 | 2,362 | 82 | 18,536 |
 
 `h2r tuples`, `--verify`, `--boundaries`, `h2r laziness`, `h2r parsec` and
 `h2r fields` are byte-identical on `-O1` before and after this milestone,
@@ -2250,20 +2314,20 @@ component that also contains a flow whose rendered element type is
 concretely *not* `Char` is a contradiction and is **refused**, not
 propagated into (0 refusals on every profile).
 
-On `-O1`, of M2.3c's 11,917 list flows:
+On `-O1`, of M2.3c's 11,818 list flows:
 
 | | flows |
 |---|---:|
-| text | 4,436 |
+| text | 4,431 |
 | not text (element type reads as something else) | 1,788 |
-| element-type-unknown — never assumed text | 5,693 |
+| element-type-unknown — never assumed text | 5,599 |
 
-and of the 4,436 text flows, how `Char` was established:
+and of the 4,431 text flows, how `Char` was established:
 
 | | flows |
 |---|---:|
 | type-string only (level 6 alone) | 58 |
-| structural only (no rendered type agreed, or there was none to read) | 1,777 |
+| structural only (no rendered type agreed, or there was none to read) | 1,772 |
 | both — a rendered type and a fact that reads no type agree | 2,601 |
 
 90 of the structural selections came from `X24`. The type string alone
@@ -2285,7 +2349,7 @@ the specialised list `==` and `compare`, regex-tdfa's `compile`. A flow
 whose only unresolved consumer is such a head is `Unknown` in M2.3c and
 decided here. That is the one place this milestone is *more* decided than
 the last; it is asserted rather than derived, and every consumer it decides
-is marked `(asserted)` in `--explain` (1,538 of them on `-O1`).
+is marked `(asserted)` in `--explain` (1,528 of them on `-O1`).
 
 One consequence is recorded explicitly in the code: M2.3c sets
 `Reuse::Escapes("no-axiom-for")` whenever *any* consumer is an imported head
@@ -2323,42 +2387,51 @@ On `-O1`:
 
 | TextShape | flows | | consumer class | consumers |
 |---|---:|---|---|---:|
-| TextOnly | 1,862 | | CompleteOutput | 1,498 |
-| Mixed | 38 | | Prefix | 658 |
+| TextOnly | 1,862 | | CompleteOutput | 1,488 |
+| Mixed | 38 | | Prefix | 653 |
 | Unobserved | 1,004 | | Incremental | 364 |
-| Unknown | 1,532 | | Retained | 6,649 |
-| | | | Unknown | 2,911 |
+| Unknown | 1,527 | | Retained | 6,641 |
+| | | | Unknown | 2,891 |
 
 | consumer side | consumers | | text family | consumers |
 |---|---:|---|---|---:|
-| Text | 3,703 | | Append | 1,920 |
-| Neutral | 5,077 | | Compare | 1,194 |
-| Opaque | 2,857 | | Show | 174 |
-| Structural | 237 | | Affix | 173 |
+| Text | 3,690 | | Append | 1,917 |
+| Neutral | 5,072 | | Compare | 1,184 |
+| Opaque | 2,837 | | Show | 174 |
+| Structural | 232 | | Affix | 173 |
 | Generic | 206 | | CharSearch | 121 |
 | | | | Output | 61 |
 | | | | Regex | 55 |
 | | | | LinesWords | 5 |
 
 Construction: 2,414 flows are literal (`unpackCString#`-family producers),
-1,349 are built by an append, 7 of those from literals only, and 1,271 are
+1,349 are built by an append, 7 of those from literals only, and 1,268 are
 an operand of an append. The append-chain histogram, in operand segments:
 
 | segments | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | flows | 1,045 | 184 | 47 | 33 | 19 | 6 | 3 | 4 | 1 | 2 | 2 | 1 | 1 | 1 |
 
-`char_semantics_required` holds for 887 of the 4,436, for these reasons
+`char_semantics_required` holds for 882 of the 4,431, for these reasons
 (a flow may have several):
 
 | reason | count |
 |---|---:|
-| a consumer exposes individual characters | 746 |
-| an element is forced (M2.3c's `HeadDemand`) | 510 |
+| a consumer exposes individual characters | 738 |
+| an element **is forced** (M2.3c's `HeadDemand`, proven) | 383 |
 | a `(:)` alternative binds and uses the head | 177 |
+| an element **is exposed to a callback** (M2.3c's `HeadExposure`) | 161 |
 | a consumer depends on character positions or count | 69 |
 | the head is compared against a `Char` literal | 59 |
 | a `Char` literal is an element | 1 |
+
+M2.3g split the second row. Before it, `an-element-is-forced` covered 510
+flows, and for most of them the only evidence was a predicate or an `Eq`
+method — which may ignore its argument. Character semantics are still
+required in both cases (the element has to exist as a `Char` either way, so
+the flag did not move except for the five flows the population lost), but
+the milestone may not say "forced" when all it knows is "handed to a
+callback".
 
 ### The advisory
 
@@ -2371,7 +2444,7 @@ first, then `NotText`, then the strong conjunction, then undecided.
 | `StrongStringCandidate` | 185 | `TextOnly` ∧ only complete-output or incremental consumers ∧ no character observed ∧ no shared tail ∧ no prefix consumer ∧ `FiniteProducer` |
 | `TextValueUndecided` | 2,561 | text, representation open |
 | `NotText` | 2 | selected by type, consumed only structurally, and no character observed anywhere |
-| `Unknown` | 1,688 | an opaque consumer, a real escape, or an unknown consumer class |
+| `Unknown` | 1,683 | an opaque consumer, a real escape, or an unknown consumer class |
 
 2,345 flows have no text-shaped consumer at all, whatever else is unknown
 about them — the honest measure of how much of ShellCheck's text is handled
@@ -2411,12 +2484,12 @@ append argument sites maps onto exactly one text flow or carries a reason.
 
 | profile | list flows | text | not text | elem unknown | type-only | struct-only | both | Strong | Undecided | NotText | Unknown |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `-O1` / A | 11,917 | 4,436 | 1,788 | 5,693 | 58 | 1,777 | 2,601 | 185 | 2,561 | 2 | 1,688 |
-| B | 12,273 | 4,478 | 1,782 | 6,013 | 65 | 1,831 | 2,582 | 205 | 2,588 | 0 | 1,685 |
-| C | 13,748 | 5,349 | 1,648 | 6,751 | 52 | 3,678 | 1,619 | 186 | 3,045 | 0 | 2,118 |
-| D | 23,987 | 7,788 | 2,389 | 13,810 | 108 | 5,357 | 2,323 | 202 | 4,141 | 0 | 3,445 |
-| E | 22,789 | 7,486 | 2,389 | 12,914 | 108 | 5,043 | 2,335 | 202 | 3,947 | 0 | 3,337 |
-| F | 22,908 | 7,624 | 2,387 | 12,897 | 110 | 5,192 | 2,322 | 202 | 3,945 | 0 | 3,477 |
+| `-O1` / A | 11,818 | 4,431 | 1,788 | 5,599 | 58 | 1,772 | 2,601 | 185 | 2,561 | 2 | 1,683 |
+| B | 12,146 | 4,473 | 1,782 | 5,891 | 65 | 1,826 | 2,582 | 205 | 2,588 | 0 | 1,680 |
+| C | 13,647 | 5,344 | 1,648 | 6,655 | 52 | 3,673 | 1,619 | 186 | 3,045 | 0 | 2,113 |
+| D | 23,886 | 7,783 | 2,389 | 13,714 | 108 | 5,352 | 2,323 | 202 | 4,141 | 0 | 3,440 |
+| E | 22,688 | 7,481 | 2,389 | 12,818 | 108 | 5,038 | 2,335 | 202 | 3,947 | 0 | 3,332 |
+| F | 22,807 | 7,619 | 2,387 | 12,801 | 110 | 5,187 | 2,322 | 202 | 3,945 | 0 | 3,472 |
 
 `h2r tuples`, `--verify`, `h2r laziness`, `h2r parsec`, `h2r fields` and
 `h2r lists` (with `--axioms`) are byte-identical on `-O1` before and after
@@ -2441,10 +2514,10 @@ this milestone.
   this milestone because it is not a list function at all, so the refusal is
   correct rather than a coverage loss. `unpackFoldrCString#` does not occur
   in this program.
-* **5,693 flows are element-type-unknown.** Most are flows with no bound
+* **5,599 flows are element-type-unknown.** Most are flows with no bound
   binder, no `(:)` alternative and no text-shaped consumer — nothing in the
   dump says what their elements are, and nothing here guesses.
-* **1,532 flows have an `Unknown` shape.** 2,857 consumers are imported
+* **1,527 flows have an `Unknown` shape.** 2,837 consumers are imported
   heads neither table knows or points at which the value left the walk;
   the largest single one is `ShellCheck.Interface.$wgo` (394 consumers).
   Whole-program work (M2.4), not a missing rule here.
@@ -2695,14 +2768,22 @@ them under that module.
   there is no representation that is not a knot for such a thing, whatever
   the demand facts say, so deciding it first is not a precedence choice but
   the only correct answer. The 31 flows it covers are all `LazyCandidate`.
-* **A proven `SharedTail` outranks an `Unknown` spine.** *Kept, and it
-  became more load-bearing.* How much of a spine anyone walks does not
-  change the fact that two owners see the same cells, and `SharedTail` is a
-  *positive* structural fact where `Unknown` is the absence of one. After
-  M2.3e's `Reuse` propagation the rule decides 1,867 flows rather than
-  1,762, and every one of them lands on `PersistentCandidate` — the safe
-  side. The verifier checks the converse directly: no flow it accepts as
-  `Vec` or `Iterator` has a shared tail.
+* **A proven `SharedTail` outranks an `Unknown` spine.** *Kept at M2.3e —
+  and **reversed at M2.3g**, which is the one M2.3e ruling that did not
+  survive.* The reasoning below is sound about the fact and wrong about the
+  advisory: two owners seeing the same cells is indeed a positive
+  structural fact, but an advisory is a claim of *sufficiency*, and a flow
+  with an unknown consumer supports no such claim. Since M2.3g the fact is
+  kept as the constraint `RequiresTailSharing` and the recommendation is
+  `Unknown` whenever any other fact is — 265 flows moved. The original
+  argument: how much of a spine anyone walks does not change the fact that
+  two owners see the same cells, and `SharedTail` is a *positive*
+  structural fact where `Unknown` is the absence of one; after M2.3e's
+  `Reuse` propagation the rule decided 1,867 flows rather than 1,762, all on
+  `PersistentCandidate` — the safe side. What that missed is that "safe
+  side" is a property of the *fact*, not a licence to publish it as an
+  advisory. The verifier checks the converse directly and always did: no
+  flow it accepts as `Vec` or `Iterator` has a shared tail.
 
 ### The adversarial cases
 
@@ -2718,15 +2799,15 @@ hand-built test is never the only evidence a rule was exercised.
 | 3 | forced on one branch, not another | 720 | `Main` 411 | `Deferred` |
 | 4 | `take 1 (x : expensiveTail)` | 179 | `ShellCheck.ASTLib` 1220 | `Prefix(Known)`, never `Vec` |
 | 5 | a `find`/`any` short-circuit | 921 | `Main` 140 | `Prefix(DataDependent)` + short-circuit, never `Vec` |
-| 6 | two consumers sharing one tail | 1,867 | `Main` 7448 | `SharedTail` → `Persistent`, never `Iterator` |
+| 6 | two consumers sharing one tail | 1,860 | `Main` 7448 | `SharedTail` → `Persistent` (or a constraint on an `Unknown`), never `Iterator` |
 | 7 | a finite recursive producer (a `go`) | 759 | `Main` 576 | `FiniteProducer`, not a knot |
-| 8 | an actual recursive list value | 31 | `ShellCheck.Analytics` 2042 | `RecursiveKnot` → `LazyCandidate` |
+| 8 | an actual recursive list value | 30 | `ShellCheck.Analytics` 2042 | `RecursiveKnot` → `LazyCandidate` (one more is a knot whose spine demand is `Unknown`) |
 | 9a | stored in another ADT, holder read structurally | 181 | `Main` 140 | `StoredIn`, spine facts propagate |
-| 9b | stored in another ADT, holder escapes | 4,297 | `Main` 74 | `Unknown` |
-| 10 | through a higher-order parameter | 1,355 | `Main` 349 | `Unknown` with a reason |
-| 11 | `[Char]` used textually **and** structurally | 156 | `Main` 135 | `TextValueUndecided` + `char_semantics_required`, never `StrongString` |
+| 9b | stored in another ADT, holder escapes | 4,357 | `Main` 74 | `Unknown` |
+| 10 | through a higher-order parameter | 1,402 | `Main` 349 | `Unknown` with a reason |
+| 11 | `[Char]` used textually **and** structurally | 151 | `Main` 135 | `TextValueUndecided` + `char_semantics_required`, never `StrongString` |
 | 12 | `foldl'` over a whole list | 38 | `Main` 5566 | `Whole` spine, `IteratorCandidate` not `Vec` |
-| 13 | the right operand of `xs ++ ys` | 1,777 | `Main` 7448 | `SharedTail` on `ys` |
+| 13 | the right operand of `xs ++ ys` | 1,770 | `Main` 7448 | `SharedTail` on `ys` |
 | 14 | a case-binder alias under an unreachable alternative | 4 | `ShellCheck.Analytics` 99 | no escape — confirmed from both sides |
 
 Case 14 is the one both sides had to agree on separately: the verifier does
@@ -2817,7 +2898,7 @@ the reps nothing re-derives because a wrong one only costs coverage.
 
 The **list view** prints the producer, every cell, every consumer with the
 rule that classified it *and the demand that one consumer contributes*, the
-six facts each with the rule that decided it, and the advisory with the
+the facts each with the rule that decided it, and the advisory with the
 fact conjunction it came from. `ListView::check` asserts every consumer
 appears exactly once. Where a fact is the *absence* of a rule firing —
 `SinglePass` is "no `L14` and no `L15`" — the view says that rather than
@@ -2832,14 +2913,16 @@ ShellCheck.ASTLib node 1220 — Nil flow, 2 consumer(s), advisory IteratorCandid
             handed to the local shortToOpts
         node 1293    Whnf           [T15-WHNF-ALT]  spine Prefix(Known) / head None, streaming
             observed at WHNF (alternative-binds-no-field)
-    the six facts
+    the facts
         SpineDemand   Prefix(Known)                [T15-WHNF-ALT]
         HeadDemand    None                         [no (:) alternative bound a head]
+        HeadExposure  NotExposed                   [no consumer hands an element anywhere]
         Reuse         SinglePass                   [no L14/L15 fired]
         Storage       NotStored                    [no L10/L16 fired]
         Recursion     FiniteProducer               [M1 does not call it a recursive value]
         ShortCircuit  no                           [no short-circuiting consumer]
         traversals    1, every spine consumer streaming [one entry into the spine]
+        constraints   none                         [what any representation must support, whatever the advisory says]
     advisory  IteratorCandidate [L-REC-ITERATOR] from Prefix(Known) ∧ None ∧ SinglePass ∧ NotStored ∧ FiniteProducer ∧ streaming
         verified: yes
 ```
@@ -2901,7 +2984,7 @@ node 5293
     T11-ESCAPE: the-program-construction-holding-it-escapes (OuterToken) (node(s) 5291)
 ```
 
-A list footer carries the six facts and the advisory
+A list footer carries the facts and the advisory
 (`SpineDemand Prefix(DataDependent) [L8-AXIOM] … advisory PersistentCandidate
 [verified: not a claim]`), and a text footer the consumer classes, the
 append chain and the text advisory. All five proof objects' marks are
@@ -2928,13 +3011,13 @@ M2.3 accounting — fields: total = proven-eager + proven-lazy + dead + unsuppor
 
 M2.3 accounting — lists and text: total = advised + unsupported
                           total      advised  unsupported   advised, by advisory
-  list flows              11917         2977         8940   IteratorCandidate 722, LazyCandidate 31, PersistentCandidate 2197, VecCandidate 27
-  text flows               4436         2748         1688   NotText 2, StrongStringCandidate 185, TextValueUndecided 2561
+  list flows              11818         2704         9114   IteratorCandidate 722, LazyCandidate 30, PersistentCandidate 1925, VecCandidate 27
+  text flows               4431         2748         1683   NotText 2, StrongStringCandidate 185, TextValueUndecided 2561
 
 M2.3 accounting — the M2 census' argument sites
                                                                total   proven advised-lazy  deferred  unsupported
   the M2 census' 1,996 constructor-field sites                  1996        0           77      1310          609
-  …of which the 1,310 list-cons sites, on M2.3c's population    1310       29          402         0          879
+  …of which the 1,310 list-cons sites, on M2.3c's population    1310       29          303         0          978
   the M2 census' 1,118 append argument sites                    1118        0          226         0          892
 ```
 
@@ -3010,7 +3093,7 @@ reasons are structural rather than a missing rule:
 
 * the whole `Deferred` population (986 fields) is *by definition* the
   thunks that stay: `Deferred` says the evaluation remains where GHC put it;
-* the whole `PersistentCandidate` population (2,197 flows) has a shared tail
+* the whole `PersistentCandidate` population (1,925 flows) has a shared tail
   or a second entry, so its cells outlive any one pass;
 * 239 flows are `Vec`/`Iterator` over a **prefix** spine, which is precisely
   a spine whose tail may never be reached — eager consumption of a prefix
@@ -3034,19 +3117,19 @@ moves a divergence; a wrong `Vec`/`Iterator`/`StrongString` materialises or
 one-shots a value that is shared. A wrong `Deferred`, `Persistent` or
 `Unknown` costs an optimisation, so nothing re-derives those and nothing
 needs to. And the facts come before the reps everywhere: three orthogonal
-facts per field, six per list flow, and the M2.3d facts on top — the rep is
+facts per field, seven per list flow, and the M2.3d facts on top — the rep is
 a *function* of them, and for lists and text it is explicitly **advisory**,
 a named conjunction of facts and not a decision about a Rust type.
 
 Against the `-O1` dump, all of the following hold.
 
 **The populations are partitioned and every equation closes.** 9,166
-constructions / 19,830 fields, 11,917 list flows, 4,436 text flows;
+constructions / 19,830 fields, 11,818 list flows, 4,431 text flows;
 `FieldAccounting::check`, `ListAccounting::check`, `TextAccounting::check`
 and `RepAccounting::check` all close, on `-O1` and on all six matrix
 profiles. The three tables are
 [above](#the-milestone-accounting): 19,830 = 3,408 + 995 + 9 + 15,418 fields,
-11,917 = 2,977 + 8,940 list flows, 4,436 = 2,748 + 1,688 text flows, and the
+11,818 = 2,704 + 9,114 list flows, 4,431 = 2,748 + 1,683 text flows, and the
 1,996 / 1,310 / 1,118 site tables close the same way.
 
 **Every claim is proven twice.** `h2r verify-rep` re-derives all 4,401
@@ -3072,7 +3155,8 @@ spine whose longer form was walked twice, shared a tail or escaped stayed
 *one* call site handed it a tail-derived argument, which under-counts
 traversals; it now requires **every** call site to. Together they moved
 `VecCandidate` 49 → 32 and `IteratorCandidate` 740 → 713 (727 after the new
-axioms), and `PersistentCandidate` 1,951 → 2,197.
+axioms), and `PersistentCandidate` 1,951 → 2,197 (1,925 after M2.3g's
+[ordering correction](#correction-m23g--the-axiom-layer)).
 
 **One axiom would have been a soundness bug.**
 `$text-2.0.2$Data.Text.Show$$wunpackCStringAscii#` (27 call sites) is not a
@@ -3083,8 +3167,8 @@ and an entry would have given a `Text` a `[Char]`'s demand semantics.
 
 **Every adversarial shape has a count in the real dump**, not only a
 hand-built test —
-[the table](#the-adversarial-cases) — 53 / 7 / 14 / 720 / 179 / 921 / 1,867
-/ 759 / 31 / 181 / 4,297 / 1,355 / 156 / 38 / 1,777 / 4, printed by
+[the table](#the-adversarial-cases) — 53 / 7 / 14 / 720 / 179 / 921 / 1,860
+/ 759 / 30 / 181 / 4,357 / 1,402 / 151 / 38 / 1,770 / 4, printed by
 `verify-rep` so a rule can never be exercised by its test alone.
 
 **The two asserted tables are labelled as asserted.** The 101-entry library
@@ -3111,15 +3195,15 @@ that a program function called `map` is never looked up.
 | | | whose problem it is |
 |---:|---|---|
 | 15,418 | fields `Unknown` | 2,264 stored in a list cell (M2.3c's population, followed as a spine but not as a field), 311 in a tuple field (M2.2's), 1,919 (998 + 573 + 348) a **program** construction that escapes — `TokenComment`, `OuterToken`, `Comment` — which is M2.4's whole-program work, 1,912 (760 + 595 + 557) a **library** construction that escapes, and 1,708 (1,143 `eta` + 565 `eok`) an unknown higher-order callee → M2.4 higher-order |
-| 8,940 | list flows `Unknown` | 2,228 stored with no visible spine demand in a holder this module never takes apart, 620 in a holder the field census *does* know, 1,700 reaching a holder that escapes, 1,019 an unknown spine demand |
-| 84 | imported heads with **no axiom**, 1,571 of the 8,031 imported consumer sites | the largest are `ShellCheck.Interface.$wgo` (394), `GHC.Show.showLitString` (168), `Text.Parsec.Char.string1` (88), `GHC.Show.showList__` (66), `GHC.IO.Handle.Text.hPutStr2` (61), regex-tdfa's `compile` (49), `Data.Set.Internal.$fDataSet1` (45) — whole-program (the ShellCheck ones) or more axioms (the base ones) |
-| 1,688 | text flows `Unknown` | 2,857 consumers are imported heads neither table knows, or points at which the value left the walk |
+| 9,114 | list flows `Unknown` | 2,228 stored with no visible spine demand in a holder this module never takes apart, 620 in a holder the field census *does* know, 1,718 reaching a holder that escapes, 1,044 an unknown spine demand — and 266 of the 9,114, cutting across those reasons, carry a proven constraint (`RequiresTailSharing`, `RequiresRecursiveLaziness`) beside the unknown |
+| 80 | imported heads with **no axiom**, 1,545 of the 6,660 imported consumer sites | the largest are `ShellCheck.Interface.$wgo` (394), `GHC.Show.showLitString` (168), `Text.Parsec.Char.string1` (88), `GHC.Show.showList__` (66), `GHC.IO.Handle.Text.hPutStr2` (61), regex-tdfa's `compile` (49), `Data.Set.Internal.$fDataSet1` (45) — whole-program (the ShellCheck ones) or more axioms (the base ones) |
+| 1,683 | text flows `Unknown` | 2,837 consumers are imported heads neither table knows, or points at which the value left the walk |
 | 2,345 | text flows with no text-shaped consumer at all | the honest measure of how much of ShellCheck's text is handled by code this dump does not contain |
 | 10 | claims the verifier refuses | the two weakenings above, both coverage-only |
 
 **How to audit a site.** `h2r show <dir> <module> <node>` for the footers,
 `h2r fields --view <node>` for the field-by-field proof, `h2r lists --view
-<node>` for the producer / cells / consumers / six facts, `h2r text --view
+<node>` for the producer / cells / consumers / facts, `h2r text --view
 <node>` for the text facts on top of them; `--view-all --module M` for a
 whole module and `--json` for any of them. All four are shown above.
 
@@ -3127,14 +3211,9 @@ whole module and `--json` for any of them. All four are shown above.
 
 * **rendered types are level-6 evidence.** Selection of `[Char]` from a
   pretty-printed type string is textual comparison, not `TyConApp` with a
-  stable `TyCon`. 58 of the 4,436 text flows rest on it alone. *For the next
+  stable `TyCon`. 58 of the 4,431 text flows rest on it alone. *For the next
   plugin-format bump: expose structured types, and the caveat disappears —
   nothing else in the pipeline needs the change.*
-* **`Produces::SameAsInput` on `GHC.Magic.lazy`** makes every call of a
-  polymorphic identity a list producer regardless of the result type.
-  `flipSeq` was given `NotAList` for exactly that reason; `lazy`'s 72 call
-  spines were left alone rather than moving published output on a point no
-  verdict depends on.
 * **`R3-SAME-FRONTIER` is exercised only by its tests.** GHC's
   case-of-known-constructor has already eliminated every construction
   scrutinised in the frame that built it, so `R3` fires on nothing in any
@@ -3145,12 +3224,240 @@ whole module and `--json` for any of them. All four are shown above.
   `L4-LOOP-WHOLE` rest on one walk, not two — and are therefore counted as
   unsupported.
 
-`cargo test` (141), `cargo clippy --all-targets` (0 warnings) and
-`cargo fmt --check` are clean; `h2r tuples`, `--verify`, `h2r laziness` and
-`h2r parsec` are byte-identical on `-O1` before and after M2.3f, and
-`h2r fields`, `lists`, `text` and `verify-rep` gain sections without one
-existing line changing. All four accounting checks close on all seven
+`cargo test` (151), `cargo clippy --all-targets` (0 warnings) and
+`cargo fmt --check` are clean; `h2r tuples`, `--verify`, `h2r laziness`,
+`h2r parsec` and `h2r compare` are byte-identical on `-O1` before and after
+M2.3f **and after M2.3g**. All four accounting checks close on all seven
 dumps.
+
+### Correction (M2.3g) — the axiom layer
+
+*2026-09-14. The acceptance above was written before this review; it is
+amended here rather than re-stamped.*
+
+**The verifier's 0 disagreements never validated the axiom table.**
+`verify_rep.rs` re-derives which argument of which saturated call to which
+*import* a value lands in, and then **reads the table's row for it**. The
+table is the milestone's asserted semantic dependency: aliasing claims are
+confirmed against base-4.18.3.0's source *and* a call site in this dump,
+demand and forcing claims are read off base's definitions. Two independent
+walks that consult the same asserted table agree about the table by
+construction. A review of the table's *contents* found three classes of
+error, none of which the verifier could have caught.
+
+**1. `Produces` conflated "returns a list" with "returns something
+containing a list" — a population bug.** Any entry whose `Produces` was not
+`NotAList` made its call an `L0-IMPORTED` producer, so calls whose result is
+a *pair* of lists, an *action* returning a list, or a polymorphic identity
+were flows whose producer node is not a list at all. The schema now states
+the outer return type honestly — `NotAList`, `DirectList(kind)`,
+`ProductContainsList{components}`, `EffectContainsList(kind)`,
+`OtherContainsList` — and **only `DirectList` starts a flow**. The other
+variants keep their argument-demand and aliasing facts for the consumer
+side; recovering the components is tuple and effect normalisation's work.
+
+| entry | `Produces` before → after | base |
+|---|---|---|
+| `GHC.List.span`, `GHC.List.break` | `Incremental` → `ProductContainsList(2)` | `span p xs = (takeWhile p xs, dropWhile p xs)` — GHC/List.hs |
+| `GHC.List.$wspan`, `GHC.List.$wbreak` | `Incremental` → `ProductContainsList(2)` | the worker returns `(# [a], [a] #)`; the old note said so and the field still claimed a list |
+| `GHC.List.splitAt` | `Incremental` → `ProductContainsList(2)` | `splitAt n xs = (take n xs, drop n xs)` |
+| `GHC.List.splitAt_$s$wsplitAt'` | `Incremental` → `ProductContainsList(2)` | the specialised worker of `splitAt' :: Int -> [a] -> ([a],[a])` |
+| `GHC.List.unzip` | `Incremental` → `ProductContainsList(2)` | `unzip :: [(a,b)] -> ([a],[b])` |
+| `Data.Traversable.mapM`, `forM`, `traverse`, `sequence` | `WholeBeforeFirstCell` → `EffectContainsList(WholeBeforeFirstCell)` | `mapM :: (a -> m b) -> [a] -> m [b]` |
+| `Data.OldList.dropLengthMaybe` | `NotAList` → `OtherContainsList` | returns `Maybe [b]`; the old value was honest but said nothing about the suffix inside |
+| `GHC.Magic.lazy` | `SameAsInput` → `NotAList` | `lazy :: a -> a`; `a` is not a list at every call site, which is exactly why `flipSeq` was already `NotAList`. The "known limit" M2.3f recorded about this entry is now fixed rather than tolerated |
+
+**99 `L0-IMPORTED` flows disappeared** on `-O1`: `$wspan` 16, `$wbreak` 6,
+`splitAt_$s$wsplitAt'` 5, `GHC.Magic.lazy` 72. (`span`, `break`, `splitAt`,
+`unzip` and the `Traversable` four never occur saturated as producers in
+this dump — GHC's worker/wrapper had already replaced them — so their rows
+cost nothing here and are corrected anyway.) 92 of the 99 were `Unknown`
+and 7 were `PersistentCandidate`.
+
+**2. `HeadDemand` claimed forcing where the axiom only proves exposure.**
+The enum is documented as "which elements are forced", and entries like
+`any`, `all`, `find`, `takeWhile`, `elem`, `nub`, `sort` marked heads
+`Prefix`/`All` — but `any (const True) xs` forces no element, and an `Eq` or
+`Ord` method may ignore its argument. The fact is split: `HeadDemand` is now
+**proven forcing only** and the new `HeadExposure` records which callback an
+element reaches (`Predicate`, `Eq`, `Ord`, `Show`, `Other`), with
+`BoundAndUsed` for a `(:)` alternative's head binder.
+
+| kept as forcing (and why) | moved to exposure |
+|---|---|
+| `eqString` — at `Char` the comparison is the `eqChar#` primop | `elem`, `notElem`, `lookup`, `isPrefixOf`, `isSuffixOf`, `isInfixOf`, `nub`, `group`, the four specialised list `==`/`compare` copies → `Eq`/`Ord` |
+| `and`, `or` — `foldr (&&)`, and `(&&)` case-analyses its argument | `takeWhile`, `dropWhile`, `span`, `break`, `any`, `all`, `find` (both copies) → `Predicate` |
+| `lines` — `break (== '\n')` on `Char` | `sort`, `sortOn`, `maximum`, `minimum` → `Ord`/`Other`; base's `sortOn` `seq`s the computed **key**, not the element |
+| `words` — `isSpace` case-analyses the `Char` | `sum` → `Other` (`(+)` comes from a dictionary) |
+| | `map`, `filter`, `foldr`, `foldl`, `foldl'`, `zipWith`, `concatMap`, `mapMaybe`, `nubBy`, `sortBy`, `groupBy`, `mapM_`/`forM_`/`traverse_`/`sequence_` and the `Traversable` four, which previously claimed `None` and now say **which** callback sees the elements |
+
+**31 entries had a `head` claim weakened** from `Prefix`/`All` to `None`,
+and 53 of the 101 now carry a non-trivial `exposure`. On `-O1`,
+`HeadDemand::Prefix` fell **972 → 544** and `None` rose 5,054 → 5,482;
+nothing moved into `All`, which had come from `L4`-shaped loops and from
+`lines`/`words`, both of which are proven. The new fact reads: 5,340
+`NotExposed`, 460 `BoundAndUsed`, 401 `Eq`, 61 `Other`, 46 `Predicate`, 7
+`Ord` (515 callback exposures in all), 5,503 `Unknown`.
+
+In the text census, `char_semantics_required` now cites which of the two it
+saw. The flag itself barely moved — an element handed to a callback still
+has to exist as a `Char` — but the evidence did:
+
+| reason | before | after |
+|---|---:|---:|
+| `an-element-is-forced` | 510 | 383 |
+| `an-element-is-exposed-to-a-callback` | — | 161 |
+| flows with `char_semantics_required` | 887 of 4,436 | 882 of 4,431 |
+
+(The five lost are flows the population correction removed; no flow lost
+the requirement.) The verifier splits the same way: its `StrongString`
+refusal is `an-individual-character-is-observed` for proven forcing and
+`an-individual-character-is-exposed-to-a-callback` for exposure. Neither
+fires on `-O1` — all 185 claims are re-derived — but the distinction is
+in the walk, not only in the census.
+
+**3. `cycle` and `isInfixOf` encoded the wrong *kind* of demand.**
+`cycle xs = xs' where xs' = xs ++ xs'` consumes its argument incrementally
+and **replays** it forever; `Whole` said the call walks to the end before
+returning, which on an infinite argument never happens. `isInfixOf needle
+hay = any (isPrefixOf needle) (tails hay)` retries the needle at successive
+positions: neither spine is necessarily walked whole, and both are
+re-traversed. The new fact is `Axiom::replays` (end-indexed arguments) and
+`Reuse::Replayed`, distinct from `Whole`, `MultiPass` and `SharedTail`:
+
+| entry | before → after | base |
+|---|---|---|
+| `GHC.List.cycle` | `Whole` → `Incremental` + replays `End(0)` | `cycle xs = xs' where xs' = xs ++ xs'` — GHC/List.hs |
+| `Data.OldList.isInfixOf` | needle `Whole` → `PrefixDataDependent`, both arguments replayed | `isInfixOf needle haystack = any (isPrefixOf needle) (tails haystack)` — OldList.hs |
+| `Data.OldList.isSuffixOf` | both spines replayed (the `Whole` demand is right here) | `isSuffixOf ns hs = maybe False id $ do delta <- dropLengthMaybe ns hs; return $ ns == dropLength delta hs` — both spines are walked once to measure and once to compare |
+| `Data.OldList.intercalate` | separator replayed, `streaming` true → **false** | `intercalate xs xss = concat (intersperse xs xss)` — the separator is inserted at every gap and copied by `concat` |
+
+The rest of the table was searched for the same shape: `dropLength` and
+`dropLengthMaybe` each make **one** pass — the replay in `isSuffixOf` is at
+the call site that uses both, and it is recorded there, not in the helpers;
+a `zip xs xs` style self-reuse is a property of the *call site*, not of the
+entry, and the walk already records it as two consumers of one flow
+(`MultiPass`). **None of the four entries carrying a replayed argument — six arguments in
+all — is called anywhere in these seven dumps, so `Reuse::Replayed` has 0
+firings.** It is printed with
+its zero.
+
+**4. Every `Alias` was type-checked.** `ResultSharesArg(i)` is only
+possible when the result spine and the argument spine can have the same
+element type. Two new variants were needed, and the audit is entry by
+entry:
+
+| entry | alias | base definition it rests on |
+|---|---|---|
+| `unpackAppendCString#`, `…Utf8#` | `ResultIsTailOfArg(0)` *kept* | `unpackAppendCString# :: Addr# -> [Char] -> [Char]` — the second argument is returned as the tail |
+| `GHC.Base.++`, `++_$s++` | `ResultIsTailOfArg(0)` *kept* | `(++) [] ys = ys` — GHC/Base.hs |
+| `GHC.List.tail` | `ResultIsTailOfArg(0)` *kept* | `tail (_:xs) = xs` |
+| `GHC.List.reverse1` | `ResultIsTailOfArg(0)` *kept* | `rev [] a = a` — the accumulator is returned |
+| `GHC.List.dropWhile` | `ResultSharesArg(0)` *kept* | `dropWhile p xs@(x:xs') = if p x then dropWhile p xs' else xs` |
+| `GHC.List.drop` | `ResultSharesArg(0)` *kept* | `drop n xs` returns a suffix |
+| `Data.OldList.dropLength` | `ResultSharesArg(0)` *kept* | `dropLength :: [a] -> [b] -> [b]`; the result is a suffix of the `[b]`, and the types agree |
+| `GHC.List.flipSeq` | `ResultSharesArg(1)` *kept* | `flipSeq x !_n = x` — the result *is* the first argument; `Produces` stays `NotAList` because `a` need not be a list |
+| `GHC.Magic.lazy` | `ResultSharesArg(0)` *kept* | `lazy :: a -> a`; only `Produces` was wrong |
+| `Data.Foldable.toList` | `ResultSharesArg(0)` *kept* | at the list instance, `toList = id` |
+| `GHC.List.span`, `break`, `$wspan`, `$wbreak`, `splitAt`, `splitAt_$s$wsplitAt'` | `ResultSharesArg(0)` → **`ResultContainsSuffixOfArg(0)`** | the suffix is the pair's *second component*; the outer result is a pair, and the two axes must not be spelled with one field |
+| `Data.OldList.dropLengthMaybe` | `ResultSharesArg(0)` → **`ResultContainsSuffixOfArg(0)`** | the suffix is inside the `Just` |
+| `GHC.List.head`, `last`, `!!`, `$w!!` | `NoAlias` → **`ResultSharesElementOf(i)`** | `head (x:_) = x`, `last`/`(!!)` likewise return an *element*: when the elements are lists the result shares cells with one of them, and that is **not** a shared tail on this spine |
+| `concat`, `Data.Foldable.concat`, `intercalate`, `unwords`, `unlines`, `lines` | `NoAlias` *kept* | `concat = foldr (++) []` (GHC/List.hs) makes every inner list a **left** operand of `(++)`, so it is copied — even the final `xs ++ []`; `intercalate xs xss = concat (intersperse xs xss)` (OldList.hs) inherits that; `unlines (l:ls) = l ++ '\n' : unlines ls` and `unwords (w:ws) = w ++ go ws` copy every line and every word, the last one included (the Report-prelude `foldr1` `unwords` would share it; base-4.18 does not) |
+| every remaining entry | `NoAlias` *kept* | result cells are freshly allocated |
+
+`ResultContainsSuffixOfArg` still puts `RequiresTailSharing` on the
+**input** flow — `span`'s second component really does keep the argument's
+cells alive — while the call itself is no longer a producer. That is the
+point of separating the axes. `ResultSharesElementOf` is the one category
+M2.3e could not express; it is *not* assigned to `concat`, `intercalate`,
+`unwords` or `unlines`, where base copies, but to the four entries whose
+result **is** an element.
+
+**5. The advisory ordering was wrong about what an advisory means.** A
+proven `SharedTail` and M1's `RecursiveKnot` used to be decided *before*
+the `Unknown` checks, so "one known property points this way" was published
+as `PersistentCandidate`/`LazyCandidate` — which reads as "this
+representation is sufficient". It is not sufficient when another consumer
+is unknown. Every `Unknown` fact now wins, the positive facts are recorded
+as constraints, and the accounting counts a constrained `Unknown` as
+unsupported like any other:
+
+| moved | from → to | constraint it now carries |
+|---:|---|---|
+| 265 | `PersistentCandidate` → `Unknown` | `RequiresTailSharing` |
+| 1 | `LazyCandidate` → `Unknown` | `RequiresRecursiveLaziness` |
+
+**The tables, before → after, on `-O1`:**
+
+| `h2r lists` | before | after |
+|---|---:|---:|
+| flows | 11,917 | **11,818** |
+| `L0-IMPORTED` producers | 5,065 | **4,966** |
+| `SpineDemand::Unknown` | 5,602 | **5,503** |
+| `HeadDemand::Prefix` / `None` | 972 / 5,054 | **544 / 5,482** |
+| `HeadExposure` (new) | — | 5,340 NotExposed, 460 BoundAndUsed, 515 callbacks, 5,503 Unknown |
+| `Reuse::SharedTail` | 1,867 | **1,860** |
+| `VecCandidate` | 32 | 32 |
+| `IteratorCandidate` | 727 | 727 |
+| `PersistentCandidate` | 2,197 | **1,925** |
+| `LazyCandidate` | 31 | **30** |
+| `Unknown` | 8,930 | **9,104** |
+| constraints (new) | — | 1,860 tail sharing, 31 recursive laziness, 0 replay; 266 of them on an `Unknown` |
+
+| `h2r text` | before | after |
+|---|---:|---:|
+| text flows | 4,436 | **4,431** |
+| `char_semantics_required` | 887 | **882** |
+| — of those, `an-element-is-forced` | 510 | **383** |
+| — of those, exposed to a callback | — | **161** |
+| `StrongStringCandidate` | 185 | 185 |
+| `Unknown` | 1,688 | **1,683** |
+
+| `h2r verify-rep` | before | after |
+|---|---:|---:|
+| claims checked / re-derived / refused | 4,401 / 4,391 / 10 | **4,401 / 4,391 / 10** |
+| disagreements | 0 | **0** |
+| shape 6 (a tail in a second place) | 1,867 | **1,860** |
+| shape 8 (a value knot) | 31 | **30** |
+| shape 9b (holder escapes) | 4,297 | **4,357** |
+| shape 10 (higher-order parameter) | 1,355 | **1,402** |
+| shape 11 (`[Char]` textual **and** structural) | 156 | **151** |
+| shape 13 (right operand of `++`) | 1,777 | **1,770** |
+
+| accounting | before | after |
+|---|---|---|
+| list flows | 11,917 = 2,977 + 8,940 | **11,818 = 2,704 + 9,114** |
+| text flows | 4,436 = 2,748 + 1,688 | **4,431 = 2,748 + 1,683** |
+| the 1,310 list-cons sites | 29 + 402 + 879 | **29 + 303 + 978** |
+| the M1 link | 2,242 = 2,139 + 92 + 11 | **unchanged** |
+| fields | 19,830 = 3,408 + 995 + 9 + 15,418 | **unchanged** |
+
+All four accounting `check()`s close on `-O1` and on all six matrix
+profiles, where the flow counts fall by 99 / 127 / 101 / 101 / 101 / 101 and
+the text counts by 5 each, with **0 disagreements** and the same 10 / 11 /
+15 / 15 / 15 / 15 coverage refusals as before.
+
+**What is still asserted rather than proven.** The same thing as before,
+now stated where it belongs: **the axiom table is this milestone's semantic
+dependency.** Its aliasing claims are checked against base's source and a
+call site; its demand, replay and forcing claims are read off base's
+definitions and are not derived from anything in the dump. The verifier
+consults it and cannot confirm it. What M2.3g adds is that each of those
+claims now has a field of its own, so a wrong one is a wrong *statement*
+rather than a conflation — and `h2r lists --axioms` prints all six per
+entry.
+
+**Regression gate.** `h2r tuples`, `--verify`, `h2r laziness`, `h2r parsec`
+and `h2r compare` are byte-identical on `-O1` before and after M2.3g. `h2r
+fields`'s own census output is byte-identical too; the only lines of it
+that move are the two rows of the shared M2.3 accounting block that belong
+to lists and text. `cargo test` 144 lib tests (151 in all crates, 10 of them
+new and adversarial: a pair-returning head is not a producer, a product- or
+effect-returning head is not a producer, only `DirectList` may produce,
+`cycle` is incremental and replayed, `isInfixOf`'s needle is replayed,
+`concat` shares neither spine nor element, an element alias is not a shared
+tail, a predicate exposes without forcing, a primop does force, and a shared
+tail beside an unknown consumer is `Unknown` with a constraint).
 
 ## What ShellCheck actually needs
 

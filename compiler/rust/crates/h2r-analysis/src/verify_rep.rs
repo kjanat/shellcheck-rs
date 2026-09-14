@@ -31,6 +31,15 @@
 //! and re-deriving them here would mean inventing a second, unchecked
 //! assertion rather than checking the first:
 //!
+//! Since M2.3g the table is consulted on **four** axes, each re-derived
+//! into a fact of its own here: the argument's spine demand, whether a tail
+//! of it survives beside the call ([`axioms::Axiom::aliases_spine`], which
+//! an element alias deliberately does not satisfy), whether the call
+//! replays it, and whether the elements are *forced* or merely *exposed*.
+//! Consulting a corrected table is still consulting it: these walks check
+//! that the entry is applied to the right argument of a saturated call to
+//! an import, not that the entry is true.
+//!
 //! * the **library demand-semantics table** ([`crate::lists::axioms`]) and
 //!   the **text-head table** ([`crate::text::TEXT_HEADS`]). This module
 //!   consults *the same* tables. What it re-derives itself is everything
@@ -151,10 +160,17 @@ pub const X_SHARED_TAIL: &str = "a-tail-of-this-spine-survives-in-a-second-place
 pub const X_MULTI_PASS: &str = "more-than-one-independent-entry-into-the-spine";
 pub const X_STORED: &str = "the-spine-is-stored-returned-or-captured";
 pub const X_NOT_STREAMING: &str = "a-spine-consumer-is-not-streaming";
+/// A consumer retains the spine and walks it again from the front, so one
+/// pass over it is not enough (M2.3g).
+pub const X_REPLAYED: &str = "a-consumer-replays-this-spine";
 pub const X_NO_SPINE_DEMAND: &str = "no-reachable-consumer-demands-the-spine";
 pub const X_NOT_WHOLE: &str = "Vec-claimed-but-no-consumer-demands-the-whole-spine";
 pub const X_KNOT: &str = "M1-calls-this-binding-a-recursive-value";
 pub const X_CHAR_OBSERVED: &str = "an-individual-character-is-observed";
+/// …and the weaker half of it, split out at M2.3g: an element reaches a
+/// predicate or a class method, which need not force it. Still a refusal —
+/// the character has to exist as a value — but a different fact.
+pub const X_CHAR_EXPOSED: &str = "an-individual-character-is-exposed-to-a-callback";
 pub const X_PREFIX_CONSUMER: &str = "a-prefix-consumer";
 pub const X_NOT_TEXT_ONLY: &str = "a-consumer-is-not-a-text-head";
 
@@ -1101,6 +1117,13 @@ impl<'m> RepVerifier<'m> {
                         detail: String::new(),
                     });
                 }
+                if let Some(at) = f.replayed.first() {
+                    return Err(Refusal {
+                        why: X_REPLAYED,
+                        at: *at,
+                        detail: String::new(),
+                    });
+                }
             }
             ClaimKind::ListVec if !f.whole => {
                 return Err(Refusal {
@@ -1147,9 +1170,19 @@ impl<'m> RepVerifier<'m> {
                 detail: String::new(),
             });
         }
-        if let Some(at) = f.char_observed {
+        // **M2.3g.** Forcing and exposure are re-derived separately, and
+        // the refusal says which of the two it saw. Either disqualifies the
+        // claim; only one of them is a proof that anything is evaluated.
+        if let Some(at) = f.head_forced {
             return Err(Refusal {
                 why: X_CHAR_OBSERVED,
+                at,
+                detail: String::new(),
+            });
+        }
+        if let Some(at) = f.head_exposed.or(f.char_observed) {
+            return Err(Refusal {
+                why: X_CHAR_EXPOSED,
                 at,
                 detail: String::new(),
             });
@@ -1244,8 +1277,19 @@ impl<'m> RepVerifier<'m> {
                     let spine = ax.spine_of(*idx, *n);
                     // The *result* of this call keeps a tail of this
                     // spine alive beside it.
-                    if !matches!(ax.alias, Alias::NoAlias) && ax.aliases(*idx, *n) {
+                    // **M2.3g.** A tail of this spine surviving beside the
+                    // call is the aliasing axis, and it is asked
+                    // independently of whether the call node is a list:
+                    // `span` returns a pair whose second component is a
+                    // suffix of this argument. An element alias
+                    // (`head :: [[a]] -> [a]`) is deliberately not a tail.
+                    if !matches!(ax.alias, Alias::NoAlias) && ax.aliases_spine(*idx, *n) {
                         f.shared_tails.push(*call);
+                    }
+                    // …and whether the call walks this spine a second time
+                    // from the front, which a one-pass iterator cannot do.
+                    if ax.replays_arg(*idx, *n) {
+                        f.replayed.push(*call);
                     }
                     match spine {
                         None => {
@@ -1272,7 +1316,17 @@ impl<'m> RepVerifier<'m> {
                             }
                         }
                     }
+                    // **M2.3g.** Proven forcing and mere exposure to a
+                    // callback are re-derived as two facts. Either is
+                    // enough to disqualify a `StrongString` claim — the
+                    // element has to exist as a value — but the refusal
+                    // now says which one it was.
                     if ax.head != crate::lists::HeadDemand::None {
+                        f.head_forced.get_or_insert(*call);
+                        f.char_observed.get_or_insert(*call);
+                    }
+                    if ax.exposure != axioms::HeadExposure::NotExposed {
+                        f.head_exposed.get_or_insert(*call);
                         f.char_observed.get_or_insert(*call);
                     }
                     if crate::text::text_head(name).is_none() {
@@ -1287,6 +1341,11 @@ impl<'m> RepVerifier<'m> {
         }
         for (b, used) in &w.heads {
             if *used {
+                // A `(:)` alternative that binds and uses the element
+                // exposes it; whether it *forces* it is L3's question and
+                // this walk does not answer it (M2.3g).
+                f.head_exposed
+                    .get_or_insert_with(|| self.m.occurrences(*b)[0]);
                 f.char_observed
                     .get_or_insert_with(|| self.m.occurrences(*b)[0]);
             }
@@ -1309,10 +1368,16 @@ struct SpineFacts {
     /// alias: each is an independent entry into the spine.
     entries: Vec<ExprId>,
     shared_tails: Vec<ExprId>,
+    /// Consumers that retain the spine and walk it again (M2.3g).
+    replayed: Vec<ExprId>,
     stored: Option<ExprId>,
     stored_in: Option<String>,
     prefix_consumer: Option<ExprId>,
     char_observed: Option<ExprId>,
+    /// An element is **provably forced** (M2.3g).
+    head_forced: Option<ExprId>,
+    /// An element is handed to a callback that need not force it (M2.3g).
+    head_exposed: Option<ExprId>,
     not_streaming: Option<ExprId>,
     not_text_only: Option<ExprId>,
     imported: usize,

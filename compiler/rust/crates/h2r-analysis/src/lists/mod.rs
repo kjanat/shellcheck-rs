@@ -101,7 +101,7 @@ use crate::laziness::{Census, Class};
 use crate::scope::Scope;
 use crate::shape::value_args;
 
-use axioms::{ArgSpine, Axiom, Produces};
+use axioms::{ArgSpine, Axiom, HeadExposure, ListKind, Produces};
 
 //------------------------------------------------------------------------------
 // Rule ids
@@ -208,6 +208,19 @@ pub const R_OUTER_ESCAPES: &str = "the-construction-holding-it-escapes";
 /// lexical identity (1).
 pub const L17_LOOP_INCREMENTAL: &str = "L17-LOOP-INCREMENTAL";
 
+/// A consumer **retains this spine and traverses it again from the
+/// front**: `cycle`'s argument, `isInfixOf`'s needle. Distinct from
+/// [`L15_MULTIPASS`] (two independent entries), from [`L14_SHARED_TAIL`]
+/// (a tail survives elsewhere) and from a lockstep second walk. Evidence:
+/// library axiom (5). New at M2.3g.
+pub const L19_REPLAYED: &str = "L19-REPLAYED";
+/// An element **reaches** a function or class method this analysis cannot
+/// see into. Not a proof that it is forced — that is [`L3_HEAD_BOUND`] and
+/// the axiom table's [`HeadDemand`] — but enough to require the element to
+/// exist as a value. Evidence: library axiom (5), or lexical binder
+/// identity (1) for a `(:)` alternative's head binder. New at M2.3g.
+pub const L20_HEAD_EXPOSED: &str = "L20-HEAD-EXPOSED";
+
 /// **Recommendation** (advisory): whole spine, entered more than once or
 /// outliving its consumers, no shared tail, a finite producer.
 pub const L_REC_VEC: &str = "L-REC-VEC";
@@ -242,6 +255,7 @@ pub const R_STORED_NO_DEMAND_HOLDER_KNOWN: &str =
 pub const R_STORED_NO_DEMAND_HOLDER_OPAQUE: &str =
     "stored-with-no-visible-spine-demand-in-a-holder-this-module-never-takes-apart";
 pub const R_NO_MATCH: &str = "the-facts-match-no-recommendation";
+pub const R_UNKNOWN_EXPOSURE: &str = "element-exposure-is-unknown";
 pub const R_NEVER_OBSERVED: &str = "no-reachable-consumer-observes-the-spine";
 
 /// How many rounds the tail-derivation closure may take before it is a bug.
@@ -290,9 +304,12 @@ impl SpineDemand {
     }
 }
 
-/// Fact 2 of 6: which *elements* are forced. `None` means no reachable
-/// observation forces one — an element that is merely passed on or stored
-/// is not forced.
+/// Fact 2 of 7: which *elements* are **provably forced**. `None` means no
+/// reachable observation forces one — an element that is merely passed on,
+/// stored, or handed to a predicate or a class method is **not** forced.
+/// Since M2.3g, "handed to a callback" is [`HeadExposure`], a fact of its
+/// own: an arbitrary predicate may ignore its argument, so `any p xs`
+/// proves nothing about the elements of `xs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum HeadDemand {
     None,
@@ -330,6 +347,13 @@ pub enum Reuse {
     SharedTail {
         at: Vec<ExprId>,
     },
+    /// A consumer retains this spine and walks it **again from the
+    /// front**: `cycle xs`, `isInfixOf needle`. The cells must all still
+    /// be there for the second traversal, which is neither a second
+    /// independent entry nor a surviving tail ([`L19_REPLAYED`], M2.3g).
+    Replayed {
+        at: Vec<ExprId>,
+    },
     /// The spine left what the walk can follow.
     Escapes(&'static str),
 }
@@ -345,7 +369,8 @@ impl Reuse {
             Reuse::SinglePass => 0,
             Reuse::MultiPass(_) => 1,
             Reuse::Escapes(_) => 2,
-            Reuse::SharedTail { .. } => 3,
+            Reuse::Replayed { .. } => 3,
+            Reuse::SharedTail { .. } => 4,
         }
     }
 
@@ -353,6 +378,7 @@ impl Reuse {
         match self {
             Reuse::SinglePass => "SinglePass",
             Reuse::MultiPass(_) => "MultiPass",
+            Reuse::Replayed { .. } => "Replayed",
             Reuse::SharedTail { .. } => "SharedTail",
             Reuse::Escapes(_) => "Escapes",
         }
@@ -435,6 +461,46 @@ impl Recommendation {
     }
 }
 
+/// What a representation must still provide, **whatever** the advisory
+/// says. A constraint is a positive fact that survives an `Unknown`
+/// recommendation: since M2.3g a proven shared tail no longer *makes* a
+/// flow `PersistentCandidate` when another fact is unknown — it is
+/// recorded here instead, so that "we do not know enough" and "whatever we
+/// choose must support tail sharing" are two different statements.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct Constraints {
+    /// A tail of this spine survives in a second place ([`L14_SHARED_TAIL`]).
+    pub tail_sharing: bool,
+    /// M1 calls the producer's binding a recursive value ([`L13_RECURSIVE_KNOT`]).
+    pub recursive_laziness: bool,
+    /// A consumer retains the spine and walks it again ([`L19_REPLAYED`]).
+    pub replay: bool,
+}
+
+pub const C_TAIL_SHARING: &str = "RequiresTailSharing";
+pub const C_RECURSIVE_LAZINESS: &str = "RequiresRecursiveLaziness";
+pub const C_REPLAY: &str = "RequiresReplay";
+
+impl Constraints {
+    pub fn any(self) -> bool {
+        self.tail_sharing || self.recursive_laziness || self.replay
+    }
+
+    pub fn names(self) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        if self.tail_sharing {
+            v.push(C_TAIL_SHARING);
+        }
+        if self.recursive_laziness {
+            v.push(C_RECURSIVE_LAZINESS);
+        }
+        if self.replay {
+            v.push(C_REPLAY);
+        }
+        v
+    }
+}
+
 //------------------------------------------------------------------------------
 // The proof object
 //------------------------------------------------------------------------------
@@ -499,12 +565,20 @@ pub struct ListConsumer {
     pub rule: &'static str,
     /// The spine demand this one consumer puts on the flow.
     pub spine: SpineDemand,
+    /// What this consumer **provably forces** of the elements it reaches.
     pub head: HeadDemand,
+    /// What it merely hands them to ([`L20_HEAD_EXPOSED`], M2.3g).
+    pub head_exposure: HeadExposure,
     /// Does this consumer touch each cell once, retaining nothing?
     pub streaming: bool,
     pub short_circuits: bool,
     /// Does the consumer's result alias this spine or a tail of it?
     pub aliases: bool,
+    /// Does its result share cells with a list that is an **element** of
+    /// this one? That is not spine sharing ([`axioms::Alias::ResultSharesElementOf`]).
+    pub aliases_element: bool,
+    /// Does it retain this spine and walk it again ([`L19_REPLAYED`])?
+    pub replays: bool,
     /// Is this consumer reached through another consumer's tail alias? Then
     /// it is the same traversal, not a new one.
     pub tail_derived: bool,
@@ -570,7 +644,11 @@ pub struct ListFlow {
     pub spine: SpineDemand,
     pub spine_rule: &'static str,
     pub head: HeadDemand,
+    /// Fact 2b: what the elements are handed to (M2.3g).
+    pub head_exposure: HeadExposure,
     pub reuse: Reuse,
+    /// Every consumer that retains this spine and walks it again.
+    pub replayed: Vec<ExprId>,
     pub storage: Storage,
     pub recursion: Recursion,
     pub short_circuit: ShortCircuit,
@@ -582,6 +660,8 @@ pub struct ListFlow {
     pub rec: Recommendation,
     pub rec_rule: &'static str,
     pub rec_reason: Option<String>,
+    /// What any representation must support, whatever the advisory says.
+    pub constraints: Constraints,
 
     pub returned: bool,
     pub locations: usize,
@@ -1004,7 +1084,12 @@ impl<'m> Lists<'m> {
             let Some(ax) = axioms::axiom(name) else {
                 continue;
             };
-            if !ax.produces.is_list() || value_args(&self.scope, &args).len() < ax.min_args {
+            // **M2.3g.** Only a call whose *outer return type* is a list
+            // starts a list flow. `span` returns a pair, `mapM` returns
+            // `m [b]`: their argument-demand and aliasing facts still speak
+            // for the consumer side, but the call node is not a list and
+            // making it one was a population bug.
+            if !ax.produces.is_direct_list() || value_args(&self.scope, &args).len() < ax.min_args {
                 continue;
             }
             let note = format!("{}: {}", ax.rule, ax.note);
@@ -1054,7 +1139,9 @@ impl<'m> Lists<'m> {
             spine: SpineDemand::None,
             spine_rule: L12_NEVER_OBSERVED,
             head: HeadDemand::None,
+            head_exposure: HeadExposure::NotExposed,
             reuse: Reuse::SinglePass,
+            replayed: Vec::new(),
             storage: Storage::NotStored,
             recursion: Recursion::FiniteProducer,
             short_circuit: ShortCircuit::default(),
@@ -1063,6 +1150,7 @@ impl<'m> Lists<'m> {
             rec: Recommendation::Unknown,
             rec_rule: L_REC_UNKNOWN,
             rec_reason: None,
+            constraints: Constraints::default(),
             returned: false,
             locations: 0,
             over_budget: false,
@@ -1183,10 +1271,11 @@ impl<'m> Lists<'m> {
                 matches!(c.kind, ConsumerKind::StoredIn { .. })
                     && reads.keys().any(|(root, _)| *root == c.at)
             });
-            let (rec, rule, reason) = recommend(&self.flows[i], holder_known);
+            let (rec, rule, reason, constraints) = recommend(&self.flows[i], holder_known);
             self.flows[i].rec = rec;
             self.flows[i].rec_rule = rule;
             self.flows[i].rec_reason = reason;
+            self.flows[i].constraints = constraints;
         }
     }
 
@@ -1232,6 +1321,7 @@ impl<'m> Lists<'m> {
         let mut consumers: Vec<ListConsumer> = Vec::new();
         let mut short_circuit = ShortCircuit::default();
         let mut shared_tail: Vec<ExprId> = Vec::new();
+        let mut replayed: Vec<ExprId> = Vec::new();
         let mut successors: Vec<ExprId> = Vec::new();
         let mut storage = Storage::NotStored;
         let mut evidence: Vec<Evidence> = Vec::new();
@@ -1307,9 +1397,16 @@ impl<'m> Lists<'m> {
                         rule,
                         spine,
                         head,
+                        head_exposure: if head_bound {
+                            HeadExposure::BoundAndUsed
+                        } else {
+                            HeadExposure::NotExposed
+                        },
                         streaming,
                         short_circuits: matches!(fate, TailFate::LoopConditional { .. }),
                         aliases: false,
+                        aliases_element: false,
+                        replays: false,
                         tail_derived: false,
                         detail: String::new(),
                     }
@@ -1320,9 +1417,12 @@ impl<'m> Lists<'m> {
                     rule: flow::T15_WHNF_ALT,
                     spine: SpineDemand::Prefix(PrefixBound::Known(1)),
                     head: HeadDemand::None,
+                    head_exposure: HeadExposure::NotExposed,
                     streaming: true,
                     short_circuits: false,
                     aliases: false,
+                    aliases_element: false,
+                    replays: false,
                     tail_derived: false,
                     detail: how.name().to_string(),
                 },
@@ -1334,9 +1434,12 @@ impl<'m> Lists<'m> {
                     rule: flow::T14_FORCED,
                     spine: SpineDemand::Prefix(PrefixBound::Known(1)),
                     head: HeadDemand::None,
+                    head_exposure: HeadExposure::NotExposed,
                     streaming: true,
                     short_circuits: false,
                     aliases: false,
+                    aliases_element: false,
+                    replays: false,
                     tail_derived: false,
                     detail: String::new(),
                 },
@@ -1348,9 +1451,12 @@ impl<'m> Lists<'m> {
                     rule: flow::T2_SCRUTINISED,
                     spine: SpineDemand::Prefix(PrefixBound::Known(1)),
                     head: HeadDemand::None,
+                    head_exposure: HeadExposure::NotExposed,
                     streaming: true,
                     short_circuits: false,
                     aliases: false,
+                    aliases_element: false,
+                    replays: false,
                     tail_derived: false,
                     detail: String::new(),
                 },
@@ -1358,11 +1464,35 @@ impl<'m> Lists<'m> {
                     if ax.short_circuit {
                         short_circuit.yes.push(*call);
                     }
-                    let aliases = ax.aliases(*idx, *n);
+                    // **M2.3g.** A tail surviving beside the call is one
+                    // axis; whether the call node is itself a list is the
+                    // other. `span`'s second component is a suffix of this
+                    // spine even though `span` returns a pair, so the
+                    // shared tail is recorded here all the same.
+                    let aliases = ax.aliases_spine(*idx, *n);
                     if aliases {
                         shared_tail.push(*call);
                     }
+                    let replays = ax.replays_arg(*idx, *n);
+                    if replays {
+                        replayed.push(*call);
+                        evidence.push(Evidence {
+                            rule: L19_REPLAYED,
+                            nodes: vec![*call],
+                            binder: None,
+                            note: format!("{}: the argument is retained and walked again", ax.rule),
+                        });
+                    }
                     let spine = self.axiom_spine(*call, ax, *idx, *n);
+                    let reached = spine != SpineDemand::None;
+                    if reached && ax.exposure != HeadExposure::NotExposed {
+                        evidence.push(Evidence {
+                            rule: L20_HEAD_EXPOSED,
+                            nodes: vec![*call],
+                            binder: None,
+                            note: format!("{}: {}", ax.rule, ax.exposure.name()),
+                        });
+                    }
                     ListConsumer {
                         kind: ConsumerKind::Axiom {
                             name: ax.name.to_string(),
@@ -1371,14 +1501,17 @@ impl<'m> Lists<'m> {
                         at: *call,
                         rule: L8_AXIOM,
                         spine,
-                        head: if spine == SpineDemand::None {
-                            HeadDemand::None
+                        head: if reached { ax.head } else { HeadDemand::None },
+                        head_exposure: if reached {
+                            ax.exposure
                         } else {
-                            ax.head
+                            HeadExposure::NotExposed
                         },
                         streaming: ax.streaming,
                         short_circuits: ax.short_circuit,
                         aliases,
+                        aliases_element: ax.aliases_element(*idx, *n),
+                        replays,
                         tail_derived: false,
                         detail: ax.note.to_string(),
                     }
@@ -1401,9 +1534,12 @@ impl<'m> Lists<'m> {
                         rule: L9_NO_AXIOM,
                         spine: SpineDemand::Unknown,
                         head: HeadDemand::Unknown,
+                        head_exposure: HeadExposure::Unknown,
                         streaming: false,
                         short_circuits: false,
                         aliases: false,
+                        aliases_element: false,
+                        replays: false,
                         tail_derived: false,
                         detail: if *in_table {
                             format!("{R_AXIOM_ARG_NOT_COVERED}({name})")
@@ -1420,9 +1556,12 @@ impl<'m> Lists<'m> {
                         rule: L7_CONSED_AS_TAIL,
                         spine: SpineDemand::None,
                         head: HeadDemand::None,
+                        head_exposure: HeadExposure::NotExposed,
                         streaming: true,
                         short_circuits: false,
                         aliases: false,
+                        aliases_element: false,
+                        replays: false,
                         tail_derived: false,
                         detail: String::new(),
                     }
@@ -1438,9 +1577,12 @@ impl<'m> Lists<'m> {
                         rule: L10_STORED,
                         spine: SpineDemand::None,
                         head: HeadDemand::None,
+                        head_exposure: HeadExposure::NotExposed,
                         streaming: true,
                         short_circuits: false,
                         aliases: false,
+                        aliases_element: false,
+                        replays: false,
                         tail_derived: false,
                         detail: R_STORED.to_string(),
                     }
@@ -1453,9 +1595,12 @@ impl<'m> Lists<'m> {
                     rule: flow::T5_PASSED_LOCAL,
                     spine: SpineDemand::None,
                     head: HeadDemand::None,
+                    head_exposure: HeadExposure::NotExposed,
                     streaming: true,
                     short_circuits: false,
                     aliases: false,
+                    aliases_element: false,
+                    replays: false,
                     tail_derived: false,
                     detail: String::new(),
                 },
@@ -1466,9 +1611,12 @@ impl<'m> Lists<'m> {
                     rule: L11_ESCAPE,
                     spine: SpineDemand::Unknown,
                     head: HeadDemand::Unknown,
+                    head_exposure: HeadExposure::Unknown,
                     streaming: false,
                     short_circuits: false,
                     aliases: false,
+                    aliases_element: false,
+                    replays: false,
                     tail_derived: false,
                     detail: (*why).to_string(),
                 },
@@ -1478,9 +1626,12 @@ impl<'m> Lists<'m> {
                     rule: L11_ESCAPE,
                     spine: SpineDemand::Unknown,
                     head: HeadDemand::Unknown,
+                    head_exposure: HeadExposure::Unknown,
                     streaming: false,
                     short_circuits: false,
                     aliases: false,
+                    aliases_element: false,
+                    replays: false,
                     tail_derived: false,
                     detail: (*why).to_string(),
                 },
@@ -1505,21 +1656,27 @@ impl<'m> Lists<'m> {
             }
         }
 
-        // Fact 1 and 2: join over the consumers.
+        // Fact 1, 2 and 2b: join over the consumers. Forcing and exposure
+        // are joined **separately** (M2.3g): a flow every one of whose
+        // consumers only hands elements to a predicate has
+        // `HeadDemand::None` and a non-trivial `HeadExposure`.
         let mut spine = SpineDemand::None;
         let mut spine_rule = L12_NEVER_OBSERVED;
         let mut head = HeadDemand::None;
+        let mut head_exposure = HeadExposure::NotExposed;
         for c in &consumers {
             if c.spine > spine {
                 spine = c.spine;
                 spine_rule = c.rule;
             }
             head = head.max(c.head);
+            head_exposure = head_exposure.max(c.head_exposure);
         }
         if w.over_budget {
             spine = SpineDemand::Unknown;
             spine_rule = L11_ESCAPE;
             head = HeadDemand::Unknown;
+            head_exposure = HeadExposure::Unknown;
         }
 
         // Fact 4: storage.
@@ -1576,6 +1733,8 @@ impl<'m> Lists<'m> {
         });
         shared_tail.sort_unstable();
         shared_tail.dedup();
+        replayed.sort_unstable();
+        replayed.dedup();
         let reuse = if !shared_tail.is_empty() {
             evidence.push(Evidence {
                 rule: L14_SHARED_TAIL,
@@ -1587,6 +1746,10 @@ impl<'m> Lists<'m> {
                 ),
             });
             Reuse::SharedTail { at: shared_tail }
+        } else if !replayed.is_empty() {
+            Reuse::Replayed {
+                at: replayed.clone(),
+            }
         } else if let Some(why) = escape_reason {
             Reuse::Escapes(why)
         } else if traversals > 1 {
@@ -1659,7 +1822,9 @@ impl<'m> Lists<'m> {
         f.spine = spine;
         f.spine_rule = spine_rule;
         f.head = head;
+        f.head_exposure = head_exposure;
         f.reuse = reuse;
+        f.replayed = replayed;
         f.storage = storage;
         f.recursion = recursion;
         f.short_circuit = short_circuit;
@@ -1946,13 +2111,15 @@ impl<'m> Lists<'m> {
             updates += 1;
             let mut changed = false;
             for j in &succ[i] {
-                let (spine, head, storage, reuse, sc, streaming) = {
+                let (spine, head, exposure, storage, reuse, replayed, sc, streaming) = {
                     let s = &self.flows[*j];
                     (
                         s.spine,
                         s.head,
+                        s.head_exposure,
                         s.storage.clone(),
                         s.reuse.clone(),
+                        s.replayed.clone(),
                         s.short_circuit.yes.clone(),
                         s.streaming,
                     )
@@ -1966,6 +2133,17 @@ impl<'m> Lists<'m> {
                 if head > f.head {
                     f.head = head;
                     changed = true;
+                }
+                if exposure > f.head_exposure {
+                    f.head_exposure = exposure;
+                    changed = true;
+                }
+                for x in replayed {
+                    if !f.replayed.contains(&x) {
+                        f.replayed.push(x);
+                        f.replayed.sort_unstable();
+                        changed = true;
+                    }
                 }
                 if storage.rank() > f.storage.rank() {
                     f.storage = storage;
@@ -2110,108 +2288,125 @@ fn crosses_lambda_from(m: &Module, producer: ExprId, at: ExprId) -> bool {
 // The advisory recommendation
 //------------------------------------------------------------------------------
 
-/// Derive the advisory recommendation from the six facts. **Nothing below
-/// is a theorem**: the facts are.
-fn recommend(f: &ListFlow, holder_known: bool) -> (Recommendation, &'static str, Option<String>) {
-    // A value knot is a knot whatever else is true of it.
+/// Derive the advisory recommendation from the facts, and the constraints
+/// that hold whatever it says. **Nothing below is a theorem**: the facts
+/// are.
+///
+/// # The M2.3g ordering
+///
+/// Before M2.3g a proven `SharedTail` and M1's `RecursiveKnot` were
+/// returned *before* the `Unknown` checks, so a flow with one unresolved
+/// consumer could still be advised `PersistentCandidate` — "one known
+/// property points this way" reading as "this is sufficient". It is not:
+/// an advisory is a claim that the representation is adequate **given
+/// everything we know**, and a flow with an unknown consumer does not
+/// support such a claim. So every `Unknown` fact now wins, and the
+/// positive facts are recorded as [`Constraints`] instead, which no
+/// `Unknown` erases.
+fn recommend(
+    f: &ListFlow,
+    holder_known: bool,
+) -> (Recommendation, &'static str, Option<String>, Constraints) {
+    let constraints = Constraints {
+        tail_sharing: matches!(f.reuse, Reuse::SharedTail { .. }),
+        recursive_laziness: f.recursion == Recursion::RecursiveKnot,
+        replay: !f.replayed.is_empty() || matches!(f.reuse, Reuse::Replayed { .. }),
+    };
+    let unknown = |why: String| {
+        (
+            Recommendation::Unknown,
+            L_REC_UNKNOWN,
+            Some(why),
+            constraints,
+        )
+    };
+    // ---- every unknown fact first (M2.3g) ----------------------------
+    if f.spine == SpineDemand::Unknown {
+        return unknown(
+            f.unknown_reasons()
+                .first()
+                .cloned()
+                .unwrap_or_else(|| R_UNKNOWN_SPINE.to_string()),
+        );
+    }
+    if f.head == HeadDemand::Unknown {
+        return unknown(R_UNKNOWN_HEAD.to_string());
+    }
+    if f.head_exposure == HeadExposure::Unknown {
+        return unknown(R_UNKNOWN_EXPOSURE.to_string());
+    }
+    if let Reuse::Escapes(why) = f.reuse {
+        return unknown(format!("{R_REUSE_ESCAPES}: {why}"));
+    }
+    // ---- then the positive facts, in the order they decide ------------
+    let advise =
+        |r: Recommendation, rule: &'static str, why: Option<String>| (r, rule, why, constraints);
     if f.recursion == Recursion::RecursiveKnot {
-        return (
+        return advise(
             Recommendation::LazyCandidate,
             L_REC_LAZY,
             Some("M1 calls this binding a recursive value".into()),
         );
     }
     // A tail that provably survives in two places decides the
-    // representation on its own: how much of the spine is demanded does not
-    // change the fact that two owners see the same cells. This is the one
-    // place a positive structural fact outranks an `Unknown` one.
+    // representation: two owners see the same cells.
     if matches!(f.reuse, Reuse::SharedTail { .. }) {
-        return (Recommendation::PersistentCandidate, L_REC_PERSIST, None);
+        return advise(Recommendation::PersistentCandidate, L_REC_PERSIST, None);
+    }
+    // A spine that is walked again from the front must still be there for
+    // the second walk, which is exactly what a one-pass iterator is not.
+    if matches!(f.reuse, Reuse::Replayed { .. }) {
+        return advise(
+            Recommendation::PersistentCandidate,
+            L_REC_PERSIST,
+            Some("a consumer retains this spine and walks it again".into()),
+        );
     }
     // A short-circuiting consumer in front of an unbounded producer.
-    if !f.short_circuit.no() && f.produces == Some(Produces::Unbounded) {
-        return (
+    if !f.short_circuit.no()
+        && matches!(f.produces, Some(Produces::DirectList(ListKind::Unbounded)))
+    {
+        return advise(
             Recommendation::LazyCandidate,
             L_REC_LAZY,
             Some("a short-circuiting consumer of an unbounded producer".into()),
         );
     }
-    if f.spine == SpineDemand::Unknown {
-        return (
-            Recommendation::Unknown,
-            L_REC_UNKNOWN,
-            Some(
-                f.unknown_reasons()
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| R_UNKNOWN_SPINE.to_string()),
-            ),
-        );
-    }
-    if f.head == HeadDemand::Unknown {
-        return (
-            Recommendation::Unknown,
-            L_REC_UNKNOWN,
-            Some(R_UNKNOWN_HEAD.to_string()),
-        );
-    }
-    if let Reuse::Escapes(why) = f.reuse {
-        return (
-            Recommendation::Unknown,
-            L_REC_UNKNOWN,
-            Some(format!("{R_REUSE_ESCAPES}: {why}")),
-        );
-    }
     if matches!(f.reuse, Reuse::MultiPass(_)) && f.storage != Storage::NotStored {
-        return (Recommendation::PersistentCandidate, L_REC_PERSIST, None);
+        return advise(Recommendation::PersistentCandidate, L_REC_PERSIST, None);
     }
     if f.spine == SpineDemand::Whole
         && (matches!(f.reuse, Reuse::MultiPass(_)) || f.storage != Storage::NotStored)
     {
-        return (Recommendation::VecCandidate, L_REC_VEC, None);
+        return advise(Recommendation::VecCandidate, L_REC_VEC, None);
     }
     if f.spine > SpineDemand::None
         && f.reuse == Reuse::SinglePass
         && f.storage == Storage::NotStored
         && f.streaming
     {
-        return (Recommendation::IteratorCandidate, L_REC_ITER, None);
+        return advise(Recommendation::IteratorCandidate, L_REC_ITER, None);
     }
     if f.spine == SpineDemand::None {
-        return (
-            Recommendation::Unknown,
-            L_REC_UNKNOWN,
-            Some(if f.storage == Storage::NotStored {
-                R_NEVER_OBSERVED.to_string()
-            } else if holder_known {
-                R_STORED_NO_DEMAND_HOLDER_KNOWN.to_string()
-            } else {
-                R_STORED_NO_DEMAND_HOLDER_OPAQUE.to_string()
-            }),
-        );
+        return unknown(if f.storage == Storage::NotStored {
+            R_NEVER_OBSERVED.to_string()
+        } else if holder_known {
+            R_STORED_NO_DEMAND_HOLDER_KNOWN.to_string()
+        } else {
+            R_STORED_NO_DEMAND_HOLDER_OPAQUE.to_string()
+        });
     }
-    if f.storage != Storage::NotStored && f.spine == SpineDemand::None {
-        return (
-            Recommendation::Unknown,
-            L_REC_UNKNOWN,
-            Some(R_STORED_NO_DEMAND.to_string()),
-        );
-    }
-    (
-        Recommendation::Unknown,
-        L_REC_UNKNOWN,
-        Some(format!(
-            "{R_NO_MATCH} ({}, {}, {}, {})",
-            f.spine.name(),
-            f.reuse.name(),
-            f.storage.name(),
-            if f.streaming {
-                "streaming"
-            } else {
-                "retaining"
-            }
-        )),
-    )
+    unknown(format!(
+        "{R_NO_MATCH} ({}, {}, {}, {})",
+        f.spine.name(),
+        f.reuse.name(),
+        f.storage.name(),
+        if f.streaming {
+            "streaming"
+        } else {
+            "retaining"
+        }
+    ))
 }
 
 //------------------------------------------------------------------------------
@@ -2242,6 +2437,8 @@ pub struct ListAccounting {
     pub by_rec: Vec<(Recommendation, usize)>,
     pub by_spine: Vec<(&'static str, usize)>,
     pub by_head: Vec<(&'static str, usize)>,
+    /// Fact 2b: what the elements are handed to (M2.3g).
+    pub by_exposure: Vec<(&'static str, usize)>,
     pub by_reuse: Vec<(&'static str, usize)>,
     pub by_storage: Vec<(&'static str, usize)>,
     pub by_recursion: Vec<(&'static str, usize)>,
@@ -2261,6 +2458,11 @@ pub struct ListAccounting {
     pub heads: Vec<(String, usize, bool, ExprId)>,
     pub heads_with_axiom: usize,
     pub heads_without_axiom: usize,
+    /// Flows carrying each constraint, whatever the advisory says (M2.3g).
+    pub constraints: Vec<(&'static str, usize)>,
+    /// Flows whose recommendation is `Unknown` **and** that carry at least
+    /// one constraint: the population the M2.3g ordering created.
+    pub unknown_with_constraints: usize,
 }
 
 impl ListAccounting {
@@ -2283,6 +2485,10 @@ impl ListAccounting {
             ("recommendation", self.by_rec.iter().map(|(_, n)| n).sum()),
             ("spine demand", self.by_spine.iter().map(|(_, n)| n).sum()),
             ("head demand", self.by_head.iter().map(|(_, n)| n).sum()),
+            (
+                "head exposure",
+                self.by_exposure.iter().map(|(_, n)| n).sum(),
+            ),
             ("reuse", self.by_reuse.iter().map(|(_, n)| n).sum()),
             ("storage", self.by_storage.iter().map(|(_, n)| n).sum()),
             ("recursion", self.by_recursion.iter().map(|(_, n)| n).sum()),
@@ -2358,6 +2564,16 @@ impl<'m> ListCensus<'m> {
         let mut by_rec: BTreeMap<Recommendation, usize> = BTreeMap::new();
         let mut by_spine: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut by_head: BTreeMap<&'static str, usize> = BTreeMap::new();
+        let mut by_exposure: BTreeMap<&'static str, usize> = BTreeMap::new();
+        // Printed in full, zeros included: a constraint the table can
+        // express and this program never exercises is a fact about the
+        // program, and hiding it would make the table look smaller than it
+        // is.
+        let mut constraints: BTreeMap<&'static str, usize> =
+            [C_TAIL_SHARING, C_RECURSIVE_LAZINESS, C_REPLAY]
+                .into_iter()
+                .map(|c| (c, 0))
+                .collect();
         let mut by_reuse: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut by_storage: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut by_recursion: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -2377,6 +2593,13 @@ impl<'m> ListCensus<'m> {
             *by_rec.entry(f.rec).or_default() += 1;
             *by_spine.entry(f.spine.name()).or_default() += 1;
             *by_head.entry(f.head.name()).or_default() += 1;
+            *by_exposure.entry(f.head_exposure.name()).or_default() += 1;
+            for c in f.constraints.names() {
+                *constraints.entry(c).or_default() += 1;
+            }
+            if f.rec == Recommendation::Unknown && f.constraints.any() {
+                acct.unknown_with_constraints += 1;
+            }
             *by_reuse.entry(f.reuse.name()).or_default() += 1;
             *by_storage.entry(f.storage.name()).or_default() += 1;
             *by_recursion
@@ -2412,6 +2635,8 @@ impl<'m> ListCensus<'m> {
         acct.by_rec = by_rec.into_iter().collect();
         acct.by_spine = by_spine.into_iter().collect();
         acct.by_head = by_head.into_iter().collect();
+        acct.by_exposure = by_exposure.into_iter().collect();
+        acct.constraints = constraints.into_iter().collect();
         acct.by_reuse = by_reuse.into_iter().collect();
         acct.by_storage = by_storage.into_iter().collect();
         acct.by_recursion = by_recursion.into_iter().collect();
