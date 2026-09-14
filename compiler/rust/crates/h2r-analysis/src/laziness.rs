@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use h2r_core_ir::{Binder, BinderKind, Edge, Expr, ExprId, Module, Pair};
 use serde::Serialize;
 
+use crate::callee::{self, BindSite, Callee};
 use crate::shape::{
     ArgShape, Position, RhsKind, arg_shape, is_dictionary_head, position, value_args,
 };
@@ -213,7 +214,10 @@ pub struct ArgSite {
     pub arg: ExprId,
     pub shape: ArgShape,
     pub position: Position,
+    /// The argument itself is dictionary construction.
     pub dictionary: bool,
+    /// Who receives it.
+    pub callee: Callee,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -243,6 +247,7 @@ impl Census {
 
     pub fn add_module(&mut self, m: &Module) {
         let occs = occurrence_map(m);
+        let sites = callee::bind_sites(m);
 
         for bind in &m.top {
             for pair in &bind.pairs {
@@ -274,17 +279,16 @@ impl Census {
                     }
                 }
                 Expr::App { .. } if is_spine_root(m, id) => {
-                    self.arg_sites(m, id);
+                    self.arg_sites(m, &sites, id);
                 }
                 _ => {}
             }
         }
     }
 
-    fn arg_sites(&mut self, m: &Module, root: ExprId) {
-        let (head, args) = m.spine(root);
-        let _ = head;
-        for arg in value_args(m, &args) {
+    fn arg_sites(&mut self, m: &Module, sites: &HashMap<&str, BindSite>, root: ExprId) {
+        let (_, args) = m.spine(root);
+        for (i, arg) in value_args(m, &args).into_iter().enumerate() {
             let shape = arg_shape(m, arg);
             if shape == ArgShape::Trivial {
                 continue;
@@ -300,6 +304,7 @@ impl Census {
                 shape,
                 position: position(m, arg),
                 dictionary,
+                callee: callee::classify(m, sites, root, i),
             });
         }
     }

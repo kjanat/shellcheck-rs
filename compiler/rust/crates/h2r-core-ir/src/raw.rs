@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-pub const FORMAT: u32 = 3;
+pub const FORMAT: u32 = 4;
 
 #[derive(Debug, Deserialize)]
 pub struct RawModule {
@@ -29,6 +29,16 @@ pub struct IdInfo {
     pub dmd_sig: DmdSig,
     #[serde(rename = "isJoinPoint")]
     pub is_join_point: bool,
+    /// A type-class method selector: a call through it is dictionary dispatch.
+    #[serde(rename = "isClassOp", default)]
+    pub is_class_op: bool,
+    /// Pretty `IdDetails`, e.g. `[gid[ClassOp]]`, `[gid[DataConWrapper]]`.
+    #[serde(default)]
+    pub details: String,
+    /// Whether the definition is visible (matters for imported ids: without
+    /// an unfolding nothing can be specialised or inlined through it).
+    #[serde(rename = "hasUnfolding", default)]
+    pub has_unfolding: bool,
     #[serde(rename = "dataCon")]
     pub data_con: Option<DataConInfo>,
 }

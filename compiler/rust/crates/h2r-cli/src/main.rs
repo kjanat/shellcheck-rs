@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use h2r_analysis::callee::{Family, Resolution};
 use h2r_analysis::laziness::{Census, Class, Fate, Origin, TopClass};
 use h2r_analysis::shape::{ArgShape, Position};
 use h2r_core_ir::{BinderKind, Expr, Module, load_dir, with_big_stack};
@@ -565,5 +566,132 @@ fn report(c: &Census, n_modules: usize) {
         .sum();
     if other > 0 {
         row("computation, other position", other, nargs);
+    }
+
+    // The M2 question: who receives the lazy ones, and can we see them?
+    let lazy: Vec<_> = comps.iter().filter(|a| a.position.escapes()).collect();
+    let n = lazy.len();
+    println!();
+    println!("Computations in lazy / unknown positions       {n:>7}");
+    println!();
+    println!("  by callee resolution");
+    let res = count_by(lazy.iter().map(|a| a.callee.resolution));
+    for (r, label) in [
+        (Resolution::DataCon, "known data constructor"),
+        (
+            Resolution::ExactGlobal,
+            "known global function, signature covers arg",
+        ),
+        (
+            Resolution::ExactLocal,
+            "known local function, signature covers arg",
+        ),
+        (
+            Resolution::ClassOp,
+            "class-op dispatch (needs specialisation)",
+        ),
+        (
+            Resolution::HigherOrderParam,
+            "unknown: higher-order parameter",
+        ),
+        (
+            Resolution::ImportedOpaque,
+            "unknown: imported, no signature",
+        ),
+        (
+            Resolution::PastArity,
+            "unknown: past callee's arity (call result)",
+        ),
+        (Resolution::NonVarHead, "unknown: non-variable head"),
+    ] {
+        row(label, res.get(&r).copied().unwrap_or(0), n);
+    }
+    println!();
+    println!("  by callee family");
+    let fam = count_by(lazy.iter().map(|a| a.callee.family));
+    for (f, label) in [
+        (Family::Parsec, "Parsec (calls into Text.Parsec)"),
+        (
+            Family::ParsecContinuation,
+            "Parsec continuation (cok/cerr/eok/eerr)",
+        ),
+        (Family::EtaParam, "eta-expanded monadic function (eta…)"),
+        (Family::Transformers, "monad transformers / mtl (calls)"),
+        (Family::Tuple, "boxed tuple constructor"),
+        (Family::UnboxedTuple, "unboxed tuple constructor"),
+        (Family::MonadOps, "monad ops from base (>>=, fmap, ...)"),
+        (Family::ClassOp, "class-op dispatch"),
+        (Family::Dictionary, "dfun / dictionary binding"),
+        (Family::ProgramDataCon, "program data constructor"),
+        (Family::ProgramFunction, "program function"),
+        (Family::LocalFunction, "local let-bound function"),
+        (Family::ListCons, "list cons"),
+        (Family::LibraryDataCon, "other library data constructor"),
+        (Family::BaseList, "base list / Foldable ops"),
+        (Family::Containers, "containers"),
+        (Family::BaseOther, "other base"),
+        (Family::OtherLibrary, "other library"),
+        (Family::Unknown, "unknown value"),
+    ] {
+        row(label, fam.get(&f).copied().unwrap_or(0), n);
+    }
+    println!();
+    println!("  attributable to a normalisation family (first-order estimate)");
+    let attr = |fs: &[Family]| {
+        lazy.iter()
+            .filter(|a| fs.contains(&a.callee.family))
+            .count()
+    };
+    row(
+        "Parsec / CPS normalisation",
+        attr(&[Family::Parsec, Family::ParsecContinuation, Family::EtaParam]),
+        n,
+    );
+    row(
+        "dictionary specialisation",
+        attr(&[Family::ClassOp, Family::Dictionary, Family::MonadOps]),
+        n,
+    );
+    row(
+        "transformer collapse (tuple results)",
+        attr(&[Family::Transformers, Family::Tuple, Family::UnboxedTuple]),
+        n,
+    );
+    row(
+        "constructor-field strategy",
+        attr(&[
+            Family::ProgramDataCon,
+            Family::ListCons,
+            Family::LibraryDataCon,
+        ]),
+        n,
+    );
+    row(
+        "ordinary calls with a visible signature",
+        attr(&[
+            Family::ProgramFunction,
+            Family::LocalFunction,
+            Family::BaseList,
+            Family::Containers,
+            Family::BaseOther,
+            Family::OtherLibrary,
+        ]),
+        n,
+    );
+    row("unknown", attr(&[Family::Unknown]), n);
+    println!();
+    println!("  top callees");
+    let mut heads: BTreeMap<String, usize> = BTreeMap::new();
+    for a in &lazy {
+        let key = match &a.callee.module {
+            Some(md) => format!("{md}.{}", a.callee.occ),
+            None => format!("<local> {}", a.callee.occ),
+        };
+        *heads.entry(key).or_default() += 1;
+    }
+    let mut heads: Vec<_> = heads.into_iter().collect();
+    heads.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    for (name, count) in heads.into_iter().take(25) {
+        println!("    {count:>6}  {name}");
     }
 }

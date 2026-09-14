@@ -104,6 +104,49 @@ well-defined residue (recursive values, plus whichever float-outs are worth
 keeping shared), not the runtime model. The big levers are, in order,
 specialisation/dictionary erasure, transformer collapsing, and let-sinking.
 
+## M2 baseline — who receives the lazy arguments?
+
+M2 is *abstraction collapse*: the remaining problem is not laziness but
+GHC-generated abstraction structure (dictionaries, transformer plumbing, CPS,
+float-outs) that looks lazy. Before transforming anything, `h2r laziness`
+instruments every computation in a lazy or unknown argument position (8,384)
+on two orthogonal axes: **resolution** (can the compiler see the callee?) and
+**family** (which abstraction is the callee part of?). Family is judged from
+the callee's defining module and, for local heads, its binding site and name
+— so it catches the *structural* signatures of inlined abstractions, which is
+how they actually appear in optimised Core: mtl's newtypes are gone and its
+binds show up as tuple constructors; Parsec's combinators are inlined and show
+up as its four continuations being applied.
+
+| Resolution | | |
+|---|---:|---:|
+| known data constructor | 3,305 | 39.4% |
+| known global function, signature covers the argument | 1,822 | 21.7% |
+| known local function, signature covers the argument | 543 | 6.5% |
+| class-op dispatch (resolved by specialisation) | 294 | 3.5% |
+| higher-order parameter | 2,264 | 27.0% |
+| past the callee's arity (applied to a call result) | 156 | 1.9% |
+| imported without signature / non-variable head | 0 | 0% |
+
+Of the 2,264 higher-order parameters, 2,108 are Parsec's `cok`/`cerr`/`eok`/
+`eerr` continuations or `eta`-expanded parser functions being applied — 960
+of the 969 `eta` sites are in `ShellCheck.Parser`. Genuinely unknown heads:
+156 (1.9%).
+
+| Attributable to | | |
+|---|---:|---:|
+| Parsec / CPS normalisation | 2,124 | 25.3% |
+| constructor-field strategy (`:` 1,298, program constructors 396, other) | 1,984 | 23.7% |
+| transformer collapse (boxed tuples 849, unboxed tuples 472) | 1,321 | 15.8% |
+| dictionary specialisation (class-op dispatch 294, dfuns 216) | 510 | 6.1% |
+| ordinary calls with a visible signature | 2,289 | 27.3% |
+| unknown | 156 | 1.9% |
+
+The "ordinary calls" bucket is dominated by string building —
+`unpackAppendCString#` (573) and `++` (544) — i.e. diagnostic messages
+assembled from lazy string appends; a `String` representation decision, not
+a laziness one.
+
 ## What ShellCheck actually needs
 
 Surveyed against the tree at the repo root:

@@ -62,7 +62,7 @@ dumpPass outDir guts = do
         unitStr = unitString (moduleUnit (mg_module guts))
         binds   = mg_binds guts
         doc     = object
-            [ "format"   .= (3 :: Int)
+            [ "format"   .= (4 :: Int)
             , "module"   .= modName
             , "unit"     .= unitStr
             , "ids"      .= idTable dflags binds
@@ -108,6 +108,10 @@ idInfoJ dflags v = object $
     , "arity"      .= idArity v
     , "dmdSig"     .= dmdSigJ dflags (idDmdSig v)
     , "isJoinPoint" .= isJoinId v
+    , "isClassOp"  .= isClassOpId v
+    , "details"    .= sdoc dflags (ppr (idDetails v))
+    -- For imported ids: can specialisation / inlining see the definition?
+    , "hasUnfolding" .= hasSomeUnfolding (realIdUnfolding v)
     ] ++ case isDataConId_maybe v of
         Just dc ->
             [ "dataCon" .= object
