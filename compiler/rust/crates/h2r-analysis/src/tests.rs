@@ -3460,3 +3460,377 @@ fn the_list_accounting_closes() {
         "the census' list-cons sites all land on a cell"
     );
 }
+
+//------------------------------------------------------------------------------
+// text: which list flows are [Char], and what is done with them (M2.3d)
+//------------------------------------------------------------------------------
+
+use crate::text::{
+    Advisory, ConsumerClass, ConsumerShape, ElementTypeEvidence, TextCensus, TextFlow, TextShape,
+};
+
+/// A binder whose rendered type is what GHC printed. Every type-based rule
+/// in [`crate::text`] reads exactly this string, and nothing else.
+fn binder_ty(occ: &str, ty: &str) -> Value {
+    let mut b = binder(occ, demand(false, false));
+    b["type"] = json!(ty);
+    b
+}
+
+/// `let x :: ty = rhs in body`.
+fn let_ty(occ: &str, ty: &str, rhs: Value, body: Value) -> Value {
+    json!({"node": "Let", "bind": {"rec": false, "pairs": [{
+        "binder": binder_ty(occ, ty), "rhs": rhs,
+        "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+    }]}, "body": body})
+}
+
+/// `case <scrut> of { [] -> nil_rhs; (y:ys) -> cons_rhs }` with the head
+/// binder carrying a rendered type.
+fn list_case_ty(scrut: Value, nil_rhs: Value, head_ty: &str, cons_rhs: Value) -> Value {
+    json!({
+        "node": "Case", "scrut": scrut,
+        "binder": binder("wild", demand(false, false)), "type": "R",
+        "alts": [
+            {"con": {"kind": "DataAlt", "name": "$ghc-prim$GHC.Types$[]", "occ": "[]", "tag": 1},
+             "binders": [], "rhs": nil_rhs},
+            {"con": {"kind": "DataAlt", "name": "$ghc-prim$GHC.Types$:", "occ": ":", "tag": 1},
+             "binders": [binder_ty("y", head_ty), binder("ys", demand(false, false))],
+             "rhs": cons_rhs}
+        ]
+    })
+}
+
+/// An `Addr#` string literal, as GHC dumps one.
+fn str_lit(s: &str) -> Value {
+    json!({"node": "Lit", "lit": {"kind": "string", "pretty": format!("{s:?}#")}})
+}
+
+fn char_lit(c: char) -> Value {
+    json!({"node": "Lit", "lit": {"kind": "char", "pretty": format!("'{c}'#")}})
+}
+
+fn unpack(s: &str) -> Value {
+    app(
+        gvar_named("unpackCString#", "$ghc-prim$GHC.CString$unpackCString#"),
+        str_lit(s),
+    )
+}
+
+fn unpack_append(s: &str, rest: Value) -> Value {
+    app(
+        app(
+            gvar_named(
+                "unpackAppendCString#",
+                "$ghc-prim$GHC.CString$unpackAppendCString#",
+            ),
+            str_lit(s),
+        ),
+        rest,
+    )
+}
+
+/// The ids every text fixture needs, plus whatever else it asks for.
+fn text_ids(extra: Value) -> Value {
+    let mut ids = json!({
+        "unpackCString#": import_fn("unpackCString#", 1),
+        "unpackAppendCString#": import_fn("unpackAppendCString#", 2),
+        "putStr": import_fn("putStr", 1),
+    });
+    if let Value::Object(o) = extra {
+        for (k, v) in o {
+            ids[k] = v;
+        }
+    }
+    list_ids(ids)
+}
+
+fn put_str(x: Value) -> Value {
+    app(gvar_named("putStr", "$base$System.IO$putStr"), x)
+}
+
+fn text_census(m: &Module) -> (crate::lists::ListAccounting, TextCensus) {
+    let census = Census::raw([m]);
+    let modules = [m];
+    let lc = crate::lists::ListCensus::of_modules(&modules, &census);
+    let tc = TextCensus::of_modules(&modules, &lc, &census);
+    tc.accounting.check();
+    (lc.accounting.clone(), tc)
+}
+
+fn only_text(tc: &TextCensus) -> &TextFlow {
+    assert_eq!(
+        tc.flows.len(),
+        1,
+        "expected exactly one text flow, got {:?}",
+        tc.flows
+            .iter()
+            .map(|f| (f.producer, f.producer_name.clone()))
+            .collect::<Vec<_>>()
+    );
+    &tc.flows[0]
+}
+
+/// `putStr (unpackAppendCString# "a"# (unpackCString# "b"#))`: static text
+/// appended to static text and written out. Two operand segments, both
+/// literal, one complete-output consumer, nothing observes a character.
+#[test]
+fn a_literal_appended_to_a_literal_and_printed_is_a_strong_string_candidate() {
+    let m = top_module(
+        put_str(unpack_append("a", unpack("b"))),
+        text_ids(json!({})),
+    );
+    let (_la, tc) = text_census(&m);
+    let f = tc
+        .flows
+        .iter()
+        .find(|f| f.append_chain.is_some())
+        .expect("the append is a flow of its own");
+    let chain = f.append_chain.unwrap();
+    assert_eq!(chain.length, 2, "two operand segments");
+    assert!(chain.all_literal, "both segments are static data");
+    assert_eq!(chain.opaque, 0);
+    assert_eq!(f.shape, TextShape::TextOnly, "{:?}", f.consumers);
+    assert_eq!(f.complete, 1, "putStr needs the whole text");
+    assert!(!f.char_semantics_required, "{:?}", f.char_reasons);
+    assert_eq!(
+        f.advisory,
+        Advisory::StrongStringCandidate,
+        "{:?}",
+        f.advisory_reason
+    );
+}
+
+/// A `[Char]` taken apart by `(:)` whose head is compared against a `Char`
+/// literal: an individual character is observed, so a representation must
+/// keep character semantics, and the advisory is undecided.
+#[test]
+fn a_head_compared_against_a_char_literal_requires_char_semantics() {
+    let scrutiny = case_alts(
+        var("y"),
+        &[("DEFAULT", vec![], var("u")), ("Q", vec![], var("u"))],
+    );
+    let mut scrutiny = scrutiny;
+    // The inner case decides on a Char literal, which is what makes the
+    // element an observed character rather than an opaque field.
+    scrutiny["alts"][1]["con"] =
+        json!({"kind": "LitAlt", "lit": {"kind": "char", "pretty": "'x'#"}});
+    scrutiny["alts"][1]["binders"] = json!([]);
+    let m = top_module(
+        let_ty(
+            "xs",
+            "[Char]",
+            cons_cell(var("a"), nil()),
+            list_case_ty(var("xs"), var("u"), "Char", scrutiny),
+        ),
+        text_ids(json!({})),
+    );
+    let (_la, tc) = text_census(&m);
+    let f = only_text(&tc);
+    assert!(
+        f.char_semantics_required,
+        "an element is scrutinised as a character"
+    );
+    assert!(
+        f.char_reasons
+            .iter()
+            .any(|(rule, _, _)| *rule == crate::text::X4_CHAR_SCRUTINY),
+        "{:?}",
+        f.char_reasons
+    );
+    assert_eq!(f.element_type_evidence, ElementTypeEvidence::Both);
+    assert_eq!(
+        f.advisory,
+        Advisory::TextValueUndecided,
+        "{:?}",
+        f.advisory_reason
+    );
+}
+
+/// A flow whose element type is a type *variable* is never assumed to be
+/// text: it is element-type-unknown, and out of the population.
+#[test]
+fn a_type_variable_element_is_element_type_unknown_not_text() {
+    let m = top_module(
+        let_ty(
+            "xs",
+            "[a]",
+            cons_cell(var("q"), nil()),
+            list_case_ty(var("xs"), var("u"), "a", var("u")),
+        ),
+        text_ids(json!({})),
+    );
+    let (la, tc) = text_census(&m);
+    assert_eq!(la.flows, 1);
+    assert_eq!(tc.flows.len(), 0, "not text");
+    assert_eq!(tc.accounting.elem_unknown, 1);
+    assert_eq!(tc.accounting.non_text, 0);
+    assert_eq!(tc.accounting.text_flows, 0);
+}
+
+/// `isPrefixOf needle xs` on text: only a prefix of the spine is needed,
+/// which is a prefix consumer and not a complete-output one.
+#[test]
+fn is_prefix_of_on_text_is_a_prefix_consumer() {
+    let m = top_module(
+        let_ty(
+            "xs",
+            "[Char]",
+            cons_cell(var("a"), nil()),
+            app(
+                app(
+                    gvar_named("isPrefixOf", "$base$Data.OldList$isPrefixOf"),
+                    var("needle"),
+                ),
+                var("xs"),
+            ),
+        ),
+        text_ids(json!({"isPrefixOf": import_fn("isPrefixOf", 2)})),
+    );
+    let (_la, tc) = text_census(&m);
+    let f = only_text(&tc);
+    assert_eq!(f.prefix, 1, "{:?}", f.consumers);
+    assert_eq!(f.complete, 0);
+    assert_eq!(f.prefix_consumers.len(), 1);
+    assert_eq!(f.shape, TextShape::TextOnly);
+    assert_ne!(f.advisory, Advisory::StrongStringCandidate);
+}
+
+/// A `[Char]` handed to the generic `map`, whose result is not text: the
+/// consumer set is mixed, because `map` is a list combinator and not a
+/// text operation.
+#[test]
+fn a_char_list_passed_to_a_generic_map_is_mixed() {
+    let m = top_module(
+        let_ty(
+            "xs",
+            "[Char]",
+            cons_cell(var("a"), nil()),
+            app(
+                app(gvar_named("map", "$base$GHC.Base$map"), var("f")),
+                var("xs"),
+            ),
+        ),
+        text_ids(json!({"map": import_fn("map", 2)})),
+    );
+    let (_la, tc) = text_census(&m);
+    let f = only_text(&tc);
+    assert_eq!(f.shape, TextShape::Mixed, "{:?}", f.consumers);
+    assert!(
+        f.consumers
+            .iter()
+            .any(|c| c.shape == ConsumerShape::Generic)
+    );
+    assert!(
+        f.char_semantics_required,
+        "map hands each character to a function"
+    );
+}
+
+/// `unpackCString#` produces `[Char]` whatever any rendered type says: the
+/// flow here has no binder at all, so nothing textual could have selected
+/// it, and the structural fact does it alone.
+#[test]
+fn an_unpack_producer_with_no_readable_type_is_selected_structurally() {
+    let m = top_module(put_str(unpack("b")), text_ids(json!({})));
+    let (_la, tc) = text_census(&m);
+    let f = only_text(&tc);
+    assert_eq!(f.list_ty, None, "no binder carries a type");
+    assert_eq!(f.elem_ty, None);
+    assert_eq!(
+        f.element_type_evidence,
+        ElementTypeEvidence::StructuralOnly,
+        "{:?}",
+        f.selection
+    );
+    assert!(
+        f.selection
+            .iter()
+            .any(|e| e.rule == crate::text::X2_UNPACK_PRODUCER)
+    );
+    assert!(f.literal, "static data");
+}
+
+/// `eqString xs ys`: the axiom's signature fixes the argument to `[Char]`,
+/// which corroborates the rendered type rather than replacing it.
+#[test]
+fn an_eq_string_consumer_corroborates_the_rendered_type() {
+    let m = top_module(
+        let_ty(
+            "xs",
+            "String",
+            cons_cell(var("a"), nil()),
+            app(
+                app(gvar_named("eqString", "$base$GHC.Base$eqString"), var("xs")),
+                var("ys"),
+            ),
+        ),
+        text_ids(json!({"eqString": import_fn("eqString", 2)})),
+    );
+    let (_la, tc) = text_census(&m);
+    let f = only_text(&tc);
+    assert_eq!(
+        f.element_type_evidence,
+        ElementTypeEvidence::Both,
+        "{:?}",
+        f.selection
+    );
+    assert!(
+        f.selection
+            .iter()
+            .any(|e| e.rule == crate::text::X1_LIST_TYPE),
+        "the rendered `String` is level-6 evidence"
+    );
+    assert!(
+        f.selection
+            .iter()
+            .any(|e| e.rule == crate::text::X5_AXIOM_FIXES_CHAR),
+        "and the signature corroborates it"
+    );
+    assert_eq!(
+        f.consumers
+            .iter()
+            .find(|c| c.name.contains("eqString"))
+            .map(|c| c.class),
+        Some(ConsumerClass::Complete),
+        "the whole text is the subject of the comparison"
+    );
+}
+
+/// A `Char` literal consed onto a list says the list is text without any
+/// type being read at all.
+#[test]
+fn a_char_literal_element_selects_the_flow_structurally() {
+    let m = top_module(
+        let1("xs", cons_cell(char_lit('x'), nil()), put_str(var("xs"))),
+        text_ids(json!({})),
+    );
+    let (_la, tc) = text_census(&m);
+    let f = only_text(&tc);
+    assert_eq!(f.element_type_evidence, ElementTypeEvidence::StructuralOnly);
+    assert!(
+        f.selection
+            .iter()
+            .any(|e| e.rule == crate::text::X3_CHAR_LITERAL_HEAD),
+        "{:?}",
+        f.selection
+    );
+    assert!(f.char_semantics_required);
+}
+
+/// The milestone's accounting closes on a hand-built module: the three
+/// selection buckets partition M2.3c's flows, and every append argument
+/// site is mapped or carries a reason.
+#[test]
+fn the_text_accounting_closes() {
+    let m = top_module(
+        put_str(unpack_append("a", unpack("b"))),
+        text_ids(json!({})),
+    );
+    let (la, tc) = text_census(&m);
+    let a = &tc.accounting;
+    a.check();
+    assert_eq!(a.list_flows, la.flows);
+    assert_eq!(a.text_flows + a.non_text + a.elem_unknown, a.list_flows);
+    assert_eq!(a.type_only + a.structural_only + a.both, a.text_flows);
+}

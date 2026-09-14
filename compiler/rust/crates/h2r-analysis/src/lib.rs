@@ -12,6 +12,7 @@ pub mod parsec;
 pub mod scalar;
 pub mod scope;
 pub mod shape;
+pub mod text;
 pub mod tuples;
 pub mod verify;
 

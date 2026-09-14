@@ -151,6 +151,23 @@ enum Command {
         #[arg(long)]
         axioms: bool,
     },
+    /// Select the text (`[Char]`) flows out of the list census and record
+    /// what the program does with them. Nothing here decides `String`.
+    Text {
+        dir: PathBuf,
+        /// Restrict to one module.
+        #[arg(long)]
+        module: Option<String>,
+        /// Emit the flows and the accounting as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print every text flow with its facts, consumers and node ids.
+        #[arg(long)]
+        explain: bool,
+        /// Print the text-head table.
+        #[arg(long)]
+        heads: bool,
+    },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
         dir: PathBuf,
@@ -224,6 +241,13 @@ fn main() -> Result<()> {
             explain,
             axioms,
         } => lists(&dir, module.as_deref(), json, explain, axioms),
+        Command::Text {
+            dir,
+            module,
+            json,
+            explain,
+            heads,
+        } => text(&dir, module.as_deref(), json, explain, heads),
         Command::Parsec {
             dir,
             module,
@@ -3272,6 +3296,438 @@ fn print_axioms() -> Result<()> {
             a.alias
         );
         println!("  {:<26} {}", "", a.note);
+    }
+    Ok(())
+}
+
+//------------------------------------------------------------------------------
+// text
+//------------------------------------------------------------------------------
+
+/// The text census: which list flows are `[Char]`, how that was
+/// established, and what the program does with them.
+fn text(
+    dir: &Path,
+    module: Option<&str>,
+    json: bool,
+    explain: bool,
+    show_heads: bool,
+) -> Result<()> {
+    use h2r_analysis::lists::ListCensus;
+    use h2r_analysis::text::{
+        Advisory, ConsumerShape, ElementTypeEvidence, TEXT_HEADS, TextCensus, TextShape,
+    };
+
+    let modules = load_dir(dir)?;
+    let selected: Vec<&Module> = match module {
+        Some(name) => vec![find_module(&modules, name)?],
+        None => modules.iter().collect(),
+    };
+    let census = Census::raw(selected.iter().copied());
+    let lc = ListCensus::of_modules(&selected, &census);
+    let tc = TextCensus::of_modules(&selected, &lc, &census);
+    let acct = &tc.accounting;
+
+    if json {
+        let out = serde_json::json!({
+            "flows": tc.flows,
+            "accounting": acct,
+            "heads": TEXT_HEADS,
+        });
+        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        println!();
+        return Ok(());
+    }
+
+    if show_heads {
+        println!(
+            "Text-head table — {} entries, keyed on (module, occ), imported heads only",
+            TEXT_HEADS.len()
+        );
+        println!("Evidence level: library axiom (5) — asserted, not derived.");
+        println!();
+        println!(
+            "  {:<24} {:<26} {:<12} {:<16} {:<5} {:<5} fixes [Char]",
+            "module", "occ", "family", "class override", "char", "pos"
+        );
+        for h in TEXT_HEADS {
+            println!(
+                "  {:<24} {:<26} {:<12} {:<16} {:<5} {:<5} {}",
+                h.module,
+                h.occ,
+                h.family.name(),
+                h.class_override.map(|c| c.name()).unwrap_or("-"),
+                if h.char_exposing { "yes" } else { "no" },
+                if h.position_semantics { "yes" } else { "no" },
+                if h.fixes_char { "yes" } else { "no" },
+            );
+            println!("  {:<24} {}", "", h.note);
+        }
+        println!();
+    }
+
+    println!("Text flows — {} module(s)", selected.len());
+    println!();
+    println!("The caveat this milestone is built on");
+    println!("  The dump carries pretty-printed type strings, not TyCon identity.");
+    println!("  Reading `Char` off a rendered type is level-6 evidence (textual type");
+    println!("  comparison, corroboration) — not `TyConApp [] [Char]`. Every selection");
+    println!("  below says which evidence established it.");
+
+    println!();
+    println!("Selection, out of M2.3c's list flows");
+    println!("  {:>7}  list flows", acct.list_flows);
+    println!("  {:>7}  text", acct.text_flows);
+    println!(
+        "  {:>7}  not text (element type reads as something else)",
+        acct.non_text
+    );
+    println!(
+        "  {:>7}  element-type-unknown (a type variable, or nothing readable) — never assumed text",
+        acct.elem_unknown
+    );
+    println!();
+    println!("  how Char was established, for the text flows");
+    println!(
+        "  {:>7}  {} (level 6 only)",
+        acct.type_only,
+        ElementTypeEvidence::TypeStringOnly.name()
+    );
+    println!(
+        "  {:>7}  {} (an unpack producer, a Char literal, a Char scrutiny, or a signature)",
+        acct.structural_only,
+        ElementTypeEvidence::StructuralOnly.name()
+    );
+    println!(
+        "  {:>7}  {} (a rendered type and a structural fact agree)",
+        acct.both,
+        ElementTypeEvidence::Both.name()
+    );
+    println!(
+        "  {:>7}  of the structural selections came from the append-chain rule (X24)",
+        acct.propagated
+    );
+    println!(
+        "  {:>7}  propagations refused: they would have contradicted a rendered element type",
+        acct.propagation_refused
+    );
+    println!(
+        "  {:>7}  flows still element-type-unknown that a consumer signature would have fixed",
+        acct.elem_unknown_with_char_axiom
+    );
+
+    println!();
+    println!("Rendered element types of the flows that are not text (top 10)");
+    for (ty, n) in acct.non_text_types.iter().take(10) {
+        println!("  {n:>7}  {ty}");
+    }
+
+    println!();
+    println!("Fact: is every consumer text-shaped?");
+    for s in [
+        TextShape::TextOnly,
+        TextShape::Mixed,
+        TextShape::Unobserved,
+        TextShape::Unknown,
+    ] {
+        let n = acct
+            .by_shape
+            .iter()
+            .find(|(x, _)| *x == s.name())
+            .map(|(_, n)| *n)
+            .unwrap_or(0);
+        println!("  {n:>7}  {}", s.name());
+    }
+
+    println!();
+    println!("Fact: consumers, by what they need of the text");
+    for (class, n) in &acct.by_class {
+        println!("  {n:>7}  {class}");
+    }
+    println!(
+        "  ({} consumer classes are asserted by the text-head table rather than derived)",
+        acct.asserted_class_consumers
+    );
+    println!();
+    println!("Fact: consumers, by which side of the text line they fall on");
+    for (shape, n) in &acct.by_consumer_shape {
+        println!("  {n:>7}  {shape}");
+    }
+    println!();
+    println!("Fact: text-shaped consumers, by family");
+    for (fam, n) in &acct.by_family {
+        println!("  {n:>7}  {fam}");
+    }
+
+    println!();
+    println!("Fact: construction");
+    println!(
+        "  {:>7}  literal (an unpackCString#-family producer)",
+        acct.literal_flows
+    );
+    println!("  {:>7}  built by an append", acct.append_flows);
+    println!(
+        "  {:>7}  of those, every operand a literal",
+        acct.append_all_literal
+    );
+    println!("  {:>7}  an operand of an append", acct.append_operands);
+    println!();
+    println!("  append-chain histogram (operand segments)");
+    for (len, n) in &acct.append_hist {
+        println!("    {n:>6}  {len} segment(s)");
+    }
+
+    println!();
+    println!("Fact: inherited from the list flow, cited and not recomputed");
+    println!(
+        "  {:>7}  with a shared tail (L14-SHARED-TAIL)",
+        acct.shared_tail_flows
+    );
+    println!(
+        "  {:>7}  with a prefix consumer",
+        acct.prefix_consumer_flows
+    );
+    println!(
+        "  {:>7}  that escape what the walk follows (L11-ESCAPE)",
+        acct.escaping_flows
+    );
+    println!("  Storage");
+    for (s, n) in &acct.by_storage {
+        println!("    {n:>6}  {s}");
+    }
+    println!("  Recursion");
+    for (s, n) in &acct.by_recursion {
+        println!("    {n:>6}  {s}");
+    }
+
+    println!();
+    println!(
+        "Fact: char_semantics_required — {} of {} flows",
+        acct.char_semantics, acct.text_flows
+    );
+    println!("  (this does NOT preclude String: it says a representation must keep");
+    println!("   character semantics explicit rather than treating the value as bytes)");
+    for (reason, n) in &acct.char_reasons {
+        println!("  {n:>7}  {reason}");
+    }
+
+    println!();
+    println!("Advisory — clearly separated; the theorem is the facts above.");
+    println!("Nothing here decides that any of these is a Rust String.");
+    for a in [
+        Advisory::StrongStringCandidate,
+        Advisory::TextValueUndecided,
+        Advisory::NotText,
+        Advisory::Unknown,
+    ] {
+        println!("  {:>7}  {}", acct.count(a), a.name());
+    }
+    println!(
+        "  ({} flows have no text-shaped consumer at all, whatever else is unknown about them)",
+        tc.flows.iter().filter(|f| !f.has_text_consumer()).count()
+    );
+
+    println!();
+    println!("Advisory x shape");
+    let mut grid: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for f in &tc.flows {
+        *grid.entry((f.advisory.name(), f.shape.name())).or_default() += 1;
+    }
+    for ((a, s), n) in &grid {
+        println!("  {n:>7}  {a:<22} {s}");
+    }
+
+    println!();
+    println!("M2.3c's append consumer sites, and how many sit on a text flow");
+    println!("  {:>7}  {:>7}  stable name", "sites", "on text");
+    for (name, total, on_text) in &acct.append_consumer_sites {
+        println!("  {total:>7}  {on_text:>7}  {name}");
+    }
+
+    println!();
+    println!(
+        "The M2 census' lazy-argument sites at the two append heads ({} sites)",
+        acct.sites.len()
+    );
+    println!("  {:>7}  map onto a text flow", acct.sites_mapped);
+    println!("  {:>7}  do not, with a reason", acct.sites_unmapped);
+    let mut by_callee: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for s in &acct.sites {
+        let e = by_callee.entry(s.callee.as_str()).or_insert((0, 0));
+        e.0 += 1;
+        if s.flow.is_some() {
+            e.1 += 1;
+        }
+    }
+    for (callee, (n, mapped)) in &by_callee {
+        println!("    {n:>6}  {callee} ({mapped} on a text flow)");
+    }
+    println!();
+    println!("  by advisory");
+    let mut by_adv: BTreeMap<&str, usize> = BTreeMap::new();
+    for s in &acct.sites {
+        *by_adv
+            .entry(s.advisory.map(|a| a.name()).unwrap_or("unmapped"))
+            .or_default() += 1;
+    }
+    for (a, n) in &by_adv {
+        println!("    {n:>6}  {a}");
+    }
+    println!();
+    println!("  unmapped, by reason");
+    let mut unmapped: BTreeMap<&str, (usize, String, u32)> = BTreeMap::new();
+    for s in &acct.sites {
+        if let Some(r) = s.reason {
+            let e = unmapped.entry(r).or_insert((0, String::new(), 0));
+            e.0 += 1;
+            if e.1.is_empty() {
+                e.1 = s.module.clone();
+                e.2 = s.app;
+            }
+        }
+    }
+    for (r, (n, md, node)) in &unmapped {
+        println!("    {n:>6}  {r:<52} e.g. {md} node {node}");
+    }
+
+    println!();
+    println!("Per module");
+    println!("  {:>7}  {:>7}  module", "list", "text");
+    for (name, list, text) in &acct.per_module {
+        if *text > 0 {
+            println!("  {list:>7}  {text:>7}  {name}");
+        }
+    }
+
+    println!();
+    println!("Rules, by the number of times each fired");
+    for (rule, n) in &acct.rules {
+        println!("  {n:>7}  {rule}");
+    }
+
+    println!();
+    println!("Top Unknown reasons (top 10)");
+    let mut by: BTreeMap<String, (usize, String, u32)> = BTreeMap::new();
+    for f in &tc.flows {
+        if f.advisory != Advisory::Unknown {
+            continue;
+        }
+        for r in f.unknown_reasons() {
+            let e = by.entry(r).or_insert((0, String::new(), 0));
+            e.0 += 1;
+            if e.1.is_empty() {
+                e.1 = f.module.clone();
+                e.2 = f.producer;
+            }
+        }
+    }
+    let mut by: Vec<_> = by.into_iter().collect();
+    by.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+    for (reason, (n, md, node)) in by.iter().take(10) {
+        println!("  {n:>7}  {reason:<70} e.g. {md} node {node}");
+    }
+
+    println!();
+    println!("Top Mixed reasons — the generic or structural consumer that mixed it (top 10)");
+    let mut mixed: BTreeMap<String, (usize, String, u32)> = BTreeMap::new();
+    for f in &tc.flows {
+        if f.shape != TextShape::Mixed {
+            continue;
+        }
+        for c in &f.consumers {
+            if !matches!(c.shape, ConsumerShape::Generic | ConsumerShape::Structural) {
+                continue;
+            }
+            let key = if c.name.is_empty() {
+                format!("{} ({})", c.shape.name(), c.list_rule)
+            } else {
+                format!("{} {}", c.shape.name(), c.name)
+            };
+            let e = mixed.entry(key).or_insert((0, String::new(), 0));
+            e.0 += 1;
+            if e.1.is_empty() {
+                e.1 = f.module.clone();
+                e.2 = c.at;
+            }
+        }
+    }
+    let mut mixed: Vec<_> = mixed.into_iter().collect();
+    mixed.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+    for (reason, (n, md, node)) in mixed.iter().take(10) {
+        println!("  {n:>7}  {reason:<70} e.g. {md} node {node}");
+    }
+
+    if explain {
+        println!();
+        println!("Every text flow");
+        for f in &tc.flows {
+            println!(
+                "{} node {} — {} {}",
+                f.module,
+                f.producer,
+                f.kind.name(),
+                f.producer_name
+            );
+            println!(
+                "    types  list {:?}, element {:?} — {}",
+                f.list_ty.as_deref().unwrap_or("-"),
+                f.elem_ty.as_deref().unwrap_or("-"),
+                f.element_type_evidence.name()
+            );
+            for e in &f.selection {
+                println!("    select {} — {} {:?}", e.rule, e.note, e.nodes);
+            }
+            println!(
+                "    facts  shape {} [{}], literal {}, append {:?}, complete {}, prefix {}, \
+                 incremental {}, retained {}, unknown {}",
+                f.shape.name(),
+                f.shape_rule,
+                f.literal,
+                f.append_chain,
+                f.complete,
+                f.prefix,
+                f.incremental,
+                f.retained,
+                f.class_unknown
+            );
+            println!(
+                "    inherit spine {}, head {}, storage {}, shared tails {:?}, escape {:?}",
+                f.spine.name(),
+                f.head.name(),
+                f.storage.name(),
+                f.shared_tails,
+                f.escaped
+            );
+            if f.char_semantics_required {
+                for (rule, reason, node) in &f.char_reasons {
+                    println!("    char   {rule} — {reason} node {node}");
+                }
+            }
+            for c in &f.consumers {
+                println!(
+                    "    use    {:<10} {:<16} node {:<8} [{} / {}] {}{}",
+                    c.shape.name(),
+                    c.class.name(),
+                    c.at,
+                    c.list_rule,
+                    c.rule,
+                    c.name,
+                    if c.asserted { " (asserted)" } else { "" }
+                );
+            }
+            println!(
+                "    => {} [{}]{}",
+                f.advisory.name(),
+                f.advisory_rule,
+                f.advisory_reason
+                    .as_ref()
+                    .map(|r| format!(" ({r})"))
+                    .unwrap_or_default()
+            );
+            for e in &f.evidence {
+                println!("    why    {} — {} {:?}", e.rule, e.note, e.nodes);
+            }
+        }
     }
     Ok(())
 }

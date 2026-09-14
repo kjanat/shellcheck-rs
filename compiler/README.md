@@ -35,9 +35,9 @@ ShellCheck Haskell
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the two canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), and which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent). Includes a depth-limited Core pretty-printer. |
-| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`). |
+| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`). Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`). Later: the lowering passes. |
 
 ## Usage
 
@@ -67,6 +67,9 @@ cargo run --release --bin h2r -- fields ../core-json --con OuterToken
 cargo run --release --bin h2r -- lists ../core-json                         # list flows: when is a spine demanded, and how much
 cargo run --release --bin h2r -- lists ../core-json --axioms                # the library demand-semantics table
 cargo run --release --bin h2r -- lists ../core-json --module ShellCheck.ASTLib --explain
+cargo run --release --bin h2r -- text ../core-json                          # which list flows are text, and what is done with them
+cargo run --release --bin h2r -- text ../core-json --heads                  # the text-head table
+cargo run --release --bin h2r -- text ../core-json --module ShellCheck.Formatter.GCC --explain
 cargo run --release --bin h2r -- tuples ../core-json --module Main --boundaries --explain
 cargo run --release --bin h2r -- show ../core-json ShellCheck.Checks.Commands 4714   # + its tuple proof
 ```
@@ -1606,6 +1609,9 @@ cargo run --release --bin h2r -- fields ../core-json --con OuterToken
 cargo run --release --bin h2r -- lists ../core-json                         # list flows: when is a spine demanded, and how much
 cargo run --release --bin h2r -- lists ../core-json --axioms                # the library demand-semantics table
 cargo run --release --bin h2r -- lists ../core-json --module ShellCheck.ASTLib --explain
+cargo run --release --bin h2r -- text ../core-json                          # which list flows are text, and what is done with them
+cargo run --release --bin h2r -- text ../core-json --heads                  # the text-head table
+cargo run --release --bin h2r -- text ../core-json --module ShellCheck.Formatter.GCC --explain
 cargo run --release --bin h2r -- fields ../core-json --json
 ```
 
@@ -1853,6 +1859,9 @@ the `[Char]` flows out of these facts.
 cargo run --release --bin h2r -- lists ../core-json
 cargo run --release --bin h2r -- lists ../core-json --axioms
 cargo run --release --bin h2r -- lists ../core-json --module ShellCheck.ASTLib --explain
+cargo run --release --bin h2r -- text ../core-json                          # which list flows are text, and what is done with them
+cargo run --release --bin h2r -- text ../core-json --heads                  # the text-head table
+cargo run --release --bin h2r -- text ../core-json --module ShellCheck.Formatter.GCC --explain
 cargo run --release --bin h2r -- lists ../core-json --json
 ```
 
@@ -2094,6 +2103,263 @@ sites maps onto exactly one cell or carries a reason.
   coverage in the safe direction.
 * **This section decides demand and sharing only.** No Rust type is chosen
   anywhere, and `[Char]` is not distinguished from any other element type.
+
+## M2.3d — which of those flows are text, and what is done with them
+
+`h2r text <dir> [--module M] [--json] [--explain] [--heads]`.
+
+M2.3c's list census says how much of a spine is demanded. It deliberately
+did not ask whether the elements are characters. This milestone selects the
+**text** flows out of that population and refines them — it does not re-walk
+the Core, and every spine fact it needs (spine demand, head demand, shared
+tails, storage, escapes, recursion) is inherited with the `L…` rule id
+cited.
+
+### The caveat this whole milestone rests on
+
+**The dump carries pretty-printed type strings, not `TyCon` identity.**
+
+Recognising `[Char]` from a rendered type — `[Char]`, `String`, a synonym
+GHC happened to print as `String`, a type variable instantiated somewhere
+this module cannot see — is evidence *from a rendered type*: **level 6,
+textual type comparison, corroboration**, exactly like M2.1's
+alpha-normalised type comparison. It is not `TyConApp [] [Char]` with a
+stable `TyCon`. Every rule below that reads a type string is marked level 6
+in its doc comment, and the report says it in the first paragraph it prints.
+
+It is still far better than looking for `++`, and better still when a fact
+that reads no type at all agrees with it. Where a flow's element type is a
+type **variable** or unreadable, the flow is `element-type-unknown` and is
+**never** assumed to be text.
+
+> **For the next plugin-format bump:** expose *structured* types —
+> `TyConApp` with a stable `TyCon` identity, not a rendered string — so that
+> "the element is `Char`" becomes a structural (level 2/4) fact and this
+> caveat disappears. Nothing else in the pipeline needs the change; the
+> selection rules below would simply move up the hierarchy.
+
+### The population, and the five ways in
+
+A list flow is selected when **any** of these fires. Each stands alone.
+
+| rule | what it reads | level |
+|---|---|---|
+| `X0-ELEM-TYPE` | the `(:)` alternative's head binder is rendered `Char` | 6 |
+| `X1-LIST-TYPE` | the flow's own binder is rendered `[Char]`/`String`/`FilePath` | 6 |
+| `X2-UNPACK-PRODUCER` | the producer is an `unpackCString#`-family call | 2 over 5 |
+| `X3-CHAR-LITERAL-HEAD` | a cell's element is a `Char` literal or a saturated `C#` | 2 |
+| `X4-CHAR-SCRUTINY` | a head binder is scrutinised by a `case` on `C#` or a `Char` literal | 1 over 2 |
+| `X5-AXIOM-FIXES-CHAR` | a consumer's signature fixes the argument to `[Char]` (`eqString`, `unpackAppendCString#`, `lines`, `words`, `showLitString`, `hPutStr`, regex `compile`) | 5 |
+| `X24-APPEND-SAME-ELEM` | an append does not change the element type, so a `[Char]` anywhere in a connected component of (append result ↔ its list operands) establishes it everywhere in the component | 5 over 2 |
+
+`X24` is closed to a fixpoint with a union-find over the append relation. A
+component that also contains a flow whose rendered element type is
+concretely *not* `Char` is a contradiction and is **refused**, not
+propagated into (0 refusals on every profile).
+
+On `-O1`, of M2.3c's 11,883 list flows:
+
+| | flows |
+|---|---:|
+| text | 4,436 |
+| not text (element type reads as something else) | 1,788 |
+| element-type-unknown — never assumed text | 5,659 |
+
+and of the 4,436 text flows, how `Char` was established:
+
+| | flows |
+|---|---:|
+| type-string only (level 6 alone) | 58 |
+| structural only (no rendered type agreed, or there was none to read) | 1,777 |
+| both — a rendered type and a fact that reads no type agree | 2,601 |
+
+90 of the structural selections came from `X24`. The type string alone
+carries only 58 flows; it is the *corroboration* it provides on 2,601 that
+it is good for.
+
+### The text-head table
+
+`TEXT_HEADS` is a second deliberate name-keyed table, in the same spirit as
+M2.3c's axiom table and at the same evidence level (**5, library axiom**),
+under the same hard rule: consulted **only** for an imported head, which
+M2.3c has already established for every `L8-AXIOM`/`L9-NO-AXIOM` consumer.
+It is keyed on `(module, occ)` rather than the full stable name because a
+package's unit id carries a build hash (`regex-tdfa-1.3.2.6-4dff8751…`).
+
+It does one thing the axiom table does not: it gives a demand class to
+heads the axiom table has **no entry for** — `hPutStr2`, `showLitString`,
+the specialised list `==` and `compare`, regex-tdfa's `compile`. A flow
+whose only unresolved consumer is such a head is `Unknown` in M2.3c and
+decided here. That is the one place this milestone is *more* decided than
+the last; it is asserted rather than derived, and every consumer it decides
+is marked `(asserted)` in `--explain` (1,538 of them on `-O1`).
+
+One consequence is recorded explicitly in the code: M2.3c sets
+`Reuse::Escapes("no-axiom-for")` whenever *any* consumer is an imported head
+its table has no entry for. That is a restatement of those consumers, not a
+claim that the value left the walk, so it is not by itself an `Unknown` fact
+here — each such consumer is reported individually, resolved by the text
+table or not.
+
+### Facts, then an advisory
+
+Recorded independently, per flow:
+
+* **`TextShape`** — `TextOnly` (every consumer is a `TEXT_HEADS` entry),
+  `Mixed` (a generic list combinator or a structural `case` on the cells),
+  `Unknown` (an imported head neither table knows, or the value left the
+  walk), `Unobserved` (nothing observes it at all).
+* **`Literal`** and **`AppendChain { length, all_literal, opaque }`** —
+  counted in *operand segments* off the Core spine at the producer,
+  following a let-bound operand by lexical identity, depth-capped at 64.
+* **Per-consumer class** — `CompleteOutput` (the whole text is the subject:
+  output, `eqString`, `==`, `length`, `reverse`, a regex compile),
+  `Prefix` (`isPrefixOf`, `take`, `head`, `null`, `takeWhile`, a `case` on
+  the first cell), `Incremental` (the left side of `++`, `map` over the
+  characters, streaming output), `Retained` (nothing is demanded here),
+  `Unknown`. Derived from the consumer's own M2.3c `SpineDemand` unless
+  `TEXT_HEADS` asserts otherwise.
+* **`char_semantics_required`** with its reasons — an element is exposed or
+  the operation depends on characters rather than on encoded bytes. **This
+  does not preclude `String`**: it says a future representation must
+  preserve character semantics explicitly.
+* **`SharedTails`, `PrefixConsumers`, `Storage`, `Escapes`** — inherited
+  from `L14`, `L10`/`L16`, `L11`; cited, never recomputed.
+
+On `-O1`:
+
+| TextShape | flows | | consumer class | consumers |
+|---|---:|---|---|---:|
+| TextOnly | 1,862 | | CompleteOutput | 1,498 |
+| Mixed | 11 | | Prefix | 617 |
+| Unobserved | 1,004 | | Incremental | 364 |
+| Unknown | 1,559 | | Retained | 6,639 |
+| | | | Unknown | 2,962 |
+
+| consumer side | consumers | | text family | consumers |
+|---|---:|---|---|---:|
+| Text | 3,703 | | Append | 1,920 |
+| Neutral | 5,077 | | Compare | 1,194 |
+| Opaque | 2,908 | | Show | 174 |
+| Structural | 237 | | Affix | 173 |
+| Generic | 155 | | CharSearch | 121 |
+| | | | Output | 61 |
+| | | | Regex | 55 |
+| | | | LinesWords | 5 |
+
+Construction: 2,414 flows are literal (`unpackCString#`-family producers),
+1,349 are built by an append, 7 of those from literals only, and 1,271 are
+an operand of an append. The append-chain histogram, in operand segments:
+
+| segments | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| flows | 1,045 | 184 | 47 | 33 | 19 | 6 | 3 | 4 | 1 | 2 | 2 | 1 | 1 | 1 |
+
+`char_semantics_required` holds for 887 of the 4,436, for these reasons
+(a flow may have several):
+
+| reason | count |
+|---|---:|
+| a consumer exposes individual characters | 746 |
+| an element is forced (M2.3c's `HeadDemand`) | 468 |
+| a `(:)` alternative binds and uses the head | 177 |
+| a consumer depends on character positions or count | 69 |
+| the head is compared against a `Char` literal | 59 |
+| a `Char` literal is an element | 1 |
+
+### The advisory
+
+Derived from the facts and clearly separated from them. **Nothing here
+decides that any flow is a Rust `String`.** Precedence: any `Unknown` fact
+first, then `NotText`, then the strong conjunction, then undecided.
+
+| advisory | flows | condition |
+|---|---:|---|
+| `StrongStringCandidate` | 185 | `TextOnly` ∧ only complete-output or incremental consumers ∧ no character observed ∧ no shared tail ∧ no prefix consumer ∧ `FiniteProducer` |
+| `TextValueUndecided` | 2,654 | text, representation open |
+| `NotText` | 2 | selected by type, consumed only structurally, and no character observed anywhere |
+| `Unknown` | 1,595 | an opaque consumer, a real escape, or an unknown consumer class |
+
+2,345 flows have no text-shaped consumer at all, whatever else is unknown
+about them — the honest measure of how much of ShellCheck's text is handled
+by code this dump does not contain.
+
+### The census' append argument sites
+
+M2's census counts 573 lazy-argument sites at `unpackAppendCString#` and
+545 at `GHC.Base.++` (the "ordinary calls" bucket), under its own
+population filter — a non-trivial *computation* in a lazy or unknown
+position — which `text::census_site` reproduces exactly, so the two
+milestones count the same 1,118 sites. Each is mapped onto the text flow
+its argument carries, or carries a reason:
+
+| | sites |
+|---|---:|
+| map onto a text flow (all `TextValueUndecided`) | 226 |
+| the argument is a `case`/`let` with no single producer | 281 |
+| the argument is a local call result M2.3c follows as a *location* of another flow, not a flow of its own | 281 |
+| the argument's flow is not text | 234 |
+| the argument is an imported call with no axiom | 96 |
+
+Separately, as *evidence* rather than population: of M2.3c's append
+**consumer** sites, all 1,002 `unpackAppendCString#` sites and 905 of the
+1,861 `GHC.Base.++` sites sit on a flow this milestone calls text (plus 12
+of 144 `++_$s++` and the single `unpackAppendCStringUtf8#`).
+
+### Accounting
+
+Asserted in code (`TextAccounting::check`), on `-O1` and on all six matrix
+profiles: text + not-text + element-type-unknown = M2.3c's flow count;
+type-only + structural-only + both = the text flows; every text flow lands
+in exactly one bucket of the shape, advisory, storage and recursion tables;
+every append-produced flow appears exactly once in the histogram; the
+per-module totals sum to the population; and every one of the census'
+append argument sites maps onto exactly one text flow or carries a reason.
+
+| profile | list flows | text | not text | elem unknown | type-only | struct-only | both | Strong | Undecided | NotText | Unknown |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `-O1` / A | 11,883 | 4,436 | 1,788 | 5,659 | 58 | 1,777 | 2,601 | 185 | 2,654 | 2 | 1,595 |
+| B | 12,235 | 4,478 | 1,782 | 5,975 | 65 | 1,831 | 2,582 | 205 | 2,691 | 0 | 1,582 |
+| C | 13,709 | 5,349 | 1,648 | 6,712 | 52 | 3,678 | 1,619 | 186 | 3,115 | 0 | 2,048 |
+| D | 23,871 | 7,788 | 2,389 | 13,694 | 108 | 5,357 | 2,323 | 202 | 4,207 | 0 | 3,379 |
+| E | 22,673 | 7,486 | 2,389 | 12,798 | 108 | 5,043 | 2,335 | 202 | 4,013 | 0 | 3,271 |
+| F | 22,792 | 7,624 | 2,387 | 12,781 | 110 | 5,192 | 2,322 | 202 | 4,072 | 0 | 3,350 |
+
+`h2r tuples`, `--verify`, `h2r laziness`, `h2r parsec`, `h2r fields` and
+`h2r lists` (with `--axioms`) are byte-identical on `-O1` before and after
+this milestone.
+
+### Known limits, stated rather than hidden
+
+* **Selection by type is level 6, and always will be until the plugin
+  exposes structured types.** See the note above. 58 flows rest on it
+  alone.
+* **The text-head table is asserted.** The entries worth re-reading are the
+  class overrides: calling `eqString` a *complete-output* consumer when its
+  spine demand is a data-dependent prefix is a claim about what a
+  representation decision turns on (the whole text is the subject of the
+  comparison), not about how many cells are walked. `isPrefixOf` was
+  deliberately **not** overridden, so it stays a prefix consumer.
+* **`unpackCStringAscii#` has no axiom, so it produces no list flow at
+  all.** 29 call sites in `ShellCheck.Formatter.JSON` and `.JSON1` are
+  therefore invisible to both M2.3c and this milestone. Adding an axiom
+  would change M2.3c's published output, so it is recorded here rather than
+  done. `unpackFoldrCString#` does not occur in this program.
+* **5,659 flows are element-type-unknown.** Most are flows with no bound
+  binder, no `(:)` alternative and no text-shaped consumer — nothing in the
+  dump says what their elements are, and nothing here guesses.
+* **1,559 flows have an `Unknown` shape.** 2,908 consumers are imported
+  heads neither table knows or points at which the value left the walk;
+  the largest single one is `ShellCheck.Interface.$wgo` (394 consumers).
+  Whole-program work (M2.4), not a missing rule here.
+* **Append chains are a lower bound.** An operand that is a parameter, a
+  case, or an imported call counts as one segment and sets
+  `all_literal = false`; the `opaque` field says how many such segments a
+  chain has.
+* **No Rust type is chosen.** `StrongStringCandidate` is the name of a
+  conjunction of facts, not a decision. Even `char_semantics_required` does
+  not rule `String` out — it rules out silently treating the value as
+  bytes.
 
 ## What ShellCheck actually needs
 
