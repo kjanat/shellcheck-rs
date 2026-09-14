@@ -1587,24 +1587,45 @@ impl Parser {
     /// substitution its first `)` closes, and the checks see it.
     pub(super) fn sub_parse_array_index(&mut self, pos: &Position, src: &str) -> Option<Token> {
         let mut sub = self.sub_parser(src, pos);
-        let _ = sub.one_of(" \t\n\r");
-        let tok = sub.read_arithmetic_contents().ok()?;
-        self.merge_sub(sub);
-        Some(tok)
+        let r = sub.called("arithmetic array index expression", |p| {
+            let _ = p.one_of(" \t\n\r");
+            p.read_arithmetic_contents()
+        });
+        match r {
+            Ok(tok) => {
+                self.merge_sub(sub);
+                Some(tok)
+            }
+            Err(()) => {
+                // `reparseIndices` runs `mapM` in the parser monad, so a
+                // sub-parse that fails is the whole file's failure: `a[(]=` has
+                // an index that is not an expression, and there is nothing left
+                // to recover with.
+                let contexts = sub
+                    .frozen_contexts
+                    .clone()
+                    .unwrap_or_else(|| sub.contexts.clone());
+                self.failure = sub.failure.clone();
+                self.committed = true;
+                self.frozen_contexts = Some(contexts);
+                self.merge_sub(sub);
+                None
+            }
+        }
     }
 
-    /// Sub-parse `src` (at `pos`) as an associative-array index word.
+    /// `subParse pos (called "associative array index" $ readIndexSpan) src`.
+    /// It is a sub-parse like any other, so what the index span reports on the
+    /// way -- SC1036 for a `(` that cannot start a word part -- is kept.
     pub(super) fn sub_parse_index_word(&mut self, pos: &Position, src: &str) -> Option<Token> {
-        let mut sub = Parser::new(&self.filename, src);
-        sub.line = pos.line;
-        sub.col = pos.column;
-        sub.next_id = self.next_id;
-        let tok = sub.read_normal_word().ok();
-        let tok = tok.unwrap_or_else(|| sub.empty_literal_word());
-        for (k, v) in sub.positions.iter() {
-            self.positions.insert(*k, v.clone());
-        }
-        self.next_id = sub.next_id;
+        let mut sub = self.sub_parser(src, pos);
+        let start = sub.pos();
+        let parts = sub
+            .called("associative array index", |p| p.read_index_span())
+            .ok()?;
+        let id = sub.next_id_between(start, sub.pos());
+        let tok = Token::new(id, InnerToken::T_NormalWord(parts));
+        self.merge_sub(sub);
         Some(tok)
     }
 
@@ -1746,7 +1767,7 @@ impl Parser {
         self.char('[')?;
         let pos = self.pos();
         // `str <- readStringForParser readIndexSpan`.
-        let raw = self.read_string_for_parser(|p| p.read_index_span())?;
+        let raw = self.read_string_for_parser(|p| p.read_index_span().map(|_| ()))?;
         self.char(']')?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
@@ -1756,17 +1777,23 @@ impl Parser {
     }
 
     /// `readIndexSpan`: `many (readNormalWordPart "]" <|> someSpace <|>
-    /// otherLiteral)`. Only consumes; the caller keeps the raw text.
-    fn read_index_span(&mut self) -> PResult<()> {
+    /// otherLiteral)`, and the parts it read -- `reparseIndices` keeps them as
+    /// the index of an associative array, while `readStringForParser` wants
+    /// only the text they cover.
+    fn read_index_span(&mut self) -> PResult<Vec<Token>> {
+        let mut parts = Vec::new();
         loop {
             // `notFollowedBy2 (oneOf "]")`
             if matches!(self.peek(), None | Some(']')) {
-                return Ok(());
+                return Ok(parts);
             }
             let before = self.idx;
             let m = self.mark();
             match self.read_normal_word_part_end("]") {
-                Ok(_) if self.idx != before => continue,
+                Ok(t) if self.idx != before => {
+                    parts.push(t);
+                    continue;
+                }
                 Ok(_) => self.reset(m),
                 Err(()) => {
                     if self.idx != before {
@@ -1775,18 +1802,25 @@ impl Parser {
                     self.reset(m);
                 }
             }
-            if self.spacing1().is_ok() {
+            let sp_start = self.pos();
+            let sp = self.spacing();
+            if !sp.is_empty() {
+                let id = self.next_id_between(sp_start, self.pos());
+                parts.push(Token::new(id, InnerToken::T_Literal(sp)));
                 continue;
             }
             // `otherLiteral`: a run of the characters a word part cannot take.
-            let mut any = false;
+            let lit_start = self.pos();
+            let mut lit = String::new();
             while matches!(self.peek(), Some(c) if QUOTABLE_CHARS.contains(c)) {
+                lit.push(self.peek().expect("just matched"));
                 self.bump();
-                any = true;
             }
-            if !any {
-                return Ok(());
+            if lit.is_empty() {
+                return Ok(parts);
             }
+            let id = self.next_id_between(lit_start, self.pos());
+            parts.push(Token::new(id, InnerToken::T_Literal(lit)));
         }
     }
 
@@ -1846,6 +1880,14 @@ impl Parser {
         self.spacing();
         let has_left_space = self.idx != before_left;
         let op_start = self.pos();
+        // `readAssignmentOp` opens with `unexpecting "===" (string "===")`:
+        // `a===b` is probably ascii-art, so it is a command name rather than an
+        // assignment. The message lands past the three characters read.
+        if self.string_peek("===") {
+            self.fail_past(3, "Unexpected ===");
+            self.reset(prefix);
+            return Err(());
+        }
         // += or =
         let mode = if self.string("+=").is_ok() {
             AssignmentMode::Append
@@ -1909,6 +1951,18 @@ impl Parser {
                     value,
                 },
             ));
+        }
+        // `optional $ lookAhead (char '=') >> parseProblem 1097`: a second `=`
+        // with no space means this was meant as a comparison.
+        if self.peek() == Some('=') {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1097,
+                "Unexpected ==. For assignment, use =. For comparison, use [/[[. Or quote for literal string.",
+            );
         }
         // value: array (..) or word (possibly empty)
         let value = if self.peek() == Some('(') {
@@ -2262,7 +2316,18 @@ impl Parser {
         } else {
             Dashed::Undashed
         };
-        self.spacing();
+        let sp = self.spacing();
+        // `optional $ try . lookAhead $ char '('`: `<<(cmd)` is a process
+        // substitution with a space missing, not a here document.
+        if self.peek() == Some('(') {
+            self.problem_at(
+                start.clone(),
+                start.clone(),
+                Severity::ErrorC,
+                1038,
+                &format!("Shells are space sensitive. Use '< <(cmd)', not '<<{sp}(cmd)'."),
+            );
+        }
         // delimiter (may be quoted). `readHereDoc` captures `startSpan` here,
         // *after* `<<`/`-`/spacing, so T_HereDoc spans only the end token.
         let delim_start = self.pos();

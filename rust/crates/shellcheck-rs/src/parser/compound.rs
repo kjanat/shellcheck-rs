@@ -190,6 +190,10 @@ impl Parser {
         let Some(written) = self.word_matches_anycase(kw) else {
             return;
         };
+        // `tryParseWordToken` warns about a glued `[`, `#`, `!` or `:` for
+        // whatever `anycaseString` matched, before it looks at the separator or
+        // at the casing: `IF[` gets SC1069 as much as `if[` does.
+        self.warn_keyword_needs_space(kw);
         if written == kw || !self.at_keyword_separator(kw.chars().count()) {
             return;
         }
@@ -1323,8 +1327,14 @@ impl Parser {
         // the body is one `try`, so a word that is not a function name leaves
         // the cursor at the keyword and `readCommand` goes on to read
         // `function` as the ordinary command name it is in a POSIX shell.
-        let (name, has_parens) = self.try_parse(|p| {
-            p.consume_keyword("function")?;
+        let sm = self.mark();
+        let signature = self.try_parse(|p| {
+            // `try $ string "function" >> whitespace`: a plain string, with no
+            // missing-space warning of its own, and the one whitespace
+            // character it requires may be a line feed -- `function\nfoo\n{`
+            // is a function definition whose `{` is missing.
+            p.string("function")?;
+            p.whitespace()?;
             p.spacing();
             let name = p.read_function_name_ext(true)?;
             let before_spaces = p.idx;
@@ -1348,7 +1358,16 @@ impl Parser {
                 );
             }
             Ok((name, has_parens))
-        })?;
+        });
+        // `readFunctionSignature = readWithFunction <|> readWithoutFunction`,
+        // both inside the one `called "function"`: `function(){ :; }` is a
+        // function *named* `function`, since the keyword form wants whitespace
+        // after the word.
+        let (name, has_parens) = match signature {
+            Ok(v) => v,
+            Err(()) if self.idx == sm.idx => return self.read_posix_function_body(),
+            Err(()) => return Err(()),
+        };
         self.allspacing();
         // `readBraceGroup <|> readSubshell`, after a lookahead that says which
         // it should have been.

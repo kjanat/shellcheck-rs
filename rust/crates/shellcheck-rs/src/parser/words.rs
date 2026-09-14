@@ -338,6 +338,14 @@ impl Parser {
                     }
                 }
                 self.bump();
+                if nxt.is_none() {
+                    // `readDoubleEscaped`'s last alternative is `anyChar`, so a
+                    // backslash at the end of the input is a failure that has
+                    // consumed, and `many1` inside the `many` of parts cannot
+                    // recover from it.
+                    self.fail_implicitly();
+                    return Err(());
+                }
                 s.push('\\');
                 continue;
             }
@@ -1327,7 +1335,13 @@ impl Parser {
                 self.bump();
                 s.push(c);
             }
-            _ => return Err(()),
+            // `variableStart` is a character class, and Parsec records an
+            // error where one of those refuses as much as where a `fail`
+            // does: `for $` has nowhere else to report from.
+            _ => {
+                self.fail_implicitly();
+                return Err(());
+            }
         }
         while let Some(c) = self.peek() {
             if c == '_' || c.is_ascii_alphanumeric() {
@@ -1431,6 +1445,12 @@ impl Parser {
                 Some('"') => self.read_double_quoted(),
                 Some('`') => self.read_backticked(false),
                 Some('$') => self.read_normal_dollar(),
+                // `readParamSubSpecialChar`, which comes before the literal:
+                // the `:-` of `${x:-y}` is a token of its own, and `${+}` is a
+                // modifier with no name rather than a name of `+`.
+                Some(c) if PARAM_SUB_SPECIAL_CHARS.contains(c) => {
+                    self.read_param_sub_special_char()
+                }
                 Some(_) => self.read_braced_literal(),
             };
             match r {
@@ -1444,6 +1464,25 @@ impl Parser {
             }
         }
         Ok(parts)
+    }
+
+    /// `readParamSubSpecialChar = many1 paramSubSpecialChars`.
+    fn read_param_sub_special_char(&mut self) -> PResult<Token> {
+        let start = self.pos();
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            if !PARAM_SUB_SPECIAL_CHARS.contains(c) {
+                break;
+            }
+            self.bump();
+            s.push(c);
+        }
+        if s.is_empty() {
+            self.fail_implicitly();
+            return Err(());
+        }
+        let id = self.next_id_between(start, self.pos());
+        Ok(Token::new(id, InnerToken::T_ParamSubSpecialChar(s)))
     }
 
     /// `readDollarBracedLiteral`: a run of anything but `bracedQuotable`.

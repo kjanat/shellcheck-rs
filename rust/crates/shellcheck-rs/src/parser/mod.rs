@@ -385,6 +385,8 @@ const QUOTABLE_CHARS: &str = "|&;<>()\\ '\t\n\r\u{A0}\\\"$`";
 /// substitutes for the real ones, which the shell treats as ordinary text.
 /// `bracedQuotable`: what a backslash escapes inside `${..}`.
 const BRACED_QUOTABLE: &str = "}\"$`'";
+/// `paramSubSpecialChars = oneOf "/:+-=%"`.
+const PARAM_SUB_SPECIAL_CHARS: &str = "/:+-=%";
 
 const UNICODE_DOUBLE_QUOTES: &str = "\u{201C}\u{201D}\u{2033}\u{2036}";
 const UNICODE_SINGLE_QUOTES: &str = "\u{2018}\u{2019}";
@@ -1482,7 +1484,7 @@ impl Parser {
         }
     }
 
-    fn whitespace(&mut self) -> PResult<char> {
+    pub(super) fn whitespace(&mut self) -> PResult<char> {
         if let Ok(c) = self.line_whitespace() {
             return Ok(c);
         }
@@ -1658,6 +1660,18 @@ fn finish_parse(mut p: Parser) -> ParseOutput {
         let assoc = get_associative_arrays(&r);
         p.reparse_indices_root(r, &assoc)
     });
+    // An index that is not an expression fails `reparseIndices`, and that
+    // failure is the file's: `mapM` in the parser monad has nothing to recover
+    // with, so there is no tree to analyse after it.
+    if p.has_committed_failure() {
+        let mut notes = p.problems.clone();
+        notes.extend(p.failure_notes());
+        return ParseOutput {
+            root: None,
+            notes,
+            positions: BTreeMap::new(),
+        };
+    }
     // Parse succeeded (we always return a tree in the slice); emit notes+problems.
     let mut notes = p.problems.clone();
     notes.extend(p.notes.clone());

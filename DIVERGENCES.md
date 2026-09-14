@@ -363,3 +363,31 @@ Kept so a reader can tell a closed entry from a missed one.
   on top, which after a production below failed and left its frame there is not
   its own. A directive in front of a command therefore changes which frame
   SC1073 names. The port kept its annotation frames on a stack of their own.
+- `for $` — `variableStart` is a character class, and Parsec records an error
+  where one of those refuses as much as where a `fail` does. With the `$`
+  already read and nothing recorded past it, the port had no failure left to
+  report and the file came back with only SC1086.
+- `"\` — `readDoubleEscaped`'s last alternative is `anyChar`, so a backslash at
+  the end of the input is a failure that has consumed, and the `many1` inside
+  the `many` of parts cannot recover from it.
+- `F==`, `a===b` — SC1097 was never ported, and neither was `readAssignmentOp`'s
+  `unexpecting "===" (string "===")`, which makes `a===b` a command name rather
+  than an assignment.
+- `IF[`, ` `'';IF# `` — `tryParseWordToken` warns about a glued `[`, `#`, `!`
+  or `:` for whatever `anycaseString` matched, before it looks at the separator
+  or at the casing, so a miscased keyword gets the warning too.
+- `<<(` — `optional $ try . lookAhead $ char '('` after the `<<` and its
+  spacing: SC1038 was not ported.
+- `#shellcheck #` — `optional readAnyComment` comes *after* `many1 readKey`, so
+  a directive with no keys fails where the comment starts rather than past it.
+- `${+}`, `${/}` — `readParamSubSpecialChar` (`many1 (oneOf "/:+-=%")`) was
+  missing from the braced word's parts, so `${+}` had a literal `+` for a name
+  and SC2296 fired on it.
+- ``function`` then a line feed — ``readWithFunction`` is `try $ string "function"
+  >> whitespace``, and that one whitespace character may be a line feed; ``readFunctionSignature``is``readWithFunction <|> readWithoutFunction``inside
+  >> the one``called "function"``, so ``function(){ :; }``is a function named``function`.
+- `declare -A a[(]=`, `a[(]=` — `reparseIndices` sub-parses each index inside a
+  `called` frame, and its problems are kept like any sub-parse's: an
+  associative index runs `readIndexSpan`, which reports SC1036 for a `(`. An
+  indexed one runs `readArithmeticContents`, and `mapM` in the parser monad has
+  nothing to recover with when that fails, so the file does not parse at all.

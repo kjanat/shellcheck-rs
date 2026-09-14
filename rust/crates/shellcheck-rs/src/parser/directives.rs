@@ -59,14 +59,8 @@ impl Parser {
         let mut keys = 0;
         // `many1 readKey`
         loop {
-            match self.peek() {
-                // `optional readAnyComment` then the end of the line.
-                None | Some('\n') | Some('\r') => break,
-                Some('#') => {
-                    let _ = self.read_any_comment();
-                    break;
-                }
-                _ => {}
+            if matches!(self.peek(), None | Some('\n') | Some('\r')) {
+                break;
             }
             let key_pos = self.pos();
             let key = self.read_annotation_key_name();
@@ -85,6 +79,10 @@ impl Parser {
             // `many1` needs one key; `# shellcheck` alone has none.
             return self.fail_with("");
         }
+        // `optional readAnyComment`, which comes *after* `many1 readKey`: a
+        // directive with no keys at all fails where the comment starts, not
+        // past it.
+        let _ = self.read_any_comment();
         // `void linefeed <|> eof <|> do { SC1125; many (noneOf "\n"); .. }`:
         // anything left on the line was not a key=value pair.
         if !self.eof() && self.peek() != Some('\n') && self.peek() != Some('\r') {
