@@ -353,12 +353,35 @@ pub struct FieldVerdict {
     pub force_on_whnf: bool,
     pub rep: FieldRep,
     pub rule: &'static str,
+    /// For a [`FieldRep::Direct`] verdict: **every** route that proves the
+    /// timing, not only the one the derivation happened to reach first.
+    /// [`FieldVerdict::rule`] is the first of them; this is what makes the
+    /// overlap between the three rules visible (M2.3f's route-set
+    /// histogram). Empty for every other rep.
+    pub routes: Vec<&'static str>,
     pub reason: Option<&'static str>,
     pub detail: String,
     pub evidence: Vec<Evidence>,
 }
 
 impl FieldVerdict {
+    /// The route set as one histogram key: `R1`, `R2`, `R1+R2`, …
+    pub fn route_key(&self) -> String {
+        if self.routes.is_empty() {
+            return "none".to_string();
+        }
+        self.routes
+            .iter()
+            .map(|r| match *r {
+                R1_STRICT_FIELD => "R1",
+                R2_FIELD_IS_VALUE => "R2",
+                R3_SAME_FRONTIER => "R3",
+                other => other,
+            })
+            .collect::<Vec<_>>()
+            .join("+")
+    }
+
     pub fn reason_key(&self) -> Option<String> {
         let r = self.reason?;
         Some(if self.detail.is_empty() {
@@ -954,6 +977,15 @@ impl<'m> Fields<'m> {
                         String::new(),
                     )
                 };
+                let routes = if rep == FieldRep::Direct {
+                    self.routes(f, idx, w)
+                } else {
+                    Vec::new()
+                };
+                debug_assert!(
+                    rep != FieldRep::Direct || routes.contains(&rule),
+                    "the rule that proved Direct must be one of the routes"
+                );
                 FieldVerdict {
                     index: idx,
                     demand,
@@ -962,6 +994,7 @@ impl<'m> Fields<'m> {
                     force_on_whnf,
                     rep,
                     rule,
+                    routes,
                     reason,
                     detail,
                     evidence,
@@ -1115,8 +1148,19 @@ impl<'m> Fields<'m> {
                 ),
             ));
         }
-        // (c) The force sits at the same evaluation frontier as the
-        // construction: nothing may run in between.
+        self.r3_frontier(f, idx, w)
+    }
+
+    /// (c) The force sits at the same evaluation frontier as the
+    /// construction: nothing may run in between. Split out of
+    /// [`Fields::timing`] so that the route-set histogram can ask each rule
+    /// separately instead of only seeing the first one that fired.
+    fn r3_frontier(
+        &self,
+        f: &FieldFlow,
+        idx: u32,
+        w: &flow::Walk<FieldUse>,
+    ) -> Option<(&'static str, String)> {
         if f.returned || f.escaped() {
             return None;
         }
@@ -1152,6 +1196,24 @@ impl<'m> Fields<'m> {
                 scrutinies.len()
             ),
         ))
+    }
+
+    /// Every route that proves a `Direct` timing for this field, in rule
+    /// order. The derivation stops at the first one; this asks all three,
+    /// so that the overlap between them is visible rather than hidden by
+    /// the order they are tried in.
+    fn routes(&self, f: &FieldFlow, idx: u32, w: &flow::Walk<FieldUse>) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if f.strict_fields[idx as usize] {
+            out.push(R1_STRICT_FIELD);
+        }
+        if field_is_value(&self.scope, f.fields[idx as usize]) {
+            out.push(R2_FIELD_IS_VALUE);
+        }
+        if self.r3_frontier(f, idx, w).is_some() {
+            out.push(R3_SAME_FRONTIER);
+        }
+        out
     }
 }
 
@@ -1364,6 +1426,10 @@ pub struct FieldAccounting {
     pub strict_unused: usize,
     /// Direct verdicts by the rule that proved the timing.
     pub direct_by_rule: Vec<(&'static str, usize)>,
+    /// Direct verdicts by the **set** of rules that prove it, so that the
+    /// overlap between R1, R2 and R3 is visible: `R1`, `R2`, `R1+R2`, …
+    /// Printed unconditionally, including the combinations that are zero.
+    pub direct_by_routes: Vec<(String, usize)>,
     pub sites: Vec<SiteMap>,
     pub sites_mapped: usize,
     pub sites_deferred_to_m23c: usize,
@@ -1432,6 +1498,12 @@ impl FieldAccounting {
             self.count(FieldRep::Direct),
             "every Direct verdict must name the rule that proved its timing"
         );
+        let routed: usize = self.direct_by_routes.iter().map(|(_, n)| n).sum();
+        assert_eq!(
+            routed,
+            self.count(FieldRep::Direct),
+            "every Direct verdict must land in exactly one route-set bucket"
+        );
     }
 }
 
@@ -1479,6 +1551,7 @@ impl<'m> FieldCensus<'m> {
         let mut obs_kind: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut rules: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut direct_by_rule: BTreeMap<&'static str, usize> = BTreeMap::new();
+        let mut direct_by_routes: BTreeMap<String, usize> = BTreeMap::new();
         // (con, index) -> rows
         let mut con_fields: BTreeMap<(String, u32), ConFieldRow> = BTreeMap::new();
         for f in &flows {
@@ -1525,6 +1598,7 @@ impl<'m> FieldCensus<'m> {
                 }
                 if v.rep == FieldRep::Direct {
                     *direct_by_rule.entry(v.rule).or_default() += 1;
+                    *direct_by_routes.entry(v.route_key()).or_default() += 1;
                 }
                 *rules.entry(v.rule).or_default() += 1;
                 let row = con_fields
@@ -1570,6 +1644,13 @@ impl<'m> FieldCensus<'m> {
         acct.rules = rules.into_iter().collect();
         acct.rules.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
         acct.direct_by_rule = direct_by_rule.into_iter().collect();
+        // The histogram is printed unconditionally, including the
+        // combinations that are zero here: the overlap between the three
+        // rules is the point, and an absent row hides a zero.
+        for key in ["R1", "R2", "R3", "R1+R2", "R1+R3", "R2+R3", "R1+R2+R3"] {
+            direct_by_routes.entry(key.to_string()).or_insert(0);
+        }
+        acct.direct_by_routes = direct_by_routes.into_iter().collect();
 
         // The M2 census' constructor-field argument sites.
         let known: HashSet<&str> = modules.iter().map(|m| m.name.as_str()).collect();

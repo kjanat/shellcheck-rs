@@ -27,6 +27,18 @@ ShellCheck Haskell
     Rust
 ```
 
+## Milestones
+
+| | | state |
+|---|---|---|
+| **M1** | the residual-laziness census: why does each local binding that survives GHC still exist? 2,242 potential thunk sites, classified and cross-checked against GHC's own demand and cardinality | done |
+| **M2 baseline** | who receives the 8,351 lazy arguments — resolution, proven tier, abstraction family | done |
+| **M2.1** | proving Parsec's CPS roles structurally, and feeding the proof back into the census | done |
+| **M2.2** | which tuples are transport and which are values: 2,584 constructions, an independent verifier, a representation-boundary check, the scalar view | done |
+| **M2.2.1** | the generic aggregate def-use walk (`flow.rs`) lifted out of the tuple census, so every later population is a client of one walk | done |
+| **M2.3** | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link | done |
+| **M2.4** | **next.** Dictionary erasure and closed-world **class-op enumeration** (294 census sites, 3 tuple residuals); **higher-order representation agreement** — the 67 tuples handed into a local callee's parameter and the 187 + 134 + 114 that reach an imported call, a list cell or a program constructor through a closure; and the **41 Parsec edges** whose continuation target the region graph does not close over | next |
+
 ## Layout
 
 | Path | What it is |
@@ -35,9 +47,9 @@ ShellCheck Haskell
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the two canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), and which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent). Includes a depth-limited Core pretty-printer. |
-| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`). |
+| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts). Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), and the `--view` / `--view-all` representation views `fields`, `lists` and `text` each carry. Later: the lowering passes. |
 
 ## Usage
 
@@ -71,7 +83,12 @@ cargo run --release --bin h2r -- text ../core-json                          # wh
 cargo run --release --bin h2r -- text ../core-json --heads                  # the text-head table
 cargo run --release --bin h2r -- text ../core-json --module ShellCheck.Formatter.GCC --explain
 cargo run --release --bin h2r -- verify-rep ../core-json          # re-derive every M2.3 verdict independently
-cargo run --release --bin h2r -- verify-rep ../core-json --explain # …listing every refusal
+cargo run --release --bin h2r -- verify-rep ../core-json --explain # …listing every refusal, plus the accounting and the M1 link
+cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.CFG --view 10329   # one construction, field by field
+cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.AST --view-all --json
+cargo run --release --bin h2r -- lists ../core-json --module ShellCheck.ASTLib --view 1220  # one flow: cells, consumers, six facts
+cargo run --release --bin h2r -- text ../core-json --module ShellCheck.Formatter.GCC --view 11
+cargo run --release --bin h2r -- show ../core-json ShellCheck.AST 5293      # + its M2.3 footers
 cargo run --release --bin h2r -- tuples ../core-json --module Main --boundaries --explain
 cargo run --release --bin h2r -- show ../core-json ShellCheck.Checks.Commands 4714   # + its tuple proof
 ```
@@ -96,32 +113,39 @@ Headline numbers on the tree at the repo root (GHC 9.6.7, `-O1`). The
 bugs in it — occurrences keyed by GHC unique, and spines split by casts;
 both are described under [M2.1](#m21--proving-parsecs-cps-roles):
 
-| | before | now | after tuple normalisation |
-|---|---:|---:|---:|
-| Local bindings after optimisation | 6,156 | 6,156 | — |
-| … functions / join points / values already in WHNF | 1,883 / 1,119 / 762 | 1,883 / 1,119 / 762 | — |
-| … strict (`let` the simplifier didn't turn into `case`) | 148 | 148 | — |
-| … lazy, used at most once / possibly many times | 39 / 2,134 | 39 / 2,134 | — |
-| **Potential thunk sites** | **2,242** | **2,242** | **2,150** |
-| … sinkable into an evaluating position (thunk vanishes) | 12 | 14 | 14 |
-| … sinkable, but into a lazy argument (thunk moves) | 243 | 254 | 251 |
-| … … of all the sinkable ones, into mutually exclusive branches | 56 | 65 | — |
-| … … the rest being single-use | 199 | 203 | — |
-| … memo needed to keep sharing | 1,918 | 1,905 | **1,816** |
-| … … captured by a many-entry lambda | 1,387 | **1,242** | **1,162** |
-| … … shared on one path | 531 | **663** | **654** |
-| … genuinely recursive values (knot-tying) | 69 | 69 | 69 |
-| Top-level CAFs that are actually string literals | 2,426 of 2,755 | 2,426 of 2,755 | — |
-| Genuine top-level thunks | 238 | 238 | — |
+| | before | now | after tuple normalisation | after M2.3 |
+|---|---:|---:|---:|---:|
+| Local bindings after optimisation | 6,156 | 6,156 | — | — |
+| … functions / join points / values already in WHNF | 1,883 / 1,119 / 762 | 1,883 / 1,119 / 762 | — | — |
+| … strict (`let` the simplifier didn't turn into `case`) | 148 | 148 | — | — |
+| … lazy, used at most once / possibly many times | 39 / 2,134 | 39 / 2,134 | — | — |
+| **Potential thunk sites** | **2,242** | **2,242** | **2,150** | **2,139** |
+| … sinkable into an evaluating position (thunk vanishes) | 12 | 14 | 14 | 11 |
+| … sinkable, but into a lazy argument (thunk moves) | 243 | 254 | 251 | 248 |
+| … … of all the sinkable ones, into mutually exclusive branches | 56 | 65 | — | — |
+| … … the rest being single-use | 199 | 203 | — | — |
+| … memo needed to keep sharing | 1,918 | 1,905 | **1,816** | **1,811** |
+| … … captured by a many-entry lambda | 1,387 | **1,242** | **1,162** | **1,160** |
+| … … shared on one path | 531 | **663** | **654** | **651** |
+| … genuinely recursive values (knot-tying) | 69 | 69 | 69 | 69 |
+| Top-level CAFs that are actually string literals | 2,426 of 2,755 | 2,426 of 2,755 | — | — |
+| Genuine top-level thunks | 238 | 238 | — | — |
 
 The third column is the [cross-milestone
 link](#the-cross-milestone-link-how-many-of-m1s-thunks-are-these-tuples):
 92 of these thunk sites are the lazy selectors of a tuple M2.2 proves
 removable, independently verifies *and* shows can be removed together with
 every other removal at the same representation boundary, so they disappear
-with it rather than needing anything of their own. `remaining + explained = 2,242` is
-asserted, and the criterion is deliberately narrow — see that section for
-what is *not* claimed.
+with it rather than needing anything of their own.
+
+The fourth is [M2.3's own link](#the-cross-milestone-link): a further
+**11** whose right-hand side is a field expression already proven to be a
+value, a lazy selection over a field proven eager, or a cell of a spine one
+eager pass consumes — again only where the independent verifier confirms
+the verdict. The two columns are disjoint by construction, and
+`remaining + explained-by-tuples + explained-by-M2.3 = 2,242` is asserted.
+Both criteria are deliberately narrow; each section says what is *not*
+claimed and why the number is not larger.
 
 GHC's cardinality and our syntactic occurrence analysis agree on 2,291 of
 the 2,321 thunk candidates they both have an opinion about (9 both-once,
@@ -1140,6 +1164,33 @@ The unsupported residual is itemised by the *kind* of thing holding the
 value (the [table above](#what-remains-and-what-each-thing-is-waiting-for)),
 and the itemisation is asserted to sum to the unsupported total.
 
+#### Two numbers, two questions — kept apart on purpose
+
+There are two removability numbers in this milestone and they answer
+different questions. They are separate metrics in `metrics.rs` and separate
+rows of `h2r compare`, not one number with a caveat attached:
+
+| | | `-O1` |
+|---|---|---:|
+| **can this box disappear locally?** | the def-use walk proves the construction is transport, on its own terms and before anything is asked about how it composes | **1,453** |
+| **can it disappear without cloning?** | …and every [representation boundary](#composing-the-views-can-all-1453-be-applied-at-once) it crosses is a uniform split, so the removal composes with every other removal at the same boundary | **1,206** |
+| …only a specialised **clone** of the callee could carry the split | recorded, and counted as *unsupported* | **3** |
+
+The 247 between them is the work a representation-agreement pass would have
+to do. The **3** `RemovableWithClone` parameter boundaries are the first
+concrete evidence in this compiler for a cloning pass: a callee whose
+parameter cannot be split because different callers want different
+representations, where specialising a copy of the callee would resolve it.
+**No cloning pass is implemented**, and they are counted as unsupported
+rather than as a removal waiting to happen.
+
+```
+$ h2r compare A=compiler/core-json
+removable locally (def-use)           1453
+removable without cloning             1206
+  …only a clone could carry              3
+```
+
 ### The normalised scalar view
 
 Proving a tuple is transport is not the same as saying what replaces it.
@@ -2104,7 +2155,9 @@ sites maps onto exactly one cell or carries a reason.
 
 `h2r tuples`, `--verify`, `--boundaries`, `h2r laziness`, `h2r parsec` and
 `h2r fields` are byte-identical on `-O1` before and after this milestone,
-and stayed byte-identical through M2.3e.
+and stayed byte-identical through M2.3e. M2.3f adds an accounting section to
+`h2r fields`, `lists`, `text` and `verify-rep` and changes no existing line
+of any of them.
 
 ### Known limits, stated rather than hidden
 
@@ -2692,7 +2745,7 @@ escape for it either.
   output as `C` rather than `D`.
 * `h2r tuples`, `--verify`, `--boundaries`, `h2r laziness` and `h2r parsec`
   are byte-identical on `-O1` before and after.
-* `cargo test` (137), `cargo clippy --all-targets` (0 warnings) and
+* `cargo test` (141), `cargo clippy --all-targets` (0 warnings) and
   `cargo fmt --check` are clean; `ListAccounting::check`,
   `FieldAccounting::check` and `TextAccounting::check` still close on all
   seven dumps.
@@ -2711,6 +2764,393 @@ escape for it either.
   verifier does not depend on.
 * The five `VecCandidate` verdicts whose `Whole` fact comes from
   `L4-LOOP-WHOLE` rest on one walk, not two.
+
+## M2.3f — the representation view, and what the milestone claims
+
+M2.3b/c/d record the facts, M2.3e re-derives every verdict whose being wrong
+would be a miscompile. This section adds the three things a milestone needs
+before it can be closed: a **view** that lays one site's proof out so a
+person can audit it, **provenance** in `h2r show` so any Core node can be
+asked what the three censuses say about it, and the milestone's own
+**accounting**, asserted in code and printed by every command. It changes no
+verdict: `h2r tuples`, `--verify`, `h2r laziness` and `h2r parsec` are
+byte-identical on `-O1`, and `h2r fields`, `lists`, `text` and `verify-rep`
+gain sections without a single existing line changing.
+
+```sh
+cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.CFG --view 10329
+cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.AST --view-all --json
+cargo run --release --bin h2r -- lists ../core-json --module ShellCheck.ASTLib --view 1220
+cargo run --release --bin h2r -- text ../core-json --module ShellCheck.Formatter.GCC --view 11
+cargo run --release --bin h2r -- show ../core-json ShellCheck.AST 5293       # + its M2.3 footers
+```
+
+### Three views, each with its own completeness assertion
+
+The **field view** puts every field of one construction on one line — the
+three facts, the derived rep, and the *route* that proved it — and under it
+the observations that justify the facts, each with its node ids, plus (for
+`Unknown`) the escape with its refined reason. `FieldView::check` asserts
+that every field of the construction appears exactly once and that no line
+names a field outside its arity:
+
+```
+$ h2r fields compiler/core-json --module ShellCheck.CFG --view 10329
+ShellCheck.CFG node 10329 — Range (program), arity 2, observed
+    f0  demand=Never  strict=LazyField  rec=Acyclic  ⇒ Dead  [R5-DEAD]
+        D6-FIELD-UNUSED: field 0 bound and unused at node 10360 [start#3315]
+        D6-FIELD-UNUSED: field 0 bound and unused at node 10520 [start#3359]
+        D6-FIELD-UNUSED: field 0 bound and unused at node 10615 [start#3400]
+        D6-FIELD-UNUSED: field 0 bound and unused at node 10664 [start#3406]
+        verified: yes   field expression at node 10333
+    f1  demand=Conditional  strict=LazyField  rec=Acyclic  ⇒ Deferred  [R4-DEFERRED: bound-and-unused-on-some-observation]
+        D5-DEMAND-LAZY: field 1 bound and used at node 10360 [mid1#3316] — mid1
+        D6-FIELD-UNUSED: field 1 bound and unused at node 10520 [mid1#3360]
+        D5-DEMAND-LAZY: field 1 bound and used at node 10615 [mid1#3401] — mid1
+        D6-FIELD-UNUSED: field 1 bound and unused at node 10664 [mid1#3407]
+        verified: not a claim   field expression at node 10331
+```
+
+`verified:` is `verify_rep`'s answer and only its answer: `yes`,
+`coverage-refused (<reason>)`, `DISAGREED (<reason>)`, or `not a claim` for
+the reps nothing re-derives because a wrong one only costs coverage.
+
+The **list view** prints the producer, every cell, every consumer with the
+rule that classified it *and the demand that one consumer contributes*, the
+six facts each with the rule that decided it, and the advisory with the
+fact conjunction it came from. `ListView::check` asserts every consumer
+appears exactly once. Where a fact is the *absence* of a rule firing —
+`SinglePass` is "no `L14` and no `L15`" — the view says that rather than
+naming a rule that did not fire:
+
+```
+$ h2r lists compiler/core-json --module ShellCheck.ASTLib --view 1220
+ShellCheck.ASTLib node 1220 — Nil flow, 2 consumer(s), advisory IteratorCandidate
+    producer  node 1220
+    consumers (2), each with the demand it contributes
+        node 1059    PassedLocal    [T5-PASSED-LOCAL]  spine None / head None, streaming
+            handed to the local shortToOpts
+        node 1293    Whnf           [T15-WHNF-ALT]  spine Prefix(Known) / head None, streaming
+            observed at WHNF (alternative-binds-no-field)
+    the six facts
+        SpineDemand   Prefix(Known)                [T15-WHNF-ALT]
+        HeadDemand    None                         [no (:) alternative bound a head]
+        Reuse         SinglePass                   [no L14/L15 fired]
+        Storage       NotStored                    [no L10/L16 fired]
+        Recursion     FiniteProducer               [M1 does not call it a recursive value]
+        ShortCircuit  no                           [no short-circuiting consumer]
+        traversals    1, every spine consumer streaming [one entry into the spine]
+    advisory  IteratorCandidate [L-REC-ITERATOR] from Prefix(Known) ∧ None ∧ SinglePass ∧ NotStored ∧ FiniteProducer ∧ streaming
+        verified: yes
+```
+
+The **text view** is the text facts *on top of* the list view — selection
+evidence with the rule that established `Char`, shape, per-consumer classes
+with `(asserted)` marked where `TEXT_HEADS` overrode M2.3c's spine demand,
+the char-semantics reasons, the append chain — and then prints the whole
+list view underneath, so the inherited facts are visible rather than cited:
+
+```
+$ h2r text compiler/core-json --module ShellCheck.Formatter.GCC --view 11
+ShellCheck.Formatter.GCC node 11 — text flow, ImportedCall by both, shape TextOnly, advisory TextValueUndecided
+    selection (how Char was established: both)
+        X1-LIST-TYPE: the flow's binder is rendered "[Char]" (level 6: a rendered type, not TyCon identity) (node(s) 11) [lvl#11]
+        X2-UNPACK-PRODUCER: $ghc-prim$GHC.CString$unpackCString# produces [Char] by the primitive's type (node(s) 11)
+        X5-AXIOM-FIXES-CHAR: GHC.Base.eqString: String -> String -> Bool: the whole text is the subject, though it stops at the first difference (node(s) 184)
+    shape     TextOnly [X8-TEXT-ONLY], a string literal
+    consumer classes
+        CompleteOutput   1
+        …
+        node 184     Text           class CompleteOutput [X15-COMPLETE-OUTPUT] family Compare (asserted; M2.3c said L8-AXIOM)
+    char_semantics_required: true
+        L3-HEAD-BOUND: an-element-is-forced(Prefix) at node 11
+    advisory  TextValueUndecided [X-ADV-TEXT-VALUE-UNDECIDED]  [character-semantics-are-required]
+        verified: not a claim
+```
+
+`--view-all --module M` does every site in a module and `--json` dumps the
+views as structured data. Each has a hand-built regression test: the field
+view lists every field once, the list view lists every consumer once, and
+the text view shows the selection evidence (`X5-AXIOM-FIXES-CHAR` on a flow
+no rendered type would have selected).
+
+### Provenance in `h2r show`
+
+The three proof objects are loaded by default whenever the module has any,
+exactly as the Parsec and tuple objects are, and `--no-fields`,
+`--no-lists`, `--no-text` opt out one at a time. They annotate
+constructions, field binders, producers, cells, tail aliases and consumers
+inline, and print one footer per site the node takes part in — as itself or
+as an *occurrence* of one of those binders:
+
+```
+$ h2r show compiler/core-json ShellCheck.AST 5293 --depth 1
+-- in top-level binding $bT_WhileExpression, node 5293
+([#5293]{Inner_T_WhileExpression construction, arity 2, Unknown 2}Inner_T_WhileExpression[#5298] c[#5297] l[#5295])
+
+node 5293
+  Inner_T_WhileExpression 2 field(s), construction node 5293 (program)
+  this node: the construction itself
+  f0 demand Unknown / LazyField / Acyclic ⇒ Unknown [verified: not a claim]  [R7-UNKNOWN: the-program-construction-holding-it-escapes (OuterToken)]
+  f1 demand Unknown / LazyField / Acyclic ⇒ Unknown [verified: not a claim]  [R7-UNKNOWN: the-program-construction-holding-it-escapes (OuterToken)]
+  consumers:
+    D7-ESCAPE: the-program-construction-holding-it-escapes at node 5291
+  evidence:
+    D0-FIELD-CON: Inner_T_WhileExpression of repArity 2 (…), 0 strict field(s) (node(s) 5293, 5298)
+    D8-NESTED: field 1 of OuterToken: 0 use(s) of that field follow (node(s) 5291)
+    T11-ESCAPE: the-program-construction-holding-it-escapes (OuterToken) (node(s) 5291)
+```
+
+A list footer carries the six facts and the advisory
+(`SpineDemand Prefix(DataDependent) [L8-AXIOM] … advisory PersistentCandidate
+[verified: not a claim]`), and a text footer the consumer classes, the
+append chain and the text advisory. All five proof objects' marks are
+concatenated rather than merged, so it stays visible which object said what.
+`show` verifies only the module it was asked about, so it stays a per-node
+query and not a whole-program analysis.
+
+### The milestone accounting
+
+Asserted in code (`m23::RepAccounting::check`) and printed by `h2r fields`,
+`lists`, `text` and `verify-rep` — always whole, so no command shows a
+fragment of it. The rule is M2.2's, pointing the same way: **any claim the
+verifier did not confirm, for coverage or otherwise, is unsupported and
+never proven.**
+
+```
+M2.3 accounting — fields: total = proven-eager + proven-lazy + dead + unsupported
+                          total proven-eager  proven-lazy   dead  unsupported
+  program !                   0            0            0      0            0
+  program                  6736            1          207      4         6524
+  library !                3323         3323            0      0            0
+  library                  9771           84          788      5         8894
+  total                   19830         3408          995      9        15418
+
+M2.3 accounting — lists and text: total = advised + unsupported
+                          total      advised  unsupported   advised, by advisory
+  list flows              11917         2977         8940   IteratorCandidate 722, LazyCandidate 31, PersistentCandidate 2197, VecCandidate 27
+  text flows               4436         2748         1688   NotText 2, StrongStringCandidate 185, TextValueUndecided 2561
+
+M2.3 accounting — the M2 census' argument sites
+                                                               total   proven advised-lazy  deferred  unsupported
+  the M2 census' 1,996 constructor-field sites                  1996        0           77      1310          609
+  …of which the 1,310 list-cons sites, on M2.3c's population    1310       29          402         0          879
+  the M2 census' 1,118 append argument sites                    1118        0          226         0          892
+```
+
+*proven-eager* is `Direct` **and** re-derived; *proven-lazy* is `Deferred`
+plus `Recursive` where it was re-derived. `Deferred` needs no second walk
+and gets none: a wrong `Deferred` loses an optimisation and cannot
+miscompile, which is exactly the criterion that decides what `verify-rep`
+checks. The ten coverage refusals show up here as the difference between
+M2.3c's published 32 `VecCandidate` / 727 `IteratorCandidate` and the 27 /
+722 counted as *advised* — the five and five the verifier declined are
+unsupported, not advised.
+
+The **route-set histogram** is printed unconditionally, zero rows included,
+because the overlap between the three `Direct` rules is the interesting
+part and an absent row hides a zero:
+
+```
+Direct, by the route **set** that proves it (printed in full, zeros included)
+     2648  R1
+      675  R1+R2
+        0  R1+R2+R3
+        0  R1+R3
+       85  R2
+        0  R2+R3
+        0  R3
+```
+
+M2.3b reports `Direct` by the rule that *fired first* (3,323 `R1`, 85 `R2`,
+0 `R3`); this asks all three of every verdict. 675 of the 3,323 GHC-strict
+fields are **also** already values, so `R2` would have proved them
+independently — which is a real redundancy, not a coincidence, and it is why
+the histogram exists. `R3` still proves nothing on the dump, and the
+regression test that exercises it lands in `R1+R2+R3`, which is the only
+place all three are visible together.
+
+### The cross-milestone link
+
+Three rules, each narrow, each requiring the verifier's confirmation:
+
+| rule | what the thunk's right-hand side is | why it stops being a thunk |
+|---|---|---|
+| `M23-A-FIELD-ALREADY-A-VALUE` | a binding whose occurrence is a constructor field proven `Direct` by **`R2`** | the field expression is already a value, so there is no evaluation to defer |
+| `M23-B-SELECTOR-OVER-AN-EAGER-FIELD` | a lazy selection `case c of C .. x .. -> x` over a field proven `Direct` | the field is forced at construction; no deferred selection remains |
+| `M23-C-CELL-OF-A-SINGLE-PASS-SPINE` | the tail of a cell (or a text append operand) of a `Vec`/`Iterator` flow whose spine demand is `Whole` or `Incremental` | one eager pass consumes the spine, so the cell thunk becomes an iterator step |
+
+```
+Thunk sites explained by M2.3 (M1 × M2.2 × M2.3)
+                                                  before  by tuples   by M2.3   after
+  sinkable, lands in an evaluating position           14          0         3      11
+  sinkable, lands in a lazy position                 254          3         3     248
+  memoisation required                              1905         89         5    1811
+  recursive value                                     69          0         0      69
+  … captured by a many-entry lambda                 1242         80         2    1160
+  … shared on one path                               663          9         3     651
+  potential thunk sites                             2242         92        11    2139
+  by binder origin        FloatOut 5, User 6
+  by the rule             M23-A 5, M23-B 1, M23-C 5
+```
+
+`remaining + explained-by-tuples + explained-by-M2.3 = 2,242` is asserted,
+as is "no site is counted twice": a site M2.2 already explains is M2.2's,
+and the M2.3 walk skips it before it can claim it. The tuple column is read
+from `link::ThunkLink` rather than recomputed, so the two milestones cannot
+disagree about who owns a site.
+
+From the other side, **29** of the M2 census' 1,996 constructor-field
+argument sites stop being lazy positions — all 29 through the list cons,
+where the spine the argument is consed into is consumed by one eager pass —
+and **0** of the 1,118 append argument sites do.
+
+**Eleven, and why it is not four hundred.** The number is small and the
+reasons are structural rather than a missing rule:
+
+* the whole `Deferred` population (986 fields) is *by definition* the
+  thunks that stay: `Deferred` says the evaluation remains where GHC put it;
+* the whole `PersistentCandidate` population (2,197 flows) has a shared tail
+  or a second entry, so its cells outlive any one pass;
+* 239 flows are `Vec`/`Iterator` over a **prefix** spine, which is precisely
+  a spine whose tail may never be reached — eager consumption of a prefix
+  does not make the unreached tail eager;
+* and `M23-A` can almost never fire *by construction*: `R2` accepts a bare
+  variable only when GHC's own `whnf`/`okForSpec` flag is set on its
+  binding, and a binding GHC marks `whnf` is one M1 does not call a thunk in
+  the first place. The five that do fire are the shapes where the flag sits
+  on a different binding from the one M1 reports.
+
+That itemisation is printed by `verify-rep` beside the table, in the same
+spirit as M2.2's 288 holders: an adjacent population that would make the
+number larger and the claim weaker.
+
+### M2.3 acceptance
+
+**The criterion is that every claim this milestone makes about *eager* or
+*streaming* evaluation is re-derived by a second walk that shares nothing
+with the first but the IR — not that coverage is high.** A wrong `Direct`
+moves a divergence; a wrong `Vec`/`Iterator`/`StrongString` materialises or
+one-shots a value that is shared. A wrong `Deferred`, `Persistent` or
+`Unknown` costs an optimisation, so nothing re-derives those and nothing
+needs to. And the facts come before the reps everywhere: three orthogonal
+facts per field, six per list flow, and the M2.3d facts on top — the rep is
+a *function* of them, and for lists and text it is explicitly **advisory**,
+a named conjunction of facts and not a decision about a Rust type.
+
+Against the `-O1` dump, all of the following hold.
+
+**The populations are partitioned and every equation closes.** 9,166
+constructions / 19,830 fields, 11,917 list flows, 4,436 text flows;
+`FieldAccounting::check`, `ListAccounting::check`, `TextAccounting::check`
+and `RepAccounting::check` all close, on `-O1` and on all six matrix
+profiles. The three tables are
+[above](#the-milestone-accounting): 19,830 = 3,408 + 995 + 9 + 15,418 fields,
+11,917 = 2,977 + 8,940 list flows, 4,436 = 2,748 + 1,688 text flows, and the
+1,996 / 1,310 / 1,118 site tables close the same way.
+
+**Every claim is proven twice.** `h2r verify-rep` re-derives all 4,401
+claims — 3,408 `Direct`, 9 `Dead`, 9 `Recursive`, 31 `RecursiveKnot`, 32
+`VecCandidate`, 727 `IteratorCandidate`, 185 `StrongStringCandidate` —
+with **0 disagreements** on `-O1` and on B–F. Ten refusals remain on `-O1`,
+all coverage-only and both named:
+
+| n | claim | refusal | why it is a coverage loss |
+|---:|---|---|---|
+| 5 | `IteratorCandidate` | `entries-counted-across-a-consed-as-tail-hop` | the verifier counts every consumer across an `L7` hop as an independent entry; where the longer spines are alternatives of one `case`, that is one entry at run time and five here |
+| 5 | `VecCandidate` | `the-Whole-spine-of-a-loop-is-not-re-derivable-here` | `Whole` for a `go`-loop is `L4-LOOP-WHOLE`, a statement about where the recursive call *stands*; re-deriving it would be writing the loop-position analysis twice rather than checking it |
+
+All ten are counted as **unsupported** in the accounting, never as advised.
+`R3-SAME-FRONTIER` is declined for the same reason and there are 0 of them
+to decline.
+
+**The two census bugs M2.3e found were fixed, and both were in the unsafe
+direction.** `Reuse` was not propagated across `L7-CONSED-AS-TAIL`, so a
+spine whose longer form was walked twice, shared a tail or escaped stayed
+`SinglePass` — 21 flows were `IteratorCandidate` on that basis. And
+`tail_derived`'s closure marked a callee's parameter tail-derived as soon as
+*one* call site handed it a tail-derived argument, which under-counts
+traversals; it now requires **every** call site to. Together they moved
+`VecCandidate` 49 → 32 and `IteratorCandidate` 740 → 713 (727 after the new
+axioms), and `PersistentCandidate` 1,951 → 2,197.
+
+**One axiom would have been a soundness bug.**
+`$text-2.0.2$Data.Text.Show$$wunpackCStringAscii#` (27 call sites) is not a
+list function at all — every `case` consuming it binds
+`(# ByteArray#, Int#, Int# #)` and builds a `Data.Text.Text`. M2.3d had
+recorded its absence from the axiom table as a coverage loss; it is not one,
+and an entry would have given a `Text` a `[Char]`'s demand semantics.
+
+**Every adversarial shape has a count in the real dump**, not only a
+hand-built test —
+[the table](#the-adversarial-cases) — 53 / 7 / 14 / 720 / 179 / 921 / 1,867
+/ 759 / 31 / 181 / 4,297 / 1,355 / 156 / 38 / 1,777 / 4, printed by
+`verify-rep` so a rule can never be exercised by its test alone.
+
+**The two asserted tables are labelled as asserted.** The 101-entry library
+demand-semantics table and the text-head table sit at evidence level 5 —
+below def-use dataflow because nothing in the dump proves them, above
+textual type comparison because they are statements about semantics. Every
+*aliasing* claim is now confirmed against base-4.18.3.0's own source **and**
+against a call site in this dump (`reverse1` 87/87 with `[]` second,
+`unpackAppendCString#` 1,086+1, `++` 927+68, `dropWhile`/`$wspan`/`$wbreak`
+29/16/6, `GHC.Magic.lazy` 72); two were **corrected to `NoAlias`**
+(`concat`, `lines`) and two heads keep their refusal. The *demand* claims
+(`Whole`, `Incremental`, prefix) are still read off contracts and are not
+proved.
+
+**No verdict rests on a name.** Every population is selected through GHC's
+`DataConInfo` or through an import test, never by spelling; the
+program/library split, the constructor names in the residual and the family
+attributions are diagnostics. The one thing keyed on a name is the axiom
+lookup, which is applied **only** to an imported id, with a regression test
+that a program function called `map` is never looked up.
+
+**The residual, itemised and owned:**
+
+| | | whose problem it is |
+|---:|---|---|
+| 15,418 | fields `Unknown` | 2,264 stored in a list cell (M2.3c's population, followed as a spine but not as a field), 311 in a tuple field (M2.2's), 1,919 (998 + 573 + 348) a **program** construction that escapes — `TokenComment`, `OuterToken`, `Comment` — which is M2.4's whole-program work, 1,912 (760 + 595 + 557) a **library** construction that escapes, and 1,708 (1,143 `eta` + 565 `eok`) an unknown higher-order callee → M2.4 higher-order |
+| 8,940 | list flows `Unknown` | 2,228 stored with no visible spine demand in a holder this module never takes apart, 620 in a holder the field census *does* know, 1,700 reaching a holder that escapes, 1,019 an unknown spine demand |
+| 84 | imported heads with **no axiom**, 1,571 of the 8,031 imported consumer sites | the largest are `ShellCheck.Interface.$wgo` (394), `GHC.Show.showLitString` (168), `Text.Parsec.Char.string1` (88), `GHC.Show.showList__` (66), `GHC.IO.Handle.Text.hPutStr2` (61), regex-tdfa's `compile` (49), `Data.Set.Internal.$fDataSet1` (45) — whole-program (the ShellCheck ones) or more axioms (the base ones) |
+| 1,688 | text flows `Unknown` | 2,857 consumers are imported heads neither table knows, or points at which the value left the walk |
+| 2,345 | text flows with no text-shaped consumer at all | the honest measure of how much of ShellCheck's text is handled by code this dump does not contain |
+| 10 | claims the verifier refuses | the two weakenings above, both coverage-only |
+
+**How to audit a site.** `h2r show <dir> <module> <node>` for the footers,
+`h2r fields --view <node>` for the field-by-field proof, `h2r lists --view
+<node>` for the producer / cells / consumers / six facts, `h2r text --view
+<node>` for the text facts on top of them; `--view-all --module M` for a
+whole module and `--json` for any of them. All four are shown above.
+
+**Known limits, stated rather than hidden:**
+
+* **rendered types are level-6 evidence.** Selection of `[Char]` from a
+  pretty-printed type string is textual comparison, not `TyConApp` with a
+  stable `TyCon`. 58 of the 4,436 text flows rest on it alone. *For the next
+  plugin-format bump: expose structured types, and the caveat disappears —
+  nothing else in the pipeline needs the change.*
+* **`Produces::SameAsInput` on `GHC.Magic.lazy`** makes every call of a
+  polymorphic identity a list producer regardless of the result type.
+  `flipSeq` was given `NotAList` for exactly that reason; `lazy`'s 72 call
+  spines were left alone rather than moving published output on a point no
+  verdict depends on.
+* **`R3-SAME-FRONTIER` is exercised only by its tests.** GHC's
+  case-of-known-constructor has already eliminated every construction
+  scrutinised in the frame that built it, so `R3` fires on nothing in any
+  of the seven dumps. The rule stays, with a positive and a negative
+  regression test, and the route-set histogram is where its absence is
+  visible.
+* **the five `VecCandidate` verdicts** whose `Whole` fact comes from
+  `L4-LOOP-WHOLE` rest on one walk, not two — and are therefore counted as
+  unsupported.
+
+`cargo test` (141), `cargo clippy --all-targets` (0 warnings) and
+`cargo fmt --check` are clean; `h2r tuples`, `--verify`, `h2r laziness` and
+`h2r parsec` are byte-identical on `-O1` before and after M2.3f, and
+`h2r fields`, `lists`, `text` and `verify-rep` gain sections without one
+existing line changing. All four accounting checks close on all seven
+dumps.
 
 ## What ShellCheck actually needs
 

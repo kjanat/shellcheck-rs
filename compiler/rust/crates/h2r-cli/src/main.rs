@@ -13,6 +13,8 @@ use h2r_analysis::laziness::{Census, Class, Fate, Origin, TopClass};
 use h2r_analysis::shape::{ArgShape, Position};
 use h2r_core_ir::{BinderKind, Expr, Module, load_dir, with_big_stack};
 
+mod m23;
+
 #[derive(Parser)]
 #[command(name = "h2r", about = "Haskell (GHC Core) to Rust compiler driver")]
 struct Cli {
@@ -59,6 +61,20 @@ enum Command {
         /// inline, with the flow's own evidence as a footer.
         #[arg(long)]
         no_tuples: bool,
+        /// Do not load M2.3b's constructor-field proof object. It is
+        /// loaded by default whenever the module has constructions, and
+        /// annotates constructions and field binders inline with the
+        /// per-field verdict and its verification status as a footer.
+        #[arg(long)]
+        no_fields: bool,
+        /// Do not load M2.3c's list proof object: producers, cells, tail
+        /// aliases and consumers, with the six facts and the advisory.
+        #[arg(long)]
+        no_lists: bool,
+        /// Do not load M2.3d's text proof object, which refines a list
+        /// flow's footer with the text facts and the text advisory.
+        #[arg(long)]
+        no_text: bool,
     },
     /// Compare census metrics across several Core dump directories
     /// (e.g. the GHC flag matrix). Arguments are `label=dir` or plain dirs.
@@ -132,6 +148,14 @@ enum Command {
         /// verdicts behind each one. Matches on the occurrence name.
         #[arg(long)]
         con: Option<String>,
+        /// Print the representation view of one construction: every field
+        /// on one line with the three facts, the derived rep and the route
+        /// that proved it, then the observations that justify the facts.
+        #[arg(long)]
+        view: Option<u32>,
+        /// The same for every construction. Use --module.
+        #[arg(long)]
+        view_all: bool,
     },
     /// Census every list flow and prove, by def-use plus an explicit
     /// library demand-semantics table, when and how much of each spine is
@@ -150,6 +174,14 @@ enum Command {
         /// Print the library demand-semantics table.
         #[arg(long)]
         axioms: bool,
+        /// Print the representation view of one flow: its producer, every
+        /// cell, every consumer with its rule and the demand it
+        /// contributes, the six facts, and the advisory.
+        #[arg(long)]
+        view: Option<u32>,
+        /// The same for every flow. Use --module.
+        #[arg(long)]
+        view_all: bool,
     },
     /// Select the text (`[Char]`) flows out of the list census and record
     /// what the program does with them. Nothing here decides `String`.
@@ -167,6 +199,13 @@ enum Command {
         /// Print the text-head table.
         #[arg(long)]
         heads: bool,
+        /// Print the representation view of one text flow: the text facts
+        /// on top of the list view.
+        #[arg(long)]
+        view: Option<u32>,
+        /// The same for every text flow. Use --module.
+        #[arg(long)]
+        view_all: bool,
     },
     /// Re-derive, with a second walk that shares nothing with them but the
     /// IR, every M2.3 verdict whose being wrong would be a miscompile:
@@ -215,8 +254,13 @@ fn main() -> Result<()> {
             depth,
             up,
             no_parsec,
+            no_fields,
+            no_lists,
+            no_text,
             no_tuples,
-        } => show(&dir, &module, node, depth, up, !no_parsec, !no_tuples),
+        } => show(
+            &dir, &module, node, depth, up, !no_parsec, !no_tuples, !no_fields, !no_lists, !no_text,
+        ),
         Command::Laziness {
             dir,
             module,
@@ -249,21 +293,51 @@ fn main() -> Result<()> {
             json,
             explain,
             con,
-        } => fields(&dir, module.as_deref(), json, explain, con.as_deref()),
+            view,
+            view_all,
+        } => fields(
+            &dir,
+            module.as_deref(),
+            json,
+            explain,
+            con.as_deref(),
+            view,
+            view_all,
+        ),
         Command::Lists {
             dir,
             module,
             json,
             explain,
             axioms,
-        } => lists(&dir, module.as_deref(), json, explain, axioms),
+            view,
+            view_all,
+        } => lists(
+            &dir,
+            module.as_deref(),
+            json,
+            explain,
+            axioms,
+            view,
+            view_all,
+        ),
         Command::Text {
             dir,
             module,
             json,
             explain,
             heads,
-        } => text(&dir, module.as_deref(), json, explain, heads),
+            view,
+            view_all,
+        } => text(
+            &dir,
+            module.as_deref(),
+            json,
+            explain,
+            heads,
+            view,
+            view_all,
+        ),
         Command::VerifyRep {
             dir,
             module,
@@ -451,6 +525,9 @@ fn show(
     up: usize,
     parsec: bool,
     tuples_on: bool,
+    fields_on: bool,
+    lists_on: bool,
+    text_on: bool,
 ) -> Result<()> {
     let modules = load_dir(dir)?;
     let m = find_module(&modules, module)?;
@@ -500,16 +577,69 @@ fn show(
             .collect();
         h2r_analysis::scalar::Provenance::of(t, verified)
     });
+    // The three M2.3 proof objects, on exactly the terms the tuple one is
+    // loaded on: by default when the module has any, and skipped by
+    // `--no-fields` / `--no-lists` / `--no-text`. The list census needs the
+    // field census' reads, and the text census needs the list one, so what
+    // is actually *computed* is the smallest set that answers what was
+    // asked for; what is *annotated* is only what was not turned off.
+    let one = [m];
+    let m23_census = Census::raw(one.iter().copied());
+    let m23_fields = fields_on
+        .then(|| h2r_analysis::fields::Fields::of_module(m, &m23_census))
+        .filter(|f| !f.flows.is_empty());
+    let m23_lists = (lists_on || text_on).then(|| {
+        let reads = h2r_analysis::fields::Fields::of_module(m, &m23_census).field_reads();
+        h2r_analysis::lists::Lists::of_module(m, &m23_census, &reads)
+    });
+    let m23_lists = m23_lists.filter(|l| !l.flows.is_empty());
+    let m23_text: Vec<h2r_analysis::text::TextFlow> = match (text_on, &m23_lists) {
+        (true, Some(_)) => {
+            let lc = h2r_analysis::lists::ListCensus::of_modules(&one, &m23_census);
+            let tc = h2r_analysis::text::TextCensus::of_modules(&one, &lc, &m23_census);
+            tc.flows
+        }
+        _ => Vec::new(),
+    };
+    // Only the claims of this module are verified, so `show` stays a
+    // per-node query rather than a whole-program analysis — the same rule
+    // the tuple verifier above follows.
+    let m23_verdicts = match (&m23_fields, &m23_lists) {
+        (None, None) => h2r_analysis::views::Verdicts::default(),
+        _ => {
+            let fc = h2r_analysis::fields::FieldCensus::of_modules(&one, &m23_census);
+            let lc = h2r_analysis::lists::ListCensus::of_modules(&one, &m23_census);
+            let tc = h2r_analysis::text::TextCensus::of_modules(&one, &lc, &m23_census);
+            h2r_analysis::views::verify_all(&one, &m23_census, &fc, &lc, &tc).1
+        }
+    };
+    let rep = (m23_fields.is_some() || (lists_on && m23_lists.is_some()) || !m23_text.is_empty())
+        .then(|| {
+            h2r_analysis::views::Provenance::of(
+                m,
+                m23_fields.as_ref(),
+                m23_lists.as_ref(),
+                &m23_text,
+                &m23_verdicts,
+                lists_on,
+            )
+        });
     let note = |id: u32| {
         join_notes(
-            analysis.as_ref().and_then(|a| a.node_note(id)),
-            prov.as_ref().and_then(|p| p.node_note(id)),
+            join_notes(
+                analysis.as_ref().and_then(|a| a.node_note(id)),
+                prov.as_ref().and_then(|p| p.node_note(id)),
+            ),
+            rep.as_ref().and_then(|p| p.node_note(id)),
         )
     };
     let bnote = |b: u32| {
         join_notes(
-            analysis.as_ref().and_then(|a| a.binder_note(b)),
-            prov.as_ref().and_then(|p| p.binder_note(b)),
+            join_notes(
+                analysis.as_ref().and_then(|a| a.binder_note(b)),
+                prov.as_ref().and_then(|p| p.binder_note(b)),
+            ),
+            rep.as_ref().and_then(|p| p.binder_note(b)),
         )
     };
     let pretty = h2r_core_ir::pretty::Pretty {
@@ -581,6 +711,39 @@ fn show(
                     }
                     if let Some(r) = &p.role {
                         println!("  this node: {r}");
+                    }
+                    if !p.consumers.is_empty() {
+                        println!("  consumers:");
+                        for c in &p.consumers {
+                            println!("    {c}");
+                        }
+                    }
+                    if !p.evidence.is_empty() {
+                        println!("  evidence:");
+                        for (rule, note) in &p.evidence {
+                            println!("    {rule}: {note}");
+                        }
+                    }
+                }
+            }
+            if let Some(rp) = &rep {
+                for p in rp.proofs_at(requested) {
+                    if p.is_empty() {
+                        continue;
+                    }
+                    println!();
+                    println!("node {}", p.node);
+                    if let Some(w) = &p.what {
+                        println!("  {w}");
+                    }
+                    if let Some(v) = &p.verdict {
+                        println!("  {v}");
+                    }
+                    if let Some(r) = &p.role {
+                        println!("  this node: {r}");
+                    }
+                    for f in &p.facts {
+                        println!("  {f}");
                     }
                     if !p.consumers.is_empty() {
                         println!("  consumers:");
@@ -2588,8 +2751,10 @@ fn fields(
     json: bool,
     explain: bool,
     con: Option<&str>,
+    view: Option<u32>,
+    view_all: bool,
 ) -> Result<()> {
-    use h2r_analysis::fields::{FieldCensus, FieldRep};
+    use h2r_analysis::fields::FieldRep;
 
     let modules = load_dir(dir)?;
     let selected: Vec<&Module> = match module {
@@ -2598,16 +2763,23 @@ fn fields(
     };
     // M1's census is read for two things and nothing else: its
     // `RecursiveValue` verdicts (the knot definition is M1's) and its
-    // constructor-field argument sites.
-    let census = Census::raw(selected.iter().copied());
-    let fc = FieldCensus::of_modules(&selected, &census);
+    // constructor-field argument sites. The other two censuses and the
+    // verifier come with it so that the milestone accounting this command
+    // prints says the same thing `verify-rep` does.
+    let all = m23::M23::of(&selected);
+    let fc = &all.fc;
     let acct = &fc.accounting;
+
+    if view.is_some() || view_all {
+        return m23::field_views(&all, &selected, module, view, view_all, json);
+    }
 
     if json {
         let out = serde_json::json!({
             "flows": fc.flows,
             "accounting": acct,
             "conFields": fc.con_fields,
+            "m23Accounting": all.accounting,
         });
         serde_json::to_writer(std::io::stdout().lock(), &out)?;
         println!();
@@ -2615,7 +2787,7 @@ fn fields(
     }
 
     if let Some(name) = con {
-        return one_con(&fc, name);
+        return one_con(fc, name);
     }
 
     println!("Constructor fields — {} module(s)", selected.len());
@@ -2890,6 +3062,7 @@ fn fields(
             }
         }
     }
+    m23::print_accounting(&all.accounting);
     Ok(())
 }
 
@@ -2960,9 +3133,11 @@ fn lists(
     json: bool,
     explain: bool,
     show_axioms: bool,
+    view: Option<u32>,
+    view_all: bool,
 ) -> Result<()> {
     use h2r_analysis::lists::axioms;
-    use h2r_analysis::lists::{ConsumerKind, ListCensus, Recommendation};
+    use h2r_analysis::lists::{ConsumerKind, Recommendation};
 
     if show_axioms && module.is_none() && dir.as_os_str().is_empty() {
         return print_axioms();
@@ -2976,9 +3151,13 @@ fn lists(
     // M1's census is read for two things only: its `RecursiveValue`
     // verdicts (the knot definition is M1's) and its list-cons argument
     // sites — the 1,310 the constructor-field census deferred here.
-    let census = Census::raw(selected.iter().copied());
-    let lc = ListCensus::of_modules(&selected, &census);
+    let all = m23::M23::of(&selected);
+    let lc = &all.lc;
     let acct = &lc.accounting;
+
+    if view.is_some() || view_all {
+        return m23::list_views(&all, &selected, module, view, view_all, json);
+    }
 
     if json {
         let out = serde_json::json!({
@@ -2986,6 +3165,7 @@ fn lists(
             "accounting": acct,
             "axioms": axioms::all(),
             "baseVersion": axioms::BASE_VERSION,
+            "m23Accounting": all.accounting,
         });
         serde_json::to_writer(std::io::stdout().lock(), &out)?;
         println!();
@@ -3280,6 +3460,7 @@ fn lists(
             }
         }
     }
+    m23::print_accounting(&all.accounting);
     Ok(())
 }
 
@@ -3334,27 +3515,30 @@ fn text(
     json: bool,
     explain: bool,
     show_heads: bool,
+    view: Option<u32>,
+    view_all: bool,
 ) -> Result<()> {
-    use h2r_analysis::lists::ListCensus;
-    use h2r_analysis::text::{
-        Advisory, ConsumerShape, ElementTypeEvidence, TEXT_HEADS, TextCensus, TextShape,
-    };
+    use h2r_analysis::text::{Advisory, ConsumerShape, ElementTypeEvidence, TEXT_HEADS, TextShape};
 
     let modules = load_dir(dir)?;
     let selected: Vec<&Module> = match module {
         Some(name) => vec![find_module(&modules, name)?],
         None => modules.iter().collect(),
     };
-    let census = Census::raw(selected.iter().copied());
-    let lc = ListCensus::of_modules(&selected, &census);
-    let tc = TextCensus::of_modules(&selected, &lc, &census);
+    let all = m23::M23::of(&selected);
+    let tc = &all.tc;
     let acct = &tc.accounting;
+
+    if view.is_some() || view_all {
+        return m23::text_views(&all, &selected, module, view, view_all, json);
+    }
 
     if json {
         let out = serde_json::json!({
             "flows": tc.flows,
             "accounting": acct,
             "heads": TEXT_HEADS,
+            "m23Accounting": all.accounting,
         });
         serde_json::to_writer(std::io::stdout().lock(), &out)?;
         println!();
@@ -3751,6 +3935,7 @@ fn text(
             }
         }
     }
+    m23::print_accounting(&all.accounting);
     Ok(())
 }
 
@@ -3763,94 +3948,28 @@ fn text(
 /// `fields.rs`, `lists/` or `text.rs` beyond the IR, and does not use the
 /// generic aggregate walk those three are built on.
 fn verify_rep(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result<()> {
-    use h2r_analysis::fields::{FieldCensus, FieldRep};
-    use h2r_analysis::lists::{ListCensus, Recommendation};
-    use h2r_analysis::text::{Advisory, TextCensus};
-    use h2r_analysis::verify_rep::{Claim, ClaimKind, RepCrossCheck, cross_check};
-
     let modules = load_dir(dir)?;
     let selected: Vec<&Module> = match module {
         Some(name) => vec![find_module(&modules, name)?],
         None => modules.iter().collect(),
     };
-    let census = Census::raw(selected.iter().copied());
-    let fc = FieldCensus::of_modules(&selected, &census);
-    let lc = ListCensus::of_modules(&selected, &census);
-    let tc = TextCensus::of_modules(&selected, &lc, &census);
-
-    // Collect every claim, per module, from the three censuses' published
-    // verdicts. Nothing but the verdict, its node and its rule crosses over.
-    let mut claims: BTreeMap<String, Vec<Claim>> = BTreeMap::new();
-    for f in &fc.flows {
-        for v in &f.verdicts {
-            let kind = match v.rep {
-                FieldRep::Direct => ClaimKind::FieldDirect,
-                FieldRep::Dead => ClaimKind::FieldDead,
-                FieldRep::Recursive => ClaimKind::FieldRecursive,
-                _ => continue,
-            };
-            claims.entry(f.module.clone()).or_default().push(Claim {
-                module: f.module.clone(),
-                kind,
-                at: f.construction,
-                field: v.index,
-                rule: v.rule,
-            });
-        }
-    }
-    for f in &lc.flows {
-        let kind = match f.rec {
-            Recommendation::VecCandidate => ClaimKind::ListVec,
-            Recommendation::IteratorCandidate => ClaimKind::ListIterator,
-            _ => {
-                if f.recursion == h2r_analysis::lists::Recursion::RecursiveKnot {
-                    ClaimKind::ListKnot
-                } else {
-                    continue;
-                }
-            }
-        };
-        claims.entry(f.module.clone()).or_default().push(Claim {
-            module: f.module.clone(),
-            kind,
-            at: f.producer,
-            field: 0,
-            rule: f.rec_rule,
-        });
-        if f.recursion == h2r_analysis::lists::Recursion::RecursiveKnot
-            && kind != ClaimKind::ListKnot
-        {
-            claims.entry(f.module.clone()).or_default().push(Claim {
-                module: f.module.clone(),
-                kind: ClaimKind::ListKnot,
-                at: f.producer,
-                field: 0,
-                rule: f.rec_rule,
-            });
-        }
-    }
-    for f in &tc.flows {
-        if f.advisory != Advisory::StrongStringCandidate {
-            continue;
-        }
-        claims.entry(f.module.clone()).or_default().push(Claim {
-            module: f.module.clone(),
-            kind: ClaimKind::TextStrong,
-            at: f.producer,
-            field: 0,
-            rule: f.advisory_rule,
-        });
-    }
-
-    let mut out = RepCrossCheck::default();
-    for m in &selected {
-        if let Some(cs) = claims.get(&m.name) {
-            cross_check(m, &census, cs, &mut out);
-        }
-    }
+    // The claim set, the verifier's answer for each claim and the
+    // milestone accounting all come from one place, so that what this
+    // command reports and what `h2r fields` / `lists` / `text` report about
+    // the same verdict cannot differ.
+    let all = m23::M23::of(&selected);
+    let census = &all.census;
+    let fc = &all.fc;
+    let lc = &all.lc;
+    let tc = &all.tc;
+    let out = all.cc.clone();
 
     if json {
-        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        let payload = serde_json::json!({
+            "crossCheck": out,
+            "m23Accounting": all.accounting,
+        });
+        serde_json::to_writer(std::io::stdout().lock(), &payload)?;
         println!();
         return Ok(());
     }
@@ -3897,7 +4016,7 @@ fn verify_rep(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Re
     println!();
     println!("The audited shapes, in this dump");
     println!("  {:<58} {:>6}  example", "shape", "n");
-    for (name, n, at) in rep_patterns(&fc, &lc, &tc) {
+    for (name, n, at) in rep_patterns(fc, lc, tc) {
         println!("  {name:<58} {n:>6}  {at}");
     }
     println!();
@@ -3953,6 +4072,29 @@ fn verify_rep(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Re
             );
         }
     }
+    m23::print_accounting(&all.accounting);
+
+    // The cross-milestone link. M2.2's tuple census and its own thunk link
+    // are built here rather than read from `h2r tuples`, for the one thing
+    // this needs from them: which M1 thunk sites that milestone already
+    // explains, so that this one never counts a site twice.
+    // Built exactly the way `h2r tuples` builds it — the Parsec proof
+    // object included — so the "by tuples" column here is the same 92 that
+    // milestone publishes, not a second computation of it.
+    let analyses: Vec<h2r_analysis::parsec::Analysis> = selected
+        .iter()
+        .map(|m| h2r_analysis::parsec::Analysis::of_module(m))
+        .collect();
+    let hops: Vec<h2r_analysis::tuples::ParsecHops> = analyses
+        .iter()
+        .map(h2r_analysis::tuples::parsec_hops)
+        .collect();
+    let tcen = h2r_analysis::tuples::TupleCensus::of_modules_with(&selected, census, &hops);
+    let tl = h2r_analysis::link::link(census, &tcen, &selected);
+    let theirs = m23::tuple_explained(&tl);
+    let rl = h2r_analysis::m23::link(census, fc, lc, tc, &all.verdicts, &selected, &theirs);
+    m23::print_link(&rl);
+
     Ok(())
 }
 

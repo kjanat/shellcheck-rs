@@ -4101,3 +4101,235 @@ fn the_rep_verifier_skips_a_case_binder_under_an_unreachable_alternative() {
         assert_eq!(d.refusal.why, crate::verify_rep::W_NO_R3_RULE);
     }
 }
+
+//------------------------------------------------------------------------------
+// M2.3f: the representation views
+//------------------------------------------------------------------------------
+
+/// The three censuses over one hand-built module, plus the verification
+/// index every view reads its `[verified: …]` from.
+fn view_fixture<'a>(
+    modules: &'a [&'a Module],
+) -> (
+    crate::fields::FieldCensus<'a>,
+    crate::lists::ListCensus<'a>,
+    TextCensus,
+    crate::views::Verdicts,
+) {
+    let census = Census::raw(modules.iter().copied());
+    let fc = crate::fields::FieldCensus::of_modules(modules, &census);
+    let lc = crate::lists::ListCensus::of_modules(modules, &census);
+    let tc = TextCensus::of_modules(modules, &lc, &census);
+    let (_, v) = crate::views::verify_all(modules, &census, &fc, &lc, &tc);
+    (fc, lc, tc, v)
+}
+
+/// The field view lists every field of the construction exactly once, with
+/// the three facts, the derived rep and the route that proved it — and the
+/// `check` that asserts the "exactly once" is the view's own.
+#[test]
+fn the_field_view_lists_every_field_once() {
+    // `data C = C !Int Int`, built with one strict field already forced and
+    // one lazy field that only one of two observations reads.
+    let m = tops(
+        vec![(
+            binder("top", demand(false, false)),
+            let1(
+                "r",
+                con_app("C", &[int_lit(1), app(var("g"), var("a"))]),
+                case_alts(var("r"), &[("C", vec!["x", "y"], app(var("k"), var("y")))]),
+            ),
+        )],
+        json!({
+            "C": {
+                "name": "$main$M$C", "occ": "C", "arity": 2,
+                "dmdSig": {"args": [demand(false, false), demand(false, false)],
+                           "diverges": false, "pretty": ""},
+                "isJoinPoint": false,
+                "dataCon": {"name": "$main$M$C", "repArity": 2, "tag": 1,
+                            "strictFields": [true, false]}
+            },
+            "g": callee(true), "k": callee(true)
+        }),
+    );
+    let ms = [&m];
+    let (fc, _, _, v) = view_fixture(&ms);
+    let flow = fc.flows.iter().find(|f| f.occ == "C").expect("a C flow");
+    let view = crate::views::FieldView::of(&m, flow, &v);
+    view.check();
+    assert_eq!(view.arity, 2);
+    assert_eq!(
+        view.lines.len(),
+        2,
+        "one line per field, no more and no less"
+    );
+    assert_eq!(view.lines[0].index, 0);
+    assert_eq!(view.lines[1].index, 1);
+    // Field 0 is GHC-strict, so R1 proves the timing and the verifier
+    // re-derives it; the headline carries the three facts and the route.
+    assert_eq!(view.lines[0].rep, FieldRep::Direct);
+    assert!(
+        view.lines[0]
+            .routes
+            .contains(&crate::fields::R1_STRICT_FIELD)
+    );
+    assert_eq!(view.lines[0].verified, crate::views::Verified::Yes);
+    assert!(
+        view.lines[0].headline.contains("demand=")
+            && view.lines[0].headline.contains("strict=")
+            && view.lines[0].headline.contains("rec=")
+            && view.lines[0].headline.contains("⇒ Direct"),
+        "the headline must carry the three facts and the rep: {}",
+        view.lines[0].headline
+    );
+    // Every line names at least one observation or an escape, so no field
+    // is asserted without something under it.
+    for l in &view.lines {
+        assert!(
+            !l.observations.is_empty() || l.escape.is_some() || !l.evidence.is_empty(),
+            "field {} has no justification under it",
+            l.index
+        );
+    }
+}
+
+/// The list view lists every consumer of the flow exactly once, each with
+/// the rule that classified it and the demand that one consumer puts on the
+/// spine.
+#[test]
+fn the_list_view_lists_every_consumer_once() {
+    let m = tops(
+        vec![(
+            binder("top", demand(false, false)),
+            let1(
+                "xs",
+                con_app(":", &[int_lit(1), con_app(":", &[int_lit(2), gvar("[]")])]),
+                app(
+                    app(
+                        var("k"),
+                        list_case(var("xs"), int_lit(0), &["y", "ys"], var("y")),
+                    ),
+                    app(gvar("length"), var("xs")),
+                ),
+            ),
+        )],
+        list_ids(json!({"length": import_fn("length", 1), "k": callee(true)})),
+    );
+    let ms = [&m];
+    let (_, lc, _, v) = view_fixture(&ms);
+    let flow = lc
+        .flows
+        .iter()
+        .find(|f| f.kind == crate::lists::ProducerKind::ConsChain)
+        .expect("a cons chain");
+    let view = crate::views::ListView::of(&m, flow, &v);
+    view.check(flow);
+    assert_eq!(
+        view.consumers.len(),
+        flow.consumers.len(),
+        "every consumer exactly once"
+    );
+    assert!(view.consumers.len() >= 2, "the fixture has two consumers");
+    assert_eq!(view.cells.len(), 2, "one flow of two cells, not two flows");
+    // Every consumer line carries its rule and the demand it contributes.
+    for c in &view.consumers {
+        assert!(!c.rule.is_empty());
+        assert!(c.headline.contains("spine ") && c.headline.contains("head "));
+    }
+    // The six facts are all present, each with the rule that decided it.
+    let names: Vec<&str> = view.facts.iter().map(|(n, _, _)| *n).collect();
+    assert_eq!(
+        names,
+        vec![
+            "SpineDemand",
+            "HeadDemand",
+            "Reuse",
+            "Storage",
+            "Recursion",
+            "ShortCircuit"
+        ]
+    );
+    assert!(
+        view.advisory_from.contains(view.facts[0].1.as_str()),
+        "the advisory must name the fact combination it came from"
+    );
+}
+
+/// The text view shows how `Char` was established — the selection evidence
+/// — on top of the list view it refines.
+#[test]
+fn the_text_view_shows_the_selection_evidence() {
+    // `eqString s "…"`: the axiom table fixes the argument to `[Char]`,
+    // which is `X5-AXIOM-FIXES-CHAR`, a structural selection that reads no
+    // rendered type at all.
+    let m = tops(
+        vec![(
+            binder("top", demand(false, false)),
+            let1(
+                "s",
+                con_app(":", &[gvar("c"), gvar("[]")]),
+                app(
+                    app(gvar_named("eqString", "$base$GHC.Base$eqString"), var("s")),
+                    gvar("other"),
+                ),
+            ),
+        )],
+        list_ids(json!({"eqString": import_fn("eqString", 2)})),
+    );
+    let ms = [&m];
+    let (_, lc, tc, v) = view_fixture(&ms);
+    let flow = tc.flows.first().expect("a text flow");
+    let view = crate::views::TextView::of(&m, flow, &lc.flows[flow.list_flow], &v);
+    assert!(
+        !view.selection.is_empty(),
+        "the view must show how Char was established"
+    );
+    assert!(
+        view.selection
+            .iter()
+            .any(|(rule, _)| *rule == crate::text::X5_AXIOM_FIXES_CHAR),
+        "this flow is selected by a consumer's signature: {:?}",
+        view.selection
+    );
+    // …and it sits on the list view, whose own consumer check still holds.
+    view.list.check(&lc.flows[flow.list_flow]);
+    assert_eq!(view.producer, flow.producer);
+}
+
+/// The route-set histogram asks all three `Direct` rules rather than
+/// stopping at the first: a field that is both GHC-strict *and* already a
+/// value lands in the `R1+R2` bucket, not in `R1`.
+#[test]
+fn the_route_set_shows_the_overlap_between_the_direct_rules() {
+    let m = tops(
+        vec![(
+            binder("top", demand(false, false)),
+            let1(
+                "r",
+                con_app("C", &[int_lit(1)]),
+                case_alts(var("r"), &[("C", vec!["x"], app(var("k"), var("x")))]),
+            ),
+        )],
+        json!({
+            "C": {
+                "name": "$main$M$C", "occ": "C", "arity": 1,
+                "dmdSig": {"args": [demand(false, false)], "diverges": false, "pretty": ""},
+                "isJoinPoint": false,
+                "dataCon": {"name": "$main$M$C", "repArity": 1, "tag": 1,
+                            "strictFields": [true]}
+            },
+            "k": callee(true)
+        }),
+    );
+    let f = field_census(&m);
+    let flow = one_con_flow(&f, "C");
+    let v = &flow.verdicts[0];
+    assert_eq!(v.rep, FieldRep::Direct);
+    assert_eq!(v.rule, crate::fields::R1_STRICT_FIELD, "R1 is tried first");
+    assert_eq!(
+        v.route_key(),
+        "R1+R2+R3",
+        "the field is strict, already a value, AND scrutinised at the construction's own \
+         frontier — all three prove it, and the histogram must show all three"
+    );
+}

@@ -65,6 +65,25 @@ pub struct Metrics {
     pub tuple_unresolved_unboxed: usize,
     /// Removable constructions with at least one field read on its own.
     pub tuple_selected: usize,
+    /// **Can this box disappear locally?** Constructions the def-use walk
+    /// proves are transport, before any question of whether the removals
+    /// agree with each other. This is the *local* answer and is the larger
+    /// of the two numbers.
+    pub tuple_removable_defuse: usize,
+    /// **Can it disappear without cloning?** Of those, the ones whose every
+    /// representation boundary is a uniform split, so the removal composes
+    /// with every other removal at the same boundary. This is the *global*
+    /// answer and is the one the milestone accounting calls `normalised`.
+    ///
+    /// The two are deliberately separate metrics rather than one number
+    /// with a caveat: they answer different questions, and the difference
+    /// between them is exactly the work a representation-agreement or
+    /// cloning pass would have to do.
+    pub tuple_removable_composable: usize,
+    /// Boundaries that only a specialised **clone** of the callee could
+    /// carry: the first concrete evidence for a cloning pass. No such pass
+    /// is implemented, and these are counted as unsupported.
+    pub tuple_removable_with_clone: usize,
     /// Representation boundaries the removable flows cross, and how many of
     /// them can be split uniformly.
     pub boundaries: usize,
@@ -215,6 +234,17 @@ impl Metrics {
                 })
                 .unwrap_or(0),
             flows_downgraded: tuples.map(|t| t.downgrades.len()).unwrap_or(0),
+            tuple_removable_defuse: tc(true, TupleFate::ScalarReplace)
+                + tc(false, TupleFate::ScalarReplace)
+                + tc(true, TupleFate::WorkerReturn)
+                + tc(false, TupleFate::WorkerReturn)
+                + tuples.map(|t| t.downgrades.len()).unwrap_or(0),
+            tuple_removable_composable: tc(true, TupleFate::ScalarReplace)
+                + tc(false, TupleFate::ScalarReplace)
+                + tc(true, TupleFate::WorkerReturn)
+                + tc(false, TupleFate::WorkerReturn),
+            tuple_removable_with_clone: tc(true, TupleFate::RemovableWithClone)
+                + tc(false, TupleFate::RemovableWithClone),
         }
     }
 
@@ -274,6 +304,12 @@ impl Metrics {
             ("  preserve", self.tuple_preserve_unboxed),
             ("  unresolved", self.tuple_unresolved_unboxed),
             ("removable, field read alone", self.tuple_selected),
+            ("removable locally (def-use)", self.tuple_removable_defuse),
+            ("removable without cloning", self.tuple_removable_composable),
+            (
+                "  …only a clone could carry",
+                self.tuple_removable_with_clone,
+            ),
             ("representation boundaries", self.boundaries),
             ("  uniform split", self.boundaries_uniform),
             ("  flows downgraded", self.flows_downgraded),

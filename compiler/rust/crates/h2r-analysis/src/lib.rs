@@ -7,6 +7,7 @@ pub mod flow;
 pub mod laziness;
 pub mod link;
 pub mod lists;
+pub mod m23;
 pub mod metrics;
 pub mod parsec;
 pub mod scalar;
@@ -16,6 +17,7 @@ pub mod text;
 pub mod tuples;
 pub mod verify;
 pub mod verify_rep;
+pub mod views;
 
 #[cfg(test)]
 mod tests;
