@@ -5,7 +5,16 @@
 #   ./compiler/matrix.sh            # all profiles
 #   ./compiler/matrix.sh C D        # a subset
 #
-# Output: compiler/matrix/<profile>/core-json and compiler/matrix/<profile>/time
+# Output, per profile, in compiler/matrix/<profile>/:
+#   flags        the GHC flags (applied to the ShellCheck package only; the
+#                dependencies are built with their Hackage defaults)
+#   core-json/   the Core dumps
+#   shellcheck   the built binary, for behavioural comparison and timing
+#   plan.json    cabal's build plan (every dependency version and flag)
+#   provenance   source, plugin and toolchain revisions the dumps came from
+#   modules      the module list, so profiles can be checked for the same set
+#   time         extraction wall-clock seconds
+#   extract.log
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -34,10 +43,17 @@ for p in "${selected[@]}"; do
   H2R_OPT="$flags" \
   H2R_BUILD_DIR="$dir/build" \
   H2R_CORE_DIR="$dir/core-json" \
+  H2R_KEEP_DIR="$dir" \
     "$repo_root/compiler/extract.sh" > "$dir/extract.log" 2>&1
   end=$(date +%s)
   echo $((end - start)) > "$dir/time"
   echo "    done in $((end - start))s, $(du -sh "$dir/core-json" | cut -f1) of Core"
-  # The build tree is large and only the dumps matter.
+  # The build tree is large; the binary, plan and dumps have been kept.
   rm -rf "$dir/build"
+done
+
+echo
+echo "==> module sets"
+for p in "${selected[@]}"; do
+  echo "    $p: $(wc -l < "$matrix_dir/$p/modules") modules, list sha $(sha256sum "$matrix_dir/$p/modules" | cut -c1-12)"
 done

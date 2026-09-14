@@ -398,6 +398,9 @@ pub fn load_dir(dir: &Path) -> Result<Vec<Module>> {
         .filter(|p| p.to_string_lossy().ends_with(".core.json"))
         .collect();
     paths.sort();
+    if paths.is_empty() {
+        bail!("no *.core.json dumps under {}", dir.display());
+    }
 
     let mut modules = Vec::with_capacity(paths.len());
     for path in paths {

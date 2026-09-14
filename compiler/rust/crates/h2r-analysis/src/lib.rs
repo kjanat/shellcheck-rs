@@ -3,6 +3,7 @@
 pub mod callee;
 pub mod laziness;
 pub mod metrics;
+pub mod scope;
 pub mod shape;
 
 #[cfg(test)]

@@ -177,10 +177,11 @@ fn ghc_cardinality_overrides_syntax() {
 }
 
 #[test]
-fn returned_closure_is_traceable_through_its_producer() {
+fn returned_closure_from_known_call_is_producer_known_only() {
     use crate::callee::Resolution;
     // let f = g a in f (h b)   -- f has no signature; its RHS is a call to
-    // the known function g, so the closure is traceable.
+    // the known function g. The producer is known; what g returns is not
+    // followed, so the target stays unresolved.
     let m = json!({
         "format": raw::FORMAT, "module": "M", "unit": "main",
         "ids": {"g": callee(true), "h": callee(true)},
@@ -201,6 +202,10 @@ fn returned_closure_is_traceable_through_its_producer() {
         .find(|a| a.callee.occ == "f")
         .expect("argument site headed by f");
     assert_eq!(site.callee.resolution, Resolution::ClosureFromKnownCall);
+    assert_eq!(
+        site.callee.resolution.tier(),
+        crate::callee::Tier::ProducerKnown
+    );
 }
 
 #[test]
@@ -227,4 +232,141 @@ fn local_signature_comes_from_the_binding_site() {
     let c = Census::of_modules([&m]);
     let site = c.args.iter().find(|a| a.callee.occ == "k").unwrap();
     assert_eq!(site.callee.resolution, Resolution::ExactLocal);
+}
+
+/// A module with one top-level binding whose RHS is `body`, an id table
+/// `ids`, and no local lets: for testing argument sites directly.
+fn top_module(body: Value, ids: Value) -> Module {
+    let m = json!({
+        "format": raw::FORMAT, "module": "M", "unit": "main", "ids": ids,
+        "binds": [{"rec": false, "pairs": [{
+            "binder": binder("top", demand(false, false)), "rhs": body,
+            "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+        }]}]
+    });
+    Module::from_raw(serde_json::from_value(m).unwrap()).unwrap()
+}
+
+#[test]
+fn stale_occurrence_metadata_never_wins_over_the_binder() {
+    use crate::callee::Resolution;
+    use crate::shape::{ArgShape, Position};
+    // let k = \y -> y in g (k (h b))
+    //
+    // The id table (populated from occurrences) claims k has arity 2 and a
+    // two-argument strict signature. The binder says arity 1, one lazy
+    // argument. Every consumer must read the binder: the callee resolution
+    // of `k (h b)`, the position of `h b` inside it, and the shape of
+    // `k (h b)` as an argument to g (a computation, not a PAP).
+    let mut k = binder("k", demand(false, false));
+    k["arity"] = json!(1);
+    k["dmdSig"] = json!({"args": [demand(false, false)], "diverges": false, "pretty": "<L>"});
+    let stale_k = json!({
+        "name": "k", "occ": "k", "arity": 2,
+        "dmdSig": {"args": [demand(true, false), demand(true, false)], "diverges": false, "pretty": "<S><S>"},
+        "isJoinPoint": false, "dataCon": null
+    });
+    let m = json!({
+        "format": raw::FORMAT, "module": "M", "unit": "main",
+        "ids": {"h": callee(true), "g": callee(false), "k": stale_k},
+        "binds": [{"rec": false, "pairs": [{
+            "binder": binder("top", demand(false, false)),
+            "rhs": {"node": "Let", "bind": {"rec": false, "pairs": [{
+                "binder": k,
+                "rhs": {"node": "Lam", "binder": lam_binder("y", false), "body": var("y")},
+                "whnf": true, "trivial": false, "cheap": true, "okForSpec": false
+            }]}, "body": app(var("g"), app(var("k"), app(var("h"), var("b"))))},
+            "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+        }]}]
+    });
+    let m = Module::from_raw(serde_json::from_value(m).unwrap()).unwrap();
+    let c = Census::of_modules([&m]);
+
+    let inner = c.args.iter().find(|a| a.callee.occ == "k").unwrap();
+    assert_eq!(inner.callee.resolution, Resolution::ExactLocal);
+    assert_eq!(
+        inner.position,
+        Position::LazyParam,
+        "binder says lazy; occurrence said strict"
+    );
+
+    let outer = c.args.iter().find(|a| a.callee.occ == "g").unwrap();
+    assert_eq!(
+        outer.shape,
+        ArgShape::Computation,
+        "binder arity 1: k (h b) is saturated"
+    );
+}
+
+#[test]
+fn undersaturated_call_does_not_unleash_the_signature() {
+    use crate::callee::Resolution;
+    use crate::shape::{ArgShape, Position};
+    // g2 :: strict in both arguments, signature arity 2.
+    let g2 = json!({
+        "name": "g2", "occ": "g2", "arity": 2,
+        "dmdSig": {"args": [demand(true, false), demand(true, false)], "diverges": false, "pretty": "<S><S>"},
+        "isJoinPoint": false, "dataCon": null
+    });
+    let ids = json!({"g2": g2, "h": callee(true), "k": callee(false)});
+
+    // k (g2 (h b)): g2 gets one of two arguments. The PAP holds `h b`
+    // unevaluated; g2's strictness in it is not unleashed.
+    let m = top_module(
+        app(var("k"), app(var("g2"), app(var("h"), var("b")))),
+        ids.clone(),
+    );
+    let c = Census::of_modules([&m]);
+    let inner = c.args.iter().find(|a| a.callee.occ == "g2").unwrap();
+    assert_eq!(inner.position, Position::UnsaturatedArg);
+    assert!(inner.position.escapes());
+    assert_eq!(
+        inner.callee.resolution,
+        Resolution::ExactGlobal,
+        "the target is still exact"
+    );
+    let outer = c.args.iter().find(|a| a.callee.occ == "k").unwrap();
+    assert_eq!(outer.shape, ArgShape::PartialApp);
+
+    // The consequence for the let census: `let x = f a in k (g2 x)` must not
+    // be a sink-eager site just because g2 is strict.
+    let m = module(
+        demand(false, false),
+        app(var("k"), app(var("g2"), var("x"))),
+        ids.clone(),
+    );
+    let c = Census::of_modules([&m]);
+    assert_eq!(only(&c).fate, Fate::SinkLazyPosition);
+
+    // Saturated, the same signature does apply.
+    let m = module(
+        demand(false, false),
+        app(app(var("g2"), var("x")), var("b")),
+        ids,
+    );
+    let c = Census::of_modules([&m]);
+    assert_eq!(only(&c).fate, Fate::SinkEager);
+}
+
+#[test]
+fn past_signature_argument_is_producer_known_not_exact() {
+    use crate::callee::{Resolution, Tier};
+    use crate::shape::Position;
+    // g (h b) (h c) with g's signature covering one argument: the second
+    // goes to whatever `g (h b)` returns.
+    let m = top_module(
+        app(
+            app(var("g"), app(var("h"), var("b"))),
+            app(var("h"), var("c")),
+        ),
+        json!({"g": callee(true), "h": callee(true)}),
+    );
+    let c = Census::of_modules([&m]);
+    let sites: Vec<_> = c.args.iter().filter(|a| a.callee.occ == "g").collect();
+    assert_eq!(sites.len(), 2);
+    assert_eq!(sites[0].position, Position::StrictArg);
+    assert_eq!(sites[0].callee.resolution.tier(), Tier::Exact);
+    assert_eq!(sites[1].position, Position::PastSigArg);
+    assert_eq!(sites[1].callee.resolution, Resolution::PastArity);
+    assert_eq!(sites[1].callee.resolution.tier(), Tier::ProducerKnown);
 }

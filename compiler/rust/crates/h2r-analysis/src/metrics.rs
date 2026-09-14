@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use crate::callee::{Family, Resolution};
+use crate::callee::{Family, Resolution, Tier};
 use crate::laziness::{Census, Class, Fate, Origin, Sink, TopClass};
 use crate::shape::ArgShape;
 
@@ -26,12 +26,23 @@ pub struct Metrics {
     pub cafs: usize,
     pub nontrivial_args: usize,
     pub strict_args: usize,
+    pub unsaturated_args: usize,
     pub lazy_computations: usize,
     pub exact_callee: usize,
     pub class_op_sites: usize,
     pub dictionary_sites: usize,
     pub higher_order_unknown: usize,
+    /// Aggregate of the five returned-closure resolutions below.
     pub past_arity: usize,
+    pub global_past_sig: usize,
+    pub lambda_no_demand: usize,
+    pub lambda_past_arity: usize,
+    pub closure_from_known_call: usize,
+    pub computed_closure: usize,
+    pub tier_exact: usize,
+    pub tier_finite: usize,
+    pub tier_producer_known: usize,
+    pub tier_unresolved: usize,
     pub parsec_cps_sites: usize,
     pub tuple_sites: usize,
     pub list_cons_sites: usize,
@@ -51,6 +62,11 @@ impl Metrics {
         let lazy: Vec<_> = comps.iter().filter(|a| a.position.escapes()).collect();
         let count_class = |c: Class| b.iter().filter(|x| x.class == c).count();
         let count_res = |r: Resolution| lazy.iter().filter(|a| a.callee.resolution == r).count();
+        let count_tier = |t: Tier| {
+            lazy.iter()
+                .filter(|a| a.callee.resolution.tier() == t)
+                .count()
+        };
         let count_fam = |fs: &[Family]| {
             lazy.iter()
                 .filter(|a| fs.contains(&a.callee.family))
@@ -90,6 +106,10 @@ impl Metrics {
                 .iter()
                 .filter(|a| a.position == crate::shape::Position::StrictArg)
                 .count(),
+            unsaturated_args: comps
+                .iter()
+                .filter(|a| a.position == crate::shape::Position::UnsaturatedArg)
+                .count(),
             lazy_computations: lazy.len(),
             exact_callee: count_res(Resolution::DataCon)
                 + count_res(Resolution::ExactGlobal)
@@ -98,9 +118,19 @@ impl Metrics {
             dictionary_sites: count_fam(&[Family::ClassOp, Family::Dictionary, Family::MonadOps]),
             higher_order_unknown: count_res(Resolution::HigherOrderParam),
             past_arity: count_res(Resolution::PastArity)
-                + count_res(Resolution::KnownLambdaShortSig)
+                + count_res(Resolution::KnownLambdaNoDemand)
+                + count_res(Resolution::KnownLambdaPastArity)
                 + count_res(Resolution::ClosureFromKnownCall)
                 + count_res(Resolution::ComputedClosure),
+            global_past_sig: count_res(Resolution::PastArity),
+            lambda_no_demand: count_res(Resolution::KnownLambdaNoDemand),
+            lambda_past_arity: count_res(Resolution::KnownLambdaPastArity),
+            closure_from_known_call: count_res(Resolution::ClosureFromKnownCall),
+            computed_closure: count_res(Resolution::ComputedClosure),
+            tier_exact: count_tier(Tier::Exact),
+            tier_finite: count_tier(Tier::FiniteSet),
+            tier_producer_known: count_tier(Tier::ProducerKnown),
+            tier_unresolved: count_tier(Tier::Unresolved),
             parsec_cps_sites: count_fam(&[
                 Family::Parsec,
                 Family::ParsecContinuation,
@@ -136,12 +166,25 @@ impl Metrics {
             ("genuine CAFs", self.cafs),
             ("non-trivial args", self.nontrivial_args),
             ("  strict positions", self.strict_args),
+            ("  unsaturated call positions", self.unsaturated_args),
             ("  lazy/unknown computations", self.lazy_computations),
             ("    exact callee", self.exact_callee),
             ("    class-op dispatch", self.class_op_sites),
             ("    dictionary family", self.dictionary_sites),
             ("    higher-order unknown", self.higher_order_unknown),
             ("    returned closures", self.past_arity),
+            ("      global past signature", self.global_past_sig),
+            ("      local lambda, no demand", self.lambda_no_demand),
+            ("      local lambda, past arity", self.lambda_past_arity),
+            (
+                "      closure from known call",
+                self.closure_from_known_call,
+            ),
+            ("      computed closure", self.computed_closure),
+            ("    tier: exact target", self.tier_exact),
+            ("    tier: finite target set", self.tier_finite),
+            ("    tier: producer known", self.tier_producer_known),
+            ("    tier: unresolved", self.tier_unresolved),
             ("    Parsec CPS", self.parsec_cps_sites),
             ("    tuple constructors", self.tuple_sites),
             ("    list cons", self.list_cons_sites),
@@ -162,6 +205,14 @@ impl Metrics {
             (
                 "exact callee %",
                 self.exact_callee * 100 / self.lazy_computations.max(1),
+            ),
+            (
+                "exact target tier %",
+                self.tier_exact * 100 / self.lazy_computations.max(1),
+            ),
+            (
+                "unresolved tier %",
+                self.tier_unresolved * 100 / self.lazy_computations.max(1),
             ),
             (
                 "higher-order unknown %",

@@ -1,8 +1,13 @@
 //! Syntactic shape of expressions: what kind of RHS is this, is it already a
 //! value, and what does an argument position demand.
+//!
+//! Every arity and demand-signature question is answered by
+//! [`Scope::head_sig`], never by reading an occurrence's own metadata.
 
-use h2r_core_ir::{Edge, Expr, ExprId, Module};
+use h2r_core_ir::{Edge, Expr, ExprId};
 use serde::Serialize;
+
+use crate::scope::Scope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RhsKind {
@@ -18,7 +23,8 @@ pub enum RhsKind {
 }
 
 impl RhsKind {
-    pub fn of(m: &Module, id: ExprId) -> RhsKind {
+    pub fn of(s: &Scope, id: ExprId) -> RhsKind {
+        let m = s.m;
         let inner = m.strip(id);
         let cast = inner != id && matches!(m.expr(id), Expr::Cast(_));
         let kind = match m.expr(inner) {
@@ -32,20 +38,20 @@ impl RhsKind {
                         }
                         cur = *body;
                     }
-                    return RhsKind::of(m, cur);
+                    return RhsKind::of(s, cur);
                 }
                 RhsKind::Lambda
             }
             Expr::Lit(_) => RhsKind::Literal,
             Expr::Var { .. } => {
-                if is_saturated_con(m, inner) {
+                if is_saturated_con(s, inner) {
                     RhsKind::Constructor
                 } else {
                     RhsKind::Variable
                 }
             }
             Expr::App { .. } => {
-                if is_saturated_con(m, inner) {
+                if is_saturated_con(s, inner) {
                     RhsKind::Constructor
                 } else {
                     RhsKind::Application
@@ -65,20 +71,17 @@ impl RhsKind {
 }
 
 /// Value arguments of a spine: everything that is not a type or coercion.
-pub fn value_args(m: &Module, args: &[ExprId]) -> Vec<ExprId> {
+pub fn value_args(s: &Scope, args: &[ExprId]) -> Vec<ExprId> {
     args.iter()
         .copied()
-        .filter(|a| !matches!(m.expr(m.strip(*a)), Expr::Type(_) | Expr::Coercion))
+        .filter(|a| !matches!(s.m.expr(s.m.strip(*a)), Expr::Type(_) | Expr::Coercion))
         .collect()
 }
 
-pub fn is_saturated_con(m: &Module, id: ExprId) -> bool {
-    let (head, args) = m.spine(id);
-    match m.id_info(head) {
-        Some(info) => match &info.data_con {
-            Some(dc) => value_args(m, &args).len() as u32 >= dc.rep_arity,
-            None => false,
-        },
+pub fn is_saturated_con(s: &Scope, id: ExprId) -> bool {
+    let (head, args) = s.m.spine(id);
+    match s.head_sig(head).and_then(|sig| sig.data_con) {
+        Some(dc) => value_args(s, &args).len() as u32 >= dc.rep_arity,
         None => false,
     }
 }
@@ -97,29 +100,31 @@ pub enum ArgShape {
     Computation,
 }
 
-pub fn arg_shape(m: &Module, id: ExprId) -> ArgShape {
+pub fn arg_shape(s: &Scope, id: ExprId) -> ArgShape {
+    let m = s.m;
     let inner = m.strip(id);
     match m.expr(inner) {
         Expr::Var { .. } | Expr::Lit(_) | Expr::Type(_) | Expr::Coercion => ArgShape::Trivial,
         Expr::Lam { .. } => ArgShape::Closure,
         Expr::App { .. } => {
             let (head, args) = m.spine(inner);
-            let n = value_args(m, &args).len() as u32;
+            let n = value_args(s, &args).len() as u32;
             if let Expr::Var { occ, .. } = m.expr(head)
                 && matches!(occ.as_str(), "unpackCString#" | "unpackCStringUtf8#")
                 && n == 1
             {
                 return ArgShape::StringLiteral;
             }
-            match m.id_info(head) {
-                Some(info) => {
-                    if let Some(dc) = &info.data_con {
+            match s.head_sig(head) {
+                Some(sig) => {
+                    if let Some(dc) = sig.data_con {
                         if n >= dc.rep_arity {
                             ArgShape::ConApp
                         } else {
                             ArgShape::PartialApp
                         }
-                    } else if info.arity > n {
+                    } else if sig.arity > n {
+                        // Fewer arguments than `idArity`: a PAP, a value.
                         ArgShape::PartialApp
                     } else {
                         ArgShape::Computation
@@ -147,7 +152,15 @@ pub enum Position {
     LazyField,
     /// Argument a known function is lazy in.
     LazyParam,
-    /// Argument to an unknown callee, or beyond the signature's arity.
+    /// Argument to a call that supplies fewer value arguments than the
+    /// callee's signature arity. The signature is not unleashed: the
+    /// partial application is a function value that holds the argument
+    /// unevaluated, whatever the callee would eventually do with it.
+    UnsaturatedArg,
+    /// Argument past the callee's signature arity: it is handed to whatever
+    /// the call *returns*, about which the signature says nothing.
+    PastSigArg,
+    /// Argument to a callee with no signature at all.
     UnknownArg,
     /// Right-hand side of a let: its own binding decides.
     LetRhs,
@@ -164,18 +177,24 @@ impl Position {
     }
 
     /// The expression is handed, unevaluated, to something else: a lazy
-    /// field, a lazy parameter, or an unknown callee.
+    /// field, a lazy parameter, a partial application, a call result, or an
+    /// unknown callee.
     pub fn escapes(self) -> bool {
         matches!(
             self,
-            Position::LazyField | Position::LazyParam | Position::UnknownArg
+            Position::LazyField
+                | Position::LazyParam
+                | Position::UnsaturatedArg
+                | Position::PastSigArg
+                | Position::UnknownArg
         )
     }
 }
 
 /// The position of expression `id` in its parent, looking through casts and
 /// ticks on the way up.
-pub fn position(m: &Module, id: ExprId) -> Position {
+pub fn position(s: &Scope, id: ExprId) -> Position {
+    let m = s.m;
     let mut cur = id;
     loop {
         let Some(parent) = m.parent[cur as usize] else {
@@ -189,16 +208,15 @@ pub fn position(m: &Module, id: ExprId) -> Position {
             Edge::CaseScrut => return Position::Scrutinee,
             Edge::AppFun => return Position::Head,
             Edge::LetRhs { .. } => return Position::LetRhs,
-            Edge::AppArg => return arg_position(m, parent, cur),
+            Edge::AppArg => return arg_position(s, parent, cur),
             _ => return Position::Other,
         }
     }
 }
 
-/// `app` is an `App` node whose argument is `arg`; classify that argument
-/// slot by the callee's signature.
-fn arg_position(m: &Module, app: ExprId, arg: ExprId) -> Position {
-    // Climb to the root of the spine, then decompose it.
+/// The root of the application spine that `app` is part of.
+pub fn spine_root(s: &Scope, app: ExprId) -> ExprId {
+    let m = s.m;
     let mut root = app;
     while let Some(p) = m.parent[root as usize] {
         if m.edge[root as usize] == Edge::AppFun && matches!(m.expr(p), Expr::App { .. }) {
@@ -207,16 +225,29 @@ fn arg_position(m: &Module, app: ExprId, arg: ExprId) -> Position {
             break;
         }
     }
+    root
+}
+
+/// `app` is an `App` node whose argument is `arg`; classify that argument
+/// slot by the callee's signature.
+fn arg_position(s: &Scope, app: ExprId, arg: ExprId) -> Position {
+    let m = s.m;
+    let root = spine_root(s, app);
     let (head, args) = m.spine(root);
-    let vargs = value_args(m, &args);
+    let vargs = value_args(s, &args);
     let Some(idx) = vargs.iter().position(|a| *a == arg) else {
         // A type argument.
         return Position::Other;
     };
-    let Some(info) = m.id_info(head) else {
+    let Some(sig) = s.head_sig(head) else {
         return Position::UnknownArg;
     };
-    if let Some(dc) = &info.data_con {
+    if let Some(dc) = sig.data_con {
+        // A constructor's arity is its field count; anything less is a
+        // partial application of the constructor.
+        if vargs.len() < dc.rep_arity as usize {
+            return Position::UnsaturatedArg;
+        }
         if dc.strict_fields.len() == vargs.len() {
             return if dc.strict_fields[idx] {
                 Position::StrictArg
@@ -224,24 +255,31 @@ fn arg_position(m: &Module, app: ExprId, arg: ExprId) -> Position {
                 Position::LazyField
             };
         }
+        // Representation and source field counts differ (unboxed or
+        // existential fields): no per-field verdict.
         return Position::UnknownArg;
     }
-    match info.dmd_sig.args.get(idx) {
+    if sig.sig_arity() == 0 {
+        return Position::UnknownArg;
+    }
+    // GHC's demand transformer: the argument demands of a signature apply
+    // only to calls that supply at least the signature's arity.
+    if !sig.unleashed_by(vargs.len()) {
+        return Position::UnsaturatedArg;
+    }
+    match sig.dmd_args.get(idx) {
         Some(d) if d.absent => Position::AbsentArg,
         Some(d) if d.strict => Position::StrictArg,
         Some(_) => Position::LazyParam,
-        None => Position::UnknownArg,
+        None => Position::PastSigArg,
     }
 }
 
-/// Is `head` (a `Var`) a dictionary or dictionary-selector? GHC's naming
-/// conventions: `$f` dfuns, `$p` superclass selectors, `$d` dictionary
-/// bindings, `$c` method implementations.
-pub fn is_dictionary_head(m: &Module, head: ExprId) -> bool {
-    match m.expr(head) {
-        Expr::Var { occ, .. } => {
-            occ.starts_with("$f") || occ.starts_with("$p") || occ.starts_with("$d")
-        }
+/// Is `head` (a `Var`) a dictionary or dictionary-selector? See
+/// [`crate::callee::is_dictionary_name`].
+pub fn is_dictionary_head(s: &Scope, head: ExprId) -> bool {
+    match s.m.expr(head) {
+        Expr::Var { occ, .. } => crate::callee::is_dictionary_name(occ),
         _ => false,
     }
 }

@@ -23,7 +23,8 @@ use std::collections::HashMap;
 use h2r_core_ir::{Binder, BinderKind, Edge, Expr, ExprId, Module, Pair};
 use serde::Serialize;
 
-use crate::callee::{self, BindInfo, Callee};
+use crate::callee::{self, Callee};
+use crate::scope::Scope;
 use crate::shape::{
     ArgShape, Position, RhsKind, arg_shape, is_dictionary_head, position, value_args,
 };
@@ -247,11 +248,11 @@ impl Census {
 
     pub fn add_module(&mut self, m: &Module) {
         let occs = occurrence_map(m);
-        let sites = callee::bind_sites(m);
+        let s = Scope::new(m);
 
         for bind in &m.top {
             for pair in &bind.pairs {
-                self.top.push(top_report(m, pair));
+                self.top.push(top_report(&s, pair));
             }
         }
 
@@ -259,7 +260,7 @@ impl Census {
             match m.expr(id) {
                 Expr::Let { bind, .. } => {
                     for pair in &bind.pairs {
-                        let r = classify(m, id, pair, bind.recursive, &occs);
+                        let r = classify(&s, id, pair, bind.recursive, &occs);
                         let candidate = matches!(
                             r.class,
                             Class::StrictValue
@@ -279,32 +280,33 @@ impl Census {
                     }
                 }
                 Expr::App { .. } if is_spine_root(m, id) => {
-                    self.arg_sites(m, &sites, id);
+                    self.arg_sites(&s, id);
                 }
                 _ => {}
             }
         }
     }
 
-    fn arg_sites(&mut self, m: &Module, sites: &HashMap<&str, BindInfo>, root: ExprId) {
+    fn arg_sites(&mut self, s: &Scope, root: ExprId) {
+        let m = s.m;
         let (_, args) = m.spine(root);
-        for (i, arg) in value_args(m, &args).into_iter().enumerate() {
-            let shape = arg_shape(m, arg);
+        for (i, arg) in value_args(s, &args).into_iter().enumerate() {
+            let shape = arg_shape(s, arg);
             if shape == ArgShape::Trivial {
                 continue;
             }
             let dictionary = {
                 let (ahead, _) = m.spine(arg);
-                is_dictionary_head(m, ahead)
+                is_dictionary_head(s, ahead)
             };
             self.args.push(ArgSite {
                 module: m.name.clone(),
                 app: root,
                 arg,
                 shape,
-                position: position(m, arg),
+                position: position(s, arg),
                 dictionary,
-                callee: callee::classify(m, sites, root, i),
+                callee: callee::classify(s, root, i),
             });
         }
     }
@@ -330,8 +332,9 @@ fn is_spine_root(m: &Module, id: ExprId) -> bool {
     }
 }
 
-fn top_report(m: &Module, pair: &Pair) -> TopReport {
-    let rhs_kind = RhsKind::of(m, pair.rhs);
+fn top_report(s: &Scope, pair: &Pair) -> TopReport {
+    let m = s.m;
+    let rhs_kind = RhsKind::of(s, pair.rhs);
     let class = if pair.trivial {
         TopClass::Alias
     } else if rhs_kind == RhsKind::Lambda {
@@ -349,9 +352,7 @@ fn top_report(m: &Module, pair: &Pair) -> TopReport {
             {
                 TopClass::StringLiteral
             }
-            Expr::Var { .. } if m.id_info(head).is_some_and(|i| i.dmd_sig.diverges) => {
-                TopClass::Bottom
-            }
+            Expr::Var { .. } if s.head_sig(head).is_some_and(|x| x.diverges) => TopClass::Bottom,
             _ => TopClass::Caf,
         }
     };
@@ -400,10 +401,10 @@ fn occ_path(m: &Module, let_node: ExprId, at: ExprId) -> OccPath {
         }
         match (m.expr(parent), edge) {
             (Expr::Case { .. }, Edge::CaseAlt { alt }) => alts.push(AltStep { case: parent, alt }),
-            (Expr::Lam { binder, .. }, Edge::LamBody) => {
-                if !transparent_lambda(m, parent, m.binder(*binder)) {
-                    lambda = Some(parent);
-                }
+            (Expr::Lam { binder, .. }, Edge::LamBody)
+                if !transparent_lambda(m, parent, m.binder(*binder)) =>
+            {
+                lambda = Some(parent);
             }
             _ => {}
         }
@@ -489,14 +490,15 @@ fn exclusive_split(paths: &[OccPath]) -> Option<ExprId> {
 //------------------------------------------------------------------------------
 
 fn classify(
-    m: &Module,
+    s: &Scope,
     let_node: ExprId,
     pair: &Pair,
     recursive: bool,
     occs: &HashMap<&str, Vec<ExprId>>,
 ) -> BindingReport {
+    let m = s.m;
     let b = m.binder(pair.binder);
-    let rhs_kind = RhsKind::of(m, pair.rhs);
+    let rhs_kind = RhsKind::of(s, pair.rhs);
     let mut reasons = Vec::new();
 
     let paths: Vec<OccPath> = occs
@@ -521,7 +523,7 @@ fn classify(
     } else {
         None
     };
-    let positions: Vec<Position> = uses.iter().map(|p| position(m, p.at)).collect();
+    let positions: Vec<Position> = uses.iter().map(|p| position(s, p.at)).collect();
     // A use in a lazy argument position hands the *thunk* to the callee,
     // which may force it any number of times; only GHC's cardinality
     // analysis can say more.

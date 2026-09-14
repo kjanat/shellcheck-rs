@@ -7,71 +7,37 @@
 //!   decides which normalisation pass (dictionary specialisation, transformer
 //!   collapse, Parsec normalisation, constructor-field strategy) would make
 //!   the argument's laziness question disappear.
+//!
+//! [`Tier`] collapses `Resolution` onto the only question that matters for
+//! codegen: is the target proven? Family attribution is not target proof —
+//! recognising a Parsec continuation name says which pass owns the site,
+//! not what code runs.
 
-use std::collections::HashMap;
-
-use h2r_core_ir::{BinderId, Expr, ExprId, IdInfo, Module};
+use h2r_core_ir::{Expr, ExprId, IdInfo, Module};
 use serde::Serialize;
 
-/// How a local unique is bound.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BindSite {
-    Top,
-    Let,
-    Lam,
-    CaseBinder,
-    AltBinder,
-}
+pub use crate::scope::{BindInfo, BindSite};
+use crate::scope::{Scope, SigSource};
 
-/// Where and how a local unique is bound. The binding-site binder is the
-/// authoritative source of a local's signature and arity: GHC does not keep
-/// the `IdInfo` on occurrence `Var`s up to date.
-#[derive(Debug, Clone, Copy)]
-pub struct BindInfo {
-    pub site: BindSite,
-    pub binder: BinderId,
-    /// The right-hand side, for let- and top-level-bound ids.
-    pub rhs: Option<ExprId>,
-}
-
-/// Binding site of every binder in the module, by unique.
-pub fn bind_sites(m: &Module) -> HashMap<&str, BindInfo> {
-    let mut map = HashMap::new();
-    let mut put = |b: BinderId, site: BindSite, rhs: Option<ExprId>| {
-        map.insert(
-            m.binder(b).unique.as_str(),
-            BindInfo {
-                site,
-                binder: b,
-                rhs,
-            },
-        );
-    };
-    for bind in &m.top {
-        for p in &bind.pairs {
-            put(p.binder, BindSite::Top, Some(p.rhs));
-        }
-    }
-    for e in &m.exprs {
-        match e {
-            Expr::Lam { binder, .. } => put(*binder, BindSite::Lam, None),
-            Expr::Let { bind, .. } => {
-                for p in &bind.pairs {
-                    put(p.binder, BindSite::Let, Some(p.rhs));
-                }
-            }
-            Expr::Case { binder, alts, .. } => {
-                put(*binder, BindSite::CaseBinder, None);
-                for a in alts {
-                    for b in &a.binders {
-                        put(*b, BindSite::AltBinder, None);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    map
+/// How much of the eventual call target is proven. This is the honest
+/// axis: [`Resolution`] says what kind of head we looked at, the tier says
+/// whether we know what code runs when the argument is consumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub enum Tier {
+    /// Exactly one target, and it is this head: a constructor, a function
+    /// with a signature covering the argument, or a local lambda whose
+    /// manifest parameter receives it.
+    Exact,
+    /// A finite, enumerated set of targets. Nothing lands here yet: class
+    /// methods will, once the closed-world instance enumeration exists.
+    FiniteSet,
+    /// The closure's *producer* is known (a known call, or a known lambda
+    /// applied past its parameters) but the returned target has not been
+    /// followed. Awaiting target analysis, not proven dynamic.
+    ProducerKnown,
+    /// Nothing proven about the target: a higher-order parameter, a class
+    /// method before enumeration, an opaque import, a computed closure.
+    Unresolved,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -92,15 +58,41 @@ pub enum Resolution {
     /// A global with a signature, but this argument lies past its arity:
     /// it is applied to the *result* of the call.
     PastArity,
-    /// A local bound to a lambda, applied past its signature.
-    KnownLambdaShortSig,
+    /// A local bound to a lambda; the argument lands on one of its
+    /// manifest parameters, but the demand signature is shorter than the
+    /// lambda and says nothing about it. The target is exact, the demand is
+    /// unknown.
+    KnownLambdaNoDemand,
+    /// A local bound to a lambda, applied past its manifest parameters:
+    /// the argument goes to whatever the lambda body returns.
+    KnownLambdaPastArity,
     /// A local bound to the result of a call to a known function or
-    /// constructor: the closure is statically traceable through the callee.
+    /// constructor. The producer is known; the closure it returns has not
+    /// been followed to its target.
     ClosureFromKnownCall,
     /// A local bound to a case, let or other computation of function type.
     ComputedClosure,
     /// The head is not a variable (a lambda, a case, a let).
     NonVarHead,
+}
+
+impl Resolution {
+    pub fn tier(self) -> Tier {
+        match self {
+            Resolution::DataCon
+            | Resolution::ExactGlobal
+            | Resolution::ExactLocal
+            | Resolution::KnownLambdaNoDemand => Tier::Exact,
+            Resolution::PastArity
+            | Resolution::KnownLambdaPastArity
+            | Resolution::ClosureFromKnownCall => Tier::ProducerKnown,
+            Resolution::ClassOp
+            | Resolution::HigherOrderParam
+            | Resolution::ImportedOpaque
+            | Resolution::ComputedClosure
+            | Resolution::NonVarHead => Tier::Unresolved,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -164,14 +156,23 @@ pub struct Callee {
     pub occ: String,
 }
 
+/// Number of manifest value lambdas at the top of an expression.
+fn manifest_params(m: &Module, e: ExprId) -> usize {
+    let mut n = 0;
+    let mut cur = m.strip(e);
+    while let Expr::Lam { binder, body } = m.expr(cur) {
+        if m.binder(*binder).kind != h2r_core_ir::BinderKind::Tyvar {
+            n += 1;
+        }
+        cur = m.strip(*body);
+    }
+    n
+}
+
 /// Classify the head of the spine rooted at `root`, for the value argument
 /// at index `arg_index`.
-pub fn classify(
-    m: &Module,
-    sites: &HashMap<&str, BindInfo>,
-    root: ExprId,
-    arg_index: usize,
-) -> Callee {
+pub fn classify(s: &Scope, root: ExprId, arg_index: usize) -> Callee {
+    let m = s.m;
     let (head, _) = m.spine(root);
 
     let Expr::Var {
@@ -189,29 +190,23 @@ pub fn classify(
         };
     };
     let info = m.ids.get(unique);
-    let bound = sites.get(unique.as_str()).copied();
+    let sig = s.head_sig(head);
+    let bound = s.site(unique);
     let (unit, module) = split_stable_name(name)
         .map(|(u, md, _)| (u, md))
         .unwrap_or(("", ""));
 
-    // Signature arity: from the binding site for locals, the id table for
-    // globals.
-    let sig_args = match bound {
-        Some(b) if !*is_global => m
-            .binder(b.binder)
-            .dmd_sig
-            .as_ref()
-            .map(|s| s.args.len())
-            .unwrap_or(0),
-        _ => info.map(|i| i.dmd_sig.args.len()).unwrap_or(0),
-    };
+    // Signature arity from the one shared lookup: the binding site for
+    // anything bound here, the id table for imports.
+    let sig_args = sig.map(|x| x.sig_arity()).unwrap_or(0);
+    let bound_here = matches!(sig, Some(x) if x.source != SigSource::IdTable);
 
-    let resolution = if info.is_some_and(|i| i.data_con.is_some()) {
+    let resolution = if sig.is_some_and(|x| x.data_con.is_some()) {
         Resolution::DataCon
-    } else if info.is_some_and(|i| i.is_class_op) {
+    } else if sig.is_some_and(|x| x.is_class_op) {
         Resolution::ClassOp
-    } else if *is_global {
-        if info.is_none() || sig_args == 0 {
+    } else if !bound_here {
+        if sig.is_none() || sig_args == 0 {
             Resolution::ImportedOpaque
         } else if arg_index >= sig_args {
             Resolution::PastArity
@@ -230,18 +225,21 @@ pub fn classify(
                 } else {
                     let inner = m.strip(rhs);
                     match m.expr(inner) {
-                        Expr::Lam { .. } => Resolution::KnownLambdaShortSig,
+                        Expr::Lam { .. } => {
+                            if arg_index < manifest_params(m, inner) {
+                                Resolution::KnownLambdaNoDemand
+                            } else {
+                                Resolution::KnownLambdaPastArity
+                            }
+                        }
                         Expr::App { .. } | Expr::Var { .. } => {
                             let (h, _) = m.spine(inner);
-                            let known = m.id_info(h).is_some_and(|i| {
-                                i.data_con.is_some() || !i.dmd_sig.args.is_empty()
-                            }) || matches!(
-                                m.expr(h),
-                                Expr::Var { unique, .. }
-                                    if sites.get(unique.as_str()).is_some_and(|b| {
-                                        matches!(b.site, BindSite::Let | BindSite::Top)
-                                    })
-                            );
+                            let known = s
+                                .head_sig(h)
+                                .is_some_and(|x| x.data_con.is_some() || x.sig_arity() > 0)
+                                || s.site_of(h).is_some_and(|b| {
+                                    matches!(b.site, BindSite::Let | BindSite::Top)
+                                });
                             if known {
                                 Resolution::ClosureFromKnownCall
                             } else {
@@ -270,6 +268,17 @@ pub fn classify(
     }
 }
 
+/// `$f…` is a dfun, `$p…` a superclass selector, `$d…` a dictionary
+/// binding. `$fApplicativeParsecT2`, with a numeric suffix, is not a
+/// dictionary: it is a floated-out instance-method body — an ordinary
+/// function GHC has already dispatched to. It is classified by its module.
+pub fn is_dictionary_name(occ: &str) -> bool {
+    if occ.starts_with("$p") || occ.starts_with("$d") {
+        return true;
+    }
+    occ.starts_with("$f") && !occ.ends_with(|c: char| c.is_ascii_digit())
+}
+
 fn family_of(
     info: Option<&IdInfo>,
     is_global: bool,
@@ -282,7 +291,7 @@ fn family_of(
     if resolution == Resolution::ClassOp {
         return Family::ClassOp;
     }
-    if occ.starts_with("$f") || occ.starts_with("$p") || occ.starts_with("$d") {
+    if is_dictionary_name(occ) {
         return Family::Dictionary;
     }
     if info.is_some_and(|i| i.data_con.is_some()) {
@@ -301,7 +310,8 @@ fn family_of(
     if !is_global {
         return match resolution {
             Resolution::ExactLocal
-            | Resolution::KnownLambdaShortSig
+            | Resolution::KnownLambdaNoDemand
+            | Resolution::KnownLambdaPastArity
             | Resolution::ClosureFromKnownCall
             | Resolution::ComputedClosure => Family::LocalFunction,
             _ if matches!(occ, "cok" | "cerr" | "eok" | "eerr") => Family::ParsecContinuation,

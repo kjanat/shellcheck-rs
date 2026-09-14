@@ -4,11 +4,11 @@
 //! passes will hang off the same subcommand structure.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use h2r_analysis::callee::{Family, Resolution};
+use h2r_analysis::callee::{Family, Resolution, Tier};
 use h2r_analysis::laziness::{Census, Class, Fate, Origin, TopClass};
 use h2r_analysis::shape::{ArgShape, Position};
 use h2r_core_ir::{BinderKind, Expr, Module, load_dir, with_big_stack};
@@ -148,7 +148,7 @@ impl Counts {
     }
 }
 
-fn stats(dir: &PathBuf, per_module: bool) -> Result<()> {
+fn stats(dir: &Path, per_module: bool) -> Result<()> {
     let modules = load_dir(dir)?;
     let mut total = Counts::default();
 
@@ -218,7 +218,7 @@ fn find_module<'a>(modules: &'a [Module], name: &str) -> Result<&'a Module> {
     })
 }
 
-fn binders(dir: &PathBuf, module: &str) -> Result<()> {
+fn binders(dir: &Path, module: &str) -> Result<()> {
     let modules = load_dir(dir)?;
     let m = find_module(&modules, module)?;
 
@@ -243,7 +243,7 @@ fn binders(dir: &PathBuf, module: &str) -> Result<()> {
 // show
 //------------------------------------------------------------------------------
 
-fn show(dir: &PathBuf, module: &str, node: Option<u32>, depth: usize, up: usize) -> Result<()> {
+fn show(dir: &Path, module: &str, node: Option<u32>, depth: usize, up: usize) -> Result<()> {
     let modules = load_dir(dir)?;
     let m = find_module(&modules, module)?;
     let pretty = h2r_core_ir::pretty::Pretty {
@@ -300,6 +300,7 @@ fn show(dir: &PathBuf, module: &str, node: Option<u32>, depth: usize, up: usize)
 
 fn compare(specs: &[String]) -> Result<()> {
     let mut columns: Vec<(String, h2r_analysis::metrics::Metrics)> = Vec::new();
+    let mut module_sets: Vec<Vec<String>> = Vec::new();
     for spec in specs {
         let (label, dir) = match spec.split_once('=') {
             Some((l, d)) => (l.to_string(), PathBuf::from(d)),
@@ -316,6 +317,9 @@ fn compare(specs: &[String]) -> Result<()> {
             label,
             h2r_analysis::metrics::Metrics::of(&census, core_nodes, top),
         ));
+        let mut names: Vec<String> = modules.iter().map(|m| m.name.clone()).collect();
+        names.sort();
+        module_sets.push(names);
     }
     let Some((_, first)) = columns.first() else {
         anyhow::bail!("no directories given");
@@ -325,12 +329,29 @@ fn compare(specs: &[String]) -> Result<()> {
         print!(" {label:>9}");
     }
     println!();
+    print!("{:<32}", "modules");
+    for set in &module_sets {
+        print!(" {:>9}", set.len());
+    }
+    println!();
     for (i, (name, _)) in first.rows().iter().enumerate() {
         print!("{name:<32}");
         for (_, m) in &columns {
             print!(" {:>9}", m.rows()[i].1);
         }
         println!();
+    }
+    // The columns only compare if they cover the same program.
+    if module_sets.iter().any(|s| *s != module_sets[0]) {
+        println!();
+        println!("WARNING: the module sets differ between columns:");
+        for ((label, _), set) in columns.iter().zip(&module_sets) {
+            let extra: Vec<_> = set.iter().filter(|m| !module_sets[0].contains(m)).collect();
+            let missing: Vec<_> = module_sets[0].iter().filter(|m| !set.contains(m)).collect();
+            if !extra.is_empty() || !missing.is_empty() {
+                println!("  {label}: +{extra:?} -{missing:?}");
+            }
+        }
     }
     Ok(())
 }
@@ -340,7 +361,7 @@ fn compare(specs: &[String]) -> Result<()> {
 //------------------------------------------------------------------------------
 
 fn laziness(
-    dir: &PathBuf,
+    dir: &Path,
     module: Option<&str>,
     explain: bool,
     thunks_only: bool,
@@ -524,7 +545,7 @@ fn report(c: &Census, n_modules: usize) {
         }
     }
     let mut per: Vec<_> = per.into_iter().collect();
-    per.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+    per.sort_by_key(|(_, (sites, _, _))| std::cmp::Reverse(*sites));
     println!(
         "  {:<34} {:>6} {:>6} {:>8}",
         "module", "sites", "memo", "of which spec-ok"
@@ -589,9 +610,14 @@ fn report(c: &Census, n_modules: usize) {
         (Position::LazyField, "computation, lazy constructor field"),
         (Position::LazyParam, "computation, lazy function param"),
         (
-            Position::UnknownArg,
-            "computation, unknown callee / past arity",
+            Position::UnsaturatedArg,
+            "computation, unsaturated call (PAP holds it)",
         ),
+        (
+            Position::PastSigArg,
+            "computation, past the callee's signature",
+        ),
+        (Position::UnknownArg, "computation, callee has no signature"),
     ] {
         row(label, positions.get(&pos).copied().unwrap_or(0), nargs);
     }
@@ -604,6 +630,8 @@ fn report(c: &Census, n_modules: usize) {
                     | Position::AbsentArg
                     | Position::LazyField
                     | Position::LazyParam
+                    | Position::UnsaturatedArg
+                    | Position::PastSigArg
                     | Position::UnknownArg
             )
         })
@@ -645,12 +673,16 @@ fn report(c: &Census, n_modules: usize) {
         ),
         (Resolution::PastArity, "global applied past its signature"),
         (
-            Resolution::KnownLambdaShortSig,
-            "local lambda applied past its signature",
+            Resolution::KnownLambdaNoDemand,
+            "local lambda param, no demand info",
+        ),
+        (
+            Resolution::KnownLambdaPastArity,
+            "local lambda applied past its params",
         ),
         (
             Resolution::ClosureFromKnownCall,
-            "closure returned by a known call",
+            "closure from a known call (target not followed)",
         ),
         (
             Resolution::ComputedClosure,
@@ -659,6 +691,20 @@ fn report(c: &Census, n_modules: usize) {
         (Resolution::NonVarHead, "unknown: non-variable head"),
     ] {
         row(label, res.get(&r).copied().unwrap_or(0), n);
+    }
+    println!();
+    println!("  by target tier (what is actually proven about the code that runs)");
+    let tiers = count_by(lazy.iter().map(|a| a.callee.resolution.tier()));
+    for (t, label) in [
+        (Tier::Exact, "exact target proven"),
+        (Tier::FiniteSet, "finite target set proven"),
+        (
+            Tier::ProducerKnown,
+            "producer known, returned target unresolved",
+        ),
+        (Tier::Unresolved, "target unresolved"),
+    ] {
+        row(label, tiers.get(&t).copied().unwrap_or(0), n);
     }
     println!();
     println!("  by callee family");
