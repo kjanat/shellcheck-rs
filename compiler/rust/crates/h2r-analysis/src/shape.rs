@@ -214,25 +214,11 @@ pub fn position(s: &Scope, id: ExprId) -> Position {
     }
 }
 
-/// The root of the application spine that `app` is part of.
-pub fn spine_root(s: &Scope, app: ExprId) -> ExprId {
-    let m = s.m;
-    let mut root = app;
-    while let Some(p) = m.parent[root as usize] {
-        if m.edge[root as usize] == Edge::AppFun && matches!(m.expr(p), Expr::App { .. }) {
-            root = p;
-        } else {
-            break;
-        }
-    }
-    root
-}
-
 /// `app` is an `App` node whose argument is `arg`; classify that argument
 /// slot by the callee's signature.
 fn arg_position(s: &Scope, app: ExprId, arg: ExprId) -> Position {
     let m = s.m;
-    let root = spine_root(s, app);
+    let root = m.spine_root(app);
     let (head, args) = m.spine(root);
     let vargs = value_args(s, &args);
     let Some(idx) = vargs.iter().position(|a| *a == arg) else {

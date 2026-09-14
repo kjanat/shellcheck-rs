@@ -154,6 +154,46 @@ pub struct Callee {
     /// Defining module of the head, when it is a global.
     pub module: Option<String>,
     pub occ: String,
+    /// What the Parsec CPS recogniser proves about the code that runs when
+    /// this argument is consumed ([`crate::parsec`]). Orthogonal to
+    /// `resolution` and `family`, which keep saying what they said: the
+    /// head is still syntactically a higher-order parameter, and the site
+    /// still belongs to the Parsec normalisation pass. This says whether
+    /// the *target* is nevertheless proven. Filled in by
+    /// [`crate::parsec::integrate`]; `None` when the head is not a proven
+    /// Parsec role binder at all.
+    pub parsec: Option<ParsecTarget>,
+}
+
+/// The recogniser's verdict for one call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ParsecTarget {
+    /// The head is a continuation with a single proven role and this call
+    /// is a well-formed edge of it: the target is exactly one of ParsecT's
+    /// four continuation slots.
+    Role(crate::parsec::EdgeKind),
+    /// The head's role is a proven finite set of slots.
+    RoleSet,
+    /// The head is a role binder of a recognised region, but the region is
+    /// rejected or this particular call is not a well-formed edge.
+    RegionUnresolved(&'static str),
+}
+
+impl Callee {
+    /// What is actually proven about the code that runs: the best of the
+    /// two independent proofs. The syntactic resolution and the Parsec
+    /// recogniser each prove what they prove, and neither may weaken the
+    /// other — a head the census already resolves exactly stays exact even
+    /// where the recogniser only narrows its role to a pair of slots.
+    /// ([`Tier`] is ordered strongest first.)
+    pub fn tier(&self) -> Tier {
+        let parsec = match self.parsec {
+            Some(ParsecTarget::Role(_)) => Tier::Exact,
+            Some(ParsecTarget::RoleSet) => Tier::FiniteSet,
+            Some(ParsecTarget::RegionUnresolved(_)) | None => Tier::Unresolved,
+        };
+        self.resolution.tier().min(parsec)
+    }
 }
 
 /// Number of manifest value lambdas at the top of an expression.
@@ -187,11 +227,19 @@ pub fn classify(s: &Scope, root: ExprId, arg_index: usize) -> Callee {
             family: Family::Unknown,
             module: None,
             occ: String::new(),
+            parsec: None,
         };
     };
-    let info = m.ids.get(unique);
+    let bound = s.binding_of(head);
+    // Linkage by unique is only ever valid for an occurrence the resolver
+    // classified as an import: a local's unique may name many binders and
+    // the id table is populated from occurrences.
+    let info = if bound.is_some() {
+        None
+    } else {
+        m.ids.get(unique)
+    };
     let sig = s.head_sig(head);
-    let bound = s.site(unique);
     let (unit, module) = split_stable_name(name)
         .map(|(u, md, _)| (u, md))
         .unwrap_or(("", ""));
@@ -237,7 +285,7 @@ pub fn classify(s: &Scope, root: ExprId, arg_index: usize) -> Callee {
                             let known = s
                                 .head_sig(h)
                                 .is_some_and(|x| x.data_con.is_some() || x.sig_arity() > 0)
-                                || s.site_of(h).is_some_and(|b| {
+                                || s.binding_of(h).is_some_and(|b| {
                                     matches!(b.site, BindSite::Let | BindSite::Top)
                                 });
                             if known {
@@ -265,6 +313,7 @@ pub fn classify(s: &Scope, root: ExprId, arg_index: usize) -> Callee {
             None
         },
         occ: occ.clone(),
+        parsec: None,
     }
 }
 

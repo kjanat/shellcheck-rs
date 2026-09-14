@@ -238,7 +238,24 @@ pub struct Census {
 }
 
 impl Census {
+    /// The census of a set of modules, with everything the Parsec CPS
+    /// recogniser proves already attached to the argument sites (see
+    /// [`crate::parsec::integrate`]). Every consumer of a census therefore
+    /// sees the same target tiers.
     pub fn of_modules<'a>(modules: impl IntoIterator<Item = &'a Module>) -> Census {
+        let modules: Vec<&Module> = modules.into_iter().collect();
+        let mut census = Census::raw(modules.iter().copied());
+        let analyses: Vec<crate::parsec::Analysis> = modules
+            .iter()
+            .map(|m| crate::parsec::Analysis::of_module(m))
+            .collect();
+        crate::parsec::integrate(&mut census, &analyses);
+        census
+    }
+
+    /// The census on its own, before the Parsec proof is attached. Only the
+    /// recogniser itself should need this: it is what the integration reads.
+    pub fn raw<'a>(modules: impl IntoIterator<Item = &'a Module>) -> Census {
         let mut census = Census::default();
         for m in modules {
             census.add_module(m);
@@ -247,7 +264,6 @@ impl Census {
     }
 
     pub fn add_module(&mut self, m: &Module) {
-        let occs = occurrence_map(m);
         let s = Scope::new(m);
 
         for bind in &m.top {
@@ -260,7 +276,7 @@ impl Census {
             match m.expr(id) {
                 Expr::Let { bind, .. } => {
                     for pair in &bind.pairs {
-                        let r = classify(&s, id, pair, bind.recursive, &occs);
+                        let r = classify(&s, id, pair, bind.recursive);
                         let candidate = matches!(
                             r.class,
                             Class::StrictValue
@@ -279,7 +295,7 @@ impl Census {
                         self.bindings.push(r);
                     }
                 }
-                Expr::App { .. } if is_spine_root(m, id) => {
+                Expr::App { .. } if m.spine_root(id) == id => {
                     self.arg_sites(&s, id);
                 }
                 _ => {}
@@ -309,26 +325,6 @@ impl Census {
                 callee: callee::classify(s, root, i),
             });
         }
-    }
-}
-
-/// Every `Var` occurrence in the module, by unique. Uniques are unique per
-/// compilation, so no scoping is needed: every occurrence of a let-bound
-/// unique is within that let.
-fn occurrence_map(m: &Module) -> HashMap<&str, Vec<ExprId>> {
-    let mut map: HashMap<&str, Vec<ExprId>> = HashMap::new();
-    for (i, e) in m.exprs.iter().enumerate() {
-        if let Expr::Var { unique, .. } = e {
-            map.entry(unique.as_str()).or_default().push(i as ExprId);
-        }
-    }
-    map
-}
-
-fn is_spine_root(m: &Module, id: ExprId) -> bool {
-    match m.parent[id as usize] {
-        Some(p) => !(m.edge[id as usize] == Edge::AppFun && matches!(m.expr(p), Expr::App { .. })),
-        None => true,
     }
 }
 
@@ -489,22 +485,19 @@ fn exclusive_split(paths: &[OccPath]) -> Option<ExprId> {
 // Classification
 //------------------------------------------------------------------------------
 
-fn classify(
-    s: &Scope,
-    let_node: ExprId,
-    pair: &Pair,
-    recursive: bool,
-    occs: &HashMap<&str, Vec<ExprId>>,
-) -> BindingReport {
+fn classify(s: &Scope, let_node: ExprId, pair: &Pair, recursive: bool) -> BindingReport {
     let m = s.m;
     let b = m.binder(pair.binder);
     let rhs_kind = RhsKind::of(s, pair.rhs);
     let mut reasons = Vec::new();
 
-    let paths: Vec<OccPath> = occs
-        .get(b.unique.as_str())
-        .map(|v| v.iter().map(|&at| occ_path(m, let_node, at)).collect())
-        .unwrap_or_default();
+    // Occurrences of *this* binder, not of every binder that happens to
+    // share its unique: see [`Scope`].
+    let paths: Vec<OccPath> = s
+        .occurrences(pair.binder)
+        .iter()
+        .map(|&at| occ_path(m, let_node, at))
+        .collect();
     // Uses inside the group's own RHSs are recursion, not consumption.
     let uses: Vec<&OccPath> = paths.iter().filter(|p| !p.in_rhs).collect();
     let self_recursive = paths.iter().any(|p| p.in_rhs);

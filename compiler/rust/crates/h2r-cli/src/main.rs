@@ -449,14 +449,16 @@ fn laziness(
 type ExprIdLike = (String, u32);
 
 fn parsec(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result<()> {
-    use h2r_analysis::parsec::{Analysis, Bucket, account};
+    use h2r_analysis::parsec::{Analysis, Bucket, EdgeFact, account};
 
     let modules = load_dir(dir)?;
     let selected: Vec<&Module> = match module {
         Some(name) => vec![find_module(&modules, name)?],
         None => modules.iter().collect(),
     };
-    let census = Census::of_modules(selected.iter().copied());
+    // The raw census plus the analyses this command reports on: building
+    // the integrated census would run the same recogniser a second time.
+    let census = Census::raw(selected.iter().copied());
     let analyses: Vec<Analysis> = selected.iter().map(|m| Analysis::of_module(m)).collect();
     let acct = account(&census, &analyses);
 
@@ -545,6 +547,30 @@ fn parsec(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result
     for (k, n) in &by_rule {
         println!("  {k:<44} {n:>7}");
     }
+
+    // Role identity and role forwarding are different facts.
+    let invoke = regions
+        .iter()
+        .flat_map(|r| r.edges.iter())
+        .filter(|e| e.fact == EdgeFact::Invoke)
+        .count();
+    let forward = regions
+        .iter()
+        .flat_map(|r| r.edges.iter())
+        .filter(|e| e.fact == EdgeFact::Forward)
+        .count();
+    let reroute = regions
+        .iter()
+        .flat_map(|r| r.edges.iter())
+        .filter(|e| e.reroutes())
+        .count();
+    println!();
+    println!("Role identity vs role forwarding");
+    println!("  invocations of a role (control goes to what it is)  {invoke:>7}");
+    println!("  forwardings into a slot of a parser call            {forward:>7}");
+    println!("    … of which into a slot other than its own role    {reroute:>7}");
+    let mapped = regions.iter().filter(|r| r.wrapper.is_some()).count();
+    println!("  ambiguous embeddings resolved by R9-WRAPPER-MAP    {mapped:>8}");
 
     println!();
     println!(
@@ -980,7 +1006,7 @@ fn report(c: &Census, n_modules: usize) {
     }
     println!();
     println!("  by target tier (what is actually proven about the code that runs)");
-    let tiers = count_by(lazy.iter().map(|a| a.callee.resolution.tier()));
+    let tiers = count_by(lazy.iter().map(|a| a.callee.tier()));
     for (t, label) in [
         (Tier::Exact, "exact target proven"),
         (Tier::FiniteSet, "finite target set proven"),
@@ -992,6 +1018,19 @@ fn report(c: &Census, n_modules: usize) {
     ] {
         row(label, tiers.get(&t).copied().unwrap_or(0), n);
     }
+    // Where the proof came from. The two sources are independent and the
+    // tier is the better of them; this says how much the second one adds.
+    let from_parsec = lazy
+        .iter()
+        .filter(|a| {
+            a.callee.resolution.tier() == Tier::Unresolved && a.callee.tier() != Tier::Unresolved
+        })
+        .count();
+    row(
+        "  of which proven only by the Parsec CPS recogniser",
+        from_parsec,
+        n,
+    );
     println!();
     println!("  by callee family");
     let fam = count_by(lazy.iter().map(|a| a.callee.family));

@@ -1,9 +1,18 @@
-//! The binding scope of a module, and the one lookup every signature
-//! question goes through.
+//! The one lookup every signature question goes through.
 //!
+//! Variable *identity* is not decided here: it is decided once, when the
+//! arena is built, by [`h2r_core_ir::Module::resolve`] — every local `Var`
+//! occurrence gets the [`BinderId`] that actually binds it, and nothing
+//! downstream ever keys by, looks up by, or compares a local unique string.
+//! (Uniques are not unique in an optimised dump; see that function.) A
+//! unique is used here in exactly one place: as the linkage key into the
+//! imported-id table, and only for an occurrence the resolver has already
+//! classified as [`h2r_core_ir::Ref::Global`].
+//!
+//! What this module adds on top of identity is the *signature* question.
 //! GHC does not keep the `IdInfo` on occurrence `Var`s of local ids up to
-//! date: the demand signature and arity on an occurrence can be stale. The
-//! binder at the binding site is authoritative. The id table the plugin
+//! date: the demand signature and arity on an occurrence can be stale, and
+//! the binder at the binding site is authoritative. The id table the plugin
 //! dumps is keyed by unique but populated from occurrences, so for anything
 //! bound in this module it may disagree with the binder. Imported ids have
 //! no binding site here; for them the id table is all there is.
@@ -13,29 +22,10 @@
 //! [`crate::callee`] for resolution) asks [`Scope::head_sig`], so they can
 //! never disagree about which source they read.
 
-use std::collections::HashMap;
-
 use h2r_core_ir::{BinderId, DataConInfo, Demand, Expr, ExprId, Module};
 use serde::Serialize;
 
-/// How a unique is bound.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum BindSite {
-    Top,
-    Let,
-    Lam,
-    CaseBinder,
-    AltBinder,
-}
-
-/// Where and how a unique is bound in this module.
-#[derive(Debug, Clone, Copy)]
-pub struct BindInfo {
-    pub site: BindSite,
-    pub binder: BinderId,
-    /// The right-hand side, for let- and top-level-bound ids.
-    pub rhs: Option<ExprId>,
-}
+pub use h2r_core_ir::{BindInfo, BindSite};
 
 /// Which source a [`HeadSig`] was read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -79,73 +69,45 @@ impl HeadSig<'_> {
     }
 }
 
-/// A module plus its binding-site index.
+/// A module, viewed through its signatures. Identity questions are
+/// forwarded straight to the IR so there is only ever one answer.
 pub struct Scope<'m> {
     pub m: &'m Module,
-    sites: HashMap<&'m str, BindInfo>,
 }
 
 impl<'m> Scope<'m> {
     pub fn new(m: &'m Module) -> Scope<'m> {
-        let mut sites = HashMap::new();
-        let mut put = |b: BinderId, site: BindSite, rhs: Option<ExprId>| {
-            sites.insert(
-                m.binder(b).unique.as_str(),
-                BindInfo {
-                    site,
-                    binder: b,
-                    rhs,
-                },
-            );
-        };
-        for bind in &m.top {
-            for p in &bind.pairs {
-                put(p.binder, BindSite::Top, Some(p.rhs));
-            }
-        }
-        for e in &m.exprs {
-            match e {
-                Expr::Lam { binder, .. } => put(*binder, BindSite::Lam, None),
-                Expr::Let { bind, .. } => {
-                    for p in &bind.pairs {
-                        put(p.binder, BindSite::Let, Some(p.rhs));
-                    }
-                }
-                Expr::Case { binder, alts, .. } => {
-                    put(*binder, BindSite::CaseBinder, None);
-                    for a in alts {
-                        for b in &a.binders {
-                            put(*b, BindSite::AltBinder, None);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        Scope { m, sites }
+        Scope { m }
     }
 
-    /// The binding site of a unique, if it is bound in this module.
-    pub fn site(&self, unique: &str) -> Option<BindInfo> {
-        self.sites.get(unique).copied()
+    /// The binder a `Var` occurrence refers to; `None` for an import.
+    pub fn resolve(&self, occ: ExprId) -> Option<BinderId> {
+        self.m.resolve(occ)
+    }
+
+    /// Where a binder is bound.
+    pub fn binding(&self, b: BinderId) -> BindInfo {
+        self.m.binding(b)
+    }
+
+    /// Every occurrence of a binder, in pre-order.
+    pub fn occurrences(&self, b: BinderId) -> &'m [ExprId] {
+        self.m.occurrences(b)
     }
 
     /// The binding site of the variable at `head`, if it is bound here.
-    pub fn site_of(&self, head: ExprId) -> Option<BindInfo> {
-        match self.m.expr(head) {
-            Expr::Var { unique, .. } => self.site(unique),
-            _ => None,
-        }
+    pub fn binding_of(&self, head: ExprId) -> Option<BindInfo> {
+        self.m.binding_of(head)
     }
 
-    /// The signature of the variable at `head`: from its binding site when
-    /// it is bound in this module, from the id table otherwise. `None` when
-    /// `head` is not a variable or nothing at all is known about it.
+    /// The signature of the variable at `head`: from the binder it resolves
+    /// to when it is bound in this module, from the id table otherwise.
+    /// `None` when `head` is not a variable or nothing at all is known.
     pub fn head_sig(&self, head: ExprId) -> Option<HeadSig<'m>> {
         let Expr::Var { unique, .. } = self.m.expr(head) else {
             return None;
         };
-        if let Some(bound) = self.site(unique) {
+        if let Some(bound) = self.binding_of(head) {
             let b = self.m.binder(bound.binder);
             return Some(HeadSig {
                 source: SigSource::BindingSite(bound.site),
@@ -157,6 +119,8 @@ impl<'m> Scope<'m> {
                 is_class_op: false,
             });
         }
+        // Linkage, not identity: the resolver has already said this
+        // occurrence is an import, so the unique is the table key.
         let info = self.m.ids.get(unique)?;
         Some(HeadSig {
             source: SigSource::IdTable,

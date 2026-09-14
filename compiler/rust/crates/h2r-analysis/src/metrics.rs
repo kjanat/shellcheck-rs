@@ -62,11 +62,7 @@ impl Metrics {
         let lazy: Vec<_> = comps.iter().filter(|a| a.position.escapes()).collect();
         let count_class = |c: Class| b.iter().filter(|x| x.class == c).count();
         let count_res = |r: Resolution| lazy.iter().filter(|a| a.callee.resolution == r).count();
-        let count_tier = |t: Tier| {
-            lazy.iter()
-                .filter(|a| a.callee.resolution.tier() == t)
-                .count()
-        };
+        let count_tier = |t: Tier| lazy.iter().filter(|a| a.callee.tier() == t).count();
         let count_fam = |fs: &[Family]| {
             lazy.iter()
                 .filter(|a| fs.contains(&a.callee.family))

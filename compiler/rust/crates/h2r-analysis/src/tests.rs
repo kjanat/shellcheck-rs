@@ -370,3 +370,104 @@ fn past_signature_argument_is_producer_known_not_exact() {
     assert_eq!(sites[1].callee.resolution, Resolution::PastArity);
     assert_eq!(sites[1].callee.resolution.tier(), Tier::ProducerKnown);
 }
+
+//------------------------------------------------------------------------------
+// Scoping: uniques are not unique in optimised Core
+//------------------------------------------------------------------------------
+
+/// Two sibling `let`s that share a unique (GHC's simplifier renames a binder
+/// only when it would clash with the *in-scope* set, so inlined copies of a
+/// term keep their original uniques). Each is used exactly once; keying the
+/// occurrence census by unique merges them into one two-use binding and
+/// reports sharing that is not there.
+#[test]
+fn sibling_lets_sharing_a_unique_are_not_merged() {
+    // case p of
+    //   A -> let x = f a in g x
+    //   B -> let x = f a in g x        -- a *different* x, same unique
+    let one_let = |body: Value| {
+        json!({"node": "Let", "bind": {"rec": false, "pairs": [{
+            "binder": binder("x", demand(false, false)), "rhs": app(var("f"), var("a")),
+            "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+        }]}, "body": body})
+    };
+    let m = top_module(
+        case2(
+            var("p"),
+            one_let(app(var("g"), var("x"))),
+            one_let(app(var("g"), var("x"))),
+        ),
+        json!({"g": callee(true)}),
+    );
+    let c = Census::of_modules([&m]);
+    assert_eq!(c.bindings.len(), 2);
+    for b in &c.bindings {
+        assert_eq!(b.occurrences, 1, "each x has exactly one use of its own");
+        assert_eq!(b.class, Class::LazyOnce);
+        assert_eq!(b.multiplicity, Multiplicity::Once);
+        assert_eq!(b.syntactic_once, Some(true));
+        assert_eq!(b.fate, Fate::SinkEager);
+        assert!(matches!(b.sink, Sink::Inline { .. }));
+    }
+    // The two bindings really do share a unique, and are different binders.
+    assert_eq!(c.bindings[0].unique, c.bindings[1].unique);
+    assert_ne!(c.bindings[0].let_node, c.bindings[1].let_node);
+}
+
+/// A local binder shadowed by an inner one of the same unique: uses inside
+/// the shadow belong to the inner binder only.
+#[test]
+fn an_inner_binder_shadows_an_outer_one_with_the_same_unique() {
+    // let x = f a in (let x = f a in g x)
+    let inner = json!({"node": "Let", "bind": {"rec": false, "pairs": [{
+        "binder": binder("x", demand(false, false)), "rhs": app(var("f"), var("a")),
+        "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+    }]}, "body": app(var("g"), var("x"))});
+    let m = module(demand(false, false), inner, json!({"g": callee(true)}));
+    let c = Census::of_modules([&m]);
+    assert_eq!(c.bindings.len(), 2);
+    let outer = c.bindings.iter().find(|b| b.occurrences == 0).unwrap();
+    assert_eq!(
+        outer.class,
+        Class::Dead,
+        "the outer x is shadowed, not used"
+    );
+    let inner = c.bindings.iter().find(|b| b.occurrences == 1).unwrap();
+    assert_eq!(inner.class, Class::LazyOnce);
+}
+
+/// `Module::spine` looks through the casts the simplifier leaves inside an
+/// application spine, so the spine-root test has to as well: otherwise the
+/// inner `App` is walked as a spine of its own and its arguments are counted
+/// twice.
+#[test]
+fn a_cast_inside_a_spine_does_not_split_it() {
+    use crate::shape::Position;
+    // g2 (h b) `cast` (h c) -- one spine, two arguments.
+    let cast = |e: Value| json!({"node": "Cast", "expr": e});
+    let g2 = json!({
+        "name": "g2", "occ": "g2", "arity": 2,
+        "dmdSig": {"args": [demand(true, false), demand(false, false)], "diverges": false, "pretty": "<S><L>"},
+        "isJoinPoint": false, "dataCon": null
+    });
+    let m = top_module(
+        app(
+            cast(app(var("g2"), app(var("h"), var("b")))),
+            app(var("h"), var("c")),
+        ),
+        json!({"g2": g2, "h": callee(true)}),
+    );
+    let c = Census::of_modules([&m]);
+    let mut args: Vec<u32> = c.args.iter().map(|a| a.arg).collect();
+    let n = args.len();
+    args.sort_unstable();
+    args.dedup();
+    assert_eq!(args.len(), n, "no argument node may be counted twice");
+    assert_eq!(n, 2);
+    // Both arguments belong to g2's spine, so the signature is unleashed and
+    // each gets the demand of its own slot.
+    assert!(c.args.iter().all(|a| a.callee.occ == "g2"));
+    let mut pos: Vec<Position> = c.args.iter().map(|a| a.position).collect();
+    pos.sort();
+    assert_eq!(pos, vec![Position::StrictArg, Position::LazyParam]);
+}

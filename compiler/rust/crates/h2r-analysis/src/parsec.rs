@@ -53,15 +53,16 @@
 //! Uniques are **not** unique in an optimised dump: inlining duplicates a
 //! term without freshening its binders (`ShellCheck.Parser` has 41,874
 //! binders over 8,257 distinct uniques). Every occurrence is therefore
-//! resolved to its innermost enclosing binder by an explicit-stack walk
-//! ([`Analysis::resolve_scopes`]); no pass here keys anything by unique.
+//! resolved to its innermost enclosing binder by [`crate::scope::Scope`],
+//! the same resolution the census uses; no pass here keys anything by
+//! unique.
 
 use std::collections::{BTreeMap, HashMap};
 
-use h2r_core_ir::{Binder, BinderId, BinderKind, Edge, Expr, ExprId, Module};
+use h2r_core_ir::{AltCon, Binder, BinderId, BinderKind, Edge, Expr, ExprId, Module};
 use serde::Serialize;
 
-use crate::callee::Family;
+use crate::callee::{Family, ParsecTarget};
 use crate::laziness::Census;
 use crate::scope::Scope;
 use crate::shape::{ArgShape, value_args};
@@ -141,9 +142,16 @@ fn strip_forall(ty: &str) -> &str {
 /// GHC's pretty-printer disambiguates type variables inside each `SDoc`
 /// independently, so the same Core type variable is printed `b` on one
 /// binder and `b1` on the next. Comparing type strings verbatim across
-/// binders therefore reports differences that are not there. This is a
-/// corroborating check on top of the layout and dataflow proof, not a type
-/// checker: two genuinely different variables can normalise alike.
+/// binders therefore reports differences that are not there.
+///
+/// This is level 5 of the evidence hierarchy and the weakest thing here: it
+/// is a *textual* comparison and two genuinely different type variables can
+/// normalise alike. It is therefore only ever used to **refuse** — a region
+/// whose continuations disagree about their result type is not a region —
+/// and never as the support for a verdict. Every proof rests on the layout
+/// (2) and the dataflow rules; if this function wrongly equated two
+/// variables, the only effect would be that a chain the stricter comparison
+/// would have skipped still has to survive every use rule to be proven.
 pub fn alpha_normalise(ty: &str) -> String {
     let mut out = String::with_capacity(ty.len());
     let mut names: Vec<&str> = Vec::new();
@@ -454,10 +462,37 @@ pub struct Provenance {
     pub label: String,
 }
 
+/// What an edge records. Role **identity** and role **forwarding** are
+/// different facts and are never conflated: handing a continuation to a
+/// parser call in some slot chooses a target for one path, it does not
+/// change what that continuation *is*. The inlined `<?>` passes its own
+/// `cok` into the `eok` slot of the parser it labels; `cok` stays `cok`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum EdgeFact {
+    /// A role binder is invoked here: control goes to the role it is, so
+    /// source and destination are the same thing.
+    Invoke,
+    /// A role binder is passed, unchanged, into a continuation slot of a
+    /// recognised parser call. `source_role` is what it is, `destination`
+    /// is the slot it fills; the two may differ.
+    Forward,
+    /// The call is a parser being run. No single role binder is its
+    /// subject, so it has no source role.
+    RunParser,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ParserEdge {
-    /// The role this call plays. When the role is a proven finite set this
-    /// is the first candidate; `candidates` carries the whole set.
+    /// Which of the two facts this edge is.
+    pub fact: EdgeFact,
+    /// The intrinsic role of the binder this edge is about: what it *is*,
+    /// never rewritten by anything that forwards it. Empty for
+    /// [`EdgeFact::RunParser`].
+    pub source_role: SlotSet,
+    /// Where this edge sends control: the invoked role for
+    /// [`EdgeFact::Invoke`], the filled slot for [`EdgeFact::Forward`].
+    pub destination: SlotSet,
+    /// `destination` as edge kinds; the first when it is a singleton.
     pub kind: EdgeKind,
     pub candidates: Vec<EdgeKind>,
     /// Spine root of the call.
@@ -469,6 +504,12 @@ pub struct ParserEdge {
 impl ParserEdge {
     pub fn exact(&self) -> bool {
         self.candidates.len() == 1
+    }
+
+    /// A forwarding edge whose destination slot is not the source's own
+    /// role: the continuation is being reused for a different path.
+    pub fn reroutes(&self) -> bool {
+        self.fact == EdgeFact::Forward && self.source_role != self.destination
     }
 }
 
@@ -507,6 +548,15 @@ pub struct ParserRegion {
     pub module: String,
     /// The lambda chain head.
     pub entry: ExprId,
+    /// Every `Id` parameter of the chain, in order. A saturated call to
+    /// this region lines its value arguments up with these one to one.
+    pub params: Vec<BinderId>,
+    /// `params[run.0..run.1]` are the continuation parameters.
+    pub run: (usize, usize),
+    /// When `state` is `None` because worker/wrapper unboxed `State s u`:
+    /// the three parameters that carry its representation fields, in field
+    /// order (`params[run.0-3..run.0]`).
+    pub unboxed_state: Option<[BinderId; 3]>,
     /// The state parameter. `None` when worker/wrapper unboxed it or it is
     /// bound by an enclosing lambda.
     pub state: Option<BinderId>,
@@ -518,6 +568,9 @@ pub struct ParserRegion {
     pub conts: Vec<ContParam>,
     /// Trailing transformer parameters (`Environment m`, `SystemState`).
     pub extra: Vec<BinderId>,
+    /// The wrapper region whose call resolved an ambiguous embedding
+    /// ([`R9_WRAPPER_MAP`]), when one did.
+    pub wrapper: Option<usize>,
     /// Let-bound continuation values inside the region, promoted by
     /// [`R8_DERIVED_CONT`] and proved by the same rules.
     pub derived: Vec<BinderId>,
@@ -530,24 +583,63 @@ pub struct ParserRegion {
 //------------------------------------------------------------------------------
 // Rule ids
 //------------------------------------------------------------------------------
+//
+// Evidence hierarchy, strongest first. Every rule below says which level it
+// rests on, and no rule rests on a weaker level than it claims.
+//
+//  1. **Lexical binder identity** — which binder an occurrence resolves to
+//     ([`h2r_core_ir::Module::resolve`]). Exact, and the foundation of
+//     everything else here.
+//  2. **Structural function / application shape** — a lambda chain's
+//     parameters, a spine's arguments, a case's alternatives. Exact.
+//  3. **Worker/wrapper dataflow** — a wrapper is an eta-expansion of its
+//     worker, so roles transfer across the call ([`R9_WRAPPER_MAP`]).
+//     Exact given 1 and 2.
+//  4. **GHC type compatibility** — the [`TyKind`] of a printed type:
+//     `State s u`, `ParseError`, the two continuation shapes. Sound as a
+//     classifier of these five cases.
+//  5. **Alpha-normalised textual type comparison** ([`alpha_normalise`]) —
+//     candidate generation and corroboration only. It can equate two
+//     genuinely distinct type variables, so it is only ever used to
+//     *refuse* a region, never as the support for a verdict.
+//  6. **Binder names** — diagnostics only. Nothing in this module reads
+//     one. (`State` in [`Analysis::index_state_fields`] is a data
+//     constructor, which is part of the type's identity and is never
+//     renamed, and the field types are checked anyway.)
 
 /// A lambda chain's parameter types carry ParsecT's `State s u`, cok, cerr,
 /// eok, eerr suffix; dropped (absent) continuations are allowed, so the run
 /// is matched as a subsequence of the four-slot template.
+/// Evidence: structural shape (2) over the binder types (4).
 pub const R1_LAYOUT: &str = "R1-LAYOUT";
 /// Every continuation of a region agrees on the state type and on the
 /// result type, and the ok continuations really take `State s u` then
-/// `ParseError`.
+/// `ParseError`. Evidence: type compatibility (4) plus alpha-normalised
+/// comparison (5) — a *filter* on [`R1_LAYOUT`], able only to refuse.
 pub const R1_TYPE_AGREE: &str = "R1-TYPE-AGREE";
 /// A call whose arguments are a `State s u` followed by a run of
 /// continuation-shaped arguments embedding into the template, plus at most
 /// two trailing transformer arguments: a parser being run.
+/// Evidence: structural shape (2) over argument types (4).
 pub const R2_PARSER_CALL: &str = "R2-PARSER-CALL";
 /// The same, with the state argument absent because worker/wrapper unboxed
-/// `State` into its fields.
+/// `State` into its representation fields. The absence has to be
+/// *explained*; the three variants below say how, and one of them always
+/// stands in for this id on an actual edge.
 pub const R2_UNBOXED_STATE: &str = "R2-UNBOXED-STATE";
+/// …the fields come from a `case … of State f0 f1 f2` at this call site.
+pub const R2_UNBOXED_DESTRUCTURED: &str = "R2-UNBOXED-STATE/destructured";
+/// …the callee is itself a recognised worker whose parameters are the fields.
+pub const R2_UNBOXED_WORKER: &str = "R2-UNBOXED-STATE/worker-layout";
+/// …the enclosing worker's own unboxed state is forwarded unchanged.
+pub const R2_UNBOXED_FORWARDED: &str = "R2-UNBOXED-STATE/forwarded";
 /// A continuation applied to exactly its arity: (value, state, error) for
-/// an ok continuation, (error) for an error continuation.
+/// an ok continuation, (error) for an error continuation. The head's own
+/// type fixes what each argument slot means, and every argument whose type
+/// is readable is checked against it
+/// ([`Analysis::cont_call_arg_types`]).
+/// Evidence: lexical identity (1) of the head, structural shape (2),
+/// corroborated by type compatibility (4).
 pub const R3_CONT_CALL: &str = "R3-CONT-CALL";
 /// …applied to its arity plus the two trailing transformer arguments that
 /// `ReaderT (Environment m) (StateT SystemState m)` erases to.
@@ -561,7 +653,12 @@ pub const R3_CONT_CALL_ETA: &str = "R3-CONT-CALL-ETA";
 pub const R3_CONT_RETURNED: &str = "R3-CONT-RETURNED";
 /// A continuation passed unchanged into a continuation slot of a recognised
 /// parser call, of the same kind. The slot need not match its own role:
-/// `try`-like combinators pass cok into the eok slot.
+/// `try`-like combinators pass cok into the eok slot — which is why this is
+/// a [`EdgeFact::Forward`] edge carrying both the source's own role and the
+/// destination slot, and never rewrites the source's role. The ok/err kind
+/// check is enforced on every propagation.
+/// Evidence: lexical identity (1) of the forwarded binder, structural shape
+/// (2) of the receiving call.
 pub const R4_PROP_CONT: &str = "R4-PROP-CONT";
 /// The state passed in the state slot of a continuation call.
 pub const R5_STATE_IN_CONT_CALL: &str = "R5-STATE-IN-CONT-CALL";
@@ -571,11 +668,19 @@ pub const R6_STATE_IN_PARSER_CALL: &str = "R6-STATE-IN-PARSER-CALL";
 pub const R7_STATE_SCRUTINISED: &str = "R7-STATE-SCRUTINISED";
 /// A let-bound binder of continuation type inside a region: a derived
 /// continuation, proved by the same use rules as a parameter.
+/// Evidence: lexical identity (1) plus type compatibility (4); its role is
+/// only ever the kind-restricted pair of slots, never a single slot.
 pub const R8_DERIVED_CONT: &str = "R8-DERIVED-CONT";
+
+/// An ambiguous embedding resolved from the worker/wrapper pair: the
+/// wrapper's full-arity chain fixes the slots, and its body is one
+/// saturated call forwarding them into the worker's parameters.
+pub const R9_WRAPPER_MAP: &str = "R9-WRAPPER-MAP";
 
 pub const REJ_STATE_APPLIED: &str = "state-applied";
 pub const REJ_STATE_SLOT: &str = "state-in-non-state-slot";
 pub const REJ_CONT_ARITY: &str = "cont-wrong-arity";
+pub const REJ_CONT_ARG_TY: &str = "cont-argument-type-mismatch";
 pub const REJ_CONT_SCRUTINISED: &str = "cont-scrutinised";
 pub const REJ_CONT_SLOT: &str = "cont-in-non-cont-slot";
 pub const REJ_CONT_KIND: &str = "cont-kind-mismatch";
@@ -597,6 +702,15 @@ pub struct SkippedChain {
     /// `type-disagreement`.
     pub reason: &'static str,
     pub detail: String,
+}
+
+/// An edge about to be recorded: the two facts, and where.
+#[derive(Debug, Clone, Copy)]
+struct EdgeSpec {
+    fact: EdgeFact,
+    source_role: SlotSet,
+    destination: SlotSet,
+    at: ExprId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -630,11 +744,15 @@ pub struct Analysis<'m> {
     pub regions: Vec<ParserRegion>,
     /// Chains with continuation-typed parameters that did not form a region.
     pub skipped: Vec<SkippedChain>,
+    /// Binding structure and scoped occurrence resolution, shared with the
+    /// census so the two can never disagree about what a `Var` refers to.
     scope: Scope<'m>,
-    /// Innermost enclosing binder of every `Var` occurrence.
-    resolved: Vec<Option<BinderId>>,
-    uses: HashMap<BinderId, Vec<ExprId>>,
     role: HashMap<BinderId, RoleInfo>,
+    /// The binder a region's lambda chain is bound to, inverted.
+    region_of_binder: HashMap<BinderId, usize>,
+    /// Binders that are representation fields of a scrutinised `State s u`:
+    /// `binder -> (case node, alt, field index)`.
+    state_fields: HashMap<BinderId, (ExprId, u32, usize)>,
     /// Lambda chain head -> region index.
     region_at: HashMap<ExprId, usize>,
     /// Spine root -> (region, edge) for every edge recorded at that root.
@@ -649,14 +767,15 @@ impl<'m> Analysis<'m> {
             regions: Vec::new(),
             skipped: Vec::new(),
             scope,
-            resolved: vec![None; m.exprs.len()],
-            uses: HashMap::new(),
             role: HashMap::new(),
+            region_of_binder: HashMap::new(),
+            state_fields: HashMap::new(),
             region_at: HashMap::new(),
             edge_index: HashMap::new(),
         };
-        a.resolve_scopes();
+        a.index_state_fields();
         a.find_regions();
+        a.wrapper_map();
         a.promote_derived();
         a.prove();
         a.find_parser_calls();
@@ -671,7 +790,7 @@ impl<'m> Analysis<'m> {
         let m = self.module;
         let mut found: Vec<(usize, ExprId, &'static str)> = Vec::new();
         for id in 0..m.exprs.len() as ExprId {
-            if !matches!(m.expr(id), Expr::App { .. }) || self.spine_root(id) != id {
+            if !matches!(m.expr(id), Expr::App { .. }) || self.module.spine_root(id) != id {
                 continue;
             }
             let Some(CallShape::Parser { rule, .. }) = self.call_shape(id) else {
@@ -684,6 +803,9 @@ impl<'m> Analysis<'m> {
         }
         for (ri, at, rule) in found {
             self.regions[ri].edges.push(ParserEdge {
+                fact: EdgeFact::RunParser,
+                source_role: SlotSet::empty(),
+                destination: SlotSet::empty(),
                 kind: EdgeKind::CallParser,
                 candidates: vec![EdgeKind::CallParser],
                 at,
@@ -715,114 +837,6 @@ impl<'m> Analysis<'m> {
     }
 
     //--------------------------------------------------------------------------
-    // Scoped resolution
-    //--------------------------------------------------------------------------
-
-    /// Resolve every local `Var` to the binder that actually binds it.
-    ///
-    /// Iterative: an explicit stack of enter/bind/unbind operations, so the
-    /// Core is never recursed over.
-    fn resolve_scopes(&mut self) {
-        enum Op<'a> {
-            Enter(ExprId),
-            Bind(BinderId),
-            Unbind(&'a str),
-        }
-        let m = self.module;
-        let mut env: HashMap<&str, Vec<BinderId>> = HashMap::new();
-        let mut stack: Vec<Op> = Vec::new();
-        for bind in &m.top {
-            for p in &bind.pairs {
-                env.entry(m.binder(p.binder).unique.as_str())
-                    .or_default()
-                    .push(p.binder);
-            }
-        }
-        for bind in m.top.iter().rev() {
-            for p in bind.pairs.iter().rev() {
-                stack.push(Op::Enter(p.rhs));
-            }
-        }
-        while let Some(op) = stack.pop() {
-            let id = match op {
-                Op::Bind(b) => {
-                    env.entry(m.binder(b).unique.as_str()).or_default().push(b);
-                    continue;
-                }
-                Op::Unbind(u) => {
-                    if let Some(v) = env.get_mut(u) {
-                        v.pop();
-                    }
-                    continue;
-                }
-                Op::Enter(id) => id,
-            };
-            match m.expr(id) {
-                Expr::Var {
-                    unique, is_global, ..
-                } => {
-                    if !*is_global && let Some(b) = env.get(unique.as_str()).and_then(|v| v.last())
-                    {
-                        self.resolved[id as usize] = Some(*b);
-                        self.uses.entry(*b).or_default().push(id);
-                    }
-                }
-                Expr::App { fun, arg } => {
-                    stack.push(Op::Enter(*arg));
-                    stack.push(Op::Enter(*fun));
-                }
-                Expr::Lam { binder, body } => {
-                    stack.push(Op::Unbind(m.binder(*binder).unique.as_str()));
-                    stack.push(Op::Enter(*body));
-                    stack.push(Op::Bind(*binder));
-                }
-                Expr::Let { bind, body } => {
-                    for p in &bind.pairs {
-                        stack.push(Op::Unbind(m.binder(p.binder).unique.as_str()));
-                    }
-                    stack.push(Op::Enter(*body));
-                    if bind.recursive {
-                        for p in bind.pairs.iter().rev() {
-                            stack.push(Op::Enter(p.rhs));
-                        }
-                        for p in bind.pairs.iter().rev() {
-                            stack.push(Op::Bind(p.binder));
-                        }
-                    } else {
-                        for p in bind.pairs.iter().rev() {
-                            stack.push(Op::Bind(p.binder));
-                        }
-                        for p in bind.pairs.iter().rev() {
-                            stack.push(Op::Enter(p.rhs));
-                        }
-                    }
-                }
-                Expr::Case {
-                    scrut,
-                    binder,
-                    alts,
-                    ..
-                } => {
-                    stack.push(Op::Unbind(m.binder(*binder).unique.as_str()));
-                    for alt in alts.iter().rev() {
-                        for b in &alt.binders {
-                            stack.push(Op::Unbind(m.binder(*b).unique.as_str()));
-                        }
-                        stack.push(Op::Enter(alt.rhs));
-                        for b in alt.binders.iter().rev() {
-                            stack.push(Op::Bind(*b));
-                        }
-                    }
-                    stack.push(Op::Bind(*binder));
-                    stack.push(Op::Enter(*scrut));
-                }
-                Expr::Cast(e) | Expr::Tick(e) => stack.push(Op::Enter(*e)),
-                Expr::Lit(_) | Expr::Type(_) | Expr::Coercion => {}
-            }
-        }
-    }
-
-    //--------------------------------------------------------------------------
     // Shape helpers
     //--------------------------------------------------------------------------
 
@@ -850,30 +864,12 @@ impl<'m> Analysis<'m> {
         }
     }
 
-    /// The root of the application spine `id` belongs to, looking through
-    /// the casts the simplifier leaves inside spines.
-    fn spine_root(&self, id: ExprId) -> ExprId {
-        let m = self.module;
-        let mut root = id;
-        while let Some(p) = m.parent[root as usize] {
-            let through = match m.edge[root as usize] {
-                Edge::AppFun => matches!(m.expr(p), Expr::App { .. }),
-                Edge::Cast | Edge::Tick => {
-                    matches!(m.expr(p), Expr::App { .. } | Expr::Cast(_) | Expr::Tick(_))
-                }
-                _ => false,
-            };
-            if through { root = p } else { break }
-        }
-        root
-    }
-
     /// The type of an expression, when it can be read off a binder.
     fn expr_ty(&self, e: ExprId) -> Option<&'m str> {
         let m = self.module;
         let i = m.strip(e);
         match m.expr(i) {
-            Expr::Var { .. } => self.resolved[i as usize].map(|b| self.binder(b).ty.as_str()),
+            Expr::Var { .. } => self.scope.resolve(i).map(|b| self.binder(b).ty.as_str()),
             _ => None,
         }
     }
@@ -886,7 +882,7 @@ impl<'m> Analysis<'m> {
         let m = self.module;
         let i = m.strip(e);
         let kind = match m.expr(i) {
-            Expr::Var { .. } => self.resolved[i as usize].map(|b| ty_kind(&self.binder(b).ty)),
+            Expr::Var { .. } => self.scope.resolve(i).map(|b| ty_kind(&self.binder(b).ty)),
             Expr::Lam { .. } => {
                 let (params, body) = self.chain(i);
                 let tys: Vec<&str> = params.iter().map(|b| self.binder(*b).ty.as_str()).collect();
@@ -926,6 +922,89 @@ impl<'m> Analysis<'m> {
             None => RunItem::Wild,
         };
         (kind, item)
+    }
+
+    /// The binder a lambda chain (or any expression) is bound to, looking
+    /// through the casts the simplifier leaves between a binding and its
+    /// right-hand side. Evidence level: lexical binder identity.
+    fn bound_to(&self, id: ExprId) -> Option<BinderId> {
+        let m = self.module;
+        let mut cur = id;
+        loop {
+            let p = m.parent[cur as usize];
+            match m.edge[cur as usize] {
+                Edge::Cast | Edge::Tick => cur = p?,
+                Edge::LetRhs { pair } => {
+                    let Expr::Let { bind, .. } = m.expr(p?) else {
+                        return None;
+                    };
+                    return Some(bind.pairs[pair as usize].binder);
+                }
+                Edge::Top { pair } => {
+                    return m
+                        .top
+                        .iter()
+                        .flat_map(|b| b.pairs.iter())
+                        .nth(pair as usize)
+                        .map(|x| x.binder);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Index the binders that carry the representation fields of a
+    /// destructured `State s u`.
+    ///
+    /// Evidence level: structural shape plus GHC type compatibility. The
+    /// alternative's constructor is `State` — a *data constructor* name,
+    /// which is part of the type's identity and is not renamed by the
+    /// simplifier, unlike a binder name — its field count is Parsec's
+    /// three, its middle field is a `SourcePos`, and the scrutinee is
+    /// something of `State` type.
+    fn index_state_fields(&mut self) {
+        let m = self.module;
+        let mut found = Vec::new();
+        for id in 0..m.exprs.len() as ExprId {
+            let Expr::Case { scrut, alts, .. } = m.expr(id) else {
+                continue;
+            };
+            // The scrutinee is something of `State s u` type.
+            if !self.expr_ty(*scrut).is_some_and(is_state_ty) {
+                continue;
+            }
+            for (ai, alt) in alts.iter().enumerate() {
+                let AltCon::DataAlt { occ, .. } = &alt.con else {
+                    continue;
+                };
+                // Three fields, the middle one a `SourcePos`: Parsec's
+                // `State`. The constructor's name corroborates it.
+                if alt.binders.len() != 3
+                    || strip_parens(&m.binder(alt.binders[1]).ty) != "SourcePos"
+                    || occ != "State"
+                {
+                    continue;
+                }
+                for (fi, b) in alt.binders.iter().enumerate() {
+                    found.push((*b, (id, ai as u32, fi)));
+                }
+            }
+        }
+        self.state_fields = found.into_iter().collect();
+    }
+
+    /// The three parameters before a continuation run that carry an unboxed
+    /// `State s u`: any input type, a `SourcePos`, any user-state type.
+    /// Evidence level: GHC type compatibility on the binder types.
+    fn unboxed_state_params(&self, params: &[BinderId], start: usize) -> Option<[BinderId; 3]> {
+        if start < 3 {
+            return None;
+        }
+        let f = [params[start - 3], params[start - 2], params[start - 1]];
+        if strip_parens(&self.binder(f[1]).ty) != "SourcePos" {
+            return None;
+        }
+        Some(f)
     }
 
     //--------------------------------------------------------------------------
@@ -1097,9 +1176,20 @@ impl<'m> Analysis<'m> {
                 ),
             });
             self.region_at.insert(id, ri);
+            if let Some(b) = self.bound_to(id) {
+                self.region_of_binder.insert(b, ri);
+            }
+            let unboxed_state = if state_idx.is_none() {
+                self.unboxed_state_params(&params, start)
+            } else {
+                None
+            };
             self.regions.push(ParserRegion {
                 module: m.name.clone(),
                 entry: id,
+                params: params.clone(),
+                run: (start, end),
+                unboxed_state,
                 state: state_idx.map(|si| params[si]),
                 cok: slot_binder[0],
                 cerr: slot_binder[1],
@@ -1107,6 +1197,7 @@ impl<'m> Analysis<'m> {
                 eerr: slot_binder[3],
                 conts,
                 extra: params[end..].to_vec(),
+                wrapper: None,
                 derived: Vec::new(),
                 edges: Vec::new(),
                 rejects: Vec::new(),
@@ -1114,6 +1205,175 @@ impl<'m> Analysis<'m> {
                 proven: false,
             });
         }
+    }
+
+    //--------------------------------------------------------------------------
+    // R9: worker/wrapper role transfer
+    //--------------------------------------------------------------------------
+
+    /// R9-WRAPPER-MAP. A region whose continuation run embeds into the
+    /// four-slot template in more than one way has a proven *finite* role
+    /// set, not an exact role. When that region is the **worker** of a
+    /// worker/wrapper pair that is also in the dump, the ambiguity is
+    /// resolvable: a wrapper is an eta-expansion of its worker with the
+    /// absent arguments dropped, so the wrapper's slot for each argument it
+    /// forwards *is* the worker's role for the parameter that receives it.
+    ///
+    /// Evidence level: structural application shape (the wrapper's body is
+    /// exactly one saturated call to the worker) on top of lexical binder
+    /// identity (each forwarded argument is one of the wrapper's own
+    /// parameters), and the wrapper's own roles come from `R1-LAYOUT` on a
+    /// chain that carries all four slots and is therefore unambiguous.
+    /// Nothing here reads a name, and the mapping is only accepted if it is
+    /// one of the embeddings the worker's own layout already allowed.
+    ///
+    /// This is role *identity* transfer, not role forwarding: it is sound
+    /// only because the wrapper does nothing but pass its parameters on. A
+    /// combinator that forwards a continuation into a differently-named
+    /// slot (`<?>` passing `cok` into the `eok` slot) is a
+    /// [`R4_PROP_CONT`] edge and never changes anybody's role.
+    fn wrapper_map(&mut self) {
+        let m = self.module;
+        let mut resolved: Vec<(usize, Vec<Slot>, ExprId, usize)> = Vec::new();
+        for ki in 0..self.regions.len() {
+            let k = &self.regions[ki];
+            if !k.conts.iter().any(|c| c.slots.len() > 1) {
+                continue;
+            }
+            let Some(kb) = self.bound_to(k.entry) else {
+                continue;
+            };
+            let mut agreed: Option<Vec<Slot>> = None;
+            let mut witness = None;
+            let mut conflict = false;
+            for &u in m.occurrences(kb) {
+                let Some((map, wi)) = self.wrapper_call_map(ki, u) else {
+                    continue;
+                };
+                match &agreed {
+                    None => {
+                        agreed = Some(map);
+                        witness = Some((u, wi));
+                    }
+                    Some(prev) if *prev == map => {}
+                    Some(_) => conflict = true,
+                }
+            }
+            if conflict {
+                continue;
+            }
+            if let (Some(map), Some((at, wi))) = (agreed, witness) {
+                resolved.push((ki, map, at, wi));
+            }
+        }
+        for (ki, map, at, wi) in resolved {
+            let (start, _) = self.regions[ki].run;
+            let mut slot_binder = [None; 4];
+            for (j, slot) in map.iter().enumerate() {
+                let c = &mut self.regions[ki].conts[j];
+                c.slots = SlotSet::single(*slot as usize);
+                slot_binder[*slot as usize] = Some(c.binder);
+                let arity = c.arity;
+                let binder = c.binder;
+                self.role.insert(
+                    binder,
+                    RoleInfo {
+                        region: ki,
+                        cont: Some((SlotSet::single(*slot as usize), arity)),
+                    },
+                );
+            }
+            let r = &mut self.regions[ki];
+            r.cok = slot_binder[0].or(r.cok);
+            r.cerr = slot_binder[1].or(r.cerr);
+            r.eok = slot_binder[2].or(r.eok);
+            r.eerr = slot_binder[3].or(r.eerr);
+            r.wrapper = Some(wi);
+            r.evidence.push(Evidence {
+                rule: R9_WRAPPER_MAP,
+                node: at,
+                note: format!(
+                    "wrapper region {wi} forwards its own slots {:?} into parameters {}..{}                      of this worker at node {at}",
+                    map,
+                    start,
+                    start + map.len()
+                ),
+            });
+        }
+    }
+
+    /// If the occurrence `u` is a wrapper's whole-body call to region `ki`,
+    /// the slot each of `ki`'s continuation parameters gets from it, and
+    /// the wrapper's region index.
+    fn wrapper_call_map(&self, ki: usize, u: ExprId) -> Option<(Vec<Slot>, usize)> {
+        let m = self.module;
+        let k = &self.regions[ki];
+        let root = m.spine_root(u);
+        let (head, args) = m.spine(root);
+        // The occurrence has to be the head of the call, not an argument.
+        if m.strip(head) != u {
+            return None;
+        }
+        let wi = self.enclosing_region(root)?;
+        let w = &self.regions[wi];
+        // The wrapper's own chain must carry all four slots (so its own
+        // embedding is unambiguous) and a state.
+        let (wcok, wcerr, weok, weerr) = (w.cok?, w.cerr?, w.eok?, w.eerr?);
+        let wstate = w.state?;
+        // Its body must be exactly this call: a wrapper does nothing else.
+        let mut body = w.entry;
+        while let Expr::Lam { body: b, .. } = m.expr(body) {
+            body = *b;
+        }
+        if m.strip(body) != root {
+            return None;
+        }
+        // The call must be saturated: one value argument per parameter.
+        let vargs = value_args(&self.scope, &args);
+        if vargs.len() != k.params.len() {
+            return None;
+        }
+        // The worker's state, if it kept one, comes from the wrapper's.
+        let (start, end) = k.run;
+        if let Some(_ks) = k.state {
+            let si = k.params.iter().position(|b| Some(*b) == k.state)?;
+            if m.resolve(m.strip(vargs[si])) != Some(wstate) {
+                return None;
+            }
+        }
+        let slot_of = |b: BinderId| -> Option<Slot> {
+            if b == wcok {
+                Some(Slot::Cok)
+            } else if b == wcerr {
+                Some(Slot::Cerr)
+            } else if b == weok {
+                Some(Slot::Eok)
+            } else if b == weerr {
+                Some(Slot::Eerr)
+            } else {
+                None
+            }
+        };
+        let mut map = Vec::new();
+        let mut last: Option<usize> = None;
+        for (j, arg) in vargs.iter().enumerate().take(end).skip(start) {
+            let b = m.resolve(m.strip(*arg))?;
+            let slot = slot_of(b)?;
+            // Order-preserving, injective, and consistent with the
+            // embeddings this worker's own layout already allowed.
+            if last.is_some_and(|l| l >= slot as usize) {
+                return None;
+            }
+            if !k.conts[j - start].slots.contains(slot as usize) {
+                return None;
+            }
+            last = Some(slot as usize);
+            map.push(slot);
+        }
+        if map.len() != end - start {
+            return None;
+        }
+        Some((map, wi))
     }
 
     /// R8: a let-bound value of continuation type inside a region is a
@@ -1166,6 +1426,10 @@ impl<'m> Analysis<'m> {
         }
     }
 
+    pub fn enclosing_region_of(&self, id: ExprId) -> Option<usize> {
+        self.enclosing_region(id)
+    }
+
     fn enclosing_region(&self, id: ExprId) -> Option<usize> {
         if let Some(ri) = self.region_at.get(&id) {
             return Some(*ri);
@@ -1179,6 +1443,42 @@ impl<'m> Analysis<'m> {
     // R2: call recognition
     //--------------------------------------------------------------------------
 
+    /// Narrow a parser call's slots with the callee's own proven roles.
+    ///
+    /// The slots a call's argument run gets from [`slot_sets`] are derived
+    /// from the argument *types*, which cannot always tell the consumed
+    /// pair from the empty pair. When the callee is a region in this module
+    /// whose parameters already have exact roles — because its chain
+    /// carries all four slots, or because [`R9_WRAPPER_MAP`] resolved it —
+    /// the callee is the authority on what its own parameters are.
+    /// Evidence level: worker/wrapper dataflow over lexical identity. A
+    /// narrowing is only taken when it agrees with the embedding.
+    fn narrow_by_callee(&self, head: ExprId, vargs: &[ExprId], slots: &mut [(usize, SlotSet)]) {
+        let Some(b) = self.module.resolve(head) else {
+            return;
+        };
+        let Some(&ri) = self.region_of_binder.get(&b) else {
+            return;
+        };
+        let r = &self.regions[ri];
+        if r.params.len() != vargs.len() {
+            return;
+        }
+        for (i, set) in slots.iter_mut() {
+            let Some(c) = r.conts.get(i.wrapping_sub(r.run.0)) else {
+                continue;
+            };
+            if r.params.get(*i) != Some(&c.binder) {
+                continue;
+            }
+            if let Some(slot) = c.slots.exact()
+                && set.contains(slot as usize)
+            {
+                *set = SlotSet::single(slot as usize);
+            }
+        }
+    }
+
     /// Classify the call rooted at `root`.
     fn call_shape(&self, root: ExprId) -> Option<CallShape> {
         let m = self.module;
@@ -1187,7 +1487,7 @@ impl<'m> Analysis<'m> {
         // A call to a (candidate) continuation.
         let hi = m.strip(head);
         if matches!(m.expr(hi), Expr::Var { .. })
-            && let Some(b) = self.resolved[hi as usize]
+            && let Some(b) = self.scope.resolve(hi)
             && let Some(info) = self.role.get(&b)
             && let Some((slots, arity)) = info.cont
             && let Some(kind) = slots.kind()
@@ -1233,9 +1533,12 @@ impl<'m> Analysis<'m> {
                 && items.len() - end <= 2
                 && let Some(sets) = slot_sets(&run)
             {
+                let mut slots: Vec<(usize, SlotSet)> =
+                    (start..end).map(|k| (k, sets[k - start])).collect();
+                self.narrow_by_callee(hi, &vargs, &mut slots);
                 best = Some(CallShape::Parser {
                     state: Some(i),
-                    slots: (start..end).map(|k| (k, sets[k - start])).collect(),
+                    slots,
                     rule: R2_PARSER_CALL,
                 });
             }
@@ -1244,7 +1547,10 @@ impl<'m> Analysis<'m> {
         if best.is_some() {
             return best;
         }
-        // Worker/wrapper unboxed the state: anchor on the continuation run.
+        // Worker/wrapper unboxed the state into its representation fields.
+        // A run of continuation-shaped arguments is *not* on its own
+        // evidence of a parser call — an ordinary higher-order function can
+        // take two of them — so the missing state has to be explained.
         let mut end = items.len();
         while end > 0 {
             let mut start = end;
@@ -1254,15 +1560,87 @@ impl<'m> Analysis<'m> {
             let run: Vec<RunItem> = (start..end).map(|k| items[k].1).collect();
             if run.len() >= 2
                 && items.len() - end <= 2
+                && let Some(rule) = self.unboxed_state_explained(root, hi, &vargs, start)
                 && let Some(sets) = slot_sets(&run)
             {
+                let mut slots: Vec<(usize, SlotSet)> =
+                    (start..end).map(|k| (k, sets[k - start])).collect();
+                self.narrow_by_callee(hi, &vargs, &mut slots);
                 return Some(CallShape::Parser {
                     state: None,
-                    slots: (start..end).map(|k| (k, sets[k - start])).collect(),
-                    rule: R2_UNBOXED_STATE,
+                    slots,
+                    rule,
                 });
             }
             end -= 1;
+        }
+        None
+    }
+
+    /// [`R2_UNBOXED_STATE`]'s side condition: the absent `State s u`
+    /// argument is *explained*, not merely missing. One of
+    ///
+    /// * **(a)** the three arguments standing where the state would be are
+    ///   the representation fields, in field order, of one and the same
+    ///   `case … of State f0 f1 f2` alternative — the state was
+    ///   destructured at this very call, by code that is itself inside a
+    ///   recognised region (evidence: lexical binder identity, then
+    ///   structural shape); or
+    /// * **(b)** the callee is a local worker that is itself a recognised
+    ///   region whose own parameter list is (state fields, continuation
+    ///   run) in exactly this order, and the call saturates it (evidence:
+    ///   lexical binder identity, then the callee's own `R1-LAYOUT`); or
+    /// * **(c)** the three arguments are the state-field parameters of the
+    ///   enclosing region, which is itself a worker whose `State` was
+    ///   unboxed — the provenance is the same one level up (evidence:
+    ///   lexical binder identity, then the enclosing region's `R1-LAYOUT`).
+    ///
+    /// Without one of these the call is not recognised as a parser call at
+    /// all, and every continuation handed to it rejects its region.
+    fn unboxed_state_explained(
+        &self,
+        root: ExprId,
+        head: ExprId,
+        vargs: &[ExprId],
+        start: usize,
+    ) -> Option<&'static str> {
+        let m = self.module;
+        // (a) destructured right here.
+        if start >= 3 {
+            let f: Vec<Option<(ExprId, u32, usize)>> = (start - 3..start)
+                .map(|i| {
+                    m.resolve(m.strip(vargs[i]))
+                        .and_then(|b| self.state_fields.get(&b).copied())
+                })
+                .collect();
+            if let [Some(a), Some(b), Some(c)] = f[..]
+                && (a.0, a.1, a.2) == (b.0, b.1, 0)
+                && (b.0, b.1, b.2) == (c.0, c.1, 1)
+                && c.2 == 2
+            {
+                return Some(R2_UNBOXED_DESTRUCTURED);
+            }
+        }
+        // (b) the callee's own layout says those parameters are the fields.
+        if let Some(b) = m.resolve(head)
+            && let Some(&wi) = self.region_of_binder.get(&b)
+        {
+            let w = &self.regions[wi];
+            if w.unboxed_state.is_some() && w.run.0 == start && w.params.len() == vargs.len() {
+                return Some(R2_UNBOXED_WORKER);
+            }
+        }
+        // (c) forwarded from the enclosing worker's own unboxed state.
+        if start >= 3
+            && let Some(ei) = self.enclosing_region(root)
+            && let Some(f) = self.regions[ei].unboxed_state
+        {
+            let got: Vec<Option<BinderId>> = (start - 3..start)
+                .map(|i| m.resolve(m.strip(vargs[i])))
+                .collect();
+            if got == [Some(f[0]), Some(f[1]), Some(f[2])] {
+                return Some(R2_UNBOXED_FORWARDED);
+            }
         }
         None
     }
@@ -1283,7 +1661,7 @@ impl<'m> Analysis<'m> {
         let p = parent?;
         match m.edge[cur as usize] {
             Edge::AppArg => {
-                let root = self.spine_root(p);
+                let root = self.module.spine_root(p);
                 let (_, args) = m.spine(root);
                 let vargs = value_args(&self.scope, &args);
                 let idx = vargs.iter().position(|a| *a == cur)?;
@@ -1336,6 +1714,34 @@ impl<'m> Analysis<'m> {
         }
     }
 
+    /// Do the arguments of a continuation call agree with the continuation
+    /// type's own argument types?
+    ///
+    /// [`R3_CONT_CALL`] is otherwise an arity check: the head's type fixes
+    /// what each slot *means* — an ok continuation takes a value, then a
+    /// `State s u`, then a `ParseError` — so applying it to exactly its
+    /// arity already pins the arguments down. This checks the claim wherever
+    /// the dump lets it be checked: every argument whose own type is
+    /// readable must have the same [`TyKind`] as the corresponding argument
+    /// of the head's type. Evidence level: GHC type compatibility, used
+    /// here to *refute*, never as the sole support for a verdict.
+    fn cont_call_arg_types(&self, head_ty: &str, vargs: &[ExprId], arity: usize) -> Option<String> {
+        let parts = split_arrows(head_ty);
+        for (j, arg) in vargs.iter().enumerate().take(arity.min(parts.len())) {
+            let Some(actual) = self.expr_ty(*arg) else {
+                continue;
+            };
+            let (want, got) = (ty_kind(parts[j]), ty_kind(actual));
+            if want != got {
+                return Some(format!(
+                    "argument {j} is {got:?} ({actual}), the continuation type wants                      {want:?} ({})",
+                    parts[j]
+                ));
+            }
+        }
+        None
+    }
+
     //--------------------------------------------------------------------------
     // The proof
     //--------------------------------------------------------------------------
@@ -1344,16 +1750,19 @@ impl<'m> Analysis<'m> {
         let m = self.module;
         let roles: Vec<(BinderId, RoleInfo)> = self.role.iter().map(|(k, v)| (*k, *v)).collect();
         for (b, info) in roles {
-            let uses = self.uses.get(&b).cloned().unwrap_or_default();
+            let uses: Vec<ExprId> = self.scope.occurrences(b).to_vec();
             for use_at in uses {
                 let (kind, prov) = self.classify_use(b, info, use_at);
                 let r = &mut self.regions[info.region];
                 match kind {
                     Ok(edge) => match edge {
-                        Some((kind, candidates, at)) => r.edges.push(ParserEdge {
-                            kind,
-                            candidates,
-                            at,
+                        Some(spec) => r.edges.push(ParserEdge {
+                            fact: spec.fact,
+                            source_role: spec.source_role,
+                            destination: spec.destination,
+                            kind: spec.destination.iter().next().expect("non-empty").edge(),
+                            candidates: spec.destination.iter().map(|s| s.edge()).collect(),
+                            at: spec.at,
                             region: info.region,
                             provenance: prov,
                         }),
@@ -1385,10 +1794,7 @@ impl<'m> Analysis<'m> {
         b: BinderId,
         info: RoleInfo,
         use_at: ExprId,
-    ) -> (
-        Result<Option<(EdgeKind, Vec<EdgeKind>, ExprId)>, (&'static str, String)>,
-        Provenance,
-    ) {
+    ) -> (Result<Option<EdgeSpec>, (&'static str, String)>, Provenance) {
         let m = self.module;
         let bd = self.binder(b);
         let mut prov = Provenance {
@@ -1414,7 +1820,7 @@ impl<'m> Analysis<'m> {
         let edge = m.edge[cur as usize];
         match edge {
             Edge::AppFun => {
-                let root = self.spine_root(cur);
+                let root = self.module.spine_root(cur);
                 prov.source_nodes = vec![root];
                 let (_, args) = m.spine(root);
                 let n = value_args(&self.scope, &args).len();
@@ -1430,22 +1836,34 @@ impl<'m> Analysis<'m> {
                 let Some(kind) = slots.kind() else {
                     return (Err((REJ_MIXED_KIND, "ok/err not decided".into())), prov);
                 };
-                let cands: Vec<EdgeKind> = slots.iter().map(|s| s.edge()).collect();
-                let first = cands[0];
-                if n == arity {
-                    prov.rule = R3_CONT_CALL;
-                    return (Ok(Some((first, cands, root))), prov);
-                }
-                if n == arity + 2 {
-                    prov.rule = R3_CONT_CALL_TRAILING;
-                    return (Ok(Some((first, cands, root))), prov);
-                }
-                if n < arity
+                let rule = if n == arity {
+                    Some(R3_CONT_CALL)
+                } else if n == arity + 2 {
+                    Some(R3_CONT_CALL_TRAILING)
+                } else if n < arity
                     && let Some(owed) = self.owed_at(root)
                     && owed + n == arity
                 {
-                    prov.rule = R3_CONT_CALL_ETA;
-                    return (Ok(Some((first, cands, root))), prov);
+                    Some(R3_CONT_CALL_ETA)
+                } else {
+                    None
+                };
+                if let Some(rule) = rule {
+                    let vargs = value_args(&self.scope, &args);
+                    if let Some(why) = self.cont_call_arg_types(&bd.ty, &vargs, arity) {
+                        return (Err((REJ_CONT_ARG_TY, why)), prov);
+                    }
+                    prov.rule = rule;
+                    // Invoking a continuation goes to the role it *is*.
+                    return (
+                        Ok(Some(EdgeSpec {
+                            fact: EdgeFact::Invoke,
+                            source_role: slots,
+                            destination: slots,
+                            at: root,
+                        })),
+                        prov,
+                    );
                 }
                 let _ = kind;
                 (
@@ -1458,7 +1876,7 @@ impl<'m> Analysis<'m> {
             }
             Edge::AppArg => {
                 let parent = m.parent[cur as usize].expect("checked");
-                let root = self.spine_root(parent);
+                let root = self.module.spine_root(parent);
                 prov.source_nodes = vec![root];
                 let (_, args) = m.spine(root);
                 let vargs = value_args(&self.scope, &args);
@@ -1528,14 +1946,25 @@ impl<'m> Analysis<'m> {
                                 prov,
                             );
                         };
+                        // The kind check is what makes forwarding sound:
+                        // an ok continuation may fill either ok slot and an
+                        // error continuation either error slot, but never
+                        // the other kind. It is enforced on *every*
+                        // propagation, and the binder's own role
+                        // (`source_role`) is untouched by the forwarding.
                         match (target.kind(), slots_here.kind()) {
                             (Some(a), Some(b2)) if a == b2 => {
                                 prov.rule = R4_PROP_CONT;
-                                let cands: Vec<EdgeKind> =
-                                    target.iter().map(|s| s.edge()).collect();
                                 prov.source_nodes.push(root);
-                                let first = cands[0];
-                                (Ok(Some((first, cands, root))), prov)
+                                (
+                                    Ok(Some(EdgeSpec {
+                                        fact: EdgeFact::Forward,
+                                        source_role: slots_here,
+                                        destination: target,
+                                        at: root,
+                                    })),
+                                    prov,
+                                )
                             }
                             (Some(a), Some(b2)) => (
                                 Err((
@@ -1642,13 +2071,14 @@ impl<'m> Analysis<'m> {
         let m = self.module;
         let (head, _) = m.spine(root);
         let hi = m.strip(head);
-        self.resolved[hi as usize]
+        self.scope.resolve(hi)
     }
 
-    /// The spine root a census argument site belongs to, looking through
-    /// the casts the census' own `spine_root` stops at.
+    /// The spine root a census argument site belongs to. The same
+    /// [`h2r_core_ir::Module::spine_root`] the census uses: there is one
+    /// notion of an application root in the compiler.
     pub fn site_root(&self, app: ExprId) -> ExprId {
-        self.spine_root(app)
+        self.module.spine_root(app)
     }
 }
 
@@ -1727,6 +2157,99 @@ pub fn in_population(a: &crate::laziness::ArgSite) -> bool {
 }
 
 /// Classify every census argument site against the recognisers.
+/// The recogniser's verdict for one census argument site: which bucket it
+/// lands in, why, and what evidence produced it. The single place the
+/// question is answered — [`integrate`] writes it onto the site and
+/// [`account`] tallies it, so the tiers and the accounting can never
+/// disagree.
+pub struct Verdict {
+    pub bucket: Bucket,
+    pub target: Option<ParsecTarget>,
+    pub rule: Option<&'static str>,
+    pub reason: Option<&'static str>,
+    pub detail: String,
+    pub region: Option<usize>,
+    pub edge: Option<EdgeKind>,
+    pub head: Option<BinderId>,
+    pub root: ExprId,
+}
+
+pub fn verdict(a: &Analysis<'_>, site: &crate::laziness::ArgSite) -> Verdict {
+    let root = a.site_root(site.app);
+    let head = a.resolved_head(root);
+    let mut v = Verdict {
+        bucket: Bucket::RejectedNonParsec,
+        target: None,
+        rule: None,
+        reason: None,
+        detail: String::new(),
+        region: None,
+        edge: None,
+        head,
+        root,
+    };
+    match head.and_then(|b| a.cont_edge_at(root, b)) {
+        Some((r, e)) if r.proven => {
+            v.bucket = if e.exact() {
+                Bucket::ExactRole
+            } else {
+                Bucket::FiniteRoleSet
+            };
+            v.target = Some(if e.exact() {
+                ParsecTarget::Role(e.kind)
+            } else {
+                ParsecTarget::RoleSet
+            });
+            v.rule = Some(e.provenance.rule);
+            v.region = Some(e.region);
+            v.edge = Some(e.kind);
+        }
+        Some((_, e)) => {
+            v.bucket = Bucket::RegionRecognisedTargetUnresolved;
+            v.target = Some(ParsecTarget::RegionUnresolved("region-rejected"));
+            v.reason = Some("region-rejected");
+            v.region = Some(e.region);
+        }
+        None => match head.and_then(|b| a.role_of(b)) {
+            Some(ri) => {
+                let why = if a.regions[ri].proven {
+                    "call-is-not-an-edge"
+                } else {
+                    "region-rejected"
+                };
+                v.bucket = Bucket::RegionRecognisedTargetUnresolved;
+                v.target = Some(ParsecTarget::RegionUnresolved(why));
+                v.reason = Some(why);
+                v.region = Some(ri);
+            }
+            None => {
+                v.reason = Some("head-is-not-a-parsec-role-binder");
+                v.detail = match head {
+                    Some(b) => format!("head :: {}", a.binder(b).ty),
+                    None => "head is not a local binder".to_string(),
+                };
+            }
+        },
+    }
+    v
+}
+
+/// Write what the recogniser proved onto every census argument site, so the
+/// census' target tier reflects it. The resolution and family axes are left
+/// exactly as they were: this is a third, orthogonal fact.
+pub fn integrate(census: &mut Census, analyses: &[Analysis<'_>]) {
+    let by_module: HashMap<&str, &Analysis> = analyses
+        .iter()
+        .map(|a| (a.module.name.as_str(), a))
+        .collect();
+    for site in &mut census.args {
+        let Some(a) = by_module.get(site.module.as_str()) else {
+            continue;
+        };
+        site.callee.parsec = verdict(a, site).target;
+    }
+}
+
 pub fn account(census: &Census, analyses: &[Analysis<'_>]) -> Accounting {
     let by_module: HashMap<&str, &Analysis> = analyses
         .iter()
@@ -1746,62 +2269,17 @@ pub fn account(census: &Census, analyses: &[Analysis<'_>]) -> Accounting {
             }
             continue;
         };
-        let root = a.site_root(site.app);
-        let head = a.resolved_head(root);
-        let edge = head.and_then(|b| a.cont_edge_at(root, b));
-        let (bucket, rule, reason, detail, region, edge) = match edge {
-            Some((r, e)) if r.proven => {
-                let b = if e.exact() {
-                    Bucket::ExactRole
-                } else {
-                    Bucket::FiniteRoleSet
-                };
-                (
-                    b,
-                    Some(e.provenance.rule),
-                    None,
-                    String::new(),
-                    Some(e.region),
-                    Some(e.kind),
-                )
-            }
-            Some((_, e)) => (
-                Bucket::RegionRecognisedTargetUnresolved,
-                None,
-                Some("region-rejected"),
-                String::new(),
-                Some(e.region),
-                None,
-            ),
-            None => match head.and_then(|b| a.role_of(b)) {
-                Some(ri) => (
-                    Bucket::RegionRecognisedTargetUnresolved,
-                    None,
-                    if a.regions[ri].proven {
-                        Some("call-is-not-an-edge")
-                    } else {
-                        Some("region-rejected")
-                    },
-                    String::new(),
-                    Some(ri),
-                    None,
-                ),
-                None => {
-                    let detail = match head {
-                        Some(b) => format!("head :: {}", a.binder(b).ty),
-                        None => "head is not a local binder".to_string(),
-                    };
-                    (
-                        Bucket::RejectedNonParsec,
-                        None,
-                        Some("head-is-not-a-parsec-role-binder"),
-                        detail,
-                        None,
-                        None,
-                    )
-                }
-            },
-        };
+        let Verdict {
+            bucket,
+            rule,
+            reason,
+            detail,
+            region,
+            edge,
+            head,
+            root,
+            ..
+        } = verdict(a, site);
         if !pop {
             match bucket {
                 Bucket::ExactRole => acct.outside_exact += 1,
@@ -2161,9 +2639,16 @@ mod test {
         let a = Analysis::of_module(&m);
         let r = &a.regions[0];
         assert!(!r.proven);
-        assert_eq!(r.rejects.len(), 1);
-        assert_eq!(r.rejects[0].reason, REJ_STATE_SLOT);
-        assert!(r.rejects[0].detail.contains("argument 0"));
+        // Two independent rules see it: the state is in a value slot, and
+        // the call's argument types contradict cok's own type.
+        let state_slot = r
+            .rejects
+            .iter()
+            .find(|j| j.reason == REJ_STATE_SLOT)
+            .expect("the state reject");
+        assert!(state_slot.detail.contains("argument 0"));
+        assert!(r.rejects.iter().any(|j| j.reason == REJ_CONT_ARG_TY));
+        assert_eq!(r.rejects.len(), 2);
     }
 
     /// Continuations propagate through a parser call nested inside a fresh
@@ -2334,6 +2819,328 @@ mod test {
         assert_eq!(acct.exact, 1);
         assert_eq!(acct.verdicts[0].bucket, Bucket::ExactRole);
         assert_eq!(acct.verdicts[0].edge, Some(EdgeKind::ConsumedOk));
+    }
+
+    //--------------------------------------------------------------------------
+    // Adversarial: what must *not* be recognised
+    //--------------------------------------------------------------------------
+
+    /// An ordinary higher-order function that happens to take two
+    /// continuation-shaped arguments is not a parser call. Nothing explains
+    /// a missing `State s u` here, so [`R2_UNBOXED_STATE`] must not fire —
+    /// and because the region hands its own continuations to a call the
+    /// rules do not recognise, the region rejects rather than guessing.
+    #[test]
+    fn two_continuation_arguments_alone_are_not_a_parser_call() {
+        let region = lam(
+            vec![
+                b("s1", ST),
+                b("cok", OK),
+                b("cerr", EK),
+                b("eok", OK),
+                b("eerr", EK),
+            ],
+            // `withBoth` takes an ok- and an err-shaped callback and no
+            // state: shape alone would have matched the template.
+            ap(g("withBoth"), vec![g("n"), v("cok"), v("cerr")]),
+        );
+        let m = module(region, json!({}));
+        let a = Analysis::of_module(&m);
+        let r = &a.regions[0];
+        assert!(!r.proven, "a bare continuation run is not evidence");
+        assert!(r.rejects.iter().all(|j| j.reason == REJ_UNRECOGNISED_CALL));
+        assert_eq!(r.rejects.len(), 2);
+        assert!(!rules(&a).contains(&R2_UNBOXED_DESTRUCTURED));
+    }
+
+    /// The same call *is* a parser call once the missing state is
+    /// explained: the three representation fields of a destructured
+    /// `State s u` stand where the state would be.
+    #[test]
+    fn a_destructured_state_explains_the_missing_state_argument() {
+        let region = lam(
+            vec![
+                b("s1", ST),
+                b("cok", OK),
+                b("cerr", EK),
+                b("eok", OK),
+                b("eerr", EK),
+            ],
+            case_of(
+                v("s1"),
+                "State",
+                vec![
+                    b("ww", "String"),
+                    b("ww1", "SourcePos"),
+                    b("ww2", "UserState"),
+                ],
+                ap(
+                    g("$wsatisfy"),
+                    vec![g("p"), v("ww"), v("ww1"), v("ww2"), v("cok"), v("cerr")],
+                ),
+            ),
+        );
+        let m = module(region, json!({}));
+        let a = Analysis::of_module(&m);
+        let r = &a.regions[0];
+        assert!(r.proven, "rejects: {:?}", r.rejects);
+        assert!(rules(&a).contains(&R2_UNBOXED_DESTRUCTURED));
+        // …and the middle field really has to be a SourcePos.
+        let bad = lam(
+            vec![
+                b("s1", ST),
+                b("cok", OK),
+                b("cerr", EK),
+                b("eok", OK),
+                b("eerr", EK),
+            ],
+            case_of(
+                v("s1"),
+                "State",
+                vec![b("ww", "String"), b("ww1", "Int"), b("ww2", "UserState")],
+                ap(
+                    g("$wsatisfy"),
+                    vec![g("p"), v("ww"), v("ww1"), v("ww2"), v("cok"), v("cerr")],
+                ),
+            ),
+        );
+        let m = module(bad, json!({}));
+        let a = Analysis::of_module(&m);
+        assert!(!a.regions[0].proven);
+    }
+
+    /// A worker whose own parameters are the representation fields is a
+    /// recognised region, and a saturated call to it is a parser call by
+    /// the worker's own layout.
+    #[test]
+    fn a_workers_own_layout_explains_the_missing_state_argument() {
+        let worker = lam(
+            vec![
+                b("ww", "String"),
+                b("ww1", "SourcePos"),
+                b("ww2", "UserState"),
+                b("wcok", OK),
+                b("wcerr", EK),
+            ],
+            ap(v("wcok"), vec![g("x"), g("s9"), g("e")]),
+        );
+        let region = lam(
+            vec![
+                b("s1", ST),
+                b("cok", OK),
+                b("cerr", EK),
+                b("eok", OK),
+                b("eerr", EK),
+            ],
+            ap(
+                v("$wf"),
+                vec![g("i"), g("pos"), g("u"), v("cok"), v("cerr")],
+            ),
+        );
+        // let $wf = worker in region: the call is headed by the worker, so
+        // its own layout says the first three arguments are State's fields.
+        let body = json!({"node": "Let", "bind": {"rec": false, "pairs": [{
+            "binder": b("$wf", "String -> SourcePos -> UserState -> R"),
+            "rhs": worker, "whnf": true, "trivial": false, "cheap": false, "okForSpec": false
+        }]}, "body": region});
+        let m = module(body, json!({}));
+        let a = Analysis::of_module(&m);
+        let outer = a
+            .regions
+            .iter()
+            .find(|r| r.state.is_some())
+            .expect("the caller region");
+        assert!(outer.proven, "rejects: {:?}", outer.rejects);
+        assert!(rules(&a).contains(&R2_UNBOXED_WORKER));
+    }
+
+    /// Forwarding never rewrites a role. The inlined `<?>` hands its own
+    /// `cok` to the `eok` slot; the edge records the destination slot *and*
+    /// the source's untouched role, and `cok` stays `cok` everywhere else.
+    #[test]
+    fn forwarding_records_both_facts_and_changes_no_role() {
+        let region = lam(
+            vec![
+                b("s1", ST),
+                b("cok", OK),
+                b("cerr", EK),
+                b("eok", OK),
+                b("eerr", EK),
+            ],
+            ap(
+                g("p"),
+                vec![v("s1"), v("cok"), v("cerr"), v("cok"), v("eerr")],
+            ),
+        );
+        let m = module(region, json!({}));
+        let a = Analysis::of_module(&m);
+        let r = &a.regions[0];
+        assert!(r.proven, "rejects: {:?}", r.rejects);
+        let cok = r.cok.unwrap();
+        let fwd: Vec<&ParserEdge> = r
+            .edges
+            .iter()
+            .filter(|e| e.provenance.binder == Some(cok))
+            .collect();
+        assert_eq!(fwd.len(), 2, "cok is forwarded into two slots");
+        for e in &fwd {
+            assert_eq!(e.fact, EdgeFact::Forward);
+            assert_eq!(e.source_role, SlotSet::single(Slot::Cok as usize));
+        }
+        let mut dests: Vec<EdgeKind> = fwd.iter().map(|e| e.kind).collect();
+        dests.sort();
+        assert_eq!(dests, vec![EdgeKind::ConsumedOk, EdgeKind::EmptyOk]);
+        assert_eq!(fwd.iter().filter(|e| e.reroutes()).count(), 1);
+        // The role itself is untouched: cok is still exactly slot Cok.
+        assert_eq!(
+            r.conts
+                .iter()
+                .find(|c| c.binder == cok)
+                .unwrap()
+                .slots
+                .exact(),
+            Some(Slot::Cok)
+        );
+    }
+
+    /// The ok/err check on a propagation is not optional.
+    ///
+    /// It can only bite where the slot and the forwarded value are decided
+    /// by different means: here `k` is a let-bound ok continuation whose
+    /// value argument GHC has already supplied, so its printed type is
+    /// `State s u -> ParseError -> r` — a shape the argument-run matcher
+    /// cannot classify, which leaves the slot to be fixed by the *other*
+    /// arguments. They put `k` in the `cerr` slot, and `k` is an ok
+    /// continuation, so the region rejects instead of guessing.
+    #[test]
+    fn forwarding_into_a_slot_of_the_other_kind_rejects() {
+        let partial = "State String UserState -> ParseError -> SCBase m b";
+        let body = json!({"node": "Let", "bind": {"rec": false, "pairs": [{
+            "binder": b("k", partial),
+            "rhs": ap(v("cok"), vec![g("x")]),
+            "whnf": true, "trivial": false, "cheap": false, "okForSpec": false
+        }]}, "body": ap(g("p"), vec![v("s1"), v("cok"), v("k"), v("eok"), v("eerr")])});
+        let region = lam(
+            vec![
+                b("s1", ST),
+                b("cok", OK),
+                b("cerr", EK),
+                b("eok", OK),
+                b("eerr", EK),
+            ],
+            body,
+        );
+        let m = module(region, json!({}));
+        let a = Analysis::of_module(&m);
+        let r = &a.regions[0];
+        assert_eq!(r.derived.len(), 1, "k is promoted by R8");
+        assert!(!r.proven);
+        assert!(
+            r.rejects.iter().any(|j| j.reason == REJ_CONT_KIND),
+            "rejects: {:?}",
+            r.rejects
+        );
+    }
+
+    /// A continuation applied to its arity, but with an argument whose own
+    /// type contradicts the continuation's type, is not an edge.
+    #[test]
+    fn a_continuation_call_with_a_contradicting_argument_type_rejects() {
+        let region = lam(
+            vec![
+                b("s1", ST),
+                b("cok", OK),
+                b("cerr", EK),
+                b("eok", OK),
+                b("eerr", EK),
+            ],
+            // `cerr` wants a ParseError; it is given the state.
+            ap(v("cerr"), vec![v("s1")]),
+        );
+        let m = module(region, json!({}));
+        let a = Analysis::of_module(&m);
+        let r = &a.regions[0];
+        assert!(!r.proven);
+        assert!(r.rejects.iter().any(|j| j.reason == REJ_CONT_ARG_TY));
+    }
+
+    /// R9: a worker whose run embeds into the template in two ways, and the
+    /// wrapper that calls it. The wrapper's chain carries all four slots, so
+    /// its own embedding is unambiguous; its body is one saturated call
+    /// forwarding its parameters, which fixes the worker's roles.
+    #[test]
+    fn a_wrapper_resolves_the_workers_ambiguous_embedding() {
+        // $wf s ok err — ok/err could be {cok,cerr} or {eok,eerr} …
+        let worker = lam(
+            vec![b("s2", ST), b("ok", OK), b("err", EK)],
+            ap(v("ok"), vec![g("x"), v("s2"), g("e")]),
+        );
+        // … but the wrapper passes its *empty* pair.
+        let wrapper = lam(
+            vec![
+                b("s1", ST),
+                b("wcok", OK),
+                b("wcerr", EK),
+                b("weok", OK),
+                b("weerr", EK),
+            ],
+            ap(v("$wf"), vec![v("s1"), v("weok"), v("weerr")]),
+        );
+        let body = json!({"node": "Let", "bind": {"rec": false, "pairs": [{
+            "binder": b("$wf", "T"), "rhs": worker,
+            "whnf": true, "trivial": false, "cheap": false, "okForSpec": false
+        }]}, "body": wrapper});
+        let m = module(body, json!({}));
+        let a = Analysis::of_module(&m);
+        let w = a.regions.iter().find(|r| r.params.len() == 3).unwrap();
+        assert_eq!(w.conts.len(), 2);
+        assert_eq!(w.conts[0].slots.exact(), Some(Slot::Eok));
+        assert_eq!(w.conts[1].slots.exact(), Some(Slot::Eerr));
+        assert!(w.wrapper.is_some());
+        assert!(
+            w.evidence.iter().any(|e| e.rule == R9_WRAPPER_MAP),
+            "the mapping must record where it came from"
+        );
+        // The call inside the worker is now an exact EmptyOk edge.
+        let e = w.edges.iter().find(|e| e.fact == EdgeFact::Invoke).unwrap();
+        assert!(e.exact());
+        assert_eq!(e.kind, EdgeKind::EmptyOk);
+    }
+
+    /// …and a caller that is not a wrapper (it does more than forward)
+    /// resolves nothing: the role stays a proven finite set.
+    #[test]
+    fn a_caller_that_is_not_a_wrapper_resolves_nothing() {
+        let worker = lam(
+            vec![b("s2", ST), b("ok", OK), b("err", EK)],
+            ap(v("ok"), vec![g("x"), v("s2"), g("e")]),
+        );
+        let caller = lam(
+            vec![
+                b("s1", ST),
+                b("wcok", OK),
+                b("wcerr", EK),
+                b("weok", OK),
+                b("weerr", EK),
+            ],
+            // The call is inside a case: the region does more than forward.
+            case_alts(
+                g("scrut"),
+                vec![
+                    ap(v("$wf"), vec![v("s1"), v("weok"), v("weerr")]),
+                    ap(v("wcok"), vec![g("x"), v("s1"), g("e")]),
+                ],
+            ),
+        );
+        let body = json!({"node": "Let", "bind": {"rec": false, "pairs": [{
+            "binder": b("$wf", "T"), "rhs": worker,
+            "whnf": true, "trivial": false, "cheap": false, "okForSpec": false
+        }]}, "body": caller});
+        let m = module(body, json!({}));
+        let a = Analysis::of_module(&m);
+        let w = a.regions.iter().find(|r| r.params.len() == 3).unwrap();
+        assert_eq!(w.conts[0].slots.len(), 2);
+        assert!(w.wrapper.is_none());
     }
 
     #[test]
