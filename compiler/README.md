@@ -35,9 +35,9 @@ ShellCheck Haskell
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the two canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), and which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent). Includes a depth-limited Core pretty-printer. |
-| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), and the structural Parsec-CPS recogniser (`parsec.rs`). |
+| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), and the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with the Parsec proof inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph). Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with the Parsec proof inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples`. Later: the lowering passes. |
 
 ## Usage
 
@@ -56,6 +56,8 @@ cargo run --release --bin h2r -- parsec ../core-json --module ShellCheck.Parser 
 cargo run --release --bin h2r -- parsec ../core-json --cfg 8106       # one region's graph
 cargo run --release --bin h2r -- parsec ../core-json --module ShellCheck.Parser --cfg-all --json
 cargo run --release --bin h2r -- show ../core-json ShellCheck.Parser 141341   # + its proof
+cargo run --release --bin h2r -- tuples ../core-json                        # tuple flows and fates
+cargo run --release --bin h2r -- tuples ../core-json --module ShellCheck.Checks.Commands --explain
 ```
 
 ## M1 — how much Haskell is left after GHC?
@@ -655,6 +657,199 @@ prints the whole region's graph, parameters and edges, with every
 successor named. Both are shown above. `h2r parsec --explain` lists every
 region's evidence, edges and rejects, and every population site that is not
 an exact edge.
+
+## M2.2 — which tuples are transport, and which are values
+
+The [M2 census](#m2-baseline--who-receives-the-lazy-arguments) attributes
+1,321 lazy argument sites to boxed (849) and unboxed (472) tuples and files
+them under "transformer collapse". That is an attribution *by constructor*,
+and a constructor is not a proof: `(a, b)` is not intrinsically transformer
+noise — ShellCheck puts pairs in `Map`s, in constructor fields and in its
+own return types. `h2r tuples` replaces the constructor with **def-use**.
+
+Argument sites are also only part of the population. A tuple is constructed
+just as often as a `let` right-hand side, as a case alternative's result, or
+as a function's return value — and the M2 census, which walks argument
+positions, sees none of those. Stage 1 therefore censuses **every saturated
+tuple construction**, boxed and unboxed separately, and maps the 1,321 onto
+it afterwards.
+
+### The population, and why the name is not the proof
+
+A construction is selected by `T0-TUPLE-CON`: the head of an application
+spine is a data constructor from `ghc-prim` whose occurrence is `(,…)` in
+`GHC.Tuple*` or `(#,…#)` in `GHC.Prim`, whose `repArity` agrees with the
+name's comma count, whose fields are all lazy, and which is applied to
+exactly `repArity` value arguments. The name *selects* (evidence level 6);
+the saturation (2) and the `DataConInfo` (4) are what the rest of the
+analysis reads, and **no fate is ever decided by a name**. Tuple
+constructors that are *not* a saturated construction are recorded
+separately, so nothing disappears silently; on the `-O1` dump there are
+none at all — every tuple constructor in 28 modules is applied to exactly
+its fields.
+
+### Following the value
+
+Each construction gets a `TupleFlow`, built by a worklist over **value
+locations**. A location is a node *plus the number of value arguments still
+owed* before the tuple appears: 0 means the node's value is the tuple, `k`
+means it is a closure that returns the tuple after `k` more arguments.
+That debt is what lets the walk leave a function — ascending past a lambda
+raises it, a call site that pays it exactly is a location of the tuple
+again — and it is why the analysis is interprocedural from the first
+construction it looks at. The two shapes the dump is full of both need it:
+
+* a lazy-RWS step returns its result triple, so its consumer is whoever
+  calls the enclosing lambda, and that lambda is usually *inside* a case
+  alternative rather than bound directly (`$wchecker = \cmd -> case … of
+  Just x -> \eta2 eta3 -> (,,) …`), so the debt is paid three arguments up;
+* a CPR worker returns `(# _, _ #)` and each call site scrutinises it.
+
+The walk is a worklist with an explicit stack, like every other traversal
+here, keyed on (node, debt) so it terminates; a location budget turns a
+pathological flow into an honest `Unresolved` rather than a hang (nothing
+on any profile reaches it — the largest flow on `-O1` visits 2,080
+locations, the mean is 19).
+
+### Rules
+
+| Rule | Evidence | Meaning |
+|---|---|---|
+| `T0-TUPLE-CON` | 2 over 4, name selects only (6) | The population: a saturated application of ghc-prim's boxed or unboxed tuple constructor, `repArity` agreeing with the name and all fields lazy. |
+| `T1-LET-BOUND` | 1 | The value is a `let`/top-level right-hand side: its uses are that binder's resolved occurrences. |
+| `T2-SCRUTINISED` | 2 | `case t of (a, b) -> …`: taken apart, the box does not survive the match. |
+| `T3-SELECTED` | 1 over 2 | …and the alternative returns exactly its *i*-th binder: a field selection, which is how the desugarer turns a lazy pattern `~(b, s, w)` into one selector thunk per field. |
+| `T4-RETUPLE` | 1 over 2 | A construction every one of whose fields is the *matching* projection of one and the same binder: a field-wise copy, recorded as a consumer of the tuple it copies. All *n* scrutinees must resolve to the same binder — two textually equal expressions are not evidence. |
+| `T5-PASSED-LOCAL` | 1 over 2 | Value argument *i* of a saturated call to a binder bound in this module to a manifest lambda chain: the flow continues at that parameter's occurrences, carrying the same debt. |
+| `T6-RETURNED` | 2 over 1 | The value is reached from a binder through a debt of *k* arguments: the binder is a function returning the tuple, and its occurrences are call sites to follow. |
+| `T7-CALL-RESULT` | 3 over 1, 2 | A call site paying exactly the debt: the spine root is a value location of the tuple again. Paying part of it leaves a partial application, which is followed too. |
+| `T8-CASE-BINDER-ALIAS` | 1 | The case binder of a scrutiny aliases the whole tuple; its occurrences are followed, so a match that also keeps the box cannot be mistaken for one that consumes it. |
+| `T9-STORED` | 2 over 4 | A value argument of a saturated data-constructor application: a real allocation holds it. |
+| `T10-OPAQUE-CALL` | 1, 4 | An argument of a call this module cannot see into — an import, class-op dispatch, a partial application, an unknown higher-order callee. |
+| `T11-ESCAPE` | 2 | Any other use, with a machine-readable reason: applied as a function, bound to or returned from an exported binder, a closure handed to a callee or stored in a constructor, a case that is not one tuple alternative. |
+
+### Fates
+
+Every construction lands in exactly one bucket, by this precedence:
+
+| Fate | Rule | When |
+|---|---|---|
+| `Preserve` | `F4-PRESERVE` | A proven real value: stored in a constructor field, held in a partial application, or handed to a function outside the module. An allocation that exists — this wins over everything. |
+| `Unresolved` | `F5-UNRESOLVED` | A use the rules cannot follow, with the reason. Never guessed either way. |
+| `WorkerReturn` | `F2-WORKER-RETURN` | The tuple crosses a return and **every** consumer scrutinises it immediately: a multi-value return. |
+| `StateThread` | `F3-STATE-THREAD` | It crosses a return and every consumer reads fields, at least one by lazy selection or field-wise re-tupling: a transformer step's triple handed to the next step. |
+| `ScalarReplace` | `F1-SCALAR-REPLACE` | Every consumer reads fields and the box never outlives them — including where it is passed to a known local callee, whose parameter becomes the fields. |
+
+Passing a tuple *into* a known callee is deliberately not a "return": the
+box still never outlives its scrutinies, so it stays `ScalarReplace`.
+
+### Results on the `-O1` dump
+
+2,584 saturated constructions — 1,765 boxed, 819 unboxed:
+
+| arity | boxed | unboxed |  | fate | boxed | unboxed |
+|---:|---:|---:|---|---|---:|---:|
+| 2 | 887 | 568 | | ScalarReplace | 402 | 5 |
+| 3 | 718 | 231 | | StateThread | 266 | 36 |
+| 4 | 156 | 9 | | WorkerReturn | 31 | 664 |
+| 5 | 0 | 9 | | Preserve | 657 | 0 |
+| 6 | 3 | 1 | | Unresolved | 409 | 114 |
+| 8 | 0 | 1 | | | | |
+| 64 | 1 | 0 | | **total** | **1,765** | **819** |
+
+Unboxed tuples are 82% `WorkerReturn`/`ScalarReplace` and **never**
+`Preserve` — as they must be, since an unboxed tuple cannot be stored in a
+lazy field. Boxed ones need the stronger escape evidence and get it: 657 of
+them, 37%, are proven real values.
+
+| Consumers | boxed | unboxed |
+|---|---:|---:|
+| Scrutinised | 699 | 2,116 |
+| Selected (lazy selector) | 1,807 | 60 |
+| Returned | 1,858 | 1,283 |
+| StoredIn | 639 | 0 |
+| Retupled | 116 | 0 |
+| PassedTo (known local) | 189 | 30 |
+| PassedToUnknown | 141 | 0 |
+| Escapes | 424 | 150 |
+
+The census' 1,321 tuple-attributed argument sites map onto this population
+**one to one**: every one of them is a field of exactly one saturated
+construction (849 boxed + 472 unboxed, 0 unmapped, over 726 distinct
+constructions). Their fates are reported on their own and never folded into
+the population's:
+
+| The 1,321 | boxed | unboxed |
+|---|---:|---:|
+| ScalarReplace | 114 | 0 |
+| StateThread | 225 | 29 |
+| WorkerReturn | 5 | 435 |
+| Preserve | 324 | 0 |
+| Unresolved | 181 | 8 |
+| **population** | **849** | **472** |
+
+### What the plumbing actually looks like
+
+Two shapes account for nearly all of the transformer transport.
+
+**The lazy-RWS re-tupling** (`ShellCheck.Checks.Commands` node 4714, the
+whole `TupleFlow` printed by `--explain`): a step returns `(,,) b s w`;
+its caller binds the result to `ds1` and reads all three fields with lazy
+selector cases; those three selections are re-tupled into the next step's
+result (`T4-RETUPLE` at node 4633), which is returned again. The inner
+tuple is `ScalarReplace` (its only consumers are the three selections), the
+outer is `StateThread`. 266 boxed constructions are `StateThread`, 221 of
+them arity 3 — the `(a, s, w)` of `RWST` — concentrated in
+`Checks.Commands` (96), `CFG` (69), `Checks.ShellSupport` (62) and
+`Analytics` (58). Only 17 constructions are *proven* field-wise copies;
+re-tupling is the visible top of a much larger selector population (707
+constructions have a `T3-SELECTED` consumer).
+
+**The CPR worker return** (`ShellCheck.Analytics` node 30892): `$wgo`
+returns `(# () , … #)`, both of its call sites `case` it apart at once.
+664 unboxed constructions are `WorkerReturn`, 416 of them pairs, in
+`Analytics` (301), `CFG` (126) and `CFGAnalysis` (116).
+
+### What remains, and what each thing is waiting for
+
+| | | |
+|---:|---|---|
+| 523 | the *closure* that returns the tuple is stored in a constructor (`:` 134, `CommandCheck` 51, …) or passed to a callee (`map` 107, `catch#` 25, …) | closure/whole-program analysis: ShellCheck's checks are functions in top-level lists, run by a driver |
+| 50 | the callee is an unknown higher-order value (`eta` 24, `eok` 15, `cok` 8, all in `ShellCheck.Parser`) | these are Parsec continuations, whose targets [M2.1](#m21--proving-parsecs-cps-roles) already proves — reading that proof object here would resolve them |
+| 13 | returned from an exported function (`format` 7, …) | callers outside the module are invisible; recorded as such, not guessed |
+| 1 | the argument lands past the callee's parameters | returned-closure analysis |
+
+The `Preserve` side is dominated by exactly what one would hope: 368 tuples
+consed into a list, 179 stored in another tuple, 51 handed to an imported
+function's lazy parameter (45 of them to `++`), 40 stored in a program or
+library constructor (`Just` 28, `Bin` 9, …), 19 passed through class-op
+dispatch.
+
+### Accounting
+
+Asserted in code, not eyeballed (`Accounting::check`): the boxed
+constructions sum to the boxed fate counts and likewise for unboxed, and
+every census tuple site either maps onto exactly one construction or
+carries a reason (`flow.is_some() ^ reason.is_some()`). The same assertions
+run on all six matrix profiles; on D (1.2M nodes, 6,120 constructions) they
+hold and the whole census takes 15 s.
+
+### Auditing one construction
+
+```
+$ h2r tuples compiler/core-json --module ShellCheck.Analytics --explain
+ShellCheck.Analytics node 30892 — unboxed tuple of arity 2, fate WorkerReturn
+    T0-TUPLE-CON     node(s) 30892, 31017: unboxed tuple of arity 2 ($ghc-prim$GHC.Prim$(#,#)), 2 value argument(s)
+    T6-RETURNED      node(s) 30852 [binder #10680 $wgo]: returned from (after 3 more argument(s)) $wgo with 2 occurrence(s)
+    T7-CALL-RESULT   node(s) 30854: 3 argument(s) supplied: the call result is the tuple
+    T2-SCRUTINISED   node(s) 30853, 30854: 2 field binder(s) bound
+    T7-CALL-RESULT   node(s) 30974: 3 argument(s) supplied: the call result is the tuple
+    T2-SCRUTINISED   node(s) 30897, 30974: 2 field binder(s) bound
+    F2-WORKER-RETURN node(s) 30892: 3 consumer(s) over 10 value location(s), crossing a return
+```
+
+Every node id there is a `h2r show` argument. `--json` dumps the flows,
+their consumers and the accounting.
 
 ## What ShellCheck actually needs
 

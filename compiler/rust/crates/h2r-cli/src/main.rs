@@ -78,6 +78,20 @@ enum Command {
         #[arg(long)]
         cfg_all: bool,
     },
+    /// Census every saturated tuple construction and prove, by def-use,
+    /// which ones are transformer/worker plumbing and which are real values.
+    Tuples {
+        dir: PathBuf,
+        /// Restrict to one module.
+        #[arg(long)]
+        module: Option<String>,
+        /// Emit the flows and the accounting as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print every construction with its evidence and node ids.
+        #[arg(long)]
+        explain: bool,
+    },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
         dir: PathBuf,
@@ -117,6 +131,12 @@ fn main() -> Result<()> {
             thunks_only,
             json,
         } => laziness(&dir, module.as_deref(), explain, thunks_only, json),
+        Command::Tuples {
+            dir,
+            module,
+            json,
+            explain,
+        } => tuples(&dir, module.as_deref(), json, explain),
         Command::Parsec {
             dir,
             module,
@@ -1400,4 +1420,280 @@ fn report(c: &Census, n_modules: usize) {
     for (name, count) in heads.into_iter().take(25) {
         println!("    {count:>6}  {name}");
     }
+}
+
+//------------------------------------------------------------------------------
+// tuples
+//------------------------------------------------------------------------------
+
+fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result<()> {
+    use h2r_analysis::tuples::{TupleCensus, TupleFate};
+
+    let modules = load_dir(dir)?;
+    let selected: Vec<&Module> = match module {
+        Some(name) => vec![find_module(&modules, name)?],
+        None => modules.iter().collect(),
+    };
+    // The census is only read for its tuple-attributed argument sites, so
+    // the raw one (without the Parsec proof, which says nothing about
+    // tuples) is enough and costs one pass instead of two.
+    let census = Census::raw(selected.iter().copied());
+    let tc = TupleCensus::of_modules(&selected, &census);
+
+    if json {
+        let out = serde_json::json!({
+            "flows": tc.flows,
+            "skipped": tc.per_module.iter().flat_map(|t| t.skipped.iter()).collect::<Vec<_>>(),
+            "accounting": tc.accounting,
+        });
+        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        println!();
+        return Ok(());
+    }
+
+    let flows = &tc.flows;
+    let acct = &tc.accounting;
+    println!("Tuple constructions — {} module(s)", selected.len());
+    println!();
+
+    // Constructions by arity.
+    println!("Saturated constructions by arity");
+    let mut by_arity: BTreeMap<u32, (usize, usize)> = BTreeMap::new();
+    for f in flows {
+        let e = by_arity.entry(f.arity).or_default();
+        if f.boxed {
+            e.0 += 1;
+        } else {
+            e.1 += 1;
+        }
+    }
+    println!("  {:<10} {:>10} {:>10}", "arity", "boxed", "unboxed");
+    for (arity, (b, u)) in &by_arity {
+        println!("  {arity:<10} {b:>10} {u:>10}");
+    }
+    println!(
+        "  {:<10} {:>10} {:>10}",
+        "total", acct.constructions_boxed, acct.constructions_unboxed
+    );
+    let skipped: usize = tc.per_module.iter().map(|t| t.skipped.len()).sum();
+    if skipped > 0 {
+        let mut by: BTreeMap<&str, (usize, String, u32)> = BTreeMap::new();
+        for t in &tc.per_module {
+            for s in &t.skipped {
+                let e = by.entry(s.reason).or_insert((0, String::new(), 0));
+                e.0 += 1;
+                if e.1.is_empty() {
+                    e.1 = t.module.name.clone();
+                    e.2 = s.at;
+                }
+            }
+        }
+        println!("  tuple constructors that are not a saturated construction");
+        for (reason, (n, md, node)) in &by {
+            println!("    {n:>6}  {reason:<28} e.g. {md} node {node}");
+        }
+    }
+
+    // Fates.
+    println!();
+    println!("Fates, proved by def-use");
+    println!("  {:<16} {:>10} {:>10}", "fate", "boxed", "unboxed");
+    let fates = [
+        TupleFate::ScalarReplace,
+        TupleFate::StateThread,
+        TupleFate::WorkerReturn,
+        TupleFate::Preserve,
+        TupleFate::Unresolved,
+    ];
+    for fate in fates {
+        let b = acct.count(true, fate);
+        let u = acct.count(false, fate);
+        println!("  {:<16} {b:>10} {u:>10}", format!("{fate:?}"));
+    }
+    println!(
+        "  {:<16} {:>10} {:>10}",
+        "total", acct.constructions_boxed, acct.constructions_unboxed
+    );
+
+    // The census' tuple-attributed argument sites, on their own.
+    println!();
+    println!(
+        "The census' {} tuple-attributed lazy argument sites",
+        acct.sites.len()
+    );
+    println!("  {:<16} {:>10} {:>10}", "fate", "boxed", "unboxed");
+    for fate in fates {
+        let b = acct
+            .sites
+            .iter()
+            .filter(|s| s.boxed && s.fate == Some(fate))
+            .count();
+        let u = acct
+            .sites
+            .iter()
+            .filter(|s| !s.boxed && s.fate == Some(fate))
+            .count();
+        println!("  {:<16} {b:>10} {u:>10}", format!("{fate:?}"));
+    }
+    let mapped_b = acct
+        .sites
+        .iter()
+        .filter(|s| s.boxed && s.flow.is_some())
+        .count();
+    let mapped_u = acct
+        .sites
+        .iter()
+        .filter(|s| !s.boxed && s.flow.is_some())
+        .count();
+    println!("  {:<16} {mapped_b:>10} {mapped_u:>10}", "mapped");
+    if acct.sites_unmapped > 0 {
+        let mut by: BTreeMap<&str, (usize, String, u32)> = BTreeMap::new();
+        for s in acct.sites.iter().filter(|s| s.flow.is_none()) {
+            let e = by.entry(s.reason.unwrap()).or_insert((0, String::new(), 0));
+            e.0 += 1;
+            if e.1.is_empty() {
+                e.1 = s.module.clone();
+                e.2 = s.app;
+            }
+        }
+        println!("  not a saturated construction");
+        for (reason, (n, md, node)) in &by {
+            println!("    {n:>6}  {reason:<28} e.g. {md} node {node}");
+        }
+    }
+    println!(
+        "  each mapped site belongs to exactly one construction; {} distinct construction(s)",
+        acct.sites
+            .iter()
+            .filter_map(|s| s.flow)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    );
+
+    // Consumers.
+    println!();
+    println!("Consumers by kind");
+    let mut kinds: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for f in flows {
+        for u in &f.consumers {
+            let e = kinds.entry(u.kind()).or_default();
+            if f.boxed {
+                e.0 += 1;
+            } else {
+                e.1 += 1;
+            }
+        }
+    }
+    println!("  {:<20} {:>10} {:>10}", "kind", "boxed", "unboxed");
+    for (k, (b, u)) in &kinds {
+        println!("  {k:<20} {b:>10} {u:>10}");
+    }
+    let no_consumer = flows.iter().filter(|f| f.consumers.is_empty()).count();
+    println!("  constructions with no surviving consumer: {no_consumer}");
+
+    // Rules.
+    println!();
+    println!("Rules by the number of constructions they fire on");
+    let mut rules: BTreeMap<&str, usize> = BTreeMap::new();
+    for f in flows {
+        let mut seen: std::collections::BTreeSet<&str> = Default::default();
+        for e in &f.evidence {
+            if seen.insert(e.rule) {
+                *rules.entry(e.rule).or_default() += 1;
+            }
+        }
+    }
+    for (r, n) in &rules {
+        println!("  {r:<24} {n:>8}");
+    }
+
+    // Reasons.
+    for (title, fate) in [
+        ("Preserve", TupleFate::Preserve),
+        ("Unresolved", TupleFate::Unresolved),
+    ] {
+        println!();
+        println!("Top reasons for {title}");
+        let mut by: BTreeMap<String, (usize, String, u32)> = BTreeMap::new();
+        for f in flows.iter().filter(|f| f.fate == fate) {
+            let Some(key) = f.reason_key() else { continue };
+            let e = by.entry(key).or_insert((0, String::new(), 0));
+            e.0 += 1;
+            if e.1.is_empty() {
+                e.1 = f.module.clone();
+                e.2 = f.construction;
+            }
+        }
+        let mut rows: Vec<_> = by.into_iter().collect();
+        rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+        for (reason, (n, md, node)) in rows.into_iter().take(10) {
+            println!("  {n:>6}  {reason}");
+            println!("          e.g. {md} node {node}");
+        }
+    }
+
+    // Per module.
+    println!();
+    println!("Per module");
+    println!(
+        "  {:<34} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+        "module", "boxed", "unbox", "scalar", "state", "worker", "presrv", "unres"
+    );
+    for t in &tc.per_module {
+        if t.flows.is_empty() {
+            continue;
+        }
+        let n = |fate: TupleFate| t.flows.iter().filter(|f| f.fate == fate).count();
+        println!(
+            "  {:<34} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+            t.module.name,
+            t.flows.iter().filter(|f| f.boxed).count(),
+            t.flows.iter().filter(|f| !f.boxed).count(),
+            n(TupleFate::ScalarReplace),
+            n(TupleFate::StateThread),
+            n(TupleFate::WorkerReturn),
+            n(TupleFate::Preserve),
+            n(TupleFate::Unresolved),
+        );
+    }
+
+    if explain {
+        println!();
+        println!("Constructions");
+        for t in &tc.per_module {
+            for f in &t.flows {
+                println!();
+                println!(
+                    "{} node {} — {} tuple of arity {}, fate {:?}{}",
+                    f.module,
+                    f.construction,
+                    if f.boxed { "boxed" } else { "unboxed" },
+                    f.arity,
+                    f.fate,
+                    match f.reason_key() {
+                        Some(r) => format!(" ({r})"),
+                        None => String::new(),
+                    }
+                );
+                for e in &f.evidence {
+                    let nodes = e
+                        .nodes
+                        .iter()
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let b = match e.binder {
+                        Some(b) => format!(" [binder #{b} {}]", t.binder(b).occ),
+                        None => String::new(),
+                    };
+                    println!("    {:<22} node(s) {nodes}{b}: {}", e.rule, e.note);
+                }
+                for u in &f.consumers {
+                    println!("    use {:<18} node {}", u.kind(), u.at());
+                }
+            }
+        }
+    }
+
+    Ok(())
 }

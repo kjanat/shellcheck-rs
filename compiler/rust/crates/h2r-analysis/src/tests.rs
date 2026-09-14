@@ -471,3 +471,419 @@ fn a_cast_inside_a_spine_does_not_split_it() {
     pos.sort();
     assert_eq!(pos, vec![Position::StrictArg, Position::LazyParam]);
 }
+
+//------------------------------------------------------------------------------
+// Tuple flows: which allocations are plumbing (tuples.rs)
+//------------------------------------------------------------------------------
+
+use crate::tuples::{TupleCensus, TupleFate, TupleUse, Tuples};
+
+/// An imported data constructor, for the id table.
+fn data_con(occ: &str, name: &str, arity: u32) -> Value {
+    let args: Vec<Value> = (0..arity).map(|_| demand(false, false)).collect();
+    json!({
+        "name": name, "occ": occ, "arity": arity,
+        "dmdSig": {"args": args, "diverges": false, "pretty": ""},
+        "isJoinPoint": false,
+        "dataCon": {
+            "name": name, "repArity": arity, "tag": 1,
+            "strictFields": vec![false; arity as usize]
+        }
+    })
+}
+
+fn boxed_tuple_id(arity: u32) -> (String, Value) {
+    let occ = format!("({})", ",".repeat(arity as usize - 1));
+    let name = format!("$ghc-prim$GHC.Tuple.Prim${occ}");
+    (occ.clone(), data_con(&occ, &name, arity))
+}
+
+fn unboxed_tuple_id(arity: u32) -> (String, Value) {
+    let occ = format!("(#{}#)", ",".repeat(arity as usize - 1));
+    let name = format!("$ghc-prim$GHC.Prim${occ}");
+    (occ.clone(), data_con(&occ, &name, arity))
+}
+
+/// A global `Var` (an import): nothing in the module binds it.
+fn gvar(occ: &str) -> Value {
+    json!({"node": "Var", "name": occ, "occ": occ, "unique": occ, "isGlobal": true})
+}
+
+/// A saturated constructor application.
+fn con_app(occ: &str, args: &[Value]) -> Value {
+    let mut e = gvar(occ);
+    for a in args {
+        e = app(e, a.clone());
+    }
+    e
+}
+
+/// `case <scrut> of wild { <con> b0 b1 … -> <rhs> }`, with a distinct
+/// unique per binder so that occurrences resolve to the right one.
+fn case_con(scrut: Value, con: &str, binders: &[&str], rhs: Value) -> Value {
+    json!({
+        "node": "Case", "scrut": scrut,
+        "binder": binder("wild", demand(false, false)), "type": "R",
+        "alts": [{
+            "con": {"kind": "DataAlt", "name": con, "occ": con, "tag": 1},
+            "binders": binders.iter().map(|b| binder(b, demand(false, false))).collect::<Vec<_>>(),
+            "rhs": rhs
+        }]
+    })
+}
+
+fn let1(occ: &str, rhs: Value, body: Value) -> Value {
+    json!({"node": "Let", "bind": {"rec": false, "pairs": [{
+        "binder": binder(occ, demand(false, false)), "rhs": rhs,
+        "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+    }]}, "body": body})
+}
+
+/// A module whose top-level binds are the given (binder, rhs) pairs.
+fn tops(pairs: Vec<(Value, Value)>, ids: Value) -> Module {
+    let binds: Vec<Value> = pairs
+        .into_iter()
+        .map(|(b, rhs)| {
+            json!({"rec": false, "pairs": [{
+                "binder": b, "rhs": rhs,
+                "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+            }]})
+        })
+        .collect();
+    let m = json!({
+        "format": raw::FORMAT, "module": "M", "unit": "main", "ids": ids, "binds": binds
+    });
+    Module::from_raw(serde_json::from_value(m).unwrap()).unwrap()
+}
+
+fn lam(params: &[&str], body: Value) -> Value {
+    let mut e = body;
+    for p in params.iter().rev() {
+        e = json!({"node": "Lam", "binder": lam_binder(p, false), "body": e});
+    }
+    e
+}
+
+fn one_flow<'a>(t: &'a Tuples<'a>) -> &'a crate::tuples::TupleFlow {
+    assert_eq!(t.flows.len(), 1, "expected exactly one construction");
+    &t.flows[0]
+}
+
+/// `let r = (a, b) in case r of (x, y) -> g x`: the box never outlives the
+/// match, so it can be replaced by its fields.
+#[test]
+fn a_let_bound_tuple_that_is_only_scrutinised_vanishes() {
+    let (tup, id) = boxed_tuple_id(2);
+    let m = top_module(
+        let1(
+            "r",
+            con_app(&tup, &[var("a"), var("b")]),
+            case_con(var("r"), &tup, &["x", "y"], app(var("g"), var("x"))),
+        ),
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    assert!(f.boxed);
+    assert_eq!(f.arity, 2);
+    assert!(f.bound.is_some(), "the construction is let-bound");
+    assert_eq!(f.fate, TupleFate::ScalarReplace);
+    assert!(matches!(
+        f.consumers.as_slice(),
+        [TupleUse::Scrutinised {
+            all_fields_bound: true,
+            ..
+        }]
+    ));
+}
+
+/// `case (# a, b #) of (# x, y #) -> g x`: no tuple survives at all.
+#[test]
+fn an_unboxed_construct_then_case_is_trivial() {
+    let (tup, id) = unboxed_tuple_id(2);
+    let m = top_module(
+        case_con(
+            con_app(&tup, &[var("a"), var("b")]),
+            &tup,
+            &["x", "y"],
+            app(var("g"), var("x")),
+        ),
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    assert!(!f.boxed);
+    assert_eq!(f.bound, None);
+    assert_eq!(f.fate, TupleFate::ScalarReplace);
+}
+
+/// A tuple returned from a local function that two call sites both
+/// scrutinise immediately: a worker return, which becomes a multi-value
+/// return rather than an allocation.
+#[test]
+fn a_returned_tuple_scrutinised_at_every_call_site_is_a_worker_return() {
+    let (tup, id) = unboxed_tuple_id(2);
+    let m = tops(
+        vec![
+            (
+                binder("f", demand(false, false)),
+                lam(&["p"], con_app(&tup, &[var("p"), var("p")])),
+            ),
+            (
+                binder("user", demand(false, false)),
+                app(
+                    app(
+                        var("h"),
+                        case_con(
+                            app(var("f"), var("a")),
+                            &tup,
+                            &["x", "y"],
+                            app(var("g"), var("x")),
+                        ),
+                    ),
+                    case_con(
+                        app(var("f"), var("b")),
+                        &tup,
+                        &["x1", "y1"],
+                        app(var("g"), var("y1")),
+                    ),
+                ),
+            ),
+        ],
+        json!({&tup: id, "g": callee(true), "h": callee(true)}),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    assert_eq!(f.fate, TupleFate::WorkerReturn);
+    assert_eq!(
+        f.consumers
+            .iter()
+            .filter(|u| matches!(u, TupleUse::Scrutinised { .. }))
+            .count(),
+        2,
+        "one scrutiny per call site"
+    );
+    assert!(
+        f.consumers
+            .iter()
+            .any(|u| matches!(u, TupleUse::Returned { .. }))
+    );
+}
+
+/// …and if one call site stores the result instead, the tuple is a real
+/// value and has to stay.
+#[test]
+fn a_call_site_that_stores_the_result_preserves_it() {
+    let (tup, id) = unboxed_tuple_id(2);
+    let m = tops(
+        vec![
+            (
+                binder("f", demand(false, false)),
+                lam(&["p"], con_app(&tup, &[var("p"), var("p")])),
+            ),
+            (
+                binder("user", demand(false, false)),
+                app(
+                    app(
+                        var("h"),
+                        case_con(
+                            app(var("f"), var("a")),
+                            &tup,
+                            &["x", "y"],
+                            app(var("g"), var("x")),
+                        ),
+                    ),
+                    con_app("Just", &[app(var("f"), var("b"))]),
+                ),
+            ),
+        ],
+        json!({
+            &tup: id, "g": callee(true), "h": callee(true),
+            "Just": data_con("Just", "$base$GHC.Maybe$Just", 1)
+        }),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    assert_eq!(f.fate, TupleFate::Preserve);
+    assert_eq!(f.reason, Some(crate::tuples::R_STORED_CON));
+    assert!(
+        f.consumers
+            .iter()
+            .any(|u| matches!(u, TupleUse::StoredIn { .. }))
+    );
+}
+
+/// The desugaring of a lazy pattern `~(a, b)` followed by re-tupling:
+/// every field of the new tuple is the matching projection of one and the
+/// same binder, so the construction is a field-wise copy of it.
+#[test]
+fn re_tupling_lazy_selectors_over_one_tuple_is_a_copy() {
+    let (tup, id) = boxed_tuple_id(2);
+    let m = top_module(
+        let1(
+            "ds",
+            app(var("f"), var("a")),
+            con_app(
+                &tup,
+                &[
+                    case_con(var("ds"), &tup, &["p", "q"], var("p")),
+                    case_con(var("ds"), &tup, &["p1", "q1"], var("q1")),
+                ],
+            ),
+        ),
+        json!({&tup: id}),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    let ds = f.copy_of.expect("a field-wise copy of one binder");
+    assert_eq!(t.binder(ds).occ, "ds");
+    assert!(
+        f.evidence
+            .iter()
+            .any(|e| e.rule == crate::tuples::T4_RETUPLE)
+    );
+
+    // Two projections of *different* binders are not a copy: only lexical
+    // identity proves the fields come from one tuple.
+    let m = top_module(
+        let1(
+            "ds",
+            app(var("f"), var("a")),
+            let1(
+                "ds2",
+                app(var("f"), var("b")),
+                con_app(
+                    &tup,
+                    &[
+                        case_con(var("ds"), &tup, &["p", "q"], var("p")),
+                        case_con(var("ds2"), &tup, &["p1", "q1"], var("q1")),
+                    ],
+                ),
+            ),
+        ),
+        json!({&tup: id}),
+    );
+    let t = Tuples::of_module(&m);
+    assert_eq!(one_flow(&t).copy_of, None);
+}
+
+/// A tuple handed to a local function whose parameter is only scrutinised:
+/// the parameter becomes the fields, so the box is still unnecessary.
+#[test]
+fn a_tuple_passed_to_a_known_local_that_scrutinises_it_is_scalar_replaced() {
+    let (tup, id) = boxed_tuple_id(2);
+    let m = top_module(
+        let1(
+            "k",
+            lam(
+                &["t"],
+                case_con(var("t"), &tup, &["x", "y"], app(var("g"), var("x"))),
+            ),
+            app(var("k"), con_app(&tup, &[var("a"), var("b")])),
+        ),
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    assert_eq!(f.fate, TupleFate::ScalarReplace);
+    assert!(
+        f.consumers
+            .iter()
+            .any(|u| matches!(u, TupleUse::PassedTo { param: 0, .. }))
+    );
+    assert!(
+        f.consumers
+            .iter()
+            .any(|u| matches!(u, TupleUse::Scrutinised { .. }))
+    );
+}
+
+/// A tuple stored in a constructor field is a real value.
+#[test]
+fn a_tuple_in_a_constructor_field_is_preserved() {
+    let (tup, id) = boxed_tuple_id(2);
+    let m = top_module(
+        con_app("Just", &[con_app(&tup, &[var("a"), var("b")])]),
+        json!({&tup: id, "Just": data_con("Just", "$base$GHC.Maybe$Just", 1)}),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    assert_eq!(f.fate, TupleFate::Preserve);
+    assert_eq!(f.reason, Some(crate::tuples::R_STORED_CON));
+}
+
+/// A tuple returned from an *exported* function: the callers this module
+/// can see all scrutinise it, but there are others it cannot see. Recorded
+/// as unresolved with the reason, never guessed either way.
+#[test]
+fn a_tuple_returned_from_an_exported_function_is_unresolved() {
+    let (tup, id) = boxed_tuple_id(2);
+    let mut f_binder = binder("f", demand(false, false));
+    f_binder["exported"] = json!(true);
+    let m = tops(
+        vec![
+            (f_binder, lam(&["p"], con_app(&tup, &[var("p"), var("p")]))),
+            (
+                binder("user", demand(false, false)),
+                case_con(
+                    app(var("f"), var("a")),
+                    &tup,
+                    &["x", "y"],
+                    app(var("g"), var("x")),
+                ),
+            ),
+        ],
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    assert_eq!(f.fate, TupleFate::Unresolved);
+    assert_eq!(f.reason, Some(crate::tuples::R_EXPORTED_RETURN));
+}
+
+/// `let r = (a, b) in h (case r of (x, y) -> x) (imported r)`: the tuple is
+/// scrutinised *and* aliased into a callee outside the module, so the box
+/// outlives the match.
+#[test]
+fn a_second_use_after_the_scrutiny_is_not_scalar_replaceable() {
+    let (tup, id) = boxed_tuple_id(2);
+    let m = top_module(
+        let1(
+            "r",
+            con_app(&tup, &[var("a"), var("b")]),
+            app(
+                app(var("h"), case_con(var("r"), &tup, &["x", "y"], var("x"))),
+                app(var("imported"), var("r")),
+            ),
+        ),
+        json!({&tup: id, "h": callee(true), "imported": callee(false)}),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    assert_ne!(f.fate, TupleFate::ScalarReplace);
+    assert_eq!(f.fate, TupleFate::Preserve);
+    assert_eq!(f.reason, Some(crate::tuples::R_IMPORTED_LAZY));
+    assert!(
+        f.consumers.iter().any(|u| u.reads_fields()),
+        "the field read is still recorded"
+    );
+}
+
+/// The census' tuple-attributed argument sites map onto the construction
+/// they are a field of, one to one; the accounting asserts it.
+#[test]
+fn census_tuple_argument_sites_map_onto_constructions() {
+    let (tup, id) = boxed_tuple_id(2);
+    let m = top_module(
+        con_app(&tup, &[app(var("f"), var("a")), var("b")]),
+        json!({&tup: id, "f": callee(true)}),
+    );
+    let mods = vec![&m];
+    let census = Census::raw(mods.iter().copied());
+    let tc = TupleCensus::of_modules(&mods, &census);
+    assert_eq!(tc.accounting.constructions_boxed, 1);
+    assert_eq!(tc.accounting.sites.len(), 1, "one lazy field computation");
+    assert_eq!(tc.accounting.sites_mapped, 1);
+    assert_eq!(tc.accounting.sites_unmapped, 0);
+    assert_eq!(tc.accounting.sites[0].flow, Some(0));
+}
