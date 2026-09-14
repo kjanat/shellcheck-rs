@@ -51,6 +51,20 @@ enum Command {
     /// Compare census metrics across several Core dump directories
     /// (e.g. the GHC flag matrix). Arguments are `label=dir` or plain dirs.
     Compare { dirs: Vec<String> },
+    /// Prove Parsec's CPS roles structurally and account for the sites the
+    /// census leaves unresolved with a Parsec-shaped head.
+    Parsec {
+        dir: PathBuf,
+        /// Restrict to one module.
+        #[arg(long)]
+        module: Option<String>,
+        /// Emit regions, edges and the accounting as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print per-region evidence and per-reject reasons with node ids.
+        #[arg(long)]
+        explain: bool,
+    },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
         dir: PathBuf,
@@ -89,6 +103,12 @@ fn main() -> Result<()> {
             thunks_only,
             json,
         } => laziness(&dir, module.as_deref(), explain, thunks_only, json),
+        Command::Parsec {
+            dir,
+            module,
+            json,
+            explain,
+        } => parsec(&dir, module.as_deref(), json, explain),
     })?
 }
 
@@ -419,6 +439,272 @@ fn laziness(
     }
 
     report(&census, selected.len());
+    Ok(())
+}
+
+//------------------------------------------------------------------------------
+// parsec
+//------------------------------------------------------------------------------
+
+type ExprIdLike = (String, u32);
+
+fn parsec(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result<()> {
+    use h2r_analysis::parsec::{Analysis, Bucket, account};
+
+    let modules = load_dir(dir)?;
+    let selected: Vec<&Module> = match module {
+        Some(name) => vec![find_module(&modules, name)?],
+        None => modules.iter().collect(),
+    };
+    let census = Census::of_modules(selected.iter().copied());
+    let analyses: Vec<Analysis> = selected.iter().map(|m| Analysis::of_module(m)).collect();
+    let acct = account(&census, &analyses);
+
+    if json {
+        let regions: Vec<_> = analyses.iter().flat_map(|a| a.regions.iter()).collect();
+        let out = serde_json::json!({"regions": regions, "accounting": acct});
+        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        println!();
+        return Ok(());
+    }
+
+    let regions: Vec<&h2r_analysis::parsec::ParserRegion> =
+        analyses.iter().flat_map(|a| a.regions.iter()).collect();
+    let proven = regions.iter().filter(|r| r.proven).count();
+    println!("Parsec CPS recognition — {} module(s)", selected.len());
+    println!();
+    println!("Regions (lambda chains carrying ParsecT's representation)");
+    println!(
+        "  candidate regions                            {:>7}",
+        regions.len()
+    );
+    println!("  proven                                       {proven:>7}");
+    println!(
+        "  rejected                                     {:>7}",
+        regions.len() - proven
+    );
+    let with_state = regions.iter().filter(|r| r.state.is_some()).count();
+    let full4 = regions
+        .iter()
+        .filter(|r| r.cok.is_some() && r.cerr.is_some() && r.eok.is_some() && r.eerr.is_some())
+        .count();
+    let trailing = regions.iter().filter(|r| !r.extra.is_empty()).count();
+    let ambiguous = regions
+        .iter()
+        .filter(|r| r.conts.iter().any(|c| c.slots.len() > 1))
+        .count();
+    println!("  … with a state parameter in the chain        {with_state:>7}");
+    println!("  … with all four continuation slots present   {full4:>7}");
+    println!("  … with trailing transformer parameters       {trailing:>7}");
+    println!("  … with an ambiguous slot embedding           {ambiguous:>7}");
+    let derived: usize = regions.iter().map(|r| r.derived.len()).sum();
+    println!("  derived (let-bound) continuations promoted   {derived:>7}");
+    let skipped: usize = analyses.iter().map(|a| a.skipped.len()).sum();
+    println!("  chains with continuation params but no region {skipped:>6}");
+    let mut skip_by: BTreeMap<&'static str, (usize, ExprIdLike)> = BTreeMap::new();
+    for a in &analyses {
+        for sk in &a.skipped {
+            let e = skip_by.entry(sk.reason).or_insert((0, (String::new(), 0)));
+            e.0 += 1;
+            if e.1.0.is_empty() {
+                e.1 = (a.module.name.clone(), sk.entry);
+            }
+        }
+    }
+    for (reason, (n, (md, node))) in &skip_by {
+        println!("    {n:>5}  {reason:<38} e.g. {md} node {node}");
+    }
+
+    println!();
+    println!("Edges by kind");
+    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_rule: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for r in &regions {
+        for e in &r.edges {
+            let key = if e.exact() {
+                format!("{:?}", e.kind)
+            } else {
+                format!(
+                    "{{{}}}",
+                    e.candidates
+                        .iter()
+                        .map(|k| format!("{k:?}"))
+                        .collect::<Vec<_>>()
+                        .join("|")
+                )
+            };
+            *by_kind.entry(key).or_default() += 1;
+            *by_rule.entry(e.provenance.rule).or_default() += 1;
+        }
+    }
+    for (k, n) in &by_kind {
+        println!("  {k:<44} {n:>7}");
+    }
+    println!();
+    println!("Edges by recognition rule");
+    for (k, n) in &by_rule {
+        println!("  {k:<44} {n:>7}");
+    }
+
+    println!();
+    println!(
+        "Accounting over the census' Parsec-shaped unresolved sites  {:>7}",
+        acct.population
+    );
+    row("exact role proven", acct.exact, acct.population);
+    row("finite role set proven", acct.finite, acct.population);
+    row(
+        "Parsec region recognised, target unresolved",
+        acct.region_unresolved,
+        acct.population,
+    );
+    row(
+        "rejected as non-Parsec / escape",
+        acct.rejected,
+        acct.population,
+    );
+    println!(
+        "  {:<44} {:>7}",
+        "(invariant: the four buckets sum to the population)",
+        acct.exact + acct.finite + acct.region_unresolved + acct.rejected
+    );
+    println!();
+    println!(
+        "Proven edges at sites OUTSIDE that population   {:>7}  (exact {}, finite {})",
+        acct.outside_exact + acct.outside_finite,
+        acct.outside_exact,
+        acct.outside_finite
+    );
+
+    if !acct.reasons.is_empty() {
+        println!();
+        println!("Top reasons a population site is not an exact edge");
+        let mut rs: Vec<(&String, &usize)> = acct.reasons.iter().collect();
+        rs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        for (r, n) in rs.into_iter().take(10) {
+            let node = acct
+                .verdicts
+                .iter()
+                .find(|v| {
+                    v.reason.is_some_and(|x| r.starts_with(x))
+                        && (r.len() == v.reason.unwrap().len() || r.ends_with(&v.detail))
+                })
+                .map(|v| format!("{} node {}", v.module, v.root))
+                .unwrap_or_default();
+            println!("  {n:>6}  {r}");
+            if !node.is_empty() {
+                println!("          e.g. {node}");
+            }
+        }
+    }
+
+    let mut rejects: BTreeMap<&'static str, (usize, String)> = BTreeMap::new();
+    for r in &regions {
+        for j in &r.rejects {
+            let e = rejects.entry(j.reason).or_insert((0, String::new()));
+            e.0 += 1;
+            if e.1.is_empty() {
+                e.1 = format!("{} node {} ({})", r.module, j.at, j.detail);
+            }
+        }
+    }
+    if !rejects.is_empty() {
+        println!();
+        println!("Region reject reasons");
+        let mut rs: Vec<_> = rejects.into_iter().collect();
+        rs.sort_by_key(|a| std::cmp::Reverse(a.1.0));
+        for (reason, (n, sample)) in rs {
+            println!("  {n:>6}  {reason:<28} e.g. {sample}");
+        }
+    }
+
+    println!();
+    println!("Regions per module");
+    println!(
+        "  {:<34} {:>9} {:>7} {:>8} {:>7}",
+        "module", "candidate", "proven", "rejected", "edges"
+    );
+    for a in &analyses {
+        if a.regions.is_empty() {
+            continue;
+        }
+        let p = a.regions.iter().filter(|r| r.proven).count();
+        let e: usize = a.regions.iter().map(|r| r.edges.len()).sum();
+        println!(
+            "  {:<34} {:>9} {:>7} {:>8} {:>7}",
+            a.module.name,
+            a.regions.len(),
+            p,
+            a.regions.len() - p,
+            e
+        );
+    }
+
+    if explain {
+        println!();
+        for a in &analyses {
+            for (i, r) in a.regions.iter().enumerate() {
+                println!(
+                    "-- {} region {i} at node {} ({}) state={:?} cok={:?} cerr={:?} eok={:?} eerr={:?}",
+                    r.module,
+                    r.entry,
+                    if r.proven { "PROVEN" } else { "REJECTED" },
+                    r.state,
+                    r.cok,
+                    r.cerr,
+                    r.eok,
+                    r.eerr
+                );
+                for c in &r.conts {
+                    println!(
+                        "   cont {} :: {}  slots {:?} arity {}",
+                        c.label,
+                        c.ty,
+                        c.slots.iter().collect::<Vec<_>>(),
+                        c.arity
+                    );
+                }
+                for ev in &r.evidence {
+                    println!("   [{}] node {}: {}", ev.rule, ev.node, ev.note);
+                }
+                for e in &r.edges {
+                    println!(
+                        "   edge {:?}{} at node {} by {} ({})",
+                        e.kind,
+                        if e.exact() { "" } else { " (finite set)" },
+                        e.at,
+                        e.provenance.rule,
+                        e.provenance.label
+                    );
+                }
+                for j in &r.rejects {
+                    println!(
+                        "   REJECT {} at node {}: {} [{}]",
+                        j.reason, j.at, j.detail, j.label
+                    );
+                }
+                println!();
+            }
+        }
+        println!("Population sites that are not exact edges:");
+        for v in &acct.verdicts {
+            if v.bucket == Bucket::ExactRole {
+                continue;
+            }
+            println!(
+                "  {:?} {} app {} arg {} root {} head {} :: {} — {} {}",
+                v.bucket,
+                v.module,
+                v.app,
+                v.arg,
+                v.root,
+                v.head_label,
+                v.head_ty,
+                v.reason.unwrap_or(""),
+                v.detail
+            );
+        }
+    }
     Ok(())
 }
 

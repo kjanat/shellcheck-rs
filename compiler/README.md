@@ -35,9 +35,9 @@ ShellCheck Haskell
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Includes a depth-limited Core pretty-printer. |
-| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), and the single binding-site-first signature lookup they all read (`scope.rs`). |
+| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), and the structural Parsec-CPS recogniser (`parsec.rs`). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show`, `laziness`, `compare`. Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show`, `laziness`, `compare`, `parsec`. Later: the lowering passes. |
 
 ## Usage
 
@@ -51,6 +51,8 @@ cargo run --release --bin h2r -- binders ../core-json ShellCheck.Fixer
 cargo run --release --bin h2r -- laziness ../core-json                      # the census
 cargo run --release --bin h2r -- laziness ../core-json --module ShellCheck.Fixer --explain --thunks-only
 cargo run --release --bin h2r -- show ../core-json ShellCheck.Fixer 1287    # Core at a node id
+cargo run --release --bin h2r -- parsec ../core-json                        # prove Parsec's CPS roles
+cargo run --release --bin h2r -- parsec ../core-json --module ShellCheck.Parser --explain
 ```
 
 ## M1 — how much Haskell is left after GHC?
@@ -188,6 +190,130 @@ dictionary family to Parsec. The "ordinary calls" bucket is dominated by
 string building — `unpackAppendCString#` (573) and `++` (543) — i.e.
 diagnostic messages assembled from lazy string appends; a `String`
 representation decision, not a laziness one.
+
+## M2.1 — proving Parsec's CPS roles
+
+The census puts 2,617 of the 8,447 lazy/unknown argument sites in the
+"target unresolved" tier, and 2,119 of those have a head that *looks* like
+one of Parsec's four continuations (`cok`, `cerr`, `eok`, `eerr`) or an
+eta-expanded parameter (`eta`). That attribution is by name, so it is a
+diagnostic and nothing more: GHC names *every* eta-expanded parameter
+`eta` (in `readArray` a head named `eta` is a continuation, not a parser),
+renames unused ones `ds`, and a binder named `cok` is not evidence of
+anything. `h2r parsec` replaces the name with a proof.
+
+### The representation, as it survives the optimiser
+
+`ParsecT s u m a` is a function of a state and four continuations. After
+inlining, the newtype is gone and what is left is a lambda chain whose
+**parameter types** still say exactly what each parameter is — the plugin
+dumps GHC's pretty-printed type for every binder, and those types survive
+optimisation:
+
+```
+\words                                                   -- the parser's own arguments
+  eta :: State [Char] UserState                          -- state
+  eta :: Token -> State [Char] UserState -> ParseError -> R   -- cok
+  eta :: ParseError -> R                                 -- cerr
+  eta :: Token -> State [Char] UserState -> ParseError -> R   -- eok
+  eta :: ParseError -> R                                 -- eerr
+  -> …
+```
+
+Discovered from the dump, not assumed:
+
+* the five parameters are always **contiguous and in Parsec's own order**,
+  as a suffix of the lambda chain (836 chains are exactly
+  `state·cok·cerr·eok·eerr`, 332 have one leading parser argument, and so on);
+* `R` is `SCBase m b = ReaderT (Environment m) (StateT SystemState m) b`,
+  which erases to **two trailing arguments** of type `Environment m` and
+  `SystemState`. Eight regions are eta-expanded that far (e.g.
+  `ShellCheck.Parser` node 8104, `\s1 eok eta::Environment m eta::SystemState`),
+  and three continuation calls carry them (node 10115: `eok v s err env st`,
+  five arguments);
+* **worker/wrapper drops absent continuations**, so a run can be shorter
+  than four and any subset of the slots may be missing (`state·cerr·eok·eerr`,
+  `state·cok·eok·eerr`, …). The run is therefore matched as a *subsequence*
+  of the four-slot template. 1,215 of 1,301 regions keep all four; 26 have
+  more than one embedding and so get a proven **finite role set** rather
+  than a single slot;
+* worker/wrapper also **unboxes `State` into its fields**, leaving parser
+  calls with no `State`-typed argument at all (83 calls).
+
+### Rules
+
+Every verdict records the rule that produced it.
+
+| Rule | Meaning |
+|---|---|
+| `R1-LAYOUT` | A lambda chain's parameter types carry `State s u` followed by a run of continuation types embedding into the `cok·cerr·eok·eerr` template. |
+| `R1-TYPE-AGREE` | All of a region's continuations agree on the state type and on the result type, compared modulo type-variable renaming (GHC prints the same tyvar `b` on one binder and `b1` on the next). |
+| `R2-PARSER-CALL` | A call whose *arguments* are a `State s u` followed by a continuation run embedding into the template, plus ≤2 trailing transformer arguments. A data constructor head is never a parser call. |
+| `R2-UNBOXED-STATE` | The same, with the state argument absent because worker/wrapper unboxed it. |
+| `R3-CONT-CALL` | A continuation applied to exactly its arity — (value, state, error) or (error). The argument *types* follow from the head's type, so arity is the whole check. |
+| `R3-CONT-CALL-TRAILING` | …plus the two trailing transformer arguments. |
+| `R3-CONT-CALL-ETA` | …applied to fewer arguments, the shortfall supplied by eta-reduction: the enclosing continuation position owes exactly the missing ones (`\x -> cok v` is `\x s e -> cok v s e`). |
+| `R3-CONT-RETURNED` | A continuation value returned into a continuation position that owes exactly what it still needs. |
+| `R4-PROP-CONT` | A continuation passed unchanged into a continuation slot of a recognised parser call. The slot need not match its own role: the inlined `<?>` passes `cok` into the `eok` slot. |
+| `R5-STATE-IN-CONT-CALL` | The state in the state slot of a continuation call. |
+| `R6-STATE-IN-PARSER-CALL` | The state in the state slot of a parser call. |
+| `R7-STATE-SCRUTINISED` | `case s of State …`. |
+| `R8-DERIVED-CONT` | A let-bound value of continuation type inside a region is a derived continuation and has to satisfy the same use rules (229 of them; GHC builds partial applications like `let lvl = cok ()`). |
+
+Anything else — stored in a constructor field, returned from something that
+is not a continuation position, passed to an unknown callee, passed in a
+slot of the wrong kind — rejects, and the rejection takes the whole region
+with it. Chains that carry continuation-typed parameters but do not form a
+region are recorded too (`skipped`), so nothing disappears silently.
+
+### Scoping: uniques are not unique
+
+GHC's simplifier duplicates terms without freshening their binders.
+`ShellCheck.Parser` has 41,874 binders over only 8,257 distinct uniques —
+`a1V6r` alone names 1,269 different `wild2` binders. Every occurrence is
+therefore resolved to its innermost enclosing binder by an explicit-stack
+scope walk. Keying occurrences by unique, as the M1 `let` census still
+does, conflates copies.
+
+### Results on the `-O1` dump
+
+```
+candidate regions                               1301   (all in ShellCheck.Parser)
+proven                                          1301
+rejected                                           0
+chains with continuation params but no region      0
+… with a state parameter in the chain           1296
+… with all four continuation slots present      1215
+… with an ambiguous slot embedding                26
+derived (let-bound) continuations promoted       229
+```
+
+| Edges | |
+|---|---:|
+| `ConsumedOk` / `ConsumedErr` | 2,568 / 2,710 |
+| `EmptyOk` / `EmptyErr` | 2,246 / 1,932 |
+| finite-set edges (`{ConsumedOk\|EmptyOk}`, `{ConsumedErr\|EmptyErr}`) | 131 / 97 |
+| `CallParser` | 2,599 |
+
+| The 2,119 Parsec-shaped unresolved sites | | |
+|---|---:|---:|
+| exact role proven | 2,090 | 98.6% |
+| finite role set proven | 20 | 0.9% |
+| Parsec region recognised, target unresolved | 0 | 0% |
+| rejected as non-Parsec / escape | 9 | 0.4% |
+
+The nine rejects are the whole non-`ShellCheck.Parser` remainder: heads
+named `eta` whose types are `RWST Parameters [TokenComment] Cache Identity ()`,
+`RWST r [TokenComment] s Identity b` and `StateT s Identity b` — mtl
+plumbing that the name-based family attribution called Parsec and the
+structural recogniser does not. A further **478** proven edges sit at sites
+*outside* that population (430 exact, 48 finite): heads the census resolves
+as ordinary local functions because they are let-bound (`lvl…`, and the
+derived continuations of `R8`). They are reported on their own line and
+never folded into the 2,119.
+
+The 184 non-Parsec fold/traversal callbacks (`f`, `go1`, `ww`) are left
+alone as a control group: none of them is recognised.
 
 ## What ShellCheck actually needs
 
