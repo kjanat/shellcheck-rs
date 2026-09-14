@@ -65,6 +65,12 @@ const TY_LIST_A: u32 = 5;
 const TY_SHOW_T: u32 = 6;
 const TY_EQ_T: u32 = 7;
 const TY_ORD_T: u32 = 8;
+/// `T -> T` and `T -> T -> T`: the function types the higher-order
+/// fixtures give their closure-valued slots. What makes a slot a boundary
+/// is the *structured* type (`higher::H1_FUNCTION_TYPED`), so the fixtures
+/// carry real `FunTy`s rather than a rendering that looks like one.
+const TY_FUN1: u32 = 9;
+const TY_FUN2: u32 = 10;
 
 /// The type table every hand-built module carries.
 fn ty_table() -> Value {
@@ -78,6 +84,8 @@ fn ty_table() -> Value {
         class_ty_json("$base$GHC.Show$Show", "Show"),
         class_ty_json("$ghc-prim$GHC.Classes$Eq", "Eq"),
         class_ty_json("$ghc-prim$GHC.Classes$Ord", "Ord"),
+        json!({"kind": "FunTy", "mult": TY_T, "arg": TY_T, "res": TY_T}),
+        json!({"kind": "FunTy", "mult": TY_T, "arg": TY_T, "res": TY_FUN1}),
     ])
 }
 
@@ -5985,4 +5993,505 @@ fn two_dictionaries_sharing_an_internal_name_stay_distinct() {
     targets.sort();
     assert_eq!(targets, vec!["$cA".to_string(), "$cB".to_string()]);
     f.accounting().check().unwrap();
+}
+
+//------------------------------------------------------------------------------
+// Higher-order representation agreement (higher.rs)
+//------------------------------------------------------------------------------
+
+use crate::higher::Verdict as HVerdict;
+use crate::higher::{self, Higher, ProducerKind, Program, Shape, Slot};
+
+/// A binder of the given function type.
+fn fn_binder(occ: &str, ty: u32) -> Value {
+    let mut b = binder(occ, demand(false, false));
+    b["ty"] = json!(ty);
+    b["type"] = json!("fn");
+    b
+}
+
+/// A lambda binder of the given function type: a function-valued parameter.
+fn fn_lam_binder(occ: &str, ty: u32) -> Value {
+    let mut b = lam_binder(occ, false);
+    b["ty"] = json!(ty);
+    b["type"] = json!("fn");
+    b
+}
+
+/// A lambda chain whose parameters carry the given types (`None` for the
+/// fixtures' plain `T`).
+fn typed_lam(params: &[(&str, Option<u32>)], body: Value) -> Value {
+    let mut e = body;
+    for (p, ty) in params.iter().rev() {
+        let b = match ty {
+            Some(t) => fn_lam_binder(p, *t),
+            None => lam_binder(p, false),
+        };
+        e = json!({"node": "Lam", "binder": b, "body": e});
+    }
+    e
+}
+
+/// A top-level binder with a stable name and a function type.
+fn named_fn_top(occ: &str, name: &str, ty: u32, exported: bool) -> Value {
+    let mut b = fn_binder(occ, ty);
+    b["name"] = json!(name);
+    b["exported"] = json!(exported);
+    b
+}
+
+/// `f = \k x -> k x`, whose parameter 0 is the function-valued slot every
+/// fixture below asks about. `name` is its stable name so other modules can
+/// call it.
+fn f_takes_a_closure(name: &str, exported: bool) -> (Value, Value) {
+    (
+        named_fn_top("f", name, TY_FUN2, exported),
+        typed_lam(
+            &[("k", Some(TY_FUN1)), ("x", None)],
+            app(var("k"), var("x")),
+        ),
+    )
+}
+
+const F_NAME: &str = "$main$A$f";
+
+/// `use<n> = f <closure> a`, calling `A.f` from wherever it is put.
+fn call_hf(occ: &str, closure: Value) -> (Value, Value) {
+    (
+        binder(occ, demand(false, false)),
+        app(app(named_gvar("f", F_NAME), closure), var("a")),
+    )
+}
+
+fn higher_of(mods: &[&Module]) -> Higher {
+    let p = Program::new(mods.iter().copied());
+    Higher::of_program(&p)
+}
+
+/// The boundary of parameter `index` of the named function.
+fn param_boundary<'a>(h: &'a Higher, owner: &str, index: usize) -> &'a higher::Boundary {
+    h.boundaries
+        .iter()
+        .find(|b| {
+            b.owner == owner
+                && matches!(b.slot, Slot::Param { .. })
+                && b.name.starts_with(&format!("parameter {index} "))
+        })
+        .unwrap_or_else(|| panic!("no parameter {index} boundary on {owner}"))
+}
+
+/// Two lambdas of the same arity, from two different modules, into one
+/// parameter: neither module could say this on its own, and one
+/// representation serves the slot.
+#[test]
+fn two_lambdas_of_one_arity_share_one_representation() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![call_hf("useB", lam(&["y"], var("y")))],
+        class_ids(vec![]),
+    );
+    let c = class_module(
+        "C",
+        vec![call_hf("useC", lam(&["z"], var("z")))],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b, &c]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 2, "{:?}", k.set);
+    assert!(k.enumerated);
+    assert_eq!(k.classes, 1);
+    assert_eq!(k.verdict, HVerdict::UniformRepresentation);
+    h.accounting().check().unwrap();
+}
+
+/// The same parameter, but the two lambdas take different numbers of
+/// arguments. At a local function that is never used as a value, one clone
+/// per shape class carries them; the clones are counted, never made.
+#[test]
+fn lambdas_of_different_arities_need_a_clone() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![
+            call_hf("useB", lam(&["y"], var("y"))),
+            call_hf("useC", lam(&["y", "z"], var("y"))),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert!(k.enumerated, "the set is still enumerated: {:?}", k.set);
+    assert_eq!(k.classes, 2);
+    assert_eq!(k.verdict, HVerdict::CloneRequired(2));
+    assert_eq!(h.accounting().clones, 2);
+}
+
+/// The same disagreement at an *exported* function: its representation is
+/// shared with callers the rewrite does not own, so there is no clone —
+/// the closure is preserved, and the holder is named.
+#[test]
+fn a_disagreement_at_an_exported_boundary_is_preserved() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, true)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![
+            call_hf("useB", lam(&["y"], var("y"))),
+            call_hf("useC", lam(&["y", "z"], var("y"))),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.classes, 2);
+    match &k.verdict {
+        HVerdict::Preserve(why) => assert!(why.contains(higher::P_EXPORTED), "{why}"),
+        other => panic!("expected Preserve, got {other:?}"),
+    }
+}
+
+/// A closure read back out of a constructor field has been through a data
+/// representation: its environment is not visible, so the slot it reaches
+/// keeps a run-time closure.
+#[test]
+fn a_closure_read_from_a_field_is_preserved() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    // useB = case d of MkC h -> f h a
+    let read = (
+        binder("useB", demand(false, false)),
+        json!({
+            "node": "Case", "scrut": var("d"),
+            "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
+            "alts": [{
+                "con": {"kind": "DataAlt", "name": "$main$B$MkC", "occ": "MkC", "tag": 1},
+                "binders": [fn_binder("h", TY_FUN1)],
+                "rhs": app(app(named_gvar("f", F_NAME), var("h")), var("a"))
+            }]
+        }),
+    );
+    let mut ids = class_ids(vec![(
+        "$main$B$MkC".to_string(),
+        data_con("MkC", "$main$B$MkC", 1),
+    )]);
+    ids["MkC"] = json!(data_con("MkC", "$main$B$MkC", 1));
+    let b = class_module("B", vec![read], ids);
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 1);
+    assert_eq!(k.producers[0].kind, ProducerKind::FieldRead);
+    assert!(k.producers[0].shape.is_opaque());
+    match &k.verdict {
+        HVerdict::Preserve(why) => assert!(why.contains(higher::P_FIELD_READ), "{why}"),
+        other => panic!("expected Preserve, got {other:?}"),
+    }
+}
+
+/// A partial application and a lambda that take the same number of further
+/// arguments and capture the same type are one shape class.
+#[test]
+fn a_pap_and_a_lambda_of_equal_arity_and_capture_agree() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    // p = \u v -> v; useB = \x -> f (p x) a; useC = \x -> f (\y -> x) a
+    let b = class_module(
+        "B",
+        vec![
+            (
+                binder("p", demand(false, false)),
+                lam(&["u", "v"], var("v")),
+            ),
+            (
+                binder("useB", demand(false, false)),
+                lam(
+                    &["x"],
+                    app(
+                        app(named_gvar("f", F_NAME), app(var("p"), var("x"))),
+                        var("a"),
+                    ),
+                ),
+            ),
+            (
+                binder("useC", demand(false, false)),
+                lam(
+                    &["x"],
+                    app(
+                        app(named_gvar("f", F_NAME), lam(&["y"], var("x"))),
+                        var("a"),
+                    ),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 2, "{:?}", k.producers);
+    let kinds: Vec<ProducerKind> = k.producers.iter().map(|x| x.kind).collect();
+    assert!(
+        kinds.contains(&ProducerKind::PartialApplication),
+        "{kinds:?}"
+    );
+    assert!(kinds.contains(&ProducerKind::Lambda), "{kinds:?}");
+    assert_eq!(k.arity, Some(1));
+    assert_eq!(k.classes, 1);
+    assert_eq!(k.verdict, HVerdict::UniformRepresentation);
+}
+
+/// A parameter handed straight on to another function's parameter: the
+/// second slot's producer set is the first's, not an unknown.
+#[test]
+fn a_parameter_passed_on_propagates_to_the_next_slot() {
+    // f = \k x -> g k x; g = \k2 y -> k2 y; useB = f (\y -> y) a
+    let a = class_module(
+        "A",
+        vec![
+            (
+                named_fn_top("f", F_NAME, TY_FUN2, false),
+                typed_lam(
+                    &[("k", Some(TY_FUN1)), ("x", None)],
+                    app(app(var("g"), var("k")), var("x")),
+                ),
+            ),
+            (
+                named_fn_top("g", "$main$A$g", TY_FUN2, false),
+                typed_lam(
+                    &[("k2", Some(TY_FUN1)), ("y", None)],
+                    app(var("k2"), var("y")),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![call_hf("useB", lam(&["y"], var("y")))],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k2 = param_boundary(&h, "g", 0);
+    assert_eq!(k2.producers.len(), 1, "{:?}", k2.set);
+    assert_eq!(k2.producers[0].kind, ProducerKind::Lambda);
+    assert_eq!(k2.verdict, HVerdict::ExactClosure);
+    // …and the slot it came through says the same.
+    assert_eq!(param_boundary(&h, "f", 0).verdict, HVerdict::ExactClosure);
+}
+
+/// A function used as a value has no enumerable set of call sites, so no
+/// slot of it can be resolved — the same refusal `boundary.rs` and
+/// `dictflow.rs` make.
+#[test]
+fn a_function_used_as_a_value_makes_its_slots_unresolved() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![
+            call_hf("useB", lam(&["y"], var("y"))),
+            // `h f`: the function itself is handed somewhere.
+            (
+                binder("useC", demand(false, false)),
+                app(gvar("h"), named_gvar("f", F_NAME)),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert!(!k.enumerated);
+    match &k.verdict {
+        HVerdict::Unresolved(r) => assert_eq!(r, higher::T_USED_AS_A_VALUE),
+        other => panic!("expected Unresolved, got {other:?}"),
+    }
+}
+
+/// More distinct closures than the set budget allows: the set collapses to
+/// `Top` with the budget as the reason, and the boundary is `Unresolved`
+/// rather than a guess.
+#[test]
+fn exhausting_the_set_budget_is_unresolved() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let calls: Vec<(Value, Value)> = (0..higher::SET_CAP + 4)
+        .map(|i| {
+            call_hf(
+                &format!("use{i}"),
+                lam(&[&format!("y{i}")], var(&format!("y{i}"))),
+            )
+        })
+        .collect();
+    let b = class_module("B", calls, class_ids(vec![]));
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert!(!k.enumerated);
+    match &k.verdict {
+        HVerdict::Unresolved(r) => assert_eq!(r, higher::B_SET),
+        other => panic!("expected Unresolved(budget), got {other:?}"),
+    }
+    assert_eq!(
+        k.classes, 0,
+        "an unenumerated set has no representation count"
+    );
+}
+
+/// The two facts stay apart: a boundary can be perfectly enumerated and
+/// still need more than one representation.
+#[test]
+fn enumeration_and_one_representation_are_separate_facts() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![
+            call_hf("useB", lam(&["y"], var("y"))),
+            call_hf("useC", lam(&["y", "z"], var("y"))),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert!(k.enumerated && k.classes > 1);
+    assert!(!k.verdict.one_representation());
+    let acct = h.accounting();
+    assert!(acct.enumerated >= 1);
+    acct.check().unwrap();
+}
+
+/// `verdict_for` is the API M2.4e calls: a module and a binder, and the
+/// boundary that binder names.
+#[test]
+fn verdict_for_finds_a_slot_by_its_binder() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![call_hf("useB", lam(&["y"], var("y")))],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    let Slot::Param { binder, .. } = k.slot else {
+        panic!("not a parameter")
+    };
+    let found = h
+        .verdict_for("A", binder)
+        .expect("no verdict for the binder");
+    assert_eq!(found.verdict, HVerdict::ExactClosure);
+    assert!(h.verdict_for("B", binder).is_none());
+}
+
+/// The shape-class key is alpha-equivalence, and nothing else: two types
+/// agree on a key exactly when `Ty::alpha_eq` accepts them.
+#[test]
+fn the_shape_class_key_is_alpha_equivalence() {
+    let m = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    for i in 0..m.types.len() {
+        for j in 0..m.types.len() {
+            assert_eq!(
+                higher::ty_key(&m.types[i]) == higher::ty_key(&m.types[j]),
+                m.types[i].alpha_eq(&m.types[j]),
+                "types {i} and {j} disagree"
+            );
+        }
+    }
+}
+
+/// A slot whose type is not a `FunTy` is not a boundary at all: the
+/// population is decided by the structured type (`H1-FUNCTION-TYPED`) and
+/// never by what a name or a use suggests.
+#[test]
+fn only_function_typed_slots_are_boundaries() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a]);
+    // `f`'s second parameter `x` is plain `T`.
+    assert!(
+        !h.boundaries
+            .iter()
+            .any(|b| b.owner == "f" && b.name.starts_with("parameter 1 ")),
+        "a non-function-typed parameter was registered as a boundary"
+    );
+    assert!(matches!(
+        param_boundary(&h, "f", 0).slot,
+        Slot::Param { .. }
+    ));
+}
+
+/// A producer's shape records its captures: a lambda that reads an
+/// enclosing parameter is not the same representation as one that reads
+/// nothing.
+#[test]
+fn a_capture_changes_the_shape_class() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![
+            call_hf("useB", lam(&["y"], var("y"))),
+            (
+                binder("useC", demand(false, false)),
+                lam(
+                    &["x"],
+                    app(
+                        app(named_gvar("f", F_NAME), lam(&["y"], var("x"))),
+                        var("a"),
+                    ),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 2);
+    assert_eq!(k.classes, 2, "{:?}", k.class_keys());
+    let caps: Vec<usize> = k
+        .producers
+        .iter()
+        .map(|x| match &x.shape {
+            Shape::Known { captures, .. } => captures.len(),
+            Shape::Opaque(_) => usize::MAX,
+        })
+        .collect();
+    assert!(caps.contains(&0) && caps.contains(&1), "{caps:?}");
 }

@@ -39,7 +39,7 @@ ShellCheck Haskell
 | **M2.3** | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link, **g** the correction to the axiom layer | done |
 | **M2.4a** | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged | done |
 | **M2.4b** | the closed-world class-op census: 565 dispatch sites, the 294 mapped 1:1, every class identified — and not one dictionary statically known | done |
-| **M2.4** | **next.** Dictionary erasure (M2.4c) and closed-world **class-op enumeration** (294 census sites, 3 tuple residuals); **higher-order representation agreement** — the 67 tuples handed into a local callee's parameter and the 187 + 134 + 114 that reach an imported call, a list cell or a program constructor through a closure; and the **41 Parsec edges** whose continuation target the region graph does not close over | next |
+| **M2.4** | **next.** Dictionary erasure (M2.4c) and closed-world **class-op enumeration** (294 census sites, 3 tuple residuals); **higher-order representation agreement** (M2.4d: 5,574 function-valued boundaries, 252 enumerated, 103 needing one representation, 418 clones counted — the 67 tuples handed into a local callee's parameter and the 187 + 134 + 114 that reach an imported call, a list cell or a program constructor through a closure all land somewhere named); and the **41 Parsec edges** whose continuation target the region graph does not close over | next |
 
 ## Layout
 
@@ -1126,6 +1126,14 @@ thing holds it):
 | 3 | …and only a specialised **clone** of the callee could carry the split | a cloning decision, which this milestone does not make |
 | 1 | the callee's parameter cannot be split (the callee escapes) | closure analysis |
 
+> **Added by [M2.4d](#m24d--higher-order-representation-agreement)**, beside
+> these rows and changing none of them: the 67 land on their callee's
+> function-typed parameter (31 `CloneRequired`, 13 `UniformRepresentation`,
+> 1 `ExactClosure`, 22 with no such parameter at all), so **14 could be
+> reclassified by a later pass**; the 187 land outside the closed world; the
+> 134 and 58 of the 114 land on the one shared `(:)` / `(,)` field slot, and
+> 45 of the 114 on a `Preserve`d record of run-time closures.
+
 The `Preserve` side is 551, dominated by exactly what one would hope: 369
 tuples consed into a list, 71 stored in another tuple that is itself a real
 value, 52 handed to an imported function's lazy parameter (45 of them to
@@ -1615,6 +1623,13 @@ not by the name.
 | 2 | an unknown higher-order callee outside `ShellCheck.Parser` | M2.4 |
 | 1 | the argument lands past the callee's parameters | M2.4 |
 | 3 | …and only a specialised **clone** of the callee could carry the split | a cloning decision |
+
+> **Added by [M2.4d](#m24d--higher-order-representation-agreement)**, as a
+> column beside these rows and changing none of them: 14 of the 67 now have
+> a receiving parameter that is `UniformRepresentation` or `ExactClosure`,
+> so a later pass **could** reclassify them; the 187 land on a parameter
+> outside the closed world; the 134 and 58 of the 114 land on the single
+> program-wide `(:)` / `(,)` field slot; 45 of the 114 land on a `Preserve`.
 | 1 | the callee's parameter cannot be split (the callee escapes) | M2.4 |
 | **827** | | |
 
@@ -4055,6 +4070,261 @@ name staying distinct), `cargo clippy --all-targets` (0 warnings) and
   that callee could take the erased form instead, and 133 of the 265
   non-`Erasable` verdicts are that case. The lowering, not this analysis,
   decides those.
+
+## M2.4d — higher-order representation agreement
+
+M2.2.1 refused 67 tuple flows because the **closure** that returns the tuple
+is handed to a local callee's parameter: rewriting the tuple away changes
+that parameter's type, and the flow does not see the other closures that
+arrive there. That refusal is not a tuple problem. A formal parameter is one
+slot and one representation, and a closure's representation is its *arity
+plus its captured environment*, so the question "can this slot be one
+representation" has to be asked of every function-valued slot in the
+program, independently of any flow. This milestone asks it. The 67 are read
+back out of the answer at the end, as feedback; **no existing verdict
+changes**.
+
+### The population, by type and nothing else
+
+Three kinds of function-valued boundary, each decided by the structured type
+(`H1-FUNCTION-TYPED`, GHC type identity — a `FunTy`, or a `ForAllTy` over
+one), never by a name and never by a rendering:
+
+| kind | what it is | producers are |
+|---|---|---|
+| **parameter** | a value lambda binder of function type | the argument at that index of every call site of its function, in every module |
+| **field** | a constructor field at which some match in the closed world binds a function-typed binder | the argument at that index of every saturated application of that constructor |
+| **return** | a function whose result, after its manifest value parameters, is still a function | every syntactic return point of its body, at the deepest lambda depth |
+
+On the `-O1` dump that is **5,574 boundaries**: 5,464 parameters, 35 fields,
+75 returns.
+
+Producers are enumerated **from the IR's own occurrences**, whole-program by
+stable name under `H0-CLOSED-WORLD` (`H2-PRODUCERS`) — the same discipline
+[`boundary.rs`](#composing-the-views-can-all-1453-be-applied-at-once) and
+[M2.4c](#m24c--whole-program-dictionary-flow-and-whether-the-dictionary-can-go)
+use, and for the same reason: a function used as a value, or one nothing in
+the closed world names, has no enumerable call-site set and the slot is
+refused rather than guessed. A producer that is itself a boundary — the
+parameter of a parameter, the result of a known saturated call — contributes
+*that* boundary's set, in a monovariant worklist fixpoint with the same
+budgets (`H3-PROPAGATE`). It settles in **10 rounds**; no budget is hit
+except one set cap, below.
+
+### The shape class, stated conservatively
+
+Two closures can share one representation only when
+
+* they take the **same number of further arguments**, and
+* they capture the **same ordered list of types**, compared up to
+  alpha-equivalence of the *structured* type
+
+(`H4-SHAPE-CLASS`). A lambda's captures are the local binders its body reads
+that it does not bind; a partial application's are the arguments it already
+holds; a bare known function's are none. A producer whose environment the
+closed world cannot see — a closure read back out of a constructor field, a
+closure returned by a call into a library — is **opaque**, and an opaque
+shape is equal to nothing, not even to another opaque shape.
+
+Where a partial application's argument is not a variable there is no type to
+read, so it gets a key unique to its node and can never merge with anything:
+refusing to merge is the conservative direction.
+
+On the `-O1` dump the producers fall into **261 distinct full class keys**.
+By the printable `(arity, captures)` summary, the commonest are arity 3 with
+1, 3 or 5 captures (86 / 77 / 48 boundaries carry one) — Parsec's four-way
+CPS continuations, closed over the state they were built with.
+
+### Two facts, and only then a verdict
+
+**AN ENUMERATED PRODUCER SET IS NOT ONE REPRESENTATION.** This is the exact
+analogue of M2.4c's *known method target ≠ removable dictionary*, and it is
+kept apart the same way: `enumerated` and `classes` are recorded separately
+on every boundary (`H11-SEPARATE`) and crossed only afterwards.
+
+| | one class | several / none |
+|---|---:|---:|
+| **not enumerated** | 0 | 5,322 |
+| **enumerated** | **103** | **149** |
+
+252 boundaries have a fully accounted producer set. Of those, 103 need
+exactly one representation and 149 do not — a boundary can have a perfect
+enumeration of nine producers and still need nine closure types.
+
+### The verdicts
+
+| kind | ExactClosure | UniformRepresentation | CloneRequired | FiniteClosureSet | Preserve | Unresolved | total |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| parameter | 47 | 20 | 138 | 0 | 6 | 5,253 | 5,464 |
+| field | 6 | 0 | 0 | 0 | 10 | 19 | 35 |
+| return | 14 | 0 | 0 | 1 | 10 | 50 | 75 |
+| **all** | **67** | **20** | **138** | **1** | **26** | **5,322** | **5,574** |
+
+The population is asserted to be the six verdicts, and the per-kind rows to
+sum to it, in `Accounting::check`. **418 clones** are counted over the 138
+`CloneRequired` parameters — one per shape class, counted and never made,
+exactly as M2.4c counts dictionary clones.
+
+`Preserve` names its holder. The 22 largest are *a closure read back from a
+constructor field*, which is precisely what one would hope: `SystemInterface`'s
+three fields, `Checker`'s two, `Formatter`'s two — ShellCheck's records of
+run-time behaviour really are records of run-time closures, and nothing here
+pretends otherwise.
+
+### Why the other 5,322 are unresolved
+
+| | | |
+|---:|---|---|
+| 2,660 | the slot's function is used somewhere as a value, so its call sites are not an enumerable set | the same refusal `boundary.rs` and `dictflow.rs` make |
+| 1,953 | the slot belongs to an **anonymous** lambda, which has no name to enumerate callers by | a lambda-lifted naming, or a call-site-directed walk |
+| 413 | a call site of the function is a partial application, so the argument never lands | the partial application's own consumers |
+| 227 | the function has no occurrence anywhere in the closed world: under `H0` it is dead | a non-answer, but a different one |
+| 44 | the body's lambda chain and the binder's type disagree about the return | refused rather than picked |
+| 19 | a closure arrives from a higher-order parameter the analysis does not track | the propagation, once the anonymous lambdas are named |
+| 5 | the constructor is never applied in the closed world | dead, like the 227 |
+| 1 | the producer set exceeded the 32-entry budget (`CommandCheck` field 1) | a larger budget, or a per-caller analysis |
+
+The 2,660 and the 1,953 are one shape between them: `ShellCheck.Parser` is
+CPS, its continuations are anonymous lambdas passed as values, and a
+higher-order analysis that wants them has to name them first. That is
+[M2.4e](#m24d--higher-order-representation-agreement)'s ground, and this
+milestone deliberately does not guess at it.
+
+### Feeding the proof back — nothing is reclassified
+
+Each section below is an **additional column** beside a residual M2.2.1 or
+M2.1 already recorded. Every fate and every tier stands exactly as it was;
+`could be reclassified` counts what a *later* pass could act on, and this
+one does not.
+
+**(a) the 67 `closure-returning-the-tuple-is-passed-into-a-parameter` flows**
+land on the callee's function-typed parameters, chosen by the callee's own
+binder types (`H13-LANDING`):
+
+| | | |
+|---:|---|---|
+| 31 | `CloneRequired` | the other closures at the slot disagree; a clone would carry it |
+| 22 | no boundary | the callee has no function-typed parameter at all — the closure lands on a slot whose type is instantiated out of sight |
+| 13 | `UniformRepresentation` | one representation already serves the slot |
+| 1 | `ExactClosure` | the flow's own closure is the only one there |
+
+**14 of the 67 could be reclassified by a later pass** (the 13 uniform plus
+the 1 exact): their receiving parameter is *already* one representation, so
+the reason M2.2.1 refused them — "the other closures reaching the parameter
+are not in this flow" — is answered. It is answered, not acted on.
+
+**(b) the closure paths of the tuple residual:**
+
+| population | where it lands | |
+|---:|---|---|
+| 187 | passed to an **imported** call | 187 × no boundary: the receiving parameter belongs to a function outside the dump. `H0` says the *program* is closed; it does not make a library's parameter a slot of it. **0** reclassifiable, and the honest answer is that the lowering of that callee decides, not this analysis. |
+| 134 | **consed onto a list** | 134 × `Unresolved` on *field 0 of `(:)`* — every cons cell in the program shares one slot, and its producer set blows the budget. A closed-world list-of-closures pass has to split that slot per list, which this one deliberately does not. |
+| 114 | **stored in a program constructor** | 45 `Preserve` (`SystemInterface` and kin: read back as run-time closures), 58 `Unresolved` (mostly the shared `(,)` and `(,,)` fields, the same one-slot-for-everything problem as `(:)`), 11 no boundary (no function-typed field of that constructor is ever read back). **0** reclassifiable. |
+
+**(c) the census' unresolved higher-order sites.** The population is the
+census' own: computations in lazy or unknown argument positions, still in
+the unresolved tier once the Parsec proof has been fed back, and — for the
+first row — outside the Parsec-shaped population, so the 10 sites the
+recogniser rejected stay M2.1's residual and not this one's.
+
+| population | | |
+|---:|---|---|
+| **99** fold/traversal callbacks (`f`, `go1`, `f1`, `ww`, …) | 66 `Unresolved`, 31 no boundary (the head's binder type is not a `FunTy` — a type variable instantiated out of sight), 1 `UniformRepresentation`, 1 `ExactClosure` | **2** could be reclassified |
+| **22** computed closures (a `case`- or `let`-selected function) | 22 `Unresolved` — judged as expressions, since a computed closure is not a slot | **0** |
+
+The 31 "not function-typed" is worth stating plainly: a third of the control
+group is not a higher-order *representation* question at all. The callback
+arrives at a slot whose type is a type variable, so there is no `FunTy` to
+agree about until the polymorphism is resolved.
+
+**(d) the 41 Parsec continuation edges** are left to M2.4e, which asks this
+analysis directly rather than re-deriving it:
+`higher::Higher::verdict_for(module, binder)` returns the boundary a binder
+names, with its producers, its uses and its verdict.
+
+### The rules
+
+| | level | |
+|---|---:|---|
+| `H0-CLOSED-WORLD` | 5 | the dump is the whole program and `Main.main` its only root (assumption) |
+| `H1-FUNCTION-TYPED` | 4 | a boundary is function-valued when its structured type is a `FunTy` |
+| `H2-PRODUCERS` | 3 | producers are enumerated from the IR's occurrences over the whole closed world |
+| `H3-PROPAGATE` | 3 | a producer that is a boundary contributes that boundary's set; a monovariant fixpoint |
+| `H4-SHAPE-CLASS` | 2 over 4 | same arity and the same ordered capture types, up to alpha-equivalence |
+| `H5-EXACT` | 3 | exactly one known producer reaches the slot |
+| `H6-UNIFORM` | 3 | every producer is known and they all fall in one shape class |
+| `H7-CLONE` | 3 | disagreeing producers at a local never-a-value parameter cost one clone per class |
+| `H8-PRESERVE` | 3 | a run-time closure reaches the slot, or the slot is shared outside the rewrite |
+| `H9-TAINT` | 3 | an unaccountable producer taints the set and the boundary is `Unresolved` |
+| `H10-BUDGET` | 2 | a walk over budget is `Unresolved`, never a guess |
+| `H11-SEPARATE` | 5 | an enumerated producer set is **not** one representation: separate facts |
+| `H12-USES` | 3 | uses are read from the occurrences of the boundary's binders, through aliases |
+| `H13-LANDING` | 4 | a residual closure flow lands on the callee's function-typed slots, by binder type |
+
+Nothing rests on a name. Binder names appear in the report and in nothing
+else, and the identity of a producer is `Module#node` (or the stable name of
+an imported function) for exactly the reason M2.4c gives: an internal
+top-level name is not unique.
+
+### Uses, for completeness
+
+A slot's uses are read from the occurrences of its binders, through local
+aliases (`H12-USES`): 10,038 passed on to another slot, 4,255 stored in a
+constructor, 2,882 called (3 over-applied, 6 under-applied, 236 saturated
+against a slot whose arity the producers agreed on, the rest at a slot with
+no agreed arity), 1,849 forced without being applied, 1,022 returned.
+
+### Across the flag matrix
+
+| | A (`-O1`) | B | C | D | E | F |
+|---|---:|---:|---:|---:|---:|---:|
+| boundaries | 5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
+| rounds | 10 | 10 | 11 | 11 | 11 | 11 |
+| Exact + Uniform | 87 | 178 | 231 | 862 | 850 | 833 |
+| CloneRequired | 138 | 184 | 227 | 1,006 | 996 | 1,017 |
+| Preserve | 26 | 27 | 26 | 39 | 39 | 39 |
+
+More inlining makes more anonymous lambdas and more boundaries, and the
+resolved share stays roughly flat: the limit is the anonymous-lambda and
+used-as-a-value populations, not the fixpoint. The accounting assertion
+holds on every profile.
+
+### The CLI
+
+```sh
+h2r higher compiler/core-json                      # the whole report
+h2r higher compiler/core-json --module ShellCheck.Analytics
+h2r higher compiler/core-json --explain            # every boundary, producers and uses
+h2r higher compiler/core-json --boundary 36827     # just the boundaries touching one node
+h2r higher compiler/core-json --json
+```
+
+### The gate
+
+Every existing report is byte-identical: `laziness`, `parsec`, `tuples`,
+`tuples --verify`, `tuples --boundaries`, `fields`, `lists`, `text`,
+`verify-rep`, `classops`, `dictflow`. `cargo test` is 194 (13 new),
+`cargo clippy --all-targets` 0 warnings, `cargo fmt --check` clean. No Core
+is mutated, no codegen is emitted, and no GHC flag changed.
+
+### What remains, stated rather than hidden
+
+* **The anonymous-lambda wall.** 4,613 of the 5,322 unresolved boundaries
+  are one of two things: a slot on a function used as a value (2,660) or a
+  slot on an anonymous lambda (1,953). Both are the same shape — CPS Parsec
+  — and both need a naming pass before a producer set exists at all. The
+  numbers above are therefore a floor, not a ceiling.
+* **`(:)` and `(,)` are one slot for the whole program.** Treating a
+  constructor field as a single boundary is sound and useless for the
+  ubiquitous constructors: 134 + 58 of the residual land there. A per-list
+  or per-site field boundary would split them; this one does not.
+* **The shape class is conservative on purpose** and merges less than a real
+  closure-conversion would. Two lambdas that capture the same types in a
+  different order, or capture through a `newtype`, are two classes here.
+  Every `CloneRequired` count is therefore an upper bound on the clones.
+* **An `Unresolved` is not a proof that a slot cannot be uniform**, only
+  that this proof object declines to say so — the same disclaimer M2.4c
+  makes about erasure.
 
 ## What ShellCheck actually needs
 

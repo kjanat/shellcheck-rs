@@ -115,6 +115,25 @@ enum Command {
         #[arg(long)]
         explain: bool,
     },
+    /// Higher-order representation agreement (M2.4d): what reaches every
+    /// function-valued parameter, constructor field and return in the
+    /// closed world, and whether one representation can serve it.
+    Higher {
+        dir: PathBuf,
+        /// Restrict the boundary listing to one module.
+        #[arg(long)]
+        module: Option<String>,
+        /// Emit boundaries, producers, the accounting and the feedback as
+        /// JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print every boundary with its producers, uses and verdict.
+        #[arg(long)]
+        explain: bool,
+        /// Print just the boundaries at, or touching, this node.
+        #[arg(long)]
+        boundary: Option<u32>,
+    },
     /// Compare census metrics across several Core dump directories
     /// (e.g. the GHC flag matrix). Arguments are `label=dir` or plain dirs.
     Compare { dirs: Vec<String> },
@@ -400,6 +419,13 @@ fn main() -> Result<()> {
             whole_program && !per_module,
         ),
         Command::Dictflow { dir, json, explain } => dictflow(&dir, json, explain),
+        Command::Higher {
+            dir,
+            module,
+            json,
+            explain,
+            boundary,
+        } => higher(&dir, module.as_deref(), json, explain, boundary),
         Command::Parsec {
             dir,
             module,
@@ -5028,6 +5054,411 @@ fn dictflow(dir: &Path, json: bool, explain: bool) -> Result<()> {
                 },
                 s.dict_verdict.label()
             );
+        }
+    }
+    Ok(())
+}
+
+//------------------------------------------------------------------------------
+// higher — M2.4d
+//------------------------------------------------------------------------------
+
+/// The residuals M2.2.1 and M2.1 left, turned into the form
+/// [`h2r_analysis::higher`] reads. Built here, in the CLI, so the analysis
+/// depends on neither census and cannot be accused of having been written
+/// around them.
+type Residuals = Vec<h2r_analysis::higher::Residual>;
+/// A named group of residuals: one feedback sub-section.
+type ResidualGroups = Vec<(&'static str, Residuals)>;
+
+fn higher_residuals(
+    modules: &[Module],
+    mi_of: &std::collections::HashMap<String, usize>,
+) -> (Residuals, ResidualGroups, ResidualGroups) {
+    use h2r_analysis::callee::{Resolution, Tier};
+    use h2r_analysis::higher::{Residual, Via};
+    use h2r_analysis::tuples::{
+        R_CLOSURE_ARG_IMPORTED, R_CLOSURE_CONSED, R_CLOSURE_INTO_PARAM, R_CLOSURE_STORED, TupleUse,
+    };
+
+    let selected: Vec<&Module> = modules.iter().collect();
+    let tcensus = Census::raw(selected.iter().copied());
+    let analyses: Vec<h2r_analysis::parsec::Analysis> = selected
+        .iter()
+        .map(|m| h2r_analysis::parsec::Analysis::of_module(m))
+        .collect();
+    let hops: Vec<h2r_analysis::tuples::ParsecHops> = analyses
+        .iter()
+        .map(h2r_analysis::tuples::parsec_hops)
+        .collect();
+    let tc = h2r_analysis::tuples::TupleCensus::of_modules_with(&selected, &tcensus, &hops);
+
+    let mut into_param = Vec::new();
+    let mut imported = Vec::new();
+    let mut consed = Vec::new();
+    let mut stored = Vec::new();
+    // One residual per *flow*, keyed on the flow's own recorded reason —
+    // the population M2.2.1's residual table counts — and not per escaping
+    // consumer, of which a flow can have several.
+    for f in &tc.flows {
+        let Some(&mi) = mi_of.get(&f.module) else {
+            continue;
+        };
+        let Some(why) = f.reason else { continue };
+        let bucket = match why {
+            x if x == R_CLOSURE_INTO_PARAM => &mut into_param,
+            x if x == R_CLOSURE_ARG_IMPORTED => &mut imported,
+            x if x == R_CLOSURE_CONSED => &mut consed,
+            x if x == R_CLOSURE_STORED => &mut stored,
+            _ => continue,
+        };
+        let at = f.consumers.iter().find_map(|u| match *u {
+            TupleUse::Escapes { at, why: w } if w == why => Some(at),
+            _ => None,
+        });
+        let Some(at) = at else { continue };
+        bucket.push(Residual {
+            mi,
+            node: at,
+            reason: why.to_string(),
+            via: match why {
+                x if x == R_CLOSURE_INTO_PARAM => Via::CalleeParam,
+                x if x == R_CLOSURE_ARG_IMPORTED => Via::Imported,
+                _ => Via::ConField,
+            },
+        });
+    }
+
+    // The argument census, with the Parsec proof attached: a site the
+    // recogniser proved is not in the control group.
+    let census = Census::of_modules(selected.iter().copied());
+    let mut ho = Vec::new();
+    let mut computed = Vec::new();
+    for site in &census.args {
+        // The exact population M2.1's residual table accounts for:
+        // computations in lazy or unknown argument positions.
+        if site.shape != ArgShape::Computation || !site.position.escapes() {
+            continue;
+        }
+        let Some(&mi) = mi_of.get(&site.module) else {
+            continue;
+        };
+        let r = |reason: &str| Residual {
+            mi,
+            node: site.app,
+            reason: reason.to_string(),
+            via: Via::Head,
+        };
+        // The residual population M2.1 accounts for: the sites still in
+        // the unresolved tier once the Parsec proof has been fed back.
+        if site.callee.tier() != Tier::Unresolved {
+            continue;
+        }
+        match site.callee.resolution {
+            // "Outside Parsec" is the census' own Parsec-shaped
+            // population test, not a name: the 10 sites the recogniser
+            // rejected are inside it and stay M2.1's residual, not this
+            // one's.
+            Resolution::HigherOrderParam
+                if site.callee.parsec.is_none() && !h2r_analysis::parsec::in_population(site) =>
+            {
+                ho.push(r("HigherOrderParam outside Parsec"))
+            }
+            Resolution::ComputedClosure => computed.push(r("ComputedClosure")),
+            _ => {}
+        }
+    }
+
+    (
+        into_param,
+        vec![
+            ("passed to an imported call", imported),
+            ("consed onto a list", consed),
+            ("stored in a program constructor", stored),
+        ],
+        vec![
+            ("HigherOrderParam sites outside Parsec", ho),
+            ("ComputedClosure sites", computed),
+        ],
+    )
+}
+
+fn higher(
+    dir: &Path,
+    module: Option<&str>,
+    json: bool,
+    explain: bool,
+    boundary: Option<u32>,
+) -> Result<()> {
+    use h2r_analysis::higher::{
+        EVAL_BUDGET, Feedback, Higher, Program, ROUND_BUDGET, RULES, SET_CAP, VERDICTS, Verdict,
+    };
+
+    let modules = load_dir(dir)?;
+    let mi_of: std::collections::HashMap<String, usize> = modules
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.name.clone(), i))
+        .collect();
+    let p = Program::new(modules.iter());
+    let h = Higher::of_program(&p);
+    let a = h.accounting();
+
+    let (into_param, paths, census_res) = higher_residuals(&modules, &mi_of);
+    let feedback = Feedback {
+        into_param: h.section(
+            &p,
+            "closure-returning-the-tuple-is-passed-into-a-parameter",
+            &into_param,
+        ),
+        closure_paths: paths
+            .iter()
+            .map(|(l, r)| h.section(&p, l, r))
+            .collect::<Vec<_>>(),
+        census: census_res
+            .iter()
+            .map(|(l, r)| h.section(&p, l, r))
+            .collect::<Vec<_>>(),
+    };
+
+    let shown: Vec<&h2r_analysis::higher::Boundary> = h
+        .boundaries
+        .iter()
+        .filter(|b| module.is_none_or(|x| b.module == x))
+        .filter(|b| {
+            boundary.is_none_or(|n| {
+                b.node == n
+                    || b.producers.iter().any(|x| x.node == n)
+                    || b.uses.iter().any(|u| u.at == n)
+                    || b.sources.iter().any(|(_, x, at)| *x == n || *at == n)
+            })
+        })
+        .collect();
+
+    if json {
+        let out = serde_json::json!({
+            "boundaries": shown,
+            "producers": h.producers,
+            "accounting": a,
+            "feedback": feedback,
+            "rules": RULES,
+        });
+        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        println!();
+        return Ok(());
+    }
+
+    println!(
+        "The closed world: {} modules, Main.main the only root (H0-CLOSED-WORLD, an\n\
+         assumption, not a derivation). Every call site of every function, every\n\
+         application of every constructor and every use of every closure is in the dump,\n\
+         so every function-valued slot has an enumerable producer set.",
+        modules.len()
+    );
+    println!();
+    println!(
+        "Fixpoint: {} rounds over {} boundaries{}.",
+        a.rounds,
+        a.boundaries,
+        if a.round_budget_hit {
+            format!(" (the {ROUND_BUDGET}-round budget was hit: every unstable slot is Unresolved)")
+        } else {
+            String::new()
+        }
+    );
+    println!("Budgets: {ROUND_BUDGET} rounds, {SET_CAP} producers per set, {EVAL_BUDGET} steps.");
+
+    println!();
+    println!("Boundaries by kind x verdict");
+    print!("  {:<8}", "kind");
+    for v in VERDICTS {
+        print!(" {v:>21}");
+    }
+    println!(" {:>8}", "total");
+    for (kind, row) in &a.by_kind {
+        print!("  {kind:<8}");
+        for n in row {
+            print!(" {n:>21}");
+        }
+        println!(" {:>8}", row.iter().sum::<usize>());
+    }
+    print!("  {:<8}", "all");
+    for n in &a.verdicts {
+        print!(" {n:>21}");
+    }
+    println!(" {:>8}", a.boundaries);
+    println!(
+        "  population = the six verdicts, and the per-kind rows sum to it: {}",
+        match a.check() {
+            Ok(()) => "asserted".to_string(),
+            Err(e) => format!("FAILED: {e}"),
+        }
+    );
+
+    println!();
+    println!("The two facts, kept apart (H11-SEPARATE)");
+    println!("  AN ENUMERATED PRODUCER SET IS NOT ONE REPRESENTATION. Enumeration says");
+    println!("  whether every producer is accounted for; the shape class says whether they");
+    println!("  can share a representation. They are recorded from different facts.");
+    println!("  {:<24} {:>14} {:>14}", "", "one class", "several/none");
+    for (i, row) in ["not enumerated", "enumerated"].iter().enumerate() {
+        println!("  {row:<24} {:>14} {:>14}", a.matrix[i][1], a.matrix[i][0]);
+    }
+    println!(
+        "  enumerated {} of {}, of which {} need exactly one representation",
+        a.enumerated, a.boundaries, a.one_representation
+    );
+    println!(
+        "  clones counted (never made): {} over the CloneRequired boundaries",
+        a.clones
+    );
+
+    println!();
+    println!(
+        "Producers by kind ({} distinct closure identities)",
+        a.producers
+    );
+    for (kind, n) in &a.by_producer_kind {
+        println!("  {n:>7}  {kind}");
+    }
+
+    println!();
+    println!("Uses by kind");
+    for (kind, n) in &a.by_use_kind {
+        println!("  {n:>7}  {kind}");
+    }
+
+    println!();
+    println!(
+        "Representation shape classes: {} distinct (H4-SHAPE-CLASS — same arity and the\n\
+         same ordered capture types, up to alpha-equivalence of the structured type; an\n\
+         opaque environment is equal to nothing, not even to another opaque one).",
+        a.distinct_shape_classes
+    );
+    println!(
+        "  A class key carries the full capture types and is far too long to print, so\n\
+         \x20 the histogram below is by (arity, number of captures); the {} above is the\n\
+         \x20 count of distinct *full* keys, which is what the verdict is taken on.",
+        a.distinct_shape_classes
+    );
+    let mut shapes: Vec<_> = a.shape_shapes.iter().collect();
+    shapes.sort_by_key(|(k, n)| (std::cmp::Reverse(**n), (*k).clone()));
+    println!("  boundaries carrying a producer of this shape:");
+    for (k, n) in shapes.iter().take(12) {
+        println!("  {n:>7}  {k}");
+    }
+
+    println!();
+    println!("Feeding the proof back — NO EXISTING VERDICT CHANGES. Every fate M2.2.1 and");
+    println!("every tier M2.1 recorded stands; these are additional columns beside them.");
+    let print_section = |s: &h2r_analysis::higher::Section| {
+        println!();
+        println!("  {} ({} site(s))", s.label, s.landings.len());
+        for (v, n) in &s.by_verdict {
+            let at = s.landings.iter().find(|l| l.verdict == *v);
+            match at {
+                Some(l) => println!(
+                    "  {n:>7}  {v:<22} e.g. {} node {}{}",
+                    l.module,
+                    l.node,
+                    l.boundary
+                        .as_ref()
+                        .map(|b| format!(" -> {b}"))
+                        .or_else(|| l.why.as_ref().map(|w| format!(" ({w})")))
+                        .unwrap_or_default()
+                ),
+                None => println!("  {n:>7}  {v}"),
+            }
+        }
+        println!(
+            "  {:>7}  COULD be reclassified by a later pass (one representation serves the\n\
+             \x20          slot). Reported, not acted on: nothing is reclassified here.",
+            s.could_reclassify
+        );
+    };
+    println!();
+    println!("(a) the tuple flows refused as closure-into-a-parameter");
+    print_section(&feedback.into_param);
+    println!();
+    println!("(b) the closure paths of the tuple residual");
+    for s in &feedback.closure_paths {
+        print_section(s);
+    }
+    println!();
+    println!("(c) the census' unresolved higher-order sites");
+    for s in &feedback.census {
+        print_section(s);
+    }
+    println!();
+    println!("(d) the 41 Parsec continuation edges are left to M2.4e, which asks this");
+    println!("    analysis directly: higher::Higher::verdict_for(module, binder).");
+
+    println!();
+    println!("Top Preserve / Unresolved reasons, with a node");
+    let mut reasons: Vec<_> = a.reasons.iter().collect();
+    reasons.sort_by_key(|(k, n)| (std::cmp::Reverse(**n), (*k).clone()));
+    for (reason, n) in reasons.iter().take(12) {
+        let at = h.boundaries.iter().find(|b| match &b.verdict {
+            Verdict::Preserve(r) | Verdict::Unresolved(r) => {
+                h2r_analysis::higher::reason_head(r) == **reason
+            }
+            _ => false,
+        });
+        match at {
+            Some(b) => println!(
+                "  {n:>7}  {reason}\n           e.g. {} {} (node {})",
+                b.module, b.name, b.node
+            ),
+            None => println!("  {n:>7}  {reason}"),
+        }
+    }
+
+    println!();
+    println!("Rules");
+    for (id, level, meaning) in RULES {
+        println!("  {id:<20} level {level}  {meaning}");
+    }
+
+    if explain || boundary.is_some() || module.is_some() {
+        println!();
+        println!("Boundaries ({} shown)", shown.len());
+        for b in &shown {
+            println!(
+                "{} {:<7} {}  node {}  {}{}",
+                b.module,
+                b.kind,
+                b.name,
+                b.node,
+                b.verdict.label(),
+                match &b.verdict {
+                    Verdict::CloneRequired(n) => format!("({n})"),
+                    Verdict::FiniteClosureSet(n) => format!("({n})"),
+                    Verdict::Preserve(r) | Verdict::Unresolved(r) => format!(" {r}"),
+                    _ => String::new(),
+                }
+            );
+            if !explain && boundary.is_none() {
+                continue;
+            }
+            println!(
+                "    enumerated={} classes={} arity={:?} producers={} uses={}",
+                b.enumerated,
+                b.classes,
+                b.arity,
+                b.producers.len(),
+                b.uses.len()
+            );
+            for x in &b.producers {
+                println!(
+                    "    producer {:<44} {:<38} {}",
+                    x.key,
+                    x.kind.name(),
+                    x.shape.short()
+                );
+            }
+            for u in &b.uses {
+                println!("    use      {:<44} node {}", u.kind.name(), u.at);
+            }
         }
     }
     Ok(())

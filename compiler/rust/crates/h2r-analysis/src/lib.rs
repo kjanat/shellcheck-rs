@@ -6,6 +6,7 @@ pub mod classops;
 pub mod dictflow;
 pub mod fields;
 pub mod flow;
+pub mod higher;
 pub mod laziness;
 pub mod link;
 pub mod lists;
