@@ -5526,3 +5526,463 @@ fn an_imported_dfun_names_the_instance_and_refuses_the_method() {
         site.outcome
     );
 }
+
+//------------------------------------------------------------------------------
+// Whole-program dictionary propagation and erasure (dictflow.rs)
+//------------------------------------------------------------------------------
+
+use crate::dictflow::{self, DictFlow, DictSet, Verdict};
+
+/// A top-level binder with an explicit stable name.
+fn named_top(occ: &str, name: &str, exported: bool) -> Value {
+    let mut b = binder(occ, demand(false, false));
+    b["name"] = json!(name);
+    b["exported"] = json!(exported);
+    b
+}
+
+/// A dictionary binding with an explicit stable name.
+fn named_dict_top(occ: &str, name: &str, ty: u32) -> Value {
+    let mut b = dict_top(occ, ty, false);
+    b["name"] = json!(name);
+    b
+}
+
+/// `C:Show <method> $cshow $cshowList`.
+fn show_dict_with(method: &str) -> Value {
+    dict_con_app(
+        "C:Show",
+        C_SHOW,
+        &[var(method), var("$cshow"), var("$cshowList")],
+    )
+}
+
+/// `f = \$dShow x -> showsPrec $dShow x`, exported, in module `A`.
+fn show_user(name: &str) -> (Value, Value) {
+    (
+        named_top("f", name, true),
+        dict_lam(
+            &[("$dShow", TY_SHOW_T)],
+            lam(
+                &["x"],
+                app(
+                    app(named_gvar("showsPrec", SHOWS_PREC), var("$dShow")),
+                    var("x"),
+                ),
+            ),
+        ),
+    )
+}
+
+/// `use = f <dict> y`, calling `A.f` from another module.
+fn call_f(occ: &str, dict: Value) -> (Value, Value) {
+    (
+        binder(occ, demand(false, false)),
+        app(app(named_gvar("f", "$main$A$f"), dict), var("y")),
+    )
+}
+
+fn flow_site<'a>(f: &'a DictFlow, module: &str) -> &'a dictflow::Site {
+    f.sites
+        .iter()
+        .find(|s| s.module == module)
+        .expect("no class-op site in that module")
+}
+
+fn flow_param<'a>(f: &'a DictFlow, owner: &str) -> &'a dictflow::Param {
+    f.params
+        .iter()
+        .find(|p| p.owner == owner)
+        .expect("no such dictionary parameter")
+}
+
+/// Module `A`: the dictionaries, the instance methods and the exported
+/// function whose dictionary parameter the closed world has to enumerate.
+fn wp_module_a(extra: Vec<(Value, Value)>) -> Module {
+    let mut pairs = vec![
+        (
+            named_dict_top("$fShowT", "$main$A$$fShowT", TY_SHOW_T),
+            show_dict_with("$cshowsPrec"),
+        ),
+        (
+            named_dict_top("$fShowU", "$main$A$$fShowU", TY_SHOW_T),
+            show_dict_with("$cshowsPrecU"),
+        ),
+        (
+            binder("$cshowsPrec", demand(false, false)),
+            lam(&["p", "v"], var("v")),
+        ),
+        (
+            binder("$cshowsPrecU", demand(false, false)),
+            lam(&["p", "v"], var("v")),
+        ),
+    ];
+    let (b, rhs) = show_user("$main$A$f");
+    pairs.push((b, rhs));
+    pairs.extend(extra);
+    class_module("A", pairs, class_ids(vec![]))
+}
+
+/// The one call site in the closed world fixes the instance: the exported
+/// function's dictionary parameter is a singleton and the method is exact.
+#[test]
+fn one_caller_in_the_closed_world_makes_the_method_exact() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f("use", named_gvar("$fShowT", "$main$A$$fShowT"))],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    let p = flow_param(&f, "f");
+    assert_eq!(p.set.keys().len(), 1, "{:?}", p.set);
+    match &flow_site(&f, "A").outcome {
+        dictflow::Outcome::Exact(t) => assert_eq!(t.occ, "$cshowsPrec"),
+        other => panic!("expected Exact, got {other:?}"),
+    }
+    f.accounting().check().unwrap();
+}
+
+/// Two modules, two dfuns: the union is a finite set of two, and so is the
+/// method target. Neither module could say this on its own.
+#[test]
+fn two_callers_in_two_modules_give_a_finite_set_of_two() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f("useB", named_gvar("$fShowT", "$main$A$$fShowT"))],
+        class_ids(vec![]),
+    );
+    let c = class_module(
+        "C",
+        vec![call_f("useC", named_gvar("$fShowU", "$main$A$$fShowU"))],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b, &c]);
+    assert_eq!(flow_param(&f, "f").set.keys().len(), 2);
+    match &flow_site(&f, "A").outcome {
+        dictflow::Outcome::FiniteSet(ts) => assert_eq!(ts.len(), 2),
+        other => panic!("expected FiniteSet(2), got {other:?}"),
+    }
+    f.accounting().check().unwrap();
+}
+
+/// The same two callers, but a third module also uses the function as a
+/// value: the producer set is no longer enumerable and every site
+/// downstream of the parameter is Unresolved.
+#[test]
+fn using_the_function_as_a_value_makes_the_parameter_unenumerable() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f("useB", named_gvar("$fShowT", "$main$A$$fShowT"))],
+        class_ids(vec![]),
+    );
+    let c = class_module(
+        "C",
+        vec![(
+            binder("stash", demand(false, false)),
+            app(gvar("g"), named_gvar("f", "$main$A$f")),
+        )],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b, &c]);
+    assert_eq!(
+        flow_param(&f, "f").set,
+        DictSet::Top(dictflow::T_USED_AS_A_VALUE.into())
+    );
+    assert!(
+        matches!(&flow_site(&f, "A").outcome,
+            dictflow::Outcome::Unresolved(r) if r == dictflow::T_USED_AS_A_VALUE),
+        "{:?}",
+        flow_site(&f, "A").outcome
+    );
+    f.accounting().check().unwrap();
+}
+
+/// Dispatch carries dictionaries forward: the instance method `$cshowsPrec`
+/// is reached only by selecting field 0 of `$fShowT`, and the dictionary
+/// the dispatch site passes becomes its own parameter's producer.
+#[test]
+fn dispatch_feeds_the_instance_methods_own_dictionary_parameter() {
+    // $cshowsPrec = \$dShow2 v -> showsPrec $dShow2 v
+    let method = (
+        binder("$cshowsPrec", demand(false, false)),
+        dict_lam(
+            &[("$dShow2", TY_SHOW_T)],
+            lam(
+                &["v"],
+                app(
+                    app(named_gvar("showsPrec", SHOWS_PREC), var("$dShow2")),
+                    var("v"),
+                ),
+            ),
+        ),
+    );
+    let mut pairs = vec![
+        (
+            named_dict_top("$fShowT", "$main$A$$fShowT", TY_SHOW_T),
+            show_dict_with("$cshowsPrec"),
+        ),
+        (
+            named_dict_top("$fShowU", "$main$A$$fShowU", TY_SHOW_T),
+            show_dict_with("$cshowsPrecU"),
+        ),
+        method,
+        (
+            binder("$cshowsPrecU", demand(false, false)),
+            lam(&["p", "v"], var("v")),
+        ),
+    ];
+    // The dispatch: showsPrec $fShowT $fShowU  — the method's own
+    // dictionary parameter receives $fShowU.
+    pairs.push((
+        binder("dispatch", demand(false, false)),
+        app(
+            app(
+                named_gvar("showsPrec", SHOWS_PREC),
+                named_gvar("$fShowT", "$main$A$$fShowT"),
+            ),
+            named_gvar("$fShowU", "$main$A$$fShowU"),
+        ),
+    ));
+    let a = class_module("A", pairs, class_ids(vec![]));
+    let f = DictFlow::of_modules([&a]);
+    let p = flow_param(&f, "$cshowsPrec");
+    assert_eq!(p.set.keys().len(), 1, "{:?}", p.set);
+    let key = p.set.keys().iter().next().unwrap();
+    assert!(
+        f.values
+            .iter()
+            .any(|v| v.what.contains(key) && v.what.contains("$fShowU")),
+        "the dispatch should have carried $fShowU into the method: {key}"
+    );
+    let inner = f
+        .sites
+        .iter()
+        .find(|s| s.node != flow_site(&f, "A").node && s.module == "A")
+        .unwrap();
+    let exact = f
+        .sites
+        .iter()
+        .any(|s| matches!(&s.outcome, dictflow::Outcome::Exact(t) if t.occ == "$cshowsPrecU"));
+    assert!(
+        exact,
+        "no site dispatched into $fShowU: {:?}",
+        inner.outcome
+    );
+    f.accounting().check().unwrap();
+}
+
+/// One producer from a source the dump cannot see taints the parameter,
+/// and the taint reaches every site downstream of it.
+#[test]
+fn a_tainted_producer_is_unresolved_downstream() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f("useB", app(gvar("g"), var("z")))],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    assert_eq!(
+        flow_param(&f, "f").set,
+        DictSet::Top(dictflow::T_UNKNOWN_CALL.into())
+    );
+    assert!(matches!(
+        &flow_site(&f, "A").outcome,
+        dictflow::Outcome::Unresolved(r) if r == dictflow::T_UNKNOWN_CALL
+    ));
+    f.accounting().check().unwrap();
+}
+
+/// More instances than the set budget allows: the set collapses to `Top`
+/// with the budget named, and the site is Unresolved rather than a guess.
+#[test]
+fn exceeding_the_set_budget_is_unresolved() {
+    let n = dictflow::SET_CAP + 1;
+    let mut pairs = vec![(
+        binder("$cshowsPrec", demand(false, false)),
+        lam(&["p", "v"], var("v")),
+    )];
+    for i in 0..n {
+        pairs.push((
+            named_dict_top(
+                &format!("$fShow{i}"),
+                &format!("$main$A$$fShow{i}"),
+                TY_SHOW_T,
+            ),
+            show_dict_with("$cshowsPrec"),
+        ));
+    }
+    let (b, rhs) = show_user("$main$A$f");
+    pairs.push((b, rhs));
+    let a = class_module("A", pairs, class_ids(vec![]));
+    let calls: Vec<(Value, Value)> = (0..n)
+        .map(|i| {
+            call_f(
+                &format!("use{i}"),
+                named_gvar(&format!("$fShow{i}"), &format!("$main$A$$fShow{i}")),
+            )
+        })
+        .collect();
+    let bm = class_module("B", calls, class_ids(vec![]));
+    let f = DictFlow::of_modules([&a, &bm]);
+    assert_eq!(
+        flow_param(&f, "f").set,
+        DictSet::Top(dictflow::B_SET.into()),
+        "the {}-dictionary budget should have been exceeded",
+        dictflow::SET_CAP
+    );
+    assert!(matches!(
+        &flow_site(&f, "A").outcome,
+        dictflow::Outcome::Unresolved(r) if r == dictflow::B_SET
+    ));
+    f.accounting().check().unwrap();
+}
+
+/// A known method target is not a removable dictionary. The target is
+/// exact and the very same dictionary parameter is also handed to a callee
+/// the dump cannot see, so the dictionary is preserved and the site keeps
+/// dispatching on it.
+#[test]
+fn an_exact_target_on_an_escaping_dictionary_is_preserved() {
+    // f = \$dShow x -> showsPrec $dShow (g $dShow)
+    let leaky = (
+        named_top("f", "$main$A$f", true),
+        dict_lam(
+            &[("$dShow", TY_SHOW_T)],
+            lam(
+                &["x"],
+                app(
+                    app(named_gvar("showsPrec", SHOWS_PREC), var("$dShow")),
+                    app(gvar("g"), var("$dShow")),
+                ),
+            ),
+        ),
+    );
+    let a = class_module(
+        "A",
+        vec![
+            (
+                named_dict_top("$fShowT", "$main$A$$fShowT", TY_SHOW_T),
+                show_dict_with("$cshowsPrec"),
+            ),
+            (
+                binder("$cshowsPrec", demand(false, false)),
+                lam(&["p", "v"], var("v")),
+            ),
+            leaky,
+        ],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![call_f("use", named_gvar("$fShowT", "$main$A$$fShowT"))],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    // Part 1 still resolves the method.
+    assert!(
+        matches!(&flow_site(&f, "A").outcome,
+            dictflow::Outcome::Exact(t) if t.occ == "$cshowsPrec"),
+        "{:?}",
+        flow_site(&f, "A").outcome
+    );
+    // Part 2 refuses to erase it, and names the holder.
+    let e = f
+        .param_erasure
+        .iter()
+        .zip(&f.params)
+        .find(|(_, p)| p.owner == "f")
+        .map(|(e, _)| e)
+        .unwrap();
+    assert!(
+        matches!(&e.verdict, Verdict::Preserve(h) if h.contains("outside the dump")),
+        "{:?}",
+        e.verdict
+    );
+    let acct = f.accounting();
+    acct.check().unwrap();
+    assert_eq!(acct.preserved_dispatch(), 1, "{:?}", acct.matrix);
+}
+
+/// Two instances at a function that is never used as a value: the
+/// representation does not agree, but a clone per instance would carry it.
+#[test]
+fn two_instances_at_a_never_a_value_function_cost_one_clone_each() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![
+            call_f("useB", named_gvar("$fShowT", "$main$A$$fShowT")),
+            call_f("useC", named_gvar("$fShowU", "$main$A$$fShowU")),
+        ],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    let e = f
+        .param_erasure
+        .iter()
+        .zip(&f.params)
+        .find(|(_, p)| p.owner == "f")
+        .map(|(e, _)| e)
+        .unwrap();
+    assert_eq!(e.verdict, Verdict::ErasableWithClone(2), "{:?}", e);
+    assert_eq!(f.accounting().param_clones, 2);
+    f.accounting().check().unwrap();
+}
+
+/// A top-level binder GHC has not externalised has an *internal* name, and
+/// those are not unique — `ShellCheck.AST` has three top-level bindings
+/// called `$_sys$$fTraversableInnerToken`. Two dictionaries that share one
+/// must stay two dictionaries.
+#[test]
+fn two_dictionaries_sharing_an_internal_name_stay_distinct() {
+    let mut p1 = dict_top("$fShowP", TY_SHOW_T, false);
+    p1["name"] = json!("$_sys$$fShowX");
+    let mut p2 = dict_top("$fShowQ", TY_SHOW_T, false);
+    p2["name"] = json!("$_sys$$fShowX");
+    let a = class_module(
+        "A",
+        vec![
+            (p1, show_dict_with("$cA")),
+            (p2, show_dict_with("$cB")),
+            (
+                binder("$cA", demand(false, false)),
+                lam(&["p", "v"], var("v")),
+            ),
+            (
+                binder("$cB", demand(false, false)),
+                lam(&["p", "v"], var("v")),
+            ),
+            (
+                binder("use1", demand(false, false)),
+                app(
+                    app(named_gvar("showsPrec", SHOWS_PREC), var("$fShowP")),
+                    var("x"),
+                ),
+            ),
+            (
+                binder("use2", demand(false, false)),
+                app(
+                    app(named_gvar("showsPrec", SHOWS_PREC), var("$fShowQ")),
+                    var("x"),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a]);
+    let mut targets: Vec<String> = f
+        .sites
+        .iter()
+        .map(|s| match &s.outcome {
+            dictflow::Outcome::Exact(t) => t.occ.clone(),
+            other => panic!("expected Exact, got {other:?}"),
+        })
+        .collect();
+    targets.sort();
+    assert_eq!(targets, vec!["$cA".to_string(), "$cB".to_string()]);
+    f.accounting().check().unwrap();
+}

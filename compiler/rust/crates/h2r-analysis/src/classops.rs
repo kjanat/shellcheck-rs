@@ -367,7 +367,10 @@ pub const CLASSES: &[ClassSpec] = &[
 ];
 
 /// The class a selector belongs to, and the field it reads.
-fn selector_class(module: &str, occ: &str) -> Option<(&'static ClassSpec, usize, &'static str)> {
+pub(crate) fn selector_class(
+    module: &str,
+    occ: &str,
+) -> Option<(&'static ClassSpec, usize, &'static str)> {
     // A superclass selector names its class in its own occurrence name.
     if let Some(rest) = occ.strip_prefix("$p") {
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -390,7 +393,7 @@ fn selector_class(module: &str, occ: &str) -> Option<(&'static ClassSpec, usize,
 }
 
 /// The class table entry for a class TyCon's stable name.
-fn class_of_tycon(name: &str) -> Option<&'static ClassSpec> {
+pub(crate) fn class_of_tycon(name: &str) -> Option<&'static ClassSpec> {
     let (_, module, occ) = split_stable_name(name)?;
     CLASSES
         .iter()
@@ -1784,7 +1787,7 @@ fn reason_head(r: &str) -> String {
 
 /// Is this type a class constraint — a `TyConApp` of a class the table
 /// knows? Level 4 on the structured type; the table decides classhood.
-fn class_ty(t: &Ty) -> Option<String> {
+pub(crate) fn class_ty(t: &Ty) -> Option<String> {
     let tc = t.tycon()?;
     class_of_tycon(&tc.name)?;
     Some(tc.name.clone())

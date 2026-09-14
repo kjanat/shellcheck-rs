@@ -93,6 +93,27 @@ enum Command {
         /// Restrict to one class, by its name (`Show`, `MonadState`, ...).
         #[arg(long)]
         class: Option<String>,
+        /// Re-derive every site's outcome whole-program (M2.4c) and print
+        /// the erasure section. On by default.
+        #[arg(long, default_value_t = true, overrides_with = "per_module")]
+        whole_program: bool,
+        /// Resolve per module, as M2.4b did: an exported function's
+        /// dictionary parameter has no enumerable producer set.
+        #[arg(long)]
+        per_module: bool,
+    },
+    /// Whole-program dictionary propagation (M2.4c): the fixpoint over
+    /// every dictionary parameter in the closed world, the method target
+    /// of every class-op site, and — as a separate proof object — whether
+    /// each dictionary can be erased.
+    Dictflow {
+        dir: PathBuf,
+        /// Emit parameters, values, sites and the accounting as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print every parameter and every site with its set and verdict.
+        #[arg(long)]
+        explain: bool,
     },
     /// Compare census metrics across several Core dump directories
     /// (e.g. the GHC flag matrix). Arguments are `label=dir` or plain dirs.
@@ -368,7 +389,17 @@ fn main() -> Result<()> {
             json,
             explain,
             class,
-        } => classops(&dir, module.as_deref(), json, explain, class.as_deref()),
+            whole_program,
+            per_module,
+        } => classops(
+            &dir,
+            module.as_deref(),
+            json,
+            explain,
+            class.as_deref(),
+            whole_program && !per_module,
+        ),
+        Command::Dictflow { dir, json, explain } => dictflow(&dir, json, explain),
         Command::Parsec {
             dir,
             module,
@@ -4399,6 +4430,7 @@ fn classops(
     json: bool,
     explain: bool,
     class: Option<&str>,
+    whole_program: bool,
 ) -> Result<()> {
     use h2r_analysis::classops::{
         CLASSES, Census, Outcome, RULES, SourceKind, TargetKind, check_table,
@@ -4416,14 +4448,28 @@ fn classops(
     let acct = census.accounting();
     let mismatches = check_table(&world);
 
+    // M2.4c: the whole-program re-derivation is a *separate* object, laid
+    // over the same population. The per-module report above is untouched.
+    let wp = if whole_program {
+        Some(h2r_analysis::dictflow::DictFlow::of_modules(modules.iter()))
+    } else {
+        None
+    };
+
     if json {
-        let out = serde_json::json!({
+        let mut out = serde_json::json!({
             "sites": census.sites,
             "sources": census.sources,
             "accounting": acct,
             "tableMismatches": mismatches,
             "rules": RULES,
         });
+        if let Some(wp) = &wp {
+            out["wholeProgram"] = serde_json::json!({
+                "accounting": wp.accounting(),
+                "rules": h2r_analysis::dictflow::RULES,
+            });
+        }
         serde_json::to_writer(std::io::stdout().lock(), &out)?;
         println!();
         return Ok(());
@@ -4594,6 +4640,63 @@ fn classops(
         CLASSES.len()
     );
 
+    if let Some(wp) = &wp {
+        let w = wp.accounting();
+        println!();
+        println!(
+            "  whole-program re-derivation (M2.4c), closed world, {} rounds",
+            w.rounds
+        );
+        println!(
+            "  {:<28} {:>9} {:>9}",
+            "outcome", "per-module", "whole-program"
+        );
+        println!("  {:<28} {:>9} {:>9}", "Exact(target)", acct.exact, w.exact);
+        println!(
+            "  {:<28} {:>9} {:>9}",
+            "FiniteSet(targets)", acct.finite, w.finite
+        );
+        println!(
+            "  {:<28} {:>9} {:>9}",
+            "Unresolved", acct.unresolved, w.unresolved
+        );
+        println!(
+            "  the fixpoint bounded the *dictionary* at {} of {} sites and at {} of {}\n  parameters, so the instance is known at many sites whose method body is not.",
+            w.dict_known, w.sites, w.params_bounded, w.params
+        );
+        println!(
+            "  population {} = {} + {} + {}: {}",
+            w.sites,
+            w.exact,
+            w.finite,
+            w.unresolved,
+            match w.check() {
+                Ok(()) => "asserted".to_string(),
+                Err(e) => format!("FAILED: {e}"),
+            }
+        );
+        println!();
+        println!("  erasure — A KNOWN METHOD TARGET IS NOT A REMOVABLE DICTIONARY.");
+        println!("  The verdicts below are computed from facts recorded separately from");
+        println!("  the targets above, and the two are crossed, never collapsed.");
+        let names = ["Erasable", "ErasableWithClone", "Preserve", "Unresolved"];
+        println!("  {:<20} {:>9} {:>11}", "verdict", "values", "parameters");
+        for (i, n) in names.iter().enumerate() {
+            println!(
+                "  {n:<20} {:>9} {:>11}",
+                w.value_verdicts[i], w.param_verdicts[i]
+            );
+        }
+        println!(
+            "  clones a WithClone verdict would cost: {} (values) + {} (parameters)",
+            w.value_clones, w.param_clones
+        );
+        println!(
+            "  sites with an Exact target on a Preserve dictionary: {}",
+            w.matrix[0][2]
+        );
+    }
+
     if explain {
         println!();
         for s in &census.sites {
@@ -4652,4 +4755,280 @@ fn pct(n: usize, total: usize) -> f64 {
     } else {
         100.0 * n as f64 / total as f64
     }
+}
+
+//------------------------------------------------------------------------------
+// dictflow
+//------------------------------------------------------------------------------
+
+fn dictflow(dir: &Path, json: bool, explain: bool) -> Result<()> {
+    use h2r_analysis::dictflow::{
+        DictFlow, DictSet, Outcome, ROUND_BUDGET, RULES, SET_CAP, Verdict,
+    };
+
+    let modules = load_dir(dir)?;
+    let flow = DictFlow::of_modules(modules.iter());
+    let a = flow.accounting();
+
+    if json {
+        let out = serde_json::json!({
+            "sites": flow.sites,
+            "parameters": flow.params,
+            "values": flow.values,
+            "parameterErasure": flow.param_erasure,
+            "accounting": a,
+            "rules": RULES,
+        });
+        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        println!();
+        return Ok(());
+    }
+
+    println!(
+        "The closed world: {} modules, Main.main the only root. Every call site of\n\
+         every function is in the dump (W0-CLOSED-WORLD, an assumption, not a\n\
+         derivation), so every dictionary parameter has an enumerable producer set.",
+        modules.len()
+    );
+    println!();
+    println!(
+        "Fixpoint: {} rounds over {} dictionary parameters and {} dictionary values{}.",
+        a.rounds,
+        a.params,
+        a.values,
+        if a.round_budget_hit {
+            format!(
+                " (the {ROUND_BUDGET}-round budget was hit: every unstable parameter is Unresolved)"
+            )
+        } else {
+            String::new()
+        }
+    );
+    println!("Budgets: {ROUND_BUDGET} rounds, {SET_CAP} dictionaries per set.");
+    println!();
+
+    println!("Part 1 — which method can run here");
+    println!(
+        "  class-op sites (population)                  {:>7}",
+        a.sites
+    );
+    println!(
+        "    Exact(target)                             {:>7}  {:>5.1}%",
+        a.exact,
+        pct(a.exact, a.sites)
+    );
+    println!(
+        "    FiniteSet(targets)                        {:>7}  {:>5.1}%",
+        a.finite,
+        pct(a.finite, a.sites)
+    );
+    println!(
+        "    Unresolved                                {:>7}  {:>5.1}%",
+        a.unresolved,
+        pct(a.unresolved, a.sites)
+    );
+    println!(
+        "  population = Exact + FiniteSet + Unresolved: {}",
+        match a.check() {
+            Ok(()) => "asserted".to_string(),
+            Err(e) => format!("FAILED: {e}"),
+        }
+    );
+
+    println!();
+    println!(
+        "  the fixpoint bounded the *dictionary* at {} of {} sites and at {} of {}\n\
+         \x20 parameters. Where the method target is still Unresolved the instance is\n\
+         \x20 known and its method body is not in the dump.",
+        a.dict_known, a.sites, a.params_bounded, a.params
+    );
+    println!("  bounded sites by the number of instances that reach them:");
+    for (k, n) in &a.instances {
+        println!("  {k:>3} instance(s) {n:>7}");
+    }
+
+    println!();
+    println!("  by class");
+    println!(
+        "  {:<16} {:>7} {:>7} {:>9} {:>11}",
+        "class", "sites", "exact", "finite", "unresolved"
+    );
+    for (name, (n, e, f, u)) in &a.by_class {
+        println!("  {name:<16} {n:>7} {e:>7} {f:>9} {u:>11}");
+    }
+
+    println!();
+    println!(
+        "  taint sources, over the {} dictionary parameters",
+        a.params
+    );
+    let mut taints: Vec<_> = a.taints.iter().collect();
+    taints.sort_by_key(|(k, n)| (std::cmp::Reverse(**n), (*k).clone()));
+    for (reason, n) in &taints {
+        let at = flow
+            .params
+            .iter()
+            .find(|x| matches!(&x.set, DictSet::Top(r) if r.split(';').next().unwrap_or(r).trim() == reason.as_str()));
+        match at {
+            Some(x) => println!(
+                "  {n:>5}  {reason}\n         e.g. {} {}.{}",
+                x.module, x.owner, x.occ
+            ),
+            None => println!("  {n:>5}  {reason}"),
+        }
+    }
+
+    println!();
+    println!("  unresolved site reasons, with a representative node");
+    let mut reasons: Vec<_> = a.reasons.iter().collect();
+    reasons.sort_by_key(|(k, n)| (std::cmp::Reverse(**n), (*k).clone()));
+    for (reason, n) in reasons.iter().take(12) {
+        let at = flow.sites.iter().find(|s| {
+            matches!(&s.outcome, Outcome::Unresolved(r) if r.split(';').next().unwrap_or(r).trim() == reason.as_str())
+        });
+        match at {
+            Some(s) => println!(
+                "  {n:>5}  {reason}\n         e.g. {} node {}",
+                s.module, s.node
+            ),
+            None => println!("  {n:>5}  {reason}"),
+        }
+    }
+
+    println!();
+    println!("Part 2 — can the dictionary disappear");
+    println!("  A KNOWN METHOD TARGET IS NOT A REMOVABLE DICTIONARY. Part 1 says which");
+    println!("  method runs; this says whether the dictionary survives. The facts are");
+    println!("  recorded separately and the verdicts are separate verdicts.");
+    println!();
+    let names = ["Erasable", "ErasableWithClone", "Preserve", "Unresolved"];
+    println!("  {:<20} {:>9} {:>11}", "verdict", "values", "parameters");
+    for (i, n) in names.iter().enumerate() {
+        println!(
+            "  {n:<20} {:>9} {:>11}",
+            a.value_verdicts[i], a.param_verdicts[i]
+        );
+    }
+    println!("  {:<20} {:>9} {:>11}", "total", a.values, a.params);
+    println!(
+        "  values = E + WithClone + Preserve + Unresolved, parameters likewise: {}",
+        match a.check() {
+            Ok(()) => "asserted".to_string(),
+            Err(e) => format!("FAILED: {e}"),
+        }
+    );
+    println!(
+        "  clones counted (never made): {} over the values, {} over the parameters",
+        a.value_clones, a.param_clones
+    );
+
+    println!();
+    println!("  the 3x4 matrix: (target outcome) x (dictionary verdict)");
+    println!(
+        "  {:<12} {:>10} {:>18} {:>10} {:>12}",
+        "", names[0], names[1], names[2], names[3]
+    );
+    for (i, row) in ["Exact", "FiniteSet", "Unresolved"].iter().enumerate() {
+        println!(
+            "  {row:<12} {:>10} {:>18} {:>10} {:>12}",
+            a.matrix[i][0], a.matrix[i][1], a.matrix[i][2], a.matrix[i][3]
+        );
+    }
+    println!(
+        "  sites whose target is Exact but whose dictionary is Preserve: {}\n\
+         \x20 — a dispatch on a preserved dictionary. The two questions do not collapse.",
+        a.matrix[0][2]
+    );
+
+    println!();
+    println!("  erasure reasons");
+    let mut er: Vec<_> = a.erasure_reasons.iter().collect();
+    er.sort_by_key(|(k, n)| (std::cmp::Reverse(**n), (*k).clone()));
+    for (reason, n) in er.iter().take(12) {
+        let at = flow
+            .values
+            .iter()
+            .chain(flow.param_erasure.iter())
+            .find(|e| match &e.verdict {
+                Verdict::Preserve(r) | Verdict::Unresolved(r) => {
+                    r.split(';')
+                        .next()
+                        .unwrap_or(r)
+                        .split(" (")
+                        .next()
+                        .unwrap_or(r)
+                        .trim()
+                        == reason.as_str()
+                }
+                _ => false,
+            });
+        match at {
+            Some(e) => println!(
+                "  {n:>5}  {reason}\n         e.g. the {} {} in {}",
+                e.kind, e.what, e.module
+            ),
+            None => println!("  {n:>5}  {reason}"),
+        }
+    }
+
+    println!();
+    println!("  rules");
+    for (id, level, meaning) in RULES {
+        println!("  {id:<22} level {level}  {meaning}");
+    }
+
+    if explain {
+        println!();
+        for x in &flow.params {
+            println!(
+                "{} {}.{}#{}  {}  strict={}",
+                x.module,
+                x.owner,
+                x.occ,
+                x.index,
+                match &x.set {
+                    DictSet::Top(r) => format!("Top({r})"),
+                    DictSet::Set(k) =>
+                        format!("{{{}}}", k.iter().cloned().collect::<Vec<_>>().join(", ")),
+                },
+                x.known_strict
+            );
+        }
+        for (x, e) in flow.params.iter().zip(&flow.param_erasure) {
+            println!(
+                "{} parameter {}  {}{}",
+                x.module,
+                e.what,
+                e.verdict.label(),
+                match &e.verdict {
+                    Verdict::ErasableWithClone(n) => format!("({n})"),
+                    Verdict::Preserve(h) | Verdict::Unresolved(h) => format!(" {h}"),
+                    Verdict::Erasable => String::new(),
+                }
+            );
+        }
+        for s in &flow.sites {
+            println!(
+                "{} node {}  {}.{}  -> {}   dictionary {}",
+                s.module,
+                s.node,
+                s.class,
+                s.method,
+                match &s.outcome {
+                    Outcome::Exact(t) => format!("Exact {}.{}", t.module, t.occ),
+                    Outcome::FiniteSet(ts) => format!(
+                        "FiniteSet({}) {}",
+                        ts.len(),
+                        ts.iter()
+                            .map(|t| format!("{}.{}", t.module, t.occ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    Outcome::Unresolved(r) => format!("Unresolved {r}"),
+                },
+                s.dict_verdict.label()
+            );
+        }
+    }
+    Ok(())
 }

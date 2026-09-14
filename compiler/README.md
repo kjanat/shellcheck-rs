@@ -3803,6 +3803,259 @@ exactly what it would have to prove: the dictionaries reaching 252 exported
 functions' parameters, and the dictionaries that reach 280 instance-method
 parameters through dispatch.
 
+## M2.4c — whole-program dictionary flow, and whether the dictionary can go
+
+[M2.4b](#m24b--the-closed-world-class-op-census) answered *which method can
+run here* one module at a time and found **0 of 565** sites resolved: every
+dictionary was a run-time parameter. It also said what a closed-world
+specialiser would have to do, and this milestone does it — and, separately,
+asks the question M2.4b refused to mix in.
+
+### The closed-world assumption, stated
+
+The 28 modules of the dump are **the entire program**, and `Main.main` is
+its only root. Nothing outside the dump calls into ShellCheck's library
+modules: there is no plugin interface, no `dlopen`, and the `prop_*` corpus
+— the only other importer — is what `striptests` removes from a production
+build. This is `W0-CLOSED-WORLD`, and it is an **assumption**: the dump
+cannot prove it. Everything in Part 1 rests on it, which is why it is
+written into `dictflow.rs`'s header, into `h2r dictflow`'s first paragraph,
+and here.
+
+Under it, an exported function's dictionary parameter *does* have an
+enumerable producer set: the union over **all** call sites in **all**
+modules, found by stable name through the global occurrences of the
+function (`W1-GLOBAL-CALLERS`) — unless the function is also used as a
+value, which makes the set unenumerable exactly as
+[`boundary.rs`](#m221--locally-removable-is-not-globally-composable) found
+for tuples.
+
+### Part 1 — the fixpoint
+
+`crates/h2r-analysis/src/dictflow.rs` is a whole-program worklist over one
+abstract set per dictionary parameter. Dictionary **values** are
+dictionary-constructor applications, dfuns applied or not, and superclass
+selections of those (`W2-DICT-VALUE`); **parameters** accumulate the union
+of what reaches them across modules (`W3-PARAM-UNION`); **dispatch**
+(`W4-DISPATCH`) is what makes it more than a call graph: a class-op site
+with a known dictionary set selects, per dictionary, the method at the
+class's field index, and where that method is a separate binding in the
+dump — `$fTraversableInnerToken_$ctraverse` and its kin — the site's own
+remaining arguments *are* that binding's actual arguments, so the method's
+dictionary parameters are fed from the dispatch and propagation continues
+through it.
+
+The analysis is **monovariant** (`W5-MONOVARIANT`): one abstract value per
+dictionary identity, one set per parameter, no calling context. It loses
+precision and never soundness. Anything it cannot account for taints
+(`W6-TAINT`): a `Top` set at a class-op site means *any* instance of that
+class could be selected there, including one outside the dump, so every
+method at that class's field index is tainted too — that is how the taint
+crosses dispatch in the other direction. Budgets are stated and exceeding
+one is `Unresolved`, never a guess (`W7-BUDGET`): 40 rounds, 32
+dictionaries per set, 4,000 expression steps per evaluation, 8 nested field
+reads. **On all seven dumps the fixpoint settles in 7 rounds and no budget
+is hit.**
+
+### What it found
+
+| | per module (M2.4b) | whole program |
+|---|---:|---:|
+| class-op sites (population) | 565 | 565 |
+| … `Exact(target)` | **0** | **7** |
+| … `FiniteSet(targets)` | 0 | 0 |
+| … `Unresolved` | 565 | 558 |
+
+`population = Exact + FiniteSet + Unresolved` is asserted. Seven sites —
+all of `Ranged`, ShellCheck's own class, dispatching on
+`$fRangedPositionedComment` — now have a known method. That is the whole of
+the improvement in *method targets*, and stating only that would be
+misleading, because the fixpoint did far more than seven sites' worth of
+work:
+
+> **the dictionary set is bounded at 118 of the 565 sites** (74 reach
+> exactly one instance, 44 reach exactly two) **and at 106 of the 216
+> dictionary parameters.**
+
+`ShellCheck.Parser`'s `parseScript`, `readArray`, `readNewlineList`,
+`tryWordToken` — 36 dictionary parameters in all — resolve their `$dMonad` to exactly
+`{$fMonadIdentity, $fMonadIO}` — the two monads ShellCheck really runs the
+parser in, proved by enumerating every caller in the program. The *method*
+stays `Unresolved` only because `$fMonadIdentity` and `$fMonadIO` are
+`base`'s, and their method bodies are not in the dump. Per the milestone's
+own rule, the target is the instance method's stable name only when GHC
+exported it as a separate binding referenced somewhere in the dump;
+otherwise `Unresolved(instance-method-not-in-the-dump)`, with the instance
+named. Nothing is guessed.
+
+### Why the other 558 are unresolved
+
+| | reason | representative |
+|---:|---|---|
+| 413 | the function holding the dictionary parameter is **unreachable**: it has no occurrence anywhere in the closed world, so under `W0` nothing can name it and the site never runs | `ShellCheck.AST` node 3465 (`doAnalysis`) |
+| 53 | `instance-method-not-in-the-dump($fMonoidDual)` — `$cfoldMap`'s `Monoid` is `Dual (Endo …)`, `base`'s | `ShellCheck.AST` node 27756 |
+| 48 | `instance-method-not-in-the-dump($fMonadIO)` | `ShellCheck.Checker` node 49 |
+| 17 | the dictionary is read from a **non-dictionary constructor field** (`SomeException`'s existential) | `Main` node 659 |
+| 9 | the method sits in a dictionary field **no class-op site in the program ever selects**: it is never dispatched | `ShellCheck.AST` node 6501 |
+| 7 + 5 + 1 | mtl's `$fMonadStatesParsecT`, `$fMonadStatesReaderT`, `$fMonadReaderrParsecT` — instance known, body in another package | `ShellCheck.Parser` node 138695 |
+| 4 | the dictionary is **returned by a call the dump cannot see** | `ShellCheck.AnalyzerLib` node 734 |
+| 1 | dispatched from a site whose own dictionary is unknown | `ShellCheck.AST` node 27609 |
+
+The first row is the milestone's most uncomfortable finding and it is not
+an artefact. **922 of the 2,235 top-level bindings in the dump are never
+referenced anywhere in it** — `doAnalysis` occurs exactly once in all 28
+modules, as its own binder. They are ShellCheck's exported library API,
+whose only other consumers are the `prop_*` corpus and downstream packages,
+neither of which is in a production build. Under `W0` they are dead code,
+and 413 of the 565 class-op sites live in them. M2.4b called these
+"parameter of an exported function"; the closed world says something
+sharper and less flattering: most of that population is not reachable at
+all.
+
+The taint over the 216 dictionary parameters, for comparison: 90
+unreachable, 12 never dispatched, 4 from a call the dump cannot see, 3 a
+function used as a value, 1 dispatch-tainted — and 106 bounded.
+
+### Part 2 — erasure agreement, a separate proof object
+
+> **A KNOWN METHOD TARGET IS NOT A REMOVABLE DICTIONARY.**
+
+This is the exact analogue of M2.2.1's *locally removable is not globally
+composable*. Part 1 says which method runs and says **nothing whatever**
+about whether the dictionary itself can disappear: a dictionary with one
+known instance may still be forced where erasure would move divergence,
+stored in a constructor, or handed to a callee the dump cannot see. The
+verdicts below come from facts recorded **separately** from Part 1, and the
+two are crossed rather than collapsed.
+
+* **Evaluation** (`E1-TOTAL`). A class-op application is a strict field
+  selection, so it forces its dictionary; replacing `classOp d x` by
+  `method x` changes behaviour only if `d` could be ⊥. A
+  dictionary-constructor or dfun application *is* a value, so a boundary
+  all of whose producers are such values is total and erasure moves no
+  divergence; a parameter GHC records as strict is forced at entry already.
+* **Representation agreement** (`E2-AGREE`, `E3-CLONE`). Every producer at
+  every boundary a dictionary crosses must request the same erased form —
+  the same instance. One instance ⇒ `Erasable`. Several, at a function that
+  is never used as a value (which is what kept the set finite), ⇒
+  `ErasableWithClone`, one clone per instance, **counted, never made**.
+* **Escape** (`E4-ESCAPE`). Used as an ordinary value — stored, passed to
+  an imported callee, handed to a non-dictionary parameter — ⇒ `Preserve`,
+  with the holder named.
+
+| verdict | dictionary values | dictionary parameters |
+|---|---:|---:|
+| `Erasable` | 102 | 36 |
+| `ErasableWithClone` | 0 | 4 |
+| `Preserve` | 89 | 84 |
+| `Unresolved` | 0 | 92 |
+| **total** | **191** | **216** |
+
+`values = Erasable + WithClone + Preserve + Unresolved` and the same for
+parameters are both asserted. The four `WithClone` parameters cost **8**
+clones between them (two instances each); no value needs one, a value being
+one instance by construction.
+
+The dominant reasons: 133 `passed to a callee outside the dump` (a `base`
+dfun handed to a `base` function), 80 `function-is-unreachable-in-the-closed-world`,
+40 `used as an ordinary value`, 7 `method-is-never-dispatched`, 4
+`dictionary-returned-by-a-call-the-dump-cannot-see`, 1 dispatch-tainted.
+
+### The two questions, crossed
+
+The 3×4 matrix is asserted to sum to the population:
+
+| target ⟍ dictionary | `Erasable` | `ErasableWithClone` | `Preserve` | `Unresolved` |
+|---|---:|---:|---:|---:|
+| `Exact` | 7 | 0 | **0** | 0 |
+| `FiniteSet` | 0 | 0 | **0** | 0 |
+| `Unresolved` | 10 | 0 | 154 | 394 |
+
+The bolded cells are the population this milestone exists to keep separate:
+a site whose method is known but whose dictionary must survive anyway — a
+dispatch on a preserved dictionary. On `-O1` it is **0**, which is a
+result, not an absence: the seven resolved sites all dispatch on a
+dictionary that nothing else holds. The other direction is populated and
+just as instructive: **10 sites whose dictionary is `Erasable` still have
+no known method target**, because the instance is `base`'s and its body is
+not here. Erasability and dispatch resolution are independent, and the
+matrix shows it in both directions.
+
+### Across the flag matrix
+
+| | A `-O1` | B `-O2` | C | D | E | F |
+|---|---:|---:|---:|---:|---:|---:|
+| class-op sites | 565 | 587 | 595 | 595 | 595 | 596 |
+| … `Exact` | 7 | 7 | 7 | 0 | 0 | 0 |
+| sites with a bounded dictionary | 118 | 138 | 140 | 65 | 65 | 65 |
+| parameters bounded / total | 106/216 | 98/210 | 109/222 | 64/223 | 64/223 | 72/231 |
+| values `Erasable` / total | 102/191 | 102/191 | 101/191 | 139/238 | 139/238 | 139/238 |
+| parameters `Erasable` | 36 | 28 | 34 | 28 | 28 | 28 |
+| clones a `WithClone` would cost | 8 | 6 | 8 | 12 | 12 | 12 |
+| fixpoint rounds | 7 | 7 | 7 | 7 | 7 | 7 |
+
+Aggressive specialisation (D–F) makes the whole-program answer *worse*, not
+better: it duplicates dictionaries into more inline constructor
+applications (238 values rather than 191) and loses the seven `Ranged`
+targets. Specialising harder does not help a closed-world analysis; it
+scatters the evidence.
+
+### A hazard the milestone had to fix
+
+A top-level binder GHC has not externalised carries an **internal** name —
+`$_in$$ctraverse`, `$_sys$$fTraversableInnerToken` — and those are **not
+unique**: `ShellCheck.AST` alone has three distinct top-level bindings whose
+name is `$_sys$$fTraversableInnerToken`. [M2.4a](#m24a--stable-global-identity-and-structured-types)'s
+bijection is over the *global Ids a module refers to*, which are external by
+construction; it says nothing about a module's own un-externalised binders.
+So `dictflow.rs` keys every dictionary identity by
+`Module#node` of its constructor application, keeps the name for the report
+only, and puts nothing with an internal name into the cross-module linkage
+table. The check that this is enough is a count: **0 global `Var`
+occurrences in the whole dump carry an internal name**, so nothing can refer
+to one from another module anyway. `classops.rs`'s `World` has the same
+latent collision and is not reachable through it for the same reason; it was
+left alone rather than changed under a byte-identity gate.
+
+### The CLI
+
+`h2r classops` gains `--whole-program` (**on by default**), which appends
+the re-derivation and the erasure section to the M2.4b report, and
+`--per-module`, which reproduces M2.4b exactly. `h2r dictflow <dir>
+[--explain] [--json]` prints the closed-world assumption, the fixpoint, both
+tables and the 3×4 matrix.
+
+### The gate
+
+Every earlier report — `laziness`, `parsec`, `tuples` (plus `--verify`),
+`fields`, `lists`, `text`, `verify-rep` — is **byte-identical** before and
+after, and so is `h2r classops --per-module` (plus `--explain` and `--json`)
+against M2.4b's `h2r classops`. `cargo test` (**181** — nine new: one caller
+in the closed world giving `Exact`, two callers in two modules giving
+`FiniteSet(2)`, a third module using the function as a value making it
+unenumerable, dispatch feeding an instance method's own dictionary
+parameter, a tainted producer unresolved downstream, the set budget
+exceeded, an `Exact` target on an escaping dictionary `Preserve`d, two
+instances costing one clone each, and two dictionaries sharing an internal
+name staying distinct), `cargo clippy --all-targets` (0 warnings) and
+`cargo fmt --check` are clean.
+
+### What remains, stated rather than hidden
+
+* The closed world is an **assumption**. If ShellCheck is built as a
+  library for someone else, 413 of the 565 sites stop being dead and the
+  answer changes.
+* The analysis is monovariant: a dfun applied to two different argument
+  dictionaries has one identity here. A call-string or per-instantiation
+  analysis would split some of the 44 two-instance sites.
+* `Unresolved` for a parameter is not a proof that it *cannot* be erased,
+  only that this proof object declines to say so.
+* A dictionary reaching an imported callee is `Preserve`d on the strength
+  of the callee being outside the dump; a hand-written Rust replacement for
+  that callee could take the erased form instead, and 133 of the 265
+  non-`Erasable` verdicts are that case. The lowering, not this analysis,
+  decides those.
+
 ## What ShellCheck actually needs
 
 Surveyed against the tree at the repo root:

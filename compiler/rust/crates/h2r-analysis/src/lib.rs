@@ -3,6 +3,7 @@
 pub mod boundary;
 pub mod callee;
 pub mod classops;
+pub mod dictflow;
 pub mod fields;
 pub mod flow;
 pub mod laziness;
