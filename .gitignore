@@ -26,3 +26,9 @@ stack.yaml.lock
 
 ### misc ###
 /shellcheck.1
+
+# h2r compiler
+compiler/build/
+compiler/core-json/
+compiler/rust/target/
+compiler/h2r-plugin/dist-newstyle/

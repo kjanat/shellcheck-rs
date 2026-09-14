@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/h2r-core-ir",
+    "crates/h2r-rt",
+    "crates/h2r-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["unbounded_depth"] }
+walkdir = "2"
+h2r-core-ir = { path = "crates/h2r-core-ir" }
+h2r-rt = { path = "crates/h2r-rt" }
