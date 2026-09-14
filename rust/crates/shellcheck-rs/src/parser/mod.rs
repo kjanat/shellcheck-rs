@@ -236,6 +236,7 @@ struct Mark {
 
 type PResult<T> = Result<T, ()>;
 
+#[derive(Clone)]
 struct PendingHereDoc {
     dashed: Dashed,
     quoted: Quoted,
@@ -696,6 +697,46 @@ impl Parser {
         Err(())
     }
 
+    /// `try (p >> fail msg)` -- `unexpecting`, `failIfIncompleteOp`, a
+    /// `tryWordToken` that matched a prefix -- for a `p` that reads `n`
+    /// characters: the failure is recorded past them, with a message when
+    /// there is one, the cursor comes back, and what stood before merges
+    /// with it rather than being dropped by the reading.
+    pub(super) fn fail_past(&mut self, n: usize, message: &str) {
+        let saved = self.failure.clone();
+        let m = self.mark();
+        for _ in 0..n {
+            self.bump();
+        }
+        self.record_failure_as(message, !message.is_empty(), false);
+        self.restore_failure(saved);
+        self.reset(m);
+    }
+
+    /// The next attempt of a `many p` after an iteration that consumed.
+    /// `manyAccum` replies with the *failing attempt's* error alone, so
+    /// whatever the successful iterations carried -- an `unexpecting` past
+    /// the keyword that ended their last term -- is gone, and an attempt that
+    /// recorded nothing of its own stands for Parsec's unknown error where it
+    /// gave up. A success or a consuming failure keeps its own, as always.
+    pub(super) fn many_attempt<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> PResult<T>,
+    ) -> PResult<T> {
+        let m = self.mark();
+        // Past a commitment there is no accumulated error to lose: the failure
+        // that ended the parse is the one reported, and Parsec would never
+        // have run another iteration at all. Same guard as [`Parser::bump`].
+        if !self.committed {
+            self.failure = None;
+        }
+        let r = f(self);
+        if r.is_err() && self.idx == m.idx && self.failure.is_none() {
+            self.fail_implicitly();
+        }
+        r
+    }
+
     /// Whether a failure here has consumed input since the innermost
     /// production began, and so cannot be backtracked out of.
     fn has_consumed(&self) -> bool {
@@ -720,14 +761,18 @@ impl Parser {
     }
 
     /// `try p`: on failure the cursor goes back, and so does Parsec's own state
-    /// -- the buffered parse notes, and with them the commitment, since a
-    /// consuming failure inside a `try` is caught rather than propagated. The
-    /// context stack and the problems live in the `StateT` underneath and stay.
+    /// -- the buffered parse notes, the here documents still waiting for a line
+    /// feed and the bodies already read for them, and with all of it the
+    /// commitment, since a consuming failure inside a `try` is caught rather
+    /// than propagated. The context stack and the problems live in the `StateT`
+    /// underneath and stay.
     pub(super) fn try_parse<T>(&mut self, f: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
         let m = self.mark();
         let notes = self.notes.len();
         let committed = self.committed;
         let frozen = self.frozen_contexts.clone();
+        let pending = self.pending_heredocs.clone();
+        let bodies = self.heredoc_bodies.clone();
         match f(self) {
             Ok(v) => Ok(v),
             Err(()) => {
@@ -735,6 +780,8 @@ impl Parser {
                 self.notes.truncate(notes);
                 self.committed = committed;
                 self.frozen_contexts = frozen;
+                self.pending_heredocs = pending;
+                self.heredoc_bodies = bodies;
                 Err(())
             }
         }
@@ -758,6 +805,8 @@ impl Parser {
         let committed = self.committed;
         let frozen = self.frozen_contexts.clone();
         let failure = self.failure.clone();
+        let pending = self.pending_heredocs.clone();
+        let bodies = self.heredoc_bodies.clone();
         let out = f(self).ok();
         if out.is_some() {
             self.failure = failure;
@@ -768,6 +817,8 @@ impl Parser {
         self.contexts = contexts;
         self.committed = committed;
         self.frozen_contexts = frozen;
+        self.pending_heredocs = pending;
+        self.heredoc_bodies = bodies;
         out
     }
 
@@ -1259,8 +1310,13 @@ impl Parser {
             let m = self.mark();
             if self.string("\\\n").is_ok() {
                 progressed = true;
-                // whitespace after continuation
-                while self.line_whitespace().is_ok() {}
+                // `continuation = try (string "\\\n") >> many linewhitespace`:
+                // what it returns is that whitespace, which is what makes
+                // `fi\` and an indented next line a keyword and a bare one
+                // not.
+                while let Ok(c) = self.line_whitespace() {
+                    out.push(c);
+                }
                 // The line was continued. A comment on the next line ending in a
                 // backslash does not continue it any further.
                 let cm = self.mark();
@@ -1290,10 +1346,17 @@ impl Parser {
     }
 
     fn spacing1(&mut self) -> PResult<String> {
+        let before = self.idx;
         let s = self.spacing();
         if s.is_empty() {
-            // `when (null spacing) $ fail "Expected whitespace"`
-            self.fail_with("Expected whitespace")
+            // `when (null spacing) $ fail "Expected whitespace"`. Whether the
+            // reply is a consuming one is `spacing`'s doing alone, not the
+            // enclosing production's: with nothing read, an alternative
+            // recovers from it and the error is merged as any empty one is,
+            // so a later failure at the same position -- the "Expected a
+            // command" after a bare `!` -- is the one reported.
+            self.record_failure_as("Expected whitespace", true, self.idx != before);
+            Err(())
         } else {
             Ok(s)
         }

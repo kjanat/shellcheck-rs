@@ -304,3 +304,34 @@ Kept so a reader can tell a closed entry from a missed one.
 - `{#` — `allspacingOrFail` returns the whitespace alone, so a comment straight
   after the `{` fails "Expected whitespace" having consumed. The port counted
   the comment as spacing.
+- `(!` — `spacing1`'s reply is consuming only when `spacing` itself read
+  something, not when the production around it had; with nothing read an
+  alternative recovers and the error merges as any empty one does, so the
+  "Expected a command" that follows is the one reported. The port ranked the
+  whitespace failure above it. Bash rejects `(!` as much as any other shell
+  does, so the empty negation the port accepts for bash ends at the end of the
+  input only when nothing is still open.
+- `for((;;))done{`, `for((;;))don` — a `tryWordToken` whose word is all there
+  fails on `lookAhead keywordSeparator`, whose `allspacingOrFail` is the only
+  alternative in it with anything to say: "Expected whitespace", not an empty
+  message.
+- `cat << foo` then a backtick that never closes — `readCaseSeparator`'s
+  `lookAhead (readLineBreak >> g_Esac)` reads the line feed's pending here
+  documents, and `unexpecting`'s `try` puts them back along with the cursor,
+  the notes and the commitment an unterminated one made. `try` now restores
+  Parsec's user state in full, here documents included, so a body read under a
+  lookahead is not eaten before the parse gets to it.
+- `#shellcheck` then a `case` — `manyAccum` loses the error accumulated by the
+  successful iterations, but past a commitment there is nothing to lose: the
+  failure that ended the parse is the one reported, and the port was clearing
+  it.
+- `if test;then case "``" in x)esac else while $?"";do gf; done; fi` —
+  `inlineSubshells` reads its contexts through `ufold`, which decomposes the
+  graph in ascending node order, so an edge to or from a lower-numbered node is
+  not in the context and the relink does not put it back. A subshell's
+  predecessors stop reaching the exit, which is what makes `$?` post-dominate
+  the condition and SC2319 stay quiet.
+- `coproc {d;}$(` — the `optional . lookAhead` that reports SC1141 has no `try`
+  inside it, so a word that fails after consuming fails
+  `readCompoundCommand` itself; the `try` in `readCoProc` catches that and
+  reads a simple coproc instead. The port ended the parse there.

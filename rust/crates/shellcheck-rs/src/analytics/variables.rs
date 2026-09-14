@@ -59,8 +59,12 @@ pub(super) fn check_subshell_assignment(params: &Parameters, _root: &Token, out:
             }
             StackData::StackScope(Scope::NoneScope) => {}
             StackData::StackScopeEnd => {
+                // The Haskell scope is built by prepending (`x:scope`) and
+                // folded from its head, so the *first* assignment is inserted
+                // last and is the one the map keeps: `for((i=0;;i++))` names
+                // the `i=0`, not the `i++`.
                 if let Some((reason, scope)) = scopes.pop() {
-                    for (token, var) in scope {
+                    for (token, var) in scope.into_iter().rev() {
                         dead.insert(var, VarState::Dead(token, reason.clone()));
                     }
                 }
@@ -1206,6 +1210,21 @@ mod tests {
             check_subshell_assignment,
             "@test 'foo' { a=1; }\n@test 'bar' { echo $a; }\n"
         ));
+    }
+
+    #[test]
+    fn subshell_assignment_names_the_first_assignment_in_the_scope() {
+        // `for((i=0;;i++))` assigns twice; the scope is built by prepending
+        // and folded from its head, so SC2030 points at the `i=0`.
+        let params = crate::test_support::params_for("(for((i=0;;i++)); do :; done); echo $i");
+        let mut out = Out::new();
+        check_subshell_assignment(&params, &params.root, &mut out);
+        let sc2030 = out
+            .iter()
+            .find(|c| c.comment.code == 2030)
+            .expect("SC2030 fires");
+        let (start, end) = &params.token_positions[&sc2030.id];
+        assert_eq!((start.column, end.column), (8, 9));
     }
 
     #[test]

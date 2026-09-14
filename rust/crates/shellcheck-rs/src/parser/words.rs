@@ -734,11 +734,8 @@ impl Parser {
         // `try` around `braceExpansion` rewinds the cursor, not the error.
         if let Some(c) = self.peek() {
             if "{}\"$',".contains(c) || is_brace_ws(c) {
-                let m = self.mark();
-                self.bump();
-                let r = self.fail_recoverable("Unexpected ");
-                self.reset(m);
-                return r;
+                self.fail_past(1, "Unexpected ");
+                return Err(());
             }
         }
         let mut s = String::new();

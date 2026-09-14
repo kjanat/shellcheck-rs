@@ -27,11 +27,14 @@ impl Parser {
         for op in ops {
             let m = self.mark();
             if self.string(op).is_ok() {
-                // failIfIncompleteOp = notFollowedBy2 (oneOf "&|<>=")
+                // `failIfIncompleteOp = notFollowedBy2 (oneOf "&|<>=")`, and
+                // `unexpecting` reads the character before it fails: `p|&`
+                // reports "Unexpected " past the `&`, from inside the `try`.
                 if !matches!(self.peek(), Some(c) if "&|<>=".contains(c)) {
                     matched = Some((*op).to_string());
                     break;
                 }
+                self.fail_past(1, "Unexpected ");
             }
             self.reset(m);
         }
@@ -58,6 +61,8 @@ impl Parser {
             return Err(());
         }
         if matches!(self.peek(), Some(c) if "&|<>=".contains(c)) {
+            // `failIfIncompleteOp` again: "Unexpected " one past the character.
+            self.fail_past(1, "Unexpected ");
             self.reset(outer);
             return Err(());
         }
@@ -150,6 +155,9 @@ impl Parser {
                     }
                 }
             }
+            // `readAssignment `sepBy` ..`: none at all is fine, but only when
+            // the attempt consumed nothing.
+            Err(()) if self.idx != m.idx => return Err(()),
             Err(()) => {
                 self.reset(m);
             }
@@ -273,13 +281,17 @@ impl Parser {
     }
 
     /// `readAnyNegated = readNegated <|> readAnySigned`.
+    /// `readAnyNegated = readNegated <|> readAnySigned`, a bare alternation.
     pub(super) fn read_arith_any_negated(&mut self) -> PResult<Token> {
         let m = self.mark();
-        if let Ok(t) = self.read_arith_negated() {
-            return Ok(t);
+        match self.read_arith_negated() {
+            Ok(t) => Ok(t),
+            Err(()) if self.idx != m.idx => Err(()),
+            Err(()) => {
+                self.reset(m);
+                self.read_arith_any_signed()
+            }
         }
-        self.reset(m);
-        self.read_arith_any_signed()
     }
 
     /// `readNegated`: `! | ~` prefix -> `TA_Unary`.
@@ -301,11 +313,14 @@ impl Parser {
     /// `readAnySigned = readSigned <|> readAnycremented`.
     pub(super) fn read_arith_any_signed(&mut self) -> PResult<Token> {
         let m = self.mark();
-        if let Ok(t) = self.read_arith_signed() {
-            return Ok(t);
+        match self.read_arith_signed() {
+            Ok(t) => Ok(t),
+            Err(()) if self.idx != m.idx => Err(()),
+            Err(()) => {
+                self.reset(m);
+                self.read_arith_anycremented()
+            }
         }
-        self.reset(m);
-        self.read_arith_anycremented()
     }
 
     /// `readSigned`: unary `+`/`-` (not `++`/`--`) -> `TA_Unary`.
@@ -347,11 +362,14 @@ impl Parser {
     /// `readAnycremented = readNormalOrPostfixIncremented <|> readPrefixIncremented`.
     pub(super) fn read_arith_anycremented(&mut self) -> PResult<Token> {
         let m = self.mark();
-        if let Ok(t) = self.read_arith_normal_or_postfix() {
-            return Ok(t);
+        match self.read_arith_normal_or_postfix() {
+            Ok(t) => Ok(t),
+            Err(()) if self.idx != m.idx => Err(()),
+            Err(()) => {
+                self.reset(m);
+                self.read_arith_prefix_incremented()
+            }
         }
-        self.reset(m);
-        self.read_arith_prefix_incremented()
     }
 
     /// `readPrefixIncremented`: `++x`/`--x` -> `TA_Unary` with op `"++|"`/`"--|"`.
@@ -415,17 +433,21 @@ impl Parser {
         }
     }
 
-    /// `readArithTerm = readGroup <|> readVariable <|> readExpansion`.
+    /// `readArithTerm = readGroup <|> readVariable <|> readExpansion`: bare
+    /// alternations, so an alternative that consumed before failing -- a
+    /// variable whose index never closes -- leaves the rest out of reach.
     pub(super) fn read_arith_term(&mut self) -> PResult<Token> {
         let m = self.mark();
-        if let Ok(t) = self.read_arith_group() {
-            return Ok(t);
+        match self.read_arith_group() {
+            Ok(t) => return Ok(t),
+            Err(()) if self.idx != m.idx => return Err(()),
+            Err(()) => self.reset(m),
         }
-        self.reset(m);
-        if let Ok(t) = self.read_arith_variable() {
-            return Ok(t);
+        match self.read_arith_variable() {
+            Ok(t) => return Ok(t),
+            Err(()) if self.idx != m.idx => return Err(()),
+            Err(()) => self.reset(m),
         }
-        self.reset(m);
         self.read_arith_expansion()
     }
 
@@ -445,10 +467,13 @@ impl Parser {
         let start = self.pos();
         let name = self.read_variable_name()?;
         let mut indices = Vec::new();
+        // `many readArrayIndex`: an index that failed past its `[` fails the
+        // variable, and everything above it.
         loop {
             let m = self.mark();
             match self.read_arith_array_index() {
                 Ok(t) => indices.push(t),
+                Err(()) if self.idx != m.idx => return Err(()),
                 Err(()) => {
                     self.reset(m);
                     break;
@@ -461,25 +486,16 @@ impl Parser {
     }
 
     /// `readArrayIndex` (arithmetic-local): `[ arith ]` -> `T_UnparsedIndex`
-    /// storing the source position and the raw consumed text. The inner
-    /// arithmetic parse is used only to find the extent (like `readStringForParser`
-    /// via `inSeparateContext`); its ids/notes are rolled back.
+    /// storing the source position and the raw text, read through
+    /// `readStringForParser readArithmeticContents` -- so what the inner parse
+    /// reported is forgotten, and when it fails, the frames it opened are put
+    /// back before the failure goes on: `((a[\`` names the `((..))` command,
+    /// not the backtick.
     pub(super) fn read_arith_array_index(&mut self) -> PResult<Token> {
         let start = self.pos();
         self.char('[')?;
         let pos = self.pos();
-        let idx0 = self.idx;
-        let save_next_id = self.next_id;
-        let save_notes = self.notes.len();
-        let save_problems = self.problems.len();
-        // Consume what readArithmeticContents would, discarding its output.
-        let _ = self.read_arithmetic_contents();
-        let raw: String = self.input[idx0..self.idx].iter().collect();
-        // Roll back the separate-context allocations/notes.
-        self.next_id = save_next_id;
-        self.notes.truncate(save_notes);
-        self.problems.truncate(save_problems);
-        self.positions.retain(|k, _| k.0 < save_next_id);
+        let raw = self.read_string_for_parser(|p| p.read_arithmetic_contents().map(|_| ()))?;
         self.char(']')?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
@@ -510,6 +526,10 @@ impl Parser {
             };
             match piece {
                 Ok(t) => pieces.push(t),
+                // `many1 $ choice [..]`: a piece that failed after consuming --
+                // a backtick with no closing one -- takes the expansion, and
+                // the whole arithmetic expression, down with it.
+                Err(()) if self.idx != m.idx => return Err(()),
                 Err(()) => {
                     self.reset(m);
                     break;

@@ -1894,6 +1894,16 @@ fn inline_subshells(g: &mut MutGraph) {
     for n in g.node_list() {
         if let Some(CFNode::CFExecuteSubshell(_, start, end)) = g.labels.get(&n).cloned() {
             let (incoming, _, label, outgoing) = g.context(n);
+            // `ufold` hands `find` the context of a graph that has already had
+            // every earlier node taken out of it -- `matchAny` decomposes in
+            // ascending node order -- so an edge to or from a lower-numbered
+            // node is not in the context at all, and the relink below does not
+            // put it back. That is what makes a subshell's predecessors stop
+            // reaching the exit once it is inlined, and it is the whole reason
+            // `$?` after an `if` whose other branch expands a command
+            // substitution post-dominates the condition.
+            let incoming = incoming.into_iter().filter(|(p, _)| *p >= n).collect();
+            let outgoing = outgoing.into_iter().filter(|(s, _)| *s >= n).collect();
             subs.push((n, label, start, end, incoming, outgoing));
         }
     }

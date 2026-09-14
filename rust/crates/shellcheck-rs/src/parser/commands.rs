@@ -194,6 +194,24 @@ impl Parser {
     // ---- separators --------------------------------------------------------
 
     pub(super) fn read_separator_op(&mut self) -> Option<char> {
+        // `notFollowedBy2 (void g_AND_IF <|> void readCaseSeparator)`, whose
+        // last arm is `lookAhead (readLineBreak >> g_Esac)`: `g_Esac` reads as
+        // much of `esac` as matches before it fails, so a command that ends
+        // in `e` (`function f{(c)e`) leaves Parsec's error one past it, with
+        // nothing to say, and that is what its failure reports.
+        //
+        // `unexpecting` wraps it in `try`, and the whole attempt is bound to
+        // fail here, so the `try` is what puts everything back: the cursor,
+        // the notes, the here documents `readLineBreak` read on the way and
+        // the commitment an unterminated one of them made. The error it got
+        // to stays, merged into the `<|> return ()` that follows -- which is
+        // how an unparsable here document ends the parse where the *body*
+        // gave up rather than at the line feed.
+        let _: PResult<()> = self.try_parse(|p| {
+            p.line_break();
+            p.keyword_attempt_failure("esac");
+            Err(())
+        });
         match self.peek() {
             Some('&') if self.peek_at(1) != Some('&') => {
                 let pos = self.pos();
@@ -496,6 +514,31 @@ impl Parser {
     /// `readKeyword`: how long the closing keyword ahead is, plus the
     /// missing-space warning each word token leaves behind even when the
     /// lookahead that called it goes on to reject the keyword.
+    /// What a `tryWordToken w` that does not match leaves behind. `anycaseString`
+    /// reads the keyword a character at a time, so a prefix that matches -- the
+    /// `e` of `ex` against `esac` -- is read before the mismatch fails, and a
+    /// full match still has `lookAhead keywordSeparator` to fail on past the
+    /// word. Parsec's error sits there either way, and the `try` around the
+    /// token keeps that position.
+    pub(super) fn keyword_attempt_failure(&mut self, w: &str) {
+        let prefix = w
+            .chars()
+            .enumerate()
+            .take_while(|(i, ch)| matches!(self.peek_at(*i), Some(c) if c.eq_ignore_ascii_case(ch)))
+            .count();
+        if prefix == 0 {
+            return;
+        }
+        if prefix < w.chars().count() {
+            self.fail_past(prefix, "");
+        } else if !self.at_keyword_separator(prefix) {
+            // The whole word is there and what refused is `keywordSeparator`,
+            // whose `allspacingOrFail` is the only alternative in it with
+            // anything to say.
+            self.fail_past(prefix, "Expected whitespace");
+        }
+    }
+
     pub(super) fn keyword_len(&mut self) -> Option<usize> {
         const WORDS: [&str; 7] = ["then", "else", "elif", "fi", "do", "done", "esac"];
         // Every alternative in the `choice` is attempted, so a longer keyword
@@ -503,10 +546,14 @@ impl Parser {
         let mut found = None;
         for w in WORDS {
             if !self.word_matches(w) {
+                self.keyword_attempt_failure(w);
                 continue;
             }
             self.warn_keyword_needs_space(w);
-            if found.is_none() && self.at_keyword_separator(w.len()) {
+            if !self.at_keyword_separator(w.len()) {
+                // `lookAhead keywordSeparator` fails past the word.
+                self.fail_past(w.len(), "Expected whitespace");
+            } else if found.is_none() {
                 found = Some(w.len());
             }
         }
@@ -602,7 +649,11 @@ impl Parser {
             return false;
         }
         match self.peek() {
-            None | Some('\n') | Some('\r') => true,
+            // End of input only ends the list when nothing is still open:
+            // `(!` is a syntax error in bash as much as anywhere, because the
+            // subshell never closes, and upstream's reading of it is right.
+            None => self.contexts.is_empty(),
+            Some('\n') | Some('\r') => true,
             Some(';') => self.peek_at(1) != Some(';'),
             _ => false,
         }
@@ -1332,7 +1383,7 @@ impl Parser {
             // well-formed assignments as T_Assignment (readModifierSuffix).
             if kind == CmdSuffix::Modifier {
                 let am = self.mark();
-                match self.read_assignment_word() {
+                match self.read_well_formed_assignment() {
                     Ok(a) => {
                         out.push(a);
                         continue;
@@ -1719,17 +1770,37 @@ impl Parser {
         }
     }
 
+    /// `readAssignmentWord = readAssignmentWordExt True`: lenient, so a
+    /// leading `$` is read and reported (SC1066) before the word is rejected.
     pub(super) fn read_assignment_word(&mut self) -> PResult<Token> {
-        self.called("variable assignment", |p| p.read_assignment_word_body())
+        self.called("variable assignment", |p| p.read_assignment_word_body(true))
     }
 
-    fn read_assignment_word_body(&mut self) -> PResult<Token> {
+    /// `readWellFormedAssignment = readAssignmentWordExt False`, what a
+    /// modifier command's arguments are read with.
+    pub(super) fn read_well_formed_assignment(&mut self) -> PResult<Token> {
+        self.called("variable assignment", |p| {
+            p.read_assignment_word_body(false)
+        })
+    }
+
+    fn read_assignment_word_body(&mut self, lenient: bool) -> PResult<Token> {
         let start = self.pos();
         // Everything up to and including the `=` is read inside a `try`: a word
         // that turns out not to be an assignment must leave the cursor where it
         // started, so the enclosing `called` unwinds and leaves no context
         // behind either.
         let prefix = self.mark();
+        // `leadingDollarPos <- optionMaybe $ getSpanPositionsFor (char '$')`:
+        // read so that `$foo=(bar)` can be warned about at parse time, since
+        // it would otherwise fail to parse and never reach the checks.
+        let leading_dollar = if lenient && self.peek() == Some('$') {
+            let l = self.pos();
+            self.bump();
+            Some((l, self.pos()))
+        } else {
+            None
+        };
         // name
         let Ok(name) = self.read_variable_name() else {
             self.reset(prefix);
@@ -1749,6 +1820,11 @@ impl Parser {
         // The T_Assignment span ends here (variable name + indices), before the
         // `=` — matching ShellCheck's `id <- endSpan start` placement, so that
         // SC2034 etc. point at the variable name rather than the whole word.
+        // `hasLeftSpace <- fmap (not . null) spacing`: space before the `=`
+        // is read, and then makes this not an assignment after all.
+        let before_left = self.idx;
+        self.spacing();
+        let has_left_space = self.idx != before_left;
         let op_start = self.pos();
         // += or =
         let mode = if self.string("+=").is_ok() {
@@ -1759,6 +1835,28 @@ impl Parser {
             self.reset(prefix);
             return Err(());
         };
+        if leading_dollar.is_some() || has_left_space {
+            // `when (isJust leadingDollarPos || hasLeftSpace)`: not an
+            // assignment after all, and with a `$` and a `(` ahead one that
+            // would otherwise fail to parse, so it is warned about here. The
+            // `fail ""` sits inside the `try`.
+            let m = self.mark();
+            self.spacing();
+            let paren = self.peek() == Some('(');
+            self.reset(m);
+            if let (true, Some((l, r))) = (paren, leading_dollar) {
+                self.problem_at(
+                    l,
+                    r,
+                    Severity::ErrorC,
+                    1066,
+                    "Don't use $ on the left side of assignments.",
+                );
+            }
+            let _: PResult<()> = self.fail_recoverable("");
+            self.reset(prefix);
+            return Err(());
+        }
         // Space after the `=`, or nothing left of the command, means the value
         // is the empty string — and if it was space, that is rarely intended.
         let right_start = self.pos();
@@ -2407,14 +2505,10 @@ impl Parser {
     /// `debugHereDoc`: the end token was never found, so guess at why.
     fn debug_here_doc(&mut self, hd: &PendingHereDoc, doc: &str) {
         let (start, end) = self.span_for(hd.id);
+        // `parseProblemAtId`, so a `disable=` in scope at the `<<` -- the
+        // scope this body is read in -- silences these like any problem.
         let mut at_token = |code: i64, msg: String| {
-            self.problems.push(ParseNote {
-                start: start.clone(),
-                end: end.clone(),
-                severity: Severity::ErrorC,
-                code,
-                message: msg,
-            });
+            self.problem_at(start.clone(), end.clone(), Severity::ErrorC, code, &msg);
         };
         // The containment tests use the raw text; only the messages are escaped.
         let token = &hd.delim;
@@ -2559,7 +2653,7 @@ impl Parser {
     }
 
     /// `readKeyword`: the tokens that close a compound command.
-    fn at_keyword(&self) -> bool {
+    fn at_keyword(&mut self) -> bool {
         const WORDS: [&str; 7] = ["then", "else", "elif", "fi", "do", "done", "esac"];
         WORDS.iter().any(|k| self.keyword_ahead(k))
             || matches!(self.peek(), Some('}') | Some(')'))

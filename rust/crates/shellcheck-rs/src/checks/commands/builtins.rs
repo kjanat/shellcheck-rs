@@ -438,18 +438,26 @@ pub(super) fn check_eval_array() -> CommandCheck {
 pub(super) fn check_arg_comparison(cmd: &'static str) -> CommandCheck {
     CommandCheck::new(Exactly(cmd), move |_params, te, out| {
         for arg in arguments(te) {
-            let Some(s) = ast_lib::get_leading_unquoted_string(arg) else {
-                continue;
-            };
-            if s.starts_with('=') {
-                err(out, head_id(arg), 2290, "Remove spaces around = to assign.");
-            } else if s.starts_with("+=") {
-                err(
-                    out,
-                    head_id(arg),
-                    2290,
-                    "Remove spaces around += to append.",
-                );
+            if let Some(s) = ast_lib::get_leading_unquoted_string(arg) {
+                if s.starts_with('=') {
+                    err(out, head_id(arg), 2290, "Remove spaces around = to assign.");
+                } else if s.starts_with("+=") {
+                    err(
+                        out,
+                        head_id(arg),
+                        2290,
+                        "Remove spaces around += to append.",
+                    );
+                }
+            }
+            // 'let' is parsed as a sequence of arithmetic expansions, so we
+            // want the additional warning for "x=".
+            if cmd == "let" {
+                if let Some(token) = ast_lib::get_trailing_unquoted_literal(arg) {
+                    if ast_lib::get_literal_string(token).is_some_and(|s| s.ends_with('=')) {
+                        err(out, token.id(), 2290, "Remove spaces around = to assign.");
+                    }
+                }
             }
         }
     })

@@ -1262,3 +1262,279 @@ mod coproc_glob_dollar_tests {
         );
     }
 }
+
+mod keyword_separator_and_failure_tests {
+    use super::*;
+
+    /// Every note as (code, line, column, message).
+    fn notes(script: &str) -> Vec<(i64, i64, i64, String)> {
+        parse_script("-", script)
+            .notes
+            .iter()
+            .map(|n| (n.code, n.start.line, n.start.column, n.message.clone()))
+            .collect()
+    }
+
+    fn parses(script: &str) -> bool {
+        parse_script("-", script).root.is_some()
+    }
+
+    fn has(script: &str, code: i64, line: i64, column: i64) -> bool {
+        notes(script)
+            .iter()
+            .any(|(c, l, col, _)| *c == code && *l == line && *col == column)
+    }
+
+    /// The whole pipeline, for the codes the analysis rather than the parser
+    /// emits.
+    fn checked(script: &str, code: i64, line: i64, column: i64) -> bool {
+        crate::check_script(&crate::interface::CheckSpec {
+            filename: "-".to_string(),
+            script: script.to_string(),
+            ..crate::interface::CheckSpec::default()
+        })
+        .comments
+        .iter()
+        .any(|c| c.comment.code == code && c.start.line == line && c.start.column == column)
+    }
+
+    // ---- keywordSeparator = eof <|> void (try allspacingOrFail) <|> ... ----
+
+    #[test]
+    fn a_comment_after_a_keyword_separates_only_when_a_newline_follows() {
+        // `allspacingOrFail` reads the comment and then the newline, so a
+        // comment that runs to end of file leaves nothing consumed and the
+        // keyword is a word.
+        assert!(parses("done#\n"));
+        assert!(has("done#\n", 1089, 1, 1));
+        assert!(checked("done#", 2288, 1, 1));
+        assert!(!has("done#", 1089, 1, 1));
+        assert!(parses("esac#!\nx"));
+        assert!(has("esac#!\nx", 1089, 1, 1));
+        assert!(parses("case#\"${r}\")"));
+        assert!(has("case#\"${r}\")", 1089, 1, 12));
+        assert!(parses("while[ x ];do#\na;done"));
+        assert!(has("while[ x ];do#\na;done", 1099, 1, 14));
+    }
+
+    #[test]
+    fn a_line_continuation_after_a_keyword_is_not_a_separator() {
+        // `continuation` yields the whitespace after the `\`+newline, and
+        // there is none: `else` and `fi` are one word, so the `if` runs off
+        // the end looking for its `fi`.
+        assert!(!parses("if x;then y;else\\\nfi"));
+        assert!(has("if x;then y;else\\\nfi", 1046, 1, 1));
+        assert!(has("if x;then y;else\\\nfi", 1047, 2, 3));
+        // One space after the continuation and `else` is a keyword: the `fi`
+        // is found, and what is wrong is the empty clause between them.
+        assert!(has("if x;then y;else\\\n fi", 1048, 2, 2));
+        assert!(has("if x;then y;else\\\n fi", 1073, 1, 13));
+    }
+
+    #[test]
+    fn a_pending_here_document_makes_the_keyword_a_word() {
+        // `allspacingOrFail`'s `linefeed` reads the pending body, so `;fi`
+        // after `<<foo` is not the end of the `if` and `then` is missing.
+        let n = notes("if <<foo;fi\nfoo");
+        assert!(
+            n.contains(&(1050, 1, 10, "Expected 'then'.".into())),
+            "{n:?}"
+        );
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1072 && *col == 12),
+            "{n:?}"
+        );
+        // And on a for loop the same reading gives SC1010 at `done`.
+        let n = notes("for((;;))do(<<'');done\nO");
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1010 && *col == 19),
+            "{n:?}"
+        );
+        assert!(
+            n.iter()
+                .any(|(c, l, col, _)| *c == 1072 && *l == 2 && *col == 2),
+            "{n:?}"
+        );
+    }
+
+    // ---- prefix failures from tryParseWordToken (anycaseString) -----------
+
+    #[test]
+    fn a_keyword_prefix_positions_the_failure_past_the_prefix() {
+        // `don` matches `do` before `n` refuses, so the furthest failure is
+        // at the `n`, one past what `anycaseString` read.
+        let n = notes("for((;;))don");
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1072 && *col == 13),
+            "{n:?}"
+        );
+        assert!(n.contains(&(1058, 1, 10, "Expected 'do'.".into())), "{n:?}");
+    }
+
+    #[test]
+    fn a_brace_after_the_last_branch_fails_where_fi_was_expected() {
+        let n = notes("if f;then f;elif e;then f;}");
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1072 && *col == 27),
+            "{n:?}"
+        );
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1047 && *col == 27),
+            "{n:?}"
+        );
+    }
+
+    #[test]
+    fn a_word_glued_to_a_paren_after_do_reports_the_paren() {
+        let n = notes("for f in '' do d|time(x)o");
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1036 && *col == 22),
+            "{n:?}"
+        );
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1062 && *col == 25),
+            "{n:?}"
+        );
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1141 && *col == 25),
+            "{n:?}"
+        );
+        let n = notes("select i;do time (x)$");
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1062 && *col == 21),
+            "{n:?}"
+        );
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1141 && *col == 21),
+            "{n:?}"
+        );
+    }
+
+    #[test]
+    fn a_function_body_that_starts_without_space_keeps_its_frames() {
+        let n = notes("function f{(c)ex");
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1095 && *col == 11),
+            "{n:?}"
+        );
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1056 && *col == 15),
+            "{n:?}"
+        );
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1072 && *col == 16),
+            "{n:?}"
+        );
+        // Without the keyword it is a command name ending in `{`.
+        assert!(checked("f{(c)e", 2288, 1, 1));
+        let n = notes("f{(c)e");
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1088 && *col == 3),
+            "{n:?}"
+        );
+    }
+
+    // ---- readAssignmentWordExt: `$` and left space ------------------------
+
+    #[test]
+    fn a_dollar_on_the_left_of_an_assignment_gets_sc1066_when_a_paren_follows() {
+        for script in ["$f=(", "$f =("] {
+            let n = notes(script);
+            assert!(
+                n.iter().any(|(c, _, col, _)| *c == 1066 && *col == 1),
+                "{script}: {n:?}"
+            );
+            assert!(n.iter().any(|(c, _, _, _)| *c == 1088), "{script}: {n:?}");
+        }
+        // No paren, no SC1066: it is an ordinary word.
+        assert!(!has("$f=x", 1066, 1, 1));
+    }
+
+    #[test]
+    fn let_with_a_trailing_equals_is_an_assignment_with_spaces() {
+        let n = notes("let b=");
+        assert!(parses("let b="));
+        assert!(
+            !n.iter().any(|(c, _, _, _)| [1072, 1073].contains(c)),
+            "{n:?}"
+        );
+    }
+
+    // ---- arithmetic: readComboOp's failIfIncompleteOp and consuming failures
+
+    #[test]
+    fn an_incomplete_arithmetic_operator_fails_one_past_the_operator() {
+        for script in ["((p|&", "((1+>"] {
+            let n = notes(script);
+            assert!(
+                n.contains(&(
+                    1072,
+                    1,
+                    6,
+                    "Unexpected . Fix any mentioned problems and try again.".into()
+                )),
+                "{script}: {n:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failing_array_index_in_arithmetic_is_the_expressions_failure() {
+        let n = notes("((a[`");
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1072 && *col == 6),
+            "{n:?}"
+        );
+        let n = notes("(1;((x[\"");
+        assert!(
+            n.iter().any(|(c, _, col, m)| *c == 1072
+                && *col == 9
+                && m.starts_with("Expected end of double quoted string")),
+            "{n:?}"
+        );
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1073 && *col == 4),
+            "{n:?}"
+        );
+    }
+
+    // ---- case separators and the elif/case-item `many` ---------------------
+
+    #[test]
+    fn a_fallthrough_separator_is_not_read_as_a_command_separator() {
+        assert!(parses("case x in a);&b) c;;esac"));
+        assert!(!has("case x in a);&b) c;;esac", 1072, 1, 1));
+    }
+
+    #[test]
+    fn a_brace_group_inside_an_expansion_fails_at_the_expansions_end() {
+        let n = notes("\"\"''$(e;{\"\";}d");
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1054 && *col == 10),
+            "{n:?}"
+        );
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1072 && *col == 14),
+            "{n:?}"
+        );
+        assert!(
+            n.iter().any(|(c, _, col, _)| *c == 1141 && *col == 14),
+            "{n:?}"
+        );
+    }
+
+    #[test]
+    fn a_bang_glued_to_an_equals_in_a_test_reports_the_missing_space() {
+        for (script, col) in [("]|[ !=", 6), ("[!= ", 3)] {
+            let n = notes(script);
+            assert!(
+                n.iter().any(|(c, _, c2, _)| *c == 1035 && *c2 == col),
+                "{script}: {n:?}"
+            );
+            assert!(
+                n.iter().any(|(c, _, c2, _)| *c == 1108 && *c2 == col),
+                "{script}: {n:?}"
+            );
+        }
+    }
+}

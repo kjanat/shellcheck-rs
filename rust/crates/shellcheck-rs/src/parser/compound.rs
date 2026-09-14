@@ -73,7 +73,7 @@ impl Parser {
                 let (s, _) = self.span_for(t.id());
                 let e = self.pos();
                 let id = self.next_id_between(s, e);
-                self.warn_on_tokens_after_compound_command();
+                self.warn_on_tokens_after_compound_command()?;
                 Ok(Token::new(id, InnerToken::T_Redirecting { redirs, cmd: t }))
             }
             Err(()) => {
@@ -90,7 +90,11 @@ impl Parser {
     /// A compound command is finished; anything but a keyword or a `{` still
     /// sitting there is a missing terminator or a mistyped redirection. Read
     /// under `lookAhead`, so the words themselves are put back.
-    fn warn_on_tokens_after_compound_command(&mut self) {
+    fn warn_on_tokens_after_compound_command(&mut self) -> PResult<()> {
+        // What stood before the whole `optional . lookAhead`: a keyword
+        // attempt that matched a prefix (`d` against `do`) records past it,
+        // and a lookahead that then succeeds gives that up too.
+        let failure = self.failure.clone();
         // `notFollowedBy2 $ choice [readKeyword, g_Lbrace]`, and `readKeyword`
         // includes `}`, `)` and `;;` as well as the closing words. It is
         // `unexpecting ""`, so a keyword that *is* there is read -- as far as
@@ -105,10 +109,10 @@ impl Parser {
             // only its message and position survive.
             let _: PResult<()> = self.fail_recoverable("Unexpected ");
             self.reset(m);
-            return;
+            return Ok(());
         }
         if self.peek() == Some('{') {
-            return;
+            return Ok(());
         }
         let m = self.mark();
         let notes = self.notes.len();
@@ -124,8 +128,12 @@ impl Parser {
                 Ok(_) => any = true,
                 Err(()) => {
                     if self.idx != wm.idx {
-                        self.commit();
-                        return;
+                        // There is no `try` inside this `lookAhead`, so the
+                        // failure is `readCompoundCommand`'s own and travels
+                        // out of it: `coproc {d;}$(` is a compound coproc that
+                        // fails here, which the `try` in `readCoProc` catches
+                        // and reads as a simple one instead.
+                        return Err(());
                     }
                     self.reset(wm);
                     break;
@@ -138,6 +146,11 @@ impl Parser {
         // problems live outside it and stay.
         self.notes.truncate(notes);
         if any {
+            // And when it succeeds it replies with an unknown error at its own
+            // position, so the failures the words ran into finding their end
+            // are not the furthest one: `do time (x)$` reports "Expected
+            // 'done'" at the `$`, not past it.
+            self.failure = failure;
             self.problem_at(
                 pos,
                 pos_end,
@@ -146,6 +159,7 @@ impl Parser {
                 "Unexpected tokens after compound command. Bad redirection or missing ;/&&/||/|?",
             );
         }
+        Ok(())
     }
 
     /// True if the input starts with `kw`, ignoring what follows.
@@ -192,27 +206,76 @@ impl Parser {
     }
 
     /// True if the upcoming token is exactly `kw` followed by a word boundary.
-    pub(super) fn keyword_ahead(&self, kw: &str) -> bool {
+    pub(super) fn keyword_ahead(&mut self, kw: &str) -> bool {
         self.word_matches(kw) && self.at_keyword_separator(kw.chars().count())
     }
 
-    /// `keywordSeparator`: end of input, whitespace (a comment counts, since
-    /// `spacing` eats one), or one of `;()[<>&|`. Notably *not* `$`, `'` or
-    /// `{`, so `if$(x)` and `case''` are ordinary words.
-    pub(super) fn at_keyword_separator(&self, offset: usize) -> bool {
-        match self.peek_at(offset) {
-            None => true,
-            Some('\\') => self.peek_at(offset + 1) == Some('\n'),
-            Some(c) => {
-                c == ' '
-                    || c == '\t'
-                    || c == '\n'
-                    || c == '\r'
-                    || c == '#'
-                    || ALMOST_SPACE_CHARS.contains(c)
-                    || ";()[<>&|".contains(c)
-            }
+    /// `keywordSeparator = eof <|> void (try allspacingOrFail) <|> void (oneOf
+    /// ";()[<>&|")`. Notably *not* `$`, `'` or `{`, so `if$(x)` and `case''`
+    /// are ordinary words; and not `#` either, since `allspacing` reads a
+    /// comment but returns no whitespace for it.
+    ///
+    /// `allspacingOrFail` also reads a line feed's pending here documents on
+    /// the way, and a body that never terminates fails it -- inside the
+    /// `try`, which keeps nothing but the diagnostics. The keyword is then
+    /// not a keyword: `done` before such a body is a word, with SC1010.
+    pub(super) fn at_keyword_separator(&mut self, offset: usize) -> bool {
+        let Some(c) = self.peek_at(offset) else {
+            return true;
+        };
+        let spacing = c == ' '
+            || c == '\t'
+            || c == '\n'
+            || c == '\r'
+            || c == '#'
+            || (c == '\\' && self.peek_at(offset + 1) == Some('\n'))
+            || ALMOST_SPACE_CHARS.contains(c);
+        if !spacing {
+            return ";()[<>&|".contains(c);
         }
+        // Plain whitespace is a separator on sight. A comment or a line
+        // continuation is only one if `allspacing` returns something for it:
+        // a comment yields nothing itself, so `fi#c` at the end of the input
+        // is a word and `fi#c` before a line feed a keyword; a continuation
+        // yields the whitespace after it, so `fi\` and a bare next line is
+        // the word `fi\`.
+        if c != '#' && c != '\\' && self.pending_heredocs.is_empty() {
+            return true;
+        }
+        // `try allspacingOrFail`, which may also have here documents to read:
+        // Parsec's state -- the cursor, the notes, the pending documents and
+        // their bodies -- goes back whatever happens; the problems, reported
+        // against the `StateT` underneath, stay.
+        let m = self.mark();
+        let notes = self.notes.len();
+        let contexts = self.contexts.clone();
+        let committed = self.committed;
+        let frozen = self.frozen_contexts.clone();
+        let failure = self.failure.clone();
+        let pending = self.pending_heredocs.clone();
+        let bodies = self.heredoc_bodies.clone();
+        for _ in 0..offset {
+            self.bump();
+        }
+        let read = !self.allspacing().is_empty();
+        let ok = read && self.committed == committed;
+        self.reset(m);
+        self.notes.truncate(notes);
+        self.contexts = contexts;
+        self.committed = committed;
+        self.frozen_contexts = frozen;
+        if ok {
+            // `lookAhead` succeeded: it replies with an unknown error at its
+            // own position, so nothing the spacing ran into on the way -- the
+            // end of the input after a here document -- is kept.
+            self.failure = failure;
+        } else {
+            // A `try` that failed merges its error with what stood before.
+            self.restore_failure(failure);
+        }
+        self.pending_heredocs = pending;
+        self.heredoc_bodies = bodies;
+        ok
     }
 
     /// `tryParseWordToken`'s warning: the keyword is there but runs straight
@@ -419,6 +482,9 @@ impl Parser {
     /// the loop keyword was, so a missing `do`/`done` can point back at it.
     fn read_do_group(&mut self, kw: &(Position, Position)) -> PResult<Vec<Token>> {
         self.allspacing();
+        // `optional (try . lookAhead $ g_Done; SC1057)`: the attempt is made
+        // whatever is there, and `don` leaves its error past the `n`.
+        self.keyword_attempt_failure("done");
         if self.keyword_ahead("done") {
             self.problem_at(
                 kw.0.clone(),
@@ -444,6 +510,7 @@ impl Parser {
             "Semicolon is not allowed directly after 'do'. You can just delete it.",
         );
         self.allspacing();
+        self.keyword_attempt_failure("done");
         if self.keyword_ahead("done") {
             self.problem_at(
                 do_pos.clone(),
@@ -506,11 +573,20 @@ impl Parser {
         // `many` and `option` recover only from a failure that consumed
         // nothing: an `elif`/`else` that was started and then went wrong is
         // the if expression's failure, not an absent clause.
+        let mut after_success = false;
         loop {
             self.allspacing();
             let m = self.mark();
-            match self.read_elif_part() {
-                Ok(c) => clauses.push(c),
+            let r = if after_success {
+                self.many_attempt(|p| p.read_elif_part())
+            } else {
+                self.read_elif_part()
+            };
+            match r {
+                Ok(c) => {
+                    clauses.push(c);
+                    after_success = true;
+                }
                 Err(()) => {
                     if self.idx != m.idx {
                         return Err(());
@@ -651,7 +727,7 @@ impl Parser {
     }
 
     /// `ifNextToken (g_Fi <|> g_Elif <|> g_Else)`.
-    fn at_if_branch_keyword(&self) -> bool {
+    fn at_if_branch_keyword(&mut self) -> bool {
         ["fi", "elif", "else"].iter().any(|k| self.keyword_ahead(k))
     }
 
@@ -972,11 +1048,20 @@ impl Parser {
         // `many readCaseItem`: an item that failed after consuming input is the
         // case expression's failure, not the end of the list.
         let mut cases: Vec<CaseClause> = Vec::new();
+        let mut after_success = false;
         loop {
             self.allspacing();
             let m = self.mark();
-            match self.read_case_item() {
-                Ok(c) => cases.push(c),
+            let r = if after_success {
+                self.many_attempt(|p| p.read_case_item())
+            } else {
+                self.read_case_item()
+            };
+            match r {
+                Ok(c) => {
+                    cases.push(c);
+                    after_success = true;
+                }
                 Err(()) => {
                     if self.idx != m.idx {
                         return Err(());

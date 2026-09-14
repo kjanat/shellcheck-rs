@@ -366,7 +366,10 @@ impl Parser {
     }
 
     pub(super) fn read_cond_term(&mut self, single: bool) -> PResult<Token> {
-        let t = if self.peek() == Some('!') && self.peek_at(1) != Some('=') {
+        // `readCondNot <|> readCondExpr`: a `!` is a negation, whatever
+        // follows it -- `[ != x ]` is `!` with a missing space and then the
+        // word `=`, which is what upstream reports (SC1035, then SC1108).
+        let t = if self.peek() == Some('!') {
             self.read_cond_not(single)?
         } else {
             self.read_cond_expr(single)?
@@ -1080,11 +1083,8 @@ impl Parser {
         // the cursor comes back so the group can go on to its `)`.
         if let Some(c) = self.peek() {
             if END.contains(c) {
-                let m = self.mark();
-                self.bump();
-                let r = self.fail_recoverable("Unexpected ");
-                self.reset(m);
-                return r;
+                self.fail_past(1, "Unexpected ");
+                return Err(());
             }
         }
         let mut s = String::new();
