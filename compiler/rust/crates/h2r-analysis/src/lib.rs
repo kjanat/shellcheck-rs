@@ -2,8 +2,10 @@
 
 pub mod callee;
 pub mod laziness;
+pub mod link;
 pub mod metrics;
 pub mod parsec;
+pub mod scalar;
 pub mod scope;
 pub mod shape;
 pub mod tuples;

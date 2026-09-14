@@ -211,6 +211,12 @@ pub const R_CALLEE_NOT_SPLITTABLE: &str = "callee-parameter-cannot-be-split";
 /// whose target the region graph does not resolve. The detail names the
 /// edge.
 pub const R_PARSEC_CONT: &str = "parsec-continuation-target-not-in-the-region-graph";
+/// Not a reason a *flow* ever carries: the bucket a construction the census
+/// calls removable and the [independent verifier](crate::verify) does not
+/// re-derive lands in. The milestone counts it as **unsupported**, never as
+/// normalised — a removable verdict with only one proof behind it is not a
+/// removal this milestone will make.
+pub const R_UNVERIFIED: &str = "removable-but-not-independently-verified";
 
 /// Locations one flow may visit before it is abandoned as too large. No
 /// flow on the `-O1` dump comes anywhere near it; it exists so a pathological
@@ -1500,6 +1506,35 @@ pub struct FateCount {
     pub n: usize,
 }
 
+/// The milestone's accounting for one representation:
+/// `before = normalised + preserved + unsupported`.
+///
+/// *normalised* is a construction this milestone removes — removable **and**
+/// re-derived by the independent verifier. *preserved* is a proven real
+/// value. *unsupported* is everything else: `Unresolved`, plus any
+/// construction the census calls removable that the verifier does not
+/// confirm ([`R_UNVERIFIED`]). The three are disjoint and sum to the
+/// population by construction, and [`Accounting::check`] asserts it.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct Bucket {
+    pub boxed: bool,
+    pub before: usize,
+    pub normalised: usize,
+    pub preserved: usize,
+    pub unsupported: usize,
+}
+
+impl Bucket {
+    fn add(&mut self, fate: TupleFate, verified: bool) {
+        self.before += 1;
+        match fate {
+            TupleFate::ScalarReplace | TupleFate::WorkerReturn if verified => self.normalised += 1,
+            TupleFate::Preserve => self.preserved += 1,
+            _ => self.unsupported += 1,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Accounting {
     /// Constructions by representation and fate; one entry per pair that
@@ -1511,6 +1546,17 @@ pub struct Accounting {
     pub sites: Vec<SiteMap>,
     pub sites_mapped: usize,
     pub sites_unmapped: usize,
+    /// `before = normalised + preserved + unsupported`, boxed then unboxed.
+    pub milestone: Vec<Bucket>,
+    /// The same for the census' tuple-attributed argument sites.
+    pub site_milestone: Vec<Bucket>,
+    /// Constructions the census calls removable that the independent
+    /// verifier does not re-derive: counted as unsupported.
+    pub removable_unverified: usize,
+    /// The unsupported residual, itemised by the *kind* of thing holding
+    /// the value — the flow's own reason, plus [`R_UNVERIFIED`]. Sums to
+    /// the unsupported total over both representations.
+    pub residual: Vec<(String, usize)>,
 }
 
 impl Accounting {
@@ -1521,6 +1567,24 @@ impl Accounting {
             .find(|c| c.boxed == boxed && c.fate == fate)
             .map(|c| c.n)
             .unwrap_or(0)
+    }
+
+    /// The milestone bucket for one representation.
+    pub fn bucket(&self, boxed: bool) -> Bucket {
+        self.milestone
+            .iter()
+            .find(|b| b.boxed == boxed)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// The same over the census' argument sites.
+    pub fn site_bucket(&self, boxed: bool) -> Bucket {
+        self.site_milestone
+            .iter()
+            .find(|b| b.boxed == boxed)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Every construction is in exactly one fate bucket, and every census
@@ -1549,6 +1613,35 @@ impl Accounting {
                 s.module
             );
         }
+        // The milestone's own accounting: nothing is counted twice and
+        // nothing falls between the buckets.
+        for (what, buckets, total) in [
+            (
+                "constructions",
+                &self.milestone,
+                self.constructions_boxed + self.constructions_unboxed,
+            ),
+            ("census sites", &self.site_milestone, self.sites_mapped),
+        ] {
+            let mut sum = 0;
+            for b in buckets.iter() {
+                assert_eq!(
+                    b.before,
+                    b.normalised + b.preserved + b.unsupported,
+                    "{what}: before must be normalised + preserved + unsupported \
+                     for the {} representation",
+                    if b.boxed { "boxed" } else { "unboxed" }
+                );
+                sum += b.before;
+            }
+            assert_eq!(sum, total, "{what}: the buckets must cover the population");
+        }
+        let unsupported: usize = self.milestone.iter().map(|b| b.unsupported).sum();
+        let itemised: usize = self.residual.iter().map(|(_, n)| n).sum();
+        assert_eq!(
+            itemised, unsupported,
+            "the itemised residual must sum to the unsupported total"
+        );
     }
 }
 
@@ -1559,6 +1652,26 @@ pub struct TupleCensus<'m> {
     /// Every flow, in module order; the index the [`SiteMap`]s refer to.
     pub flows: Vec<TupleFlow>,
     pub accounting: Accounting,
+    /// The [independent verifier](crate::verify)'s re-derivation of every
+    /// removable verdict. Run here rather than behind a flag, because the
+    /// milestone's accounting counts only *verified* removals as
+    /// normalised, so the verdict is part of the census, not a report.
+    pub cross: crate::verify::CrossCheck,
+    /// `(module, construction)` of every verdict the verifier re-derived.
+    pub verified: HashSet<(String, ExprId)>,
+}
+
+impl TupleCensus<'_> {
+    /// Did the independent verifier re-derive this flow's removable
+    /// verdict? False for everything that is not removable.
+    pub fn is_verified(&self, f: &TupleFlow) -> bool {
+        self.verified.contains(&(f.module.clone(), f.construction))
+    }
+
+    /// Constructions this milestone removes: removable *and* verified.
+    pub fn is_normalised(&self, f: &TupleFlow) -> bool {
+        matches!(f.fate, TupleFate::ScalarReplace | TupleFate::WorkerReturn) && self.is_verified(f)
+    }
 }
 
 impl<'m> TupleCensus<'m> {
@@ -1601,6 +1714,21 @@ impl<'m> TupleCensus<'m> {
             .into_iter()
             .map(|((boxed, fate), n)| FateCount { boxed, fate, n })
             .collect();
+        // The independent re-derivation, module by module. Its verdict is
+        // what separates *normalised* from *unsupported* below.
+        let mut cross = crate::verify::CrossCheck::default();
+        for (t, m) in per_module.iter().zip(modules.iter()) {
+            let population: HashSet<ExprId> = t.flows.iter().map(|f| f.construction).collect();
+            let removable: HashSet<ExprId> = t
+                .flows
+                .iter()
+                .filter(|f| matches!(f.fate, TupleFate::ScalarReplace | TupleFate::WorkerReturn))
+                .map(|f| f.construction)
+                .collect();
+            crate::verify::cross_check(m, &population, &removable, t.hops.clone(), &mut cross);
+        }
+        let verified: HashSet<(String, ExprId)> = cross.verified.iter().cloned().collect();
+
         let known: HashSet<&str> = modules.iter().map(|m| m.name.as_str()).collect();
         for site in &census.args {
             let Some(boxed) = in_population(site) else {
@@ -1632,11 +1760,55 @@ impl<'m> TupleCensus<'m> {
                 reason,
             });
         }
+        // `before = normalised + preserved + unsupported`, per
+        // representation, for the population and for the census' sites.
+        let is_verified = |f: &TupleFlow| verified.contains(&(f.module.clone(), f.construction));
+        let mut milestone = [
+            Bucket {
+                boxed: true,
+                ..Default::default()
+            },
+            Bucket {
+                boxed: false,
+                ..Default::default()
+            },
+        ];
+        let mut site_milestone = milestone;
+        let mut residual: BTreeMap<String, usize> = BTreeMap::new();
+        for f in &flows {
+            let ok = is_verified(f);
+            milestone[usize::from(!f.boxed)].add(f.fate, ok);
+            match (f.fate, ok) {
+                (TupleFate::ScalarReplace | TupleFate::WorkerReturn, false) => {
+                    acct.removable_unverified += 1;
+                    *residual.entry(R_UNVERIFIED.to_string()).or_default() += 1;
+                }
+                (TupleFate::Unresolved, _) => {
+                    // By the *kind* of holder, not by its name: the
+                    // constructor and callee names are diagnostics, and the
+                    // split is what says which milestone picks each class up.
+                    let key = f.reason.unwrap_or("unresolved-with-no-reason");
+                    *residual.entry(key.to_string()).or_default() += 1;
+                }
+                _ => {}
+            }
+        }
+        for s in &acct.sites {
+            let Some(i) = s.flow else { continue };
+            site_milestone[usize::from(!s.boxed)].add(flows[i].fate, is_verified(&flows[i]));
+        }
+        acct.milestone = milestone.to_vec();
+        acct.site_milestone = site_milestone.to_vec();
+        acct.residual = residual.into_iter().collect();
+        acct.residual
+            .sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         acct.check();
         TupleCensus {
             per_module,
             flows,
             accounting: acct,
+            cross,
+            verified,
         }
     }
 }

@@ -619,6 +619,11 @@ pub struct CrossCheck {
     pub only_there: Vec<ExprId>,
     /// Removable verdicts that needed a hop from another proof object.
     pub via_hops: usize,
+    /// Every construction this walk re-derived as removable, by module and
+    /// spine root. The milestone's accounting counts a construction as
+    /// *normalised* only if it is in here: removable-but-unverified is
+    /// unsupported, never normalised.
+    pub verified: Vec<(String, ExprId)>,
 }
 
 /// Check one module: `population` is every construction the census found,
@@ -648,6 +653,7 @@ pub fn cross_check(
                 Ok(p) => {
                     out.agreed += 1;
                     out.via_hops += usize::from(p.used_hop);
+                    out.verified.push((m.name.clone(), root));
                 }
                 Err(rejection) => out.disagreements.push(Disagreement {
                     module: m.name.clone(),

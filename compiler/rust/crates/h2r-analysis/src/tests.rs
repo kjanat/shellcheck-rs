@@ -1665,3 +1665,365 @@ fn the_verifier_agrees_on_every_hand_built_module() {
     assert_eq!(out.census_stricter, 0);
     assert!(out.only_here.is_empty() && out.only_there.is_empty());
 }
+
+//------------------------------------------------------------------------------
+// The normalised scalar view (scalar.rs)
+//------------------------------------------------------------------------------
+
+// The view is the milestone's deliverable: what the program looks like with
+// one proven tuple gone. Every test below asserts *completeness* — every
+// consumer of the flow, and every call site it proved, placed exactly once —
+// because a view that quietly drops a use would be a wrong rewrite, not a
+// missing line.
+
+use crate::scalar::{LineKind, view};
+
+/// The whole census over one hand-built module, so that a view carries the
+/// independent verifier's verdict as well as the census'.
+fn census_of(m: &Module) -> Census {
+    Census::raw([m])
+}
+
+/// `let r = (a, b) in case r of (x, y) -> g x`: two scalars, one binding.
+#[test]
+fn a_scalar_replace_view_places_every_field_and_consumer() {
+    let (tup, id) = boxed_tuple_id(2);
+    let m = top_module(
+        let1(
+            "r",
+            con_app(&tup, &[var("a"), var("b")]),
+            case_con(var("r"), &tup, &["x", "y"], app(var("g"), var("x"))),
+        ),
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let census = census_of(&m);
+    let mods = [&m];
+    let tc = TupleCensus::of_modules(&mods, &census);
+    let t = &tc.per_module[0];
+    let f = one_flow(t);
+    assert_eq!(f.fate, TupleFate::ScalarReplace);
+    let v = view(t, f, tc.is_verified(f));
+    v.check();
+    assert!(v.verified, "the independent verifier re-derived it");
+    assert_eq!(v.scalars.len(), 2, "one scalar per field");
+    assert_eq!(v.scalars[0].node, f.fields[0]);
+    assert_eq!(v.scalars[1].node, f.fields[1]);
+    assert_eq!(
+        v.consumers,
+        f.consumers.len(),
+        "every consumer placed exactly once"
+    );
+    assert!(v.unplaced.is_empty());
+    let binding = v
+        .lines
+        .iter()
+        .find(|l| l.kind == LineKind::Binding)
+        .expect("the scrutiny becomes bindings");
+    assert!(binding.rules.contains(&crate::tuples::T2_SCRUTINISED));
+    // `case r of (x, y) -> …` ⇒ `x := f0; y := f1`.
+    assert!(binding.text.contains(":= f0"), "{}", binding.text);
+    assert!(binding.text.contains(":= f1"), "{}", binding.text);
+}
+
+/// A worker returning `(# p, p #)` that two call sites take apart: the
+/// result becomes two scalar results and *both* call sites are in the view.
+#[test]
+fn a_worker_return_view_places_every_call_site() {
+    let (tup, id) = unboxed_tuple_id(2);
+    let m = tops(
+        vec![
+            (
+                binder("f", demand(false, false)),
+                lam(&["p"], con_app(&tup, &[var("p"), var("p")])),
+            ),
+            (
+                binder("user", demand(false, false)),
+                app(
+                    app(
+                        var("h"),
+                        case_con(
+                            app(var("f"), var("a")),
+                            &tup,
+                            &["x", "y"],
+                            app(var("g"), var("x")),
+                        ),
+                    ),
+                    case_con(
+                        app(var("f"), var("b")),
+                        &tup,
+                        &["x1", "y1"],
+                        app(var("g"), var("y1")),
+                    ),
+                ),
+            ),
+        ],
+        json!({&tup: id, "g": callee(true), "h": callee(true)}),
+    );
+    let census = census_of(&m);
+    let mods = [&m];
+    let tc = TupleCensus::of_modules(&mods, &census);
+    let t = &tc.per_module[0];
+    let f = one_flow(t);
+    assert_eq!(f.fate, TupleFate::WorkerReturn);
+    let v = view(t, f, tc.is_verified(f));
+    v.check();
+    assert_eq!(v.call_sites, 2, "both call sites are in the view");
+    assert_eq!(v.consumers, f.consumers.len());
+    // Each call site's scrutiny folds the call into itself, which is the
+    // `(x, y) := f a` multiple-return shape.
+    let bindings: Vec<_> = v
+        .lines
+        .iter()
+        .filter(|l| l.kind == LineKind::Binding)
+        .collect();
+    assert_eq!(bindings.len(), 2);
+    for b in &bindings {
+        assert!(b.rules.contains(&crate::tuples::T7_CALL_RESULT), "{:?}", b);
+        assert!(b.call_site.is_some());
+        assert!(b.text.contains(":="), "{}", b.text);
+    }
+    assert!(
+        v.lines
+            .iter()
+            .any(|l| l.kind == LineKind::Hop && l.rules.contains(&crate::tuples::T6_RETURNED))
+    );
+}
+
+/// A tuple in a removable tuple's field: the inner view reaches its readers
+/// *through* the outer's field binder, and says so.
+#[test]
+fn a_nested_view_shows_the_inner_scalars_through_the_outer() {
+    let (tup, id) = boxed_tuple_id(2);
+    let m = top_module(
+        let1(
+            "o",
+            con_app(&tup, &[con_app(&tup, &[var("a"), var("b")]), var("c")]),
+            case_con(
+                var("o"),
+                &tup,
+                &["p", "q"],
+                case_con(var("p"), &tup, &["x", "y"], app(var("g"), var("x"))),
+            ),
+        ),
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let census = census_of(&m);
+    let mods = [&m];
+    let tc = TupleCensus::of_modules(&mods, &census);
+    let t = &tc.per_module[0];
+    let outer = t.flows.iter().find(|f| f.bound.is_some()).unwrap();
+    let inner = t.flows.iter().find(|f| f.bound.is_none()).unwrap();
+
+    let ov = view(t, outer, tc.is_verified(outer));
+    ov.check();
+    assert_eq!(ov.consumers, outer.consumers.len());
+
+    let iv = view(t, inner, tc.is_verified(inner));
+    iv.check();
+    assert_eq!(iv.consumers, inner.consumers.len());
+    // The inner tuple's own fields are still its scalars…
+    assert_eq!(iv.scalars.len(), 2);
+    // …and one line says the outer box is gone too, naming the outer
+    // construction and the field binder the scalars reach the readers
+    // through.
+    let nested = iv
+        .lines
+        .iter()
+        .find(|l| l.rules.contains(&crate::tuples::T12_NESTED))
+        .expect("the nesting is in the view");
+    assert!(nested.nodes.contains(&outer.construction));
+    assert!(nested.text.contains("ScalarReplace"), "{}", nested.text);
+    assert!(nested.text.contains("through p#"), "{}", nested.text);
+    // The scrutiny of the outer's field binder is the inner's own consumer,
+    // and it is placed as a binding over the inner's scalars.
+    assert!(
+        iv.lines
+            .iter()
+            .any(|l| l.rules.contains(&crate::tuples::T2_SCRUTINISED) && l.text.contains(":= f0"))
+    );
+}
+
+/// The `h2r show` footer finds the flow from the construction, from the
+/// binder the tuple is bound to, and from an occurrence of it.
+#[test]
+fn the_show_footer_finds_the_flow_from_any_of_its_nodes() {
+    use std::collections::HashSet;
+
+    let (tup, id) = boxed_tuple_id(2);
+    let m = top_module(
+        let1(
+            "r",
+            con_app(&tup, &[var("a"), var("b")]),
+            case_con(var("r"), &tup, &["x", "y"], app(var("g"), var("x"))),
+        ),
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    let verified: HashSet<u32> = HashSet::from([f.construction]);
+    let p = crate::scalar::Provenance::of(&t, verified);
+    assert_eq!(p.flows_at(f.construction), vec![0]);
+    let proof = p.proof_at(f.construction, 0);
+    assert!(proof.tuple.as_ref().unwrap().contains("arity 2"));
+    assert_eq!(
+        proof.fate.as_deref(),
+        Some("ScalarReplace  [verified: yes]")
+    );
+    assert_eq!(proof.consumers.len(), f.consumers.len());
+    assert!(
+        proof
+            .evidence
+            .iter()
+            .any(|(r, _)| *r == crate::tuples::T0_TUPLE_CON)
+    );
+    // The alias binder, and the scrutiny, both lead to the same flow.
+    let b = f.bound.expect("let-bound");
+    assert!(p.binder_note(b).unwrap().contains("alias of tuple flow #0"));
+    let case = f
+        .consumers
+        .iter()
+        .find_map(|u| match u {
+            TupleUse::Scrutinised { case, .. } => Some(*case),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(p.flows_at(case), vec![0]);
+    assert!(p.node_note(case).unwrap().contains("Scrutinised"));
+}
+
+//------------------------------------------------------------------------------
+// The cross-milestone link (link.rs)
+//------------------------------------------------------------------------------
+
+/// A lazy pattern `~(u, v)` as the desugarer leaves it: the scrutinee bound
+/// once and one selector thunk per field. Both selector thunks disappear
+/// with the tuple; the binding that holds the tuple itself does not, because
+/// its right-hand side is the call, not a selection.
+#[test]
+fn a_lazy_pattern_desugaring_explains_two_thunk_sites() {
+    let (tup, id) = boxed_tuple_id(2);
+    // g, lazy in all four arguments, so each selector is used twice on one
+    // path: memoisation required, which is the population that matters.
+    let lazy4 = json!({
+        "name": "g", "occ": "g", "arity": 4,
+        "dmdSig": {"args": [demand(false, false), demand(false, false),
+                            demand(false, false), demand(false, false)],
+                   "diverges": false, "pretty": ""},
+        "isJoinPoint": false, "dataCon": null
+    });
+    let body = app(
+        app(app(app(var("g"), var("a")), var("a")), var("b")),
+        var("b"),
+    );
+    let m = tops(
+        vec![
+            (
+                binder("w", demand(false, false)),
+                lam(&["z"], con_app(&tup, &[var("p"), var("q")])),
+            ),
+            (
+                binder("top", demand(false, false)),
+                lam(
+                    &["y"],
+                    let1(
+                        "t",
+                        app(var("w"), var("y")),
+                        let1(
+                            "a",
+                            case_con(var("t"), &tup, &["u", "u2"], var("u")),
+                            let1("b", case_con(var("t"), &tup, &["v1", "v"], var("v")), body),
+                        ),
+                    ),
+                ),
+            ),
+        ],
+        json!({&tup: id, "g": lazy4}),
+    );
+    let census = Census::raw([&m]);
+    let mods = [&m];
+    let tc = TupleCensus::of_modules(&mods, &census);
+    let f = one_flow(&tc.per_module[0]);
+    assert_eq!(f.fate, TupleFate::WorkerReturn);
+    assert!(tc.is_verified(f), "the verifier re-derives it");
+    assert_eq!(
+        f.consumers
+            .iter()
+            .filter(|u| matches!(u, TupleUse::Selected { .. }))
+            .count(),
+        2,
+        "one lazy selector per field"
+    );
+
+    let l = crate::link::link(&census, &tc, &mods);
+    l.check();
+    // t, a and b are all potential thunk sites; only the two selectors are
+    // explained by the tuple going away.
+    assert_eq!(l.thunk_sites, 3);
+    assert_eq!(l.explained.len(), 2);
+    assert_eq!(l.remaining(), 1);
+    let mut names: Vec<&str> = l.explained.iter().map(|e| e.occ.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["a", "b"]);
+    for e in &l.explained {
+        assert_eq!(e.rule, crate::tuples::T3_SELECTED);
+        assert_eq!(e.over, f.construction);
+        assert_eq!(e.fate, Fate::Memo);
+        assert!(e.memo && e.shared);
+    }
+    assert_eq!(l.by_rule.get(crate::tuples::T3_SELECTED), Some(&2));
+    let memo = l
+        .fates
+        .iter()
+        .find(|r| r.label == "memoisation required")
+        .unwrap();
+    assert_eq!((memo.before, memo.explained, memo.after()), (3, 2, 1));
+}
+
+/// `before = normalised + preserved + unsupported`, on a module with one of
+/// each: a removable tuple, a stored one, and one the rules refuse.
+#[test]
+fn the_milestone_accounting_closes() {
+    let (tup, id) = boxed_tuple_id(2);
+    let m = tops(
+        vec![
+            (
+                binder("removable", demand(false, false)),
+                let1(
+                    "r",
+                    con_app(&tup, &[var("a"), var("b")]),
+                    case_con(var("r"), &tup, &["x", "y"], app(var("g"), var("x"))),
+                ),
+            ),
+            (
+                binder("stored", demand(false, false)),
+                con_app("Just", &[con_app(&tup, &[var("c"), var("d")])]),
+            ),
+            // Returned from an exported function: the callers are outside
+            // the module, so the rules refuse it rather than guess.
+            (
+                exported("escaping"),
+                lam(&["k"], con_app(&tup, &[var("e"), var("f2")])),
+            ),
+        ],
+        json!({
+            &tup: id, "g": callee(true),
+            "Just": data_con("Just", "$base$GHC.Maybe$Just", 1)
+        }),
+    );
+    let census = Census::raw([&m]);
+    let mods = [&m];
+    let tc = TupleCensus::of_modules(&mods, &census);
+    let acct = &tc.accounting;
+    acct.check();
+    let b = acct.bucket(true);
+    assert_eq!(b.before, 3);
+    assert_eq!(b.normalised, 1);
+    assert_eq!(b.preserved, 1);
+    assert_eq!(b.unsupported, 1);
+    assert_eq!(b.before, b.normalised + b.preserved + b.unsupported);
+    assert_eq!(acct.removable_unverified, 0);
+    assert_eq!(
+        acct.residual.iter().map(|(_, n)| n).sum::<usize>(),
+        b.unsupported
+    );
+}

@@ -35,9 +35,9 @@ ShellCheck Haskell
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the two canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), and which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent). Includes a depth-limited Core pretty-printer. |
-| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`), and the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR). |
+| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with the Parsec proof inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples`. Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar` and the milestone accounting). Later: the lowering passes. |
 
 ## Usage
 
@@ -59,6 +59,9 @@ cargo run --release --bin h2r -- show ../core-json ShellCheck.Parser 141341   # 
 cargo run --release --bin h2r -- tuples ../core-json                        # tuple flows and fates
 cargo run --release --bin h2r -- tuples ../core-json --module ShellCheck.Checks.Commands --explain
 cargo run --release --bin h2r -- tuples ../core-json --verify    # the independent re-derivation
+cargo run --release --bin h2r -- tuples ../core-json --module ShellCheck.Analytics --scalar 30892
+cargo run --release --bin h2r -- tuples ../core-json --module ShellCheck.CFG --scalar-all --json
+cargo run --release --bin h2r -- show ../core-json ShellCheck.Checks.Commands 4714   # + its tuple proof
 ```
 
 ## M1 — how much Haskell is left after GHC?
@@ -81,23 +84,31 @@ Headline numbers on the tree at the repo root (GHC 9.6.7, `-O1`). The
 bugs in it — occurrences keyed by GHC unique, and spines split by casts;
 both are described under [M2.1](#m21--proving-parsecs-cps-roles):
 
-| | before | now |
-|---|---:|---:|
-| Local bindings after optimisation | 6,156 | 6,156 |
-| … functions / join points / values already in WHNF | 1,883 / 1,119 / 762 | 1,883 / 1,119 / 762 |
-| … strict (`let` the simplifier didn't turn into `case`) | 148 | 148 |
-| … lazy, used at most once / possibly many times | 39 / 2,134 | 39 / 2,134 |
-| **Potential thunk sites** | **2,242** | **2,242** |
-| … sinkable into an evaluating position (thunk vanishes) | 12 | 14 |
-| … sinkable, but into a lazy argument (thunk moves) | 243 | 254 |
-| … … of all the sinkable ones, into mutually exclusive branches | 56 | 65 |
-| … … the rest being single-use | 199 | 203 |
-| … memo needed to keep sharing | 1,918 | 1,905 |
-| … … captured by a many-entry lambda | 1,387 | **1,242** |
-| … … shared on one path | 531 | **663** |
-| … genuinely recursive values (knot-tying) | 69 | 69 |
-| Top-level CAFs that are actually string literals | 2,426 of 2,755 | 2,426 of 2,755 |
-| Genuine top-level thunks | 238 | 238 |
+| | before | now | after tuple normalisation |
+|---|---:|---:|---:|
+| Local bindings after optimisation | 6,156 | 6,156 | — |
+| … functions / join points / values already in WHNF | 1,883 / 1,119 / 762 | 1,883 / 1,119 / 762 | — |
+| … strict (`let` the simplifier didn't turn into `case`) | 148 | 148 | — |
+| … lazy, used at most once / possibly many times | 39 / 2,134 | 39 / 2,134 | — |
+| **Potential thunk sites** | **2,242** | **2,242** | **2,131** |
+| … sinkable into an evaluating position (thunk vanishes) | 12 | 14 | 14 |
+| … sinkable, but into a lazy argument (thunk moves) | 243 | 254 | 251 |
+| … … of all the sinkable ones, into mutually exclusive branches | 56 | 65 | — |
+| … … the rest being single-use | 199 | 203 | — |
+| … memo needed to keep sharing | 1,918 | 1,905 | **1,797** |
+| … … captured by a many-entry lambda | 1,387 | **1,242** | **1,143** |
+| … … shared on one path | 531 | **663** | **654** |
+| … genuinely recursive values (knot-tying) | 69 | 69 | 69 |
+| Top-level CAFs that are actually string literals | 2,426 of 2,755 | 2,426 of 2,755 | — |
+| Genuine top-level thunks | 238 | 238 | — |
+
+The third column is the [cross-milestone
+link](#the-cross-milestone-link-how-many-of-m1s-thunks-are-these-tuples):
+111 of these thunk sites are the lazy selectors of a tuple M2.2 proves
+removable *and* independently verifies, so they disappear with it rather
+than needing anything of their own. `remaining + explained = 2,242` is
+asserted, and the criterion is deliberately narrow — see that section for
+what is *not* claimed.
 
 GHC's cardinality and our syntactic occurrence analysis agree on 2,291 of
 the 2,321 thunk candidates they both have an opinion about (9 both-once,
@@ -687,6 +698,20 @@ instead of giving up on its continuations, split the residual by what is
 holding the value, and removed a fate whose name claimed more than its rule
 proved.
 
+Stage 3 turns the verdict into a **view** and closes the accounting. For
+every removal it prints [what replaces the tuple](#the-normalised-scalar-view),
+line by line, with the rule and the source nodes — and asserts that the
+view is complete, the way the recovered Parsec graph asserts that no edge
+is unplaced. It puts the same provenance [inline in `h2r
+show`](#auditing-one-construction), states the milestone's
+`before = normalised + preserved + unsupported`
+[accounting](#accounting) — where *normalised* means removable **and**
+independently verified, so a verdict with only one proof behind it counts
+as unsupported — and measures [how much of M1's residual
+laziness](#the-cross-milestone-link-how-many-of-m1s-thunks-are-these-tuples)
+this milestone actually explains. Still no Rust and still no rewrite of the
+Core: the proof and the view are the deliverable.
+
 ### The population, and why the name is not the proof
 
 A construction is selected by `T0-TUPLE-CON`: the head of an application
@@ -1038,6 +1063,86 @@ carries a reason (`flow.is_some() ^ reason.is_some()`). The nesting fixpoint
 asserts its own convergence. The same assertions, and the independent
 verifier, run on all six matrix profiles.
 
+Stage 3 adds the milestone's own equation, per representation:
+
+```
+before = normalised + preserved + unsupported
+```
+
+*normalised* is a construction this milestone removes — removable **and**
+re-derived by the [independent verifier](#the-independent-verifier);
+*preserved* is `Preserve`; *unsupported* is `Unresolved` **plus any
+removable verdict the verifier does not confirm**. A construction that only
+one walk proves counts as unsupported, never as normalised: that is the
+direction the acceptance rule points. The verifier therefore runs inside
+`TupleCensus`, not behind `--verify` — it is part of the verdict, and
+`--verify` only reports it.
+
+```
+M2.2 accounting — before = normalised + preserved + unsupported
+                     before  normalised  preserved  unsupported
+  boxed                1765         761        551          453
+  unboxed               819         692          0          127
+  total                2584        1453        551          580
+  normalised = removable and re-derived by the independent verifier; 0 removable verdict(s) unverified
+
+  the census' 1321 tuple-attributed argument sites, the same way
+  boxed                 849         503        144          202
+  unboxed               472         463          0            9
+  total                1321         966        144          211
+```
+
+The unsupported residual is itemised by the *kind* of thing holding the
+value (the [table above](#what-remains-and-what-each-thing-is-waiting-for)),
+and the itemisation is asserted to sum to the unsupported total.
+
+### The normalised scalar view
+
+Proving a tuple is transport is not the same as saying what replaces it.
+`h2r tuples --scalar <construction-node>` (and `--scalar-all`, `--json`)
+prints the program with that tuple gone, at the level of the IR — nothing
+is lowered and no Core is rewritten. The construction's fields become named
+scalars `f0…f{n-1}`; every consumer becomes bindings over them; every line
+names the nodes it reads and the rule that justifies it:
+
+```
+$ h2r tuples compiler/core-json --module ShellCheck.Analytics --scalar 30892
+ShellCheck.Analytics node 30892 — unboxed (#,#) of arity 2, fate WorkerReturn [verified: yes]
+  scalars
+    f0     := ()                                       [node 31010]
+    f1     := [] …                                     [node 31006]
+  normalised
+    hop   $wgo#10680 returns (f0, f1) as 2 scalar result(s) — returned from (after 3 more argument(s)) $wgo with 2 occurrence(s)
+            [T6-RETURNED]
+    bind  at node 30853: (ww#10682, ww#10683) := $wgo … … … at node 30854   [the call returns 2 scalar(s)]
+            [T7-CALL-RESULT, T2-SCRUTINISED]
+    bind  at node 30897: (ww#10722, ww#10723) := $wgo … … … at node 30974   [the call returns 2 scalar(s)]
+            [T7-CALL-RESULT, T2-SCRUTINISED]
+  3 consumer(s), 2 call site(s) accounted for, 0 unplaced
+```
+
+The shapes, and what each becomes:
+
+| Consumer | Rule | The view |
+|---|---|---|
+| `case t of (a, b) -> e` | `T2-SCRUTINISED` | `a := f0; b := f1` |
+| a lazy selector `case t of (_, s, _) -> s` | `T3-SELECTED` | `s := f1` — and the selector thunk goes with it |
+| a field-wise re-tupling | `T4-RETUPLE` | the copy's own fields *are* `f0…`, with that construction's own fate printed beside it |
+| passed into a local callee | `T5-PASSED-LOCAL` | that parameter becomes *n* scalar parameters; the call passes `f0…` |
+| returned | `T6-RETURNED` / `T7-CALL-RESULT` | the function returns *n* scalar results, and each call site binds them — `case (f x) of (a, s) -> e` ⇒ `(a, s) := f x` |
+| a field of a removable tuple | `T12-NESTED` | the outer box is gone too, so `f0…` reach the outer's readers directly, through the field binder named on the line |
+| forced whole | `T14-FORCED` | the force disappears; forcing a constructor application is a no-op |
+
+**The view is complete, and says so.** Every consumer on the flow is placed
+in exactly one line and every call site the flow proved is placed exactly
+once; the block ends the way [the recovered Parsec graph](#the-recovered-graph)
+ends, with `0 unplaced`, and the assertion is in code
+(`ScalarView::check`). A scrutiny whose scrutinee *is* the call folds the
+call into its own line, so the multiple-return shape reads as one binding
+rather than two. `--scalar-all` builds the view of every removable
+construction: **1,453 of 1,453 on `-O1`, 0 unplaced**, and likewise on all
+six profiles (1,741 / 1,694 / 4,001 / 4,035 / 4,040).
+
 ### Auditing one construction
 
 ```
@@ -1055,6 +1160,212 @@ ShellCheck.Analytics node 30892 — unboxed tuple of arity 2, fate WorkerReturn
 Every node id there is a `h2r show` argument. `--json` dumps the flows,
 their consumers and the accounting; `--verify` prints the independent
 re-derivation and the table of audited shapes above.
+
+`h2r show` loads the tuple proof object by default for a module that has
+flows (`--no-tuples` turns it off, exactly like `--no-parsec`). It marks
+constructions, alias binders, consumers and their occurrences inline, and
+prints the flow's own evidence for the node asked about:
+
+```
+$ h2r show compiler/core-json ShellCheck.Checks.Commands 4714 --depth 2
+-- in top-level binding lvl, node 4714
+([#4714]{tuple flow #46 construction, arity 3, WorkerReturn}(,,)[#4725] ()[#4720] s1[#4718] w1[#4716])
+
+node 4714
+  tuple: (,,) boxed, arity 3, construction node 4714 (flow #46)
+  fate: WorkerReturn  [verified: yes]
+  this node: the construction itself
+  consumers:
+    returned from eta1#2405 (T6-RETURNED) → its call sites (T7-CALL-RESULT)
+    copied field by field into the construction at node 4633 (T4-RETUPLE)
+    field 2 selected on its own at node 4635 (T3-SELECTED)
+    field 1 selected on its own at node 4640 (T3-SELECTED)
+    field 0 selected on its own at node 4645 (T3-SELECTED)
+  evidence:
+    T0-TUPLE-CON: boxed tuple of arity 3 ($ghc-prim$GHC.Tuple.Prim$(,,)), 3 value argument(s) (node(s) 4714, 4725)
+    T6-RETURNED: returned from (after 2 more argument(s)) eta1 with 1 occurrence(s) (node(s) 4626) [eta1#2405]
+    T7-CALL-RESULT: 2 argument(s) supplied: the call result is the tuple (node(s) 4657)
+    T4-RETUPLE: copied field by field into this construction (node(s) 4633) [ds1#2408]
+    T1-LET-BOUND: bound to ds1 with 3 occurrence(s) (node(s) 4631) [ds1#2408]
+    T3-SELECTED: field 2 selected (node(s) 4635, 4636) [w'#2412]
+    T3-SELECTED: field 1 selected (node(s) 4640, 4641) [s''#2415]
+    T3-SELECTED: field 0 selected (node(s) 4645, 4646) [b1#2418]
+    F2-WORKER-RETURN: 5 consumer(s) over 24 value location(s), crossing a return, at least one field read on its own (node(s) 4714)
+```
+
+A node that takes part in several flows gets one footer per flow — node
+4635 above is a selector of three different constructions, and each says so
+separately. For `Preserve` and `Unresolved` the fate line carries the
+reason *with its holder* (`Preserve  [stored-in-constructor-field (:)]`),
+which is the same string the residual is itemised by. Both proof objects
+annotate the same rendering, and their marks are concatenated rather than
+merged, so it stays visible which object said what.
+
+### The cross-milestone link: how many of M1's thunks are these tuples?
+
+[M1](#m1--how-much-haskell-is-left-after-ghc) counts 2,242 potential thunk
+sites, 1,905 of which need memoisation to keep sharing, and attributes 422
+of the sites to `ds…` desugar bindings. The desugarer turns a lazy tuple
+pattern `~(b, s, w)` into one selector thunk per field, so the obvious
+question is how much of M1's residue is *this milestone's* tuples.
+
+`h2r tuples` answers it exactly, with a deliberately narrow rule: a thunk
+site is **explained by tuple transport** when the binding M1 reports is a
+potential thunk site, its right-hand side *is* a lazy selection
+(`T3-SELECTED`) or a field-wise re-tupling (`T4-RETUPLE`), and the tuple it
+reads is **normalised** — removable *and* verified. A `Preserve` or
+`Unresolved` tuple keeps its box, so its selectors stay; a removable
+verdict only one walk proves does not count either.
+
+```
+Thunk sites explained by tuple transport (M1 × M2.2)
+                                                 before explained    after
+  sinkable, lands in an evaluating position          14         0       14
+  sinkable, lands in a lazy position                254         3      251
+  memoisation required                             1905       108     1797
+  recursive value                                    69         0       69
+  … captured by a many-entry lambda                1242        99     1143
+  … shared on one path                              663         9      654
+  potential thunk sites                            2242       111     2131
+```
+
+**111** thunk sites are explained: 108 of them memo (99 captured by a
+many-entry lambda, 9 shared on a path) and 3 sinkable into a lazy position.
+By binder origin they are 82 user-named, 27 `eta…`, 2 `ds…`, and none at
+all from `lvl…` or the dictionaries. The invariant `remaining + explained =
+2,242` is asserted, as is "every explained site lands in exactly one fate
+row, one origin row and one rule".
+
+Of the census' 1,321 tuple-attributed lazy argument sites, **966** stop
+being lazy positions because the tuple they are an argument *to* is
+normalised — the argument becomes a scalar binding at the construction
+(503 boxed, 463 unboxed). That is the same 966 as the `normalised` column
+of the site accounting above, seen from the other side.
+
+**Why 111 and not 400.** The interesting finding is that the `ds…`
+population is *not* the selectors. GHC names the lazy pattern's scrutinee
+`ds…` and leaves the field selections under the pattern variables' own
+names, so `ds1` holds the *tuple* and `b1`/`s''`/`w'` are the selectors —
+which is exactly what the origin split shows. Counted separately, and
+**never folded into the table above**, 377 thunk sites *hold* a normalised
+tuple (`T1-LET-BOUND`): 278 `ds…`, 67 user-named, 25 `eta…`, 7 `lvl…`.
+Their box will not exist either, but what replaces each of them is one
+scalar binding per field, and whether *those* are thunks is a question for
+the let census to answer again after the rewrite — not one this link may
+answer now. Claiming them here would be the same mistake as naming a fate
+after a monad transformer.
+
+The other reason the number is not larger is visible in the Core: of the
+863 distinct lazy-selector cases over the whole population, only 142 are a
+`let` right-hand side at all. The rest are written inline —
+`case ($wgetCommandNameAndToken False x) of (# ww, ww1 #) -> ww` in
+`ShellCheck.ASTLib` — where there is no thunk to remove in the first place.
+
+| | A `-O1` | B | C | D | E | F |
+|---|---:|---:|---:|---:|---:|---:|
+| thunk sites explained by tuple transport | 111 | 122 | 133 | 134 | 134 | 135 |
+| thunk sites holding a normalised tuple | 377 | 430 | 400 | 1,176 | 1,176 | 1,178 |
+| lazy argument sites that become scalars | 966 | 1,105 | 1,038 | 2,194 | 2,194 | 2,193 |
+
+### M2.2 acceptance
+
+**The criterion is that every tuple this milestone removes has a complete
+def-use proof, re-derived by an independent verifier — not that coverage is
+high.** A wrong "removable" is a miscompile; a wrong "Preserve" is a missed
+optimisation. Coverage is reported and secondary.
+
+Against the `-O1` dump, all of the following hold.
+
+**The population is partitioned, and the accounting closes.** 2,584
+saturated constructions, 1,765 boxed and 819 unboxed, every one in exactly
+one fate bucket (asserted):
+
+| fate | boxed | unboxed |
+|---|---:|---:|
+| ScalarReplace | 423 | 3 |
+| WorkerReturn | 338 | 689 |
+| Preserve | 551 | 0 |
+| Unresolved | 453 | 127 |
+| **total** | **1,765** | **819** |
+
+and `before = normalised + preserved + unsupported` per representation:
+1,765 = 761 + 551 + 453 boxed, 819 = 692 + 0 + 127 unboxed, 2,584 = 1,453 +
+551 + 580 in all. The census' 1,321 tuple-attributed argument sites map
+one-to-one onto the population (849 boxed + 472 unboxed, 0 unmapped, over
+726 distinct constructions) and close the same way: 1,321 = 966 + 144 +
+211.
+
+**Every removal is proven twice.** The [independent
+verifier](#the-independent-verifier) shares nothing with the census but the
+IR — its own population selection, its own name test, its own walk — and
+re-derives all 1,453 removable verdicts with **0 disagreements**; the two
+sides also select the same population (0 constructions found by only one),
+and there is no construction the verifier accepts that the census refuses.
+The same holds on all six flag-matrix profiles (1,741 / 1,694 / 4,001 /
+4,035 / 4,040, 0 disagreements each). **0 removable verdicts are
+unverified**, so nothing is counted as normalised on one proof.
+
+**Every removal has a complete rewrite.** `--scalar-all` builds the
+normalised view of all 1,453 (and of all 4,040 on F): every consumer and
+every call site placed in exactly one line, `0 unplaced` everywhere.
+
+**No fate rests on a name.** The population is *selected* by ghc-prim's
+tuple constructor (evidence level 6) with `repArity` checked against the
+name and saturation checked structurally; every verdict after that is
+def-use over resolved occurrences. The constructor and callee names in the
+residual are diagnostics, and the residual is split by the *kind* of holder,
+not by the name.
+
+**What remains, and what milestone each item belongs to:**
+
+| | | |
+|---:|---|---|
+| 187 | the closure that returns the tuple is passed to an **imported** call | M2.4 higher-order / whole-program closure analysis |
+| 134 | …**consed onto a list** | M2.4: the checks-in-a-top-level-list shape, a closed-world list-of-closures pass |
+| 114 | …**stored in a program constructor** | M2.4, per constructor |
+| 67 | …**handed to a local callee's parameter** | a higher-order representation agreement (M2.4), not a def-use question |
+| 41 | a proven Parsec continuation whose target the region graph does not close over | M2.1 follow-up: 20 chains not bound to a binder, 19 parsers used as a value, 2 unsaturated calls |
+| 11 | returned from an **exported wrapper of a local worker** | whole-program linking — the *worker's* callers, not the wrapper's |
+| 10 | …passed to a local binder that is not a lambda chain | M2.4 returned-closure analysis |
+| 7 | …held in a partial application | M2.4 |
+| 3 | …passed to a class-op | closed-world instance enumeration (M2.3) |
+| 2 | returned from an exported function with no worker | whole-program linking |
+| 2 | an unknown higher-order callee outside `ShellCheck.Parser` | M2.4 |
+| 1 | the argument lands past the callee's parameters | M2.4 |
+| 1 | the callee's parameter cannot be split (the callee escapes) | M2.4 |
+| **580** | | |
+
+**The cross-milestone table** is
+[above](#the-cross-milestone-link-how-many-of-m1s-thunks-are-these-tuples):
+111 of M1's 2,242 thunk sites are these tuples' lazy selectors, 2,131
+remain, and the invariant is asserted.
+
+**How to audit a site.** `h2r show <dir> <module> <node>` prints the Core
+around the node with both proof objects' marks inline and the flow's
+evidence as a footer; `h2r tuples <dir> --scalar <node>` prints what
+replaces the tuple, line by line, with `0 unplaced`; `--explain` lists
+every construction's evidence; `--verify` prints the independent
+re-derivation and the audited-shape table. All four are shown above.
+
+**Known limits**, stated rather than hidden:
+
+* the **location budget** (20,000) turns a pathological flow into an honest
+  `Unresolved`. Nothing on `-O1` comes near it — the largest flow visits
+  2,023 locations, the mean is 19 — but the transitive `T12-NESTED` rule
+  does reach it on the inlining-heavy profiles: 4 flows on B and 2 each on
+  C–F end as `flow-exceeded-the-location-budget`. The verifier refuses
+  those flows too, so it is a coverage loss in the safe direction;
+* the **Parsec hop is an input to both sides** of the cross-check. Seven
+  `-O1` verdicts (50 on D–F) rest on a continuation target the verifier
+  cannot derive on its own and is handed from the other proof object. Those
+  seven are proven twice *after* that hop and once before it; dropping the
+  hop would move them to `Unresolved`, not to a different removal;
+* `exported` is **trusted from GHC**. Every rule that needs "no caller
+  outside this module" reads the binder's `exported` flag as dumped. A
+  whole-program link step can replace that with the actual call graph, and
+  would resolve the 11 exported-wrapper and 2 exported-return residuals;
+* the link's `explained` count is the *narrow* one. The 377 bindings that
+  hold a normalised tuple are reported beside it and not claimed.
 
 ## What ShellCheck actually needs
 
@@ -1131,6 +1442,10 @@ the dumps are deterministic.
 | saturated tuple constructions, unboxed | 819 | 1,020 | 943 | 1,751 | 1,751 | 1,752 |
 | … proven removable | 692 | 884 | 806 | 1,585 | 1,585 | 1,586 |
 | **tuples proven removable** | **56%** | 57% | 53% | 65% | 65% | 64% |
+| **normalised** (removable *and* independently verified) | **1,453** | 1,741 | 1,694 | 4,001 | 4,035 | 4,040 |
+| … verifier disagreements | 0 | 0 | 0 | 0 | 0 | 0 |
+| … scalar views built, all with 0 unplaced | 1,453 | 1,741 | 1,694 | 4,001 | 4,035 | 4,040 |
+| M1 thunk sites explained by tuple transport | 111 | 122 | 133 | 134 | 134 | 135 |
 
 Findings:
 

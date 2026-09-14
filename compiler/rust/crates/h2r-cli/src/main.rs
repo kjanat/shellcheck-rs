@@ -53,6 +53,12 @@ enum Command {
         /// the spine roots of proven edges, and prints the evidence footer.
         #[arg(long)]
         no_parsec: bool,
+        /// Do not load the tuple proof object. It is loaded by default
+        /// whenever the module has tuple flows, and annotates
+        /// constructions, alias binders, consumers and their occurrences
+        /// inline, with the flow's own evidence as a footer.
+        #[arg(long)]
+        no_tuples: bool,
     },
     /// Compare census metrics across several Core dump directories
     /// (e.g. the GHC flag matrix). Arguments are `label=dir` or plain dirs.
@@ -95,6 +101,14 @@ enum Command {
         /// verifier and report the disagreements.
         #[arg(long)]
         verify: bool,
+        /// Print the normalised scalar view of one construction: what the
+        /// program looks like with that tuple gone.
+        #[arg(long)]
+        scalar: Option<u32>,
+        /// Print the scalar view of every removable construction. Use
+        /// --module.
+        #[arg(long)]
+        scalar_all: bool,
     },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
@@ -127,7 +141,8 @@ fn main() -> Result<()> {
             depth,
             up,
             no_parsec,
-        } => show(&dir, &module, node, depth, up, !no_parsec),
+            no_tuples,
+        } => show(&dir, &module, node, depth, up, !no_parsec, !no_tuples),
         Command::Laziness {
             dir,
             module,
@@ -141,7 +156,17 @@ fn main() -> Result<()> {
             json,
             explain,
             verify,
-        } => tuples(&dir, module.as_deref(), json, explain, verify),
+            scalar,
+            scalar_all,
+        } => tuples(
+            &dir,
+            module.as_deref(),
+            json,
+            explain,
+            verify,
+            scalar,
+            scalar_all,
+        ),
         Command::Parsec {
             dir,
             module,
@@ -304,6 +329,17 @@ fn binders(dir: &Path, module: &str) -> Result<()> {
 // show
 //------------------------------------------------------------------------------
 
+/// Both proof objects can have something to say about one node; the marks
+/// are concatenated, never merged, so it stays visible which object said
+/// what.
+fn join_notes(a: Option<String>, b: Option<String>) -> Option<String> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(format!("{x}; {y}")),
+        (x, y) => x.or(y),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn show(
     dir: &Path,
     module: &str,
@@ -311,6 +347,7 @@ fn show(
     depth: usize,
     up: usize,
     parsec: bool,
+    tuples_on: bool,
 ) -> Result<()> {
     let modules = load_dir(dir)?;
     let m = find_module(&modules, module)?;
@@ -323,8 +360,52 @@ fn show(
         }
         false => None,
     };
-    let note = |id: u32| analysis.as_ref().and_then(|a| a.node_note(id));
-    let bnote = |b: u32| analysis.as_ref().and_then(|a| a.binder_note(b));
+    // The tuple proof object, on the same terms: loaded by default when the
+    // module has flows, `--no-tuples` skips it. The Parsec hops are read
+    // for it exactly as `h2r tuples` reads them, so a continuation-carried
+    // tuple is annotated here too.
+    let tuples = match tuples_on {
+        true => {
+            let hops = analysis
+                .as_ref()
+                .map(h2r_analysis::tuples::parsec_hops)
+                .unwrap_or_default();
+            let t = h2r_analysis::tuples::Tuples::of_module_with(m, Some(&hops));
+            if t.flows.is_empty() { None } else { Some(t) }
+        }
+        false => None,
+    };
+    // Only the flows actually printed are verified, so `show` stays a
+    // per-node query rather than a whole-module analysis.
+    let prov = tuples.as_ref().map(|t| {
+        let mut v = h2r_analysis::verify::Verifier::new(m).with_hops(t.hops.clone());
+        let verified = t
+            .flows
+            .iter()
+            .filter(|f| {
+                matches!(
+                    f.fate,
+                    h2r_analysis::tuples::TupleFate::ScalarReplace
+                        | h2r_analysis::tuples::TupleFate::WorkerReturn
+                )
+            })
+            .filter(|f| v.verify(f.construction).is_ok())
+            .map(|f| f.construction)
+            .collect();
+        h2r_analysis::scalar::Provenance::of(t, verified)
+    });
+    let note = |id: u32| {
+        join_notes(
+            analysis.as_ref().and_then(|a| a.node_note(id)),
+            prov.as_ref().and_then(|p| p.node_note(id)),
+        )
+    };
+    let bnote = |b: u32| {
+        join_notes(
+            analysis.as_ref().and_then(|a| a.binder_note(b)),
+            prov.as_ref().and_then(|p| p.binder_note(b)),
+        )
+    };
     let pretty = h2r_core_ir::pretty::Pretty {
         module: m,
         max_depth: depth,
@@ -372,6 +453,34 @@ fn show(
                     }
                     if let Some(r) = &p.role {
                         println!("  intrinsic role: {r}");
+                    }
+                    if !p.evidence.is_empty() {
+                        println!("  evidence:");
+                        for (rule, note) in &p.evidence {
+                            println!("    {rule}: {note}");
+                        }
+                    }
+                }
+            }
+            if let Some(pv) = &prov {
+                for i in pv.flows_at(requested) {
+                    let p = pv.proof_at(requested, i);
+                    println!();
+                    println!("node {}", p.node);
+                    if let Some(t) = &p.tuple {
+                        println!("  tuple: {t}");
+                    }
+                    if let Some(f) = &p.fate {
+                        println!("  fate: {f}");
+                    }
+                    if let Some(r) = &p.role {
+                        println!("  this node: {r}");
+                    }
+                    if !p.consumers.is_empty() {
+                        println!("  consumers:");
+                        for c in &p.consumers {
+                            println!("    {c}");
+                        }
                     }
                     if !p.evidence.is_empty() {
                         println!("  evidence:");
@@ -1442,26 +1551,125 @@ fn report(c: &Census, n_modules: usize) {
 // tuples
 //------------------------------------------------------------------------------
 
+/// The normalised scalar view: what the program looks like with one proven
+/// tuple gone. An IR-level view — nothing is lowered and no Core is
+/// rewritten — and a complete one: every consumer of the flow and every
+/// call site it proved is placed in exactly one line, and the block ends
+/// the way the recovered Parsec graph does, with `0 unplaced`.
+fn print_view(v: &h2r_analysis::scalar::ScalarView) {
+    use h2r_analysis::scalar::LineKind;
+
+    v.check();
+    println!(
+        "{} node {} — {} {} of arity {}, fate {:?} [verified: {}]",
+        v.module,
+        v.construction,
+        if v.boxed { "boxed" } else { "unboxed" },
+        v.con,
+        v.arity,
+        v.fate,
+        if v.verified { "yes" } else { "no" }
+    );
+    println!("  scalars");
+    for sc in &v.scalars {
+        println!("    {:<6} := {:<40} [node {}]", sc.name, sc.text, sc.node);
+    }
+    println!("  normalised");
+    for l in &v.lines {
+        let tag = match l.kind {
+            LineKind::Scalar => "scalar",
+            LineKind::Hop => "hop",
+            LineKind::CallSite => "call",
+            LineKind::Binding => "bind",
+            LineKind::Note => "note",
+        };
+        println!("    {tag:<5} {}", l.text);
+        println!("    {:<5}   [{}]", "", l.rules.join(", "));
+    }
+    println!(
+        "  {} consumer(s), {} call site(s) accounted for, {} unplaced",
+        v.consumers,
+        v.call_sites,
+        v.unplaced.len()
+    );
+}
+
+fn scalar_views(
+    tc: &h2r_analysis::tuples::TupleCensus<'_>,
+    node: Option<u32>,
+    all: bool,
+    json: bool,
+) -> Result<()> {
+    use h2r_analysis::scalar::view;
+    use h2r_analysis::tuples::TupleFate;
+
+    let mut out = Vec::new();
+    let mut found = false;
+    for t in &tc.per_module {
+        for f in &t.flows {
+            if let Some(n) = node
+                && f.construction != n
+            {
+                continue;
+            }
+            found = true;
+            let removable = matches!(f.fate, TupleFate::ScalarReplace | TupleFate::WorkerReturn);
+            if !removable {
+                if node.is_some() {
+                    println!(
+                        "{} node {} is {:?}{} — there is no scalar view of a tuple that stays",
+                        f.module,
+                        f.construction,
+                        f.fate,
+                        match f.reason_key() {
+                            Some(r) => format!(" ({r})"),
+                            None => String::new(),
+                        }
+                    );
+                }
+                continue;
+            }
+            if all && node.is_none() || node.is_some() {
+                out.push(view(t, f, tc.is_verified(f)));
+            }
+        }
+    }
+    if let Some(n) = node {
+        if !found {
+            println!("no saturated tuple construction at node {n} in the selected module(s)");
+        }
+        if out.is_empty() {
+            return Ok(());
+        }
+    }
+    if json {
+        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        println!();
+        return Ok(());
+    }
+    for (i, v) in out.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        print_view(v);
+    }
+    if all {
+        println!();
+        println!(
+            "{} removable construction(s), every consumer and call site placed",
+            out.len()
+        );
+    }
+    Ok(())
+}
+
 /// Re-derive every removable verdict with the independent verifier
 /// (`h2r_analysis::verify`) and report the disagreements.
-fn verify_tuples(selected: &[&Module], tc: &h2r_analysis::tuples::TupleCensus<'_>) -> Result<()> {
-    use std::collections::{HashMap, HashSet};
-
-    use h2r_analysis::tuples::TupleFate;
-    use h2r_analysis::verify::{CrossCheck, cross_check};
-
-    let mut out = CrossCheck::default();
-    for (t, m) in tc.per_module.iter().zip(selected) {
-        let population: HashSet<u32> = t.flows.iter().map(|f| f.construction).collect();
-        let removable: HashSet<u32> = t
-            .flows
-            .iter()
-            .filter(|f| matches!(f.fate, TupleFate::ScalarReplace | TupleFate::WorkerReturn))
-            .map(|f| f.construction)
-            .collect();
-        let hops: HashMap<(u32, usize), Vec<u32>> = t.hops.clone();
-        cross_check(m, &population, &removable, hops, &mut out);
-    }
+fn verify_tuples(tc: &h2r_analysis::tuples::TupleCensus<'_>) -> Result<()> {
+    // The cross-check is part of the census now — the milestone's
+    // accounting counts only verified removals as normalised — so this
+    // reports it rather than running it again.
+    let out = &tc.cross;
     println!("Independent verification of every removable verdict");
     println!();
     println!("  {:<44} {:>8}", "removable verdicts checked", out.checked);
@@ -1528,7 +1736,16 @@ fn verify_tuples(selected: &[&Module], tc: &h2r_analysis::tuples::TupleCensus<'_
     Ok(())
 }
 
-fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool, verify: bool) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn tuples(
+    dir: &Path,
+    module: Option<&str>,
+    json: bool,
+    explain: bool,
+    verify: bool,
+    scalar: Option<u32>,
+    scalar_all: bool,
+) -> Result<()> {
     use h2r_analysis::tuples::{TupleCensus, TupleFate};
 
     let modules = load_dir(dir)?;
@@ -1554,7 +1771,10 @@ fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool, verify: b
     let tc = TupleCensus::of_modules_with(&selected, &census, &hops);
 
     if verify {
-        return verify_tuples(&selected, &tc);
+        return verify_tuples(&tc);
+    }
+    if scalar.is_some() || scalar_all {
+        return scalar_views(&tc, scalar, scalar_all, json);
     }
 
     if json {
@@ -1647,6 +1867,67 @@ fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool, verify: b
             .filter(|f| removable(f) && !f.boxed && f.selected)
             .count()
     );
+
+    // The milestone's accounting: before = normalised + preserved +
+    // unsupported, per representation. `Accounting::check` asserts every
+    // cell of this; printing it is the audit trail, not the check.
+    println!();
+    println!("M2.2 accounting — before = normalised + preserved + unsupported");
+    println!(
+        "  {:<16} {:>8} {:>11} {:>10} {:>12}",
+        "", "before", "normalised", "preserved", "unsupported"
+    );
+    for (label, boxed) in [("boxed", true), ("unboxed", false)] {
+        let b = acct.bucket(boxed);
+        println!(
+            "  {label:<16} {:>8} {:>11} {:>10} {:>12}",
+            b.before, b.normalised, b.preserved, b.unsupported
+        );
+    }
+    let all = |f: fn(&h2r_analysis::tuples::Bucket) -> usize| -> usize {
+        acct.milestone.iter().map(f).sum()
+    };
+    println!(
+        "  {:<16} {:>8} {:>11} {:>10} {:>12}",
+        "total",
+        all(|b| b.before),
+        all(|b| b.normalised),
+        all(|b| b.preserved),
+        all(|b| b.unsupported)
+    );
+    println!(
+        "  normalised = removable and re-derived by the independent verifier; \
+         {} removable verdict(s) unverified",
+        acct.removable_unverified
+    );
+    println!();
+    println!(
+        "  the census' {} tuple-attributed argument sites, the same way",
+        acct.sites_mapped
+    );
+    for (label, boxed) in [("boxed", true), ("unboxed", false)] {
+        let b = acct.site_bucket(boxed);
+        println!(
+            "  {label:<16} {:>8} {:>11} {:>10} {:>12}",
+            b.before, b.normalised, b.preserved, b.unsupported
+        );
+    }
+    let sall = |f: fn(&h2r_analysis::tuples::Bucket) -> usize| -> usize {
+        acct.site_milestone.iter().map(f).sum()
+    };
+    println!(
+        "  {:<16} {:>8} {:>11} {:>10} {:>12}",
+        "total",
+        sall(|b| b.before),
+        sall(|b| b.normalised),
+        sall(|b| b.preserved),
+        sall(|b| b.unsupported)
+    );
+    println!();
+    println!("  the unsupported residual, itemised by what holds the value");
+    for (reason, n) in &acct.residual {
+        println!("    {n:>6}  {reason}");
+    }
 
     // The census' tuple-attributed argument sites, on their own.
     println!();
@@ -1788,6 +2069,97 @@ fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool, verify: b
             n(TupleFate::Unresolved),
         );
     }
+
+    // The cross-milestone link: the M1 thunk sites that are these tuples'
+    // lazy selectors, and therefore disappear with them.
+    let l = h2r_analysis::link::link(&census, &tc, &selected);
+    println!();
+    println!("Thunk sites explained by tuple transport (M1 × M2.2)");
+    println!(
+        "  {} of M1's {} potential thunk site(s) have a right-hand side that is a lazy",
+        l.explained.len(),
+        l.thunk_sites
+    );
+    println!(
+        "  selector or a field-wise re-tupling over a removable, verified tuple; \
+         {} remain.",
+        l.remaining()
+    );
+    println!(
+        "  {:<44} {:>8} {:>9} {:>8}",
+        "", "before", "explained", "after"
+    );
+    for r in &l.fates {
+        println!(
+            "  {:<44} {:>8} {:>9} {:>8}",
+            r.label,
+            r.before,
+            r.explained,
+            r.after()
+        );
+    }
+    for r in &l.memo {
+        println!(
+            "  {:<44} {:>8} {:>9} {:>8}",
+            format!("… {}", r.label),
+            r.before,
+            r.explained,
+            r.after()
+        );
+    }
+    println!(
+        "  {:<44} {:>8} {:>9} {:>8}",
+        "potential thunk sites",
+        l.thunk_sites,
+        l.explained.len(),
+        l.remaining()
+    );
+    println!("  by binder origin");
+    for (o, before, explained) in &l.origins {
+        if *before == 0 && *explained == 0 {
+            continue;
+        }
+        println!(
+            "    {:<42} {:>8} {:>9} {:>8}",
+            format!("{o:?}"),
+            before,
+            explained,
+            before - explained
+        );
+    }
+    println!("  by the rule that explains it");
+    for (rule, n) in &l.by_rule {
+        println!("    {rule:<42} {n:>8}");
+    }
+    // Reported beside the table, never in it: a binding whose right-hand
+    // side *is* the tuple holds a box that will not exist, but what
+    // replaces it is n scalar bindings, and whether those are thunks is a
+    // question for the let census to answer again after the rewrite.
+    let mut held_by_origin: BTreeMap<String, usize> = BTreeMap::new();
+    for e in &l.holds {
+        *held_by_origin.entry(format!("{:?}", e.origin)).or_default() += 1;
+    }
+    println!(
+        "  beside them, {} thunk site(s) *hold* a normalised tuple (T1-LET-BOUND): the box",
+        l.holds.len()
+    );
+    println!("  is gone, but what replaces each is one scalar binding per field, so they");
+    println!(
+        "  are not counted as explained — by origin: {}",
+        held_by_origin
+            .iter()
+            .map(|(o, n)| format!("{o} {n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "  of the census' {} tuple-attributed lazy argument sites, {} become a scalar",
+        l.sites, l.sites_explained
+    );
+    println!(
+        "  binding because their tuple is normalised ({} boxed, {} unboxed)",
+        l.sites_explained_boxed, l.sites_explained_unboxed
+    );
 
     if explain {
         println!();
