@@ -391,3 +391,23 @@ Kept so a reader can tell a closed entry from a missed one.
   associative index runs `readIndexSpan`, which reports SC1036 for a `(`. An
   indexed one runs `readArithmeticContents`, and `mapM` in the parser monad has
   nothing to recover with when that fails, so the file does not parse at all.
+- ```#shellcheck`if [ -d```h;do ` `` — past the point of no return the outer
+  parse is over in Parsec, which never reads the text a sub-parse was made
+  from: what such a sub-parse reports, and the failure it hands back, are
+  diagnostics the original had no chance to emit.
+- `((i)<)` — `many readIoRedirect` fails on an attempt that read something
+  first, so a redirection with no target is the whole command's failure. The
+  port ended its redirection list there instead, and the subshell that then
+  closed made `readAmbiguous` take the alternative.
+- `read []]` — `readClass`' guard is `not (null leadingBracket) || not (null
+  s)`, so a `]` straight after the `[` is a member of the class and enough on
+  its own.
+- `[o "-a ` — `flagOp`'s `when (s == "-a" || s == "-o") $ fail "Unexpected
+  operator"` sits inside its own `try`: the cursor comes back but the message
+  stays where the operator ended.
+- `([ ]esac` — `isFollowedBy readKeyword` is a `lookAhead`, and one that
+  succeeds replies with an unknown error at its own position: the errors the
+  keyword attempts left behind go with it.
+- `if [ ]esac` — `ifNextToken (g_Fi <|> g_Elif <|> g_Else)` is still an attempt
+  at each of the three, and `g_Elif` reading the `e` of `esac` leaves its error
+  one past it, further than the missing `then` behind it.

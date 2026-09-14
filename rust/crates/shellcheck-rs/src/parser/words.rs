@@ -516,10 +516,14 @@ impl Parser {
         if let Ok(c) = self.one_of("!^") {
             body.push(c);
         }
+        // `guard $ not (null leadingBracket) || not (null s)`: a `]` right
+        // after the `[` is a member of the class, and enough on its own, so
+        // `[]]` is a class holding a bracket.
+        let mut had = false;
         if let Ok(c) = self.one_of("]") {
             body.push(c);
+            had = true;
         }
-        let mut had = false;
         loop {
             // predefined [:class:]
             let m = self.mark();

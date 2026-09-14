@@ -2086,16 +2086,31 @@ impl Parser {
 
     // ---- redirections ------------------------------------------------------
 
-    pub(super) fn read_redirect_list(&mut self) -> Vec<Token> {
+    /// `many readIoRedirect`, which stops on an attempt that declined without
+    /// reading anything and fails on one that read something first: `(x)<` and
+    /// then a `)` is a redirection with no target, and that is the whole
+    /// command's failure rather than the end of its redirection list.
+    pub(super) fn read_redirect_list(&mut self) -> PResult<Vec<Token>> {
         let mut out = Vec::new();
         loop {
-            self.spacing();
+            let before = self.idx;
             match self.read_io_redirect() {
-                Ok(r) => out.push(r),
-                Err(()) => break,
+                Ok(r) => {
+                    out.push(r);
+                    // `readIoRedirect` ends with `spacing`, so the next attempt
+                    // begins at the next token and the gap is not given back
+                    // when it declines: `{o;}>/` and a tab and a word still get
+                    // SC1141 for the word.
+                    self.spacing();
+                }
+                Err(()) => {
+                    if self.idx != before {
+                        return Err(());
+                    }
+                    return Ok(out);
+                }
             }
         }
-        out
     }
 
     pub(super) fn read_io_redirect(&mut self) -> PResult<Token> {

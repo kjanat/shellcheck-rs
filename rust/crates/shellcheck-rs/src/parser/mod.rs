@@ -1014,13 +1014,24 @@ impl Parser {
             self.positions.entry(k).or_insert(v);
         }
         self.notes.extend(sub.notes);
-        self.problems.extend(sub.problems);
+        // Past the point of no return the outer parse is over in Parsec, which
+        // never reads the text this sub-parse was made from -- so its problems
+        // are ones the original had no chance to emit. Same rule as
+        // [`Parser::problem_at`].
+        if !self.committed {
+            self.problems.extend(sub.problems);
+        }
     }
 
     /// `tryWithErrors`: a sub-parse whose failure is reported rather than
     /// propagated -- the error itself plus the contexts it was left in -- after
     /// which the caller carries on with nothing (`<|> return []`).
     pub(super) fn report_sub_failure(&mut self, contexts: Vec<Context>, failure: Option<Failure>) {
+        if self.committed {
+            // The outer parse was already over, so this expansion is one the
+            // original never reached, let alone reported on.
+            return;
+        }
         // The sub-parse reports against its own stack, which is the one it
         // froze when it committed.
         let outer = self.frozen_contexts.replace(contexts);

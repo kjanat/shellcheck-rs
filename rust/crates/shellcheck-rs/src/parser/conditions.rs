@@ -21,7 +21,7 @@ impl Parser {
                 return Err(());
             }
         };
-        let redirs = self.read_redirect_list();
+        let redirs = self.read_redirect_list()?;
         let id = self.next_id_between(start, self.pos());
         let pos = self.pos();
         let has_dash_ao = ["-o", "-a", "or", "and"]
@@ -44,7 +44,15 @@ impl Parser {
         }
         // A keyword here is reported by readNormalWord instead, and `-o`/`and`
         // already got SC1139; anything else is a stray parameter.
+        // `isFollowedBy readKeyword`, and a `lookAhead` that succeeds replies
+        // with an unknown error at its own position: the errors the keyword
+        // attempts left -- `g_Else` reading the `e` of `esac` -- are given up
+        // with it, so what the parse reports is the missing `)` after them.
+        let keyword_failure = self.failure.clone();
         let has_keyword = self.keyword_len().is_some();
+        if has_keyword {
+            self.failure = keyword_failure;
+        }
         // `isFollowedBy p = (lookAhead . try $ p $> True) <|> return False`: the
         // `try` catches a word that fails after consuming, so an unterminated
         // backtick after the condition is not a parse error here.
@@ -741,6 +749,10 @@ impl Parser {
             if o != "-a" && o != "-o" {
                 return Some(o);
             }
+            // `when (s == "-a" || s == "-o") $ fail "Unexpected operator"`,
+            // inside `flagOp`'s own `try`: the cursor comes back, but the
+            // message stays where the operator ended.
+            let _: PResult<()> = self.fail_recoverable("Unexpected operator");
         }
         self.reset(m);
         // flaglessOps, longest first

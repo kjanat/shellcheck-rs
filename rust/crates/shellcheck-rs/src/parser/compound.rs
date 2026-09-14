@@ -69,7 +69,7 @@ impl Parser {
                 // possibly-empty redirect list), exactly as ShellCheck's
                 // readCompoundCommand. This keeps parent-path depth (and thus
                 // fix precedence) identical to the oracle.
-                let redirs = self.read_redirect_list();
+                let redirs = self.read_redirect_list()?;
                 let (s, _) = self.span_for(t.id());
                 let e = self.pos();
                 let id = self.next_id_between(s, e);
@@ -730,9 +730,22 @@ impl Parser {
         })
     }
 
-    /// `ifNextToken (g_Fi <|> g_Elif <|> g_Else)`.
+    /// `ifNextToken (g_Fi <|> g_Elif <|> g_Else)`, whose `try . lookAhead` is
+    /// still an attempt at each of the three: `]esac` after an `if` leaves the
+    /// error `g_Elif` made reading the `e` of `esac`, one past it, and that is
+    /// further than the missing `then` behind it.
     fn at_if_branch_keyword(&mut self) -> bool {
-        ["fi", "elif", "else"].iter().any(|k| self.keyword_ahead(k))
+        let failure = self.failure.clone();
+        for k in ["fi", "elif", "else"] {
+            if self.keyword_ahead(k) {
+                // The lookahead succeeded, so it replies with an unknown error
+                // at its own position and the attempts before it are given up.
+                self.failure = failure;
+                return true;
+            }
+            self.keyword_attempt_failure(k);
+        }
+        false
     }
 
     /// `verifyNotEmptyIf`: the clause runs straight into what closes it.
