@@ -6,6 +6,7 @@ use serde::Serialize;
 use crate::callee::{Family, Resolution, Tier};
 use crate::laziness::{Census, Class, Fate, Origin, Sink, TopClass};
 use crate::shape::ArgShape;
+use crate::tuples::{TupleCensus, TupleFate};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Metrics {
@@ -45,12 +46,35 @@ pub struct Metrics {
     pub tier_unresolved: usize,
     pub parsec_cps_sites: usize,
     pub tuple_sites: usize,
+    // Saturated tuple constructions and their proven fates, boxed and
+    // unboxed kept apart: an unboxed tuple cannot be stored in a lazy
+    // field, so the two populations answer different questions.
+    pub tuple_cons_boxed: usize,
+    pub tuple_cons_unboxed: usize,
+    pub tuple_scalar_boxed: usize,
+    pub tuple_scalar_unboxed: usize,
+    pub tuple_return_boxed: usize,
+    pub tuple_return_unboxed: usize,
+    pub tuple_preserve_boxed: usize,
+    pub tuple_preserve_unboxed: usize,
+    pub tuple_unresolved_boxed: usize,
+    pub tuple_unresolved_unboxed: usize,
+    /// Removable constructions with at least one field read on its own.
+    pub tuple_selected: usize,
     pub list_cons_sites: usize,
     pub string_literal_args: usize,
 }
 
 impl Metrics {
-    pub fn of(census: &Census, core_nodes: usize, top_level_binds: usize) -> Metrics {
+    pub fn of(
+        census: &Census,
+        tuples: Option<&TupleCensus<'_>>,
+        core_nodes: usize,
+        top_level_binds: usize,
+    ) -> Metrics {
+        let tc = |boxed: bool, fate: TupleFate| {
+            tuples.map(|t| t.accounting.count(boxed, fate)).unwrap_or(0)
+        };
         let b = &census.bindings;
         let thunks: Vec<_> = b.iter().filter(|x| x.fate != Fate::NotAThunk).collect();
         let memo: Vec<_> = thunks.iter().filter(|x| x.fate == Fate::Memo).collect();
@@ -139,6 +163,34 @@ impl Metrics {
                 .iter()
                 .filter(|a| a.shape == ArgShape::StringLiteral)
                 .count(),
+            tuple_cons_boxed: tuples
+                .map(|t| t.accounting.constructions_boxed)
+                .unwrap_or(0),
+            tuple_cons_unboxed: tuples
+                .map(|t| t.accounting.constructions_unboxed)
+                .unwrap_or(0),
+            tuple_scalar_boxed: tc(true, TupleFate::ScalarReplace),
+            tuple_scalar_unboxed: tc(false, TupleFate::ScalarReplace),
+            tuple_return_boxed: tc(true, TupleFate::WorkerReturn),
+            tuple_return_unboxed: tc(false, TupleFate::WorkerReturn),
+            tuple_preserve_boxed: tc(true, TupleFate::Preserve),
+            tuple_preserve_unboxed: tc(false, TupleFate::Preserve),
+            tuple_unresolved_boxed: tc(true, TupleFate::Unresolved),
+            tuple_unresolved_unboxed: tc(false, TupleFate::Unresolved),
+            tuple_selected: tuples
+                .map(|t| {
+                    t.flows
+                        .iter()
+                        .filter(|f| {
+                            f.selected
+                                && matches!(
+                                    f.fate,
+                                    TupleFate::ScalarReplace | TupleFate::WorkerReturn
+                                )
+                        })
+                        .count()
+                })
+                .unwrap_or(0),
         }
     }
 
@@ -185,6 +237,26 @@ impl Metrics {
             ("    tuple constructors", self.tuple_sites),
             ("    list cons", self.list_cons_sites),
             ("  string literal args", self.string_literal_args),
+            ("tuple constructions, boxed", self.tuple_cons_boxed),
+            ("  scalar replace", self.tuple_scalar_boxed),
+            ("  multi-value return", self.tuple_return_boxed),
+            ("  preserve", self.tuple_preserve_boxed),
+            ("  unresolved", self.tuple_unresolved_boxed),
+            ("tuple constructions, unboxed", self.tuple_cons_unboxed),
+            ("  scalar replace", self.tuple_scalar_unboxed),
+            ("  multi-value return", self.tuple_return_unboxed),
+            ("  preserve", self.tuple_preserve_unboxed),
+            ("  unresolved", self.tuple_unresolved_unboxed),
+            ("removable, field read alone", self.tuple_selected),
+            (
+                "tuples removable %",
+                (self.tuple_scalar_boxed
+                    + self.tuple_scalar_unboxed
+                    + self.tuple_return_boxed
+                    + self.tuple_return_unboxed)
+                    * 100
+                    / (self.tuple_cons_boxed + self.tuple_cons_unboxed).max(1),
+            ),
             // Ratios, so profiles of different size compare.
             (
                 "thunk sites / 1k nodes",

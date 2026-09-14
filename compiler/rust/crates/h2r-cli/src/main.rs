@@ -91,6 +91,10 @@ enum Command {
         /// Print every construction with its evidence and node ids.
         #[arg(long)]
         explain: bool,
+        /// Re-derive every removable verdict with the independent
+        /// verifier and report the disagreements.
+        #[arg(long)]
+        verify: bool,
     },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
@@ -136,7 +140,8 @@ fn main() -> Result<()> {
             module,
             json,
             explain,
-        } => tuples(&dir, module.as_deref(), json, explain),
+            verify,
+        } => tuples(&dir, module.as_deref(), json, explain, verify),
         Command::Parsec {
             dir,
             module,
@@ -412,9 +417,20 @@ fn compare(specs: &[String]) -> Result<()> {
             .iter()
             .map(|m| m.top.iter().map(|b| b.pairs.len()).sum::<usize>())
             .sum();
+        let selected: Vec<&Module> = modules.iter().collect();
+        let raw = Census::raw(selected.iter().copied());
+        let analyses: Vec<h2r_analysis::parsec::Analysis> = selected
+            .iter()
+            .map(|m| h2r_analysis::parsec::Analysis::of_module(m))
+            .collect();
+        let hops: Vec<h2r_analysis::tuples::ParsecHops> = analyses
+            .iter()
+            .map(h2r_analysis::tuples::parsec_hops)
+            .collect();
+        let tuples = h2r_analysis::tuples::TupleCensus::of_modules_with(&selected, &raw, &hops);
         columns.push((
             label,
-            h2r_analysis::metrics::Metrics::of(&census, core_nodes, top),
+            h2r_analysis::metrics::Metrics::of(&census, Some(&tuples), core_nodes, top),
         ));
         let mut names: Vec<String> = modules.iter().map(|m| m.name.clone()).collect();
         names.sort();
@@ -1426,7 +1442,93 @@ fn report(c: &Census, n_modules: usize) {
 // tuples
 //------------------------------------------------------------------------------
 
-fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result<()> {
+/// Re-derive every removable verdict with the independent verifier
+/// (`h2r_analysis::verify`) and report the disagreements.
+fn verify_tuples(selected: &[&Module], tc: &h2r_analysis::tuples::TupleCensus<'_>) -> Result<()> {
+    use std::collections::{HashMap, HashSet};
+
+    use h2r_analysis::tuples::TupleFate;
+    use h2r_analysis::verify::{CrossCheck, cross_check};
+
+    let mut out = CrossCheck::default();
+    for (t, m) in tc.per_module.iter().zip(selected) {
+        let population: HashSet<u32> = t.flows.iter().map(|f| f.construction).collect();
+        let removable: HashSet<u32> = t
+            .flows
+            .iter()
+            .filter(|f| matches!(f.fate, TupleFate::ScalarReplace | TupleFate::WorkerReturn))
+            .map(|f| f.construction)
+            .collect();
+        let hops: HashMap<(u32, usize), Vec<u32>> = t.hops.clone();
+        cross_check(m, &population, &removable, hops, &mut out);
+    }
+    println!("Independent verification of every removable verdict");
+    println!();
+    println!("  {:<44} {:>8}", "removable verdicts checked", out.checked);
+    println!("  {:<44} {:>8}", "  re-derived by the verifier", out.agreed);
+    println!(
+        "  {:<44} {:>8}",
+        "  …of which using a Parsec hop", out.via_hops
+    );
+    println!("  {:<44} {:>8}", "  DISAGREEMENTS", out.disagreements.len());
+    println!(
+        "  {:<44} {:>8}",
+        "verifier accepts, census does not", out.census_stricter
+    );
+    println!(
+        "  {:<44} {:>8}",
+        "population: only the verifier found it",
+        out.only_here.len()
+    );
+    println!(
+        "  {:<44} {:>8}",
+        "population: only the census found it",
+        out.only_there.len()
+    );
+    println!(
+        "  {:<44} {:>8}",
+        "rounds the tuple-in-tuple fixpoint took",
+        tc.per_module
+            .iter()
+            .map(|t| t.nesting_rounds)
+            .max()
+            .unwrap_or(0)
+    );
+    println!();
+    println!("The audited shapes, in this dump");
+    println!("  {:<44} {:>6}  fates / example", "shape", "n");
+    for p in h2r_analysis::tuples::patterns(&tc.per_module) {
+        let fates: Vec<String> = p.fates.iter().map(|(f, n)| format!("{f} {n}")).collect();
+        println!("  {:<44} {:>6}  {}", p.name, p.n, fates.join(", "));
+        if p.n > 0 {
+            println!("  {:<44}         e.g. {} node {}", "", p.module, p.at);
+        }
+    }
+    if !out.disagreements.is_empty() {
+        println!();
+        let mut by: BTreeMap<(&str, String), (usize, String, u32)> = BTreeMap::new();
+        for d in &out.disagreements {
+            let e = by
+                .entry((d.rejection.why, d.rejection.detail.clone()))
+                .or_insert((0, String::new(), 0));
+            e.0 += 1;
+            if e.1.is_empty() {
+                e.1 = d.module.clone();
+                e.2 = d.construction;
+            }
+        }
+        println!("Disagreements by reason");
+        let mut rows: Vec<_> = by.into_iter().collect();
+        rows.sort_by_key(|(_, v)| std::cmp::Reverse(v.0));
+        for ((why, detail), (n, module, at)) in rows {
+            println!("  {n:>6}  {why} ({detail})");
+            println!("          e.g. {module} node {at}");
+        }
+    }
+    Ok(())
+}
+
+fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool, verify: bool) -> Result<()> {
     use h2r_analysis::tuples::{TupleCensus, TupleFate};
 
     let modules = load_dir(dir)?;
@@ -1438,7 +1540,22 @@ fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result
     // the raw one (without the Parsec proof, which says nothing about
     // tuples) is enough and costs one pass instead of two.
     let census = Census::raw(selected.iter().copied());
-    let tc = TupleCensus::of_modules(&selected, &census);
+    // The Parsec proof object resolves the continuation calls the tuple
+    // rules see as an unknown higher-order callee; it is read, never
+    // re-derived (`tuples::parsec_hops`).
+    let analyses: Vec<h2r_analysis::parsec::Analysis> = selected
+        .iter()
+        .map(|m| h2r_analysis::parsec::Analysis::of_module(m))
+        .collect();
+    let hops: Vec<h2r_analysis::tuples::ParsecHops> = analyses
+        .iter()
+        .map(h2r_analysis::tuples::parsec_hops)
+        .collect();
+    let tc = TupleCensus::of_modules_with(&selected, &census, &hops);
+
+    if verify {
+        return verify_tuples(&selected, &tc);
+    }
 
     if json {
         let out = serde_json::json!({
@@ -1500,7 +1617,6 @@ fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result
     println!("  {:<16} {:>10} {:>10}", "fate", "boxed", "unboxed");
     let fates = [
         TupleFate::ScalarReplace,
-        TupleFate::StateThread,
         TupleFate::WorkerReturn,
         TupleFate::Preserve,
         TupleFate::Unresolved,
@@ -1513,6 +1629,23 @@ fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result
     println!(
         "  {:<16} {:>10} {:>10}",
         "total", acct.constructions_boxed, acct.constructions_unboxed
+    );
+    // How the fields of a removable tuple are read is a fact about the
+    // flow, not a fate: both are removed the same way, so it is reported
+    // beside the fates rather than as one of them.
+    let removable = |f: &&h2r_analysis::tuples::TupleFlow| {
+        matches!(f.fate, TupleFate::ScalarReplace | TupleFate::WorkerReturn)
+    };
+    println!(
+        "  of the removable ones, {} boxed and {} unboxed have at least one field read on its own",
+        flows
+            .iter()
+            .filter(|f| removable(f) && f.boxed && f.selected)
+            .count(),
+        flows
+            .iter()
+            .filter(|f| removable(f) && !f.boxed && f.selected)
+            .count()
     );
 
     // The census' tuple-attributed argument sites, on their own.
@@ -1636,8 +1769,8 @@ fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result
     println!();
     println!("Per module");
     println!(
-        "  {:<34} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
-        "module", "boxed", "unbox", "scalar", "state", "worker", "presrv", "unres"
+        "  {:<34} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+        "module", "boxed", "unbox", "scalar", "return", "presrv", "unres"
     );
     for t in &tc.per_module {
         if t.flows.is_empty() {
@@ -1645,12 +1778,11 @@ fn tuples(dir: &Path, module: Option<&str>, json: bool, explain: bool) -> Result
         }
         let n = |fate: TupleFate| t.flows.iter().filter(|f| f.fate == fate).count();
         println!(
-            "  {:<34} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+            "  {:<34} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
             t.module.name,
             t.flows.iter().filter(|f| f.boxed).count(),
             t.flows.iter().filter(|f| !f.boxed).count(),
             n(TupleFate::ScalarReplace),
-            n(TupleFate::StateThread),
             n(TupleFate::WorkerReturn),
             n(TupleFate::Preserve),
             n(TupleFate::Unresolved),

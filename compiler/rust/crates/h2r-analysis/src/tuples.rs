@@ -121,6 +121,27 @@ pub const T9_STORED: &str = "T9-STORED";
 /// unresolved rather than proven. Evidence: lexical identity (1), signature
 /// lookup (4).
 pub const T10_OPAQUE_CALL: &str = "T10-OPAQUE-CALL";
+/// A use is a value argument of a saturated construction of *another*
+/// tuple whose own fate is proven removable: the inner tuple is a field of
+/// a box that will not exist, so it survives exactly as long as that box's
+/// fields do, and its consumers are the uses of the outer's *i*-th field
+/// binder at every scrutiny of the outer — transitively. When the outer is
+/// not proven removable the inner is [`T9_STORED`] as before.
+/// Evidence: structural shape (2) over the outer's own def-use proof (3).
+pub const T12_NESTED: &str = "T12-NESTED";
+/// A use is the value argument of a continuation call the Parsec proof
+/// object ([`crate::parsec`]) proves, *and* that proof resolves the
+/// continuation to lambdas inside this module: the flow continues at their
+/// value parameters. Nothing here re-derives the continuation's target —
+/// the region graph is read, not recomputed. Evidence: the Parsec proof's
+/// own level (1 over 2) for the hop, def-use (3) after it.
+pub const T13_PARSEC_CONT: &str = "T13-PARSEC-CONT";
+/// A use is the scrutinee of a `case` with a single `DEFAULT` alternative
+/// binding nothing: the tuple is *forced* and no field is read. Forcing a
+/// constructor application is a no-op, so this neither keeps the box alive
+/// nor reads it — it is recorded as a consumer that reads no field.
+/// Evidence: structural shape (2).
+pub const T14_FORCED: &str = "T14-FORCED";
 /// Any other use: the tuple applied as a function, bound to an exported
 /// binder, returned from an exported function, or reached through a closure
 /// whose call sites are not visible. Recorded with a machine-readable
@@ -131,15 +152,14 @@ pub const T11_ESCAPE: &str = "T11-ESCAPE";
 /// tuple was built in: the allocation can be replaced by its fields.
 /// Evidence: def-use over resolved occurrences (3).
 pub const F1_SCALAR_REPLACE: &str = "F1-SCALAR-REPLACE";
-/// The flow crosses a function boundary and **every** consumer scrutinises
-/// the tuple immediately: a worker/CPR return, which becomes a multi-value
-/// return. Evidence: def-use (3).
-pub const F2_WORKER_RETURN: &str = "F2-WORKER-RETURN";
-/// The flow crosses a function boundary and every consumer reads fields, at
-/// least one of them by lazy selection or by field-wise re-tupling: a
-/// transformer step's state/result triple handed to the next step.
+/// The flow crosses a function boundary and **every** consumer reads the
+/// tuple's fields — by scrutiny, by lazy selection, or by field-wise
+/// re-tupling: a multi-value return. Whether any consumer is a lazy
+/// selection is recorded as a fact on the flow and not as a fate of its
+/// own: both shapes are removed the same way, and no structural rule
+/// distinguishes "a state being threaded" from "a worker's result".
 /// Evidence: def-use (3).
-pub const F3_STATE_THREAD: &str = "F3-STATE-THREAD";
+pub const F2_WORKER_RETURN: &str = "F2-WORKER-RETURN";
 /// A proven real value: stored in a constructor field, held in a partial
 /// application, or handed to a function outside this module. Evidence:
 /// whichever `T9`/`T10` use proved it.
@@ -162,17 +182,56 @@ pub const R_FUNCTION_ESCAPES: &str = "returning-function-escapes-as-a-value";
 pub const R_CALL_UNDERSAT: &str = "call-site-is-a-partial-application";
 pub const R_CALL_OVERSAT: &str = "call-site-applies-past-the-return";
 pub const R_NESTED_CLOSURE: &str = "returned-from-a-closure-with-no-visible-binding";
-pub const R_CLOSURE_ARG: &str = "returned-from-a-closure-passed-to-a-call";
+pub const R_CLOSURE_ARG: &str = "returned-from-a-closure-passed-to-a-local-value-callee";
 pub const R_CLOSURE_STORED: &str = "returned-from-a-closure-stored-in-a-constructor";
 pub const R_APPLIED: &str = "tuple-applied-as-a-function";
 pub const R_ALTS: &str = "case-is-not-one-tuple-alternative";
 pub const R_PAST_PARAMS: &str = "argument-lands-past-the-callee-parameters";
 pub const R_TOO_LARGE: &str = "flow-exceeded-the-location-budget";
+// Refined residuals, so the next milestone can pick each one up without
+// re-analysing. The constructor and callee names in the `detail` are
+// diagnostics; the *split* is by what kind of thing holds the closure.
+pub const R_CLOSURE_CONSED: &str = "returned-from-a-closure-consed-onto-a-list";
+pub const R_CLOSURE_ARG_IMPORTED: &str = "returned-from-a-closure-passed-to-an-imported-call";
+pub const R_CLOSURE_ARG_CLASS_OP: &str = "returned-from-a-closure-passed-to-a-class-op";
+pub const R_CLOSURE_ARG_UNKNOWN: &str =
+    "returned-from-a-closure-passed-to-an-unknown-higher-order-callee";
+pub const R_EXPORTED_WRAPPER_RETURN: &str = "returned-from-an-exported-wrapper-of-a-local-worker";
+/// The *closure* that returns the tuple is handed to a known local
+/// callee's parameter. Rewriting the tuple away changes that parameter's
+/// type, so every other closure reaching the parameter would have to be
+/// rewritten too — and this flow does not see them. Refused rather than
+/// guessed; the independent verifier refuses it for the same reason.
+pub const R_CLOSURE_INTO_PARAM: &str = "closure-returning-the-tuple-is-passed-into-a-parameter";
+/// The tuple is handed to a local callee whose parameter cannot be split:
+/// the callee is exported, or it is used somewhere as a value, so not
+/// every call site of it is visible and rewritable.
+pub const R_CALLEE_NOT_SPLITTABLE: &str = "callee-parameter-cannot-be-split";
+/// The tuple is the value argument of a proven Parsec continuation call
+/// whose target the region graph does not resolve. The detail names the
+/// edge.
+pub const R_PARSEC_CONT: &str = "parsec-continuation-target-not-in-the-region-graph";
 
 /// Locations one flow may visit before it is abandoned as too large. No
 /// flow on the `-O1` dump comes anywhere near it; it exists so a pathological
 /// module degrades into an honest `Unresolved` instead of a hang.
 const LOCATION_BUDGET: usize = 20_000;
+
+/// How many times the nesting fixpoint ([`Tuples::resolve_flows`]) may go
+/// round before it is a bug. On every dump it settles in 2.
+const NESTING_ROUNDS: usize = 32;
+
+/// Where a removable outer tuple's *i*-th field can be followed to.
+#[derive(Debug, Clone)]
+struct NestedTarget {
+    /// Occurrences of the field binder at each of the outer's scrutinies.
+    seeds: Vec<ExprId>,
+    /// The outer crossed a return, so this field does too.
+    returned: bool,
+}
+
+/// `(outer construction, field index) -> where that field goes`.
+type Nested = HashMap<(ExprId, usize), NestedTarget>;
 
 //------------------------------------------------------------------------------
 // The proof object
@@ -211,6 +270,11 @@ pub enum TupleUse {
     Retupled { outer: ExprId },
     /// Stored in a data constructor's field: a real allocation holds it.
     StoredIn { con: ExprId },
+    /// A field of another tuple that is itself proven removable: the flow
+    /// continues at that field's binders ([`T12_NESTED`]).
+    NestedIn { outer: ExprId, field: u32 },
+    /// Forced whole, without reading a field ([`T14_FORCED`]).
+    Forced { case: ExprId },
     /// Argument of a call this module cannot see into.
     PassedToUnknown { call: ExprId, why: &'static str },
     /// Anything else the rules do not accept.
@@ -234,6 +298,8 @@ impl TupleUse {
             TupleUse::Returned { .. } => "Returned",
             TupleUse::Retupled { .. } => "Retupled",
             TupleUse::StoredIn { .. } => "StoredIn",
+            TupleUse::NestedIn { .. } => "NestedIn",
+            TupleUse::Forced { .. } => "Forced",
             TupleUse::PassedToUnknown { .. } => "PassedToUnknown",
             TupleUse::Escapes { .. } => "Escapes",
         }
@@ -241,10 +307,12 @@ impl TupleUse {
 
     pub fn at(self) -> ExprId {
         match self {
-            TupleUse::Scrutinised { case, .. } | TupleUse::Selected { case, .. } => case,
+            TupleUse::Scrutinised { case, .. }
+            | TupleUse::Selected { case, .. }
+            | TupleUse::Forced { case } => case,
             TupleUse::PassedTo { call, .. } | TupleUse::PassedToUnknown { call, .. } => call,
             TupleUse::Retupled { outer } => outer,
-            TupleUse::StoredIn { con } => con,
+            TupleUse::StoredIn { con } | TupleUse::NestedIn { outer: con, .. } => con,
             TupleUse::Escapes { at, .. } => at,
             TupleUse::Returned { .. } => 0,
         }
@@ -255,9 +323,10 @@ impl TupleUse {
 pub enum TupleFate {
     /// Every consumer reads fields, in the function that built it.
     ScalarReplace,
-    /// Flows through transformer-step positions and never escapes.
-    StateThread,
-    /// Returned from a function whose every call site scrutinises it.
+    /// It crosses a return and every consumer reads its fields: a
+    /// multi-value return. Whether the fields are read together (a
+    /// scrutiny) or one at a time (a lazy selection) is recorded as a fact
+    /// on the flow, not as a separate fate — see [`TupleFlow::selected`].
     WorkerReturn,
     /// A proven real value.
     Preserve,
@@ -270,7 +339,6 @@ impl TupleFate {
         match self {
             TupleFate::ScalarReplace => F1_SCALAR_REPLACE,
             TupleFate::WorkerReturn => F2_WORKER_RETURN,
-            TupleFate::StateThread => F3_STATE_THREAD,
             TupleFate::Preserve => F4_PRESERVE,
             TupleFate::Unresolved => F5_UNRESOLVED,
         }
@@ -294,6 +362,17 @@ pub struct TupleFlow {
     /// the binder it copies.
     pub copy_of: Option<BinderId>,
     pub consumers: Vec<TupleUse>,
+    /// At least one consumer reads a field on its own — a lazy selector
+    /// ([`T3_SELECTED`]) or a field-wise copy ([`T4_RETUPLE`]) — as opposed
+    /// to taking the whole tuple apart at once. A fact about how the
+    /// fields are demanded, kept as evidence; it decides no fate.
+    pub selected: bool,
+    /// The flow left the function the tuple was built in through a return.
+    pub returned: bool,
+    /// Constructions this one is a field of, with the field index
+    /// ([`T12_NESTED`]); non-empty whether or not the outer turned out to
+    /// be removable.
+    pub nested_in: Vec<(ExprId, u32)>,
     pub fate: TupleFate,
     pub evidence: Vec<Evidence>,
     /// Machine-readable reason, for `Preserve` and `Unresolved`.
@@ -387,6 +466,16 @@ pub struct Tuples<'m> {
     copies: HashMap<BinderId, Vec<ExprId>>,
     /// Top-level binder of every flattened top-level pair, by pair index.
     top_pairs: Vec<BinderId>,
+    /// Hops this module's own rules cannot derive, taken from another proof
+    /// object: `(spine root, value-argument index) -> the parameter(s) the
+    /// value lands on`. Filled in by the Parsec coupling
+    /// ([`T12_PARSEC_CONT`]); empty when no Parsec proof is supplied.
+    pub hops: HashMap<(ExprId, usize), Vec<BinderId>>,
+    /// Proven Parsec continuation calls whose target the region graph does
+    /// not close over: `(spine root, value-argument index) -> the edge`.
+    pub parsec_unresolved: HashMap<(ExprId, usize), String>,
+    /// Rounds the nesting fixpoint took.
+    pub nesting_rounds: usize,
 }
 
 /// A location the tuple value reaches, and the accumulated verdict about it.
@@ -410,6 +499,11 @@ struct Walk {
     /// parameter is not that — the box still never outlives its scrutinies
     /// — so only a return sets this.
     returned: bool,
+    /// Local binders the flow already crossed a *return* of, innermost
+    /// first: what makes an exported return a wrapper of a local worker.
+    returned_from: Vec<BinderId>,
+    /// Constructions this tuple is a field of, with the field index.
+    nested_in: Vec<(ExprId, u32)>,
     locations: usize,
     over_budget: bool,
 }
@@ -454,6 +548,12 @@ impl Walk {
 
 impl<'m> Tuples<'m> {
     pub fn of_module(m: &'m Module) -> Tuples<'m> {
+        Tuples::of_module_with(m, None)
+    }
+
+    /// …reading the Parsec proof object's resolved continuation targets as
+    /// well, when one is supplied ([`T13_PARSEC_CONT`]).
+    pub fn of_module_with(m: &'m Module, parsec: Option<&ParsecHops>) -> Tuples<'m> {
         let mut t = Tuples {
             module: m,
             flows: Vec::new(),
@@ -467,7 +567,14 @@ impl<'m> Tuples<'m> {
                 .flat_map(|b| b.pairs.iter())
                 .map(|p| p.binder)
                 .collect(),
+            hops: HashMap::new(),
+            parsec_unresolved: HashMap::new(),
+            nesting_rounds: 0,
         };
+        if let Some(p) = parsec {
+            t.hops = p.hops.clone();
+            t.parsec_unresolved = p.unresolved.clone();
+        }
         t.find_constructions();
         t.find_retuplings();
         t.resolve_flows();
@@ -476,6 +583,21 @@ impl<'m> Tuples<'m> {
 
     pub fn binder(&self, b: BinderId) -> &'m h2r_core_ir::Binder {
         self.module.binder(b)
+    }
+
+    /// Is every occurrence of `b` the head of a spine that supplies at
+    /// least `n` value arguments? If not, `b` is somewhere a *value*, and a
+    /// call site of it exists that rewriting its parameters would miss.
+    fn never_escapes(&self, b: BinderId, n: usize) -> bool {
+        let m = self.module;
+        m.occurrences(b).iter().all(|occ| {
+            let root = m.spine_root(*occ);
+            if root == *occ {
+                return false;
+            }
+            let (head, args) = m.spine(root);
+            m.strip(head) == m.strip(*occ) && value_args(&self.scope, &args).len() >= n
+        })
     }
 
     /// The flow of the construction rooted at `node`, if that node is one.
@@ -541,6 +663,9 @@ impl<'m> Tuples<'m> {
                 bound: None,
                 copy_of: None,
                 consumers: Vec::new(),
+                selected: false,
+                returned: false,
+                nested_in: Vec::new(),
                 fate: TupleFate::Unresolved,
                 evidence: vec![Evidence {
                     rule: T0_TUPLE_CON,
@@ -626,53 +751,156 @@ impl<'m> Tuples<'m> {
     // Def-use walk
     //--------------------------------------------------------------------------
 
+    /// Resolve every flow, and then iterate the ones that are a field of
+    /// another tuple until the nesting settles.
+    ///
+    /// A tuple stored in a *tuple* field is not, in itself, evidence of a
+    /// real allocation: if the outer box is proven removable then the field
+    /// is just a value, and the inner tuple's consumers are the uses of the
+    /// outer's *i*-th field binder at each of the outer's scrutinies. That
+    /// is a fixpoint, because the outer may be nested in something else
+    /// again. It starts from the pessimistic assignment — every nested
+    /// tuple `Preserve` — and only ever *adds* resolved nestings, so a
+    /// knot-tied cycle cannot bootstrap itself into being removable.
     fn resolve_flows(&mut self) {
-        for i in 0..self.flows.len() {
-            let start = self.flows[i].construction;
-            let mut w = Walk {
-                work: vec![(start, 0)],
-                seen: HashSet::from([(start, 0)]),
-                consumers: Vec::new(),
-                evidence: Vec::new(),
-                escapes: Vec::new(),
-                returned: false,
-                locations: 0,
-                over_budget: false,
-            };
-            let mut bound = None;
-            while let Some((v, owed)) = w.work.pop() {
-                w.locations += 1;
-                if w.locations > LOCATION_BUDGET {
-                    w.over_budget = true;
-                    break;
-                }
-                self.step(&mut w, v, owed, start, &mut bound);
-            }
-            let (fate, reason, detail) = decide(&w);
-            let f = &mut self.flows[i];
-            f.bound = bound;
-            f.locations = w.locations;
-            f.consumers = w.consumers;
-            f.evidence.extend(w.evidence);
-            f.fate = fate;
-            f.reason = reason;
-            f.detail = detail;
-            f.evidence.push(Evidence {
-                rule: fate.rule(),
-                nodes: vec![f.construction],
-                binder: None,
-                note: format!(
-                    "{} consumer(s) over {} value location(s){}",
-                    f.consumers.len(),
-                    f.locations,
-                    if w.returned {
-                        ", crossing a return"
-                    } else {
-                        ""
-                    }
-                ),
-            });
+        let n = self.flows.len();
+        let empty: Nested = Nested::new();
+        let mut nested_any = vec![false; n];
+        for (i, any) in nested_any.iter_mut().enumerate() {
+            *any = self.run_flow(i, &empty);
         }
+        let mut rounds = 0;
+        loop {
+            let nested = self.nested_targets();
+            let before: Vec<TupleFate> = self.flows.iter().map(|f| f.fate).collect();
+            let again: Vec<usize> = nested_any
+                .iter()
+                .enumerate()
+                .filter(|(_, any)| **any)
+                .map(|(i, _)| i)
+                .collect();
+            for i in again {
+                nested_any[i] = self.run_flow(i, &nested);
+            }
+            rounds += 1;
+            if self.flows.iter().map(|f| f.fate).eq(before.iter().copied()) {
+                break;
+            }
+            assert!(
+                rounds < NESTING_ROUNDS,
+                "tuple nesting did not settle in {NESTING_ROUNDS} rounds"
+            );
+        }
+        self.nesting_rounds = rounds;
+    }
+
+    /// Where a removable outer tuple's *i*-th field can be followed to:
+    /// the occurrences of the field binder at every scrutiny of the outer.
+    fn nested_targets(&self) -> Nested {
+        let m = self.module;
+        let mut out: Nested = Nested::new();
+        for f in &self.flows {
+            if !matches!(f.fate, TupleFate::ScalarReplace | TupleFate::WorkerReturn) {
+                continue;
+            }
+            for idx in 0..f.arity as usize {
+                let mut seeds = Vec::new();
+                for u in &f.consumers {
+                    let case = match u {
+                        TupleUse::Scrutinised { case, .. } | TupleUse::Selected { case, .. } => {
+                            *case
+                        }
+                        _ => continue,
+                    };
+                    let Expr::Case { alts, .. } = m.expr(case) else {
+                        continue;
+                    };
+                    let Some(alt) = alts.first() else { continue };
+                    let Some(b) = alt.binders.get(idx) else {
+                        continue;
+                    };
+                    seeds.extend(m.occurrences(*b).iter().copied());
+                }
+                out.insert(
+                    (f.construction, idx),
+                    NestedTarget {
+                        seeds,
+                        returned: f.returned,
+                    },
+                );
+            }
+        }
+        out
+    }
+
+    /// Run one construction's def-use walk from scratch. Returns whether
+    /// the flow is a field of another tuple, i.e. whether re-running it can
+    /// change anything.
+    fn run_flow(&mut self, i: usize, nested: &Nested) -> bool {
+        let start = self.flows[i].construction;
+        let mut w = Walk {
+            work: vec![(start, 0)],
+            seen: HashSet::from([(start, 0)]),
+            consumers: Vec::new(),
+            evidence: Vec::new(),
+            escapes: Vec::new(),
+            returned: false,
+            returned_from: Vec::new(),
+            nested_in: Vec::new(),
+            locations: 0,
+            over_budget: false,
+        };
+        let mut bound = None;
+        while let Some((v, owed)) = w.work.pop() {
+            w.locations += 1;
+            if w.locations > LOCATION_BUDGET {
+                w.over_budget = true;
+                break;
+            }
+            self.step(&mut w, v, owed, start, &mut bound, nested);
+        }
+        let (fate, reason, detail) = decide(&w);
+        let base = self.flows[i]
+            .evidence
+            .iter()
+            .position(|e| e.rule != T0_TUPLE_CON && e.rule != T4_RETUPLE)
+            .unwrap_or(self.flows[i].evidence.len());
+        let f = &mut self.flows[i];
+        f.evidence.truncate(base);
+        f.bound = bound;
+        f.locations = w.locations;
+        f.selected = w
+            .consumers
+            .iter()
+            .any(|u| matches!(u, TupleUse::Selected { .. } | TupleUse::Retupled { .. }));
+        f.returned = w.returned;
+        f.nested_in = w.nested_in.clone();
+        f.consumers = w.consumers;
+        f.evidence.extend(w.evidence);
+        f.fate = fate;
+        f.reason = reason;
+        f.detail = detail;
+        f.evidence.push(Evidence {
+            rule: fate.rule(),
+            nodes: vec![f.construction],
+            binder: None,
+            note: format!(
+                "{} consumer(s) over {} value location(s){}{}",
+                f.consumers.len(),
+                f.locations,
+                if w.returned {
+                    ", crossing a return"
+                } else {
+                    ""
+                },
+                if f.selected {
+                    ", at least one field read on its own"
+                } else {
+                    ""
+                }
+            ),
+        });
+        !f.nested_in.is_empty()
     }
 
     /// Classify one value location: what does the context do with the value
@@ -685,6 +913,7 @@ impl<'m> Tuples<'m> {
         owed: u32,
         start: ExprId,
         bound: &mut Option<BinderId>,
+        nested: &Nested,
     ) {
         let m = self.module;
         let Some(parent) = m.parent[v as usize] else {
@@ -719,8 +948,11 @@ impl<'m> Tuples<'m> {
                 let b = bind.pairs[pair as usize].binder;
                 self.follow_binding(w, b, v, owed, start, bound, BindSite::Let);
             }
-            Edge::CaseScrut if owed == 0 => self.scrutiny(w, parent, v),
-            Edge::AppArg => self.argument(w, parent, v, owed),
+            Edge::CaseScrut if owed == 0 => {
+                let arity = self.flow_at(start).map(|f| f.arity).unwrap_or(0);
+                self.scrutiny(w, parent, v, arity)
+            }
+            Edge::AppArg => self.argument(w, parent, v, owed, nested),
             // A closure that still owes arguments is applied here: the
             // spine that applies it pays part or all of the debt
             // ([`T7_CALL_RESULT`]).
@@ -758,16 +990,25 @@ impl<'m> Tuples<'m> {
             w.use_(TupleUse::Returned { function: b });
         }
         if site == BindSite::Top && m.binder(b).exported == Some(true) {
-            let why = if owed > 0 {
-                R_EXPORTED_RETURN
-            } else {
-                R_EXPORTED_BINDING
+            let worker = w.returned_from.iter().rev().find(|x| **x != b).copied();
+            let (why, detail) = match (owed, worker) {
+                (0, _) => (R_EXPORTED_BINDING, m.binder(b).occ.clone()),
+                // The tuple already crossed a *local* function's return
+                // before reaching this exported one: the exported binder is
+                // a wrapper around that worker, and resolving it needs the
+                // worker's callers, not the exported function's.
+                (_, Some(k)) => (
+                    R_EXPORTED_WRAPPER_RETURN,
+                    format!("{} of {}", m.binder(b).occ, m.binder(k).occ),
+                ),
+                _ => (R_EXPORTED_RETURN, m.binder(b).occ.clone()),
             };
-            w.escape_at(v, false, why, m.binder(b).occ.clone());
+            w.escape_at(v, false, why, detail);
             return;
         }
         if owed > 0 {
             w.returned = true;
+            w.returned_from.push(b);
         }
         // A construction that copies this binder field by field is a
         // consumer of it: it reads every field and allocates its own box,
@@ -830,7 +1071,7 @@ impl<'m> Tuples<'m> {
     }
 
     /// `case t of …` ([`T2_SCRUTINISED`] / [`T3_SELECTED`]).
-    fn scrutiny(&self, w: &mut Walk, case: ExprId, v: ExprId) {
+    fn scrutiny(&self, w: &mut Walk, case: ExprId, v: ExprId, arity: u32) {
         let m = self.module;
         let Expr::Case {
             binder, alts, ty, ..
@@ -862,10 +1103,23 @@ impl<'m> Tuples<'m> {
         // `DEFAULT` alternative) or an empty case on a diverging scrutinee.
         // Neither reads a field; neither is what the scalar-replacement
         // rules are about, so it is reported rather than assumed benign.
-        let Some(alt) = alts
-            .first()
-            .filter(|a| alts.len() == 1 && matches!(a.con, AltCon::DataAlt { .. }))
-        else {
+        // Forcing the whole tuple without reading a field: a no-op on a
+        // constructor application, and no field is read ([`T14_FORCED`]).
+        if alts.len() == 1 && matches!(alts[0].con, AltCon::Default) && alts[0].binders.is_empty() {
+            w.use_(TupleUse::Forced { case });
+            w.evidence.push(Evidence {
+                rule: T14_FORCED,
+                nodes: vec![case, v],
+                binder: None,
+                note: "forced whole; no field read".into(),
+            });
+            return;
+        }
+        let Some(alt) = alts.first().filter(|a| {
+            alts.len() == 1
+                && matches!(a.con, AltCon::DataAlt { .. })
+                && a.binders.len() == arity as usize
+        }) else {
             w.escape_at(
                 case,
                 false,
@@ -908,7 +1162,7 @@ impl<'m> Tuples<'m> {
 
     /// The value at `v` — the tuple when `owed` is 0, otherwise a closure
     /// that returns it — is a value argument of the spine `app` sits in.
-    fn argument(&self, w: &mut Walk, app: ExprId, v: ExprId, owed: u32) {
+    fn argument(&self, w: &mut Walk, app: ExprId, v: ExprId, owed: u32, nested: &Nested) {
         let m = self.module;
         let root = m.spine_root(app);
         let (head, args) = m.spine(root);
@@ -941,10 +1195,43 @@ impl<'m> Tuples<'m> {
                 return;
             }
             if owed > 0 {
-                w.escape_at(root, false, R_CLOSURE_STORED, occ);
+                // The *closure* is stored. Split by what holds it, so the
+                // residual says which whole-program fact would resolve it.
+                let why = if is_list_cons(&dc.name) {
+                    R_CLOSURE_CONSED
+                } else {
+                    R_CLOSURE_STORED
+                };
+                w.escape_at(root, false, why, occ);
                 return;
             }
             let tuple_field = tuple_con(&dc.name, dc.rep_arity).is_some();
+            // A field of another tuple: if that tuple is itself proven
+            // removable the box holding this one will not exist, so the
+            // flow continues at the outer's field binders ([`T12_NESTED`]).
+            if tuple_field && self.index.contains_key(&root) {
+                w.nested_in.push((root, idx as u32));
+                if let Some(t) = nested.get(&(root, idx)) {
+                    w.use_(TupleUse::NestedIn {
+                        outer: root,
+                        field: idx as u32,
+                    });
+                    w.evidence.push(Evidence {
+                        rule: T12_NESTED,
+                        nodes: vec![root],
+                        binder: None,
+                        note: format!(
+                            "field {idx} of a removable tuple: {} use(s) of that field follow",
+                            t.seeds.len()
+                        ),
+                    });
+                    w.returned |= t.returned;
+                    for seed in &t.seeds {
+                        w.push(*seed, 0);
+                    }
+                    return;
+                }
+            }
             w.evidence.push(Evidence {
                 rule: T9_STORED,
                 nodes: vec![root],
@@ -962,6 +1249,43 @@ impl<'m> Tuples<'m> {
                 occ,
             );
             return;
+        }
+
+        // A continuation the Parsec proof object resolves: the tuple is
+        // the continuation's value argument, so it lands on the value
+        // parameter of every lambda that continuation can be
+        // ([`T13_PARSEC_CONT`]).
+        if owed == 0 {
+            if let Some(params) = self.hops.get(&(root, idx))
+                && let Some(b) = m.resolve(m.strip(head))
+            {
+                {
+                    w.use_(TupleUse::PassedTo {
+                        call: root,
+                        callee: b,
+                        param: idx as u32,
+                    });
+                    w.evidence.push(Evidence {
+                        rule: T13_PARSEC_CONT,
+                        nodes: vec![root],
+                        binder: Some(b),
+                        note: format!(
+                            "the Parsec proof resolves {occ} to {} continuation lambda(s)",
+                            params.len()
+                        ),
+                    });
+                    for p in params {
+                        for o in m.occurrences(*p) {
+                            w.push(*o, 0);
+                        }
+                    }
+                    return;
+                }
+            }
+            if let Some(detail) = self.parsec_unresolved.get(&(root, idx)) {
+                w.escape_at(root, false, R_PARSEC_CONT, detail.clone());
+                return;
+            }
         }
 
         // A call to something bound in this module to a manifest lambda
@@ -997,6 +1321,22 @@ impl<'m> Tuples<'m> {
                     );
                     return;
                 }
+                if owed > 0 {
+                    // A *closure* that returns the tuple, handed to a
+                    // parameter. Removing the tuple changes that
+                    // parameter's representation, and the other closures
+                    // that reach it are not in this flow.
+                    w.escape_at(root, false, R_CLOSURE_INTO_PARAM, occ);
+                    return;
+                }
+                // Splitting the parameter rewrites every call site of the
+                // callee, so they all have to be visible and be calls.
+                if m.binder(bi.binder).exported == Some(true)
+                    || !self.never_escapes(bi.binder, params.len())
+                {
+                    w.escape_at(root, false, R_CALLEE_NOT_SPLITTABLE, occ);
+                    return;
+                }
                 let p = params[idx];
                 w.use_(TupleUse::PassedTo {
                     call: root,
@@ -1025,7 +1365,15 @@ impl<'m> Tuples<'m> {
         // handed out says nothing about the tuple it will return, so that
         // is unresolved rather than proven.
         if owed > 0 {
-            w.escape_at(root, false, R_CLOSURE_ARG, occ);
+            let why = match sig {
+                Some(s) if s.is_class_op => R_CLOSURE_ARG_CLASS_OP,
+                Some(s) if s.sig_arity() > 0 && m.binding_of(head).is_none() => {
+                    R_CLOSURE_ARG_IMPORTED
+                }
+                _ if m.binding_of(head).is_some() => R_CLOSURE_ARG,
+                _ => R_CLOSURE_ARG_UNKNOWN,
+            };
+            w.escape_at(root, false, why, occ);
             return;
         }
         let (preserve, why) = match sig {
@@ -1051,6 +1399,15 @@ impl<'m> Tuples<'m> {
             occ,
         );
     }
+}
+
+/// Is this stable name the list cons constructor? A diagnostic split of
+/// the residual only: no fate depends on it.
+fn is_list_cons(name: &str) -> bool {
+    matches!(
+        split_stable_name(name),
+        Some(("ghc-prim", "GHC.Types", ":"))
+    )
 }
 
 /// Value parameters of the manifest lambda chain at `rhs`, in order.
@@ -1097,13 +1454,7 @@ fn decide(w: &Walk) -> (TupleFate, Option<&'static str>, String) {
         // callee, whose parameter becomes the fields.
         return (TupleFate::ScalarReplace, None, String::new());
     }
-    if reads
-        .iter()
-        .all(|u| matches!(u, TupleUse::Scrutinised { .. }))
-    {
-        return (TupleFate::WorkerReturn, None, String::new());
-    }
-    (TupleFate::StateThread, None, String::new())
+    (TupleFate::WorkerReturn, None, String::new())
 }
 
 /// Is this census argument site one of the tuple-attributed lazy/unknown
@@ -1212,7 +1563,21 @@ pub struct TupleCensus<'m> {
 
 impl<'m> TupleCensus<'m> {
     pub fn of_modules(modules: &'m [&'m Module], census: &Census) -> TupleCensus<'m> {
-        let per_module: Vec<Tuples<'m>> = modules.iter().map(|m| Tuples::of_module(m)).collect();
+        TupleCensus::of_modules_with(modules, census, &[])
+    }
+
+    /// …with the Parsec proof object's hops, one entry per module in the
+    /// same order (or an empty slice for none).
+    pub fn of_modules_with(
+        modules: &'m [&'m Module],
+        census: &Census,
+        parsec: &[ParsecHops],
+    ) -> TupleCensus<'m> {
+        let per_module: Vec<Tuples<'m>> = modules
+            .iter()
+            .enumerate()
+            .map(|(i, m)| Tuples::of_module_with(m, parsec.get(i)))
+            .collect();
         let mut flows: Vec<TupleFlow> = Vec::new();
         // module -> construction node -> flow index
         let mut index: HashMap<(&str, ExprId), usize> = HashMap::new();
@@ -1288,4 +1653,389 @@ fn unmapped_reason(per_module: &[Tuples<'_>], site: &crate::laziness::ArgSite) -
         }
     }
     "construction-not-in-the-population"
+}
+
+//------------------------------------------------------------------------------
+// Coupling the two proof objects
+//------------------------------------------------------------------------------
+//
+// A tuple handed to a Parsec continuation is not "passed to an unknown
+// higher-order value" as far as the *other* proof object is concerned:
+// [`crate::parsec`] proves what that continuation is and which edge of the
+// recovered graph the call is. What it does not always give is where the
+// continuation's own value comes from, and that is what following the
+// tuple needs. So this reads the proof object — regions, their continuation
+// parameters, and the binder each region's chain is bound to — and resolves
+// the *value* of the continuation only when the region graph closes over
+// it: every call of the region is a saturated call to a visible binder, and
+// what fills the slot at each is a manifest lambda (directly, or through
+// another continuation parameter, followed the same way). Nothing here
+// re-derives a role, a slot or an edge.
+
+/// What the Parsec proof object contributes to a tuple flow.
+#[derive(Debug, Default, Clone)]
+pub struct ParsecHops {
+    /// `(spine root, value-argument index) -> the value parameter(s) of the
+    /// lambdas that continuation can be.
+    pub hops: HashMap<(ExprId, usize), Vec<BinderId>>,
+    /// `spine root -> (value-argument index, the edge, why it is not
+    /// resolved)` for a proven continuation call whose target the region
+    /// graph does not close over.
+    pub unresolved: HashMap<(ExprId, usize), String>,
+}
+
+/// Read the Parsec proof object for every continuation call that carries a
+/// value argument.
+pub fn parsec_hops(a: &crate::parsec::Analysis<'_>) -> ParsecHops {
+    use crate::parsec::{ContKind, EdgeFact};
+
+    let mut out = ParsecHops::default();
+    // Which region each continuation *parameter* belongs to, and its arity,
+    // straight out of the proof object.
+    let mut cont_param: HashMap<BinderId, (usize, usize, usize)> = HashMap::new();
+    for (ri, r) in a.regions.iter().enumerate() {
+        if !r.proven {
+            continue;
+        }
+        for c in &r.conts {
+            let Some(pos) = r.params.iter().position(|p| *p == c.binder) else {
+                continue;
+            };
+            cont_param.insert(c.binder, (ri, pos, c.arity));
+        }
+    }
+    for r in a.regions.iter().filter(|r| r.proven) {
+        for e in &r.edges {
+            if e.fact != EdgeFact::Invoke {
+                continue;
+            }
+            let Some(b) = e.provenance.binder else {
+                continue;
+            };
+            // Only an "ok" continuation of the three-argument shape carries
+            // a value; the proof object says which this is.
+            let Some((ri, _, arity)) = cont_param.get(&b).copied() else {
+                continue;
+            };
+            if e.source_role.kind() != Some(ContKind::Ok) || arity != 3 {
+                continue;
+            }
+            let key = (e.at, 0usize);
+            match resolve_cont(a, &cont_param, b) {
+                Ok(params) if !params.is_empty() => {
+                    out.hops.insert(key, params);
+                }
+                Ok(_) => {
+                    out.unresolved.insert(
+                        key,
+                        format!("{} of region {ri} has no call site", e.provenance.label),
+                    );
+                }
+                Err(why) => {
+                    out.unresolved
+                        .insert(key, format!("{} of region {ri}: {why}", e.provenance.label));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The value parameters of every lambda that can be bound to the
+/// continuation parameter `b`, following the region graph.
+fn resolve_cont(
+    a: &crate::parsec::Analysis<'_>,
+    cont_param: &HashMap<BinderId, (usize, usize, usize)>,
+    b: BinderId,
+) -> Result<Vec<BinderId>, &'static str> {
+    let m: &Module = a.module;
+    let mut out: Vec<BinderId> = Vec::new();
+    let mut work = vec![b];
+    let mut seen: HashSet<BinderId> = HashSet::from([b]);
+    while let Some(cb) = work.pop() {
+        // The continuation values that reach `cb`.
+        let values: Vec<ExprId> = if let Some((ri, pos, _)) = cont_param.get(&cb).copied() {
+            let r = &a.regions[ri];
+            let Some(p) = a.region_binder(ri) else {
+                return Err("the region's chain is not bound to a binder");
+            };
+            if m.binder(p).exported == Some(true) {
+                return Err("the region's parser is exported");
+            }
+            let mut vs = Vec::new();
+            for occ in m.occurrences(p) {
+                let root = m.spine_root(*occ);
+                if root == *occ {
+                    return Err("the region's parser is used as a value");
+                }
+                let (head, args) = m.spine(root);
+                if m.strip(head) != m.strip(*occ) {
+                    return Err("the region's parser is not the head of its spine");
+                }
+                let vargs: Vec<ExprId> = args
+                    .iter()
+                    .copied()
+                    .filter(|x| !matches!(m.expr(m.strip(*x)), Expr::Type(_) | Expr::Coercion))
+                    .collect();
+                if vargs.len() != r.params.len() {
+                    return Err("a call of the region is not saturated exactly");
+                }
+                vs.push(vargs[pos]);
+            }
+            vs
+        } else {
+            // A let-bound continuation: its right-hand side is its value.
+            match m.binding(cb).rhs {
+                Some(rhs) => vec![rhs],
+                None => return Err("the continuation is not a region parameter or a binding"),
+            }
+        };
+        for v in values {
+            let i = m.strip(v);
+            match m.expr(i) {
+                Expr::Lam { .. } => match manifest_params(m, i).first() {
+                    // The value is the ok continuation's first argument.
+                    // Corroborated against the parameter's own type, so an
+                    // eta-reduced lambda that starts with the state cannot
+                    // be mistaken for one that starts with the value.
+                    Some(p) if !crate::parsec::is_state_ty(&m.binder(*p).ty) => out.push(*p),
+                    Some(_) => return Err("the continuation lambda starts with the state"),
+                    None => return Err("the continuation lambda has no value parameter"),
+                },
+                Expr::Var { .. } => match m.resolve(i) {
+                    Some(b2) if seen.insert(b2) => work.push(b2),
+                    Some(_) => {}
+                    None => return Err("the continuation is an import"),
+                },
+                _ => return Err("the continuation is a computed value"),
+            }
+        }
+    }
+    Ok(out)
+}
+
+//------------------------------------------------------------------------------
+// The audited shapes, counted in a real dump
+//------------------------------------------------------------------------------
+
+/// One shape the stage-2 audit built a regression test for, and how often
+/// it actually occurs. Reported so that a hand-built test is never the only
+/// evidence that a rule was exercised.
+#[derive(Debug, Clone, Serialize)]
+pub struct Pattern {
+    pub name: &'static str,
+    pub n: usize,
+    /// A representative, for `h2r show`.
+    pub module: String,
+    pub at: ExprId,
+    /// Fates of the constructions matching it.
+    pub fates: BTreeMap<String, usize>,
+}
+
+/// Does `b` occur inside its own right-hand side?
+fn is_recursive(m: &Module, b: BinderId) -> bool {
+    let Some(rhs) = m.binding(b).rhs else {
+        return false;
+    };
+    m.occurrences(b)
+        .iter()
+        .any(|occ| *occ == rhs || m.ancestors(*occ).any(|a| a == rhs))
+}
+
+/// Facts about one module that a shape predicate needs and a single flow
+/// does not carry.
+struct PatternCtx {
+    /// Cases that take an *unboxed* tuple apart, from those flows' own
+    /// consumer lists.
+    unboxed_scrutinies: HashSet<ExprId>,
+}
+
+/// Count every audited shape over a set of modules.
+pub fn patterns(per_module: &[Tuples<'_>]) -> Vec<Pattern> {
+    let ctxs: Vec<PatternCtx> = per_module
+        .iter()
+        .map(|t| PatternCtx {
+            unboxed_scrutinies: t
+                .flows
+                .iter()
+                .filter(|f| !f.boxed)
+                .flat_map(|f| f.consumers.iter())
+                .filter_map(|u| match u {
+                    TupleUse::Scrutinised { case, .. } | TupleUse::Selected { case, .. } => {
+                        Some(*case)
+                    }
+                    _ => None,
+                })
+                .collect(),
+        })
+        .collect();
+    type Pred = fn(&PatternCtx, &Tuples<'_>, &TupleFlow) -> bool;
+    let rows: &[(&'static str, Pred)] = &[
+        ("1 two names for one tuple, one escaping", |_, _, f| {
+            aliases(f) > 1 && !removable(f.fate)
+        }),
+        ("1 re-bound under a second let binder", |_, _, f| {
+            lets(f) > 1
+        }),
+        ("2 two or more field reads", |_, _, f| {
+            f.consumers.iter().filter(|u| u.reads_fields()).count() > 1
+        }),
+        ("2 read and then stored", |_, _, f| {
+            f.consumers.iter().any(|u| u.reads_fields())
+                && f.consumers
+                    .iter()
+                    .any(|u| matches!(u, TupleUse::StoredIn { .. }))
+        }),
+        ("3 returned from a recursive function", |_, t, f| {
+            f.consumers.iter().any(|u| match u {
+                TupleUse::Returned { function } => is_recursive(t.module, *function),
+                _ => false,
+            })
+        }),
+        ("3 threaded into a recursive callee", |_, t, f| {
+            f.consumers.iter().any(|u| match u {
+                TupleUse::PassedTo { callee, .. } => is_recursive(t.module, *callee),
+                _ => false,
+            })
+        }),
+        ("4 a field of another tuple, outer removable", |_, _, f| {
+            f.consumers
+                .iter()
+                .any(|u| matches!(u, TupleUse::NestedIn { .. }))
+        }),
+        ("4 a field of another tuple, outer not", |_, _, f| {
+            !f.nested_in.is_empty()
+                && !f
+                    .consumers
+                    .iter()
+                    .any(|u| matches!(u, TupleUse::NestedIn { .. }))
+        }),
+        ("5 an unboxed return re-boxed by its caller", |c, t, f| {
+            f.boxed && f.fields.iter().all(|x| is_unboxed_field(c, t, *x))
+        }),
+        ("5 unboxed into a local callee's parameters", |_, _, f| {
+            f.consumers
+                .iter()
+                .any(|u| matches!(u, TupleUse::PassedTo { .. }))
+                && f.consumers
+                    .iter()
+                    .any(|u| matches!(u, TupleUse::Scrutinised { .. }))
+        }),
+        ("5 returned from an exported wrapper", |_, _, f| {
+            f.reason == Some(R_EXPORTED_WRAPPER_RETURN)
+        }),
+        (
+            "6 returned from a closure, call sites visible",
+            |_, t, f| {
+                removable(f.fate)
+                    && f.consumers.iter().any(|u| match u {
+                        TupleUse::Returned { function } => {
+                            t.module.binding(*function).site == BindSite::Let
+                        }
+                        _ => false,
+                    })
+            },
+        ),
+        ("6 returned from a closure that is stored", |_, _, f| {
+            matches!(f.reason, Some(R_CLOSURE_STORED) | Some(R_CLOSURE_CONSED))
+        }),
+        ("7 the callee is a computed closure", |_, _, f| {
+            f.reason == Some(R_HIGHER_ORDER) || f.reason == Some(R_CLOSURE_ARG)
+        }),
+        ("7 a parameter reached from two call sites", |_, t, f| {
+            f.consumers.iter().any(|u| match u {
+                TupleUse::PassedTo { callee, .. } => t.module.occurrences(*callee).len() > 1,
+                _ => false,
+            })
+        }),
+        ("8 forced whole, no field read", |_, _, f| {
+            f.consumers
+                .iter()
+                .any(|u| matches!(u, TupleUse::Forced { .. }))
+        }),
+        ("8 stored in a strict constructor field", |_, t, f| {
+            f.consumers.iter().any(|u| match u {
+                TupleUse::StoredIn { con } => in_strict_field(t, *con),
+                _ => false,
+            })
+        }),
+        ("8 a case that is not one tuple alternative", |_, _, f| {
+            f.reason == Some(R_ALTS)
+        }),
+    ];
+    let mut out = Vec::new();
+    for (name, pred) in rows {
+        let mut p = Pattern {
+            name,
+            n: 0,
+            module: String::new(),
+            at: 0,
+            fates: BTreeMap::new(),
+        };
+        for (t, c) in per_module.iter().zip(&ctxs) {
+            for f in &t.flows {
+                if !pred(c, t, f) {
+                    continue;
+                }
+                p.n += 1;
+                *p.fates.entry(format!("{:?}", f.fate)).or_default() += 1;
+                if p.module.is_empty() {
+                    p.module = t.module.name.clone();
+                    p.at = f.construction;
+                }
+            }
+        }
+        out.push(p);
+    }
+    out
+}
+
+fn removable(f: TupleFate) -> bool {
+    matches!(f, TupleFate::ScalarReplace | TupleFate::WorkerReturn)
+}
+
+/// Alias binders the flow was reachable under: every `let`/top-level
+/// binding plus every case binder that aliases the whole tuple.
+fn aliases(f: &TupleFlow) -> usize {
+    f.evidence
+        .iter()
+        .filter(|e| e.rule == T1_LET_BOUND || e.rule == T8_CASE_BINDER_ALIAS)
+        .count()
+}
+
+fn lets(f: &TupleFlow) -> usize {
+    f.evidence.iter().filter(|e| e.rule == T1_LET_BOUND).count()
+}
+
+/// Is this field of a boxed construction a binder bound by a match on an
+/// *unboxed* tuple — i.e. is the construction re-boxing a worker's result?
+fn is_unboxed_field(c: &PatternCtx, t: &Tuples<'_>, field: ExprId) -> bool {
+    let m = t.module;
+    let Some(b) = m.resolve(m.strip(field)) else {
+        return false;
+    };
+    if m.binding(b).site != BindSite::AltBinder {
+        return false;
+    }
+    // The field is inside the alternative that binds it, so the case is on
+    // the path up from here.
+    for a in m.ancestors(field) {
+        let Expr::Case { alts, .. } = m.expr(a) else {
+            continue;
+        };
+        if !alts.iter().any(|x| x.binders.contains(&b)) {
+            continue;
+        }
+        return c.unboxed_scrutinies.contains(&a);
+    }
+    false
+}
+
+fn in_strict_field(t: &Tuples<'_>, con: ExprId) -> bool {
+    let m = t.module;
+    let (head, _) = m.spine(con);
+    t.scope
+        .head_sig(head)
+        .and_then(|s| s.data_con)
+        .is_some_and(|dc| dc.strict_fields.iter().any(|x| *x))
 }

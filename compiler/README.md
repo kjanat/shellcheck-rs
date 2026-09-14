@@ -35,7 +35,7 @@ ShellCheck Haskell
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the two canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), and which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent). Includes a depth-limited Core pretty-printer. |
-| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), and the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`). |
+| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`), and the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
 | `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with the Parsec proof inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples`. Later: the lowering passes. |
 
@@ -58,6 +58,7 @@ cargo run --release --bin h2r -- parsec ../core-json --module ShellCheck.Parser 
 cargo run --release --bin h2r -- show ../core-json ShellCheck.Parser 141341   # + its proof
 cargo run --release --bin h2r -- tuples ../core-json                        # tuple flows and fates
 cargo run --release --bin h2r -- tuples ../core-json --module ShellCheck.Checks.Commands --explain
+cargo run --release --bin h2r -- tuples ../core-json --verify    # the independent re-derivation
 ```
 
 ## M1 — how much Haskell is left after GHC?
@@ -674,6 +675,18 @@ positions, sees none of those. Stage 1 therefore censuses **every saturated
 tuple construction**, boxed and unboxed separately, and maps the 1,321 onto
 it afterwards.
 
+Stage 2 then tried to break it. The acceptance rule of this milestone is
+that **every tuple that will be removed has a complete def-use proof**;
+coverage is secondary, because a wrong "removable" is a miscompile and a
+wrong "Preserve" is only a missed optimisation. So stage 2 wrote a
+[second, independent verifier](#the-independent-verifier) of every removable
+verdict, went looking for [eight shapes](#the-adversarial-cases) a removable
+verdict could be wrong on, made the [tuple-in-tuple](#tuple-in-tuple) rule
+consistent, [read the Parsec proof object](#coupling-the-two-proof-objects)
+instead of giving up on its continuations, split the residual by what is
+holding the value, and removed a fate whose name claimed more than its rule
+proved.
+
 ### The population, and why the name is not the proof
 
 A construction is selected by `T0-TUPLE-CON`: the head of an application
@@ -706,10 +719,14 @@ construction it looks at. The two shapes the dump is full of both need it:
 * a CPR worker returns `(# _, _ #)` and each call site scrutinises it.
 
 The walk is a worklist with an explicit stack, like every other traversal
-here, keyed on (node, debt) so it terminates; a location budget turns a
-pathological flow into an honest `Unresolved` rather than a hang (nothing
-on any profile reaches it — the largest flow on `-O1` visits 2,080
-locations, the mean is 19).
+here, keyed on (node, debt) so it terminates; a location budget (20,000)
+turns a pathological flow into an honest `Unresolved` rather than a hang.
+On `-O1` nothing comes near it — the largest flow visits 2,023 locations
+and the mean is 19 — but on the inlining-heavy profiles the transitive
+[tuple-in-tuple](#tuple-in-tuple) rule does reach it: 4 flows on B and 2
+each on C–F end as `flow-exceeded-the-location-budget`. That is a coverage
+loss in the safe direction and the independent verifier refuses those
+flows too.
 
 ### Rules
 
@@ -717,16 +734,33 @@ locations, the mean is 19).
 |---|---|---|
 | `T0-TUPLE-CON` | 2 over 4, name selects only (6) | The population: a saturated application of ghc-prim's boxed or unboxed tuple constructor, `repArity` agreeing with the name and all fields lazy. |
 | `T1-LET-BOUND` | 1 | The value is a `let`/top-level right-hand side: its uses are that binder's resolved occurrences. |
-| `T2-SCRUTINISED` | 2 | `case t of (a, b) -> …`: taken apart, the box does not survive the match. |
+| `T2-SCRUTINISED` | 2 | `case t of (a, b) -> …`, with exactly *arity* field binders: taken apart, the box does not survive the match. |
 | `T3-SELECTED` | 1 over 2 | …and the alternative returns exactly its *i*-th binder: a field selection, which is how the desugarer turns a lazy pattern `~(b, s, w)` into one selector thunk per field. |
 | `T4-RETUPLE` | 1 over 2 | A construction every one of whose fields is the *matching* projection of one and the same binder: a field-wise copy, recorded as a consumer of the tuple it copies. All *n* scrutinees must resolve to the same binder — two textually equal expressions are not evidence. |
-| `T5-PASSED-LOCAL` | 1 over 2 | Value argument *i* of a saturated call to a binder bound in this module to a manifest lambda chain: the flow continues at that parameter's occurrences, carrying the same debt. |
+| `T5-PASSED-LOCAL` | 1 over 2 | Value argument *i* of a saturated call to a binder bound in this module to a manifest lambda chain, which is **not exported and never occurs as a value**: the flow continues at that parameter's occurrences. |
 | `T6-RETURNED` | 2 over 1 | The value is reached from a binder through a debt of *k* arguments: the binder is a function returning the tuple, and its occurrences are call sites to follow. |
 | `T7-CALL-RESULT` | 3 over 1, 2 | A call site paying exactly the debt: the spine root is a value location of the tuple again. Paying part of it leaves a partial application, which is followed too. |
 | `T8-CASE-BINDER-ALIAS` | 1 | The case binder of a scrutiny aliases the whole tuple; its occurrences are followed, so a match that also keeps the box cannot be mistaken for one that consumes it. |
 | `T9-STORED` | 2 over 4 | A value argument of a saturated data-constructor application: a real allocation holds it. |
 | `T10-OPAQUE-CALL` | 1, 4 | An argument of a call this module cannot see into — an import, class-op dispatch, a partial application, an unknown higher-order callee. |
-| `T11-ESCAPE` | 2 | Any other use, with a machine-readable reason: applied as a function, bound to or returned from an exported binder, a closure handed to a callee or stored in a constructor, a case that is not one tuple alternative. |
+| `T11-ESCAPE` | 2 | Any other use, with a machine-readable reason: applied as a function, bound to or returned from an exported binder, a closure handed to a callee or stored in a constructor, a case that is not one full tuple alternative. |
+| `T12-NESTED` | 2 over 3 | A field of *another* tuple whose own fate is proven removable: the box holding it will not exist, so the inner tuple's consumers are the uses of the outer's *i*-th field binder at every scrutiny of the outer — transitively. When the outer is not removable this is `T9-STORED` as before. |
+| `T13-PARSEC-CONT` | the Parsec proof's own level, then 3 | The value argument of a continuation call [M2.1](#m21--proving-parsecs-cps-roles) proves, where that proof also resolves the continuation to lambdas inside this module: the flow continues at their value parameters. The region graph is *read*; no role, slot or edge is re-derived here. |
+| `T14-FORCED` | 2 | `case t of _ { DEFAULT -> … }`: the tuple is forced whole and no field is read. Forcing a constructor application is a no-op, so this neither keeps the box alive nor counts as a read. |
+
+Two of the rules are about whether the rewrite is *possible*, not about
+where the value goes, and both were added in stage 2 after the independent
+verifier refused what stage 1 accepted:
+
+* removing a tuple that is **passed into** a local callee means splitting
+  that callee's parameter, so every call site of the callee has to be
+  visible and rewritable — `T5-PASSED-LOCAL` now requires the callee to be
+  neither exported nor ever used as a value (`callee-parameter-cannot-be-split`);
+* removing a tuple that a **closure returns**, where that closure is itself
+  handed to a parameter, would change the parameter's type and therefore
+  every other closure that reaches it — which this flow does not see. That
+  is refused (`closure-returning-the-tuple-is-passed-into-a-parameter`),
+  not guessed.
 
 ### Fates
 
@@ -736,103 +770,273 @@ Every construction lands in exactly one bucket, by this precedence:
 |---|---|---|
 | `Preserve` | `F4-PRESERVE` | A proven real value: stored in a constructor field, held in a partial application, or handed to a function outside the module. An allocation that exists — this wins over everything. |
 | `Unresolved` | `F5-UNRESOLVED` | A use the rules cannot follow, with the reason. Never guessed either way. |
-| `WorkerReturn` | `F2-WORKER-RETURN` | The tuple crosses a return and **every** consumer scrutinises it immediately: a multi-value return. |
-| `StateThread` | `F3-STATE-THREAD` | It crosses a return and every consumer reads fields, at least one by lazy selection or field-wise re-tupling: a transformer step's triple handed to the next step. |
-| `ScalarReplace` | `F1-SCALAR-REPLACE` | Every consumer reads fields and the box never outlives them — including where it is passed to a known local callee, whose parameter becomes the fields. |
+| `WorkerReturn` | `F2-WORKER-RETURN` | The tuple crosses a return and **every** consumer reads its fields: a multi-value return. |
+| `ScalarReplace` | `F1-SCALAR-REPLACE` | Every consumer reads fields and the box never outlives them, in the function that built it — including where it is passed to a known local callee, whose parameter becomes the fields. |
 
 Passing a tuple *into* a known callee is deliberately not a "return": the
 box still never outlives its scrutinies, so it stays `ScalarReplace`.
 
+**Stage 1's fifth fate, `StateThread`, is gone.** It separated a returned
+tuple whose consumers include a lazy selection or a field-wise re-tupling
+from one that is only ever scrutinised. That is a real difference — it says
+whether the fields are demanded together or one at a time — but it is not a
+different *fate*: both are removed the same way, as a multi-value return,
+and no structural rule distinguishes "a state being threaded" from "a
+worker's result". Naming a fate after a monad transformer it was not proven
+to be is exactly the mistake this milestone exists to avoid. So the split is
+kept as a **fact on the flow** (`TupleFlow::selected`, proved by `T3` and
+`T4`, reported beside the fate table) and the two fates are one. On `-O1`
+279 of the 302 former `StateThread`s are `WorkerReturn` and 23 are now
+`Unresolved` for the closure-into-a-parameter reason above.
+
+### The independent verifier
+
+`h2r tuples <dir> --verify` re-derives every removable verdict a second
+time, from scratch, with code that shares nothing with `tuples.rs` beyond
+the IR (`h2r-analysis/src/verify.rs`: its own selection of the population,
+its own name test, its own walk). It is deliberately blunt — one verdict,
+removable or not — and it enumerates, for one construction, every alias the
+tuple can be reached under (the binder it is bound to, every case binder,
+the parameter of every local callee it is handed to, the call sites of every
+function that returns it) and requires that **every occurrence of every
+alias** is a scrutiny, a lazy selection or a further alias, and that the
+whole chain is closed within the module.
+
+It found **94 disagreements** on the first run, all reported under one
+reason, which on inspection were two different things.
+
+* **30 were the verifier being too blunt.** Its first cut refused any
+  function that returns the tuple and does not occur *only* as the head of a
+  saturated call — which also refuses a **partial application** (`let f =
+  handleCommand a b c d` in `ShellCheck.CFG`, then `f` applied to the last
+  two). A partial application is not an escape: the closure is local, the
+  walk follows it, and every one of its own uses is checked. The rule was
+  narrowed to the case that actually blocks the rewrite — a closure handed
+  to a *parameter*, where the parameter's other producers are invisible —
+  which is a weakening of the verifier and is why it is written down here.
+  The 30 are removable and stayed removable.
+* **64 were the census over-claiming**, and became the two new rules above:
+  the tuple's own uses are all reads, but the rewrite needs a signature
+  change the flow does not prove is possible. They are now `Unresolved`
+  with a reason, costing coverage rather than soundness.
+
+After that:
+
+| dump | removable verdicts | re-derived | disagreements |
+|---|---:|---:|---:|
+| `-O1` (`compiler/core-json`, and matrix A) | 1,453 | 1,453 | **0** |
+| B `-O2` | 1,741 | 1,741 | **0** |
+| C | 1,694 | 1,694 | **0** |
+| D | 4,001 | 4,001 | **0** |
+| E | 4,035 | 4,035 | **0** |
+| F | 4,040 | 4,040 | **0** |
+
+The two sides also select the *same population* on every dump (0
+constructions found by only one of them), and there is no construction the
+verifier would accept that the census refuses — the coverage is identical,
+not merely sound. Seven of `-O1`'s verdicts (50 on D–F) use the one hop the
+verifier cannot derive on its own, the Parsec continuation target, which is
+supplied to it as an input from the other proof object rather than
+recomputed.
+
+### The adversarial cases
+
+Each shape below has a hand-built regression test in
+`h2r-analysis/src/tests.rs` *and* a count in the real `-O1` dump, printed by
+`--verify`, so that a hand-built test is never the only evidence a rule was
+exercised.
+
+| # | Shape | In `-O1` | Example | Stage 1 | Now |
+|---|---|---:|---|---|---|
+| 1 | two names for one tuple (let + case binder, or two lets), one escaping | 25 | `ShellCheck.Analytics` 46 | Preserve 2, Unres 22, State 1 | Preserve 2, Unres 23 — never removable |
+| 1 | re-bound under a second `let` binder | 167 | `ShellCheck.ASTLib` 651 | 143 removable, 24 not | 142 removable, 25 not |
+| 2 | two or more field reads | 1,246 | `Main` 2737 | 1,162 removable, 84 not | 1,205 removable, 41 not |
+| 2 | read and then stored | 6 | `ShellCheck.Analytics` 46 | Preserve 6 | Preserve 6 — the store wins |
+| 3 | returned from a *recursive* function | 722 | `Main` 2594 | 638 removable, 84 not | 634 removable, 88 not; terminates |
+| 3 | threaded into a recursive callee (a `go` accumulator) | 19 | `ShellCheck.Analytics` 46 | 9 removable, 10 Preserve | 12 removable, 7 Preserve |
+| 4 | a field of another tuple, outer removable | 115 | `ShellCheck.Analytics` 1974 | **Preserve 115** | **106 removable**, 9 Preserve on other evidence |
+| 4 | a field of another tuple, outer not removable | 64 | `Main` 422 | Preserve 64 | Preserve 64 |
+| 5 | an unboxed worker return re-boxed by its caller | 284 | `Main` 5018 | 236 removable, 48 not | 214 removable, 70 not |
+| 5 | a boxed tuple unboxed into a local callee's parameters | 15 | `ShellCheck.Analytics` 46 | 3 removable, 12 not | 13 removable, 2 Preserve |
+| 5 | returned from an exported wrapper of a local worker | 11 | `Paths_ShellCheck` 67 | Unresolved 11, unsplit | Unresolved 11, reason names both binders |
+| 6 | returned from a closure whose call sites are all visible | 453 | `Main` 2737 | 450 removable, 3 Unres | **453 removable** |
+| 6 | returned from a closure that is stored or consed | 248 | `Main` 2220 | Unresolved 248 | Unresolved 248, split by what holds it |
+| 7 | the callee is a computed (case-selected) closure | 12 | `ShellCheck.AnalyzerLib` 3861 | Unresolved 12 | Unresolved 12 — never one alternative |
+| 7 | a parameter reached from two or more call sites | 32 | `ShellCheck.Analytics` 46 | 12 removable, 20 not | 22 removable, 10 Preserve |
+| 8 | forced whole (`seq`), no field read | 2 | `ShellCheck.Analytics` 47426 | Preserve 2 (a store wins) | Preserve 2; the forcing reads no field |
+| 8 | stored in a *strict* constructor field | 9 | `ShellCheck.Analytics` 47426 | Preserve 9 | Preserve 9 — stored, not scrutinised |
+| 8 | a case that is not one full tuple alternative | 0 | — | — | would be Unresolved |
+
+"Removable" is `ScalarReplace` or `WorkerReturn` (stage 1's `StateThread`
+counts as removable in the left column). Where the two columns differ it is
+one of the stage-2 changes: the 106 in case 4, the 7 Parsec resolutions, or
+the 64 refusals.
+
+Case 7 is the may-analysis question, and it is answered in two places. A
+callee *computed* by a `case` is refused outright — picking either
+alternative would be a guess. Where a parameter is followed, its uses are
+the union over every call site that reaches it, which can only add
+consumers: the second test builds a parameter that is scrutinised on one
+path and stored on another and asserts that the store wins for *both*
+producers. Case 4 is the one that changed a verdict in the other direction,
+and case 3's `go`-accumulator test is the one that pins termination.
+
+### Tuple in tuple
+
+Stage 1 called a tuple stored in another tuple's field `Preserve`
+("stored-in-a-tuple-field", 179 constructions), which is inconsistent: if
+the *outer* box will not exist, the inner tuple is not "stored" in anything.
+`T12-NESTED` makes the two agree. The fixpoint starts pessimistic — every
+nested tuple `Preserve` — and only ever adds resolved nestings, so a
+knot-tied cycle cannot bootstrap itself into being removable; on every dump
+it settles in two rounds.
+
+Of the 179: **106 become removable** (84 `WorkerReturn`, 22
+`ScalarReplace`), 73 stay `Preserve` — 71 because the outer is not
+removable, and 2 because the transitive walk found a *different* escape
+(one a constructor field, one an imported lazy parameter).
+
+### Coupling the two proof objects
+
+The 50 constructions stage 1 left as "the callee is an unknown higher-order
+value" are, 48 of them, Parsec continuations in `ShellCheck.Parser` — and
+M2.1 already proves what those are. `tuples::parsec_hops` reads that proof
+object (regions, their continuation parameters, the binder each region's
+chain is bound to) and resolves the *value* of a continuation only when the
+region graph closes over it: the region's parser is bound to a non-exported
+binder, every occurrence of that binder is a call saturating the chain
+exactly, and what fills the slot is a manifest lambda — directly, or through
+another continuation parameter, followed the same way. Only an `ok`
+continuation of the three-argument shape carries a value, and the proof
+object is what says which one this is.
+
+Of the 50: **7 resolve** (4 `ScalarReplace`, 3 `WorkerReturn`), 41 get a
+reason that names the edge, and 2 are not Parsec at all
+(`ShellCheck.AnalyzerLib`, `ShellCheck.Formatter.TTY`). The 41 break down as
+
+| | |
+|---:|---|
+| 20 | the region's chain is not bound to a binder (it is a lambda written out at a call site) |
+| 19 | the region's parser occurs somewhere as a value, so not every call of it is visible |
+| 2 | a call of the region is not saturated exactly |
+
+each recorded as `parsec-continuation-target-not-in-the-region-graph` with
+the region and the continuation in the detail.
+
 ### Results on the `-O1` dump
 
-2,584 saturated constructions — 1,765 boxed, 819 unboxed:
+2,584 saturated constructions — 1,765 boxed, 819 unboxed. Stage 1's numbers
+are in the "before" columns; every difference is one of the four stage-2
+changes above (the two new refusals, `T12-NESTED`, `T13-PARSEC-CONT`, and
+folding `StateThread` away).
 
-| arity | boxed | unboxed |  | fate | boxed | unboxed |
+| arity | boxed | unboxed | | fate | before b/u | now b/u |
 |---:|---:|---:|---|---|---:|---:|
-| 2 | 887 | 568 | | ScalarReplace | 402 | 5 |
-| 3 | 718 | 231 | | StateThread | 266 | 36 |
-| 4 | 156 | 9 | | WorkerReturn | 31 | 664 |
-| 5 | 0 | 9 | | Preserve | 657 | 0 |
-| 6 | 3 | 1 | | Unresolved | 409 | 114 |
+| 2 | 887 | 568 | | ScalarReplace | 402 / 5 | **423 / 3** |
+| 3 | 718 | 231 | | StateThread | 266 / 36 | — |
+| 4 | 156 | 9 | | WorkerReturn | 31 / 664 | **338 / 689** |
+| 5 | 0 | 9 | | Preserve | 657 / 0 | **551 / 0** |
+| 6 | 3 | 1 | | Unresolved | 409 / 114 | **453 / 127** |
 | 8 | 0 | 1 | | | | |
-| 64 | 1 | 0 | | **total** | **1,765** | **819** |
+| 64 | 1 | 0 | | **total** | **1,765 / 819** | **1,765 / 819** |
 
-Unboxed tuples are 82% `WorkerReturn`/`ScalarReplace` and **never**
+1,453 constructions are proven removable (56%), up from 1,404; of those, 657
+have at least one field read on its own and the rest are read whole.
+Unboxed tuples are 84% `WorkerReturn`/`ScalarReplace` and **never**
 `Preserve` — as they must be, since an unboxed tuple cannot be stored in a
-lazy field. Boxed ones need the stronger escape evidence and get it: 657 of
-them, 37%, are proven real values.
+lazy field. 551 boxed ones, 31%, are proven real values.
 
 | Consumers | boxed | unboxed |
 |---|---:|---:|
-| Scrutinised | 699 | 2,116 |
-| Selected (lazy selector) | 1,807 | 60 |
-| Returned | 1,858 | 1,283 |
-| StoredIn | 639 | 0 |
-| Retupled | 116 | 0 |
-| PassedTo (known local) | 189 | 30 |
-| PassedToUnknown | 141 | 0 |
-| Escapes | 424 | 150 |
+| Scrutinised | 899 | 2,089 |
+| Selected (lazy selector) | 1,755 | 60 |
+| Returned | 1,825 | 1,271 |
+| StoredIn | 501 | 0 |
+| NestedIn (a field of a removable tuple) | 333 | 0 |
+| Retupled | 115 | 0 |
+| PassedTo (known local, or a proven continuation) | 122 | 0 |
+| PassedToUnknown | 86 | 0 |
+| Forced | 2 | 0 |
+| Escapes | 540 | 168 |
 
-The census' 1,321 tuple-attributed argument sites map onto this population
-**one to one**: every one of them is a field of exactly one saturated
-construction (849 boxed + 472 unboxed, 0 unmapped, over 726 distinct
-constructions). Their fates are reported on their own and never folded into
-the population's:
+The census' 1,321 tuple-attributed argument sites still map onto this
+population **one to one** (849 boxed + 472 unboxed, 0 unmapped, over 726
+distinct constructions), and their fates are reported on their own:
 
-| The 1,321 | boxed | unboxed |
+| The 1,321 | before b/u | now b/u |
 |---|---:|---:|
-| ScalarReplace | 114 | 0 |
-| StateThread | 225 | 29 |
-| WorkerReturn | 5 | 435 |
-| Preserve | 324 | 0 |
-| Unresolved | 181 | 8 |
-| **population** | **849** | **472** |
+| ScalarReplace | 114 / 0 | **128 / 0** |
+| StateThread | 225 / 29 | — |
+| WorkerReturn | 5 / 435 | **375 / 463** |
+| Preserve | 324 / 0 | **144 / 0** |
+| Unresolved | 181 / 8 | **202 / 9** |
+| **population** | **849 / 472** | **849 / 472** |
 
 ### What the plumbing actually looks like
 
 Two shapes account for nearly all of the transformer transport.
 
-**The lazy-RWS re-tupling** (`ShellCheck.Checks.Commands` node 4714, the
-whole `TupleFlow` printed by `--explain`): a step returns `(,,) b s w`;
-its caller binds the result to `ds1` and reads all three fields with lazy
-selector cases; those three selections are re-tupled into the next step's
-result (`T4-RETUPLE` at node 4633), which is returned again. The inner
-tuple is `ScalarReplace` (its only consumers are the three selections), the
-outer is `StateThread`. 266 boxed constructions are `StateThread`, 221 of
-them arity 3 — the `(a, s, w)` of `RWST` — concentrated in
-`Checks.Commands` (96), `CFG` (69), `Checks.ShellSupport` (62) and
-`Analytics` (58). Only 17 constructions are *proven* field-wise copies;
-re-tupling is the visible top of a much larger selector population (707
-constructions have a `T3-SELECTED` consumer).
+**The lazy-RWS re-tupling** (`ShellCheck.Checks.Commands` nodes 4714 and
+4633, both printed in full by `--explain`): a step returns `(,,) b s w`
+from `eta1`; its caller binds the result to `ds1` and reads all three
+fields with lazy selector cases; those three selections are re-tupled into
+the next step's result (`T4-RETUPLE` at node 4633), which is returned
+again. The *inner* triple (4714) is a multi-value return — its four
+consumers are the three selections and the copy, and it crosses a return —
+while the *outer* copy (4633) is `Unresolved`, because the closure that
+returns it ends up in a `CommandCheck` constructor, which is the
+checks-in-a-top-level-list shape the residual is full of. 621 boxed
+removable constructions have a field read on its own, concentrated in
+`Checks.Commands`, `CFG`, `Checks.ShellSupport` and `Analytics`; only 129
+constructions are *proven* field-wise copies, so re-tupling is the visible
+top of a much larger selector population (691 constructions have a
+`T3-SELECTED` consumer).
 
 **The CPR worker return** (`ShellCheck.Analytics` node 30892): `$wgo`
-returns `(# () , … #)`, both of its call sites `case` it apart at once.
-664 unboxed constructions are `WorkerReturn`, 416 of them pairs, in
-`Analytics` (301), `CFG` (126) and `CFGAnalysis` (116).
+returns `(# () , … #)`, both of its call sites `case` it apart at once. 689
+unboxed constructions are multi-value returns; counting boxed and unboxed
+together, the multi-value returns are concentrated in `Analytics` (333),
+`CFG` (259), `Checks.Commands` (138) and `CFGAnalysis` (107). 284 boxed
+constructions are the *other* half of that shape: a caller re-boxing the
+fields it just unpacked.
 
 ### What remains, and what each thing is waiting for
 
+580 constructions are `Unresolved`. The residual is split by *where* the
+value went, so the next milestone can pick each class up without
+re-analysing (the constructor and callee names are diagnostics; the split is
+by what kind of thing holds it):
+
 | | | |
 |---:|---|---|
-| 523 | the *closure* that returns the tuple is stored in a constructor (`:` 134, `CommandCheck` 51, …) or passed to a callee (`map` 107, `catch#` 25, …) | closure/whole-program analysis: ShellCheck's checks are functions in top-level lists, run by a driver |
-| 50 | the callee is an unknown higher-order value (`eta` 24, `eok` 15, `cok` 8, all in `ShellCheck.Parser`) | these are Parsec continuations, whose targets [M2.1](#m21--proving-parsecs-cps-roles) already proves — reading that proof object here would resolve them |
-| 13 | returned from an exported function (`format` 7, …) | callers outside the module are invisible; recorded as such, not guessed |
-| 1 | the argument lands past the callee's parameters | returned-closure analysis |
+| 187 | the closure that returns the tuple is passed to an **imported** call (`map` 107, `catch#` 25, `$wtext` 20, …) | closure/whole-program analysis |
+| 134 | …**consed onto a list** | the checks-in-a-top-level-list shape; a closed-world list-of-closures pass |
+| 114 | …**stored in a program constructor** (`CommandCheck` 51, `SystemInterface` 13, `ForShell` 11, …) | the same, per constructor |
+| 67 | …**handed to a local callee's parameter** | the parameter's other producers: a higher-order representation agreement, not a def-use question |
+| 41 | a proven Parsec continuation whose target the region graph does not close over | above |
+| 11 | returned from an **exported wrapper of a local worker** | the *worker's* callers, not the wrapper's — which is why the split exists |
+| 10 | …passed to a local binder that is not a lambda chain | returned-closure analysis |
+| 7 | …held in a partial application | the same |
+| 3 | …passed to a class-op | closed-world instance enumeration |
+| 2 | returned from an exported function with no worker | callers outside the module |
+| 2 | an unknown higher-order callee outside `ShellCheck.Parser` | returned-closure analysis |
+| 1 | the argument lands past the callee's parameters | the same |
+| 1 | the callee's parameter cannot be split (the callee escapes) | closure analysis |
 
-The `Preserve` side is dominated by exactly what one would hope: 368 tuples
-consed into a list, 179 stored in another tuple, 51 handed to an imported
-function's lazy parameter (45 of them to `++`), 40 stored in a program or
-library constructor (`Just` 28, `Bin` 9, …), 19 passed through class-op
-dispatch.
+The `Preserve` side is 551, dominated by exactly what one would hope: 369
+tuples consed into a list, 71 stored in another tuple that is itself a real
+value, 52 handed to an imported function's lazy parameter (45 of them to
+`++`), 40 stored in a program or library constructor (`Just` 28, `Bin` 9,
+…), 19 passed through class-op dispatch.
 
 ### Accounting
 
 Asserted in code, not eyeballed (`Accounting::check`): the boxed
 constructions sum to the boxed fate counts and likewise for unboxed, and
 every census tuple site either maps onto exactly one construction or
-carries a reason (`flow.is_some() ^ reason.is_some()`). The same assertions
-run on all six matrix profiles; on D (1.2M nodes, 6,120 constructions) they
-hold and the whole census takes 15 s.
+carries a reason (`flow.is_some() ^ reason.is_some()`). The nesting fixpoint
+asserts its own convergence. The same assertions, and the independent
+verifier, run on all six matrix profiles.
 
 ### Auditing one construction
 
@@ -849,7 +1053,8 @@ ShellCheck.Analytics node 30892 — unboxed tuple of arity 2, fate WorkerReturn
 ```
 
 Every node id there is a `h2r show` argument. `--json` dumps the flows,
-their consumers and the accounting.
+their consumers and the accounting; `--verify` prints the independent
+re-derivation and the table of audited shapes above.
 
 ## What ShellCheck actually needs
 
@@ -920,6 +1125,12 @@ the dumps are deterministic.
 | … exact *by the head alone*, before the Parsec proof | **68%** | 66% | 64% | 47% | 49% | 49% |
 | … Parsec CPS | **27%** | 29% | 32% | 41% | 40% | 38% |
 | thunk sites per 1k nodes | 5 | 5 | 5 | 6 | 6 | 6 |
+| saturated tuple constructions, boxed | 1,765 | 1,989 | 2,250 | 4,369 | 4,380 | 4,465 |
+| … proven removable | 761 | 857 | 888 | 2,416 | 2,450 | 2,454 |
+| … proven a real value | 551 | 683 | 674 | 923 | 900 | 900 |
+| saturated tuple constructions, unboxed | 819 | 1,020 | 943 | 1,751 | 1,751 | 1,752 |
+| … proven removable | 692 | 884 | 806 | 1,585 | 1,585 | 1,586 |
+| **tuples proven removable** | **56%** | 57% | 53% | 65% | 65% | 64% |
 
 Findings:
 
@@ -948,6 +1159,15 @@ Findings:
   Rust; inside functions they become lets captured by inner lambdas, and
   the memo population grows by 18% (the captured-by-a-lambda part by 21%).
   Better to keep the hoisting and lower top-level constants to statics.
+* **The tuple proof holds up under replication.** Inlining more (D–F)
+  triples the constructions and the *share* proven removable goes up, not
+  down (56% → 65%), because the extra copies are worker/wrapper returns
+  whose call sites are all local. `-fno-full-laziness` (C) is the only
+  profile that loses ground (53%): floating a tuple-returning closure back
+  inside a lambda turns some returns into closures handed to parameters,
+  which is the one shape the def-use proof refuses. The independent
+  verifier agrees with the census on all six, with no disagreement
+  anywhere.
 * Static-argument transformation trims ~7% of nodes; an extra strictness
   pass changes nothing.
 

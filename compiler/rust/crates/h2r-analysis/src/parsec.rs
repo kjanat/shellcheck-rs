@@ -2739,6 +2739,16 @@ impl<'m> Analysis<'m> {
             .unwrap_or_default()
     }
 
+    /// The binder a region's lambda chain is bound to, if it is bound to
+    /// one. The inverse of the map the recogniser builds when it promotes a
+    /// binding's right-hand side to a region.
+    pub fn region_binder(&self, ri: usize) -> Option<BinderId> {
+        self.region_of_binder
+            .iter()
+            .find(|(_, r)| **r == ri)
+            .map(|(b, _)| *b)
+    }
+
     /// Is this binder a (candidate) Parsec role binder?
     pub fn role_of(&self, b: BinderId) -> Option<usize> {
         self.role.get(&b).map(|r| r.region)
