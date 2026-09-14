@@ -2027,3 +2027,262 @@ fn the_milestone_accounting_closes() {
         b.unsupported
     );
 }
+
+//------------------------------------------------------------------------------
+// Representation boundaries (boundary.rs)
+//------------------------------------------------------------------------------
+
+// A flow's own def-use proof says the tuple is transport. These say whether
+// every *other* value that arrives at the same parameter or return agrees
+// on one representation — which is what applying all the scalar views at
+// once needs, and which neither the census nor the verifier ever asks.
+
+use crate::boundary::{Boundary, BoundaryVerdict, Representation, settle};
+
+/// Every boundary of a module, with its verdict, keyed by its rendering.
+fn boundaries_of(m: &Module) -> (Tuples<'_>, Vec<(String, BoundaryVerdict)>, Vec<String>) {
+    let t = Tuples::of_module(m);
+    let s = settle(&t);
+    let reports = s
+        .boundaries
+        .reports
+        .iter()
+        .map(|r| (r.name.clone(), r.verdict))
+        .collect();
+    let downgraded = s
+        .downgrades
+        .iter()
+        .map(|d| format!("{} -> {:?} ({})", d.construction, d.to, d.reason))
+        .collect();
+    (t, reports, downgraded)
+}
+
+/// Two removable tuples and one opaque value reach the same parameter. Each
+/// tuple has a perfect def-use proof; the parameter still cannot become two
+/// scalars, because the third call site has a real box to pass. Only a
+/// clone of the callee could take the split, so both flows lose their fate.
+#[test]
+fn two_removable_producers_and_an_opaque_one_need_a_clone() {
+    let (tup, id) = boxed_tuple_id(2);
+    let body = app(
+        app(
+            app(
+                gvar("h"),
+                app(var("k"), con_app(&tup, &[var("a"), var("b")])),
+            ),
+            app(var("k"), con_app(&tup, &[var("c"), var("d")])),
+        ),
+        app(var("k"), gvar("opaque")),
+    );
+    let m = top_module(
+        let1(
+            "k",
+            lam(
+                &["t"],
+                case_con(var("t"), &tup, &["x", "y"], app(var("g"), var("x"))),
+            ),
+            body,
+        ),
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let (t, reports, downgraded) = boundaries_of(&m);
+    assert_eq!(t.flows.len(), 2);
+    // The census itself proves both removable: each one's own uses are a
+    // parameter it is scrutinised at.
+    for f in &t.flows {
+        assert_eq!(f.fate, TupleFate::ScalarReplace, "{f:?}");
+    }
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].1, BoundaryVerdict::CloneRequired);
+    assert!(reports[0].0.starts_with("parameter 0 of k"));
+    assert_eq!(downgraded.len(), 2, "{downgraded:?}");
+    assert!(downgraded.iter().all(|d| d.contains("RemovableWithClone")));
+}
+
+/// The same shape without the opaque call: every producer of the parameter
+/// is a removable tuple of the same arity, so the parameter becomes two
+/// scalars and both flows keep their fate.
+#[test]
+fn two_removable_producers_of_one_arity_split_uniformly() {
+    let (tup, id) = boxed_tuple_id(2);
+    let body = app(
+        app(
+            gvar("h"),
+            app(var("k"), con_app(&tup, &[var("a"), var("b")])),
+        ),
+        app(var("k"), con_app(&tup, &[var("c"), var("d")])),
+    );
+    let m = top_module(
+        let1(
+            "k",
+            lam(
+                &["t"],
+                case_con(var("t"), &tup, &["x", "y"], app(var("g"), var("x"))),
+            ),
+            body,
+        ),
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let (t, reports, downgraded) = boundaries_of(&m);
+    assert_eq!(t.flows.len(), 2);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(
+        reports[0].1,
+        BoundaryVerdict::UniformSplit { arity: 2 },
+        "{reports:?}"
+    );
+    assert!(downgraded.is_empty(), "{downgraded:?}");
+}
+
+/// A function that returns a removable tuple on one branch and the result
+/// of an imported call on the other. A return cannot be specialised the way
+/// a parameter can — every return point is in the same body — so the
+/// boundary is unresolved and the flow goes with it.
+#[test]
+fn a_return_that_mixes_a_tuple_with_an_imported_result_is_unresolved() {
+    let (tup, id) = boxed_tuple_id(2);
+    let m = tops(
+        vec![
+            (
+                binder("f", demand(false, false)),
+                lam(
+                    &["p"],
+                    case2(
+                        var("p"),
+                        con_app(&tup, &[var("a"), var("b")]),
+                        app(gvar("imported"), var("p")),
+                    ),
+                ),
+            ),
+            (
+                binder("user", demand(false, false)),
+                case_con(
+                    app(var("f"), var("x")),
+                    &tup,
+                    &["u", "v"],
+                    app(var("g"), var("u")),
+                ),
+            ),
+        ],
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let t = Tuples::of_module(&m);
+    assert_eq!(one_flow(&t).fate, TupleFate::WorkerReturn);
+    let (_, reports, downgraded) = boundaries_of(&m);
+    assert_eq!(reports.len(), 1);
+    assert!(reports[0].0.starts_with("return of f"));
+    assert_eq!(reports[0].1, BoundaryVerdict::Unresolved);
+    assert_eq!(downgraded.len(), 1, "{downgraded:?}");
+    assert!(downgraded[0].contains("Unresolved"));
+    assert!(downgraded[0].contains(crate::boundary::B_PRODUCERS_DISAGREE));
+    // …and the census that owns the flows applies it: the fate is gone and
+    // the reason names the boundary that took it.
+    let census = census_of(&m);
+    let mods = [&m];
+    let tc = crate::tuples::TupleCensus::of_modules(&mods, &census);
+    assert_eq!(tc.flows[0].fate, TupleFate::Unresolved);
+    assert_eq!(
+        tc.flows[0].reason,
+        Some(crate::tuples::R_BOUNDARY_NOT_UNIFORM)
+    );
+    assert!(tc.flows[0].detail.starts_with("return of f"));
+    assert_eq!(tc.accounting.bucket(true).normalised, 0);
+}
+
+/// A callee whose every call site passes the same removable tuple, but
+/// which is *also* handed to something as a value: the PAP holds the
+/// original representation, so the parameter cannot be split whatever the
+/// producers say. The census refuses this shape too — its own
+/// `callee-parameter-cannot-be-split` rule fires — and the point of the
+/// assertion is that the two independent walks agree about it.
+#[test]
+fn a_function_used_as_a_value_has_no_splittable_parameter() {
+    use std::collections::HashSet;
+
+    let (tup, id) = boxed_tuple_id(2);
+    let m = top_module(
+        let1(
+            "k",
+            lam(
+                &["t"],
+                case_con(var("t"), &tup, &["x", "y"], app(var("g"), var("x"))),
+            ),
+            app(
+                app(gvar("h"), var("k")),
+                app(var("k"), con_app(&tup, &[var("a"), var("b")])),
+            ),
+        ),
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    assert_eq!(f.fate, TupleFate::Unresolved);
+    assert_eq!(f.reason, Some(crate::tuples::R_CALLEE_NOT_SPLITTABLE));
+    // …and the boundary, asked directly, says the same thing for its own
+    // reason: one occurrence of `k` is not a call site at all.
+    let k = m
+        .binders
+        .iter()
+        .position(|b| b.occ == "k")
+        .expect("the callee is bound") as u32;
+    let all: HashSet<u32> = t.flows.iter().map(|f| f.construction).collect();
+    let r = crate::boundary::examine(
+        &t,
+        Boundary::Parameter {
+            function: k,
+            index: 0,
+        },
+        &all,
+    );
+    assert_eq!(r.verdict, BoundaryVerdict::Unresolved);
+    assert_eq!(r.reason, Some(crate::boundary::B_FUNCTION_IS_A_VALUE));
+    // The producer that *is* there is uniform: the refusal is about the
+    // other use, not about disagreement.
+    assert_eq!(r.requested, vec![Representation::Scalars(2)]);
+}
+
+/// The tuple is passed into `f`'s parameter, `f` returns it, and the call
+/// site scrutinises the result: two boundaries on one flow, and both have
+/// to be checked. `f` is the identity, so its return is whatever its
+/// parameter is — which only holds once the parameter boundary itself is a
+/// uniform split.
+#[test]
+fn a_flow_that_crosses_two_boundaries_has_both_checked() {
+    let (tup, id) = boxed_tuple_id(2);
+    let m = tops(
+        vec![
+            (binder("f", demand(false, false)), lam(&["t"], var("t"))),
+            (
+                binder("user", demand(false, false)),
+                case_con(
+                    app(var("f"), con_app(&tup, &[var("a"), var("b")])),
+                    &tup,
+                    &["x", "y"],
+                    app(var("g"), var("x")),
+                ),
+            ),
+        ],
+        json!({&tup: id, "g": callee(true)}),
+    );
+    let t = Tuples::of_module(&m);
+    let f = one_flow(&t);
+    assert!(
+        f.consumers
+            .iter()
+            .any(|u| matches!(u, TupleUse::PassedTo { param: 0, .. }))
+    );
+    assert!(
+        f.consumers
+            .iter()
+            .any(|u| matches!(u, TupleUse::Returned { .. }))
+    );
+    let (_, mut reports, downgraded) = boundaries_of(&m);
+    reports.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(reports.len(), 2, "{reports:?}");
+    assert!(reports[0].0.starts_with("parameter 0 of f"));
+    assert!(reports[1].0.starts_with("return of f"));
+    for (name, v) in &reports {
+        assert_eq!(*v, BoundaryVerdict::UniformSplit { arity: 2 }, "{name}");
+    }
+    assert!(downgraded.is_empty(), "{downgraded:?}");
+}

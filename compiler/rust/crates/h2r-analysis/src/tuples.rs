@@ -163,6 +163,13 @@ pub const F2_WORKER_RETURN: &str = "F2-WORKER-RETURN";
 /// A proven real value: stored in a constructor field, held in a partial
 /// application, or handed to a function outside this module. Evidence:
 /// whichever `T9`/`T10` use proved it.
+/// **Fate.** Removable by its own def-use proof, but it crosses a
+/// representation boundary that [`crate::boundary`] cannot split uniformly
+/// and that only a specialised clone of the callee could carry. The proof
+/// stands; the rewrite needs a decision this milestone does not make, so
+/// the construction is counted as *unsupported*, never as normalised.
+pub const F3_REMOVABLE_WITH_CLONE: &str = "F3-REMOVABLE-WITH-CLONE";
+
 pub const F4_PRESERVE: &str = "F4-PRESERVE";
 /// A use the rules cannot classify. Carries the reason.
 pub const F5_UNRESOLVED: &str = "F5-UNRESOLVED";
@@ -217,6 +224,13 @@ pub const R_PARSEC_CONT: &str = "parsec-continuation-target-not-in-the-region-gr
 /// normalised — a removable verdict with only one proof behind it is not a
 /// removal this milestone will make.
 pub const R_UNVERIFIED: &str = "removable-but-not-independently-verified";
+
+/// A removable flow crosses a representation boundary that is not a
+/// uniform split and cannot be cloned into one ([`crate::boundary`]).
+pub const R_BOUNDARY_NOT_UNIFORM: &str = "boundary-not-uniform";
+
+/// …and one that a specialised clone of the callee could carry.
+pub const R_BOUNDARY_NEEDS_CLONE: &str = "boundary-needs-a-specialised-clone";
 
 /// Locations one flow may visit before it is abandoned as too large. No
 /// flow on the `-O1` dump comes anywhere near it; it exists so a pathological
@@ -334,6 +348,12 @@ pub enum TupleFate {
     /// scrutiny) or one at a time (a lazy selection) is recorded as a fact
     /// on the flow, not as a separate fate — see [`TupleFlow::selected`].
     WorkerReturn,
+    /// Removable by its own def-use proof, but a representation boundary it
+    /// crosses carries values that do not agree on one representation, and
+    /// only a specialised clone of the callee could split it
+    /// ([`crate::boundary`]). Counted as *unsupported* until a cloning
+    /// decision exists.
+    RemovableWithClone,
     /// A proven real value.
     Preserve,
     /// A use the rules cannot classify.
@@ -345,6 +365,7 @@ impl TupleFate {
         match self {
             TupleFate::ScalarReplace => F1_SCALAR_REPLACE,
             TupleFate::WorkerReturn => F2_WORKER_RETURN,
+            TupleFate::RemovableWithClone => F3_REMOVABLE_WITH_CLONE,
             TupleFate::Preserve => F4_PRESERVE,
             TupleFate::Unresolved => F5_UNRESOLVED,
         }
@@ -585,6 +606,45 @@ impl<'m> Tuples<'m> {
         t.find_retuplings();
         t.resolve_flows();
         t
+    }
+
+    /// Run the [representation boundary](crate::boundary) check over this
+    /// module's flows and apply its downgrades, in place.
+    ///
+    /// Part of the census ([`TupleCensus::of_modules_with`] calls it) rather
+    /// than a report, for the same reason the independent verifier is: a
+    /// flow whose boundary cannot be split is not one this milestone
+    /// removes, so the fate has to say so wherever the fate is read.
+    pub fn settle_boundaries(&mut self) -> crate::boundary::Settled {
+        let settled = crate::boundary::settle(self);
+        for d in &settled.downgrades {
+            let Some(i) = self
+                .flows
+                .iter()
+                .position(|f| f.construction == d.construction)
+            else {
+                continue;
+            };
+            let f = &mut self.flows[i];
+            f.fate = d.to;
+            f.reason = Some(match d.to {
+                TupleFate::RemovableWithClone => R_BOUNDARY_NEEDS_CLONE,
+                _ => R_BOUNDARY_NOT_UNIFORM,
+            });
+            f.detail = d.boundary.clone();
+            f.evidence.push(Evidence {
+                rule: crate::boundary::B3_DOWNGRADE,
+                nodes: vec![f.construction],
+                binder: Some(d.function),
+                note: format!(
+                    "{} is {} ({}): the def-use proof stands, the rewrite does not",
+                    d.boundary,
+                    d.verdict.name(),
+                    d.reason
+                ),
+            });
+        }
+        settled
     }
 
     pub fn binder(&self, b: BinderId) -> &'m h2r_core_ir::Binder {
@@ -1553,6 +1613,10 @@ pub struct Accounting {
     /// Constructions the census calls removable that the independent
     /// verifier does not re-derive: counted as unsupported.
     pub removable_unverified: usize,
+    /// Constructions whose def-use proof stands but whose representation
+    /// boundary only a specialised clone could split: counted as
+    /// unsupported ([`TupleFate::RemovableWithClone`]).
+    pub removable_with_clone: usize,
     /// The unsupported residual, itemised by the *kind* of thing holding
     /// the value — the flow's own reason, plus [`R_UNVERIFIED`]. Sums to
     /// the unsupported total over both representations.
@@ -1659,6 +1723,14 @@ pub struct TupleCensus<'m> {
     pub cross: crate::verify::CrossCheck,
     /// `(module, construction)` of every verdict the verifier re-derived.
     pub verified: HashSet<(String, ExprId)>,
+    /// The [representation boundaries](crate::boundary) the removable flows
+    /// cross, one entry per module in the same order as `per_module`.
+    pub boundaries: Vec<crate::boundary::Boundaries>,
+    /// Flows that lost their fate because a boundary they cross is not a
+    /// uniform split.
+    pub downgrades: Vec<crate::boundary::Downgrade>,
+    /// Rounds the boundary downgrade fixpoint took, over all modules.
+    pub boundary_rounds: usize,
 }
 
 impl TupleCensus<'_> {
@@ -1686,11 +1758,26 @@ impl<'m> TupleCensus<'m> {
         census: &Census,
         parsec: &[ParsecHops],
     ) -> TupleCensus<'m> {
-        let per_module: Vec<Tuples<'m>> = modules
+        let mut per_module: Vec<Tuples<'m>> = modules
             .iter()
             .enumerate()
             .map(|(i, m)| Tuples::of_module_with(m, parsec.get(i)))
             .collect();
+        // M2.2.1: a flow's own def-use proof is not enough if the
+        // representation boundary it crosses carries other values too.
+        // Every removable flow whose scalar view crosses a parameter or a
+        // return has that boundary enumerated independently, and loses its
+        // fate here if the boundary is not a uniform split.
+        let mut boundaries: Vec<crate::boundary::Boundaries> = Vec::new();
+        let mut downgrades: Vec<crate::boundary::Downgrade> = Vec::new();
+        let mut boundary_rounds = 0;
+        for t in per_module.iter_mut() {
+            let settled = t.settle_boundaries();
+            boundary_rounds = boundary_rounds.max(settled.rounds);
+            downgrades.extend(settled.downgrades.iter().cloned());
+            boundaries.push(settled.boundaries);
+        }
+        let per_module = per_module;
         let mut flows: Vec<TupleFlow> = Vec::new();
         // module -> construction node -> flow index
         let mut index: HashMap<(&str, ExprId), usize> = HashMap::new();
@@ -1783,6 +1870,14 @@ impl<'m> TupleCensus<'m> {
                     acct.removable_unverified += 1;
                     *residual.entry(R_UNVERIFIED.to_string()).or_default() += 1;
                 }
+                // Proven removable, but the boundary it crosses would have
+                // to be cloned: unsupported until that decision exists.
+                (TupleFate::RemovableWithClone, _) => {
+                    acct.removable_with_clone += 1;
+                    *residual
+                        .entry(R_BOUNDARY_NEEDS_CLONE.to_string())
+                        .or_default() += 1;
+                }
                 (TupleFate::Unresolved, _) => {
                     // By the *kind* of holder, not by its name: the
                     // constructor and callee names are diagnostics, and the
@@ -1809,6 +1904,9 @@ impl<'m> TupleCensus<'m> {
             accounting: acct,
             cross,
             verified,
+            boundaries,
+            downgrades,
+            boundary_rounds,
         }
     }
 }

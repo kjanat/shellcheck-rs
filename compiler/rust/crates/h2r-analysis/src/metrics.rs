@@ -55,12 +55,21 @@ pub struct Metrics {
     pub tuple_scalar_unboxed: usize,
     pub tuple_return_boxed: usize,
     pub tuple_return_unboxed: usize,
+    /// Removable by def-use but crossing a boundary only a specialised
+    /// clone could split ([`TupleFate::RemovableWithClone`]).
+    pub tuple_clone_boxed: usize,
+    pub tuple_clone_unboxed: usize,
     pub tuple_preserve_boxed: usize,
     pub tuple_preserve_unboxed: usize,
     pub tuple_unresolved_boxed: usize,
     pub tuple_unresolved_unboxed: usize,
     /// Removable constructions with at least one field read on its own.
     pub tuple_selected: usize,
+    /// Representation boundaries the removable flows cross, and how many of
+    /// them can be split uniformly.
+    pub boundaries: usize,
+    pub boundaries_uniform: usize,
+    pub flows_downgraded: usize,
     pub list_cons_sites: usize,
     pub string_literal_args: usize,
 }
@@ -173,6 +182,8 @@ impl Metrics {
             tuple_scalar_unboxed: tc(false, TupleFate::ScalarReplace),
             tuple_return_boxed: tc(true, TupleFate::WorkerReturn),
             tuple_return_unboxed: tc(false, TupleFate::WorkerReturn),
+            tuple_clone_boxed: tc(true, TupleFate::RemovableWithClone),
+            tuple_clone_unboxed: tc(false, TupleFate::RemovableWithClone),
             tuple_preserve_boxed: tc(true, TupleFate::Preserve),
             tuple_preserve_unboxed: tc(false, TupleFate::Preserve),
             tuple_unresolved_boxed: tc(true, TupleFate::Unresolved),
@@ -191,6 +202,19 @@ impl Metrics {
                         .count()
                 })
                 .unwrap_or(0),
+            boundaries: tuples
+                .map(|t| t.boundaries.iter().map(|b| b.reports.len()).sum())
+                .unwrap_or(0),
+            boundaries_uniform: tuples
+                .map(|t| {
+                    t.boundaries
+                        .iter()
+                        .flat_map(|b| b.reports.iter())
+                        .filter(|r| r.verdict.ok())
+                        .count()
+                })
+                .unwrap_or(0),
+            flows_downgraded: tuples.map(|t| t.downgrades.len()).unwrap_or(0),
         }
     }
 
@@ -240,14 +264,19 @@ impl Metrics {
             ("tuple constructions, boxed", self.tuple_cons_boxed),
             ("  scalar replace", self.tuple_scalar_boxed),
             ("  multi-value return", self.tuple_return_boxed),
+            ("  removable, needs a clone", self.tuple_clone_boxed),
             ("  preserve", self.tuple_preserve_boxed),
             ("  unresolved", self.tuple_unresolved_boxed),
             ("tuple constructions, unboxed", self.tuple_cons_unboxed),
             ("  scalar replace", self.tuple_scalar_unboxed),
             ("  multi-value return", self.tuple_return_unboxed),
+            ("  removable, needs a clone", self.tuple_clone_unboxed),
             ("  preserve", self.tuple_preserve_unboxed),
             ("  unresolved", self.tuple_unresolved_unboxed),
             ("removable, field read alone", self.tuple_selected),
+            ("representation boundaries", self.boundaries),
+            ("  uniform split", self.boundaries_uniform),
+            ("  flows downgraded", self.flows_downgraded),
             (
                 "tuples removable %",
                 (self.tuple_scalar_boxed

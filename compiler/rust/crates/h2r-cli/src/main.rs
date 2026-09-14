@@ -109,6 +109,10 @@ enum Command {
         /// --module.
         #[arg(long)]
         scalar_all: bool,
+        /// Enumerate the representation boundaries the removable flows
+        /// cross, and report which of them can be split uniformly.
+        #[arg(long)]
+        boundaries: bool,
     },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
@@ -158,6 +162,7 @@ fn main() -> Result<()> {
             verify,
             scalar,
             scalar_all,
+            boundaries,
         } => tuples(
             &dir,
             module.as_deref(),
@@ -166,6 +171,7 @@ fn main() -> Result<()> {
             verify,
             scalar,
             scalar_all,
+            boundaries,
         ),
         Command::Parsec {
             dir,
@@ -370,7 +376,10 @@ fn show(
                 .as_ref()
                 .map(h2r_analysis::tuples::parsec_hops)
                 .unwrap_or_default();
-            let t = h2r_analysis::tuples::Tuples::of_module_with(m, Some(&hops));
+            let mut t = h2r_analysis::tuples::Tuples::of_module_with(m, Some(&hops));
+            // The boundary check is part of the verdict, not a report, so
+            // the fate `show` prints is the same one `h2r tuples` counts.
+            t.settle_boundaries();
             if t.flows.is_empty() { None } else { Some(t) }
         }
         false => None,
@@ -1613,7 +1622,14 @@ fn scalar_views(
                 continue;
             }
             found = true;
-            let removable = matches!(f.fate, TupleFate::ScalarReplace | TupleFate::WorkerReturn);
+            // A flow the boundary check moved to RemovableWithClone keeps
+            // its own proof — what it lost is the right to be counted as
+            // normalised — so its view is still printed, with that fate in
+            // the header.
+            let removable = matches!(
+                f.fate,
+                TupleFate::ScalarReplace | TupleFate::WorkerReturn | TupleFate::RemovableWithClone
+            );
             if !removable {
                 if node.is_some() {
                     println!(
@@ -1663,6 +1679,251 @@ fn scalar_views(
     Ok(())
 }
 
+/// The representation boundaries the removable flows cross, and whether
+/// each can be split uniformly. A flow's own def-use proof says the tuple
+/// is transport; this says whether every *other* value that arrives at the
+/// same parameter or return agrees on one representation, which is what
+/// applying all the scalar views at once needs.
+fn print_boundaries(
+    tc: &h2r_analysis::tuples::TupleCensus<'_>,
+    explain: bool,
+    json: bool,
+) -> Result<()> {
+    use h2r_analysis::boundary::{BoundaryVerdict, Representation, verdict_rows};
+    use h2r_analysis::tuples::TupleFate;
+
+    if json {
+        let out = serde_json::json!({
+            "boundaries": tc.boundaries,
+            "downgrades": tc.downgrades,
+            "rows": verdict_rows(&tc.boundaries),
+        });
+        serde_json::to_writer(std::io::stdout().lock(), &out)?;
+        println!();
+        return Ok(());
+    }
+
+    let reports: Vec<&h2r_analysis::boundary::BoundaryReport> = tc
+        .boundaries
+        .iter()
+        .flat_map(|b| b.reports.iter())
+        .collect();
+    println!(
+        "Representation boundaries — {} module(s)",
+        tc.per_module.len()
+    );
+    println!();
+    println!("Every parameter and return a removable flow's scalar view crosses, with every");
+    println!(
+        "value that reaches it enumerated from the IR's occurrences — not from the flow walk."
+    );
+    println!();
+    println!(
+        "  {:<16} {:<11} {:>8} {:>8} {:>6} {:>8}",
+        "verdict", "kind", "boxed", "unboxed", "both", "total"
+    );
+    for r in verdict_rows(&tc.boundaries) {
+        println!(
+            "  {:<16} {:<11} {:>8} {:>8} {:>6} {:>8}",
+            r.verdict, r.kind, r.boxed, r.unboxed, r.both, r.total
+        );
+    }
+    println!(
+        "  {:<16} {:<11} {:>8} {:>8} {:>6} {:>8}",
+        "total",
+        "",
+        "",
+        "",
+        "",
+        reports.len()
+    );
+
+    // How many flows cross a boundary at all. The boundary object keeps the
+    // crossings of the downgraded flows too, so this is the whole
+    // population def-use proved removable before the boundary check.
+    let crossing: usize = tc.boundaries.iter().map(|b| b.crossed.len()).sum();
+    let before = tc
+        .flows
+        .iter()
+        .filter(|f| matches!(f.fate, TupleFate::ScalarReplace | TupleFate::WorkerReturn))
+        .count()
+        + tc.downgrades.len();
+    println!();
+    println!(
+        "  of the {before} flow(s) def-use proved removable, {crossing} cross at least one \
+         boundary and {} cross none",
+        before.saturating_sub(crossing)
+    );
+    println!(
+        "  {} of them were downgraded here: {} to RemovableWithClone, {} to Unresolved",
+        tc.downgrades.len(),
+        tc.downgrades
+            .iter()
+            .filter(|d| d.to == TupleFate::RemovableWithClone)
+            .count(),
+        tc.downgrades
+            .iter()
+            .filter(|d| d.to == TupleFate::Unresolved)
+            .count()
+    );
+    println!(
+        "  the downgrade fixpoint settled in {} round(s)",
+        tc.boundary_rounds
+    );
+
+    // Why a boundary is not a uniform split.
+    println!();
+    println!("Why a boundary is not a uniform split");
+    let mut by: BTreeMap<(&str, &str), (usize, String, String)> = BTreeMap::new();
+    for r in reports.iter().filter(|r| !r.verdict.ok()) {
+        let e = by
+            .entry((r.verdict.name(), r.reason.unwrap_or("no-reason")))
+            .or_insert((0, String::new(), String::new()));
+        e.0 += 1;
+        if e.1.is_empty() {
+            e.1 = r.module.clone();
+            e.2 = r.name.clone();
+        }
+    }
+    let mut rows: Vec<_> = by.into_iter().collect();
+    rows.sort_by_key(|a| std::cmp::Reverse(a.1.0));
+    for ((verdict, reason), (n, module, name)) in &rows {
+        println!("  {n:>6}  {verdict:<14} {reason}");
+        println!("          e.g. {module} {name}");
+    }
+
+    // What the producers of a non-uniform boundary actually are.
+    println!();
+    println!("What reaches a boundary that is not a uniform split");
+    let mut kinds: BTreeMap<&str, (usize, String, u32)> = BTreeMap::new();
+    for r in reports.iter().filter(|r| !r.verdict.ok()) {
+        for p in &r.producers {
+            if p.representation != Representation::Tuple {
+                continue;
+            }
+            let e = kinds.entry(p.kind.name()).or_insert((0, String::new(), 0));
+            e.0 += 1;
+            if e.1.is_empty() {
+                e.1 = r.module.clone();
+                e.2 = p.at;
+            }
+        }
+    }
+    let mut krows: Vec<_> = kinds.into_iter().collect();
+    krows.sort_by_key(|a| std::cmp::Reverse(a.1.0));
+    for (kind, (n, module, at)) in &krows {
+        println!("  {n:>6}  {kind:<42} e.g. {module} node {at}");
+    }
+
+    // The flows that lost their fate.
+    println!();
+    println!("Flows downgraded, by reason");
+    let mut dr: BTreeMap<(&str, &str), (usize, String, u32, String)> = BTreeMap::new();
+    for d in &tc.downgrades {
+        let to = match d.to {
+            TupleFate::RemovableWithClone => "RemovableWithClone",
+            _ => "Unresolved",
+        };
+        let e = dr
+            .entry((to, d.reason))
+            .or_insert((0, String::new(), 0, String::new()));
+        e.0 += 1;
+        if e.1.is_empty() {
+            e.1 = d.module.clone();
+            e.2 = d.construction;
+            e.3 = d.boundary.clone();
+        }
+    }
+    let mut drows: Vec<_> = dr.into_iter().collect();
+    drows.sort_by_key(|a| std::cmp::Reverse(a.1.0));
+    for ((to, reason), (n, module, at, boundary)) in &drows {
+        println!("  {n:>6}  {to:<20} {reason}");
+        println!("          e.g. {module} node {at} — {boundary}");
+    }
+    let db = tc.downgrades.iter().filter(|d| d.boxed).count();
+    println!("  {} boxed, {} unboxed", db, tc.downgrades.len() - db);
+
+    // Per module.
+    println!();
+    println!("Per module");
+    println!(
+        "  {:<34} {:>9} {:>9} {:>7} {:>7} {:>7}",
+        "module", "boundaries", "uniform", "clone", "presrv", "unres"
+    );
+    for b in &tc.boundaries {
+        if b.reports.is_empty() {
+            continue;
+        }
+        let n =
+            |v: fn(&BoundaryVerdict) -> bool| b.reports.iter().filter(|r| v(&r.verdict)).count();
+        println!(
+            "  {:<34} {:>9} {:>9} {:>7} {:>7} {:>7}",
+            b.module,
+            b.reports.len(),
+            n(|v| matches!(v, BoundaryVerdict::UniformSplit { .. })),
+            n(|v| *v == BoundaryVerdict::CloneRequired),
+            n(|v| *v == BoundaryVerdict::Preserve),
+            n(|v| *v == BoundaryVerdict::Unresolved),
+        );
+    }
+
+    if explain {
+        for b in &tc.boundaries {
+            for r in &b.reports {
+                println!();
+                println!(
+                    "{} {} — {:?}{}",
+                    r.module,
+                    r.name,
+                    r.verdict,
+                    match r.reason {
+                        Some(x) => format!(" ({x})"),
+                        None => String::new(),
+                    }
+                );
+                println!(
+                    "  crossed by {}{}{} tuple(s)",
+                    if r.boxed { "boxed" } else { "" },
+                    if r.boxed && r.unboxed { " and " } else { "" },
+                    if r.unboxed { "unboxed" } else { "" }
+                );
+                println!("  producers");
+                for p in &r.producers {
+                    let rep = match p.representation {
+                        Representation::Scalars(k) => format!("Scalars({k})"),
+                        Representation::Tuple => "Tuple".to_string(),
+                    };
+                    println!(
+                        "    node {:<8} {:<12} {:<42}{}",
+                        p.at,
+                        rep,
+                        p.kind.name(),
+                        match p.call {
+                            Some(c) => format!(" at call {c}"),
+                            None => String::new(),
+                        }
+                    );
+                }
+                if !r.other_uses.is_empty() {
+                    println!("  other uses of the function");
+                    for u in &r.other_uses {
+                        println!("    node {:<8} {}", u.at, u.why);
+                    }
+                }
+                println!(
+                    "  consumers: {}",
+                    r.consumers
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Re-derive every removable verdict with the independent verifier
 /// (`h2r_analysis::verify`) and report the disagreements.
 fn verify_tuples(tc: &h2r_analysis::tuples::TupleCensus<'_>) -> Result<()> {
@@ -1682,6 +1943,11 @@ fn verify_tuples(tc: &h2r_analysis::tuples::TupleCensus<'_>) -> Result<()> {
     println!(
         "  {:<44} {:>8}",
         "verifier accepts, census does not", out.census_stricter
+    );
+    println!(
+        "  {:<44} {:>8}",
+        "  …of which the boundary check downgraded",
+        tc.downgrades.len()
     );
     println!(
         "  {:<44} {:>8}",
@@ -1745,6 +2011,7 @@ fn tuples(
     verify: bool,
     scalar: Option<u32>,
     scalar_all: bool,
+    boundaries: bool,
 ) -> Result<()> {
     use h2r_analysis::tuples::{TupleCensus, TupleFate};
 
@@ -1773,6 +2040,9 @@ fn tuples(
     if verify {
         return verify_tuples(&tc);
     }
+    if boundaries {
+        return print_boundaries(&tc, explain, json);
+    }
     if scalar.is_some() || scalar_all {
         return scalar_views(&tc, scalar, scalar_all, json);
     }
@@ -1782,6 +2052,8 @@ fn tuples(
             "flows": tc.flows,
             "skipped": tc.per_module.iter().flat_map(|t| t.skipped.iter()).collect::<Vec<_>>(),
             "accounting": tc.accounting,
+            "boundaries": tc.boundaries,
+            "downgrades": tc.downgrades,
         });
         serde_json::to_writer(std::io::stdout().lock(), &out)?;
         println!();
@@ -1834,27 +2106,31 @@ fn tuples(
     // Fates.
     println!();
     println!("Fates, proved by def-use");
-    println!("  {:<16} {:>10} {:>10}", "fate", "boxed", "unboxed");
+    println!("  {:<20} {:>10} {:>10}", "fate", "boxed", "unboxed");
     let fates = [
         TupleFate::ScalarReplace,
         TupleFate::WorkerReturn,
+        TupleFate::RemovableWithClone,
         TupleFate::Preserve,
         TupleFate::Unresolved,
     ];
     for fate in fates {
         let b = acct.count(true, fate);
         let u = acct.count(false, fate);
-        println!("  {:<16} {b:>10} {u:>10}", format!("{fate:?}"));
+        println!("  {:<20} {b:>10} {u:>10}", format!("{fate:?}"));
     }
     println!(
-        "  {:<16} {:>10} {:>10}",
+        "  {:<20} {:>10} {:>10}",
         "total", acct.constructions_boxed, acct.constructions_unboxed
     );
     // How the fields of a removable tuple are read is a fact about the
     // flow, not a fate: both are removed the same way, so it is reported
     // beside the fates rather than as one of them.
     let removable = |f: &&h2r_analysis::tuples::TupleFlow| {
-        matches!(f.fate, TupleFate::ScalarReplace | TupleFate::WorkerReturn)
+        matches!(
+            f.fate,
+            TupleFate::ScalarReplace | TupleFate::WorkerReturn | TupleFate::RemovableWithClone
+        )
     };
     println!(
         "  of the removable ones, {} boxed and {} unboxed have at least one field read on its own",
@@ -1935,7 +2211,7 @@ fn tuples(
         "The census' {} tuple-attributed lazy argument sites",
         acct.sites.len()
     );
-    println!("  {:<16} {:>10} {:>10}", "fate", "boxed", "unboxed");
+    println!("  {:<20} {:>10} {:>10}", "fate", "boxed", "unboxed");
     for fate in fates {
         let b = acct
             .sites
@@ -1947,7 +2223,7 @@ fn tuples(
             .iter()
             .filter(|s| !s.boxed && s.fate == Some(fate))
             .count();
-        println!("  {:<16} {b:>10} {u:>10}", format!("{fate:?}"));
+        println!("  {:<20} {b:>10} {u:>10}", format!("{fate:?}"));
     }
     let mapped_b = acct
         .sites
@@ -1959,7 +2235,7 @@ fn tuples(
         .iter()
         .filter(|s| !s.boxed && s.flow.is_some())
         .count();
-    println!("  {:<16} {mapped_b:>10} {mapped_u:>10}", "mapped");
+    println!("  {:<20} {mapped_b:>10} {mapped_u:>10}", "mapped");
     if acct.sites_unmapped > 0 {
         let mut by: BTreeMap<&str, (usize, String, u32)> = BTreeMap::new();
         for s in acct.sites.iter().filter(|s| s.flow.is_none()) {
@@ -2050,8 +2326,8 @@ fn tuples(
     println!();
     println!("Per module");
     println!(
-        "  {:<34} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
-        "module", "boxed", "unbox", "scalar", "return", "presrv", "unres"
+        "  {:<34} {:>7} {:>7} {:>7} {:>7} {:>6} {:>7} {:>7}",
+        "module", "boxed", "unbox", "scalar", "return", "clone", "presrv", "unres"
     );
     for t in &tc.per_module {
         if t.flows.is_empty() {
@@ -2059,12 +2335,13 @@ fn tuples(
         }
         let n = |fate: TupleFate| t.flows.iter().filter(|f| f.fate == fate).count();
         println!(
-            "  {:<34} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+            "  {:<34} {:>7} {:>7} {:>7} {:>7} {:>6} {:>7} {:>7}",
             t.module.name,
             t.flows.iter().filter(|f| f.boxed).count(),
             t.flows.iter().filter(|f| !f.boxed).count(),
             n(TupleFate::ScalarReplace),
             n(TupleFate::WorkerReturn),
+            n(TupleFate::RemovableWithClone),
             n(TupleFate::Preserve),
             n(TupleFate::Unresolved),
         );
