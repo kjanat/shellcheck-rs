@@ -2286,3 +2286,126 @@ fn a_flow_that_crosses_two_boundaries_has_both_checked() {
     }
     assert!(downgraded.is_empty(), "{downgraded:?}");
 }
+
+//------------------------------------------------------------------------------
+// The generic aggregate walk, on a non-tuple constructor (flow.rs)
+//------------------------------------------------------------------------------
+
+use crate::flow::{self, Client, Ctx, FlowUse, saturated_con};
+use crate::scope::Scope;
+use h2r_core_ir::ExprId;
+
+/// A client with no rules of its own: everything it sees is what the
+/// generic walk produced. This is the whole contract a non-tuple client
+/// (M2.3b's program ADTs and lists) has to implement.
+struct Probe;
+
+impl Client for Probe {
+    type Use = FlowUse;
+}
+
+/// `let j = Just (f a) in h (case j of Just y -> g y) (Wrap j)`.
+///
+/// Nothing here is a tuple, and nothing in [`crate::flow`] looks at the
+/// constructor's name: `Just` is found through its `DataConInfo`. The walk
+/// should bind the construction to `j`, report the scrutiny with the
+/// alternative's field binder exposed, and report the `Wrap` field as a
+/// store that keeps the value alive.
+#[test]
+fn the_generic_walk_follows_a_non_tuple_constructor() {
+    let m = top_module(
+        let1(
+            "j",
+            con_app("Just", &[app(var("f"), var("a"))]),
+            app(
+                app(
+                    var("h"),
+                    case_con(var("j"), "Just", &["y"], app(var("g"), var("y"))),
+                ),
+                con_app("Wrap", &[var("j")]),
+            ),
+        ),
+        json!({
+            "Just": data_con("Just", "$main$M$Just", 1),
+            "Wrap": data_con("Wrap", "$main$M$Wrap", 1),
+            "f": callee(true), "g": callee(true), "h": callee(true)
+        }),
+    );
+    let scope = Scope::new(&m);
+    // The population: saturated constructor applications of `Just`,
+    // selected through the head's `DataConInfo` and not by name.
+    let starts: Vec<ExprId> = (0..m.exprs.len() as ExprId)
+        .filter(|id| {
+            saturated_con(&scope, *id).is_some_and(|(dc, _, _)| dc.name.ends_with("$Just"))
+        })
+        .collect();
+    assert_eq!(starts.len(), 1, "one `Just` construction");
+    let (dc, _head, fields) = saturated_con(&scope, starts[0]).unwrap();
+    assert_eq!(fields.len(), 1, "one field, in field order");
+
+    let top_pairs: Vec<h2r_core_ir::BinderId> = m
+        .top
+        .iter()
+        .flat_map(|b| b.pairs.iter())
+        .map(|p| p.binder)
+        .collect();
+    let cx = Ctx {
+        m: &m,
+        scope: &scope,
+        top_pairs: &top_pairs,
+        start: starts[0],
+        arity: dc.rep_arity,
+    };
+    let w = flow::walk(&cx, &mut Probe);
+
+    // T1: the construction is let-bound, and the flow is the occurrences of
+    // that binder.
+    assert_eq!(w.bound.map(|b| m.binder(b).occ.as_str()), Some("j"));
+    // T2: the scrutiny, with the alternative's field binders exposed — this
+    // is what lets a client follow one field rather than the whole value.
+    assert_eq!(w.scrutinies.len(), 1);
+    let s = &w.scrutinies[0];
+    assert_eq!(
+        s.field_binders
+            .iter()
+            .map(|b| m.binder(*b).occ.as_str())
+            .collect::<Vec<_>>(),
+        vec!["y"],
+        "field 0 of `Just` is bound to y"
+    );
+    assert!(matches!(m.expr(s.case), h2r_core_ir::Expr::Case { .. }));
+    // The two uses, and nothing else.
+    assert!(
+        w.consumers.iter().any(|u| matches!(
+            u,
+            FlowUse::Scrutinised {
+                all_fields_bound: true,
+                ..
+            }
+        )),
+        "{:?}",
+        w.consumers
+    );
+    assert!(
+        w.consumers
+            .iter()
+            .any(|u| matches!(u, FlowUse::StoredIn { .. })),
+        "{:?}",
+        w.consumers
+    );
+    assert_eq!(w.consumers.len(), 2);
+    // T9 is what keeps it alive: one escape, and it is a *proven* real
+    // value rather than something the rules could not follow.
+    assert_eq!(w.escapes.len(), 1);
+    assert!(
+        w.escapes[0].0,
+        "stored in a constructor field: a real value"
+    );
+    assert_eq!(w.escapes[0].1, flow::R_STORED_CON);
+    assert!(!w.returned, "the value never crosses a return");
+    assert!(!w.over_budget);
+    let rules: Vec<&str> = w.evidence.iter().map(|e| e.rule).collect();
+    for want in [flow::T1_LET_BOUND, flow::T2_SCRUTINISED, flow::T9_STORED] {
+        assert!(rules.contains(&want), "{want} in {rules:?}");
+    }
+}

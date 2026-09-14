@@ -51,13 +51,28 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use h2r_core_ir::{AltCon, BindSite, BinderId, BinderKind, Edge, Expr, ExprId, Module};
+use h2r_core_ir::{AltCon, BindSite, BinderId, Expr, ExprId, Module};
 use serde::Serialize;
 
 use crate::callee::{Family, split_stable_name};
+use crate::flow::{self, Client, Consumer, Ctx, FlowUse, manifest_params};
 use crate::laziness::Census;
 use crate::scope::Scope;
 use crate::shape::value_args;
+
+/// The generic aggregate walk's rule ids, reasons and proof object, which
+/// this client uses unchanged. They are defined in [`crate::flow`] because
+/// every saturated constructor flow shares them, and re-exported here
+/// because this is where they were first established.
+pub use crate::flow::{
+    Evidence, LOCATION_BUDGET, R_ALTS, R_APPLIED, R_CALL_OVERSAT, R_CALLEE_NOT_SPLITTABLE,
+    R_CLASS_OP, R_CLOSURE_ARG, R_CLOSURE_ARG_CLASS_OP, R_CLOSURE_ARG_IMPORTED,
+    R_CLOSURE_ARG_UNKNOWN, R_CLOSURE_CONSED, R_CLOSURE_INTO_PARAM, R_CLOSURE_STORED,
+    R_EXPORTED_BINDING, R_EXPORTED_RETURN, R_EXPORTED_WRAPPER_RETURN, R_HIGHER_ORDER,
+    R_IMPORTED_LAZY, R_IMPORTED_STRICT, R_IN_PAP, R_NESTED_CLOSURE, R_PAST_PARAMS, R_STORED_CON,
+    R_TOO_LARGE, T1_LET_BOUND, T2_SCRUTINISED, T5_PASSED_LOCAL, T6_RETURNED, T7_CALL_RESULT,
+    T8_CASE_BINDER_ALIAS, T9_STORED, T10_OPAQUE_CALL, T11_ESCAPE, T14_FORCED,
+};
 
 //------------------------------------------------------------------------------
 // Rule ids
@@ -72,14 +87,6 @@ use crate::shape::value_args;
 /// `DataConInfo` (4); the *name* selects the population (6) and proves
 /// nothing about the fate.
 pub const T0_TUPLE_CON: &str = "T0-TUPLE-CON";
-/// The construction is the right-hand side of a `let` or top-level binding:
-/// the tuple's uses are the resolved occurrences of that binder.
-/// Evidence: lexical binder identity (1).
-pub const T1_LET_BOUND: &str = "T1-LET-BOUND";
-/// A use is the scrutinee of a `case` whose single alternative is a data
-/// alternative binding the tuple's fields: the tuple is taken apart here and
-/// the box does not survive the match. Evidence: structural shape (2).
-pub const T2_SCRUTINISED: &str = "T2-SCRUTINISED";
 /// …and that alternative's right-hand side is exactly its *i*-th binder: a
 /// field selection, which is how GHC desugars a lazy pattern `~(a, b)` into
 /// one selector thunk per field. Evidence: lexical identity of the returned
@@ -91,36 +98,6 @@ pub const T3_SELECTED: &str = "T3-SELECTED";
 /// resolve to the same binder; two textually equal expressions are not
 /// evidence. Evidence: lexical binder identity (1) over structural shape (2).
 pub const T4_RETUPLE: &str = "T4-RETUPLE";
-/// A use is value argument *i* of a **saturated** call to a binder bound in
-/// this module to a manifest lambda chain: the tuple flows on to the
-/// occurrences of that chain's *i*-th value parameter. Evidence: lexical
-/// identity of the callee (1) over structural shape of the call (2).
-pub const T5_PASSED_LOCAL: &str = "T5-PASSED-LOCAL";
-/// The value is the body of the innermost lambda of the manifest chain bound
-/// to a local binder `f`: it is `f`'s return value, and the flow continues at
-/// every call site of `f` in this module. Evidence: structural shape (2) over
-/// lexical identity (1).
-pub const T6_RETURNED: &str = "T6-RETURNED";
-/// …and at a call site supplying exactly the chain's parameters, the call's
-/// spine root is a value location of the same tuple. Evidence: dataflow (3)
-/// over 1 and 2.
-pub const T7_CALL_RESULT: &str = "T7-CALL-RESULT";
-/// The case binder of a scrutiny is an alias of the whole tuple; its own
-/// occurrences are followed as value locations, so a match that also keeps
-/// the boxed value cannot be mistaken for one that consumes it.
-/// Evidence: lexical binder identity (1).
-pub const T8_CASE_BINDER_ALIAS: &str = "T8-CASE-BINDER-ALIAS";
-/// A use is a value argument of a saturated data-constructor application:
-/// the tuple is stored in a field and outlives every scrutiny of it. A
-/// proven real value. Evidence: structural shape (2) over `DataConInfo` (4).
-pub const T9_STORED: &str = "T9-STORED";
-/// A use is an argument of a call this module cannot see into: an import, a
-/// class-op dispatch, a partial application, or an unknown higher-order
-/// callee. What the callee does with the tuple is outside the module, so the
-/// box has to exist — except when even the callee is unknown, which is
-/// unresolved rather than proven. Evidence: lexical identity (1), signature
-/// lookup (4).
-pub const T10_OPAQUE_CALL: &str = "T10-OPAQUE-CALL";
 /// A use is a value argument of a saturated construction of *another*
 /// tuple whose own fate is proven removable: the inner tuple is a field of
 /// a box that will not exist, so it survives exactly as long as that box's
@@ -136,18 +113,6 @@ pub const T12_NESTED: &str = "T12-NESTED";
 /// the region graph is read, not recomputed. Evidence: the Parsec proof's
 /// own level (1 over 2) for the hop, def-use (3) after it.
 pub const T13_PARSEC_CONT: &str = "T13-PARSEC-CONT";
-/// A use is the scrutinee of a `case` with a single `DEFAULT` alternative
-/// binding nothing: the tuple is *forced* and no field is read. Forcing a
-/// constructor application is a no-op, so this neither keeps the box alive
-/// nor reads it — it is recorded as a consumer that reads no field.
-/// Evidence: structural shape (2).
-pub const T14_FORCED: &str = "T14-FORCED";
-/// Any other use: the tuple applied as a function, bound to an exported
-/// binder, returned from an exported function, or reached through a closure
-/// whose call sites are not visible. Recorded with a machine-readable
-/// reason; never guessed. Evidence: structural shape (2).
-pub const T11_ESCAPE: &str = "T11-ESCAPE";
-
 /// Every consumer reads fields, and the flow never left the function the
 /// tuple was built in: the allocation can be replaced by its fields.
 /// Evidence: def-use over resolved occurrences (3).
@@ -174,46 +139,13 @@ pub const F4_PRESERVE: &str = "F4-PRESERVE";
 /// A use the rules cannot classify. Carries the reason.
 pub const F5_UNRESOLVED: &str = "F5-UNRESOLVED";
 
-// Reasons. `Preserve` reasons name what holds the tuple; `Unresolved`
-// reasons name what the rules could not follow.
-pub const R_STORED_CON: &str = "stored-in-constructor-field";
+// Reasons specific to this client; the ones every aggregate flow shares
+// live in [`crate::flow`] and are re-exported above. `Preserve` reasons
+// name what holds the tuple; `Unresolved` reasons name what the rules could
+// not follow.
 pub const R_STORED_TUPLE: &str = "stored-in-a-tuple-field";
-pub const R_IMPORTED_LAZY: &str = "passed-to-imported-lazy-parameter";
-pub const R_IMPORTED_STRICT: &str = "passed-to-imported-strict-parameter";
-pub const R_CLASS_OP: &str = "passed-through-class-op-dispatch";
-pub const R_IN_PAP: &str = "held-in-a-partial-application";
-pub const R_HIGHER_ORDER: &str = "callee-is-an-unknown-higher-order-value";
-pub const R_EXPORTED_RETURN: &str = "returned-from-an-exported-function";
-pub const R_EXPORTED_BINDING: &str = "bound-to-an-exported-binding";
 pub const R_FUNCTION_ESCAPES: &str = "returning-function-escapes-as-a-value";
 pub const R_CALL_UNDERSAT: &str = "call-site-is-a-partial-application";
-pub const R_CALL_OVERSAT: &str = "call-site-applies-past-the-return";
-pub const R_NESTED_CLOSURE: &str = "returned-from-a-closure-with-no-visible-binding";
-pub const R_CLOSURE_ARG: &str = "returned-from-a-closure-passed-to-a-local-value-callee";
-pub const R_CLOSURE_STORED: &str = "returned-from-a-closure-stored-in-a-constructor";
-pub const R_APPLIED: &str = "tuple-applied-as-a-function";
-pub const R_ALTS: &str = "case-is-not-one-tuple-alternative";
-pub const R_PAST_PARAMS: &str = "argument-lands-past-the-callee-parameters";
-pub const R_TOO_LARGE: &str = "flow-exceeded-the-location-budget";
-// Refined residuals, so the next milestone can pick each one up without
-// re-analysing. The constructor and callee names in the `detail` are
-// diagnostics; the *split* is by what kind of thing holds the closure.
-pub const R_CLOSURE_CONSED: &str = "returned-from-a-closure-consed-onto-a-list";
-pub const R_CLOSURE_ARG_IMPORTED: &str = "returned-from-a-closure-passed-to-an-imported-call";
-pub const R_CLOSURE_ARG_CLASS_OP: &str = "returned-from-a-closure-passed-to-a-class-op";
-pub const R_CLOSURE_ARG_UNKNOWN: &str =
-    "returned-from-a-closure-passed-to-an-unknown-higher-order-callee";
-pub const R_EXPORTED_WRAPPER_RETURN: &str = "returned-from-an-exported-wrapper-of-a-local-worker";
-/// The *closure* that returns the tuple is handed to a known local
-/// callee's parameter. Rewriting the tuple away changes that parameter's
-/// type, so every other closure reaching the parameter would have to be
-/// rewritten too — and this flow does not see them. Refused rather than
-/// guessed; the independent verifier refuses it for the same reason.
-pub const R_CLOSURE_INTO_PARAM: &str = "closure-returning-the-tuple-is-passed-into-a-parameter";
-/// The tuple is handed to a local callee whose parameter cannot be split:
-/// the callee is exported, or it is used somewhere as a value, so not
-/// every call site of it is visible and rewritable.
-pub const R_CALLEE_NOT_SPLITTABLE: &str = "callee-parameter-cannot-be-split";
 /// The tuple is the value argument of a proven Parsec continuation call
 /// whose target the region graph does not resolve. The detail names the
 /// edge.
@@ -231,11 +163,6 @@ pub const R_BOUNDARY_NOT_UNIFORM: &str = "boundary-not-uniform";
 
 /// …and one that a specialised clone of the callee could carry.
 pub const R_BOUNDARY_NEEDS_CLONE: &str = "boundary-needs-a-specialised-clone";
-
-/// Locations one flow may visit before it is abandoned as too large. No
-/// flow on the `-O1` dump comes anywhere near it; it exists so a pathological
-/// module degrades into an honest `Unresolved` instead of a hang.
-const LOCATION_BUDGET: usize = 20_000;
 
 /// How many times the nesting fixpoint ([`Tuples::resolve_flows`]) may go
 /// round before it is a bug. On every dump it settles in 2.
@@ -256,16 +183,6 @@ type Nested = HashMap<(ExprId, usize), NestedTarget>;
 //------------------------------------------------------------------------------
 // The proof object
 //------------------------------------------------------------------------------
-
-/// Why a verdict holds: a rule id, the nodes it read, and the binder whose
-/// identity it rests on.
-#[derive(Debug, Clone, Serialize)]
-pub struct Evidence {
-    pub rule: &'static str,
-    pub nodes: Vec<ExprId>,
-    pub binder: Option<BinderId>,
-    pub note: String,
-}
 
 /// One consumer of a tuple value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -505,71 +422,208 @@ pub struct Tuples<'m> {
     pub nesting_rounds: usize,
 }
 
-/// A location the tuple value reaches, and the accumulated verdict about it.
+/// The tuple census as a client of the [generic aggregate walk](crate::flow).
 ///
-/// A location is a node **plus the number of value arguments still owed**
-/// before the tuple appears: 0 means the node's value *is* the tuple, `k`
-/// means it is a function that returns the tuple after `k` more arguments.
-/// That is what lets the walk leave a function: ascending past a lambda
-/// raises the debt, and a call site that pays it exactly is a location of
-/// the tuple again. Keyed on the pair, since the same node can be reached
-/// with different debts.
-struct Walk {
-    work: Vec<(ExprId, u32)>,
-    seen: HashSet<(ExprId, u32)>,
-    consumers: Vec<TupleUse>,
-    evidence: Vec<Evidence>,
-    /// Escapes, as (is this a proven real value?, reason, detail, node).
-    escapes: Vec<(bool, &'static str, String, ExprId)>,
-    /// The tuple crossed a *return*: it is the result of a function whose
-    /// call sites had to be followed. Passing it into a known callee's
-    /// parameter is not that — the box still never outlives its scrutinies
-    /// — so only a return sets this.
-    returned: bool,
-    /// Local binders the flow already crossed a *return* of, innermost
-    /// first: what makes an exported return a wrapper of a local worker.
-    returned_from: Vec<BinderId>,
-    /// Constructions this tuple is a field of, with the field index.
+/// Everything generic — the worklist over value locations, the argument
+/// debt that lets the walk leave a function, the may-analysis union over
+/// call sites, the location budget — is [`crate::flow`]'s. What this adds is
+/// the four rules that are about *tuples* specifically: re-tupling
+/// ([`T4_RETUPLE`]), lazy field selection ([`T3_SELECTED`]), nesting inside
+/// another removable tuple ([`T12_NESTED`]) and the Parsec continuation hop
+/// ([`T13_PARSEC_CONT`]).
+struct TupleClient<'a, 'm> {
+    t: &'a Tuples<'m>,
+    /// Where a removable outer tuple's fields go, from the previous round
+    /// of the nesting fixpoint.
+    nested: &'a Nested,
+    /// Constructions this tuple is a field of, with the field index —
+    /// recorded whether or not the outer turned out to be removable.
     nested_in: Vec<(ExprId, u32)>,
-    locations: usize,
-    over_budget: bool,
 }
 
-impl Walk {
-    fn push(&mut self, id: ExprId, owed: u32) {
-        if self.seen.insert((id, owed)) {
-            self.work.push((id, owed));
+impl Consumer for TupleUse {
+    fn at(self) -> ExprId {
+        TupleUse::at(self)
+    }
+}
+
+impl From<FlowUse> for TupleUse {
+    fn from(u: FlowUse) -> TupleUse {
+        match u {
+            FlowUse::Scrutinised {
+                case,
+                all_fields_bound,
+            } => TupleUse::Scrutinised {
+                case,
+                all_fields_bound,
+            },
+            FlowUse::Forced { case } => TupleUse::Forced { case },
+            FlowUse::PassedTo {
+                call,
+                callee,
+                param,
+            } => TupleUse::PassedTo {
+                call,
+                callee,
+                param,
+            },
+            FlowUse::Returned { function } => TupleUse::Returned { function },
+            FlowUse::StoredIn { con } => TupleUse::StoredIn { con },
+            FlowUse::PassedToUnknown { call, why } => TupleUse::PassedToUnknown { call, why },
+            FlowUse::Escapes { at, why } => TupleUse::Escapes { at, why },
+        }
+    }
+}
+
+impl Client for TupleClient<'_, '_> {
+    type Use = TupleUse;
+
+    /// A construction that copies this binder field by field is a consumer
+    /// of it: it reads every field and allocates its own box, whose fate is
+    /// decided on its own ([`T4_RETUPLE`]).
+    fn on_binding(
+        &mut self,
+        w: &mut flow::Walk<TupleUse>,
+        _cx: &Ctx<'_, '_>,
+        b: BinderId,
+        _v: ExprId,
+        owed: u32,
+    ) {
+        if owed > 0 {
+            return;
+        }
+        for outer in self.t.copies.get(&b).into_iter().flatten() {
+            w.use_(TupleUse::Retupled { outer: *outer });
+            w.evidence.push(Evidence {
+                rule: T4_RETUPLE,
+                nodes: vec![*outer],
+                binder: Some(b),
+                note: "copied field by field into this construction".into(),
+            });
         }
     }
 
-    fn use_(&mut self, u: TupleUse) {
-        self.consumers.push(u);
-    }
-
-    /// The tuple leaves what this analysis can follow. `preserve` says
-    /// whether *where* it went proves it is a real value (a constructor
-    /// field, a callee outside the module) as opposed to merely being
-    /// unfollowable. Records the consumer and the escape together, so the
-    /// consumer list is never missing a use.
-    fn escape(&mut self, u: TupleUse, preserve: bool, why: &'static str, detail: String) {
-        let at = u.at();
-        self.consumers.push(u);
-        self.escapes.push((preserve, why, detail, at));
-    }
-
-    /// An escape with no more specific use kind ([`T11_ESCAPE`]).
-    fn escape_at(&mut self, at: ExprId, preserve: bool, why: &'static str, detail: String) {
-        self.evidence.push(Evidence {
-            rule: T11_ESCAPE,
-            nodes: vec![at],
-            binder: None,
-            note: if detail.is_empty() {
-                why.to_string()
-            } else {
-                format!("{why} ({detail})")
-            },
+    /// A field selection: the alternative returns one of its own binders,
+    /// which is how GHC desugars a lazy pattern into one selector thunk per
+    /// field ([`T3_SELECTED`]).
+    fn on_alt(
+        &mut self,
+        w: &mut flow::Walk<TupleUse>,
+        cx: &Ctx<'_, '_>,
+        case: ExprId,
+        v: ExprId,
+        alt: &h2r_core_ir::Alt,
+    ) -> bool {
+        let m = cx.m;
+        let Some(i) = m
+            .resolve(m.strip(alt.rhs))
+            .and_then(|r| alt.binders.iter().position(|x| *x == r))
+        else {
+            return false;
+        };
+        w.use_(TupleUse::Selected {
+            case,
+            field: i as u32,
         });
-        self.escape(TupleUse::Escapes { at, why }, preserve, why, detail);
+        w.evidence.push(Evidence {
+            rule: T3_SELECTED,
+            nodes: vec![case, v],
+            binder: Some(alt.binders[i]),
+            note: format!("field {i} selected"),
+        });
+        true
+    }
+
+    /// A field of another tuple: if that tuple is itself proven removable
+    /// the box holding this one will not exist, so the flow continues at the
+    /// outer's field binders ([`T12_NESTED`]). Otherwise this is an ordinary
+    /// [`T9_STORED`], with the reason split by whether the holder is a tuple.
+    fn on_stored(
+        &mut self,
+        w: &mut flow::Walk<TupleUse>,
+        _cx: &Ctx<'_, '_>,
+        root: ExprId,
+        idx: usize,
+        dc: &h2r_core_ir::DataConInfo,
+        _occ: &str,
+    ) -> Option<&'static str> {
+        let tuple_field = tuple_con(&dc.name, dc.rep_arity).is_some();
+        if tuple_field && self.t.index.contains_key(&root) {
+            self.nested_in.push((root, idx as u32));
+            if let Some(t) = self.nested.get(&(root, idx)) {
+                w.use_(TupleUse::NestedIn {
+                    outer: root,
+                    field: idx as u32,
+                });
+                w.evidence.push(Evidence {
+                    rule: T12_NESTED,
+                    nodes: vec![root],
+                    binder: None,
+                    note: format!(
+                        "field {idx} of a removable tuple: {} use(s) of that field follow",
+                        t.seeds.len()
+                    ),
+                });
+                w.returned |= t.returned;
+                for seed in &t.seeds {
+                    w.push(*seed, 0);
+                }
+                return None;
+            }
+        }
+        Some(if tuple_field {
+            R_STORED_TUPLE
+        } else {
+            R_STORED_CON
+        })
+    }
+
+    /// A continuation the Parsec proof object resolves: the tuple is the
+    /// continuation's value argument, so it lands on the value parameter of
+    /// every lambda that continuation can be ([`T13_PARSEC_CONT`]).
+    fn on_call_arg(
+        &mut self,
+        w: &mut flow::Walk<TupleUse>,
+        cx: &Ctx<'_, '_>,
+        root: ExprId,
+        idx: usize,
+        head: ExprId,
+        occ: &str,
+        owed: u32,
+    ) -> bool {
+        if owed != 0 {
+            return false;
+        }
+        let m = cx.m;
+        if let Some(params) = self.t.hops.get(&(root, idx))
+            && let Some(b) = m.resolve(m.strip(head))
+        {
+            w.use_(TupleUse::PassedTo {
+                call: root,
+                callee: b,
+                param: idx as u32,
+            });
+            w.evidence.push(Evidence {
+                rule: T13_PARSEC_CONT,
+                nodes: vec![root],
+                binder: Some(b),
+                note: format!(
+                    "the Parsec proof resolves {occ} to {} continuation lambda(s)",
+                    params.len()
+                ),
+            });
+            for p in params {
+                for o in m.occurrences(*p) {
+                    w.push(*o, 0);
+                }
+            }
+            return true;
+        }
+        if let Some(detail) = self.t.parsec_unresolved.get(&(root, idx)) {
+            w.escape_at(root, false, R_PARSEC_CONT, detail.clone());
+            return true;
+        }
+        false
     }
 }
 
@@ -649,21 +703,6 @@ impl<'m> Tuples<'m> {
 
     pub fn binder(&self, b: BinderId) -> &'m h2r_core_ir::Binder {
         self.module.binder(b)
-    }
-
-    /// Is every occurrence of `b` the head of a spine that supplies at
-    /// least `n` value arguments? If not, `b` is somewhere a *value*, and a
-    /// call site of it exists that rewriting its parameters would miss.
-    fn never_escapes(&self, b: BinderId, n: usize) -> bool {
-        let m = self.module;
-        m.occurrences(b).iter().all(|occ| {
-            let root = m.spine_root(*occ);
-            if root == *occ {
-                return false;
-            }
-            let (head, args) = m.spine(root);
-            m.strip(head) == m.strip(*occ) && value_args(&self.scope, &args).len() >= n
-        })
     }
 
     /// The flow of the construction rooted at `node`, if that node is one.
@@ -903,28 +942,20 @@ impl<'m> Tuples<'m> {
     /// the flow is a field of another tuple, i.e. whether re-running it can
     /// change anything.
     fn run_flow(&mut self, i: usize, nested: &Nested) -> bool {
-        let start = self.flows[i].construction;
-        let mut w = Walk {
-            work: vec![(start, 0)],
-            seen: HashSet::from([(start, 0)]),
-            consumers: Vec::new(),
-            evidence: Vec::new(),
-            escapes: Vec::new(),
-            returned: false,
-            returned_from: Vec::new(),
-            nested_in: Vec::new(),
-            locations: 0,
-            over_budget: false,
+        let cx = Ctx {
+            m: self.module,
+            scope: &self.scope,
+            top_pairs: &self.top_pairs,
+            start: self.flows[i].construction,
+            arity: self.flows[i].arity,
         };
-        let mut bound = None;
-        while let Some((v, owed)) = w.work.pop() {
-            w.locations += 1;
-            if w.locations > LOCATION_BUDGET {
-                w.over_budget = true;
-                break;
-            }
-            self.step(&mut w, v, owed, start, &mut bound, nested);
-        }
+        let mut client = TupleClient {
+            t: self,
+            nested,
+            nested_in: Vec::new(),
+        };
+        let w = flow::walk(&cx, &mut client);
+        let nested_in = client.nested_in;
         let (fate, reason, detail) = decide(&w);
         let base = self.flows[i]
             .evidence
@@ -933,14 +964,14 @@ impl<'m> Tuples<'m> {
             .unwrap_or(self.flows[i].evidence.len());
         let f = &mut self.flows[i];
         f.evidence.truncate(base);
-        f.bound = bound;
+        f.bound = w.bound;
         f.locations = w.locations;
         f.selected = w
             .consumers
             .iter()
             .any(|u| matches!(u, TupleUse::Selected { .. } | TupleUse::Retupled { .. }));
         f.returned = w.returned;
-        f.nested_in = w.nested_in.clone();
+        f.nested_in = nested_in;
         f.consumers = w.consumers;
         f.evidence.extend(w.evidence);
         f.fate = fate;
@@ -968,525 +999,6 @@ impl<'m> Tuples<'m> {
         });
         !f.nested_in.is_empty()
     }
-
-    /// Classify one value location: what does the context do with the value
-    /// there — the tuple itself when `owed` is 0, otherwise a function that
-    /// returns it after `owed` more arguments?
-    fn step(
-        &self,
-        w: &mut Walk,
-        v: ExprId,
-        owed: u32,
-        start: ExprId,
-        bound: &mut Option<BinderId>,
-        nested: &Nested,
-    ) {
-        let m = self.module;
-        let Some(parent) = m.parent[v as usize] else {
-            // A top-level right-hand side.
-            let Edge::Top { pair } = m.edge[v as usize] else {
-                w.escape_at(v, false, R_NESTED_CLOSURE, String::new());
-                return;
-            };
-            let b = self.top_pairs[pair as usize];
-            self.follow_binding(w, b, v, owed, start, bound, BindSite::Top);
-            return;
-        };
-        match m.edge[v as usize] {
-            // A cast or tick is the same value.
-            Edge::Cast | Edge::Tick => w.push(parent, owed),
-            // The value of the `let`/`case` is this value: keep ascending.
-            Edge::LetBody | Edge::CaseAlt { .. } => w.push(parent, owed),
-            // Ascending past a lambda: the value here is a function that
-            // returns the tuple once one more argument is supplied
-            // ([`T6_RETURNED`]).
-            Edge::LamBody => {
-                let Expr::Lam { binder, .. } = m.expr(parent) else {
-                    return;
-                };
-                let value_param = m.binder(*binder).kind != BinderKind::Tyvar;
-                w.push(parent, owed + u32::from(value_param));
-            }
-            Edge::LetRhs { pair } => {
-                let Expr::Let { bind, .. } = m.expr(parent) else {
-                    return;
-                };
-                let b = bind.pairs[pair as usize].binder;
-                self.follow_binding(w, b, v, owed, start, bound, BindSite::Let);
-            }
-            Edge::CaseScrut if owed == 0 => {
-                let arity = self.flow_at(start).map(|f| f.arity).unwrap_or(0);
-                self.scrutiny(w, parent, v, arity)
-            }
-            Edge::AppArg => self.argument(w, parent, v, owed, nested),
-            // A closure that still owes arguments is applied here: the
-            // spine that applies it pays part or all of the debt
-            // ([`T7_CALL_RESULT`]).
-            Edge::AppFun if owed > 0 => self.applied(w, v, owed),
-            // A tuple applied as a function is impossible; a closure
-            // scrutinised or handed to a callee is not followed.
-            Edge::AppFun => w.escape_at(parent, false, R_APPLIED, String::new()),
-            Edge::CaseScrut => w.escape_at(parent, false, R_NESTED_CLOSURE, String::new()),
-            Edge::Top { .. } => {}
-        }
-    }
-
-    /// A value location bound to `b`. With no debt the binder *is* the
-    /// tuple and its occurrences are tuple locations ([`T1_LET_BOUND`]);
-    /// with a debt it is a function returning it, and its occurrences are
-    /// call sites to follow ([`T6_RETURNED`]). Either way the flow is
-    /// bounded by the binder's resolved occurrences — unless the binder is
-    /// exported, when there are call sites this module cannot see.
-    #[allow(clippy::too_many_arguments)]
-    fn follow_binding(
-        &self,
-        w: &mut Walk,
-        b: BinderId,
-        v: ExprId,
-        owed: u32,
-        start: ExprId,
-        bound: &mut Option<BinderId>,
-        site: BindSite,
-    ) {
-        let m = self.module;
-        if owed == 0 && (v == start || m.strip(v) == start) {
-            *bound = Some(b);
-        }
-        if owed > 0 {
-            w.use_(TupleUse::Returned { function: b });
-        }
-        if site == BindSite::Top && m.binder(b).exported == Some(true) {
-            let worker = w.returned_from.iter().rev().find(|x| **x != b).copied();
-            let (why, detail) = match (owed, worker) {
-                (0, _) => (R_EXPORTED_BINDING, m.binder(b).occ.clone()),
-                // The tuple already crossed a *local* function's return
-                // before reaching this exported one: the exported binder is
-                // a wrapper around that worker, and resolving it needs the
-                // worker's callers, not the exported function's.
-                (_, Some(k)) => (
-                    R_EXPORTED_WRAPPER_RETURN,
-                    format!("{} of {}", m.binder(b).occ, m.binder(k).occ),
-                ),
-                _ => (R_EXPORTED_RETURN, m.binder(b).occ.clone()),
-            };
-            w.escape_at(v, false, why, detail);
-            return;
-        }
-        if owed > 0 {
-            w.returned = true;
-            w.returned_from.push(b);
-        }
-        // A construction that copies this binder field by field is a
-        // consumer of it: it reads every field and allocates its own box,
-        // whose fate is decided on its own ([`T4_RETUPLE`]).
-        if owed == 0 {
-            for outer in self.copies.get(&b).into_iter().flatten() {
-                w.use_(TupleUse::Retupled { outer: *outer });
-                w.evidence.push(Evidence {
-                    rule: T4_RETUPLE,
-                    nodes: vec![*outer],
-                    binder: Some(b),
-                    note: "copied field by field into this construction".into(),
-                });
-            }
-        }
-        w.evidence.push(Evidence {
-            rule: if owed > 0 { T6_RETURNED } else { T1_LET_BOUND },
-            nodes: vec![v],
-            binder: Some(b),
-            note: format!(
-                "{} {} with {} occurrence(s)",
-                if owed > 0 {
-                    format!("returned from (after {owed} more argument(s))")
-                } else {
-                    "bound to".to_string()
-                },
-                m.binder(b).occ,
-                m.occurrences(b).len()
-            ),
-        });
-        for occ in m.occurrences(b) {
-            w.push(*occ, owed);
-        }
-    }
-
-    /// The closure at `v` (owing `owed` arguments before it returns the
-    /// tuple) is in the head position of an application spine.
-    fn applied(&self, w: &mut Walk, v: ExprId, owed: u32) {
-        let m = self.module;
-        let root = m.spine_root(v);
-        let (_, args) = m.spine(root);
-        let n = value_args(&self.scope, &args).len() as u32;
-        match n.cmp(&owed) {
-            std::cmp::Ordering::Equal => {
-                w.evidence.push(Evidence {
-                    rule: T7_CALL_RESULT,
-                    nodes: vec![root],
-                    binder: None,
-                    note: format!("{n} argument(s) supplied: the call result is the tuple"),
-                });
-                w.push(root, 0);
-            }
-            // Still a function: a partial application, which is a value
-            // holding the tuple's eventual producer. Keep following it.
-            std::cmp::Ordering::Less => w.push(root, owed - n),
-            std::cmp::Ordering::Greater => {
-                w.escape_at(root, false, R_CALL_OVERSAT, format!("{n} of {owed}"))
-            }
-        }
-    }
-
-    /// `case t of …` ([`T2_SCRUTINISED`] / [`T3_SELECTED`]).
-    fn scrutiny(&self, w: &mut Walk, case: ExprId, v: ExprId, arity: u32) {
-        let m = self.module;
-        let Expr::Case {
-            binder, alts, ty, ..
-        } = m.expr(case)
-        else {
-            return;
-        };
-        let _ = ty;
-        // The case binder is an alias of the whole tuple: follow it too, so
-        // a match that also keeps the box is not mistaken for one that
-        // consumes it ([`T8_CASE_BINDER_ALIAS`]).
-        if !m.occurrences(*binder).is_empty() {
-            w.evidence.push(Evidence {
-                rule: T8_CASE_BINDER_ALIAS,
-                nodes: vec![case],
-                binder: Some(*binder),
-                note: format!(
-                    "case binder {} aliases the tuple ({} occurrence(s))",
-                    m.binder(*binder).occ,
-                    m.occurrences(*binder).len()
-                ),
-            });
-            for occ in m.occurrences(*binder) {
-                w.push(*occ, 0);
-            }
-        }
-        // A value of tuple type has exactly one constructor, so a `case` on
-        // it that is not one data alternative is either forcing-only (a
-        // `DEFAULT` alternative) or an empty case on a diverging scrutinee.
-        // Neither reads a field; neither is what the scalar-replacement
-        // rules are about, so it is reported rather than assumed benign.
-        // Forcing the whole tuple without reading a field: a no-op on a
-        // constructor application, and no field is read ([`T14_FORCED`]).
-        if alts.len() == 1 && matches!(alts[0].con, AltCon::Default) && alts[0].binders.is_empty() {
-            w.use_(TupleUse::Forced { case });
-            w.evidence.push(Evidence {
-                rule: T14_FORCED,
-                nodes: vec![case, v],
-                binder: None,
-                note: "forced whole; no field read".into(),
-            });
-            return;
-        }
-        let Some(alt) = alts.first().filter(|a| {
-            alts.len() == 1
-                && matches!(a.con, AltCon::DataAlt { .. })
-                && a.binders.len() == arity as usize
-        }) else {
-            w.escape_at(
-                case,
-                false,
-                R_ALTS,
-                format!("{} alternative(s)", alts.len()),
-            );
-            return;
-        };
-        // A field selection: the alternative returns one of its own binders.
-        let projected = m
-            .resolve(m.strip(alt.rhs))
-            .and_then(|r| alt.binders.iter().position(|x| *x == r));
-        match projected {
-            Some(i) => {
-                w.use_(TupleUse::Selected {
-                    case,
-                    field: i as u32,
-                });
-                w.evidence.push(Evidence {
-                    rule: T3_SELECTED,
-                    nodes: vec![case, v],
-                    binder: Some(alt.binders[i]),
-                    note: format!("field {i} selected"),
-                });
-            }
-            None => {
-                w.use_(TupleUse::Scrutinised {
-                    case,
-                    all_fields_bound: !alt.binders.is_empty(),
-                });
-                w.evidence.push(Evidence {
-                    rule: T2_SCRUTINISED,
-                    nodes: vec![case, v],
-                    binder: None,
-                    note: format!("{} field binder(s) bound", alt.binders.len()),
-                });
-            }
-        }
-    }
-
-    /// The value at `v` — the tuple when `owed` is 0, otherwise a closure
-    /// that returns it — is a value argument of the spine `app` sits in.
-    fn argument(&self, w: &mut Walk, app: ExprId, v: ExprId, owed: u32, nested: &Nested) {
-        let m = self.module;
-        let root = m.spine_root(app);
-        let (head, args) = m.spine(root);
-        let vargs = value_args(&self.scope, &args);
-        let Some(idx) = vargs.iter().position(|a| *a == v) else {
-            return; // a type argument: not a value flow
-        };
-        let occ = match m.expr(head) {
-            Expr::Var { occ, .. } => occ.clone(),
-            _ => String::new(),
-        };
-        let sig = self.scope.head_sig(head);
-
-        // Stored in a constructor field. With no debt that is the tuple
-        // itself: a real allocation holds it, which is the strongest
-        // `Preserve` evidence there is. With a debt it is the *closure*
-        // that is stored, and whoever pulls it back out and calls it is not
-        // visible from here.
-        if let Some(dc) = sig.and_then(|s| s.data_con) {
-            if vargs.len() < dc.rep_arity as usize {
-                w.escape(
-                    TupleUse::PassedToUnknown {
-                        call: root,
-                        why: R_IN_PAP,
-                    },
-                    owed == 0,
-                    R_IN_PAP,
-                    occ,
-                );
-                return;
-            }
-            if owed > 0 {
-                // The *closure* is stored. Split by what holds it, so the
-                // residual says which whole-program fact would resolve it.
-                let why = if is_list_cons(&dc.name) {
-                    R_CLOSURE_CONSED
-                } else {
-                    R_CLOSURE_STORED
-                };
-                w.escape_at(root, false, why, occ);
-                return;
-            }
-            let tuple_field = tuple_con(&dc.name, dc.rep_arity).is_some();
-            // A field of another tuple: if that tuple is itself proven
-            // removable the box holding this one will not exist, so the
-            // flow continues at the outer's field binders ([`T12_NESTED`]).
-            if tuple_field && self.index.contains_key(&root) {
-                w.nested_in.push((root, idx as u32));
-                if let Some(t) = nested.get(&(root, idx)) {
-                    w.use_(TupleUse::NestedIn {
-                        outer: root,
-                        field: idx as u32,
-                    });
-                    w.evidence.push(Evidence {
-                        rule: T12_NESTED,
-                        nodes: vec![root],
-                        binder: None,
-                        note: format!(
-                            "field {idx} of a removable tuple: {} use(s) of that field follow",
-                            t.seeds.len()
-                        ),
-                    });
-                    w.returned |= t.returned;
-                    for seed in &t.seeds {
-                        w.push(*seed, 0);
-                    }
-                    return;
-                }
-            }
-            w.evidence.push(Evidence {
-                rule: T9_STORED,
-                nodes: vec![root],
-                binder: None,
-                note: format!("field {idx} of {occ}"),
-            });
-            w.escape(
-                TupleUse::StoredIn { con: root },
-                true,
-                if tuple_field {
-                    R_STORED_TUPLE
-                } else {
-                    R_STORED_CON
-                },
-                occ,
-            );
-            return;
-        }
-
-        // A continuation the Parsec proof object resolves: the tuple is
-        // the continuation's value argument, so it lands on the value
-        // parameter of every lambda that continuation can be
-        // ([`T13_PARSEC_CONT`]).
-        if owed == 0 {
-            if let Some(params) = self.hops.get(&(root, idx))
-                && let Some(b) = m.resolve(m.strip(head))
-            {
-                {
-                    w.use_(TupleUse::PassedTo {
-                        call: root,
-                        callee: b,
-                        param: idx as u32,
-                    });
-                    w.evidence.push(Evidence {
-                        rule: T13_PARSEC_CONT,
-                        nodes: vec![root],
-                        binder: Some(b),
-                        note: format!(
-                            "the Parsec proof resolves {occ} to {} continuation lambda(s)",
-                            params.len()
-                        ),
-                    });
-                    for p in params {
-                        for o in m.occurrences(*p) {
-                            w.push(*o, 0);
-                        }
-                    }
-                    return;
-                }
-            }
-            if let Some(detail) = self.parsec_unresolved.get(&(root, idx)) {
-                w.escape_at(root, false, R_PARSEC_CONT, detail.clone());
-                return;
-            }
-        }
-
-        // A call to something bound in this module to a manifest lambda
-        // chain: the argument lands on a parameter whose occurrences are
-        // the next value locations — with the same debt it arrived with.
-        if let Some(bi) = m.binding_of(head)
-            && matches!(bi.site, BindSite::Let | BindSite::Top)
-            && let Some(rhs) = bi.rhs
-        {
-            let params = manifest_params(m, rhs);
-            if !params.is_empty() {
-                if vargs.len() < params.len() {
-                    w.escape(
-                        TupleUse::PassedToUnknown {
-                            call: root,
-                            why: R_IN_PAP,
-                        },
-                        owed == 0,
-                        R_IN_PAP,
-                        occ,
-                    );
-                    return;
-                }
-                if idx >= params.len() {
-                    w.escape(
-                        TupleUse::PassedToUnknown {
-                            call: root,
-                            why: R_PAST_PARAMS,
-                        },
-                        false,
-                        R_PAST_PARAMS,
-                        occ,
-                    );
-                    return;
-                }
-                if owed > 0 {
-                    // A *closure* that returns the tuple, handed to a
-                    // parameter. Removing the tuple changes that
-                    // parameter's representation, and the other closures
-                    // that reach it are not in this flow.
-                    w.escape_at(root, false, R_CLOSURE_INTO_PARAM, occ);
-                    return;
-                }
-                // Splitting the parameter rewrites every call site of the
-                // callee, so they all have to be visible and be calls.
-                if m.binder(bi.binder).exported == Some(true)
-                    || !self.never_escapes(bi.binder, params.len())
-                {
-                    w.escape_at(root, false, R_CALLEE_NOT_SPLITTABLE, occ);
-                    return;
-                }
-                let p = params[idx];
-                w.use_(TupleUse::PassedTo {
-                    call: root,
-                    callee: bi.binder,
-                    param: idx as u32,
-                });
-                w.evidence.push(Evidence {
-                    rule: T5_PASSED_LOCAL,
-                    nodes: vec![root],
-                    binder: Some(p),
-                    note: format!(
-                        "argument {idx} of the saturated call to {}; follows parameter {} (debt {owed})",
-                        occ,
-                        m.binder(p).occ
-                    ),
-                });
-                for o in m.occurrences(p) {
-                    w.push(*o, owed);
-                }
-                return;
-            }
-        }
-
-        // Everything else: the callee is opaque ([`T10_OPAQUE_CALL`]). A
-        // tuple handed to code outside the module has to exist; a *closure*
-        // handed out says nothing about the tuple it will return, so that
-        // is unresolved rather than proven.
-        if owed > 0 {
-            let why = match sig {
-                Some(s) if s.is_class_op => R_CLOSURE_ARG_CLASS_OP,
-                Some(s) if s.sig_arity() > 0 && m.binding_of(head).is_none() => {
-                    R_CLOSURE_ARG_IMPORTED
-                }
-                _ if m.binding_of(head).is_some() => R_CLOSURE_ARG,
-                _ => R_CLOSURE_ARG_UNKNOWN,
-            };
-            w.escape_at(root, false, why, occ);
-            return;
-        }
-        let (preserve, why) = match sig {
-            Some(s) if s.is_class_op => (true, R_CLASS_OP),
-            Some(s) if s.sig_arity() > 0 && m.binding_of(head).is_none() => {
-                match s.dmd_args.get(idx) {
-                    Some(d) if d.strict => (true, R_IMPORTED_STRICT),
-                    _ => (true, R_IMPORTED_LAZY),
-                }
-            }
-            _ => (false, R_HIGHER_ORDER),
-        };
-        w.evidence.push(Evidence {
-            rule: T10_OPAQUE_CALL,
-            nodes: vec![root],
-            binder: None,
-            note: format!("argument {idx} of {occ}: {why}"),
-        });
-        w.escape(
-            TupleUse::PassedToUnknown { call: root, why },
-            preserve,
-            why,
-            occ,
-        );
-    }
-}
-
-/// Is this stable name the list cons constructor? A diagnostic split of
-/// the residual only: no fate depends on it.
-fn is_list_cons(name: &str) -> bool {
-    matches!(
-        split_stable_name(name),
-        Some(("ghc-prim", "GHC.Types", ":"))
-    )
-}
-
-/// Value parameters of the manifest lambda chain at `rhs`, in order.
-fn manifest_params(m: &Module, rhs: ExprId) -> Vec<BinderId> {
-    let mut out = Vec::new();
-    let mut cur = m.strip(rhs);
-    while let Expr::Lam { binder, body } = m.expr(cur) {
-        if m.binder(*binder).kind != BinderKind::Tyvar {
-            out.push(*binder);
-        }
-        cur = m.strip(*body);
-    }
-    out
 }
 
 /// The fate, from the accumulated uses. Precedence, so that every
@@ -1496,7 +1008,7 @@ fn manifest_params(m: &Module, rhs: ExprId) -> Vec<BinderId> {
 /// 2. then anything the rules could not follow;
 /// 3. then the three plumbing fates, by whether the tuple crossed a return
 ///    and by how its fields are read.
-fn decide(w: &Walk) -> (TupleFate, Option<&'static str>, String) {
+fn decide(w: &flow::Walk<TupleUse>) -> (TupleFate, Option<&'static str>, String) {
     if w.over_budget {
         return (TupleFate::Unresolved, Some(R_TOO_LARGE), String::new());
     }

@@ -34,6 +34,11 @@
 //! the callee to be visible and rewritable. So a callee that is exported,
 //! or that escapes as a value anywhere in the module (handed to `map`,
 //! stored in a constructor), is refused here.
+//!
+//! **This module does not use [`crate::flow`], and must not.** The generic
+//! aggregate walk *is* the census' walk with the tuple-specific rules lifted
+//! out; re-deriving a verdict with it would only re-run the analysis being
+//! checked. The only thing this module shares with the census is the IR.
 
 use std::collections::{HashMap, HashSet};
 

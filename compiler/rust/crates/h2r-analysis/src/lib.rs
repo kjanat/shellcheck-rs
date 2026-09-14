@@ -2,6 +2,7 @@
 
 pub mod boundary;
 pub mod callee;
+pub mod flow;
 pub mod laziness;
 pub mod link;
 pub mod metrics;
