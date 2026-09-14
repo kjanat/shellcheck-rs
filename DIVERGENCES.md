@@ -353,3 +353,13 @@ Kept so a reader can tell a closed entry from a missed one.
 - `[ c -o]` — `readAndOrOp` is `try $ string op` with no word boundary asked
   for; `condSpacing True` is what reports the missing space (SC1035) once the
   operator has been read.
+- `x<<""` then a line and nothing more — `rawLine` takes the line feed with the
+  line and `isEof` is asked afterwards, so the empty remainder past the last
+  line feed is not a line of its own and an empty end token is never found
+  there. The port terminated the document on it.
+- `if e;#shellcheck source=b` then `coproc while[` — `withAnnotations` is the
+  same `parsecBracket` as `called`, on the same context stack: the frame it
+  pushes takes a pop with it on the way out, and that pop removes whatever is
+  on top, which after a production below failed and left its frame there is not
+  its own. A directive in front of a command therefore changes which frame
+  SC1073 names. The port kept its annotation frames on a stack of their own.

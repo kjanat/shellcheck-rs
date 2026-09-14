@@ -859,9 +859,21 @@ impl Parser {
         let from = self.ann_contexts.len();
         let start_idx = self.idx;
         self.push_disables(anns);
+        // `withContext (ContextAnnotation ..)` is the same `parsecBracket` as
+        // `called`: the frame goes on the one context stack, and the pop it
+        // takes on the way out removes whatever is on top -- which, after a
+        // production below failed and left its own frame there, is not this
+        // one. That shift is the whole difference a directive in front of a
+        // command makes to what SC1073 names.
+        if !anns.is_empty() {
+            self.push_ctx("");
+        }
         let r = f(self);
         if r.is_ok() || self.idx == start_idx {
             self.ann_contexts.truncate(from);
+            if !anns.is_empty() {
+                self.pop_ctx();
+            }
         }
         r
     }
@@ -891,7 +903,10 @@ impl Parser {
         // live one, when nothing committed). Haskell has the innermost context
         // first; ours has it last.
         let stack = self.frozen_contexts.as_ref().unwrap_or(&self.contexts);
-        let mut inner = stack.iter().rev();
+        // `[(pos, str) | ContextName pos str <- list]`: an annotation frame
+        // occupies a place on the stack -- and takes a pop with it -- but is
+        // not a production anything can be said to be inside of.
+        let mut inner = stack.iter().rev().filter(|c| !c.name.is_empty());
         if let Some(c) = inner.next() {
             out.push(ParseNote {
                 start: c.pos.clone(),

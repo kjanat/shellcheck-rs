@@ -2388,7 +2388,12 @@ impl Parser {
                 self.bump();
                 line.push(c);
             }
-            let at_eof = self.char('\n').is_err();
+            // `rawLine` takes the line feed with the line, and `isEof` is asked
+            // afterwards: the empty remainder past the last line feed is not a
+            // line of its own, so a `<<""` whose body ends with one is still
+            // unterminated.
+            let _ = self.char('\n');
+            let at_eof = self.eof();
             let (is_end, was_warned) = self.check_here_doc_end(hd, &line, &line_pos);
             warned = warned || was_warned;
             if is_end {
