@@ -1,0 +1,60 @@
+# Project toolchain, managed by mise (https://mise.jdx.dev).
+#
+# Versions are "latest" so `mise up` tracks upstream; mise records exact
+# resolved versions in mise.lock. This repo hosts the Haskell ShellCheck
+# oracle, the Rust port + its workspace, and the Python conformance harness,
+# so all three toolchains live here.
+#
+# Do not delete this file: it is the single source of truth for the project's
+# tools and is checked into the repo.
+
+min_version = "2026.7.3"
+
+[tools]
+# rustfmt is needed by dprint (it formats .rs via rustfmt); clippy by `cargo lint`.
+cabal  = "latest"                                                    # Haskell build tool for the oracle (Aqua backend)
+dprint = "latest"                                                    # formatter
+ghc    = "latest"                                                    # GHC 9.x via GHCup; mise's default ghc backend caps at 8.10.7
+ghcup  = "latest"                                                    # GHCup itself, so the compiler is reproducible
+python = "latest"                                                    # conformance harness (rust/harness/*.py)
+rust   = { version = "latest", components = ["rustfmt", "clippy"] }  # Rust port (edition 2024)
+tombi  = "latest"                                                    # TOML toolkit (format/lint)
+
+[tool_alias]
+ghc = "mise-ghcup:ghc"
+
+[plugins]
+"vfox-backend:mise-ghcup" = "https://github.com/wasp-lang/mise-ghcup.git"
+
+[settings]
+# Backend plugins are experimental, so they must be enabled explicitly.
+experimental = true
+
+[tasks]
+[tasks.fmt]
+alias = "f"
+tools = { tombi = "latest" }
+run   = "dprint fmt"
+
+# --- Refactor safety net -----------------------------------------------------
+# The oracle answers "does the port agree with ShellCheck?". These three answer
+# the questions a refactor asks instead: did anything change, is any of it
+# untested, and would the tests have noticed?
+
+# Characterization: fail if the port's own output moved anywhere in the corpus.
+# Needs no oracle. `mise run snapshot -- --write` re-freezes it.
+[tasks.snapshot]
+run = "cargo conformance-snapshot"
+
+# What the snapshot corpus actually exercises, per file.
+[tasks.coverage]
+run = [
+  "cargo llvm-cov clean --workspace",
+  "cargo llvm-cov --no-report run --release -p conformance -- snapshot",
+  "cargo llvm-cov report --release --summary-only",
+]
+
+# Whether the tests would catch a behaviour change at all. Scope it to the file
+# being worked on: `mise run mutants -- --file rust/crates/shellcheck-rs/src/cfg.rs`.
+[tasks.mutants]
+run = "cargo mutants"

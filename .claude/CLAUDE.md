@@ -32,19 +32,19 @@ ShellCheck processes shell scripts in three stages:
 
 ### Key source files
 
-| File | Purpose |
-|---|---|
-| `src/ShellCheck/AST.hs` | Token type definitions (the AST node types) |
-| `src/ShellCheck/ASTLib.hs` | Helpers for working with AST nodes (e.g. `getLiteralString`) |
-| `src/ShellCheck/Analytics.hs` | Main analysis: `treeChecks` and `nodeChecks` lists |
-| `src/ShellCheck/AnalyzerLib.hs` | Shared utilities for check authors (`warn`, `err`, `style`, etc.) |
-| `src/ShellCheck/Checks/Commands.hs` | Per-command checks (dispatched by command name) |
-| `src/ShellCheck/Checks/ShellSupport.hs` | Shell-specific checks (dispatched by shell dialect) |
-| `src/ShellCheck/Checks/ControlFlow.hs` | Control-flow / CFG-based checks |
-| `src/ShellCheck/CFG.hs`, `CFGAnalysis.hs` | Control-flow graph construction and analysis |
-| `src/ShellCheck/Parser.hs` | The Parsec-based shell parser |
-| `src/ShellCheck/Interface.hs` | Public API types (`CheckResult`, `PositionedComment`, etc.) |
-| `src/ShellCheck/Debug.hs` | Dev helpers: `stringToAst`, `shellcheckString`, etc. |
+| File                                      | Purpose                                                           |
+| ----------------------------------------- | ----------------------------------------------------------------- |
+| `src/ShellCheck/AST.hs`                   | Token type definitions (the AST node types)                       |
+| `src/ShellCheck/ASTLib.hs`                | Helpers for working with AST nodes (e.g. `getLiteralString`)      |
+| `src/ShellCheck/Analytics.hs`             | Main analysis: `treeChecks` and `nodeChecks` lists                |
+| `src/ShellCheck/AnalyzerLib.hs`           | Shared utilities for check authors (`warn`, `err`, `style`, etc.) |
+| `src/ShellCheck/Checks/Commands.hs`       | Per-command checks (dispatched by command name)                   |
+| `src/ShellCheck/Checks/ShellSupport.hs`   | Shell-specific checks (dispatched by shell dialect)               |
+| `src/ShellCheck/Checks/ControlFlow.hs`    | Control-flow / CFG-based checks                                   |
+| `src/ShellCheck/CFG.hs`, `CFGAnalysis.hs` | Control-flow graph construction and analysis                      |
+| `src/ShellCheck/Parser.hs`                | The Parsec-based shell parser                                     |
+| `src/ShellCheck/Interface.hs`             | Public API types (`CheckResult`, `PositionedComment`, etc.)       |
+| `src/ShellCheck/Debug.hs`                 | Dev helpers: `stringToAst`, `shellcheckString`, etc.              |
 
 ### Adding a check
 
@@ -77,3 +77,106 @@ Always use the sugared pattern aliases when matching or constructing AST nodes, 
 - Account for equivalent command forms (e.g. `echo > foo bar` vs `echo bar > foo`).
 - Always verify `cabal test` passes cleanly.
 - Verify new and modified checks end-to-end via `cabal run shellcheck - <<< 'bad code'` (or `./quickrun`) to confirm the warning fires as expected.
+
+## Rust port (`rust/`)
+
+A structural port of the Haskell code lives in the `rust/` workspace and is
+gated against the Haskell binary as an oracle. Toolchain via `mise` (`mise.toml`).
+
+```sh
+cargo lint                                   # clippy, -D warnings; must be clean
+mise run fmt                                 # dprint; run before committing
+cargo test --workspace                       # prop_ tests ported from the Haskell
+cargo build --release                        # target/release/rshellcheck
+
+# Conformance, both against the Haskell binary as an oracle:
+cargo run --release -p conformance -- gate --oracle .cache/shellcheck-oracle
+cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle
+
+# External validity: both tools against the shells themselves (bash, dash,
+# ksh93, busybox sh via `-n`). Needs those interpreters installed; a missing
+# one is reported, never silently skipped.
+cargo run --release -p conformance -- shells --iterations 300
+
+# Where the port rewinds over a commitment instead of using a `try`. Needs no
+# oracle, but does need a debug build: the instrumentation is behind
+# debug_assertions, so do NOT pass --release.
+cargo conformance-audit
+
+# Refactor safety net (no oracle needed). See "Before refactoring" below.
+mise run snapshot          # did any observable behaviour change? (--write to re-freeze)
+mise run coverage          # what the snapshot corpus exercises, per file
+mise run mutants -- --file rust/crates/shellcheck-rs/src/cfg.rs
+```
+
+`cargo conformance-*` aliases live in `.cargo/config.toml`; everything runs from
+the repository root, which is the Cargo workspace root (`members = ["rust/crates/*"]`).
+
+In CI every finding is also printed as a GitHub Actions workflow command, so a
+divergence becomes an annotation on the run instead of a line in a log nobody
+opens: `error` for a divergence, `warning` for an input the oracle crashed on,
+`notice` for a sanctioned deviation and for the summary. A *gate* divergence
+annotates the `prop_` that produced it, by file and line in `src/ShellCheck/`
+(a test pins every one of the 2026 paths and lines, because an annotation on
+the wrong line blames code that is fine); a *fuzz* divergence carries its
+shrunk reproducer instead, since the input exists nowhere. The counts also go
+to `$GITHUB_OUTPUT` and the job summary. There is no flag: the
+[`actions-rs`](https://crates.io/crates/actions-rs) crate decides, from
+`GITHUB_ACTIONS`, whether a run is in CI, and escaping (`%`, CR, LF
+everywhere; `:` and `,` inside properties) and the `line`/`col` property
+spelling are its problem rather than ours. Do not confuse it with the archived
+`actions-rs/*` GitHub Actions org — different thing, unrelated.
+
+`gate` takes the shell script out of every `prop_` property in
+`src/ShellCheck/**/*.hs` that has one (extracted from the sources at run time,
+so there is no corpus file to go stale) and runs it through both tools' full
+pipeline, comparing the whole json1 payload. It must stay at 0 divergences.
+
+Two things it is not. It does not call the helper the property called
+(`verifyTree`, `verifyCodes`, …), so it is a corpus *derived from* the upstream
+properties rather than an execution of them. And it covers only the properties
+with an extractable script — 2026 of 2252 definitions, the count its own banner
+prints; the other 226 test the Fixer, the Checker's IO, `ASTLib` helpers and the
+like, and have no shell to replay. (2252 definitions, 2238 distinct names: a
+dozen names are defined in two modules, and both are replayed.)
+
+`fuzz` runs the same comparison over generated and mutated shell; it is the only
+one of the two that can say anything about parity, because `gate` only ever
+covers what upstream already wrote a test for. A green `gate` with a divergent
+`fuzz` means the port is incomplete, not correct.
+
+Layout mirrors the Haskell modules one-to-one: `ast_lib.rs` = `ASTLib.hs`,
+`data.rs` = `Data.hs`, `parser/` = `Parser.hs`, `analytics/` = `Analytics.hs`,
+`checks/commands/` = `Checks/Commands.hs`, `checks/shell_support.rs` =
+`Checks/ShellSupport.hs`. A check keeps its Haskell shape: a plain fn, a
+`CommandCheck::new(Basename("x"), ..)`, or a `ForShell::new(&[Shell::Sh], ..)`.
+Rules for every change there: one definition per helper (grep before adding
+one), no blanket `#![allow(..)]`, every touched file clippy-clean, and a check
+is only registered once both conformance commands agree about its codes.
+
+### Before refactoring
+
+The safety net today is that structure: the port reads like the Haskell, so a
+divergence can be traced to a line in `Parser.hs`, and an invented condition
+stands out as one. A refactor to idiomatic Rust gives that up, and then three
+instruments are all that is left.
+
+| Instrument | Question it answers                            |
+| ---------- | ---------------------------------------------- |
+| `snapshot` | Did any observable output change, anywhere?    |
+| `coverage` | Which code does the corpus actually reach?     |
+| `mutants`  | Would the tests have noticed if it were wrong? |
+
+`snapshot` is what a refactor is gated on, and it is deliberately *not* a
+comparison against the oracle: the port still diverges in places
+(`DIVERGENCES.md`), so "still diverges identically" is success, and only a
+record of the port's own behaviour can express that. `rust/snapshot.txt` holds
+one line per input (2026 property scripts + 2000 generated, each checked in all
+six dialect settings); the output hash decides the comparison, the codes, spans
+and message hash beside it make the diff readable. Every `--write` claims that a
+behaviour change was intended, so its diff belongs in the commit causing it.
+
+`coverage` reports what that corpus reaches: 85.1% of regions and 84.7% of lines
+of `shellcheck-rs`, against 82.7% for the unit tests alone. `mutants` answers
+what coverage cannot -- 7499 mutants workspace-wide, so run it scoped or
+sharded, and treat each survivor as a place the refactor could break silently.

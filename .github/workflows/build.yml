@@ -1,7 +1,21 @@
 name: Build ShellCheck
 
-# Run this workflow every time a new commit pushed to your repository
-on: [push, pull_request]
+on:
+  push:
+    branches: [master]
+    tags: ["*"]
+  pull_request:
+    paths:
+      - "src/**"
+      - "shellcheck.hs"
+      - "ShellCheck.cabal"
+      - "setgitversion"
+      - "builders/**"
+      - ".prepare_deploy"
+      - ".github_deploy"
+      - ".multi_arch_docker"
+
+concurrency: { group: "build-${{ github.ref }}", cancel-in-progress: true }
 
 jobs:
   package_source:
@@ -15,19 +29,14 @@ jobs:
           sudo apt-get install cabal-install
 
       - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
 
       - name: Deduce tags
         run: |
           mkdir source
           echo "latest" > source/tags
-          if tag=$(git describe --exact-match --tags)
-          then
-            echo "stable" >> source/tags
-            echo "$tag" >> source/tags
-          fi
+          if tag="$(git describe --exact-match --tags)"; then { echo "stable"; echo "${tag}"; } >> source/tags; fi
           cat source/tags
 
       - name: Package Source
@@ -38,9 +47,7 @@ jobs:
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
-        with:
-          name: source
-          path: source/
+        with: &Source { name: source, path: source/ }
 
   run_tests:
     name: Run tests (GHC ${{ matrix.ghc }})
@@ -48,62 +55,87 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        ghc: ['8.0', '8.10', '9.0.1', '9.4.7', '9.6.6', 'latest']
-        include:
-          - ghc: 'latest'
-            cabal_flags: '--allow-newer'
-      # If one version fails, we still want the status of the others
+        ghc: ["8.0", "8.10", "9.0.1", "9.4.7", "9.6.6", "latest"]
+        include: [{ ghc: "latest", cabal_flags: "--allow-newer" }]
       fail-fast: false
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v8
-        with:
-          name: source
-          path: source/
+        with: *Source
 
       - name: Setup Haskell
+        id: haskell
         uses: haskell-actions/setup@v2
-        with:
-          ghc-version: ${{ matrix.ghc }}
+        with: { ghc-version: "${{ matrix.ghc }}" }
 
       - name: Unpack source
-        run: |
-          cd source
-          tar xvf source.tar.gz --strip-components=1
+        working-directory: source
+        run: tar xvf source.tar.gz --strip-components=1
+
+      - name: Plan test build
+        working-directory: source
+        run: "cabal build test-shellcheck --enable-tests --dry-run ${{ matrix.cabal_flags }}"
+
+      - name: Cache Haskell build
+        uses: actions/cache@v6
+        env:
+          CACHE_PREFIX: "${{ runner.os }}-${{ runner.arch }}-cabal-tests-${{ steps.haskell.outputs.ghc-version }}-${{ steps.haskell.outputs.cabal-version }}-${{ matrix.cabal_flags }}"
+        with:
+          path: |
+            ${{ steps.haskell.outputs.cabal-store }}
+            source/dist-newstyle
+          key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('source/dist-newstyle/cache/plan.json') }}-${{ hashFiles('source/ShellCheck.cabal', 'source/cabal.project*', 'source/src/**', 'source/*.hs', 'source/test/**') }}
+          restore-keys: |
+            ${{ env.CACHE_PREFIX }}-${{ hashFiles('source/dist-newstyle/cache/plan.json') }}-
+            ${{ env.CACHE_PREFIX }}-
 
       - name: Build and run tests
-        run: |
-          cd source
-          cabal test ${{ matrix.cabal_flags }}
+        working-directory: source
+        run: "cabal test ${{ matrix.cabal_flags }}"
 
   build_source:
     name: Build
     needs: package_source
-    strategy:
-      matrix:
-        build: [linux.x86_64, linux.aarch64, linux.armv6hf, linux.riscv64, darwin.x86_64, darwin.aarch64, windows.x86_64]
+    strategy: { matrix: { build: [linux.x86_64, linux.aarch64, linux.armv6hf, linux.riscv64, darwin.x86_64, darwin.aarch64, windows.x86_64] } }
     runs-on: ubuntu-latest
+    env: { BUILDER: "${{ matrix.build }}", BUILDER_DIR: "bin/${{ matrix.build }}" }
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
-        with:
-          name: source
-          path: source/
+        with: *Source
+
+      - name: Delete unnecessary files
+        background: true
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" \
+            2>/dev/null || true
+
+      - name: Prune Docker images
+        background: true
+        run: sudo docker image prune --all --force 2>/dev/null || true
+
+      - name: Create bin directory
+        run: mkdir -p "${BUILDER_DIR}"
 
       - name: Build source
-        run: |
-          mkdir -p bin
-          mkdir -p bin/${{matrix.build}}
-          ( cd bin && ../builders/run_builder ../source/source.tar.gz ../builders/${{matrix.build}} )
+        working-directory: bin
+        run: ( ../builders/run_builder ../source/source.tar.gz ../builders/"${BUILDER}" )
+
+      - name: Show disk space
+        run: df -h /
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
-        with:
-          name: ${{matrix.build}}.bin
-          path: bin/
+        with: { name: "${{ matrix.build }}.bin", path: bin/ }
 
   package_binary:
     name: Package Binaries
@@ -111,7 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -120,60 +152,58 @@ jobs:
         run: find .
 
       - name: Work around GitHub permissions bug
-        run: chmod +x *.bin/*/shellcheck*
+        run: chmod +x ./*.bin/*/shellcheck*
 
       - name: Package binaries
         run: |
-          export TAGS="$(cat source/tags)"
+          TAGS="$(cat source/tags)"
+          export TAGS
           mkdir -p deploy
-          cp -r *.bin/* deploy
+          cp -R ./*.bin/* deploy
           cd deploy
           ../.prepare_deploy
-          rm -rf */ README* LICENSE*
+          rm -rf ./*/ ./README* ./LICENSE*
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
-        with:
-          name: deploy
-          path: deploy/
+        with: &Deploy { name: deploy, path: deploy/ }
 
   deploy:
-    if: github.event_name == 'push'
+    # Only the canonical upstream repository has the `latest` GitHub release and
+    # the Docker Hub secrets this job needs; on a fork `.github_deploy` aborts at
+    # `hub release show latest` (exit 1). Skip deploy anywhere but upstream.
+    if: github.event_name == 'push' && github.repository == 'koalaman/shellcheck'
     name: Deploy binaries
     needs: package_binary
     runs-on: ubuntu-latest
     environment: Deploy
     steps:
       - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install hub
+        run: sudo apt-get update && sudo apt-get install hub
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download artifacts (source)
         uses: actions/download-artifact@v8
-        with:
-          name: source
-          path: source/
+        with: *Source
 
       - name: Download artifacts (binaries)
         uses: actions/download-artifact@v8
-        with:
-          name: deploy
-          path: deploy/
+        with: *Deploy
+
+      - name: Tags
+        working-directory: source
+        run: |
+          SEED="(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)"
+          { echo "TAGS<<${SEED}"; cat tags; echo "${SEED}"; } >> "${GITHUB_ENV}"
 
       - name: Upload to GitHub
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          export TAGS="$(cat source/tags)"
-          ./.github_deploy
+        env: { GITHUB_TOKEN: "${{ github.token }}" }
+        run: ./.github_deploy
 
       - name: Waiting for GitHub to replicate uploaded releases
-        run: |
-          sleep 300
+        run: sleep 300
 
       - name: Upload to Docker Hub
         env:
@@ -181,6 +211,4 @@ jobs:
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
           DOCKER_EMAIL: ${{ secrets.DOCKER_EMAIL }}
           DOCKER_BASE: ${{ secrets.DOCKER_USERNAME }}/shellcheck
-        run: |
-          export TAGS="$(cat source/tags)"
-          ( source ./.multi_arch_docker && set -eux && multi_arch_docker::main )
+        run: ( source ./.multi_arch_docker && set -eux && multi_arch_docker::main )

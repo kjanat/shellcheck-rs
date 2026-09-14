@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members  = ["rust/crates/*"]
+
+[workspace.package]
+edition      = "2024"
+rust-version = "1.85"
+repository   = "https://github.com/kjanat/shellcheck-rs"
+license      = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+actions-rs     = "0.1.1"
+clap           = { version = "4.6.6", features = ["derive", "env", "wrap_help"] }
+regex          = "1"
+serde          = { version = "1", features = ["derive"] }
+serde_json     = "1"
+shellcheck-cli = { path = "rust/crates/shellcheck-cli" }
+shellcheck-rs  = { path = "rust/crates/shellcheck-rs" }
+
+[profile.release]
+opt-level = 3
+lto       = "thin"
