@@ -35,6 +35,7 @@ pub struct Metrics {
     pub parsec_cps_sites: usize,
     pub tuple_sites: usize,
     pub list_cons_sites: usize,
+    pub string_literal_args: usize,
 }
 
 impl Metrics {
@@ -107,6 +108,11 @@ impl Metrics {
             ]),
             tuple_sites: count_fam(&[Family::Tuple, Family::UnboxedTuple]),
             list_cons_sites: count_fam(&[Family::ListCons]),
+            string_literal_args: census
+                .args
+                .iter()
+                .filter(|a| a.shape == ArgShape::StringLiteral)
+                .count(),
         }
     }
 
@@ -139,6 +145,36 @@ impl Metrics {
             ("    Parsec CPS", self.parsec_cps_sites),
             ("    tuple constructors", self.tuple_sites),
             ("    list cons", self.list_cons_sites),
+            ("  string literal args", self.string_literal_args),
+            // Ratios, so profiles of different size compare.
+            (
+                "thunk sites / 1k nodes",
+                self.thunk_sites * 1000 / self.core_nodes.max(1),
+            ),
+            (
+                "memo sites / 1k nodes",
+                self.memo_sites * 1000 / self.core_nodes.max(1),
+            ),
+            (
+                "lazy comps / 1k nodes",
+                self.lazy_computations * 1000 / self.core_nodes.max(1),
+            ),
+            (
+                "exact callee %",
+                self.exact_callee * 100 / self.lazy_computations.max(1),
+            ),
+            (
+                "higher-order unknown %",
+                self.higher_order_unknown * 100 / self.lazy_computations.max(1),
+            ),
+            (
+                "Parsec CPS %",
+                self.parsec_cps_sites * 100 / self.lazy_computations.max(1),
+            ),
+            (
+                "strict arg %",
+                self.strict_args * 100 / (self.strict_args + self.lazy_computations).max(1),
+            ),
         ]
     }
 }

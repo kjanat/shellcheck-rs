@@ -92,6 +92,8 @@ pub enum ArgShape {
     Closure,
     ConApp,
     PartialApp,
+    /// `unpackCString# "…"#`: a string literal, static data.
+    StringLiteral,
     Computation,
 }
 
@@ -103,6 +105,12 @@ pub fn arg_shape(m: &Module, id: ExprId) -> ArgShape {
         Expr::App { .. } => {
             let (head, args) = m.spine(inner);
             let n = value_args(m, &args).len() as u32;
+            if let Expr::Var { occ, .. } = m.expr(head)
+                && matches!(occ.as_str(), "unpackCString#" | "unpackCStringUtf8#")
+                && n == 1
+            {
+                return ArgShape::StringLiteral;
+            }
             match m.id_info(head) {
                 Some(info) => {
                     if let Some(dc) = &info.data_con {

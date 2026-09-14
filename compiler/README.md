@@ -32,11 +32,12 @@ ShellCheck Haskell
 | Path | What it is |
 |---|---|
 | `h2r-plugin/` | GHC plugin. Appends a Core pass after the whole optimisation pipeline and serialises each module's `CoreProgram` to JSON, including every binder's demand signature, CPR signature, arity and occurrence info. |
+| `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Includes a depth-limited Core pretty-printer. |
 | `rust/crates/h2r-analysis` | Analyses over the arena. Today: the residual-laziness census (`laziness.rs`) and the shape/position predicates it rests on (`shape.rs`). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show`, `laziness`. Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show`, `laziness`, `compare`. Later: the lowering passes. |
 
 ## Usage
 
@@ -172,3 +173,54 @@ The `prop_*` corpus that `striptests` removes is the oracle: build ShellCheck
 once with GHC and once through this pipeline, run the same inputs through both,
 and require identical diagnostics, positions, fixes, exit status and output
 formats. Differential fuzzing over generated shell scripts extends it.
+
+
+## GHC flag matrix — can GHC be tuned into producing more Rust-shaped Core?
+
+`compiler/matrix.sh` extracts Core under six profiles and `h2r compare`
+puts the census side by side. The hypothesis was that `-fno-full-laziness`
+plus aggressive specialisation would remove float-outs, dictionaries and
+much of the memo population before any pass of ours runs.
+
+| | A `-O1` | B `-O2` | C = B `-fno-full-laziness` | D = C `-fspecialise-aggressively -fexpose-all-unfoldings` | E = D `-fstatic-argument-transformation` | F = E `-fstrictness-before=2` |
+|---|---:|---:|---:|---:|---:|---:|
+| Core nodes | 409,622 | 469,070 | 498,825 | 1,197,283 | 1,116,489 | 1,119,151 |
+| extraction time | 99 s | 111 s | 108 s | 245 s | 245 s | 246 s |
+| thunk sites | 2,242 | 2,389 | 2,849 | 7,311 | 7,131 | 7,109 |
+| memo, under many-entry lambda | 1,387 | 1,614 | 1,953 | 6,107 | 5,915 | 5,891 |
+| `lvl…` float-outs | 307 | 340 | **89** | 275 | 275 | 271 |
+| genuine CAFs | 238 | 230 | **53** | 34 | 34 | 34 |
+| recursive values | 69 | 65 | 45 | 119 | 119 | 119 |
+| class-op dispatch sites | 294 | 305 | 314 | 314 | 314 | 314 |
+| lazy/unknown computations | 8,382 | 9,337 | 10,217 | 26,009 | 24,399 | 24,398 |
+| … exact callee | **67%** | 66% | 64% | 47% | 49% | 49% |
+| … higher-order unknown | **27%** | 29% | 30% | 50% | 48% | 48% |
+| … Parsec CPS | **25%** | 27% | 28% | 38% | 37% | 35% |
+| thunk sites per 1k nodes | 5 | 5 | 5 | 6 | 6 | 6 |
+
+Findings:
+
+* **The flags change the program's size, not its shape.** Per-node ratios
+  are flat across A–C; D–F are worse. `-O1` is the most Rust-shaped profile
+  on every resolvability metric.
+* **Inlining replicates Parsec's CPS, it does not dissolve it.** Exposing
+  all unfoldings triples the Core and takes Parsec continuation sites from
+  2,124 to 10,142. The Parsec normalisation pass is unavoidable; it should
+  run on the smallest Core that still exhibits the pattern.
+* **GHC's specialiser does not finish the dictionary job.** Class-op
+  dispatch sites *rise* (294 → 314) under `-fspecialise-aggressively`; the
+  remaining dispatch is in code GHC cannot specialise (dictionaries stored
+  in data, polymorphic recursion, unexposed instances). Closed-world
+  specialisation is ours to do.
+* **Full laziness is doing useful work for us.** Turning it off removes the
+  `lvl…` float-outs and most CAFs as predicted, but the constant
+  expressions it had hoisted to top level — string literals, partial
+  applications, ~7,700 top-level bindings in all — are *static data* in
+  Rust; inside functions they become lets captured by inner lambdas, and
+  the memo population grows by 40%. Better to keep the hoisting and lower
+  top-level constants to statics.
+* Static-argument transformation trims ~7% of nodes; an extra strictness
+  pass changes nothing.
+
+Decision: stay on `-O1` for the survey dump. Revisit per pass (e.g. SAT
+before ownership inference) rather than globally.
