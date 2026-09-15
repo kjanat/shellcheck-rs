@@ -14,6 +14,9 @@ use h2r_analysis::shape::{ArgShape, Position};
 use h2r_core_ir::{BinderKind, Expr, Module, load_dir, with_big_stack};
 
 mod m23;
+mod m24;
+
+use crate::m24 as m24mod;
 
 #[derive(Parser)]
 #[command(name = "h2r", about = "Haskell (GHC Core) to Rust compiler driver")]
@@ -75,6 +78,18 @@ enum Command {
         /// flow's footer with the text facts and the text advisory.
         #[arg(long)]
         no_text: bool,
+        /// Do not load M2.4b/c's class-op and dictionary proof object. It
+        /// is loaded by default whenever the module has any, and
+        /// annotates class-op sites, dictionary values, dictionary
+        /// parameter binders and their occurrences, with the whole-program
+        /// set, the totality fact and the erasure verdict as a footer.
+        #[arg(long)]
+        no_classops: bool,
+        /// Do not load M2.4d's higher-order proof object: function-valued
+        /// boundary slots, their binders and every closure producer, with
+        /// the producer set, the verdict and the owner's clone plan.
+        #[arg(long)]
+        no_higher: bool,
     },
     /// The closed-world class-op census: which instance and which method
     /// can run at each dictionary-dispatch site, and where every
@@ -101,6 +116,16 @@ enum Command {
         /// dictionary parameter has no enumerable producer set.
         #[arg(long)]
         per_module: bool,
+        /// Print the dispatch view of one class-op site: the class and the
+        /// method, the dictionary argument and its origin chain, the
+        /// whole-program producer set of every parameter hop, the target,
+        /// the totality fact, the erasure verdict and the owner's clone
+        /// plan row.
+        #[arg(long)]
+        view: Option<u32>,
+        /// The same for every site. Use --module.
+        #[arg(long)]
+        view_all: bool,
     },
     /// Whole-program dictionary propagation (M2.4c): the fixpoint over
     /// every dictionary parameter in the closed world, the method target
@@ -133,6 +158,15 @@ enum Command {
         /// Print just the boundaries at, or touching, this node.
         #[arg(long)]
         boundary: Option<u32>,
+        /// Print the representation view of the boundary or boundaries at
+        /// this node: every producer with its shape class and capture
+        /// types, every use, the verdict with the rule order that produced
+        /// it, and the owner's clone tuples.
+        #[arg(long)]
+        view: Option<u32>,
+        /// The same for every boundary. Use --module.
+        #[arg(long)]
+        view_all: bool,
     },
     /// Compare census metrics across several Core dump directories
     /// (e.g. the GHC flag matrix). Arguments are `label=dir` or plain dirs.
@@ -295,6 +329,15 @@ enum Command {
         #[arg(long)]
         explain: bool,
     },
+    /// M2.4's own accounting, in one place: the three questions kept
+    /// apart, the 3x5 matrix, the residual itemised and owned, the four
+    /// cross-milestone links and the independent verifier's result.
+    M24 {
+        dir: PathBuf,
+        /// Emit the accounting and the links as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
         dir: PathBuf,
@@ -330,8 +373,23 @@ fn main() -> Result<()> {
             no_lists,
             no_text,
             no_tuples,
+            no_classops,
+            no_higher,
         } => show(
-            &dir, &module, node, depth, up, !no_parsec, !no_tuples, !no_fields, !no_lists, !no_text,
+            &dir,
+            &module,
+            node,
+            depth,
+            up,
+            ShowObjects {
+                parsec: !no_parsec,
+                tuples: !no_tuples,
+                fields: !no_fields,
+                lists: !no_lists,
+                text: !no_text,
+                classops: !no_classops,
+                higher: !no_higher,
+            },
         ),
         Command::Laziness {
             dir,
@@ -425,6 +483,8 @@ fn main() -> Result<()> {
             class,
             whole_program,
             per_module,
+            view,
+            view_all,
         } => classops(
             &dir,
             module.as_deref(),
@@ -432,6 +492,8 @@ fn main() -> Result<()> {
             explain,
             class.as_deref(),
             whole_program && !per_module,
+            view,
+            view_all,
         ),
         Command::Dictflow { dir, json, explain } => dictflow(&dir, json, explain),
         Command::Higher {
@@ -440,7 +502,18 @@ fn main() -> Result<()> {
             json,
             explain,
             boundary,
-        } => higher(&dir, module.as_deref(), json, explain, boundary),
+            view,
+            view_all,
+        } => higher(
+            &dir,
+            module.as_deref(),
+            json,
+            explain,
+            boundary,
+            view,
+            view_all,
+        ),
+        Command::M24 { dir, json } => m24_report(&dir, json),
         Command::Parsec {
             dir,
             module,
@@ -614,18 +687,35 @@ fn join_notes(a: Option<String>, b: Option<String>) -> Option<String> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Which proof objects `h2r show` loads. Every one is loaded by default
+/// whenever the module has anything for it, and turned off one at a time.
+struct ShowObjects {
+    parsec: bool,
+    tuples: bool,
+    fields: bool,
+    lists: bool,
+    text: bool,
+    classops: bool,
+    higher: bool,
+}
+
 fn show(
     dir: &Path,
     module: &str,
     node: Option<u32>,
     depth: usize,
     up: usize,
-    parsec: bool,
-    tuples_on: bool,
-    fields_on: bool,
-    lists_on: bool,
-    text_on: bool,
+    on: ShowObjects,
 ) -> Result<()> {
+    let ShowObjects {
+        parsec,
+        tuples: tuples_on,
+        fields: fields_on,
+        lists: lists_on,
+        text: text_on,
+        classops: classops_on,
+        higher: higher_on,
+    } = on;
     let modules = load_dir(dir)?;
     let m = find_module(&modules, module)?;
     // The proof object is loaded once, by default, and only when this
@@ -721,22 +811,42 @@ fn show(
                 lists_on,
             )
         });
+    // M2.4's two proof objects, on exactly the same terms. Both are
+    // whole-program by construction — a dictionary parameter's producer
+    // set and a slot's closure set are unions over every module — so the
+    // objects are built over the whole dump and only *this* module's
+    // sites, values, parameters, boundaries and producers are indexed.
+    let one_m24 = [m];
+    let m24 = (classops_on || higher_on).then(|| {
+        let all: Vec<&Module> = modules.iter().collect();
+        let _ = &one_m24;
+        h2r_analysis::m24::M24::of_modules(&all)
+    });
+    let m24p = m24
+        .as_ref()
+        .map(|x| h2r_analysis::m24::Provenance::of(m, x, classops_on, higher_on));
     let note = |id: u32| {
         join_notes(
             join_notes(
-                analysis.as_ref().and_then(|a| a.node_note(id)),
-                prov.as_ref().and_then(|p| p.node_note(id)),
+                join_notes(
+                    analysis.as_ref().and_then(|a| a.node_note(id)),
+                    prov.as_ref().and_then(|p| p.node_note(id)),
+                ),
+                rep.as_ref().and_then(|p| p.node_note(id)),
             ),
-            rep.as_ref().and_then(|p| p.node_note(id)),
+            m24p.as_ref().and_then(|p| p.node_note(id)),
         )
     };
     let bnote = |b: u32| {
         join_notes(
             join_notes(
-                analysis.as_ref().and_then(|a| a.binder_note(b)),
-                prov.as_ref().and_then(|p| p.binder_note(b)),
+                join_notes(
+                    analysis.as_ref().and_then(|a| a.binder_note(b)),
+                    prov.as_ref().and_then(|p| p.binder_note(b)),
+                ),
+                rep.as_ref().and_then(|p| p.binder_note(b)),
             ),
-            rep.as_ref().and_then(|p| p.binder_note(b)),
+            m24p.as_ref().and_then(|p| p.binder_note(b)),
         )
     };
     let pretty = h2r_core_ir::pretty::Pretty {
@@ -847,6 +957,33 @@ fn show(
                         for c in &p.consumers {
                             println!("    {c}");
                         }
+                    }
+                    if !p.evidence.is_empty() {
+                        println!("  evidence:");
+                        for (rule, note) in &p.evidence {
+                            println!("    {rule}: {note}");
+                        }
+                    }
+                }
+            }
+            if let Some(mp) = &m24p {
+                for p in mp.proofs_at(requested) {
+                    if p.is_empty() {
+                        continue;
+                    }
+                    println!();
+                    println!("node {}", p.node);
+                    if let Some(w) = &p.what {
+                        println!("  {w}");
+                    }
+                    if let Some(v) = &p.verdict {
+                        println!("  {v}");
+                    }
+                    if let Some(r) = &p.role {
+                        println!("  this node: {r}");
+                    }
+                    for f in &p.facts {
+                        println!("  {f}");
                     }
                     if !p.evidence.is_empty() {
                         println!("  evidence:");
@@ -4539,6 +4676,7 @@ fn rep_patterns(
 // classops
 //------------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn classops(
     dir: &Path,
     module: Option<&str>,
@@ -4546,6 +4684,8 @@ fn classops(
     explain: bool,
     class: Option<&str>,
     whole_program: bool,
+    view: Option<u32>,
+    view_all: bool,
 ) -> Result<()> {
     use h2r_analysis::classops::{
         CLASSES, Census, Outcome, RULES, SourceKind, TargetKind, check_table,
@@ -4558,6 +4698,14 @@ fn classops(
     if let Some(name) = module {
         find_module(&modules, name)?;
     }
+    // The two views are their own report: a site laid out for a person to
+    // audit, not a census. They read the same objects `h2r m24` does.
+    if view.is_some() || view_all {
+        let all: Vec<&Module> = modules.iter().collect();
+        let m24 = h2r_analysis::m24::M24::of_modules(&all);
+        return classop_views(&m24, module, view, view_all, json);
+    }
+
     let (mut census, world) = Census::of_modules(modules.iter());
     census.filter(module, class);
     let acct = census.accounting();
@@ -4868,6 +5016,69 @@ fn classops(
             );
             println!("    rules: {}", s.rules.join(" "));
         }
+    }
+
+    // M2.4g: the milestone accounting, always whole, appended so that not
+    // one line of the census above moves. It is the whole-program object's
+    // accounting, so `--per-module` does not print it: that mode exists to
+    // reproduce M2.4b exactly.
+    if wp.is_some() {
+        let all: Vec<&Module> = modules.iter().collect();
+        let m24 = h2r_analysis::m24::M24::of_modules(&all);
+        let a = h2r_analysis::m24::accounting(&m24);
+        m24mod::print_accounting(&a);
+    }
+    Ok(())
+}
+
+/// Lay out one class-op site, or every site of a module.
+fn classop_views(
+    m24: &h2r_analysis::m24::M24,
+    module: Option<&str>,
+    view: Option<u32>,
+    view_all: bool,
+    json: bool,
+) -> Result<()> {
+    use h2r_analysis::m24::{ClassopView, ClassopViews};
+    if view_all {
+        let name = module.ok_or_else(|| {
+            anyhow::anyhow!("--view-all needs --module: it lays out every site of one module")
+        })?;
+        let vs = ClassopViews::of_module(m24, name);
+        if json {
+            serde_json::to_writer(std::io::stdout().lock(), &vs)?;
+            println!();
+            return Ok(());
+        }
+        println!(
+            "{} — {} class-op site(s), each laid out exactly once (asserted)",
+            vs.module,
+            vs.views.len()
+        );
+        for v in &vs.views {
+            println!();
+            m24mod::print_classop_view(v);
+        }
+        return Ok(());
+    }
+    let node = view.expect("one of --view / --view-all");
+    let views: Vec<ClassopView> = m24
+        .census
+        .sites
+        .iter()
+        .filter(|s| s.node == node && module.is_none_or(|x| s.module == x))
+        .map(|s| ClassopView::of(m24, s))
+        .collect();
+    if views.is_empty() {
+        anyhow::bail!("node {node} is not a class-op site in this dump");
+    }
+    if json {
+        serde_json::to_writer(std::io::stdout().lock(), &views)?;
+        println!();
+        return Ok(());
+    }
+    for v in &views {
+        m24mod::print_classop_view(v);
     }
     Ok(())
 }
@@ -5377,18 +5588,28 @@ fn higher_residuals(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn higher(
     dir: &Path,
     module: Option<&str>,
     json: bool,
     explain: bool,
     boundary: Option<u32>,
+    view: Option<u32>,
+    view_all: bool,
 ) -> Result<()> {
     use h2r_analysis::higher::{
         EVAL_BUDGET, Feedback, Higher, Program, ROUND_BUDGET, RULES, SET_CAP, VERDICTS, Verdict,
     };
 
     let modules = load_dir(dir)?;
+    // The boundary view is its own report, and reads the same objects
+    // `h2r m24` does.
+    if view.is_some() || view_all {
+        let all: Vec<&Module> = modules.iter().collect();
+        let m24 = h2r_analysis::m24::M24::of_modules(&all);
+        return boundary_views(&m24, module, view, view_all, json);
+    }
     let mi_of: std::collections::HashMap<String, usize> = modules
         .iter()
         .enumerate()
@@ -5738,6 +5959,184 @@ fn higher(
             }
         }
     }
+
+    // M2.4g: the milestone accounting, appended so that not one line above
+    // moves.
+    let all: Vec<&Module> = modules.iter().collect();
+    let m24 = h2r_analysis::m24::M24::of_modules(&all);
+    let acct = h2r_analysis::m24::accounting(&m24);
+    m24mod::print_accounting(&acct);
+    Ok(())
+}
+
+/// Lay out one function-valued boundary, or every boundary of a module.
+fn boundary_views(
+    m24: &h2r_analysis::m24::M24,
+    module: Option<&str>,
+    view: Option<u32>,
+    view_all: bool,
+    json: bool,
+) -> Result<()> {
+    use h2r_analysis::m24::{BoundaryView, BoundaryViews};
+    if view_all {
+        let name = module.ok_or_else(|| {
+            anyhow::anyhow!("--view-all needs --module: it lays out every boundary of one module")
+        })?;
+        let vs = BoundaryViews::of_module(m24, name);
+        if json {
+            serde_json::to_writer(std::io::stdout().lock(), &vs)?;
+            println!();
+            return Ok(());
+        }
+        println!(
+            "{} — {} function-valued boundary/boundaries, each laid out exactly once (asserted)",
+            vs.module,
+            vs.views.len()
+        );
+        for v in &vs.views {
+            println!();
+            m24mod::print_boundary_view(v);
+        }
+        return Ok(());
+    }
+    let node = view.expect("one of --view / --view-all");
+    let views: Vec<BoundaryView> = m24
+        .higher
+        .boundaries
+        .iter()
+        .filter(|b| b.node == node && module.is_none_or(|x| b.module == x))
+        .map(|b| BoundaryView::of(m24, b))
+        .collect();
+    if views.is_empty() {
+        anyhow::bail!("node {node} carries no function-valued boundary in this dump");
+    }
+    if json {
+        serde_json::to_writer(std::io::stdout().lock(), &views)?;
+        println!();
+        return Ok(());
+    }
+    for (i, v) in views.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        m24mod::print_boundary_view(v);
+    }
+    Ok(())
+}
+
+//------------------------------------------------------------------------------
+// m24 — the milestone summary
+//------------------------------------------------------------------------------
+
+/// M2.4's accounting in one place, with the four cross-milestone links and
+/// the verifier's result. Nothing here is a second computation: every
+/// number is read from a published proof object.
+fn m24_report(dir: &Path, json: bool) -> Result<()> {
+    let modules = load_dir(dir)?;
+    let selected: Vec<&Module> = modules.iter().collect();
+    let s = m24mod::Summary::of(&selected);
+
+    // The cross-links. M2.2's and M2.3's own links are *built* here rather
+    // than quoted, so the columns beside M2.4's cannot drift; each is built
+    // exactly the way its own milestone builds it.
+    let census = h2r_analysis::laziness::Census::raw(selected.iter().copied());
+    let analyses: Vec<h2r_analysis::parsec::Analysis> = selected
+        .iter()
+        .map(|m| h2r_analysis::parsec::Analysis::of_module(m))
+        .collect();
+    let hops: Vec<h2r_analysis::tuples::ParsecHops> = analyses
+        .iter()
+        .map(h2r_analysis::tuples::parsec_hops)
+        .collect();
+    let tcen = h2r_analysis::tuples::TupleCensus::of_modules_with(&selected, &census, &hops);
+    let tl = h2r_analysis::link::link(&census, &tcen, &selected);
+    let tuple_explained = m23::tuple_explained(&tl);
+    let all23 = m23::M23::of(&selected);
+    let rl = h2r_analysis::m23::link(
+        &census,
+        &all23.fc,
+        &all23.lc,
+        &all23.tc,
+        &all23.verdicts,
+        &selected,
+        &tuple_explained,
+    );
+    let m23_explained: std::collections::HashSet<(String, u32, u32)> = rl
+        .explained
+        .iter()
+        .map(|e| (e.module.clone(), e.let_node, e.rhs))
+        .collect();
+    let m1 = h2r_analysis::m24::m1_link(&s.m24, &census, &tuple_explained, &m23_explained);
+    let m23_closures = h2r_analysis::m24::m23_closure_residual(&s.m24, &all23.fc);
+
+    // M2.2's 67 closure-into-parameter flows and M2.1's 41 Parsec edges,
+    // recomputed rather than quoted.
+    let hp = h2r_analysis::higher::Program::new(selected.iter().copied());
+    let (into_param, _paths, _c) = higher_residuals(&modules, &{
+        let mut mi = std::collections::HashMap::new();
+        for (i, m) in modules.iter().enumerate() {
+            mi.insert(m.name.clone(), i);
+        }
+        mi
+    });
+    let section = s.m24.higher.section(
+        &hp,
+        "closure-returning-the-tuple-is-passed-into-a-parameter",
+        &into_param,
+    );
+    let edges = h2r_analysis::parsec::residual_edges(&analyses, &s.m24.higher);
+
+    if json {
+        let payload = serde_json::json!({
+            "accounting": s.accounting,
+            "m1Link": m1,
+            "m23ClosureResidual": m23_closures,
+            "m22IntoParameter": section,
+            "m21ResidualEdges": edges,
+        });
+        serde_json::to_writer(std::io::stdout().lock(), &payload)?;
+        println!();
+        return Ok(());
+    }
+
+    println!("M2.4 — the milestone, in one place");
+    println!();
+    println!(
+        "The closed world: {} modules, Main.main the only root (W0/H0-CLOSED-WORLD, an\n\
+         assumption, not a derivation).",
+        modules.len()
+    );
+    m24mod::print_accounting(&s.accounting);
+    m24mod::print_verifier(&s.m24);
+
+    println!();
+    println!("The cross-milestone links. NOTHING IS RECLASSIFIED: every fate M2.2 recorded,");
+    println!("every tier M2.1 recorded and every rep M2.3 recorded stands exactly as it was.");
+    println!();
+    println!(
+        "  back to M2.2 — the {} tuple flows refused as closure-into-a-parameter,",
+        section.landings.len()
+    );
+    println!("  where each one's closure lands and what the closure graph says about that slot");
+    for (v, n) in &section.by_verdict {
+        println!("  {n:>6}  {v}");
+    }
+    println!(
+        "  {:>6}  COULD be reclassified by a later pass (the receiving slot is already one\n          representation). Reported, not acted on.",
+        section.could_reclassify
+    );
+    m24mod::print_link_section(&m23_closures);
+    println!();
+    println!(
+        "  back to M2.1 — the {} residual Parsec continuation edges",
+        edges.len()
+    );
+    let closed = edges.iter().filter(|e| e.closed()).count();
+    println!("  {closed:>6}  closed by the closure graph (P-HO-EXACT / P-HO-FINITE)");
+    for (status, n) in h2r_analysis::parsec::residual_by_status(&edges) {
+        println!("  {n:>6}  {status}");
+    }
+    m24mod::print_m1_link(&m1);
     Ok(())
 }
 

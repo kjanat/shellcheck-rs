@@ -11,6 +11,7 @@ pub mod laziness;
 pub mod link;
 pub mod lists;
 pub mod m23;
+pub mod m24;
 pub mod m24_claims;
 pub mod metrics;
 pub mod parsec;

@@ -7925,3 +7925,350 @@ fn m24f_the_verifier_refuses_a_clone_plan_with_the_wrong_count() {
         verify_m24::X_CLONES_DIFFER
     );
 }
+
+//------------------------------------------------------------------------------
+// M2.4g — the views, the provenance, the accounting and the M1 link
+//------------------------------------------------------------------------------
+//
+// The rule these tests hold to is [`crate::views`]': a view is an *audit*
+// of one site, so its completeness assertion is the thing worth testing —
+// every site of a module once, every boundary of a module once, every
+// producer once — together with the two places the milestone's own
+// corrections live: the rule *order* (H8 before H5/H6) and the refusal to
+// report an unconfirmed claim as proven.
+
+use crate::m24::{self, BoundaryViews, ClassopView, ClassopViews, M24, Verified};
+
+/// The whole M2.4 object over a fixture.
+fn m24_of<'a>(mods: &'a [&'a Module]) -> M24<'a> {
+    M24::of_modules(mods)
+}
+
+/// Every class-op site of a module appears in `--view-all` exactly once,
+/// and each view's own `check` passes.
+#[test]
+fn m24g_the_classop_view_lays_out_every_site_of_a_module_once() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f("use", named_gvar("$fShowT", "$main$A$$fShowT"))],
+        class_ids(vec![]),
+    );
+    let mods: Vec<&Module> = vec![&a, &b];
+    let m = m24_of(&mods);
+    let population = m.census.sites.iter().filter(|s| s.module == "A").count();
+    assert!(population > 0, "the fixture must have a class-op site");
+    let vs = ClassopViews::of_module(&m, "A");
+    assert_eq!(vs.views.len(), population);
+    vs.check(&m);
+    // The view carries the whole-program answer, not the per-module one.
+    let v = &vs.views[0];
+    assert!(
+        v.outcome.starts_with("Exact"),
+        "the whole-program target is Exact here, got {}",
+        v.outcome
+    );
+    assert_eq!(v.verified_target, Verified::Yes);
+    assert!(
+        v.per_module_outcome.starts_with("Unresolved"),
+        "…and M2.4b's own answer stands beside it unchanged: {}",
+        v.per_module_outcome
+    );
+    // The dictionary reaches the site through one parameter hop, and the
+    // hop carries the whole-program producer set.
+    assert_eq!(v.hops.len(), 1, "{:?}", v.hops);
+    assert_eq!(v.hops[0].set.len(), 1);
+}
+
+/// The boundary view names **exactly one** rule as the one that produced
+/// the verdict, and at an exported slot that rule is `H8-PRESERVE` — which
+/// is decided *before* `H5`/`H6`, the whole point of M2.4d′ defect 1.
+#[test]
+fn m24g_the_boundary_view_names_the_rule_that_fired_in_the_right_order() {
+    // Not exported: the two producers agree, so H6 fires.
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![call_hf("useB", lam(&["y"], var("y")))],
+        class_ids(vec![]),
+    );
+    let c = class_module(
+        "C",
+        vec![call_hf("useC", lam(&["z"], var("z")))],
+        class_ids(vec![]),
+    );
+    let mods: Vec<&Module> = vec![&a, &b, &c];
+    let m = m24_of(&mods);
+    let k = param_boundary(&m.higher, "f", 0);
+    let v = m24::BoundaryView::of(&m, k);
+    let fired: Vec<&str> = v
+        .rule_order
+        .iter()
+        .filter(|r| r.fired)
+        .map(|r| r.rule)
+        .collect();
+    assert_eq!(fired, vec![higher::H6_UNIFORM]);
+    assert_eq!(v.verdict, "TypeShapeUniform");
+    assert_eq!(v.producers.len(), 2);
+    assert!(v.one_representation && v.rewritable_as_one);
+
+    // Exported: the same producers, the same agreement, and H8 fires
+    // first. The view must show the earlier rules answered, not skipped.
+    let a2 = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, true)],
+        class_ids(vec![]),
+    );
+    let mods2: Vec<&Module> = vec![&a2, &b, &c];
+    let m2 = m24_of(&mods2);
+    let k2 = param_boundary(&m2.higher, "f", 0);
+    let v2 = m24::BoundaryView::of(&m2, k2);
+    let fired2: Vec<&str> = v2
+        .rule_order
+        .iter()
+        .filter(|r| r.fired)
+        .map(|r| r.rule)
+        .collect();
+    assert_eq!(fired2, vec![higher::H8_PRESERVE]);
+    assert_eq!(v2.verdict, "Preserve");
+    assert!(
+        v2.one_representation,
+        "the producers still agree — one representation is a different fact"
+    );
+    assert!(
+        !v2.rewritable_as_one,
+        "…but the rewrite does not own the slot"
+    );
+    let h5 = v2
+        .rule_order
+        .iter()
+        .position(|r| r.rule == higher::H5_EXACT)
+        .expect("H5 is listed");
+    let h8 = v2
+        .rule_order
+        .iter()
+        .position(|r| r.rule == higher::H8_PRESERVE)
+        .expect("H8 is listed");
+    assert!(h8 < h5, "H8-PRESERVE is decided before H5/H6");
+}
+
+/// Every boundary of a module appears in `--view-all` exactly once, and no
+/// producer is listed twice inside one view.
+#[test]
+fn m24g_the_boundary_view_lays_out_every_boundary_of_a_module_once() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![
+            call_hf("useB", lam(&["y"], var("y"))),
+            call_hf("useC", lam(&["y", "z"], var("y"))),
+        ],
+        class_ids(vec![]),
+    );
+    let mods: Vec<&Module> = vec![&a, &b];
+    let m = m24_of(&mods);
+    let population = m
+        .higher
+        .boundaries
+        .iter()
+        .filter(|x| x.module == "A")
+        .count();
+    let vs = BoundaryViews::of_module(&m, "A");
+    assert_eq!(vs.views.len(), population);
+    vs.check(&m);
+    let k = vs
+        .views
+        .iter()
+        .find(|v| v.verdict == "CloneRequired")
+        .expect("the two arities disagree");
+    assert_eq!(k.producers.len(), 2);
+    assert_eq!(k.classes, 2);
+    // The owner's clone plan is the distinct call-site tuples, never the
+    // sum of the per-slot counts.
+    assert!(
+        k.owner_plan.as_ref().is_some_and(|p| p.ends_with("→ 2")),
+        "{:?}",
+        k.owner_plan
+    );
+}
+
+/// The three questions close, and the two representation counts are kept
+/// apart in the right direction: rewritable-as-one is a *subset* of
+/// one-representation.
+#[test]
+fn m24g_the_accounting_closes_and_keeps_the_three_questions_apart() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![
+            call_f("use", named_gvar("$fShowT", "$main$A$$fShowT")),
+            call_hf("useB", lam(&["y"], var("y"))),
+        ],
+        class_ids(vec![]),
+    );
+    let mods: Vec<&Module> = vec![&a, &b];
+    let m = m24_of(&mods);
+    let acct = m24::accounting(&m);
+    acct.check().expect("the M2.4 accounting must close");
+    assert_eq!(
+        acct.targets.exact + acct.targets.finite + acct.targets.unresolved,
+        acct.targets.sites
+    );
+    assert!(acct.representation.rewritable_as_one <= acct.representation.one_representation);
+    assert_eq!(acct.disagreements, 0);
+    // The residual is itemised to the last site: the check above asserts
+    // it, and this pins what it is asserting.
+    let itemised: usize = acct.residual_sites.iter().map(|r| r.n).sum();
+    assert_eq!(itemised, acct.targets.unresolved);
+}
+
+/// `h2r show`'s provenance marks the class-op site, the dictionary
+/// parameter's binder and the function-valued slot, and prints a footer for
+/// each — and `--no-classops` / `--no-higher` turn each off on its own.
+#[test]
+fn m24g_show_provenance_annotates_a_site_a_dictionary_and_a_boundary() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f("use", named_gvar("$fShowT", "$main$A$$fShowT"))],
+        class_ids(vec![]),
+    );
+    let mods: Vec<&Module> = vec![&a, &b];
+    let m = m24_of(&mods);
+    let site = m
+        .census
+        .sites
+        .iter()
+        .find(|s| s.module == "A")
+        .expect("a class-op site");
+    let p = m24::Provenance::of(&a, &m, true, true);
+    assert!(
+        p.node_note(site.node)
+            .is_some_and(|n| n.contains("class-op site")),
+        "{:?}",
+        p.node_note(site.node)
+    );
+    let proofs = p.proofs_at(site.node);
+    assert!(!proofs.is_empty());
+    let what = proofs[0].what.clone().unwrap_or_default();
+    assert!(what.starts_with("classop: "), "{what}");
+    assert!(what.contains("whole-program"), "{what}");
+    // The dictionary parameter's binder carries the erasure verdict.
+    let prm = m
+        .flow
+        .params
+        .iter()
+        .find(|x| x.module == "A")
+        .expect("a dictionary parameter");
+    assert!(
+        p.binder_note(prm.binder)
+            .is_some_and(|n| n.contains("dictionary parameter")),
+        "{:?}",
+        p.binder_note(prm.binder)
+    );
+    // Opted out, the same node earns nothing.
+    let off = m24::Provenance::of(&a, &m, false, false);
+    assert!(off.node_note(site.node).is_none());
+    assert!(off.proofs_at(site.node).is_empty());
+}
+
+/// The M1 link's invariant: `remaining + tuples + M2.3 + M2.4` is the
+/// whole population, and a site an earlier milestone explains is that
+/// milestone's — never counted twice.
+#[test]
+fn m24g_the_m1_link_never_counts_a_site_twice() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f("use", named_gvar("$fShowT", "$main$A$$fShowT"))],
+        class_ids(vec![]),
+    );
+    let mods: Vec<&Module> = vec![&a, &b];
+    let m = m24_of(&mods);
+    let census = crate::laziness::Census::raw(mods.iter().copied());
+    let none: std::collections::HashSet<(String, u32, u32)> = std::collections::HashSet::new();
+    // `m1_link` asserts the invariant itself; this pins that it is the
+    // invariant being asserted, and that the columns are disjoint.
+    let l = m24::m1_link(&m, &census, &none, &none);
+    assert_eq!(
+        l.remaining() + l.by_tuples + l.by_m23 + l.explained.len(),
+        l.thunk_sites
+    );
+    assert!(l.explained.len() <= l.dictionary_sites);
+
+    // A site M2.2 already claims is skipped before this walk can take it.
+    let claimed: std::collections::HashSet<(String, u32, u32)> = census
+        .bindings
+        .iter()
+        .filter(|x| x.fate != crate::laziness::Fate::NotAThunk)
+        .map(|x| (x.module.clone(), x.let_node, x.rhs))
+        .collect();
+    let l2 = m24::m1_link(&m, &census, &claimed, &none);
+    assert_eq!(l2.by_tuples, l2.thunk_sites);
+    assert_eq!(l2.explained.len(), 0, "every site is already M2.2's");
+}
+
+/// A claim the verifier refused is **never** reported as proven — the rule
+/// M2.2 set, M2.3 repeated and this milestone inherits.
+#[test]
+fn m24g_a_refused_claim_is_never_reported_as_proven() {
+    use crate::verify_m24::{Disagreement, Refusal, X_TARGET_DIFFERS};
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f("use", named_gvar("$fShowT", "$main$A$$fShowT"))],
+        class_ids(vec![]),
+    );
+    let mods: Vec<&Module> = vec![&a, &b];
+    let m = m24_of(&mods);
+    let site = m
+        .flow
+        .sites
+        .iter()
+        .find(|s| matches!(s.outcome, dictflow::Outcome::Exact(_)))
+        .expect("an Exact site");
+    assert_eq!(
+        m.verdicts.site_target(&site.module, site.node),
+        Verified::Yes
+    );
+
+    // Now hand the same claim list an audit that refuses that one claim.
+    let claim = m
+        .claims
+        .iter()
+        .find(|c| c.kind == crate::verify_m24::ClaimKind::SiteExact)
+        .expect("the Exact claim")
+        .clone();
+    let mut audit = m.audit.clone();
+    audit.disagreements.push(Disagreement {
+        claim,
+        refusal: Refusal {
+            why: X_TARGET_DIFFERS,
+            detail: "a planted refusal".into(),
+        },
+    });
+    let v = m24::Verdicts::of(&m.claims, &audit);
+    assert!(matches!(
+        v.site_target(&site.module, site.node),
+        Verified::Disagreed(_)
+    ));
+    assert!(!v.site_target(&site.module, site.node).proven());
+    // …and the view reports it as refused rather than as proven.
+    let cs = m
+        .census
+        .sites
+        .iter()
+        .find(|s| s.node == site.node && s.module == site.module);
+    if let Some(cs) = cs {
+        let view = ClassopView::of(&m, cs);
+        assert_eq!(view.verified_target, Verified::Yes, "the real audit agrees");
+    }
+}

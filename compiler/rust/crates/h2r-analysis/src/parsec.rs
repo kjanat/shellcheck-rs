@@ -2420,7 +2420,18 @@ impl<'m> Analysis<'m> {
 
     fn prove(&mut self) {
         let m = self.module;
-        let roles: Vec<(BinderId, RoleInfo)> = self.role.iter().map(|(k, v)| (*k, *v)).collect();
+        // `role` is a `HashMap`, and the order it is walked in is the
+        // order every region's `edges`, `evidence` and `rejects` come out
+        // in. Iterating it directly made `h2r parsec --explain` and
+        // `--json` differ run to run — the counts never moved, but the
+        // per-role line order and the `e.g.` witness did, which is what
+        // kept those two reports out of every byte-identity gate since
+        // M2.4a. Sorting by the binder makes the walk deterministic: a
+        // **report-order change only**, since nothing here depends on the
+        // order and every count is an aggregate over all of it.
+        let mut roles: Vec<(BinderId, RoleInfo)> =
+            self.role.iter().map(|(k, v)| (*k, *v)).collect();
+        roles.sort_by_key(|(b, _)| *b);
         for (b, info) in roles {
             let uses: Vec<ExprId> = self.scope.occurrences(b).to_vec();
             for use_at in uses {
