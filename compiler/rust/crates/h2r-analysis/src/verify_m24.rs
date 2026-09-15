@@ -3703,23 +3703,7 @@ fn same_lines(
 /// asserts? An `ErasableWithObligation` verdict whose obligations are not
 /// the claimed ones is a different verdict (M2.4h).
 fn same_obligations(mine: &[String], c: &Claim) -> Result<(), Refusal> {
-    let a: BTreeSet<&str> = mine.iter().map(String::as_str).collect();
-    let b: BTreeSet<&str> = c.obligations.iter().map(String::as_str).collect();
-    if a == b {
-        return Ok(());
-    }
-    let only_here: Vec<&str> = a.difference(&b).copied().collect();
-    let only_there: Vec<&str> = b.difference(&a).copied().collect();
-    Err(Refusal::new(
-        X_OBLIGATIONS_DIFFER,
-        format!(
-            "{} obligation(s) only here [{}], {} only claimed [{}]",
-            only_here.len(),
-            only_here.join("; "),
-            only_there.len(),
-            only_there.join("; ")
-        ),
-    ))
+    same_lines(mine, &c.obligations, X_OBLIGATIONS_DIFFER, "obligation")
 }
 
 impl HigherDerived {
