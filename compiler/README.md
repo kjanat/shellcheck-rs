@@ -5030,14 +5030,14 @@ back cell for cell on `-O1`:
 These are not claim checks — a difference here would be a difference to look
 at, not a `D` — and there is no difference: the erasure table of
 [M2.4c′](#erasure-tables-before--after), its totality row (118/0/98) and the
-whole of [M2.4d′](#the-verdicts-before--after-o1)'s corrected verdict table
+whole of [M2.4d′](#the-verdicts-before--after--o1)'s corrected verdict table
 are reproduced by a walk that has never seen them.
 
 ### Why silence here is evidence
 
 A verifier that agrees with everything has said nothing unless it can be
-shown to bite. Two tests do that, and they are the reason the table above is
-worth printing: `m24f_the_verifier_refuses_a_claim_that_names_the_wrong_target`
+shown to bite. Two tests do that, and they are the reason the tables above
+are worth printing: `m24f_the_verifier_refuses_a_claim_that_names_the_wrong_target`
 rewrites one `Exact` claim's target to the *other* instance's method and the
 walk refuses it as `X_TARGET_DIFFERS` (a `D`, not a `C`), and
 `m24f_the_verifier_refuses_a_clone_plan_with_the_wrong_count` turns a
@@ -5160,8 +5160,8 @@ standard error was captured too, and all 224 are empty):
 * `parsec` on B, C, E and F and `parsec --explain` on B, C, D and E differ in
   one or two `e.g.` exemplar lines each — the *same* node with a different
   argument index, every count identical, which is the same witness-picking
-  recorded at [M2.4a](#the-gate) and re-confirmed at M2.4d′ by running an
-  unchanged binary twice;
+  M2.4a's gate recorded and M2.4d′ re-confirmed by running an unchanged
+  binary three times;
 * `parsec --json` differs on all seven dumps in each region's edge list
   order, and is **multiset-identical on all seven** when every list is
   canonicalised.
@@ -5187,9 +5187,13 @@ flag changed.
 * **The closed world is an assumption**, and this walk rests on it exactly as
   M2.4c and M2.4d do. Re-deriving a producer set does not re-derive the right
   to enumerate it.
-* **`Unresolved` and `Preserve` are not re-derived.** A milestone that
-  refused too much would pass this check in silence; that is the deliberate
-  asymmetry, because only the positive verdicts can miscompile.
+* **`Unresolved` and `Preserve` are not re-derived *as claims*.** A milestone
+  that refused too much would pass the claim check in silence; that is the
+  deliberate asymmetry, because only the positive verdicts can miscompile.
+  What narrows it is the whole-population table above, where this walk's own
+  `Preserve` and `Unresolved` counts are printed and agree cell for cell —
+  but a difference there is a difference to look at and not a `D`, and no
+  *reason* attached to a refusal is compared at all.
 * **The monovariant lower bounds stand.** Four dictionary plans and eight
   closure plans on `-O1` have a set-valued tuple component, and their clone
   counts are lower bounds on both sides — this walk re-derives the same
