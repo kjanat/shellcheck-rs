@@ -39,7 +39,7 @@ ShellCheck Haskell
 | **M2.3** | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link, **g** the correction to the axiom layer | done |
 | **M2.4a** | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged | done |
 | **M2.4b** | the closed-world class-op census: 565 dispatch sites, the 294 mapped 1:1, every class identified — and not one dictionary statically known | done |
-| **M2.4** | the closed-world dictionary and higher-order milestone, in three separate questions: **can the call target be enumerated** (7 of 565 sites, the dictionary bounded at 118), **can an abstraction boundary use one representation** (5,574 function-valued boundaries, 252 enumerated, 84 one representation, 66 rewritable as one, 53 clones planned per owner), and **can the object disappear** (102 of 191 dictionary values `Erasable`, 36 of 216 parameters `Erasable` and 4 more with a clone, 4 owner-level clones) — **c** whole-program dictionary flow with its own totality domain, **d** higher-order representation agreement, **e** the 41 Parsec edges (0 closed, and why), **f** the independent re-derivation of all 606 positive claims with 0 disagreements on all seven dumps, **g** the views, the provenance, the accounting and the four cross-milestone links, **c′/d′** the two corrections | done |
+| **M2.4** | the closed-world dictionary and higher-order milestone, in three separate questions: **can the call target be enumerated** (7 of 565 sites, the dictionary bounded at 118), **can an abstraction boundary use one representation** (5,574 function-valued boundaries, 252 enumerated, 84 one representation, 66 rewritable as one, 68 clones planned per owner), and **can the object disappear** (102 of 191 dictionary values `Erasable`, 36 of 216 parameters `Erasable` and 4 more with a clone, 4 owner-level clones) — **c** whole-program dictionary flow with its own totality domain, **d** higher-order representation agreement, **e** the 41 Parsec edges (0 closed, and why), **f** the independent re-derivation of all 606 positive claims with 0 disagreements on all seven dumps, **g** the views, the provenance, the accounting and the four cross-milestone links, **c′/d′** the two corrections | done |
 | **M3** | **next.** The lowering: `Main.main`-rooted reachability (the 922 zero-reference bindings are not a rooted dead set), a canonical closure-boundary carrier per Haskell type — the open invariant `TypeShapeUniform` rests on — a call-string analysis to close the twelve set-valued clone plans, and a naming pass for the 4,613 anonymous-lambda / used-as-a-value boundaries that are `ShellCheck.Parser`'s CPS | next |
 
 ## Layout
@@ -4132,12 +4132,24 @@ enclosing `case`, or a variable GHC marks strict **and** that an enclosing
 qualify — GHC's promise is that the force happens, not that it has happened
 *here*.
 
+*Corrected by [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found):
+"a variable bound by an enclosing `case`" was still too wide. It admitted
+every **alternative** binder, and matching an outer constructor forces the
+constructor, not its fields — the binder of a lazy field is an unevaluated
+thunk. Only the scrutinee binder and the binder of a field GHC marks strict
+qualify.*
+
 The verdict is then: `ProvenTotal` ⇒ identity decides as before;
 `MustPreserveForce` ⇒ `ErasableWithObligation { at, what }`, naming the node
 whose evaluation erasure would delete and the scrutinee that must still be
 evaluated, or `Preserve(erasure-would-delete-a-force)` when no obligation
 can be expressed; `Unknown` ⇒
 `Preserve(totality-unknown-erasure-could-move-divergence)`.
+
+*Amended by [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found):
+`ErasableWithObligation` carries the whole obligation **set**. The join kept
+one witness, so a dictionary standing behind two distinct forces was erased
+against one of them.*
 
 #### Erasure tables, before → after
 
@@ -4586,7 +4598,7 @@ that cannot be enumerated refuses that owner's plan rather than guessing.
 | | before | after |
 |---|---:|---:|
 | per-parameter class cardinality (evidence) | 418 | 509 |
-| **clones planned** | 418 | **53** |
+| **clones planned** | 418 | **53** (→ **68** in [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found)) |
 | owning functions wanting a plan | — | 87 |
 | plans refused rather than guessed | — | 66 |
 
@@ -4701,7 +4713,7 @@ Every number that moves, with its cause:
 | rewritable as one | 87 | 66 | 3 by defect 4, 18 by defect 1 |
 | distinct shape classes | 261 | 353 | +71 defect 4, +21 defect 2 |
 | per-parameter class sum | 418 | 509 | defect 4 — more classes, still only evidence |
-| **clones** | 418 | **53** | defect 3 — distinct call-site tuples, per owner |
+| **clones** | 418 | **53** | defect 3 — distinct call-site tuples, per owner (**68** since [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found), which corrected how a tuple is deduplicated) |
 
 #### M2.4e re-checked against the corrected `Higher`
 
@@ -4850,49 +4862,56 @@ per-call-site rather than monovariant view of a parser that is also a value.
 `site` is the continuation call the tuple reached; `boundary` is the M2.4d
 slot that was asked about it.
 
+*Recomputed by [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found),
+which changed the condition. The **new status** column now says what the
+enumeration question answered, with the representation verdict named inside
+it rather than standing in for it: all 41 boundaries are **unenumerated**,
+which is why none of them closes. Nothing else in the table moves, and the
+count is still 0 closed / 41 open.*
+
 | module | node | edge | previous reason | new status | boundary |
 |---|---:|---|---|---|---|
-| `ShellCheck.Parser` | 1946 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 119: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 1930 |
-| `ShellCheck.Parser` | 1962 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 119: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 1930 |
-| `ShellCheck.Parser` | 1996 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 119: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 1928 |
-| `ShellCheck.Parser` | 2012 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 119: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 1928 |
-| `ShellCheck.Parser` | 17769 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 546: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 17767 |
-| `ShellCheck.Parser` | 40016 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 659: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 40014 |
-| `ShellCheck.Parser` | 44120 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 3 (eta) of eta#14436 at node 44107 |
-| `ShellCheck.Parser` | 44121 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 3 (eta) of eta#14436 at node 44107 |
-| `ShellCheck.Parser` | 44170 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (eta) of eta#14436 at node 44105 |
-| `ShellCheck.Parser` | 44171 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (eta) of eta#14436 at node 44105 |
-| `ShellCheck.Parser` | 55495 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 769: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 55491 |
-| `ShellCheck.Parser` | 57894 | `eta Eok → Eok [R3-CONT-CALL-ETA]` | eta of region 444: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 3 (eta) of lvl#4458 at node 57887 |
-| `ShellCheck.Parser` | 57919 | `eta Cok → Cok [R3-CONT-CALL-ETA]` | eta of region 444: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (eta) of lvl#4458 at node 57885 |
-| `ShellCheck.Parser` | 58867 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 439: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 2 (eok) of $wps#4447 at node 58854 |
-| `ShellCheck.Parser` | 58868 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 439: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 2 (eok) of $wps#4447 at node 58854 |
-| `ShellCheck.Parser` | 58921 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 439: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (cok) of $wps#4447 at node 58853 |
-| `ShellCheck.Parser` | 58922 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 439: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (cok) of $wps#4447 at node 58853 |
-| `ShellCheck.Parser` | 61995 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 802: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 61982 |
-| `ShellCheck.Parser` | 61996 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 802: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 61982 |
-| `ShellCheck.Parser` | 62045 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 802: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 61980 |
-| `ShellCheck.Parser` | 62046 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 802: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 61980 |
-| `ShellCheck.Parser` | 66715 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 4 (eta) of k#4393 at node 66700 |
-| `ShellCheck.Parser` | 66716 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 4 (eta) of k#4393 at node 66700 |
-| `ShellCheck.Parser` | 66765 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 2 (eta) of k#4393 at node 66698 |
-| `ShellCheck.Parser` | 66766 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 2 (eta) of k#4393 at node 66698 |
-| `ShellCheck.Parser` | 79705 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 866: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 79701 |
-| `ShellCheck.Parser` | 87005 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 891: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 87003 |
-| `ShellCheck.Parser` | 98148 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 976: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eta) of #? at node 98146 |
-| `ShellCheck.Parser` | 123694 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
-| `ShellCheck.Parser` | 123725 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
-| `ShellCheck.Parser` | 123767 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
-| `ShellCheck.Parser` | 123824 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eta) of $wk#36309 at node 123687 |
-| `ShellCheck.Parser` | 123881 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1157: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 4 (eta) of k#36395 at node 123877 |
-| `ShellCheck.Parser` | 124015 | `eta3 Eok → Eok [R3-CONT-CALL]` | eta3 of region 1149: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 2 (eta3) of $wm1#36087 at node 123991 |
-| `ShellCheck.Parser` | 124668 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1161: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 4 (eta) of k#36617 at node 124648 |
-| `ShellCheck.Parser` | 125675 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 54: a call of the region is not saturated exactly | `boundary-Unresolved(call-site-is-a-partial-application)` | parameter 3 (eok) of lvl#397 at node 125673 |
-| `ShellCheck.Parser` | 125720 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 53: a call of the region is not saturated exactly | `boundary-Unresolved(call-site-is-a-partial-application)` | parameter 3 (eok) of lvl#382 at node 125718 |
-| `ShellCheck.Parser` | 126651 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 1166: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 3 (eok) of lvl#36967 at node 126635 |
-| `ShellCheck.Parser` | 126675 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 1166: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 3 (eok) of lvl#36967 at node 126635 |
-| `ShellCheck.Parser` | 126717 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 1166: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (cok) of lvl#36967 at node 126633 |
-| `ShellCheck.Parser` | 126741 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 1166: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (cok) of lvl#36967 at node 126633 |
+| `ShellCheck.Parser` | 1946 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 119: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 1930 |
+| `ShellCheck.Parser` | 1962 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 119: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 1930 |
+| `ShellCheck.Parser` | 1996 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 119: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 1928 |
+| `ShellCheck.Parser` | 2012 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 119: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 1928 |
+| `ShellCheck.Parser` | 17769 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 546: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 17767 |
+| `ShellCheck.Parser` | 40016 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 659: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 40014 |
+| `ShellCheck.Parser` | 44120 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 3 (eta) of eta#14436 at node 44107 |
+| `ShellCheck.Parser` | 44121 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 3 (eta) of eta#14436 at node 44107 |
+| `ShellCheck.Parser` | 44170 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (eta) of eta#14436 at node 44105 |
+| `ShellCheck.Parser` | 44171 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (eta) of eta#14436 at node 44105 |
+| `ShellCheck.Parser` | 55495 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 769: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 55491 |
+| `ShellCheck.Parser` | 57894 | `eta Eok → Eok [R3-CONT-CALL-ETA]` | eta of region 444: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 3 (eta) of lvl#4458 at node 57887 |
+| `ShellCheck.Parser` | 57919 | `eta Cok → Cok [R3-CONT-CALL-ETA]` | eta of region 444: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (eta) of lvl#4458 at node 57885 |
+| `ShellCheck.Parser` | 58867 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 439: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 2 (eok) of $wps#4447 at node 58854 |
+| `ShellCheck.Parser` | 58868 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 439: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 2 (eok) of $wps#4447 at node 58854 |
+| `ShellCheck.Parser` | 58921 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 439: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (cok) of $wps#4447 at node 58853 |
+| `ShellCheck.Parser` | 58922 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 439: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (cok) of $wps#4447 at node 58853 |
+| `ShellCheck.Parser` | 61995 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 802: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 61982 |
+| `ShellCheck.Parser` | 61996 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 802: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 61982 |
+| `ShellCheck.Parser` | 62045 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 802: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 61980 |
+| `ShellCheck.Parser` | 62046 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 802: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 61980 |
+| `ShellCheck.Parser` | 66715 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 4 (eta) of k#4393 at node 66700 |
+| `ShellCheck.Parser` | 66716 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 4 (eta) of k#4393 at node 66700 |
+| `ShellCheck.Parser` | 66765 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 2 (eta) of k#4393 at node 66698 |
+| `ShellCheck.Parser` | 66766 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 2 (eta) of k#4393 at node 66698 |
+| `ShellCheck.Parser` | 79705 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 866: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 79701 |
+| `ShellCheck.Parser` | 87005 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 891: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 87003 |
+| `ShellCheck.Parser` | 98148 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 976: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eta) of #? at node 98146 |
+| `ShellCheck.Parser` | 123694 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
+| `ShellCheck.Parser` | 123725 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
+| `ShellCheck.Parser` | 123767 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
+| `ShellCheck.Parser` | 123824 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eta) of $wk#36309 at node 123687 |
+| `ShellCheck.Parser` | 123881 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1157: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 4 (eta) of k#36395 at node 123877 |
+| `ShellCheck.Parser` | 124015 | `eta3 Eok → Eok [R3-CONT-CALL]` | eta3 of region 1149: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 2 (eta3) of $wm1#36087 at node 123991 |
+| `ShellCheck.Parser` | 124668 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1161: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 4 (eta) of k#36617 at node 124648 |
+| `ShellCheck.Parser` | 125675 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 54: a call of the region is not saturated exactly | `boundary-producer-set-is-not-enumerated (Unresolved: call-site-is-a-partial-application)` | parameter 3 (eok) of lvl#397 at node 125673 |
+| `ShellCheck.Parser` | 125720 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 53: a call of the region is not saturated exactly | `boundary-producer-set-is-not-enumerated (Unresolved: call-site-is-a-partial-application)` | parameter 3 (eok) of lvl#382 at node 125718 |
+| `ShellCheck.Parser` | 126651 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 1166: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 3 (eok) of lvl#36967 at node 126635 |
+| `ShellCheck.Parser` | 126675 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 1166: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 3 (eok) of lvl#36967 at node 126635 |
+| `ShellCheck.Parser` | 126717 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 1166: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (cok) of lvl#36967 at node 126633 |
+| `ShellCheck.Parser` | 126741 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 1166: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (cok) of lvl#36967 at node 126633 |
 
 ### What this is checked by
 
@@ -4904,7 +4923,15 @@ population that happens to have the same size. The section prints in
 `h2r parsec` and, in summary, in `h2r tuples --verify`; both are additions,
 and every other line of every existing report is byte-identical.
 
-The hand-built regression test (`residual_edge_closes_through_a_uniform_boundary_of_known_continuations`)
+*Corrected by [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found).
+The condition this section states — "one of the three enumerated verdicts" —
+was the wrong condition, and the paragraph below called
+`residual_edge_closes_through_a_uniform_boundary_of_known_continuations`
+"the" regression test as though `parsec.rs` had no others. It carries
+**27** unit tests of its own, in its own `mod tests`, and `cargo test`
+counts every one of them; this is the one that covers `residual_edges`.*
+
+That regression test
 covers the branch the real dump does not reach: two regions that each hand a
 tuple to their `cok` and are each called twice with a continuation the region
 graph refuses to follow. One closes — `P-HO-FINITE` over a
@@ -4949,7 +4976,7 @@ the same reason: the verifier must not be able to see a `Verdict` at all.
 | dictionary parameter `Erasable` / `WithClone` / `WithObligation` | 36 / 4 / 0 | a dictionary, or a force, that is still needed is deleted |
 | owner-level dictionary clone plan | 4 | fewer specialisations than the call sites that exist |
 | higher-order `ExactClosure` / `TypeShapeUniform` / `CloneRequired` / `FiniteClosureSet` | 50 / 16 / 141 / 1 | one representation given to a slot two live closures disagree about |
-| owner-level closure clone plan | 21 plans, 53 clones | ditto |
+| owner-level closure clone plan | 21 plans, 68 clones (53 before [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found)) | ditto |
 | | **606 claims** | |
 
 A wrong `Unresolved` or a wrong `Preserve` costs only coverage, so nothing
@@ -5138,6 +5165,12 @@ constructor application, a dfun, or a variable a `case` has already bound.
 M2.4c′ additionally admits a variable GHC marks strict at its binder that an
 enclosing `case` on that binder dominates — a sound clause, but one this
 module would be *re-running* rather than checking, so it is left out.
+
+*Amended by [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found):
+"a variable a `case` has already bound" was too generous on **both** sides.
+An alternative binder of a lazy field is an unevaluated thunk, and this walk
+had taken that clause from M2.4c′ rather than deciding it. Both now admit
+only the scrutinee binder and a GHC-strict field's binder.*
 Omitting it can only make this walk find more forces than the analysis, which
 is the conservative direction for a verifier; it finds none, because there is
 no `case` to find.
@@ -5449,7 +5482,7 @@ together and never reported as one number.
   tuple, which is neither the sum nor the product of the per-slot counts.
   plan                                  cardinality   clones   planned   refused  lower bounds
   dictionary clones (E7-OWNER-CLONES)             8        4         4         0             4
-  closure clones (H15-OWNER-CLONES)             509       53        21        66             8
+  closure clones (H15-OWNER-CLONES)             509       68        21        66             8
 ```
 
 `rewritable as one` (66) ≤ `one representation` (84) ≤ `enumerated` (252) is
@@ -5592,7 +5625,7 @@ its thunk. The number is 0 and it is a result.
 | boundaries | 5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
 | … enumerated / one representation / rewritable as one | 252 / 84 / 66 | 391 / 143 / 125 | 486 / 189 / 172 | 1,909 / 718 / 695 | 1,887 / 706 / 683 | 1,891 / 705 / 682 |
 | dictionary values / parameters | 191 / 216 | 191 / 210 | 191 / 222 | 238 / 223 | 238 / 223 | 238 / 231 |
-| clone plans (dictionary / closure) | 4 / 53 | 3 / 61 | 4 / 65 | 7 / 154 | 7 / 154 | 7 / 176 |
+| clone plans (dictionary / closure) | 4 / CLOSURE_O1 | 3 / CLOSURE_B | 4 / CLOSURE_C | 7 / CLOSURE_D | 7 / CLOSURE_E | 7 / CLOSURE_F |
 | claims / disagreements | 606 / 0 | 749 / 0 | 867 / 0 | 2,209 / 0 | 2,187 / 0 | 2,209 / 0 |
 | M1 thunk sites explained by M2.4 | 0 | 0 | 0 | 0 | 0 | 0 |
 
@@ -5640,7 +5673,252 @@ an aggregate over all of it.
 Those two reports can now carry a byte-identity gate, and this milestone is
 the first to put them under one.
 
+### Correction (M2.4h) — four defects the owner's review of M2.4 found
+
+Four defects in `e2055bc`, found by the project owner's review of the
+published work and not by a failing test. Three of them are the analysis
+claiming more than its evidence; the fourth is a proof object answering the
+wrong question. Every one is in the same direction as the earlier
+corrections, and one of them the **verifier had copied rather than
+derived** — which is a defect in the verification and not only in the
+analysis.
+
+| | what was wrong | what it moved |
+|---|---|---|
+| **1** | three defects in the totality domain, in `dictflow.rs` **and** reproduced in `verify_m24.rs`: every alternative binder counted as *already evaluated*; the totality join kept one obligation and lost the rest; an applied `case`/`let` head was peeled, dropping its arguments | no verdict on any of the seven dumps — `MustPreserveForce` is 0 on `-O1` because there is no `case` on a dictionary path at all, and the three shapes do not occur — but the rules are now the rules the reports claim, and each has a hand-built counterexample |
+| **2** | `H15-OWNER-CLONES` deduplicated clone tuples with `Shape::short()` — arity and capture **count** — contradicting `Shape::class()`, which is what every other part of M2.4d calls a representation | closure clones **53 → 68** on `-O1`; the verifier's independent recount agrees |
+| **3** | a clone-plan claim carried only its cardinality and an `ErasableWithObligation` claim carried no obligation at all, so `check_plan` compared `tuples == n` and a different plan of the same size passed | no number; the claim protocol and two refusal reasons are new, and `[verified: yes]` now requires a content-checked claim |
+| **4** | `parsec::residual_edges` gated target enumeration on the *representation* verdict, admitting three verdicts and refusing `CloneRequired` | no number — still **0 closed of 41** — but the 41-row table's status column now names the enumeration answer, with the verdict beside it |
+
+#### 1 — the totality domain, three defects, and a verifier that had copied them
+
+**(a) an alternative binder is not already evaluated.** `is_already_evaluated`
+returned `true` for `BindSite::CaseBinder | BindSite::AltBinder`. The
+scrutinee binder is sound: it could not be named before the scrutinee was
+forced. The alternative binder is not. Matching `P d` forces `P`, not `d`,
+and if the field is lazy then `d` is an unevaluated thunk — so a `case` on
+`d` deletes an evaluation that erasure would have to put back. Both walks
+now admit only the scrutinee binder, the binder of a field GHC's own
+`strictFields` marks strict, and the values they already admitted; a
+constructor the dump does not carry, or one whose source-field strictness
+vector and representation arity disagree, contributes no strict field at all
+rather than a guess. `an_alt_binder_of_a_lazy_field_is_not_already_evaluated`
+and its strict twin pin both directions.
+
+**(b) an obligation set is a set.** `Tot::join` kept the lexicographically
+smallest `ForceObligation` and dropped every other one, so a dictionary
+standing behind two distinct forces was erasable against one of them and the
+second force disappeared with it. An obligation is a proof debt, not a
+witness to be chosen. `Tot` now carries a `BTreeSet<ForceObligation>`, the
+join is a **union**, and `ErasableWithObligation` carries the whole set;
+`dictflow`'s accounting gained `named_forces` beside `obligations` because
+one verdict can now carry several. `every_force_obligation_survives_the_join`
+builds two call sites forcing different scrutinees and requires both.
+
+**(c) an applied `case`/`let` head is not its alternatives.** `eval_nested`
+and `tot_nested` matched `Expr::Case`/`Expr::Let` in head position and
+walked into the alternatives — but `m.spine()` puts the *outer value
+arguments* in `args`, and `(case x of A -> f; B -> g) d` is not
+`case x of A -> f; B -> g`. Peeling it answered about an expression `d` had
+been dropped from. Pushing the arguments through would mean building Core,
+which this compiler never does, so both walks refuse:
+`case-or-let-head-with-outer-value-arguments`, a `Top` for the set and
+`Unknown` for the totality.
+`a_case_head_with_outer_arguments_is_refused_not_peeled` builds exactly that
+shape with `d` the dictionary, and pins that the old walk's answer — the
+two-element set `{$fShowT, $fShowU}` for an expression whose value is
+neither — is now a refusal.
+
+**In the dump: all three shapes are zero on `-O1`.** The totality transfer
+reaches **0** `case` nodes on a dictionary path — the instrumented fact
+M2.4c′ recorded and M2.4f re-derives — so (a) and (b) have nothing to bite
+on: 0 dictionary paths through an alternative binder's `case`, 0 verdicts
+with more than one obligation, `MustPreserveForce` still 0 of 216. For (c),
+no dictionary expression in any of the seven dumps has a `case` or `let`
+head with outer value arguments, so no set moved either. `dictflow`'s report
+is **byte-identical** on all seven dumps. That is a finding about GHC's
+`-O1` output, not a reason the rules could stay wrong: the counterexamples
+are in `tests.rs` and the rules are what the reports say they are.
+
+**(d) the totality partition is asserted in its own right.**
+`m24::Accounting::check()` asserted it only inside `ErasureRow::closes()`,
+where a failure would have been reported as the whole erasure row not
+closing. It is now its own equation with its own message:
+`ProvenTotal + MustPreserveForce + Unknown = parameters` — 118 + 0 + 98 =
+216 on `-O1`.
+
+**And the verifier had copied all three.** `verify_m24.rs` claims to share
+nothing with `dictflow.rs` but the IR and four named inputs, and for these
+three points that was not true: its `already_evaluated`, its `TotFact::join`
+and its `tot_eval` reproduced the analysis's decisions, defect included, so
+the check agreed for the wrong reason. Each is now decided there on its own
+terms — its own `alt_strict` map built from GHC's `strictFields`, its own
+witness **set**, its own refusal of an applied head — and the module's
+documentation says that these three were previously copied, because a
+verifier that had copied a decision is a fact about the verification that
+belongs in the record.
+
+#### 2 — a representation class is arity *and* the capture types
+
+`H15-OWNER-CLONES` plans one clone per distinct call-site assignment tuple.
+Building the tuple, `component()` rendered each settled producer set with
+`Shape::short()` — *arity and the number of captures* — and deduplicated on
+that. `Shape::class()`, which is what `Boundary::classes`, `class_keys()`,
+`one_representation()` and `H14-FREE-TYVAR` all mean by a representation, is
+*arity and the ordered capture-type keys*. Two closures of the same arity
+capturing the same number of differently-typed values are one variant under
+`short()` and two under `class()`, and the plan used the wrong one — so it
+under-counted the specialisations the lowering has to emit, which is the one
+direction a clone plan must not err in.
+
+The tuple component is `class()` now. `short()` survives as `tuples_short`,
+display only, and the correction is visible in it: `ShellCheck.Fixer`
+`$srealignColumn` has two call sites whose tuples both render as
+`arity 1, 1 capture(s), arity 1, 1 capture(s)` and whose classes are
+
+```
+arity=1;captures=[!ShellCheck.Fixer#1181!F(Many,faYH6,Position)], arity=1;captures=[!ShellCheck.Fixer#1170!C(Ranged,faYH6)]
+arity=1;captures=[!ShellCheck.Fixer#1225!F(Many,faYH6,Position)], arity=1;captures=[!ShellCheck.Fixer#1214!C(Ranged,faYH6)]
+```
+
+— two `H14-FREE-TYVAR` producer-private keys, which is exactly the
+distinction `short()` erases. One clone before, two after.
+`clone_tuples_use_the_full_shape_class_not_the_short_rendering` pins the
+minimal version: two closures of arity 1 capturing one `T` and one `R`.
+
+`verify_m24.rs`'s own planner had the same defect and is corrected
+independently.
+
+**Closure clones, per owning function, before → after (`-O1`):**
+
+| module | owning function | plans | clones before | clones after |
+|---|---|---:|---:|---:|
+| `ShellCheck.ASTLib` | `$sgetLiteralStringExt` | 1 | 2 | 2 |
+| `ShellCheck.Analytics` | `$srunNodeAnalysis` | 1 | 3 | **5** |
+| `ShellCheck.Analytics` | `analyse` | 1 | 2 | 2 |
+| `ShellCheck.Analytics` | `doVariableFlowAnalysis` | 1 | 3 | 3 |
+| `ShellCheck.CFGAnalysis` | `go15` | 2 | 6 | 6 |
+| `ShellCheck.CFGAnalysis` | `go4` | 1 | 3 | 3 |
+| `ShellCheck.Checks.ShellSupport` | `go1` | 1 | 3 | 3 |
+| `ShellCheck.Fixer` | `$srealignColumn` | 1 | 1 | **2** |
+| `ShellCheck.Parser` | `$wisFollowedBy` | 1 | 1 | **4** |
+| `ShellCheck.Parser` | `$wpoly_k` | 1 | 3 | **4** |
+| `ShellCheck.Parser` | `$wreadIoVariable` | 1 | 2 | 2 |
+| `ShellCheck.Parser` | `k` (eight distinct binders) | 8 | 23 | **30** |
+| `ShellCheck.Parser` | `readAmbiguous` | 1 | 1 | **2** |
+| **total** | | **21** | **53** | **68** |
+
+Six of the twenty-one plans move; the refusals do not (66 of 87 owners still
+refuse rather than guess), the per-parameter class cardinality is still 509
+and is still evidence rather than a count, and the eight plans with a
+set-valued component are still lower bounds. `h2r verify-m24` re-derives all
+21 plans from its own walk with **0 disagreements**, so 68 is two
+independent counts and not one.
+
+#### 3 — a claim has to carry what the check needs
+
+`m24_claims.rs` wrote a clone plan down as a cardinality — `n` — and
+`verify_m24::check_plan` compared `p.tuples == c.n`. A plan with completely
+different variants of the same size therefore re-derived as agreeing, which
+is a check of arithmetic and not of a plan. An `ErasableWithObligation`
+claim carried no obligation at all, so the check could compare only the
+verdict *label*: an obligation at the wrong node would have passed.
+
+A claim now carries its content:
+
+* **`Claim::groups`** — the plan as a **partition of the owner's call
+  sites**, one entry per planned clone, each site by address
+  (`Module#node`), rendered by one shared `group_lines`. This is the content
+  of a clone plan that survives being derived twice: *which call shares a
+  clone with which*. It is compared for every plan.
+* **`Claim::tuples`** — the deduplicated tuple set itself. For a
+  **dictionary** plan the components are dictionary identities — addresses —
+  and the set is compared directly. For a **closure** plan they are shape
+  classes, and the two walks derive their capture keys independently and
+  render them differently on purpose (`arity=1;captures=[…]` against
+  `1/[…]`); comparing those strings would compare two renderings and not two
+  facts, so the tuples are the record and `groups` is the check. Addressing
+  is not sharing; rendering a derived fact would be.
+* **`Claim::obligations`** — every force the verdict leaves to be
+  discharged, as `Module#at forces what`, an address both sides build from
+  their own derivation.
+
+`check_plan` compares the partition, then the tuple set where its components
+are addresses, then the cardinality **last** — agreeing about a number after
+disagreeing about the content is the defect this corrects. Two new refusals
+carry it: `X_GROUPS_DIFFER` and `X_TUPLES_DIFFER`, plus `X_OBLIGATIONS_DIFFER`
+for the obligation set. And `m24.rs` will not print `[verified: yes]` for a
+claim that carried no content to check: a clone-plan claim whose `tuples` or
+`groups` do not have one entry per planned clone, or an
+`ErasableWithObligation` claim with an empty obligation set, is refused with
+`X_NO_CONTENT` rather than silently counted as proven.
+
+Four tests make it bite, and all four corrupt the **content** while leaving
+every count intact: `a_clone_plan_claim_with_swapped_tuples_is_refused`
+reassigns the call sites between two planned clones and gets
+`X_GROUPS_DIFFER`;
+`a_dictionary_clone_plan_claim_with_swapped_tuples_is_refused` replaces one
+tuple with a copy of the other and gets `X_TUPLES_DIFFER`;
+`an_obligation_claim_with_a_changed_address_is_refused` moves the obligation
+to a node that does not exist and gets `X_OBLIGATIONS_DIFFER`; and
+`a_contentless_clone_plan_claim_is_never_marked_verified` strips the content
+and keeps the count, and asserts the view no longer says `yes`. Each asserts
+the refusal is a `D` and not a `C`.
+
+#### 4 — enumeration and representation are different questions
+
+`parsec::residual_edges` asks, of each of the 41 residual Parsec
+continuation edges, whether the closure graph gives it a finite set of
+continuation targets. It admitted `ExactClosure | TypeShapeUniform |
+FiniteClosureSet` and refused `CloneRequired` — which is the exact
+conflation `H11-SEPARATE` exists to prevent, and which M2.4d′ had already
+had to correct once elsewhere. Whether the producers are **enumerated** and
+whether **one representation** can serve them are two facts M2.4d records
+separately. A `CloneRequired` boundary is enumerated — that is how its
+clones could be counted at all — and its continuation-target set is exactly
+as finite as an `ExactClosure` one; needing two representations says nothing
+about how many targets there are.
+
+The condition is now `bd.enumerated && every producer has a known
+continuation role`, read from the recogniser's own `cont_source` as before.
+The representation verdict is recorded beside every edge as evidence
+(`representation verdict …`) and gates nothing, and an unenumerated boundary
+gets the new status `boundary-producer-set-is-not-enumerated`, naming the
+verdict inside the parentheses rather than in place of the answer.
+
+**The 41-row table is recomputed and still closes 0.** Every one of the 41
+boundaries is `Unresolved` and therefore unenumerated — 20
+`parameter-of-an-anonymous-lambda`, 19 `function-used-as-a-value`, 2
+`call-site-is-a-partial-application` — so none of them could have closed
+under either condition, and the rule never reached the role question. What
+changed is that the table now says *why* in the terms of the question it
+asked. Nothing here would have moved on the old condition either; the point
+is that it would have moved for the wrong reason as soon as an enumerated
+`CloneRequired` boundary appeared, which is the case M2.4d′ found on the
+other side of the same wall.
+
+*(`parsec.rs` carries **27** unit tests of its own; M2.4e's text called one
+of them "the" regression test. That is corrected above.)*
+
+#### The gate for this correction
+
+**278 reports** captured over the seven dumps before and after —
+`stats`, `laziness`, `tuples` (plus `--verify`, `--scalar`,
+`--boundaries`), `fields`, `lists` (plus `--axioms`), `text` (plus
+`--heads`), `verify-rep` (plus `--explain`), `parsec` (plus `--explain`),
+`classops` (plus `--per-module`), `dictflow` (plus `--explain`), `higher`,
+`verify-m24` (plus `--explain`), `m24`, `compare`, three `show` nodes and
+the `--json` form of each. GATE_RESULT
+
+No Core is mutated, no codegen is emitted, no GHC flag changed, no
+`rust-port` file is touched. `cargo test` TEST_COUNT, `cargo clippy
+--all-targets` 0 warnings and `cargo fmt --check` clean.
+
 ### M2.4 acceptance
+
+*(Every count below is as M2.4g measured it, with
+[M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found)'s one
+moved number — 53 planned closure clones → **68** — folded in.)*
 
 **The criterion is that the three questions are answered separately, that
 every positive answer is re-derived by a walk that shares nothing with the
@@ -5696,8 +5974,9 @@ having claimed more than its evidence:
 | | what was wrong | what it moved |
 |---|---|---|
 | [M2.4c′](#correction-m24c--totality-is-not-the-same-fact-as-identity) | `Erasable` was decided from *bounded dictionary identity*, which a MAY-analysis over a `case` gives without the producer being total; and the per-parameter clone cardinalities were summed | no verdict moved (`MustPreserveForce` is 0 because `-O1` floats every dictionary out of every scrutinee — an instrumented fact, re-derived by M2.4f) and 8 clones → **4** |
-| [M2.4d′](#correction-m24d--sharing-is-decided-before-agreement-and-a-free-type-variable-identifies-nothing) | six defects: `H8` decided after `H5`/`H6`; two different one-representation theorems and opaque shapes merging; per-parameter clone counts summed; free type variables merging unrelated closures; existential fields indexed by raw binder position; `UniformRepresentation` named a Rust fact it is not | `ExactClosure` 67 → **50**, `Preserve` 26 → **44**, one representation 103 → **84**, rewritable 87 → **66**, shape classes 261 → **353**, clones 418 → **53** |
+| [M2.4d′](#correction-m24d--sharing-is-decided-before-agreement-and-a-free-type-variable-identifies-nothing) | six defects: `H8` decided after `H5`/`H6`; two different one-representation theorems and opaque shapes merging; per-parameter clone counts summed; free type variables merging unrelated closures; existential fields indexed by raw binder position; `UniformRepresentation` named a Rust fact it is not | `ExactClosure` 67 → **50**, `Preserve` 26 → **44**, one representation 103 → **84**, rewritable 87 → **66**, shape classes 261 → **353**, clones 418 → **53** (→ **68** in M2.4h) |
 | [M2.4f](#the-one-correction-this-produced) | the *record*, not a verdict: M2.4d′ said ShellCheck's Core has no alternative binding a function-typed field after an existential type binder. It has four | no number moved; the prose was corrected and the shape is now counted on every run (rows 11 and 11a) |
+| [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found) | four: three in the totality domain (every alternative binder read as already evaluated, the obligation join keeping one of a set, an applied `case`/`let` head peeled) which `verify_m24.rs` had **copied rather than derived**; clone tuples deduplicated by arity-and-capture-count instead of by representation class; a claim protocol that carried counts where the check needed contents; and `parsec::residual_edges` gating target enumeration on the representation verdict | closure clones 53 → **68**; nothing else moved as a number — the three totality shapes are absent from all seven dumps and the 41 Parsec edges still close **0** — but the claim protocol, two refusal reasons and the `parsec` status column are new |
 
 **Trusted inputs and assumptions, named.** The first four are the trusted
 inputs: consulted and never verified, on both sides of the M2.4f check, and
