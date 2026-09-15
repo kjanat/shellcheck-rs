@@ -5935,10 +5935,20 @@ boundaries is `Unresolved` and therefore unenumerated — 20
 under either condition, and the rule never reached the role question. What
 changed is that the table now says *why* in the terms of the question it
 asked. The count is the same as M2.4e published, and it was the same for a
-different reason: the old rule refused these 41 by verdict, and the verdict
-happened to be the same `Unresolved` that also means unenumerated. The
-first enumerated `CloneRequired` boundary to appear on a residual edge would
-have parted the two.
+different reason: the old rule refused these 41 by verdict, and on `-O1` the
+verdict happened to be the same `Unresolved` that also means unenumerated.
+
+**On the `-O2 -fno-full-laziness` dump (C) the two part.** C has 71 residual
+edges, and **four** of them sit on a boundary the closure graph calls
+`CloneRequired(8)` — enumerated, eight shape classes. The old rule turned
+those four away on the representation verdict and never asked the role
+question. The corrected rule asks it, and all four fail it: the refusal
+`producer-is-not-a-region-continuation` goes from 1 to **5**. The closed
+count is still 0 on every dump, so no verdict moves — but four edges on C
+are now refused for a reason about *continuations*, which is the question
+M2.4e set out to ask, instead of for a reason about *representations*, which
+is not. That is the defect showing itself in a real dump rather than only in
+a fixture.
 
 **And the rule now fires where it could not.**
 `residual_edge_closes_through_a_clone_required_boundary` builds the case the
