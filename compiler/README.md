@@ -39,7 +39,8 @@ ShellCheck Haskell
 | **M2.3** | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link, **g** the correction to the axiom layer | done |
 | **M2.4a** | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged | done |
 | **M2.4b** | the closed-world class-op census: 565 dispatch sites, the 294 mapped 1:1, every class identified — and not one dictionary statically known | done |
-| **M2.4** | **next.** Dictionary erasure (M2.4c) and closed-world **class-op enumeration** (294 census sites, 3 tuple residuals); **higher-order representation agreement** (M2.4d: 5,574 function-valued boundaries, 252 enumerated, 103 needing one representation, 418 clones counted — the 67 tuples handed into a local callee's parameter and the 187 + 134 + 114 that reach an imported call, a list cell or a program constructor through a closure all land somewhere named); and the **41 Parsec edges** whose continuation target the region graph does not close over; **M2.4f** re-derives every positive verdict of all of it independently, with 0 disagreements on all seven dumps | next |
+| **M2.4** | the closed-world dictionary and higher-order milestone, in three separate questions: **can the call target be enumerated** (7 of 565 sites, the dictionary bounded at 118), **can an abstraction boundary use one representation** (5,574 function-valued boundaries, 252 enumerated, 84 one representation, 66 rewritable as one, 53 clones planned per owner), and **can the object disappear** (102 of 191 dictionary values `Erasable`, 40 of 216 parameters, 4 owner-level clones) — **c** whole-program dictionary flow with its own totality domain, **d** higher-order representation agreement, **e** the 41 Parsec edges (0 closed, and why), **f** the independent re-derivation of all 606 positive claims with 0 disagreements on all seven dumps, **g** the views, the provenance, the accounting and the four cross-milestone links, **c′/d′** the two corrections | done |
+| **M3** | **next.** The lowering: `Main.main`-rooted reachability (the 922 zero-reference bindings are not a rooted dead set), a canonical closure-boundary carrier per Haskell type — the open invariant `TypeShapeUniform` rests on — a call-string analysis to close the twelve set-valued clone plans, and a naming pass for the 4,613 anonymous-lambda / used-as-a-value boundaries that are `ShellCheck.Parser`'s CPS | next |
 
 ## Layout
 
@@ -49,9 +50,9 @@ ShellCheck Haskell
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), which imported Id an occurrence links to (its stable name), which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent), and what each type *is* (`Ty`, with `TyCon` identity and `alpha_eq`). Includes a depth-limited Core pretty-printer. |
-| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`), and the closed-world class-op census with its asserted class table (`classops.rs`), and the whole-program dictionary flow with its separate erasure and totality domains (`dictflow.rs`), and the higher-order representation-agreement analysis (`higher.rs`), and the independent re-derivation of every *positive* M2.4 verdict (`verify_m24.rs`, which shares nothing with `classops.rs`, `dictflow.rs`, `higher.rs` or `flow.rs` but the IR, and reads the analyses' verdicts only as the plain data `m24_claims.rs` writes down). |
+| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`), and the closed-world class-op census with its asserted class table (`classops.rs`), and the whole-program dictionary flow with its separate erasure and totality domains (`dictflow.rs`), and the higher-order representation-agreement analysis (`higher.rs`), and the independent re-derivation of every *positive* M2.4 verdict (`verify_m24.rs`, which shares nothing with `classops.rs`, `dictflow.rs`, `higher.rs` or `flow.rs` but the IR, and reads the analyses' verdicts only as the plain data `m24_claims.rs` writes down), and M2.4's per-site and per-boundary views, the `h2r show` provenance they share, the milestone's own accounting and its four cross-milestone links (`m24.rs`). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), `dictflow` (the whole-program dictionary flow, its erasure verdicts and its clone plan), `higher` (the function-valued boundaries and their representation verdicts), `verify-m24` (the independent re-derivation of every positive M2.4 verdict), and the `--view` / `--view-all` representation views `fields`, `lists` and `text` each carry. Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), `dictflow` (the whole-program dictionary flow, its erasure verdicts and its clone plan), `higher` (the function-valued boundaries and their representation verdicts), `verify-m24` (the independent re-derivation of every positive M2.4 verdict), `m24` (M2.4's accounting, its residual and its four cross-milestone links in one place), and the `--view` / `--view-all` views `fields`, `lists`, `text`, `classops` and `higher` each carry. Later: the lowering passes. |
 
 ## Usage
 
@@ -100,6 +101,12 @@ cargo run --release --bin h2r -- text ../core-json --module ShellCheck.Formatter
 cargo run --release --bin h2r -- show ../core-json ShellCheck.AST 5293      # + its M2.3 footers
 cargo run --release --bin h2r -- tuples ../core-json --module Main --boundaries --explain
 cargo run --release --bin h2r -- show ../core-json ShellCheck.Checks.Commands 4714   # + its tuple proof
+cargo run --release --bin h2r -- classops ../core-json --view 1154          # one dispatch site, laid out
+cargo run --release --bin h2r -- classops ../core-json --view-all --module ShellCheck.Fixer --json
+cargo run --release --bin h2r -- higher ../core-json --view 51239           # one boundary: producers, uses, the rule order
+cargo run --release --bin h2r -- higher ../core-json --view-all --module ShellCheck.AST --json
+cargo run --release --bin h2r -- m24 ../core-json             # M2.4's accounting, residual and cross-links
+cargo run --release --bin h2r -- show ../core-json ShellCheck.Fixer 1154    # + its M2.4 footers
 ```
 
 ## M1 — how much Haskell is left after GHC?
@@ -5225,6 +5232,557 @@ flag changed.
   and not a closing of it.
 * **`TypeShapeUniform`'s M3 carrier invariant** is assumed here too. This
   walk re-derives the shape classes; it cannot promise a lowering.
+
+## M2.4g — the views, the provenance, the accounting, and what the milestone claims
+
+M2.4b–e record the facts and [M2.4f](#m24f--re-deriving-the-m24-verdicts-independently)
+re-derives every verdict whose being wrong would be a miscompile. This
+section adds the three things a milestone needs before it can be closed —
+exactly the three [M2.3f](#m23f--the-representation-view-and-what-the-milestone-claims)
+added for M2.3: **views** that lay one site's proof out so a person can
+audit it, **provenance** in `h2r show` so any Core node can be asked what
+M2.4 says about it, and the milestone's own **accounting**, asserted in
+code and printed whole. It changes no verdict.
+
+```sh
+cargo run --release --bin h2r -- classops ../core-json --view 1154
+cargo run --release --bin h2r -- classops ../core-json --view-all --module ShellCheck.Fixer --json
+cargo run --release --bin h2r -- higher ../core-json --view 51239
+cargo run --release --bin h2r -- higher ../core-json --view-all --module ShellCheck.AST --json
+cargo run --release --bin h2r -- show ../core-json ShellCheck.Fixer 1154      # + its M2.4 footers
+cargo run --release --bin h2r -- m24 ../core-json                             # the whole milestone
+```
+
+### Two views, each with its own completeness assertion
+
+The **class-op view** puts one dispatch site on the page: the class and the
+method with the field the selector reads, the dictionary argument, the
+per-module origin chain with each step's rule, the **whole-program producer
+set at every parameter hop** the dictionary passes through, the target
+outcome, the totality fact, the erasure verdict with its reason, and the
+owner's clone-plan row where the owner has one. Every fact carries the
+verifier's answer, and a claim `verify-m24` refused is never printed as
+proven. `ClassopViews::check` asserts that **every site of the module
+appears exactly once**, and `ClassopView::check` that no parameter hop is
+listed twice — the walk up the parameter chain terminates and never doubles
+back.
+
+```
+$ h2r classops compiler/core-json --view 1154
+ShellCheck.Fixer node 1154 — Ranged.setRange, dispatch on node 1252 → Exact(ShellCheck.Fixer.$csetRange)
+    class Ranged … method setRange (field 3) … selector $ShellCheck-0.11.0-inplace$ShellCheck.Fixer$setRange
+    dictionary argument  node 1252  [K1-DICT-ARG]
+    origin chain (per module)  none reached
+    whole-program producer set, per parameter hop [W3-PARAM-UNION]
+        ShellCheck.Fixer removeTabStops.$dRanged (binder 312), exported
+            set {ShellCheck.Fixer#14}  [verified: yes]
+            totality ProvenTotal … erasure Erasable [verified: yes]
+    target   Exact(ShellCheck.Fixer.$csetRange)  [verified: yes]
+    per module (M2.4b)  Unresolved(dictionary-parameter-of-an-exported-function)
+    dictionary set  {ShellCheck.Fixer#14}  [verified: yes]
+    totality ProvenTotal  [E6-TOTALITY-*]
+    erasure  Erasable  [verified: yes]
+    owner clone plan  none (this owner needs no clone)
+    facts (no verdict attached)
+        K10-FORCED: the selector application forces its dictionary: true
+        K11-DICT-ESCAPES: the dictionary is also used as an ordinary value: false
+        GHC records the dictionary binder strict: true (evidence only, never a verdict)
+    rules  K0-CLASSOP-SITE K1-DICT-ARG K10-FORCED K2-DICT-TYPE K3-CLASS-TABLE
+```
+
+That one site is the milestone in miniature: M2.4b could only say
+`Unresolved(dictionary-parameter-of-an-exported-function)`, the closed-world
+fixpoint bounds the dictionary to one instance and the method to one
+binding, the totality domain says the producer is a value so erasing it
+moves no divergence, and the second walk re-derived all three.
+
+The **boundary view** puts one function-valued slot on the page: the slot
+with its owner and whether it is exported or belongs to a function used as
+a value, every producer with its **full shape class and its capture types**,
+every use, and — the part the milestone's own corrections make necessary —
+the **rule order** that produced the verdict, with the answer at every step
+and an arrow on the one that fired. `H8-PRESERVE` is decided before `H5`
+and `H6` ([M2.4d′ defect 1](#1-h8-was-decided-after-h5h6)), and the view
+shows the earlier questions answered rather than skipped.
+`BoundaryViews::check` asserts **every boundary of the module appears
+exactly once**, and `BoundaryView::check` that every producer appears once
+and that *rewritable as one* never exceeds *one representation*.
+
+```
+$ h2r higher compiler/core-json --view 51239
+ShellCheck.Analytics parameter 0 (readFunc) of doVariableFlowAnalysis#1867 — param of doVariableFlowAnalysis, producers 3 (classes 3) → CloneRequired
+    slot     param parameter 0 (readFunc) of doVariableFlowAnalysis#1867 at node 51239 of doVariableFlowAnalysis
+    facts    enumerated true … 3 shape class(es) … the producer set is accounted for  [H11-SEPARATE: …]
+    producers (3)
+        ShellCheck.Analytics#160                 known function as a value              arity 4
+            captures []  class arity=4;captures=[]
+        ShellCheck.Analytics#36841               lambda                                 arity 4
+            captures [C(…Map,C(…Id),C(…Token)) | C(…Shell) | C(…Comment)]  class arity=4;captures=[…]
+        ShellCheck.Analytics#41138               lambda                                 arity 4
+            captures [C(…Map,C(…Id),C(…Token))]  class arity=4;captures=[…]
+    uses (1)
+        called, saturated                            node 51295  args 4
+    the rule order that produced the verdict (H8 before H5/H6)
+          H9-TAINT       is the producer set Top?                                         no, every producer is accounted for
+          H2-PRODUCERS   does any producer reach the slot?                                3 producer(s)
+          H8-PRESERVE    is a producer's environment invisible (opaque)?                  no
+          H8-PRESERVE    is the slot exported, so its representation is shared?           no
+          H8-PRESERVE    does the slot belong to a function used as a value?              no
+          H5-EXACT       is there exactly one producer?                                   3 producer(s)
+          H6-UNIFORM     do the producers fall in one shape class?                        3 shape class(es)
+        → H7-CLONE       is the slot a parameter of a local function, so a clone can serve it? the slot is a param
+          H4-SHAPE-CLASS otherwise: a finite set of closures no clone can serve           3 producer(s)
+    verdict  CloneRequired — 3 shape class(es)  [verified: yes]
+    one representation false … rewritable as one false (strictly stronger: the rewrite must own the slot)
+    owner clone plan  ShellCheck.Analytics doVariableFlowAnalysis — 2 slot(s), 3 call site(s), 3 tuple(s) → 3  [verified: yes]
+        tuple arity 4, 0 capture(s), arity 5, 0 capture(s)
+        tuple arity 4, 1 capture(s), arity 5, 0 capture(s)
+        tuple arity 4, 3 capture(s), arity 5, 0 capture(s)
+```
+
+`--view-all --module M` does every site or boundary of a module and `--json`
+dumps the views as structured data. Both assertions are exercised on the
+real dump rather than on a fixture: over the 28 modules they lay out **565
+of 565** class-op sites and **5,548** boundaries, each exactly once —
+`ShellCheck.AST` 429 sites and 240 boundaries, `ShellCheck.Parser` 57 and
+5,154. The 26 boundaries the 28 modules do not cover are constructor
+*fields* of constructors defined outside the dump — nine of `GHC.Prim`'s,
+nine of `GHC.Tuple.Prim`'s, three of `GHC.Base`'s and five more — and
+`--module GHC.Tuple.Prim` lays those out on the same terms. 5,548 + 26 =
+5,574.
+
+### Provenance in `h2r show`
+
+The two proof objects are loaded by default whenever the module has any,
+exactly as the Parsec, tuple and three representation objects are, and
+`--no-classops` / `--no-higher` opt out one at a time. They annotate
+class-op sites, dictionary values, dictionary-parameter binders and their
+occurrences, function-valued slots and their binders, and every closure
+producer — inline, and with one footer per site the node takes part in:
+
+```
+$ h2r show compiler/core-json ShellCheck.Fixer 1154 --depth 1
+([#1154]{class-op site Ranged.setRange ⇒ Exact}setRange[#1253]
+   $dRanged[#1252]{occurrence of dictionary parameter 0 of removeTabStops} … )
+
+node 1154
+  classop: Ranged.setRange at node 1154 dictionary $dRanged at node 1252 (param 0 of removeTabStops#312) → whole-program {ShellCheck.Fixer#14} → target Exact(ShellCheck.Fixer.$csetRange)
+  totality ProvenTotal … erasure Erasable [verified: yes]
+  this node: the class-op application itself; per-module Unresolved(dictionary-parameter-of-an-exported-function) [verified target: yes]
+```
+
+```
+$ h2r show compiler/core-json ShellCheck.Analytics 51239 --depth 0
+\readFunc{function-valued param ⇒ CloneRequired} writeFunc¹{function-valued param ⇒ TypeShapeUniform} … ->
+
+node 51239
+  boundary: parameter 0 (readFunc) of doVariableFlowAnalysis#1867 producers 3 (classes 3) → CloneRequired(3) … owner plan 3 clones
+  one representation false … rewritable as one false [verified: yes]
+  this node: the param slot itself; not exported
+  H11-SEPARATE: enumerated true — an enumerated producer set is not one representation
+```
+
+All seven proof objects' marks are concatenated rather than merged, so it
+stays visible which object said what. Unlike M2.3's, these two are
+*whole-program by construction* — a dictionary parameter's producer set and
+a slot's closure set are unions over every module — so the objects are built
+over the whole dump and only the asked-about module's sites, values,
+parameters, boundaries and producers are indexed. The whole M2.4 object,
+`verify-m24` included, costs about five seconds on the `-O1` dump, which is
+why `show` can load it by default.
+
+### The milestone accounting — three questions, never collapsed
+
+Asserted in code (`m24::Accounting::check`) and printed whole by `h2r
+classops`, `h2r higher` and `h2r m24`. The milestone has spent two
+corrections learning that these are three questions and not one: **a known
+method target is not a removable dictionary** (M2.4c) and **an enumerated
+producer set is not one representation** (M2.4d). They are never added
+together and never reported as one number.
+
+```
+(1) can the call target be enumerated?   sites = Exact + FiniteSet + Unresolved
+  class-op dispatch sites (population)              565
+  Exact(target)                                       7
+  FiniteSet(targets)                                  0
+  Unresolved                                        558
+  … sites whose dictionary is bounded               118   a SEPARATE fact, never added in
+  re-derived by verify-m24 (Exact / bounded)          7 / 118
+```
+
+```
+(2) can this abstraction boundary use one representation?
+    boundaries = ExactClosure + TypeShapeUniform + FiniteClosureSet + CloneRequired
+               + Preserve + Unresolved
+  function-valued boundaries (population)          5574
+  ExactClosure                                       50
+  TypeShapeUniform                                   16
+  CloneRequired                                     141
+  FiniteClosureSet                                    1
+  Preserve                                           44
+  Unresolved                                       5322
+  one representation (the theorem)                   84   enumerated, one shape class, no opaque producer
+  rewritable as one                                  66   strictly stronger: the rewrite must own the slot
+  producer set enumerated                           252   a different fact again (H11-SEPARATE)
+  re-derived by verify-m24 (of the claims)          208 / 208
+```
+
+```
+(3) can the dictionary or closure object actually disappear?
+    values / parameters = Erasable + WithObligation + WithClone + Preserve
+                        + Unresolved
+  verdict                          values   parameters
+  Erasable                            102           36
+  ErasableWithObligation                0            0
+  ErasableWithClone                     0            4
+  Preserve                             89           84
+  Unresolved                            0           92
+  total                               191          216
+  parameter totality: 118 ProvenTotal, 0 MustPreserveForce, 98 Unknown; named force obligations 0
+  re-derived by verify-m24: 102 value claim(s), 40 parameter claim(s)
+
+  the two clone plans — OWNER-LEVEL. A per-slot cardinality is evidence and must
+  never be summed: a function is cloned once per DISTINCT call-site assignment
+  tuple, which is neither the sum nor the product of the per-slot counts.
+  plan                                  cardinality   clones   planned   refused  lower bounds
+  dictionary clones (E7-OWNER-CLONES)             8        4         4         0             4
+  closure clones (H15-OWNER-CLONES)             509       53        21        66             8
+```
+
+`rewritable as one` (66) ≤ `one representation` (84) ≤ `enumerated` (252) is
+asserted, and the direction is the point: 18 boundaries whose producers
+genuinely agree are still `Preserve`, because the rewrite does not own the
+slot. All twelve of the `-O1` clone plans that carry a number are flagged
+where a tuple has a set-valued component — **4 of 4** dictionary plans and
+**8 of 21** closure plans are lower bounds, closable only by a call-string
+analysis.
+
+**The 3×5 matrix** crosses questions 1 and 3 rather than collapsing them:
+
+| target ⟍ dictionary | `Erasable` | `…WithObligation` | `…WithClone` | `Preserve` | `Unresolved` |
+|---|---:|---:|---:|---:|---:|
+| `Exact` | 7 | 0 | 0 | **0** | 0 |
+| `FiniteSet` | 0 | 0 | 0 | **0** | 0 |
+| `Unresolved` | 10 | 0 | 0 | 154 | 394 |
+
+The bolded cells — a site whose method is known but whose dictionary must
+survive anyway — are **0**, and the other direction is populated: 10 sites
+whose dictionary is `Erasable` still have no known method target.
+
+**The residual, itemised and owned.** Every row is attributed; an
+unattributed row would be the milestone hiding what it did not do. The site
+rows sum to the 558 `Unresolved` and the boundary rows to the 44 `Preserve`
+plus 5,322 `Unresolved`, both asserted.
+
+| | class-op sites | whose problem it is |
+|---:|---|---|
+| 413 | `function-is-unreachable-in-the-closed-world` | `W0`: dead in the closed world — if ShellCheck is built as a library they come back |
+| 53 + 48 + 7 + 5 + 1 | `instance-method-not-in-the-dump` (`$fMonoidDual`, `$fMonadIO`, `$fMonadStatesParsecT`, `$fMonadStatesReaderT`, `$fMonadReaderrParsecT`) | the instance is known and its body is in another package: a bigger dump, or a hand-written callee |
+| 17 | `dictionary-read-from-a-non-dictionary-constructor-field` | `SomeException`'s existential dictionary field: M3, or a hand-written `Exception` lowering |
+| 9 | `method-is-never-dispatched-in-the-closed-world` | no class-op site in the program selects that field: dead under `W0` |
+| 4 | `dictionary-returned-by-a-call-the-dump-cannot-see` | a bigger dump |
+| 1 | `dispatched-from-a-site-with-an-unknown-dictionary` | closable only when that site's dictionary is |
+
+| | function-valued boundaries | whose problem it is |
+|---:|---|---|
+| 2,660 + 1,953 = **4,613** | `function-used-as-a-value`, `parameter-of-an-anonymous-lambda` | the Parsec CPS wall: a naming pass for the anonymous lambdas, then a call-string view |
+| 413 | `call-site-is-a-partial-application` | the partial application's own consumers |
+| 227 | `function-is-unreachable-in-the-closed-world` | dead under `H0` |
+| 44 | `expression-is-not-a-closure` | M3 |
+| 22 + 3 | `a-closure-read-back-from-a-constructor-field`, `a-closure-returned-by-an-imported-call` | a genuine run-time closure: the lowering decides, not this analysis |
+| 19 | `closure-from-an-untracked-higher-order-parameter` | M3 |
+| 14 + 5 | `the-boundary-is-exported-…`, `…-belongs-to-a-function-used-as-a-value` | shared outside the rewrite: M3's ownership question |
+| 5 | `constructor-is-never-applied-in-the-closed-world` | dead under `H0` |
+| 1 | `closure-set-exceeded-the-budget` | a larger budget, or a per-caller analysis |
+
+### The cross-milestone links
+
+Four, and **nothing is reclassified**: every fate M2.2 recorded, every tier
+M2.1 recorded and every rep M2.3 recorded stands exactly as it was. `h2r
+m24` recomputes each rather than quoting it, so the two sides cannot drift.
+
+**Back to M2.2 — the 67 closure-into-a-parameter tuple flows.** Recomputed
+against the corrected `Higher`: 31 `CloneRequired`, 22 no boundary, 13
+`TypeShapeUniform`, 1 `ExactClosure`, and **14 could be reclassified by a
+later pass** — the 13 uniform plus the 1 exact. That is the same 14
+[M2.4d](#feeding-the-proof-back--nothing-is-reclassified) published and it
+is **unchanged after M2.4d′**. That is visible in the table rather than
+argued: not one of the 67 lands on a `Preserve` slot, so none of them is at
+an exported or valued boundary — which is where defect 1 moved verdicts —
+and the 13 uniform slots survived the free-tyvar class split of defect 4.
+
+**Back to M2.3 — the closure residual, by holder.** M2.3b left **2,454**
+constructor fields `Unknown` because the callee that consumes them is an
+unknown higher-order value — the population whose two largest rows M2.3's
+residual table names as *1,143 `eta` + 565 `eok`*. Each is now asked of the
+closure graph, by the callee binder M2.3 itself named:
+
+| holder | n | what the closure graph says |
+|---|---:|---|
+| `eta` | 1,143 | `Unresolved` 1,035, `CloneRequired` 84, `ExactClosure` 20, no boundary 4 |
+| `eok` | 565 | `Unresolved` 554, `CloneRequired` 11 |
+| `cok` | 282 | `Unresolved` 275, `CloneRequired` 7 |
+| `eerr` | 182 | `Unresolved` 178, `CloneRequired` 4 |
+| `cerr` | 146 | `Unresolved` 146 |
+| `reader` | 36 | `TypeShapeUniform` 36 |
+| `eta3` | 29 | `Unresolved` 29 |
+| `z'` | 21 | `CloneRequired` 21 |
+| 14 more | 50 | no boundary 36, `Unresolved` 8, `ExactClosure` 3, `Preserve` 3 |
+
+**59 could be reclassified** (36 `reader` + 20 `eta` + 3 `color`). The shape
+of the answer is M2.4d's own: five of the six largest holders are Parsec's
+CPS continuations, and they are `Unresolved` for the same reason 4,613
+boundaries are.
+
+**Back to M2.1 — the 41 residual Parsec continuation edges.** Re-run here
+against the same `Higher`: **0 of 41** closed, 20
+`boundary-Unresolved(parameter-of-an-anonymous-lambda)`, 19
+`boundary-Unresolved(function-used-as-a-value)`, 2
+`boundary-Unresolved(call-site-is-a-partial-application)` — row for row what
+[M2.4e](#m24e--the-41-residual-parsec-continuation-edges) published.
+
+**Back to M1 — the thunk sites.** The M1 table gains a fourth column, and
+the invariant it exists to state is asserted:
+
+```
+Thunk sites explained by M2.4 (M1 × M2.2 × M2.3 × M2.4)
+                                                      before  by tuples   by M2.3   by M2.4   after
+  sinkable, lands in an evaluating position               14          0         3         0      11
+  sinkable, lands in a lazy position                     254          3         3         0     248
+  memoisation required                                  1905         89         5         0    1811
+  recursive value                                         69          0         0         0      69
+  potential thunk sites                                 2242         92        11         0    2139
+```
+
+`remaining + explained-by-tuples + explained-by-M2.3 + explained-by-M2.4 =
+2,242` is asserted, as is *no site is counted twice*: a site an earlier
+milestone explains is that milestone's, and this walk skips it before it can
+claim it. The two earlier columns are read from `link::ThunkLink` and
+`m23::RepLink` rather than recomputed.
+
+**M2.4's column is 0, and the reason is a fact about the dump rather than a
+missing rule.** The one rule
+(`M24-D-DICTIONARY-BINDING-ERASED`) is: a `$d…` binding whose right-hand
+side is a saturated application of a dfun the whole-program flow holds as a
+dictionary identity, and whose identity is `Erasable` with the verifier's
+confirmation. The population and every refusal are printed:
+
+| | | |
+|---:|---|---|
+| 152 | of the 2,242 thunk sites are `$d…` bindings (`Origin::Dictionary`) | the population this link draws on |
+| 131 | name a dictionary the whole-program flow holds an identity for | …and **all 131** are `Preserve(used as an ordinary value)` |
+| 18 | have a head the flow holds no identity for | not a dictionary M2.4c gave a verdict to |
+| 3 | are a superclass selection (`$pN<Class> d`) | a *field of* a dictionary, not an identity of its own |
+| 0 | are `Erasable` but unconfirmed | an unconfirmed claim is unsupported and never proven |
+
+Every one of the 152 is `Memo` in M1's own table, and 131 of them build a
+dictionary that `E4-ESCAPE` says is handed on as an ordinary value. A
+dictionary that escapes keeps its box, so the binding that builds it keeps
+its thunk. The number is 0 and it is a result.
+
+### Across the flag matrix
+
+| | A (`-O1`) | B | C | D | E | F |
+|---|---:|---:|---:|---:|---:|---:|
+| class-op sites / `Exact` | 565 / 7 | 587 / 7 | 595 / 7 | 595 / 0 | 595 / 0 | 596 / 0 |
+| … dictionary bounded | 118 | 138 | 140 | 65 | 65 | 65 |
+| boundaries | 5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
+| … enumerated / one representation / rewritable as one | 252 / 84 / 66 | 391 / 143 / 125 | 486 / 189 / 172 | 1,909 / 718 / 695 | 1,887 / 706 / 683 | 1,891 / 705 / 682 |
+| dictionary values / parameters | 191 / 216 | 191 / 210 | 191 / 222 | 238 / 223 | 238 / 223 | 238 / 231 |
+| clone plans (dictionary / closure) | 4 / 53 | 3 / 61 | 4 / 65 | 7 / 154 | 7 / 154 | 7 / 176 |
+| claims / disagreements | 606 / 0 | 749 / 0 | 867 / 0 | 2,209 / 0 | 2,187 / 0 | 2,209 / 0 |
+| M1 thunk sites explained by M2.4 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+The accounting closes on all seven dumps, and `rewritable ≤ one
+representation ≤ enumerated` holds on all seven.
+
+### The `h2r parsec` nondeterminism, fixed
+
+[M2.4c′](#correction-m24c--totality-is-not-the-same-fact-as-identity)
+recorded that `h2r parsec --explain` and `h2r parsec --json` differ run to
+run, and [M2.4d′](#the-gate-1) and [M2.4f](#the-gate-2) had to keep them out
+of every byte-identity gate because of it. The cause is one line:
+`Analysis::prove` walked `self.role`, a `HashMap<BinderId, RoleInfo>`, and
+that walk order is the order every region's `edges`, `evidence` and
+`rejects` come out in — hence the per-role line order in `--explain`, the
+per-region `edges` order in `--json`, and the `e.g.` witness of a reject
+reason, which is whichever reject was pushed first.
+
+Sorting that walk by the binder fixes all three. It is a **report-order
+change only**: nothing in the proof depends on the order, and every count is
+an aggregate over all of it.
+
+* **the counts are unchanged.** `parsec --explain` is line-for-line
+  **multiset identical** before and after on all seven dumps, and `parsec
+  --json` is identical on all seven once each region's `edges` list is
+  canonicalised — the exact comparison M2.4f had to make. `h2r parsec`
+  itself is byte-identical on five of the seven; on B and C it differs in
+  **exactly one `e.g.` exemplar line each** — the same reject reason
+  (`arg-of-unrecognised-call`, `cont-in-non-cont-slot`) with a different
+  witness, every count identical. That is the wobble itself: the old binary
+  picked a witness at random and the new one picks the lowest-numbered
+  binder's, so the *before* capture is one of the several outputs the old
+  binary could have produced. The 41-row M2.4e table is byte-identical on
+  every dump.
+* **two runs are now identical.** Three consecutive runs of `h2r parsec`,
+  `parsec --explain` and `parsec --json` on profile B — the profile where
+  M2.4a first reproduced the wobble — give one md5 each, where before the
+  `e.g.` exemplar and the edge order moved every run.
+
+Those two reports can now carry a byte-identity gate, and this milestone is
+the first to put them under one.
+
+### M2.4 acceptance
+
+**The criterion is that the three questions are answered separately, that
+every positive answer is re-derived by a walk that shares nothing with the
+first but the IR and four named inputs, and that every residual is itemised
+and owned.** Not that coverage is high: on this program it is low, and the
+milestone's contribution is knowing exactly why.
+
+**Question 1 — can the call target be enumerated?** `sites = Exact +
+FiniteSet + Unresolved` closes on all seven dumps.
+[7 of 565](#m24c--whole-program-dictionary-flow-and-whether-the-dictionary-can-go)
+on `-O1`, and **0 per module**: GHC's simplifier has already taken every
+site whose dictionary is visible, so what survives is dispatch on a run-time
+parameter. The closed-world fixpoint bounds the *dictionary* at 118 sites
+and at 106 of the 216 parameters, which is a different and larger result
+than the seven targets, and the accounting prints it as a separate fact.
+[The residual table above](#the-milestone-accounting--three-questions-never-collapsed)
+itemises all 558, and the largest row — 413 — is not a weakness of the walk
+but `W0` biting: those sites live in bindings nothing in the closed world
+references.
+
+**Question 2 — can this abstraction boundary use one representation?**
+`boundaries = ExactClosure + TypeShapeUniform + CloneRequired +
+FiniteClosureSet + Preserve + Unresolved` closes on all seven dumps.
+There are **three** counts here and M2.4d′ had to separate them: 252
+boundaries have an enumerated producer set, 84 satisfy the *one* statement
+of the theorem (`Boundary::one_representation` — enumerated, one shape
+class, no opaque producer), and 66 are `rewritable_as_one`, which
+additionally requires the rewrite to own the slot. The accounting prints all
+three side by side and asserts the inclusion. 4,613 of the 5,322
+`Unresolved` are the Parsec CPS wall.
+
+**Question 3 — can the object actually disappear?** `values = Erasable +
+WithObligation + WithClone + Preserve + Unresolved` and the same for
+parameters, both closing on all seven dumps, with the totality domain's
+118/0/98 asserted to sum to 216 beside them. Erasure is computed from facts
+recorded **separately** from the targets and crossed with them in the 3×5
+matrix rather than collapsed. Both clone plans are **owner-level** —
+distinct call-site assignment tuples, never the sum of per-slot
+cardinalities — and every plan with a set-valued tuple is flagged as the
+lower bound it is.
+
+**The verifier.** `h2r verify-m24` re-derives **606** positive claims on
+`-O1` (749 / 867 / 2,209 / 2,187 / 2,209 on B–F) with **0 disagreements and
+0 coverage refusals on all seven dumps**, and reproduces every published
+table cell for cell on a walk that has never seen them. Two tests make it
+bite. Every number in this section is the verifier's own or carries its
+answer beside it.
+
+**The corrections history.** Three, all found by review of the published
+work rather than by a failing test, and all in the direction of the analysis
+having claimed more than its evidence:
+
+| | what was wrong | what it moved |
+|---|---|---|
+| [M2.4c′](#correction-m24c--totality-is-not-the-same-fact-as-identity) | `Erasable` was decided from *bounded dictionary identity*, which a MAY-analysis over a `case` gives without the producer being total; and the per-parameter clone cardinalities were summed | no verdict moved (`MustPreserveForce` is 0 because `-O1` floats every dictionary out of every scrutinee — an instrumented fact, re-derived by M2.4f) and 8 clones → **4** |
+| [M2.4d′](#correction-m24d--sharing-is-decided-before-agreement-and-a-free-type-variable-identifies-nothing) | six defects: `H8` decided after `H5`/`H6`; two different one-representation theorems and opaque shapes merging; per-parameter clone counts summed; free type variables merging unrelated closures; existential fields indexed by raw binder position; `UniformRepresentation` named a Rust fact it is not | `ExactClosure` 67 → **50**, `Preserve` 26 → **44**, one representation 103 → **84**, rewritable 87 → **66**, shape classes 261 → **353**, clones 418 → **53** |
+| [M2.4f](#the-one-correction-this-produced) | the *record*, not a verdict: M2.4d′ said ShellCheck's Core has no alternative binding a function-typed field after an existential type binder. It has four | no number moved; the prose was corrected and the shape is now counted on every run (rows 11 and 11a) |
+
+**Trusted inputs and assumptions, named.** These are consulted and not
+verified, on both sides of the M2.4f check, and printed at the top of every
+`verify-m24` run:
+
+1. **the 17-class method-field table** (`classops::CLASSES`), a level-5
+   axiom: format 5 carries neither a type nor an unfolding for a global, so
+   a selector's `C a => …` type and its `case d of C:C … m … -> m` body are
+   both absent and the field order is **not derivable from the dump at
+   all**. Every *use* of the table is re-derived, including the cross-check
+   against the dictionary constructor's own `repArity` — 0 disagreements and
+   0 classes outside the table on all seven dumps;
+2. **`W0-CLOSED-WORLD` / `H0-CLOSED-WORLD`** — the 28 modules are the whole
+   program and `Main.main` its only root. An assumption about the *build*,
+   which no walk can prove, and the one 413 of the 558 unresolved sites rest
+   on;
+3. **GHC's own flags** — `isClassOpId`, `isExportedId` and the demand
+   signatures' strictness bits, read from the authoritative source;
+4. **the structured `Ty`** and `TyCon` stable-name identity (format 5);
+5. **free type variables are compared by GHC unique** in `Ty::alpha_eq`, and
+   a unique is not an identity in optimised Core. `H14-FREE-TYVAR` keeps the
+   *shape class* off that — a capture type with a free type variable gets a
+   producer-private key — but the IR predicate itself is unchanged and must
+   not be handed a free-tyvar-sensitive proof;
+6. **the M3 carrier invariant** behind `TypeShapeUniform`: the verdict is a
+   fact about *Haskell* types (same arity, same ordered captured Haskell
+   types). Reading it as *one Rust representation* is sound only if the
+   lowering promises a canonical closure-boundary carrier per Haskell type
+   with conversions inserted at the boundary. **That invariant is open**,
+   and every `h2r higher` run says so.
+
+**What remains, and who owns it.**
+
+* **M3: `Main.main`-rooted reachability.** The 922 "unreachable" top-level
+  bindings are the *zero-reference* subset under `W0` — a valid dead subset,
+  but not a rooted transitive one: a binding referenced only by another
+  unreachable binding is not in it. 413 of the 558 unresolved sites and 227
+  of the unresolved boundaries rest on that subset, so the real dead set is
+  larger and M3 has to compute it.
+* **M3: the canonical closure carrier.** Until the lowering promises one,
+  `TypeShapeUniform` is a Haskell-type fact and the 16 boundaries carrying
+  it are not yet one Rust representation.
+* **M3: a call-string analysis for the set-valued tuples.** 4 dictionary
+  plans and 8 closure plans on `-O1` have a tuple with a set-valued
+  component, because the fixpoint is monovariant (`W5`, `H3`). Their clone
+  counts are lower bounds on both sides of the verifier — agreement about a
+  bound, not a closing of it.
+* **The anonymous-lambda naming pass.** 4,613 of the 5,322 unresolved
+  boundaries, all 41 Parsec edges and five of the six largest M2.3 closure
+  holders are one shape: `ShellCheck.Parser` is CPS, its continuations are
+  anonymous lambdas passed as values, and a higher-order analysis that wants
+  them has to name them first.
+* **A future dump format: global types and unfoldings.** The class table is
+  an axiom only because format 5 carries neither for a global. A format that
+  did would make it **derivable**, and the one level-5 assumption that both
+  sides of the M2.4f check share would go.
+* **`Unresolved` and `Preserve` are not re-derived as claims** — the
+  deliberate asymmetry, narrowed but not closed by M2.4f's whole-population
+  table.
+
+`cargo test` (**232** — seven new: the class-op view over a module, the
+boundary view's rule order at a slot that is and is not exported, the
+boundary view over a module, the accounting's three questions, the `show`
+provenance with both opt-outs, the M1 link's invariant under a milestone
+that already claims every site, and a planted refusal that must never be
+reported as proven), `cargo clippy --all-targets` (0 warnings) and `cargo
+fmt --check` are clean.
+
+### The gate
+
+Every existing report is **byte-identical** before and after, on
+`compiler/core-json` and on all six matrix profiles — `stats`, `laziness`,
+`tuples` (plus `--explain`, `--verify`, `--boundaries`), `fields`, `lists`
+(plus `--axioms`), `text` (plus `--heads`, `--explain`), `verify-rep` (plus
+`--explain`), `dictflow` (plus `--explain`), `verify-m24` (plus
+`--explain`), `classops --per-module`, `compare` and the `--json` form of
+each — with three deliberate movements and nothing else:
+
+* **`classops` and `higher` gain the accounting section**, appended after
+  everything they already print, so **not one existing line moves**; their
+  `--json` gains no key at all, because the views are their own
+  `--view`/`--view-all` reports.
+* **`parsec --explain` and `parsec --json`** change *order* only —
+  multiset-identical and canonical-JSON-identical on all seven dumps — and
+  `parsec` itself changes one `e.g.` exemplar line on B and on C, which is
+  the nondeterminism being fixed rather than a report changing. All three
+  are now stable across runs.
+* **`show`** gains M2.4 marks and footers on nodes that have them, and
+  `--no-classops --no-higher` reproduces its previous output exactly.
+
+`h2r m24`, `h2r classops --view/--view-all` and `h2r higher
+--view/--view-all` are new commands. No Core is mutated, no codegen is
+emitted, no GHC flag changed.
 
 ## What ShellCheck actually needs
 
