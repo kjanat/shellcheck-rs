@@ -208,14 +208,14 @@ pub const RULES: &[(&str, u8, &str)] = &[
         "every live binding carries one shortest root-to-binding chain of edges",
     ),
     (
-        A11_MISSING_IMPACT,
-        6,
-        "a name-matched bound on what an A5 hole could cost; never a verdict",
-    ),
-    (
         A10_ACCOUNTING,
         5,
         "top = live + dead per module and in total; dead = no-refs + only-from-dead",
+    ),
+    (
+        A11_MISSING_IMPACT,
+        6,
+        "a name-matched bound on what an A5 hole could cost; never a verdict",
     ),
 ];
 

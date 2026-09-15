@@ -18,6 +18,9 @@ use h2r_lower::verify::{Audit, verify};
 /// which live modules carry them.
 type TargetRow<'a> = (usize, u32, BTreeSet<&'a str>);
 
+/// How many bindings `--explain` spells out when a name matches several.
+const EXPLAIN_CAP: usize = 20;
+
 /// How many import names the summary lists.
 const TOP_IMPORTS: usize = 20;
 
@@ -28,7 +31,7 @@ pub fn lower(
     rules: bool,
     explain: Option<String>,
 ) -> Result<()> {
-    if rules && !reachability {
+    if rules {
         print_rules();
         return Ok(());
     }
@@ -60,7 +63,7 @@ pub fn lower(
         return print_explain(&live, &what);
     }
 
-    print_report(&selected, &live, &audit, rules);
+    print_report(&selected, &live, &audit);
     Ok(())
 }
 
@@ -71,7 +74,7 @@ fn print_rules() {
     }
 }
 
-fn print_report(modules: &[&Module], live: &LiveSet, audit: &Audit, rules: bool) {
+fn print_report(modules: &[&Module], live: &LiveSet, audit: &Audit) {
     let a = &live.accounting;
     println!(
         "M3a — the Main.main-rooted live set. The nodes are the {} top-level\n\
@@ -385,11 +388,6 @@ fn print_report(modules: &[&Module], live: &LiveSet, audit: &Audit, rules: bool)
             from.join(", ")
         );
     }
-
-    if rules {
-        println!();
-        print_rules();
-    }
 }
 
 fn root_rule(live: &LiveSet) -> &'static str {
@@ -410,12 +408,16 @@ fn print_explain(live: &LiveSet, what: &str) -> Result<()> {
     }
     if hits.len() > 1 {
         println!(
-            "{} top-level bindings answer to {what}; a name is not an identity, so all of \
-             them follow.",
-            hits.len()
+            "{} top-level bindings answer to {what}; a name is not an identity{}.",
+            hits.len(),
+            if hits.len() > EXPLAIN_CAP {
+                format!(", so the first {EXPLAIN_CAP} follow")
+            } else {
+                ", so all of them follow".to_string()
+            }
         );
     }
-    for n in hits {
+    for n in hits.into_iter().take(EXPLAIN_CAP) {
         let t = live.node(n);
         println!();
         println!(
@@ -454,7 +456,18 @@ fn print_explain(live: &LiveSet, what: &str) -> Result<()> {
                             .map(|e| e.rule)
                             .unwrap_or("?")
                     };
-                    println!("    {:>3}. {} {}  [{}]", i, s.module_name, s.occ, rule);
+                    println!(
+                        "    {:>3}. {:<32} {}{}  [{}]",
+                        i,
+                        s.module_name,
+                        s.name,
+                        if s.external {
+                            String::new()
+                        } else {
+                            format!("#{}", s.key.binder)
+                        },
+                        rule
+                    );
                 }
             }
             None => {
