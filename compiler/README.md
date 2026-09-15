@@ -5016,6 +5016,16 @@ and *which node that is* is re-derived here. Agreeing on an address is not
 agreeing on a derivation; disagreeing about which node is the constructor
 application would be a disagreement, and is reported as one.
 
+*[M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found) adds
+one shared **rendering** for the same reason: `dictflow::group_lines`, which
+lays a clone plan's partition of call sites out as text. It derives nothing
+— it sorts and joins addresses each walk computed for itself — and both
+sides need one spelling for the same set, exactly as they need one spelling
+for a method target. Nothing else crosses; in particular the two walks'
+shape classes, capture keys and type keys stay their own and are rendered
+differently on purpose, which is why a closure clone plan is checked by its
+partition and not by its tuple strings.*
+
 The linkage table that addressing rests on is re-derived too, including
 [M2.4c′'s identity cleanup](#identity-cleanups): this walk writes its own
 *external name* test, rejects the two pseudo-units `_sys` and `_in` that a
