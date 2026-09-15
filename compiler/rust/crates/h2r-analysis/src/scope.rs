@@ -4,17 +4,19 @@
 //! arena is built, by [`h2r_core_ir::Module::resolve`] — every local `Var`
 //! occurrence gets the [`BinderId`] that actually binds it, and nothing
 //! downstream ever keys by, looks up by, or compares a local unique string.
-//! (Uniques are not unique in an optimised dump; see that function.) A
-//! unique is used here in exactly one place: as the linkage key into the
-//! imported-id table, and only for an occurrence the resolver has already
-//! classified as [`h2r_core_ir::Ref::Global`].
+//! (Uniques are not unique in an optimised dump; see that function.) **No
+//! unique is used here at all**: the one lookup that leaves this module is
+//! the linkage key into the imported-id table, and since dump format 5 the
+//! key is the *stable name* — unit, module and occurrence — of an
+//! occurrence the resolver has already classified as
+//! [`h2r_core_ir::Ref::Global`], never its unique.
 //!
 //! What this module adds on top of identity is the *signature* question.
 //! GHC does not keep the `IdInfo` on occurrence `Var`s of local ids up to
 //! date: the demand signature and arity on an occurrence can be stale, and
 //! the binder at the binding site is authoritative. The id table the plugin
-//! dumps is keyed by unique but populated from occurrences, so for anything
-//! bound in this module it may disagree with the binder. Imported ids have
+//! dumps is keyed by stable name but populated from occurrences, so for
+//! anything bound in this module it may disagree with the binder. Imported ids have
 //! no binding site here; for them the id table is all there is.
 //!
 //! Every consumer that needs the arity or demand signature of a head

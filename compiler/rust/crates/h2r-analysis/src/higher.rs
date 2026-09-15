@@ -854,7 +854,7 @@ impl<'m> Program<'m> {
 /// top-level binder it has not externalised an internal name, and those are
 /// not unique.
 pub(crate) fn is_external_name(name: &str) -> bool {
-    split_stable_name(name).is_some_and(|(u, md, _)| !u.is_empty() && !md.is_empty())
+    crate::dictflow::is_external_name(name)
 }
 
 //------------------------------------------------------------------------------

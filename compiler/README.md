@@ -4030,7 +4030,9 @@ table. The check that this is enough is a count: **0 global `Var`
 occurrences in the whole dump carry an internal name**, so nothing can refer
 to one from another module anyway. `classops.rs`'s `World` has the same
 latent collision and is not reachable through it for the same reason; it was
-left alone rather than changed under a byte-identity gate.
+left alone rather than changed under a byte-identity gate. (M2.4c′ closes
+it, and finds that the "external ⇒ unique" test was itself too weak — see
+[Correction (M2.4c′)](#correction-m24c--totality-is-not-the-same-fact-as-identity).)
 
 ### The CLI
 
@@ -4038,7 +4040,8 @@ left alone rather than changed under a byte-identity gate.
 the re-derivation and the erasure section to the M2.4b report, and
 `--per-module`, which reproduces M2.4b exactly. `h2r dictflow <dir>
 [--explain] [--json]` prints the closed-world assumption, the fixpoint, both
-tables and the 3×4 matrix.
+tables and the 3×4 matrix (M2.4c′ adds a fifth verdict column, the totality
+table and the owner-level clone plan).
 
 ### The gate
 
@@ -4070,6 +4073,189 @@ name staying distinct), `cargo clippy --all-targets` (0 warnings) and
   that callee could take the erased form instead, and 133 of the 265
   non-`Erasable` verdicts are that case. The lowering, not this analysis,
   decides those.
+
+### Correction (M2.4c′) — totality is not the same fact as identity
+
+The `Part 2` verdicts above were computed with a bug the project owner's
+review of `96e4733` found. `erasure()` decided `Erasable` from
+`!x.set.is_top()` and the instance count — but `eval_nested()` is a
+**MAY**-analysis of which dictionary values an expression can produce: for a
+`case` it walks the alternatives' right-hand sides and ignores the
+scrutinee entirely. "Bounded dictionary identity" had silently become "the
+producer is total". The counterexample:
+
+```haskell
+f d    = classOp d x
+main   = f (case bottom of A -> knownDict; B -> knownDict)
+```
+
+The set is exactly `{knownDict}` — the old code says `Erasable` — but the
+selector forces `d` (`K10`), and deleting the dictionary computation
+deletes the divergence. `known_strict` was recorded on the parameter and
+copied to the report and **never consulted**; and consulting it would not
+have helped, because strictness at entry is not permission to drop the
+force: if the parameter disappears, its entry force still has to happen
+somewhere.
+
+#### An independent totality domain
+
+`Totality` is now its own lattice, propagated by its own transfer in its own
+fixpoint, sharing the settled dictionary sets **only** to resolve dispatch.
+The chain is `ProvenTotal < MustPreserveForce < Unknown`, bottom
+`ProvenTotal`, join `max`.
+
+| rule | level | what it says |
+|---|---:|---|
+| `E6-TOTALITY-VALUE` | 2 | a saturated dictionary-constructor application, a dfun applied or not, and a superclass selection out of a `ProvenTotal` dictionary are values ⇒ `ProvenTotal` |
+| `E6-TOTALITY-CASE` | 5 | a `case` whose scrutinee is not *already evaluated* ⇒ `MustPreserveForce`, **even when every alternative yields the same dictionary** |
+| `E6-TOTALITY-LET` | 3 | a let- or top-bound dictionary inherits its right-hand side's totality |
+| `E6-TOTALITY-PARAM` | 3 | a parameter is the join over the totality of every producer that reaches it |
+| `E6-TOTALITY-UNKNOWN` | 3 | through a call the dump cannot see, a non-dictionary constructor field, a higher-order parameter, or a budget ⇒ `Unknown` |
+| `E6-TOTALITY-OBLIGATION` | 5 | `Erasable` requires `ProvenTotal`, **or** a named `ForceObligation`; strictness is evidence, never a verdict |
+| `E7-OWNER-CLONES` | 3 | a function's clones are its distinct call-site assignment tuples |
+
+*Already evaluated* is deliberately narrow: a value (a literal, a lambda, a
+saturated constructor application, a dfun), a variable bound by an
+enclosing `case`, or a variable GHC marks strict **and** that an enclosing
+`case` on that same binder dominates. Strict-at-entry alone does not
+qualify — GHC's promise is that the force happens, not that it has happened
+*here*.
+
+The verdict is then: `ProvenTotal` ⇒ identity decides as before;
+`MustPreserveForce` ⇒ `ErasableWithObligation { at, what }`, naming the node
+whose evaluation erasure would delete and the scrutinee that must still be
+evaluated, or `Preserve(erasure-would-delete-a-force)` when no obligation
+can be expressed; `Unknown` ⇒
+`Preserve(totality-unknown-erasure-could-move-divergence)`.
+
+#### Erasure tables, before → after
+
+| verdict | values before | values after | parameters before | parameters after |
+|---|---:|---:|---:|---:|
+| `Erasable` | 102 | 102 | 36 | 36 |
+| `ErasableWithObligation` | — | 0 | — | 0 |
+| `ErasableWithClone` | 0 | 0 | 4 | 4 |
+| `Preserve` | 89 | 89 | 84 | 84 |
+| `Unresolved` | 0 | 0 | 92 | 92 |
+| **total** | **191** | **191** | **216** | **216** |
+
+**No verdict moved, and that is a result rather than a no-op.** The totality
+domain answers, over the 216 dictionary parameters: **118 `ProvenTotal`, 0
+`MustPreserveForce`, 98 `Unknown`** (asserted to sum to 216). The 40
+erasable parameters are all `ProvenTotal`; the 98 `Unknown` ones were
+already `Preserve` or `Unresolved` on escape or on a `Top` set. The reason
+`MustPreserveForce` is **0** is stronger than "nothing changed": an
+instrumented run shows the walk reaches **no `case` node at all** on any
+dictionary path in the dump — GHC's `-O1` floats every dictionary out of
+every scrutinee. The old code was unsound *in principle* and, on this
+program, accidentally right. It is now right on purpose, and the
+counterexample is a unit test.
+
+Named force obligations carried: **0**.
+
+The matrix gains a column and no cell moves:
+
+| target ⟍ dictionary | `Erasable` | `ErasableWithObligation` | `ErasableWithClone` | `Preserve` | `Unresolved` |
+|---|---:|---:|---:|---:|---:|
+| `Exact` | 7 | 0 | 0 | **0** | 0 |
+| `FiniteSet` | 0 | 0 | 0 | **0** | 0 |
+| `Unresolved` | 10 | 0 | 0 | 154 | 394 |
+
+#### Clone planning is per owner, not per parameter
+
+`ErasableWithClone(n)` is a per-**parameter** cardinality and `Accounting`
+used to **sum** it: 4 parameters × 2 instances = **8 clones**. That is not
+a clone plan. A function needs one specialisation per *distinct assignment
+tuple actually seen at its call sites* — one tuple per call site,
+deduplicated — which is neither the sum nor the product of the
+per-parameter cardinalities. The cardinalities stay, as evidence.
+
+On `-O1` all four `WithClone` parameters belong to four different
+single-parameter functions, and each has exactly **one** call site:
+
+| module | function | dictionary parameters | cardinalities | tuples seen | clones |
+|---|---|---:|---|---:|---:|
+| `ShellCheck.Parser` | `allspacingOrFail` | 1 | `[2]` | 1 | 1 |
+| `ShellCheck.Parser` | `commentWarning` | 1 | `[2]` | 1 | 1 |
+| `ShellCheck.Parser` | `readNormalLiteral` | 1 | `[2]` | 1 | 1 |
+| `ShellCheck.Parser` | `splitBy` | 1 | `[2]` | 1 | 1 |
+| | | | | **total** | **8 → 4** |
+
+The "2 instances" never meant two call sites: it is one call site whose
+dictionary argument is itself a two-instance parameter, which the
+monovariant analysis (`W5-MONOVARIANT`) can only give as a *set*. Such a
+tuple is counted as the one call site it is, so **4 is a lower bound** — the
+true figure is between 4 and 8 and only a call-string analysis can close
+it. Every set-valued tuple is flagged in the report rather than smoothed
+over.
+
+`-O2` and the specialising profiles make the same point more loudly: in
+D–F the four parameters collapse onto **two** two-parameter functions,
+`parseProblemAtWithEnd` and `shouldIgnoreCode`, each with cardinalities
+`[3, 3]` — a sum of 12 and a product of 9 — whose call sites use only 3 and
+4 distinct tuples: **12 → 7**.
+
+| clone plan | A `-O1` | B `-O2` | C | D | E | F |
+|---|---:|---:|---:|---:|---:|---:|
+| per-parameter cardinality sum (the old number) | 8 | 6 | 8 | 12 | 12 | 12 |
+| owner-level clones (distinct tuples) | **4** | **3** | **4** | **7** | **7** | **7** |
+| owning functions | 4 | 3 | 4 | 2 | 2 | 2 |
+| parameters `ProvenTotal` / `MustPreserveForce` / `Unknown` | 118/0/98 | 110/0/100 | 121/0/101 | 77/0/146 | 77/0/146 | 85/0/146 |
+
+#### Identity cleanups
+
+* `classops::World::new` keyed `tops` by `b.name` with `or_insert`, which
+  admits internal, non-unique names exactly as the hazard above describes.
+  It now admits only external stable names, as `dictflow::Program` does,
+  and **asserts there is no collision**. Doing so found a second defect:
+  `is_external_name` split `$_sys$poly_$j` into unit `_sys`, module `poly_`,
+  occurrence `$j` and passed it as external. GHC's `nameStableString`
+  renders a non-external name as `$_sys$<occ>` or `$_in$<occ>` with no unit
+  and no module, and when that `<occ>` itself contains a `$` — GHC's
+  worker/wrapper and join-point names are full of them — the three-way
+  split is fooled. Two distinct top-level bindings of the dump claim
+  `$_sys$poly_$j`. Rejecting the two pseudo-units makes *external ⇒ unique*
+  true rather than nearly true, in `dictflow`, `higher` and now `classops`
+  alike. **Collisions asserted: 0.** No target-enumeration number moved.
+* The doc comments on `scope.rs` and on `Ref::Global` still said a GHC
+  *unique* is the key into the imported-id table. It is not, and has not
+  been since dump format 5: the key is the stable name. Corrected.
+* `KVar`/`KAll` interning in the plugin and free-type-variable comparison in
+  `Ty::alpha_eq` **still rest on GHC uniques**. `alpha_eq` alpha-maps
+  *bound* type variables but compares *free* ones by unique, and free type
+  variables are not scope-identified: format 5 carries no lexical identity
+  for a type variable, and a unique is not unique in an optimised dump. So
+  `alpha_eq` must not be used for any free-tyvar-sensitive proof until a
+  later format carries lexical type-variable identity; every current caller
+  compares closed or same-scope types. This is now stated on the function.
+* The "**922 unreachable top-level bindings**" above are the **zero-reference
+  subset** under `W0` — bindings with no occurrence anywhere in the dump.
+  That is a valid *dead* subset (nothing can name them, so they cannot run),
+  but it is **not** a `Main.main`-rooted transitive reachability set: a
+  binding referenced only by another unreachable binding is not in it. M3
+  needs the rooted set, and will have to compute it.
+
+#### The gate for this correction
+
+Every report is byte-identical before and after except `dictflow` and the
+erasure section of `classops` — `stats`, `higher`, `tuples`, `fields`,
+`lists`, `text`, `verify-rep`, `laziness` and `compare`, with `--explain`
+and `--json`, on `core-json` and on all six matrix profiles. The
+target-enumeration half of `dictflow` (Part 1, in full) and of `classops`
+is byte-identical too; the `classops` diff is exactly its erasure block, six
+lines becoming ten. `cargo test` is **201** (six new: the `case`-on-⊥
+counterexample, an unknown-call producer, a dfun application, a strict
+parameter with total producers, a strict parameter with one forced
+producer, and the owner-level clone plan), clippy is 0 and `cargo fmt
+--check` is clean.
+
+One pre-existing defect surfaced and is **not** fixed here: `h2r parsec
+--explain` and `h2r parsec --json` are **nondeterministic run to run** —
+two consecutive runs of the same binary on the same input differ in the
+order of the per-role edge lines. The multiset of lines, and `h2r parsec`
+itself, are stable; the ordering comes from a `HashMap` iteration in the
+report. It predates this milestone and is unrelated to it, but it means
+those two outputs cannot carry a byte-identity gate until they are sorted.
 
 ## M2.4d — higher-order representation agreement
 

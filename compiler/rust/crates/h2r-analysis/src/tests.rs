@@ -5996,6 +5996,285 @@ fn two_dictionaries_sharing_an_internal_name_stay_distinct() {
 }
 
 //------------------------------------------------------------------------------
+// M2.4c' — totality is its own domain
+//------------------------------------------------------------------------------
+
+use crate::dictflow::Totality;
+
+/// A dictionary lambda binder GHC records as strict at its binding site.
+fn strict_dict_lam(params: &[(&str, u32)], body: Value) -> Value {
+    let mut e = body;
+    for (p, ty) in params.iter().rev() {
+        let mut b = dict_lam_binder(p, *ty);
+        b["demand"] = demand(true, false);
+        e = json!({"node": "Lam", "binder": b, "body": e});
+    }
+    e
+}
+
+/// `f = \$dShow x -> showsPrec $dShow x` with a *strict* dictionary binder.
+fn strict_show_user(name: &str) -> (Value, Value) {
+    (
+        named_top("f", name, true),
+        strict_dict_lam(
+            &[("$dShow", TY_SHOW_T)],
+            lam(
+                &["x"],
+                app(
+                    app(named_gvar("showsPrec", SHOWS_PREC), var("$dShow")),
+                    var("x"),
+                ),
+            ),
+        ),
+    )
+}
+
+/// Module `A`, with the dictionary parameter of `f` marked strict.
+fn wp_module_a_strict(extra: Vec<(Value, Value)>) -> Module {
+    let mut pairs = vec![
+        (
+            named_dict_top("$fShowT", "$main$A$$fShowT", TY_SHOW_T),
+            show_dict_with("$cshowsPrec"),
+        ),
+        (
+            named_dict_top("$fShowU", "$main$A$$fShowU", TY_SHOW_T),
+            show_dict_with("$cshowsPrecU"),
+        ),
+        (
+            binder("$cshowsPrec", demand(false, false)),
+            lam(&["p", "v"], var("v")),
+        ),
+        (
+            binder("$cshowsPrecU", demand(false, false)),
+            lam(&["p", "v"], var("v")),
+        ),
+    ];
+    let (b, rhs) = strict_show_user("$main$A$f");
+    pairs.push((b, rhs));
+    pairs.extend(extra);
+    class_module("A", pairs, class_ids(vec![]))
+}
+
+/// `case <scrut> of { A -> <d>; B -> <d> }` — both alternatives yield the
+/// same dictionary, so the MAY-set is a singleton and says nothing.
+fn case_both_alts(scrut: Value, d: Value) -> Value {
+    case_alts(scrut, &[("A", vec![], d.clone()), ("B", vec![], d)])
+}
+
+/// **The counterexample the correction is for.** `f (case bottom of A -> d;
+/// B -> d)`: the dictionary set is exactly `{$fShowT}`, and erasing the
+/// dictionary computation would delete the divergence the selector forces.
+/// Bounded identity is not totality.
+#[test]
+fn a_case_on_an_unevaluated_scrutinee_is_not_erasable() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f(
+            "use",
+            case_both_alts(
+                app(gvar("g"), var("y")),
+                named_gvar("$fShowT", "$main$A$$fShowT"),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    let p = flow_param(&f, "f");
+    // Part 1 is unchanged: the set really is the single instance.
+    assert_eq!(p.set.keys().len(), 1, "{:?}", p.set);
+    // Part 2 no longer reads that as totality.
+    assert_eq!(p.totality, Totality::MustPreserveForce);
+    let e = &f.param_erasure[f.params.iter().position(|x| x.owner == "f").unwrap()];
+    assert!(
+        !matches!(e.verdict, Verdict::Erasable),
+        "a forced dictionary must never be silently Erasable: {:?}",
+        e.verdict
+    );
+    match &e.verdict {
+        Verdict::ErasableWithObligation(o) => assert_eq!(o.module, "B"),
+        Verdict::Preserve(r) => assert_eq!(r, dictflow::R_FORCE),
+        other => panic!("expected an obligation or Preserve(force), got {other:?}"),
+    }
+    f.accounting().check().unwrap();
+}
+
+/// A producer through a call the dump cannot see has unknown totality —
+/// not `ProvenTotal`, and not a permission to erase.
+#[test]
+fn a_producer_through_an_unknown_call_has_unknown_totality() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![(
+            binder("use", demand(false, false)),
+            let_ty_ix(
+                "d",
+                "Show T",
+                TY_SHOW_T,
+                app(gvar("g"), var("y")),
+                app(app(named_gvar("f", "$main$A$f"), var("d")), var("y")),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    let p = flow_param(&f, "f");
+    assert_eq!(p.totality, Totality::Unknown);
+    let e = &f.param_erasure[f.params.iter().position(|x| x.owner == "f").unwrap()];
+    assert!(
+        !matches!(e.verdict, Verdict::Erasable | Verdict::ErasableWithClone(_)),
+        "{:?}",
+        e.verdict
+    );
+    f.accounting().check().unwrap();
+}
+
+/// A dfun application is a value: `ProvenTotal`, and the dictionary is
+/// erasable exactly as before.
+#[test]
+fn a_dfun_application_is_proven_total() {
+    // $fShowL = \$dShow -> C:Show $cshowsPrec $cshow $cshowList
+    let dfun = (
+        named_dict_top("$fShowL", "$main$A$$fShowL", TY_SHOW_T),
+        dict_lam(&[("$dShow", TY_SHOW_T)], show_dict_with("$cshowsPrec")),
+    );
+    let a = wp_module_a(vec![dfun]);
+    let b = class_module(
+        "B",
+        vec![call_f(
+            "use",
+            app(
+                named_gvar("$fShowL", "$main$A$$fShowL"),
+                named_gvar("$fShowT", "$main$A$$fShowT"),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    let p = flow_param(&f, "f");
+    assert_eq!(p.totality, Totality::ProvenTotal);
+    let e = &f.param_erasure[f.params.iter().position(|x| x.owner == "f").unwrap()];
+    assert_eq!(e.verdict, Verdict::Erasable);
+    f.accounting().check().unwrap();
+}
+
+/// A strict parameter all of whose producers are proven total is Erasable —
+/// on the totality, not on the strictness.
+#[test]
+fn a_strict_parameter_with_total_producers_is_erasable() {
+    let a = wp_module_a_strict(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f("use", named_gvar("$fShowT", "$main$A$$fShowT"))],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    let p = flow_param(&f, "f");
+    assert!(p.known_strict);
+    assert_eq!(p.totality, Totality::ProvenTotal);
+    let e = &f.param_erasure[f.params.iter().position(|x| x.owner == "f").unwrap()];
+    assert_eq!(e.verdict, Verdict::Erasable);
+    assert!(e.known_strict, "strictness is reported as evidence");
+    f.accounting().check().unwrap();
+}
+
+/// …and the same strict parameter with **one** forced producer is not.
+/// Strictness at entry is not permission to drop the force: if the
+/// parameter disappears the entry force must still happen somewhere.
+#[test]
+fn a_strict_parameter_with_one_forced_producer_keeps_the_force() {
+    let a = wp_module_a_strict(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f("useB", named_gvar("$fShowT", "$main$A$$fShowT"))],
+        class_ids(vec![]),
+    );
+    let c = class_module(
+        "C",
+        vec![call_f(
+            "useC",
+            case_both_alts(
+                app(gvar("g"), var("y")),
+                named_gvar("$fShowT", "$main$A$$fShowT"),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b, &c]);
+    let p = flow_param(&f, "f");
+    assert!(p.known_strict);
+    assert_eq!(p.set.keys().len(), 1, "{:?}", p.set);
+    assert_eq!(p.totality, Totality::MustPreserveForce);
+    let e = &f.param_erasure[f.params.iter().position(|x| x.owner == "f").unwrap()];
+    match &e.verdict {
+        Verdict::ErasableWithObligation(o) => assert_eq!(o.module, "C"),
+        Verdict::Preserve(r) => assert_eq!(r, dictflow::R_FORCE),
+        other => panic!("expected an obligation or Preserve(force), got {other:?}"),
+    }
+    f.accounting().check().unwrap();
+}
+
+/// Owner-level clone planning: one function, two dictionary parameters,
+/// three call sites that use only **two** distinct assignment tuples. The
+/// per-parameter cardinalities are 2 and 2; the clone count is 2 — neither
+/// their sum (4) nor their product (4).
+#[test]
+fn clones_are_the_distinct_call_site_tuples_not_a_sum_or_a_product() {
+    // f2 = \$dShow1 $dShow2 x -> showsPrec $dShow1 x
+    let f2 = (
+        named_top("f2", "$main$A$f2", true),
+        dict_lam(
+            &[("$dShow1", TY_SHOW_T), ("$dShow2", TY_SHOW_T)],
+            lam(
+                &["x"],
+                app(
+                    app(named_gvar("showsPrec", SHOWS_PREC), var("$dShow1")),
+                    var("x"),
+                ),
+            ),
+        ),
+    );
+    let a = wp_module_a(vec![f2]);
+    let call = |occ: &str, d1: &str, d2: &str| {
+        (
+            binder(occ, demand(false, false)),
+            app(
+                app(
+                    app(
+                        named_gvar("f2", "$main$A$f2"),
+                        named_gvar(d1, &format!("$main$A$${d1}")),
+                    ),
+                    named_gvar(d2, &format!("$main$A$${d2}")),
+                ),
+                var("y"),
+            ),
+        )
+    };
+    let b = class_module(
+        "B",
+        vec![
+            call("useTT", "fShowT", "fShowT"),
+            call("useUU", "fShowU", "fShowU"),
+            // A third call site that repeats the first tuple.
+            call("useTT2", "fShowT", "fShowT"),
+        ],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    let plan = f
+        .owners
+        .iter()
+        .find(|o| o.owner == "f2")
+        .expect("no clone plan for f2");
+    assert_eq!(plan.params.len(), 2);
+    assert_eq!(plan.cardinalities, vec![2, 2]);
+    assert_eq!(plan.clones, Some(2), "{:?}", plan.tuples);
+    assert_eq!(f.accounting().owner_clones, 2);
+    f.accounting().check().unwrap();
+}
+
+//------------------------------------------------------------------------------
 // Higher-order representation agreement (higher.rs)
 //------------------------------------------------------------------------------
 

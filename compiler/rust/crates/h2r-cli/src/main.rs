@@ -4779,21 +4779,30 @@ fn classops(
         println!("  erasure — A KNOWN METHOD TARGET IS NOT A REMOVABLE DICTIONARY.");
         println!("  The verdicts below are computed from facts recorded separately from");
         println!("  the targets above, and the two are crossed, never collapsed.");
-        let names = ["Erasable", "ErasableWithClone", "Preserve", "Unresolved"];
-        println!("  {:<20} {:>9} {:>11}", "verdict", "values", "parameters");
+        let names = h2r_analysis::dictflow::VERDICTS;
+        println!("  {:<24} {:>9} {:>11}", "verdict", "values", "parameters");
         for (i, n) in names.iter().enumerate() {
             println!(
-                "  {n:<20} {:>9} {:>11}",
+                "  {n:<24} {:>9} {:>11}",
                 w.value_verdicts[i], w.param_verdicts[i]
             );
         }
         println!(
-            "  clones a WithClone verdict would cost: {} (values) + {} (parameters)",
+            "  totality of the dictionary parameters: {} ProvenTotal, {} MustPreserveForce, {} Unknown",
+            w.param_totality[0], w.param_totality[1], w.param_totality[2]
+        );
+        println!("  named force obligations: {}", w.obligations);
+        println!(
+            "  clone plan: {} clones over {} owning functions (distinct call-site tuples)",
+            w.owner_clones, w.owner_functions
+        );
+        println!(
+            "  per-parameter cardinality sums, evidence only: {} (values) + {} (parameters)",
             w.value_clones, w.param_clones
         );
         println!(
             "  sites with an Exact target on a Preserve dictionary: {}",
-            w.matrix[0][2]
+            w.matrix[0][3]
         );
     }
 
@@ -4876,6 +4885,7 @@ fn dictflow(dir: &Path, json: bool, explain: bool) -> Result<()> {
             "parameters": flow.params,
             "values": flow.values,
             "parameterErasure": flow.param_erasure,
+            "clonePlan": flow.owners,
             "accounting": a,
             "rules": RULES,
         });
@@ -5001,43 +5011,124 @@ fn dictflow(dir: &Path, json: bool, explain: bool) -> Result<()> {
     println!("  method runs; this says whether the dictionary survives. The facts are");
     println!("  recorded separately and the verdicts are separate verdicts.");
     println!();
-    let names = ["Erasable", "ErasableWithClone", "Preserve", "Unresolved"];
-    println!("  {:<20} {:>9} {:>11}", "verdict", "values", "parameters");
+    println!("  Totality is its own domain (E6-TOTALITY-*), propagated separately from");
+    println!("  the dictionary sets: a bounded set says WHICH dictionary an expression");
+    println!("  can produce and never that producing it terminates. Erasable requires");
+    println!("  ProvenTotal; a force that survives is carried as a named obligation.");
+    println!(
+        "  totality fixpoint: {} rounds{}",
+        flow.tot_rounds,
+        if flow.tot_budget_hit {
+            format!(" (the {ROUND_BUDGET}-round budget was hit: every parameter is Unknown)")
+        } else {
+            String::new()
+        }
+    );
+    println!("  {:<26} {:>11}", "totality (parameters)", "parameters");
+    for (i, n) in ["ProvenTotal", "MustPreserveForce", "Unknown"]
+        .iter()
+        .enumerate()
+    {
+        println!("  {n:<26} {:>11}", a.param_totality[i]);
+    }
+    println!(
+        "  ProvenTotal + MustPreserveForce + Unknown = {}: {}",
+        a.params,
+        if a.param_totality.iter().sum::<usize>() == a.params {
+            "asserted"
+        } else {
+            "FAILED"
+        }
+    );
+    println!();
+    let names = h2r_analysis::dictflow::VERDICTS;
+    println!("  {:<24} {:>9} {:>11}", "verdict", "values", "parameters");
     for (i, n) in names.iter().enumerate() {
         println!(
-            "  {n:<20} {:>9} {:>11}",
+            "  {n:<24} {:>9} {:>11}",
             a.value_verdicts[i], a.param_verdicts[i]
         );
     }
-    println!("  {:<20} {:>9} {:>11}", "total", a.values, a.params);
+    println!("  {:<24} {:>9} {:>11}", "total", a.values, a.params);
     println!(
-        "  values = E + WithClone + Preserve + Unresolved, parameters likewise: {}",
+        "  values = the five verdicts, parameters likewise: {}",
         match a.check() {
             Ok(()) => "asserted".to_string(),
             Err(e) => format!("FAILED: {e}"),
         }
     );
+    println!("  named force obligations carried: {}", a.obligations);
     println!(
-        "  clones counted (never made): {} over the values, {} over the parameters",
+        "  per-parameter cardinality (evidence, NOT a clone count): {} over the values,\n\
+         \x20 {} over the parameters",
         a.value_clones, a.param_clones
     );
 
     println!();
-    println!("  the 3x4 matrix: (target outcome) x (dictionary verdict)");
+    println!("  the clone plan, per owning function (E7-OWNER-CLONES): the clones a");
+    println!("  function needs are its DISTINCT call-site assignment tuples — one tuple");
+    println!("  per call site, deduplicated — not the sum and not the product of the");
+    println!("  per-parameter cardinalities.");
     println!(
-        "  {:<12} {:>10} {:>18} {:>10} {:>12}",
-        "", names[0], names[1], names[2], names[3]
+        "  {:<22} {:<28} {:>7} {:>8} {:>7}",
+        "module", "function", "params", "tuples", "clones"
+    );
+    for o in &flow.owners {
+        println!(
+            "  {:<22} {:<28} {:>7} {:>8} {:>7}",
+            o.module,
+            o.owner,
+            o.params.len(),
+            o.tuples.len(),
+            match o.clones {
+                Some(n) => n.to_string(),
+                None => "refused".to_string(),
+            }
+        );
+        println!(
+            "      cardinalities {:?}   parameters {}",
+            o.cardinalities,
+            o.params.join(", ")
+        );
+        for t in &o.tuples {
+            println!("      tuple: {t}");
+        }
+        if o.set_valued > 0 {
+            println!(
+                "      {} tuple(s) have a set-valued component (W5-MONOVARIANT): this\n\
+                 \x20     owner's clone count is a LOWER BOUND, closable only by a\n\
+                 \x20     call-string analysis",
+                o.set_valued
+            );
+        }
+        if let Some(r) = &o.refused {
+            println!("      refused: {r}");
+        }
+    }
+    println!(
+        "  clone plan total: {} over {} owning functions ({} owner(s) with a\n\
+         \x20 set-valued tuple, whose count is a lower bound)",
+        a.owner_clones,
+        a.owner_functions,
+        flow.owners.iter().filter(|o| o.set_valued > 0).count()
+    );
+
+    println!();
+    println!("  the matrix: (target outcome) x (dictionary verdict)");
+    println!(
+        "  {:<12} {:>10} {:>23} {:>18} {:>10} {:>12}",
+        "", names[0], names[1], names[2], names[3], names[4]
     );
     for (i, row) in ["Exact", "FiniteSet", "Unresolved"].iter().enumerate() {
         println!(
-            "  {row:<12} {:>10} {:>18} {:>10} {:>12}",
-            a.matrix[i][0], a.matrix[i][1], a.matrix[i][2], a.matrix[i][3]
+            "  {row:<12} {:>10} {:>23} {:>18} {:>10} {:>12}",
+            a.matrix[i][0], a.matrix[i][1], a.matrix[i][2], a.matrix[i][3], a.matrix[i][4]
         );
     }
     println!(
         "  sites whose target is Exact but whose dictionary is Preserve: {}\n\
          \x20 — a dispatch on a preserved dictionary. The two questions do not collapse.",
-        a.matrix[0][2]
+        a.matrix[0][3]
     );
 
     println!();
@@ -5094,6 +5185,16 @@ fn dictflow(dir: &Path, json: bool, explain: bool) -> Result<()> {
                 x.known_strict
             );
         }
+        for x in &flow.params {
+            println!(
+                "{} {}.{}#{}  totality {}",
+                x.module,
+                x.owner,
+                x.occ,
+                x.index,
+                x.totality.label()
+            );
+        }
         for (x, e) in flow.params.iter().zip(&flow.param_erasure) {
             println!(
                 "{} parameter {}  {}{}",
@@ -5102,6 +5203,10 @@ fn dictflow(dir: &Path, json: bool, explain: bool) -> Result<()> {
                 e.verdict.label(),
                 match &e.verdict {
                     Verdict::ErasableWithClone(n) => format!("({n})"),
+                    Verdict::ErasableWithObligation(o) => format!(
+                        "(force at {} node {}, scrutinee node {})",
+                        o.module, o.at, o.what
+                    ),
                     Verdict::Preserve(h) | Verdict::Unresolved(h) => format!(" {h}"),
                     Verdict::Erasable => String::new(),
                 }

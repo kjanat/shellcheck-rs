@@ -150,9 +150,15 @@ impl Ty {
     }
 
     /// Alpha-equivalence: the same type up to the names of bound type
-    /// variables. Free type variables are compared by unique, which is
-    /// sound because a type's free variables are all bound in the same
-    /// enclosing term.
+    /// variables. Bound variables are alpha-mapped here; **free type
+    /// variables are compared by GHC unique and are not scope-identified**.
+    /// A unique is not unique in an optimised dump (see
+    /// [`Module::resolve_scopes`]), and format 5 carries no lexical
+    /// identity for a *type* variable, so two free tyvars from different
+    /// scopes can share a unique and compare equal. That is why this must
+    /// not be used for any proof that is sensitive to free type variables
+    /// until a later dump format carries lexical type-variable identity;
+    /// every current caller compares closed or same-scope types.
     ///
     /// Iterative, over an explicit worklist, and over the *structured*
     /// type — the textual `alpha_normalise` M2.1 uses on rendered types is
@@ -357,14 +363,17 @@ pub struct BindInfo {
 }
 
 /// What a `Var` occurrence refers to. This is the *identity* of a variable
-/// in the IR; the GHC unique is kept for diagnostics and for linking against
-/// the imported-id table, and is never an identity anywhere else.
+/// in the IR; the GHC unique is kept for diagnostics only, and is never an
+/// identity and never a key — linkage against the imported-id table goes
+/// through the stable name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ref {
     /// Bound in this module, by this binder.
     Local(BinderId),
-    /// An import: nothing in this module binds it. The unique on the
-    /// occurrence is the key into [`Module::ids`].
+    /// An import: nothing in this module binds it. The occurrence's
+    /// **stable name** — unit, module and occurrence, as of dump format 5
+    /// — is the key into [`Module::ids`]; the unique is not, and is never
+    /// a key anywhere.
     Global,
 }
 

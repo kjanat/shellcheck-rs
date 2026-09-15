@@ -410,7 +410,19 @@ pub(crate) fn class_of_tycon(name: &str) -> Option<&'static ClassSpec> {
 /// binding in `ShellCheck.AST`, and the closed world has both.
 pub struct World<'m> {
     pub modules: Vec<&'m Module>,
+    /// Keyed by **stable name**, and only for bindings whose name is
+    /// external — the only names another module can refer to, and the only
+    /// ones that are unique. A top-level binder GHC has not externalised
+    /// has an *internal* name (`$_sys$$fTraversableInnerToken`) that three
+    /// distinct bindings of `ShellCheck.AST` share; admitting those here
+    /// would silently make one of them stand for the others. This is the
+    /// discipline [`crate::dictflow::Program`] already applies, and the
+    /// collisions it would have hidden are counted in
+    /// [`World::name_collisions`] and asserted to be none.
     tops: HashMap<String, (usize, BinderId, ExprId)>,
+    /// External stable names that two distinct top-level bindings claim.
+    /// Asserted empty when the world is built.
+    pub name_collisions: Vec<String>,
     lam_of: Vec<HashMap<BinderId, ExprId>>,
     top_of_rhs: Vec<HashMap<ExprId, BinderId>>,
 }
@@ -418,7 +430,8 @@ pub struct World<'m> {
 impl<'m> World<'m> {
     pub fn new(modules: impl IntoIterator<Item = &'m Module>) -> World<'m> {
         let modules: Vec<&Module> = modules.into_iter().collect();
-        let mut tops = HashMap::new();
+        let mut tops: HashMap<String, (usize, BinderId, ExprId)> = HashMap::new();
+        let mut name_collisions: Vec<String> = Vec::new();
         let mut lam_of = Vec::with_capacity(modules.len());
         let mut top_of_rhs = Vec::with_capacity(modules.len());
         for (mi, m) in modules.iter().enumerate() {
@@ -426,8 +439,20 @@ impl<'m> World<'m> {
             for bind in &m.top {
                 for pair in &bind.pairs {
                     let b = m.binder(pair.binder);
-                    tops.entry(b.name.clone())
-                        .or_insert((mi, pair.binder, pair.rhs));
+                    // Only an external name is referable from another
+                    // module, and only an external name is unique.
+                    if crate::dictflow::is_external_name(&b.name) {
+                        match tops.entry(b.name.clone()) {
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                e.insert((mi, pair.binder, pair.rhs));
+                            }
+                            std::collections::hash_map::Entry::Occupied(e) => {
+                                if *e.get() != (mi, pair.binder, pair.rhs) {
+                                    name_collisions.push(b.name.clone());
+                                }
+                            }
+                        }
+                    }
                     rhs_map.insert(pair.rhs, pair.binder);
                 }
             }
@@ -440,9 +465,14 @@ impl<'m> World<'m> {
             lam_of.push(lams);
             top_of_rhs.push(rhs_map);
         }
+        assert!(
+            name_collisions.is_empty(),
+            "external stable names are not unique: {name_collisions:?}"
+        );
         World {
             modules,
             tops,
+            name_collisions,
             lam_of,
             top_of_rhs,
         }

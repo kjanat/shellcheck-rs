@@ -155,6 +155,51 @@ pub const E4_ESCAPE: &str = "E4-ESCAPE";
 /// never collapse. Evidence: structural (2).
 pub const E5_PRESERVED_DISPATCH: &str = "E5-PRESERVED-DISPATCH";
 
+/// **Totality is its own domain.** Whether a dictionary expression can be
+/// deleted without deleting a divergence is propagated in [`Totality`],
+/// separately from [`DictSet`], with its own lattice and its own transfer.
+/// A saturated dictionary-constructor application, a dfun (applied or
+/// not), and a superclass selection out of a `ProvenTotal` dictionary are
+/// values: `ProvenTotal`. Evidence: structural saturation (2).
+pub const E6_TOTALITY_VALUE: &str = "E6-TOTALITY-VALUE";
+/// **A `case` is a force.** A `case` whose scrutinee is not itself already
+/// evaluated — a value, or a variable bound by an enclosing `case`, or a
+/// variable GHC marks strict that an enclosing `case` on it dominates — is
+/// `MustPreserveForce`, **even when every alternative yields the same
+/// dictionary**. [`eval_nested`] is a MAY-analysis over the alternatives
+/// and says nothing about the scrutinee; bounded dictionary identity is
+/// not totality. Evidence: compiler axiom (5).
+pub const E6_TOTALITY_CASE: &str = "E6-TOTALITY-CASE";
+/// **Let.** A let- or top-bound dictionary inherits the totality of its
+/// right-hand side. Evidence: def-use (3).
+pub const E6_TOTALITY_LET: &str = "E6-TOTALITY-LET";
+/// **Parameters.** A dictionary parameter's totality is the join over the
+/// totality of every producer that reaches it, over the closed world, in
+/// its own fixpoint. Evidence: def-use dataflow (3).
+pub const E6_TOTALITY_PARAM: &str = "E6-TOTALITY-PARAM";
+/// **Unknown.** A dictionary through a call the dump cannot see, through a
+/// non-dictionary constructor field, through a higher-order parameter, or
+/// over a budget has unknown totality: not a permission to erase.
+/// Evidence: def-use (3).
+pub const E6_TOTALITY_UNKNOWN: &str = "E6-TOTALITY-UNKNOWN";
+/// **The obligation.** `Erasable` requires `ProvenTotal`. A
+/// `MustPreserveForce` dictionary may still be erased only if the force it
+/// carries can be named — the `case` node and the scrutinee that must
+/// still be evaluated — and then the verdict is
+/// [`Verdict::ErasableWithObligation`], never a silent `Erasable`. Without
+/// an expressible obligation the verdict is `Preserve(force)`. Strictness
+/// at entry ([`Param::known_strict`]) is **not** permission to drop the
+/// force: if the parameter disappears the entry force must still happen
+/// somewhere, so it is evidence on the report and never a verdict.
+/// Evidence: compiler axiom (5).
+pub const E6_TOTALITY_OBLIGATION: &str = "E6-TOTALITY-OBLIGATION";
+/// **Clones are planned per owner.** The specialisations a function needs
+/// are the *distinct call-site assignment tuples* of its dictionary
+/// parameters — one tuple per call site, deduplicated — not the sum and
+/// not the product of the per-parameter cardinalities, which are kept only
+/// as evidence. Evidence: def-use over the closed world (3).
+pub const E7_OWNER_CLONES: &str = "E7-OWNER-CLONES";
+
 /// Every rule, with its meaning and evidence level.
 pub const RULES: &[(&str, u8, &str)] = &[
     (
@@ -227,6 +272,41 @@ pub const RULES: &[(&str, u8, &str)] = &[
         2,
         "an Exact target on a Preserve dictionary is still a run-time dispatch",
     ),
+    (
+        E6_TOTALITY_VALUE,
+        2,
+        "a dict-con application, a dfun, or a superclass selection of a total dictionary is total",
+    ),
+    (
+        E6_TOTALITY_CASE,
+        5,
+        "a case on a scrutinee that is not already evaluated must preserve its force",
+    ),
+    (
+        E6_TOTALITY_LET,
+        3,
+        "a let- or top-bound dictionary inherits the totality of its right-hand side",
+    ),
+    (
+        E6_TOTALITY_PARAM,
+        3,
+        "a parameter's totality is the join over its producers, in its own fixpoint",
+    ),
+    (
+        E6_TOTALITY_UNKNOWN,
+        3,
+        "an unknown call, a non-dictionary field or a budget leaves totality unknown",
+    ),
+    (
+        E6_TOTALITY_OBLIGATION,
+        5,
+        "Erasable requires ProvenTotal, or a named force obligation; strictness is not permission",
+    ),
+    (
+        E7_OWNER_CLONES,
+        3,
+        "a function's clones are its distinct call-site assignment tuples, not a sum or a product",
+    ),
 ];
 
 // Taint / unresolved reasons.
@@ -257,6 +337,13 @@ pub const B_ROUNDS: &str = "fixpoint-exceeded-the-round-budget";
 pub const B_SET: &str = "dictionary-set-exceeded-the-budget";
 pub const B_EVAL: &str = "evaluation-exceeded-the-step-budget";
 pub const B_NEST: &str = "field-read-exceeded-the-nesting-budget";
+/// The dictionary can be bounded but its producer is not proven total and
+/// the force it carries cannot be named: it must stay.
+pub const R_FORCE: &str = "erasure-would-delete-a-force";
+/// Totality could not be decided at all, so erasure is not permitted.
+pub const R_FORCE_UNKNOWN: &str = "totality-unknown-erasure-could-move-divergence";
+/// The totality fixpoint did not settle inside the round budget.
+pub const B_TOT_ROUNDS: &str = "totality-fixpoint-exceeded-the-round-budget";
 
 /// Fixpoint rounds before every unstable parameter is forced to `Top`.
 pub const ROUND_BUDGET: usize = 40;
@@ -322,6 +409,102 @@ impl DictSet {
 }
 
 static EMPTY: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+
+//------------------------------------------------------------------------------
+// The totality domain — separate from DictSet
+//------------------------------------------------------------------------------
+
+/// Whether deleting a dictionary computation would delete an evaluation.
+/// **This is not [`DictSet`] and it is not derived from it**: a bounded
+/// set says *which* dictionary an expression can produce, and says nothing
+/// about whether producing it terminates. The two are propagated by
+/// separate transfers and joined separately.
+///
+/// The lattice is the chain `ProvenTotal < MustPreserveForce < Unknown`,
+/// with `ProvenTotal` as bottom (the empty join) and `max` as the join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum Totality {
+    /// Every producer is a value: erasure moves no divergence
+    /// ([`E6_TOTALITY_VALUE`]).
+    ProvenTotal,
+    /// A `case` on a scrutinee that is not already evaluated stands
+    /// between the producer and the dictionary ([`E6_TOTALITY_CASE`]).
+    MustPreserveForce,
+    /// Not decidable here ([`E6_TOTALITY_UNKNOWN`]).
+    Unknown,
+}
+
+impl Totality {
+    pub fn label(self) -> &'static str {
+        match self {
+            Totality::ProvenTotal => "ProvenTotal",
+            Totality::MustPreserveForce => "MustPreserveForce",
+            Totality::Unknown => "Unknown",
+        }
+    }
+}
+
+/// The force that erasure would delete, named: the `case` node and the
+/// scrutinee expression that must still be evaluated somewhere if the
+/// dictionary itself goes away ([`E6_TOTALITY_OBLIGATION`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ForceObligation {
+    pub module: String,
+    /// The node whose evaluation erasure would delete.
+    pub at: ExprId,
+    /// The scrutinee that must still be evaluated.
+    pub what: ExprId,
+}
+
+/// A totality level together with the obligation that witnesses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tot {
+    pub level: Totality,
+    pub obligation: Option<ForceObligation>,
+}
+
+impl Tot {
+    pub fn total() -> Tot {
+        Tot {
+            level: Totality::ProvenTotal,
+            obligation: None,
+        }
+    }
+    pub fn unknown() -> Tot {
+        Tot {
+            level: Totality::Unknown,
+            obligation: None,
+        }
+    }
+    pub fn force(module: &str, at: ExprId, what: ExprId) -> Tot {
+        Tot {
+            level: Totality::MustPreserveForce,
+            obligation: Some(ForceObligation {
+                module: module.to_string(),
+                at,
+                what,
+            }),
+        }
+    }
+    /// Monotone join on the chain. The obligation kept is the
+    /// lexicographically smallest witness, so the result never depends on
+    /// visit order.
+    pub fn join(&mut self, other: &Tot) {
+        self.level = self.level.max(other.level);
+        let keep = match (&self.obligation, &other.obligation) {
+            (Some(a), Some(b)) => {
+                if (a.module.as_str(), a.at, a.what) <= (b.module.as_str(), b.at, b.what) {
+                    Some(a.clone())
+                } else {
+                    Some(b.clone())
+                }
+            }
+            (Some(a), None) => Some(a.clone()),
+            (None, b) => b.clone(),
+        };
+        self.obligation = keep;
+    }
+}
 
 /// One dictionary identity in the closed world.
 #[derive(Debug, Clone, Serialize)]
@@ -649,7 +832,20 @@ impl<'m> Program<'m> {
 /// whose name is `$_sys$$fTraversableInnerToken`. Nothing here is keyed by
 /// one.
 pub(crate) fn is_external_name(name: &str) -> bool {
-    split_stable_name(name).is_some_and(|(u, md, _)| !u.is_empty() && !md.is_empty())
+    split_stable_name(name)
+        .is_some_and(|(u, md, _)| !u.is_empty() && !md.is_empty() && !is_internal_unit(u))
+}
+
+/// GHC's `nameStableString` renders a non-external name as `$_sys$<occ>`
+/// or `$_in$<occ>`, with **no unit and no module**. When that `<occ>` itself
+/// contains a `$` — `$_sys$poly_$j`, and GHC's worker/wrapper and
+/// join-point names are full of them — the three-way split reads `_sys` as
+/// a unit and `poly_` as a module, and the name passes for external. It is
+/// not: two distinct top-level bindings of the dump claim
+/// `$_sys$poly_$j`. Rejecting the two pseudo-units is what makes
+/// "external ⇒ unique" true rather than nearly true.
+pub(crate) fn is_internal_unit(unit: &str) -> bool {
+    unit == "_sys" || unit == "_in"
 }
 
 /// The class whose dictionary constructor this stable name is.
@@ -688,6 +884,15 @@ pub struct Param {
     pub producers: Producers,
     /// The fixpoint's answer.
     pub set: DictSet,
+    /// The **separate** totality fixpoint's answer ([`E6_TOTALITY_PARAM`]).
+    /// Not derived from `set`: a bounded set is not a proof of totality.
+    pub totality: Totality,
+    #[serde(skip)]
+    pub tot: Tot,
+    /// The owning function's binder, for owner-level clone planning
+    /// ([`E7_OWNER_CLONES`]).
+    #[serde(skip)]
+    pub owner_binder: Option<BinderId>,
 }
 
 /// A method sitting at field `field` of the dictionary `dict`: its callers
@@ -779,8 +984,12 @@ pub struct Site {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Verdict {
     Erasable,
-    /// One specialised clone per instance; the count is the number of
-    /// instances, never made, only counted.
+    /// Erasable only if the force it carries is discharged elsewhere: the
+    /// obligation is recorded, never silently dropped
+    /// ([`E6_TOTALITY_OBLIGATION`]).
+    ErasableWithObligation(ForceObligation),
+    /// One specialised clone per instance at this parameter; the real
+    /// clone count is planned per owning function ([`E7_OWNER_CLONES`]).
     ErasableWithClone(usize),
     /// The dictionary must stay: the holder is named.
     Preserve(String),
@@ -791,20 +1000,31 @@ impl Verdict {
     pub fn label(&self) -> &'static str {
         match self {
             Verdict::Erasable => "Erasable",
+            Verdict::ErasableWithObligation(_) => "ErasableWithObligation",
             Verdict::ErasableWithClone(_) => "ErasableWithClone",
             Verdict::Preserve(_) => "Preserve",
             Verdict::Unresolved(_) => "Unresolved",
         }
     }
-    fn col(&self) -> usize {
+    pub fn col(&self) -> usize {
         match self {
             Verdict::Erasable => 0,
-            Verdict::ErasableWithClone(_) => 1,
-            Verdict::Preserve(_) => 2,
-            Verdict::Unresolved(_) => 3,
+            Verdict::ErasableWithObligation(_) => 1,
+            Verdict::ErasableWithClone(_) => 2,
+            Verdict::Preserve(_) => 3,
+            Verdict::Unresolved(_) => 4,
         }
     }
 }
+
+/// The verdict columns, in [`Verdict::col`] order.
+pub const VERDICTS: [&str; 5] = [
+    "Erasable",
+    "ErasableWithObligation",
+    "ErasableWithClone",
+    "Preserve",
+    "Unresolved",
+];
 
 /// The erasure verdict of one dictionary value or parameter, with the
 /// facts it was computed from — recorded separately from Part 1.
@@ -814,9 +1034,19 @@ pub struct Erasure {
     pub module: String,
     /// `value` or `parameter`.
     pub kind: &'static str,
-    /// Every producer is a total dictionary value ([`E1_TOTAL`]).
+    /// Every producer is a total dictionary value ([`E1_TOTAL`]), i.e.
+    /// `totality == ProvenTotal`. Recorded by the totality domain, not by
+    /// the dictionary set.
     pub producers_total: bool,
-    /// GHC already forces it at entry, so erasure moves no divergence.
+    /// The totality domain's answer ([`E6_TOTALITY_PARAM`]).
+    pub totality: Totality,
+    /// The force erasure would delete, where it can be named
+    /// ([`E6_TOTALITY_OBLIGATION`]).
+    pub obligation: Option<ForceObligation>,
+    /// GHC records the parameter as strict at its binder. **Evidence
+    /// only**: strictness at entry is not permission to drop the force,
+    /// because if the parameter disappears the entry force must still
+    /// happen somewhere. Never consulted for the verdict.
     pub known_strict: bool,
     /// The instances that must agree at this boundary.
     pub instances: usize,
@@ -852,13 +1082,23 @@ pub struct Accounting {
     pub reasons: BTreeMap<String, usize>,
     /// Taint sources, by reason, over the parameters.
     pub taints: BTreeMap<String, usize>,
-    /// value verdict counts, in [`Verdict`] order.
-    pub value_verdicts: [usize; 4],
-    pub param_verdicts: [usize; 4],
+    /// value verdict counts, in [`Verdict::col`] order.
+    pub value_verdicts: [usize; 5],
+    pub param_verdicts: [usize; 5],
+    /// The per-parameter cardinality sum: **evidence**, not a clone plan.
     pub value_clones: usize,
     pub param_clones: usize,
+    /// The clone plan: distinct call-site assignment tuples, summed over
+    /// the owning functions that need any ([`E7_OWNER_CLONES`]).
+    pub owner_clones: usize,
+    /// Owning functions in the clone plan.
+    pub owner_functions: usize,
+    /// Verdicts that carry a named force obligation.
+    pub obligations: usize,
+    /// Totality of the dictionary parameters, by level.
+    pub param_totality: [usize; 3],
     /// (target outcome) × (dictionary verdict).
-    pub matrix: [[usize; 4]; 3],
+    pub matrix: [[usize; 5]; 3],
     pub erasure_reasons: BTreeMap<String, usize>,
 }
 
@@ -892,7 +1132,7 @@ impl Accounting {
     }
 
     pub fn preserved_dispatch(&self) -> usize {
-        self.matrix[0][2] + self.matrix[1][2]
+        self.matrix[0][3] + self.matrix[1][3]
     }
 }
 
@@ -903,8 +1143,41 @@ pub struct DictFlow {
     pub params: Vec<Param>,
     pub values: Vec<Erasure>,
     pub param_erasure: Vec<Erasure>,
+    /// The owner-level clone plan ([`E7_OWNER_CLONES`]).
+    pub owners: Vec<OwnerPlan>,
     pub rounds: usize,
     pub round_budget_hit: bool,
+    /// Rounds the *totality* fixpoint took, and whether it hit its budget.
+    pub tot_rounds: usize,
+    pub tot_budget_hit: bool,
+}
+
+/// The clone plan for one function that owns dictionary parameters: the
+/// specialisations it needs are its **distinct call-site assignment
+/// tuples**, one tuple per call site, deduplicated ([`E7_OWNER_CLONES`]).
+/// The per-parameter cardinalities are kept as evidence and are neither
+/// summed nor multiplied to get the count.
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnerPlan {
+    pub module: String,
+    pub owner: String,
+    /// The function's dictionary parameters, by `occ#index`.
+    pub params: Vec<String>,
+    /// Per-parameter instance cardinality: evidence only.
+    pub cardinalities: Vec<usize>,
+    /// The distinct tuples actually seen, rendered.
+    pub tuples: Vec<String>,
+    /// Tuples with a component the monovariant analysis
+    /// ([`W5_MONOVARIANT`]) could only give as a *set* of instances: one
+    /// call site whose dictionary argument is itself a multi-instance
+    /// parameter. Such a tuple counts as one call site here, so while
+    /// `set_valued` is non-zero `clones` is a **lower bound** and only a
+    /// call-string analysis can close it.
+    pub set_valued: usize,
+    /// `tuples.len()`, or — when a call site could not be enumerated —
+    /// `None`, and then the plan is refused rather than guessed.
+    pub clones: Option<usize>,
+    pub refused: Option<String>,
 }
 
 /// The fixpoint state: one set per parameter.
@@ -1040,8 +1313,91 @@ impl DictFlow {
             s.outcome = outcome_of(p, s);
         }
 
+        // ------------------------------------------------------------------
+        // The *second*, separate fixpoint: totality ([`E6_TOTALITY_PARAM`]).
+        // It shares the settled dictionary sets only to resolve dispatch;
+        // its own transfer and its own lattice decide the answer.
+        // ------------------------------------------------------------------
+        let mut dispatch: DispatchIndex = HashMap::new();
+        let mut tainted: HashSet<(&str, usize)> = HashSet::new();
+        for site in &sites {
+            let (Some(spec), Some(field)) = (site.spec, site.field) else {
+                continue;
+            };
+            match &site.set {
+                DictSet::Top(_) => {
+                    tainted.insert((spec.class, field));
+                }
+                DictSet::Set(keys) => {
+                    for k in keys {
+                        dispatch
+                            .entry((k.as_str(), field))
+                            .or_default()
+                            .push((site.mi, &site.rest));
+                    }
+                }
+            }
+        }
+
+        let mut tst: TotState = params
+            .iter()
+            .map(|x| ((x.mi, x.binder), Tot::total()))
+            .collect();
+        let mut tot_rounds = 0usize;
+        let mut tot_hit = false;
+        loop {
+            tot_rounds += 1;
+            let mut changed = false;
+            let mut next = tst.clone();
+            for x in &params {
+                let mut acc = Tot::total();
+                if x.producers.top.is_some() {
+                    acc.join(&Tot::unknown());
+                }
+                for &(cmi, arg) in &x.producers.calls {
+                    acc.join(&tot_of(p, &state, &tst, cmi, arg));
+                }
+                for slot in &x.producers.slots {
+                    if tainted.contains(&(slot.class, slot.field)) {
+                        acc.join(&Tot::unknown());
+                        continue;
+                    }
+                    let Some(callers) = dispatch.get(&(slot.dict.as_str(), slot.field)) else {
+                        continue;
+                    };
+                    for (cmi, rest) in callers {
+                        match rest.get(slot.arg_index.wrapping_sub(1)) {
+                            Some(&a) => acc.join(&tot_of(p, &state, &tst, *cmi, a)),
+                            None => acc.join(&Tot::unknown()),
+                        }
+                    }
+                }
+                let slot = next.get_mut(&(x.mi, x.binder)).unwrap();
+                if *slot != acc {
+                    *slot = acc;
+                    changed = true;
+                }
+            }
+            tst = next;
+            if !changed {
+                break;
+            }
+            if tot_rounds >= ROUND_BUDGET {
+                tot_hit = true;
+                for v in tst.values_mut() {
+                    v.join(&Tot::unknown());
+                }
+                break;
+            }
+        }
+        for x in &mut params {
+            x.tot = tst[&(x.mi, x.binder)].clone();
+            x.totality = x.tot.level;
+        }
+
         // Part 2, from facts recorded separately.
         let (values, param_erasure) = erasure(p, &params, &sites);
+        let owners = owner_plans(p, &state, &params, &param_erasure);
         let pv: HashMap<(usize, BinderId), Verdict> = params
             .iter()
             .zip(&param_erasure)
@@ -1060,8 +1416,11 @@ impl DictFlow {
             params,
             values,
             param_erasure,
+            owners,
             rounds,
             round_budget_hit: hit,
+            tot_rounds,
+            tot_budget_hit: tot_hit,
         }
     }
 
@@ -1128,10 +1487,21 @@ impl DictFlow {
                     Verdict::Preserve(r) | Verdict::Unresolved(r) => {
                         *a.erasure_reasons.entry(reason_head(r)).or_default() += 1;
                     }
+                    Verdict::ErasableWithObligation(_) => {}
                     Verdict::Erasable => {}
                 }
             }
         }
+        for e in self.values.iter().chain(self.param_erasure.iter()) {
+            if matches!(e.verdict, Verdict::ErasableWithObligation(_)) {
+                a.obligations += 1;
+            }
+        }
+        for x in &self.params {
+            a.param_totality[x.totality as usize] += 1;
+        }
+        a.owner_functions = self.owners.len();
+        a.owner_clones = self.owners.iter().filter_map(|o| o.clones).sum();
         a
     }
 }
@@ -1191,6 +1561,9 @@ fn collect_params(p: &Program) -> Vec<Param> {
                 known_strict: m.binder(b).demand.as_ref().is_some_and(|d| d.strict),
                 producers: producers_of(p, mi, owner, index),
                 set: DictSet::empty(),
+                totality: Totality::ProvenTotal,
+                tot: Tot::total(),
+                owner_binder: owner,
             });
         }
     }
@@ -1605,6 +1978,240 @@ fn target_of(p: &Program, mi: usize, node: ExprId) -> Option<MethodTarget> {
 }
 
 //------------------------------------------------------------------------------
+// The totality transfer
+//------------------------------------------------------------------------------
+
+/// One totality per dictionary parameter: the second fixpoint's state.
+pub type TotState = HashMap<(usize, BinderId), Tot>;
+
+fn tot_of(p: &Program, st: &State, tst: &TotState, mi: usize, node: ExprId) -> Tot {
+    tot_nested(p, st, tst, mi, node, 0)
+}
+
+/// The totality of a dictionary expression. Structurally the same walk as
+/// [`eval_nested`], with a different transfer: where that one takes the
+/// union over a `case`'s alternatives and forgets the scrutinee, this one
+/// *keeps* the scrutinee ([`E6_TOTALITY_CASE`]).
+fn tot_nested(
+    p: &Program,
+    st: &State,
+    tst: &TotState,
+    mi: usize,
+    node: ExprId,
+    nest: usize,
+) -> Tot {
+    if nest > NEST_CAP {
+        return Tot::unknown();
+    }
+    let mut acc = Tot::total();
+    let mut seen: HashSet<(usize, ExprId)> = HashSet::new();
+    let mut work = vec![(mi, node)];
+    let mut steps = 0usize;
+    while let Some((mi, node)) = work.pop() {
+        steps += 1;
+        if steps > EVAL_BUDGET {
+            return Tot::unknown();
+        }
+        if !seen.insert((mi, node)) {
+            continue;
+        }
+        let m = p.m(mi);
+        let s = p.s(mi);
+        let inner = m.strip(node);
+        let (head, args) = m.spine(inner);
+        let vargs = value_args(s, &args);
+
+        match m.expr(head) {
+            Expr::Case { scrut, alts, .. } => {
+                // The MAY-set over the alternatives is irrelevant here:
+                // reaching any alternative at all evaluated the scrutinee.
+                if !is_already_evaluated(p, mi, *scrut) {
+                    acc.join(&Tot::force(&m.name, head, *scrut));
+                }
+                for alt in alts {
+                    work.push((mi, alt.rhs));
+                }
+                continue;
+            }
+            Expr::Let { body, .. } => {
+                work.push((mi, *body));
+                continue;
+            }
+            Expr::Var { .. } => {}
+            _ => {
+                acc.join(&Tot::unknown());
+                continue;
+            }
+        }
+
+        // A saturated dictionary-constructor application is a value.
+        if p.con_key[mi].contains_key(&inner) {
+            continue;
+        }
+
+        if let Some(b) = m.resolve(head) {
+            let bi = m.binding(b);
+            match bi.site {
+                BindSite::Lam => match tst.get(&(mi, b)) {
+                    Some(v) => acc.join(v),
+                    None => acc.join(&Tot::unknown()),
+                },
+                BindSite::Let | BindSite::Top => match bi.rhs {
+                    Some(rhs) if vargs.is_empty() => work.push((mi, p.strip_ty_lams(mi, rhs))),
+                    Some(rhs) => work.push((mi, p.strip_lams(mi, rhs))),
+                    None => acc.join(&Tot::unknown()),
+                },
+                BindSite::CaseBinder => match p.case_scrut[mi].get(&b) {
+                    // Reaching the case binder means the scrutinee was
+                    // evaluated: the same force, named at the same place.
+                    Some(&scrut) => {
+                        if !is_already_evaluated(p, mi, scrut) {
+                            acc.join(&Tot::force(&m.name, head, scrut));
+                        }
+                        work.push((mi, scrut));
+                    }
+                    None => acc.join(&Tot::unknown()),
+                },
+                BindSite::AltBinder => match p.alt_field[mi].get(&b) {
+                    Some(&(scrut, spec, i)) => {
+                        acc.join(&read_field_tot(p, st, tst, mi, scrut, spec, i, nest));
+                    }
+                    None => acc.join(&Tot::unknown()),
+                },
+            }
+            continue;
+        }
+
+        let Expr::Var { name, occ, .. } = m.expr(head) else {
+            unreachable!()
+        };
+        if occ.starts_with("$p")
+            && let Some(&d) = vargs.first()
+        {
+            let (_, gm, _) = split_stable_name(name).unwrap_or(("", "", ""));
+            match selector_class(gm, occ) {
+                Some((spec, field, _)) => {
+                    acc.join(&read_field_tot(p, st, tst, mi, d, spec, field, nest));
+                }
+                None => acc.join(&Tot::unknown()),
+            }
+            continue;
+        }
+        if let Some(&(wi, _, rhs)) = p.tops.get(name) {
+            if vargs.is_empty() {
+                work.push((wi, p.strip_ty_lams(wi, rhs)));
+            } else {
+                work.push((wi, p.strip_lams(wi, rhs)));
+            }
+            continue;
+        }
+        if p.values.contains_key(name) {
+            // A dfun, applied or not, is a value.
+            continue;
+        }
+        acc.join(&Tot::unknown());
+    }
+    acc
+}
+
+/// Superclass selection: total exactly when the dictionary it selects out
+/// of is total and every field expression it can reach is
+/// ([`E6_TOTALITY_VALUE`]).
+#[allow(clippy::too_many_arguments)]
+fn read_field_tot(
+    p: &Program,
+    st: &State,
+    tst: &TotState,
+    mi: usize,
+    node: ExprId,
+    spec: &'static ClassSpec,
+    field: usize,
+    nest: usize,
+) -> Tot {
+    let mut acc = tot_nested(p, st, tst, mi, node, nest + 1);
+    if acc.level == Totality::Unknown {
+        return acc;
+    }
+    let base = eval_nested(p, st, mi, node, nest + 1);
+    let keys = match &base {
+        // The base dictionary is not bounded, so neither is the field.
+        DictSet::Top(_) => return Tot::unknown(),
+        DictSet::Set(k) => k.clone(),
+    };
+    for k in &keys {
+        match field_expr(p, k, spec, field) {
+            Ok((fmi, fnode)) => acc.join(&tot_nested(p, st, tst, fmi, fnode, nest + 1)),
+            Err(_) => acc.join(&Tot::unknown()),
+        }
+    }
+    acc
+}
+
+/// Is this expression *already evaluated* where it stands — a value, a
+/// variable an enclosing `case` has already forced, or a variable GHC
+/// marks strict that an enclosing `case` on it dominates? Only then does a
+/// `case` on it delete no evaluation ([`E6_TOTALITY_CASE`]).
+fn is_already_evaluated(p: &Program, mi: usize, node: ExprId) -> bool {
+    let m = p.m(mi);
+    let s = p.s(mi);
+    let inner = m.strip(node);
+    let (head, args) = m.spine(inner);
+    match m.expr(head) {
+        Expr::Lit(_) | Expr::Lam { .. } => return true,
+        Expr::Var { .. } => {}
+        _ => return false,
+    }
+    // A saturated constructor application is a value.
+    if let Some(sig) = s.head_sig(head)
+        && let Some(dc) = sig.data_con
+    {
+        return value_args(s, &args).len() >= dc.rep_arity as usize;
+    }
+    let Some(b) = m.resolve(head) else {
+        // An imported nullary head: a dfun or a dictionary is a value,
+        // anything else we do not know.
+        return args.is_empty()
+            && matches!(m.expr(head), Expr::Var { name, .. } if p.values.contains_key(name));
+    };
+    if !args.is_empty() {
+        return false;
+    }
+    match m.binding(b).site {
+        // Bound by a `case`: forced before it could be named.
+        BindSite::CaseBinder | BindSite::AltBinder => true,
+        // Strict at entry is not enough on its own: the force GHC promises
+        // may happen *after* this point. It counts only where an enclosing
+        // `case` on the same binder dominates this occurrence.
+        BindSite::Lam => {
+            m.binder(b).demand.as_ref().is_some_and(|d| d.strict)
+                && dominated_by_case_on(p, mi, node, b)
+        }
+        BindSite::Let | BindSite::Top => false,
+    }
+}
+
+/// Does a `case` scrutinising `b` sit on the path from `node` to the root?
+fn dominated_by_case_on(p: &Program, mi: usize, node: ExprId, b: BinderId) -> bool {
+    let m = p.m(mi);
+    let mut cur = node;
+    let mut steps = 0usize;
+    while let Some(parent) = m.parent[cur as usize] {
+        steps += 1;
+        if steps > EVAL_BUDGET {
+            return false;
+        }
+        if matches!(m.edge[cur as usize], Edge::CaseAlt { .. })
+            && let Expr::Case { scrut, .. } = m.expr(parent)
+            && m.resolve(m.strip(*scrut)) == Some(b)
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
+//------------------------------------------------------------------------------
 // Part 2 — erasure agreement
 //------------------------------------------------------------------------------
 
@@ -1652,8 +2259,11 @@ fn erasure(p: &Program, params: &[Param], sites: &[Site]) -> (Vec<Erasure>, Vec<
             },
             module: v.module.clone(),
             kind: "value",
-            // A saturated dictionary-constructor application is a value.
+            // A saturated dictionary-constructor application, and a dfun
+            // applied or not, is a value ([`E6_TOTALITY_VALUE`]).
             producers_total: true,
+            totality: Totality::ProvenTotal,
+            obligation: None,
             known_strict: false,
             instances: 1,
             escapes,
@@ -1665,18 +2275,34 @@ fn erasure(p: &Program, params: &[Param], sites: &[Site]) -> (Vec<Erasure>, Vec<
     for x in params {
         let escapes = escape_of_param(p, x, &dict_args);
         let instances = x.set.keys().len();
-        let total = !x.set.is_top();
+        // **Totality is read from the totality domain, never from the
+        // dictionary set.** `!set.is_top()` says the producer set is
+        // bounded; it never said the producer terminates, and reading it
+        // as totality is the error this corrects.
+        let total = x.totality == Totality::ProvenTotal;
         let verdict = if let Some(h) = &escapes {
             Verdict::Preserve(h.clone())
         } else {
             match &x.set {
                 DictSet::Top(r) => Verdict::Unresolved(r.clone()),
-                DictSet::Set(_) if instances == 1 => Verdict::Erasable,
                 DictSet::Set(_) if instances == 0 => Verdict::Unresolved(T_NO_PRODUCER.to_string()),
-                // Producers disagree. The function is never used as a
-                // value — that is what kept the set finite — so one clone
-                // per instance carries the erased representation.
-                DictSet::Set(_) => Verdict::ErasableWithClone(instances),
+                DictSet::Set(_) => match x.totality {
+                    // Proven total: identity decides, as before.
+                    Totality::ProvenTotal if instances == 1 => Verdict::Erasable,
+                    // Producers disagree. The function is never used as a
+                    // value — that is what kept the set finite — so a
+                    // specialised clone carries the erased representation;
+                    // how many is planned per owner ([`E7_OWNER_CLONES`]).
+                    Totality::ProvenTotal => Verdict::ErasableWithClone(instances),
+                    // The dictionary computation carries a force. It may
+                    // still be erased, but only against a named
+                    // obligation; never silently.
+                    Totality::MustPreserveForce => match &x.tot.obligation {
+                        Some(ob) => Verdict::ErasableWithObligation(ob.clone()),
+                        None => Verdict::Preserve(R_FORCE.to_string()),
+                    },
+                    Totality::Unknown => Verdict::Preserve(R_FORCE_UNKNOWN.to_string()),
+                },
             }
         };
         pe.push(Erasure {
@@ -1684,6 +2310,8 @@ fn erasure(p: &Program, params: &[Param], sites: &[Site]) -> (Vec<Erasure>, Vec<
             module: x.module.clone(),
             kind: "parameter",
             producers_total: total,
+            totality: x.totality,
+            obligation: x.tot.obligation.clone(),
             known_strict: x.known_strict,
             instances,
             escapes,
@@ -1691,6 +2319,107 @@ fn erasure(p: &Program, params: &[Param], sites: &[Site]) -> (Vec<Erasure>, Vec<
         });
     }
     (values, pe)
+}
+
+//------------------------------------------------------------------------------
+// Owner-level clone planning ([`E7_OWNER_CLONES`])
+//------------------------------------------------------------------------------
+
+/// Plan clones per **owning function**, not per parameter. A function with
+/// two dictionary parameters called from three call sites needs one clone
+/// per *distinct assignment tuple* actually seen — which is at most three
+/// and is neither the sum nor the product of the per-parameter
+/// cardinalities. Those cardinalities are kept as evidence.
+///
+/// A call site that cannot be enumerated (a partial application, the
+/// function used as a value) refuses the plan for that owner rather than
+/// guessing a number.
+fn owner_plans(p: &Program, st: &State, params: &[Param], pe: &[Erasure]) -> Vec<OwnerPlan> {
+    // Group the parameters that a clone plan is about: those a verdict
+    // says are erasable but whose producers disagree.
+    let mut groups: BTreeMap<(usize, BinderId), Vec<usize>> = BTreeMap::new();
+    let mut wanted: BTreeSet<(usize, BinderId)> = BTreeSet::new();
+    for (i, x) in params.iter().enumerate() {
+        let Some(f) = x.owner_binder else { continue };
+        groups.entry((x.mi, f)).or_default().push(i);
+        if matches!(pe[i].verdict, Verdict::ErasableWithClone(_)) {
+            wanted.insert((x.mi, f));
+        }
+    }
+
+    let mut out = Vec::new();
+    for key in &wanted {
+        let idxs = &groups[key];
+        let (mi, f) = *key;
+        let m = p.m(mi);
+        let plan_params: Vec<String> = idxs
+            .iter()
+            .map(|&i| format!("{}#{}", params[i].occ, params[i].index))
+            .collect();
+        let cardinalities: Vec<usize> = idxs.iter().map(|&i| params[i].set.keys().len()).collect();
+        let arg_indices: Vec<usize> = idxs.iter().map(|&i| params[i].index).collect();
+
+        let mut tuples: BTreeSet<Vec<String>> = BTreeSet::new();
+        let mut set_valued: BTreeSet<Vec<String>> = BTreeSet::new();
+        let mut refused = None;
+        for (omi, o) in p.all_occurrences(mi, f) {
+            let om = p.m(omi);
+            let root = om.spine_root(o);
+            let (head, args) = om.spine(root);
+            if root == o || om.strip(head) != om.strip(o) {
+                refused = Some(T_USED_AS_A_VALUE.to_string());
+                break;
+            }
+            let vargs = value_args(p.s(omi), &args);
+            let mut tuple = Vec::with_capacity(arg_indices.len());
+            let mut set_valued_seen = 0usize;
+            for &ai in &arg_indices {
+                match vargs.get(ai) {
+                    Some(&a) => match eval(p, st, omi, a) {
+                        DictSet::Set(k) if !k.is_empty() => {
+                            if k.len() > 1 {
+                                set_valued_seen += 1;
+                            }
+                            tuple.push(k.iter().cloned().collect::<Vec<_>>().join("|"))
+                        }
+                        other => {
+                            refused = Some(other.reason().unwrap_or(T_NO_PRODUCER).to_string());
+                            break;
+                        }
+                    },
+                    None => {
+                        refused = Some(T_PARTIAL_CALL.to_string());
+                        break;
+                    }
+                }
+            }
+            if refused.is_some() {
+                break;
+            }
+            if set_valued_seen > 0 {
+                set_valued.insert(tuple.clone());
+            }
+            tuples.insert(tuple);
+        }
+
+        let clones = if refused.is_some() {
+            None
+        } else {
+            Some(tuples.len())
+        };
+        out.push(OwnerPlan {
+            module: m.name.clone(),
+            owner: m.binder(f).occ.clone(),
+            params: plan_params,
+            cardinalities,
+            tuples: tuples.iter().map(|t| t.join(", ")).collect(),
+            set_valued: set_valued.len(),
+            clones,
+            refused,
+        });
+    }
+    out.sort_by(|a, b| (&a.module, &a.owner).cmp(&(&b.module, &b.owner)));
+    out
 }
 
 fn escape_of_value(
