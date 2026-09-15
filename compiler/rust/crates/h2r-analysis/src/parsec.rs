@@ -3624,6 +3624,244 @@ pub fn account(census: &Census, analyses: &[Analysis<'_>]) -> Accounting {
 }
 
 //------------------------------------------------------------------------------
+// M2.4e — the residual continuation edges, asked of the closure graph
+//------------------------------------------------------------------------------
+//
+// M2.2 stage 2 resolved a continuation call's target by the region graph
+// alone: every call of the region has to be a saturated call to a visible
+// binder, and what fills the continuation slot at each has to be a manifest
+// lambda. 41 tuple sites sit on a continuation call where that failed
+// (`tuples::R_PARSEC_CONT`). This asks one further question per edge, and it
+// asks [`crate::higher`] rather than re-deriving anything: the continuation
+// parameter is a function-valued slot of the closed world, so the M2.4d
+// fixpoint already knows what reaches it. When that boundary is one of the
+// three *enumerated* verdicts and **every** producer is, by the region
+// recogniser's own classifier ([`Analysis::cont_source`]), a region
+// continuation or a nested region — that is, a closure of known role — the
+// edge gains a structural role target: exactly one producer is an exact
+// target ([`P_HO_EXACT`]), several a finite one ([`P_HO_FINITE`]).
+//
+// Nothing here recognises a region, a role or a slot. No name is read.
+// Every other edge keeps its reason, refined to say which of the closure
+// graph's answers stopped it.
+
+/// The residual edge closes onto exactly one continuation of known role.
+/// Level 3, over M2.4d's facts.
+pub const P_HO_EXACT: &str = "P-HO-EXACT";
+/// The residual edge closes onto a finite set of continuations, every one
+/// of known role. Level 3, over M2.4d's facts.
+pub const P_HO_FINITE: &str = "P-HO-FINITE";
+
+/// The continuation parameter has no function-valued boundary in M2.4d's
+/// closed world, so there is nothing to ask.
+pub const P_NO_BOUNDARY: &str = "no-boundary";
+/// The boundary is enumerated, but at least one producer is not a region
+/// continuation: the closure graph closes the *representation* without
+/// closing the *role*.
+pub const P_NOT_A_CONT: &str = "producer-is-not-a-region-continuation";
+
+/// One of the 41 residual Parsec continuation edges, and what the
+/// whole-program closure graph has to say about it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResidualEdge {
+    /// `Module#node`: the tuple site's continuation call.
+    pub site: String,
+    pub module: String,
+    /// The spine root of the continuation call.
+    pub node: ExprId,
+    /// The edge, as the proof object records it: `label roles at node`.
+    pub edge: String,
+    /// The continuation binder the edge is about.
+    #[serde(skip)]
+    pub binder: Option<BinderId>,
+    /// Why M2.2 stage 2 could not resolve the target.
+    pub previous_reason: String,
+    /// `P-HO-EXACT`, `P-HO-FINITE`, or the refused reason.
+    pub status: String,
+    /// The rule that fired, when one did.
+    pub rule: Option<&'static str>,
+    /// The boundary node and the producers, in that order.
+    pub evidence: Vec<String>,
+}
+
+impl ResidualEdge {
+    /// Did the closure graph close this edge?
+    pub fn closed(&self) -> bool {
+        matches!(self.rule, Some(P_HO_EXACT) | Some(P_HO_FINITE))
+    }
+}
+
+/// Is this producer a continuation of known role, and what is it?
+///
+/// Read straight off [`Analysis::cont_source`] — the recogniser's own
+/// classifier — so nothing new decides what a continuation is.
+fn producer_role(analyses: &[Analysis<'_>], module: &str, node: ExprId) -> Option<String> {
+    let a = analyses.iter().find(|a| a.module.name == module)?;
+    match a.cont_source(node) {
+        ContSource::Param { region, role, .. } if !role.is_empty() => {
+            Some(format!("{} of region {region}", slots_str(role)))
+        }
+        ContSource::Derived {
+            region,
+            role,
+            connected: true,
+            ..
+        } if !role.is_empty() => Some(format!("{} of region {region}, derived", slots_str(role))),
+        ContSource::NestedRegion { entry } => Some(format!("nested region at node {entry}")),
+        _ => None,
+    }
+}
+
+/// Enumerate the residual Parsec continuation edges — the tuple sites
+/// M2.2 stage 2 refused with `tuples::R_PARSEC_CONT` — and ask the M2.4d
+/// closure graph about each one.
+pub fn residual_edges(
+    analyses: &[Analysis<'_>],
+    higher: &crate::higher::Higher,
+) -> Vec<ResidualEdge> {
+    use crate::higher::Verdict;
+
+    let mut out: Vec<ResidualEdge> = Vec::new();
+    for a in analyses {
+        let hops = crate::tuples::parsec_hops(a);
+        let t = crate::tuples::Tuples::of_module_with(a.module, Some(&hops));
+        // The escape node of every flow the Parsec refusal stopped. The
+        // walk records it as its own evidence; this reads it back rather
+        // than guessing which call the flow reached.
+        // One row per refused flow — the escape that *decided* the flow's
+        // fate, which is the one whose refusal the flow carries as its
+        // detail — never one row per evidence entry.
+        let mut sites: Vec<ExprId> = Vec::new();
+        for f in &t.flows {
+            if f.reason != Some(crate::tuples::R_PARSEC_CONT) {
+                continue;
+            }
+            let at = f
+                .evidence
+                .iter()
+                .filter(|ev| {
+                    ev.rule == crate::flow::T11_ESCAPE
+                        && ev.note.starts_with(crate::tuples::R_PARSEC_CONT)
+                })
+                .flat_map(|ev| ev.nodes.iter().copied())
+                .find(|n| hops.unresolved.get(&(*n, 0)) == Some(&f.detail));
+            if let Some(at) = at {
+                sites.push(at);
+            }
+        }
+        sites.sort_unstable();
+        for node in sites {
+            let previous_reason = hops.unresolved.get(&(node, 0)).cloned().unwrap_or_default();
+            // The edge at that call: the one the hop was read from.
+            let edge = a
+                .edges_at(node)
+                .into_iter()
+                .find(|(_, e)| e.fact == EdgeFact::Invoke && e.provenance.binder.is_some())
+                .map(|(_, e)| e);
+            let (label, binder, edge_text) = match edge {
+                Some(e) => (
+                    e.provenance.label.clone(),
+                    e.provenance.binder,
+                    format!(
+                        "{} {} → {} [{}]",
+                        e.provenance.label,
+                        slots_str(e.source_role),
+                        slots_str(e.destination),
+                        e.provenance.rule
+                    ),
+                ),
+                None => (String::new(), None, String::new()),
+            };
+            let mut r = ResidualEdge {
+                site: format!("{}#{node}", a.module.name),
+                module: a.module.name.clone(),
+                node,
+                edge: edge_text,
+                binder,
+                previous_reason,
+                status: P_NO_BOUNDARY.to_string(),
+                rule: None,
+                evidence: Vec::new(),
+            };
+            let _ = label;
+            let b = match binder {
+                Some(b) => b,
+                None => {
+                    out.push(r);
+                    continue;
+                }
+            };
+            let Some(bd) = higher.verdict_for(&a.module.name, b) else {
+                out.push(r);
+                continue;
+            };
+            r.evidence
+                .push(format!("boundary {} at node {}", bd.name, bd.node));
+            match &bd.verdict {
+                Verdict::ExactClosure
+                | Verdict::UniformRepresentation
+                | Verdict::FiniteClosureSet(_) => {
+                    let mut roles: Vec<String> = Vec::new();
+                    let mut opaque: Option<String> = None;
+                    for p in &bd.producers {
+                        match producer_role(analyses, &p.module, p.node) {
+                            Some(role) => roles.push(format!("{} = {role}", p.key)),
+                            None => {
+                                opaque = Some(format!("{} ({})", p.key, p.kind.name()));
+                                break;
+                            }
+                        }
+                    }
+                    match opaque {
+                        Some(why) => {
+                            r.status = P_NOT_A_CONT.to_string();
+                            r.evidence.push(format!("producer {why}"));
+                        }
+                        None if bd.producers.is_empty() => {
+                            r.status = format!("boundary-{}", bd.verdict.label());
+                        }
+                        None => {
+                            let exact = bd.producers.len() == 1;
+                            r.rule = Some(if exact { P_HO_EXACT } else { P_HO_FINITE });
+                            r.status = if exact {
+                                format!("{P_HO_EXACT} ({})", bd.verdict.label())
+                            } else {
+                                format!(
+                                    "{P_HO_FINITE} ({}, {} producers)",
+                                    bd.verdict.label(),
+                                    bd.producers.len()
+                                )
+                            };
+                            r.evidence.extend(roles);
+                        }
+                    }
+                }
+                Verdict::Preserve(why) => {
+                    r.status = format!("boundary-Preserve({})", crate::higher::reason_head(why));
+                }
+                Verdict::Unresolved(why) => {
+                    r.status = format!("boundary-Unresolved({})", crate::higher::reason_head(why));
+                }
+                Verdict::CloneRequired(n) => {
+                    r.status = format!("boundary-CloneRequired({n})");
+                }
+            }
+            out.push(r);
+        }
+    }
+    out
+}
+
+/// The residual edges grouped by status, for the report.
+pub fn residual_by_status(edges: &[ResidualEdge]) -> BTreeMap<String, usize> {
+    let mut by: BTreeMap<String, usize> = BTreeMap::new();
+    for e in edges {
+        *by.entry(e.status.clone()).or_default() += 1;
+    }
+    by
+}
+
+//------------------------------------------------------------------------------
 // Tests
 //------------------------------------------------------------------------------
 
@@ -3912,6 +4150,129 @@ mod test {
         let e = &r.edges[0];
         assert!(!e.exact());
         assert_eq!(e.candidates, vec![EdgeKind::ConsumedOk, EdgeKind::EmptyOk]);
+    }
+
+    //--------------------------------------------------------------------
+    // M2.4e — the residual edges asked of the closure graph
+    //--------------------------------------------------------------------
+
+    /// A binder whose *structured* type is a `FunTy`, which is what
+    /// M2.4d's `H1-FUNCTION-TYPED` reads. The rendered type still carries
+    /// the CPS shape the Parsec rules read.
+    fn bf(occ: &str, ty: &str) -> Value {
+        let mut v = b(occ, ty);
+        v["ty"] = json!(1);
+        v
+    }
+
+    /// A module with several top-level pairs and a type table that has a
+    /// real `FunTy` in it (index 1).
+    fn module_pairs(pairs: Vec<(&str, Value)>, ids: Value) -> h2r_core_ir::Module {
+        let m = json!({
+            "format": raw::FORMAT, "module": "M", "unit": "main", "ids": ids,
+            "types": [{"kind": "Opaque", "pretty": "?"},
+                      {"kind": "FunTy", "mult": 0, "arg": 0, "res": 0}],
+            "binds": [{"rec": false, "pairs": pairs.into_iter().map(|(n, rhs)| json!({
+                "binder": b(n, "T"), "rhs": rhs,
+                "whnf": true, "trivial": false, "cheap": false, "okForSpec": false
+            })).collect::<Vec<_>>()}]
+        });
+        h2r_core_ir::Module::from_raw(serde_json::from_value(m).unwrap()).unwrap()
+    }
+
+    /// `\s1 cok cerr eok eerr -> body`: unParser's argument list.
+    fn cps_lam(body: Value) -> Value {
+        lam(
+            vec![
+                b("s1", ST),
+                bf("cok", OK),
+                bf("cerr", EK),
+                bf("eok", OK),
+                bf("eerr", EK),
+            ],
+            body,
+        )
+    }
+
+    /// A region that hands a **tuple** to its `cok`: the tuple site M2.2
+    /// stage 2 has to resolve.
+    fn region_returning_a_tuple() -> Value {
+        cps_lam(ap(
+            v("cok"),
+            vec![ap(g("(,)"), vec![g("x1"), g("x2")]), v("s1"), g("e")],
+        ))
+    }
+
+    fn tuple_ids() -> Value {
+        json!({"(,)": {
+            "name": "$ghc-prim$GHC.Tuple.Prim$(,)", "occ": "(,)", "arity": 2,
+            "dmdSig": {"args": [], "diverges": false, "pretty": ""},
+            "isJoinPoint": false,
+            "dataCon": {"name": "$ghc-prim$GHC.Tuple.Prim$(,)", "repArity": 2, "tag": 1,
+                        "strictFields": [false, false]}
+        }})
+    }
+
+    /// Both halves of M2.4e's question on one hand-built module.
+    ///
+    /// `p` and `q` each hand a tuple to their `cok`, and each is called
+    /// twice with a continuation the region graph refuses to follow (a
+    /// nested region starts with the *state*, so stage 2 cannot read a
+    /// value parameter off it). Both edges are therefore residual. The
+    /// closure graph then closes `p`'s — both producers are nested
+    /// regions, of known role — and refuses `q`'s, because one of its two
+    /// producers is a lambda that is no continuation at all: opaque to the
+    /// role question, however well its representation agrees.
+    #[test]
+    fn residual_edge_closes_through_a_uniform_boundary_of_known_continuations() {
+        // A continuation that is itself a region: known role.
+        let nested = || cps_lam(ap(v("cok"), vec![g("y"), v("s1"), g("e")]));
+        // A five-argument lambda that is not a region: same arity, same
+        // (empty) capture list, no role.
+        let opaque = || {
+            lam(
+                vec![
+                    b("a1", "Int"),
+                    b("a2", "Int"),
+                    b("a3", "Int"),
+                    b("a4", "Int"),
+                    b("a5", "Int"),
+                ],
+                g("bottom"),
+            )
+        };
+        let call = |f: &str, k: Value| ap(v(f), vec![g("s"), k, g("ce"), g("eo"), g("ee")]);
+        let m = module_pairs(
+            vec![
+                ("p", region_returning_a_tuple()),
+                ("q", region_returning_a_tuple()),
+                ("callp1", call("p", nested())),
+                ("callp2", call("p", nested())),
+                ("callq1", call("q", nested())),
+                ("callq2", call("q", opaque())),
+            ],
+            tuple_ids(),
+        );
+        let a = Analysis::of_module(&m);
+        let higher = crate::higher::Higher::of_modules([&m]);
+        let edges = residual_edges(std::slice::from_ref(&a), &higher);
+        assert_eq!(edges.len(), 2, "{edges:#?}");
+        let closed: Vec<&ResidualEdge> = edges.iter().filter(|e| e.closed()).collect();
+        assert_eq!(closed.len(), 1, "{edges:#?}");
+        assert_eq!(closed[0].rule, Some(P_HO_FINITE));
+        assert!(
+            closed[0]
+                .evidence
+                .iter()
+                .filter(|e| e.contains("nested region"))
+                .count()
+                == 2,
+            "{:#?}",
+            closed[0]
+        );
+        let open: Vec<&ResidualEdge> = edges.iter().filter(|e| !e.closed()).collect();
+        assert_eq!(open[0].status, P_NOT_A_CONT, "{:#?}", open[0]);
+        assert!(!open[0].previous_reason.is_empty());
     }
 
     /// A continuation stored in a data constructor field escapes: the

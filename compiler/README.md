@@ -4187,7 +4187,7 @@ pretends otherwise.
 The 2,660 and the 1,953 are one shape between them: `ShellCheck.Parser` is
 CPS, its continuations are anonymous lambdas passed as values, and a
 higher-order analysis that wants them has to name them first. That is
-[M2.4e](#m24d--higher-order-representation-agreement)'s ground, and this
+[M2.4e](#m24e--the-41-residual-parsec-continuation-edges)'s ground, and this
 milestone deliberately does not guess at it.
 
 ### Feeding the proof back — nothing is reclassified
@@ -4325,6 +4325,142 @@ is mutated, no codegen is emitted, and no GHC flag changed.
 * **An `Unresolved` is not a proof that a slot cannot be uniform**, only
   that this proof object declines to say so — the same disclaimer M2.4c
   makes about erasure.
+
+## M2.4e — the 41 residual Parsec continuation edges
+
+[M2.2](#m22--which-tuples-are-transport-and-which-are-values) stage 2 resolved a continuation
+call's target by the **region graph** alone: every call of the region has to
+be a saturated call to a visible binder, and what fills the continuation
+slot at each has to be a manifest lambda. 41 tuple sites sit on a
+continuation call where that failed, and the tuple census counts them as
+`parsec-continuation-target-not-in-the-region-graph`. [M2.4d](#m24d--higher-order-representation-agreement)
+left them to this one, which asks a second, independent question per edge
+and asks it of the **closure graph**: the continuation parameter is a
+function-valued slot of the closed world, so the whole-program fixpoint
+already knows what reaches it.
+
+The question, per edge:
+
+1. `higher::Higher::verdict_for(module, binder)` — the boundary the
+   continuation binder names. No boundary, no answer.
+2. Is the verdict one of the three **enumerated** ones — `ExactClosure`,
+   `UniformRepresentation`, `FiniteClosureSet`? `Preserve`, `Unresolved`
+   and `CloneRequired` are recorded as the refusal they are.
+3. Is **every** producer at that boundary a continuation of *known role* —
+   a region continuation (a parameter, or a connected derived one) or a
+   nested region? Read off `Analysis::cont_source`, the recogniser's own
+   classifier; nothing here re-decides what a continuation is, and no name
+   is read.
+
+Only then does the edge gain a structural role target: one producer is an
+exact one (`P-HO-EXACT`), several a finite one (`P-HO-FINITE`), both level 3
+over M2.4d's facts and citing the boundary node and every producer.
+
+| | level | |
+|---|---:|---|
+| `P-HO-EXACT` | 3 | the continuation slot's boundary is enumerated, every producer is a continuation of known role, and there is exactly one |
+| `P-HO-FINITE` | 3 | the same, with more than one: a finite set of role targets |
+
+### The answer: 0 of 41
+
+**No edge closes.** The closure graph refuses every one of the 41, and — the
+result worth reporting — it refuses each of them for the *same reason the
+region graph did*, one for one:
+
+| | the region graph's refusal (M2.2 stage 2) | the closure graph's answer (M2.4d) |
+|---:|---|---|
+| 20 | the region's chain is not bound to a binder | `Unresolved(parameter-of-an-anonymous-lambda)` |
+| 19 | the region's parser is used as a value | `Unresolved(function-used-as-a-value)` |
+| 2 | a call of the region is not saturated exactly | `Unresolved(call-site-is-a-partial-application)` |
+
+The cross-tabulation is exact: the 20/19/2 split of the region graph's
+reasons maps onto the 20/19/2 split of the closure graph's, edge by edge.
+That is not a coincidence and it is not a second failure either — it is the
+same three facts about the Core seen from two sides. A region whose chain is
+not bound to a binder *is* an anonymous lambda, so M2.4d's `collect_params`
+has no owner to enumerate call sites of; a parser used as a value *is* a
+function used as a value, which is `H8-PRESERVE`'s and `H9-TAINT`'s reason
+to refuse a slot; a call that is not saturated exactly *is* a partial
+application, whose argument never lands. Two analyses that share nothing but
+the IR agree about which 41 edges they cannot see, and agree about why.
+
+So M2.4e's honest contribution is a **negative result with provenance**, not
+a reclassification: nothing moves, no count in any report changes, and the
+41 stay exactly where M2.2 put them — now each with the closure graph's own
+reason beside the region graph's. Closing them needs what both refusals
+point at and neither pass does: naming the anonymous CPS lambdas of
+`ShellCheck.Parser` (M2.4d says the same about its 2,660 + 1,953), and a
+per-call-site rather than monovariant view of a parser that is also a value.
+
+### The 41, individually
+
+`site` is the continuation call the tuple reached; `boundary` is the M2.4d
+slot that was asked about it.
+
+| module | node | edge | previous reason | new status | boundary |
+|---|---:|---|---|---|---|
+| `ShellCheck.Parser` | 1946 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 119: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 1930 |
+| `ShellCheck.Parser` | 1962 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 119: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 1930 |
+| `ShellCheck.Parser` | 1996 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 119: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 1928 |
+| `ShellCheck.Parser` | 2012 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 119: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 1928 |
+| `ShellCheck.Parser` | 17769 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 546: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 17767 |
+| `ShellCheck.Parser` | 40016 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 659: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 40014 |
+| `ShellCheck.Parser` | 44120 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 3 (eta) of eta#14436 at node 44107 |
+| `ShellCheck.Parser` | 44121 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 3 (eta) of eta#14436 at node 44107 |
+| `ShellCheck.Parser` | 44170 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (eta) of eta#14436 at node 44105 |
+| `ShellCheck.Parser` | 44171 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (eta) of eta#14436 at node 44105 |
+| `ShellCheck.Parser` | 55495 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 769: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 55491 |
+| `ShellCheck.Parser` | 57894 | `eta Eok → Eok [R3-CONT-CALL-ETA]` | eta of region 444: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 3 (eta) of lvl#4458 at node 57887 |
+| `ShellCheck.Parser` | 57919 | `eta Cok → Cok [R3-CONT-CALL-ETA]` | eta of region 444: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (eta) of lvl#4458 at node 57885 |
+| `ShellCheck.Parser` | 58867 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 439: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 2 (eok) of $wps#4447 at node 58854 |
+| `ShellCheck.Parser` | 58868 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 439: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 2 (eok) of $wps#4447 at node 58854 |
+| `ShellCheck.Parser` | 58921 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 439: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (cok) of $wps#4447 at node 58853 |
+| `ShellCheck.Parser` | 58922 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 439: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (cok) of $wps#4447 at node 58853 |
+| `ShellCheck.Parser` | 61995 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 802: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 61982 |
+| `ShellCheck.Parser` | 61996 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 802: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 61982 |
+| `ShellCheck.Parser` | 62045 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 802: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 61980 |
+| `ShellCheck.Parser` | 62046 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 802: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 61980 |
+| `ShellCheck.Parser` | 66715 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 4 (eta) of k#4393 at node 66700 |
+| `ShellCheck.Parser` | 66716 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 4 (eta) of k#4393 at node 66700 |
+| `ShellCheck.Parser` | 66765 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 2 (eta) of k#4393 at node 66698 |
+| `ShellCheck.Parser` | 66766 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 2 (eta) of k#4393 at node 66698 |
+| `ShellCheck.Parser` | 79705 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 866: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 79701 |
+| `ShellCheck.Parser` | 87005 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 891: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 87003 |
+| `ShellCheck.Parser` | 98148 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 976: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eta) of #? at node 98146 |
+| `ShellCheck.Parser` | 123694 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
+| `ShellCheck.Parser` | 123725 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
+| `ShellCheck.Parser` | 123767 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
+| `ShellCheck.Parser` | 123824 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 3 (eta) of $wk#36309 at node 123687 |
+| `ShellCheck.Parser` | 123881 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1157: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 4 (eta) of k#36395 at node 123877 |
+| `ShellCheck.Parser` | 124015 | `eta3 Eok → Eok [R3-CONT-CALL]` | eta3 of region 1149: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 2 (eta3) of $wm1#36087 at node 123991 |
+| `ShellCheck.Parser` | 124668 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1161: the region's chain is not bound to a binder | `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | parameter 4 (eta) of k#36617 at node 124648 |
+| `ShellCheck.Parser` | 125675 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 54: a call of the region is not saturated exactly | `boundary-Unresolved(call-site-is-a-partial-application)` | parameter 3 (eok) of lvl#397 at node 125673 |
+| `ShellCheck.Parser` | 125720 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 53: a call of the region is not saturated exactly | `boundary-Unresolved(call-site-is-a-partial-application)` | parameter 3 (eok) of lvl#382 at node 125718 |
+| `ShellCheck.Parser` | 126651 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 1166: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 3 (eok) of lvl#36967 at node 126635 |
+| `ShellCheck.Parser` | 126675 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 1166: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 3 (eok) of lvl#36967 at node 126635 |
+| `ShellCheck.Parser` | 126717 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 1166: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (cok) of lvl#36967 at node 126633 |
+| `ShellCheck.Parser` | 126741 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 1166: the region's parser is used as a value | `boundary-Unresolved(function-used-as-a-value)` | parameter 1 (cok) of lvl#36967 at node 126633 |
+
+### What this is checked by
+
+`parsec::residual_edges(&[Analysis], &Higher)` builds the population the way
+the tuple census itself records it — the escape evidence of every flow whose
+fate is `parsec-continuation-target-not-in-the-region-graph`, one row per
+flow — so the 41 here are the same 41 `h2r tuples` counts, not a second
+population that happens to have the same size. The section prints in
+`h2r parsec` and, in summary, in `h2r tuples --verify`; both are additions,
+and every other line of every existing report is byte-identical.
+
+The hand-built regression test (`residual_edge_closes_through_a_uniform_boundary_of_known_continuations`)
+covers the branch the real dump does not reach: two regions that each hand a
+tuple to their `cok` and are each called twice with a continuation the region
+graph refuses to follow. One closes — `P-HO-FINITE` over a
+`UniformRepresentation` boundary whose two producers are both nested regions
+— and one stays open with `producer-is-not-a-region-continuation`, because
+one of its two producers is a lambda that is no continuation at all: opaque
+to the role question however well its representation agrees. That the rule
+*can* fire is therefore evidence, and that it does not fire on ShellCheck is
+a fact about ShellCheck's Core.
 
 ## What ShellCheck actually needs
 

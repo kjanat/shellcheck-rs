@@ -1130,6 +1130,56 @@ fn print_cfgs(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// M2.4e: the residual Parsec continuation edges, asked of the M2.4d
+/// closure graph. The closed world is the whole dump — `--module` narrows
+/// which edges are listed, never what the fixpoint sees.
+fn print_residual_edges(analyses: &[h2r_analysis::parsec::Analysis<'_>], all: &[Module]) {
+    let higher = h2r_analysis::higher::Higher::of_modules(all.iter());
+    let edges = h2r_analysis::parsec::residual_edges(analyses, &higher);
+    println!();
+    println!(
+        "The {} residual edges after M2.4d (tuple sites on a continuation whose target",
+        edges.len()
+    );
+    println!("the region graph does not close; the closure graph is asked about each)");
+    let closed = edges.iter().filter(|e| e.closed()).count();
+    println!(
+        "  closed by the closure graph                   {closed:>7}  (P-HO-EXACT / P-HO-FINITE)"
+    );
+    println!(
+        "  still open                                   {:>7}",
+        edges.len() - closed
+    );
+    for (status, n) in h2r_analysis::parsec::residual_by_status(&edges) {
+        println!("  {n:>6}  {status}");
+    }
+    // The two refusals side by side: what the region graph could not do
+    // with the edge, against what the closure graph says about the slot.
+    let mut cross: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for e in &edges {
+        let was = e
+            .previous_reason
+            .rsplit_once(": ")
+            .map(|(_, w)| w.to_string())
+            .unwrap_or_else(|| e.previous_reason.clone());
+        *cross.entry((was, e.status.clone())).or_default() += 1;
+    }
+    println!();
+    println!("  the region graph's refusal against the closure graph's answer");
+    for ((was, now), n) in &cross {
+        println!("  {n:>6}  {was}");
+        println!("          → {now}");
+    }
+    println!();
+    for e in &edges {
+        println!("  {} {} — was: {}", e.site, e.edge, e.previous_reason);
+        println!("      now: {}", e.status);
+        for ev in &e.evidence {
+            println!("        {ev}");
+        }
+    }
+}
+
 fn parsec(
     dir: &Path,
     module: Option<&str>,
@@ -1439,6 +1489,8 @@ fn parsec(
             e
         );
     }
+
+    print_residual_edges(&analyses, &modules);
 
     if explain {
         println!();
@@ -2268,7 +2320,11 @@ fn print_boundaries(
 
 /// Re-derive every removable verdict with the independent verifier
 /// (`h2r_analysis::verify`) and report the disagreements.
-fn verify_tuples(tc: &h2r_analysis::tuples::TupleCensus<'_>) -> Result<()> {
+fn verify_tuples(
+    tc: &h2r_analysis::tuples::TupleCensus<'_>,
+    analyses: &[h2r_analysis::parsec::Analysis<'_>],
+    all: &[Module],
+) -> Result<()> {
     // The cross-check is part of the census now — the milestone's
     // accounting counts only verified removals as normalised — so this
     // reports it rather than running it again.
@@ -2341,6 +2397,24 @@ fn verify_tuples(tc: &h2r_analysis::tuples::TupleCensus<'_>) -> Result<()> {
             println!("          e.g. {module} node {at}");
         }
     }
+    // M2.4e: the 41 flows this report counts as
+    // `parsec-continuation-target-not-in-the-region-graph`, with the status
+    // the whole-program closure graph gives each. The same objects
+    // `h2r parsec` prints in full; nothing above this line moves.
+    let higher = h2r_analysis::higher::Higher::of_modules(all.iter());
+    let edges = h2r_analysis::parsec::residual_edges(analyses, &higher);
+    println!();
+    println!(
+        "The {} residual Parsec continuation edges after M2.4d (see `h2r parsec`)",
+        edges.len()
+    );
+    println!(
+        "  {:>6}  closed by the closure graph (P-HO-EXACT / P-HO-FINITE)",
+        edges.iter().filter(|e| e.closed()).count()
+    );
+    for (status, n) in h2r_analysis::parsec::residual_by_status(&edges) {
+        println!("  {n:>6}  {status}");
+    }
     Ok(())
 }
 
@@ -2380,7 +2454,7 @@ fn tuples(
     let tc = TupleCensus::of_modules_with(&selected, &census, &hops);
 
     if verify {
-        return verify_tuples(&tc);
+        return verify_tuples(&tc, &analyses, &modules);
     }
     if boundaries {
         return print_boundaries(&tc, explain, json);
