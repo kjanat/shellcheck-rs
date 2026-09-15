@@ -5777,19 +5777,21 @@ fn verify_m24(dir: &Path, json: bool, explain: bool) -> Result<()> {
     println!("    4  the structured Ty, and TyCon stable-name identity.");
     println!();
     println!(
-        "  {:<36} {:>8} {:>11} {:>8}",
-        "claim", "checked", "re-derived", "refused"
+        "  {:<36} {:>8} {:>11} {:>4} {:>4}",
+        "claim", "checked", "re-derived", "D", "C"
     );
-    for (k, n, ok) in &audit.by_kind {
-        println!("  {:<36} {n:>8} {ok:>11} {:>8}", k.name(), n - ok);
+    for (k, n, ok, d, c) in &audit.by_kind {
+        println!("  {:<36} {n:>8} {ok:>11} {d:>4} {c:>4}", k.name());
     }
     println!(
-        "  {:<36} {:>8} {:>11} {:>8}",
+        "  {:<36} {:>8} {:>11} {:>4} {:>4}",
         "total",
         audit.checked,
         audit.agreed,
-        audit.checked - audit.agreed
+        audit.real_disagreements(),
+        audit.coverage_refusals()
     );
+    println!("  (D = the analysis claimed it and this walk refutes it; C = this walk declines)");
     println!();
     println!("This walk's own populations and fixpoints");
     println!(

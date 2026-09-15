@@ -91,7 +91,7 @@ cargo run --release --bin h2r -- verify-rep ../core-json          # re-derive ev
 cargo run --release --bin h2r -- dictflow ../core-json                      # whole-program dictionary flow and erasure
 cargo run --release --bin h2r -- higher ../core-json                        # function-valued boundaries: can one representation serve each?
 cargo run --release --bin h2r -- verify-m24 ../core-json   # re-derive every positive M2.4 verdict independently
-cargo run --release --bin h2r -- verify-m24 ../core-json --explain # …listing every refusal, with the adversarial shapes
+cargo run --release --bin h2r -- verify-m24 ../core-json --explain # …listing every refusal one by one
 cargo run --release --bin h2r -- verify-rep ../core-json --explain # …listing every refusal, plus the accounting and the M1 link
 cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.CFG --view 10329   # one construction, field by field
 cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.AST --view-all --json

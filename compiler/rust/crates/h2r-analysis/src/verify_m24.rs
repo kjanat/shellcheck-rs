@@ -280,8 +280,8 @@ pub struct ShapeRow {
 pub struct Audit {
     pub checked: usize,
     pub agreed: usize,
-    /// (kind, checked, re-derived).
-    pub by_kind: Vec<(ClaimKind, usize, usize)>,
+    /// (kind, checked, re-derived, `D` refusals, `C` refusals).
+    pub by_kind: Vec<(ClaimKind, usize, usize, usize, usize)>,
     pub disagreements: Vec<Disagreement>,
     pub shapes: Vec<ShapeRow>,
     /// This walk's own fixpoint rounds, for the report.
@@ -3834,7 +3834,7 @@ pub fn verify(modules: &[&Module], claims: &[Claim]) -> Audit {
         own_boundaries: hd.boundaries.len(),
         ..Default::default()
     };
-    let mut by: BTreeMap<ClaimKind, (usize, usize)> = BTreeMap::new();
+    let mut by: BTreeMap<ClaimKind, (usize, usize, usize, usize)> = BTreeMap::new();
     for c in claims {
         let r = match c.kind {
             ClaimKind::SiteExact => dd.check_site_exact(&w, c),
@@ -3846,7 +3846,7 @@ pub fn verify(modules: &[&Module], claims: &[Claim]) -> Audit {
             ClaimKind::HigherVerdict => hd.check_verdict(&w, c),
             ClaimKind::ClosureClonePlan => hd.check_clone_plan(&w, c),
         };
-        let e = by.entry(c.kind).or_insert((0, 0));
+        let e = by.entry(c.kind).or_insert((0, 0, 0, 0));
         e.0 += 1;
         a.checked += 1;
         match r {
@@ -3854,13 +3854,23 @@ pub fn verify(modules: &[&Module], claims: &[Claim]) -> Audit {
                 e.1 += 1;
                 a.agreed += 1;
             }
-            Err(refusal) => a.disagreements.push(Disagreement {
-                claim: c.clone(),
-                refusal,
-            }),
+            Err(refusal) => {
+                if is_coverage_refusal(refusal.why) {
+                    e.3 += 1;
+                } else {
+                    e.2 += 1;
+                }
+                a.disagreements.push(Disagreement {
+                    claim: c.clone(),
+                    refusal,
+                });
+            }
         }
     }
-    a.by_kind = by.into_iter().map(|(k, (n, ok))| (k, n, ok)).collect();
+    a.by_kind = by
+        .into_iter()
+        .map(|(k, (n, ok, d, c))| (k, n, ok, d, c))
+        .collect();
     a.shapes = shapes(&w, &dd, &hd);
     a
 }
