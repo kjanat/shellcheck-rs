@@ -5950,7 +5950,11 @@ above.)*
 the `--json` form of each. GATE_RESULT
 
 No Core is mutated, no codegen is emitted, no GHC flag changed, no
-`rust-port` file is touched. `cargo test` TEST_COUNT, `cargo clippy
+`rust-port` file is touched. `cargo test` is **243** (eleven new: one per
+defect in the totality domain and its strict twin, one for the shape class
+against the short rendering, three for a claim whose contents are corrupted
+while its counts are preserved, one for a claim with no content at all, and
+two for the corrected `parsec` condition), `cargo clippy
 --all-targets` 0 warnings and `cargo fmt --check` clean.
 
 ### M2.4 acceptance
@@ -6082,7 +6086,9 @@ boundary view's rule order at a slot that is and is not exported, the
 boundary view over a module, the accounting's three questions, the `show`
 provenance with both opt-outs, the M1 link's invariant under a milestone
 that already claims every site, and a planted refusal that must never be
-reported as proven), `cargo clippy --all-targets` (0 warnings) and `cargo
+reported as proven; **243** since
+[M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found), which
+added eleven), `cargo clippy --all-targets` (0 warnings) and `cargo
 fmt --check` are clean.
 
 ### The gate
