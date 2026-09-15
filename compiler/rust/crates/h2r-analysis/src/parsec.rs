@@ -3799,7 +3799,7 @@ pub fn residual_edges(
                 .push(format!("boundary {} at node {}", bd.name, bd.node));
             match &bd.verdict {
                 Verdict::ExactClosure
-                | Verdict::UniformRepresentation
+                | Verdict::TypeShapeUniform
                 | Verdict::FiniteClosureSet(_) => {
                     let mut roles: Vec<String> = Vec::new();
                     let mut opaque: Option<String> = None;

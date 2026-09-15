@@ -6384,7 +6384,7 @@ fn two_lambdas_of_one_arity_share_one_representation() {
     assert_eq!(k.producers.len(), 2, "{:?}", k.set);
     assert!(k.enumerated);
     assert_eq!(k.classes, 1);
-    assert_eq!(k.verdict, HVerdict::UniformRepresentation);
+    assert_eq!(k.verdict, HVerdict::TypeShapeUniform);
     h.accounting().check().unwrap();
 }
 
@@ -6411,7 +6411,10 @@ fn lambdas_of_different_arities_need_a_clone() {
     assert!(k.enumerated, "the set is still enumerated: {:?}", k.set);
     assert_eq!(k.classes, 2);
     assert_eq!(k.verdict, HVerdict::CloneRequired(2));
-    assert_eq!(h.accounting().clones, 2);
+    // The per-parameter class count is evidence; the clone count is the
+    // owning function's distinct call-site tuples (H15-OWNER-CLONES).
+    assert_eq!(h.accounting().clone_classes, 2);
+    assert_eq!(h.accounting().owner_clones, 2);
 }
 
 /// The same disagreement at an *exported* function: its representation is
@@ -6532,7 +6535,7 @@ fn a_pap_and_a_lambda_of_equal_arity_and_capture_agree() {
     assert!(kinds.contains(&ProducerKind::Lambda), "{kinds:?}");
     assert_eq!(k.arity, Some(1));
     assert_eq!(k.classes, 1);
-    assert_eq!(k.verdict, HVerdict::UniformRepresentation);
+    assert_eq!(k.verdict, HVerdict::TypeShapeUniform);
 }
 
 /// A parameter handed straight on to another function's parameter: the
@@ -6657,7 +6660,16 @@ fn enumeration_and_one_representation_are_separate_facts() {
     let h = higher_of(&[&a, &b]);
     let k = param_boundary(&h, "f", 0);
     assert!(k.enumerated && k.classes > 1);
-    assert!(!k.verdict.one_representation());
+    assert!(!k.verdict.rewritable_as_one());
+    assert!(!k.one_representation());
+    assert_eq!(
+        h.accounting().one_representation,
+        h.boundaries
+            .iter()
+            .filter(|b| b.one_representation())
+            .count(),
+        "the accounting and the method must state ONE theorem"
+    );
     let acct = h.accounting();
     assert!(acct.enumerated >= 1);
     acct.check().unwrap();
@@ -6769,8 +6781,330 @@ fn a_capture_changes_the_shape_class() {
         .iter()
         .map(|x| match &x.shape {
             Shape::Known { captures, .. } => captures.len(),
-            Shape::Opaque(_) => usize::MAX,
+            Shape::Opaque { .. } => usize::MAX,
         })
         .collect();
     assert!(caps.contains(&0) && caps.contains(&1), "{caps:?}");
+}
+
+/// **H8 before H5.** An exported boundary with exactly ONE producer is
+/// still shared with callers the rewrite does not own: sharing is decided
+/// before agreement, so this is `Preserve`, not `ExactClosure`.
+#[test]
+fn an_exported_boundary_with_one_producer_is_preserved() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, true)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![call_hf("useB", lam(&["y"], var("y")))],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 1);
+    assert_eq!(k.classes, 1);
+    // The representation FACT still holds; the rewrite just does not own
+    // the slot.
+    assert!(k.one_representation());
+    assert!(!k.verdict.rewritable_as_one());
+    match &k.verdict {
+        HVerdict::Preserve(why) => assert!(why.contains(higher::P_EXPORTED), "{why}"),
+        other => panic!("expected Preserve, got {other:?}"),
+    }
+}
+
+/// **H8 before H6.** The same at an exported boundary whose two producers
+/// fall in ONE shape class.
+#[test]
+fn an_exported_boundary_with_one_shape_class_is_preserved() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, true)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![
+            call_hf("useB", lam(&["y"], var("y"))),
+            call_hf("useC", lam(&["z"], var("z"))),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 2);
+    assert_eq!(k.classes, 1);
+    assert!(k.one_representation());
+    match &k.verdict {
+        HVerdict::Preserve(why) => assert!(why.contains(higher::P_EXPORTED), "{why}"),
+        other => panic!("expected Preserve, got {other:?}"),
+    }
+}
+
+/// **H8 before H5/H6, the `valued` half.** A function that is also used as
+/// a value has holders the rewrite cannot rewrite, so the closure it
+/// returns is preserved even though both its producers fall in one shape
+/// class.
+#[test]
+fn a_valued_boundary_is_preserved_whatever_its_producers_agree_on() {
+    const R_NAME: &str = "$main$A$r";
+    // p and q are one-argument functions; r = \x -> case x of A -> p ; B -> q
+    // returns one of them, so both producers are known functions of one
+    // shape class.
+    let a = class_module(
+        "A",
+        vec![
+            (
+                named_fn_top("p", "$main$A$p", TY_FUN1, false),
+                lam(&["u"], var("u")),
+            ),
+            (
+                named_fn_top("q", "$main$A$q", TY_FUN1, false),
+                lam(&["v"], var("v")),
+            ),
+            (
+                named_fn_top("r", R_NAME, TY_FUN2, false),
+                typed_lam(
+                    &[("x", None)],
+                    case2(
+                        var("x"),
+                        named_gvar("p", "$main$A$p"),
+                        named_gvar("q", "$main$A$q"),
+                    ),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    // B calls it, and also hands it to `g` as a value.
+    let b = class_module(
+        "B",
+        vec![
+            (
+                binder("useB", demand(false, false)),
+                app(named_gvar("r", R_NAME), var("a")),
+            ),
+            (
+                binder("useV", demand(false, false)),
+                app(var("g"), named_gvar("r", R_NAME)),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = h
+        .boundaries
+        .iter()
+        .find(|x| matches!(x.slot, Slot::Return { .. }) && x.owner == "r")
+        .expect("no return boundary for r");
+    assert_eq!(k.producers.len(), 2, "{:?}", k.producers);
+    assert_eq!(k.classes, 1, "{:?}", k.class_keys());
+    // One representation is a fact about the producers; it does not make
+    // the slot the rewrite's to change.
+    assert!(k.one_representation());
+    assert!(!k.verdict.rewritable_as_one());
+    match &k.verdict {
+        HVerdict::Preserve(why) => assert!(why.contains(higher::P_VALUED), "{why}"),
+        other => panic!("expected Preserve, got {other:?}"),
+    }
+}
+
+/// **H14.** Two closures in two different modules whose captured type is a
+/// FREE type variable that happens to carry the same GHC unique are NOT
+/// one shape class: a free variable's unique is neither module- nor
+/// scope-qualified, so it identifies nothing across producers.
+#[test]
+fn free_type_variables_with_one_unique_do_not_merge_two_closures() {
+    // \x::a -> f (\y -> x) a, with `x` of the free type variable `a`.
+    let capture_call = |occ: &str| {
+        let mut xb = lam_binder("x", false);
+        xb["ty"] = json!(TY_A);
+        xb["type"] = json!("a");
+        (
+            binder(occ, demand(false, false)),
+            json!({
+                "node": "Lam", "binder": xb,
+                "body": app(
+                    app(named_gvar("f", F_NAME), lam(&["y"], var("x"))),
+                    var("a"),
+                )
+            }),
+        )
+    };
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let b = class_module("B", vec![capture_call("useB")], class_ids(vec![]));
+    let c = class_module("C", vec![capture_call("useC")], class_ids(vec![]));
+    let h = higher_of(&[&a, &b, &c]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 2, "{:?}", k.producers);
+    // Same arity, one capture each, and the capture types are written
+    // identically — `a` in both tables, with the same unique.
+    assert_eq!(
+        higher::ty_key(&b.types[TY_A as usize]),
+        higher::ty_key(&c.types[TY_A as usize])
+    );
+    assert_eq!(
+        k.classes,
+        2,
+        "two unrelated free type variables merged two closures into one class: {:?}",
+        k.class_keys()
+    );
+    assert!(!k.one_representation());
+}
+
+/// **H2, value-field indexing.** An existential constructor binds its type
+/// variable first; the runtime fields are still numbered from zero. A
+/// function-typed binder after a type binder must be paired with the
+/// constructor argument it is really read from.
+#[test]
+fn an_existential_type_binder_does_not_shift_the_field_index() {
+    // A: f as before, plus `MkE` with one runtime field.
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    // B builds `MkE (\y -> y)` and matches it as `MkE @a h`, handing `h`
+    // to `f`. The binder `h` is raw position 1 and value field 0.
+    let mut tyb = binder("tv", demand(false, false));
+    tyb["kind"] = json!("tyvar");
+    let read = (
+        binder("useB", demand(false, false)),
+        json!({
+            "node": "Case", "scrut": app(named_gvar("MkE", "$main$B$MkE"), lam(&["w"], var("w"))),
+            "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
+            "alts": [{
+                "con": {"kind": "DataAlt", "name": "$main$B$MkE", "occ": "MkE", "tag": 1},
+                "binders": [tyb, fn_binder("h", TY_FUN1)],
+                "rhs": app(app(named_gvar("f", F_NAME), var("h")), var("a"))
+            }]
+        }),
+    );
+    let mut ids = class_ids(vec![(
+        "$main$B$MkE".to_string(),
+        data_con("MkE", "$main$B$MkE", 1),
+    )]);
+    ids["MkE"] = json!(data_con("MkE", "$main$B$MkE", 1));
+    let b = class_module("B", vec![read], ids);
+    let h = higher_of(&[&a, &b]);
+    let field = h
+        .boundaries
+        .iter()
+        .find(|x| matches!(&x.slot, Slot::Field { con, .. } if con == "$main$B$MkE"))
+        .expect("no field boundary for MkE");
+    let Slot::Field { index, .. } = &field.slot else {
+        unreachable!()
+    };
+    assert_eq!(*index, 0, "the type binder shifted the value-field index");
+    // And the field really resolves to the closure that was stored there.
+    assert_eq!(field.producers.len(), 1, "{:?}", field.producers);
+    assert_eq!(field.producers[0].kind, ProducerKind::Lambda);
+}
+
+/// **H15.** A function with TWO function-valued parameters, called from
+/// three sites, is cloned once per distinct call-site tuple — three sites,
+/// two distinct tuples — and never once per parameter class, which would
+/// say four.
+#[test]
+fn clones_are_the_owner_s_distinct_call_site_tuples() {
+    const G2: &str = "$main$A$g2";
+    // g2 = \k1 k2 x -> k1 x
+    let a = class_module(
+        "A",
+        vec![(
+            named_fn_top("g2", G2, TY_FUN2, false),
+            typed_lam(
+                &[("k1", Some(TY_FUN1)), ("k2", Some(TY_FUN1)), ("x", None)],
+                app(var("k1"), var("x")),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let call = |occ: &str, k1: Value, k2: Value| {
+        (
+            binder(occ, demand(false, false)),
+            app(app(app(named_gvar("g2", G2), k1), k2), var("a")),
+        )
+    };
+    // Two of the three call sites assign the SAME pair of shapes.
+    let b = class_module(
+        "B",
+        vec![
+            call("u1", lam(&["y"], var("y")), lam(&["y", "z"], var("y"))),
+            call("u2", lam(&["p"], var("p")), lam(&["p", "q"], var("p"))),
+            call("u3", lam(&["r", "s"], var("r")), lam(&["t"], var("t"))),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k1 = param_boundary(&h, "g2", 0);
+    let k2 = param_boundary(&h, "g2", 1);
+    assert_eq!(k1.classes, 2, "{:?}", k1.class_keys());
+    assert_eq!(k2.classes, 2, "{:?}", k2.class_keys());
+    let plan = h
+        .owners
+        .iter()
+        .find(|o| o.owner == "g2")
+        .expect("no clone plan for g2");
+    assert_eq!(plan.params.len(), 2);
+    assert_eq!(plan.classes, vec![2, 2]);
+    assert_eq!(plan.sites, 3);
+    assert_eq!(plan.clones, Some(2), "{:?}", plan.tuples);
+    let a2 = h.accounting();
+    // NOT the sum of the per-parameter counts, which is 4.
+    assert_eq!(a2.clone_classes, 4);
+    assert_eq!(a2.owner_clones, 2);
+    a2.check().unwrap();
+}
+
+/// **The one-representation theorem is stated once.** A lone opaque
+/// producer is a class of one and still not a representation anything can
+/// share, so the fact and the accounting agree on excluding it.
+#[test]
+fn a_lone_opaque_producer_is_not_one_representation() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    // useB = case d of MkC h -> f h a: the one producer is a field read.
+    let read = (
+        binder("useB", demand(false, false)),
+        json!({
+            "node": "Case", "scrut": var("d"),
+            "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
+            "alts": [{
+                "con": {"kind": "DataAlt", "name": "$main$B$MkC", "occ": "MkC", "tag": 1},
+                "binders": [fn_binder("h", TY_FUN1)],
+                "rhs": app(app(named_gvar("f", F_NAME), var("h")), var("a"))
+            }]
+        }),
+    );
+    let mut ids = class_ids(vec![(
+        "$main$B$MkC".to_string(),
+        data_con("MkC", "$main$B$MkC", 1),
+    )]);
+    ids["MkC"] = json!(data_con("MkC", "$main$B$MkC", 1));
+    let b = class_module("B", vec![read], ids);
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 1);
+    assert!(k.producers[0].shape.is_opaque());
+    assert!(!k.one_representation(), "an opaque shape shares nothing");
+    let acct = h.accounting();
+    assert_eq!(
+        acct.one_representation,
+        h.boundaries
+            .iter()
+            .filter(|b| b.one_representation())
+            .count()
+    );
+    acct.check().unwrap();
 }

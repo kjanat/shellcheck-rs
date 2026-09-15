@@ -4339,6 +4339,11 @@ enumeration of nine producers and still need nine closure types.
 
 ### The verdicts
 
+*(The tables in this section are as M2.4d computed them. Six of these
+numbers are wrong; see [Correction (M2.4d′)](#correction-m24d--sharing-is-decided-before-agreement-and-a-free-type-variable-identifies-nothing)
+below for what moved and why, and note that `UniformRepresentation` is now
+called `TypeShapeUniform`.)*
+
 | kind | ExactClosure | UniformRepresentation | CloneRequired | FiniteClosureSet | Preserve | Unresolved | total |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | parameter | 47 | 20 | 138 | 0 | 6 | 5,253 | 5,464 |
@@ -4511,6 +4516,250 @@ is mutated, no codegen is emitted, and no GHC flag changed.
 * **An `Unresolved` is not a proof that a slot cannot be uniform**, only
   that this proof object declines to say so — the same disclaimer M2.4c
   makes about erasure.
+
+### Correction (M2.4d′) — sharing is decided before agreement, and a free type variable identifies nothing
+
+The M2.4d tables above were computed with six defects the project owner's
+review of `3741ec5` found. Every one of them is a place where the proof
+object said something stronger than its evidence.
+
+#### 1. `H8` was decided after `H5`/`H6`
+
+`judge()` returned `ExactClosure` as soon as one producer reached a slot,
+and `TypeShapeUniform` as soon as they fell in one class, **before** it
+looked at `exported` or `valued`. But how well the producers the dump can
+see agree says nothing about the code outside the rewrite that names the
+same slot. Constructor fields are collected with `exported: true` on
+purpose — a constructor's fields are shared by every module that can build
+or match it — and the -O1 run still reported **6 field `ExactClosure`s**,
+which is exactly the contradiction. `H8-PRESERVE` is now decided first,
+and its documentation says so.
+
+#### 2. Two different "one representation" theorems
+
+`Accounting` counted `enumerated && classes == 1` (103) while the method
+`Verdict::one_representation()` accepted only `ExactClosure |
+TypeShapeUniform` (67 + 20 = 87). Worse, `Shape::class()` mapped every
+opaque producer with the same reason to the same string `opaque:<reason>`,
+although the rule says an opaque shape equals **nothing, not even another
+opaque one**. Two closures read back out of two different constructor
+fields were being counted as one representation.
+
+* every opaque producer now carries its own identity (the producer key), so
+  `opaque:` classes never merge;
+* there is now **one** statement of the theorem,
+  `Boundary::one_representation()` — enumerated, one class, and no opaque
+  producer — and `Accounting::one_representation` is that method and
+  nothing else;
+* the strictly stronger question the *rewrite* asks is named separately,
+  `Verdict::rewritable_as_one()`, and is reported beside it.
+
+| | before | after |
+|---|---:|---:|
+| `Accounting::one_representation` (`enumerated && classes == 1`) | 103 | — |
+| `Boundary::one_representation()` (the single theorem) | — | **84** |
+| `Verdict::one_representation()` / `rewritable_as_one()` | 87 | **66** |
+| distinct shape classes | 261 | **353** |
+
+#### 3. The clone count was a sum of per-parameter numbers
+
+`CloneRequired(classes)` is a count **per parameter** and `Accounting` added
+them up: 418. That is the same mistake M2.4c made and M2.4c′ fixed with
+`E7-OWNER-CLONES`. Clones are now planned per **owning function**
+(`H15-OWNER-CLONES`): the function-valued parameters of one function are
+grouped, the *actual* call-site shape-assignment tuples are enumerated and
+deduplicated, and the function's clones are its distinct tuples. The
+per-slot class counts stay as evidence and are never summed. A call site
+that cannot be enumerated refuses that owner's plan rather than guessing.
+
+| | before | after |
+|---|---:|---:|
+| per-parameter class cardinality (evidence) | 418 | 509 |
+| **clones planned** | 418 | **53** |
+| owning functions wanting a plan | — | 87 |
+| plans refused rather than guessed | — | 66 |
+
+The owners that need clones, largest first:
+
+| module | function | params | call sites | tuples | clones | per-slot classes |
+|---|---|---:|---:|---:|---:|---|
+| ShellCheck.Parser | `k` | 4 | 4 | 4 | 4 | [1, 1, 4, 3] |
+| ShellCheck.Parser | `k` | 4 | 4 | 4 | 4 | [1, 1, 4, 4] |
+| ShellCheck.Analytics | `$srunNodeAnalysis` | 1 | 5 | 3 | 3 | [5] |
+| ShellCheck.Analytics | `doVariableFlowAnalysis` | 2 | 3 | 3 | 3 | [3, 1] |
+| ShellCheck.CFGAnalysis | `go15` | 1 | 3 | 3 | 3 † | [2] |
+| ShellCheck.CFGAnalysis | `go15` | 1 | 3 | 3 | 3 † | [2] |
+| ShellCheck.CFGAnalysis | `go4` | 1 | 3 | 3 | 3 † | [2] |
+| ShellCheck.Checks.ShellSupport | `go1` | 1 | 3 | 3 | 3 † | [2] |
+| ShellCheck.Parser | `$wpoly_k` | 1 | 4 | 3 | 3 † | [6] |
+| ShellCheck.Parser | `k` | 4 | 4 | 3 | 3 | [1, 1, 4, 3] |
+| ShellCheck.Parser | `k` | 4 | 4 | 3 | 3 † | [1, 1, 6, 5] |
+| ShellCheck.Parser | `k` | 4 | 4 | 3 | 3 † | [1, 1, 6, 5] |
+| ShellCheck.ASTLib | `$sgetLiteralStringExt` | 1 | 5 | 2 | 2 | [2] |
+| ShellCheck.Analytics | `analyse` | 1 | 3 | 2 | 2 | [2] |
+| ShellCheck.Parser | `$wreadIoVariable` | 3 | 2 | 2 | 2 | [2, 2, 2] |
+| ShellCheck.Parser | `k` | 4 | 4 | 2 | 2 | [1, 1, 4, 3] |
+| ShellCheck.Parser | `k` | 4 | 4 | 2 | 2 | [1, 1, 4, 3] |
+| ShellCheck.Parser | `k` | 4 | 2 | 2 | 2 † | [3, 1, 4, 2] |
+| ShellCheck.Fixer | `$srealignColumn` | 2 | 2 | 1 | 1 | [2, 2] |
+| ShellCheck.Parser | `$wisFollowedBy` | 1 | 4 | 1 | 1 | [4] |
+
+† a tuple has a **set-valued** component — one call site whose
+function-valued argument is itself a multi-class parameter, which the
+monovariant fixpoint can only give as a set. Those counts are **lower
+bounds**, closable only by a call-string analysis.
+`$srunNodeAnalysis` is the point of the correction in one row: five shape
+classes at one parameter, three clones.
+
+#### 4. Free type variables could merge two unrelated closures
+
+`ty_key()` wrote an unbound type variable as `f<unique>`. A GHC unique is
+neither module- nor scope-qualified, so two closures in two modules — or
+two closures under two different `forall`s in one module — whose captures
+are free variables could get the **same key** and be merged into one shape
+class. (The `ty_key == alpha_eq` test is not independent evidence: both
+sides use the same rule, and `Ty::alpha_eq` compares free variables by
+unique too, which M2.4c′ already recorded as a hazard.) A capture type
+containing a free type variable now gets a key private to its producer
+(`H14-FREE-TYVAR`) and merges with nothing.
+
+Distinct shape classes **261 → 332** on -O1 — 71 classes that were being
+merged on the strength of a free variable's name — and with the opaque
+identity of defect 2, **353**.
+
+#### 5. Existential/GADT fields were indexed by raw binder position
+
+`alt_field` enumerated *all* the binders of an alternative and skipped the
+type binders with `continue`, keeping the raw position as the field index.
+Constructor applications, however, are indexed by **value** arguments. For
+`case e of C @a dict f -> ...` the runtime field `dict` is value index 0 and
+was recorded as 1, so a function-valued binder could be paired with the
+wrong constructor argument and read a producer set that is not its own. A
+separate value-field counter now does the indexing (`H2-PRODUCERS`), with a
+test that pins the pairing for a type binder before a function-typed field.
+
+**No number moves on the -O1 dump** — GHC's ShellCheck Core has no
+alternative binding a function-typed field after an existential type binder
+— but the pairing was wrong wherever one appears, and the flag matrix and
+any future dump are not the same program.
+
+#### 6. `UniformRepresentation` → `TypeShapeUniform`
+
+`H4` compares arity and the ordered list of captured **Haskell** types:
+`captures()` feeds `binder_ty` and nothing else to `ty_key`. Calling the
+result *one Rust representation* contradicts the earlier milestones on
+purpose-built grounds: M2.1 lets one Haskell type be a thunk or a value,
+M2.3 lets one be `Vec` or an iterator, owned or borrowed, `String` or
+`&str`. The verdict is therefore renamed **`TypeShapeUniform`**, and the
+reading *one Rust representation* is sound **only if** the M3 lowering
+promises a canonical closure-boundary carrier per Haskell type with
+conversions inserted at the boundary. **That invariant is open**, and the
+report says so on every run.
+
+#### The verdicts, before → after (-O1)
+
+| kind | | ExactClosure | TypeShapeUniform | CloneRequired | FiniteClosureSet | Preserve | Unresolved | total |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| parameter | before | 47 | 20 | 138 | 0 | 6 | 5,253 | 5,464 |
+| | **after** | 47 | **16** | **141** | 0 | **7** | 5,253 | 5,464 |
+| field | before | 6 | 0 | 0 | 0 | 10 | 19 | 35 |
+| | **after** | **0** | 0 | 0 | 0 | **16** | 19 | 35 |
+| return | before | 14 | 0 | 0 | 1 | 10 | 50 | 75 |
+| | **after** | **3** | 0 | 0 | 1 | **21** | 50 | 75 |
+| **all** | before | 67 | 20 | 138 | 1 | 26 | 5,322 | 5,574 |
+| | **after** | **50** | **16** | **141** | 1 | **44** | 5,322 | 5,574 |
+
+Every number that moves, with its cause:
+
+| number | before | after | cause |
+|---|---:|---:|---|
+| field `ExactClosure` | 6 | 0 | defect 1 — an exported field slot is `Preserve` |
+| return `ExactClosure` | 14 | 3 | defect 1 — exported / used-as-a-value returns |
+| parameter `TypeShapeUniform` | 20 | 16 | 3 by defect 4 (a free-tyvar class split makes them `CloneRequired`), 1 by defect 1 |
+| `CloneRequired` | 138 | 141 | defect 4 — three slots whose producers stop agreeing |
+| `Preserve` | 26 | 44 | defect 1 — +6 field, +11 return, +1 parameter |
+| enumerated | 252 | 252 | unchanged: enumeration is a different fact (`H11`) |
+| one representation | 103 | 84 | 3 by defect 4, 16 by defect 2 (opaque never shares) |
+| rewritable as one | 87 | 66 | 3 by defect 4, 18 by defect 1 |
+| distinct shape classes | 261 | 353 | +71 defect 4, +21 defect 2 |
+| per-parameter class sum | 418 | 509 | defect 4 — more classes, still only evidence |
+| **clones** | 418 | **53** | defect 3 — distinct call-site tuples, per owner |
+
+#### M2.4e re-checked against the corrected `Higher`
+
+`parsec::residual_edges` reads `Higher::verdict_for`, so it was re-run. The
+41-row status table is **unchanged, row for row**:
+
+| status | before | after |
+|---|---:|---:|
+| closed by the closure graph (`P-HO-EXACT` / `P-HO-FINITE`) | 0 | 0 |
+| `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | 20 | 20 |
+| `boundary-Unresolved(function-used-as-a-value)` | 19 | 19 |
+| `boundary-Unresolved(call-site-is-a-partial-application)` | 2 | 2 |
+
+This is the expected result and not a coincidence: all 41 land on
+boundaries whose producer set is `Top`, and `H9-TAINT` is decided before
+anything the correction touched. None of the six defects can move an
+`Unresolved`.
+
+#### Across the flag matrix, before → after
+
+| | | A (`-O1`) | B | C | D | E | F |
+|---|---|---:|---:|---:|---:|---:|---:|
+| boundaries | | 5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
+| Exact + TypeShapeUniform | before | 87 | 178 | 231 | 862 | 850 | 833 |
+| | **after** | **66** | **125** | **172** | **695** | **683** | **682** |
+| `CloneRequired` | before | 138 | 184 | 227 | 1,006 | 996 | 1,017 |
+| | **after** | **141** | **219** | **269** | **1,150** | **1,140** | **1,145** |
+| `Preserve` | before | 26 | 27 | 26 | 39 | 39 | 39 |
+| | **after** | **44** | **45** | **43** | **62** | **62** | **62** |
+| clones | before (a sum) | 418 | 621 | 770 | 3,118 | 3,132 | 3,210 |
+| | **after (planned)** | **53** | **61** | **65** | **154** | **154** | **176** |
+| per-slot class sum (evidence) | after | 509 | 916 | 1,182 | 5,058 | 4,982 | 5,020 |
+
+The shape of the correction is the same on every profile: more inlining
+makes more shape classes once free type variables stop merging, so
+`CloneRequired` rises and `Exact + TypeShapeUniform` falls, while the
+*planned* clone count is an order of magnitude below the old sum. The
+accounting assertion holds on all six.
+
+#### The gate
+
+Every report except `higher` and the **appended M2.4e sections** of
+`parsec` and `tuples --verify` is byte-identical, on `compiler/core-json`
+and on all six matrix profiles: `laziness`, `tuples`, `tuples --explain`,
+`tuples --boundaries`, `fields`, `lists`, `text`, `verify-rep`, `classops`,
+`dictflow`, and `parsec` itself on -O1 — including its 41-row M2.4e table.
+What does move, and why:
+
+* `boundary-CloneRequired(5)` → `boundary-CloneRequired(8)` in the M2.4e
+  section of `parsec` and `tuples --verify` on profiles C–F: defect 4, a
+  free-tyvar class split at that one boundary. The M2.4e **status** of
+  every row is unchanged.
+* `parsec --json` and three `e.g.` exemplar lines of `parsec` on the matrix
+  profiles differ — the known nondeterminism recorded at M2.4e. It was
+  re-confirmed here by running the **unchanged** binary three times over
+  the same dump: `arg-of-unrecognised-call`, `cont-in-non-cont-slot` and
+  `cont-wrong-arity` pick a different witness each run with identical
+  counts, and `--json` differs only in the order of each region's `edges`
+  (972 of 1,301 regions, before against before).
+
+`cargo test` is 208 (7 new), `cargo clippy --all-targets` 0 warnings,
+`cargo fmt --check` clean. No Core is mutated, no codegen is emitted, no
+GHC flag changed.
+
+#### Still unsound, stated rather than hidden
+
+* **The M3 carrier invariant** behind `TypeShapeUniform` (defect 6) is
+  assumed, not proved, and nothing in M2 can prove it.
+* **`Ty::alpha_eq` still compares free type variables by unique.** `H14`
+  keeps the *shape class* from resting on that, but the IR predicate itself
+  is unchanged and must not be given a free-tyvar-sensitive proof to carry.
+* **66 of 87 clone plans are refused**, because some function-valued
+  parameter of the owner has an unenumerable producer set. 53 is therefore
+  the clone count of the 21 owners that can be planned, not of the program.
+* **Set-valued tuples are lower bounds** (†): the fixpoint is monovariant.
+* Everything M2.4d already listed under *What remains* still stands.
 
 ## M2.4e — the 41 residual Parsec continuation edges
 

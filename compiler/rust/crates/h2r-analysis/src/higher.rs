@@ -116,9 +116,13 @@ pub const H4_SHAPE_CLASS: &str = "H4-SHAPE-CLASS";
 /// **Exact.** Exactly one producer reaches the boundary and it is a known
 /// lambda, partial application or function. Evidence: def-use (3).
 pub const H5_EXACT: &str = "H5-EXACT";
-/// **Uniform.** Every producer is known and they all fall in one shape
-/// class, so one representation serves the slot. Evidence: def-use (3)
-/// over [`H4_SHAPE_CLASS`].
+/// **Type-shape uniform.** Every producer is known and they all fall in
+/// one shape class: same arity, same ordered captured **Haskell** types.
+/// That is one *type shape*, and it is one *Rust* representation only if
+/// the lowering promises a canonical closure-boundary carrier per Haskell
+/// type — an M3 invariant that is open, since earlier milestones let one
+/// Haskell type have several normalised Rust representations. Evidence:
+/// def-use (3) over [`H4_SHAPE_CLASS`].
 pub const H6_UNIFORM: &str = "H6-UNIFORM";
 /// **Clone.** Producers in different shape classes at a *parameter* of a
 /// local function that is not exported and is never used as a value: one
@@ -129,7 +133,10 @@ pub const H7_CLONE: &str = "H7-CLONE";
 /// back out of a constructor field, or returned by a call the dump cannot
 /// see — or the boundary's representation is shared with something the
 /// rewrite does not own, because its function is exported or used as a
-/// value. The holder is named. Evidence: def-use (3).
+/// value. The holder is named. **Decided before [`H5_EXACT`] and
+/// [`H6_UNIFORM`]**: how well the producers the dump can see agree says
+/// nothing about the code outside the rewrite that names the same slot.
+/// Evidence: def-use (3).
 pub const H8_PRESERVE: &str = "H8-PRESERVE";
 /// **Taint.** A producer the closed world cannot account for makes the set
 /// `Top` and the boundary `Unresolved`; nothing is guessed. Evidence:
@@ -147,6 +154,23 @@ pub const H11_SEPARATE: &str = "H11-SEPARATE";
 /// passed on, stored, returned, forced — is read from the occurrences of
 /// its binders, following local aliases. Evidence: def-use (3).
 pub const H12_USES: &str = "H12-USES";
+/// **Clones are planned per owning function.** A function with two
+/// function-valued parameters called from three call sites needs one clone
+/// per *distinct assignment tuple* actually seen — at most three — which is
+/// neither the sum nor the product of the per-parameter class counts. The
+/// tuples are enumerated from the real call sites; a call site that cannot
+/// be enumerated refuses that owner's plan rather than guessing. The same
+/// discipline as [`crate::dictflow::E7_OWNER_CLONES`]. Evidence: def-use
+/// (3).
+pub const H15_OWNER_CLONES: &str = "H15-OWNER-CLONES";
+/// **A free type variable does not identify a type across producers.** A
+/// capture type that mentions a type variable nothing in the type binds
+/// carries only that variable's GHC unique, which is neither module- nor
+/// scope-qualified: two unrelated closures can write the same key. Such a
+/// capture gets a key private to its producer and merges with nothing, so
+/// no two closures are ever put in one shape class on the strength of a
+/// free variable's name. Evidence: structural (2).
+pub const H14_FREE_TYVAR: &str = "H14-FREE-TYVAR";
 /// **Landing.** Where a residual closure flow of M2.2.1 lands is the
 /// function-typed parameter (or constructor field) of the callee it is
 /// handed to, chosen by the *callee's own binder types* and not by the
@@ -186,7 +210,7 @@ pub const RULES: &[(&str, u8, &str)] = &[
     (
         H6_UNIFORM,
         3,
-        "every producer is known and they all fall in one shape class",
+        "every producer is known and they all fall in one shape class (Haskell types, not Rust)",
     ),
     (
         H7_CLONE,
@@ -222,6 +246,16 @@ pub const RULES: &[(&str, u8, &str)] = &[
         H13_LANDING,
         4,
         "a residual closure flow lands on the callee's function-typed slots, by binder type",
+    ),
+    (
+        H14_FREE_TYVAR,
+        2,
+        "a capture type with a free type variable gets a producer-private key and merges with nothing",
+    ),
+    (
+        H15_OWNER_CLONES,
+        3,
+        "clones are the distinct call-site shape tuples of the OWNING function, deduplicated",
     ),
 ];
 
@@ -420,6 +454,58 @@ pub fn ty_key(t: &Ty) -> String {
     out
 }
 
+/// Does this type mention a type variable that nothing inside it binds?
+/// Such a variable is bound somewhere in the enclosing term, and
+/// [`ty_key`] writes it as `f<unique>` — a name with no module and no scope
+/// identity ([`H14_FREE_TYVAR`]).
+pub fn has_free_tyvar(t: &Ty) -> bool {
+    let mut bound: Vec<&str> = Vec::new();
+    let mut work: Vec<(&Ty, usize)> = vec![(t, 0)];
+    while let Some((t, depth)) = work.pop() {
+        bound.truncate(depth);
+        match t {
+            Ty::Var(v) => {
+                if !bound.iter().any(|b| *b == v.unique) {
+                    return true;
+                }
+            }
+            Ty::Con { args, .. } => work.extend(args.iter().map(|a| (a, depth))),
+            Ty::App { fun, arg } => {
+                work.push((fun, depth));
+                work.push((arg, depth));
+            }
+            Ty::Fun { mult, arg, res } => {
+                work.push((mult, depth));
+                work.push((arg, depth));
+                work.push((res, depth));
+            }
+            Ty::ForAll { binder, body } => {
+                bound.truncate(depth);
+                bound.push(binder.unique.as_str());
+                work.push((body, depth + 1));
+            }
+            Ty::Lit { .. } | Ty::Opaque { .. } => {}
+        }
+    }
+    false
+}
+
+/// The key a *capture type* contributes to a shape class
+/// ([`H14_FREE_TYVAR`]). A closed type is its [`ty_key`], which two
+/// producers can share. A type with a free type variable is **not**
+/// identified structurally in any shared scope — GHC uniques repeat across
+/// modules and are reused within one — so it is given a key private to the
+/// producer, and it merges with nothing, not even with a textually equal
+/// key in another closure.
+fn capture_key(t: &Ty, producer: &str) -> String {
+    let k = ty_key(t);
+    if has_free_tyvar(t) {
+        format!("!{producer}!{k}")
+    } else {
+        k
+    }
+}
+
 //------------------------------------------------------------------------------
 // Producers
 //------------------------------------------------------------------------------
@@ -459,8 +545,9 @@ impl ProducerKind {
 pub enum Shape {
     /// `arity` arguments, capturing these types in this order.
     Known { arity: usize, captures: Vec<String> },
-    /// The environment is not visible: equal to nothing, not even itself.
-    Opaque(String),
+    /// The environment is not visible: equal to nothing, not even itself,
+    /// and so identified by the producer it belongs to.
+    Opaque { why: String, producer: String },
 }
 
 impl Shape {
@@ -471,11 +558,14 @@ impl Shape {
             Shape::Known { arity, captures } => {
                 format!("arity={arity};captures=[{}]", captures.join("|"))
             }
-            Shape::Opaque(r) => format!("opaque:{r}"),
+            // An opaque shape equals nothing, not even another opaque
+            // one, so its class is the producer's own identity and never
+            // the reason it is opaque.
+            Shape::Opaque { producer, .. } => format!("opaque:{producer}"),
         }
     }
     pub fn is_opaque(&self) -> bool {
-        matches!(self, Shape::Opaque(_))
+        matches!(self, Shape::Opaque { .. })
     }
     /// The class as a report prints it: the arity and the number of
     /// captures, with the capture types elided.
@@ -484,7 +574,7 @@ impl Shape {
             Shape::Known { arity, captures } => {
                 format!("arity {arity}, {} capture(s)", captures.len())
             }
-            Shape::Opaque(_) => "opaque".to_string(),
+            Shape::Opaque { .. } => "opaque".to_string(),
         }
     }
 }
@@ -580,8 +670,19 @@ pub struct Use {
 pub enum Verdict {
     /// One producer, and it is a known lambda, PAP or function.
     ExactClosure,
-    /// Every producer is known and they all share one representation.
-    UniformRepresentation,
+    /// Every producer is known and they all agree on arity and on their
+    /// ordered captured **Haskell** types ([`H4_SHAPE_CLASS`]).
+    ///
+    /// **This is a fact about Haskell types, not yet about Rust types.**
+    /// Earlier milestones deliberately let one Haskell type have several
+    /// normalised Rust representations — a thunk or a value (M2.1), owned
+    /// or borrowed, `Vec` or an iterator (M2.3), `String` or `&str`
+    /// (M2.3 text) — and [`captures`] feeds only the binder's Haskell type
+    /// to [`ty_key`]. Reading this verdict as *one Rust representation*
+    /// is therefore sound only if the lowering promises a canonical
+    /// closure-boundary carrier per Haskell type, with conversions
+    /// inserted at the boundary. That is an M3 invariant and it is open.
+    TypeShapeUniform,
     /// Every producer is known; they need `n` representations, and one
     /// clone of the callee per representation would serve them. Counted,
     /// never made.
@@ -598,7 +699,7 @@ impl Verdict {
     pub fn label(&self) -> &'static str {
         match self {
             Verdict::ExactClosure => "ExactClosure",
-            Verdict::UniformRepresentation => "UniformRepresentation",
+            Verdict::TypeShapeUniform => "TypeShapeUniform",
             Verdict::CloneRequired(_) => "CloneRequired",
             Verdict::FiniteClosureSet(_) => "FiniteClosureSet",
             Verdict::Preserve(_) => "Preserve",
@@ -608,7 +709,7 @@ impl Verdict {
     pub fn col(&self) -> usize {
         match self {
             Verdict::ExactClosure => 0,
-            Verdict::UniformRepresentation => 1,
+            Verdict::TypeShapeUniform => 1,
             Verdict::CloneRequired(_) => 2,
             Verdict::FiniteClosureSet(_) => 3,
             Verdict::Preserve(_) => 4,
@@ -619,22 +720,27 @@ impl Verdict {
     pub fn severity(&self) -> usize {
         match self {
             Verdict::ExactClosure => 0,
-            Verdict::UniformRepresentation => 1,
+            Verdict::TypeShapeUniform => 1,
             Verdict::CloneRequired(_) => 2,
             Verdict::FiniteClosureSet(_) => 3,
             Verdict::Preserve(_) => 4,
             Verdict::Unresolved(_) => 5,
         }
     }
-    /// Does one representation serve the slot?
-    pub fn one_representation(&self) -> bool {
-        matches!(self, Verdict::ExactClosure | Verdict::UniformRepresentation)
+    /// Can the **rewrite** give the slot one representation? A strictly
+    /// stronger question than [`Boundary::one_representation`]: besides
+    /// the producers agreeing, the rewrite must own the slot — an exported
+    /// boundary, or one belonging to a function used as a value, is shared
+    /// outside it and is `Preserve` however well its producers agree
+    /// ([`H8_PRESERVE`]).
+    pub fn rewritable_as_one(&self) -> bool {
+        matches!(self, Verdict::ExactClosure | Verdict::TypeShapeUniform)
     }
 }
 
 pub const VERDICTS: [&str; 6] = [
     "ExactClosure",
-    "UniformRepresentation",
+    "TypeShapeUniform",
     "CloneRequired",
     "FiniteClosureSet",
     "Preserve",
@@ -680,6 +786,20 @@ pub struct Boundary {
 }
 
 impl Boundary {
+    /// **The one-representation theorem, stated once.** Every producer is
+    /// accounted for, they all fall in one shape class, and none of them is
+    /// opaque — an opaque shape equals nothing, not even another opaque
+    /// one, so a lone opaque producer is a class of one and still not a
+    /// representation anything can share ([`H4_SHAPE_CLASS`]).
+    ///
+    /// [`Accounting::one_representation`] counts exactly this, and nothing
+    /// else in the crate has a second opinion. It is *not*
+    /// [`Verdict::rewritable_as_one`], which additionally asks whether the
+    /// rewrite owns the slot.
+    pub fn one_representation(&self) -> bool {
+        self.enumerated && self.classes == 1 && !self.producers.iter().any(|x| x.shape.is_opaque())
+    }
+
     /// The distinct shape classes of the producers, sorted.
     pub fn class_keys(&self) -> Vec<String> {
         let mut v: Vec<String> = self.producers.iter().map(|p| p.shape.class()).collect();
@@ -687,6 +807,32 @@ impl Boundary {
         v.dedup();
         v
     }
+}
+
+/// The clone plan of one owning function ([`H15_OWNER_CLONES`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnerPlan {
+    pub module: String,
+    pub owner: String,
+    /// The function's function-valued parameters, by `occ#index`.
+    pub params: Vec<String>,
+    /// Per-slot shape-class counts: **evidence only**, never the clone
+    /// count.
+    pub classes: Vec<usize>,
+    /// The distinct call-site shape tuples actually seen, rendered.
+    pub tuples: Vec<String>,
+    /// How many call sites there were, before deduplication.
+    pub sites: usize,
+    /// Tuples with a component the monovariant fixpoint could only give as
+    /// a *set* of shape classes — one call site whose function-valued
+    /// argument is itself a multi-class parameter. Such a tuple counts as
+    /// one call site here, so while `set_valued` is non-zero `clones` is a
+    /// **LOWER BOUND**, closable only by a call-string analysis.
+    pub set_valued: usize,
+    /// `tuples.len()`, or `None` when a call site could not be enumerated
+    /// and the plan is refused rather than guessed.
+    pub clones: Option<usize>,
+    pub refused: Option<String>,
 }
 
 //------------------------------------------------------------------------------
@@ -780,11 +926,19 @@ impl<'m> Program<'m> {
                             let AltCon::DataAlt { name, .. } = &alt.con else {
                                 continue;
                             };
-                            for (i, &bid) in alt.binders.iter().enumerate() {
+                            // A constructor application is indexed by its
+                            // VALUE arguments; an alternative binds the
+                            // existential type binders too. Counting raw
+                            // positions would pair `C @a dict f`'s `dict`
+                            // — value field 0 — with argument 1
+                            // ([`H2_PRODUCERS`]).
+                            let mut vi = 0usize;
+                            for &bid in &alt.binders {
                                 if m.binder(bid).kind == BinderKind::Tyvar {
                                     continue;
                                 }
-                                self.alt_field[mi].insert(bid, (name.clone(), i));
+                                self.alt_field[mi].insert(bid, (name.clone(), vi));
+                                vi += 1;
                             }
                         }
                     }
@@ -938,6 +1092,14 @@ fn return_points(m: &Module, rhs: ExprId) -> Vec<(ExprId, usize)> {
 /// facts read off the IR.
 struct Raw {
     slot: Slot,
+    /// The module the slot lives in, by index: the clone plan walks the
+    /// owning function's call sites and needs it.
+    mi: usize,
+    /// The owning function's binder and the slot's position among its
+    /// manifest value parameters ([`H15_OWNER_CLONES`]). `None` for a
+    /// field or a return.
+    owner_binder: Option<BinderId>,
+    index: usize,
     module: String,
     name: String,
     node: ExprId,
@@ -973,6 +1135,9 @@ fn collect_params(p: &Program) -> Vec<Raw> {
             };
             out.push(Raw {
                 slot: Slot::Param { mi, binder: b },
+                mi,
+                owner_binder: owner,
+                index,
                 module: m.name.clone(),
                 name: format!(
                     "parameter {index} ({}) of {owner_name}#{}",
@@ -1103,6 +1268,9 @@ fn collect_fields(p: &Program) -> Vec<Raw> {
                 con: con.clone(),
                 index,
             },
+            mi: binders_sorted.first().map(|(mi, _)| *mi).unwrap_or(0),
+            owner_binder: None,
+            index,
             module,
             name: format!("field {index} of {occ}"),
             node: 0,
@@ -1174,6 +1342,9 @@ fn collect_returns(p: &Program) -> Vec<Raw> {
             }
             out.push(Raw {
                 slot: Slot::Return { mi, binder: b },
+                mi,
+                owner_binder: None,
+                index: 0,
                 module: m.name.clone(),
                 name: format!("return of {}#{b}", m.binder(b).occ),
                 node: rhs,
@@ -1412,8 +1583,14 @@ fn captures(m: &Module, lam: ExprId) -> Vec<BinderId> {
 fn shape_of(p: &Program, mi: usize, node: ExprId, kind: ProducerKind, key: &str) -> Shape {
     let m = p.m(mi);
     match kind {
-        ProducerKind::FieldRead => Shape::Opaque(P_FIELD_READ.into()),
-        ProducerKind::ImportedCall => Shape::Opaque(P_IMPORTED.into()),
+        ProducerKind::FieldRead => Shape::Opaque {
+            why: P_FIELD_READ.into(),
+            producer: key.to_string(),
+        },
+        ProducerKind::ImportedCall => Shape::Opaque {
+            why: P_IMPORTED.into(),
+            producer: key.to_string(),
+        },
         ProducerKind::ImportedFunction => Shape::Known {
             arity: p
                 .s(mi)
@@ -1427,7 +1604,10 @@ fn shape_of(p: &Program, mi: usize, node: ExprId, kind: ProducerKind, key: &str)
             let caps = captures(m, node);
             Shape::Known {
                 arity,
-                captures: caps.iter().map(|b| ty_key(m.binder_ty(*b))).collect(),
+                captures: caps
+                    .iter()
+                    .map(|b| capture_key(m.binder_ty(*b), key))
+                    .collect(),
             }
         }
         ProducerKind::PartialApplication => {
@@ -1436,9 +1616,8 @@ fn shape_of(p: &Program, mi: usize, node: ExprId, kind: ProducerKind, key: &str)
             let arity = head_arity(p, mi, head).saturating_sub(vargs.len());
             let captures = vargs
                 .iter()
-                .map(|&a| arg_ty_key(p, mi, a))
+                .map(|&a| arg_ty_key(p, mi, a, key))
                 .collect::<Vec<_>>();
-            let _ = key;
             Shape::Known { arity, captures }
         }
     }
@@ -1473,11 +1652,11 @@ fn head_arity(p: &Program, mi: usize, head: ExprId) -> usize {
 /// here — binders do, expressions do not — so anything else gets a key
 /// unique to its node, which can never match another producer's. Refusing
 /// to merge is the conservative direction.
-fn arg_ty_key(p: &Program, mi: usize, a: ExprId) -> String {
+fn arg_ty_key(p: &Program, mi: usize, a: ExprId, producer: &str) -> String {
     let m = p.m(mi);
     let inner = m.strip(a);
     match m.resolve(inner) {
-        Some(b) => ty_key(m.binder_ty(b)),
+        Some(b) => capture_key(m.binder_ty(b), producer),
         None => format!("?{}#{inner}", m.name),
     }
 }
@@ -1637,8 +1816,14 @@ pub struct Accounting {
     /// on its own.
     pub enumerated: usize,
     /// Of the enumerated, those that need exactly one representation:
-    /// **fact two**, on its own.
+    /// **fact two**, on its own. Counted by
+    /// [`Boundary::one_representation`] and by nothing else: there is one
+    /// statement of the theorem in the crate.
     pub one_representation: usize,
+    /// The strictly stronger question [`Verdict::rewritable_as_one`] asks:
+    /// the producers agree *and* the rewrite owns the slot. Always at most
+    /// [`Accounting::one_representation`].
+    pub rewritable_as_one: usize,
     /// kind → verdict counts, in [`VERDICTS`] order.
     pub by_kind: BTreeMap<&'static str, [usize; 6]>,
     pub verdicts: [usize; 6],
@@ -1652,7 +1837,18 @@ pub struct Accounting {
     /// The same, by the printable `(arity, captures)` summary.
     pub shape_shapes: BTreeMap<String, usize>,
     pub distinct_shape_classes: usize,
-    pub clones: usize,
+    /// **Evidence, not a clone count**: the sum of the per-parameter class
+    /// cardinalities over the `CloneRequired` boundaries. A function with
+    /// two such parameters is counted twice here and needs neither the sum
+    /// nor the product of them ([`H15_OWNER_CLONES`]).
+    pub clone_classes: usize,
+    /// The clones the plan actually needs: the distinct call-site shape
+    /// tuples, summed over the owning functions ([`H15_OWNER_CLONES`]).
+    pub owner_clones: usize,
+    /// Owners whose plan was refused rather than guessed.
+    pub clone_owners_refused: usize,
+    /// Owners with a clone plan at all.
+    pub clone_owners: usize,
     pub reasons: BTreeMap<String, usize>,
 }
 
@@ -1697,6 +1893,8 @@ pub struct Higher {
     pub round_budget_hit: bool,
     /// Every producer the analysis resolved, by key.
     pub producers: BTreeMap<String, Producer>,
+    /// The clone plan, per owning function ([`H15_OWNER_CLONES`]).
+    pub owners: Vec<OwnerPlan>,
 }
 
 impl Higher {
@@ -1814,12 +2012,15 @@ impl Higher {
             });
         }
 
+        let owners = owner_plans(p, &state, &raws, &boundaries, &producers);
+
         Higher {
             boundaries,
             state,
             rounds,
             round_budget_hit: hit,
             producers,
+            owners,
         }
     }
 
@@ -1852,9 +2053,12 @@ impl Higher {
             if b.enumerated {
                 a.enumerated += 1;
             }
-            let one = b.enumerated && b.classes == 1;
+            let one = b.one_representation();
             if one {
                 a.one_representation += 1;
+            }
+            if b.verdict.rewritable_as_one() {
+                a.rewritable_as_one += 1;
             }
             a.matrix[usize::from(b.enumerated)][usize::from(one)] += 1;
             for k in b.class_keys() {
@@ -1871,7 +2075,7 @@ impl Higher {
                 *a.by_use_kind.entry(u.kind.name()).or_default() += 1;
             }
             if let Verdict::CloneRequired(n) = &b.verdict {
-                a.clones += n;
+                a.clone_classes += n;
             }
             match &b.verdict {
                 Verdict::Preserve(r) | Verdict::Unresolved(r) => {
@@ -1881,6 +2085,13 @@ impl Higher {
             }
         }
         a.distinct_shape_classes = classes.len();
+        a.clone_owners = self.owners.len();
+        for o in &self.owners {
+            match o.clones {
+                Some(n) => a.owner_clones += n,
+                None => a.clone_owners_refused += 1,
+            }
+        }
         a.producers = self.producers.len();
         for x in self.producers.values() {
             *a.by_producer_kind.entry(x.kind.name()).or_default() += 1;
@@ -1889,11 +2100,164 @@ impl Higher {
     }
 }
 
+//------------------------------------------------------------------------------
+// Owner-level clone planning ([`H15_OWNER_CLONES`])
+//------------------------------------------------------------------------------
+
+/// Plan clones per **owning function**, not per parameter. `CloneRequired`
+/// records one number per parameter — the shape classes that parameter
+/// must serve — and those numbers must never be added up: a function with
+/// two such parameters is cloned once per *distinct call-site assignment
+/// tuple*, which is bounded by the number of call sites and is neither the
+/// sum nor the product of the per-parameter counts.
+///
+/// A call site the closed world cannot enumerate — the function used as a
+/// value, a partial application, an argument whose producer set is `Top` —
+/// refuses that owner's plan rather than guessing a number
+/// ([`H9_TAINT`]).
+fn owner_plans(
+    p: &Program,
+    st: &State,
+    raws: &[Raw],
+    boundaries: &[Boundary],
+    producers: &BTreeMap<String, Producer>,
+) -> Vec<OwnerPlan> {
+    // Group the function-valued parameters by the function that owns them,
+    // and want a plan only where some parameter is CloneRequired.
+    let mut groups: BTreeMap<(usize, BinderId), Vec<usize>> = BTreeMap::new();
+    let mut wanted: BTreeSet<(usize, BinderId)> = BTreeSet::new();
+    for (i, r) in raws.iter().enumerate() {
+        let Some(f) = r.owner_binder else { continue };
+        if !matches!(r.slot, Slot::Param { .. }) {
+            continue;
+        }
+        groups.entry((r.mi, f)).or_default().push(i);
+        if boundaries
+            .iter()
+            .any(|b| b.slot == r.slot && matches!(b.verdict, Verdict::CloneRequired(_)))
+        {
+            wanted.insert((r.mi, f));
+        }
+    }
+
+    // The shape classes a settled producer set stands for, as a rendered
+    // tuple component; `None` when the set is not enumerable.
+    let component = |set: &ClosureSet| -> Result<(String, bool), String> {
+        if let ClosureSet::Top(t) = set {
+            return Err(t.clone());
+        }
+        let mut ks: BTreeSet<String> = BTreeSet::new();
+        for k in set.keys() {
+            match producers.get(k) {
+                Some(x) => {
+                    ks.insert(x.shape.short());
+                }
+                None => return Err(T_NO_PRODUCER.into()),
+            }
+        }
+        if ks.is_empty() {
+            return Err(T_NO_PRODUCER.into());
+        }
+        let many = ks.len() > 1;
+        Ok((ks.into_iter().collect::<Vec<_>>().join("|"), many))
+    };
+
+    let mut out = Vec::new();
+    for key in &wanted {
+        let idxs = &groups[key];
+        let (mi, f) = *key;
+        let m = p.m(mi);
+        let params: Vec<String> = idxs
+            .iter()
+            .map(|&i| {
+                let b = raws[i]
+                    .binder
+                    .map(|b| m.binder(b).occ.clone())
+                    .unwrap_or_default();
+                format!("{b}#{}", raws[i].index)
+            })
+            .collect();
+        let classes: Vec<usize> = idxs
+            .iter()
+            .map(|&i| {
+                boundaries
+                    .iter()
+                    .find(|b| b.slot == raws[i].slot)
+                    .map(|b| b.classes)
+                    .unwrap_or(0)
+            })
+            .collect();
+        let arg_indices: Vec<usize> = idxs.iter().map(|&i| raws[i].index).collect();
+
+        let mut tuples: BTreeSet<Vec<String>> = BTreeSet::new();
+        let mut set_valued: BTreeSet<Vec<String>> = BTreeSet::new();
+        let mut refused = None;
+        let mut sites = 0usize;
+        for (omi, o) in p.all_occurrences(mi, f) {
+            let om = p.m(omi);
+            let root = om.spine_root(o);
+            let (head, args) = om.spine(root);
+            if root == o || om.strip(head) != om.strip(o) {
+                refused = Some(T_USED_AS_A_VALUE.to_string());
+                break;
+            }
+            let vargs = value_args(p.s(omi), &args);
+            let mut tuple = Vec::with_capacity(arg_indices.len());
+            let mut many = 0usize;
+            for &ai in &arg_indices {
+                let Some(&a) = vargs.get(ai) else {
+                    refused = Some(T_PARTIAL_CALL.to_string());
+                    break;
+                };
+                match component(&eval(p, st, omi, a)) {
+                    Ok((c, m)) => {
+                        if m {
+                            many += 1;
+                        }
+                        tuple.push(c);
+                    }
+                    Err(why) => {
+                        refused = Some(why);
+                        break;
+                    }
+                }
+            }
+            if refused.is_some() {
+                break;
+            }
+            sites += 1;
+            if many > 0 {
+                set_valued.insert(tuple.clone());
+            }
+            tuples.insert(tuple);
+        }
+
+        let clones = if refused.is_some() {
+            None
+        } else {
+            Some(tuples.len())
+        };
+        out.push(OwnerPlan {
+            module: m.name.clone(),
+            owner: m.binder(f).occ.clone(),
+            params,
+            classes,
+            tuples: tuples.iter().map(|t| t.join(", ")).collect(),
+            sites,
+            set_valued: set_valued.len(),
+            clones,
+            refused,
+        });
+    }
+    out.sort_by(|a, b| (&a.module, &a.owner).cmp(&(&b.module, &b.owner)));
+    out
+}
+
 /// The one arity every producer agrees on, when there is one.
 fn one_arity(ps: &[Producer]) -> Option<usize> {
     let mut it = ps.iter().filter_map(|x| match &x.shape {
         Shape::Known { arity, .. } => Some(*arity),
-        Shape::Opaque(_) => None,
+        Shape::Opaque { .. } => None,
     });
     let first = it.next()?;
     if it.all(|a| a == first) && ps.iter().all(|x| !x.shape.is_opaque()) {
@@ -1933,28 +2297,36 @@ fn judge(r: &Raw, set: &ClosureSet, ps: &[Producer], classes: usize) -> Verdict 
     // run-time closure ([`H8_PRESERVE`]).
     if let Some(o) = ps.iter().find(|x| x.shape.is_opaque()) {
         let holder = match &o.shape {
-            Shape::Opaque(why) => why.clone(),
+            Shape::Opaque { why, .. } => why.clone(),
             _ => unreachable!(),
         };
         return Verdict::Preserve(format!("{holder} ({} node {})", o.module, o.node));
     }
-    if ps.len() == 1 {
-        return Verdict::ExactClosure;
-    }
-    if classes <= 1 {
-        return Verdict::UniformRepresentation;
-    }
-    // The producers disagree. Only a *parameter* of a local function that
-    // is not exported and never used as a value can be cloned: every call
-    // site of it is visible and rewritable ([`H7_CLONE`]).
-    if matches!(r.slot, Slot::Param { .. }) && !r.exported && !r.valued {
-        return Verdict::CloneRequired(classes);
-    }
+    // **Sharing is decided before agreement** ([`H8_PRESERVE`]). A slot
+    // whose representation is shared with something the rewrite does not
+    // own — its function is exported, or used as a value — must be
+    // preserved however well its producers agree: one producer, or one
+    // shape class, says nothing about the code outside the rewrite that
+    // also names this slot. Constructor fields are collected with
+    // `exported` set on purpose, and this is the order that makes that
+    // mean something.
     if r.exported {
         return Verdict::Preserve(format!("{P_EXPORTED} ({} {})", r.module, r.owner));
     }
     if r.valued {
         return Verdict::Preserve(format!("{P_VALUED} ({} {})", r.module, r.owner));
+    }
+    if ps.len() == 1 {
+        return Verdict::ExactClosure;
+    }
+    if classes <= 1 {
+        return Verdict::TypeShapeUniform;
+    }
+    // The producers disagree. Only a *parameter* of a local function that
+    // is not exported and never used as a value can be cloned: every call
+    // site of it is visible and rewritable ([`H7_CLONE`]).
+    if matches!(r.slot, Slot::Param { .. }) {
+        return Verdict::CloneRequired(classes);
     }
     Verdict::FiniteClosureSet(ps.len())
 }
@@ -1984,8 +2356,11 @@ pub struct Landing {
     /// The boundary it lands on, when the closed world has one.
     pub boundary: Option<String>,
     pub verdict: String,
-    /// Would one representation serve the slot?
-    pub one_representation: bool,
+    /// Could the rewrite give the landing slot one representation
+    /// ([`Verdict::rewritable_as_one`])? The producers agreeing is not
+    /// enough: a slot shared outside the rewrite is preserved whatever
+    /// they do.
+    pub rewritable_as_one: bool,
     /// Why there is no boundary, when there is none.
     pub why: Option<String>,
 }
@@ -1996,8 +2371,9 @@ pub struct Section {
     pub landings: Vec<Landing>,
     /// verdict → count.
     pub by_verdict: BTreeMap<String, usize>,
-    /// How many **could** be reclassified by a later pass: the landing slot
-    /// needs one representation. Reported, never acted on.
+    /// How many **could** be reclassified by a later pass: the rewrite
+    /// could give the landing slot one representation. Reported, never
+    /// acted on.
     pub could_reclassify: usize,
 }
 
@@ -2007,7 +2383,7 @@ impl Section {
         let mut could = 0usize;
         for l in &landings {
             *by_verdict.entry(l.verdict.clone()).or_default() += 1;
-            if l.one_representation {
+            if l.rewritable_as_one {
                 could += 1;
             }
         }
@@ -2130,7 +2506,7 @@ impl Higher {
                 residual: residual.to_string(),
                 boundary: Some(b.name.clone()),
                 verdict: b.verdict.label().to_string(),
-                one_representation: b.verdict.one_representation(),
+                rewritable_as_one: b.verdict.rewritable_as_one(),
                 why: None,
             },
             None => Landing {
@@ -2139,7 +2515,7 @@ impl Higher {
                 residual: residual.to_string(),
                 boundary: None,
                 verdict: "NoBoundary".to_string(),
-                one_representation: false,
+                rewritable_as_one: false,
                 why: why.or_else(|| Some("the slot is not in the closed world".into())),
             },
         }
@@ -2193,7 +2569,7 @@ impl Higher {
                     residual: r.reason.clone(),
                     boundary: None,
                     verdict: "NoBoundary".to_string(),
-                    one_representation: false,
+                    rewritable_as_one: false,
                     why: Some(
                         "the receiving parameter belongs to an imported function: it is not a \
                          slot of the closed world, and H0 does not make it one"
@@ -2228,7 +2604,7 @@ impl Higher {
         }
         if let Some(o) = ps.iter().find(|x| x.shape.is_opaque()) {
             let holder = match &o.shape {
-                Shape::Opaque(why) => why.clone(),
+                Shape::Opaque { why, .. } => why.clone(),
                 _ => unreachable!(),
             };
             return Verdict::Preserve(format!("{holder} ({} node {})", o.module, o.node));
@@ -2240,7 +2616,7 @@ impl Higher {
         classes.sort();
         classes.dedup();
         if classes.len() == 1 {
-            Verdict::UniformRepresentation
+            Verdict::TypeShapeUniform
         } else {
             Verdict::FiniteClosureSet(ps.len())
         }
@@ -2257,7 +2633,7 @@ impl Higher {
             module: m.name.clone(),
             node: r.node,
             residual: r.reason.clone(),
-            one_representation: v.one_representation(),
+            rewritable_as_one: v.rewritable_as_one(),
             verdict: v.label().to_string(),
             boundary: name,
             why,
@@ -2269,7 +2645,7 @@ impl Higher {
                 residual: r.reason.clone(),
                 boundary: None,
                 verdict: "NoBoundary".into(),
-                one_representation: false,
+                rewritable_as_one: false,
                 why: Some("the head is an import, not a slot of the closed world".into()),
             };
         };
@@ -2310,7 +2686,7 @@ impl Higher {
                 residual: r.reason.clone(),
                 boundary: None,
                 verdict: "NoBoundary".into(),
-                one_representation: false,
+                rewritable_as_one: false,
                 why: Some(format!(
                     "the head {}#{b} is not function-typed (H1-FUNCTION-TYPED): its type is \
                      instantiated out of sight, so there is no slot to agree about",

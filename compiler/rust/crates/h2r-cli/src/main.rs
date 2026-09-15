@@ -5488,9 +5488,92 @@ fn higher(
         a.enumerated, a.boundaries, a.one_representation
     );
     println!(
-        "  clones counted (never made): {} over the CloneRequired boundaries",
-        a.clones
+        "  ONE statement of the theorem (Boundary::one_representation): the set is\n\
+         \x20 enumerated, the producers fall in one shape class, and none of them is\n\
+         \x20 opaque — an opaque shape equals nothing, not even another opaque one, so a\n\
+         \x20 lone opaque producer is a class of one and still not a shared representation."
     );
+    println!(
+        "  rewritable as one (ExactClosure or TypeShapeUniform): {} — strictly stronger,\n\
+         \x20 because the rewrite must also OWN the slot (H8-PRESERVE is decided before\n\
+         \x20 H5 and H6: an exported slot, or one of a function used as a value, is\n\
+         \x20 Preserve however well its producers agree).",
+        a.rewritable_as_one
+    );
+    println!(
+        "  TypeShapeUniform is a fact about HASKELL types: same arity, same ordered\n\
+         \x20 captured Haskell types. Reading it as one RUST representation needs the M3\n\
+         \x20 invariant that the lowering gives each Haskell type a canonical\n\
+         \x20 closure-boundary carrier, with conversions inserted. That invariant is open."
+    );
+
+    println!();
+    println!("The clone plan, per owning function (H15-OWNER-CLONES)");
+    println!("  A CloneRequired count is PER PARAMETER and the counts must never be added");
+    println!("  up: a function is cloned once per DISTINCT call-site assignment tuple, which");
+    println!("  is bounded by its call sites and is neither the sum nor the product of the");
+    println!("  per-parameter class counts.");
+    println!(
+        "  per-parameter class cardinality (evidence, NOT a clone count): {}",
+        a.clone_classes
+    );
+    println!(
+        "  clones planned: {} over the {} owning function(s) that can be planned; {} of\n\
+         \x20 {} owners refused rather than guessed (a call site the closed world cannot\n\
+         \x20 enumerate)",
+        a.owner_clones,
+        a.clone_owners - a.clone_owners_refused,
+        a.clone_owners_refused,
+        a.clone_owners
+    );
+    println!(
+        "  {:<22} {:<30} {:>7} {:>6} {:>7} {:>7}",
+        "module", "function", "params", "sites", "tuples", "clones"
+    );
+    let mut owners: Vec<&h2r_analysis::higher::OwnerPlan> = h
+        .owners
+        .iter()
+        .filter(|o| module.is_none_or(|x| o.module == x))
+        .collect();
+    owners.sort_by_key(|o| {
+        (
+            std::cmp::Reverse(o.clones.unwrap_or(0)),
+            o.module.clone(),
+            o.owner.clone(),
+        )
+    });
+    for o in owners.iter().take(20) {
+        println!(
+            "  {:<22} {:<30} {:>7} {:>6} {:>7} {:>7}",
+            o.module,
+            o.owner,
+            o.params.len(),
+            o.sites,
+            o.tuples.len(),
+            match o.clones {
+                Some(n) => n.to_string(),
+                None => "refused".to_string(),
+            }
+        );
+        println!(
+            "      per-slot classes {:?}   parameters {}",
+            o.classes,
+            o.params.join(", ")
+        );
+        if let Some(why) = &o.refused {
+            println!("      refused: {why}");
+        }
+        if o.set_valued > 0 {
+            println!(
+                "      {} tuple(s) have a set-valued component: this owner's clone count\n\
+                 \x20     is a LOWER BOUND, closable only by a call-string analysis",
+                o.set_valued
+            );
+        }
+    }
+    if owners.len() > 20 {
+        println!("  ... and {} more owner(s)", owners.len() - 20);
+    }
 
     println!();
     println!(
