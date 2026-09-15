@@ -200,29 +200,12 @@ pub enum ClaimSlot {
 /// What a claim is about, as an IR address.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Subject {
-    Site {
-        module: String,
-        node: ExprId,
-    },
-    Param {
-        module: String,
-        binder: BinderId,
-    },
-    Value {
-        key: String,
-    },
-    DictOwner {
-        module: String,
-        owner: BinderId,
-    },
-    Boundary {
-        module: String,
-        slot: ClaimSlot,
-    },
-    ClosureOwner {
-        module: String,
-        owner: BinderId,
-    },
+    Site { module: String, node: ExprId },
+    Param { module: String, binder: BinderId },
+    Value { key: String },
+    DictOwner { module: String, owner: BinderId },
+    Boundary { module: String, slot: ClaimSlot },
+    ClosureOwner { module: String, owner: BinderId },
 }
 
 impl Subject {
@@ -305,6 +288,10 @@ pub struct Audit {
     pub dict_rounds: usize,
     pub tot_rounds: usize,
     pub closure_rounds: usize,
+    /// `case` nodes this walk's totality transfer reached on a dictionary
+    /// path, over every round. Zero means erasure can delete no force
+    /// anywhere, for a stronger reason than every force being discharged.
+    pub dict_case_nodes: usize,
     /// Clone plans with a **set-valued** tuple component: one call site
     /// whose argument is itself a multi-instance or multi-class parameter,
     /// which a monovariant fixpoint can only give as a set. While these are
@@ -422,7 +409,9 @@ fn head_sig<'m>(m: &'m Module, head: ExprId) -> Option<Sig<'m>> {
 /// The class table entry for a class type constructor's stable name.
 fn class_spec_of_tycon(name: &str) -> Option<&'static ClassSpec> {
     let (_, module, occ) = parts(name)?;
-    CLASSES.iter().find(|c| c.module == module && c.class == occ)
+    CLASSES
+        .iter()
+        .find(|c| c.module == module && c.class == occ)
 }
 
 /// The class a dictionary's structured type names, when the table carries
@@ -607,8 +596,8 @@ impl<'m> World<'m> {
                                     value_binders += 1;
                                 }
                             }
-                            let spec = dict_con_spec(name)
-                                .filter(|spec| spec.fields() == value_binders);
+                            let spec =
+                                dict_con_spec(name).filter(|spec| spec.fields() == value_binders);
                             for &bid in &alt.binders {
                                 if m.binder(bid).kind == BinderKind::Tyvar {
                                     continue;
@@ -878,6 +867,9 @@ const R_HIGHER_ORDER: &str = "from-a-higher-order-parameter";
 const R_DISPATCH_TAINTED: &str = "dispatched-from-a-site-with-an-unknown-dictionary";
 const R_CLASS_UNKNOWN: &str = "class-not-in-the-class-table";
 const R_NO_PRODUCER: &str = "no-producer-reaches-it";
+/// The parameter sits behind a method no class-op site in the closed world
+/// ever selects: nothing dispatches into it, so nothing reaches it.
+const R_NEVER_DISPATCHED: &str = "the-method-behind-it-is-never-dispatched";
 const R_BUDGET_SET: &str = "set-exceeded-this-walks-budget";
 const R_BUDGET_ROUNDS: &str = "fixpoint-exceeded-this-walks-round-budget";
 const R_BUDGET_STEPS: &str = "evaluation-exceeded-this-walks-step-budget";
@@ -1460,7 +1452,16 @@ fn already_evaluated(w: &World, mi: usize, node: ExprId) -> bool {
 /// union over a `case`'s alternatives and forgets the scrutinee, this one
 /// **keeps the scrutinee**, because reaching any alternative at all means
 /// the scrutinee was evaluated.
-fn tot_eval(w: &World, st: &DState, ts: &TState, mi: usize, node: ExprId, nest: usize) -> TotFact {
+#[allow(clippy::too_many_arguments)]
+fn tot_eval(
+    w: &World,
+    st: &DState,
+    ts: &TState,
+    mi: usize,
+    node: ExprId,
+    nest: usize,
+    cases: &std::cell::Cell<usize>,
+) -> TotFact {
     if nest > NEST {
         return TotFact::unknown();
     }
@@ -1483,6 +1484,7 @@ fn tot_eval(w: &World, st: &DState, ts: &TState, mi: usize, node: ExprId, nest: 
 
         match m.expr(head) {
             Expr::Case { scrut, alts, .. } => {
+                cases.set(cases.get() + 1);
                 if !already_evaluated(w, mi, *scrut) {
                     acc.join(&TotFact::force(&m.name, head, *scrut));
                 }
@@ -1521,6 +1523,7 @@ fn tot_eval(w: &World, st: &DState, ts: &TState, mi: usize, node: ExprId, nest: 
                     // Naming the case binder means the scrutinee was
                     // forced: the same force, at the same place.
                     Some(&scrut) => {
+                        cases.set(cases.get() + 1);
                         if !already_evaluated(w, mi, scrut) {
                             acc.join(&TotFact::force(&m.name, head, scrut));
                         }
@@ -1530,7 +1533,7 @@ fn tot_eval(w: &World, st: &DState, ts: &TState, mi: usize, node: ExprId, nest: 
                 },
                 BindSite::AltBinder => match w.dict_alt_field[mi].get(&b) {
                     Some(&(scrut, spec, i)) => {
-                        acc.join(&tot_field(w, st, ts, mi, scrut, spec, i, nest));
+                        acc.join(&tot_field(w, st, ts, mi, scrut, spec, i, nest, cases));
                     }
                     None => acc.join(&TotFact::unknown()),
                 },
@@ -1546,7 +1549,9 @@ fn tot_eval(w: &World, st: &DState, ts: &TState, mi: usize, node: ExprId, nest: 
         {
             let gm = parts(name).map(|(_, md, _)| md).unwrap_or("");
             match selector_field(gm, occ) {
-                Some((spec, field)) => acc.join(&tot_field(w, st, ts, mi, d, spec, field, nest)),
+                Some((spec, field)) => {
+                    acc.join(&tot_field(w, st, ts, mi, d, spec, field, nest, cases))
+                }
                 None => acc.join(&TotFact::unknown()),
             }
             continue;
@@ -1580,8 +1585,9 @@ fn tot_field(
     spec: &'static ClassSpec,
     field: usize,
     nest: usize,
+    cases: &std::cell::Cell<usize>,
 ) -> TotFact {
-    let mut acc = tot_eval(w, st, ts, mi, node, nest + 1);
+    let mut acc = tot_eval(w, st, ts, mi, node, nest + 1, cases);
     if acc.level == Tot::Unknown {
         return acc;
     }
@@ -1591,7 +1597,7 @@ fn tot_field(
     };
     for k in &keys {
         match field_expr(w, k, spec, field) {
-            Ok((fmi, fnode)) => acc.join(&tot_eval(w, st, ts, fmi, fnode, nest + 1)),
+            Ok((fmi, fnode)) => acc.join(&tot_eval(w, st, ts, fmi, fnode, nest + 1, cases)),
             Err(_) => acc.join(&TotFact::unknown()),
         }
     }
@@ -1644,6 +1650,8 @@ pub struct DictDerived {
     site_at: HashMap<(usize, ExprId), usize>,
     pub rounds: usize,
     pub tot_rounds: usize,
+    /// `case` nodes the totality walk reached on a dictionary path.
+    pub tot_cases: usize,
 }
 
 type Dispatch<'a> = HashMap<(&'a str, usize), Vec<(usize, &'a Vec<ExprId>)>>;
@@ -1666,7 +1674,10 @@ fn dispatch_of<'a>(
             }
             Set::Fin(keys) => {
                 for k in keys {
-                    dispatch.entry((k.as_str(), field)).or_default().push((s.mi, &s.rest));
+                    dispatch
+                        .entry((k.as_str(), field))
+                        .or_default()
+                        .push((s.mi, &s.rest));
                 }
             }
         }
@@ -1750,7 +1761,7 @@ impl DictDerived {
                 x.set = Set::top(if x.producers.slots.is_empty() {
                     R_NO_PRODUCER
                 } else {
-                    R_NO_PRODUCER
+                    R_NEVER_DISPATCHED
                 });
             }
         }
@@ -1775,6 +1786,13 @@ impl DictDerived {
             .iter()
             .map(|x| ((x.mi, x.binder), TotFact::total()))
             .collect();
+        // **M2.4c′'s instrumented claim, re-derived.** How many `case`
+        // nodes the totality walk reaches on a dictionary path at all. The
+        // milestone asserts the answer is zero on this dump — GHC floats
+        // every dictionary out of every scrutinee — and that is a stronger
+        // statement than `MustPreserveForce == 0`, which a wide enough
+        // definition of *already evaluated* could also produce.
+        let cases = std::cell::Cell::new(0usize);
         let mut tot_rounds = 0usize;
         loop {
             tot_rounds += 1;
@@ -1786,7 +1804,7 @@ impl DictDerived {
                     acc.join(&TotFact::unknown());
                 }
                 for &(cmi, arg) in &x.producers.calls {
-                    acc.join(&tot_eval(w, &state, &ts, cmi, arg, 0));
+                    acc.join(&tot_eval(w, &state, &ts, cmi, arg, 0, &cases));
                 }
                 for slot in &x.producers.slots {
                     if tainted.contains(&(slot.class, slot.field)) {
@@ -1798,7 +1816,7 @@ impl DictDerived {
                     };
                     for (cmi, rest) in callers {
                         match rest.get(slot.rest_index) {
-                            Some(&a) => acc.join(&tot_eval(w, &state, &ts, *cmi, a, 0)),
+                            Some(&a) => acc.join(&tot_eval(w, &state, &ts, *cmi, a, 0, &cases)),
                             None => acc.join(&TotFact::unknown()),
                         }
                     }
@@ -1823,6 +1841,7 @@ impl DictDerived {
         for x in &mut params {
             x.tot = ts[&(x.mi, x.binder)].clone();
         }
+        let tot_cases = cases.get();
 
         // ---- Part 2: erasure, from facts recorded separately.
         let dict_args: HashSet<(usize, ExprId)> = sites
@@ -1897,6 +1916,7 @@ impl DictDerived {
             site_at,
             rounds,
             tot_rounds,
+            tot_cases,
         }
     }
 }
@@ -2126,8 +2146,7 @@ fn dict_owner_plans(
                             tuple.push(k.into_iter().collect::<Vec<_>>().join("|"));
                         }
                         other => {
-                            refused =
-                                Some(other.reason().unwrap_or(R_NO_PRODUCER).to_string());
+                            refused = Some(other.reason().unwrap_or(R_NO_PRODUCER).to_string());
                             break;
                         }
                     },
@@ -2321,10 +2340,16 @@ enum PKind {
 /// The representation a producer needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PShape {
-    Known { arity: usize, captures: Vec<String> },
+    Known {
+        arity: usize,
+        captures: Vec<String>,
+    },
     /// The environment is not visible: equal to nothing, **not even to
     /// another opaque shape**, so it is identified by its own producer.
-    Opaque { why: &'static str, producer: String },
+    Opaque {
+        why: &'static str,
+        producer: String,
+    },
 }
 
 impl PShape {
@@ -2483,12 +2508,7 @@ fn return_points(m: &Module, rhs: ExprId) -> Vec<(ExprId, usize)> {
 
 /// What produces the `index`th value argument of `owner`, over the whole
 /// closed world.
-fn closure_param_sources(
-    w: &World,
-    mi: usize,
-    owner: Option<BinderId>,
-    index: usize,
-) -> HSources {
+fn closure_param_sources(w: &World, mi: usize, owner: Option<BinderId>, index: usize) -> HSources {
     let mut out = HSources::default();
     let Some(f) = owner else {
         out.top = Some(R_ANON.into());
@@ -2592,7 +2612,9 @@ fn collect_closure_fields(w: &World) -> Vec<HRaw> {
                 }
             }
         }
-        let module = parts(&con).map(|(_, md, _)| md.to_string()).unwrap_or_default();
+        let module = parts(&con)
+            .map(|(_, md, _)| md.to_string())
+            .unwrap_or_default();
         out.push(HRaw {
             slot: HSlot::Field {
                 con: con.clone(),
@@ -2957,7 +2979,10 @@ fn closure_judge(r: &HRaw, set: &Set, ps: &[HProducer], classes: usize) -> HVerd
         return HVerdict::Preserve(format!("an exported slot ({})", r.module));
     }
     if r.valued {
-        return HVerdict::Preserve(format!("a slot of a function used as a value ({})", r.module));
+        return HVerdict::Preserve(format!(
+            "a slot of a function used as a value ({})",
+            r.module
+        ));
     }
     if ps.len() == 1 {
         return HVerdict::Exact;
@@ -3545,7 +3570,7 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
         .filter_map(|s| s.dict.map(|d| (s.mi, w.m(s.mi).strip(d))))
         .collect();
     row(
-        "3  a dictionary used as an ordinary value and as a selector's dictionary",
+        "3  a dictionary used as a value and as a selector's dictionary",
         "Preserve; the method target is unaffected",
         dd.params
             .iter()
@@ -3583,7 +3608,7 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
     // 6 — a dictionary parameter reached only through dispatch: an
     // instance method's own dictionary, and a default method's.
     row(
-        "6  a dictionary parameter fed through dispatch (instance / default method)",
+        "6  a dictionary parameter fed through dispatch",
         "terminates; the fixpoint is monotone",
         dd.params
             .iter()
@@ -3620,7 +3645,7 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
     // 9 — two opaque producers at one slot.
     row(
         "9  a slot two opaque producers reach",
-        "two classes: an opaque shape unifies with nothing",
+        "two classes: opaque unifies with nothing",
         hd.boundaries
             .iter()
             .filter(|b| b.producers.iter().filter(|p| p.shape.is_opaque()).count() >= 2)
@@ -3677,7 +3702,7 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
         }
     }
     row(
-        "11 an alternative binding a value field after an existential type binder",
+        "11 a value field bound after an existential type binder",
         "value-field indexing, not raw binder position",
         existential,
     );
@@ -3688,8 +3713,8 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
     );
     // 12 — a multi-parameter owner planned from joint call-site tuples.
     row(
-        "12 an owner with two or more slots planned from joint call-site tuples",
-        "clones = distinct tuples, not the sum and not the product",
+        "12 an owner with two or more slots, planned jointly",
+        "clones = distinct call-site tuples",
         hd.owner_plans
             .iter()
             .chain(dd.owner_plans.iter())
@@ -3707,7 +3732,7 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
     );
     // 13 — one formal receiving closures of several representations.
     row(
-        "13 a function slot whose producers need several representations, at a local",
+        "13 several representations at one slot, at a local",
         "CloneRequired",
         hd.boundaries
             .iter()
@@ -3754,7 +3779,9 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
             {
                 continue;
             }
-            let Some(rhs) = m.binding(b).rhs else { continue };
+            let Some(rhs) = m.binding(b).rhs else {
+                continue;
+            };
             if w.lam_params(mi, rhs).len() == 3 {
                 parsec_shaped.push(format!("{} node {rhs}", m.name));
             }
@@ -3762,7 +3789,7 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
     }
     row(
         "15 a three-argument closure named like a Parsec continuation",
-        "no role: the shape class is arity and captures, never a name",
+        "arity and captures decide; no name is read",
         parsec_shaped,
     );
     out
@@ -3772,7 +3799,10 @@ fn slot_label(s: &HSlot) -> String {
     match s {
         HSlot::Param { binder, .. } => format!("parameter binder {binder}"),
         HSlot::Return { binder, .. } => format!("return binder {binder}"),
-        HSlot::Field { con, index } => format!("field {index} of {con}"),
+        HSlot::Field { con, index } => format!(
+            "field {index} of {}",
+            parts(con).map(|(_, _, o)| o).unwrap_or(con)
+        ),
     }
 }
 
@@ -3795,6 +3825,7 @@ pub fn verify(modules: &[&Module], claims: &[Claim]) -> Audit {
         dict_rounds: dd.rounds,
         tot_rounds: dd.tot_rounds,
         closure_rounds: hd.rounds,
+        dict_case_nodes: dd.tot_cases,
         dict_plans_set_valued: dd.owner_plans.values().filter(|p| p.set_valued > 0).count(),
         closure_plans_set_valued: hd.owner_plans.values().filter(|p| p.set_valued > 0).count(),
         own_sites: dd.sites.len(),

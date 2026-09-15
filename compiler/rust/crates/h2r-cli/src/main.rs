@@ -5805,16 +5805,16 @@ fn verify_m24(dir: &Path, json: bool, explain: bool) -> Result<()> {
         audit.dict_rounds, audit.tot_rounds, audit.closure_rounds
     );
     println!(
-        "  clone plans with a set-valued tuple component (a LOWER BOUND while non-zero):\
- {} dictionary, {} closure",
+        "  case nodes this walk's totality transfer reaches on a dictionary path: {}",
+        audit.dict_case_nodes
+    );
+    println!(
+        "  clone plans with a set-valued tuple component, a LOWER BOUND while non-zero: {} dictionary, {} closure",
         audit.dict_plans_set_valued, audit.closure_plans_set_valued
     );
     println!();
     println!("The adversarial shapes, in this dump");
-    println!(
-        "  {:<62} {:>6}  {:<44} example",
-        "shape", "n", "must be"
-    );
+    println!("  {:<62} {:>6}  {:<44} example", "shape", "n", "must be");
     for r in &audit.shapes {
         println!("  {:<62} {:>6}  {:<44} {}", r.name, r.n, r.verdict, r.at);
     }

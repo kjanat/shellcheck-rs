@@ -7108,3 +7108,820 @@ fn a_lone_opaque_producer_is_not_one_representation() {
     );
     acct.check().unwrap();
 }
+
+//------------------------------------------------------------------------------
+// M2.4f — the independent re-derivation of the M2.4 positive claims
+// (verify_m24.rs), and the fifteen adversarial shapes it has to survive.
+//
+// Every case below is hand-built here *and* counted in the real dump by
+// `h2r verify-m24`'s shape table, so that a fixture is never the only
+// evidence a rule was exercised.
+//------------------------------------------------------------------------------
+
+use crate::verify_m24::{self, Audit};
+
+/// Build the claim list from the analyses and re-derive it independently.
+fn m24(mods: &[&Module]) -> Audit {
+    let (claims, _f, _h) = crate::m24_claims::claims(mods);
+    verify_m24::verify(mods, &claims)
+}
+
+/// The count of one row of the adversarial shape table.
+fn shape_n(a: &Audit, prefix: &str) -> usize {
+    a.shapes
+        .iter()
+        .find(|r| r.name.starts_with(prefix))
+        .unwrap_or_else(|| panic!("no shape row {prefix:?}"))
+        .n
+}
+
+/// Nothing this walk refutes, and nothing it declines.
+fn agreed(a: &Audit) {
+    assert_eq!(
+        a.real_disagreements(),
+        0,
+        "disagreements: {:?}",
+        a.disagreements
+    );
+    assert_eq!(
+        a.coverage_refusals(),
+        0,
+        "coverage refusals: {:?}",
+        a.disagreements
+    );
+}
+
+/// `case <scrut> of { <con> h… -> <rhs> }` with function-typed binders.
+fn case_con_fn(scrut: Value, con: &str, binders: &[(&str, u32)], rhs: Value) -> Value {
+    json!({
+        "node": "Case", "scrut": scrut,
+        "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
+        "alts": [{
+            "con": {"kind": "DataAlt", "name": con, "occ": con, "tag": 1},
+            "binders": binders.iter().map(|(b, t)| fn_binder(b, *t)).collect::<Vec<_>>(),
+            "rhs": rhs
+        }]
+    })
+}
+
+/// A type binder, as an alternative of an existential constructor binds one.
+fn tyvar_binder(occ: &str) -> Value {
+    let mut b = binder(occ, demand(false, false));
+    b["kind"] = json!("tyvar");
+    b
+}
+
+/// A `Type` argument.
+fn type_arg(ty: u32) -> Value {
+    json!({"node": "Type", "ty": ty, "type": "T"})
+}
+
+/// `\d x -> showsPrec d x`, a local function whose dictionary parameter the
+/// closed world has to enumerate.
+fn dict_user(name: &str, exported: bool) -> (Value, Value) {
+    (
+        named_top("f", name, exported),
+        dict_lam(
+            &[("d", TY_SHOW_T)],
+            lam(
+                &["x"],
+                app(app(named_gvar("showsPrec", SHOWS_PREC), var("d")), var("x")),
+            ),
+        ),
+    )
+}
+
+/// The two `Show` instances and their methods.
+fn two_show_instances() -> Vec<(Value, Value)> {
+    vec![
+        (
+            named_dict_top("$fShowT", "$main$A$$fShowT", TY_SHOW_T),
+            show_dict_with("$cshowsPrec"),
+        ),
+        (
+            named_dict_top("$fShowU", "$main$A$$fShowU", TY_SHOW_T),
+            show_dict_with("$cshowsPrecU"),
+        ),
+        (
+            binder("$cshowsPrec", demand(false, false)),
+            lam(&["p", "v"], var("v")),
+        ),
+        (
+            binder("$cshowsPrecU", demand(false, false)),
+            lam(&["p", "v"], var("v")),
+        ),
+    ]
+}
+
+/// **1.** `f (case bottom of A -> d; B -> d)`. The dictionary *identity* is
+/// bounded — one instance, from both alternatives — and the producer is
+/// still not total: the `case` forces a scrutinee that could be ⊥, and
+/// deleting the dictionary deletes that force. Bounded identity is not
+/// totality, and this walk keeps the two apart in its own domain.
+#[test]
+fn m24f_a_bounded_dictionary_identity_is_not_a_total_producer() {
+    let mut pairs = two_show_instances();
+    pairs.push(dict_user("$main$A$f", false));
+    pairs.push((
+        binder("use", demand(false, false)),
+        app(
+            app(
+                var("f"),
+                case2(
+                    app(gvar("bottom"), var("z")),
+                    named_gvar("$fShowT", "$main$A$$fShowT"),
+                    named_gvar("$fShowT", "$main$A$$fShowT"),
+                ),
+            ),
+            var("y"),
+        ),
+    ));
+    let a = class_module("A", pairs, class_ids(vec![]));
+    let f = DictFlow::of_modules([&a]);
+    let p = flow_param(&f, "f");
+    assert_eq!(p.set.keys().len(), 1, "one instance: {:?}", p.set);
+    assert_eq!(p.totality, Totality::MustPreserveForce);
+    let e = &f.param_erasure[f.params.iter().position(|x| x.owner == "f").unwrap()];
+    assert!(
+        !matches!(e.verdict, Verdict::Erasable),
+        "a forced producer is never plainly Erasable: {:?}",
+        e.verdict
+    );
+    let audit = m24(&[&a]);
+    agreed(&audit);
+    assert_eq!(shape_n(&audit, "1  bounded"), 1);
+}
+
+/// **2.** One dictionary parameter, two call sites, two instances: the set
+/// is a finite two, the parameter is `ErasableWithClone(2)`, and the
+/// owner's plan is its two distinct call-site tuples.
+#[test]
+fn m24f_two_instances_at_one_parameter_cost_one_clone_each() {
+    let mut pairs = two_show_instances();
+    pairs.push(dict_user("$main$A$f", false));
+    pairs.push((
+        binder("use", demand(false, false)),
+        app(
+            app(
+                app(var("f"), named_gvar("$fShowT", "$main$A$$fShowT")),
+                var("a"),
+            ),
+            app(
+                app(var("f"), named_gvar("$fShowU", "$main$A$$fShowU")),
+                var("b"),
+            ),
+        ),
+    ));
+    let a = class_module("A", pairs, class_ids(vec![]));
+    let f = DictFlow::of_modules([&a]);
+    let i = f.params.iter().position(|x| x.owner == "f").unwrap();
+    assert_eq!(f.params[i].set.keys().len(), 2);
+    assert_eq!(f.param_erasure[i].verdict, Verdict::ErasableWithClone(2));
+    assert_eq!(f.owners.len(), 1);
+    assert_eq!(f.owners[0].clones, Some(2));
+    let audit = m24(&[&a]);
+    agreed(&audit);
+    assert_eq!(shape_n(&audit, "2  one dictionary"), 1);
+}
+
+/// **3.** A dictionary used as an ordinary value *and* as a selector's
+/// dictionary: the dictionary is `Preserve`d and the method target is
+/// completely unaffected by that.
+#[test]
+fn m24f_a_dictionary_that_is_also_a_value_is_preserved_and_the_target_stands() {
+    let mut pairs = two_show_instances();
+    pairs.push((
+        named_top("f", "$main$A$f", false),
+        dict_lam(
+            &[("d", TY_SHOW_T)],
+            app(
+                app(app(named_gvar("showsPrec", SHOWS_PREC), var("d")), var("x")),
+                app(gvar("g"), var("d")),
+            ),
+        ),
+    ));
+    pairs.push((
+        binder("use", demand(false, false)),
+        app(var("f"), named_gvar("$fShowT", "$main$A$$fShowT")),
+    ));
+    let a = class_module("A", pairs, class_ids(vec![]));
+    let f = DictFlow::of_modules([&a]);
+    let i = f.params.iter().position(|x| x.owner == "f").unwrap();
+    assert!(
+        matches!(f.param_erasure[i].verdict, Verdict::Preserve(_)),
+        "{:?}",
+        f.param_erasure[i].verdict
+    );
+    match &flow_site(&f, "A").outcome {
+        dictflow::Outcome::Exact(t) => assert_eq!(t.occ, "$cshowsPrec"),
+        other => panic!("the target stands whatever the dictionary's fate: {other:?}"),
+    }
+    let audit = m24(&[&a]);
+    agreed(&audit);
+    assert_eq!(shape_n(&audit, "3  a dictionary used"), 1);
+}
+
+/// **4.** A dictionary that arrives from a call the dump cannot see: the
+/// set is `Top`, the totality is `Unknown`, and neither a target nor an
+/// erasure is claimed.
+#[test]
+fn m24f_an_unknown_dictionary_parameter_is_unresolved_and_its_totality_unknown() {
+    let mut pairs = two_show_instances();
+    pairs.push(dict_user("$main$A$f", false));
+    pairs.push((
+        binder("use", demand(false, false)),
+        app(app(var("f"), app(gvar("g"), var("y"))), var("a")),
+    ));
+    let a = class_module("A", pairs, class_ids(vec![]));
+    let f = DictFlow::of_modules([&a]);
+    let i = f.params.iter().position(|x| x.owner == "f").unwrap();
+    assert!(f.params[i].set.is_top(), "{:?}", f.params[i].set);
+    assert_eq!(f.params[i].totality, Totality::Unknown);
+    assert!(
+        matches!(f.param_erasure[i].verdict, Verdict::Unresolved(_)),
+        "{:?}",
+        f.param_erasure[i].verdict
+    );
+    let audit = m24(&[&a]);
+    agreed(&audit);
+    assert!(shape_n(&audit, "4  a dictionary parameter of unknown") >= 1);
+}
+
+/// **5.** `$p1Ord d` selects the superclass field and the walk follows into
+/// the dictionary it finds there — whole-program, and re-derived.
+#[test]
+fn m24f_a_superclass_selection_is_followed_whole_program() {
+    let ord_dict = dict_con_app(
+        "C:Ord",
+        C_ORD,
+        &[
+            var("$fEqT"),
+            var("$ccompare"),
+            var("$c<"),
+            var("$c<="),
+            var("$c>"),
+            var("$c>="),
+            var("$cmax"),
+            var("$cmin"),
+        ],
+    );
+    let m = class_module(
+        "M",
+        vec![
+            (
+                named_dict_top("$fEqT", "$main$M$$fEqT", TY_EQ_T),
+                dict_con_app("C:Eq", C_EQ, &[var("$c=="), var("$c/=")]),
+            ),
+            (
+                named_dict_top("$fOrdT", "$main$M$$fOrdT", TY_ORD_T),
+                ord_dict,
+            ),
+            (
+                binder("$c==", demand(false, false)),
+                lam(&["p", "v"], var("v")),
+            ),
+            (
+                binder("use", demand(false, false)),
+                app(
+                    app(
+                        named_gvar("==", EQ_EQ),
+                        app(named_gvar("$p1Ord", P1_ORD), var("$fOrdT")),
+                    ),
+                    var("x"),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&m]);
+    let eq = f.sites.iter().find(|s| s.method == "==").unwrap();
+    match &eq.outcome {
+        dictflow::Outcome::Exact(t) => assert_eq!(t.occ, "$c=="),
+        other => panic!("expected the superclass instance's method, got {other:?}"),
+    }
+    let audit = m24(&[&m]);
+    agreed(&audit);
+    assert_eq!(shape_n(&audit, "5  a superclass"), 1);
+}
+
+/// **6.** Dispatch into an instance method feeds that method's *own*
+/// dictionary parameter, and a dictionary reachable only that way still
+/// terminates: the class-op inside the method resolves exactly.
+#[test]
+fn m24f_dispatch_into_an_instance_method_terminates() {
+    let a = class_module(
+        "A",
+        vec![
+            (
+                named_dict_top("$fShowL", "$main$A$$fShowL", TY_SHOW_T),
+                show_dict_with("$cshowsPrecL"),
+            ),
+            (
+                named_dict_top("$fShowT", "$main$A$$fShowT", TY_SHOW_T),
+                show_dict_with("$cshowsPrec"),
+            ),
+            (
+                binder("$cshowsPrecL", demand(false, false)),
+                dict_lam(
+                    &[("d", TY_SHOW_T)],
+                    lam(
+                        &["p", "v"],
+                        app(app(named_gvar("showsPrec", SHOWS_PREC), var("d")), var("v")),
+                    ),
+                ),
+            ),
+            (
+                binder("$cshowsPrec", demand(false, false)),
+                lam(&["p", "v"], var("v")),
+            ),
+            (
+                binder("use", demand(false, false)),
+                app(
+                    app(
+                        app(named_gvar("showsPrec", SHOWS_PREC), var("$fShowL")),
+                        var("$fShowT"),
+                    ),
+                    var("y"),
+                ),
+            ),
+        ],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a]);
+    let inner = f
+        .params
+        .iter()
+        .position(|x| x.owner == "$cshowsPrecL")
+        .expect("the instance method's own dictionary parameter");
+    assert_eq!(
+        f.params[inner].set.keys().len(),
+        1,
+        "fed by dispatch: {:?}",
+        f.params[inner].set
+    );
+    assert!(f.rounds < dictflow::ROUND_BUDGET, "the fixpoint terminates");
+    let audit = m24(&[&a]);
+    agreed(&audit);
+    assert_eq!(shape_n(&audit, "6  a dictionary parameter fed"), 1);
+}
+
+/// **7.** A selector applied to no value argument is a value, not a
+/// dispatch: it is recorded and no target is claimed for it.
+#[test]
+fn m24f_a_partially_applied_selector_claims_no_target() {
+    let m = class_module(
+        "M",
+        vec![(
+            binder("use", demand(false, false)),
+            app(gvar("g"), named_gvar("showsPrec", SHOWS_PREC)),
+        )],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&m]);
+    assert_eq!(f.sites.len(), 1);
+    assert!(matches!(
+        f.sites[0].outcome,
+        dictflow::Outcome::Unresolved(_)
+    ));
+    let audit = m24(&[&m]);
+    agreed(&audit);
+    assert_eq!(shape_n(&audit, "7  a partially applied"), 1);
+}
+
+/// **8.** One producer at an *exported* slot is still `Preserve`: how well
+/// the closures the dump can see agree says nothing about the callers it
+/// cannot. Sharing is decided before agreement.
+#[test]
+fn m24f_an_exported_slot_with_one_producer_is_still_preserved() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, true)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![call_hf("useB", lam(&["y"], var("y")))],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 1);
+    assert!(
+        matches!(k.verdict, HVerdict::Preserve(_)),
+        "{:?}",
+        k.verdict
+    );
+    let audit = m24(&[&a, &b]);
+    agreed(&audit);
+    assert!(shape_n(&audit, "8  an exported or valued") >= 1);
+}
+
+/// **9.** Two closures read back out of two different constructor fields
+/// reach one slot. Both are opaque *for the same reason*, and they are
+/// still two classes: an opaque shape unifies with nothing, not even with
+/// another opaque one.
+#[test]
+fn m24f_two_field_read_closures_are_two_classes() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let b = class_module(
+        "B",
+        vec![(
+            binder("useB", demand(false, false)),
+            case_con_fn(
+                var("box1"),
+                "$main$B$MkB",
+                &[("h", TY_FUN1)],
+                app(app(named_gvar("f", F_NAME), var("h")), var("a")),
+            ),
+        )],
+        class_ids(vec![(
+            "$main$B$MkB".to_string(),
+            data_con("MkB", "$main$B$MkB", 1),
+        )]),
+    );
+    let c = class_module(
+        "C",
+        vec![(
+            binder("useC", demand(false, false)),
+            case_con_fn(
+                var("box2"),
+                "$main$C$MkC",
+                &[("h", TY_FUN1)],
+                app(app(named_gvar("f", F_NAME), var("h")), var("a")),
+            ),
+        )],
+        class_ids(vec![(
+            "$main$C$MkC".to_string(),
+            data_con("MkC", "$main$C$MkC", 1),
+        )]),
+    );
+    let h = higher_of(&[&a, &b, &c]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 2);
+    assert_eq!(k.classes, 2, "an opaque shape is a class of its own");
+    assert!(
+        matches!(k.verdict, HVerdict::Preserve(_)),
+        "{:?}",
+        k.verdict
+    );
+    let audit = m24(&[&a, &b, &c]);
+    agreed(&audit);
+    assert!(shape_n(&audit, "9  a slot two opaque") >= 1);
+}
+
+/// **10.** Two closures in two modules capture a free type variable whose
+/// GHC unique is the same string. A unique is neither module- nor
+/// scope-qualified, so it identifies nothing: the two must not merge.
+#[test]
+fn m24f_two_free_type_variables_with_one_unique_are_two_classes() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let capture_a = |occ: &str| {
+        typed_lam(
+            &[(occ, Some(TY_A))],
+            app(
+                app(named_gvar("f", F_NAME), lam(&["y"], var(occ))),
+                var("a"),
+            ),
+        )
+    };
+    let b = class_module(
+        "B",
+        vec![(binder("useB", demand(false, false)), capture_a("v"))],
+        class_ids(vec![]),
+    );
+    let c = class_module(
+        "C",
+        vec![(binder("useC", demand(false, false)), capture_a("w"))],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b, &c]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 2);
+    assert_eq!(
+        k.classes, 2,
+        "a free type variable's unique identifies nothing"
+    );
+    assert_eq!(k.verdict, HVerdict::CloneRequired(2));
+    let audit = m24(&[&a, &b, &c]);
+    agreed(&audit);
+    assert_eq!(shape_n(&audit, "10 a capture type"), 2);
+}
+
+/// **11.** `case e of MkE @a d k -> …`: the alternative binds an
+/// existential *type* binder before the runtime fields, and a constructor
+/// application is indexed by its **value** arguments. `k` is value field 1,
+/// not raw binder position 2, and its producer set is the one the
+/// application really puts there.
+#[test]
+fn m24f_an_existential_type_binder_does_not_shift_the_value_field_index() {
+    let alt = json!({
+        "node": "Case", "scrut": var("e"),
+        "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
+        "alts": [{
+            "con": {"kind": "DataAlt", "name": "$main$M$MkE", "occ": "MkE", "tag": 1},
+            "binders": [tyvar_binder("a"), dict_binder("d", TY_SHOW_T), fn_binder("k", TY_FUN1)],
+            "rhs": app(var("k"), var("x"))
+        }]
+    });
+    let m = class_module(
+        "M",
+        vec![
+            (
+                named_dict_top("$fShowT", "$main$M$$fShowT", TY_SHOW_T),
+                show_dict_with("$cshowsPrec"),
+            ),
+            (
+                binder("$cshowsPrec", demand(false, false)),
+                lam(&["p", "v"], var("v")),
+            ),
+            (binder("use", demand(false, false)), alt),
+            (
+                binder("make", demand(false, false)),
+                app(
+                    app(
+                        app(named_gvar("MkE", "$main$M$MkE"), type_arg(TY_T)),
+                        named_gvar("$fShowT", "$main$M$$fShowT"),
+                    ),
+                    lam(&["y"], var("y")),
+                ),
+            ),
+        ],
+        class_ids(vec![(
+            "$main$M$MkE".to_string(),
+            data_con("MkE", "$main$M$MkE", 2),
+        )]),
+    );
+    let h = higher_of(&[&m]);
+    let field = h
+        .boundaries
+        .iter()
+        .find(|b| matches!(&b.slot, Slot::Field { con, .. } if con == "$main$M$MkE"))
+        .expect("a function-typed field of MkE");
+    assert_eq!(
+        field.slot,
+        Slot::Field {
+            con: "$main$M$MkE".into(),
+            index: 1
+        },
+        "the value-field index, not the raw binder position"
+    );
+    assert_eq!(field.producers.len(), 1, "{:?}", field.set);
+    let audit = m24(&[&m]);
+    agreed(&audit);
+    assert!(shape_n(&audit, "11 a value field") >= 1);
+}
+
+/// **12.** Two two-way slots on one function, three call sites with the
+/// tuples (A,X), (B,X), (A,Y): **three** clones. Not the sum of the
+/// per-slot class counts (4) and not their product (4).
+#[test]
+fn m24f_three_call_sites_over_two_two_way_slots_need_three_clones() {
+    let a = class_module(
+        "A",
+        vec![(
+            named_fn_top("f", F_NAME, TY_FUN2, false),
+            typed_lam(
+                &[("k1", Some(TY_FUN1)), ("k2", Some(TY_FUN1)), ("x", None)],
+                app(var("k1"), var("x")),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let call = |occ: &str, k1: Value, k2: Value| {
+        (
+            binder(occ, demand(false, false)),
+            app(app(app(named_gvar("f", F_NAME), k1), k2), var("a")),
+        )
+    };
+    let one = || lam(&["y"], var("y"));
+    let two = || lam(&["y", "z"], var("y"));
+    let b = class_module(
+        "B",
+        vec![
+            call("u1", one(), one()),
+            call("u2", two(), one()),
+            call("u3", one(), two()),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    assert_eq!(param_boundary(&h, "f", 0).classes, 2);
+    assert_eq!(param_boundary(&h, "f", 1).classes, 2);
+    let plan = h.owners.iter().find(|o| o.owner == "f").expect("a plan");
+    assert_eq!(plan.sites, 3);
+    assert_eq!(plan.clones, Some(3), "{:?}", plan.tuples);
+    let audit = m24(&[&a, &b]);
+    agreed(&audit);
+    assert!(shape_n(&audit, "12 an owner with two") >= 1);
+}
+
+/// **13.** The same disagreement at two slots: a clone at a local function
+/// whose every call site is visible, and `Preserve` at an exported one,
+/// whose callers are not.
+#[test]
+fn m24f_disagreeing_closures_clone_at_a_local_and_preserve_at_an_export() {
+    let calls = || {
+        vec![
+            call_hf("useB", lam(&["y"], var("y"))),
+            call_hf("useC", lam(&["y", "z"], var("y"))),
+        ]
+    };
+    for (exported, want_clone) in [(false, true), (true, false)] {
+        let a = class_module(
+            "A",
+            vec![f_takes_a_closure(F_NAME, exported)],
+            class_ids(vec![]),
+        );
+        let b = class_module("B", calls(), class_ids(vec![]));
+        let h = higher_of(&[&a, &b]);
+        let k = param_boundary(&h, "f", 0);
+        assert_eq!(k.classes, 2);
+        if want_clone {
+            assert_eq!(k.verdict, HVerdict::CloneRequired(2));
+        } else {
+            assert!(
+                matches!(k.verdict, HVerdict::Preserve(_)),
+                "{:?}",
+                k.verdict
+            );
+        }
+        let audit = m24(&[&a, &b]);
+        agreed(&audit);
+        let row = if want_clone {
+            "13 several representations"
+        } else {
+            "13a"
+        };
+        assert!(shape_n(&audit, row) >= 1);
+    }
+}
+
+/// **14.** A *return* slot two known functions of different arity reach: no
+/// clone can serve it — a return is not a parameter and its callers do not
+/// choose — so it is a finite closure set, counted and not collapsed.
+#[test]
+fn m24f_a_return_slot_with_two_shapes_is_a_finite_closure_set() {
+    let a = class_module(
+        "A",
+        vec![
+            (
+                named_fn_top("g1", "$main$A$g1", TY_FUN1, false),
+                lam(&["y"], var("y")),
+            ),
+            (
+                named_fn_top("g2", "$main$A$g2", TY_FUN2, false),
+                lam(&["y", "z"], var("y")),
+            ),
+            (
+                named_fn_top("h", "$main$A$h", TY_FUN2, false),
+                lam(&["x"], case2(var("x"), var("g1"), var("g2"))),
+            ),
+            (binder("use", demand(false, false)), app(var("h"), var("a"))),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a]);
+    let ret = h
+        .boundaries
+        .iter()
+        .find(|b| matches!(b.slot, Slot::Return { .. }) && b.owner == "h")
+        .expect("h's return boundary");
+    assert_eq!(ret.producers.len(), 2, "{:?}", ret.set);
+    assert_eq!(ret.classes, 2);
+    assert_eq!(ret.verdict, HVerdict::FiniteClosureSet(2));
+    let audit = m24(&[&a]);
+    agreed(&audit);
+    assert_eq!(shape_n(&audit, "14 a finite closure set"), 1);
+}
+
+/// **15.** A three-argument closure bound to a `cok`-shaped name is a
+/// Parsec continuation to a reader and nothing at all to this analysis: the
+/// shape class is arity and captured types, and **no name is read
+/// anywhere**. An identically shaped closure called `zzz` is in the same
+/// class; a differently shaped one called `cok2` is not.
+#[test]
+fn m24f_a_parsec_shaped_name_buys_a_closure_nothing() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    let named = |occ: &str, params: &[&str]| {
+        (
+            named_fn_top(occ, &format!("$main$B${occ}"), TY_FUN1, false),
+            lam(params, var(params[0])),
+        )
+    };
+    let pass = |occ: &str, k: &str| {
+        (
+            binder(occ, demand(false, false)),
+            app(app(named_gvar("f", F_NAME), var(k)), var("a")),
+        )
+    };
+    let b = class_module(
+        "B",
+        vec![
+            named("cok", &["p", "q", "r"]),
+            named("zzz", &["p", "q", "r"]),
+            pass("u1", "cok"),
+            pass("u2", "zzz"),
+        ],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.producers.len(), 2);
+    assert_eq!(k.classes, 1, "the name is never part of the shape class");
+    assert_eq!(k.verdict, HVerdict::TypeShapeUniform);
+    let audit = m24(&[&a, &b]);
+    agreed(&audit);
+
+    // …and a differently shaped `cok2` splits the class, on its shape.
+    let c = class_module(
+        "B",
+        vec![
+            named("cok", &["p", "q", "r"]),
+            named("cok2", &["p", "q"]),
+            pass("u1", "cok"),
+            pass("u2", "cok2"),
+        ],
+        class_ids(vec![]),
+    );
+    let h2 = higher_of(&[&a, &c]);
+    assert_eq!(param_boundary(&h2, "f", 0).classes, 2);
+    agreed(&m24(&[&a, &c]));
+}
+
+/// The verifier has to **bite**: a claim that names a target this walk does
+/// not reach is refused, and refused as a disagreement (`D`), not as a
+/// coverage loss.
+#[test]
+fn m24f_the_verifier_refuses_a_claim_that_names_the_wrong_target() {
+    let mut pairs = two_show_instances();
+    pairs.push(dict_user("$main$A$f", false));
+    pairs.push((
+        binder("use", demand(false, false)),
+        app(
+            app(var("f"), named_gvar("$fShowT", "$main$A$$fShowT")),
+            var("y"),
+        ),
+    ));
+    let a = class_module("A", pairs, class_ids(vec![]));
+    let mods = [&a];
+    let (mut claims, _f, _h) = crate::m24_claims::claims(&mods);
+    let exact = claims
+        .iter_mut()
+        .find(|c| c.kind == verify_m24::ClaimKind::SiteExact)
+        .expect("an Exact claim");
+    exact.target = Some("A#0 $main$A$$cshowsPrecU".into());
+    let audit = verify_m24::verify(&mods, &claims);
+    assert_eq!(audit.real_disagreements(), 1);
+    assert_eq!(audit.coverage_refusals(), 0);
+    assert_eq!(
+        audit.disagreements[0].refusal.why,
+        verify_m24::X_TARGET_DIFFERS
+    );
+}
+
+/// …and a clone plan whose count is not the number of distinct call-site
+/// tuples is refused the same way.
+#[test]
+fn m24f_the_verifier_refuses_a_clone_plan_with_the_wrong_count() {
+    let mut pairs = two_show_instances();
+    pairs.push(dict_user("$main$A$f", false));
+    pairs.push((
+        binder("use", demand(false, false)),
+        app(
+            app(
+                app(var("f"), named_gvar("$fShowT", "$main$A$$fShowT")),
+                var("a"),
+            ),
+            app(
+                app(var("f"), named_gvar("$fShowU", "$main$A$$fShowU")),
+                var("b"),
+            ),
+        ),
+    ));
+    let a = class_module("A", pairs, class_ids(vec![]));
+    let mods = [&a];
+    let (mut claims, _f, _h) = crate::m24_claims::claims(&mods);
+    let plan = claims
+        .iter_mut()
+        .find(|c| c.kind == verify_m24::ClaimKind::DictClonePlan)
+        .expect("a dictionary clone plan");
+    plan.n = 1;
+    let audit = verify_m24::verify(&mods, &claims);
+    assert_eq!(audit.real_disagreements(), 1);
+    assert_eq!(
+        audit.disagreements[0].refusal.why,
+        verify_m24::X_CLONES_DIFFER
+    );
+}

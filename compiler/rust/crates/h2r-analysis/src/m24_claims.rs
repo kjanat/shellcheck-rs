@@ -84,7 +84,9 @@ pub fn claims(modules: &[&Module]) -> (Vec<Claim>, DictFlow, Higher) {
     for (key, e) in dp.values.keys().zip(f.values.iter()) {
         if !matches!(
             e.verdict,
-            DVerdict::Erasable | DVerdict::ErasableWithClone(_) | DVerdict::ErasableWithObligation(_)
+            DVerdict::Erasable
+                | DVerdict::ErasableWithClone(_)
+                | DVerdict::ErasableWithObligation(_)
         ) {
             continue;
         }
