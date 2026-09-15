@@ -5806,6 +5806,7 @@ The tuple component is `class()` now. `short()` survives as `tuples_short`,
 display only, and the correction is visible in it: `ShellCheck.Fixer`
 `$srealignColumn` has two call sites whose tuples both render as
 `arity 1, 1 capture(s), arity 1, 1 capture(s)` and whose classes are
+(type names abbreviated to their last component)
 
 ```
 arity=1;captures=[!ShellCheck.Fixer#1181!F(Many,faYH6,Position)], arity=1;captures=[!ShellCheck.Fixer#1170!C(Ranged,faYH6)]
@@ -5839,12 +5840,12 @@ independently.
 | `ShellCheck.Parser` | `readAmbiguous` | 1 | 1 | **2** |
 | **total** | | **21** | **53** | **68** |
 
-Six of the twenty-one plans move; the refusals do not (66 of 87 owners still
-refuse rather than guess), the per-parameter class cardinality is still 509
-and is still evidence rather than a count, and the eight plans with a
-set-valued component are still lower bounds. `h2r verify-m24` re-derives all
-21 plans from its own walk with **0 disagreements**, so 68 is two
-independent counts and not one.
+Six of the thirteen owning functions move and seven do not; the refusals do
+not move either (66 of 87 owners still refuse rather than guess), the
+per-parameter class cardinality is still 509 and is still evidence rather
+than a count, and the eight plans with a set-valued component are still
+lower bounds. `h2r verify-m24` re-derives all 21 plans from its own walk
+with **0 disagreements**, so 68 is two independent counts and not one.
 
 #### 3 — a claim has to carry what the check needs
 
