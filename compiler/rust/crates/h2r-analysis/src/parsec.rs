@@ -3645,12 +3645,24 @@ pub fn account(census: &Census, analyses: &[Analysis<'_>]) -> Accounting {
 // (`tuples::R_PARSEC_CONT`). This asks one further question per edge, and it
 // asks [`crate::higher`] rather than re-deriving anything: the continuation
 // parameter is a function-valued slot of the closed world, so the M2.4d
-// fixpoint already knows what reaches it. When that boundary is one of the
-// three *enumerated* verdicts and **every** producer is, by the region
-// recogniser's own classifier ([`Analysis::cont_source`]), a region
-// continuation or a nested region — that is, a closure of known role — the
-// edge gains a structural role target: exactly one producer is an exact
-// target ([`P_HO_EXACT`]), several a finite one ([`P_HO_FINITE`]).
+// fixpoint already knows what reaches it. The question this asks is
+// **target enumeration**, and its condition is exactly that: the boundary's
+// producer set is enumerated ([`crate::higher::Boundary::enumerated`]) and
+// **every** producer is, by the region recogniser's own classifier
+// ([`Analysis::cont_source`]), a region continuation or a nested region —
+// that is, a closure of known role. Then the edge gains a structural role
+// target: exactly one producer is an exact target ([`P_HO_EXACT`]), several
+// a finite one ([`P_HO_FINITE`]).
+//
+// **M2.4h.** The condition used to be the *verdict* — `ExactClosure |
+// TypeShapeUniform | FiniteClosureSet` admitted, `CloneRequired` refused.
+// That confuses two questions M2.4d itself keeps apart
+// ([`crate::higher::H11_SEPARATE`]): whether the producers are enumerated,
+// and whether one representation can serve them. A `CloneRequired` boundary
+// is enumerated — that is why its clones could be counted — and its
+// continuation-target set is just as finite as an `ExactClosure` one. The
+// representation verdict is now recorded beside every edge as evidence and
+// gates nothing.
 //
 // Nothing here recognises a region, a role or a slot. No name is read.
 // Every other edge keeps its reason, refined to say which of the closure
@@ -3666,6 +3678,10 @@ pub const P_HO_FINITE: &str = "P-HO-FINITE";
 /// The continuation parameter has no function-valued boundary in M2.4d's
 /// closed world, so there is nothing to ask.
 pub const P_NO_BOUNDARY: &str = "no-boundary";
+/// The boundary exists but its producer set is not enumerated, so no
+/// continuation-target set can be finite. The representation verdict is
+/// reported beside it and is not the reason (M2.4h).
+pub const P_NOT_ENUMERATED: &str = "boundary-producer-set-is-not-enumerated";
 /// The boundary is enumerated, but at least one producer is not a region
 /// continuation: the closure graph closes the *representation* without
 /// closing the *role*.
@@ -3808,53 +3824,78 @@ pub fn residual_edges(
             };
             r.evidence
                 .push(format!("boundary {} at node {}", bd.name, bd.node));
-            match &bd.verdict {
-                Verdict::ExactClosure
-                | Verdict::TypeShapeUniform
-                | Verdict::FiniteClosureSet(_) => {
-                    let mut roles: Vec<String> = Vec::new();
-                    let mut opaque: Option<String> = None;
-                    for p in &bd.producers {
-                        match producer_role(analyses, &p.module, p.node) {
-                            Some(role) => roles.push(format!("{} = {role}", p.key)),
-                            None => {
-                                opaque = Some(format!("{} ({})", p.key, p.kind.name()));
-                                break;
-                            }
-                        }
+            // The representation verdict, recorded beside the enumeration
+            // question and gating nothing (M2.4h).
+            r.evidence.push(format!(
+                "representation verdict {}",
+                match &bd.verdict {
+                    Verdict::Preserve(why) | Verdict::Unresolved(why) => {
+                        format!(
+                            "{}({})",
+                            bd.verdict.label(),
+                            crate::higher::reason_head(why)
+                        )
                     }
-                    match opaque {
-                        Some(why) => {
-                            r.status = P_NOT_A_CONT.to_string();
-                            r.evidence.push(format!("producer {why}"));
-                        }
-                        None if bd.producers.is_empty() => {
-                            r.status = format!("boundary-{}", bd.verdict.label());
-                        }
-                        None => {
-                            let exact = bd.producers.len() == 1;
-                            r.rule = Some(if exact { P_HO_EXACT } else { P_HO_FINITE });
-                            r.status = if exact {
-                                format!("{P_HO_EXACT} ({})", bd.verdict.label())
-                            } else {
-                                format!(
-                                    "{P_HO_FINITE} ({}, {} producers)",
-                                    bd.verdict.label(),
-                                    bd.producers.len()
-                                )
-                            };
-                            r.evidence.extend(roles);
-                        }
+                    Verdict::CloneRequired(n) | Verdict::FiniteClosureSet(n) => {
+                        format!("{}({n})", bd.verdict.label())
+                    }
+                    v => v.label().to_string(),
+                }
+            ));
+            if !bd.enumerated {
+                r.status = match &bd.verdict {
+                    Verdict::Preserve(why) => {
+                        format!(
+                            "{P_NOT_ENUMERATED} (Preserve: {})",
+                            crate::higher::reason_head(why)
+                        )
+                    }
+                    Verdict::Unresolved(why) => {
+                        format!(
+                            "{P_NOT_ENUMERATED} (Unresolved: {})",
+                            crate::higher::reason_head(why)
+                        )
+                    }
+                    v => format!("{P_NOT_ENUMERATED} ({})", v.label()),
+                };
+                out.push(r);
+                continue;
+            }
+            // Enumerated: does every producer have a known continuation
+            // role? That, and nothing about representation, is what makes
+            // the continuation-target set finite.
+            let mut roles: Vec<String> = Vec::new();
+            let mut opaque: Option<String> = None;
+            for pr in &bd.producers {
+                match producer_role(analyses, &pr.module, pr.node) {
+                    Some(role) => roles.push(format!("{} = {role}", pr.key)),
+                    None => {
+                        opaque = Some(format!("{} ({})", pr.key, pr.kind.name()));
+                        break;
                     }
                 }
-                Verdict::Preserve(why) => {
-                    r.status = format!("boundary-Preserve({})", crate::higher::reason_head(why));
+            }
+            match opaque {
+                Some(why) => {
+                    r.status = P_NOT_A_CONT.to_string();
+                    r.evidence.push(format!("producer {why}"));
                 }
-                Verdict::Unresolved(why) => {
-                    r.status = format!("boundary-Unresolved({})", crate::higher::reason_head(why));
+                None if bd.producers.is_empty() => {
+                    r.status = format!("{P_NOT_ENUMERATED} (no producer)");
                 }
-                Verdict::CloneRequired(n) => {
-                    r.status = format!("boundary-CloneRequired({n})");
+                None => {
+                    let exact = bd.producers.len() == 1;
+                    r.rule = Some(if exact { P_HO_EXACT } else { P_HO_FINITE });
+                    r.status = if exact {
+                        format!("{P_HO_EXACT} ({})", bd.verdict.label())
+                    } else {
+                        format!(
+                            "{P_HO_FINITE} ({}, {} producers)",
+                            bd.verdict.label(),
+                            bd.producers.len()
+                        )
+                    };
+                    r.evidence.extend(roles);
                 }
             }
             out.push(r);

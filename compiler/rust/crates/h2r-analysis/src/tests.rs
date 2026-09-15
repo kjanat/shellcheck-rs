@@ -6092,7 +6092,10 @@ fn a_case_on_an_unevaluated_scrutinee_is_not_erasable() {
         e.verdict
     );
     match &e.verdict {
-        Verdict::ErasableWithObligation(o) => assert_eq!(o.module, "B"),
+        Verdict::ErasableWithObligation(obs) => {
+            assert_eq!(obs.len(), 1, "{obs:?}");
+            assert_eq!(obs[0].module, "B");
+        }
         Verdict::Preserve(r) => assert_eq!(r, dictflow::R_FORCE),
         other => panic!("expected an obligation or Preserve(force), got {other:?}"),
     }
@@ -6208,7 +6211,10 @@ fn a_strict_parameter_with_one_forced_producer_keeps_the_force() {
     assert_eq!(p.totality, Totality::MustPreserveForce);
     let e = &f.param_erasure[f.params.iter().position(|x| x.owner == "f").unwrap()];
     match &e.verdict {
-        Verdict::ErasableWithObligation(o) => assert_eq!(o.module, "C"),
+        Verdict::ErasableWithObligation(obs) => {
+            assert_eq!(obs.len(), 1, "{obs:?}");
+            assert_eq!(obs[0].module, "C");
+        }
         Verdict::Preserve(r) => assert_eq!(r, dictflow::R_FORCE),
         other => panic!("expected an obligation or Preserve(force), got {other:?}"),
     }
@@ -8271,4 +8277,456 @@ fn m24g_a_refused_claim_is_never_reported_as_proven() {
         let view = ClassopView::of(&m, cs);
         assert_eq!(view.verified_target, Verified::Yes, "the real audit agrees");
     }
+}
+
+//------------------------------------------------------------------------------
+// M2.4h — the four blockers, each with the shape that exhibits it
+//------------------------------------------------------------------------------
+
+/// `case y of { P d -> <rhs> }` for a program constructor `P` of one field.
+fn case_one_field(con: &str, field: &str, rhs: Value) -> Value {
+    json!({
+        "node": "Case", "scrut": app(gvar("g"), var("y")),
+        "binder": binder("wild", demand(false, false)), "type": "R", "ty": TY_R,
+        "alts": [{
+            "con": {"kind": "DataAlt", "name": format!("$main$M${con}"), "occ": con, "tag": 1},
+            "binders": [binder(field, demand(false, false))],
+            "rhs": rhs
+        }]
+    })
+}
+
+/// **Blocker 1a.** A `case` on the alternative binder of a **lazy** field
+/// is a force: matching the outer constructor `P` did not evaluate `d`, so
+/// deleting the dictionary computation would delete that evaluation.
+/// Before M2.4h every `AltBinder` counted as already evaluated and this
+/// came out `ProvenTotal`.
+#[test]
+fn an_alt_binder_of_a_lazy_field_is_not_already_evaluated() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![(
+            binder("use", demand(false, false)),
+            case_one_field(
+                "P",
+                "d",
+                app(
+                    app(
+                        named_gvar("f", "$main$A$f"),
+                        case_both_alts(var("d"), named_gvar("$fShowT", "$main$A$$fShowT")),
+                    ),
+                    var("y"),
+                ),
+            ),
+        )],
+        class_ids(vec![(
+            "$main$M$P".to_string(),
+            data_con("P", "$main$M$P", 1),
+        )]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    let p = flow_param(&f, "f");
+    assert_eq!(p.set.keys().len(), 1, "identity is unchanged: {:?}", p.set);
+    assert_eq!(
+        p.totality,
+        Totality::MustPreserveForce,
+        "a lazy field's binder is a thunk, so the case on it is a force"
+    );
+    f.accounting().check().unwrap();
+}
+
+/// …and the same shape with the field made **strict** by GHC is
+/// `ProvenTotal`: the correction narrows the rule, it does not delete it.
+#[test]
+fn an_alt_binder_of_a_strict_field_is_already_evaluated() {
+    let a = wp_module_a(vec![]);
+    let mut con = data_con("P", "$main$M$P", 1);
+    con["dataCon"]["strictFields"] = json!([true]);
+    let b = class_module(
+        "B",
+        vec![(
+            binder("use", demand(false, false)),
+            case_one_field(
+                "P",
+                "d",
+                app(
+                    app(
+                        named_gvar("f", "$main$A$f"),
+                        case_both_alts(var("d"), named_gvar("$fShowT", "$main$A$$fShowT")),
+                    ),
+                    var("y"),
+                ),
+            ),
+        )],
+        class_ids(vec![("$main$M$P".to_string(), con)]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    assert_eq!(flow_param(&f, "f").totality, Totality::ProvenTotal);
+    f.accounting().check().unwrap();
+}
+
+/// **Blocker 1b.** Two call sites, each forcing a *different* scrutinee,
+/// leave **two** obligations on the parameter. Before M2.4h the join kept
+/// the lexicographically smaller one and the other force was lost.
+#[test]
+fn every_force_obligation_survives_the_join() {
+    let a = wp_module_a(vec![]);
+    let site = |occ: &str, scrut: Value| {
+        (
+            binder(occ, demand(false, false)),
+            app(
+                app(
+                    named_gvar("f", "$main$A$f"),
+                    case_both_alts(scrut, named_gvar("$fShowT", "$main$A$$fShowT")),
+                ),
+                var("y"),
+            ),
+        )
+    };
+    let b = class_module(
+        "B",
+        vec![
+            site("u1", app(gvar("g"), var("y"))),
+            site("u2", app(gvar("g"), var("z"))),
+        ],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    let p = flow_param(&f, "f");
+    assert_eq!(p.totality, Totality::MustPreserveForce);
+    assert_eq!(
+        p.tot.obligations.len(),
+        2,
+        "both forces must survive the join: {:?}",
+        p.tot.obligations
+    );
+    let e = &f.param_erasure[f.params.iter().position(|x| x.owner == "f").unwrap()];
+    match &e.verdict {
+        Verdict::ErasableWithObligation(obs) => assert_eq!(obs.len(), 2, "{obs:?}"),
+        Verdict::Preserve(r) => assert_eq!(r, dictflow::R_FORCE),
+        other => panic!("expected an obligation set or Preserve(force), got {other:?}"),
+    }
+    assert_eq!(f.accounting().named_forces, e.obligations.len());
+    f.accounting().check().unwrap();
+}
+
+/// **Blocker 1c.** `(case x of A -> $fShowT; B -> $fShowU) d` — a `case` in
+/// head position with an outer value argument. Peeling the head and
+/// walking into the alternatives answers about an expression `d` was
+/// dropped from, and would have reported the two-instance set `{T, U}` for
+/// an expression whose value is neither. The walk refuses instead.
+#[test]
+fn a_case_head_with_outer_arguments_is_refused_not_peeled() {
+    let a = wp_module_a(vec![]);
+    let applied = app(
+        case_alts(
+            app(gvar("g"), var("y")),
+            &[
+                ("A", vec![], named_gvar("$fShowT", "$main$A$$fShowT")),
+                ("B", vec![], named_gvar("$fShowU", "$main$A$$fShowU")),
+            ],
+        ),
+        named_gvar("$fShowT", "$main$A$$fShowT"),
+    );
+    let b = class_module(
+        "B",
+        vec![(
+            binder("use", demand(false, false)),
+            app(app(named_gvar("f", "$main$A$f"), applied), var("y")),
+        )],
+        class_ids(vec![]),
+    );
+    let f = DictFlow::of_modules([&a, &b]);
+    let p = flow_param(&f, "f");
+    match &p.set {
+        DictSet::Top(r) => assert_eq!(r, dictflow::T_APPLIED_CASE),
+        other => panic!("the dropped argument must refuse the set, got {other:?}"),
+    }
+    assert_ne!(p.totality, Totality::ProvenTotal);
+    f.accounting().check().unwrap();
+}
+
+/// **Blocker 2.** Two closures of the **same arity and the same number of
+/// captures** whose capture TYPES differ are two representations, so the
+/// owner needs two clones. `Shape::short()` cannot tell them apart and
+/// planning with it said one.
+#[test]
+fn clone_tuples_use_the_full_shape_class_not_the_short_rendering() {
+    let a = class_module(
+        "A",
+        vec![f_takes_a_closure(F_NAME, false)],
+        class_ids(vec![]),
+    );
+    // `use<n> = \c -> f (\y -> c) a`, with `c` typed T in one and R in the
+    // other: arity 1 and one capture on both sides, different classes.
+    let site = |occ: &str, ty: u32| {
+        (
+            binder(occ, demand(false, false)),
+            typed_lam(
+                &[("c", Some(ty))],
+                app(
+                    app(named_gvar("f", F_NAME), lam(&["y"], var("c"))),
+                    var("a"),
+                ),
+            ),
+        )
+    };
+    let b = class_module(
+        "B",
+        vec![site("u1", TY_T), site("u2", TY_R)],
+        class_ids(vec![]),
+    );
+    let h = higher_of(&[&a, &b]);
+    let k = param_boundary(&h, "f", 0);
+    assert_eq!(k.classes, 2, "{:?}", k.class_keys());
+    let plan = h
+        .owners
+        .iter()
+        .find(|o| o.owner == "f")
+        .expect("no clone plan for f");
+    assert_eq!(plan.sites, 2);
+    assert_eq!(
+        plan.clones,
+        Some(2),
+        "the two capture types are two representations: {:?}",
+        plan.tuples
+    );
+    // The short rendering really cannot tell them apart — which is why it
+    // is a rendering and not an identity.
+    assert_eq!(plan.tuples_short.len(), 2);
+    assert_eq!(plan.tuples_short[0], plan.tuples_short[1]);
+    assert_ne!(plan.tuples[0], plan.tuples[1]);
+    h.accounting().check().unwrap();
+}
+
+/// **Blocker 3, the clone plan.** A claim whose tuple SET is corrupted
+/// while its cardinality is preserved must be refused. Before M2.4h the
+/// check was `tuples == n` and this passed.
+#[test]
+fn a_clone_plan_claim_with_swapped_tuples_is_refused() {
+    const G2: &str = "$main$A$g2";
+    let a = class_module(
+        "A",
+        vec![(
+            named_fn_top("g2", G2, TY_FUN2, false),
+            typed_lam(
+                &[("k1", Some(TY_FUN1)), ("k2", Some(TY_FUN1)), ("x", None)],
+                app(var("k1"), var("x")),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let call = |occ: &str, k1: Value, k2: Value| {
+        (
+            binder(occ, demand(false, false)),
+            app(app(app(named_gvar("g2", G2), k1), k2), var("a")),
+        )
+    };
+    let b = class_module(
+        "B",
+        vec![
+            call("u1", lam(&["y"], var("y")), lam(&["y", "z"], var("y"))),
+            call("u2", lam(&["r", "s"], var("r")), lam(&["t"], var("t"))),
+        ],
+        class_ids(vec![]),
+    );
+    let mods: Vec<&Module> = vec![&a, &b];
+    let (claims, _f, _h) = crate::m24_claims::claims(&mods);
+    // Honest claims re-derive.
+    agreed(&verify_m24::verify(&mods, &claims));
+
+    let i = claims
+        .iter()
+        .position(|c| c.kind == verify_m24::ClaimKind::ClosureClonePlan)
+        .expect("a closure clone plan claim");
+    assert_eq!(claims[i].n, 2);
+    assert_eq!(claims[i].tuples.len(), 2);
+
+    assert_eq!(claims[i].groups.len(), 2);
+
+    // Reassign the call sites: still two entries, still two planned
+    // clones, but a different partition of the same sites.
+    let mut corrupt = claims.clone();
+    corrupt[i].groups[1] = corrupt[i].groups[0].clone();
+    let audit = verify_m24::verify(&mods, &corrupt);
+    assert_eq!(audit.checked, claims.len());
+    let d = audit
+        .disagreements
+        .iter()
+        .find(|d| d.claim.kind == verify_m24::ClaimKind::ClosureClonePlan)
+        .expect("the corrupted plan must be refused");
+    assert_eq!(d.refusal.why, verify_m24::X_GROUPS_DIFFER);
+    assert_eq!(audit.real_disagreements(), 1);
+    assert!(
+        !verify_m24::is_coverage_refusal(d.refusal.why),
+        "a D, not a C"
+    );
+}
+
+/// **Blocker 3, the dictionary plan.** A dictionary plan's tuple
+/// components are identities, so the tuple SET itself is compared: swapping
+/// one tuple for another of the same cardinality is refused.
+#[test]
+fn a_dictionary_clone_plan_claim_with_swapped_tuples_is_refused() {
+    let f2 = (
+        named_top("f2", "$main$A$f2", true),
+        dict_lam(
+            &[("$dShow1", TY_SHOW_T), ("$dShow2", TY_SHOW_T)],
+            lam(
+                &["x"],
+                app(
+                    app(named_gvar("showsPrec", SHOWS_PREC), var("$dShow1")),
+                    var("x"),
+                ),
+            ),
+        ),
+    );
+    let a = wp_module_a(vec![f2]);
+    let call = |occ: &str, d1: &str, d2: &str| {
+        (
+            binder(occ, demand(false, false)),
+            app(
+                app(
+                    app(
+                        named_gvar("f2", "$main$A$f2"),
+                        named_gvar(d1, &format!("$main$A$${d1}")),
+                    ),
+                    named_gvar(d2, &format!("$main$A$${d2}")),
+                ),
+                var("y"),
+            ),
+        )
+    };
+    let b = class_module(
+        "B",
+        vec![
+            call("useTT", "fShowT", "fShowT"),
+            call("useUU", "fShowU", "fShowU"),
+        ],
+        class_ids(vec![]),
+    );
+    let mods: Vec<&Module> = vec![&a, &b];
+    let (claims, _f, _h) = crate::m24_claims::claims(&mods);
+    agreed(&verify_m24::verify(&mods, &claims));
+    let i = claims
+        .iter()
+        .position(|c| c.kind == verify_m24::ClaimKind::DictClonePlan)
+        .expect("a dictionary clone plan claim");
+    assert_eq!(claims[i].n, 2);
+    assert_eq!(claims[i].tuples.len(), 2);
+    let mut corrupt = claims.clone();
+    // The same two tuples, but one replaced by a copy of the other: the
+    // cardinality the claim carries is untouched.
+    corrupt[i].tuples[1] = corrupt[i].tuples[0].clone();
+    let audit = verify_m24::verify(&mods, &corrupt);
+    let d = audit
+        .disagreements
+        .iter()
+        .find(|d| d.claim.kind == verify_m24::ClaimKind::DictClonePlan)
+        .expect("the corrupted plan must be refused");
+    assert_eq!(d.refusal.why, verify_m24::X_TUPLES_DIFFER);
+    assert!(
+        !verify_m24::is_coverage_refusal(d.refusal.why),
+        "a D, not a C"
+    );
+}
+
+/// **Blocker 3, the obligation.** An `ErasableWithObligation` claim whose
+/// obligation ADDRESS is changed — the count preserved — must be refused.
+/// Before M2.4h the claim carried no obligation at all and the check
+/// compared only the verdict label.
+#[test]
+fn an_obligation_claim_with_a_changed_address_is_refused() {
+    let a = wp_module_a(vec![]);
+    let b = class_module(
+        "B",
+        vec![call_f(
+            "use",
+            case_both_alts(
+                app(gvar("g"), var("y")),
+                named_gvar("$fShowT", "$main$A$$fShowT"),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let mods: Vec<&Module> = vec![&a, &b];
+    let (claims, _f, _h) = crate::m24_claims::claims(&mods);
+    agreed(&verify_m24::verify(&mods, &claims));
+
+    let Some(i) = claims
+        .iter()
+        .position(|c| c.verdict == "ErasableWithObligation")
+    else {
+        // The fixture reached `Preserve(force)` instead; then there is no
+        // obligation claim to corrupt and nothing to assert here.
+        return;
+    };
+    assert_eq!(claims[i].obligations.len(), 1);
+    let mut corrupt = claims.clone();
+    corrupt[i].obligations = vec![verify_m24::obligation_address("B", 9999, 9998)];
+    let audit = verify_m24::verify(&mods, &corrupt);
+    let d = audit
+        .disagreements
+        .iter()
+        .find(|d| d.claim.kind == claims[i].kind)
+        .expect("the corrupted obligation must be refused");
+    assert_eq!(d.refusal.why, verify_m24::X_OBLIGATIONS_DIFFER);
+    assert!(
+        !verify_m24::is_coverage_refusal(d.refusal.why),
+        "a D, not a C"
+    );
+}
+
+/// **Blocker 3, the view.** `[verified: yes]` may not be printed for a
+/// claim that carried no content to check.
+#[test]
+fn a_contentless_clone_plan_claim_is_never_marked_verified() {
+    const G2: &str = "$main$A$g2";
+    let a = class_module(
+        "A",
+        vec![(
+            named_fn_top("g2", G2, TY_FUN2, false),
+            typed_lam(
+                &[("k1", Some(TY_FUN1)), ("k2", Some(TY_FUN1)), ("x", None)],
+                app(var("k1"), var("x")),
+            ),
+        )],
+        class_ids(vec![]),
+    );
+    let call = |occ: &str, k1: Value, k2: Value| {
+        (
+            binder(occ, demand(false, false)),
+            app(app(app(named_gvar("g2", G2), k1), k2), var("a")),
+        )
+    };
+    let b = class_module(
+        "B",
+        vec![
+            call("u1", lam(&["y"], var("y")), lam(&["y", "z"], var("y"))),
+            call("u2", lam(&["r", "s"], var("r")), lam(&["t"], var("t"))),
+        ],
+        class_ids(vec![]),
+    );
+    let mods: Vec<&Module> = vec![&a, &b];
+    let (claims, _f, _h) = crate::m24_claims::claims(&mods);
+    let audit = verify_m24::verify(&mods, &claims);
+    let i = claims
+        .iter()
+        .position(|c| c.kind == verify_m24::ClaimKind::ClosureClonePlan)
+        .expect("a closure clone plan claim");
+    let honest = m24::Verdicts::of(&claims, &audit);
+    let crate::verify_m24::Subject::ClosureOwner { module, owner } = &claims[i].subject else {
+        panic!("not a closure owner claim");
+    };
+    assert_eq!(honest.closure_plan(module, *owner), Verified::Yes);
+    // Strip the content, keep the count: no longer verifiable.
+    let mut stripped = claims.clone();
+    stripped[i].tuples.clear();
+    let v = m24::Verdicts::of(&stripped, &audit);
+    assert!(matches!(
+        v.closure_plan(module, *owner),
+        Verified::Disagreed(_)
+    ));
+    assert!(!v.closure_plan(module, *owner).proven());
 }

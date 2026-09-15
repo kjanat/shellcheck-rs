@@ -163,8 +163,9 @@ pub const E5_PRESERVED_DISPATCH: &str = "E5-PRESERVED-DISPATCH";
 /// values: `ProvenTotal`. Evidence: structural saturation (2).
 pub const E6_TOTALITY_VALUE: &str = "E6-TOTALITY-VALUE";
 /// **A `case` is a force.** A `case` whose scrutinee is not itself already
-/// evaluated — a value, or a variable bound by an enclosing `case`, or a
-/// variable GHC marks strict that an enclosing `case` on it dominates — is
+/// evaluated — a value, the scrutinee binder of an enclosing `case`, the
+/// alternative binder of a **GHC-strict** field, or a variable GHC marks
+/// strict that an enclosing `case` on it dominates — is
 /// `MustPreserveForce`, **even when every alternative yields the same
 /// dictionary**. [`eval_nested`] is a MAY-analysis over the alternatives
 /// and says nothing about the scrutinee; bounded dictionary identity is
@@ -186,7 +187,8 @@ pub const E6_TOTALITY_UNKNOWN: &str = "E6-TOTALITY-UNKNOWN";
 /// `MustPreserveForce` dictionary may still be erased only if the force it
 /// carries can be named — the `case` node and the scrutinee that must
 /// still be evaluated — and then the verdict is
-/// [`Verdict::ErasableWithObligation`], never a silent `Erasable`. Without
+/// [`Verdict::ErasableWithObligation`] carrying **every** such force, not
+/// one of them (M2.4h), never a silent `Erasable`. Without
 /// an expressible obligation the verdict is `Preserve(force)`. Strictness
 /// at entry ([`Param::known_strict`]) is **not** permission to drop the
 /// force: if the parameter disappears the entry force must still happen
@@ -325,6 +327,13 @@ pub const T_CON_FIELD: &str = "dictionary-read-from-a-non-dictionary-constructor
 pub const T_UNKNOWN_CALL: &str = "dictionary-returned-by-a-call-the-dump-cannot-see";
 pub const T_HIGHER_ORDER: &str = "dictionary-from-a-higher-order-parameter";
 pub const T_NOT_A_DICT_EXPR: &str = "dictionary-expression-is-not-a-dictionary";
+/// **M2.4h.** A `case`/`let` in head position with outer value arguments —
+/// `(case x of A -> f; B -> g) d`. Peeling the head and walking into the
+/// alternatives drops `d`, which is a different expression. The arguments
+/// cannot be pushed through without building Core, and this compiler never
+/// mutates Core, so the walk refuses instead of answering about the wrong
+/// expression.
+pub const T_APPLIED_CASE: &str = "case-or-let-head-with-outer-value-arguments";
 pub const T_DISPATCH_TAINTED: &str = "dispatched-from-a-site-with-an-unknown-dictionary";
 pub const T_METHOD_FIELD_PARTIAL: &str = "method-field-is-a-partial-application";
 pub const T_RECURSIVE: &str = "recursive-dictionary";
@@ -447,7 +456,7 @@ impl Totality {
 /// The force that erasure would delete, named: the `case` node and the
 /// scrutinee expression that must still be evaluated somewhere if the
 /// dictionary itself goes away ([`E6_TOTALITY_OBLIGATION`]).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct ForceObligation {
     pub module: String,
     /// The node whose evaluation erasure would delete.
@@ -456,53 +465,54 @@ pub struct ForceObligation {
     pub what: ExprId,
 }
 
-/// A totality level together with the obligation that witnesses it.
+/// A totality level together with **every** obligation that witnesses it.
+///
+/// **M2.4h.** This was an `Option<ForceObligation>` and the join kept the
+/// lexicographically smallest witness, so every additional required force
+/// was silently lost: a dictionary whose computation stands behind two
+/// distinct `case`s was erased against one of them. An obligation is not a
+/// witness to be chosen, it is a proof debt to be discharged, so a set of
+/// them is a **set** — kept whole, ordered deterministically by
+/// [`ForceObligation`]'s own `Ord`, and carried whole into the verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tot {
     pub level: Totality,
-    pub obligation: Option<ForceObligation>,
+    pub obligations: BTreeSet<ForceObligation>,
 }
 
 impl Tot {
     pub fn total() -> Tot {
         Tot {
             level: Totality::ProvenTotal,
-            obligation: None,
+            obligations: BTreeSet::new(),
         }
     }
     pub fn unknown() -> Tot {
         Tot {
             level: Totality::Unknown,
-            obligation: None,
+            obligations: BTreeSet::new(),
         }
     }
     pub fn force(module: &str, at: ExprId, what: ExprId) -> Tot {
         Tot {
             level: Totality::MustPreserveForce,
-            obligation: Some(ForceObligation {
+            obligations: BTreeSet::from([ForceObligation {
                 module: module.to_string(),
                 at,
                 what,
-            }),
+            }]),
         }
     }
-    /// Monotone join on the chain. The obligation kept is the
-    /// lexicographically smallest witness, so the result never depends on
-    /// visit order.
+    /// Monotone join on the chain, and **union** on the obligations: every
+    /// force that any joined path requires is kept, so the result never
+    /// depends on visit order and never loses a required force (M2.4h).
     pub fn join(&mut self, other: &Tot) {
         self.level = self.level.max(other.level);
-        let keep = match (&self.obligation, &other.obligation) {
-            (Some(a), Some(b)) => {
-                if (a.module.as_str(), a.at, a.what) <= (b.module.as_str(), b.at, b.what) {
-                    Some(a.clone())
-                } else {
-                    Some(b.clone())
-                }
-            }
-            (Some(a), None) => Some(a.clone()),
-            (None, b) => b.clone(),
-        };
-        self.obligation = keep;
+        self.obligations.extend(other.obligations.iter().cloned());
+    }
+    /// The obligations, in their deterministic order.
+    pub fn obligation_list(&self) -> Vec<ForceObligation> {
+        self.obligations.iter().cloned().collect()
     }
 }
 
@@ -553,6 +563,16 @@ pub struct Program<'m> {
     top_of_rhs: Vec<HashMap<ExprId, BinderId>>,
     case_scrut: Vec<HashMap<BinderId, ExprId>>,
     alt_field: Vec<HashMap<BinderId, (ExprId, &'static ClassSpec, usize)>>,
+    /// Every alternative binder in the program, mapped to whether the
+    /// constructor field it binds is **GHC-strict**
+    /// ([`E6_TOTALITY_CASE`], M2.4h). Matching an outer constructor forces
+    /// the constructor, not its lazy fields, so an alternative binder of a
+    /// lazy field names an unevaluated thunk. Absent — and therefore not
+    /// evaluated — whenever the constructor is not in the dump, or its
+    /// source-field strictness vector and its representation arity
+    /// disagree (unpacking), because then no field can be identified with
+    /// certainty and the walk refuses rather than guesses.
+    alt_strict: Vec<HashMap<BinderId, bool>>,
     /// A dictionary-constructor application node → its dictionary key.
     con_key: Vec<HashMap<ExprId, String>>,
     /// Every dictionary identity, by key.
@@ -573,6 +593,7 @@ impl<'m> Program<'m> {
             top_of_rhs: vec![HashMap::new(); n],
             case_scrut: vec![HashMap::new(); n],
             alt_field: vec![HashMap::new(); n],
+            alt_strict: vec![HashMap::new(); n],
             con_key: vec![HashMap::new(); n],
             values: BTreeMap::new(),
         };
@@ -627,6 +648,27 @@ impl<'m> Program<'m> {
                             let AltCon::DataAlt { name, .. } = &alt.con else {
                                 continue;
                             };
+                            // Which of this alternative's binders name a
+                            // field GHC made strict. A constructor
+                            // application is indexed by its VALUE fields;
+                            // the alternative binds the existential type
+                            // binders too, so they are skipped.
+                            let strict: &[bool] = m
+                                .ids
+                                .get(name)
+                                .and_then(|i| i.data_con.as_ref())
+                                .filter(|d| d.strict_fields.len() == d.rep_arity as usize)
+                                .map(|d| d.strict_fields.as_slice())
+                                .unwrap_or(&[]);
+                            let mut vi = 0usize;
+                            for &bid in &alt.binders {
+                                if m.binder(bid).kind == BinderKind::Tyvar {
+                                    continue;
+                                }
+                                self.alt_strict[mi]
+                                    .insert(bid, strict.get(vi).copied().unwrap_or(false));
+                                vi += 1;
+                            }
                             let Some(spec) = dict_con_spec(name) else {
                                 continue;
                             };
@@ -987,7 +1029,7 @@ pub enum Verdict {
     /// Erasable only if the force it carries is discharged elsewhere: the
     /// obligation is recorded, never silently dropped
     /// ([`E6_TOTALITY_OBLIGATION`]).
-    ErasableWithObligation(ForceObligation),
+    ErasableWithObligation(Vec<ForceObligation>),
     /// One specialised clone per instance at this parameter; the real
     /// clone count is planned per owning function ([`E7_OWNER_CLONES`]).
     ErasableWithClone(usize),
@@ -1040,9 +1082,10 @@ pub struct Erasure {
     pub producers_total: bool,
     /// The totality domain's answer ([`E6_TOTALITY_PARAM`]).
     pub totality: Totality,
-    /// The force erasure would delete, where it can be named
-    /// ([`E6_TOTALITY_OBLIGATION`]).
-    pub obligation: Option<ForceObligation>,
+    /// **Every** force erasure would delete, where they can be named
+    /// ([`E6_TOTALITY_OBLIGATION`]). A set since M2.4h: keeping one
+    /// witness dropped the rest.
+    pub obligations: Vec<ForceObligation>,
     /// GHC records the parameter as strict at its binder. **Evidence
     /// only**: strictness at entry is not permission to drop the force,
     /// because if the parameter disappears the entry force must still
@@ -1095,6 +1138,9 @@ pub struct Accounting {
     pub owner_functions: usize,
     /// Verdicts that carry a named force obligation.
     pub obligations: usize,
+    /// The named forces those verdicts carry, summed. One verdict can
+    /// carry several since M2.4h; before it, the join kept one.
+    pub named_forces: usize,
     /// Totality of the dictionary parameters, by level.
     pub param_totality: [usize; 3],
     /// (target outcome) × (dictionary verdict).
@@ -1170,8 +1216,16 @@ pub struct OwnerPlan {
     pub params: Vec<String>,
     /// Per-parameter instance cardinality: evidence only.
     pub cardinalities: Vec<usize>,
-    /// The distinct tuples actually seen, rendered.
+    /// The distinct tuples actually seen, rendered. Each component is the
+    /// set of dictionary **identities** that reach that parameter at that
+    /// call site — addresses, so M2.4f's verifier can compare the set
+    /// itself and not just its size.
     pub tuples: Vec<String>,
+    /// **The plan as a partition of the owner's call sites**, one entry per
+    /// planned clone: the call sites assigned to it, each addressed
+    /// `Module#node`, sorted, and the entries sorted. Compared by the
+    /// verifier beside the tuples.
+    pub groups: Vec<String>,
     /// Tuples with a component the monovariant analysis
     /// ([`W5_MONOVARIANT`]) could only give as a *set* of instances: one
     /// call site whose dictionary argument is itself a multi-instance
@@ -1498,8 +1552,9 @@ impl DictFlow {
             }
         }
         for e in self.values.iter().chain(self.param_erasure.iter()) {
-            if matches!(e.verdict, Verdict::ErasableWithObligation(_)) {
+            if let Verdict::ErasableWithObligation(obs) = &e.verdict {
                 a.obligations += 1;
+                a.named_forces += obs.len();
             }
         }
         for x in &self.params {
@@ -1767,6 +1822,14 @@ fn eval_nested(p: &Program, st: &State, mi: usize, node: ExprId, nest: usize) ->
         let vargs = value_args(s, &args);
 
         match m.expr(head) {
+            // **M2.4h.** Peeling the head is only sound when the head IS
+            // the expression. `(case x of A -> f; B -> g) d` has outer
+            // value arguments, and walking into `f` and `g` answers about
+            // a different expression — one where `d` was dropped.
+            Expr::Case { .. } | Expr::Let { .. } if !vargs.is_empty() => {
+                acc.join(&DictSet::Top(T_APPLIED_CASE.into()));
+                continue;
+            }
             Expr::Case { alts, .. } => {
                 for alt in alts {
                     work.push((mi, alt.rhs));
@@ -2027,6 +2090,12 @@ fn tot_nested(
         let vargs = value_args(s, &args);
 
         match m.expr(head) {
+            // **M2.4h**, as in [`eval_nested`]: an applied `case`/`let`
+            // head is not the expression its alternatives are.
+            Expr::Case { .. } | Expr::Let { .. } if !vargs.is_empty() => {
+                acc.join(&Tot::unknown());
+                continue;
+            }
             Expr::Case { scrut, alts, .. } => {
                 // The MAY-set over the alternatives is irrelevant here:
                 // reaching any alternative at all evaluated the scrutinee.
@@ -2182,8 +2251,14 @@ fn is_already_evaluated(p: &Program, mi: usize, node: ExprId) -> bool {
         return false;
     }
     match m.binding(b).site {
-        // Bound by a `case`: forced before it could be named.
-        BindSite::CaseBinder | BindSite::AltBinder => true,
+        // The scrutinee binder: forced before it could be named.
+        BindSite::CaseBinder => true,
+        // **M2.4h.** An alternative binder was treated as evaluated too.
+        // It is not: matching an outer constructor forces the constructor,
+        // not its fields, so the binder of a LAZY field names an
+        // unevaluated thunk and a `case` on it deletes a real evaluation.
+        // Only a field GHC made strict is already evaluated here.
+        BindSite::AltBinder => p.alt_strict[mi].get(&b).copied().unwrap_or(false),
         // Strict at entry is not enough on its own: the force GHC promises
         // may happen *after* this point. It counts only where an enclosing
         // `case` on the same binder dominates this occurrence.
@@ -2268,7 +2343,7 @@ fn erasure(p: &Program, params: &[Param], sites: &[Site]) -> (Vec<Erasure>, Vec<
             // applied or not, is a value ([`E6_TOTALITY_VALUE`]).
             producers_total: true,
             totality: Totality::ProvenTotal,
-            obligation: None,
+            obligations: Vec::new(),
             known_strict: false,
             instances: 1,
             escapes,
@@ -2302,10 +2377,12 @@ fn erasure(p: &Program, params: &[Param], sites: &[Site]) -> (Vec<Erasure>, Vec<
                     // The dictionary computation carries a force. It may
                     // still be erased, but only against a named
                     // obligation; never silently.
-                    Totality::MustPreserveForce => match &x.tot.obligation {
-                        Some(ob) => Verdict::ErasableWithObligation(ob.clone()),
-                        None => Verdict::Preserve(R_FORCE.to_string()),
-                    },
+                    // Every obligation the join collected, never one of
+                    // them ([`E6_TOTALITY_OBLIGATION`], M2.4h).
+                    Totality::MustPreserveForce if !x.tot.obligations.is_empty() => {
+                        Verdict::ErasableWithObligation(x.tot.obligation_list())
+                    }
+                    Totality::MustPreserveForce => Verdict::Preserve(R_FORCE.to_string()),
                     Totality::Unknown => Verdict::Preserve(R_FORCE_UNKNOWN.to_string()),
                 },
             }
@@ -2316,7 +2393,7 @@ fn erasure(p: &Program, params: &[Param], sites: &[Site]) -> (Vec<Erasure>, Vec<
             kind: "parameter",
             producers_total: total,
             totality: x.totality,
-            obligation: x.tot.obligation.clone(),
+            obligations: x.tot.obligation_list(),
             known_strict: x.known_strict,
             instances,
             escapes,
@@ -2365,6 +2442,7 @@ fn owner_plans(p: &Program, st: &State, params: &[Param], pe: &[Erasure]) -> Vec
         let arg_indices: Vec<usize> = idxs.iter().map(|&i| params[i].index).collect();
 
         let mut tuples: BTreeSet<Vec<String>> = BTreeSet::new();
+        let mut groups: BTreeMap<Vec<String>, BTreeSet<String>> = BTreeMap::new();
         let mut set_valued: BTreeSet<Vec<String>> = BTreeSet::new();
         let mut refused = None;
         for (omi, o) in p.all_occurrences(mi, f) {
@@ -2404,6 +2482,10 @@ fn owner_plans(p: &Program, st: &State, params: &[Param], pe: &[Erasure]) -> Vec
             if set_valued_seen > 0 {
                 set_valued.insert(tuple.clone());
             }
+            groups
+                .entry(tuple.clone())
+                .or_default()
+                .insert(format!("{}#{o}", om.name));
             tuples.insert(tuple);
         }
 
@@ -2419,12 +2501,26 @@ fn owner_plans(p: &Program, st: &State, params: &[Param], pe: &[Erasure]) -> Vec
             params: plan_params,
             cardinalities,
             tuples: tuples.iter().map(|t| t.join(", ")).collect(),
+            groups: group_lines(&groups),
             set_valued: set_valued.len(),
             clones,
             refused,
         });
     }
     out.sort_by(|a, b| (&a.module, &a.owner).cmp(&(&b.module, &b.owner)));
+    out
+}
+
+/// A clone plan's partition, rendered: one line per planned clone, the
+/// call-site addresses sorted within a line and the lines sorted. Both
+/// M2.4's analyses and M2.4f's verifier render theirs with this, because a
+/// protocol needs one alphabet — it derives nothing.
+pub fn group_lines(groups: &BTreeMap<Vec<String>, BTreeSet<String>>) -> Vec<String> {
+    let mut out: Vec<String> = groups
+        .values()
+        .map(|sites| sites.iter().cloned().collect::<Vec<_>>().join(" "))
+        .collect();
+    out.sort();
     out
 }
 

@@ -5427,9 +5427,16 @@ fn dictflow(dir: &Path, json: bool, explain: bool) -> Result<()> {
                 e.verdict.label(),
                 match &e.verdict {
                     Verdict::ErasableWithClone(n) => format!("({n})"),
-                    Verdict::ErasableWithObligation(o) => format!(
-                        "(force at {} node {}, scrutinee node {})",
-                        o.module, o.at, o.what
+                    Verdict::ErasableWithObligation(obs) => format!(
+                        "({} force(s): {})",
+                        obs.len(),
+                        obs.iter()
+                            .map(|o| format!(
+                                "at {} node {}, scrutinee node {}",
+                                o.module, o.at, o.what
+                            ))
+                            .collect::<Vec<_>>()
+                            .join("; ")
                     ),
                     Verdict::Preserve(h) | Verdict::Unresolved(h) => format!(" {h}"),
                     Verdict::Erasable => String::new(),

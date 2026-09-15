@@ -9,7 +9,7 @@
 
 use crate::dictflow::{self, DictFlow, Outcome, Verdict as DVerdict};
 use crate::higher::{self, Higher, Slot, Verdict as HVerdict};
-use crate::verify_m24::{Claim, ClaimKind, ClaimSlot, Subject};
+use crate::verify_m24::{Claim, ClaimKind, ClaimSlot, Subject, obligation_address};
 use h2r_core_ir::Module;
 
 /// How a method target is written down, so that both sides name the same
@@ -17,6 +17,18 @@ use h2r_core_ir::Module;
 /// name — an address, and not a derivation.
 fn target_key(t: &dictflow::MethodTarget) -> String {
     format!("{}#{} {}", t.module, t.node, t.name)
+}
+
+/// The force obligations a verdict carries, as the addresses both sides
+/// compare (M2.4h). Empty for every other verdict.
+fn obligations_of(v: &DVerdict) -> Vec<String> {
+    match v {
+        DVerdict::ErasableWithObligation(obs) => obs
+            .iter()
+            .map(|o| obligation_address(&o.module, o.at, o.what))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Every **positive** claim the two milestones publish.
@@ -42,6 +54,9 @@ pub fn claims(modules: &[&Module]) -> (Vec<Claim>, DictFlow, Higher) {
                 target: Some(target_key(t)),
                 verdict: "Exact".into(),
                 n: 1,
+                tuples: Vec::new(),
+                groups: Vec::new(),
+                obligations: Vec::new(),
             });
         }
         if !s.set.is_top() && !keys.is_empty() {
@@ -56,6 +71,9 @@ pub fn claims(modules: &[&Module]) -> (Vec<Claim>, DictFlow, Higher) {
                 keys,
                 target: None,
                 verdict: "bounded".into(),
+                tuples: Vec::new(),
+                groups: Vec::new(),
+                obligations: Vec::new(),
             });
         }
     }
@@ -77,6 +95,9 @@ pub fn claims(modules: &[&Module]) -> (Vec<Claim>, DictFlow, Higher) {
             keys,
             target: None,
             verdict: "bounded".into(),
+            tuples: Vec::new(),
+            groups: Vec::new(),
+            obligations: Vec::new(),
         });
     }
 
@@ -98,6 +119,9 @@ pub fn claims(modules: &[&Module]) -> (Vec<Claim>, DictFlow, Higher) {
             target: None,
             verdict: e.verdict.label().into(),
             n: e.instances,
+            tuples: Vec::new(),
+            groups: Vec::new(),
+            obligations: obligations_of(&e.verdict),
         });
     }
     // …and the dictionary parameters.
@@ -118,6 +142,9 @@ pub fn claims(modules: &[&Module]) -> (Vec<Claim>, DictFlow, Higher) {
             target: None,
             verdict: e.verdict.label().into(),
             n,
+            tuples: Vec::new(),
+            groups: Vec::new(),
+            obligations: obligations_of(&e.verdict),
         });
     }
 
@@ -135,6 +162,11 @@ pub fn claims(modules: &[&Module]) -> (Vec<Claim>, DictFlow, Higher) {
             target: None,
             verdict: "clone plan".into(),
             n,
+            // The exact deduplicated tuple set, each component the
+            // dictionary identities that reach that parameter (M2.4h).
+            tuples: o.tuples.clone(),
+            groups: o.groups.clone(),
+            obligations: Vec::new(),
         });
     }
 
@@ -168,6 +200,9 @@ pub fn claims(modules: &[&Module]) -> (Vec<Claim>, DictFlow, Higher) {
             target: None,
             verdict: b.verdict.label().into(),
             n,
+            tuples: Vec::new(),
+            groups: Vec::new(),
+            obligations: Vec::new(),
         });
     }
 
@@ -185,6 +220,12 @@ pub fn claims(modules: &[&Module]) -> (Vec<Claim>, DictFlow, Higher) {
             target: None,
             verdict: "clone plan".into(),
             n,
+            // The exact deduplicated tuple set, each component the full
+            // shape class of the closures that reach that parameter — not
+            // the arity-and-count rendering (M2.4h).
+            tuples: o.tuples.clone(),
+            groups: o.groups.clone(),
+            obligations: Vec::new(),
         });
     }
 

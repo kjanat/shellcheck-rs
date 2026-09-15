@@ -74,6 +74,35 @@
 //! refusal (`D`) says the analysis claimed something this derivation
 //! refutes; a `C_` refusal is this derivation being blunter than the
 //! analysis and costs coverage only.
+//!
+//! # Three points this walk had copied rather than decided (M2.4h)
+//!
+//! Independence is a property of the *derivation*, and until M2.4h three
+//! semantic decisions in the totality domain here were not derived at all:
+//! they reproduced [`crate::dictflow`]'s, defect included, so the check
+//! agreed for the wrong reason. Each is now decided here on its own terms,
+//! and each turned out to be wrong in both places:
+//!
+//! 1. **`already_evaluated` admitted every alternative binder.** Matching
+//!    an outer constructor forces the constructor, not its fields: the
+//!    binder of a **lazy** field names an unevaluated thunk, and a `case`
+//!    on it deletes a real evaluation. This walk now builds its own
+//!    [`World::alt_strict`] from GHC's `strictFields` (trusted input 3)
+//!    and admits only the scrutinee binder, a strict field's binder, and
+//!    the values it already admitted.
+//! 2. **The totality join kept one witness.** A required force is a proof
+//!    debt, not a witness to be chosen, so [`TotFact`] carries the whole
+//!    **set** and the join is a union. An `ErasableWithObligation` verdict
+//!    names every force it leaves behind, and a claim that names different
+//!    ones is refused ([`X_OBLIGATIONS_DIFFER`]).
+//! 3. **An applied `case`/`let` head was peeled.** `(case x of A -> f;
+//!    B -> g) d` is not `case x of A -> f; B -> g`: peeling the head drops
+//!    `d`. Nothing here may build Core, so both walks here refuse
+//!    ([`R_APPLIED_CASE`]) rather than answer about another expression.
+//!
+//! The clone planner here had the same representation defect as
+//! [`crate::higher`]'s and is likewise corrected: a tuple component is the
+//! full shape class, never the arity-and-capture-count rendering.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -99,6 +128,13 @@ pub const X_NOT_TOTAL: &str = "Erasable-claimed-but-the-producer-is-not-proven-t
 pub const X_ESCAPES: &str = "Erasable-claimed-but-the-dictionary-is-used-as-an-ordinary-value";
 pub const X_INSTANCES_DIFFER: &str = "the-re-derived-instance-count-is-different";
 pub const X_CLONES_DIFFER: &str = "the-re-derived-clone-tuple-count-is-different";
+/// M2.4h: the clone plan's tuple SET differs, whatever the cardinalities.
+pub const X_TUPLES_DIFFER: &str = "the-re-derived-clone-tuple-set-is-a-different-set";
+/// M2.4h: the clone plan assigns the owner's call sites to clones
+/// differently, whatever the cardinalities.
+pub const X_GROUPS_DIFFER: &str = "the-re-derived-clone-plan-partitions-the-call-sites-differently";
+/// M2.4h: the force obligations differ, whatever their number.
+pub const X_OBLIGATIONS_DIFFER: &str = "the-re-derived-force-obligation-set-is-a-different-set";
 pub const X_SHARED_SLOT: &str = "one-representation-claimed-at-an-exported-or-valued-slot";
 pub const X_OPAQUE_PRODUCER: &str = "one-representation-claimed-with-an-opaque-producer";
 pub const X_CLASSES_DIFFER: &str = "the-re-derived-shape-class-count-is-different";
@@ -246,6 +282,32 @@ pub struct Claim {
     /// The cardinality the verdict carries: instances, shape classes, or
     /// planned clones.
     pub n: usize,
+    /// **The clone plan's own content** — the exact deduplicated set of
+    /// call-site assignment tuples, each component a full shape class
+    /// ([`crate::higher::Shape::class`]) or a dictionary identity, rendered
+    /// one tuple per entry and ordered as the plan orders them.
+    ///
+    /// M2.4h: a clone-plan claim used to carry only `n`, so the check was
+    /// `tuples == n` and a completely different tuple set of the same
+    /// cardinality passed. The verifier now compares the set.
+    ///
+    /// A *dictionary* plan's components are identities — addresses — and
+    /// are compared directly. A *closure* plan's components are shape
+    /// classes, which each walk derives, and two independent derivations
+    /// render the same class differently on purpose; those are carried as
+    /// the record and checked through [`Claim::groups`] instead.
+    pub tuples: Vec<String>,
+    /// **The plan as a partition of the owner's call sites**: one entry per
+    /// planned clone, naming the call sites assigned to it by address. This
+    /// is the content of a clone plan that survives being derived twice —
+    /// which call shares a clone with which — and it is what the verifier
+    /// compares for every plan (M2.4h).
+    pub groups: Vec<String>,
+    /// **The obligation set's own content** — every force an
+    /// `ErasableWithObligation` verdict leaves to be discharged, as the
+    /// address [`obligation_address`] renders. M2.4h: the claim carried no
+    /// obligation at all, so the check could only compare labels.
+    pub obligations: Vec<String>,
 }
 
 /// Why this walk will not re-derive a claim.
@@ -530,6 +592,11 @@ pub struct World<'m> {
     /// existential **type** binders, so the index is counted over the value
     /// binders alone.
     any_alt_field: Vec<HashMap<BinderId, (String, usize)>>,
+    /// Every alternative binder, mapped to whether the field it binds is
+    /// **GHC-strict**. This walk's own copy, built from its own pass over
+    /// the alternatives and from GHC's `strictFields` — trusted input 3 —
+    /// and never read from [`crate::dictflow`].
+    alt_strict: Vec<HashMap<BinderId, bool>>,
     /// A dictionary-constructor application node → its dictionary key.
     con_key: Vec<HashMap<ExprId, String>>,
     /// Constructor stable name → every saturated application of it.
@@ -551,6 +618,7 @@ impl<'m> World<'m> {
             case_scrut: vec![HashMap::new(); n],
             dict_alt_field: vec![HashMap::new(); n],
             any_alt_field: vec![HashMap::new(); n],
+            alt_strict: vec![HashMap::new(); n],
             con_key: vec![HashMap::new(); n],
             con_apps: HashMap::new(),
             values: BTreeMap::new(),
@@ -625,10 +693,23 @@ impl<'m> World<'m> {
                             }
                             let spec =
                                 dict_con_spec(name).filter(|spec| spec.fields() == value_binders);
+                            // GHC's own per-source-field strictness, read
+                            // only when it lines up with the constructor's
+                            // representation arity; otherwise no field of
+                            // this constructor counts as strict.
+                            let strict: &[bool] = m
+                                .ids
+                                .get(name)
+                                .and_then(|i| i.data_con.as_ref())
+                                .filter(|d| d.strict_fields.len() == d.rep_arity as usize)
+                                .map(|d| d.strict_fields.as_slice())
+                                .unwrap_or(&[]);
                             for &bid in &alt.binders {
                                 if m.binder(bid).kind == BinderKind::Tyvar {
                                     continue;
                                 }
+                                self.alt_strict[mi]
+                                    .insert(bid, strict.get(vi).copied().unwrap_or(false));
                                 self.any_alt_field[mi].insert(bid, (name.clone(), vi));
                                 if let Some(spec) = spec {
                                     self.dict_alt_field[mi].insert(bid, (*scrut, spec, vi));
@@ -888,6 +969,9 @@ const R_VALUE_USE: &str = "function-used-as-a-value";
 const R_PARTIAL: &str = "call-site-is-a-partial-application";
 const R_UNREACHABLE: &str = "function-has-no-occurrence-in-the-closed-world";
 const R_NOT_A_DICT: &str = "expression-is-not-a-dictionary";
+/// A `case`/`let` head carrying outer value arguments (M2.4h): the head is
+/// not the expression, so the walk refuses rather than drop the arguments.
+const R_APPLIED_CASE: &str = "case-or-let-head-with-outer-value-arguments";
 const R_CON_FIELD: &str = "read-from-a-non-dictionary-constructor-field";
 const R_UNKNOWN_CALL: &str = "produced-by-a-call-the-dump-cannot-see";
 const R_HIGHER_ORDER: &str = "from-a-higher-order-parameter";
@@ -924,42 +1008,60 @@ enum Tot {
     Unknown,
 }
 
-/// A totality level with the force that witnesses it, when there is one:
-/// the node whose evaluation erasure would delete, and the scrutinee that
-/// would still have to be evaluated.
+/// A totality level with **every** force that witnesses it: the node whose
+/// evaluation erasure would delete, and the scrutinee that would still have
+/// to be evaluated.
+///
+/// **M2.4h.** This walk held one witness and its join kept the smaller of
+/// two — the second of the three semantic points it had copied from
+/// [`crate::dictflow`] instead of deciding for itself. A required force is
+/// not a witness to be chosen: every one of them has to be discharged, so
+/// the join is a **union** and the verdict carries the whole set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TotFact {
     level: Tot,
-    witness: Option<(String, ExprId, ExprId)>,
+    witnesses: BTreeSet<(String, ExprId, ExprId)>,
 }
 
 impl TotFact {
     fn total() -> TotFact {
         TotFact {
             level: Tot::Total,
-            witness: None,
+            witnesses: BTreeSet::new(),
         }
     }
     fn unknown() -> TotFact {
         TotFact {
             level: Tot::Unknown,
-            witness: None,
+            witnesses: BTreeSet::new(),
         }
     }
     fn force(module: &str, at: ExprId, what: ExprId) -> TotFact {
         TotFact {
             level: Tot::Force,
-            witness: Some((module.to_string(), at, what)),
+            witnesses: BTreeSet::from([(module.to_string(), at, what)]),
         }
     }
     fn join(&mut self, other: &TotFact) {
         self.level = self.level.max(other.level);
-        self.witness = match (&self.witness, &other.witness) {
-            (Some(a), Some(b)) => Some(if a <= b { a.clone() } else { b.clone() }),
-            (Some(a), None) => Some(a.clone()),
-            (None, b) => b.clone(),
-        };
+        self.witnesses.extend(other.witnesses.iter().cloned());
     }
+    /// The obligations as addresses, in their deterministic order — the
+    /// same rendering [`crate::m24_claims`] writes a claim down with, so
+    /// that comparing them compares contents and not counts.
+    fn addresses(&self) -> Vec<String> {
+        self.witnesses
+            .iter()
+            .map(|(m, at, what)| obligation_address(m, *at, *what))
+            .collect()
+    }
+}
+
+/// How a force obligation is addressed on both sides of the check: the
+/// module, the `case` node whose evaluation erasure would delete, and the
+/// scrutinee that must still be evaluated. An address, not a derivation.
+pub fn obligation_address(module: &str, at: ExprId, what: ExprId) -> String {
+    format!("{module}#{at} forces {what}")
 }
 
 //------------------------------------------------------------------------------
@@ -1232,6 +1334,13 @@ fn dict_eval_at(w: &World, st: &DState, mi: usize, node: ExprId, nest: usize) ->
         let va = vargs(m, &args);
 
         match m.expr(head) {
+            // **M2.4h.** `(case x of A -> f; B -> g) d` — peeling the head
+            // and walking into the alternatives answers about an
+            // expression `d` was dropped from.
+            Expr::Case { .. } | Expr::Let { .. } if !va.is_empty() => {
+                acc.join(&Set::top(R_APPLIED_CASE));
+                continue;
+            }
             Expr::Case { alts, .. } => {
                 work.extend(alts.iter().map(|a| (mi, a.rhs)));
                 continue;
@@ -1438,9 +1547,18 @@ type TState = HashMap<(usize, BinderId), TotFact>;
 /// **This walk's own definition of *already evaluated*, and it is
 /// deliberately narrower than M2.4c′'s.** A `case` deletes no evaluation
 /// only if its scrutinee has already been evaluated where it stands: a
-/// literal, a lambda, a saturated constructor application, a dfun, or a
-/// variable a `case` has already bound (a case binder or an alternative
-/// binder — it could not be named before the scrutinee was forced).
+/// literal, a lambda, a saturated constructor application, a dfun, the
+/// scrutinee binder of an enclosing `case`, or the alternative binder of a
+/// field GHC made **strict**.
+///
+/// **M2.4h.** This walk previously admitted *every* alternative binder,
+/// which was one of three semantic points it had copied from
+/// [`crate::dictflow`] rather than re-derived — and the point is wrong in
+/// both places. Matching an outer constructor forces the constructor, not
+/// its fields: the binder of a lazy field names an unevaluated thunk, and a
+/// `case` on it deletes a real evaluation. The strictness comes from GHC's
+/// own `strictFields` (trusted input 3), read here through this walk's own
+/// [`World::alt_strict`].
 ///
 /// M2.4c′ additionally admits a variable GHC marks strict at its binder
 /// that an enclosing `case` on that same binder dominates. That is a sound
@@ -1468,10 +1586,11 @@ fn already_evaluated(w: &World, mi: usize, node: ExprId) -> bool {
     if !args.is_empty() {
         return false;
     }
-    matches!(
-        m.binding(b).site,
-        BindSite::CaseBinder | BindSite::AltBinder
-    )
+    match m.binding(b).site {
+        BindSite::CaseBinder => true,
+        BindSite::AltBinder => w.alt_strict[mi].get(&b).copied().unwrap_or(false),
+        _ => false,
+    }
 }
 
 /// The totality of a dictionary expression. Structurally the same walk as
@@ -1510,6 +1629,16 @@ fn tot_eval(
         let va = vargs(m, &args);
 
         match m.expr(head) {
+            // **M2.4h**, the third copied point: a `case`/`let` in head
+            // position with outer value arguments is not the expression
+            // its alternatives are — `(case x of A -> f; B -> g) d` loses
+            // `d` when the head is peeled. Nothing here may build Core, so
+            // this walk refuses instead of answering about another
+            // expression.
+            Expr::Case { .. } | Expr::Let { .. } if !va.is_empty() => {
+                acc.join(&TotFact::unknown());
+                continue;
+            }
             Expr::Case { scrut, alts, .. } => {
                 cases.set(cases.get() + 1);
                 if !already_evaluated(w, mi, *scrut) {
@@ -1635,7 +1764,7 @@ fn tot_field(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum EVerdict {
     Erasable,
-    WithObligation,
+    WithObligation(Vec<String>),
     WithClone(usize),
     /// Preserved because the dictionary is used as an ordinary value: the
     /// holder is named.
@@ -1651,7 +1780,7 @@ impl EVerdict {
     fn label(&self) -> &'static str {
         match self {
             EVerdict::Erasable => "Erasable",
-            EVerdict::WithObligation => "ErasableWithObligation",
+            EVerdict::WithObligation(_) => "ErasableWithObligation",
             EVerdict::WithClone(_) => "ErasableWithClone",
             EVerdict::PreserveEscape(_) | EVerdict::PreserveForce(_) => "Preserve",
             EVerdict::Unresolved(_) => "Unresolved",
@@ -1664,7 +1793,15 @@ impl EVerdict {
 struct OwnerPlan {
     /// How many dictionary or function-valued parameters the owner has.
     params: usize,
-    tuples: usize,
+    /// The distinct call-site assignment tuples this walk enumerated,
+    /// rendered one per entry — the plan's **content**, not its size.
+    /// M2.4h: this was a `usize`, so a check could only compare counts.
+    tuples: Vec<String>,
+    /// The plan as a partition of the owner's call sites, one entry per
+    /// planned clone, each site by address. Rendered with
+    /// [`crate::dictflow::group_lines`], which is the protocol's alphabet
+    /// and derives nothing.
+    groups: Vec<String>,
     set_valued: usize,
     refused: Option<String>,
 }
@@ -1917,7 +2054,9 @@ impl DictDerived {
                     Set::Fin(_) => match x.tot.level {
                         Tot::Total if instances == 1 => EVerdict::Erasable,
                         Tot::Total => EVerdict::WithClone(instances),
-                        Tot::Force if x.tot.witness.is_some() => EVerdict::WithObligation,
+                        Tot::Force if !x.tot.witnesses.is_empty() => {
+                            EVerdict::WithObligation(x.tot.addresses())
+                        }
                         Tot::Force => {
                             EVerdict::PreserveForce("erasure-would-delete-a-force".into())
                         }
@@ -2160,6 +2299,7 @@ fn dict_owner_plans(
         let (mi, f) = *key;
         let arg_indices: Vec<usize> = groups[key].iter().map(|&i| params[i].index).collect();
         let mut tuples: BTreeSet<Vec<String>> = BTreeSet::new();
+        let mut groups: BTreeMap<Vec<String>, BTreeSet<String>> = BTreeMap::new();
         let mut set_valued: BTreeSet<Vec<String>> = BTreeSet::new();
         let mut refused: Option<String> = None;
         for (omi, o) in w.all_occurrences(mi, f) {
@@ -2199,13 +2339,18 @@ fn dict_owner_plans(
             if many > 0 {
                 set_valued.insert(tuple.clone());
             }
+            groups
+                .entry(tuple.clone())
+                .or_default()
+                .insert(format!("{}#{o}", om.name));
             tuples.insert(tuple);
         }
         out.insert(
             *key,
             OwnerPlan {
                 params: arg_indices.len(),
-                tuples: tuples.len(),
+                tuples: tuples.iter().map(|t| t.join(", ")).collect(),
+                groups: crate::dictflow::group_lines(&groups),
                 set_valued: set_valued.len(),
                 refused,
             },
@@ -2398,12 +2543,6 @@ impl PShape {
     }
     fn is_opaque(&self) -> bool {
         matches!(self, PShape::Opaque { .. })
-    }
-    fn short(&self) -> String {
-        match self {
-            PShape::Known { arity, captures } => format!("{arity}/{}", captures.len()),
-            PShape::Opaque { .. } => "opaque".into(),
-        }
     }
 }
 
@@ -3179,7 +3318,12 @@ fn closure_owner_plans(
         }
     }
 
-    // The shape classes a settled producer set stands for, rendered.
+    // The shape classes a settled producer set stands for, rendered as the
+    // full representation identity. **M2.4h**: this walk rendered
+    // `Shape::short()` — arity and capture COUNT — so two closures with the
+    // same arity and count but different capture types collapsed into one
+    // planned variant, contradicting `Shape::class()`, which is what this
+    // walk calls a representation everywhere else.
     let component = |set: &Set| -> Result<(String, bool), String> {
         if let Set::Top(t) = set {
             return Err(t.clone());
@@ -3188,7 +3332,7 @@ fn closure_owner_plans(
         for k in set.keys() {
             match producers.get(&k) {
                 Some(x) => {
-                    ks.insert(x.shape.short());
+                    ks.insert(x.shape.class());
                 }
                 None => return Err(R_NO_PRODUCER.into()),
             }
@@ -3205,6 +3349,7 @@ fn closure_owner_plans(
         let (mi, f) = *key;
         let arg_indices: Vec<usize> = groups[key].iter().map(|&i| raws[i].index).collect();
         let mut tuples: BTreeSet<Vec<String>> = BTreeSet::new();
+        let mut groups: BTreeMap<Vec<String>, BTreeSet<String>> = BTreeMap::new();
         let mut set_valued: BTreeSet<Vec<String>> = BTreeSet::new();
         let mut refused: Option<String> = None;
         for (omi, o) in w.all_occurrences(mi, f) {
@@ -3242,13 +3387,18 @@ fn closure_owner_plans(
             if many > 0 {
                 set_valued.insert(tuple.clone());
             }
+            groups
+                .entry(tuple.clone())
+                .or_default()
+                .insert(format!("{}#{o}", om.name));
             tuples.insert(tuple);
         }
         out.insert(
             *key,
             OwnerPlan {
                 params: arg_indices.len(),
-                tuples: tuples.len(),
+                tuples: tuples.iter().map(|t| t.join(", ")).collect(),
+                groups: crate::dictflow::group_lines(&groups),
                 set_valued: set_valued.len(),
                 refused,
             },
@@ -3423,7 +3573,7 @@ impl DictDerived {
                     ))
                 }
             }
-            (EVerdict::WithObligation, "ErasableWithObligation") => Ok(()),
+            (EVerdict::WithObligation(obs), "ErasableWithObligation") => same_obligations(obs, c),
             (EVerdict::Erasable, "ErasableWithObligation") => Err(Refusal::new(
                 X_NO_OBLIGATION,
                 "this walk proves the producers total",
@@ -3449,7 +3599,9 @@ impl DictDerived {
         let Some(mi) = w.module_index(module) else {
             return Err(Refusal::new(C_MODULE_MISSING, module.clone()));
         };
-        check_plan(self.owner_plans.get(&(mi, *owner)), c)
+        // A dictionary plan's tuple components are identities, so they
+        // are compared as well as the partition.
+        check_plan(self.owner_plans.get(&(mi, *owner)), c, true)
     }
 }
 
@@ -3457,7 +3609,7 @@ impl DictDerived {
 fn verdict_col(v: &EVerdict) -> usize {
     match v {
         EVerdict::Erasable => 0,
-        EVerdict::WithObligation => 1,
+        EVerdict::WithObligation(_) => 1,
         EVerdict::WithClone(_) => 2,
         EVerdict::PreserveEscape(_) | EVerdict::PreserveForce(_) => 3,
         EVerdict::Unresolved(_) => 4,
@@ -3482,21 +3634,92 @@ fn same_set(set: &Set, keys: &[String]) -> Result<(), Refusal> {
     }
 }
 
-fn check_plan(plan: Option<&OwnerPlan>, c: &Claim) -> Result<(), Refusal> {
+/// Does the plan this walk built have exactly the content the claim
+/// asserts?
+///
+/// **M2.4h.** This compared cardinalities (`p.tuples == c.n`), so a plan
+/// with a completely different tuple set of the same size was re-derived as
+/// agreeing. Three things are compared now, in this order:
+///
+/// 1. the **partition** of the owner's call sites — which call site shares
+///    a clone with which, each site named by address. This is the content
+///    of the plan that two independent walks can both state, and it is
+///    checked for every plan;
+/// 2. the **tuple set**, when its components are addresses rather than
+///    derived renderings — that is, for a dictionary plan, whose components
+///    are dictionary identities. A closure plan's components are shape
+///    classes; this walk derives its own capture keys and renders them its
+///    own way, deliberately, so comparing those strings would compare two
+///    renderings and not two facts;
+/// 3. the cardinality, last, because agreeing about a number after
+///    disagreeing about the content would be the defect this corrects.
+fn check_plan(plan: Option<&OwnerPlan>, c: &Claim, addressed_tuples: bool) -> Result<(), Refusal> {
     let Some(p) = plan else {
         return Err(Refusal::new(C_NO_OWNER, c.what.clone()));
     };
     if let Some(r) = &p.refused {
         return Err(Refusal::new(C_NO_OWNER, format!("refused here: {r}")));
     }
-    if p.tuples == c.n {
-        Ok(())
-    } else {
-        Err(Refusal::new(
-            X_CLONES_DIFFER,
-            format!("{} distinct tuples here, {} claimed", p.tuples, c.n),
-        ))
+    same_lines(&p.groups, &c.groups, X_GROUPS_DIFFER, "call-site group")?;
+    if addressed_tuples {
+        same_lines(&p.tuples, &c.tuples, X_TUPLES_DIFFER, "tuple")?;
     }
+    if p.tuples.len() != c.n {
+        return Err(Refusal::new(
+            X_CLONES_DIFFER,
+            format!("{} distinct tuples here, {} claimed", p.tuples.len(), c.n),
+        ));
+    }
+    Ok(())
+}
+
+/// Two rendered sets, compared by content, with both differences named.
+fn same_lines(
+    mine: &[String],
+    theirs: &[String],
+    why: &'static str,
+    what: &str,
+) -> Result<(), Refusal> {
+    let a: BTreeSet<&str> = mine.iter().map(String::as_str).collect();
+    let b: BTreeSet<&str> = theirs.iter().map(String::as_str).collect();
+    if a == b {
+        return Ok(());
+    }
+    let only_here: Vec<&str> = a.difference(&b).copied().collect();
+    let only_there: Vec<&str> = b.difference(&a).copied().collect();
+    Err(Refusal::new(
+        why,
+        format!(
+            "{} {what}(s) only here [{}], {} only claimed [{}]",
+            only_here.len(),
+            only_here.join("; "),
+            only_there.len(),
+            only_there.join("; ")
+        ),
+    ))
+}
+
+/// Does this walk's obligation set have exactly the members the claim
+/// asserts? An `ErasableWithObligation` verdict whose obligations are not
+/// the claimed ones is a different verdict (M2.4h).
+fn same_obligations(mine: &[String], c: &Claim) -> Result<(), Refusal> {
+    let a: BTreeSet<&str> = mine.iter().map(String::as_str).collect();
+    let b: BTreeSet<&str> = c.obligations.iter().map(String::as_str).collect();
+    if a == b {
+        return Ok(());
+    }
+    let only_here: Vec<&str> = a.difference(&b).copied().collect();
+    let only_there: Vec<&str> = b.difference(&a).copied().collect();
+    Err(Refusal::new(
+        X_OBLIGATIONS_DIFFER,
+        format!(
+            "{} obligation(s) only here [{}], {} only claimed [{}]",
+            only_here.len(),
+            only_here.join("; "),
+            only_there.len(),
+            only_there.join("; ")
+        ),
+    ))
 }
 
 impl HigherDerived {
@@ -3601,7 +3824,10 @@ impl HigherDerived {
         let Some(mi) = w.module_index(module) else {
             return Err(Refusal::new(C_MODULE_MISSING, module.clone()));
         };
-        check_plan(self.owner_plans.get(&(mi, *owner)), c)
+        // A closure plan's tuple components are shape classes, which this
+        // walk derives and renders its own way; the partition is the
+        // content both walks can state.
+        check_plan(self.owner_plans.get(&(mi, *owner)), c, false)
     }
 }
 
@@ -3812,7 +4038,7 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
                     w.m(*mi).name,
                     w.m(*mi).binder(*f).occ,
                     p.params,
-                    p.tuples
+                    p.tuples.len()
                 )
             })
             .collect(),

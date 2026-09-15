@@ -160,8 +160,16 @@ pub const H12_USES: &str = "H12-USES";
 /// neither the sum nor the product of the per-parameter class counts. The
 /// tuples are enumerated from the real call sites; a call site that cannot
 /// be enumerated refuses that owner's plan rather than guessing. The same
-/// discipline as [`crate::dictflow::E7_OWNER_CLONES`]. Evidence: def-use
-/// (3).
+/// discipline as [`crate::dictflow::E7_OWNER_CLONES`].
+///
+/// **A tuple component is a [`Shape::class`]**, the full representation
+/// identity — arity plus the ordered capture-type keys. M2.4h: it was
+/// [`Shape::short`], arity plus the capture *count*, so two closures of the
+/// same arity and the same number of captures but different capture TYPES
+/// deduplicated into one planned variant. That contradicts `class()`, which
+/// is what every other part of this analysis calls a representation, and
+/// under-counts the clones. `short()` is a rendering and is used for nothing
+/// else. Evidence: def-use (3).
 pub const H15_OWNER_CLONES: &str = "H15-OWNER-CLONES";
 /// **A free type variable does not identify a type across producers.** A
 /// capture type that mentions a type variable nothing in the type binds
@@ -824,8 +832,25 @@ pub struct OwnerPlan {
     /// Per-slot shape-class counts: **evidence only**, never the clone
     /// count.
     pub classes: Vec<usize>,
-    /// The distinct call-site shape tuples actually seen, rendered.
+    /// The distinct call-site shape tuples actually seen, each component
+    /// the full [`Shape::class`] identity (M2.4h). This is the SET the
+    /// clone count is the cardinality of, and the set M2.4f's verifier
+    /// compares by content.
     pub tuples: Vec<String>,
+    /// The same tuples in [`Shape::short`] form: display only, never an
+    /// identity. Two rows here can read alike where the classes differ.
+    pub tuples_short: Vec<String>,
+    /// **The plan as a partition of the owner's call sites**, one entry per
+    /// planned clone: the call sites assigned to it, each addressed
+    /// `Module#node`, sorted, and the entries sorted.
+    ///
+    /// This is what M2.4f's verifier compares, and it is deliberately not
+    /// the rendered tuples: a shape class is *derived*, and the two walks
+    /// derive their capture keys independently, so their renderings differ
+    /// even when they agree. A call site is an **address**. Two plans that
+    /// induce the same partition assign the same clone to the same call,
+    /// which is the whole content of a clone plan.
+    pub groups: Vec<String>,
     /// How many call sites there were, before deduplication.
     pub sites: usize,
     /// Tuples with a component the monovariant fixpoint could only give as
@@ -2145,17 +2170,20 @@ fn owner_plans(
         }
     }
 
-    // The shape classes a settled producer set stands for, as a rendered
-    // tuple component; `None` when the set is not enumerable.
-    let component = |set: &ClosureSet| -> Result<(String, bool), String> {
+    // The shape classes a settled producer set stands for: the identity
+    // component (the full `Shape::class`, M2.4h) and the short rendering
+    // beside it; `Err` when the set is not enumerable.
+    let component = |set: &ClosureSet| -> Result<(String, String, bool), String> {
         if let ClosureSet::Top(t) = set {
             return Err(t.clone());
         }
         let mut ks: BTreeSet<String> = BTreeSet::new();
+        let mut shorts: BTreeSet<String> = BTreeSet::new();
         for k in set.keys() {
             match producers.get(k) {
                 Some(x) => {
-                    ks.insert(x.shape.short());
+                    ks.insert(x.shape.class());
+                    shorts.insert(x.shape.short());
                 }
                 None => return Err(T_NO_PRODUCER.into()),
             }
@@ -2164,7 +2192,11 @@ fn owner_plans(
             return Err(T_NO_PRODUCER.into());
         }
         let many = ks.len() > 1;
-        Ok((ks.into_iter().collect::<Vec<_>>().join("|"), many))
+        Ok((
+            ks.into_iter().collect::<Vec<_>>().join("|"),
+            shorts.into_iter().collect::<Vec<_>>().join("|"),
+            many,
+        ))
     };
 
     let mut out = Vec::new();
@@ -2194,7 +2226,8 @@ fn owner_plans(
             .collect();
         let arg_indices: Vec<usize> = idxs.iter().map(|&i| raws[i].index).collect();
 
-        let mut tuples: BTreeSet<Vec<String>> = BTreeSet::new();
+        let mut tuples: BTreeMap<Vec<String>, Vec<String>> = BTreeMap::new();
+        let mut groups: BTreeMap<Vec<String>, BTreeSet<String>> = BTreeMap::new();
         let mut set_valued: BTreeSet<Vec<String>> = BTreeSet::new();
         let mut refused = None;
         let mut sites = 0usize;
@@ -2208,6 +2241,7 @@ fn owner_plans(
             }
             let vargs = value_args(p.s(omi), &args);
             let mut tuple = Vec::with_capacity(arg_indices.len());
+            let mut short = Vec::with_capacity(arg_indices.len());
             let mut many = 0usize;
             for &ai in &arg_indices {
                 let Some(&a) = vargs.get(ai) else {
@@ -2215,11 +2249,12 @@ fn owner_plans(
                     break;
                 };
                 match component(&eval(p, st, omi, a)) {
-                    Ok((c, m)) => {
+                    Ok((c, sh, m)) => {
                         if m {
                             many += 1;
                         }
                         tuple.push(c);
+                        short.push(sh);
                     }
                     Err(why) => {
                         refused = Some(why);
@@ -2234,7 +2269,11 @@ fn owner_plans(
             if many > 0 {
                 set_valued.insert(tuple.clone());
             }
-            tuples.insert(tuple);
+            groups
+                .entry(tuple.clone())
+                .or_default()
+                .insert(format!("{}#{o}", om.name));
+            tuples.insert(tuple, short);
         }
 
         let clones = if refused.is_some() {
@@ -2248,7 +2287,9 @@ fn owner_plans(
             owner_binder: f,
             params,
             classes,
-            tuples: tuples.iter().map(|t| t.join(", ")).collect(),
+            tuples: tuples.keys().map(|t| t.join(", ")).collect(),
+            tuples_short: tuples.values().map(|t| t.join(", ")).collect(),
+            groups: crate::dictflow::group_lines(&groups),
             sites,
             set_valued: set_valued.len(),
             clones,

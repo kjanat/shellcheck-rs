@@ -113,13 +113,47 @@ fn subject_key(s: &Subject) -> String {
 pub struct Verdicts {
     claimed: HashSet<(ClaimKind, String)>,
     refused: HashMap<(ClaimKind, String), String>,
+    /// Claims of a kind whose check compares CONTENT that arrived without
+    /// any (M2.4h). `[verified: yes]` may never be printed for one: a
+    /// clone plan that names no tuples, or an `ErasableWithObligation`
+    /// that names no force, was checked against nothing.
+    contentless: HashSet<(ClaimKind, String)>,
 }
+
+/// M2.4h: `[verified: yes]` may only come from a **content**-checked
+/// claim. These are the kinds whose check compares a set rather than a
+/// count, and what each must carry for the comparison to mean anything.
+fn carries_its_content(c: &Claim) -> Option<bool> {
+    match c.kind {
+        // The plan's tuple set, one tuple per planned clone.
+        ClaimKind::DictClonePlan | ClaimKind::ClosureClonePlan => Some(
+            c.tuples.len() == c.n
+                && c.groups.len() == c.n
+                && !c.groups.iter().any(|g| g.is_empty()),
+        ),
+        // The forces the verdict leaves to be discharged.
+        ClaimKind::ParamErasure | ClaimKind::ValueErasure
+            if c.verdict == "ErasableWithObligation" =>
+        {
+            Some(!c.obligations.is_empty())
+        }
+        _ => None,
+    }
+}
+
+/// The refusal a contentless claim gets: not a coverage loss on this
+/// walk's side, but a claim that cannot be checked at all.
+pub const X_NO_CONTENT: &str = "the-claim-carries-no-content-for-a-content-checked-kind";
 
 impl Verdicts {
     pub fn of(claims: &[Claim], audit: &Audit) -> Verdicts {
         let mut v = Verdicts::default();
         for c in claims {
-            v.claimed.insert((c.kind, subject_key(&c.subject)));
+            let key = (c.kind, subject_key(&c.subject));
+            if carries_its_content(c) == Some(false) {
+                v.contentless.insert(key.clone());
+            }
+            v.claimed.insert(key);
         }
         for d in &audit.disagreements {
             v.refused.insert(
@@ -134,6 +168,9 @@ impl Verdicts {
         let key = (kind, subject_key(subject));
         if !self.claimed.contains(&key) {
             return Verified::NotAClaim;
+        }
+        if self.contentless.contains(&key) {
+            return Verified::Disagreed(X_NO_CONTENT.to_string());
         }
         match self.refused.get(&key) {
             None => Verified::Yes,
@@ -681,9 +718,13 @@ impl ClassopView {
 fn erasure_reason(v: &DVerdict) -> Option<String> {
     match v {
         DVerdict::Erasable => None,
-        DVerdict::ErasableWithObligation(o) => Some(format!(
-            "a force obligation at {} node {} over node {}",
-            o.module, o.at, o.what
+        DVerdict::ErasableWithObligation(obs) => Some(format!(
+            "{} force obligation(s): {}",
+            obs.len(),
+            obs.iter()
+                .map(|o| format!("{} node {} over node {}", o.module, o.at, o.what))
+                .collect::<Vec<_>>()
+                .join("; ")
         )),
         DVerdict::ErasableWithClone(n) => Some(format!("{n} instance(s) at this boundary")),
         DVerdict::Preserve(r) | DVerdict::Unresolved(r) => Some(r.clone()),
@@ -1705,6 +1746,19 @@ impl Accounting {
                 self.erasure.params,
                 self.erasure.param_verdicts,
                 self.erasure.param_totality
+            ));
+        }
+        // **M2.4h.** The totality domain partitions the parameters, and
+        // says so in its own equation rather than only inside
+        // `ErasureRow::closes`: every parameter is exactly one of
+        // ProvenTotal, MustPreserveForce and Unknown.
+        let [total, force, unknown] = self.erasure.param_totality;
+        if total + force + unknown != self.erasure.params {
+            return Err(format!(
+                "question 3, totality: ProvenTotal {total} + MustPreserveForce {force} + \
+                 Unknown {unknown} = {} != parameters {}",
+                total + force + unknown,
+                self.erasure.params
             ));
         }
         let m: usize = self.matrix.iter().flatten().sum();
