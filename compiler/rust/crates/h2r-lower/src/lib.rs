@@ -9,3 +9,4 @@
 //! every live binding and a named reason for every dead one.
 
 pub mod reachability;
+pub mod verify;
