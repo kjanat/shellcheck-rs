@@ -40,20 +40,20 @@ ShellCheck Haskell
 | **M2.4a** | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged | done |
 | **M2.4b** | the closed-world class-op census: 565 dispatch sites, the 294 mapped 1:1, every class identified — and not one dictionary statically known | done |
 | **M2.4** | the closed-world dictionary and higher-order milestone, in three separate questions: **can the call target be enumerated** (7 of 565 sites, the dictionary bounded at 118), **can an abstraction boundary use one representation** (5,574 function-valued boundaries, 252 enumerated, 84 one representation, 66 rewritable as one, 68 clones planned per owner), and **can the object disappear** (102 of 191 dictionary values `Erasable`, 36 of 216 parameters `Erasable` and 4 more with a clone, 4 owner-level clones) — **c** whole-program dictionary flow with its own totality domain, **d** higher-order representation agreement, **e** the 41 Parsec edges (0 closed, and why), **f** the independent re-derivation of all 606 positive claims with 0 disagreements on all seven dumps, **g** the views, the provenance, the accounting and the four cross-milestone links, **c′/d′/h** the three corrections | done |
-| **M3** | The lowering — Core plus the M1–M2.4 proofs to an explicit, proof-carrying NIR and a compiled Rust canary. **a** the `Main.main`-rooted live set: 3,997 live and 9,831 dead of 13,828 top-level bindings, a witness for every live one and a named reason for every dead one, 113,325 claims re-derived with 0 disagreements — and the finding that the dump's *pre-tidy* naming cannot link 112 cross-module references, which makes 8,131 of those dead verdicts conditional and is the first thing M3b has to fix | in progress: M3a done, M3b next |
+| **M3** | The lowering — Core plus the M1–M2.4 proofs to an explicit, proof-carrying NIR and a compiled Rust canary. **a** the `Main.main`-rooted live set, and the finding that the dump's *pre-tidy* naming could not link 112 cross-module references, which made 8,131 dead verdicts conditional. **a′** the dumps regenerated post-`CoreTidy` with the pre-tidy proof facts joined back on: **9,795 live and 3,957 dead of 13,752** top-level bindings, `A5-IN-WORLD-MISSING` **0 on all seven dumps**, 116,029 claims re-derived with 0 disagreements, dump format 6 | in progress: M3a and M3a′ done; the M1–M2.4 re-baseline on the new dumps next, then M3b |
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `h2r-plugin/` | GHC plugin. Appends a Core pass after the whole optimisation pipeline and serialises each module's `CoreProgram` to JSON (dump format 5), including every binder's demand signature, CPR signature, arity and occurrence info, every referenced **global** Id keyed by stable name, and every type **structurally** in a hash-consed per-module table. |
+| `h2r-plugin/` | GHC plugin (pinned to GHC 9.6.*). Appends a Core pass after the whole optimisation pipeline, runs `CoreTidy` itself and serialises the **tidied** `CoreProgram` to JSON (dump format 6) — so a top-level binding carries, in its own module's dump, the name every downstream module refers to it by — while handing the pipeline back the *original* `ModGuts`. The `IdInfo` CoreTidy discards is joined back on, field by field and binder by binder: the per-binder `demand` on top-level, lambda, `case` and alternative binders, `oneShot` on top-level and `let` binders, and `exported`. Everything else is CoreTidy's finalised value. The dump carries every binder's demand signature, CPR signature, arity and occurrence info, every referenced **external** global Id keyed by stable name, and every type **structurally** in a hash-consed per-module table. Each module gets a `<Module>.tidy-align.txt` sidecar recording the alignment the join was proved against. See [dump format 6](#dump-format-6). |
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
-| `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
+| `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps and their alignment sidecars. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), which imported Id an occurrence links to (its stable name), which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent), and what each type *is* (`Ty`, with `TyCon` identity and `alpha_eq`). Includes a depth-limited Core pretty-printer. |
 | `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`), and the closed-world class-op census with its asserted class table (`classops.rs`), and the whole-program dictionary flow with its separate erasure and totality domains (`dictflow.rs`), and the higher-order representation-agreement analysis (`higher.rs`), and the independent re-derivation of every *positive* M2.4 verdict (`verify_m24.rs`, which shares nothing with `classops.rs`, `dictflow.rs`, `higher.rs` or `flow.rs` but the IR, and reads the analyses' verdicts only as the plain data `m24_claims.rs` writes down), and M2.4's per-site and per-boundary views, the `h2r show` provenance they share, the milestone's own accounting and its four cross-milestone links (`m24.rs`). |
 | `rust/crates/h2r-lower` | The lowering. Where `h2r-analysis` *proves* things about the dumped Core, this crate *constructs* the program the proofs licence — it never mutates the arena and never re-derives a fact an analysis already carries. Today: the `Main.main`-rooted reachability graph over the closed world (`reachability.rs`), whose nodes are `(module, BinderId)` top-level binding pairs and whose edges come only from the resolver or from an external stable name, with a shortest witness path for every live binding and a named reason for every dead one; and the independent re-derivation of every one of its claims (`verify.rs`, which shares nothing with it but the IR and five named trusted inputs, and walks *up* the parent links where the census walks down). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), `dictflow` (the whole-program dictionary flow, its erasure verdicts and its clone plan), `higher` (the function-valued boundaries and their representation verdicts), `verify-m24` (the independent re-derivation of every positive M2.4 verdict), `m24` (M2.4's accounting, its residual and its four cross-milestone links in one place), the `--view` / `--view-all` views `fields`, `lists`, `text`, `classops` and `higher` each carry, and `lower --reachability` (M3a's live set, its accounting, its rule table and the verifier's audit, with `--explain <name>` for one binding's witness path or dead reason, and `--m24-link` for how much of M2.4's residual sits in unreachable code). Later: the rest of the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), `dictflow` (the whole-program dictionary flow, its erasure verdicts and its clone plan), `higher` (the function-valued boundaries and their representation verdicts), `verify-m24` (the independent re-derivation of every positive M2.4 verdict), `m24` (M2.4's accounting, its residual and its four cross-milestone links in one place), the `--view` / `--view-all` views `fields`, `lists`, `text`, `classops` and `higher` each carry, and `lower --reachability` (M3a's live set, its accounting, its rule table and the verifier's audit, with `--explain <name>` for one binding's witness path or dead reason, `--link <stable name>` for the whole-program linkage of one external name — its single defining binding, its referrers by module and rule, and its witness path — and `--m24-link` for how much of M2.4's residual sits in unreachable code). Later: the rest of the lowering passes. |
 
 ## Usage
 
@@ -3524,6 +3524,12 @@ Two things the earlier milestones had to work around were properties of the
 Dump format 5 removes both. The format bump is the whole of this milestone:
 **no analysis was allowed to change its mind about anything.**
 
+> *The current format is **6**, which keeps every field below with the same
+> name and shape and changes what a consumer may conclude from them: the
+> program is the one after GHC's `CoreTidy`, not before it. The contract is
+> set out field by field in
+> [dump format 6](#dump-format-6), and both formats load.*
+
 ### The format
 
 ```jsonc
@@ -6140,8 +6146,10 @@ the *verdicts* rest on rather than inputs either walk reads.
   anonymous lambdas passed as values, and a higher-order analysis that wants
   them has to name them first.
 * **A future dump format: global types and unfoldings.** The class table is
-  an axiom only because format 5 carries neither for a global. A format that
-  did would make it **derivable**, and the one level-5 assumption that both
+  an axiom only because the dump carries neither for a global — still true of
+  format 6, which widened the id table to every *external* global but did not
+  add a type or an unfolding body to it. A format that did would make the
+  table **derivable**, and the one level-5 assumption that both
   sides of the M2.4f check share would go.
 * **`Unresolved` and `Preserve` are not re-derived as claims** — the
   deliberate asymmetry, narrowed but not closed by M2.4f's whole-population
@@ -6212,7 +6220,7 @@ target. The sub-milestones:
 | | |
 |---|---|
 | **M3a** | `Main.main`-rooted reachability — **done**, with a linkage hole it measured rather than hid |
-| **M3a′** | dump post-CoreTidy Core and re-establish whole-program identity — **halted at its own `IdInfo` gate.** The resolver half is committed and proven; the plugin half is written, measured and withheld, because dumping the tidied program takes GHC's per-binder demand off every lambda, `case` and alternative binder, and M2.3b/M2.3c/M2.4b/M2.4c read it there. See [M3a′](#m3a--dump-post-coretidy-core-and-re-establish-whole-program-identity) |
+| **M3a′** | dump post-CoreTidy Core and re-establish whole-program identity — **done.** The resolver decides locality lexically; the plugin runs `CoreTidy` itself, serialises the tidied program and joins back, field by field, the facts CoreTidy discards (`demand`, `oneShot`, `exported`), with the alignment proved per module at extraction time. All seven dumps regenerated, `A5-IN-WORLD-MISSING` **0** on every one, dump format 6. **The M1–M2.4 re-baseline on the new dumps has not been done and is the next piece of work.** See [M3a′](#m3a--dump-post-coretidy-core-and-re-establish-whole-program-identity) |
 | **M3b** | the normalised IR — NIR, ANF/CFG-shaped, `FnId`/`ValueId`/`BlockId`, explicit `Delay`/`Force`/closure create/return, every instruction carrying `Origin { module, source_node/binder, rule }`, and **no `OpaqueCore` escape hatch** |
 | **M3c** | canonical carriers `Carrier(T)` plus closure conversion, so no anonymous `Lam` remains — this is what closes the open invariant `TypeShapeUniform` rests on |
 | **M3d** | polyvariant specialisation keyed by `(FnId, DictAssignment, ClosureShapeAssignment)` from a live-rooted worklist, closing the set-valued clone lower bounds without a call-string length |
@@ -6227,8 +6235,12 @@ and no anonymous closures, every optimisation traceable to an M1–M2.4
 proof, and at least one reachable lowered SCC emitted as Rust and compiled.
 
 Three forbidden temptations, stated so they can be refused by name: **no
-format-6 project** unless the lowering hits a concrete blocker format 5
-cannot represent; **no requirement to resolve every existing `Unresolved`**
+further dump-format project** unless the lowering hits a concrete blocker the
+current format cannot represent — M3a′ did bump the format to 6, and that was
+not a representational wish but the only honest way to mark a changed
+contract: the dump is now the post-`CoreTidy` program, and a format-5 consumer
+must not read it as the pre-tidy one; **no requirement to resolve every
+existing `Unresolved`**
 before lowering — the conservative NIR gives an unresolved case a correct
 fallback; and **no mutation of the source Core arena or its proof
 objects**.
@@ -6388,6 +6400,13 @@ and the full referrer list of a dead one.
 
 This is the milestone's real result, and it is a defect in the *dump*, not
 in the walk.
+
+> *This section records M3a as it stood, on the pre-`CoreTidy` dumps.
+> [M3a′](#m3a--dump-post-coretidy-core-and-re-establish-whole-program-identity)
+> fixed the defect: the plugin now serialises the tidied program, the dumps
+> have been regenerated on all seven profiles, and `A5-IN-WORLD-MISSING` is
+> **0** on every one. The numbers below are the pre-tidy ones and are kept
+> because they are what the finding was made of.*
 
 `h2r-plugin` appends its pass after the optimisation pipeline and
 serialises the `CoreProgram` **before GHC's `CoreTidy` pass** — and
@@ -6927,6 +6946,554 @@ untouched and remain correct for the dumps in the tree.
 *The M1–M2.4 re-baseline that was to follow this section has not been
 done, and must not be, until one of the options above is chosen and the
 dumps are regenerated under it.*
+
+### 2026-09-15, continued — the decision: option 1, and what it became
+
+Option 1 was chosen: **join the pre-tidy facts onto the tidied program.** The
+other three were refused for the reasons the table above gives — option 2
+gives up the implicit bindings and the trimming, so the dump is not the
+program GHC hands to codegen; option 3 ships two programs and makes M3b pick;
+option 4 throws away GHC's demand analysis, which nothing on the Rust side can
+recompute.
+
+It did not stay a whole-`IdInfo` transplant. `tidyTopIdInfo` does real
+finalisation — the arity codegen relies on, the final demand and CPR
+signatures, the robustified occurrence info, the unfolding that reaches the
+interface — and `tidyCbvInfoTop` / `tidyCbvInfoLocal` put the call-by-value
+marks onto the `IdDetails` codegen reads. Overwriting all of that with the
+pre-tidy `IdInfo` would undo genuine codegen-facing work and make the dump
+*less* the program GHC compiles. So the join is **field-level, with a stated
+owner per field**, and it supplies only what CoreTidy discards.
+
+### The provenance contract
+
+| field | top | let | lam | case | alt | why |
+|---|---|---|---|---|---|---|
+| `demand` | **pre** | post | **pre** | **pre** | **pre** | `tidyIdBndr` rebuilds lambda/case/alt binders from `vanillaIdInfo` (`Core/Tidy.hs:305-308`, which sets only occ-info, the unfolding and one-shot); `tidyTopIdInfo`'s setter list has no `setDemandInfo` (`Iface/Tidy.hs:1225-1241`). `tidyLetBndr` **does** keep it (`Core/Tidy.hs:356`), so a `let` binder's demand is CoreTidy's. |
+| `oneShot` | **pre** | **pre** | post | post | post | Neither `tidyTopIdInfo` nor `tidyLetBndr` puts it back; `tidyIdBndr` sets it explicitly for lambda binders (`Core/Tidy.hs:308`, *Note [Preserve OneShotInfo]*), which is the only class a reader uses it on. |
+| `exported` | **pre** | post | post | post | post | Post-tidy every top-level binder is a `GlobalId`, so `isExportedId` is uniformly `True` and carries no information. Nested binders are `False` on both sides. |
+| `arity`, `callArity`, `dmdSig`, `cprSig`, `occInfo`, `details`, `hasUnfolding`, `isJoinPoint`, `isDataCon`, the type | post | post | post | post | post | CoreTidy finalises these, and the finalised value is the one the compiled program has. |
+
+Which reader needs which joined field, named rather than asserted:
+
+| field | binder class | reader | milestone |
+|---|---|---|---|
+| `demand.strict` | alternative binder | `h2r-analysis/src/fields.rs:883` (`demand_of`) | M2.3b |
+| `demand.strict && !absent` | alternative binder | `h2r-analysis/src/lists/mod.rs:1359` (`head_forced`) | M2.3c |
+| `demand.strict` | lambda binder | `h2r-analysis/src/dictflow.rs:2267` | M2.4c |
+| `demand.strict` | lambda (dictionary parameter) | `h2r-analysis/src/classops.rs:960` (`dict_known_strict`) | M2.4b |
+| `demand.strict` | lambda (dictionary parameter) | `h2r-analysis/src/dictflow.rs:1623` (`Param::known_strict`) | M2.4c |
+| `exported` | top level | `dictflow`, `higher`, `boundary`, `flow`, `m24`, `tuples`, `classops`, `verify`, `verify_rep`, `verify_m24` | M2.2–M2.4 |
+| `one_shot` | **lambda** — taken *post*-tidy | `h2r-analysis/src/laziness.rs:421` (`transparent_lambda`) | M1 |
+
+Two fields CoreTidy drops are deliberately **not** joined, because the search
+for readers found none: `cprSig` on a `let` binder (`tidyLetBndr` has no
+`setCprSigInfo`; 38 binders in the `-O1` world) and `callArity` (dropped
+everywhere, and 0 on every binder of every class in the `-O1` world). Their
+only consumer is a `h2r stats` census column, which is a report, not a proof.
+If a later milestone needs either, the join is one line per field.
+
+### `exported`, and the fact the milestone brief expected that is not true
+
+The brief proposed redefining `exported` as membership of the tidied `Name` in
+`availsToNameSet (mg_exports guts)`, expecting it to agree with the pre-tidy
+`isExportedId`. **It does not**, and the plugin measures the gap on every
+module. Over the `-O1` world:
+
+| | |
+|---|---:|
+| aligned top-level binders with pre-tidy `isExportedId` — the **emitted** `exported` | 1200 |
+| …in `availsToNameSet (mg_exports)` — emitted as `sourceExported` | 342 |
+| …disagreements | 858 |
+| aligned top-level binders whose tidied `Name` is external — emitted as `externalName` | 6102 |
+
+1200 − 342 = 858 exactly, so the source export list is a **strict subset** of
+the compiler's export flag. The desugarer marks as exported everything that
+must survive to the interface, not only what the module's export list names:
+dfuns (`$fClassyFoo`), `Typeable` bindings (`$trModule`, `$tcFoo`, `$tc'Foo`),
+class default methods (`$dmclassy`). All of those *are* referable from another
+module, so `isExportedId` is the fact the analyses want, and it is the fact the
+pre-tidy dumps carried. `exported` therefore keeps its meaning and its value,
+and the two narrower facts are emitted beside it as diagnostics that **nothing
+reads in this milestone**. An implicit binding has no pre-tidy binder to read
+`exported` from, and post-tidy `isExportedId` would say `True` for all of them,
+so those — the four in `ShellCheck.Fixer`, and only those — take
+`sourceExported`.
+
+### The three GHC facts the join rests on, with their source lines
+
+Read from GHC 9.6.7's own source, and cited in the plugin at the call site:
+
+**(a) `tidyExpr` is structure-preserving.** `GHC/Core/Tidy.hs:207-233`: `Var`,
+`Lit`, `App`, `Lam`, `Let`, `Case`, `Cast`, `Tick`, `Type` and `Coercion` each
+map to the same constructor; `tidyAlt` (`:230-233`) rebuilds an `Alt` with the
+same `AltCon` and the same number of binders; and `map (tidyAlt env') alts`
+(`:223`) keeps the alternatives in order. A pre-tidy right-hand side and its
+tidied counterpart are the same tree, node for node.
+
+**(b) Nested binders keep their `Unique`; top-level binders do not.**
+`tidyIdBndr` (`Core/Tidy.hs:300`) and `tidyLetBndr` (`Core/Tidy.hs:326`) both
+build `mkInternalName (idUnique id) occ' noSrcSpan` — the print name is
+freshened, the unique is the old one; `tidyVarBndr` does the same for type and
+coercion variables. At the top level `tidyTopName`
+(`Iface/Tidy.hs:1069-1093`) takes a **fresh** unique from the name cache for
+every name that was local: `takeUniqFromNameCache` (`:1084`) when it stays
+internal, `allocateGlobalBinder` (`:1092`) when it is externalised. Only names
+that were **already** global keep theirs (`:1073-1074`) — which is why an
+import occurrence is literally the same `Var` before and after. The plugin
+checks that on every aligned pair: **44,858 import occurrences agree in name
+and unique, 0 disagree.**
+
+**(c) Order is preserved end to end; the implicit bindings are a prefix; a
+trimmed binding never has an exported binder.** `tidyProgram`
+(`Iface/Tidy.hs:381-387`) builds `all_binds = implicit_binds ++ binds`, where
+`implicit_binds = concatMap getImplicitBinds tcs` (`:381`). `getImplicitBinds`
+(`:611-626`) yields exactly the class selectors (`getClassImplicitBinds`,
+`ClassOpId`) and the data constructor **wrappers** (`getTyConImplicitBinds`,
+`DataConWrapId`) — constructor *workers* are never Core bindings, which is why
+M3a's "277 data-constructor names explained by GHC's own flags" is still the
+right classification for them. `findExternalRules` (`:976-1050`) then filters
+that list with `trim_binds`, which keeps a `CoreBind` group **whole** when
+`any needed bndrs` and discards it **whole** otherwise (`:1039-1045`), where
+`needed bndr = isExportedId bndr || bndr \`elemVarSet\` needed_fvs` (`:1046`).
+`tidyTopBinds` is `mapAccumL tidyTopBind` (`:1165`) — one tidied group per
+input group, in order — and `tidyTopBind` keeps `NonRec`/`Rec` and the order of
+a `Rec` group's pairs (`:1174-1190`). The only later insertion is
+`sptCreateStaticBinds` (`:390-392`), which runs only when `StaticPointers` is
+on (`Driver/Config/Tidy.hs:33-35`); the pass reads `opt_static_ptr_opts` and
+records that it is **off on all 28 modules**, so the SPT column is 0 by
+construction and not by hope.
+
+### The alignment theorem, asserted at extraction time
+
+From (c) the alignment is a two-pointer merge over `mg_binds` and `cg_binds` in
+order. Order alone would leave "we took the first structural match" as the
+justification, so uniqueness is proved a **second time, independently of
+order**, with a fingerprint CoreTidy preserves exactly: the
+expression-constructor tree, every nested binder's `Unique`, every literal,
+every `AltCon`, and the stable name of every occurrence of an import or of one
+of the implicit ids. An occurrence of one of the module's *own* top-level
+bindings is the one thing that cannot be fingerprinted directly — tidy
+reallocates its unique and may rename it — so it is a **hole**, closed by
+partition refinement: every binding starts with one colour, each round
+re-fingerprints with the previous round's colours in the holes, and the rounds
+stop when the partition stops splitting. Both programs are coloured
+**together**, in one shared numbering, so a colour means the same thing on
+both sides of the tidy. Colours are 64-bit FNV-1a hashes; a collision can only
+*merge* two colours, which surfaces as a tie and is then resolved below — it
+can never make two different structures look aligned, because the lockstep zip
+is what admits a pair.
+
+What the pass asserts, per module, and aborts the extraction on:
+
+1. every aligned tidied binding has **exactly one** pre-tidy binding of the
+   same refined fingerprint — **13,499 of 13,660** — or, where several
+   pre-tidy bindings are structurally indistinguishable, **all of them carry
+   the same joined facts**, so which one the merge picked cannot change a byte
+   — **161 of 161 ties are vacuous in that sense.** A tie that is not vacuous
+   aborts.
+2. every aligned pair passes a **strict lockstep zip** of the two trees before
+   any field is merged: node for node, alternative for alternative, `AltCon`
+   for `AltCon`, binder for binder with equal uniques. A mismatch aborts,
+   naming the module and the binding.
+3. every unmatched pre-tidy group is a `trim_binds` trim and **has no exported
+   binder** (`Iface/Tidy.hs:1046`). A counter-example aborts. There were none.
+4. every unmatched tidied group is a `getImplicitBinds` injection, identified
+   by `IdDetails` (`ClassOpId` / `DataConWrapId`), never by a name. Anything
+   else aborts, and the log records that SPT insertion was impossible.
+5. the implicit bindings are a prefix of the tidied program, as (c) says.
+
+Nothing is keyed by a unique across the module: uniques are not unique in
+optimised Core, and two copies of one binder can carry different demands. The
+zip is positional inside one aligned pair, and the fingerprint is compared
+whole.
+
+Each module's counts go to `compiler/core-json/<Module>.tidy-align.txt`
+beside its dump (136 KB for all 28), and a one-line summary to stderr during
+the build. The Rust loader reads `*.core.json` only
+(`h2r_core_ir::load_dir`), so the sidecar is inert.
+
+### The alignment, per module
+
+Groups are `CoreBind`s — a recursive group is one — and `bOut`/`bTrim` are
+top-level *binders*, which is what the dump's top-level pair count is.
+
+| module | aligned | implicit | trimmed | spt | unique FP | tied | vacuous | bOut | bTrim | `exported` | `sourceExported` | `externalName` |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `Main` | 500 | 0 | 1 | 0 | 487 | 13 | 13 | 501 | 1 | 24 | 1 | 80 |
+| `Paths_ShellCheck` | 63 | 0 | 0 | 0 | 63 | 0 | 0 | 63 | 0 | 9 | 8 | 63 |
+| `ShellCheck.AST` | 1067 | 0 | 0 | 0 | 1063 | 4 | 4 | 1083 | 0 | 381 | 6 | 840 |
+| `ShellCheck.ASTLib` | 328 | 0 | 1 | 0 | 319 | 9 | 9 | 345 | 1 | 85 | 78 | 190 |
+| `ShellCheck.Analytics` | 2659 | 0 | 9 | 0 | 2632 | 27 | 27 | 2667 | 9 | 8 | 2 | 991 |
+| `ShellCheck.Analyzer` | 8 | 0 | 0 | 0 | 8 | 0 | 0 | 8 | 0 | 3 | 2 | 8 |
+| `ShellCheck.AnalyzerLib` | 648 | 0 | 1 | 0 | 645 | 3 | 3 | 649 | 1 | 117 | 81 | 334 |
+| `ShellCheck.CFG` | 973 | 0 | 10 | 0 | 930 | 43 | 43 | 993 | 10 | 121 | 7 | 557 |
+| `ShellCheck.CFGAnalysis` | 866 | 0 | 28 | 0 | 853 | 13 | 13 | 867 | 28 | 124 | 19 | 490 |
+| `ShellCheck.Checker` | 36 | 0 | 0 | 0 | 36 | 0 | 0 | 36 | 0 | 2 | 1 | 6 |
+| `ShellCheck.Checks.Commands` | 1238 | 0 | 14 | 0 | 1232 | 6 | 6 | 1240 | 14 | 10 | 2 | 65 |
+| `ShellCheck.Checks.ControlFlow` | 14 | 0 | 2 | 0 | 14 | 0 | 0 | 14 | 2 | 3 | 2 | 14 |
+| `ShellCheck.Checks.Custom` | 9 | 0 | 0 | 0 | 7 | 2 | 2 | 9 | 0 | 2 | 1 | 9 |
+| `ShellCheck.Checks.ShellSupport` | 901 | 0 | 5 | 0 | 895 | 6 | 6 | 901 | 5 | 4 | 1 | 134 |
+| `ShellCheck.Data` | 1340 | 0 | 0 | 0 | 1340 | 0 | 0 | 1340 | 0 | 20 | 19 | 1340 |
+| `ShellCheck.Fixer` | 91 | **4** | 0 | 0 | 91 | 0 | 0 | 96 | 0 | 15 | 3 | 59 |
+| `ShellCheck.Formatter.CheckStyle` | 53 | 0 | 0 | 0 | 53 | 0 | 0 | 53 | 0 | 2 | 1 | 38 |
+| `ShellCheck.Formatter.Diff` | 154 | 0 | 1 | 0 | 154 | 0 | 0 | 155 | 1 | 9 | 1 | 33 |
+| `ShellCheck.Formatter.Format` | 62 | 0 | 0 | 0 | 62 | 0 | 0 | 62 | 0 | 17 | 14 | 44 |
+| `ShellCheck.Formatter.GCC` | 22 | 0 | 0 | 0 | 22 | 0 | 0 | 22 | 0 | 2 | 1 | 11 |
+| `ShellCheck.Formatter.JSON` | 66 | 0 | 3 | 0 | 63 | 3 | 3 | 66 | 3 | 5 | 1 | 38 |
+| `ShellCheck.Formatter.JSON1` | 88 | 0 | 3 | 0 | 84 | 4 | 4 | 88 | 3 | 9 | 1 | 56 |
+| `ShellCheck.Formatter.Quiet` | 11 | 0 | 0 | 0 | 11 | 0 | 0 | 11 | 0 | 2 | 1 | 11 |
+| `ShellCheck.Formatter.TTY` | 93 | 0 | 0 | 0 | 93 | 0 | 0 | 93 | 0 | 2 | 1 | 8 |
+| `ShellCheck.Interface` | 678 | 0 | 2 | 0 | 674 | 4 | 4 | 678 | 2 | 175 | 74 | 549 |
+| `ShellCheck.Parser` | 1625 | 0 | 0 | 0 | 1601 | 24 | 24 | 1645 | 0 | 34 | 1 | 105 |
+| `ShellCheck.Prelude` | 42 | 0 | 0 | 0 | 42 | 0 | 0 | 42 | 0 | 7 | 6 | 16 |
+| `ShellCheck.Regex` | 25 | 0 | 0 | 0 | 25 | 0 | 0 | 25 | 0 | 8 | 7 | 13 |
+| **TOTAL** | **13660** | **4** | **80** | **0** | **13499** | **161** | **161** | **13752** | **80** | **1200** | **342** | **6102** |
+
+**The net −76 explained rather than observed.** 13,828 pre-tidy top-level
+binders = 13,748 aligned + 80 trimmed; 13,752 emitted = 13,748 aligned + 4
+implicit. Every one of the 80 is named in its module's sidecar, and they are
+overwhelmingly auto-specialisations that nothing but an auto-generated rule
+kept alive, which is exactly *Note [Trimming auto-rules]*: `$sinsert`,
+`$ssplit`, `$sinsertR`, `$sfromListWithKey`, `$ssplitS`, `$s$wsplit`,
+`$s$fMonadRWST1`, `$ssequence__c`, `$s$cshow`, `$s$cshowsPrec`,
+`$s$fMonadStateT1`, `$s$w$c<*>`, `$snew`, `$sunstream`,
+`$snewSystemInterface`, plus a handful of `lvl_`, `go4_`, `poly_go15_` and
+`$wgo1_` bindings that were only reachable from them. The 4 implicit bindings
+are `ShellCheck.Fixer`'s `Range` class selectors — `start`, `end`, `overlap`,
+`setRange` — all `[ClassOp]`, all in that module's export list.
+
+### The three-column census, with the owning side named
+
+`pre` is the pre-tidy program, `post-raw` the tidied program with no join,
+`joined` what the dump now carries. All three were emitted **from one
+compilation process through one emitter**, so there is no internal-unique
+confound between the columns.
+
+The invariant is checked per binder, not by these totals: over all 28 modules,
+**115,537 aligned binders, every field equal to its owning side's value, 0
+violations.** (The dump has 115,569 binders; the other 32 belong to the four
+implicit bindings, which have no pre-tidy counterpart and read everything from
+themselves.) The totals below then differ from the owning column only by
+population, and the population differs only by the 80 trimmed binders (−) and
+the 4 implicit ones (+).
+
+| binder class | pre | post-raw | joined |
+|---|---:|---:|---:|
+| top | 13828 | 13752 | 13752 |
+| let | 6156 | 6125 | 6125 |
+| lam | 24202 | 23950 | 23950 |
+| case | 25076 | 24923 | 24923 |
+| alt | 47078 | 46819 | 46819 |
+
+Only the rows where `joined` is not literally equal to the owning column are
+listed; every other row is equal to the byte, and the full table is in the
+scratchpad. Each difference here is a *population* difference, attributed:
+
+| field | class | pre | post-raw | joined | owner | difference |
+|---|---|---:|---:|---:|---|---|
+| `demand absent` | lam | 1515 | 0 | 1513 | pre | −2 trimmed |
+| `demand absent` | case | 21065 | 0 | 20936 | pre | −129 trimmed |
+| `demand absent` | alt | 14344 | 0 | 14282 | pre | −62 trimmed |
+| `demand pretty != L` | top | 820 | 0 | 818 | pre | −2 trimmed |
+| `demand pretty != L` | lam | 11544 | 0 | 11386 | pre | −158 trimmed |
+| `demand pretty != L` | case | 21911 | 0 | 21776 | pre | −135 trimmed |
+| `demand pretty != L` | alt | 35170 | 0 | 35015 | pre | −155 trimmed |
+| `demand strict` | lam | 6026 | 0 | 5900 | pre | −126 trimmed |
+| `demand strict` | alt | 22956 | 0 | 22872 | pre | −84 trimmed |
+| `demand usedOnce` | lam | 9518 | 0 | 9382 | pre | −136 trimmed |
+| `demand usedOnce` | case | 21890 | 0 | 21755 | pre | −135 trimmed |
+| `demand usedOnce` | alt | 29245 | 0 | 29107 | pre | −138 trimmed |
+| `exported` | top | 1200 | 346 | 1204 | pre | +4 implicit (all four in `Fixer`'s export list) |
+
+`demand strict` on a **case** binder is 532 in all three of pre, post-raw's
+would-be value and joined, because none of the trimmed bindings held one;
+`oneShot` on **top** (25) and **let** (187) is likewise unchanged by the
+trimming. The rows the join does **not** own are equal to `post-raw` to the
+digit, including the ones where CoreTidy's value differs sharply from the
+pre-tidy one and that is deliberate: `hasUnfolding` on a `let` binder
+(5828 → 3245 — CoreTidy decided what the interface exposes), `occInfo
+loopBreaker` at top level (691 → 250 — `zapFragileOcc`), `details` (945 → 848
+at top, 1423 → 1327 in lets — the CBV marks), `dmdSig pretty non-empty` in
+lets (3182 → 2738 — `zapDmdEnvSig` drops the demand environment while keeping
+every argument demand: `dmdSig with >=1 arg demand` is 2755 → 2738, which is
+the trimming alone), and `cprSig` in lets (38 → 0, not joined because no
+analysis reads it).
+
+The **pair-level shape facts** (`whnf`, `trivial`, `cheap`, `okForSpec`) and
+the whole **id table** are computed from the tidied program by design, and are
+equal to `post-raw` exactly: pairs 13752/6125, `whnf` 10997/3399, `cheap`
+11109/3758, `okForSpec` 11035/3631, `trivial` 54/0; id table 2972 → **8056**
+entries, `hasUnfolding` 2043 → 7103, `dataCon` 1071 → 1064, `isClassOp` 56 →
+56.
+
+### Dump format 6
+
+The dump's *semantic contract* changed, not only its content, so the number
+changed with it. Format 5 was the program **before** `CoreTidy`; format 6 is
+the program **after** it — the one GHC hands to codegen. Field names and
+shapes are format 5's; what a consumer may conclude from them is not.
+
+| | format 5 | format 6 |
+|---|---|---|
+| top-level names | pre-tidy: a binding can carry a name no other module uses | CoreTidy's: a stable name links across modules |
+| top-level binder `isGlobalId` | `False` (module-local binders are `LocalId`s) | `True` for all of them — which is why the resolver decides locality lexically (see above) |
+| population | `mg_binds` | `cg_binds`: the implicit class-op selectors and constructor wrappers injected, the rule-only-live bindings trimmed |
+| `ids` (id table) | every referenced `GlobalId` | only those with an **external** `Name` — an internal stable string is not unique (M2.4h) |
+| `demand` | GHC's, everywhere | GHC's, everywhere — joined back on top/lam/case/alt, CoreTidy's on lets |
+| `oneShot` | GHC's, everywhere | joined back on top/let, CoreTidy's on lambdas |
+| `exported` | `isExportedId` | `isExportedId`, unchanged in meaning and value (implicit bindings: the source export list) |
+| `arity`, `callArity`, `dmdSig`, `cprSig`, `occInfo`, `details`, `hasUnfolding`, `isJoinPoint`, `isDataCon`, types | pre-tidy | **CoreTidy's finalised values** |
+| `whnf` / `trivial` / `cheap` / `okForSpec` | on the pre-tidy RHS | on the tidied RHS |
+| `externalName`, `sourceExported` | — | **new**, top-level binders only, **diagnostics**; nothing reads them |
+| structured types, hash-consed `types` table, stable-name keys | yes | yes, unchanged |
+
+`h2r-core-ir` loads **both**: `raw::FORMATS_ACCEPTED = [5, 6]`, the number is
+recorded on `Module::format`, `h2r stats` prints it, and **no analysis
+branches on it**. That is what keeps the old format-5 dumps in the scratchpad
+readable, which is what makes the compatibility check below possible. Any
+other number is refused, as before.
+
+The plugin's `ghc` bound is now `>= 9.6 && < 9.7`: the join rests on
+documented GHC 9.6.7 internals, cited by line and asserted per module at
+extraction time. A different series has to be re-read and re-proved, not
+assumed. There are no version-specific branches in the plugin.
+
+### The seven dumps, regenerated
+
+`-O1` was extracted **twice more, in independent build trees and separate
+process runs**, and all 28 dumps — and all 28 alignment sidecars — are
+**byte-identical** across them. (Three runs in all, counting the first: 0
+differing files in every pairing.) `compiler/matrix/A` is a fourth,
+independent `-O1` extraction and its reachability report is identical to
+`compiler/core-json`'s line for line.
+
+| profile | top | live | dead (0-ref) | dead (only-dead) | % dead | inter-module edges | `A5` names | `A5` occurrences | verifier claims / disagreements |
+|---|---|---|---|---|---|---|---|---|---|
+| **A** `-O1` | 13828 → 13752 | 3997 → **9795** | 976 → 905 | 8855 → 3052 | 71.1 → **28.8** | 498 → **1288** | 112 → **0** | 1232 → **0** | 113325/0 → 116029/0 |
+| **B** `-O2` | 13957 → 13867 | 3525 → **9894** | 1000 → 921 | 9432 → 3052 | 74.7 → **28.7** | 490 → **1317** | 125 → **0** | 1376 → **0** | 115720/0 → 118510/0 |
+| **C** | 6073 → 6035 | 1260 → **2759** | 930 → 893 | 3883 → 2383 | 79.3 → **54.3** | 487 → **816** | 83 → **0** | 659 → **0** | 50133/0 → 51433/0 |
+| **D** | 7209 → 6889 | 1484 → **3082** | 1057 → 921 | 4668 → 2886 | 79.4 → **55.3** | 635 → **1084** | 109 → **0** | 1793 → **0** | 64002/0 → 63668/0 |
+| **E** | 7209 → 6889 | 1484 → **3082** | 1057 → 921 | 4668 → 2886 | 79.4 → **55.3** | 635 → **1084** | 109 → **0** | 1451 → **0** | 63582/0 → 63077/0 |
+| **F** | 7197 → 6879 | 1482 → **3078** | 1055 → 921 | 4660 → 2880 | 79.4 → **55.3** | 642 → **1085** | 109 → **0** | 1433 → **0** | 63479/0 → 62977/0 |
+
+`A5-IN-WORLD-MISSING` is **0 on all seven dumps**, which was the gate.
+`STATUS — THE DEAD SET IS CONDITIONAL` therefore does not print on any of
+them; the check is still there and the report now says, in one line,
+`A5-IN-WORLD-MISSING 0: the dead set is unconditional`.
+`A11-MISSING-IMPACT` is untouched and prints nothing when there is no hole.
+On `-O1` the remaining in-world non-bindings are **277 data-constructor names
+over 3827 occurrences and 0 class-op selectors** — the class-op selectors are
+now real top-level bindings, and constructor *workers* never were Core
+bindings at all (fact (c)).
+
+Every module now has a nonzero live count. The ones that had none:
+
+| module | live, old → new |
+|---|---|
+| `ShellCheck.Checks.Commands` | 0 → 1184 |
+| `ShellCheck.Checks.ShellSupport` | 0 → 870 |
+| `ShellCheck.CFG` | 0 → 355 |
+| `ShellCheck.CFGAnalysis` | 0 → 292 |
+| `ShellCheck.Formatter.Diff` | 0 → 106 |
+| `ShellCheck.Formatter.TTY` | 0 → 87 |
+| `ShellCheck.Formatter.JSON1` / `JSON` / `CheckStyle` / `GCC` / `Format` / `Quiet` | 0 → 48 / 44 / 47 / 16 / 19 / 4 |
+| `ShellCheck.Fixer` | 0 → 30 |
+| `ShellCheck.Prelude` | 0 → 29 |
+| `ShellCheck.Analytics` | 489 → 2646 |
+| `ShellCheck.Interface` | 1 → 30 |
+
+### The two pinned links, and `lower --link`
+
+`LiveSet::link` answers, for one **external** stable name: the single
+top-level binding that defines it, found through the external-name index and
+never by a name heuristic; every binding that refers to it, grouped by module
+and by the rule that made the edge; and its shortest witness chain from
+`Main.main`. The fact lives in the proof object so it can be tested; `h2r
+lower --reachability --link <stable name>` prints it. An internal name is
+**refused with the reason**, not answered — internal stable strings are not
+unique, so there is no single binding to point at.
+
+```
+$ h2r lower --reachability compiler/core-json \
+      --link '$ShellCheck-0.11.0-inplace$ShellCheck.Checks.Commands$$wchecker'
+
+  defined by exactly one top-level binding [A12-EXTERNAL-UNIQUE]
+    module ShellCheck.Checks.Commands   binder #1238   occ $wchecker
+    the name is external, so another module can name it [A3-EDGE-GLOBAL]
+
+  referenced by 2 top-level binding(s) over 2 occurrence(s), in 2 module(s)
+         1 occ over    1 binding(s)  ShellCheck.Analyzer         [A3-EDGE-GLOBAL]
+         1 occ over    1 binding(s)  ShellCheck.Checks.Commands  [A2-EDGE-LOCAL]
+
+  LIVE — witness [A9-WITNESS], 5 hop(s) from the root
+      0. Main                        $…-shellcheck$Main$main            [A1-ROOT-MAIN]
+      1. Main                        $…-shellcheck$Main$main1           [A2-EDGE-LOCAL]
+      2. Main                        $_in$poly_$j1#485                  [A2-EDGE-LOCAL]
+      3. ShellCheck.Checker          $…$ShellCheck.Checker$checkScript  [A3-EDGE-GLOBAL]
+      4. ShellCheck.Analyzer         $…$ShellCheck.Analyzer$analyzeScript [A3-EDGE-GLOBAL]
+      5. ShellCheck.Checks.Commands  $…$ShellCheck.Checks.Commands$$wchecker [A3-EDGE-GLOBAL]
+```
+
+```
+$ h2r lower --reachability compiler/core-json \
+      --link '$ShellCheck-0.11.0-inplace$ShellCheck.Formatter.TTY$format1'
+
+  defined by exactly one top-level binding [A12-EXTERNAL-UNIQUE]
+    module ShellCheck.Formatter.TTY   binder #91   occ format1
+  referenced by 2 top-level binding(s) over 2 occurrence(s), in 2 module(s)
+         1 occ over    1 binding(s)  Main                      [A3-EDGE-GLOBAL]
+         1 occ over    1 binding(s)  ShellCheck.Formatter.TTY  [A2-EDGE-LOCAL]
+
+  LIVE — witness [A9-WITNESS], 4 hop(s) from the root
+      0. Main  $…-shellcheck$Main$main   [A1-ROOT-MAIN]
+      1. Main  $…-shellcheck$Main$main1  [A2-EDGE-LOCAL]
+      2. Main  $_in$poly_$j1#485         [A2-EDGE-LOCAL]
+      3. Main  $_in$formats#140          [A2-EDGE-LOCAL]
+      4. ShellCheck.Formatter.TTY  $…$ShellCheck.Formatter.TTY$format1 [A3-EDGE-GLOBAL]
+```
+
+Both are exactly the two names M3a could not link. Each resolves to **one**
+defining top-level binding, through the external-name index; each is live;
+and the witness paths are the ones the scratch measurement predicted.
+
+Seven tests on the synthetic two-module world cover the view itself: the link
+names the one defining binding and its referrers, crosses a module through a
+local hop, refuses an internal name and refuses an occurrence name, reports a
+dead binding with no witness, and the identity-rule counts hold — with a
+world that violates `A13` failing loudly.
+
+### Two new rules, reported with their counts
+
+| rule | level | meaning | `-O1` |
+|---|---|---|---:|
+| `A12-EXTERNAL-UNIQUE` | 5 | every external in-world stable name is defined by exactly one top-level binding | 6106 names defined, **0** collisions |
+| `A13-GLOBAL-EXTERNAL` | 4 | no `Ref::Global` occurrence carries an internal stable name | **0** occurrences, **0** distinct names |
+
+`A12` is what makes `A3-EDGE-GLOBAL` an identity rather than a guess.
+`RootError::NameCollisions` already *refused* a world where it fails; now the
+size of the index and the collision count are printed, and
+`Accounting::check` asserts the latter is 0. The IR resolver's own
+unique-collision guard is summed over the world and printed beside them:
+**0**, on all seven dumps, as `h2r stats` also reports. All three counts hold
+on all seven.
+
+### The compatibility re-check, on the old format-5 dumps
+
+The old `-O1` dump in the scratchpad still loads, and with the final binary
+produces, for every report:
+
+| | |
+|---|---:|
+| report files captured (stdout and stderr apart) | 94 |
+| …byte-identical to the previous capture | **88** |
+| …differing | **6**, and every difference is an *added line* |
+
+* `stats`, `stats --per-module`: one added line each, `dump format 5
+  (pre-CoreTidy)`. Nothing else.
+* `lower --reachability`, `… --m24-link`: one added eight-line block, the
+  identity-rule counts. The `STATUS — THE DEAD SET IS CONDITIONAL` block is
+  **unchanged and still printed**, because `A5` is 112 on that dump — the new
+  one-line verdict only appears when `A5` is 0, so the wording change is
+  invisible here.
+* `lower --rules`: the two added rule rows.
+* `lower --json`: five added `accounting` keys
+  (`external_names_defined` 1288, `external_name_collisions` 0,
+  `global_internal_names` 0, `global_internal_occurrences` 0,
+  `unique_collisions` 0) and the two added rules. Compared structurally with
+  those removed, the rest of the document is **identical**.
+
+### The transparency re-run, on the final plugin
+
+Three builds of the stripped ShellCheck tree from the same sources: **(a)** no
+plugin, **(b)** the plugin as it was before this milestone (pre-tidy dump,
+no extra tidy), **(d)** the final plugin.
+
+| | result |
+|---|---|
+| executable behaviour, (a) vs (b) vs (d) | **identical** — 117 invocations (every `*.sh` in the repo through 7 formatters, 12 inline cases through 7 formatters plus the fixer, `--version`, `--help`), output *and* exit codes, 710 lines, byte-identical in all three |
+| interface surface, **(b) vs (d)** — the measurement that isolates the extra tidy | **`ABI hash` and `export-list hash` unchanged on all 27 modules.** The only differences are the 27 `addDependentFile` lines naming the plugin's own `.so` (different path, different content) and the 27 `interface hash:` values that follow: 108 diff lines, 54 of each, and nothing else |
+| interface surface, (a) vs (d) | differs only in plugin-presence bookkeeping: `plugin package dependencies`, `trusted package dependencies`, the `.so` and package `addDependentFile` lines, and — on the two modules Safe Haskell had inferred safe, `Paths_ShellCheck` and `ShellCheck.Prelude` — `trusted: safe-inferred` → `trusted: none`, which does move those two `ABI hash`es. That is *loading a plugin at all*, not the extra tidy: (b) vs (d) shows the extra tidy moves neither |
+| object symbols, (b) vs (d) | 20 of the 27 `.o` files differ byte-wise; **9,504 defined symbols in each, and of the 1,418 symbol names that differ, 0 are anything but a `<unique>_str` string-literal symbol or a `.Lr<unique>_bytes` local label** — symbols whose *names are internal uniques*. Consistent with, and only with, internal-unique perturbation |
+| `shellcheck` binary sha256 | (a) `1c2e2f59…`, (d) `2468445e…` — they differ, as (a) vs (b) already did for a plugin that touched nothing |
+| deterministic repeat extraction | byte-identical across three independent build trees and three process runs, all 28 dumps and all 28 sidecars |
+
+What still could not be determined, unchanged from the earlier record:
+whether the `.o` bytes differ *only* in those symbol names and the relocations
+that follow them. `nm` shows the symbol tables agree; a byte-level attribution
+would need a full `objdump` comparison of 27 objects.
+
+### A sanity pass over the M2 readers — and the one number that moved structurally
+
+Run on the new `-O1` dump. "raw" is the tidied program with **no** join,
+which is what the join had to avoid. **These are not a re-baseline**; the
+M1–M2.4 numbers in this document are still the ones for the old dumps, and
+re-deriving them is the next agent's work.
+
+| report | old (pre-tidy) | raw post-tidy | **new (joined)** |
+|---|---:|---:|---:|
+| `fields`: observed / unobserved / escaped | 1407 / 13 / 7746 | 191 / 1 / 8931 | **1395 / 1 / 7727** |
+| `fields`: `Always` verdicts | 196 | 34 | **196** |
+| `fields`: `Conditional` verdicts | 915 | 275 | **895** |
+| `lists`: `SpineDemand::Unknown` | 5503 | 8895 | **5503** |
+| `lists`: `Whole` | 141 | 62 | **141** |
+| `lists`: `Prefix(DataDependent)` | 921 | 145 | **921** |
+| `classops`: dictionary known strict at its binder | 247 | 0 | **236** |
+| `classops`: class-op dispatch sites | 565 | 554 | **554** |
+| `dictflow`: `Exact(target)` sites | 7 (1.2%) | 0 | **0 (0.0%)** |
+| `laziness`: potential thunk sites | 2242 | 2228 | **2228** |
+
+Every reader lands at or beside its old value, not at the raw one — except
+`dictflow`'s `Exact`, which is 0 on both. That one was chased down rather
+than waved through, and it is **not the join failing**:
+
+* all 7 `Exact` sites were `setRange`, `end` and `start` — the `Range` class
+  of `ShellCheck.Fixer`;
+* those are exactly the four class-op selectors `getImplicitBinds` now injects
+  as **real top-level bindings** of `ShellCheck.Fixer`;
+* so an occurrence of one is no longer a `Ref::Global` naming a class-op
+  selector the dump does not contain. It resolves `Ref::Local` to a top-level
+  binding of its own module, and `dictflow` no longer classifies it as a
+  class-op dispatch site at all. The site population falls 565 → 554, and the
+  11 sites that leave take the 7 `Exact` verdicts with them.
+
+That is the dump getting *better*, in precisely the way `A5`'s "0 class-op
+selectors remain" line reports: the dispatch M2.4c had to model as a bounded
+class-op site is now a plain call to a selector binding the world contains.
+Whether `dictflow` should still count such a call as a dispatch site is a
+question for the re-baseline, and it is flagged here rather than decided.
+The join itself is proved directly, not by these numbers: **115,537 aligned
+binders, every field equal to its owning side, 0 violations** — and
+`classops`' 236 (raw: 0) and `fields`' 1395 (raw: 191) are what a working
+join looks like.
+
+Every independent verifier on the new `-O1` dump:
+
+| verifier | claims | disagreements |
+|---|---:|---:|
+| `tuples --verify` | 1227 removable verdicts | **0** |
+| `verify-rep` | every M2.3 representation verdict | **0** |
+| `verify-m24` | every positive M2.4 claim | **0** |
+| `lower --reachability`'s | 116029 | **0** |
+
+`cargo fmt --all --check` clean, `cargo clippy --workspace --all-targets -- -D
+warnings` clean, `cargo test --workspace` **270 passing** (263 before, plus
+the seven new ones). The synthetic-module tests in `h2r-analysis` and
+`h2r-lower` pass unchanged.
+
+### Where this leaves the milestone
+
+The dumps are regenerated under the join, on all seven profiles.
+`A5-IN-WORLD-MISSING` is 0 everywhere, every stable name in the closed world
+links, the two names M3a could not resolve resolve structurally, and the
+identity rules are asserted with their counts. The dump is format 6 and says
+so.
+
+**The M1–M2.4 re-baseline has not been done and is the next piece of work.**
+Every number in the M1–M2.4 sections above is still the number for the old
+pre-tidy dumps, and is still correct *for those dumps*, which remain readable.
+The Step-4 table above is a sanity pass, not a baseline.
+
 
 ## What ShellCheck actually needs
 

@@ -4,7 +4,25 @@
 #   1. copy the ShellCheck sources into a scratch tree
 #   2. run upstream's ./striptests there (drops QuickCheck + Template Haskell)
 #   3. build that tree with h2r-plugin enabled
-#   4. the plugin writes one <Module>.core.json per module
+#   4. the plugin writes one <Module>.core.json per module, plus one
+#      <Module>.tidy-align.txt beside it
+#
+# What the dumps contain (dump format 6): the Core *after* GHC's CoreTidy --
+# the program GHC hands to codegen -- so a top-level binding carries, in its
+# own module's dump, the very name every downstream module refers to it by.
+# The plugin runs CoreTidy itself and hands the pipeline back the original
+# ModGuts, so the compilation still sees its own tidy. The IdInfo CoreTidy
+# discards is joined back on from the pre-tidy program, binder by binder: the
+# per-binder demand on top-level, lambda, case and alternative binders,
+# oneShot on top-level and let binders, and exported. Everything else is
+# CoreTidy's finalised value. The .tidy-align.txt sidecar records the
+# alignment that join was proved against; the Rust loader reads *.core.json
+# only, so it is inert.
+#
+# The extra tidy is not side-effect free: it consumes uniques from the
+# process-global name cache. Measured, it leaves every module's ABI hash and
+# export-list hash unchanged and the executable's behaviour identical; what
+# moves is internal uniques. See compiler/README.md, section M3a'.
 #
 # The source tree at the repo root is never modified.
 #
