@@ -3643,7 +3643,7 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
     // 2 — one dictionary parameter reaching two or more instances.
     row(
         "2  one dictionary parameter, two or more instances",
-        "FiniteSet(n) / ErasableWithClone(n)",
+        "a finite set; a clone each if erasable",
         dd.params
             .iter()
             .filter(|x| x.set.keys().len() >= 2)

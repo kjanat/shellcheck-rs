@@ -5077,7 +5077,7 @@ evidence a rule was exercised. Every count is this walk's own.
 | # | shape | in `-O1` | example | must be |
 |---:|---|---:|---|---|
 | 1 | bounded dictionary identity whose producer is not total | **0** | — | never `Erasable` |
-| 2 | one dictionary parameter, two or more instances | 36 | `ShellCheck.Parser` 1645 | `FiniteSet(n)` / `ErasableWithClone(n)` |
+| 2 | one dictionary parameter, two or more instances | 36 | `ShellCheck.Parser` 1645 | a finite set; `ErasableWithClone(n)` where it is erasable at all (4 of the 36 here) |
 | 3 | a dictionary used as an ordinary value *and* as a selector's dictionary | 11 | `ShellCheck.AST` 23582 | `Preserve`; the target is unaffected |
 | 4 | a dictionary parameter of unknown totality | 98 | `ShellCheck.AST` 3461 | `Unresolved` / `Preserve(totality)` |
 | 5 | a superclass selector site (`$pN<Class>`) | 72 | `Main` 659 | follows to the superclass instance |
