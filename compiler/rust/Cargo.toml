@@ -4,6 +4,7 @@ members = [
     "crates/h2r-core-ir",
     "crates/h2r-rt",
     "crates/h2r-analysis",
+    "crates/h2r-lower",
     "crates/h2r-cli",
 ]
 
@@ -21,3 +22,4 @@ walkdir = "2"
 h2r-core-ir = { path = "crates/h2r-core-ir" }
 h2r-rt = { path = "crates/h2r-rt" }
 h2r-analysis = { path = "crates/h2r-analysis" }
+h2r-lower = { path = "crates/h2r-lower" }

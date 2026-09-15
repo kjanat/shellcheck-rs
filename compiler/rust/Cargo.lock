@@ -121,6 +121,7 @@ dependencies = [
  "clap",
  "h2r-analysis",
  "h2r-core-ir",
+ "h2r-lower",
  "serde_json",
 ]
 
@@ -132,6 +133,16 @@ dependencies = [
  "serde",
  "serde_json",
  "walkdir",
+]
+
+[[package]]
+name = "h2r-lower"
+version = "0.1.0"
+dependencies = [
+ "h2r-analysis",
+ "h2r-core-ir",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
