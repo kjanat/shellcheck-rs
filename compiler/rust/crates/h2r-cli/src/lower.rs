@@ -9,8 +9,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use h2r_core_ir::{Module, load_dir};
-use h2r_lower::reachability::{DeadReason, LiveSet, NodeId, RULES, TRUSTED, root_name};
+use h2r_analysis::dictflow::{self, DictFlow, Outcome};
+use h2r_analysis::higher::{Higher, Slot, Verdict as HigherVerdict};
+use h2r_core_ir::{BinderId, ExprId, Module, load_dir};
+use h2r_lower::reachability::{
+    DeadReason, LiveSet, NodeId, RULES, TRUSTED, enclosing_top_pair, root_name, top_pair_binders,
+};
 use h2r_lower::verify::{Audit, verify};
 
 /// One row of the [`A5-IN-WORLD-MISSING`] table, grouped by the module the
@@ -30,6 +34,7 @@ pub fn lower(
     json: bool,
     rules: bool,
     explain: Option<String>,
+    m24_link: bool,
 ) -> Result<()> {
     if rules {
         print_rules();
@@ -64,6 +69,10 @@ pub fn lower(
     }
 
     print_report(&selected, &live, &audit);
+    if m24_link {
+        println!();
+        print_m24_link(&selected, &live);
+    }
     Ok(())
 }
 
@@ -494,4 +503,124 @@ fn print_explain(live: &LiveSet, what: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+//------------------------------------------------------------------------------
+// The cross-reference with M2.4
+//------------------------------------------------------------------------------
+
+/// Which top-level binding a node lies in, for the whole world. Built the
+/// way the verifier builds it — by climbing to the arena root — so the
+/// cross-reference reads the same owner relation the audit checked.
+struct Owners {
+    pair_binder: Vec<Vec<BinderId>>,
+    node_of: Vec<std::collections::HashMap<BinderId, NodeId>>,
+}
+
+impl Owners {
+    fn new(modules: &[&Module], live: &LiveSet) -> Owners {
+        let mut node_of = vec![std::collections::HashMap::new(); modules.len()];
+        for (i, t) in live.nodes.iter().enumerate() {
+            node_of[t.key.module as usize].insert(t.key.binder, i as NodeId);
+        }
+        Owners {
+            pair_binder: modules.iter().map(|m| top_pair_binders(m)).collect(),
+            node_of,
+        }
+    }
+
+    fn of(&self, modules: &[&Module], mi: usize, node: ExprId) -> Option<NodeId> {
+        let pair = enclosing_top_pair(modules[mi], node)?;
+        let b = *self.pair_binder[mi].get(pair)?;
+        self.node_of[mi].get(&b).copied()
+    }
+}
+
+/// How much of M2.4's residual is inside code `Main.main` cannot reach.
+///
+/// The counts are cross-references, not verdicts: they say where an
+/// existing `Unresolved` sits, and nothing about whether it is resolvable.
+/// Every one of them inherits M3a's own `A5` caveat — a site inside a
+/// binding the linkage hole wrongly calls dead is counted here as dead.
+fn print_m24_link(modules: &[&Module], live: &LiveSet) {
+    let owners = Owners::new(modules, live);
+    let flow = DictFlow::of_modules(modules.iter().copied());
+    let higher = Higher::of_modules(modules.iter().copied());
+
+    let mut sites = 0usize;
+    let mut unresolved = 0usize;
+    let mut unresolved_dead = 0usize;
+    let mut unreachable_reason = 0usize;
+    let mut unreachable_reason_dead = 0usize;
+    let mut unlocated = 0usize;
+    for s in &flow.sites {
+        sites += 1;
+        let Outcome::Unresolved(reason) = &s.outcome else {
+            continue;
+        };
+        unresolved += 1;
+        let by_unreachable = reason.starts_with(dictflow::T_UNREACHABLE);
+        if by_unreachable {
+            unreachable_reason += 1;
+        }
+        match owners.of(modules, s.mi, s.node) {
+            Some(n) if !live.is_live(n) => {
+                unresolved_dead += 1;
+                if by_unreachable {
+                    unreachable_reason_dead += 1;
+                }
+            }
+            Some(_) => {}
+            None => unlocated += 1,
+        }
+    }
+
+    let mut bounds = 0usize;
+    let mut b_unresolved = 0usize;
+    let mut b_unresolved_dead = 0usize;
+    let mut b_field = 0usize;
+    for b in &higher.boundaries {
+        bounds += 1;
+        if !matches!(b.verdict, HigherVerdict::Unresolved(_)) {
+            continue;
+        }
+        b_unresolved += 1;
+        let mi = match b.slot {
+            Slot::Param { mi, .. } | Slot::Return { mi, .. } => mi,
+            // A constructor field is a slot of a *type*, not a site in one
+            // binding: it has no enclosing top-level binding to be dead in.
+            Slot::Field { .. } => {
+                b_field += 1;
+                continue;
+            }
+        };
+        if let Some(n) = owners.of(modules, mi, b.node)
+            && !live.is_live(n)
+        {
+            b_unresolved_dead += 1;
+        }
+    }
+
+    println!("  cross-reference with M2.4 — where its residual sits in the live set");
+    println!(
+        "    these are cross-references, not verdicts, and they inherit A5: a site inside a\n\
+         \x20   binding the linkage hole wrongly calls dead is counted dead here too."
+    );
+    println!("    class-op dispatch sites                              {sites:>6}");
+    println!("      Unresolved                                         {unresolved:>6}");
+    println!("        …inside a rooted-dead top-level binding          {unresolved_dead:>6}");
+    println!(
+        "      Unresolved with reason {:<28} {unreachable_reason:>6}",
+        dictflow::T_UNREACHABLE
+    );
+    println!(
+        "        …inside a rooted-dead top-level binding          {unreachable_reason_dead:>6}"
+    );
+    if unlocated > 0 {
+        println!("        …not inside any top-level right-hand side        {unlocated:>6}");
+    }
+    println!("    function-valued boundaries                           {bounds:>6}");
+    println!("      Unresolved                                         {b_unresolved:>6}");
+    println!("        …inside a rooted-dead top-level binding          {b_unresolved_dead:>6}");
+    println!("        …a constructor field, with no one binding to be in {b_field:>4}");
 }

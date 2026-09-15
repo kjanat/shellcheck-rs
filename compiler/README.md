@@ -53,7 +53,7 @@ ShellCheck Haskell
 | `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`), and the closed-world class-op census with its asserted class table (`classops.rs`), and the whole-program dictionary flow with its separate erasure and totality domains (`dictflow.rs`), and the higher-order representation-agreement analysis (`higher.rs`), and the independent re-derivation of every *positive* M2.4 verdict (`verify_m24.rs`, which shares nothing with `classops.rs`, `dictflow.rs`, `higher.rs` or `flow.rs` but the IR, and reads the analyses' verdicts only as the plain data `m24_claims.rs` writes down), and M2.4's per-site and per-boundary views, the `h2r show` provenance they share, the milestone's own accounting and its four cross-milestone links (`m24.rs`). |
 | `rust/crates/h2r-lower` | The lowering. Where `h2r-analysis` *proves* things about the dumped Core, this crate *constructs* the program the proofs licence — it never mutates the arena and never re-derives a fact an analysis already carries. Today: the `Main.main`-rooted reachability graph over the closed world (`reachability.rs`), whose nodes are `(module, BinderId)` top-level binding pairs and whose edges come only from the resolver or from an external stable name, with a shortest witness path for every live binding and a named reason for every dead one; and the independent re-derivation of every one of its claims (`verify.rs`, which shares nothing with it but the IR and five named trusted inputs, and walks *up* the parent links where the census walks down). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), `dictflow` (the whole-program dictionary flow, its erasure verdicts and its clone plan), `higher` (the function-valued boundaries and their representation verdicts), `verify-m24` (the independent re-derivation of every positive M2.4 verdict), `m24` (M2.4's accounting, its residual and its four cross-milestone links in one place), the `--view` / `--view-all` views `fields`, `lists`, `text`, `classops` and `higher` each carry, and `lower --reachability` (M3a's live set, its accounting, its rule table and the verifier's audit, with `--explain <name>` for one binding's witness path or dead reason). Later: the rest of the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), `dictflow` (the whole-program dictionary flow, its erasure verdicts and its clone plan), `higher` (the function-valued boundaries and their representation verdicts), `verify-m24` (the independent re-derivation of every positive M2.4 verdict), `m24` (M2.4's accounting, its residual and its four cross-milestone links in one place), the `--view` / `--view-all` views `fields`, `lists`, `text`, `classops` and `higher` each carry, and `lower --reachability` (M3a's live set, its accounting, its rule table and the verifier's audit, with `--explain <name>` for one binding's witness path or dead reason, and `--m24-link` for how much of M2.4's residual sits in unreachable code). Later: the rest of the lowering passes. |
 
 ## Usage
 
@@ -111,6 +111,7 @@ cargo run --release --bin h2r -- show ../core-json ShellCheck.Fixer 1154    # + 
 cargo run --release --bin h2r -- lower ../core-json --reachability          # M3a: what Main.main can reach
 cargo run --release --bin h2r -- lower ../core-json --reachability --explain checkScript
 cargo run --release --bin h2r -- lower ../core-json --reachability --json
+cargo run --release --bin h2r -- lower ../core-json --reachability --m24-link
 cargo run --release --bin h2r -- lower ../core-json --rules                 # the A0-A11 rule table
 ```
 
@@ -6441,6 +6442,34 @@ current dump cannot represent. The fix is not a new format: it is moving
 the plugin's serialisation after `CoreTidy`, or recording each top-level
 binder's tidied name beside its pre-tidy one. Nothing here guesses in the
 meantime; a name match is level 6 and no verdict reads one.
+
+### Where M2.4's residual sits
+
+`h2r lower --reachability <dir> --m24-link` crosses the live set with
+M2.4's two unresolved populations. It costs one `dictflow` and one
+`higher` run, so it is off by default, and it inherits `A5` in full: a
+site inside a binding the linkage hole wrongly calls dead is counted dead
+here too.
+
+| | `-O1` |
+|---|---:|
+| class-op dispatch sites | 565 |
+| …`Unresolved` | 558 |
+| …inside a rooted-dead top-level binding | **484** |
+| …`Unresolved` for `function-is-unreachable-in-the-closed-world` | 413 |
+| …inside a rooted-dead top-level binding | **413** |
+| function-valued boundaries | 5,574 |
+| …`Unresolved` | 5,322 |
+| …inside a rooted-dead top-level binding | **331** |
+| …a constructor field, which has no one binding to be inside | 19 |
+
+All 413 sites M2.4c attributed to the zero-reference subset are rooted-dead,
+as they must be, and the rooted analysis adds 71 more — 484 of the 558
+unresolved class-op sites are in code `Main.main` cannot reach. The
+higher-order residual is the opposite shape: only 331 of 5,322 unresolved
+boundaries are in dead code, because 4,613 of them are `ShellCheck.Parser`'s
+CPS continuations and `ShellCheck.Parser` is 1,487 of 1,645 live. Killing
+dead code will not shrink the Parsec problem; M3g still has to lower it.
 
 ### The verifier
 

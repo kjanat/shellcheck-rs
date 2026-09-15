@@ -361,6 +361,12 @@ enum Command {
         /// several).
         #[arg(long)]
         explain: Option<String>,
+        /// Also cross-reference M2.4's residual: how many `Unresolved`
+        /// class-op sites and function-valued boundaries sit inside
+        /// rooted-dead bindings. Costs one `dictflow` and one `higher`
+        /// run, so it is off by default.
+        #[arg(long)]
+        m24_link: bool,
     },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
@@ -544,7 +550,8 @@ fn main() -> Result<()> {
             json,
             rules,
             explain,
-        } => lower::lower(&dir, reachability, json, rules, explain),
+            m24_link,
+        } => lower::lower(&dir, reachability, json, rules, explain, m24_link),
         Command::Parsec {
             dir,
             module,
