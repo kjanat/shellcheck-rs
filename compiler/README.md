@@ -5960,10 +5960,11 @@ disagree — `CloneRequired(2)`, and enumerated. The edge closes with
 `P-HO-FINITE`, and the test asserts that the representation verdict is
 present in the evidence as `representation verdict CloneRequired(2)` rather
 than as the answer. `residual_edge_at_an_unenumerated_boundary_says_so` pins
-the other direction. Both are new, and they are the only reason this
-correction is more than a rewording: on ShellCheck's Core nothing moves,
-because the wall M2.4e found is the anonymous-lambda wall and not a
-representation one.
+the other direction. Both are new, and they are what makes this more than a
+rewording where the dumps are silent: on `-O1` and A no edge changes its
+answer, because the wall M2.4e found there is the anonymous-lambda wall and
+not a representation one, and the fixture is the only place the corrected
+rule can be seen firing.
 
 *(`parsec.rs` carries **29** unit tests of its own — 27 before these two;
 M2.4e's text called one of them "the" regression test. That is corrected
