@@ -5759,11 +5759,11 @@ hand-built counterexamples are not the only evidence the corrected rules were
 exercised, and so that a zero is a fact about the dump rather than about
 where the walk looked:
 
-| row | shape | in `-O1` | example |
-|---:|---|---:|---|
-| 16 | a `case` on the alternative binder of a **lazy** field | **6,625** | `Main` node 518 |
-| 17 | …the same, on a **GHC-strict** field's binder | 168 | `ShellCheck.ASTLib` node 8186 |
-| 18 | a `case`/`let` head carrying outer value arguments | **0** | — |
+| row | shape | `-O1`/A | B | C | D | E | F | example on `-O1` |
+|---:|---|---:|---:|---:|---:|---:|---:|---|
+| 16 | a `case` on the alternative binder of a **lazy** field | **6,625** | 7,539 | 7,570 | 12,372 | 11,348 | 11,287 | `Main` node 518 |
+| 17 | …the same, on a **GHC-strict** field's binder | 168 | 204 | 222 | 459 | 339 | 339 | `ShellCheck.ASTLib` node 8186 |
+| 18 | a `case`/`let` head carrying outer value arguments | **0** | **0** | **0** | **0** | **0** | **0** | — |
 
 Defect (a) was therefore **live in the program** — 6,625 of the 6,793
 alternative-binder scrutinees in `-O1` bind a lazy field and were being read
