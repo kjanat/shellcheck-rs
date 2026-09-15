@@ -13,7 +13,8 @@ use h2r_analysis::dictflow::{self, DictFlow, Outcome};
 use h2r_analysis::higher::{Higher, Slot, Verdict as HigherVerdict};
 use h2r_core_ir::{BinderId, ExprId, Module, load_dir};
 use h2r_lower::reachability::{
-    DeadReason, LiveSet, NodeId, RULES, TRUSTED, enclosing_top_pair, root_name, top_pair_binders,
+    DeadReason, LinkError, LiveSet, NodeId, RULES, TRUSTED, enclosing_top_pair, root_name,
+    top_pair_binders,
 };
 use h2r_lower::verify::{Audit, verify};
 
@@ -28,12 +29,14 @@ const EXPLAIN_CAP: usize = 20;
 /// How many import names the summary lists.
 const TOP_IMPORTS: usize = 20;
 
+#[allow(clippy::too_many_arguments)]
 pub fn lower(
     dir: &Path,
     reachability: bool,
     json: bool,
     rules: bool,
     explain: Option<String>,
+    link: Option<String>,
     m24_link: bool,
 ) -> Result<()> {
     if rules {
@@ -62,6 +65,10 @@ pub fn lower(
         });
         println!("{}", serde_json::to_string_pretty(&v)?);
         return Ok(());
+    }
+
+    if let Some(what) = link {
+        return print_link(&live, &what);
     }
 
     if let Some(what) = explain {
@@ -143,6 +150,12 @@ fn print_report(modules: &[&Module], live: &LiveSet, audit: &Audit) {
             a.missing_impact.suspect_dead,
             a.dead
         );
+        println!();
+    } else {
+        // The check stays; only the verdict changes. The conditional block
+        // above is what M3a had to print, and M3a' is the milestone that
+        // removed its cause.
+        println!("  A5-IN-WORLD-MISSING 0: the dead set is unconditional");
         println!();
     }
 
@@ -335,6 +348,32 @@ fn print_report(modules: &[&Module], live: &LiveSet, audit: &Audit) {
     }
     println!();
 
+    println!("  the identity rules, with their counts");
+    println!(
+        "    [{A12}] external stable names an in-world top-level binding defines  {:>6}",
+        a.external_names_defined,
+        A12 = h2r_lower::reachability::A12_EXTERNAL_UNIQUE
+    );
+    println!(
+        "      ...defined by more than one binding (the graph refuses to build     {:>6}\n\
+         \x20      otherwise, so this is 0 or there is no report)",
+        a.external_name_collisions
+    );
+    println!(
+        "    [{A13}] Ref::Global occurrences carrying an internal stable name    {:>6}",
+        a.global_internal_occurrences,
+        A13 = h2r_lower::reachability::A13_GLOBAL_EXTERNAL
+    );
+    println!(
+        "      ...distinct such names                                              {:>6}",
+        a.global_internal_names
+    );
+    println!(
+        "    the IR resolver's unique-collision guard, over the whole world        {:>6}",
+        a.unique_collisions
+    );
+    println!();
+
     println!("  accounting [A10-ACCOUNTING]");
     let bad = a.check();
     if bad.is_empty() {
@@ -449,35 +488,7 @@ fn print_explain(live: &LiveSet, what: &str) -> Result<()> {
                     l.rule,
                     l.witness.len() - 1
                 );
-                for (i, &step) in l.witness.iter().enumerate() {
-                    let s = live.node(step);
-                    let rule = if i == 0 {
-                        live.roots
-                            .iter()
-                            .find(|r| r.node == step)
-                            .map(|r| r.rule)
-                            .unwrap_or("?")
-                    } else {
-                        let prev = l.witness[i - 1];
-                        live.edges
-                            .iter()
-                            .find(|e| e.from == prev && e.to == step)
-                            .map(|e| e.rule)
-                            .unwrap_or("?")
-                    };
-                    println!(
-                        "    {:>3}. {:<32} {}{}  [{}]",
-                        i,
-                        s.module_name,
-                        s.name,
-                        if s.external {
-                            String::new()
-                        } else {
-                            format!("#{}", s.key.binder)
-                        },
-                        rule
-                    );
-                }
+                print_witness(live, &l.witness);
             }
             None => {
                 let d = live.dead_of(n).expect("neither live nor dead");
@@ -503,6 +514,131 @@ fn print_explain(live: &LiveSet, what: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `--link <stable name>`: the whole-program linkage of one name, end to
+/// end.
+///
+/// This is the view M3a′ exists to make possible. It answers, for one
+/// external stable name: which single top-level binding of which module
+/// defines it ([`A12-EXTERNAL-UNIQUE`]), which modules' bindings refer to it
+/// and under which rule ([`A2-EDGE-LOCAL`] inside the defining module,
+/// [`A3-EDGE-GLOBAL`] from outside), and — if it is live — the shortest
+/// chain of edges from `Main.main` to it ([`A9-WITNESS`]).
+///
+/// The defining binding is found through the external-name index, never by
+/// a name heuristic: an internal stable name is not an identity, so
+/// `--link` refuses one and says why.
+fn print_link(live: &LiveSet, what: &str) -> Result<()> {
+    let link = match live.link(what) {
+        Ok(l) => l,
+        Err(LinkError::NotFound) => bail!(
+            "no top-level binding of this world carries the stable name {what}. \
+             --link takes a stable name ($<unit>$<Module>$<occ>), which is an \
+             identity; --explain also accepts an occurrence name, which is not."
+        ),
+        Err(LinkError::InternalName) => bail!(
+            "{what} is an INTERNAL stable name. Internal names are not unique \
+             — several top-level bindings can render as one — so nothing links \
+             through them and --link has no single answer. Such a binding is \
+             reachable only through A2-EDGE-LOCAL, inside its own module; ask \
+             --explain instead."
+        ),
+        Err(LinkError::Ambiguous(k)) => bail!(
+            "{k} top-level bindings carry the external stable name {what}: \
+             A12-EXTERNAL-UNIQUE does not hold and nothing here is an identity."
+        ),
+    };
+    let t = live.node(link.node);
+
+    println!("  link — {}", link.name);
+    println!();
+    println!("  defined by exactly one top-level binding [{}]", link.rule);
+    println!(
+        "    module {}   binder #{}   occ {}",
+        t.module_name, t.key.binder, t.occ
+    );
+    println!(
+        "    the name is external, so another module can name it [A3-EDGE-GLOBAL]{}",
+        if t.exported {
+            "; GHC also marks the binder exported"
+        } else {
+            ""
+        }
+    );
+    println!();
+
+    let bindings: usize = link.referrers.iter().map(|r| r.bindings).sum();
+    let occurrences: u32 = link.referrers.iter().map(|r| r.occurrences).sum();
+    let modules: BTreeSet<&str> = link.referrers.iter().map(|r| r.module.as_str()).collect();
+    println!(
+        "  referenced by {bindings} top-level binding(s) over {occurrences} occurrence(s), \
+         in {} module(s)",
+        modules.len()
+    );
+    if link.referrers.is_empty() {
+        println!("    (nothing in the closed world names it)");
+    }
+    for r in &link.referrers {
+        println!(
+            "    {:>6} occ over {:>4} binding(s)  {:<34} [{}]",
+            r.occurrences, r.bindings, r.module, r.rule
+        );
+    }
+    println!();
+
+    match &link.witness {
+        Some(w) => {
+            println!(
+                "  LIVE — witness [{}], {} hop(s) from the root",
+                h2r_lower::reachability::A9_WITNESS,
+                w.len() - 1
+            );
+            print_witness(live, w);
+        }
+        None => {
+            let d = live.dead_of(link.node).expect("neither live nor dead");
+            println!("  DEAD — {} [{}]", d.reason.label(), d.rule);
+            for &r in d.referrers.iter().take(EXPLAIN_CAP) {
+                let s = live.node(r);
+                println!("    referenced by {} {}  (dead)", s.module_name, s.occ);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One witness chain, with the rule that made each step.
+fn print_witness(live: &LiveSet, witness: &[NodeId]) {
+    for (i, &step) in witness.iter().enumerate() {
+        let s = live.node(step);
+        let rule = if i == 0 {
+            live.roots
+                .iter()
+                .find(|r| r.node == step)
+                .map(|r| r.rule)
+                .unwrap_or("?")
+        } else {
+            let prev = witness[i - 1];
+            live.edges
+                .iter()
+                .find(|e| e.from == prev && e.to == step)
+                .map(|e| e.rule)
+                .unwrap_or("?")
+        };
+        println!(
+            "    {:>3}. {:<32} {}{}  [{}]",
+            i,
+            s.module_name,
+            s.name,
+            if s.external {
+                String::new()
+            } else {
+                format!("#{}", s.key.binder)
+            },
+            rule
+        );
+    }
 }
 
 //------------------------------------------------------------------------------

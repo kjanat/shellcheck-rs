@@ -9,7 +9,10 @@
 use h2r_core_ir::{Module, raw};
 use serde_json::{Value, json};
 
-use crate::reachability::{A2_EDGE_LOCAL, A3_EDGE_GLOBAL, DeadReason, LiveSet, NodeId, RootError};
+use crate::reachability::{
+    A2_EDGE_LOCAL, A3_EDGE_GLOBAL, A12_EXTERNAL_UNIQUE, A13_GLOBAL_EXTERNAL, DeadReason, LinkError,
+    LiveSet, NodeId, RootError,
+};
 use crate::verify::{
     V2_POPULATION, V3_LIVE_CLOSED, V4_DEAD_UNREFERENCED, V5_WITNESS, V6_EDGES, verify,
 };
@@ -518,4 +521,143 @@ fn a_binding_with_two_verdicts_is_caught() {
         });
         live.live.sort_by_key(|x| x.node);
     });
+}
+
+//------------------------------------------------------------------------------
+// The link view (A12-EXTERNAL-UNIQUE)
+//------------------------------------------------------------------------------
+
+#[test]
+fn link_names_the_one_defining_binding_and_its_referrers() {
+    let (main, l) = world();
+    let ms: Vec<&Module> = vec![&main, &l];
+    let live = live_of(&ms);
+
+    // `L.exported` is defined once, in L, and named from Main (globally, by
+    // stable name) and from nowhere else.
+    let link = live.link(&sn("L", "exported")).expect("a linkable name");
+    assert_eq!(link.node, node_named(&live, "L", "exported"));
+    assert_eq!(link.rule, A12_EXTERNAL_UNIQUE);
+    assert_eq!(link.referrers.len(), 1);
+    assert_eq!(link.referrers[0].module, "Main");
+    assert_eq!(link.referrers[0].rule, A3_EDGE_GLOBAL);
+    assert_eq!(link.referrers[0].bindings, 1);
+    assert_eq!(link.referrers[0].occurrences, 1);
+
+    // It is live, and the witness is the real chain Main.main -> L.exported.
+    let w = link.witness.expect("L.exported is live");
+    assert_eq!(w.len(), 2);
+    assert_eq!(live.named(w[0]).1, sn("Main", "main"));
+    assert_eq!(w[1], link.node);
+}
+
+#[test]
+fn link_crosses_a_module_through_a_local_hop() {
+    let (main, l) = world();
+    let ms: Vec<&Module> = vec![&main, &l];
+    let live = live_of(&ms);
+
+    // `L.leaf` is named only by `Main.helper`, which `Main.main` reaches
+    // locally: the witness is three nodes long and mixes both edge rules.
+    let link = live.link(&sn("L", "leaf")).expect("a linkable name");
+    assert_eq!(link.referrers.len(), 1);
+    assert_eq!(link.referrers[0].module, "Main");
+    assert_eq!(link.referrers[0].rule, A3_EDGE_GLOBAL);
+    let w = link.witness.expect("L.leaf is live");
+    assert_eq!(
+        w.iter().map(|&n| live.named(n).1).collect::<Vec<_>>(),
+        vec![sn("Main", "main"), sn("Main", "helper"), sn("L", "leaf")]
+    );
+}
+
+#[test]
+fn link_refuses_an_internal_name_because_it_is_not_an_identity() {
+    let (main, l) = world();
+    let ms: Vec<&Module> = vec![&main, &l];
+    let live = live_of(&ms);
+
+    // Two top-level bindings of L render as `$_sys$w`. The name is internal,
+    // so the link view refuses it rather than picking one.
+    assert_eq!(
+        (0..live.nodes.len() as NodeId)
+            .filter(|&n| live.node(n).name == "$_sys$w")
+            .count(),
+        2
+    );
+    assert_eq!(live.link("$_sys$w").err(), Some(LinkError::InternalName));
+}
+
+#[test]
+fn link_says_not_found_rather_than_guessing() {
+    let (main, l) = world();
+    let ms: Vec<&Module> = vec![&main, &l];
+    let live = live_of(&ms);
+    assert_eq!(
+        live.link(&sn("L", "nosuch")).err(),
+        Some(LinkError::NotFound)
+    );
+    // An occurrence name is not a stable name, and is not accepted as one.
+    assert_eq!(live.link("exported").err(), Some(LinkError::InternalName));
+}
+
+#[test]
+fn link_reports_a_dead_binding_as_dead_with_no_witness() {
+    let (main, l) = world();
+    let ms: Vec<&Module> = vec![&main, &l];
+    let live = live_of(&ms);
+    let link = live.link(&sn("L", "unused")).expect("a linkable name");
+    assert!(link.witness.is_none());
+    assert!(link.referrers.is_empty());
+    assert_eq!(
+        live.dead_of(link.node).map(|d| d.reason),
+        Some(DeadReason::DeadNoReferences)
+    );
+}
+
+//------------------------------------------------------------------------------
+// The identity rules (A12, A13)
+//------------------------------------------------------------------------------
+
+#[test]
+fn the_identity_rule_counts_hold_on_the_fixture() {
+    let (main, l) = world();
+    let ms: Vec<&Module> = vec![&main, &l];
+    let live = live_of(&ms);
+    let a = &live.accounting;
+
+    // Every external name of the fixture, and no collision.
+    // Nine of the fixture's eleven top-level bindings have external names; the
+    // two `$_sys$w` ones do not, which is why they are not in the index.
+    assert_eq!(a.external_names_defined, 9);
+    assert_eq!(a.external_name_collisions, 0);
+    // No global occurrence carries an internal name, and no unique collides.
+    assert_eq!(a.global_internal_names, 0);
+    assert_eq!(a.global_internal_occurrences, 0);
+    assert_eq!(a.unique_collisions, 0);
+    assert!(a.check().is_empty(), "{:?}", a.check());
+}
+
+#[test]
+fn a_global_occurrence_with_an_internal_name_is_counted_not_ignored() {
+    // A world whose Main names an *internal* stable string globally. It
+    // links to nothing — an internal name is not an identity — and A13
+    // counts it rather than letting it pass as an import.
+    let main = module(
+        "Main",
+        vec![(
+            binder(&sn("Main", "main"), "main", "main"),
+            gvar("$_in$hidden", "hidden"),
+        )],
+        json!({}),
+    );
+    let ms: Vec<&Module> = vec![&main];
+    let live = live_of(&ms);
+    let a = &live.accounting;
+    assert_eq!(a.global_internal_names, 1);
+    assert_eq!(a.global_internal_occurrences, 1);
+    assert!(
+        a.check().iter().any(|b| b.contains(A13_GLOBAL_EXTERNAL)),
+        "A13 must fail loudly: {:?}",
+        a.check()
+    );
 }

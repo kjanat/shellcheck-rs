@@ -150,6 +150,24 @@ pub const A9_WITNESS: &str = "A9-WITNESS";
 /// to bound the damage a hole could do. No edge, no verdict and no count
 /// in the accounting rests on it. Evidence: binder names (6).
 pub const A11_MISSING_IMPACT: &str = "A11-MISSING-IMPACT";
+/// **External identity is unique.** Every external stable name that an
+/// in-world module's top-level binding carries is carried by *exactly one*
+/// such binding. This is what makes [`A3_EDGE_GLOBAL`] an identity and not
+/// a guess; it is the property [`RootError::NameCollisions`] refuses to
+/// proceed without, and the count it refuses on is reported here rather
+/// than left implicit. Evidence: a stated property of the dump, asserted
+/// (5).
+pub const A12_EXTERNAL_UNIQUE: &str = "A12-EXTERNAL-UNIQUE";
+/// **A global occurrence never carries an internal name.** After CoreTidy a
+/// top-level binder can still have an *internal* `Name`, whose stable
+/// string (`$_in$…`, `$_sys$…`) is not unique — three top-level bindings of
+/// `ShellCheck.AST` render as one. Such a binding is reachable only through
+/// [`A2_EDGE_LOCAL`]. This rule asserts the converse: no occurrence the
+/// resolver calls [`Ref::Global`] — one nothing in its module binds —
+/// carries an internal stable name, so no global occurrence is ever matched
+/// against a name that is not an identity. Evidence: stable global identity
+/// (4).
+pub const A13_GLOBAL_EXTERNAL: &str = "A13-GLOBAL-EXTERNAL";
 /// **The accounting.** `top = live + dead` per module and in total, and
 /// `dead = dead_no_refs + dead_only_from_dead`. Asserted, never assumed.
 /// Evidence: a stated property of the proof object (5).
@@ -216,6 +234,16 @@ pub const RULES: &[(&str, u8, &str)] = &[
         A11_MISSING_IMPACT,
         6,
         "a name-matched bound on what an A5 hole could cost; never a verdict",
+    ),
+    (
+        A12_EXTERNAL_UNIQUE,
+        5,
+        "every external in-world stable name is defined by exactly one top-level binding",
+    ),
+    (
+        A13_GLOBAL_EXTERNAL,
+        4,
+        "no Ref::Global occurrence carries an internal stable name",
     ),
 ];
 
@@ -450,6 +478,21 @@ pub struct Accounting {
     pub in_world_missing: usize,
     pub in_world_non_bindings: InWorldNonBindings,
     pub missing_impact: MissingImpact,
+    /// [`A12_EXTERNAL_UNIQUE`]: how many distinct external stable names the
+    /// in-world top-level bindings define, and how many of them two
+    /// bindings claim. The second must be 0 — [`RootError::NameCollisions`]
+    /// refuses to build the graph otherwise — and is reported, not assumed.
+    pub external_names_defined: usize,
+    pub external_name_collisions: usize,
+    /// [`A13_GLOBAL_EXTERNAL`]: [`Ref::Global`] occurrences whose stable
+    /// name is *internal*, by distinct name and by occurrence. Both must
+    /// be 0.
+    pub global_internal_names: usize,
+    pub global_internal_occurrences: u64,
+    /// The IR resolver's own guard, summed over the world: an occurrence
+    /// that resolved lexically although its stable name is an external name
+    /// of another module. Two Ids sharing one GHC unique. Must be 0.
+    pub unique_collisions: usize,
 }
 
 impl Accounting {
@@ -504,6 +547,23 @@ impl Accounting {
                 self.dead, zero_dead, self.additional_dead
             ));
         }
+        if self.unique_collisions != 0 {
+            bail_unique(&mut bad, self.unique_collisions);
+        }
+        if self.external_name_collisions != 0 {
+            bad.push(format!(
+                "{} external stable name(s) are defined by more than one top-level \
+                 binding: {} fails",
+                self.external_name_collisions, A12_EXTERNAL_UNIQUE
+            ));
+        }
+        if self.global_internal_names != 0 {
+            bad.push(format!(
+                "{} Ref::Global occurrence name(s) are internal, over {} occurrence(s): \
+                 {} fails",
+                self.global_internal_names, self.global_internal_occurrences, A13_GLOBAL_EXTERNAL
+            ));
+        }
         if self.edges != self.edges_local + self.edges_global {
             bad.push(format!(
                 "edges {} != local {} + global {}",
@@ -512,6 +572,15 @@ impl Accounting {
         }
         bad
     }
+}
+
+/// One accounting failure, spelled out rather than inlined so the
+/// [`Accounting::check`] arm stays one line.
+fn bail_unique(bad: &mut Vec<String>, n: usize) {
+    bad.push(format!(
+        "{n} occurrence(s) resolved lexically although their stable name is an \
+         external name of another module: two Ids share one GHC unique"
+    ));
 }
 
 //------------------------------------------------------------------------------
@@ -665,6 +734,92 @@ impl LiveSet {
     pub fn is_root(&self, n: NodeId) -> bool {
         self.roots.iter().any(|r| r.node == n)
     }
+
+    /// The whole-program linkage of one **external** stable name: the single
+    /// top-level binding that defines it, every binding that refers to it
+    /// grouped by module and by the rule that made the edge, and its witness
+    /// path if it is live.
+    ///
+    /// This is [`A12_EXTERNAL_UNIQUE`] made usable. The defining binding is
+    /// found through the external-name index, never by a name heuristic, and
+    /// an internal name is refused rather than answered: internal stable
+    /// strings are not unique, so there is no single binding to point at.
+    pub fn link(&self, name: &str) -> Result<Link, LinkError> {
+        if !is_external_name(name) {
+            return Err(LinkError::InternalName);
+        }
+        let hits = self.by_name(name);
+        let node = match hits.as_slice() {
+            [] => return Err(LinkError::NotFound),
+            [n] => *n,
+            many => return Err(LinkError::Ambiguous(many.len())),
+        };
+        let mut by: BTreeMap<(&str, &'static str), (usize, u32)> = BTreeMap::new();
+        for e in self.edges.iter().filter(|e| e.to == node) {
+            let slot = by
+                .entry((self.node(e.from).module_name.as_str(), e.rule))
+                .or_insert((0, 0));
+            slot.0 += 1;
+            slot.1 += e.occurrences;
+        }
+        let mut referrers: Vec<LinkRef> = by
+            .into_iter()
+            .map(|((module, rule), (bindings, occurrences))| LinkRef {
+                module: module.to_string(),
+                rule,
+                bindings,
+                occurrences,
+            })
+            .collect();
+        referrers.sort_by(|a, b| {
+            b.occurrences
+                .cmp(&a.occurrences)
+                .then(a.module.cmp(&b.module))
+                .then(a.rule.cmp(b.rule))
+        });
+        Ok(Link {
+            name: name.to_string(),
+            node,
+            referrers,
+            witness: self.live_of(node).map(|l| l.witness.clone()),
+            rule: A12_EXTERNAL_UNIQUE,
+        })
+    }
+}
+
+/// One group of references to a linked binding: how many top-level bindings
+/// of one module name it, over how many occurrences, under which rule.
+#[derive(Debug, Clone, Serialize)]
+pub struct LinkRef {
+    pub module: String,
+    pub rule: &'static str,
+    pub bindings: usize,
+    pub occurrences: u32,
+}
+
+/// The answer to [`LiveSet::link`].
+#[derive(Debug, Clone, Serialize)]
+pub struct Link {
+    pub name: String,
+    pub node: NodeId,
+    pub referrers: Vec<LinkRef>,
+    /// Root first, this binding last, when it is live.
+    pub witness: Option<Vec<NodeId>>,
+    pub rule: &'static str,
+}
+
+/// Why a name has no single linkage. Never a guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkError {
+    /// No top-level binding of the world carries the name.
+    NotFound,
+    /// The name is internal, so it is not an identity: several top-level
+    /// bindings can render as one, and nothing links through it.
+    InternalName,
+    /// Two or more bindings claim one external name: [`A12_EXTERNAL_UNIQUE`]
+    /// does not hold. [`LiveSet::of_modules`] refuses such a world, so this
+    /// is a second line of defence, not an expected outcome.
+    Ambiguous(usize),
 }
 
 //------------------------------------------------------------------------------
@@ -673,6 +828,10 @@ impl LiveSet {
 
 struct Build<'m> {
     modules: &'m [&'m Module],
+    /// [`A12_EXTERNAL_UNIQUE`]: the size of the external-name index. The
+    /// collision count is 0 by construction — [`Build::new`] refuses
+    /// otherwise — and is reported beside it.
+    external_names_defined: usize,
     nodes: Vec<TopRef>,
     /// `(module, binder) → node`.
     node_of: Vec<HashMap<BinderId, NodeId>>,
@@ -755,6 +914,7 @@ impl<'m> Build<'m> {
 
         Ok(Build {
             modules,
+            external_names_defined: by_name.len(),
             nodes,
             node_of,
             by_name,
@@ -774,6 +934,9 @@ impl<'m> Build<'m> {
         let mut imports_at: Vec<BTreeMap<&str, u32>> = vec![BTreeMap::new(); n];
         let mut missing: BTreeMap<&str, MissingAcc> = BTreeMap::new();
         let mut non_bindings: BTreeMap<&str, (bool, u32)> = BTreeMap::new();
+        // A13: a Ref::Global occurrence whose own stable name is internal.
+        // Expected empty, counted rather than assumed.
+        let mut internal_globals: BTreeMap<&str, u64> = BTreeMap::new();
 
         for (ni, node) in self.nodes.iter().enumerate() {
             let m = self.modules[node.key.module as usize];
@@ -793,26 +956,31 @@ impl<'m> Build<'m> {
                             *out[ni].entry((to, A2_EDGE_LOCAL)).or_insert(0) += 1;
                         }
                     }
-                    Some(Ref::Global) => match self.by_name.get(name.as_str()) {
-                        // A3
-                        Some(&to) => *out[ni].entry((to, A3_EDGE_GLOBAL)).or_insert(0) += 1,
-                        None => match self.classify_global(m, e, name) {
-                            Global::Import(k) => *imports_at[ni].entry(k).or_insert(0) += 1,
-                            Global::NonBinding { key, data_con } => {
-                                let slot = non_bindings.entry(key).or_insert((data_con, 0));
-                                slot.1 += 1;
-                            }
-                            Global::Missing { module } => {
-                                let slot = missing.entry(name.as_str()).or_insert(MissingAcc {
-                                    module,
-                                    occurrences: 0,
-                                    referrers: BTreeSet::new(),
-                                });
-                                slot.occurrences += 1;
-                                slot.referrers.insert(ni as NodeId);
-                            }
-                        },
-                    },
+                    Some(Ref::Global) => {
+                        if !is_external_name(name) {
+                            *internal_globals.entry(name.as_str()).or_insert(0) += 1;
+                        }
+                        match self.by_name.get(name.as_str()) {
+                            // A3
+                            Some(&to) => *out[ni].entry((to, A3_EDGE_GLOBAL)).or_insert(0) += 1,
+                            None => match self.classify_global(m, e, name) {
+                                Global::Import(k) => *imports_at[ni].entry(k).or_insert(0) += 1,
+                                Global::NonBinding { key, data_con } => {
+                                    let slot = non_bindings.entry(key).or_insert((data_con, 0));
+                                    slot.1 += 1;
+                                }
+                                Global::Missing { module } => {
+                                    let slot = missing.entry(name.as_str()).or_insert(MissingAcc {
+                                        module,
+                                        occurrences: 0,
+                                        referrers: BTreeSet::new(),
+                                    });
+                                    slot.occurrences += 1;
+                                    slot.referrers.insert(ni as NodeId);
+                                }
+                            },
+                        }
+                    }
                     None => {}
                 }
             }
@@ -959,7 +1127,7 @@ impl<'m> Build<'m> {
             .map(|k| self.node_of[k.module as usize][&k.binder])
             .collect();
 
-        let accounting = self.accounting(
+        let mut accounting = self.accounting(
             &live,
             &dead,
             &edges,
@@ -969,6 +1137,15 @@ impl<'m> Build<'m> {
             &zero_nodes,
             &would_become_live,
         );
+        accounting.external_names_defined = self.external_names_defined;
+        accounting.external_name_collisions = 0; // Build::new refuses otherwise.
+        accounting.global_internal_names = internal_globals.len();
+        accounting.global_internal_occurrences = internal_globals.values().sum();
+        accounting.unique_collisions = self
+            .modules
+            .iter()
+            .map(|m| m.unique_collisions().len())
+            .sum();
         Ok(LiveSet {
             modules: self.modules.iter().map(|m| m.name.clone()).collect(),
             nodes: self.nodes,

@@ -361,6 +361,13 @@ enum Command {
         /// several).
         #[arg(long)]
         explain: Option<String>,
+        /// The whole-program linkage of one *external* stable name: the
+        /// single top-level binding that defines it, the modules whose
+        /// bindings refer to it and under which rule, and its witness path
+        /// from `Main.main`. A stable name is an identity; an occurrence
+        /// name is not, so this takes only the former.
+        #[arg(long)]
+        link: Option<String>,
         /// Also cross-reference M2.4's residual: how many `Unresolved`
         /// class-op sites and function-valued boundaries sit inside
         /// rooted-dead bindings. Costs one `dictflow` and one `higher`
@@ -550,8 +557,9 @@ fn main() -> Result<()> {
             json,
             rules,
             explain,
+            link,
             m24_link,
-        } => lower::lower(&dir, reachability, json, rules, explain, m24_link),
+        } => lower::lower(&dir, reachability, json, rules, explain, link, m24_link),
         Command::Parsec {
             dir,
             module,
