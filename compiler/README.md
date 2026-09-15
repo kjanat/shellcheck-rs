@@ -6211,7 +6211,8 @@ target. The sub-milestones:
 
 | | |
 |---|---|
-| **M3a** | `Main.main`-rooted reachability |
+| **M3a** | `Main.main`-rooted reachability — **done**, with a linkage hole it measured rather than hid |
+| **M3a′** | dump post-CoreTidy Core and re-establish whole-program identity — **halted at its own `IdInfo` gate.** The resolver half is committed and proven; the plugin half is written, measured and withheld, because dumping the tidied program takes GHC's per-binder demand off every lambda, `case` and alternative binder, and M2.3b/M2.3c/M2.4b/M2.4c read it there. See [M3a′](#m3a--dump-post-coretidy-core-and-re-establish-whole-program-identity) |
 | **M3b** | the normalised IR — NIR, ANF/CFG-shaped, `FnId`/`ValueId`/`BlockId`, explicit `Delay`/`Force`/closure create/return, every instruction carrying `Origin { module, source_node/binder, rule }`, and **no `OpaqueCore` escape hatch** |
 | **M3c** | canonical carriers `Carrier(T)` plus closure conversion, so no anonymous `Lam` remains — this is what closes the open invariant `TypeShapeUniform` rests on |
 | **M3d** | polyvariant specialisation keyed by `(FnId, DictAssignment, ClosureShapeAssignment)` from a live-rooted worklist, closing the set-valued clone lower bounds without a call-string length |
@@ -6443,6 +6444,14 @@ the plugin's serialisation after `CoreTidy`, or recording each top-level
 binder's tidied name beside its pre-tidy one. Nothing here guesses in the
 meantime; a name match is level 6 and no verdict reads one.
 
+[M3a′](#m3a--dump-post-coretidy-core-and-re-establish-whole-program-identity)
+took this on. Moving the serialisation after `CoreTidy` does close the hole
+completely — `A5` goes to 0 and the live set to 9,795 on a scratch dump —
+but it also takes GHC's per-binder demand off every lambda, `case` and
+alternative binder, which M2.3b, M2.3c, M2.4b and M2.4c read. The numbers
+in this section therefore still stand, and M3a′ stopped rather than
+regenerate.
+
 ### Where M2.4's residual sits
 
 `h2r lower --reachability <dir> --m24-link` crosses the live set with
@@ -6572,7 +6581,352 @@ modules the program certainly uses. M3b cannot consume this live set until
 the plugin's naming is fixed; what it *can* consume unconditionally is the
 live set as a **lower bound** — every binding M3a calls live really is
 reachable, because every edge behind it is either lexical binder identity
-or a stable-name match, and neither can invent a reference.
+or a stable-name match, and neither can invent a reference. What it would
+cost to fix, and why the fix is not in the tree yet, is
+[M3a′](#m3a--dump-post-coretidy-core-and-re-establish-whole-program-identity).
+
+## M3a′ — dump post-CoreTidy Core and re-establish whole-program identity
+
+*2026-09-15. **Halted at its own gate**, deliberately and with the evidence
+below. The resolver half is done, proven and committed; the plugin half is
+written, measured, and **not** committed, because measuring it is what
+showed it would destroy proof inputs M1–M2.4 depend on.*
+
+### The defect
+
+[M3a's `A5` finding](#the-finding-a5-in-world-missing-is-not-0) named it:
+`h2r-plugin` appends its pass at the end of `installCoreToDos`, which puts
+it immediately *before* the driver's own `CoreTidy` — and `CoreTidy` is
+where GHC decides which top-level names become external and rewrites the
+bindings. So a defining module's dump carries the pre-tidy name
+(`$_in$$wchecker` in `ShellCheck.Checks.Commands`, `format` in
+`ShellCheck.Formatter.TTY`) while every downstream module, which read the
+*tidied* `.hi`, refers to `…Checks.Commands$$wchecker` and
+`…TTY$format1`. On `-O1` that is **112 stable names over 1,232
+occurrences** that name an in-world module and no top-level binding of it,
+and it is under every stable-name linkage in the compiler:
+`dictflow::Program::tops`, `classops::World::tops`, `higher`'s producer
+enumeration and `h2r-lower`'s `A3-EDGE-GLOBAL` index all build it.
+
+### The resolver: lexical binding decides locality, not `isGlobalId`
+
+`Module::resolve_scopes` refused a lexical hit when the occurrence's
+`isGlobal` bit was set. That was valid only for pre-tidy Core, where a
+module's own top-level binders are `LocalId`s. `tidyTopBind` rebuilds every
+top-level binder as a `GlobalId` — including the ones whose `Name` stays
+internal — so on a post-tidy dump the bit no longer separates an import
+from a module-local top-level binding.
+
+* An in-scope binder now wins whatever the flag says; only an occurrence
+  with **no in-scope binder at all** is `Ref::Global`.
+* `isGlobal` stays in the JSON and in `Expr::Var` as a GHC diagnostic fact.
+  It is no longer the local-vs-import identity decision, and the doc
+  comments that said module-level binders are `LocalId`s all the way
+  through are corrected.
+* The test being removed was also what kept an *import* from being captured
+  by a same-unique local binder, so that guard is re-established explicitly:
+  an occurrence that resolves lexically although its **own stable name** is
+  an external name of another module is a **unique collision**
+  (`Module::unique_collisions`). It is stated on the name the occurrence
+  already carries, against the module's own identity — nothing is keyed by
+  a unique — and `h2r stats` prints the count on every dump, with the
+  offending modules when it is not 0.
+* `split_stable_name` / `is_external_name` / `is_internal_unit` moved to
+  `h2r-core-ir`, where dump format 5's names live; `h2r-analysis` delegates,
+  so the IR's collision guard and `dictflow`'s linkage index cannot drift.
+
+**The compatibility proof.** On the *unchanged* `-O1` dump and the six
+unchanged matrix dumps, with the resolver changed:
+
+| | |
+|---|---:|
+| reports captured on `core-json`, stdout and stderr apart | 94 |
+| …byte-identical before and after | **94** |
+| matrix files (`stats`, `stats --per-module`, `lower --reachability` × A–F) | 24 |
+| …byte-identical before and after | **24** |
+| unique collisions, on all seven existing dumps | **0** |
+
+The 94 are `stats` (+`--per-module`), `laziness`, `parsec`, `tuples`
+(+`--verify`, `--boundaries`), `fields`, `lists` (+`--axioms`), `text`
+(+`--heads`), `verify-rep`, `classops` (+`--per-module`), `dictflow`,
+`higher`, `verify-m24`, `m24`, `lower --reachability` (+`--rules`,
+`--m24-link`) and every `--json` / `--explain` form. This is what lets the
+change stay **format 5**: the new resolver reads the old dumps to the byte,
+so old and new dumps can coexist. The one line `h2r stats` gains — the
+collision count — is committed separately and is the only difference
+between the pre- and post-resolver captures.
+
+Four new IR tests: an `isGlobal` occurrence with an in-scope binder is
+`Local`, without one is `Global`, a module's own top-level binding
+referenced by its post-tidy external name resolves lexically, and the
+collision guard fires on a synthetic import-captured-by-a-local.
+
+### The plugin: written, measured, **not committed**
+
+The change is small: in `dumpPass`, run `tidyProgram` ourselves and
+serialise `cg_binds` instead of `mg_binds`, returning the **original**
+`ModGuts` so the pipeline still sees its own tidy; and admit into `idTable`
+only referenced `GlobalId`s whose `Name` is external, because an internal
+stable string is not unique (M2.4h).
+
+It is **not side-effect free and must not be described as if it were.**
+`tidyProgram` allocates names through the process-global name cache
+(`takeUniqFromNameCache` / `allocateGlobalBinder`), consuming uniques the
+driver's own later tidy would otherwise have had. Whether the external
+names it picks are the ones the driver reuses, and whether anything
+perturbed is confined to internal uniques, is an experiment, recorded
+below.
+
+It also does more than rename: it trims bindings kept alive only by rules
+it cannot use, and it *injects implicit bindings* into `cg_binds`.
+
+The patch is kept at `plugin-post-tidy.patch` in the M3a′ scratchpad. It is
+not in the tree, because of the gate.
+
+### The gate: the `IdInfo` census
+
+`GHC.Core.Tidy.tidyIdBndr` / `tidyLetBndr` and `GHC.Iface.Tidy.tidyTopIdInfo`
+rebuild every `IdInfo` from `vanillaIdInfo` and put back only some fields.
+Read from GHC 9.6.7's own source:
+
+| binder class | tidied by | kept | **zapped** |
+|---|---|---|---|
+| top level, external name | `tidyTopIdInfo` | arity, `dmd_sig`, CPR, occ-info (`zapFragileOcc`), inline pragma, unfolding | per-binder demand, call arity, rules |
+| top level, internal name | `tidyTopIdInfo` | arity, `dmd_sig`, CPR, minimal unfolding | **occ-info**, per-binder demand, call arity, inline pragma, rules |
+| `let` / `letrec` | `tidyLetBndr` | occ-info, arity, `dmd_sig` (DmdEnv zapped), **per-binder demand**, inline pragma, unfolding | CPR, call arity, one-shot |
+| **lambda** | `tidyIdBndr` | occ-info, **one-shot**, trimmed unfolding | **arity, `dmd_sig`, per-binder demand, CPR, `IdDetails`** |
+| **case binder, alt binder** | `tidyIdBndr` | occ-info, trimmed unfolding | **arity, `dmd_sig`, per-binder demand, CPR, `IdDetails`** |
+
+Measured, not inferred: one `-O1` extraction of all 28 modules emitted
+twice through the *same* emitter, once from `mg_binds` and once from
+`cg_binds`. Binders carrying a non-trivial value, pre-tidy → post-tidy:
+
+| field | top | let | lam | case | alt |
+|---|---:|---:|---:|---:|---:|
+| binders in the class | 13828 → 13752 | 6156 → 6125 | 24202 → 23950 | 25076 → 24923 | 47078 → 46819 |
+| `arity != 0` | 3067 → 2994 | 2755 → 2738 | 0 → 0 | 0 → 0 | 0 → 0 |
+| `dmdSig` non-empty | 3179 → 3106 | 3182 → 2738 | 0 → 0 | 0 → 0 | 0 → 0 |
+| `dmdSig` has a strict arg | 2426 → 2363 | 1617 → 1608 | 0 → 0 | 0 → 0 | 0 → 0 |
+| `dmdSig` has an absent arg | 195 → 194 | 410 → 410 | 0 → 0 | 0 → 0 | 0 → 0 |
+| `dmdSig` diverges | 132 → 132 | 25 → 25 | 0 → 0 | 0 → 0 | 0 → 0 |
+| `cprSig` non-empty | 581 → 547 | 38 → **0** | 0 → 0 | 0 → 0 | 0 → 0 |
+| **`demand` strict** | 0 → 0 | 1059 → 1044 | **6026 → 0** | **532 → 0** | **22956 → 0** |
+| **`demand` absent** | 0 → 0 | 0 → 0 | **1515 → 0** | **21065 → 0** | **14344 → 0** |
+| **`demand` usedOnce** | 0 → 0 | 460 → 454 | **9518 → 0** | **21890 → 0** | **29245 → 0** |
+| **`demand` pretty ≠ `L`** | 820 → **0** | 4114 → 4089 | **11544 → 0** | **21911 → 0** | **35170 → 0** |
+| `occInfo` dead | 0 → 0 | 0 → 0 | 1513 → 1511 | 20675 → 20546 | 0 → 0 |
+| `occInfo` loopBreaker | 691 → **250** | 874 → 865 | 0 → 0 | 0 → 0 | 0 → 0 |
+| `oneShot` | 25 → 0 | 187 → 0 | 6119 → 6098 | 0 → 0 | 0 → 0 |
+| `hasUnfolding` | 13828 → 11792 | 5828 → **3245** | 0 → 0 | 24687 → 24530 | 5388 → 5377 |
+| `isJoinPoint` | 0 → 0 | 1119 → 1102 | 0 → 0 | 0 → 0 | 0 → 0 |
+| `details` non-empty | 945 → 848 | 1423 → 1327 | 0 → 0 | 0 → 0 | 4 → 4 |
+| **`exported`** | **1200 → 13752** | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 |
+
+The id table grows, as it should: 2,972 → 8,056 entries, `hasUnfolding`
+2,043 → 7,103, `isClassOp` 56 → 56, `dataCon` 1,071 → 1,064. Those extra
+entries are the module's own externalised binders, and they are redundant
+rather than harmful — such an occurrence resolves `Ref::Local` and the
+binder is what signatures are read from.
+
+**Verdict: the gate fires.** Three of the four zapped fields are read by
+M1–M2.4 proofs in exactly the binder classes tidy zaps them in:
+
+| reader | binder class | field |
+|---|---|---|
+| `h2r-analysis/src/fields.rs` `demand_of` (M2.3b) | **alt binder** | `demand.strict` → `DemandHow::StrictByGhc` |
+| `h2r-analysis/src/lists/mod.rs` `head_forced` (M2.3c) | **alt binder** | `demand.strict && !absent` |
+| `h2r-analysis/src/dictflow.rs:2267` (M2.4c) | **lambda** | `demand.strict` under `BindSite::Lam` |
+| `h2r-analysis/src/classops.rs:960` (M2.4b) | **lambda** (dictionary parameter) | `demand.strict` → `dict_known_strict` |
+| `h2r-analysis/src/dictflow.rs:1623` (M2.4c) | **lambda** (dictionary parameter) | `demand.strict` → `Param::known_strict` |
+| `h2r-analysis/src/{dictflow,higher,boundary,verify,verify_rep,verify_m24}.rs` | top level | `exported`, which post-tidy is `isGlobalId` and so **uniformly true** |
+
+Run on the two dumps, the damage is what the census predicts:
+
+| report | pre-tidy | post-tidy |
+|---|---:|---:|
+| `fields`: observed / unobserved / escaped | 1407 / 13 / 7746 | 191 / 1 / 8931 |
+| `fields`: `Always` verdicts | 196 | 34 |
+| `fields`: `Conditional` verdicts | 915 | 275 |
+| `lists`: `SpineDemand::Unknown` | 5503 | 8895 |
+| `lists`: `Whole` | 141 | 62 |
+| `lists`: `Prefix(DataDependent)` | 921 | 145 |
+| `classops`: dictionary known strict at its binder | 247 | 0 |
+| `classops`: sites with a bounded instance set (≥1) | 10 | 0 |
+| `dictflow`: `Exact(target)` class-op sites | 7 (1.2%) | 0 (0.0%) |
+| `laziness`: potential thunk sites | 2242 | 2228 |
+
+`laziness` (M1) survives — its binders are `let` binders, where tidy keeps
+the demand. M2.3b, M2.3c, M2.4b and M2.4c do not.
+
+**So the dumps were not regenerated.** Per the milestone's own rule, this
+is where it stops and hands the decision back.
+
+### What the fix would buy, measured on a scratch dump
+
+The post-tidy `-O1` dump was extracted and run through `lower
+--reachability` anyway, to price the decision:
+
+| | pre-tidy (committed) | post-tidy (scratch) |
+|---|---:|---:|
+| top-level bindings | 13,828 | 13,752 |
+| live | 3,997 | **9,795** |
+| dead, no references | 976 | 905 |
+| dead, only dead referrers | 8,855 | 3,052 |
+| share dead | 71.1% | **28.8%** |
+| inter-module edges (`A3`) | 498 | **1,288** |
+| `A5-IN-WORLD-MISSING` names | **112** over 1,232 occurrences | **0** |
+| in-world names GHC's flags explain | 277 data cons, 3 class ops | 277 data cons, **0** class ops |
+| zero-reference set, not dead and not a root | 0 | 0 |
+| verifier claims / disagreements | 113,325 / 0 | 116,029 / **0** |
+| `stats` unique collisions | 0 | **0** |
+
+Every module gains a nonzero live count. `ShellCheck.Checks.Commands` goes
+from 0 live to 1,184; `Checks.ShellSupport` from 0 to 870; `Analytics` from
+489 to 2,646; `Formatter.TTY` from 0 to 87. The `STATUS — THE DEAD SET IS
+CONDITIONAL` block disappears.
+
+The two pinned links resolve structurally, through the external-name index
+and not by any name heuristic:
+
+```
+ShellCheck.Checks.Commands $wchecker  — LIVE, 5 hops
+  Main$main [A1] → Main$main1 [A2] → Main $_in$poly_$j1 [A2]
+  → ShellCheck.Checker$checkScript [A3] → ShellCheck.Analyzer$analyzeScript [A3]
+  → ShellCheck.Checks.Commands$$wchecker [A3]
+
+ShellCheck.Formatter.TTY format1  — LIVE, 4 hops
+  Main$main [A1] → Main$main1 [A2] → Main $_in$poly_$j1 [A2]
+  → Main $_in$formats [A2] → ShellCheck.Formatter.TTY$format1 [A3]
+```
+
+The 277 data-constructor names that remain non-bindings are correct and
+not a hole: GHC 9.6.7's `getTyConImplicitBinds` injects constructor
+*wrappers* only — workers are generated from the `TyCon` by codegen and are
+never Core bindings — so `A5`'s "explained by GHC's own flags" branch is
+still the right classification for them. The 3 class-op selectors *do*
+become real top-level bindings (top-level `IdDetails` `[ClassOp]`: 0 → 4).
+
+Top-level bindings per module, pre-tidy → post-tidy, with the count whose
+stable name is external:
+
+| module | binds | external names |
+|---|---|---|
+| `Main` | 502 → 501 | 29 → 80 |
+| `Paths_ShellCheck` | 63 → 63 | 10 → 63 |
+| `ShellCheck.AST` | 1083 → 1083 | 381 → 840 |
+| `ShellCheck.ASTLib` | 346 → 345 | 85 → 190 |
+| `ShellCheck.Analytics` | 2676 → 2667 | 15 → 991 |
+| `ShellCheck.Analyzer` | 8 → 8 | 3 → 8 |
+| `ShellCheck.AnalyzerLib` | 650 → 649 | 117 → 334 |
+| `ShellCheck.CFG` | 1003 → 993 | 124 → 557 |
+| `ShellCheck.CFGAnalysis` | 895 → 867 | 145 → 490 |
+| `ShellCheck.Checker` | 36 → 36 | 2 → 6 |
+| `ShellCheck.Checks.Commands` | 1254 → 1240 | 13 → 65 |
+| `ShellCheck.Checks.ControlFlow` | 16 → 14 | 3 → 14 |
+| `ShellCheck.Checks.Custom` | 9 → 9 | 2 → 9 |
+| `ShellCheck.Checks.ShellSupport` | 906 → 901 | 7 → 134 |
+| `ShellCheck.Data` | 1340 → 1340 | 20 → 1340 |
+| `ShellCheck.Fixer` | 92 → 96 | 15 → 63 |
+| `ShellCheck.Formatter.CheckStyle` | 53 → 53 | 2 → 38 |
+| `ShellCheck.Formatter.Diff` | 156 → 155 | 12 → 33 |
+| `ShellCheck.Formatter.Format` | 62 → 62 | 17 → 44 |
+| `ShellCheck.Formatter.GCC` | 22 → 22 | 2 → 11 |
+| `ShellCheck.Formatter.JSON` | 69 → 66 | 5 → 38 |
+| `ShellCheck.Formatter.JSON1` | 91 → 88 | 9 → 56 |
+| `ShellCheck.Formatter.Quiet` | 11 → 11 | 2 → 11 |
+| `ShellCheck.Formatter.TTY` | 93 → 93 | 2 → 8 |
+| `ShellCheck.Interface` | 680 → 678 | 175 → 549 |
+| `ShellCheck.Parser` | 1645 → 1645 | 76 → 105 |
+| `ShellCheck.Prelude` | 42 → 42 | 7 → 16 |
+| `ShellCheck.Regex` | 25 → 25 | 8 → 13 |
+| **total** | **13828 → 13752** | **1288 → 6106** |
+
+`ShellCheck.Fixer` is the only module that gains bindings net (92 → 96):
+implicit bindings injected. Everywhere else the trimming of rule-only-live
+bindings dominates. The net is **−76**. Injected and trimmed were not
+separated exactly — `getImplicitBinds` is not exported from
+`GHC.Iface.Tidy`, and a name-level before/after is meaningless because
+tidy is what invents the names (`$c==` → `$fEqStatus_$c==`).
+
+### The transparency experiment
+
+Three `-O1` builds of the stripped ShellCheck tree from the same sources:
+**(a)** no plugin at all, **(b)** the plugin as committed, **(c)** the
+post-tidy plugin.
+
+| | result |
+|---|---|
+| interface surface, (b) vs (c) | **identical** except 27 `addDependentFile` lines naming the plugin's own `.so` (different path, different content) and the 27 `interface hash:` values that follow from them. **`ABI hash` and `export-list hash` are unchanged on every one of the 27 modules.** |
+| interface surface, (a) vs (b) | differs only in the same kind of bookkeeping: `plugin package dependencies`, the plugin `.so` `addDependentFile` lines, `trusted package dependencies`, and the hashes that follow. |
+| executable behaviour | **identical**, all three. 117 invocations — every `*.sh` in the repo (3 files) plus 12 inline cases exercising the parser, analytics and the fixer, each through `-f tty/json/json1/gcc/checkstyle/diff/quiet`, plus `--version` and `--help`; output **and** exit codes compared. 710 lines of output, byte-identical. |
+| deterministic repeat extraction, plugin (c) | **byte-identical** across two independent build trees and two process runs, all 28 dumps; the two binaries also hash the same. |
+| deterministic repeat extraction, plugin (b) | the re-extraction reproduced the committed `compiler/core-json` **to the byte**, and its binary hash equals the one in `compiler/matrix/A/provenance`. |
+| `shellcheck` binary sha256 | (a) `1c2e2f59…`, (b) `38905705…`, (c) `192b82c8…` — **all three differ.** |
+| module `.o` sha256 | 20 of the 27 differ between (a) and (b), and **the same 20** between (b) and (c). |
+
+The binaries and objects **do** move, and (a) vs (b) shows a plugin that
+touches nothing moves them too — so the move is not evidence about the
+extra tidy on its own. What can be said about where it lands, from `nm`:
+of the **8,793** defined symbols across the 27 objects, **every one is
+identical in all three builds**, byte for byte in name and section. The
+only differing symbols are the 294 `<unique>_str` string-literal symbols
+and the local `.Lr<unique>_bytes` labels — symbols whose *names are
+internal uniques*. That is consistent with, and only with, internal-unique
+perturbation.
+
+What could not be determined: whether the `.o` bytes differ *only* in those
+symbol names and the relocations that follow them. `nm` shows the symbol
+tables agree; a byte-level attribution of the remaining object diff to
+those labels alone was not carried out, and a full `objdump` comparison of
+27 objects is the work that would settle it.
+
+### Where this leaves the milestone, and the options
+
+Committed and proven: the resolver, the collision guard, `stats`'s report
+of it, and the byte-identity of all 118 captured report files on the seven
+existing dumps. The Rust side reads both the old dumps and post-tidy
+dumps, which is what Step 1 was for, and it is still **format 5**.
+
+Not committed: the plugin. Regenerating the dumps under it would silently
+take `demand` off every lambda, case and alternative binder, and M2.3b,
+M2.3c, M2.4b and M2.4c read it there.
+
+The options, for whoever picks this up:
+
+1. **Join the pre-tidy `IdInfo` onto the tidied binder inside the pass.**
+   `tidyIdBndr` and `tidyLetBndr` both rebuild the name as
+   `mkInternalName (idUnique id) occ'` — **nested binders keep their
+   unique** — so the join is exact for the three classes that lose
+   anything. Top-level binders do **not**: `tidyTopName` takes a fresh
+   unique from the name cache for every local name, external or internal.
+   So the join has to be a lockstep structural walk of `mg_binds` and
+   `cg_binds`, with the top-level pairs aligned first (the sequence of
+   nested binder uniques inside a right-hand side is a fingerprint that
+   survives tidying exactly, and implicit bindings have no pre-tidy
+   counterpart while trimmed ones have no tidied one). Legitimate — it is
+   all inside one compilation of one module — and it keeps every M1–M2.4
+   input while giving M3 the tidied names, the implicit bindings and the
+   trimming. The most work; the only option that loses nothing.
+2. **Emit the tidied program *structure* with pre-tidy `IdInfo`
+   throughout**, i.e. the same lockstep walk but resolved the other way:
+   serialise `mg_binds`, with each top-level binder's `name` replaced by
+   the name `CoreTidy` gave it. Closes the linkage hole exactly and
+   changes no `IdInfo` at all, so every M1–M2.4 report stays byte-identical
+   by construction. Gives up the implicit bindings and the trimming, so
+   the dump is not the program GHC hands to codegen.
+3. **Emit both programs**, `<Module>.core.json` unchanged plus
+   `<Module>.tidy.core.json`. Trivially safe, and trivially two programs;
+   M3b would have to say which one it lowers.
+4. **Accept the loss.** Not viable: the demand on an alternative binder is
+   GHC's demand analysis, and nothing on the Rust side can recompute it.
+
+Nothing in `h2r-analysis` changed; the resolver change forced no semantic
+change there, as expected. The M1–M2.4 numbers in this document are
+untouched and remain correct for the dumps in the tree.
+
+*The M1–M2.4 re-baseline that was to follow this section has not been
+done, and must not be, until one of the options above is chosen and the
+dumps are regenerated under it.*
 
 ## What ShellCheck actually needs
 
