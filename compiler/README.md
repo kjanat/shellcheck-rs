@@ -4981,6 +4981,15 @@ and *which node that is* is re-derived here. Agreeing on an address is not
 agreeing on a derivation; disagreeing about which node is the constructor
 application would be a disagreement, and is reported as one.
 
+The linkage table that addressing rests on is re-derived too, including
+[M2.4c′'s identity cleanup](#identity-cleanups): this walk writes its own
+*external name* test, rejects the two pseudo-units `_sys` and `_in` that a
+three-way split on `$` would otherwise read as a unit and a module, and
+**asserts that no two top-level bindings claim one external stable name**.
+That assertion holds on all seven dumps, and it is load-bearing: accepting
+the pseudo-units makes this walk's own assertion fail on `-O1` with exactly
+`external stable names are not unique: ["$_sys$poly_$j"]`.
+
 ### What it found
 
 | dump | claims | re-derived | **disagreements** | coverage refusals |
