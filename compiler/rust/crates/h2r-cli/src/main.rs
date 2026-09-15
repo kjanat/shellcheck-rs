@@ -13,6 +13,7 @@ use h2r_analysis::laziness::{Census, Class, Fate, Origin, TopClass};
 use h2r_analysis::shape::{ArgShape, Position};
 use h2r_core_ir::{BinderKind, Expr, Module, load_dir, with_big_stack};
 
+mod lower;
 mod m23;
 mod m24;
 
@@ -338,6 +339,29 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// M3 — the lowering. M3a: the `Main.main`-rooted live set over the
+    /// closed world, with a witness for every live top-level binding, a
+    /// named reason for every dead one, and the independent verifier's
+    /// result beside it.
+    Lower {
+        dir: PathBuf,
+        /// The M3a question: which top-level bindings can `Main.main`
+        /// reach? Required — M3a implements this one and no other.
+        #[arg(long)]
+        reachability: bool,
+        /// Emit the live set, the verifier's audit and the rules as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print the rule table.
+        #[arg(long)]
+        rules: bool,
+        /// Print the witness path of one live binding, or the dead reason
+        /// and referrers of one dead binding, by stable name (or by
+        /// occurrence name, which is not an identity and may match
+        /// several).
+        #[arg(long)]
+        explain: Option<String>,
+    },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
         dir: PathBuf,
@@ -514,6 +538,13 @@ fn main() -> Result<()> {
             view_all,
         ),
         Command::M24 { dir, json } => m24_report(&dir, json),
+        Command::Lower {
+            dir,
+            reachability,
+            json,
+            rules,
+            explain,
+        } => lower::lower(&dir, reachability, json, rules, explain),
         Command::Parsec {
             dir,
             module,
