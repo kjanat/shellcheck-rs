@@ -5127,6 +5127,13 @@ evidence a rule was exercised. Every count is this walk's own.
 | 13a | …the same, at an exported or valued slot | 10 | `ShellCheck.AnalyzerLib` field 0 of `Checker` | `Preserve` |
 | 14 | a finite closure set at a slot no clone can serve | 1 | `ShellCheck.Checks.ShellSupport` return binder 942 | `FiniteClosureSet(n)` |
 | 15 | a three-argument closure named like a Parsec continuation | 124 | `ShellCheck.Parser` 3450 | arity and captures decide; no name is read |
+| 16 | a `case` on the alternative binder of a **lazy** field | 6,625 | `Main` 518 | a force: the binder is an unevaluated thunk |
+| 17 | …the same, on a **GHC-strict** field's binder | 168 | `ShellCheck.ASTLib` 8186 | already evaluated: the `case` deletes nothing |
+| 18 | a `case`/`let` head carrying outer value arguments | **0** | — | refused, never peeled: the arguments would be dropped |
+
+*Rows 16–18 were added by
+[M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found), one
+per defect it found in the totality domain.*
 
 Rows 1 and 7 are zero, and both are load-bearing zeroes rather than gaps: the
 fixtures exercise each rule, and the dump's zero is the finding. Row 1 is the
@@ -5729,16 +5736,33 @@ shape with `d` the dictionary, and pins that the old walk's answer — the
 two-element set `{$fShowT, $fShowU}` for an expression whose value is
 neither — is now a refusal.
 
-**In the dump: all three shapes are zero on `-O1`.** The totality transfer
-reaches **0** `case` nodes on a dictionary path — the instrumented fact
-M2.4c′ recorded and M2.4f re-derives — so (a) and (b) have nothing to bite
-on: 0 dictionary paths through an alternative binder's `case`, 0 verdicts
-with more than one obligation, `MustPreserveForce` still 0 of 216. For (c),
-no dictionary expression in any of the seven dumps has a `case` or `let`
-head with outer value arguments, so no set moved either. `dictflow`'s report
-is **byte-identical** on all seven dumps. That is a finding about GHC's
-`-O1` output, not a reason the rules could stay wrong: the counterexamples
-are in `tests.rs` and the rules are what the reports say they are.
+**In the dump.** Each shape is now searched for over the whole closed world
+and counted by `h2r verify-m24` (rows **16**, **17** and **18**), so that the
+hand-built counterexamples are not the only evidence the corrected rules were
+exercised, and so that a zero is a fact about the dump rather than about
+where the walk looked:
+
+| row | shape | in `-O1` | example |
+|---:|---|---:|---|
+| 16 | a `case` on the alternative binder of a **lazy** field | **6,625** | `Main` node 518 |
+| 17 | …the same, on a **GHC-strict** field's binder | 168 | `ShellCheck.ASTLib` node 8186 |
+| 18 | a `case`/`let` head carrying outer value arguments | **0** | — |
+
+Defect (a) was therefore **live in the program** — 6,625 of the 6,793
+alternative-binder scrutinees in `-O1` bind a lazy field and were being read
+as already evaluated, against 168 that really are — and the only reason no
+verdict moves is that none of the 6,625 sits on a **dictionary** path: the
+totality transfer reaches **0** `case` nodes there at all, the instrumented
+fact M2.4c′ recorded and M2.4f re-derives on every run. "It did not matter
+here" is not "it was right", and for the next milestone, which asks the same
+question about fields rather than dictionaries, 6,625 is the number that
+would have been wrong.
+
+Defects (b) and (c) have nothing to bite on for the same reason and for
+shape 18's own zero: 0 verdicts carry more than one obligation,
+`MustPreserveForce` is still 0 of 216, and no expression in any of the seven
+dumps applies a `case` or `let` head to value arguments. `dictflow`'s report
+is **byte-identical** on all seven dumps.
 
 **(d) the totality partition is asserted in its own right.**
 `m24::Accounting::check()` asserted it only inside `ErasureRow::closes()`,

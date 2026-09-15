@@ -4105,6 +4105,59 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
         "arity and captures decide; no name is read",
         parsec_shaped,
     );
+
+    // 16, 17, 18 — M2.4h's three shapes, counted in the dump so that the
+    // hand-built counterexamples in `tests.rs` are not the only evidence
+    // the corrected rules were exercised. All three are searched over the
+    // whole closed world, not only over dictionary paths, so a zero here
+    // is a fact about the dump and not about where this walk looked.
+    let mut lazy_alt: Vec<String> = Vec::new();
+    let mut strict_alt: Vec<String> = Vec::new();
+    let mut applied_head: Vec<String> = Vec::new();
+    for mi in 0..w.modules.len() {
+        let m = w.m(mi);
+        for id in 0..m.exprs.len() as ExprId {
+            // 16/17 — a `case` whose scrutinee is an alternative binder.
+            // Before M2.4h every such scrutinee counted as already
+            // evaluated; now only the strict ones do.
+            if let Expr::Case { scrut, .. } = m.expr(id)
+                && let Some(b) = m.resolve(m.strip(*scrut))
+                && m.binding(b).site == BindSite::AltBinder
+            {
+                let at = format!("{} node {id}", m.name);
+                if w.alt_strict[mi].get(&b).copied().unwrap_or(false) {
+                    strict_alt.push(at);
+                } else {
+                    lazy_alt.push(at);
+                }
+            }
+            // 18 — a spine whose head is a `case`/`let` carrying outer
+            // value arguments. Peeling it would drop them.
+            if m.spine_root(id) == id && matches!(m.expr(id), Expr::App { .. }) {
+                let (head, args) = m.spine(id);
+                if matches!(m.expr(head), Expr::Case { .. } | Expr::Let { .. })
+                    && !vargs(m, &args).is_empty()
+                {
+                    applied_head.push(format!("{} node {id}", m.name));
+                }
+            }
+        }
+    }
+    row(
+        "16 a case on the alternative binder of a LAZY field",
+        "a force: the binder is an unevaluated thunk",
+        lazy_alt,
+    );
+    row(
+        "17 … the same, on a GHC-strict field's binder",
+        "already evaluated: the case deletes nothing",
+        strict_alt,
+    );
+    row(
+        "18 a case/let head carrying outer value arguments",
+        "refused, never peeled: the arguments would be dropped",
+        applied_head,
+    );
     out
 }
 
