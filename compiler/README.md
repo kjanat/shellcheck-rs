@@ -4928,8 +4928,9 @@ The condition this section states — "one of the three enumerated verdicts" —
 was the wrong condition, and the paragraph below called
 `residual_edge_closes_through_a_uniform_boundary_of_known_continuations`
 "the" regression test as though `parsec.rs` had no others. It carries
-**27** unit tests of its own, in its own `mod tests`, and `cargo test`
-counts every one of them; this is the one that covers `residual_edges`.*
+**29** unit tests of its own (27 before M2.4h), in its own `mod tests`, and
+`cargo test` counts every one of them; this is one of three that cover
+`residual_edges`.*
 
 That regression test
 covers the branch the real dump does not reach: two regions that each hand a
@@ -5921,8 +5922,22 @@ is that it would have moved for the wrong reason as soon as an enumerated
 `CloneRequired` boundary appeared, which is the case M2.4d′ found on the
 other side of the same wall.
 
-*(`parsec.rs` carries **27** unit tests of its own; M2.4e's text called one
-of them "the" regression test. That is corrected above.)*
+**And the rule now fires where it could not.**
+`residual_edge_closes_through_a_clone_required_boundary` builds the case the
+old condition refused by name: one region whose `cok` boundary has two
+producers, both nested regions of **known role**, whose representations
+disagree — `CloneRequired(2)`, and enumerated. The edge closes with
+`P-HO-FINITE`, and the test asserts that the representation verdict is
+present in the evidence as `representation verdict CloneRequired(2)` rather
+than as the answer. `residual_edge_at_an_unenumerated_boundary_says_so` pins
+the other direction. Both are new, and they are the only reason this
+correction is more than a rewording: on ShellCheck's Core nothing moves,
+because the wall M2.4e found is the anonymous-lambda wall and not a
+representation one.
+
+*(`parsec.rs` carries **29** unit tests of its own — 27 before these two;
+M2.4e's text called one of them "the" regression test. That is corrected
+above.)*
 
 #### The gate for this correction
 
