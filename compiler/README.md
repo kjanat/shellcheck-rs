@@ -5388,8 +5388,11 @@ stays visible which object said what. Unlike M2.3's, these two are
 a slot's closure set are unions over every module — so the objects are built
 over the whole dump and only the asked-about module's sites, values,
 parameters, boundaries and producers are indexed. The whole M2.4 object,
-`verify-m24` included, costs about five seconds on the `-O1` dump, which is
-why `show` can load it by default.
+`verify-m24` included, costs about three seconds on the `-O1` dump: `h2r
+show` on a class-op site takes **2.7s** with both objects loaded against
+**1.8s** with `--no-classops --no-higher`, most of which is reading the
+dump either way. That is why `show` can load them by default and stay a
+per-node query.
 
 ### The milestone accounting — three questions, never collapsed
 
@@ -5641,8 +5644,8 @@ the first to put them under one.
 
 **The criterion is that the three questions are answered separately, that
 every positive answer is re-derived by a walk that shares nothing with the
-first but the IR and four named inputs, and that every residual is itemised
-and owned.** Not that coverage is high: on this program it is low, and the
+first but the IR and four named trusted inputs, and that every residual is
+itemised and owned.** Not that coverage is high: on this program it is low, and the
 milestone's contribution is knowing exactly why.
 
 **Question 1 — can the call target be enumerated?** `sites = Exact +
@@ -5696,9 +5699,10 @@ having claimed more than its evidence:
 | [M2.4d′](#correction-m24d--sharing-is-decided-before-agreement-and-a-free-type-variable-identifies-nothing) | six defects: `H8` decided after `H5`/`H6`; two different one-representation theorems and opaque shapes merging; per-parameter clone counts summed; free type variables merging unrelated closures; existential fields indexed by raw binder position; `UniformRepresentation` named a Rust fact it is not | `ExactClosure` 67 → **50**, `Preserve` 26 → **44**, one representation 103 → **84**, rewritable 87 → **66**, shape classes 261 → **353**, clones 418 → **53** |
 | [M2.4f](#the-one-correction-this-produced) | the *record*, not a verdict: M2.4d′ said ShellCheck's Core has no alternative binding a function-typed field after an existential type binder. It has four | no number moved; the prose was corrected and the shape is now counted on every run (rows 11 and 11a) |
 
-**Trusted inputs and assumptions, named.** These are consulted and not
-verified, on both sides of the M2.4f check, and printed at the top of every
-`verify-m24` run:
+**Trusted inputs and assumptions, named.** The first four are the trusted
+inputs: consulted and never verified, on both sides of the M2.4f check, and
+printed at the top of every `verify-m24` run. The last two are assumptions
+the *verdicts* rest on rather than inputs either walk reads.
 
 1. **the 17-class method-field table** (`classops::CLASSES`), a level-5
    axiom: format 5 carries neither a type nor an unfolding for a global, so
