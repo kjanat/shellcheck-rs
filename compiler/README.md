@@ -5692,7 +5692,7 @@ analysis.
 
 | | what was wrong | what it moved |
 |---|---|---|
-| **1** | three defects in the totality domain, in `dictflow.rs` **and** reproduced in `verify_m24.rs`: every alternative binder counted as *already evaluated*; the totality join kept one obligation and lost the rest; an applied `case`/`let` head was peeled, dropping its arguments | no verdict on any of the seven dumps — `MustPreserveForce` is 0 on `-O1` because there is no `case` on a dictionary path at all, and the three shapes do not occur — but the rules are now the rules the reports claim, and each has a hand-built counterexample |
+| **1** | three defects in the totality domain, in `dictflow.rs` **and** reproduced in `verify_m24.rs`: every alternative binder counted as *already evaluated*; the totality join kept one obligation and lost the rest; an applied `case`/`let` head was peeled, dropping its arguments | no verdict on any of the seven dumps, and `dictflow`'s report is byte-identical on all seven — but the first shape occurs **6,625** times in `-O1` and misses every verdict only because none of them sits on a dictionary path, where the totality transfer reaches no `case` at all. Each defect now has a hand-built counterexample and a counted row (16–18) |
 | **2** | `H15-OWNER-CLONES` deduplicated clone tuples with `Shape::short()` — arity and capture **count** — contradicting `Shape::class()`, which is what every other part of M2.4d calls a representation | closure clones **53 → 68** on `-O1`; the verifier's independent recount agrees |
 | **3** | a clone-plan claim carried only its cardinality and an `ErasableWithObligation` claim carried no obligation at all, so `check_plan` compared `tuples == n` and a different plan of the same size passed | no number; the claim protocol and two refusal reasons are new, and `[verified: yes]` now requires a content-checked claim |
 | **4** | `parsec::residual_edges` gated target enumeration on the *representation* verdict, admitting three verdicts and refusing `CloneRequired` | no number — still **0 closed of 41** — but the 41-row table's status column now names the enumeration answer, with the verdict beside it |
@@ -5754,12 +5754,12 @@ as already evaluated, against 168 that really are — and the only reason no
 verdict moves is that none of the 6,625 sits on a **dictionary** path: the
 totality transfer reaches **0** `case` nodes there at all, the instrumented
 fact M2.4c′ recorded and M2.4f re-derives on every run. "It did not matter
-here" is not "it was right", and for the next milestone, which asks the same
-question about fields rather than dictionaries, 6,625 is the number that
-would have been wrong.
+here" is not "it was right": the rule was stated in the report, it was wrong
+as stated, and 6,625 is how much of this program it was wrong about.
 
-Defects (b) and (c) have nothing to bite on for the same reason and for
-shape 18's own zero: 0 verdicts carry more than one obligation,
+Defects (b) and (c) have nothing to bite on for the same reason, and (c)
+additionally because shape 18 is itself zero: 0 verdicts carry more than one
+obligation,
 `MustPreserveForce` is still 0 of 216, and no expression in any of the seven
 dumps applies a `case` or `let` head to value arguments. `dictflow`'s report
 is **byte-identical** on all seven dumps.
