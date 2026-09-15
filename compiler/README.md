@@ -5633,12 +5633,18 @@ its thunk. The number is 0 and it is a result.
 | boundaries | 5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
 | … enumerated / one representation / rewritable as one | 252 / 84 / 66 | 391 / 143 / 125 | 486 / 189 / 172 | 1,909 / 718 / 695 | 1,887 / 706 / 683 | 1,891 / 705 / 682 |
 | dictionary values / parameters | 191 / 216 | 191 / 210 | 191 / 222 | 238 / 223 | 238 / 223 | 238 / 231 |
-| clone plans (dictionary / closure) | 4 / CLOSURE_O1 | 3 / CLOSURE_B | 4 / CLOSURE_C | 7 / CLOSURE_D | 7 / CLOSURE_E | 7 / CLOSURE_F |
+| clone plans (dictionary / closure) | 4 / 68 | 3 / 83 | 4 / 87 | 7 / 207 | 7 / 207 | 7 / 227 |
 | claims / disagreements | 606 / 0 | 749 / 0 | 867 / 0 | 2,209 / 0 | 2,187 / 0 | 2,209 / 0 |
 | M1 thunk sites explained by M2.4 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The accounting closes on all seven dumps, and `rewritable ≤ one
 representation ≤ enumerated` holds on all seven.
+
+*The closure clone row is as
+[M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found)
+recomputed it; M2.4g published 53 / 61 / 65 / 154 / 154 / 176, planning with
+`Shape::short()` instead of `Shape::class()`. It is the only row that moved,
+and it moved upward on every dump — the defect always under-counted.*
 
 ### The `h2r parsec` nondeterminism, fixed
 
@@ -5694,7 +5700,7 @@ analysis.
 | | what was wrong | what it moved |
 |---|---|---|
 | **1** | three defects in the totality domain, in `dictflow.rs` **and** reproduced in `verify_m24.rs`: every alternative binder counted as *already evaluated*; the totality join kept one obligation and lost the rest; an applied `case`/`let` head was peeled, dropping its arguments | no verdict on any of the seven dumps, and `dictflow`'s report is byte-identical on all seven — but the first shape occurs **6,625** times in `-O1` and misses every verdict only because none of them sits on a dictionary path, where the totality transfer reaches no `case` at all. Each defect now has a hand-built counterexample and a counted row (16–18) |
-| **2** | `H15-OWNER-CLONES` deduplicated clone tuples with `Shape::short()` — arity and capture **count** — contradicting `Shape::class()`, which is what every other part of M2.4d calls a representation | closure clones **53 → 68** on `-O1`; the verifier's independent recount agrees |
+| **2** | `H15-OWNER-CLONES` deduplicated clone tuples with `Shape::short()` — arity and capture **count** — contradicting `Shape::class()`, which is what every other part of M2.4d calls a representation | closure clones **53 → 68** on `-O1`, and up on every dump: 61 → **83** (B), 65 → **87** (C), 154 → **207** (D and E), 176 → **227** (F). The verifier's independent recount agrees on all seven |
 | **3** | a clone-plan claim carried only its cardinality and an `ErasableWithObligation` claim carried no obligation at all, so `check_plan` compared `tuples == n` and a different plan of the same size passed | no number; the claim protocol and two refusal reasons are new, and `[verified: yes]` now requires a content-checked claim |
 | **4** | `parsec::residual_edges` gated target enumeration on the *representation* verdict, admitting three verdicts and refusing `CloneRequired` | no number — still **0 closed of 41** — but the 41-row table's status column now names the enumeration answer, with the verdict beside it |
 
