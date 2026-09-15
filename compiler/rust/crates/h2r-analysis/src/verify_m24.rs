@@ -135,7 +135,15 @@ pub fn is_coverage_refusal(why: &str) -> bool {
 }
 
 //------------------------------------------------------------------------------
-// Budgets — this walk's own, deliberately not the analyses'
+// Budgets
+//
+// The round, step and nesting budgets are this walk's own and deliberately
+// larger than the analyses': hitting one is this walk declining, and a
+// verifier that declined exactly where the analysis declines would be
+// checking nothing. The **set cap** is the one budget kept identical, and
+// not for symmetry: a claim that a set is bounded is a claim about a set of
+// at most this many members, so a walk with a different cap would sometimes
+// be answering a different question.
 //------------------------------------------------------------------------------
 
 /// Fixpoint rounds before every unsettled node is forced to `Top`.
