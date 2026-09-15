@@ -5176,15 +5176,16 @@ Every existing report is **byte-identical** before and after, on
 `lists` (plus `--axioms`), `text` (plus `--heads`, `--explain`),
 `verify-rep`, `classops` (plus `--per-module`, `--explain`), `dictflow` and
 `higher`, with the `--json` form of each — 238 captured reports over the
-seven dumps, of which **223 are byte-identical** and the other 15 are the
+seven dumps, of which **224 are byte-identical** and the other 14 are the
 **pre-existing `parsec` nondeterminism** and nothing else (every run's
 standard error was captured too, and all 224 are empty):
 
-* `parsec` on B, C, E and F and `parsec --explain` on B, C, D and E differ in
-  one or two `e.g.` exemplar lines each — the *same* node with a different
-  argument index, every count identical, which is the same witness-picking
+* `parsec` on B, C and D and `parsec --explain` on B, C, E and F differ in
+  exactly **one `e.g.` exemplar line each** — the same reject reason with a
+  different witness, every count identical. That is the witness-picking
   M2.4a's gate recorded and M2.4d′ re-confirmed by running an unchanged
-  binary three times;
+  binary three times; *which* of the profiles it lands on moves from run to
+  run, which is the point.
 * `parsec --json` differs on all seven dumps in each region's edge list
   order, and is **multiset-identical on all seven** when every list is
   canonicalised.
