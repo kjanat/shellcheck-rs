@@ -4327,6 +4327,91 @@ mod test {
         assert!(!open[0].previous_reason.is_empty());
     }
 
+    /// **M2.4h.** The same question at a boundary the closure graph calls
+    /// `CloneRequired`: two continuations of **known role** whose
+    /// representations disagree.
+    ///
+    /// Target enumeration and representation agreement are separate facts
+    /// ([`crate::higher::H11_SEPARATE`]). A `CloneRequired` boundary is
+    /// enumerated — that is how its clones were counted — so its
+    /// continuation-target set is as finite as an `ExactClosure` one, and
+    /// the edge closes. Before M2.4h the rule admitted three verdicts by
+    /// name and refused this one, which answered the representation
+    /// question in place of the enumeration question.
+    #[test]
+    fn residual_edge_closes_through_a_clone_required_boundary() {
+        // Two nested regions of known role, one capturing and one not:
+        // same arity, different capture counts, so two shape classes.
+        let plain = || cps_lam(ap(v("cok"), vec![g("y"), v("s1"), g("e")]));
+        let capturing = || cps_lam(ap(v("cok"), vec![v("c"), v("s1"), g("e")]));
+        let call = |f: &str, k: Value| ap(v(f), vec![g("s"), k, g("ce"), g("eo"), g("ee")]);
+        let m = module_pairs(
+            vec![
+                ("p", region_returning_a_tuple()),
+                ("callp1", call("p", plain())),
+                ("callp2", lam(vec![b("c", "Int")], call("p", capturing()))),
+            ],
+            tuple_ids(),
+        );
+        let a = Analysis::of_module(&m);
+        let higher = crate::higher::Higher::of_modules([&m]);
+        // The boundary really is CloneRequired, and really is enumerated.
+        let bd = higher
+            .boundaries
+            .iter()
+            .find(|b| b.producers.len() == 2)
+            .expect("the cok boundary of p");
+        assert!(bd.enumerated, "{bd:#?}");
+        assert!(
+            matches!(bd.verdict, crate::higher::Verdict::CloneRequired(2)),
+            "{:?}",
+            bd.verdict
+        );
+        let edges = residual_edges(std::slice::from_ref(&a), &higher);
+        assert_eq!(edges.len(), 1, "{edges:#?}");
+        assert!(edges[0].closed(), "{:#?}", edges[0]);
+        assert_eq!(edges[0].rule, Some(P_HO_FINITE));
+        // …and the representation verdict is recorded beside it, not used
+        // to gate it.
+        assert!(
+            edges[0]
+                .evidence
+                .iter()
+                .any(|e| e == "representation verdict CloneRequired(2)"),
+            "{:#?}",
+            edges[0]
+        );
+    }
+
+    /// **M2.4h.** An **unenumerated** boundary is refused for that reason,
+    /// and the reason names the enumeration answer rather than the
+    /// representation verdict.
+    #[test]
+    fn residual_edge_at_an_unenumerated_boundary_says_so() {
+        let call = |f: &str, k: Value| ap(v(f), vec![g("s"), k, g("ce"), g("eo"), g("ee")]);
+        let m = module_pairs(
+            vec![
+                ("p", region_returning_a_tuple()),
+                // The only producer is a closure out of an imported call,
+                // so the producer set is not accounted for.
+                ("callp1", call("p", ap(g("imported"), vec![g("z")]))),
+            ],
+            tuple_ids(),
+        );
+        let a = Analysis::of_module(&m);
+        let higher = crate::higher::Higher::of_modules([&m]);
+        let edges = residual_edges(std::slice::from_ref(&a), &higher);
+        assert_eq!(edges.len(), 1, "{edges:#?}");
+        assert!(!edges[0].closed(), "{:#?}", edges[0]);
+        assert!(
+            edges[0].status.starts_with(P_NOT_ENUMERATED)
+                || edges[0].status == P_NOT_A_CONT
+                || edges[0].status == P_NO_BOUNDARY,
+            "{:#?}",
+            edges[0]
+        );
+    }
+
     /// A continuation stored in a data constructor field escapes: the
     /// recogniser cannot see what will eventually call it, so the region is
     /// rejected rather than guessed at.
