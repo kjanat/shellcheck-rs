@@ -298,6 +298,25 @@ pub struct Audit {
     /// non-zero, a planned clone count is a **lower bound**.
     pub dict_plans_set_valued: usize,
     pub closure_plans_set_valued: usize,
+    /// This walk's own verdict distribution over the **whole** population,
+    /// not just the claimed part of it. A claim check is one-sided — only
+    /// the positive verdicts are re-derived — so a walk that called
+    /// everything `Erasable` would pass it. These say what this walk says
+    /// about every value, every parameter and every boundary, in the
+    /// analyses' own column order, so that the one-sidedness is visible
+    /// rather than assumed away. A difference here is not a disagreement
+    /// about a claim; it is a difference to look at.
+    ///
+    /// Values and parameters: `Erasable`, `ErasableWithObligation`,
+    /// `ErasableWithClone`, `Preserve`, `Unresolved`.
+    pub own_value_verdicts: [usize; 5],
+    pub own_param_verdicts: [usize; 5],
+    /// Parameters by totality: `ProvenTotal`, `MustPreserveForce`,
+    /// `Unknown`.
+    pub own_param_totality: [usize; 3],
+    /// Boundaries: `ExactClosure`, `TypeShapeUniform`, `CloneRequired`,
+    /// `FiniteClosureSet`, `Preserve`, `Unresolved`.
+    pub own_higher_verdicts: [usize; 6],
     /// This walk's own population sizes, for the report.
     pub own_sites: usize,
     pub own_params: usize,
@@ -3248,6 +3267,31 @@ fn keys_line(k: &BTreeSet<String>) -> String {
 }
 
 impl DictDerived {
+    /// This walk's own verdicts over every dictionary value.
+    fn value_verdict_counts(&self) -> [usize; 5] {
+        let mut out = [0usize; 5];
+        for v in self.value_verdict.values() {
+            out[verdict_col(v)] += 1;
+        }
+        out
+    }
+    /// …over every dictionary parameter.
+    fn param_verdict_counts(&self) -> [usize; 5] {
+        let mut out = [0usize; 5];
+        for v in &self.param_verdict {
+            out[verdict_col(v)] += 1;
+        }
+        out
+    }
+    /// …and their totality.
+    fn param_totality_counts(&self) -> [usize; 3] {
+        let mut out = [0usize; 3];
+        for x in &self.params {
+            out[x.tot.level as usize] += 1;
+        }
+        out
+    }
+
     fn check_site_exact(&self, w: &World, c: &Claim) -> Result<(), Refusal> {
         let Subject::Site { module, node } = &c.subject else {
             return Err(Refusal::new(C_NO_SITE, "not a site claim"));
@@ -3393,6 +3437,17 @@ impl DictDerived {
     }
 }
 
+/// The column an erasure verdict sits in, in the analyses' own order.
+fn verdict_col(v: &EVerdict) -> usize {
+    match v {
+        EVerdict::Erasable => 0,
+        EVerdict::WithObligation => 1,
+        EVerdict::WithClone(_) => 2,
+        EVerdict::Preserve(_) => 3,
+        EVerdict::Unresolved(_) => 4,
+    }
+}
+
 /// Does this walk's set have exactly the members the claim asserts?
 fn same_set(set: &Set, keys: &[String]) -> Result<(), Refusal> {
     match set {
@@ -3429,6 +3484,22 @@ fn check_plan(plan: Option<&OwnerPlan>, c: &Claim) -> Result<(), Refusal> {
 }
 
 impl HigherDerived {
+    /// This walk's own verdicts over every function-valued boundary.
+    fn verdict_counts(&self) -> [usize; 6] {
+        let mut out = [0usize; 6];
+        for b in &self.boundaries {
+            out[match &b.verdict {
+                HVerdict::Exact => 0,
+                HVerdict::Uniform => 1,
+                HVerdict::Clone(_) => 2,
+                HVerdict::Finite(_) => 3,
+                HVerdict::Preserve(_) => 4,
+                HVerdict::Unresolved(_) => 5,
+            }] += 1;
+        }
+        out
+    }
+
     fn boundary(&self, w: &World, c: &Claim) -> Result<&HBoundary, Refusal> {
         let Subject::Boundary { module, slot } = &c.subject else {
             return Err(Refusal::new(C_NO_BOUNDARY, "not a boundary claim"));
@@ -3826,6 +3897,10 @@ pub fn verify(modules: &[&Module], claims: &[Claim]) -> Audit {
         tot_rounds: dd.tot_rounds,
         closure_rounds: hd.rounds,
         dict_case_nodes: dd.tot_cases,
+        own_value_verdicts: dd.value_verdict_counts(),
+        own_param_verdicts: dd.param_verdict_counts(),
+        own_param_totality: dd.param_totality_counts(),
+        own_higher_verdicts: hd.verdict_counts(),
         dict_plans_set_valued: dd.owner_plans.values().filter(|p| p.set_valued > 0).count(),
         closure_plans_set_valued: hd.owner_plans.values().filter(|p| p.set_valued > 0).count(),
         own_sites: dd.sites.len(),

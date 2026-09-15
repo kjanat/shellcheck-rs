@@ -5006,6 +5006,33 @@ class-op sites exist:
 | function-valued boundaries | 5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
 | rounds (dictionary / totality / closure) | 7/4/10 | 7/4/10 | 7/4/11 | 7/7/11 | 7/7/11 | 7/7/11 |
 
+### The whole population, not just the claimed part
+
+A claim check is **one-sided**: only the positive verdicts are re-derived, so
+a walk that called everything `Erasable` would pass it. `verify-m24`
+therefore also prints what this walk says about *every* value, parameter and
+boundary, in the analyses' own column order, and every published table comes
+back cell for cell on `-O1`:
+
+| this walk's own verdicts (`-O1`) | `Erasable` | `…WithObligation` | `…WithClone` | `Preserve` | `Unresolved` |
+|---|---:|---:|---:|---:|---:|
+| dictionary values (191) | 102 | 0 | 0 | 89 | 0 |
+| dictionary parameters (216) | 36 | 0 | 4 | 84 | 92 |
+
+| | `ProvenTotal` | `MustPreserveForce` | `Unknown` |
+|---|---:|---:|---:|
+| dictionary parameters (216) | 118 | 0 | 98 |
+
+| | `ExactClosure` | `TypeShapeUniform` | `CloneRequired` | `FiniteClosureSet` | `Preserve` | `Unresolved` |
+|---|---:|---:|---:|---:|---:|---:|
+| boundaries (5,574) | 50 | 16 | 141 | 1 | 44 | 5,322 |
+
+These are not claim checks — a difference here would be a difference to look
+at, not a `D` — and there is no difference: the erasure table of
+[M2.4c′](#erasure-tables-before--after), its totality row (118/0/98) and the
+whole of [M2.4d′](#the-verdicts-before--after-o1)'s corrected verdict table
+are reproduced by a walk that has never seen them.
+
 ### Why silence here is evidence
 
 A verifier that agrees with everything has said nothing unless it can be

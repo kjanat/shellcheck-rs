@@ -5810,6 +5810,56 @@ fn verify_m24(dir: &Path, json: bool, explain: bool) -> Result<()> {
         "  case nodes this walk's totality transfer reaches on a dictionary path: {}",
         audit.dict_case_nodes
     );
+    println!();
+    println!("This walk's own verdicts over the WHOLE population, not just the claimed part");
+    println!("  (a claim check is one-sided: only the positive verdicts are re-derived, so a");
+    println!("   walk that called everything Erasable would pass it. These are what this walk");
+    println!("   says about every value, parameter and boundary, in the analyses' column order.)");
+    println!(
+        "  {:<24} {:>10} {:>24} {:>22} {:>10} {:>11}",
+        "erasure",
+        "Erasable",
+        "ErasableWithObligation",
+        "ErasableWithClone",
+        "Preserve",
+        "Unresolved"
+    );
+    for (what, row) in [
+        ("dictionary values", audit.own_value_verdicts),
+        ("dictionary parameters", audit.own_param_verdicts),
+    ] {
+        println!(
+            "  {what:<24} {:>10} {:>24} {:>22} {:>10} {:>11}",
+            row[0], row[1], row[2], row[3], row[4]
+        );
+    }
+    println!(
+        "  {:<24} {:>10} {:>24} {:>22}",
+        "parameter totality",
+        format!("ProvenTotal {}", audit.own_param_totality[0]),
+        format!("MustPreserveForce {}", audit.own_param_totality[1]),
+        format!("Unknown {}", audit.own_param_totality[2])
+    );
+    println!(
+        "  {:<24} {:>10} {:>24} {:>22} {:>10} {:>11} {:>11}",
+        "higher-order",
+        "ExactClosure",
+        "TypeShapeUniform",
+        "CloneRequired",
+        "FiniteSet",
+        "Preserve",
+        "Unresolved"
+    );
+    println!(
+        "  {:<24} {:>10} {:>24} {:>22} {:>10} {:>11} {:>11}",
+        "",
+        audit.own_higher_verdicts[0],
+        audit.own_higher_verdicts[1],
+        audit.own_higher_verdicts[2],
+        audit.own_higher_verdicts[3],
+        audit.own_higher_verdicts[4],
+        audit.own_higher_verdicts[5]
+    );
     println!(
         "  clone plans with a set-valued tuple component, a LOWER BOUND while non-zero: {} dictionary, {} closure",
         audit.dict_plans_set_valued, audit.closure_plans_set_valued
