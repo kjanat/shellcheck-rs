@@ -424,6 +424,10 @@ pub fn is_external_name(name: &str) -> bool {
 
 #[derive(Debug)]
 pub struct Module {
+    /// Which dump contract this module was read under: 5 (pre-CoreTidy) or
+    /// 6 (post-CoreTidy). **Reported, never branched on** — `h2r stats`
+    /// prints it so a report says what it read.
+    pub format: u32,
     pub name: String,
     pub unit: String,
     /// Facts about the Ids this module refers to that GHC handed us as
@@ -863,17 +867,18 @@ impl Module {
     }
 
     pub fn from_raw(raw: raw::RawModule) -> Result<Self> {
-        if raw.format != raw::FORMAT {
+        if !raw::FORMATS_ACCEPTED.contains(&raw.format) {
             bail!(
-                "module {} has dump format {}, expected {}: re-extract with the \
-                 current plugin (`. ~/.ghcup/env; ./compiler/extract.sh`). \
-                 Format {} keys the id table by stable name and carries \
-                 structured types; format {} did not.",
+                "module {} has dump format {}, and only {:?} load: re-extract \
+                 with the current plugin (`. ~/.ghcup/env; \
+                 ./compiler/extract.sh`), which emits format {}. Format 5 is \
+                 the pre-CoreTidy program, format 6 the post-CoreTidy one; \
+                 both key the id table by stable name and carry structured \
+                 types, and neither is guessed at.",
                 raw.module,
                 raw.format,
-                raw::FORMAT,
-                raw::FORMAT,
-                raw.format
+                raw::FORMATS_ACCEPTED,
+                raw::FORMAT
             );
         }
         let types = build_types(&raw.types)?;
@@ -889,6 +894,7 @@ impl Module {
         }
         b.drain();
         let mut m = Module {
+            format: raw.format,
             name: raw.module,
             unit: raw.unit,
             ids: raw.ids,

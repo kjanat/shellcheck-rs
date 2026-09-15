@@ -651,6 +651,26 @@ fn stats(dir: &Path, per_module: bool) -> Result<()> {
     if per_module {
         println!();
     }
+    // Which dump contract these modules were read under: 5 is the
+    // pre-CoreTidy program, 6 the post-CoreTidy one. Reported so a report
+    // always says what it read; no analysis branches on it.
+    {
+        let mut fmts: Vec<u32> = modules.iter().map(|m| m.format).collect();
+        fmts.sort_unstable();
+        fmts.dedup();
+        let shown: Vec<String> = fmts.iter().map(|f| f.to_string()).collect();
+        println!(
+            "dump format      {}{}",
+            shown.join(", "),
+            if fmts.len() > 1 {
+                "  (MIXED — these modules are not one program)"
+            } else if fmts == [h2r_core_ir::raw::FORMAT] {
+                "  (post-CoreTidy)"
+            } else {
+                "  (pre-CoreTidy)"
+            }
+        );
+    }
     println!("modules          {}", total.modules);
     println!("top-level binds  {}", total.top_level_binds);
     println!("recursive groups {}", total.rec_groups);

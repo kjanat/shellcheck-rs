@@ -1,10 +1,37 @@
-//! The JSON produced by `h2r-plugin` (format 5), one-to-one.
+//! The JSON produced by `h2r-plugin` (format 6, and format 5 before it),
+//! one-to-one.
 //!
 //! This nested form exists only to be deserialised; every pass works on the
 //! flattened [`crate::Module`] instead. Nothing here is walked recursively:
 //! the arena builder consumes it piecewise off an explicit stack.
 //!
-//! Two things in format 5 are *identity*, and both are deliberately not
+//! **Format 5 vs format 6.** Format 5 was the program *before* GHC's
+//! `CoreTidy`: a top-level binding carried the name it had before tidy
+//! externalised it, so a defining module's dump and its clients' dumps
+//! disagreed about what to call it. Format 6 is the program *after*
+//! `CoreTidy` — the one GHC hands to codegen. Same field names, same
+//! shapes; a different contract:
+//!
+//! * top-level names are the tidied ones, so a stable name links across
+//!   modules;
+//! * the implicit bindings GHC injects (class-op selectors, data
+//!   constructor wrappers) are present, and bindings kept alive only by
+//!   rules `CoreTidy` cannot use are gone;
+//! * the id table admits only *external* names (an internal stable string
+//!   is not unique);
+//! * `demand` (on top-level, lambda, case and alternative binders),
+//!   `oneShot` (on top-level and let binders) and `exported` are the
+//!   *pre-tidy* values, joined back on by the plugin because `CoreTidy`
+//!   rebuilds those binders' `IdInfo` from `vanillaIdInfo`; every other
+//!   `IdInfo` field is `CoreTidy`'s finalised one;
+//! * two new diagnostic fields on top-level binders, [`Binder::external_name`]
+//!   and [`Binder::source_exported`]. Nothing reads them yet.
+//!
+//! Both formats load. No analysis branches on the number; it is recorded on
+//! [`crate::Module::format`] and printed by `h2r stats`, so a report always
+//! says which contract it was reading.
+//!
+//! Two things in both formats are *identity*, and both are deliberately not
 //! uniques: an imported Id is named by its stable name (`$unit$Module$occ`),
 //! and a type constructor likewise. Uniques are still dumped, on `Var`
 //! nodes, binders, type variables and type constructors, but only ever as a
@@ -17,7 +44,12 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-pub const FORMAT: u32 = 5;
+/// The format the current plugin emits.
+pub const FORMAT: u32 = 6;
+
+/// Every format this crate can load. A dump with any other number is
+/// refused rather than guessed at.
+pub const FORMATS_ACCEPTED: &[u32] = &[5, 6];
 
 /// An index into [`RawModule::types`] / [`crate::Module::types`].
 pub type TyId = u32;
@@ -215,6 +247,19 @@ pub struct Binder {
     pub is_join_point: Option<bool>,
     #[serde(rename = "isDataCon")]
     pub is_data_con: Option<bool>,
+
+    /// Format 6, top-level binders only, **diagnostics**: the tidied `Name`
+    /// is external, i.e. another module can name this binding. `None` on a
+    /// format-5 dump and on every nested binder.
+    #[serde(rename = "externalName", default)]
+    pub external_name: Option<bool>,
+    /// Format 6, top-level binders only, **diagnostics**: the tidied `Name`
+    /// is in the module's source export list (`availsToNameSet
+    /// (mg_exports)`). Narrower than [`Binder::exported`], which is the
+    /// compiler's own export/liveness flag. `None` on a format-5 dump and
+    /// on every nested binder.
+    #[serde(rename = "sourceExported", default)]
+    pub source_exported: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
