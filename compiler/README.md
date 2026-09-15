@@ -49,9 +49,9 @@ ShellCheck Haskell
 | `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), which imported Id an occurrence links to (its stable name), which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent), and what each type *is* (`Ty`, with `TyCon` identity and `alpha_eq`). Includes a depth-limited Core pretty-printer. |
-| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`), and the closed-world class-op census with its asserted class table (`classops.rs`). |
+| `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`), and the closed-world class-op census with its asserted class table (`classops.rs`), and the whole-program dictionary flow with its separate erasure and totality domains (`dictflow.rs`), and the higher-order representation-agreement analysis (`higher.rs`), and the independent re-derivation of every *positive* M2.4 verdict (`verify_m24.rs`, which shares nothing with `classops.rs`, `dictflow.rs`, `higher.rs` or `flow.rs` but the IR, and reads the analyses' verdicts only as the plain data `m24_claims.rs` writes down). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), and the `--view` / `--view-all` representation views `fields`, `lists` and `text` each carry. Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), `dictflow` (the whole-program dictionary flow, its erasure verdicts and its clone plan), `higher` (the function-valued boundaries and their representation verdicts), `verify-m24` (the independent re-derivation of every positive M2.4 verdict), and the `--view` / `--view-all` representation views `fields`, `lists` and `text` each carry. Later: the lowering passes. |
 
 ## Usage
 
@@ -88,6 +88,10 @@ cargo run --release --bin h2r -- classops ../core-json                      # cl
 cargo run --release --bin h2r -- classops ../core-json --class Show --explain
 cargo run --release --bin h2r -- classops ../core-json --module ShellCheck.Fixer --json
 cargo run --release --bin h2r -- verify-rep ../core-json          # re-derive every M2.3 verdict independently
+cargo run --release --bin h2r -- dictflow ../core-json                      # whole-program dictionary flow and erasure
+cargo run --release --bin h2r -- higher ../core-json                        # function-valued boundaries: can one representation serve each?
+cargo run --release --bin h2r -- verify-m24 ../core-json   # re-derive every positive M2.4 verdict independently
+cargo run --release --bin h2r -- verify-m24 ../core-json --explain # …listing every refusal, with the adversarial shapes
 cargo run --release --bin h2r -- verify-rep ../core-json --explain # …listing every refusal, plus the accounting and the M1 link
 cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.CFG --view 10329   # one construction, field by field
 cargo run --release --bin h2r -- fields ../core-json --module ShellCheck.AST --view-all --json
@@ -4638,10 +4642,17 @@ wrong constructor argument and read a producer set that is not its own. A
 separate value-field counter now does the indexing (`H2-PRODUCERS`), with a
 test that pins the pairing for a type binder before a function-typed field.
 
-**No number moves on the -O1 dump** — GHC's ShellCheck Core has no
-alternative binding a function-typed field after an existential type binder
-— but the pairing was wrong wherever one appears, and the flag matrix and
-any future dump are not the same program.
+**No number moves on the -O1 dump**, but not for the reason first given
+here. *(Corrected at [M2.4f](#the-one-correction-this-produced): the original
+text said ShellCheck's Core has no alternative binding a function-typed field
+after an existential type binder. It has four — `ShellCheck.Formatter.JSON`
+nodes 4217 and 4219, `ShellCheck.Formatter.JSON1` nodes 4896 and 4898, all
+matches on `vector`'s existential `Data.Stream.Monadic.Stream`. Raw binder
+position would put its step function at field 1 where the value-field counter
+puts it at field 0; no number moves because that boundary is
+`Unresolved(constructor-is-never-applied-in-the-closed-world)` at either
+index.)* The pairing was wrong wherever such an alternative appears, and the
+flag matrix and any future dump are not the same program.
 
 #### 6. `UniformRepresentation` → `TypeShapeUniform`
 
@@ -4896,6 +4907,257 @@ one of its two producers is a lambda that is no continuation at all: opaque
 to the role question however well its representation agrees. That the rule
 *can* fire is therefore evidence, and that it does not fire on ShellCheck is
 a fact about ShellCheck's Core.
+
+## M2.4f — re-deriving the M2.4 verdicts independently
+
+`h2r verify-m24 <dir> [--json] [--explain]`.
+
+[M2.2 stage 2](#the-independent-verifier) and
+[M2.3e](#m23e--re-deriving-the-representation-verdicts-independently) are the
+model, and the discipline is theirs: a second implementation that **shares
+nothing with the analyses it checks beyond the IR** and a short, named list
+of trusted inputs, re-deriving every claim whose being wrong would be a
+miscompile, with every disagreement settled by fixing whichever side is
+wrong. `crates/h2r-analysis/src/verify_m24.rs` does that for M2.4b–d′. It
+does **not** use [`classops.rs`](#m24b--the-closed-world-class-op-census)'s
+walk, [`dictflow.rs`](#m24c--whole-program-dictionary-flow-and-whether-the-dictionary-can-go),
+[`higher.rs`](#m24d--higher-order-representation-agreement) or `flow.rs`; it
+has its own closed-world index, its own dictionary test, its own call-site
+enumeration, its own dispatch, its own two fixpoints, its own totality domain
+with its own definition of *already evaluated*, its own escape walk, its own
+type key and its own shape classes.
+
+The analyses' verdicts reach it as **plain data**, through
+`m24_claims.rs` — the same split `m23.rs` makes for `verify_rep.rs`, and for
+the same reason: the verifier must not be able to see a `Verdict` at all.
+
+### What it re-derives, and why those
+
+| claim | `-O1` | a wrong one costs |
+|---|---:|---|
+| class-op site `Exact(target)` | 7 | a call redirected into the wrong instance's method |
+| class-op site, bounded `DictSet` | 118 | an instance outside the set dispatched at run time |
+| dictionary parameter, bounded `DictSet` | 106 | the same, one level up |
+| dictionary value `Erasable` | 102 | a dictionary that is still needed is deleted |
+| dictionary parameter `Erasable` / `WithClone` / `WithObligation` | 36 / 4 / 0 | a dictionary, or a force, that is still needed is deleted |
+| owner-level dictionary clone plan | 4 | fewer specialisations than the call sites that exist |
+| higher-order `ExactClosure` / `TypeShapeUniform` / `CloneRequired` / `FiniteClosureSet` | 50 / 16 / 141 / 1 | one representation given to a slot two live closures disagree about |
+| owner-level closure clone plan | 21 plans, 53 clones | ditto |
+| | **606 claims** | |
+
+A wrong `Unresolved` or a wrong `Preserve` costs only coverage, so nothing
+re-derives those — the same asymmetry M2.3e states.
+
+### Trusted inputs, named
+
+These are **consulted, not verified**, and nothing in this milestone may be
+read as a check of them. They are printed at the top of every run.
+
+1. **The 17-class method-field table** (`classops::CLASSES`). It is a
+   [level-5 axiom](#the-class-table-and-why-there-is-one): format 5 carries
+   neither a type nor an unfolding for a global, so a selector's
+   `C a => …` type and its `case d of C:C … m … -> m` body are both absent
+   and the field order is not derivable from the dump at all. Asserting it a
+   second time here would be inventing a second unchecked assertion rather
+   than checking the first — M2.3e's argument about the list axioms, exactly.
+   The **data** is shared; every *use* of it is re-derived: which selector
+   names which class, which field a method sits at, the `$pN<Class>`
+   superclass reading, and the cross-check against the dictionary
+   constructor's own `repArity`.
+2. **`W0-CLOSED-WORLD` / `H0-CLOSED-WORLD`** — the 28 modules are the whole
+   program. An assumption about the build, which no walk can prove.
+3. **GHC's own flags**: `isClassOpId` (the id table's `isClassOp`),
+   `isExportedId` (a binder's `exported`) and the demand signatures'
+   strictness bits, read from the authoritative source — the binder at a
+   binding site, the id table for an import.
+4. **The structured `Ty`**, and `TyCon` stable-name identity.
+
+**Addressing is not sharing.** A claim has to name what it is about, and the
+names are IR addresses: a module and a node id, a module and a `BinderId`, a
+constructor's stable name and a value-field index. A dictionary identity is
+addressed the way any dictionary built in the dump has to be — the module and
+node of its constructor application, or the stable name of an imported dfun —
+and *which node that is* is re-derived here. Agreeing on an address is not
+agreeing on a derivation; disagreeing about which node is the constructor
+application would be a disagreement, and is reported as one.
+
+### What it found
+
+| dump | claims | re-derived | **disagreements** | coverage refusals |
+|---|---:|---:|---:|---:|
+| `-O1` (and matrix A) | 606 | 606 | **0** | 0 |
+| B | 749 | 749 | **0** | 0 |
+| C | 867 | 867 | **0** | 0 |
+| D | 2,209 | 2,209 | **0** | 0 |
+| E | 2,187 | 2,187 | **0** | 0 |
+| F | 2,209 | 2,209 | **0** | 0 |
+
+Not one claim refused, on any dump, in either sense: this walk re-derived
+every positive verdict M2.4 publishes, and it never had to decline. The
+populations it built on the way are the same ones, which is a second
+agreement and a separate one — the claim list says nothing about how many
+class-op sites exist:
+
+| this walk's own population | A (`-O1`) | B | C | D | E | F |
+|---|---:|---:|---:|---:|---:|---:|
+| class-op sites | 565 | 587 | 595 | 595 | 595 | 596 |
+| dictionary parameters | 216 | 210 | 222 | 223 | 223 | 231 |
+| dictionary identities | 191 | 191 | 191 | 238 | 238 | 238 |
+| function-valued boundaries | 5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
+| rounds (dictionary / totality / closure) | 7/4/10 | 7/4/10 | 7/4/11 | 7/7/11 | 7/7/11 | 7/7/11 |
+
+### Why silence here is evidence
+
+A verifier that agrees with everything has said nothing unless it can be
+shown to bite. Two tests do that, and they are the reason the table above is
+worth printing: `m24f_the_verifier_refuses_a_claim_that_names_the_wrong_target`
+rewrites one `Exact` claim's target to the *other* instance's method and the
+walk refuses it as `X_TARGET_DIFFERS` (a `D`, not a `C`), and
+`m24f_the_verifier_refuses_a_clone_plan_with_the_wrong_count` turns a
+two-tuple clone plan into a one-clone claim and gets `X_CLONES_DIFFER`. Both
+assert that the refusal is counted as a disagreement and not as a coverage
+loss.
+
+### The adversarial shapes
+
+Each shape is a hand-built fixture in `tests.rs` **and** a count in the real
+`-O1` dump, printed by `h2r verify-m24`, so that a fixture is never the only
+evidence a rule was exercised. Every count is this walk's own.
+
+| # | shape | in `-O1` | example | must be |
+|---:|---|---:|---|---|
+| 1 | bounded dictionary identity whose producer is not total | **0** | — | never `Erasable` |
+| 2 | one dictionary parameter, two or more instances | 36 | `ShellCheck.Parser` 1645 | `FiniteSet(n)` / `ErasableWithClone(n)` |
+| 3 | a dictionary used as an ordinary value *and* as a selector's dictionary | 11 | `ShellCheck.AST` 23582 | `Preserve`; the target is unaffected |
+| 4 | a dictionary parameter of unknown totality | 98 | `ShellCheck.AST` 3461 | `Unresolved` / `Preserve(totality)` |
+| 5 | a superclass selector site (`$pN<Class>`) | 72 | `Main` 659 | follows to the superclass instance |
+| 6 | a dictionary parameter fed through dispatch | 15 | `Main` 7766 | terminates; the fixpoint is monotone |
+| 7 | a partially applied class-op selector | **0** | — | recorded, no target claimed |
+| 8 | an exported or valued function slot whose producers *do* agree | 18 | `ShellCheck.AnalyzerLib` binder 2508 | `Preserve`, decided before agreement |
+| 9 | a slot two opaque producers reach | 4 | `ShellCheck.Interface` field 0 of `SystemInterface` | two classes: opaque unifies with nothing |
+| 10 | a capture type carrying a free type variable | 292 | `ShellCheck.AST` 3463 | a producer-private key: unifies with nothing |
+| 11 | a value field bound after an existential type binder | 25 | `Main` 623 | value-field indexing, not raw binder position |
+| 11a | …and the field is function-typed | 4 | `ShellCheck.Formatter.JSON` 4217 | pairs with the constructor's value argument |
+| 12 | an owner with two or more slots, planned jointly | 11 | `ShellCheck.Analytics` `doVariableFlowAnalysis` (2 slots, 3 tuples) | clones = distinct call-site tuples |
+| 13 | several representations at one slot, at a local | 141 | `ShellCheck.ASTLib` binder 1422 | `CloneRequired` |
+| 13a | …the same, at an exported or valued slot | 10 | `ShellCheck.AnalyzerLib` field 0 of `Checker` | `Preserve` |
+| 14 | a finite closure set at a slot no clone can serve | 1 | `ShellCheck.Checks.ShellSupport` return binder 942 | `FiniteClosureSet(n)` |
+| 15 | a three-argument closure named like a Parsec continuation | 124 | `ShellCheck.Parser` 3450 | arity and captures decide; no name is read |
+
+Rows 1 and 7 are zero, and both are load-bearing zeroes rather than gaps: the
+fixtures exercise each rule, and the dump's zero is the finding. Row 1 is the
+`-O1` half of [M2.4c′](#correction-m24c--totality-is-not-the-same-fact-as-identity)'s
+counterexample; row 12 is [M2.4d′](#3-the-clone-count-was-a-sum-of-per-parameter-numbers)'s
+`(A,X)`, `(B,X)`, `(A,Y)` shape, whose fixture wants **three** clones where
+the per-slot sum and the product both say four.
+
+Row 15 belongs half to [M2.4e](#m24e--the-41-residual-parsec-continuation-edges).
+On this side of the line the finding is that the 124 three-argument
+`cok`/`eok`/`cerr`/`eerr`-shaped closures buy nothing from their names:
+a shape class is an arity and an ordered list of captured types, and the
+fixture pins that an identically shaped `zzz` lands in the same class while a
+two-argument `cok2` does not. On the M2.4e side, role admission is decided by
+the layout check and never by a name — `h2r parsec` reports 1,301/1,301
+regions proven with **0** refused on continuation *order* and 10 census sites
+rejected outright as `head-is-not-a-parsec-role-binder` (e.g.
+`ShellCheck.Checks.Commands` node 16805). A Parsec-looking head that is
+structurally not a continuation gets no role and no edge.
+
+### M2.4c′'s instrumented claim, re-derived
+
+M2.4c′ says `MustPreserveForce` is **0** for a reason stronger than "every
+force was discharged": an instrumented run showed the totality walk reaches
+*no `case` node at all* on any dictionary path, GHC's `-O1` having floated
+every dictionary out of every scrutinee. This walk counts the same thing in
+its own transfer and reports it on every run:
+
+```
+  case nodes this walk's totality transfer reaches on a dictionary path: 0
+```
+
+That matters because this walk's definition of *already evaluated* is
+deliberately **narrower** than M2.4c′'s: a literal, a lambda, a saturated
+constructor application, a dfun, or a variable a `case` has already bound.
+M2.4c′ additionally admits a variable GHC marks strict at its binder that an
+enclosing `case` on that binder dominates — a sound clause, but one this
+module would be *re-running* rather than checking, so it is left out.
+Omitting it can only make this walk find more forces than the analysis, which
+is the conservative direction for a verifier; it finds none, because there is
+no `case` to find.
+
+### The one correction this produced
+
+There was no disagreement about a verdict. There was one about the **record**:
+
+* [M2.4d′ defect 5](#5-existentialgadt-fields-were-indexed-by-raw-binder-position)
+  says "No number moves on the -O1 dump — GHC's ShellCheck Core has no
+  alternative binding a function-typed field after an existential type
+  binder". The first half is right and the second half is **wrong**. There
+  are four such alternatives: `ShellCheck.Formatter.JSON` nodes 4217 and
+  4219 and `ShellCheck.Formatter.JSON1` nodes 4896 and 4898, all of them
+  matches on `vector`'s existential `Data.Stream.Monadic.Stream`, whose
+  first runtime field is the step function. The value-field counter puts it
+  at *field 0*, raw binder position would have put it at field 1, and the
+  reason no number moves is not that the shape is absent but that the
+  boundary is `Unresolved(constructor-is-never-applied-in-the-closed-world)`
+  at either index. Resolution: the **analysis was right and the prose was
+  wrong**; M2.4d′'s paragraph is corrected above, and the shape is now
+  counted on every run (rows 11 and 11a).
+
+### Where this walk declines, and why that is not a disagreement
+
+Two weakenings are written down rather than hidden, and neither fired on any
+of the seven dumps:
+
+* **A `Top` set of this walk's own is a coverage refusal (`C`), never a
+  disagreement (`D`).** `Top` says only that *this* walk could not account
+  for every producer, which is this walk being blunter. What would be a
+  disagreement is naming a producer the analysis does not have, and that is
+  `X_SET_DIFFERS`.
+* **The narrower *already evaluated*** above. A refusal it caused would be
+  this walk over-refusing, and would be reported as a disagreement for a
+  human to resolve — `X_NOT_TOTAL` — rather than silently absorbed.
+
+### The gate
+
+Every existing report is **byte-identical** before and after, on
+`compiler/core-json` and on all six matrix profiles: `stats`, `laziness`,
+`parsec`, `tuples` (plus `--explain`, `--verify`, `--boundaries`), `fields`,
+`lists` (plus `--axioms`), `text` (plus `--heads`, `--explain`),
+`verify-rep`, `classops` (plus `--per-module`, `--explain`), `dictflow` and
+`higher`, with the `--json` form of each. **No census number moved**, because
+nothing but new code was added: `verify_m24.rs` and `m24_claims.rs` are new,
+`h2r verify-m24` is new, and the only edit to an existing analysis is an
+`owner_binder` field on `dictflow::OwnerPlan` and `higher::OwnerPlan` — an
+address a claim needs, `#[serde(skip)]`, read by no report. `parsec --explain`
+and `parsec --json` remain [nondeterministic in line order](#the-gate-for-this-correction)
+and are compared as multisets, as they were at M2.4c′ and M2.4d′.
+
+`cargo test` is **225** (17 new: one per adversarial shape, plus the two that
+make the verifier bite), `cargo clippy --all-targets` 0 warnings and
+`cargo fmt --check` clean. No Core is mutated, no codegen is emitted, no GHC
+flag changed.
+
+### Still unsound, or still unchecked
+
+* **The four trusted inputs are trusted.** In particular the class table is
+  an axiom on both sides of this check, and a wrong field order would be
+  wrong in the same way twice. What the two sides do check against each other
+  is every *use* of it, including the `repArity` cross-check, which is what a
+  wrong entry would have to survive.
+* **The closed world is an assumption**, and this walk rests on it exactly as
+  M2.4c and M2.4d do. Re-deriving a producer set does not re-derive the right
+  to enumerate it.
+* **`Unresolved` and `Preserve` are not re-derived.** A milestone that
+  refused too much would pass this check in silence; that is the deliberate
+  asymmetry, because only the positive verdicts can miscompile.
+* **The monovariant lower bounds stand.** Four dictionary plans and eight
+  closure plans on `-O1` have a set-valued tuple component, and their clone
+  counts are lower bounds on both sides — this walk re-derives the same
+  tuples and flags the same lower bound, which is agreement about a bound
+  and not a closing of it.
+* **`TypeShapeUniform`'s M3 carrier invariant** is assumed here too. This
+  walk re-derives the shape classes; it cannot promise a lowering.
 
 ## What ShellCheck actually needs
 
