@@ -57,6 +57,15 @@
 //! the stable name of an imported dfun — and *which node that is* is
 //! re-derived here. Agreeing on an address is not sharing a derivation.
 //!
+//! One rendering is shared for the same reason (M2.4h):
+//! [`crate::dictflow::group_lines`], which lays a clone plan's partition of
+//! call sites out as text. It derives nothing — it sorts and joins
+//! addresses this walk computed itself — and both sides need one spelling
+//! for the same set, exactly as they need one spelling for a method target.
+//! Nothing else crosses: this walk's shape classes, capture keys and type
+//! keys are its own and are deliberately rendered differently, which is why
+//! a closure plan is checked by its partition and not by its tuple strings.
+//!
 //! # What is re-derived, and why those
 //!
 //! | claim | a wrong one costs |
