@@ -5036,6 +5036,20 @@ back cell for cell on `-O1`:
 |---|---:|---:|---:|---:|---:|---:|
 | boundaries (5,574) | 50 | 16 | 141 | 1 | 44 | 5,322 |
 
+It holds on every profile too. Every cell of
+[M2.4c′'s](#across-the-flag-matrix-1) and
+[M2.4d′'s](#across-the-flag-matrix-before--after) matrix tables comes back:
+
+| this walk's own verdicts | A (`-O1`) | B | C | D | E | F |
+|---|---:|---:|---:|---:|---:|---:|
+| values `Erasable` | 102 | 102 | 101 | 139 | 139 | 139 |
+| parameters `Erasable` | 36 | 28 | 34 | 28 | 28 | 28 |
+| parameters `ErasableWithClone` | 4 | 3 | 4 | 4 | 4 | 4 |
+| parameters `ProvenTotal` / `MustPreserveForce` / `Unknown` | 118/0/98 | 110/0/100 | 121/0/101 | 77/0/146 | 77/0/146 | 85/0/146 |
+| `ExactClosure` + `TypeShapeUniform` | 66 | 125 | 172 | 695 | 683 | 682 |
+| `CloneRequired` | 141 | 219 | 269 | 1,150 | 1,140 | 1,145 |
+| boundary `Preserve` | 44 | 45 | 43 | 62 | 62 | 62 |
+
 These are not claim checks — a difference here would be a difference to look
 at, not a `D` — and there is no difference: the erasure table of
 [M2.4c′](#erasure-tables-before--after), its totality row (118/0/98) and the
