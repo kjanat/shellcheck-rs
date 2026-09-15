@@ -27,9 +27,13 @@ pub struct RawModule {
     pub format: u32,
     pub module: String,
     pub unit: String,
-    /// Facts about every *global* Id referenced anywhere in the module,
-    /// keyed by its stable name. Locals are never in here: they are bound
-    /// in this module, and the lexical resolver owns them.
+    /// Facts about every referenced Id GHC gave us as a `GlobalId` with an
+    /// *external* `Name`, keyed by that stable name. An internal name is
+    /// never a key: internal stable strings are not unique. A locally bound
+    /// Id is not in here — the lexical resolver owns it and its binder
+    /// carries the authoritative facts — but since the dump is taken after
+    /// `CoreTidy` the module's own externalised top-level binders can
+    /// appear, redundantly, when the module references them.
     pub ids: HashMap<String, IdInfo>,
     /// The module's hash-consed type table. Every child index is smaller
     /// than its parent's, so the table can be rebuilt in one forward pass.
@@ -238,6 +242,11 @@ pub enum RawExpr {
         name: String,
         occ: String,
         unique: String,
+        /// GHC's `isGlobalId`. A diagnostic fact about the `Var`, **not**
+        /// the local-vs-import decision: after `CoreTidy` every top-level
+        /// binder is a `GlobalId`, including the ones whose `Name` stays
+        /// internal, so locality is decided lexically by
+        /// [`crate::Module::resolve_scopes`] and by nothing else.
         #[serde(rename = "isGlobal")]
         is_global: bool,
     },

@@ -370,19 +370,71 @@ pub struct BindInfo {
 pub enum Ref {
     /// Bound in this module, by this binder.
     Local(BinderId),
-    /// An import: nothing in this module binds it. The occurrence's
+    /// An import: **nothing in this module lexically binds it**, whatever
+    /// GHC's `isGlobal` bit says about the occurrence. The occurrence's
     /// **stable name** — unit, module and occurrence, as of dump format 5
     /// — is the key into [`Module::ids`]; the unique is not, and is never
     /// a key anywhere.
     Global,
 }
 
+/// A unique collision: an occurrence that resolved **lexically** to an
+/// in-scope binder although its own stable name is an external name of a
+/// *different* module — so it is an import that a local binder's GHC
+/// unique has captured. Two distinct Ids would be sharing one unique.
+///
+/// This is the guard that the `isGlobal` test in [`Module::resolve_scopes`]
+/// used to provide as a side effect. It is stated on the *name* the
+/// occurrence already carries, against this module's own identity; nothing
+/// here is keyed by a unique. The population is expected to be empty and is
+/// reported on every dump (`h2r stats`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UniqueCollision {
+    /// The `Var` node.
+    pub occurrence: ExprId,
+    /// The in-scope binder that captured it.
+    pub binder: BinderId,
+}
+
+/// Split a dump-format-5 stable name `$unit$Module$occ` into its three
+/// parts. `None` for a name GHC rendered without a unit and a module.
+pub fn split_stable_name(name: &str) -> Option<(&str, &str, &str)> {
+    let rest = name.strip_prefix('$')?;
+    let (unit, rest) = rest.split_once('$')?;
+    let (module, occ) = rest.split_once('$')?;
+    Some((unit, module, occ))
+}
+
+/// GHC's `nameStableString` renders a *non-external* name as `$_sys$<occ>`
+/// or `$_in$<occ>`, with no unit and no module. When that `<occ>` itself
+/// contains a `$` the three-way split reads `_sys` as a unit, so the two
+/// pseudo-units are rejected by name.
+pub fn is_internal_unit(unit: &str) -> bool {
+    unit == "_sys" || unit == "_in"
+}
+
+/// Is this an *external* name — one another module could refer to, and the
+/// only kind that is unique in the program? An internal name is not: three
+/// top-level bindings of `ShellCheck.AST` are called
+/// `$_sys$$fTraversableInnerToken`. Nothing anywhere may be keyed by one.
+pub fn is_external_name(name: &str) -> bool {
+    split_stable_name(name)
+        .is_some_and(|(u, md, _)| !u.is_empty() && !md.is_empty() && !is_internal_unit(u))
+}
+
 #[derive(Debug)]
 pub struct Module {
     pub name: String,
     pub unit: String,
-    /// Facts about the *global* Ids this module refers to, keyed by stable
-    /// name. Read it through [`Module::id_info`], never by unique.
+    /// Facts about the Ids this module refers to that GHC handed us as
+    /// `GlobalId`s with an *external* `Name`, keyed by stable name. Read it
+    /// through [`Module::id_info`], never by unique.
+    ///
+    /// Since the dump is taken after `CoreTidy`, the module's **own**
+    /// now-external top-level binders can appear here too, when the module
+    /// references them. Those entries are redundant, not harmful: such an
+    /// occurrence resolves lexically ([`Ref::Local`]), and the binder — not
+    /// the table — is what every signature is read from.
     pub ids: HashMap<String, IdInfo>,
     /// The module's types, rebuilt from the dump's hash-consed table.
     /// Binders and `Type` nodes index into this.
@@ -399,6 +451,8 @@ pub struct Module {
     refs: Vec<Option<Ref>>,
     /// Occurrences of every binder, in pre-order, indexed by [`BinderId`].
     occurrences: Vec<Vec<ExprId>>,
+    /// See [`UniqueCollision`]. Expected empty; asserted, never assumed.
+    unique_collisions: Vec<UniqueCollision>,
 }
 
 impl Module {
@@ -538,6 +592,12 @@ impl Module {
         &self.occurrences[b as usize]
     }
 
+    /// The occurrences an import's stable name says should not have
+    /// resolved lexically — see [`UniqueCollision`]. Expected empty.
+    pub fn unique_collisions(&self) -> &[UniqueCollision] {
+        &self.unique_collisions
+    }
+
     /// Record where every binder is bound. One pass over the arena; a
     /// binder occurs at exactly one site, so no scoping is involved.
     fn index_binding_sites(&mut self) {
@@ -596,9 +656,23 @@ impl Module {
     ///
     /// Iterative: an explicit stack of enter/bind/unbind operations, so the
     /// (very deep) Core is never recursed over. The module's top-level
-    /// binders are the outermost scope; module-level binders are `LocalId`s
-    /// all the way through the Core pipeline, so an occurrence flagged
-    /// `isGlobal` is an import and resolves to [`Ref::Global`].
+    /// binders are the outermost scope.
+    ///
+    /// **Lexical binding decides locality, not GHC's `isGlobalId` bit.** An
+    /// in-scope binder wins whatever the occurrence's `isGlobal` flag says:
+    /// after `CoreTidy` — which is the point the dump is taken at, see
+    /// `compiler/h2r-plugin/src/H2R/CorePlugin.hs` — every top-level binder
+    /// is rebuilt as a `GlobalId`, so an occurrence of a module's own
+    /// top-level binding carries `isGlobal = true` and is nonetheless
+    /// lexically bound here. Only an occurrence with no in-scope binder at
+    /// all is an import, and resolves to [`Ref::Global`]. The flag stays in
+    /// the JSON and in [`Expr::Var`] as a GHC diagnostic fact and is never
+    /// the local-vs-import identity decision.
+    ///
+    /// The `isGlobal` test this replaced was also what kept an *import*
+    /// from being captured by a same-unique local binder, so the guard it
+    /// used to provide is re-established explicitly and counted:
+    /// [`Module::unique_collisions`].
     fn resolve_scopes(&mut self) {
         enum Op<'a> {
             Enter(ExprId),
@@ -609,6 +683,7 @@ impl Module {
         let mut occurrences: Vec<Vec<ExprId>> = vec![Vec::new(); self.binders.len()];
         let mut env: HashMap<&str, Vec<BinderId>> = HashMap::new();
         let mut stack: Vec<Op> = Vec::new();
+        let mut collisions: Vec<UniqueCollision> = Vec::new();
         for bind in &self.top {
             for p in &bind.pairs {
                 env.entry(self.binders[p.binder as usize].unique.as_str())
@@ -638,17 +713,31 @@ impl Module {
             };
             match &self.exprs[id as usize] {
                 Expr::Var {
-                    unique: u,
-                    is_global,
-                    ..
+                    unique: u, name, ..
                 } => {
                     let r = match env.get(u.as_str()).and_then(|v| v.last()) {
-                        Some(b) if !*is_global => Ref::Local(*b),
-                        _ => Ref::Global,
+                        Some(b) => Ref::Local(*b),
+                        None => Ref::Global,
                     };
                     refs[id as usize] = Some(r);
                     if let Ref::Local(b) = r {
                         occurrences[b as usize].push(id);
+                        // The collision guard. A lexically resolved
+                        // occurrence whose own stable name is external and
+                        // names some *other* module is an import that a
+                        // local binder's unique has captured: two distinct
+                        // Ids sharing one unique. Nothing here is keyed by
+                        // a unique — the test is on the name the occurrence
+                        // already carries against this module's identity.
+                        if let Some((unit, module, _)) = split_stable_name(name)
+                            && is_external_name(name)
+                            && (unit != self.unit || module != self.name)
+                        {
+                            collisions.push(UniqueCollision {
+                                occurrence: id,
+                                binder: b,
+                            });
+                        }
                     }
                 }
                 Expr::App { fun, arg } => {
@@ -707,6 +796,7 @@ impl Module {
         }
         self.refs = refs;
         self.occurrences = occurrences;
+        self.unique_collisions = collisions;
     }
 
     /// Is `b` in scope at `occ`? Walks up from the occurrence and asks each
@@ -762,9 +852,9 @@ impl Module {
 
     /// Facts about the *imported* Id a `Var` refers to, if the plugin
     /// recorded any. Only defined for an occurrence the resolver classified
-    /// as [`Ref::Global`]: the table holds globals only, keyed by stable
-    /// name. For a local, read the binder — it is the authoritative source
-    /// and the only one that exists.
+    /// as [`Ref::Global`] — an occurrence nothing in this module binds. For
+    /// anything bound here, read the binder: it is the authoritative source
+    /// and, for a module-local name, the only one.
     pub fn id_info(&self, id: ExprId) -> Option<&IdInfo> {
         match (self.expr(id), self.reference(id)) {
             (Expr::Var { name, .. }, Some(Ref::Global)) => self.ids.get(name),
@@ -815,6 +905,7 @@ impl Module {
             binding: Vec::new(),
             refs: Vec::new(),
             occurrences: Vec::new(),
+            unique_collisions: Vec::new(),
         };
         m.index_binding_sites();
         m.resolve_scopes();
@@ -1234,6 +1325,131 @@ mod tests {
             naive_violations > 0,
             "the unique-keyed lookup this replaces must fail the same check"
         );
+    }
+
+    /// A `Var` with an explicit `isGlobal` and a stable name of this
+    /// module's own — what every occurrence of a module-local top-level
+    /// binding looks like once `CoreTidy` has globalised the binders.
+    fn gvar(name: &str, occ: &str, uniq: &str) -> serde_json::Value {
+        serde_json::json!({"node": "Var", "name": name, "occ": occ, "unique": uniq, "isGlobal": true})
+    }
+
+    /// One top-level binding `top`, whose right-hand side is `body`.
+    fn one_top(body: serde_json::Value) -> raw::RawModule {
+        let raw = serde_json::json!({
+            "format": raw::FORMAT, "module": "M", "unit": "main", "ids": {},
+            "types": [{"kind": "TyConApp",
+                       "tycon": {"name": "$main$M$T", "occ": "T", "unique": "T"},
+                       "args": []}],
+            "binds": [{"rec": false, "pairs": [{
+                "binder": binder("top", "t"), "rhs": body,
+                "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+            }]}]
+        });
+        serde_json::from_value(raw).unwrap()
+    }
+
+    /// **Lexical binding decides locality, not `isGlobalId`.** An
+    /// occurrence GHC flagged `isGlobal` that a binder in scope binds is
+    /// that binder's, because after `CoreTidy` every top-level binder is a
+    /// `GlobalId` and the dump is taken there.
+    #[test]
+    fn an_is_global_occurrence_with_an_in_scope_binder_is_local() {
+        // let x@u = f a in x@u, with the occurrence flagged isGlobal.
+        let m = Module::from_raw(one_top(serde_json::json!({
+            "node": "Let", "bind": {"rec": false, "pairs": [{
+                "binder": binder("x", "u"),
+                "rhs": {"node": "App", "fun": var("f", "f"), "arg": var("a", "a")},
+                "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+            }]},
+            "body": gvar("$main$M$x", "x", "u")
+        })))
+        .unwrap();
+        let Expr::Let { bind, body } = m.expr(m.top[0].pairs[0].rhs) else {
+            unreachable!()
+        };
+        let x = bind.pairs[0].binder;
+        assert_eq!(m.reference(*body), Some(Ref::Local(x)));
+        assert_eq!(m.occurrences(x), &[*body]);
+        assert!(m.scoping_violations().is_empty());
+        assert!(m.unique_collisions().is_empty());
+    }
+
+    /// …and the same occurrence with **no** binder in scope is an import.
+    #[test]
+    fn an_is_global_occurrence_without_an_in_scope_binder_is_global() {
+        let m = Module::from_raw(one_top(gvar("$base$GHC.Base$id", "id", "u"))).unwrap();
+        let body = m.top[0].pairs[0].rhs;
+        assert_eq!(m.reference(body), Some(Ref::Global));
+        assert!(m.unique_collisions().is_empty());
+    }
+
+    /// A module's own top-level binder, referenced from another top-level
+    /// right-hand side by its post-tidy external name: an `A2` edge, not an
+    /// `A3` one, and not a collision.
+    #[test]
+    fn a_reference_to_an_own_top_level_binding_resolves_lexically() {
+        let raw = serde_json::json!({
+            "format": raw::FORMAT, "module": "M", "unit": "main", "ids": {},
+            "types": [{"kind": "TyConApp",
+                       "tycon": {"name": "$main$M$T", "occ": "T", "unique": "T"},
+                       "args": []}],
+            "binds": [
+                {"rec": false, "pairs": [{
+                    "binder": binder("f", "f1"), "rhs": var("a", "a"),
+                    "whnf": false, "trivial": false, "cheap": false, "okForSpec": false}]},
+                {"rec": false, "pairs": [{
+                    "binder": binder("g", "g1"), "rhs": gvar("$main$M$f", "f", "f1"),
+                    "whnf": false, "trivial": false, "cheap": false, "okForSpec": false}]}
+            ]
+        });
+        let m = Module::from_raw(serde_json::from_value(raw).unwrap()).unwrap();
+        let f = m.top[0].pairs[0].binder;
+        let g_rhs = m.top[1].pairs[0].rhs;
+        assert_eq!(m.reference(g_rhs), Some(Ref::Local(f)));
+        assert_eq!(m.binding(f).site, BindSite::Top);
+        assert!(m.unique_collisions().is_empty());
+    }
+
+    /// **The collision guard.** An occurrence whose stable name is an
+    /// external name of *another* module cannot legitimately be bound
+    /// here; if a local binder's unique captures it, that is a unique
+    /// collision between an import and a local, and it is counted.
+    #[test]
+    fn the_collision_guard_fires_on_an_import_captured_by_a_local() {
+        // let x@u = f a in <$base$GHC.Base$id>@u  -- an import's name on
+        // an occurrence whose unique the local `x` owns.
+        let m = Module::from_raw(one_top(serde_json::json!({
+            "node": "Let", "bind": {"rec": false, "pairs": [{
+                "binder": binder("x", "u"),
+                "rhs": {"node": "App", "fun": var("f", "f"), "arg": var("a", "a")},
+                "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+            }]},
+            "body": gvar("$base$GHC.Base$id", "id", "u")
+        })))
+        .unwrap();
+        let Expr::Let { bind, body } = m.expr(m.top[0].pairs[0].rhs) else {
+            unreachable!()
+        };
+        assert_eq!(
+            m.unique_collisions(),
+            &[UniqueCollision {
+                occurrence: *body,
+                binder: bind.pairs[0].binder
+            }]
+        );
+        // An *internal* name resolving locally is not a collision: it
+        // names nothing outside this module and claims no other module.
+        let m2 = Module::from_raw(one_top(serde_json::json!({
+            "node": "Let", "bind": {"rec": false, "pairs": [{
+                "binder": binder("x", "u"),
+                "rhs": var("a", "a"),
+                "whnf": false, "trivial": false, "cheap": false, "okForSpec": false
+            }]},
+            "body": gvar("$_in$x", "x", "u")
+        })))
+        .unwrap();
+        assert!(m2.unique_collisions().is_empty());
     }
 
     #[test]

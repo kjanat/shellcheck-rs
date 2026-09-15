@@ -885,22 +885,11 @@ impl<'m> Program<'m> {
 /// not externalised an internal name (`$_in$…`, `$_sys$…`), and those are
 /// **not** unique: `ShellCheck.AST` has three distinct top-level bindings
 /// whose name is `$_sys$$fTraversableInnerToken`. Nothing here is keyed by
-/// one.
+/// one. The predicate itself lives in `h2r-core-ir` — it is a property of
+/// dump format 5's names — so the IR's own collision guard and this cannot
+/// drift apart.
 pub fn is_external_name(name: &str) -> bool {
-    split_stable_name(name)
-        .is_some_and(|(u, md, _)| !u.is_empty() && !md.is_empty() && !is_internal_unit(u))
-}
-
-/// GHC's `nameStableString` renders a non-external name as `$_sys$<occ>`
-/// or `$_in$<occ>`, with **no unit and no module**. When that `<occ>` itself
-/// contains a `$` — `$_sys$poly_$j`, and GHC's worker/wrapper and
-/// join-point names are full of them — the three-way split reads `_sys` as
-/// a unit and `poly_` as a module, and the name passes for external. It is
-/// not: two distinct top-level bindings of the dump claim
-/// `$_sys$poly_$j`. Rejecting the two pseudo-units is what makes
-/// "external ⇒ unique" true rather than nearly true.
-pub(crate) fn is_internal_unit(unit: &str) -> bool {
-    unit == "_sys" || unit == "_in"
+    h2r_core_ir::is_external_name(name)
 }
 
 /// The class whose dictionary constructor this stable name is.

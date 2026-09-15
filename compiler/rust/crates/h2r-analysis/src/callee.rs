@@ -141,10 +141,7 @@ pub enum Family {
 
 /// `$unit$Module$occ` as produced by GHC's `nameStableString`.
 pub fn split_stable_name(name: &str) -> Option<(&str, &str, &str)> {
-    let rest = name.strip_prefix('$')?;
-    let (unit, rest) = rest.split_once('$')?;
-    let (module, occ) = rest.split_once('$')?;
-    Some((unit, module, occ))
+    h2r_core_ir::split_stable_name(name)
 }
 
 #[derive(Debug, Clone, Serialize)]
