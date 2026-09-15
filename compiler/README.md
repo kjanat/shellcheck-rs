@@ -5600,7 +5600,8 @@ representation ≤ enumerated` holds on all seven.
 
 [M2.4c′](#correction-m24c--totality-is-not-the-same-fact-as-identity)
 recorded that `h2r parsec --explain` and `h2r parsec --json` differ run to
-run, and [M2.4d′](#the-gate-1) and [M2.4f](#the-gate-2) had to keep them out
+run, and [M2.4d′](#correction-m24d--sharing-is-decided-before-agreement-and-a-free-type-variable-identifies-nothing)
+and [M2.4f](#m24f--re-deriving-the-m24-verdicts-independently) had to keep them out
 of every byte-identity gate because of it. The cause is one line:
 `Analysis::prove` walked `self.role`, a `HashMap<BinderId, RoleInfo>`, and
 that walk order is the order every region's `edges`, `evidence` and
@@ -5627,9 +5628,11 @@ an aggregate over all of it.
   produced, and the new one always picks the lowest-numbered role binder's.
   The 41-row M2.4e table is byte-identical on every dump.
 * **two runs are now identical.** Three consecutive runs of `h2r parsec`,
-  `parsec --explain` and `parsec --json` on profile B — the profile where
-  M2.4a first reproduced the wobble — give one md5 each, where before the
-  `e.g.` exemplar and the edge order moved every run.
+  `parsec --explain` and `parsec --json` on `-O1`, on B and on C give
+  **one md5 each — nine hashes for twenty-seven runs**. Against the same
+  three runs of the *unchanged* binary on B, `--json` and `--explain` give
+  **three distinct hashes each**, which is the defect being measured rather
+  than assumed.
 
 Those two reports can now carry a byte-identity gate, and this milestone is
 the first to put them under one.
