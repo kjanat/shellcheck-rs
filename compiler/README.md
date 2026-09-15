@@ -5903,8 +5903,8 @@ the refusal is a `D` and not a `C`.
 continuation edges, whether the closure graph gives it a finite set of
 continuation targets. It admitted `ExactClosure | TypeShapeUniform |
 FiniteClosureSet` and refused `CloneRequired` — which is the exact
-conflation `H11-SEPARATE` exists to prevent, and which M2.4d′ had already
-had to correct once elsewhere. Whether the producers are **enumerated** and
+conflation `H11-SEPARATE` exists to prevent. Whether the producers are
+**enumerated** and
 whether **one representation** can serve them are two facts M2.4d records
 separately. A `CloneRequired` boundary is enumerated — that is how its
 clones could be counted at all — and its continuation-target set is exactly
@@ -5924,10 +5924,11 @@ boundaries is `Unresolved` and therefore unenumerated — 20
 `call-site-is-a-partial-application` — so none of them could have closed
 under either condition, and the rule never reached the role question. What
 changed is that the table now says *why* in the terms of the question it
-asked. Nothing here would have moved on the old condition either; the point
-is that it would have moved for the wrong reason as soon as an enumerated
-`CloneRequired` boundary appeared, which is the case M2.4d′ found on the
-other side of the same wall.
+asked. The count is the same as M2.4e published, and it was the same for a
+different reason: the old rule refused these 41 by verdict, and the verdict
+happened to be the same `Unresolved` that also means unenumerated. The
+first enumerated `CloneRequired` boundary to appear on a residual edge would
+have parted the two.
 
 **And the rule now fires where it could not.**
 `residual_edge_closes_through_a_clone_required_boundary` builds the case the
