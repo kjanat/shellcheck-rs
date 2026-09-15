@@ -576,6 +576,13 @@ struct Counts {
     join_points: usize,
     nodes: BTreeMap<&'static str, usize>,
     dmd_sigs: BTreeMap<String, usize>,
+    /// [`h2r_core_ir::UniqueCollision`] — occurrences an import's own
+    /// stable name says should not have resolved lexically. Expected 0 on
+    /// every dump, and printed whatever it is, because the guard is only
+    /// worth having if its number is in front of the reader.
+    unique_collisions: usize,
+    /// …and where, so a nonzero count is actionable.
+    collision_modules: BTreeMap<String, usize>,
 }
 
 fn node_name(e: &Expr) -> &'static str {
@@ -596,6 +603,11 @@ fn node_name(e: &Expr) -> &'static str {
 impl Counts {
     fn add_module(&mut self, m: &Module) {
         self.modules += 1;
+        let coll = m.unique_collisions().len();
+        if coll > 0 {
+            self.unique_collisions += coll;
+            self.collision_modules.insert(m.name.clone(), coll);
+        }
         for bind in &m.top {
             if bind.recursive {
                 self.rec_groups += 1;
@@ -645,6 +657,14 @@ fn stats(dir: &Path, per_module: bool) -> Result<()> {
     println!("binders          {}", total.binders);
     println!("join points      {}", total.join_points);
     println!("core nodes       {}", total.nodes.values().sum::<usize>());
+    // The resolver's collision guard. Locality is decided lexically, so
+    // an occurrence whose own stable name is an external name of another
+    // module and that a binder in scope nevertheless binds would be two
+    // Ids sharing one GHC unique. Asserted 0, reported always.
+    println!("unique collisions {}", total.unique_collisions);
+    for (module, n) in &total.collision_modules {
+        println!("  {module:<32} {n}");
+    }
     println!();
     println!("node histogram:");
     let mut nodes: Vec<_> = total.nodes.iter().collect();
