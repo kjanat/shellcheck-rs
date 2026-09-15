@@ -1629,7 +1629,13 @@ enum EVerdict {
     Erasable,
     WithObligation,
     WithClone(usize),
-    Preserve(String),
+    /// Preserved because the dictionary is used as an ordinary value: the
+    /// holder is named.
+    PreserveEscape(String),
+    /// Preserved because erasure would delete a force this walk cannot
+    /// discharge, or because totality could not be decided at all. Kept
+    /// apart from an escape so a refusal can say which fact failed.
+    PreserveForce(String),
     Unresolved(String),
 }
 
@@ -1639,7 +1645,7 @@ impl EVerdict {
             EVerdict::Erasable => "Erasable",
             EVerdict::WithObligation => "ErasableWithObligation",
             EVerdict::WithClone(_) => "ErasableWithClone",
-            EVerdict::Preserve(_) => "Preserve",
+            EVerdict::PreserveEscape(_) | EVerdict::PreserveForce(_) => "Preserve",
             EVerdict::Unresolved(_) => "Unresolved",
         }
     }
@@ -1871,7 +1877,7 @@ impl DictDerived {
         let mut value_verdict: BTreeMap<String, EVerdict> = BTreeMap::new();
         for v in w.values.values() {
             let verdict = match value_escape(w, v, &dict_args) {
-                Some(h) => EVerdict::Preserve(h),
+                Some(h) => EVerdict::PreserveEscape(h),
                 None if v.imported => EVerdict::Erasable,
                 None => {
                     // The instance is determined only if the dfun's own
@@ -1896,7 +1902,7 @@ impl DictDerived {
             let escapes = param_escape(w, x, &dict_args);
             let instances = x.set.keys().len();
             let verdict = match escapes {
-                Some(h) => EVerdict::Preserve(h),
+                Some(h) => EVerdict::PreserveEscape(h),
                 None => match &x.set {
                     Set::Top(r) => EVerdict::Unresolved(r.clone()),
                     Set::Fin(_) if instances == 0 => EVerdict::Unresolved(R_NO_PRODUCER.into()),
@@ -1904,8 +1910,12 @@ impl DictDerived {
                         Tot::Total if instances == 1 => EVerdict::Erasable,
                         Tot::Total => EVerdict::WithClone(instances),
                         Tot::Force if x.tot.witness.is_some() => EVerdict::WithObligation,
-                        Tot::Force => EVerdict::Preserve("erasure-would-delete-a-force".into()),
-                        Tot::Unknown => EVerdict::Preserve("totality-unknown".into()),
+                        Tot::Force => {
+                            EVerdict::PreserveForce("erasure-would-delete-a-force".into())
+                        }
+                        Tot::Unknown => EVerdict::PreserveForce(
+                            "totality-unknown-erasure-could-move-divergence".into(),
+                        ),
                     },
                 },
             };
@@ -3369,7 +3379,8 @@ impl DictDerived {
         };
         match v {
             EVerdict::Erasable if c.verdict == "Erasable" => Ok(()),
-            EVerdict::Preserve(h) => Err(Refusal::new(X_ESCAPES, h.clone())),
+            EVerdict::PreserveEscape(h) => Err(Refusal::new(X_ESCAPES, h.clone())),
+            EVerdict::PreserveForce(h) => Err(Refusal::new(X_NOT_TOTAL, h.clone())),
             EVerdict::Unresolved(r) => Err(top_refusal(r)),
             other => Err(Refusal::new(
                 X_INSTANCES_DIFFER,
@@ -3392,7 +3403,6 @@ impl DictDerived {
             ));
         };
         let mine = &self.param_verdict[i];
-        let x = &self.params[i];
         match (mine, c.verdict.as_str()) {
             (EVerdict::Erasable, "Erasable") => Ok(()),
             (EVerdict::WithClone(n), "ErasableWithClone") => {
@@ -3410,10 +3420,8 @@ impl DictDerived {
                 X_NO_OBLIGATION,
                 "this walk proves the producers total",
             )),
-            (EVerdict::Preserve(h), _) if x.tot.level == Tot::Total => {
-                Err(Refusal::new(X_ESCAPES, h.clone()))
-            }
-            (EVerdict::Preserve(h), _) => Err(Refusal::new(X_NOT_TOTAL, h.clone())),
+            (EVerdict::PreserveEscape(h), _) => Err(Refusal::new(X_ESCAPES, h.clone())),
+            (EVerdict::PreserveForce(h), _) => Err(Refusal::new(X_NOT_TOTAL, h.clone())),
             (EVerdict::Unresolved(r), _) => Err(top_refusal(r)),
             (EVerdict::WithClone(n), "Erasable") => Err(Refusal::new(
                 X_INSTANCES_DIFFER,
@@ -3443,7 +3451,7 @@ fn verdict_col(v: &EVerdict) -> usize {
         EVerdict::Erasable => 0,
         EVerdict::WithObligation => 1,
         EVerdict::WithClone(_) => 2,
-        EVerdict::Preserve(_) => 3,
+        EVerdict::PreserveEscape(_) | EVerdict::PreserveForce(_) => 3,
         EVerdict::Unresolved(_) => 4,
     }
 }
@@ -3647,7 +3655,7 @@ fn shapes(w: &World, dd: &DictDerived, hd: &HigherDerived) -> Vec<ShapeRow> {
             .iter()
             .enumerate()
             .filter(|(i, x)| {
-                matches!(dd.param_verdict[*i], EVerdict::Preserve(_))
+                matches!(dd.param_verdict[*i], EVerdict::PreserveEscape(_))
                     && w.m(x.mi)
                         .occurrences(x.binder)
                         .iter()
