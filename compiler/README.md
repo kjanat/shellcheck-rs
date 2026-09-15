@@ -4923,7 +4923,7 @@ does **not** use [`classops.rs`](#m24b--the-closed-world-class-op-census)'s
 walk, [`dictflow.rs`](#m24c--whole-program-dictionary-flow-and-whether-the-dictionary-can-go),
 [`higher.rs`](#m24d--higher-order-representation-agreement) or `flow.rs`; it
 has its own closed-world index, its own dictionary test, its own call-site
-enumeration, its own dispatch, its own two fixpoints, its own totality domain
+enumeration, its own dispatch, its own three fixpoints, its own totality domain
 with its own definition of *already evaluated*, its own escape walk, its own
 type key and its own shape classes.
 
@@ -5152,13 +5152,25 @@ Every existing report is **byte-identical** before and after, on
 `parsec`, `tuples` (plus `--explain`, `--verify`, `--boundaries`), `fields`,
 `lists` (plus `--axioms`), `text` (plus `--heads`, `--explain`),
 `verify-rep`, `classops` (plus `--per-module`, `--explain`), `dictflow` and
-`higher`, with the `--json` form of each. **No census number moved**, because
-nothing but new code was added: `verify_m24.rs` and `m24_claims.rs` are new,
-`h2r verify-m24` is new, and the only edit to an existing analysis is an
-`owner_binder` field on `dictflow::OwnerPlan` and `higher::OwnerPlan` — an
-address a claim needs, `#[serde(skip)]`, read by no report. `parsec --explain`
-and `parsec --json` remain [nondeterministic in line order](#the-gate-for-this-correction)
-and are compared as multisets, as they were at M2.4c′ and M2.4d′.
+`higher`, with the `--json` form of each — 238 captured reports over the
+seven dumps, of which **223 are byte-identical** and the other 15 are the
+**pre-existing `parsec` nondeterminism** and nothing else (every run's
+standard error was captured too, and all 224 are empty):
+
+* `parsec` on B, C, E and F and `parsec --explain` on B, C, D and E differ in
+  one or two `e.g.` exemplar lines each — the *same* node with a different
+  argument index, every count identical, which is the same witness-picking
+  recorded at [M2.4a](#the-gate) and re-confirmed at M2.4d′ by running an
+  unchanged binary twice;
+* `parsec --json` differs on all seven dumps in each region's edge list
+  order, and is **multiset-identical on all seven** when every list is
+  canonicalised.
+
+**No census number moved**, because nothing but new code was added:
+`verify_m24.rs` and `m24_claims.rs` are new, `h2r verify-m24` is new, and the
+only edit to an existing analysis is an `owner_binder` field on
+`dictflow::OwnerPlan` and `higher::OwnerPlan` — an address a claim needs,
+`#[serde(skip)]`, read by no report.
 
 `cargo test` is **225** (17 new: one per adversarial shape, plus the two that
 make the verifier bite), `cargo clippy --all-targets` 0 warnings and

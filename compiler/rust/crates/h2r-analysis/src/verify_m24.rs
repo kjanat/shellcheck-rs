@@ -11,7 +11,7 @@
 //! whichever side is wrong. In particular this module does **not** use
 //! [`crate::classops`]'s walk, [`crate::dictflow`], [`crate::higher`] or
 //! [`crate::flow`]. It has its own closed-world index, its own dictionary
-//! test, its own call-site enumeration, its own dispatch, its own two
+//! test, its own call-site enumeration, its own dispatch, its own three
 //! fixpoints, its own totality domain with its own definition of *already
 //! evaluated*, its own escape walk, its own type key and its own shape
 //! classes.
