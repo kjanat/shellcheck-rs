@@ -10,3 +10,6 @@
 
 pub mod reachability;
 pub mod verify;
+
+#[cfg(test)]
+mod tests;
