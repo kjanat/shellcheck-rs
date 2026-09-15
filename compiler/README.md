@@ -5972,13 +5972,39 @@ above.)*
 
 #### The gate for this correction
 
-**278 reports** captured over the seven dumps before and after —
-`stats`, `laziness`, `tuples` (plus `--verify`, `--scalar`,
+**312 reports** were captured over the seven dumps before and after —
+`stats`, `laziness`, `tuples` (plus `--verify`, `--scalar-all`,
 `--boundaries`), `fields`, `lists` (plus `--axioms`), `text` (plus
-`--heads`), `verify-rep` (plus `--explain`), `parsec` (plus `--explain`),
-`classops` (plus `--per-module`), `dictflow` (plus `--explain`), `higher`,
-`verify-m24` (plus `--explain`), `m24`, `compare`, three `show` nodes and
-the `--json` form of each. GATE_RESULT
+`--heads`, `--explain`), `verify-rep` (plus `--explain`), `parsec` (plus
+`--explain`, `--cfg-all`), `classops` (plus `--per-module`, `--view-all`),
+`dictflow` (plus `--explain`), `higher` (plus `--view-all`), `verify-m24`
+(plus `--explain`), `m24`, `compare`, three `show` nodes and the `--json`
+form of each. **214 are byte-identical**, **98 moved**, and every one of the
+98 is a report this correction was allowed to move; every run's standard
+error was captured too and is identical on both sides everywhere.
+
+The 98 are fourteen reports × seven dumps, and nothing else:
+
+| report | lines moved (`-O1` … F) | what moved |
+|---|---|---|
+| `classops` | 2 | the one closure-clone line of the accounting block it shares with `higher` |
+| `classops --json` | — | the `named_forces` key, added; no existing value |
+| `dictflow --json` | — | `obligation` → `obligations` on values and parameters (empty on every dump), plus `groups` on each clone plan and `named_forces`; **no existing value changes** |
+| `higher` | 52 … 70 | the clone-plan table: 53 → 68 and the per-owner rows that produced it |
+| `higher --json` | 1 | `owner_clones`, and nothing else |
+| `higher --view-all` | 20 | the clone tuples in each boundary view, now the full shape class |
+| `m24` | 8 … 9 | the closure-clone row, and the three `parsec` residual status lines |
+| `m24 --json` | — | the same two, in `accounting.erasure.plans` and `m21ResidualEdges` |
+| `parsec`, `parsec --explain` | 135 … 1,007 | every residual edge's status string, plus one `representation verdict …` evidence line each |
+| `tuples --verify` | 6 … 7 | the same residual summary, which this report prints in brief |
+| `verify-m24`, `--explain`, `--json` | 3, and 5 on E and F | the three appended shape rows (16–18); on E and F also row 12's exemplar, `Main $s$wgo1` 1 → 2 tuples, which is the H15 correction again |
+
+Everything else is **byte-identical on all seven dumps**, including
+`dictflow` itself (the totality corrections move no verdict), `parsec
+--json` and `parsec --cfg-all` (the residual section is not in either),
+`classops --per-module` and `classops --view-all`, `tuples`, `fields`,
+`lists`, `text`, `verify-rep`, `compare`, and all three `show` nodes with
+their M2.4 footers.
 
 No Core is mutated, no codegen is emitted, no GHC flag changed, no
 `rust-port` file is touched. `cargo test` is **243** (eleven new: one per
