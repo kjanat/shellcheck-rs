@@ -5809,8 +5809,8 @@ display only, and the correction is visible in it: `ShellCheck.Fixer`
 (type names abbreviated to their last component)
 
 ```
-arity=1;captures=[!ShellCheck.Fixer#1181!F(Many,faYH6,Position)], arity=1;captures=[!ShellCheck.Fixer#1170!C(Ranged,faYH6)]
-arity=1;captures=[!ShellCheck.Fixer#1225!F(Many,faYH6,Position)], arity=1;captures=[!ShellCheck.Fixer#1214!C(Ranged,faYH6)]
+arity=1;captures=[!ShellCheck.Fixer#1181!F(C(Many),faYH6,C(Position))], arity=1;captures=[!ShellCheck.Fixer#1170!C(Ranged,faYH6)]
+arity=1;captures=[!ShellCheck.Fixer#1225!F(C(Many),faYH6,C(Position))], arity=1;captures=[!ShellCheck.Fixer#1214!C(Ranged,faYH6)]
 ```
 
 — two `H14-FREE-TYVAR` producer-private keys, which is exactly the
