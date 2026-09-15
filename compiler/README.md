@@ -40,7 +40,7 @@ ShellCheck Haskell
 | **M2.4a** | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged | done |
 | **M2.4b** | the closed-world class-op census: 565 dispatch sites, the 294 mapped 1:1, every class identified — and not one dictionary statically known | done |
 | **M2.4** | the closed-world dictionary and higher-order milestone, in three separate questions: **can the call target be enumerated** (7 of 565 sites, the dictionary bounded at 118), **can an abstraction boundary use one representation** (5,574 function-valued boundaries, 252 enumerated, 84 one representation, 66 rewritable as one, 68 clones planned per owner), and **can the object disappear** (102 of 191 dictionary values `Erasable`, 36 of 216 parameters `Erasable` and 4 more with a clone, 4 owner-level clones) — **c** whole-program dictionary flow with its own totality domain, **d** higher-order representation agreement, **e** the 41 Parsec edges (0 closed, and why), **f** the independent re-derivation of all 606 positive claims with 0 disagreements on all seven dumps, **g** the views, the provenance, the accounting and the four cross-milestone links, **c′/d′/h** the three corrections | done |
-| **M3** | **next.** The lowering: `Main.main`-rooted reachability (the 922 zero-reference bindings are not a rooted dead set), a canonical closure-boundary carrier per Haskell type — the open invariant `TypeShapeUniform` rests on — a call-string analysis to close the twelve set-valued clone plans, and a naming pass for the 4,613 anonymous-lambda / used-as-a-value boundaries that are `ShellCheck.Parser`'s CPS | next |
+| **M3** | The lowering — Core plus the M1–M2.4 proofs to an explicit, proof-carrying NIR and a compiled Rust canary. **a** the `Main.main`-rooted live set: 3,997 live and 9,831 dead of 13,828 top-level bindings, a witness for every live one and a named reason for every dead one, 113,325 claims re-derived with 0 disagreements — and the finding that the dump's *pre-tidy* naming cannot link 112 cross-module references, which makes 8,131 of those dead verdicts conditional and is the first thing M3b has to fix | in progress: M3a done, M3b next |
 
 ## Layout
 
@@ -51,8 +51,9 @@ ShellCheck Haskell
 | `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps. The tree at the repo root is never touched. |
 | `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), which imported Id an occurrence links to (its stable name), which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent), and what each type *is* (`Ty`, with `TyCon` identity and `alpha_eq`). Includes a depth-limited Core pretty-printer. |
 | `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`), and the closed-world class-op census with its asserted class table (`classops.rs`), and the whole-program dictionary flow with its separate erasure and totality domains (`dictflow.rs`), and the higher-order representation-agreement analysis (`higher.rs`), and the independent re-derivation of every *positive* M2.4 verdict (`verify_m24.rs`, which shares nothing with `classops.rs`, `dictflow.rs`, `higher.rs` or `flow.rs` but the IR, and reads the analyses' verdicts only as the plain data `m24_claims.rs` writes down), and M2.4's per-site and per-boundary views, the `h2r show` provenance they share, the milestone's own accounting and its four cross-milestone links (`m24.rs`). |
+| `rust/crates/h2r-lower` | The lowering. Where `h2r-analysis` *proves* things about the dumped Core, this crate *constructs* the program the proofs licence — it never mutates the arena and never re-derives a fact an analysis already carries. Today: the `Main.main`-rooted reachability graph over the closed world (`reachability.rs`), whose nodes are `(module, BinderId)` top-level binding pairs and whose edges come only from the resolver or from an external stable name, with a shortest witness path for every live binding and a named reason for every dead one; and the independent re-derivation of every one of its claims (`verify.rs`, which shares nothing with it but the IR and five named trusted inputs, and walks *up* the parent links where the census walks down). |
 | `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), `dictflow` (the whole-program dictionary flow, its erasure verdicts and its clone plan), `higher` (the function-valued boundaries and their representation verdicts), `verify-m24` (the independent re-derivation of every positive M2.4 verdict), `m24` (M2.4's accounting, its residual and its four cross-milestone links in one place), and the `--view` / `--view-all` views `fields`, `lists`, `text`, `classops` and `higher` each carry. Later: the lowering passes. |
+| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), `dictflow` (the whole-program dictionary flow, its erasure verdicts and its clone plan), `higher` (the function-valued boundaries and their representation verdicts), `verify-m24` (the independent re-derivation of every positive M2.4 verdict), `m24` (M2.4's accounting, its residual and its four cross-milestone links in one place), the `--view` / `--view-all` views `fields`, `lists`, `text`, `classops` and `higher` each carry, and `lower --reachability` (M3a's live set, its accounting, its rule table and the verifier's audit, with `--explain <name>` for one binding's witness path or dead reason). Later: the rest of the lowering passes. |
 
 ## Usage
 
@@ -107,6 +108,10 @@ cargo run --release --bin h2r -- higher ../core-json --view 51239           # on
 cargo run --release --bin h2r -- higher ../core-json --view-all --module ShellCheck.AST --json
 cargo run --release --bin h2r -- m24 ../core-json             # M2.4's accounting, residual and cross-links
 cargo run --release --bin h2r -- show ../core-json ShellCheck.Fixer 1154    # + its M2.4 footers
+cargo run --release --bin h2r -- lower ../core-json --reachability          # M3a: what Main.main can reach
+cargo run --release --bin h2r -- lower ../core-json --reachability --explain checkScript
+cargo run --release --bin h2r -- lower ../core-json --reachability --json
+cargo run --release --bin h2r -- lower ../core-json --rules                 # the A0-A11 rule table
 ```
 
 ## M1 — how much Haskell is left after GHC?
@@ -6111,12 +6116,15 @@ the *verdicts* rest on rather than inputs either walk reads.
 
 **What remains, and who owns it.**
 
-* **M3: `Main.main`-rooted reachability.** The 922 "unreachable" top-level
-  bindings are the *zero-reference* subset under `W0` — a valid dead subset,
-  but not a rooted transitive one: a binding referenced only by another
-  unreachable binding is not in it. 413 of the 558 unresolved sites and 227
-  of the unresolved boundaries rest on that subset, so the real dead set is
-  larger and M3 has to compute it.
+* **`Main.main`-rooted reachability — done, and conditional.**
+  [M3a](#m3a--mainmain-rooted-reachability) computed the rooted set: 9,831
+  of the 13,828 top-level bindings are dead on `-O1`, 8,855 more than the
+  zero-reference subset sees. What it also found is that the dump is
+  serialised *before* `CoreTidy`, so 112 cross-module references name
+  bindings under names their own module's dump does not carry; 8,131 of the
+  dead verdicts are conditional on that, and every stable-name linkage in
+  the compiler — `dictflow`'s, `classops`'s and `higher`'s — has the same
+  gap. Fixing the plugin's naming is M3b's first task.
 * **M3: the canonical closure carrier.** Until the lowering promises one,
   `TypeShapeUniform` is a Haskell-type fact and the 16 boundaries carrying
   it are not yet one Rust representation.
@@ -6182,6 +6190,360 @@ each — with three deliberate movements and nothing else:
 `h2r m24`, `h2r classops --view/--view-all` and `h2r higher
 --view/--view-all` are new commands. No Core is mutated, no codegen is
 emitted, no GHC flag changed.
+
+## M3 — the lowering
+
+M2.4 closed the last of the analysis milestones. M3 is the first one that
+**builds** something: it does not end with another census, it constructs a
+new program representation.
+
+```
+GHC Core + M1–M2.4 proof objects → reachable program → explicit semantic NIR
+  → closure conversion + specialisation → apply certified transformations
+  → Rust-facing normal form → small generated-Rust canary
+```
+
+A new crate, `h2r-lower`, consumes `h2r-core-ir` and `h2r-analysis` and
+constructs the new IR. `h2r-core-ir` stays the flattened dumped Core,
+`h2r-analysis` stays the proof-producing layer, `h2r-rt` stays the runtime
+target. The sub-milestones:
+
+| | |
+|---|---|
+| **M3a** | `Main.main`-rooted reachability |
+| **M3b** | the normalised IR — NIR, ANF/CFG-shaped, `FnId`/`ValueId`/`BlockId`, explicit `Delay`/`Force`/closure create/return, every instruction carrying `Origin { module, source_node/binder, rule }`, and **no `OpaqueCore` escape hatch** |
+| **M3c** | canonical carriers `Carrier(T)` plus closure conversion, so no anonymous `Lam` remains — this is what closes the open invariant `TypeShapeUniform` rests on |
+| **M3d** | polyvariant specialisation keyed by `(FnId, DictAssignment, ClosureShapeAssignment)` from a live-rooted worklist, closing the set-valued clone lower bounds without a call-string length |
+| **M3e** | explicit evaluation: M1 consumed — `Delay`, `Lazy`, shared and recursive thunks — and every M2.4 force obligation becomes a `Force` |
+| **M3f** | apply the certified representation rewrites. `Erasable` is *permission, not obligation*; every destructive rewrite gets a certificate naming the source address and the proof rule or claim it rests on |
+| **M3g** | lower the proven Parsec CPS regions into blocks and jumps using M2.1's regions and edges — no re-recognition, no names |
+| **M3h** | the lowering audit, and a thin canary emitter compiling at least one nontrivial reachable leaf SCC against `h2r-rt` |
+
+**Acceptance for all of M3:** the complete `Main.main`-reachable ShellCheck
+program exists as an explicit, proof-carrying NIR with no implicit laziness
+and no anonymous closures, every optimisation traceable to an M1–M2.4
+proof, and at least one reachable lowered SCC emitted as Rust and compiled.
+
+Three forbidden temptations, stated so they can be refused by name: **no
+format-6 project** unless the lowering hits a concrete blocker format 5
+cannot represent; **no requirement to resolve every existing `Unresolved`**
+before lowering — the conservative NIR gives an unresolved case a correct
+fallback; and **no mutation of the source Core arena or its proof
+objects**.
+
+## M3a — `Main.main`-rooted reachability
+
+M2.4c's most uncomfortable finding was that a large part of the dump is
+never referenced by any of it, and that [413 of the 558 unresolved class-op
+sites](#m24c--whole-program-dictionary-flow-and-whether-the-dictionary-can-go)
+live in that part. But the *zero-reference* set
+(`function-is-unreachable-in-the-closed-world`) is a valid dead **subset**,
+not a rooted dead **set**: it cannot see a binding referenced only by
+another dead binding, and it cannot see a recursive function whose only
+reference is its own. M3a computes the rooted set.
+
+### The graph
+
+The nodes are the **top-level binding pairs** of every module of the closed
+world — all 13,828 of them on `-O1`, not the exported ones and not the
+function-shaped ones — identified by `(module index, BinderId)` and never
+by a name. Three top-level bindings of `ShellCheck.AST` share the internal
+name `$_sys$$fTraversableInnerToken`; a name-keyed node table would silently
+make one of them stand for the others.
+
+An edge is established two ways, and two ways only:
+
+* **`A2-EDGE-LOCAL`** — `Module::resolve` gives `Ref::Local(b)` and
+  `Module::binding(b).site` is `Top`. Lexical binder identity; the binding
+  *site* decides, never the name. This is the only rule that can ever reach
+  an internally-named top-level binding.
+* **`A3-EDGE-GLOBAL`** — the resolver gives `Ref::Global` and the
+  occurrence's stable name is the name of an *external* top-level binding
+  of some in-world module. The same linkage `W1-GLOBAL-CALLERS` and
+  `classops::World` already use; external names only, because an internal
+  name is not unique.
+
+An occurrence resolving to a lambda, `let`, `case` or alternative binder is
+not an edge: it names something *inside* a top-level binding. A global
+occurrence naming no in-world module is an **import reference**
+(`A4-IMPORT`), recorded with its count but not an edge, because the
+definition is outside the world.
+
+### The rules
+
+| Rule | Evidence | Meaning |
+|---|---|---|
+| `A0-CLOSED-WORLD` | 5 | The dump is the whole program and `Main.main` is its only root. This is `W0-CLOSED-WORLD` / `H0-CLOSED-WORLD` **cited, not re-asserted**: an assumption about the build that no walk can prove, and the one every `dead` verdict below rests on. |
+| `A1-ROOT-MAIN` | 4 over 1 | The root is the top-level binding of the dump's `Main` module whose stable name is `$<that module's unit>$Main$main`, found structurally through the world index. Not exactly one such binding is a named failure, never a guess. |
+| `A2-EDGE-LOCAL` | 1 | An occurrence the resolver maps to a binder bound at top level is an edge to that binding. |
+| `A3-EDGE-GLOBAL` | 3 | A global occurrence whose stable name is an external top-level binding of an in-world module is an edge to it. |
+| `A4-IMPORT` | 4 | A global occurrence whose stable name belongs to no in-world module is an import reference, counted per name, separately from live and from dead code. Not an edge. |
+| `A5-IN-WORLD-MISSING` | 4 over 5 | A global occurrence whose stable name's unit *and* module are an in-world module's, that no top-level binding of that module defines, and that GHC's own flags do not mark as a data constructor or a class-op selector. Its own category. **It is not 0** — see below. |
+| `A6-LIVE-CLOSURE` | 3 | Live is the transitive closure of `A2`/`A3` edges from the `A1` roots, and nothing else. |
+| `A7-DEAD-NO-REFS` | 3 | No occurrence anywhere in the closed world. This **calls** `dictflow`'s own `Program::is_unreachable_top`, the predicate behind `T_UNREACHABLE`, rather than restating it, so the two cannot drift. |
+| `A8-DEAD-ONLY-FROM-DEAD` | 3 | Referenced, but every top-level binding that references it is itself dead. The population the zero-reference subset could not see. |
+| `A9-WITNESS` | 3 | Every live binding carries one **shortest** chain of edges from a root to it, so the verdict is checkable by hand from the report. |
+| `A10-ACCOUNTING` | 5 | `top = live + dead` per module and in total; `dead = no-refs + only-from-dead`. Asserted, never assumed. |
+| `A11-MISSING-IMPACT` | 6 | A **name**-matched bound on what an `A5` hole could cost. Diagnostics only. No edge, no verdict and no accounting figure rests on it, and it exists only so the damage can be stated as a number. |
+
+Trusted inputs, named on every run and shared with the verifier: `W0`; the
+module list; the root name; the IR's resolver (`Module::resolve`,
+`Module::binding`, `Module::occurrences`); and GHC's own `isClassOp` flag
+and data-constructor record.
+
+### The result on `-O1`
+
+| module | top | live | dead, no references | dead, only dead referrers |
+|---|---:|---:|---:|---:|
+| `Main` | 502 | 409 | 18 | 75 |
+| `Paths_ShellCheck` | 63 | 0 | 9 | 54 |
+| `ShellCheck.AST` | 1083 | 35 | 320 | 728 |
+| `ShellCheck.ASTLib` | 346 | 150 | 44 | 152 |
+| `ShellCheck.Analytics` | 2676 | 489 | 14 | 2173 |
+| `ShellCheck.Analyzer` | 8 | 3 | 1 | 4 |
+| `ShellCheck.AnalyzerLib` | 650 | 309 | 82 | 259 |
+| `ShellCheck.CFG` | 1003 | 0 | 104 | 899 |
+| `ShellCheck.CFGAnalysis` | 895 | 0 | 128 | 767 |
+| `ShellCheck.Checker` | 36 | 33 | 1 | 2 |
+| `ShellCheck.Checks.Commands` | 1254 | 0 | 17 | 1237 |
+| `ShellCheck.Checks.ControlFlow` | 16 | 0 | 4 | 12 |
+| `ShellCheck.Checks.Custom` | 9 | 0 | 2 | 7 |
+| `ShellCheck.Checks.ShellSupport` | 906 | 0 | 7 | 899 |
+| `ShellCheck.Data` | 1340 | 1078 | 1 | 261 |
+| `ShellCheck.Fixer` | 92 | 0 | 9 | 83 |
+| `ShellCheck.Formatter.CheckStyle` | 53 | 0 | 2 | 51 |
+| `ShellCheck.Formatter.Diff` | 156 | 0 | 6 | 150 |
+| `ShellCheck.Formatter.Format` | 62 | 0 | 14 | 48 |
+| `ShellCheck.Formatter.GCC` | 22 | 0 | 2 | 20 |
+| `ShellCheck.Formatter.JSON` | 69 | 0 | 7 | 62 |
+| `ShellCheck.Formatter.JSON1` | 91 | 0 | 9 | 82 |
+| `ShellCheck.Formatter.Quiet` | 11 | 0 | 2 | 9 |
+| `ShellCheck.Formatter.TTY` | 93 | 0 | 2 | 91 |
+| `ShellCheck.Interface` | 680 | 1 | 137 | 542 |
+| `ShellCheck.Parser` | 1645 | 1487 | 24 | 134 |
+| `ShellCheck.Prelude` | 42 | 0 | 6 | 36 |
+| `ShellCheck.Regex` | 25 | 3 | 4 | 18 |
+| **total** | **13828** | **3997** | **976** | **8855** |
+
+17,695 edges over 21,636 occurrences — 17,197 intra-module, **498**
+inter-module, which is how thin the linkage between ShellCheck's modules
+actually is in optimised Core. 569 distinct external stable names are
+referenced, 11,924 times from live code and 27,347 times from dead;
+`Text.Parsec.Error.ParseError`, `$wmergeError`, `GHC.Types.[]`,
+`unpackCString#` and `GHC.Types.:` are the five most used.
+
+**The zero-reference column of that table is not the old 922.** Over the
+whole 13,828-binding population `dictflow`'s own predicate gives **977** on
+`-O1` — the 922 in
+[M2.4c](#m24c--whole-program-dictionary-flow-and-whether-the-dictionary-can-go)
+was measured over an unstated sub-population and is left standing there as
+the historical record; the number every later pass should quote is the one
+`Program::is_unreachable_top` produces over all top-level bindings, which
+is now the only place the predicate exists.
+
+### The subset check
+
+| | `-O1` |
+|---|---:|
+| zero-reference (`dictflow`'s own `T_UNREACHABLE` predicate) | 977 |
+| …of which are **roots** | 1 |
+| …of which are rooted-dead | 976 |
+| …neither dead nor a root — the gate asserts 0 | **0** |
+| rooted dead | 9,831 |
+| **additional dead the rooted analysis finds** | **8,855** |
+
+The gate is `zero-reference \ roots ⊆ dead`, not `zero-reference ⊆ dead`,
+and the difference is not a fudge: a program's entry point is not called by
+the program, so `$…$Main$main` has no occurrence anywhere and is the one
+zero-reference binding that is live. It is named in the report every run.
+
+### What the extra 8,855 are
+
+Three shapes, all of them invisible to a zero-reference test:
+
+* **Recursive functions whose only reference is their own.** 506 dead
+  bindings occur inside their own right-hand side and nowhere else —
+  `ShellCheck.ASTLib getCommandSequences` (6 referrers, all dead),
+  `ShellCheck.AST $s$c==` (4), `Paths_ShellCheck lastChar` (2). A
+  zero-reference test counts the self-occurrence and lets every one of them
+  through.
+* **Dead components that hang together.** `ShellCheck.AST $trModule` is
+  referenced by **140** other bindings and every one of them is dead; the
+  `Typeable` machinery of a module nothing reaches is a large, densely
+  connected, entirely dead subgraph. `ShellCheck.CFG $trModule` (63),
+  `ShellCheck.Interface $trModule` (51) and `ShellCheck.Checks.Commands
+  lvl` (54) are the same shape.
+* **Instance and dictionary chains.** `Main $fEqStatus` ← `$fOrdStatus`,
+  `Main $fSemigroupStatus` ← `$cstimes`, `$fMonoidStatus`, `Main $c==` ←
+  `$fEqStatus`: a dictionary is referenced by exactly the instance that
+  builds it, and nothing reaches the instance.
+
+`h2r lower --reachability <dir> --explain <name>` prints the witness path
+of a live binding hop by hop with the rule for each hop, or the dead reason
+and the full referrer list of a dead one.
+
+### The finding: `A5-IN-WORLD-MISSING` is **not** 0
+
+This is the milestone's real result, and it is a defect in the *dump*, not
+in the walk.
+
+`h2r-plugin` appends its pass after the optimisation pipeline and
+serialises the `CoreProgram` **before GHC's `CoreTidy` pass** — and
+`CoreTidy` is exactly what externalises a top-level binder GHC has kept
+internal, and what invents the names `foo1`, `$wfoo`, `foo_$sbar` that
+appear in the module's interface file. So the defining module's dump
+carries the *pre-tidy* name while every downstream module, which read the
+*tidied* interface, refers to the same binding by the *post-tidy* one:
+
+| the reference, in the module that makes it | the binding, in its own dump |
+|---|---|
+| `ShellCheck.Analyzer` → `$…$ShellCheck.Checks.Commands$$wchecker` | `$_in$$wchecker` |
+| `ShellCheck.Analytics` → `$…$ShellCheck.ASTLib$$wgetPath` | `$_in$$wgetPath` |
+| `Main` → `$…$ShellCheck.Formatter.TTY$format1` | *(nothing: no binding of that occurrence name exists in `ShellCheck.Formatter.TTY`'s dump at all — `format1` is a name `CoreTidy` invents)* |
+
+The closed world cannot see that the two names are one binding, so the
+reference establishes no edge. On `-O1` that is **112 stable names over
+1,232 occurrences**, **54 of them referenced from live code**. Every
+stable-name linkage in the compiler has this gap —
+`dictflow::Program::tops`, `classops::World::tops` and `higher`'s producer
+enumeration all build the same index — and M3a is simply the first pass
+whose answer *depends* on it.
+
+What it costs, stated two ways and neither of them a repair:
+
+* the **sound** bound, which uses no name: the 19 modules an unlinkable
+  live-referenced name points into hold **8,131 of the 9,831** dead
+  bindings, so those verdicts are conditional;
+* the **constructive** bound (`A11-MISSING-IMPACT`, evidence level 6):
+  **18** of the 112 names do have top-level bindings of the right module
+  with the matching *occurrence* name — 23 of them, and every one a `$w…`
+  worker, the one form `CoreTidy` leaves alone. They are
+  `$wchecker` of `ShellCheck.Analytics`, of `Checks.Commands` and of
+  `Checks.ShellSupport`, `$wbuildGraph` of `ShellCheck.CFG`,
+  `$wanalyzeControlFlow` of `ShellCheck.CFGAnalysis`, `$wrunChecker` of
+  `AnalyzerLib`, `$wapplyFix` of `Fixer` — the worker entry points of
+  exactly the modules that show 0 live above. Re-running the closure with
+  those 23 name-matched edges added makes **5,240** further bindings live:
+  `ShellCheck.Analytics` 2,157, `Checks.Commands` 1,177,
+  `Checks.ShellSupport` 870, `CFG` 354, `CFGAnalysis` 291, `Data` 257 and
+  six modules more. The other 94 names have no candidate at all, so even
+  5,240 is a floor.
+
+The report leads with this: `h2r lower --reachability` prints a `STATUS —
+THE DEAD SET IS CONDITIONAL` block immediately after the roots, on every
+dump, and the live set is labelled a **lower bound**. `ShellCheck.Checks.Commands`
+showing 0 live bindings in the table above is that defect and nothing else:
+the program obviously runs the command checks.
+
+**This is the first thing M3 has to fix**, and it is squarely a
+[forbidden-temptation](#m3--the-lowering) case — a concrete blocker the
+current dump cannot represent. The fix is not a new format: it is moving
+the plugin's serialisation after `CoreTidy`, or recording each top-level
+binder's tidied name beside its pre-tidy one. Nothing here guesses in the
+meantime; a name match is level 6 and no verdict reads one.
+
+### The verifier
+
+`h2r-lower/src/verify.rs` re-derives every claim from the IR alone. It
+shares nothing with `reachability.rs` but the arena and the five named
+trusted inputs, and it reads the `LiveSet` only as *data*: a population, a
+set of verdicts, a set of witnesses, a set of edges.
+
+The two derivations are deliberately opposite. The census walks **down** —
+pre-order over each top-level right-hand side, collecting the occurrences
+it finds. The verifier works **up**: for every node of every arena it
+climbs `Module::parent` to the root and reads the `Edge::Top` it arrived
+by, giving an owner map, and phrases every check over that map and over
+`Module::occurrences`, the IR's own occurrence index.
+
+| | what it re-derives | claims on `-O1` |
+|---|---|---:|
+| `V1-ROOTS` | the roots are exactly `Main`'s `$<unit>$Main$main`, and every binding carrying that name is a root | 2 |
+| `V2-POPULATION` | every top-level binding of every module appears exactly once in `live ∪ dead`, with the module and stable name it claims | 41,484 |
+| `V3-LIVE-CLOSED` | no live right-hand side names a dead top-level binding | 6,111 |
+| `V4-DEAD-UNREFERENCED` | every occurrence of a dead binder, intra-module through `occurrences` and inter-module through the stable-name scan, lies inside a dead right-hand side | 14,526 |
+| `V5-WITNESS` | every witness starts at a root, ends at its binding, and every hop is an edge re-derived here | 3,997 |
+| `V6-EDGES` | the recorded edges are exactly the IR's, rule and occurrence count included | 35,390 |
+| `V7-DEAD-REASON` | every dead reason and referrer list is the one the IR gives | 9,831 |
+| `V8-ACCOUNTING` | the identities hold over the *contents*, not the counters | 30 |
+| `V9-ZERO-REFERENCE` | the zero-reference set is exactly the unreferenced bindings, every one dead or a root | 1,954 |
+| | **total** | **113,325** |
+
+**0 disagreements on all seven dumps.** Six tests make it bite: a dead
+binding moved to live, a live one moved to dead (checked in both
+directions), a witness with its root removed, a dropped edge, an invented
+edge, and a binding carrying two verdicts. Each asserts that a *named*
+check fires, not merely that the audit fails.
+
+### Across the flag matrix
+
+| | `core-json` | A `-O1` | B `-O2` | C | D | E | F |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| top-level bindings | 13,828 | 13,828 | 13,957 | 6,073 | 7,209 | 7,209 | 7,197 |
+| live | 3,997 | 3,997 | 3,525 | 1,260 | 1,484 | 1,484 | 1,482 |
+| dead, no references | 976 | 976 | 1,000 | 930 | 1,057 | 1,057 | 1,055 |
+| dead, only dead referrers | 8,855 | 8,855 | 9,432 | 3,883 | 4,668 | 4,668 | 4,660 |
+| zero-reference set | 977 | 977 | 1,001 | 931 | 1,058 | 1,058 | 1,056 |
+| …not dead and not a root | **0** | **0** | **0** | **0** | **0** | **0** | **0** |
+| `A5-IN-WORLD-MISSING` names | 112 | 112 | 125 | 83 | 109 | 109 | 109 |
+| …dead bindings they make conditional | 8,131 | 8,131 | 8,949 | 3,889 | 4,854 | 4,854 | 4,845 |
+| verifier claims | 113,325 | 113,325 | 115,720 | 50,133 | 64,002 | 63,582 | 63,479 |
+| verifier disagreements | **0** | **0** | **0** | **0** | **0** | **0** | **0** |
+| accounting identities | all hold | all hold | all hold | all hold | all hold | all hold | all hold |
+
+`compiler/core-json` and `matrix/A` produce byte-identical reports, as they
+should: A *is* the `-O1` profile. C's top-level population is less than half
+of A's because `-fno-full-laziness` is the profile that stops hoisting
+constants to top level — the same finding the census made about `lvl…`
+float-outs, now visible in the node count of the live graph itself. The
+share of the program that is dead rises from 71.1% on `-O1` to 79.4% on
+D–F, which is the linkage hole growing with the amount of cross-module
+inlining rather than the program shrinking.
+
+### The gate
+
+**44 reports** were captured on `compiler/core-json` before and after —
+`stats` (plus `--per-module`), `laziness`, `parsec`, `tuples` (plus
+`--verify`, `--boundaries`), `fields`, `lists` (plus `--axioms`), `text`
+(plus `--heads`), `verify-rep`, `classops` (plus `--per-module`),
+`dictflow`, `higher`, `verify-m24`, `m24`, the `--explain` and `--json`
+form of each that has one, and two `show` nodes. **All 44 are
+byte-identical.** M3a adds a report; it moves none.
+
+The one change outside `h2r-lower` and `h2r-cli` is in
+`h2r-analysis/src/dictflow.rs`, and it is deliberately not a change of
+behaviour: `Program::is_unreachable_top` names the predicate that was
+written inline at `T_UNREACHABLE`'s one call site, and `producers_of` now
+calls it, so M3a's `A7` and M2.4c's `T_UNREACHABLE` cannot drift apart.
+`all_occurrences` and `is_external_name` became `pub` for the same reason.
+No Core is mutated and no proof object is touched.
+
+`h2r lower --reachability <dir>` produces byte-identical output on two
+consecutive runs, in both the text and the `--json` form, on every dump:
+the node order is the dump's own, every adjacency is a `BTreeMap`, and the
+breadth-first closure over it makes the witness a shortest path that does
+not depend on hash order.
+
+`cargo test` is **259** (sixteen new), `cargo clippy --workspace
+--all-targets -- -D warnings` and `cargo fmt --check` are clean.
+
+### M3a acceptance
+
+What M3a establishes: the rooted live set exists, as a proof object, with a
+hand-checkable witness for every live binding and a named reason for every
+dead one; the accounting closes exactly on all seven dumps; the old
+zero-reference subset is contained in it up to the root, with the predicate
+now living in exactly one place; and an independent walk that shares only
+the IR confirms every claim with 0 disagreements.
+
+What M3a does **not** establish: that the dead set is right. 8,131 of the
+9,831 dead verdicts on `-O1` are conditional on a linkage the dump cannot
+supply, and inspection of the `A5` population shows the gap severs whole
+modules the program certainly uses. M3b cannot consume this live set until
+the plugin's naming is fixed; what it *can* consume unconditionally is the
+live set as a **lower bound** — every binding M3a calls live really is
+reachable, because every edge behind it is either lexical binder identity
+or a stable-name match, and neither can invent a reference.
 
 ## What ShellCheck actually needs
 
