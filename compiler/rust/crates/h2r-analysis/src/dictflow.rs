@@ -854,7 +854,7 @@ impl<'m> Program<'m> {
     /// Every occurrence of a top-level binding, in every module of the
     /// closed world ([`W1_GLOBAL_CALLERS`]): the local ones through the
     /// module's own binder, the rest by stable name.
-    fn all_occurrences(&self, mi: usize, b: BinderId) -> Vec<(usize, ExprId)> {
+    pub fn all_occurrences(&self, mi: usize, b: BinderId) -> Vec<(usize, ExprId)> {
         let m = self.m(mi);
         let mut out: Vec<(usize, ExprId)> = m.occurrences(b).iter().map(|&o| (mi, o)).collect();
         if m.binding(b).site == BindSite::Top
@@ -865,6 +865,19 @@ impl<'m> Program<'m> {
         }
         out
     }
+
+    /// **The zero-reference predicate.** A top-level binding with no
+    /// occurrence anywhere in the closed world: under
+    /// [`W0_CLOSED_WORLD`] nothing can name it, so it cannot run. This is
+    /// the one predicate [`T_UNREACHABLE`] means, exposed so that a later
+    /// pass asking the same question asks it here rather than
+    /// reimplementing it — [`producers_of`] calls this, so the two cannot
+    /// drift. It is a *dead subset*, not a rooted reachability set: a
+    /// binding referenced only by another unreachable binding is not in
+    /// it.
+    pub fn is_unreachable_top(&self, mi: usize, b: BinderId) -> bool {
+        self.m(mi).binding(b).site == BindSite::Top && self.all_occurrences(mi, b).is_empty()
+    }
 }
 
 /// Is this an *external* name — one another module could refer to, and
@@ -873,7 +886,7 @@ impl<'m> Program<'m> {
 /// **not** unique: `ShellCheck.AST` has three distinct top-level bindings
 /// whose name is `$_sys$$fTraversableInnerToken`. Nothing here is keyed by
 /// one.
-pub(crate) fn is_external_name(name: &str) -> bool {
+pub fn is_external_name(name: &str) -> bool {
     split_stable_name(name)
         .is_some_and(|(u, md, _)| !u.is_empty() && !md.is_empty() && !is_internal_unit(u))
 }
@@ -1673,10 +1686,9 @@ fn producers_of(p: &Program, mi: usize, owner: Option<BinderId>, index: usize) -
         out.top = Some(T_ANON_LAMBDA.into());
         return out;
     };
-    let m = p.m(mi);
     let occs = p.all_occurrences(mi, f);
     if occs.is_empty() {
-        out.top = Some(if m.binding(f).site == BindSite::Top {
+        out.top = Some(if p.is_unreachable_top(mi, f) {
             T_UNREACHABLE.into()
         } else {
             T_NO_CALLERS.to_string()
