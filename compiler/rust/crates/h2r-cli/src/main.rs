@@ -816,10 +816,8 @@ fn show(
     // set and a slot's closure set are unions over every module — so the
     // objects are built over the whole dump and only *this* module's
     // sites, values, parameters, boundaries and producers are indexed.
-    let one_m24 = [m];
     let m24 = (classops_on || higher_on).then(|| {
         let all: Vec<&Module> = modules.iter().collect();
-        let _ = &one_m24;
         h2r_analysis::m24::M24::of_modules(&all)
     });
     let m24p = m24

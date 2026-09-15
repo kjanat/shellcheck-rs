@@ -512,9 +512,12 @@ impl ClassopView {
         if let Some(d) = s.dict_arg {
             let mi = m24.modules.iter().position(|x| x.name == s.module);
             if let Some(mi) = mi {
-                let mut frontier: Vec<(usize, ExprId)> = vec![(mi, d)];
+                // Breadth first, so the immediate parameter is the first
+                // hop and the callers behind it follow in call-site order.
+                let mut frontier: std::collections::VecDeque<(usize, ExprId)> =
+                    std::collections::VecDeque::from([(mi, d)]);
                 let mut budget = 32usize;
-                while let Some((mi, node)) = frontier.pop() {
+                while let Some((mi, node)) = frontier.pop_front() {
                     if budget == 0 {
                         break;
                     }
@@ -557,7 +560,7 @@ impl ClassopView {
                     // One more hop: every call site's argument that is
                     // itself a dictionary parameter.
                     for (cmi, at) in &p.producers.calls {
-                        frontier.push((*cmi, *at));
+                        frontier.push_back((*cmi, *at));
                     }
                 }
             }
@@ -1747,8 +1750,22 @@ fn whose(reason: &str) -> &'static str {
         || reason.starts_with(higher::T_ANON_LAMBDA)
     {
         "the Parsec CPS wall: a naming pass for the anonymous lambdas, then a call-string view"
-    } else if reason.starts_with(higher::T_PARTIAL_CALL) {
+    } else if reason.starts_with(higher::T_PARTIAL_CALL)
+        || reason.starts_with(dictflow::T_PARTIAL_CALL)
+    {
         "the partial application's own consumers"
+    } else if reason.starts_with(higher::T_NOT_A_FUNCTION) {
+        "the body's lambda chain and the binder's type disagree about the return: refused rather than picked"
+    } else if reason.starts_with(higher::T_HIGHER_ORDER)
+        || reason.starts_with(dictflow::T_HIGHER_ORDER)
+    {
+        "the propagation, once the anonymous lambdas are named"
+    } else if reason.starts_with(higher::T_NO_PRODUCER)
+        || reason.starts_with(dictflow::T_NO_PRODUCER)
+    {
+        "nothing reaches the slot: dead, or a producer this walk does not see"
+    } else if reason.starts_with(higher::T_UNKNOWN_CALL) {
+        "a call the dump cannot see: a bigger dump"
     } else if reason.starts_with(higher::T_NO_CON_APPS) || reason.starts_with(higher::T_UNREACHABLE)
     {
         "dead under H0"

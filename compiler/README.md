@@ -39,7 +39,7 @@ ShellCheck Haskell
 | **M2.3** | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link, **g** the correction to the axiom layer | done |
 | **M2.4a** | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged | done |
 | **M2.4b** | the closed-world class-op census: 565 dispatch sites, the 294 mapped 1:1, every class identified — and not one dictionary statically known | done |
-| **M2.4** | the closed-world dictionary and higher-order milestone, in three separate questions: **can the call target be enumerated** (7 of 565 sites, the dictionary bounded at 118), **can an abstraction boundary use one representation** (5,574 function-valued boundaries, 252 enumerated, 84 one representation, 66 rewritable as one, 53 clones planned per owner), and **can the object disappear** (102 of 191 dictionary values `Erasable`, 40 of 216 parameters, 4 owner-level clones) — **c** whole-program dictionary flow with its own totality domain, **d** higher-order representation agreement, **e** the 41 Parsec edges (0 closed, and why), **f** the independent re-derivation of all 606 positive claims with 0 disagreements on all seven dumps, **g** the views, the provenance, the accounting and the four cross-milestone links, **c′/d′** the two corrections | done |
+| **M2.4** | the closed-world dictionary and higher-order milestone, in three separate questions: **can the call target be enumerated** (7 of 565 sites, the dictionary bounded at 118), **can an abstraction boundary use one representation** (5,574 function-valued boundaries, 252 enumerated, 84 one representation, 66 rewritable as one, 53 clones planned per owner), and **can the object disappear** (102 of 191 dictionary values `Erasable`, 36 of 216 parameters `Erasable` and 4 more with a clone, 4 owner-level clones) — **c** whole-program dictionary flow with its own totality domain, **d** higher-order representation agreement, **e** the 41 Parsec edges (0 closed, and why), **f** the independent re-derivation of all 606 positive claims with 0 disagreements on all seven dumps, **g** the views, the provenance, the accounting and the four cross-milestone links, **c′/d′** the two corrections | done |
 | **M3** | **next.** The lowering: `Main.main`-rooted reachability (the 922 zero-reference bindings are not a rooted dead set), a canonical closure-boundary carrier per Haskell type — the open invariant `TypeShapeUniform` rests on — a call-string analysis to close the twelve set-valued clone plans, and a naming pass for the 4,613 anonymous-lambda / used-as-a-value boundaries that are `ShellCheck.Parser`'s CPS | next |
 
 ## Layout
@@ -5452,10 +5452,10 @@ together and never reported as one number.
 `rewritable as one` (66) ≤ `one representation` (84) ≤ `enumerated` (252) is
 asserted, and the direction is the point: 18 boundaries whose producers
 genuinely agree are still `Preserve`, because the rewrite does not own the
-slot. All twelve of the `-O1` clone plans that carry a number are flagged
-where a tuple has a set-valued component — **4 of 4** dictionary plans and
-**8 of 21** closure plans are lower bounds, closable only by a call-string
-analysis.
+slot. Twelve of the twenty-five `-O1` clone plans that carry a
+number are flagged where a tuple has a set-valued component — **4 of 4**
+dictionary plans and **8 of 21** closure plans are lower bounds, closable
+only by a call-string analysis.
 
 **The 3×5 matrix** crosses questions 1 and 3 rather than collapsing them:
 
@@ -5488,9 +5488,9 @@ plus 5,322 `Unresolved`, both asserted.
 | 2,660 + 1,953 = **4,613** | `function-used-as-a-value`, `parameter-of-an-anonymous-lambda` | the Parsec CPS wall: a naming pass for the anonymous lambdas, then a call-string view |
 | 413 | `call-site-is-a-partial-application` | the partial application's own consumers |
 | 227 | `function-is-unreachable-in-the-closed-world` | dead under `H0` |
-| 44 | `expression-is-not-a-closure` | M3 |
+| 44 | `expression-is-not-a-closure` | the body's lambda chain and the binder's type disagree about the return: refused rather than picked |
 | 22 + 3 | `a-closure-read-back-from-a-constructor-field`, `a-closure-returned-by-an-imported-call` | a genuine run-time closure: the lowering decides, not this analysis |
-| 19 | `closure-from-an-untracked-higher-order-parameter` | M3 |
+| 19 | `closure-from-an-untracked-higher-order-parameter` | the propagation, once the anonymous lambdas are named |
 | 14 + 5 | `the-boundary-is-exported-…`, `…-belongs-to-a-function-used-as-a-value` | shared outside the rewrite: M3's ownership question |
 | 5 | `constructor-is-never-applied-in-the-closed-world` | dead under `H0` |
 | 1 | `closure-set-exceeded-the-budget` | a larger budget, or a per-caller analysis |
@@ -5612,18 +5612,20 @@ Sorting that walk by the binder fixes all three. It is a **report-order
 change only**: nothing in the proof depends on the order, and every count is
 an aggregate over all of it.
 
-* **the counts are unchanged.** `parsec --explain` is line-for-line
-  **multiset identical** before and after on all seven dumps, and `parsec
-  --json` is identical on all seven once each region's `edges` list is
+* **the counts are unchanged.** Apart from the `e.g.` exemplar lines,
+  `parsec --explain` is line-for-line **multiset identical** before and
+  after on all seven dumps, and `parsec --json` is identical on all seven
+  once each region's `edges`, `evidence` and `rejects` lists are
   canonicalised — the exact comparison M2.4f had to make. `h2r parsec`
-  itself is byte-identical on five of the seven; on B and C it differs in
-  **exactly one `e.g.` exemplar line each** — the same reject reason
-  (`arg-of-unrecognised-call`, `cont-in-non-cont-slot`) with a different
-  witness, every count identical. That is the wobble itself: the old binary
-  picked a witness at random and the new one picks the lowest-numbered
-  binder's, so the *before* capture is one of the several outputs the old
-  binary could have produced. The 41-row M2.4e table is byte-identical on
-  every dump.
+  itself is **byte-identical on `-O1`, A and D**, and on B, C, E and F it
+  differs in **exactly one `e.g.` exemplar line** — the same reject reason
+  (`arg-of-unrecognised-call`, `cont-in-non-cont-slot`, `cont-wrong-arity`)
+  with a different witness and the same count. `parsec --explain` differs
+  in two such lines on C and one on E and on F, and in none on the other
+  four. That is the wobble itself: the old binary picked a witness at
+  random, so the *before* capture is one of several outputs it could have
+  produced, and the new one always picks the lowest-numbered role binder's.
+  The 41-row M2.4e table is byte-identical on every dump.
 * **two runs are now identical.** Three consecutive runs of `h2r parsec`,
   `parsec --explain` and `parsec --json` on profile B — the profile where
   M2.4a first reproduced the wobble — give one md5 each, where before the
@@ -5760,6 +5762,9 @@ fmt --check` are clean.
 
 ### The gate
 
+**262 reports** were captured over the seven dumps before and after: **215
+byte-identical**, 28 appended-only, 11 multiset-identical up to an `e.g.`
+exemplar, 7 canonical-JSON-identical and one `show` that gains its footer.
 Every existing report is **byte-identical** before and after, on
 `compiler/core-json` and on all six matrix profiles — `stats`, `laziness`,
 `tuples` (plus `--explain`, `--verify`, `--boundaries`), `fields`, `lists`
@@ -5768,17 +5773,23 @@ Every existing report is **byte-identical** before and after, on
 `--explain`), `classops --per-module`, `compare` and the `--json` form of
 each — with three deliberate movements and nothing else:
 
-* **`classops` and `higher` gain the accounting section**, appended after
-  everything they already print, so **not one existing line moves**; their
-  `--json` gains no key at all, because the views are their own
-  `--view`/`--view-all` reports.
+* **`classops` and `higher` gain the accounting section**, 85 lines
+  appended after everything they already print, so **not one existing line
+  moves** — the *after* file starts with the *before* file byte for byte,
+  on all seven dumps and with `--explain`. Their `--json` gains no key at
+  all, because the views are their own `--view`/`--view-all` reports, and
+  `classops --per-module` gains nothing at all: that mode exists to
+  reproduce M2.4b exactly.
 * **`parsec --explain` and `parsec --json`** change *order* only —
   multiset-identical and canonical-JSON-identical on all seven dumps — and
-  `parsec` itself changes one `e.g.` exemplar line on B and on C, which is
-  the nondeterminism being fixed rather than a report changing. All three
-  are now stable across runs.
-* **`show`** gains M2.4 marks and footers on nodes that have them, and
-  `--no-classops --no-higher` reproduces its previous output exactly.
+  `parsec` itself changes one `e.g.` exemplar line on B, C, E and F, which
+  is the nondeterminism being fixed rather than a report changing. All
+  three are now stable across runs.
+* **`show`** gains M2.4 marks and footers on nodes that have them —
+  `ShellCheck.Parser 141341` gains one inline mark and an eight-line
+  boundary footer, `ShellCheck.AST 5293` is unchanged because it has
+  neither — and `--no-classops --no-higher` reproduces the previous output
+  **byte for byte**.
 
 `h2r m24`, `h2r classops --view/--view-all` and `h2r higher
 --view/--view-all` are new commands. No Core is mutated, no codegen is
