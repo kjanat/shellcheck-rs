@@ -1161,6 +1161,11 @@ pub struct DictFlow {
 pub struct OwnerPlan {
     pub module: String,
     pub owner: String,
+    /// The owning function's binder. An address, for a consumer that has
+    /// to name this plan; `occ` is not one, being neither unique nor
+    /// stable. Not serialised: no report reads it.
+    #[serde(skip)]
+    pub owner_binder: BinderId,
     /// The function's dictionary parameters, by `occ#index`.
     pub params: Vec<String>,
     /// Per-parameter instance cardinality: evidence only.
@@ -2410,6 +2415,7 @@ fn owner_plans(p: &Program, st: &State, params: &[Param], pe: &[Erasure]) -> Vec
         out.push(OwnerPlan {
             module: m.name.clone(),
             owner: m.binder(f).occ.clone(),
+            owner_binder: f,
             params: plan_params,
             cardinalities,
             tuples: tuples.iter().map(|t| t.join(", ")).collect(),

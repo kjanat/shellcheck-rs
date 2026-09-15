@@ -281,6 +281,20 @@ enum Command {
         #[arg(long)]
         explain: bool,
     },
+    /// Re-derive, with a second walk that shares nothing with them but the
+    /// IR and a named list of trusted inputs, every **positive** M2.4
+    /// claim: the class-op targets and bounded dictionary sets, the
+    /// dictionary-erasure verdicts, the higher-order representation
+    /// verdicts and both clone plans.
+    VerifyM24 {
+        dir: PathBuf,
+        /// Emit the audit as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print every refusal, not just the summary by reason.
+        #[arg(long)]
+        explain: bool,
+    },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
         dir: PathBuf,
@@ -402,6 +416,7 @@ fn main() -> Result<()> {
             json,
             explain,
         } => verify_rep(&dir, module.as_deref(), json, explain),
+        Command::VerifyM24 { dir, json, explain } => verify_m24(&dir, json, explain),
         Command::Classops {
             dir,
             module,
@@ -5721,6 +5736,137 @@ fn higher(
             for u in &b.uses {
                 println!("    use      {:<44} node {}", u.kind.name(), u.at);
             }
+        }
+    }
+    Ok(())
+}
+
+//------------------------------------------------------------------------------
+// verify-m24
+//------------------------------------------------------------------------------
+
+/// Re-derive every **positive** M2.4 claim with `h2r_analysis::verify_m24`
+/// — a second walk that shares nothing with `classops.rs`, `dictflow.rs`,
+/// `higher.rs` or `flow.rs` beyond the IR and four named trusted inputs.
+fn verify_m24(dir: &Path, json: bool, explain: bool) -> Result<()> {
+    let modules = load_dir(dir)?;
+    let selected: Vec<&Module> = modules.iter().collect();
+    // The claims come from the analyses through `m24_claims`, which derives
+    // nothing; the verifier never sees the analyses themselves.
+    let (claims, _f, _h) = h2r_analysis::m24_claims::claims(&selected);
+    let audit = h2r_analysis::verify_m24::verify(&selected, &claims);
+
+    if json {
+        serde_json::to_writer(std::io::stdout().lock(), &audit)?;
+        println!();
+        return Ok(());
+    }
+
+    println!("Independent re-derivation of the M2.4 positive claims");
+    println!();
+    println!("  The walk below shares nothing with classops.rs, dictflow.rs, higher.rs or");
+    println!("  flow.rs but the IR. Four things are consulted rather than re-derived, and");
+    println!("  nothing here may be read as a check of them:");
+    println!("    1  the 17-class method-field table (classops::CLASSES) — a level-5 axiom:");
+    println!("       format 5 carries neither a type nor an unfolding for a global, so the");
+    println!("       field order is not in the dump at all. Every *use* of the table — which");
+    println!("       selector names which class, which field a method sits at, the $pN<Class>");
+    println!("       reading, and the repArity cross-check — is re-derived here.");
+    println!("    2  W0-CLOSED-WORLD / H0-CLOSED-WORLD: the dump is the whole program.");
+    println!("    3  GHC's own flags: isClassOpId, isExportedId and the strictness bits.");
+    println!("    4  the structured Ty, and TyCon stable-name identity.");
+    println!();
+    println!(
+        "  {:<36} {:>8} {:>11} {:>8}",
+        "claim", "checked", "re-derived", "refused"
+    );
+    for (k, n, ok) in &audit.by_kind {
+        println!("  {:<36} {n:>8} {ok:>11} {:>8}", k.name(), n - ok);
+    }
+    println!(
+        "  {:<36} {:>8} {:>11} {:>8}",
+        "total",
+        audit.checked,
+        audit.agreed,
+        audit.checked - audit.agreed
+    );
+    println!();
+    println!("This walk's own populations and fixpoints");
+    println!(
+        "  {:>7}  class-op sites          {:>7}  dictionary parameters",
+        audit.own_sites, audit.own_params
+    );
+    println!(
+        "  {:>7}  dictionary identities   {:>7}  function-valued boundaries",
+        audit.own_values, audit.own_boundaries
+    );
+    println!(
+        "  rounds: {} dictionary, {} totality, {} closure",
+        audit.dict_rounds, audit.tot_rounds, audit.closure_rounds
+    );
+    println!(
+        "  clone plans with a set-valued tuple component (a LOWER BOUND while non-zero):\
+ {} dictionary, {} closure",
+        audit.dict_plans_set_valued, audit.closure_plans_set_valued
+    );
+    println!();
+    println!("The adversarial shapes, in this dump");
+    println!(
+        "  {:<62} {:>6}  {:<44} example",
+        "shape", "n", "must be"
+    );
+    for r in &audit.shapes {
+        println!("  {:<62} {:>6}  {:<44} {}", r.name, r.n, r.verdict, r.at);
+    }
+    println!();
+    println!(
+        "  {:<58} {:>8}",
+        "DISAGREEMENTS (the analysis claimed it, this walk refutes it)",
+        audit.real_disagreements()
+    );
+    println!(
+        "  {:<58} {:>8}",
+        "coverage refusals (this walk is blunter, no claim)",
+        audit.coverage_refusals()
+    );
+    println!();
+    if audit.disagreements.is_empty() {
+        println!("Disagreements: none");
+        return Ok(());
+    }
+    let mut by: BTreeMap<(&str, &str), (usize, String)> = BTreeMap::new();
+    for d in &audit.disagreements {
+        let e = by
+            .entry((d.claim.kind.name(), d.refusal.why))
+            .or_insert((0, String::new()));
+        e.0 += 1;
+        if e.1.is_empty() {
+            e.1 = d.claim.what.clone();
+        }
+    }
+    println!("Refusals by claim and reason (D = a disagreement, C = coverage only)");
+    let mut rows: Vec<_> = by.into_iter().collect();
+    rows.sort_by_key(|(_, v)| std::cmp::Reverse(v.0));
+    for ((kind, why), (n, what)) in rows {
+        let tag = if h2r_analysis::verify_m24::is_coverage_refusal(why) {
+            'C'
+        } else {
+            'D'
+        };
+        println!("  {n:>6}  {tag}  {kind:<36} {why}");
+        println!("          e.g. {what}");
+    }
+    if explain {
+        println!();
+        for d in &audit.disagreements {
+            println!(
+                "  {} — {} [{}] {} ({})",
+                d.claim.kind.name(),
+                d.claim.what,
+                d.claim.verdict,
+                d.refusal.why,
+                d.refusal.detail
+            );
         }
     }
     Ok(())

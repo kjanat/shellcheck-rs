@@ -814,6 +814,11 @@ impl Boundary {
 pub struct OwnerPlan {
     pub module: String,
     pub owner: String,
+    /// The owning function's binder. An address, for a consumer that has
+    /// to name this plan; `owner` is not one. Not serialised: no report
+    /// reads it.
+    #[serde(skip)]
+    pub owner_binder: BinderId,
     /// The function's function-valued parameters, by `occ#index`.
     pub params: Vec<String>,
     /// Per-slot shape-class counts: **evidence only**, never the clone
@@ -2240,6 +2245,7 @@ fn owner_plans(
         out.push(OwnerPlan {
             module: m.name.clone(),
             owner: m.binder(f).occ.clone(),
+            owner_binder: f,
             params,
             classes,
             tuples: tuples.iter().map(|t| t.join(", ")).collect(),

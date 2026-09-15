@@ -11,6 +11,7 @@ pub mod laziness;
 pub mod link;
 pub mod lists;
 pub mod m23;
+pub mod m24_claims;
 pub mod metrics;
 pub mod parsec;
 pub mod scalar;
@@ -19,6 +20,7 @@ pub mod shape;
 pub mod text;
 pub mod tuples;
 pub mod verify;
+pub mod verify_m24;
 pub mod verify_rep;
 pub mod views;
 
