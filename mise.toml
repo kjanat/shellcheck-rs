@@ -1,0 +1,131 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+# Project toolchain, managed by mise (https://mise.jdx.dev).
+#
+# H2R is a mixed Haskell/Rust compiler pipeline:
+# - GHC 9.6.7 is the frontend and the format-6 Core dump contract.
+# - Cabal builds the ShellCheck oracle and h2r-plugin.
+# - Rust builds the analyses, lowering passes, runtime, and CLI.
+#
+# Fuzzy tool versions are resolved through mise.lock. GHC is pinned exactly:
+# the post-CoreTidy alignment and IdInfo join are proved against GHC 9.6.7.
+
+min_version = "2026.9.7"
+
+[tools]
+cabal  = { version = "latest" }
+dprint = { version = "latest" }
+# hls = {version = "latest"}
+ghc    = { version = "9.6.7" }
+ghcup  = { version = "latest", postinstall = "mise run hls-install" }
+rust   = { version = "latest", components = ["rustfmt", "clippy"] }
+tombi  = { version = "latest" }
+
+[tool_alias]
+ghc = "mise-ghcup:ghc"
+
+[plugins]
+"vfox-backend:mise-ghcup" = "https://github.com/wasp-lang/mise-ghcup.git"
+
+[settings]
+experimental = true
+lockfile     = true
+
+# -----------------------------------------------------------------------------
+# Source checks
+# -----------------------------------------------------------------------------
+
+[tasks.fmt]
+alias       = "f"
+description = "Format with dprint"
+run         = "dprint fmt"
+
+[tasks.lint]
+alias       = "l"
+description = "Lint Rust and TOML"
+run         = [
+  "cargo clippy --manifest-path compiler/rust/Cargo.toml --workspace --all-targets -- -D warnings",
+  "tombi lint --error-on-warnings mise.toml compiler/rust/Cargo.toml compiler/rust/crates/*/Cargo.toml",
+  "dprint check"
+]
+
+[tasks.test]
+alias       = "t"
+description = "Run the H2R Rust workspace tests"
+run         = "cargo test --manifest-path compiler/rust/Cargo.toml --workspace"
+
+[tasks.plugin]
+description = "Build the GHC Core-dump plugin"
+dir         = "{{ config_root }}/compiler/h2r-plugin"
+run         = "cabal build all"
+
+[tasks.check]
+alias       = "c"
+description = "H2R source gate: format, lint, tests, and plugin build"
+run         = [
+  "cargo fmt --manifest-path compiler/rust/Cargo.toml --all -- --check",
+  "cargo clippy --manifest-path compiler/rust/Cargo.toml --workspace --all-targets -- -D warnings",
+  "cargo test --manifest-path compiler/rust/Cargo.toml --workspace",
+  "mise run plugin",
+]
+
+# -----------------------------------------------------------------------------
+# Haskell oracle
+# -----------------------------------------------------------------------------
+
+[tasks.oracle]
+description = "Build and test upstream ShellCheck with the canonical GHC"
+run         = "cabal test"
+
+[tasks.hls-install]
+confirm     = "Do you want to install the hls language server"
+description = "install hls in non-ci environments"
+file        = "scripts/hls.sh"
+
+# -----------------------------------------------------------------------------
+# Core extraction
+# -----------------------------------------------------------------------------
+
+[tasks.extract]
+alias       = "x"
+description = "Extract canonical -O1 format-6 Core into compiler/core-json"
+file        = "compiler/extract.sh"
+
+[tasks.matrix]
+description = "Extract the GHC optimization matrix; optional profile names are forwarded"
+file        = "compiler/matrix.sh"
+
+# Examples:
+#   mise run matrix C
+#   mise run matrix A B C
+
+# -----------------------------------------------------------------------------
+# H2R CLI and proof gates
+# -----------------------------------------------------------------------------
+
+[tasks.h2r]
+alias       = "h"
+description = "Run the H2R CLI; arguments are forwarded after `--`"
+dir         = "compiler/rust"
+run         = "cargo run --release --bin h2r --"
+
+# Examples:
+#   mise run h2r stats ../core-json
+#   mise run h2r laziness ../core-json
+#   mise run h2r lower ../core-json --reachability
+
+[tasks.proofs]
+alias       = "p"
+description = "Run the independent proof verifiers on the canonical dump"
+run         = [
+  "cargo run --release --manifest-path compiler/rust/Cargo.toml --bin h2r -- tuples compiler/core-json --verify",
+  "cargo run --release --manifest-path compiler/rust/Cargo.toml --bin h2r -- verify-rep compiler/core-json",
+  "cargo run --release --manifest-path compiler/rust/Cargo.toml --bin h2r -- verify-m24 compiler/core-json",
+  "cargo run --release --manifest-path compiler/rust/Cargo.toml --bin h2r -- lower compiler/core-json --reachability",
+]
+
+[tasks.full]
+description = "Run source checks and the upstream ShellCheck oracle"
+run         = [
+  { task = "check" },
+  { task = "oracle" },
+]

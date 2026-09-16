@@ -21,12 +21,12 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 matrix_dir=$repo_root/compiler/matrix
 
 declare -A PROFILES=(
-  [A]="-O1"
-  [B]="-O2"
-  [C]="-O2 -fno-full-laziness"
-  [D]="-O2 -fno-full-laziness -fspecialise-aggressively -fexpose-all-unfoldings -fcross-module-specialise"
-  [E]="-O2 -fno-full-laziness -fspecialise-aggressively -fexpose-all-unfoldings -fcross-module-specialise -fstatic-argument-transformation"
-  [F]="-O2 -fno-full-laziness -fspecialise-aggressively -fexpose-all-unfoldings -fcross-module-specialise -fstatic-argument-transformation -fstrictness-before=2"
+	[A]="-O1"
+	[B]="-O2"
+	[C]="-O2 -fno-full-laziness"
+	[D]="-O2 -fno-full-laziness -fspecialise-aggressively -fexpose-all-unfoldings -fcross-module-specialise"
+	[E]="-O2 -fno-full-laziness -fspecialise-aggressively -fexpose-all-unfoldings -fcross-module-specialise -fstatic-argument-transformation"
+	[F]="-O2 -fno-full-laziness -fspecialise-aggressively -fexpose-all-unfoldings -fcross-module-specialise -fstatic-argument-transformation -fstrictness-before=2"
 )
 ORDER=(A B C D E F)
 
@@ -34,26 +34,26 @@ selected=("$@")
 [ ${#selected[@]} -eq 0 ] && selected=("${ORDER[@]}")
 
 for p in "${selected[@]}"; do
-  flags=${PROFILES[$p]:?unknown profile $p}
-  dir=$matrix_dir/$p
-  mkdir -p "$dir"
-  echo "$flags" > "$dir/flags"
-  echo "==> profile $p: $flags"
-  start=$(date +%s)
-  H2R_OPT="$flags" \
-  H2R_BUILD_DIR="$dir/build" \
-  H2R_CORE_DIR="$dir/core-json" \
-  H2R_KEEP_DIR="$dir" \
-    "$repo_root/compiler/extract.sh" > "$dir/extract.log" 2>&1
-  end=$(date +%s)
-  echo $((end - start)) > "$dir/time"
-  echo "    done in $((end - start))s, $(du -sh "$dir/core-json" | cut -f1) of Core"
-  # The build tree is large; the binary, plan and dumps have been kept.
-  rm -rf "$dir/build"
+	flags=${PROFILES[$p]:?unknown profile $p}
+	dir=$matrix_dir/$p
+	mkdir -p "$dir"
+	echo "$flags" >"$dir/flags"
+	echo "==> profile $p: $flags"
+	start=$(date +%s)
+	H2R_OPT="$flags" \
+		H2R_BUILD_DIR="$dir/build" \
+		H2R_CORE_DIR="$dir/core-json" \
+		H2R_KEEP_DIR="$dir" \
+		"$repo_root/compiler/extract.sh" >"$dir/extract.log" 2>&1
+	end=$(date +%s)
+	echo $((end - start)) >"$dir/time"
+	echo "    done in $((end - start))s, $(du -sh "$dir/core-json" | cut -f1) of Core"
+	# The build tree is large; the binary, plan and dumps have been kept.
+	rm -rf "$dir/build"
 done
 
 echo
 echo "==> module sets"
 for p in "${selected[@]}"; do
-  echo "    $p: $(wc -l < "$matrix_dir/$p/modules") modules, list sha $(sha256sum "$matrix_dir/$p/modules" | cut -c1-12)"
+	echo "    $p: $(wc -l <"$matrix_dir/$p/modules") modules, list sha $(sha256sum "$matrix_dir/$p/modules" | cut -c1-12)"
 done

@@ -29,31 +29,31 @@ ShellCheck Haskell
 
 ## Milestones
 
-| | | state |
-|---|---|---|
-| **M1** | the residual-laziness census: why does each local binding that survives GHC still exist? 2,242 potential thunk sites, classified and cross-checked against GHC's own demand and cardinality | done |
-| **M2 baseline** | who receives the 8,351 lazy arguments — resolution, proven tier, abstraction family | done |
-| **M2.1** | proving Parsec's CPS roles structurally, and feeding the proof back into the census | done |
-| **M2.2** | which tuples are transport and which are values: 2,584 constructions, an independent verifier, a representation-boundary check, the scalar view | done |
-| **M2.2.1** | the generic aggregate def-use walk (`flow.rs`) lifted out of the tuple census, so every later population is a client of one walk | done |
-| **M2.3** | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link, **g** the correction to the axiom layer | done |
-| **M2.4a** | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged | done |
-| **M2.4b** | the closed-world class-op census: 565 dispatch sites, the 294 mapped 1:1, every class identified — and not one dictionary statically known | done |
-| **M2.4** | the closed-world dictionary and higher-order milestone, in three separate questions: **can the call target be enumerated** (7 of 565 sites, the dictionary bounded at 118), **can an abstraction boundary use one representation** (5,574 function-valued boundaries, 252 enumerated, 84 one representation, 66 rewritable as one, 68 clones planned per owner), and **can the object disappear** (102 of 191 dictionary values `Erasable`, 36 of 216 parameters `Erasable` and 4 more with a clone, 4 owner-level clones) — **c** whole-program dictionary flow with its own totality domain, **d** higher-order representation agreement, **e** the 41 Parsec edges (0 closed, and why), **f** the independent re-derivation of all 606 positive claims with 0 disagreements on all seven dumps, **g** the views, the provenance, the accounting and the four cross-milestone links, **c′/d′/h** the three corrections | done |
-| **M3** | The lowering — Core plus the M1–M2.4 proofs to an explicit, proof-carrying NIR and a compiled Rust canary. **a** the `Main.main`-rooted live set, and the finding that the dump's *pre-tidy* naming could not link 112 cross-module references, which made 8,131 dead verdicts conditional. **a′** the dumps regenerated post-`CoreTidy` with the pre-tidy proof facts joined back on: **9,795 live and 3,957 dead of 13,752** top-level bindings, `A5-IN-WORLD-MISSING` **0 on all seven dumps**, 116,029 claims re-derived with 0 disagreements, dump format 6 | in progress: M3a and M3a′ done; the M1–M2.4 re-baseline on the new dumps next, then M3b |
+|                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | state                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| **M1**          | the residual-laziness census: why does each local binding that survives GHC still exist? 2,242 potential thunk sites, classified and cross-checked against GHC's own demand and cardinality                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | done                                                                                    |
+| **M2 baseline** | who receives the 8,351 lazy arguments — resolution, proven tier, abstraction family                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | done                                                                                    |
+| **M2.1**        | proving Parsec's CPS roles structurally, and feeding the proof back into the census                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | done                                                                                    |
+| **M2.2**        | which tuples are transport and which are values: 2,584 constructions, an independent verifier, a representation-boundary check, the scalar view                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | done                                                                                    |
+| **M2.2.1**      | the generic aggregate def-use walk (`flow.rs`) lifted out of the tuple census, so every later population is a client of one walk                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | done                                                                                    |
+| **M2.3**        | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link, **g** the correction to the axiom layer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | done                                                                                    |
+| **M2.4a**       | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | done                                                                                    |
+| **M2.4b**       | the closed-world class-op census: 565 dispatch sites, the 294 mapped 1:1, every class identified — and not one dictionary statically known                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | done                                                                                    |
+| **M2.4**        | the closed-world dictionary and higher-order milestone, in three separate questions: **can the call target be enumerated** (7 of 565 sites, the dictionary bounded at 118), **can an abstraction boundary use one representation** (5,574 function-valued boundaries, 252 enumerated, 84 one representation, 66 rewritable as one, 68 clones planned per owner), and **can the object disappear** (102 of 191 dictionary values `Erasable`, 36 of 216 parameters `Erasable` and 4 more with a clone, 4 owner-level clones) — **c** whole-program dictionary flow with its own totality domain, **d** higher-order representation agreement, **e** the 41 Parsec edges (0 closed, and why), **f** the independent re-derivation of all 606 positive claims with 0 disagreements on all seven dumps, **g** the views, the provenance, the accounting and the four cross-milestone links, **c′/d′/h** the three corrections | done                                                                                    |
+| **M3**          | The lowering — Core plus the M1–M2.4 proofs to an explicit, proof-carrying NIR and a compiled Rust canary. **a** the `Main.main`-rooted live set, and the finding that the dump's *pre-tidy* naming could not link 112 cross-module references, which made 8,131 dead verdicts conditional. **a′** the dumps regenerated post-`CoreTidy` with the pre-tidy proof facts joined back on: **9,795 live and 3,957 dead of 13,752** top-level bindings, `A5-IN-WORLD-MISSING` **0 on all seven dumps**, 116,029 claims re-derived with 0 disagreements, dump format 6                                                                                                                                                                                                                                                                                                                                                         | in progress: M3a and M3a′ done; the M1–M2.4 re-baseline on the new dumps next, then M3b |
 
 ## Layout
 
-| Path | What it is |
-|---|---|
-| `h2r-plugin/` | GHC plugin (pinned to GHC 9.6.*). Appends a Core pass after the whole optimisation pipeline, runs `CoreTidy` itself and serialises the **tidied** `CoreProgram` to JSON (dump format 6) — so a top-level binding carries, in its own module's dump, the name every downstream module refers to it by — while handing the pipeline back the *original* `ModGuts`. The `IdInfo` CoreTidy discards is joined back on, field by field and binder by binder: the per-binder `demand` on top-level, lambda, `case` and alternative binders, `oneShot` on top-level and `let` binders, and `exported`. Everything else is CoreTidy's finalised value. The dump carries every binder's demand signature, CPR signature, arity and occurrence info, every referenced **external** global Id keyed by stable name, and every type **structurally** in a hash-consed per-module table. Each module gets a `<Module>.tidy-align.txt` sidecar recording the alignment the join was proved against. See [dump format 6](#dump-format-6). |
-| `matrix.sh` | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`. |
-| `extract.sh` | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps and their alignment sidecars. The tree at the repo root is never touched. |
-| `rust/crates/h2r-core-ir` | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), which imported Id an occurrence links to (its stable name), which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent), and what each type *is* (`Ty`, with `TyCon` identity and `alpha_eq`). Includes a depth-limited Core pretty-printer. |
+| Path                       | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `h2r-plugin/`              | GHC plugin (pinned to GHC 9.6.*). Appends a Core pass after the whole optimisation pipeline, runs `CoreTidy` itself and serialises the **tidied** `CoreProgram` to JSON (dump format 6) — so a top-level binding carries, in its own module's dump, the name every downstream module refers to it by — while handing the pipeline back the *original* `ModGuts`. The `IdInfo` CoreTidy discards is joined back on, field by field and binder by binder: the per-binder `demand` on top-level, lambda, `case` and alternative binders, `oneShot` on top-level and `let` binders, and `exported`. Everything else is CoreTidy's finalised value. The dump carries every binder's demand signature, CPR signature, arity and occurrence info, every referenced **external** global Id keyed by stable name, and every type **structurally** in a hash-consed per-module table. Each module gets a `<Module>.tidy-align.txt` sidecar recording the alignment the join was proved against. See [dump format 6](#dump-format-6).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `matrix.sh`                | Runs `extract.sh` under a matrix of GHC optimisation profiles (into `compiler/matrix/<profile>/`), for `h2r compare`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `extract.sh`               | Driver: stages a copy of the ShellCheck sources, runs upstream's `striptests` (which removes QuickCheck and Template Haskell), builds it with the plugin enabled, and collects the dumps and their alignment sidecars. The tree at the repo root is never touched.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `rust/crates/h2r-core-ir`  | Rust-side model of that JSON. Flattened into an arena on load — iteratively, since Core `App` spines nest far deeper than a stack likes — with parent links and edge kinds, so every later pass is worklist-driven. Owns the canonical identities every analysis reads: which binder a `Var` occurrence refers to (`resolve`; GHC uniques are *not* unique in optimised Core), which imported Id an occurrence links to (its stable name), which `App` an application spine is rooted at (`spine_root`, cast- and tick-transparent), and what each type *is* (`Ty`, with `TyCon` identity and `alpha_eq`). Includes a depth-limited Core pretty-printer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `rust/crates/h2r-analysis` | Analyses over the arena. Today: the generic aggregate def-use walk every saturated-constructor flow is built on (`flow.rs`), the residual-laziness census (`laziness.rs`), callee resolution and target tiers (`callee.rs`), the shape/position predicates (`shape.rs`), the single binding-site-first signature lookup they all read (`scope.rs`), the structural Parsec-CPS recogniser (`parsec.rs`), the tuple def-use census that separates transformer plumbing from real values (`tuples.rs`, a client of `flow.rs` plus the four tuple-specific rules), the independent re-derivation of every removable tuple verdict (`verify.rs`, which shares nothing with `tuples.rs` but the IR), the normalised scalar view and per-node tuple provenance (`scalar.rs`), the representation-boundary check that says whether all those views can be applied at once (`boundary.rs`), and the cross-milestone link from M1's thunk sites to M2.2's tuples (`link.rs`), and the constructor-field census that says what is evaluated when each field is read (`fields.rs`), and the list-flow census with its explicit library demand-semantics table (`lists.rs`, `lists/axioms.rs`), and the text census that selects the `[Char]` flows out of it and says what the program does with them (`text.rs`, with its own asserted text-head table), and the independent re-derivation of every M2.3 representation verdict whose being wrong would be a miscompile (`verify_rep.rs`, which shares nothing with `fields.rs`, `lists/` or `text.rs` but the IR and does **not** use `flow.rs`), and the per-site representation views with the `h2r show` provenance they share (`views.rs`), and M2.3's own accounting and its cross-milestone link to M1's thunk sites (`m23.rs`), and the closed-world class-op census with its asserted class table (`classops.rs`), and the whole-program dictionary flow with its separate erasure and totality domains (`dictflow.rs`), and the higher-order representation-agreement analysis (`higher.rs`), and the independent re-derivation of every *positive* M2.4 verdict (`verify_m24.rs`, which shares nothing with `classops.rs`, `dictflow.rs`, `higher.rs` or `flow.rs` but the IR, and reads the analyses' verdicts only as the plain data `m24_claims.rs` writes down), and M2.4's per-site and per-boundary views, the `h2r show` provenance they share, the milestone's own accounting and its four cross-milestone links (`m24.rs`). |
-| `rust/crates/h2r-lower` | The lowering. Where `h2r-analysis` *proves* things about the dumped Core, this crate *constructs* the program the proofs licence — it never mutates the arena and never re-derives a fact an analysis already carries. Today: the `Main.main`-rooted reachability graph over the closed world (`reachability.rs`), whose nodes are `(module, BinderId)` top-level binding pairs and whose edges come only from the resolver or from an external stable name, with a shortest witness path for every live binding and a named reason for every dead one; and the independent re-derivation of every one of its claims (`verify.rs`, which shares nothing with it but the IR and five named trusted inputs, and walks *up* the parent links where the census walks down). |
-| `rust/crates/h2r-rt` | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code. |
-| `rust/crates/h2r-cli` | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), `dictflow` (the whole-program dictionary flow, its erasure verdicts and its clone plan), `higher` (the function-valued boundaries and their representation verdicts), `verify-m24` (the independent re-derivation of every positive M2.4 verdict), `m24` (M2.4's accounting, its residual and its four cross-milestone links in one place), the `--view` / `--view-all` views `fields`, `lists`, `text`, `classops` and `higher` each carry, and `lower --reachability` (M3a's live set, its accounting, its rule table and the verifier's audit, with `--explain <name>` for one binding's witness path or dead reason, `--link <stable name>` for the whole-program linkage of one external name — its single defining binding, its referrers by module and rule, and its witness path — and `--m24-link` for how much of M2.4's residual sits in unreachable code). Later: the rest of the lowering passes. |
+| `rust/crates/h2r-lower`    | The lowering. Where `h2r-analysis` *proves* things about the dumped Core, this crate *constructs* the program the proofs licence — it never mutates the arena and never re-derives a fact an analysis already carries. Today: the `Main.main`-rooted reachability graph over the closed world (`reachability.rs`), whose nodes are `(module, BinderId)` top-level binding pairs and whose edges come only from the resolver or from an external stable name, with a shortest witness path for every live binding and a named reason for every dead one; and the independent re-derivation of every one of its claims (`verify.rs`, which shares nothing with it but the IR and five named trusted inputs, and walks *up* the parent links where the census walks down).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `rust/crates/h2r-rt`       | Runtime for *residual* laziness only — `Lazy<T>`, `Shared<T>`. The design rule is that as little of this as possible should survive into generated code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `rust/crates/h2r-cli`      | The `h2r` driver. Today: `stats`, `binders`, `show` (with both proof objects inline and per-node evidence), `laziness`, `compare`, `parsec` (including `--cfg`, the recovered parser graph), `tuples` (including `--verify`, `--scalar`, `--boundaries` and the milestone accounting), `fields` (the constructor-field census), `lists` (the list-flow census, including `--axioms`), `text` (the text census, including `--heads`), `verify-rep` (the independent re-derivation of the M2.3 verdicts, the milestone accounting and the M1 link), `classops` (the closed-world class-op census: population, the 294 mapping, dictionary sources, origin chains and the evaluation facts), `dictflow` (the whole-program dictionary flow, its erasure verdicts and its clone plan), `higher` (the function-valued boundaries and their representation verdicts), `verify-m24` (the independent re-derivation of every positive M2.4 verdict), `m24` (M2.4's accounting, its residual and its four cross-milestone links in one place), the `--view` / `--view-all` views `fields`, `lists`, `text`, `classops` and `higher` each carry, and `lower --reachability` (M3a's live set, its accounting, its rule table and the verifier's audit, with `--explain <name>` for one binding's witness path or dead reason, `--link <stable name>` for the whole-program linkage of one external name — its single defining binding, its referrers by module and rule, and its witness path — and `--m24-link` for how much of M2.4's residual sits in unreachable code). Later: the rest of the lowering passes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ## Usage
 
@@ -135,23 +135,23 @@ Headline numbers on the tree at the repo root (GHC 9.6.7, `-O1`). The
 bugs in it — occurrences keyed by GHC unique, and spines split by casts;
 both are described under [M2.1](#m21--proving-parsecs-cps-roles):
 
-| | before | now | after tuple normalisation | after M2.3 |
-|---|---:|---:|---:|---:|
-| Local bindings after optimisation | 6,156 | 6,156 | — | — |
-| … functions / join points / values already in WHNF | 1,883 / 1,119 / 762 | 1,883 / 1,119 / 762 | — | — |
-| … strict (`let` the simplifier didn't turn into `case`) | 148 | 148 | — | — |
-| … lazy, used at most once / possibly many times | 39 / 2,134 | 39 / 2,134 | — | — |
-| **Potential thunk sites** | **2,242** | **2,242** | **2,150** | **2,139** |
-| … sinkable into an evaluating position (thunk vanishes) | 12 | 14 | 14 | 11 |
-| … sinkable, but into a lazy argument (thunk moves) | 243 | 254 | 251 | 248 |
-| … … of all the sinkable ones, into mutually exclusive branches | 56 | 65 | — | — |
-| … … the rest being single-use | 199 | 203 | — | — |
-| … memo needed to keep sharing | 1,918 | 1,905 | **1,816** | **1,811** |
-| … … captured by a many-entry lambda | 1,387 | **1,242** | **1,162** | **1,160** |
-| … … shared on one path | 531 | **663** | **654** | **651** |
-| … genuinely recursive values (knot-tying) | 69 | 69 | 69 | 69 |
-| Top-level CAFs that are actually string literals | 2,426 of 2,755 | 2,426 of 2,755 | — | — |
-| Genuine top-level thunks | 238 | 238 | — | — |
+|                                                                |              before |                 now | after tuple normalisation | after M2.3 |
+| -------------------------------------------------------------- | ------------------: | ------------------: | ------------------------: | ---------: |
+| Local bindings after optimisation                              |               6,156 |               6,156 |                         — |          — |
+| … functions / join points / values already in WHNF             | 1,883 / 1,119 / 762 | 1,883 / 1,119 / 762 |                         — |          — |
+| … strict (`let` the simplifier didn't turn into `case`)        |                 148 |                 148 |                         — |          — |
+| … lazy, used at most once / possibly many times                |          39 / 2,134 |          39 / 2,134 |                         — |          — |
+| **Potential thunk sites**                                      |           **2,242** |           **2,242** |                 **2,150** |  **2,139** |
+| … sinkable into an evaluating position (thunk vanishes)        |                  12 |                  14 |                        14 |         11 |
+| … sinkable, but into a lazy argument (thunk moves)             |                 243 |                 254 |                       251 |        248 |
+| … … of all the sinkable ones, into mutually exclusive branches |                  56 |                  65 |                         — |          — |
+| … … the rest being single-use                                  |                 199 |                 203 |                         — |          — |
+| … memo needed to keep sharing                                  |               1,918 |               1,905 |                 **1,816** |  **1,811** |
+| … … captured by a many-entry lambda                            |               1,387 |           **1,242** |                 **1,162** |  **1,160** |
+| … … shared on one path                                         |                 531 |             **663** |                   **654** |    **651** |
+| … genuinely recursive values (knot-tying)                      |                  69 |                  69 |                        69 |         69 |
+| Top-level CAFs that are actually string literals               |      2,426 of 2,755 |      2,426 of 2,755 |                         — |          — |
+| Genuine top-level thunks                                       |                 238 |                 238 |                         — |          — |
 
 The third column is the [cross-milestone
 link](#the-cross-milestone-link-how-many-of-m1s-thunks-are-these-tuples):
@@ -210,14 +210,14 @@ float-outs) that looks lazy. Before transforming anything, `h2r laziness`
 instruments every computation in a lazy or unknown argument position (8,351)
 on three axes:
 
-* **resolution** — what kind of head receives the argument;
-* **tier** — what is actually *proven* about the code that runs when the
+- **resolution** — what kind of head receives the argument;
+- **tier** — what is actually *proven* about the code that runs when the
   argument is consumed. This is the honest axis: recognising a Parsec
   continuation by name attributes the site to a pass, it does not resolve
   the target. Since M2.1 the tier is the better of two *independent*
   proofs — the syntactic resolution below, and whatever the Parsec CPS
   recogniser proves structurally — and neither may weaken the other;
-* **family** — which abstraction the head belongs to, judged from its
+- **family** — which abstraction the head belongs to, judged from its
   defining module and, for local heads, its binding site and name. This
   catches the *structural* signatures of inlined abstractions, which is how
   they appear in optimised Core: mtl's newtypes are gone and its binds show
@@ -240,25 +240,25 @@ is a partial application — a function value that holds the argument
 unevaluated — and claims no strictness (`Position::UnsaturatedArg`, 108
 sites, 68 of them `$fApplicativeParsecT2` building parser values).
 
-| Resolution (the syntactic head axis) | | |
-|---|---:|---:|
-| known data constructor | 3,317 | 39.7% |
+| Resolution (the syntactic head axis)                 |       |       |
+| ---------------------------------------------------- | ----: | ----: |
+| known data constructor                               | 3,317 | 39.7% |
 | known global function, signature covers the argument | 1,848 | 22.1% |
-| known local function, signature covers the argument | 536 | 6.4% |
-| class-op dispatch | 294 | 3.5% |
-| higher-order parameter | 2,216 | 26.5% |
-| global applied past its signature | 5 | 0.1% |
-| local lambda applied past its parameters | 27 | 0.3% |
-| closure from a known call, target not followed | 86 | 1.0% |
-| closure from a case/let computation | 22 | 0.3% |
-| imported without signature / non-variable head | 0 | 0% |
+| known local function, signature covers the argument  |   536 |  6.4% |
+| class-op dispatch                                    |   294 |  3.5% |
+| higher-order parameter                               | 2,216 | 26.5% |
+| global applied past its signature                    |     5 |  0.1% |
+| local lambda applied past its parameters             |    27 |  0.3% |
+| closure from a known call, target not followed       |    86 |  1.0% |
+| closure from a case/let computation                  |    22 |  0.3% |
+| imported without signature / non-variable head       |     0 |    0% |
 
-| Target tier | resolution only | with the Parsec proof | |
-|---|---:|---:|---:|
-| exact target proven | 5,701 | **7,800** | 93.4% |
-| finite target set proven | 0 | **8** | 0.1% |
-| producer known, returned target unresolved | 118 | 118 | 1.4% |
-| target unresolved | 2,532 | **425** | 5.1% |
+| Target tier                                | resolution only | with the Parsec proof |       |
+| ------------------------------------------ | --------------: | --------------------: | ----: |
+| exact target proven                        |           5,701 |             **7,800** | 93.4% |
+| finite target set proven                   |               0 |                 **8** |  0.1% |
+| producer known, returned target unresolved |             118 |                   118 |  1.4% |
+| target unresolved                          |           2,532 |               **425** |  5.1% |
 
 The first column is what the head alone proves; the second adds
 [M2.1](#m21--proving-parsecs-cps-roles)'s structural proof of Parsec's CPS
@@ -268,12 +268,12 @@ higher-order parameters, and still belong to the Parsec normalisation pass.
 
 The 425 that remain unresolved are, exactly:
 
-| | |
-|---:|---|
+|     |                                                                                                                                                                                          |
+| --: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 294 | class-op dispatch — enumerated in [M2.4b](#m24b--the-closed-world-class-op-census): all 294 map onto the 565-site class-op population, and every one dispatches on a run-time dictionary |
-| 99 | functional arguments of inlined folds and traversals (`f` 55, `f1` 14, `ww` 10, `ds1` 8, and 12 others), deliberately left alone as a control group |
-| 22 | closures computed by a `case` or `let` of function type |
-| 10 | heads the *name*-based family attribution called Parsec and the structural recogniser rejects: mtl plumbing (`RWST`, `StateT`) outside `ShellCheck.Parser` |
+|  99 | functional arguments of inlined folds and traversals (`f` 55, `f1` 14, `ww` 10, `ds1` 8, and 12 others), deliberately left alone as a control group                                      |
+|  22 | closures computed by a `case` or `let` of function type                                                                                                                                  |
+|  10 | heads the *name*-based family attribution called Parsec and the structural recogniser rejects: mtl plumbing (`RWST`, `StateT`) outside `ShellCheck.Parser`                               |
 
 The 118 producer-known sites are known-origin closures awaiting target
 analysis, not proven dynamic: 86 are bound to the result of a call to a
@@ -281,14 +281,14 @@ known function or constructor, 27 are local lambdas applied past their
 manifest parameters, 5 are globals applied past their signature. Following
 a producer's result to the closure it returns is a separate analysis.
 
-| Attributable to | | |
-|---|---:|---:|
-| Parsec / CPS normalisation | 2,305 | 27.6% |
-| constructor-field strategy (`:` 1,310, program constructors 396, other) | 1,996 | 23.9% |
+| Attributable to                                                           |       |       |
+| ------------------------------------------------------------------------- | ----: | ----: |
+| Parsec / CPS normalisation                                                | 2,305 | 27.6% |
+| constructor-field strategy (`:` 1,310, program constructors 396, other)   | 1,996 | 23.9% |
 | transformer collapse (boxed tuples 849, unboxed tuples 472, mtl calls 13) | 1,334 | 16.0% |
-| dictionary specialisation (class-op dispatch 294, dictionaries 57) | 351 | 4.2% |
-| ordinary calls with a visible signature | 2,266 | 27.1% |
-| unknown | 99 | 1.2% |
+| dictionary specialisation (class-op dispatch 294, dictionaries 57)        |   351 |  4.2% |
+| ordinary calls with a visible signature                                   | 2,266 | 27.1% |
+| unknown                                                                   |    99 |  1.2% |
 
 A `$f…` name with a numeric suffix (`$fApplicativeParsecT2`) is not a
 dictionary but a floated-out instance-method body that GHC has already
@@ -331,7 +331,7 @@ Discovered from the dump — and then **checked against the types at every
 region**, since what one dump exhibits is not a property of the
 representation (`R1-UNPARSER-SIG`, `R1-TRAILING-ERASURE`):
 
-* the five parameters are always **contiguous and in Parsec's own order**,
+- the five parameters are always **contiguous and in Parsec's own order**,
   as a suffix of the lambda chain (836 chains are exactly
   `state·cok·cerr·eok·eerr`, 336 have one leading parser argument, and so
   on). Order is checked as an embedding into the `cok·cerr·eok·eerr`
@@ -340,7 +340,7 @@ representation (`R1-UNPARSER-SIG`, `R1-TRAILING-ERASURE`):
   `ParseError -> r`, with `a`, `s`, `u` and `r` agreeing across all five. A
   chain whose continuation types are present in any other order forms no
   region and is reported;
-* `R` is `SCBase m b = ReaderT (Environment m) (StateT SystemState m) b`,
+- `R` is `SCBase m b = ReaderT (Environment m) (StateT SystemState m) b`,
   which erases to **two trailing arguments** of type `Environment m` and
   `SystemState`. Eight regions are eta-expanded that far (e.g.
   `ShellCheck.Parser` node 8104, `\s1 eok eta::Environment m eta::SystemState`),
@@ -348,14 +348,14 @@ representation (`R1-UNPARSER-SIG`, `R1-TRAILING-ERASURE`):
   five arguments); 28 parser calls carry them too. The permitted count and
   types are computed *per region* from that region's own `r`, so the 139
   regions whose `r` is a bare `m b` may carry none at all;
-* **worker/wrapper drops absent continuations**, so a run can be shorter
+- **worker/wrapper drops absent continuations**, so a run can be shorter
   than four and any subset of the slots may be missing (`state·cerr·eok·eerr`,
   `state·cok·eok·eerr`, …). The run is therefore matched as a *subsequence*
   of the four-slot template. 1,215 of 1,301 regions keep all four; 26 have
   more than one embedding, and 20 of those are resolved from the
   worker/wrapper pair (`R9-WRAPPER-MAP`), leaving 6 with a proven **finite
   role set** rather than a single slot;
-* worker/wrapper also **unboxes `State` into its representation fields**,
+- worker/wrapper also **unboxes `State` into its representation fields**,
   leaving parser calls with no `State`-typed argument at all (83 calls).
   A run of continuation-shaped arguments is not on its own evidence of a
   parser call — an ordinary higher-order function can take two of them — so
@@ -384,26 +384,26 @@ level of evidence it rests on. The hierarchy, strongest first:
    with its own gate;
 6. **binder names** — diagnostics only. Nothing reads one.
 
-| Rule | Evidence | Meaning |
-|---|---|---|
-| `R1-LAYOUT` | 2 over 4 | A lambda chain's parameter types carry `State s u` followed by a run of continuation types embedding into the `cok·cerr·eok·eerr` template. |
-| `R1-UNPARSER-SIG` | 4 over 2 | Those parameter types *are* `unParser`'s argument list, checked position by position: every ok continuation is `a -> State s u -> ParseError -> r`, every error continuation is `ParseError -> r`, `State` is applied to exactly `s` and `u`, and the run is in `unParser`'s own order. A chain carrying continuation types in any other order forms no region and is reported. |
-| `R1-TYPE-AGREE` | 4, 5 | `a`, `s`, `u` and `r` agree across all five, compared modulo type-variable renaming (GHC prints the same tyvar `b` on one binder and `b1` on the next). A filter on `R1-UNPARSER-SIG`, able only to refuse. |
-| `R1-TRAILING-ERASURE` | 4 | A region's trailing parameters, and a call's trailing arguments, are a prefix — by count *and* by type — of what that region's own result type `r` erases to: `ReaderT r m a` is `r -> m a` and `StateT s m a` is `s -> m (a, s)`, so `SCBase m b` erases to `Environment m` then `SystemState`, and a bare `m b` erases to nothing at all. Derived per region from `r`; never a fixed "at most two". GHC's void token `(# #)` is zero-width and is not part of the erasure. |
-| `R2-PARSER-CALL` | 2 over 4 | A call whose *arguments* are a `State s u` followed by a continuation run embedding into the template, plus whatever `R1-TRAILING-ERASURE` allows after it. A data constructor head is never a parser call. |
-| `R2-UNBOXED-STATE/destructured` | 1, 2, 4 | The state argument is absent, and the three arguments standing in its place are the representation fields, in field order, of one `case … of State f0 f1 f2` — the state was destructured at this very call. |
-| `R2-UNBOXED-STATE/worker-layout` | 1, then the callee's `R1-LAYOUT` | …or the callee is itself a recognised region whose own parameters are (state fields, continuation run) in exactly this order, saturated by this call. |
-| `R2-UNBOXED-STATE/forwarded` | 1, then the caller's `R1-LAYOUT` | …or the three arguments are the enclosing worker's own unboxed state, forwarded unchanged. |
-| `R3-CONT-CALL` | 1, 2, corroborated by 4 | A continuation applied to exactly its arity — (value, state, error) or (error). The head's type fixes what each slot means, and every argument whose own type is readable is checked against it. |
-| `R3-CONT-CALL-TRAILING` | as above | …plus trailing transformer arguments, as many and of exactly the types its own result type erases to (`R1-TRAILING-ERASURE`). |
-| `R3-CONT-CALL-ETA` | as above | …applied to fewer arguments, the shortfall supplied by eta-reduction: the enclosing continuation position owes exactly the missing ones (`\x -> cok v` is `\x s e -> cok v s e`). |
-| `R3-CONT-RETURNED` | 1, 2 | A continuation value returned into a continuation position that owes exactly what it still needs. |
-| `R4-PROP-CONT` | 1, 2 | A continuation passed unchanged into a continuation slot of a recognised parser call. The ok/err kind must match and is checked on every propagation; the *slot* need not match its own role — the inlined `<?>` passes `cok` into the `eok` slot. |
-| `R5-STATE-IN-CONT-CALL` | 1, 2 | The state in the state slot of a continuation call. |
-| `R6-STATE-IN-PARSER-CALL` | 1, 2 | The state in the state slot of a parser call. |
-| `R7-STATE-SCRUTINISED` | 2 | `case s of State …`. |
-| `R8-DERIVED-CONT` | 1, 4 | A let-bound value of continuation type inside a region **that dataflow connects to it** is a derived continuation and has to satisfy the same use rules (129 of them; GHC builds partial applications like `let lvl = cok ()`). Connected means its right-hand side mentions one of the region's continuation parameters, its state or its trailing parameters — transitively through other derived continuations, since GHC chains them. Its role is only ever the kind-restricted pair of slots, never a single slot. A let of continuation type that is *not* connected (100 of them) is no evidence of anything: it is excluded from the region's obligations and counted separately. |
-| `R9-WRAPPER-MAP` | 3 over 1, 2 | An ambiguous embedding resolved from the worker/wrapper pair: the wrapper's chain carries all four slots (so its own embedding is unambiguous) and its body is one saturated call forwarding its parameters into the worker, which fixes the worker's roles. Only accepted if the resulting mapping is one the worker's own layout already allowed. |
+| Rule                             | Evidence                         | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `R1-LAYOUT`                      | 2 over 4                         | A lambda chain's parameter types carry `State s u` followed by a run of continuation types embedding into the `cok·cerr·eok·eerr` template.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `R1-UNPARSER-SIG`                | 4 over 2                         | Those parameter types *are* `unParser`'s argument list, checked position by position: every ok continuation is `a -> State s u -> ParseError -> r`, every error continuation is `ParseError -> r`, `State` is applied to exactly `s` and `u`, and the run is in `unParser`'s own order. A chain carrying continuation types in any other order forms no region and is reported.                                                                                                                                                                                                                                                                                                           |
+| `R1-TYPE-AGREE`                  | 4, 5                             | `a`, `s`, `u` and `r` agree across all five, compared modulo type-variable renaming (GHC prints the same tyvar `b` on one binder and `b1` on the next). A filter on `R1-UNPARSER-SIG`, able only to refuse.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `R1-TRAILING-ERASURE`            | 4                                | A region's trailing parameters, and a call's trailing arguments, are a prefix — by count *and* by type — of what that region's own result type `r` erases to: `ReaderT r m a` is `r -> m a` and `StateT s m a` is `s -> m (a, s)`, so `SCBase m b` erases to `Environment m` then `SystemState`, and a bare `m b` erases to nothing at all. Derived per region from `r`; never a fixed "at most two". GHC's void token `(# #)` is zero-width and is not part of the erasure.                                                                                                                                                                                                              |
+| `R2-PARSER-CALL`                 | 2 over 4                         | A call whose *arguments* are a `State s u` followed by a continuation run embedding into the template, plus whatever `R1-TRAILING-ERASURE` allows after it. A data constructor head is never a parser call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `R2-UNBOXED-STATE/destructured`  | 1, 2, 4                          | The state argument is absent, and the three arguments standing in its place are the representation fields, in field order, of one `case … of State f0 f1 f2` — the state was destructured at this very call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `R2-UNBOXED-STATE/worker-layout` | 1, then the callee's `R1-LAYOUT` | …or the callee is itself a recognised region whose own parameters are (state fields, continuation run) in exactly this order, saturated by this call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `R2-UNBOXED-STATE/forwarded`     | 1, then the caller's `R1-LAYOUT` | …or the three arguments are the enclosing worker's own unboxed state, forwarded unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `R3-CONT-CALL`                   | 1, 2, corroborated by 4          | A continuation applied to exactly its arity — (value, state, error) or (error). The head's type fixes what each slot means, and every argument whose own type is readable is checked against it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `R3-CONT-CALL-TRAILING`          | as above                         | …plus trailing transformer arguments, as many and of exactly the types its own result type erases to (`R1-TRAILING-ERASURE`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `R3-CONT-CALL-ETA`               | as above                         | …applied to fewer arguments, the shortfall supplied by eta-reduction: the enclosing continuation position owes exactly the missing ones (`\x -> cok v` is `\x s e -> cok v s e`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `R3-CONT-RETURNED`               | 1, 2                             | A continuation value returned into a continuation position that owes exactly what it still needs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `R4-PROP-CONT`                   | 1, 2                             | A continuation passed unchanged into a continuation slot of a recognised parser call. The ok/err kind must match and is checked on every propagation; the *slot* need not match its own role — the inlined `<?>` passes `cok` into the `eok` slot.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `R5-STATE-IN-CONT-CALL`          | 1, 2                             | The state in the state slot of a continuation call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `R6-STATE-IN-PARSER-CALL`        | 1, 2                             | The state in the state slot of a parser call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `R7-STATE-SCRUTINISED`           | 2                                | `case s of State …`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `R8-DERIVED-CONT`                | 1, 4                             | A let-bound value of continuation type inside a region **that dataflow connects to it** is a derived continuation and has to satisfy the same use rules (129 of them; GHC builds partial applications like `let lvl = cok ()`). Connected means its right-hand side mentions one of the region's continuation parameters, its state or its trailing parameters — transitively through other derived continuations, since GHC chains them. Its role is only ever the kind-restricted pair of slots, never a single slot. A let of continuation type that is *not* connected (100 of them) is no evidence of anything: it is excluded from the region's obligations and counted separately. |
+| `R9-WRAPPER-MAP`                 | 3 over 1, 2                      | An ambiguous embedding resolved from the worker/wrapper pair: the wrapper's chain carries all four slots (so its own embedding is unambiguous) and its body is one saturated call forwarding its parameters into the worker, which fixes the worker's roles. Only accepted if the resulting mapping is one the worker's own layout already allowed.                                                                                                                                                                                                                                                                                                                                       |
 
 Anything else — stored in a constructor field, returned from something that
 is not a continuation position, passed to an unknown callee, passed in a
@@ -478,15 +478,15 @@ derived (let-bound) continuations promoted       129
 … let-bound continuations excluded as unconnected 100
 ```
 
-| Edges by kind | | Edges by rule | |
-|---|---:|---|---:|
-| `ConsumedOk` / `ConsumedErr` | 2,430 / 2,710 | `R2-PARSER-CALL` | 2,516 |
-| `EmptyOk` / `EmptyErr` | 2,249 / 1,953 | `R2-UNBOXED-STATE/destructured` | 77 |
-| `{ConsumedOk\|EmptyOk}` (finite) | 66 | `R2-UNBOXED-STATE/forwarded` | 6 |
-| `{ConsumedErr\|EmptyErr}` (finite) | 76 | `R3-CONT-CALL` | 2,192 |
-| `CallParser` | 2,599 | `R3-CONT-CALL-ETA` | 47 |
-| role invocations / forwardings | 2,242 / 7,242 | `R3-CONT-CALL-TRAILING` | 3 |
-| | | `R4-PROP-CONT` | 7,242 |
+| Edges by kind                      |               | Edges by rule                   |       |
+| ---------------------------------- | ------------: | ------------------------------- | ----: |
+| `ConsumedOk` / `ConsumedErr`       | 2,430 / 2,710 | `R2-PARSER-CALL`                | 2,516 |
+| `EmptyOk` / `EmptyErr`             | 2,249 / 1,953 | `R2-UNBOXED-STATE/destructured` |    77 |
+| `{ConsumedOk\|EmptyOk}` (finite)   |            66 | `R2-UNBOXED-STATE/forwarded`    |     6 |
+| `{ConsumedErr\|EmptyErr}` (finite) |            76 | `R3-CONT-CALL`                  | 2,192 |
+| `CallParser`                       |         2,599 | `R3-CONT-CALL-ETA`              |    47 |
+| role invocations / forwardings     | 2,242 / 7,242 | `R3-CONT-CALL-TRAILING`         |     3 |
+|                                    |               | `R4-PROP-CONT`                  | 7,242 |
 
 `R2-UNBOXED-STATE/worker-layout` proves nothing on this dump — every call
 with an unboxed state is already explained by the destructuring at the call
@@ -496,12 +496,12 @@ none of the three explanations applied, the calls would not be parser calls
 and the continuations handed to them would reject their regions: dropping
 just the "forwarded" case costs 5 regions, 6 edges and 13 proven sites.
 
-| The 2,117 Parsec-shaped unresolved sites | | |
-|---|---:|---:|
-| exact role proven | 2,099 | 99.1% |
-| finite role set proven | 8 | 0.4% |
-| Parsec region recognised, target unresolved | 0 | 0% |
-| rejected as non-Parsec / escape | 10 | 0.5% |
+| The 2,117 Parsec-shaped unresolved sites    |       |       |
+| ------------------------------------------- | ----: | ----: |
+| exact role proven                           | 2,099 | 99.1% |
+| finite role set proven                      |     8 |  0.4% |
+| Parsec region recognised, target unresolved |     0 |    0% |
+| rejected as non-Parsec / escape             |    10 |  0.5% |
 
 The ten rejects are the whole non-`ShellCheck.Parser` remainder: heads
 named `eta` whose types are `RWST Parameters [TokenComment] Cache Identity ()`,
@@ -644,10 +644,10 @@ the census already resolved exactly.)
 
 The accounting closes two independent ways:
 
-* **by difference** — 2,532 sites were in the unresolved tier; 2,107 are now
+- **by difference** — 2,532 sites were in the unresolved tier; 2,107 are now
   proven (2,099 exact + 8 finite, i.e. precisely the population's proven
   sites); 2,532 − 2,107 = **425** remain;
-* **by enumeration** — 294 class-op dispatch + 99 fold/traversal callbacks +
+- **by enumeration** — 294 class-op dispatch + 99 fold/traversal callbacks +
   22 computed closures + 10 Parsec rejects = **425**.
 
 Both come to the same number, itemised in the
@@ -667,25 +667,25 @@ Against the `-O1` dump, all of the following hold.
 **The population is partitioned.** Of the 2,117 census sites whose head is
 Parsec-shaped and whose target the head alone cannot resolve:
 
-| | | |
-|---|---:|---:|
-| exact role proven | 2,099 | 99.1% |
-| finite role set proven | 8 | 0.4% |
-| Parsec region recognised, target unresolved | 0 | 0% |
-| rejected as non-Parsec / escape | 10 | 0.5% |
-| **population** | **2,117** | |
+|                                             |           |       |
+| ------------------------------------------- | --------: | ----: |
+| exact role proven                           |     2,099 | 99.1% |
+| finite role set proven                      |         8 |  0.4% |
+| Parsec region recognised, target unresolved |         0 |    0% |
+| rejected as non-Parsec / escape             |        10 |  0.5% |
+| **population**                              | **2,117** |       |
 
 The four buckets are disjoint and exhaustive by construction (one
 `Bucket` per site) and the sum is asserted, not eyeballed.
 
 **The census tiers, after feeding the proof back:**
 
-| Target tier | resolution only | with the Parsec proof | |
-|---|---:|---:|---:|
-| exact target proven | 5,701 | **7,800** | 93.4% |
-| finite target set proven | 0 | **8** | 0.1% |
-| producer known, returned target unresolved | 118 | 118 | 1.4% |
-| target unresolved | 2,532 | **425** | 5.1% |
+| Target tier                                | resolution only | with the Parsec proof |       |
+| ------------------------------------------ | --------------: | --------------------: | ----: |
+| exact target proven                        |           5,701 |             **7,800** | 93.4% |
+| finite target set proven                   |               0 |                 **8** |  0.1% |
+| producer known, returned target unresolved |             118 |                   118 |  1.4% |
+| target unresolved                          |           2,532 |               **425** |  5.1% |
 
 **The residual closes both ways.** By difference: 2,532 − 2,107 proven
 (2,099 exact + 8 finite) = **425**. By enumeration: 294 class-op dispatch +
@@ -696,14 +696,14 @@ sub-row of the 425 — they are what left that tier, not part of it.
 **Every rule states its evidence level**, and no rule rests on a weaker
 level than it claims:
 
-| Level | Evidence | Rules |
-|---|---|---|
-| 1 | lexical binder identity | `R3-CONT-CALL`, `R3-CONT-CALL-ETA`, `R3-CONT-RETURNED`, `R4-PROP-CONT`, `R5`, `R6`, `R8` (the connection) |
-| 2 | structural function / application shape | `R1-LAYOUT`, `R2-PARSER-CALL`, `R2-UNBOXED-STATE/*`, `R7` |
-| 3 | worker/wrapper dataflow | `R9-WRAPPER-MAP`, and the callee-narrowing of a call's slots |
-| 4 | GHC type compatibility | `R1-UNPARSER-SIG`, `R1-TRAILING-ERASURE`, `R8` (the shape), and the argument-type corroboration of `R3-CONT-CALL` |
-| 5 | alpha-normalised textual type comparison | `R1-TYPE-AGREE` only, and only to refuse |
-| 6 | binder names | nothing |
+| Level | Evidence                                 | Rules                                                                                                             |
+| ----- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| 1     | lexical binder identity                  | `R3-CONT-CALL`, `R3-CONT-CALL-ETA`, `R3-CONT-RETURNED`, `R4-PROP-CONT`, `R5`, `R6`, `R8` (the connection)         |
+| 2     | structural function / application shape  | `R1-LAYOUT`, `R2-PARSER-CALL`, `R2-UNBOXED-STATE/*`, `R7`                                                         |
+| 3     | worker/wrapper dataflow                  | `R9-WRAPPER-MAP`, and the callee-narrowing of a call's slots                                                      |
+| 4     | GHC type compatibility                   | `R1-UNPARSER-SIG`, `R1-TRAILING-ERASURE`, `R8` (the shape), and the argument-type corroboration of `R3-CONT-CALL` |
+| 5     | alpha-normalised textual type comparison | `R1-TYPE-AGREE` only, and only to refuse                                                                          |
+| 6     | binder names                             | nothing                                                                                                           |
 
 **What the two new checks found** is above under
 [type-derived layout checks](#what-the-type-derived-layout-checks-found):
@@ -722,13 +722,13 @@ state costs.
 
 **What remains, and what each thing is waiting for:**
 
-| | | |
-|---:|---|---|
-| 294 | class-op dispatch | closed-world instance enumeration ([M2.4b](#m24b--the-closed-world-class-op-census): enumerated, none statically known) |
-| 99 | functional arguments of inlined folds and traversals | deliberately untouched control group; a *residual*, not a proof |
-| 22 | closures computed by a `case` or `let` | returned-closure analysis |
-| 10 | mtl plumbing outside `ShellCheck.Parser` | rejected by the recogniser; the name-based family attribution called them Parsec |
-| 118 | producer known, target unresolved | following a producer's result to the closure it returns |
+|     |                                                      |                                                                                                                         |
+| --: | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 294 | class-op dispatch                                    | closed-world instance enumeration ([M2.4b](#m24b--the-closed-world-class-op-census): enumerated, none statically known) |
+|  99 | functional arguments of inlined folds and traversals | deliberately untouched control group; a *residual*, not a proof                                                         |
+|  22 | closures computed by a `case` or `let`               | returned-closure analysis                                                                                               |
+|  10 | mtl plumbing outside `ShellCheck.Parser`             | rejected by the recogniser; the name-based family attribution called them Parsec                                        |
+| 118 | producer known, target unresolved                    | following a producer's result to the closure it returns                                                                 |
 
 **How to audit a site.** `h2r show <dir> <module> <node>` prints the Core
 around the node with the proof object's marks inline and the node's own
@@ -815,11 +815,11 @@ raises it, a call site that pays it exactly is a location of the tuple
 again — and it is why the analysis is interprocedural from the first
 construction it looks at. The two shapes the dump is full of both need it:
 
-* a lazy-RWS step returns its result triple, so its consumer is whoever
+- a lazy-RWS step returns its result triple, so its consumer is whoever
   calls the enclosing lambda, and that lambda is usually *inside* a case
   alternative rather than bound directly (`$wchecker = \cmd -> case … of
   Just x -> \eta2 eta3 -> (,,) …`), so the debt is paid three arguments up;
-* a CPR worker returns `(# _, _ #)` and each call site scrutinises it.
+- a CPR worker returns `(# _, _ #)` and each call site scrutinises it.
 
 The walk is a worklist with an explicit stack, like every other traversal
 here, keyed on (node, debt) so it terminates; a location budget (20,000)
@@ -833,33 +833,33 @@ flows too.
 
 ### Rules
 
-| Rule | Evidence | Meaning |
-|---|---|---|
-| `T0-TUPLE-CON` | 2 over 4, name selects only (6) | The population: a saturated application of ghc-prim's boxed or unboxed tuple constructor, `repArity` agreeing with the name and all fields lazy. |
-| `T1-LET-BOUND` | 1 | The value is a `let`/top-level right-hand side: its uses are that binder's resolved occurrences. |
-| `T2-SCRUTINISED` | 2 | `case t of (a, b) -> …`, with exactly *arity* field binders: taken apart, the box does not survive the match. |
-| `T3-SELECTED` | 1 over 2 | …and the alternative returns exactly its *i*-th binder: a field selection, which is how the desugarer turns a lazy pattern `~(b, s, w)` into one selector thunk per field. |
-| `T4-RETUPLE` | 1 over 2 | A construction every one of whose fields is the *matching* projection of one and the same binder: a field-wise copy, recorded as a consumer of the tuple it copies. All *n* scrutinees must resolve to the same binder — two textually equal expressions are not evidence. |
-| `T5-PASSED-LOCAL` | 1 over 2 | Value argument *i* of a saturated call to a binder bound in this module to a manifest lambda chain, which is **not exported and never occurs as a value**: the flow continues at that parameter's occurrences. |
-| `T6-RETURNED` | 2 over 1 | The value is reached from a binder through a debt of *k* arguments: the binder is a function returning the tuple, and its occurrences are call sites to follow. |
-| `T7-CALL-RESULT` | 3 over 1, 2 | A call site paying exactly the debt: the spine root is a value location of the tuple again. Paying part of it leaves a partial application, which is followed too. |
-| `T8-CASE-BINDER-ALIAS` | 1 | The case binder of a scrutiny aliases the whole tuple; its occurrences are followed, so a match that also keeps the box cannot be mistaken for one that consumes it. |
-| `T9-STORED` | 2 over 4 | A value argument of a saturated data-constructor application: a real allocation holds it. |
-| `T10-OPAQUE-CALL` | 1, 4 | An argument of a call this module cannot see into — an import, class-op dispatch, a partial application, an unknown higher-order callee. |
-| `T11-ESCAPE` | 2 | Any other use, with a machine-readable reason: applied as a function, bound to or returned from an exported binder, a closure handed to a callee or stored in a constructor, a case that is not one full tuple alternative. |
-| `T12-NESTED` | 2 over 3 | A field of *another* tuple whose own fate is proven removable: the box holding it will not exist, so the inner tuple's consumers are the uses of the outer's *i*-th field binder at every scrutiny of the outer — transitively. When the outer is not removable this is `T9-STORED` as before. |
-| `T13-PARSEC-CONT` | the Parsec proof's own level, then 3 | The value argument of a continuation call [M2.1](#m21--proving-parsecs-cps-roles) proves, where that proof also resolves the continuation to lambdas inside this module: the flow continues at their value parameters. The region graph is *read*; no role, slot or edge is re-derived here. |
-| `T14-FORCED` | 2 | `case t of _ { DEFAULT -> … }`: the tuple is forced whole and no field is read. Forcing a constructor application is a no-op, so this neither keeps the box alive nor counts as a read. |
+| Rule                   | Evidence                             | Meaning                                                                                                                                                                                                                                                                                        |
+| ---------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `T0-TUPLE-CON`         | 2 over 4, name selects only (6)      | The population: a saturated application of ghc-prim's boxed or unboxed tuple constructor, `repArity` agreeing with the name and all fields lazy.                                                                                                                                               |
+| `T1-LET-BOUND`         | 1                                    | The value is a `let`/top-level right-hand side: its uses are that binder's resolved occurrences.                                                                                                                                                                                               |
+| `T2-SCRUTINISED`       | 2                                    | `case t of (a, b) -> …`, with exactly *arity* field binders: taken apart, the box does not survive the match.                                                                                                                                                                                  |
+| `T3-SELECTED`          | 1 over 2                             | …and the alternative returns exactly its *i*-th binder: a field selection, which is how the desugarer turns a lazy pattern `~(b, s, w)` into one selector thunk per field.                                                                                                                     |
+| `T4-RETUPLE`           | 1 over 2                             | A construction every one of whose fields is the *matching* projection of one and the same binder: a field-wise copy, recorded as a consumer of the tuple it copies. All *n* scrutinees must resolve to the same binder — two textually equal expressions are not evidence.                     |
+| `T5-PASSED-LOCAL`      | 1 over 2                             | Value argument *i* of a saturated call to a binder bound in this module to a manifest lambda chain, which is **not exported and never occurs as a value**: the flow continues at that parameter's occurrences.                                                                                 |
+| `T6-RETURNED`          | 2 over 1                             | The value is reached from a binder through a debt of *k* arguments: the binder is a function returning the tuple, and its occurrences are call sites to follow.                                                                                                                                |
+| `T7-CALL-RESULT`       | 3 over 1, 2                          | A call site paying exactly the debt: the spine root is a value location of the tuple again. Paying part of it leaves a partial application, which is followed too.                                                                                                                             |
+| `T8-CASE-BINDER-ALIAS` | 1                                    | The case binder of a scrutiny aliases the whole tuple; its occurrences are followed, so a match that also keeps the box cannot be mistaken for one that consumes it.                                                                                                                           |
+| `T9-STORED`            | 2 over 4                             | A value argument of a saturated data-constructor application: a real allocation holds it.                                                                                                                                                                                                      |
+| `T10-OPAQUE-CALL`      | 1, 4                                 | An argument of a call this module cannot see into — an import, class-op dispatch, a partial application, an unknown higher-order callee.                                                                                                                                                       |
+| `T11-ESCAPE`           | 2                                    | Any other use, with a machine-readable reason: applied as a function, bound to or returned from an exported binder, a closure handed to a callee or stored in a constructor, a case that is not one full tuple alternative.                                                                    |
+| `T12-NESTED`           | 2 over 3                             | A field of *another* tuple whose own fate is proven removable: the box holding it will not exist, so the inner tuple's consumers are the uses of the outer's *i*-th field binder at every scrutiny of the outer — transitively. When the outer is not removable this is `T9-STORED` as before. |
+| `T13-PARSEC-CONT`      | the Parsec proof's own level, then 3 | The value argument of a continuation call [M2.1](#m21--proving-parsecs-cps-roles) proves, where that proof also resolves the continuation to lambdas inside this module: the flow continues at their value parameters. The region graph is *read*; no role, slot or edge is re-derived here.   |
+| `T14-FORCED`           | 2                                    | `case t of _ { DEFAULT -> … }`: the tuple is forced whole and no field is read. Forcing a constructor application is a no-op, so this neither keeps the box alive nor counts as a read.                                                                                                        |
 
 Two of the rules are about whether the rewrite is *possible*, not about
 where the value goes, and both were added in stage 2 after the independent
 verifier refused what stage 1 accepted:
 
-* removing a tuple that is **passed into** a local callee means splitting
+- removing a tuple that is **passed into** a local callee means splitting
   that callee's parameter, so every call site of the callee has to be
   visible and rewritable — `T5-PASSED-LOCAL` now requires the callee to be
   neither exported nor ever used as a value (`callee-parameter-cannot-be-split`);
-* removing a tuple that a **closure returns**, where that closure is itself
+- removing a tuple that a **closure returns**, where that closure is itself
   handed to a parameter, would change the parameter's type and therefore
   every other closure that reaches it — which this flow does not see. That
   is refused (`closure-returning-the-tuple-is-passed-into-a-parameter`),
@@ -869,11 +869,11 @@ verifier refused what stage 1 accepted:
 
 Every construction lands in exactly one bucket, by this precedence:
 
-| Fate | Rule | When |
-|---|---|---|
-| `Preserve` | `F4-PRESERVE` | A proven real value: stored in a constructor field, held in a partial application, or handed to a function outside the module. An allocation that exists — this wins over everything. |
-| `Unresolved` | `F5-UNRESOLVED` | A use the rules cannot follow, with the reason. Never guessed either way. |
-| `WorkerReturn` | `F2-WORKER-RETURN` | The tuple crosses a return and **every** consumer reads its fields: a multi-value return. |
+| Fate            | Rule                | When                                                                                                                                                                                   |
+| --------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Preserve`      | `F4-PRESERVE`       | A proven real value: stored in a constructor field, held in a partial application, or handed to a function outside the module. An allocation that exists — this wins over everything.  |
+| `Unresolved`    | `F5-UNRESOLVED`     | A use the rules cannot follow, with the reason. Never guessed either way.                                                                                                              |
+| `WorkerReturn`  | `F2-WORKER-RETURN`  | The tuple crosses a return and **every** consumer reads its fields: a multi-value return.                                                                                              |
 | `ScalarReplace` | `F1-SCALAR-REPLACE` | Every consumer reads fields and the box never outlives them, in the function that built it — including where it is passed to a known local callee, whose parameter becomes the fields. |
 
 Passing a tuple *into* a known callee is deliberately not a "return": the
@@ -908,7 +908,7 @@ whole chain is closed within the module.
 It found **94 disagreements** on the first run, all reported under one
 reason, which on inspection were two different things.
 
-* **30 were the verifier being too blunt.** Its first cut refused any
+- **30 were the verifier being too blunt.** Its first cut refused any
   function that returns the tuple and does not occur *only* as the head of a
   saturated call — which also refuses a **partial application** (`let f =
   handleCommand a b c d` in `ShellCheck.CFG`, then `f` applied to the last
@@ -918,21 +918,21 @@ reason, which on inspection were two different things.
   to a *parameter*, where the parameter's other producers are invisible —
   which is a weakening of the verifier and is why it is written down here.
   The 30 are removable and stayed removable.
-* **64 were the census over-claiming**, and became the two new rules above:
+- **64 were the census over-claiming**, and became the two new rules above:
   the tuple's own uses are all reads, but the rewrite needs a signature
   change the flow does not prove is possible. They are now `Unresolved`
   with a reason, costing coverage rather than soundness.
 
 After that:
 
-| dump | removable verdicts | re-derived | disagreements | refused by [stage 4](#composing-the-views-can-all-1453-be-applied-at-once) |
-|---|---:|---:|---:|---:|
-| `-O1` (`compiler/core-json`, and matrix A) | 1,206 | 1,206 | **0** | 247 |
-| B `-O2` | 1,464 | 1,464 | **0** | 277 |
-| C | 1,360 | 1,360 | **0** | 334 |
-| D | 2,504 | 2,504 | **0** | 1,497 |
-| E | 2,538 | 2,538 | **0** | 1,497 |
-| F | 2,539 | 2,539 | **0** | 1,501 |
+| dump                                       | removable verdicts | re-derived | disagreements | refused by [stage 4](#composing-the-views-can-all-1453-be-applied-at-once) |
+| ------------------------------------------ | -----------------: | ---------: | ------------: | -------------------------------------------------------------------------: |
+| `-O1` (`compiler/core-json`, and matrix A) |              1,206 |      1,206 |         **0** |                                                                        247 |
+| B `-O2`                                    |              1,464 |      1,464 |         **0** |                                                                        277 |
+| C                                          |              1,360 |      1,360 |         **0** |                                                                        334 |
+| D                                          |              2,504 |      2,504 |         **0** |                                                                      1,497 |
+| E                                          |              2,538 |      2,538 |         **0** |                                                                      1,497 |
+| F                                          |              2,539 |      2,539 |         **0** |                                                                      1,501 |
 
 The two sides also select the *same population* on every dump (0
 constructions found by only one of them). The last column is the only thing
@@ -951,26 +951,26 @@ Each shape below has a hand-built regression test in
 `--verify`, so that a hand-built test is never the only evidence a rule was
 exercised.
 
-| # | Shape | In `-O1` | Example | Stage 1 | Now |
-|---|---|---:|---|---|---|
-| 1 | two names for one tuple (let + case binder, or two lets), one escaping | 59 | `ShellCheck.Analytics` 46 | Preserve 2, Unres 22, State 1 | Preserve 2, Unres 57 — never removable |
-| 1 | re-bound under a second `let` binder | 167 | `ShellCheck.ASTLib` 651 | 143 removable, 24 not | 108 removable, 59 not |
-| 2 | two or more field reads | 1,246 | `Main` 2737 | 1,162 removable, 84 not | 1,020 removable, 226 not |
-| 2 | read and then stored | 6 | `ShellCheck.Analytics` 46 | Preserve 6 | Preserve 6 — the store wins |
-| 3 | returned from a *recursive* function | 722 | `Main` 2594 | 638 removable, 84 not | 555 removable, 167 not; terminates |
-| 3 | threaded into a recursive callee (a `go` accumulator) | 19 | `ShellCheck.Analytics` 46 | 9 removable, 10 Preserve | 3 need a clone, 7 Preserve, 9 Unres |
-| 4 | a field of another tuple, outer removable | 115 | `ShellCheck.Analytics` 1974 | **Preserve 115** | 62 removable, 53 not |
-| 4 | a field of another tuple, outer not removable | 64 | `Main` 422 | Preserve 64 | Preserve 64 |
-| 5 | an unboxed worker return re-boxed by its caller | 284 | `Main` 5018 | 236 removable, 48 not | 185 removable, 99 not |
-| 5 | a boxed tuple unboxed into a local callee's parameters | 15 | `ShellCheck.Analytics` 46 | 3 removable, 12 not | 5 removable (3 of them need a clone), 10 not |
-| 5 | returned from an exported wrapper of a local worker | 11 | `Paths_ShellCheck` 67 | Unresolved 11, unsplit | Unresolved 11, reason names both binders |
-| 6 | returned from a closure whose call sites are all visible | 303 | `Main` 3762 | 450 removable, 3 Unres | **303 removable** |
-| 6 | returned from a closure that is stored or consed | 248 | `Main` 2220 | Unresolved 248 | Unresolved 248, split by what holds it |
-| 7 | the callee is a computed (case-selected) closure | 12 | `ShellCheck.AnalyzerLib` 3861 | Unresolved 12 | Unresolved 12 — never one alternative |
-| 7 | a parameter reached from two or more call sites | 32 | `ShellCheck.Analytics` 46 | 12 removable, 20 not | 5 removable, 27 not |
-| 8 | forced whole (`seq`), no field read | 2 | `ShellCheck.Analytics` 47426 | Preserve 2 (a store wins) | Preserve 2; the forcing reads no field |
-| 8 | stored in a *strict* constructor field | 9 | `ShellCheck.Analytics` 47426 | Preserve 9 | Preserve 9 — stored, not scrutinised |
-| 8 | a case that is not one full tuple alternative | 0 | — | — | would be Unresolved |
+| # | Shape                                                                  | In `-O1` | Example                       | Stage 1                       | Now                                          |
+| - | ---------------------------------------------------------------------- | -------: | ----------------------------- | ----------------------------- | -------------------------------------------- |
+| 1 | two names for one tuple (let + case binder, or two lets), one escaping |       59 | `ShellCheck.Analytics` 46     | Preserve 2, Unres 22, State 1 | Preserve 2, Unres 57 — never removable       |
+| 1 | re-bound under a second `let` binder                                   |      167 | `ShellCheck.ASTLib` 651       | 143 removable, 24 not         | 108 removable, 59 not                        |
+| 2 | two or more field reads                                                |    1,246 | `Main` 2737                   | 1,162 removable, 84 not       | 1,020 removable, 226 not                     |
+| 2 | read and then stored                                                   |        6 | `ShellCheck.Analytics` 46     | Preserve 6                    | Preserve 6 — the store wins                  |
+| 3 | returned from a *recursive* function                                   |      722 | `Main` 2594                   | 638 removable, 84 not         | 555 removable, 167 not; terminates           |
+| 3 | threaded into a recursive callee (a `go` accumulator)                  |       19 | `ShellCheck.Analytics` 46     | 9 removable, 10 Preserve      | 3 need a clone, 7 Preserve, 9 Unres          |
+| 4 | a field of another tuple, outer removable                              |      115 | `ShellCheck.Analytics` 1974   | **Preserve 115**              | 62 removable, 53 not                         |
+| 4 | a field of another tuple, outer not removable                          |       64 | `Main` 422                    | Preserve 64                   | Preserve 64                                  |
+| 5 | an unboxed worker return re-boxed by its caller                        |      284 | `Main` 5018                   | 236 removable, 48 not         | 185 removable, 99 not                        |
+| 5 | a boxed tuple unboxed into a local callee's parameters                 |       15 | `ShellCheck.Analytics` 46     | 3 removable, 12 not           | 5 removable (3 of them need a clone), 10 not |
+| 5 | returned from an exported wrapper of a local worker                    |       11 | `Paths_ShellCheck` 67         | Unresolved 11, unsplit        | Unresolved 11, reason names both binders     |
+| 6 | returned from a closure whose call sites are all visible               |      303 | `Main` 3762                   | 450 removable, 3 Unres        | **303 removable**                            |
+| 6 | returned from a closure that is stored or consed                       |      248 | `Main` 2220                   | Unresolved 248                | Unresolved 248, split by what holds it       |
+| 7 | the callee is a computed (case-selected) closure                       |       12 | `ShellCheck.AnalyzerLib` 3861 | Unresolved 12                 | Unresolved 12 — never one alternative        |
+| 7 | a parameter reached from two or more call sites                        |       32 | `ShellCheck.Analytics` 46     | 12 removable, 20 not          | 5 removable, 27 not                          |
+| 8 | forced whole (`seq`), no field read                                    |        2 | `ShellCheck.Analytics` 47426  | Preserve 2 (a store wins)     | Preserve 2; the forcing reads no field       |
+| 8 | stored in a *strict* constructor field                                 |        9 | `ShellCheck.Analytics` 47426  | Preserve 9                    | Preserve 9 — stored, not scrutinised         |
+| 8 | a case that is not one full tuple alternative                          |        0 | —                             | —                             | would be Unresolved                          |
 
 "Removable" is `ScalarReplace`, `WorkerReturn` or `RemovableWithClone`
 (stage 1's `StateThread` counts as removable in the left column). The "In
@@ -1022,11 +1022,11 @@ Of the 50: **7 resolve** (4 `ScalarReplace`, 3 `WorkerReturn`), 41 get a
 reason that names the edge, and 2 are not Parsec at all
 (`ShellCheck.AnalyzerLib`, `ShellCheck.Formatter.TTY`). The 41 break down as
 
-| | |
-|---:|---|
+|    |                                                                                         |
+| -: | --------------------------------------------------------------------------------------- |
 | 20 | the region's chain is not bound to a binder (it is a lambda written out at a call site) |
-| 19 | the region's parser occurs somewhere as a value, so not every call of it is visible |
-| 2 | a call of the region is not saturated exactly |
+| 19 | the region's parser occurs somewhere as a value, so not every call of it is visible     |
+|  2 | a call of the region is not saturated exactly                                           |
 
 each recorded as `parsec-continuation-target-not-in-the-region-graph` with
 the region and the continuation in the detail.
@@ -1038,15 +1038,15 @@ are in the "before" columns; every difference is one of the four stage-2
 changes above (the two new refusals, `T12-NESTED`, `T13-PARSEC-CONT`, and
 folding `StateThread` away).
 
-| arity | boxed | unboxed | | fate | before b/u | now b/u |
-|---:|---:|---:|---|---|---:|---:|
-| 2 | 887 | 568 | | ScalarReplace | 402 / 5 | **423 / 3** |
-| 3 | 718 | 231 | | StateThread | 266 / 36 | — |
-| 4 | 156 | 9 | | WorkerReturn | 31 / 664 | **338 / 689** |
-| 5 | 0 | 9 | | Preserve | 657 / 0 | **551 / 0** |
-| 6 | 3 | 1 | | Unresolved | 409 / 114 | **453 / 127** |
-| 8 | 0 | 1 | | | | |
-| 64 | 1 | 0 | | **total** | **1,765 / 819** | **1,765 / 819** |
+| arity | boxed | unboxed |   | fate          |      before b/u |         now b/u |
+| ----: | ----: | ------: | - | ------------- | --------------: | --------------: |
+|     2 |   887 |     568 |   | ScalarReplace |         402 / 5 |     **423 / 3** |
+|     3 |   718 |     231 |   | StateThread   |        266 / 36 |               — |
+|     4 |   156 |       9 |   | WorkerReturn  |        31 / 664 |   **338 / 689** |
+|     5 |     0 |       9 |   | Preserve      |         657 / 0 |     **551 / 0** |
+|     6 |     3 |       1 |   | Unresolved    |       409 / 114 |   **453 / 127** |
+|     8 |     0 |       1 |   |               |                 |                 |
+|    64 |     1 |       0 |   | **total**     | **1,765 / 819** | **1,765 / 819** |
 
 1,453 constructions are proven removable by def-use (56%), up from 1,404; of
 those, 657 have at least one field read on its own and the rest are read
@@ -1058,32 +1058,32 @@ Unboxed tuples are 84% `WorkerReturn`/`ScalarReplace` and **never**
 `Preserve` — as they must be, since an unboxed tuple cannot be stored in a
 lazy field. 551 boxed ones, 31%, are proven real values.
 
-| Consumers | boxed | unboxed |
-|---|---:|---:|
-| Scrutinised | 899 | 2,089 |
-| Selected (lazy selector) | 1,755 | 60 |
-| Returned | 1,825 | 1,271 |
-| StoredIn | 501 | 0 |
-| NestedIn (a field of a removable tuple) | 333 | 0 |
-| Retupled | 115 | 0 |
-| PassedTo (known local, or a proven continuation) | 122 | 0 |
-| PassedToUnknown | 86 | 0 |
-| Forced | 2 | 0 |
-| Escapes | 540 | 168 |
+| Consumers                                        | boxed | unboxed |
+| ------------------------------------------------ | ----: | ------: |
+| Scrutinised                                      |   899 |   2,089 |
+| Selected (lazy selector)                         | 1,755 |      60 |
+| Returned                                         | 1,825 |   1,271 |
+| StoredIn                                         |   501 |       0 |
+| NestedIn (a field of a removable tuple)          |   333 |       0 |
+| Retupled                                         |   115 |       0 |
+| PassedTo (known local, or a proven continuation) |   122 |       0 |
+| PassedToUnknown                                  |    86 |       0 |
+| Forced                                           |     2 |       0 |
+| Escapes                                          |   540 |     168 |
 
 The census' 1,321 tuple-attributed argument sites still map onto this
 population **one to one** (849 boxed + 472 unboxed, 0 unmapped, over 726
 distinct constructions), and their fates are reported on their own:
 
-| The 1,321 | before b/u | def-use b/u | after boundaries b/u |
-|---|---:|---:|---:|
-| ScalarReplace | 114 / 0 | 128 / 0 | **111 / 0** |
-| StateThread | 225 / 29 | — | — |
-| WorkerReturn | 5 / 435 | 375 / 463 | **56 / 463** |
-| RemovableWithClone | — | — | **2 / 0** |
-| Preserve | 324 / 0 | 144 / 0 | **144 / 0** |
-| Unresolved | 181 / 8 | 202 / 9 | **536 / 9** |
-| **population** | **849 / 472** | **849 / 472** | **849 / 472** |
+| The 1,321          |    before b/u |   def-use b/u | after boundaries b/u |
+| ------------------ | ------------: | ------------: | -------------------: |
+| ScalarReplace      |       114 / 0 |       128 / 0 |          **111 / 0** |
+| StateThread        |      225 / 29 |             — |                    — |
+| WorkerReturn       |       5 / 435 |     375 / 463 |         **56 / 463** |
+| RemovableWithClone |             — |             — |            **2 / 0** |
+| Preserve           |       324 / 0 |       144 / 0 |          **144 / 0** |
+| Unresolved         |       181 / 8 |       202 / 9 |          **536 / 9** |
+| **population**     | **849 / 472** | **849 / 472** |        **849 / 472** |
 
 ### What the plumbing actually looks like
 
@@ -1125,23 +1125,23 @@ the next milestone can pick each class up without re-analysing (the
 constructor and callee names are diagnostics; the split is by what kind of
 thing holds it):
 
-| | | |
-|---:|---|---|
-| 244 | the flow's own proof stands, but a [representation boundary](#composing-the-views-can-all-1453-be-applied-at-once) it crosses is not a uniform split | a representation-agreement pass, or cloning |
-| 187 | the closure that returns the tuple is passed to an **imported** call (`map` 107, `catch#` 25, `$wtext` 20, …) | closure/whole-program analysis |
-| 134 | …**consed onto a list** | the checks-in-a-top-level-list shape; a closed-world list-of-closures pass |
-| 114 | …**stored in a program constructor** (`CommandCheck` 51, `SystemInterface` 13, `ForShell` 11, …) | the same, per constructor |
-| 67 | …**handed to a local callee's parameter** | the parameter's other producers: a higher-order representation agreement, not a def-use question |
-| 41 | a proven Parsec continuation whose target the region graph does not close over | above |
-| 11 | returned from an **exported wrapper of a local worker** | the *worker's* callers, not the wrapper's — which is why the split exists |
-| 10 | …passed to a local binder that is not a lambda chain | returned-closure analysis |
-| 7 | …held in a partial application | the same |
-| 3 | …passed to a class-op | closed-world instance enumeration |
-| 2 | returned from an exported function with no worker | callers outside the module |
-| 2 | an unknown higher-order callee outside `ShellCheck.Parser` | returned-closure analysis |
-| 1 | the argument lands past the callee's parameters | the same |
-| 3 | …and only a specialised **clone** of the callee could carry the split | a cloning decision, which this milestone does not make |
-| 1 | the callee's parameter cannot be split (the callee escapes) | closure analysis |
+|     |                                                                                                                                                      |                                                                                                  |
+| --: | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 244 | the flow's own proof stands, but a [representation boundary](#composing-the-views-can-all-1453-be-applied-at-once) it crosses is not a uniform split | a representation-agreement pass, or cloning                                                      |
+| 187 | the closure that returns the tuple is passed to an **imported** call (`map` 107, `catch#` 25, `$wtext` 20, …)                                        | closure/whole-program analysis                                                                   |
+| 134 | …**consed onto a list**                                                                                                                              | the checks-in-a-top-level-list shape; a closed-world list-of-closures pass                       |
+| 114 | …**stored in a program constructor** (`CommandCheck` 51, `SystemInterface` 13, `ForShell` 11, …)                                                     | the same, per constructor                                                                        |
+|  67 | …**handed to a local callee's parameter**                                                                                                            | the parameter's other producers: a higher-order representation agreement, not a def-use question |
+|  41 | a proven Parsec continuation whose target the region graph does not close over                                                                       | above                                                                                            |
+|  11 | returned from an **exported wrapper of a local worker**                                                                                              | the *worker's* callers, not the wrapper's — which is why the split exists                        |
+|  10 | …passed to a local binder that is not a lambda chain                                                                                                 | returned-closure analysis                                                                        |
+|   7 | …held in a partial application                                                                                                                       | the same                                                                                         |
+|   3 | …passed to a class-op                                                                                                                                | closed-world instance enumeration                                                                |
+|   2 | returned from an exported function with no worker                                                                                                    | callers outside the module                                                                       |
+|   2 | an unknown higher-order callee outside `ShellCheck.Parser`                                                                                           | returned-closure analysis                                                                        |
+|   1 | the argument lands past the callee's parameters                                                                                                      | the same                                                                                         |
+|   3 | …and only a specialised **clone** of the callee could carry the split                                                                                | a cloning decision, which this milestone does not make                                           |
+|   1 | the callee's parameter cannot be split (the callee escapes)                                                                                          | closure analysis                                                                                 |
 
 > **Added by [M2.4d](#m24d--higher-order-representation-agreement)**, beside
 > these rows and changing none of them: the 67 land on their callee's
@@ -1210,11 +1210,11 @@ There are two removability numbers in this milestone and they answer
 different questions. They are separate metrics in `metrics.rs` and separate
 rows of `h2r compare`, not one number with a caveat attached:
 
-| | | `-O1` |
-|---|---|---:|
-| **can this box disappear locally?** | the def-use walk proves the construction is transport, on its own terms and before anything is asked about how it composes | **1,453** |
-| **can it disappear without cloning?** | …and every [representation boundary](#composing-the-views-can-all-1453-be-applied-at-once) it crosses is a uniform split, so the removal composes with every other removal at the same boundary | **1,206** |
-| …only a specialised **clone** of the callee could carry the split | recorded, and counted as *unsupported* | **3** |
+|                                                                   |                                                                                                                                                                                                 |     `-O1` |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------: |
+| **can this box disappear locally?**                               | the def-use walk proves the construction is transport, on its own terms and before anything is asked about how it composes                                                                      | **1,453** |
+| **can it disappear without cloning?**                             | …and every [representation boundary](#composing-the-views-can-all-1453-be-applied-at-once) it crosses is a uniform split, so the removal composes with every other removal at the same boundary | **1,206** |
+| …only a specialised **clone** of the callee could carry the split | recorded, and counted as *unsupported*                                                                                                                                                          |     **3** |
 
 The 247 between them is the work a representation-agreement pass would have
 to do. The **3** `RemovableWithClone` parameter boundaries are the first
@@ -1258,15 +1258,15 @@ ShellCheck.Analytics node 30892 — unboxed (#,#) of arity 2, fate WorkerReturn 
 
 The shapes, and what each becomes:
 
-| Consumer | Rule | The view |
-|---|---|---|
-| `case t of (a, b) -> e` | `T2-SCRUTINISED` | `a := f0; b := f1` |
-| a lazy selector `case t of (_, s, _) -> s` | `T3-SELECTED` | `s := f1` — and the selector thunk goes with it |
-| a field-wise re-tupling | `T4-RETUPLE` | the copy's own fields *are* `f0…`, with that construction's own fate printed beside it |
-| passed into a local callee | `T5-PASSED-LOCAL` | that parameter becomes *n* scalar parameters; the call passes `f0…` |
-| returned | `T6-RETURNED` / `T7-CALL-RESULT` | the function returns *n* scalar results, and each call site binds them — `case (f x) of (a, s) -> e` ⇒ `(a, s) := f x` |
-| a field of a removable tuple | `T12-NESTED` | the outer box is gone too, so `f0…` reach the outer's readers directly, through the field binder named on the line |
-| forced whole | `T14-FORCED` | the force disappears; forcing a constructor application is a no-op |
+| Consumer                                   | Rule                             | The view                                                                                                               |
+| ------------------------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `case t of (a, b) -> e`                    | `T2-SCRUTINISED`                 | `a := f0; b := f1`                                                                                                     |
+| a lazy selector `case t of (_, s, _) -> s` | `T3-SELECTED`                    | `s := f1` — and the selector thunk goes with it                                                                        |
+| a field-wise re-tupling                    | `T4-RETUPLE`                     | the copy's own fields *are* `f0…`, with that construction's own fate printed beside it                                 |
+| passed into a local callee                 | `T5-PASSED-LOCAL`                | that parameter becomes *n* scalar parameters; the call passes `f0…`                                                    |
+| returned                                   | `T6-RETURNED` / `T7-CALL-RESULT` | the function returns *n* scalar results, and each call site binds them — `case (f x) of (a, s) -> e` ⇒ `(a, s) := f x` |
+| a field of a removable tuple               | `T12-NESTED`                     | the outer box is gone too, so `f0…` reach the outer's readers directly, through the field binder named on the line     |
+| forced whole                               | `T14-FORCED`                     | the force disappears; forcing a constructor application is a no-op                                                     |
 
 **The view is complete, and says so.** Every consumer on the flow is placed
 in exactly one line and every call site the flow proved is placed exactly
@@ -1309,7 +1309,7 @@ second one. `boundary.rs` is the third proof object that challenges it.
 
 **How a boundary is enumerated — independently of the flow walk.**
 
-* **A parameter** `(f, i)`. Every occurrence of `f`'s binder
+- **A parameter** `(f, i)`. Every occurrence of `f`'s binder
   (`Module::occurrences`) is taken to its spine root (`Module::spine_root`).
   An occurrence that is not the head of a spine, or heads a spine supplying
   fewer value arguments than `f` has manifest parameters, is `f` used *as a
@@ -1317,7 +1317,7 @@ second one. `boundary.rs` is the third proof object that challenges it.
   be split at all. Every remaining occurrence is a call site, and the value
   argument at index `i` is a producer. `f` being exported is the same kind
   of disqualification.
-* **A return** of `f`. Every syntactic return point of the body, enumerated
+- **A return** of `f`. Every syntactic return point of the body, enumerated
   iteratively through the `case`/`let` tree — GHC does not leave the lambdas
   at the head of a right-hand side, so `f = case c of A -> \s -> e1; B -> \s
   -> e2` has return points `e1` and `e2`. Each leaf carries the number of
@@ -1385,16 +1385,16 @@ $ h2r tuples compiler/core-json --boundaries
 flows cross at least one boundary**; 429 never leave the function they were
 built in and are untouched by any of this. **247 flows are downgraded**:
 
-| | new fate | reason | representative |
-|---:|---|---|---|
-| 181 | `Unresolved` | producers request different representations | `Main` node 2737 — return of `p#1107` |
-| 23 | `Unresolved` | the function is used as a value | `ShellCheck.Analytics` node 49954 — return of `$s$fMonadWriterT2#1992` |
-| 21 | `Unresolved` | a preserved tuple reaches the boundary | `ShellCheck.Analytics` node 3044 — return of `go1#2757` |
-| 12 | `Unresolved` | the function has no visible call site | `Main` node 8383 — return of `$s$w$c<*>#1` |
-| 5 | `Unresolved` | the binding is not a lambda chain, so it has no result to split | `ShellCheck.CFG` node 38683 — return of `m1#2556` |
-| 3 | `RemovableWithClone` | producers disagree at a splittable parameter | `ShellCheck.Analytics` node 1974 — parameter 1 of `$wgo1#2086` |
-| 2 | `Unresolved` | a call site is a partial application | `ShellCheck.Checks.Commands` node 13824 — return of `$s$fMonadRWST1#977` |
-| **247** | | | 222 boxed, 25 unboxed |
+|         | new fate             | reason                                                          | representative                                                           |
+| ------: | -------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------ |
+|     181 | `Unresolved`         | producers request different representations                     | `Main` node 2737 — return of `p#1107`                                    |
+|      23 | `Unresolved`         | the function is used as a value                                 | `ShellCheck.Analytics` node 49954 — return of `$s$fMonadWriterT2#1992`   |
+|      21 | `Unresolved`         | a preserved tuple reaches the boundary                          | `ShellCheck.Analytics` node 3044 — return of `go1#2757`                  |
+|      12 | `Unresolved`         | the function has no visible call site                           | `Main` node 8383 — return of `$s$w$c<*>#1`                               |
+|       5 | `Unresolved`         | the binding is not a lambda chain, so it has no result to split | `ShellCheck.CFG` node 38683 — return of `m1#2556`                        |
+|       3 | `RemovableWithClone` | producers disagree at a splittable parameter                    | `ShellCheck.Analytics` node 1974 — parameter 1 of `$wgo1#2086`           |
+|       2 | `Unresolved`         | a call site is a partial application                            | `ShellCheck.Checks.Commands` node 13824 — return of `$s$fMonadRWST1#977` |
+| **247** |                      |                                                                 | 222 boxed, 25 unboxed                                                    |
 
 The single most common shape is the one the milestone was written for:
 `Main`'s `p#1107` returns a removable unboxed pair on one path and the
@@ -1553,11 +1553,11 @@ The other reason the number is not larger is visible in the Core: of the
 `case ($wgetCommandNameAndToken False x) of (# ww, ww1 #) -> ww` in
 `ShellCheck.ASTLib` — where there is no thunk to remove in the first place.
 
-| | A `-O1` | B | C | D | E | F |
-|---|---:|---:|---:|---:|---:|---:|
-| thunk sites explained by tuple transport | 92 | 103 | 120 | 121 | 121 | 121 |
-| thunk sites holding a normalised tuple | 288 | 332 | 298 | 659 | 659 | 659 |
-| lazy argument sites that become scalars | 630 | 734 | 694 | 1,160 | 1,160 | 1,159 |
+|                                          | A `-O1` |   B |   C |     D |     E |     F |
+| ---------------------------------------- | ------: | --: | --: | ----: | ----: | ----: |
+| thunk sites explained by tuple transport |      92 | 103 | 120 |   121 |   121 |   121 |
+| thunk sites holding a normalised tuple   |     288 | 332 | 298 |   659 |   659 |   659 |
+| lazy argument sites that become scalars  |     630 | 734 | 694 | 1,160 | 1,160 | 1,159 |
 
 ### M2.2 acceptance
 
@@ -1573,14 +1573,14 @@ Against the `-O1` dump, all of the following hold.
 saturated constructions, 1,765 boxed and 819 unboxed, every one in exactly
 one fate bucket (asserted):
 
-| fate | boxed | unboxed |
-|---|---:|---:|
-| ScalarReplace | 403 | 0 |
-| WorkerReturn | 136 | 667 |
-| RemovableWithClone | 3 | 0 |
-| Preserve | 551 | 0 |
-| Unresolved | 672 | 152 |
-| **total** | **1,765** | **819** |
+| fate               |     boxed | unboxed |
+| ------------------ | --------: | ------: |
+| ScalarReplace      |       403 |       0 |
+| WorkerReturn       |       136 |     667 |
+| RemovableWithClone |         3 |       0 |
+| Preserve           |       551 |       0 |
+| Unresolved         |       672 |     152 |
+| **total**          | **1,765** | **819** |
 
 and `before = normalised + preserved + unsupported` per representation:
 1,765 = 539 + 551 + 675 boxed, 819 = 667 + 0 + 152 unboxed, 2,584 = 1,206 +
@@ -1624,22 +1624,22 @@ not by the name.
 
 **What remains, and what milestone each item belongs to:**
 
-| | | |
-|---:|---|---|
-| 244 | the def-use proof stands, but a **representation boundary** the flow crosses is not a uniform split (181 producers disagree, 23 the function is used as a value, 21 a preserved tuple reaches it, 12 no visible call site, 5 not a lambda chain, 2 a partial application) | a representation-agreement pass over the boundaries, or cloning |
-| 187 | the closure that returns the tuple is passed to an **imported** call | M2.4 higher-order / whole-program closure analysis |
-| 134 | …**consed onto a list** | M2.4: the checks-in-a-top-level-list shape, a closed-world list-of-closures pass |
-| 114 | …**stored in a program constructor** | M2.4, per constructor |
-| 67 | …**handed to a local callee's parameter** | a higher-order representation agreement (M2.4), not a def-use question |
-| 41 | a proven Parsec continuation whose target the region graph does not close over | M2.1 follow-up: 20 chains not bound to a binder, 19 parsers used as a value, 2 unsaturated calls |
-| 11 | returned from an **exported wrapper of a local worker** | whole-program linking — the *worker's* callers, not the wrapper's |
-| 10 | …passed to a local binder that is not a lambda chain | M2.4 returned-closure analysis |
-| 7 | …held in a partial application | M2.4 |
-| 3 | …passed to a class-op | closed-world instance enumeration (M2.3) |
-| 2 | returned from an exported function with no worker | whole-program linking |
-| 2 | an unknown higher-order callee outside `ShellCheck.Parser` | M2.4 |
-| 1 | the argument lands past the callee's parameters | M2.4 |
-| 3 | …and only a specialised **clone** of the callee could carry the split | a cloning decision |
+|     |                                                                                                                                                                                                                                                                           |                                                                                                  |
+| --: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 244 | the def-use proof stands, but a **representation boundary** the flow crosses is not a uniform split (181 producers disagree, 23 the function is used as a value, 21 a preserved tuple reaches it, 12 no visible call site, 5 not a lambda chain, 2 a partial application) | a representation-agreement pass over the boundaries, or cloning                                  |
+| 187 | the closure that returns the tuple is passed to an **imported** call                                                                                                                                                                                                      | M2.4 higher-order / whole-program closure analysis                                               |
+| 134 | …**consed onto a list**                                                                                                                                                                                                                                                   | M2.4: the checks-in-a-top-level-list shape, a closed-world list-of-closures pass                 |
+| 114 | …**stored in a program constructor**                                                                                                                                                                                                                                      | M2.4, per constructor                                                                            |
+|  67 | …**handed to a local callee's parameter**                                                                                                                                                                                                                                 | a higher-order representation agreement (M2.4), not a def-use question                           |
+|  41 | a proven Parsec continuation whose target the region graph does not close over                                                                                                                                                                                            | M2.1 follow-up: 20 chains not bound to a binder, 19 parsers used as a value, 2 unsaturated calls |
+|  11 | returned from an **exported wrapper of a local worker**                                                                                                                                                                                                                   | whole-program linking — the *worker's* callers, not the wrapper's                                |
+|  10 | …passed to a local binder that is not a lambda chain                                                                                                                                                                                                                      | M2.4 returned-closure analysis                                                                   |
+|   7 | …held in a partial application                                                                                                                                                                                                                                            | M2.4                                                                                             |
+|   3 | …passed to a class-op                                                                                                                                                                                                                                                     | closed-world instance enumeration (M2.3)                                                         |
+|   2 | returned from an exported function with no worker                                                                                                                                                                                                                         | whole-program linking                                                                            |
+|   2 | an unknown higher-order callee outside `ShellCheck.Parser`                                                                                                                                                                                                                | M2.4                                                                                             |
+|   1 | the argument lands past the callee's parameters                                                                                                                                                                                                                           | M2.4                                                                                             |
+|   3 | …and only a specialised **clone** of the callee could carry the split                                                                                                                                                                                                     | a cloning decision                                                                               |
 
 > **Added by [M2.4d](#m24d--higher-order-representation-agreement)**, as a
 > column beside these rows and changing none of them: 14 of the 67 now have
@@ -1647,8 +1647,8 @@ not by the name.
 > so a later pass **could** reclassify them; the 187 land on a parameter
 > outside the closed world; the 134 and 58 of the 114 land on the single
 > program-wide `(:)` / `(,)` field slot; 45 of the 114 land on a `Preserve`.
-| 1 | the callee's parameter cannot be split (the callee escapes) | M2.4 |
-| **827** | | |
+> | 1 | the callee's parameter cannot be split (the callee escapes) | M2.4 |
+> | **827** | | |
 
 **The cross-milestone table** is
 [above](#the-cross-milestone-link-how-many-of-m1s-thunks-are-these-tuples):
@@ -1664,26 +1664,26 @@ re-derivation and the audited-shape table. All four are shown above.
 
 **Known limits**, stated rather than hidden:
 
-* the **location budget** (20,000) turns a pathological flow into an honest
+- the **location budget** (20,000) turns a pathological flow into an honest
   `Unresolved`. Nothing on `-O1` comes near it — the largest flow visits
   2,023 locations, the mean is 19 — but the transitive `T12-NESTED` rule
   does reach it on the inlining-heavy profiles: 4 flows on B and 2 each on
   C–F end as `flow-exceeded-the-location-budget`. The verifier refuses
   those flows too, so it is a coverage loss in the safe direction;
-* the **Parsec hop is an input to both sides** of the cross-check. Seven
+- the **Parsec hop is an input to both sides** of the cross-check. Seven
   `-O1` verdicts rested on a continuation target the verifier cannot derive
   on its own and is handed from the other proof object; the boundary check
   has since downgraded all seven, so `-O1` now has none (D–F still do).
   Where they remain, they are proven twice *after* that hop and once before
   it; dropping the hop would move them to `Unresolved`, not to a different
   removal;
-* `exported` is **trusted from GHC**. Every rule that needs "no caller
+- `exported` is **trusted from GHC**. Every rule that needs "no caller
   outside this module" reads the binder's `exported` flag as dumped. A
   whole-program link step can replace that with the actual call graph, and
   would resolve the 11 exported-wrapper and 2 exported-return residuals;
-* the link's `explained` count is the *narrow* one. The 288 bindings that
+- the link's `explained` count is the *narrow* one. The 288 bindings that
   hold a normalised tuple are reported beside it and not claimed;
-* the boundary check's **producer classifier is partial by design**. A
+- the boundary check's **producer classifier is partial by design**. A
   producer it will not follow — a local call at an arity it cannot match, a
   lambda-bound parameter whose own boundary is not uniform, a field bound by
   a match — asks for the tuple, which makes the boundary non-uniform and
@@ -1725,14 +1725,14 @@ through the head's `DataConInfo` and never by name — 9,166 constructions on
 program and library, exactly as the M2 census' family attribution does; no
 verdict reads it.
 
-| constructions | | constructions | |
-|---:|---|---:|---|
-| 1,789 | `ParseError` | 386 | `I#` |
-| 677 | `Solo#` | 371 | `TyCon` |
-| 547 | `IS` | 335 | `Comment` |
-| 500 | `OuterToken` | 293 | `KindRepFun` |
-| 427 | `TrNameS` | 291 | `Just` |
-| 408 | `TokenComment` | 282 | `KindRepTyConApp` |
+| constructions |                | constructions |                   |
+| ------------: | -------------- | ------------: | ----------------- |
+|         1,789 | `ParseError`   |           386 | `I#`              |
+|           677 | `Solo#`        |           371 | `TyCon`           |
+|           547 | `IS`           |           335 | `Comment`         |
+|           500 | `OuterToken`   |           293 | `KindRepFun`      |
+|           427 | `TrNameS`      |           291 | `Just`            |
+|           408 | `TokenComment` |           282 | `KindRepTyConApp` |
 
 ### Sum types: which alternative is the scrutiny
 
@@ -1743,14 +1743,14 @@ that is exact; for a sum type one alternative per constructor is the normal
 shape, and the rule reported it as unresolved. M2.3b makes alternative
 selection **constructor-relative**, the way GHC decides it:
 
-* the alternative whose data constructor is this one — matched on GHC's
+- the alternative whose data constructor is this one — matched on GHC's
   stable name with the tag corroborating — is the scrutiny (`T2-SCRUTINISED`);
-* no such alternative, but a `DEFAULT`: that is what a value of this
+- no such alternative, but a `DEFAULT`: that is what a value of this
   constructor selects, and it binds no field — an observation to WHNF
   (`T15-WHNF-ALT`), not an escape and not a read;
-* neither: nothing this value could select, which is conservatively an
+- neither: nothing this value could select, which is conservatively an
   escape (`R_ALTS`), never "the construction was not observed";
-* every other alternative is **unreachable for this value** and contributes
+- every other alternative is **unreachable for this value** and contributes
   nothing to the field-demand theorem.
 
 Reachability applies to the case **binder** too. It is in scope in all the
@@ -1772,29 +1772,29 @@ profiles.
 Nothing is assigned a representation directly. Every (construction, field)
 records three **orthogonal** facts, and the rep is a function of them:
 
-| Fact | Values | Where it comes from |
-|---|---|---|
-| field demand | `Always` / `Conditional` / `Never` / `Unknown` | the walk's reachable observations |
-| construction strictness | `StrictField` / `LazyField` | GHC's `DataConInfo.strictFields` |
-| value recursion | `RecursiveKnot` / `Acyclic` | **M1's** `Class::RecursiveValue`, read not re-derived |
+| Fact                    | Values                                         | Where it comes from                                   |
+| ----------------------- | ---------------------------------------------- | ----------------------------------------------------- |
+| field demand            | `Always` / `Conditional` / `Never` / `Unknown` | the walk's reachable observations                     |
+| construction strictness | `StrictField` / `LazyField`                    | GHC's `DataConInfo.strictFields`                      |
+| value recursion         | `RecursiveKnot` / `Acyclic`                    | **M1's** `Class::RecursiveValue`, read not re-derived |
 
 The recursion fact is deliberately M1's and only M1's: a non-function member
 of a recursive group that refers to itself through the value. It does not
 mean "the field's type mentions the ADT" and it does not mean "produced by a
 recursive function".
 
-| demand | strictness | recursion | fields |
-|---|---|---|---:|
-| Always | LazyField | Acyclic | 175 |
-| Always | StrictField | Acyclic | 21 |
-| Conditional | LazyField | Acyclic | 896 |
-| Conditional | StrictField | Acyclic | 19 |
-| Never | LazyField | Acyclic | 9 |
-| Never | StrictField | Acyclic | 21 |
-| Unknown | LazyField | Acyclic | 15,418 |
-| Unknown | LazyField | RecursiveKnot | 9 |
-| Unknown | StrictField | Acyclic | 3,262 |
-| | | **total** | **19,830** |
+| demand      | strictness  | recursion     |     fields |
+| ----------- | ----------- | ------------- | ---------: |
+| Always      | LazyField   | Acyclic       |        175 |
+| Always      | StrictField | Acyclic       |         21 |
+| Conditional | LazyField   | Acyclic       |        896 |
+| Conditional | StrictField | Acyclic       |         19 |
+| Never       | LazyField   | Acyclic       |          9 |
+| Never       | StrictField | Acyclic       |         21 |
+| Unknown     | LazyField   | Acyclic       |     15,418 |
+| Unknown     | LazyField   | RecursiveKnot |          9 |
+| Unknown     | StrictField | Acyclic       |      3,262 |
+|             |             | **total**     | **19,830** |
 
 The `Never` / `StrictField` row is the one that says why the facts are kept
 apart. `data X = X !Int Int` with field 0 never read is **not** `Dead`: the
@@ -1812,11 +1812,11 @@ crosses a return can sit while other work happens before anything reads it,
 so moving the field's evaluation to the construction moves the divergence.
 Only three rules establish it:
 
-| Rule | Evidence | What it proves |
-|---|---|---|
-| `R1-STRICT-FIELD` | GHC (4) | the field is already strict: forced at construction, nothing left to move |
-| `R2-FIELD-IS-VALUE` | structural (2) | the field expression is already a value — a literal, a lambda, a saturated construction, a partial application, a nullary constructor, a string literal, or a variable whose binding GHC marks `whnf` / `okForSpec` — so there is no evaluation to move |
-| `R3-SAME-FRONTIER` | 2 over 3 | every observation is a scrutiny that strictly demands the field and stands at the construction's own evaluation frontier: the walk crossed no return and no unknown call, and between the construction and each scrutiny there is no lambda, no conditional and no thunk boundary |
+| Rule                | Evidence       | What it proves                                                                                                                                                                                                                                                                    |
+| ------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `R1-STRICT-FIELD`   | GHC (4)        | the field is already strict: forced at construction, nothing left to move                                                                                                                                                                                                         |
+| `R2-FIELD-IS-VALUE` | structural (2) | the field expression is already a value — a literal, a lambda, a saturated construction, a partial application, a nullary constructor, a string literal, or a variable whose binding GHC marks `whnf` / `okForSpec` — so there is no evaluation to move                           |
+| `R3-SAME-FRONTIER`  | 2 over 3       | every observation is a scrutiny that strictly demands the field and stands at the construction's own evaluation frontier: the walk crossed no return and no unknown call, and between the construction and each scrutiny there is no lambda, no conditional and no thunk boundary |
 
 Everything demanded at all and not proven by one of those is `Deferred`. A
 false `Direct` is a miscompile; a false `Deferred` is lost coverage, so the
@@ -1824,13 +1824,13 @@ rules are deliberately one-sided.
 
 ### Results on the `-O1` dump
 
-| | Dead | Direct | Deferred | Recursive | Unknown |
-|---|---:|---:|---:|---:|---:|
-| program, GHC-strict | 0 | 0 | 0 | 0 | 0 |
-| program, lazy | 4 | 1 | 206 | 1 | 6,524 |
-| library, GHC-strict | 0 | 3,323 | 0 | 0 | 0 |
-| library, lazy | 5 | 84 | 780 | 8 | 8,894 |
-| **total** | **9** | **3,408** | **986** | **9** | **15,418** |
+|                     |  Dead |    Direct | Deferred | Recursive |    Unknown |
+| ------------------- | ----: | --------: | -------: | --------: | ---------: |
+| program, GHC-strict |     0 |         0 |        0 |         0 |          0 |
+| program, lazy       |     4 |         1 |      206 |         1 |      6,524 |
+| library, GHC-strict |     0 |     3,323 |        0 |         0 |          0 |
+| library, lazy       |     5 |        84 |      780 |         8 |      8,894 |
+| **total**           | **9** | **3,408** |  **986** |     **9** | **15,418** |
 
 `Direct` by the rule that proved the timing: 3,323 `R1-STRICT-FIELD`, 85
 `R2-FIELD-IS-VALUE`, **0** `R3-SAME-FRONTIER`. The last is not a bug and it
@@ -1847,21 +1847,21 @@ alternative's binder, 12 strict by position, 3,765 lazy), 1,922
 never observed, 7,746 escaped before any observation. The nesting fixpoint
 settles in 3 rounds.
 
-| Top `Deferred` reason | |
-|---:|---|
-| 667 | demanded only lazily (passed on, stored, captured) |
-| 203 | bound and unused on some observation |
-| 90 | demanded on every path, but not at the same frontier |
-| 26 | demanded on some observations only |
+| Top `Deferred` reason |                                                      |
+| --------------------: | ---------------------------------------------------- |
+|                   667 | demanded only lazily (passed on, stored, captured)   |
+|                   203 | bound and unused on some observation                 |
+|                    90 | demanded on every path, but not at the same frontier |
+|                    26 | demanded on some observations only                   |
 
-| Top `Unknown` reason | |
-|---:|---|
-| 2,264 | `stored-in-a-list-cell` — M2.3c's population |
-| 1,143 | an unknown higher-order callee (`eta`) |
-| 998 / 573 / 348 | `the-program-construction-holding-it-escapes` (`TokenComment`, `OuterToken`, `Comment`) |
-| 760 / 595 / 557 | `the-library-construction-holding-it-escapes` (`KindRepFun`, `TyCon`, `PushCallStack`) |
-| 565 | an unknown higher-order callee (`eok`) — a Parsec continuation |
-| 311 | `stored-in-a-tuple-field` — M2.2's population |
+| Top `Unknown` reason |                                                                                         |
+| -------------------: | --------------------------------------------------------------------------------------- |
+|                2,264 | `stored-in-a-list-cell` — M2.3c's population                                            |
+|                1,143 | an unknown higher-order callee (`eta`)                                                  |
+|      998 / 573 / 348 | `the-program-construction-holding-it-escapes` (`TokenComment`, `OuterToken`, `Comment`) |
+|      760 / 595 / 557 | `the-library-construction-holding-it-escapes` (`KindRepFun`, `TyCon`, `PushCallStack`)  |
+|                  565 | an unknown higher-order callee (`eok`) — a Parsec continuation                          |
+|                  311 | `stored-in-a-tuple-field` — M2.2's population                                           |
 
 M2.3e split those reasons by **which population owns the holder**, because
 that is what decides who can close the residue: a list cell is M2.3c's, a
@@ -1884,11 +1884,11 @@ The [M2 baseline](#m2-baseline--who-receives-the-lazy-arguments) attributes
 1,996 lazy argument sites to the constructor-field strategy. They map onto
 this population exactly, with nothing unexplained:
 
-| | |
-|---:|---|
+|       |                                                        |
+| ----: | ------------------------------------------------------ |
 | 1,310 | the list cons — **deferred to M2.3c**, not mapped here |
-| 686 | mapped onto a (construction, field) pair |
-| 0 | unmapped |
+|   686 | mapped onto a (construction, field) pair               |
+|     0 | unmapped                                               |
 
 and their `FieldRep` is 77 `Deferred`, 609 `Unknown`, 0 of anything else —
 which is the honest shape of the thing: a lazy *computation* in a
@@ -1905,42 +1905,42 @@ the 1,996 is the same 1,996.)
 Asserted in code (`FieldAccounting::check`), on `-O1` and on all six matrix
 profiles:
 
-* every field lands in exactly one rep, and the program/library ×
+- every field lands in exactly one rep, and the program/library ×
   GHC-strict/lazy split and the three-fact matrix each cover all 19,830;
-* `constructions = observed + unobserved + escaped-before-observation`
+- `constructions = observed + unobserved + escaped-before-observation`
   (9,166 = 1,407 + 13 + 7,746) and `= program + library`;
-* every census site is mapped, deferred to M2.3c, or carries a reason;
-* every `Direct` verdict names the rule that proved its timing.
+- every census site is mapped, deferred to M2.3c, or carries a reason;
+- every `Direct` verdict names the rule that proved its timing.
 
-| profile | constructions | fields | Dead | Direct | Deferred | Recursive | Unknown |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| `-O1` / A | 9,166 | 19,830 | 9 | 3,408 | 986 | 9 | 15,418 |
-| B | 10,171 | 22,111 | 30 | 4,264 | 1,023 | 9 | 16,785 |
-| C | 11,092 | 23,381 | 26 | 4,621 | 782 | 9 | 17,943 |
-| D | 26,014 | 52,024 | 253 | 14,348 | 979 | 6 | 36,438 |
-| E | 23,632 | 47,292 | 223 | 12,748 | 925 | 6 | 33,390 |
-| F | 23,734 | 47,332 | 223 | 12,736 | 926 | 6 | 33,441 |
+| profile   | constructions | fields | Dead | Direct | Deferred | Recursive | Unknown |
+| --------- | ------------: | -----: | ---: | -----: | -------: | --------: | ------: |
+| `-O1` / A |         9,166 | 19,830 |    9 |  3,408 |      986 |         9 |  15,418 |
+| B         |        10,171 | 22,111 |   30 |  4,264 |    1,023 |         9 |  16,785 |
+| C         |        11,092 | 23,381 |   26 |  4,621 |      782 |         9 |  17,943 |
+| D         |        26,014 | 52,024 |  253 | 14,348 |      979 |         6 |  36,438 |
+| E         |        23,632 | 47,292 |  223 | 12,748 |      925 |         6 |  33,390 |
+| F         |        23,734 | 47,332 |  223 | 12,736 |      926 |         6 |  33,441 |
 
 ### Known limits, stated rather than hidden
 
-* **`D8-NESTED` stops at the other milestones' populations.** A value stored
+- **`D8-NESTED` stops at the other milestones' populations.** A value stored
   in a list cell or a tuple field is `Unknown`, not followed. Following it
   needs M2.3c and M2.2's flows respectively; it is a coverage loss in the
   safe direction.
-* **Any escape makes every field of that construction `Unknown`**, including
+- **Any escape makes every field of that construction `Unknown`**, including
   an escape that is a *proven* real value (a store, an imported strict
   parameter). What the callee demands of the field is outside the module, so
   the analysis refuses rather than guessing — which is why 15,418 of 19,830
   fields are `Unknown`.
-* **`R2` counts a string literal as a value.** `unpackCString# "…"#` is not
+- **`R2` counts a string literal as a value.** `unpackCString# "…"#` is not
   `exprIsHNF`, but it is total, terminating and cheap, so evaluating it
   eagerly can neither diverge nor error. That is the one place `R2` argues
   from `okForSpeculation`-style reasoning rather than from WHNF.
-* **The recursion fact is M1's at `let` level and the group flag at top
+- **The recursion fact is M1's at `let` level and the group flag at top
   level.** M1 reports `Class::RecursiveValue` for `let`-bound bindings only;
   a top-level construction in a recursive group is taken at the group's own
   `rec` flag, under the same predicate.
-* **This section decides evaluation only.** A field can be `Deferred` and
+- **This section decides evaluation only.** A field can be `Deferred` and
   `Acyclic` with no decision made about how it is represented.
 
 ## M2.3c — when, and how much, of a list's spine is demanded
@@ -1975,13 +1975,13 @@ cargo run --release --bin h2r -- lists ../core-json --json
 
 ### The population: flows, not cells
 
-| Producer | | `-O1` |
-|---|---|---:|
-| `L0-CONS` | a saturated `(:)`, by `DataConInfo` and never by name, that is not itself the tail of another cons | 3,920 |
-| `L0-NIL` | a `[]`, likewise, that is not the tail of a cons in the population | 2,887 |
-| `L0-IMPORTED` | a saturated call to an imported function whose [axiom](#the-library-demand-semantics-table) says the call's **own return type** is a list | 4,966 |
-| `L0-LOCAL` | a saturated call to a local function returning a list producer whose own flow could not reach this call site | 45 |
-| | **flows** | **11,818** |
+| Producer      |                                                                                                                                           |      `-O1` |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------: |
+| `L0-CONS`     | a saturated `(:)`, by `DataConInfo` and never by name, that is not itself the tail of another cons                                        |      3,920 |
+| `L0-NIL`      | a `[]`, likewise, that is not the tail of a cons in the population                                                                        |      2,887 |
+| `L0-IMPORTED` | a saturated call to an imported function whose [axiom](#the-library-demand-semantics-table) says the call's **own return type** is a list |      4,966 |
+| `L0-LOCAL`    | a saturated call to a local function returning a list producer whose own flow could not reach this call site                              |         45 |
+|               | **flows**                                                                                                                                 | **11,818** |
 
 > Every number in this section is **after** M2.3e, which added eleven audited
 > entries to the axiom table and fixed two propagation bugs, **and after
@@ -2013,18 +2013,18 @@ added: at `case xs of { [] -> …; (y:ys) -> … }` a cons flow selects the
 for that flow (987 alternatives and 120 case-binder occurrences skipped).
 Three list-specific rules sit on top of it:
 
-* **`L2-TAIL-ALIAS`** — the `(:)` alternative's *second* binder is not a
+- **`L2-TAIL-ALIAS`** — the `(:)` alternative's *second* binder is not a
   field leaving the flow, it **is** the rest of this spine, and the walk
   continues at its occurrences. This is what lets a recursive consumer
   close a loop back onto the same `case` instead of stopping at the first
   cell. The *first* binder is an element, and is what `HeadDemand` is
   measured on (`L3-HEAD-BOUND`).
-* **`L7-CONSED-AS-TAIL`** — the value is the **tail** argument of another
+- **`L7-CONSED-AS-TAIL`** — the value is the **tail** argument of another
   cell: a `go`-loop accumulator, a cons built from a parameter. That is not
   storage; the spine continues into that cell's flow, and the successor's
   facts come back through a worklist fixpoint over the reverse edges
   (9,880 hops, 2,873 updates to settle).
-* **`L18-STORED-FOLLOWED`** — the value is a field of a construction in
+- **`L18-STORED-FOLLOWED`** — the value is a field of a construction in
   M2.3b's population, and that holder is taken apart somewhere visible: the
   reads of the holder's field are reads of this spine. This is the exact
   mirror of M2.3b's `D8-NESTED`, which stops at a list cell precisely
@@ -2041,14 +2041,14 @@ carrying a stable global name, a semantic rule id (`L-AX-…`), a note, and
 six fields whose axes M2.3g separated because conflating them was a bug in
 each case:
 
-| field | what it says | what it deliberately does **not** say |
-|---|---|---|
-| `list_args` | `(end-index, ArgSpine)` for **each** list argument: `Whole`, `PrefixFromArg(i)`, `PrefixDataDependent`, `Incremental`, `NoDemand` | how often the spine is walked — that is `replays` |
-| `replays` | the end-indices of arguments the call **retains and traverses again from the front** (`cycle`, `isInfixOf`, `isSuffixOf`, `intercalate`'s separator) | nothing about how far each traversal gets |
-| `head` | `HeadDemand`: what the call **provably forces** of the elements it reaches — a primop (`eqString` at `Char`), a `case` (`and`, `words`) | that a callback forces anything: `any (const True)` does not |
-| `exposure` | `HeadExposure`: which callback the elements are handed to — `Predicate`, `Eq`, `Ord`, `Show`, `Other` | that the element is evaluated |
-| `alias` | `NoAlias` · `ResultIsTailOfArg(i)` · `ResultSharesArg(i)` · `ResultContainsSuffixOfArg(i)` (the suffix is inside a pair or a `Maybe`) · `ResultSharesElementOf(i)` (the result is one of the *elements*, which puts nothing on this spine) | whether the result is itself a list |
-| `produces` | the call's **outer return type**: `NotAList` · `DirectList(kind)` · `ProductContainsList{components}` · `EffectContainsList(kind)` · `OtherContainsList`, where `kind` is incremental / whole-before-first-cell / same-as-input / unbounded | which component of a product or effect the list is — that is tuple and effect normalisation's job, not this milestone's |
+| field       | what it says                                                                                                                                                                                                                                | what it deliberately does **not** say                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `list_args` | `(end-index, ArgSpine)` for **each** list argument: `Whole`, `PrefixFromArg(i)`, `PrefixDataDependent`, `Incremental`, `NoDemand`                                                                                                           | how often the spine is walked — that is `replays`                                                                       |
+| `replays`   | the end-indices of arguments the call **retains and traverses again from the front** (`cycle`, `isInfixOf`, `isSuffixOf`, `intercalate`'s separator)                                                                                        | nothing about how far each traversal gets                                                                               |
+| `head`      | `HeadDemand`: what the call **provably forces** of the elements it reaches — a primop (`eqString` at `Char`), a `case` (`and`, `words`)                                                                                                     | that a callback forces anything: `any (const True)` does not                                                            |
+| `exposure`  | `HeadExposure`: which callback the elements are handed to — `Predicate`, `Eq`, `Ord`, `Show`, `Other`                                                                                                                                       | that the element is evaluated                                                                                           |
+| `alias`     | `NoAlias` · `ResultIsTailOfArg(i)` · `ResultSharesArg(i)` · `ResultContainsSuffixOfArg(i)` (the suffix is inside a pair or a `Maybe`) · `ResultSharesElementOf(i)` (the result is one of the *elements*, which puts nothing on this spine)  | whether the result is itself a list                                                                                     |
+| `produces`  | the call's **outer return type**: `NotAList` · `DirectList(kind)` · `ProductContainsList{components}` · `EffectContainsList(kind)` · `OtherContainsList`, where `kind` is incremental / whole-before-first-cell / same-as-input / unbounded | which component of a product or effect the list is — that is tuple and effect normalisation's job, not this milestone's |
 
 **Only `DirectList` starts a flow.** The two axes are independent in both
 directions: `span` returns a pair *and* its second component is a suffix of
@@ -2085,18 +2085,18 @@ further **46 of the 101 entries were corrected** by
 [M2.3g's audit](#correction-m23g--the-axiom-layer), which read base's own
 definition for every entry claiming a result type, a forcing or an alias.
 
-| calls | axiom | head | | calls | axiom | head |
-|---:|---|---|---|---:|---|---|
-| 1,861 | yes | `GHC.Base.++` | | 394 | **no** | `ShellCheck.Interface.$wgo` |
-| 1,121 | yes | `GHC.Base.eqString` | | 168 | **no** | `GHC.Show.showLitString` |
-| 999 | yes | `GHC.CString.unpackAppendCString#` | | 88 | **no** | `Text.Parsec.Char.string1` |
-| 236 | yes | `GHC.List.elem` | | 66 | **no** | `GHC.Show.showList__` |
-| 192 | yes | `Data.OldList.isPrefixOf` | | 61 | **no** | `GHC.IO.Handle.Text.hPutStr2` |
-| 144 | yes | `GHC.Base.++_$s++` | | 49 | **no** | `Text.Regex.TDFA.String.compile` |
-| 138 | yes | `GHC.List.reverse1` | | 45 | **no** | `Data.Set.Internal.$fDataSet1` |
-| 129 | yes | `GHC.List.takeWhile` | | 40 | **no** | `Text.Parsec.Error.$wmergeError` |
-| 81 | yes | `GHC.Classes.$fEqList_$s$c==1` (M2.3e) | | 39 | **no** | `GHC.Base.pure` |
-| 72 | yes | `GHC.Classes.$fOrdList_$s$ccompare1` (M2.3e) | | 43 | **no** | `Data.Set.Internal.$fDataSet1` |
+| calls | axiom | head                                         |   | calls | axiom  | head                             |
+| ----: | ----- | -------------------------------------------- | - | ----: | ------ | -------------------------------- |
+| 1,861 | yes   | `GHC.Base.++`                                |   |   394 | **no** | `ShellCheck.Interface.$wgo`      |
+| 1,121 | yes   | `GHC.Base.eqString`                          |   |   168 | **no** | `GHC.Show.showLitString`         |
+|   999 | yes   | `GHC.CString.unpackAppendCString#`           |   |    88 | **no** | `Text.Parsec.Char.string1`       |
+|   236 | yes   | `GHC.List.elem`                              |   |    66 | **no** | `GHC.Show.showList__`            |
+|   192 | yes   | `Data.OldList.isPrefixOf`                    |   |    61 | **no** | `GHC.IO.Handle.Text.hPutStr2`    |
+|   144 | yes   | `GHC.Base.++_$s++`                           |   |    49 | **no** | `Text.Regex.TDFA.String.compile` |
+|   138 | yes   | `GHC.List.reverse1`                          |   |    45 | **no** | `Data.Set.Internal.$fDataSet1`   |
+|   129 | yes   | `GHC.List.takeWhile`                         |   |    40 | **no** | `Text.Parsec.Error.$wmergeError` |
+|    81 | yes   | `GHC.Classes.$fEqList_$s$c==1` (M2.3e)       |   |    39 | **no** | `GHC.Base.pure`                  |
+|    72 | yes   | `GHC.Classes.$fOrdList_$s$ccompare1` (M2.3e) |   |    43 | **no** | `Data.Set.Internal.$fDataSet1`   |
 
 Entries are written only where the semantics are certain. M2.3e read
 base-4.18.3.0's source for every helper M2.3c had left out and added the
@@ -2109,36 +2109,36 @@ That residual is the honest measure of the table's coverage.
 
 ### Seven facts, and only then a recommendation
 
-| `SpineDemand` | | | `HeadDemand` (**proven forcing only**) | |
-|---|---:|---|---|---:|
-| Unknown | 5,503 | | Unknown | 5,503 |
-| None | 4,359 | | None | 5,482 |
-| Prefix(DataDependent) | 921 | | Prefix | 544 |
-| Incremental | 715 | | All | 270 |
-| Prefix(Known) | 179 | | First | 19 |
-| Whole | 141 | | | |
+| `SpineDemand`         |       |   | `HeadDemand` (**proven forcing only**) |       |
+| --------------------- | ----: | - | -------------------------------------- | ----: |
+| Unknown               | 5,503 |   | Unknown                                | 5,503 |
+| None                  | 4,359 |   | None                                   | 5,482 |
+| Prefix(DataDependent) |   921 |   | Prefix                                 |   544 |
+| Incremental           |   715 |   | All                                    |   270 |
+| Prefix(Known)         |   179 |   | First                                  |    19 |
+| Whole                 |   141 |   |                                        |       |
 
 `HeadExposure` is fact 2b, added by M2.3g and recorded **beside**
 `HeadDemand`, never folded into it: an element that reaches a predicate or
 a class method has to exist as a value, but nothing proves it is evaluated.
 
-| `HeadExposure` | | |
-|---|---:|---|
-| Unknown | 5,503 | a consumer is outside what this module proves |
-| NotExposed | 5,340 | |
-| BoundAndUsed | 460 | a `(:)` alternative binds the element and uses it |
-| PassedToCallback(Eq) | 401 | `elem`, `nub`, `isPrefixOf`, the specialised list `==` |
-| PassedToCallback(Other) | 61 | `map`, `foldr`, `zipWith`, `mapM_` |
-| PassedToCallback(Predicate) | 46 | `any`, `all`, `find`, `takeWhile`, `span` |
-| PassedToCallback(Ord) | 7 | `sort`, `maximum`, the specialised list `compare` |
+| `HeadExposure`              |       |                                                        |
+| --------------------------- | ----: | ------------------------------------------------------ |
+| Unknown                     | 5,503 | a consumer is outside what this module proves          |
+| NotExposed                  | 5,340 |                                                        |
+| BoundAndUsed                |   460 | a `(:)` alternative binds the element and uses it      |
+| PassedToCallback(Eq)        |   401 | `elem`, `nub`, `isPrefixOf`, the specialised list `==` |
+| PassedToCallback(Other)     |    61 | `map`, `foldr`, `zipWith`, `mapM_`                     |
+| PassedToCallback(Predicate) |    46 | `any`, `all`, `find`, `takeWhile`, `span`              |
+| PassedToCallback(Ord)       |     7 | `sort`, `maximum`, the specialised list `compare`      |
 
-| `Reuse` | | | `Storage` | | | `Recursion` | |
-|---|---:|---|---|---:|---|---|---:|
-| Escapes | 5,238 | | StoredIn | 5,234 | | FiniteProducer | 11,787 |
-| SinglePass | 4,225 | | NotStored | 4,310 | | RecursiveKnot | 31 |
-| SharedTail | 1,860 | | Returned | 1,460 | | | |
-| MultiPass | 495 | | Captured | 814 | | | |
-| Replayed | 0 | | | | | | |
+| `Reuse`    |       |   | `Storage` |       |   | `Recursion`    |        |
+| ---------- | ----: | - | --------- | ----: | - | -------------- | -----: |
+| Escapes    | 5,238 |   | StoredIn  | 5,234 |   | FiniteProducer | 11,787 |
+| SinglePass | 4,225 |   | NotStored | 4,310 |   | RecursiveKnot  |     31 |
+| SharedTail | 1,860 |   | Returned  | 1,460 |   |                |        |
+| MultiPass  |   495 |   | Captured  |   814 |   |                |        |
+| Replayed   |     0 |   |           |       |   |                |        |
 
 `ShortCircuit`: 1,181 flows have a consumer that may stop before the end,
 10,637 do not. 6,239 flows have only streaming spine consumers.
@@ -2154,17 +2154,17 @@ exercises is a fact about the program.
 
 The spine rules behind `SpineDemand`, beyond the axioms:
 
-| Rule | | `-O1` |
-|---|---|---:|
-| `L4-LOOP-WHOLE` | the tail alias is an argument of a saturated call to a local callee whose parameter *this same `case`* scrutinises, and the call runs whenever the alternative does with only evaluating edges in between → **Whole** | 27 |
-| `L17-LOOP-INCREMENTAL` | the same loop with the recursive call in a lazy position — a constructor field, a lazy argument, a lambda — so a cell is reached only when the consumer's own consumer asks → **Incremental**. This is the `map`-shaped loop, and calling it `Whole` would be a lie | 115 |
-| `L5-LOOP-SHORTCIRCUIT` | the same loop under a `case` inside the alternative → **Prefix(DataDependent)** and a short-circuit node | 195 |
-| `L6-TAIL-DROPPED` | the alternative binds the tail and never uses it → this cell only | 137 |
-| `L14-SHARED-TAIL` | an axiom whose result — or a list inside its result — is a suffix of the argument, or a tail-derived value that is stored or handed out | 1,770 |
-| `L15-MULTIPASS` | more than one consumer enters the spine without reaching it through another's tail alias | 330 |
-| `L13-RECURSIVE-KNOT` | **M1's** `Class::RecursiveValue`, read and not re-derived | 31 |
-| `L19-REPLAYED` | an axiom says the consumer retains this argument and walks it again from the front (M2.3g) | 0 |
-| `L20-HEAD-EXPOSED` | an element reaches a callback the analysis cannot see into — exposure, not forcing (M2.3g) | 723 |
+| Rule                   |                                                                                                                                                                                                                                                                     | `-O1` |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
+| `L4-LOOP-WHOLE`        | the tail alias is an argument of a saturated call to a local callee whose parameter *this same `case`* scrutinises, and the call runs whenever the alternative does with only evaluating edges in between → **Whole**                                               |    27 |
+| `L17-LOOP-INCREMENTAL` | the same loop with the recursive call in a lazy position — a constructor field, a lazy argument, a lambda — so a cell is reached only when the consumer's own consumer asks → **Incremental**. This is the `map`-shaped loop, and calling it `Whole` would be a lie |   115 |
+| `L5-LOOP-SHORTCIRCUIT` | the same loop under a `case` inside the alternative → **Prefix(DataDependent)** and a short-circuit node                                                                                                                                                            |   195 |
+| `L6-TAIL-DROPPED`      | the alternative binds the tail and never uses it → this cell only                                                                                                                                                                                                   |   137 |
+| `L14-SHARED-TAIL`      | an axiom whose result — or a list inside its result — is a suffix of the argument, or a tail-derived value that is stored or handed out                                                                                                                             | 1,770 |
+| `L15-MULTIPASS`        | more than one consumer enters the spine without reaching it through another's tail alias                                                                                                                                                                            |   330 |
+| `L13-RECURSIVE-KNOT`   | **M1's** `Class::RecursiveValue`, read and not re-derived                                                                                                                                                                                                           |    31 |
+| `L19-REPLAYED`         | an axiom says the consumer retains this argument and walks it again from the front (M2.3g)                                                                                                                                                                          |     0 |
+| `L20-HEAD-EXPOSED`     | an element reaches a callback the analysis cannot see into — exposure, not forcing (M2.3g)                                                                                                                                                                          |   723 |
 
 The rule counts are direct firings. The `Reuse` fact totals above are
 larger (1,860 `SharedTail`, 495 `MultiPass`) because M2.3e made `Reuse`
@@ -2182,14 +2182,14 @@ that asserts M1 does not call such a binding a recursive value.
 
 ### The advisory recommendation
 
-| | | |
-|---:|---|---|
-| 32 | `VecCandidate` | whole spine, entered more than once or outliving its consumers, no shared tail, finite producer |
-| 727 | `IteratorCandidate` | one pass, nothing retained, every spine consumer streaming, finite producer |
-| 1,925 | `PersistentCandidate` | a tail survives in two places, the spine is replayed, or repeated entry with tails retained |
-| 30 | `LazyCandidate` | a value knot, or a short-circuiting consumer in front of an unbounded producer |
-| 9,104 | `Unknown` | any fact is `Unknown`, or the facts match no recommendation — with the reason |
-| **11,818** | | |
+|            |                       |                                                                                                 |
+| ---------: | --------------------- | ----------------------------------------------------------------------------------------------- |
+|         32 | `VecCandidate`        | whole spine, entered more than once or outliving its consumers, no shared tail, finite producer |
+|        727 | `IteratorCandidate`   | one pass, nothing retained, every spine consumer streaming, finite producer                     |
+|      1,925 | `PersistentCandidate` | a tail survives in two places, the spine is replayed, or repeated entry with tails retained     |
+|         30 | `LazyCandidate`       | a value knot, or a short-circuiting consumer in front of an unbounded producer                  |
+|      9,104 | `Unknown`             | any fact is `Unknown`, or the facts match no recommendation — with the reason                   |
+| **11,818** |                       |                                                                                                 |
 
 **The ordering, corrected at M2.3g.** An advisory is a claim that a
 representation is sufficient *given everything we know*, so **every**
@@ -2204,11 +2204,11 @@ The positive facts are not lost. They are recorded as **constraints** on
 the flow — things any representation must support whatever the advisory
 says — and a constraint survives an `Unknown`:
 
-| constraint | | `-O1` | of which the recommendation is `Unknown` |
-|---|---|---:|---:|
-| `RequiresTailSharing` | a tail of this spine survives in a second place (`L14`) | 1,860 | 265 |
-| `RequiresRecursiveLaziness` | M1 calls the producer's binding a recursive value (`L13`) | 31 | 1 |
-| `RequiresReplay` | a consumer retains the spine and walks it again (`L19`) | 0 | 0 |
+| constraint                  |                                                           | `-O1` | of which the recommendation is `Unknown` |
+| --------------------------- | --------------------------------------------------------- | ----: | ---------------------------------------: |
+| `RequiresTailSharing`       | a tail of this spine survives in a second place (`L14`)   | 1,860 |                                      265 |
+| `RequiresRecursiveLaziness` | M1 calls the producer's binding a recursive value (`L13`) |    31 |                                        1 |
+| `RequiresReplay`            | a consumer retains the spine and walks it again (`L19`)   |     0 |                                        0 |
 
 Only then do the positive facts decide, in this order: a **value knot** is
 a knot whatever else is true of it; then a **proven shared tail**, because
@@ -2227,23 +2227,23 @@ M2.3b mapped 686 of the M2 census' 1,996 constructor-field sites onto a
 (construction, field) pair and deferred the 1,310 list-cons ones here. They
 map onto this population exactly:
 
-| | |
-|---:|---|
+|       |                                              |
+| ----: | -------------------------------------------- |
 | 1,310 | mapped onto the cell they are an argument of |
-| 0 | unmapped |
+|     0 | unmapped                                     |
 
 1,174 of them are the cell's **tail** and 136 its element — which is the
 shape of the thing: a lazy computation in a cons cell is usually the rest
 of the list.
 
-| by recommendation | | by `SpineDemand` | |
-|---:|---|---:|---|
-| 977 | Unknown | 682 | Unknown |
-| 289 | PersistentCandidate | 492 | None |
-| 39 | IteratorCandidate | 52 | Incremental |
-| 5 | VecCandidate | 40 | Prefix(DataDependent) |
-| | | 29 | Whole |
-| | | 15 | Prefix(Known) |
+| by recommendation |                     | by `SpineDemand` |                       |
+| ----------------: | ------------------- | ---------------: | --------------------- |
+|               977 | Unknown             |              682 | Unknown               |
+|               289 | PersistentCandidate |              492 | None                  |
+|                39 | IteratorCandidate   |               52 | Incremental           |
+|                 5 | VecCandidate        |               40 | Prefix(DataDependent) |
+|                   |                     |               29 | Whole                 |
+|                   |                     |               15 | Prefix(Known)         |
 
 ### Accounting
 
@@ -2255,14 +2255,14 @@ flow either has a short-circuiting consumer or has not; every imported head
 seen either has an axiom or has not; and every one of the census' list-cons
 sites maps onto exactly one cell or carries a reason.
 
-| profile | flows | ConsChain | Nil | Imported | Local | Vec | Iterator | Persistent | Lazy | Unknown |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `-O1` / A | 11,818 | 3,920 | 2,887 | 4,966 | 45 | 32 | 727 | 1,925 | 30 | 9,104 |
-| B | 12,146 | 3,989 | 3,024 | 5,083 | 50 | 37 | 701 | 2,079 | 30 | 9,299 |
-| C | 13,647 | 3,907 | 3,670 | 6,016 | 54 | 31 | 1,231 | 1,839 | 22 | 10,524 |
-| D | 23,886 | 6,291 | 8,516 | 9,025 | 54 | 32 | 1,886 | 2,480 | 82 | 19,406 |
-| E | 22,688 | 6,213 | 7,806 | 8,615 | 54 | 32 | 1,817 | 2,382 | 82 | 18,375 |
-| F | 22,807 | 6,262 | 7,839 | 8,652 | 54 | 32 | 1,795 | 2,362 | 82 | 18,536 |
+| profile   |  flows | ConsChain |   Nil | Imported | Local | Vec | Iterator | Persistent | Lazy | Unknown |
+| --------- | -----: | --------: | ----: | -------: | ----: | --: | -------: | ---------: | ---: | ------: |
+| `-O1` / A | 11,818 |     3,920 | 2,887 |    4,966 |    45 |  32 |      727 |      1,925 |   30 |   9,104 |
+| B         | 12,146 |     3,989 | 3,024 |    5,083 |    50 |  37 |      701 |      2,079 |   30 |   9,299 |
+| C         | 13,647 |     3,907 | 3,670 |    6,016 |    54 |  31 |    1,231 |      1,839 |   22 |  10,524 |
+| D         | 23,886 |     6,291 | 8,516 |    9,025 |    54 |  32 |    1,886 |      2,480 |   82 |  19,406 |
+| E         | 22,688 |     6,213 | 7,806 |    8,615 |    54 |  32 |    1,817 |      2,382 |   82 |  18,375 |
+| F         | 22,807 |     6,262 | 7,839 |    8,652 |    54 |  32 |    1,795 |      2,362 |   82 |  18,536 |
 
 `h2r tuples`, `--verify`, `--boundaries`, `h2r laziness`, `h2r parsec` and
 `h2r fields` are byte-identical on `-O1` before and after this milestone,
@@ -2272,7 +2272,7 @@ of any of them.
 
 ### Known limits, stated rather than hidden
 
-* **The axiom table is asserted.** Every `L-AX-…` entry is a claim about
+- **The axiom table is asserted.** Every `L-AX-…` entry is a claim about
   base that the dump does not prove. The entries most worth re-reading are
   the aliasing ones — `reverse1`'s accumulator becoming the result's tail,
   `unpackAppendCString#`'s second argument, `dropWhile`/`drop`/`span`
@@ -2280,17 +2280,17 @@ of any of them.
   `PersistentCandidate` into an `IteratorCandidate`, which is the unsafe
   direction. Nothing that could not be read off the function's contract
   with certainty got an entry.
-* **2,848 flows are stored with no visible spine demand**, and M2.3e split
+- **2,848 flows are stored with no visible spine demand**, and M2.3e split
   the reason by what holds them: 620
   (`…-in-a-holder-the-field-census-knows`) sit in a construction M2.3b has
   the field reads of, so M2.3f can pick that verdict up without re-analysing
   anything, and 2,228 (`…-in-a-holder-this-module-never-takes-apart`) sit in
   a holder that is never taken apart here or is not a construction at all.
   Whole-program (M2.4) work, not a missing rule here.
-* **1,700 flows reach a holder that escapes.** `L18-STORED-FOLLOWED`
+- **1,700 flows reach a holder that escapes.** `L18-STORED-FOLLOWED`
   inherits the holder's escapes, so a spine inside an escaping
   `TokenComment` is `Unknown` rather than guessed.
-* **Traversal counting over-counts rather than under-counts.** A consumer
+- **Traversal counting over-counts rather than under-counts.** A consumer
   is treated as a new entry into the spine unless it is reached through
   another consumer's tail alias, closed over known-local calls — and since
   M2.3e that closure requires **every** call site of a parameter to hand it
@@ -2301,11 +2301,11 @@ of any of them.
   are counted as two, which pushes a flow towards `MultiPass` and
   `PersistentCandidate`: the conservative direction for a representation
   decision.
-* **`Captured` is narrow.** A flow that crossed a parameter or a return is
+- **`Captured` is narrow.** A flow that crossed a parameter or a return is
   never called captured, because a consumer inside the callee's lambdas is
   where the value was *sent*, not where it was captured. That costs
   coverage in the safe direction.
-* **This section decides demand and sharing only.** No Rust type is chosen
+- **This section decides demand and sharing only.** No Rust type is chosen
   anywhere, and `[Char]` is not distinguished from any other element type.
 
 ## M2.3d — which of those flows are text, and what is done with them
@@ -2347,14 +2347,14 @@ records how `Char` was established.
 
 A list flow is selected when **any** of these fires. Each stands alone.
 
-| rule | what it reads | level |
-|---|---|---|
-| `X0-ELEM-TYPE` | the `(:)` alternative's head binder is `TyConApp Char []` | 4 |
-| `X1-LIST-TYPE` | the flow's own binder is `TyConApp List [TyConApp Char []]` | 4 |
-| `X2-UNPACK-PRODUCER` | the producer is an `unpackCString#`-family call | 2 over 5 |
-| `X3-CHAR-LITERAL-HEAD` | a cell's element is a `Char` literal or a saturated `C#` | 2 |
-| `X4-CHAR-SCRUTINY` | a head binder is scrutinised by a `case` on `C#` or a `Char` literal | 1 over 2 |
-| `X5-AXIOM-FIXES-CHAR` | a consumer's signature fixes the argument to `[Char]` (`eqString`, `unpackAppendCString#`, `lines`, `words`, `showLitString`, `hPutStr`, regex `compile`) | 5 |
+| rule                   | what it reads                                                                                                                                                                 | level    |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `X0-ELEM-TYPE`         | the `(:)` alternative's head binder is `TyConApp Char []`                                                                                                                     | 4        |
+| `X1-LIST-TYPE`         | the flow's own binder is `TyConApp List [TyConApp Char []]`                                                                                                                   | 4        |
+| `X2-UNPACK-PRODUCER`   | the producer is an `unpackCString#`-family call                                                                                                                               | 2 over 5 |
+| `X3-CHAR-LITERAL-HEAD` | a cell's element is a `Char` literal or a saturated `C#`                                                                                                                      | 2        |
+| `X4-CHAR-SCRUTINY`     | a head binder is scrutinised by a `case` on `C#` or a `Char` literal                                                                                                          | 1 over 2 |
+| `X5-AXIOM-FIXES-CHAR`  | a consumer's signature fixes the argument to `[Char]` (`eqString`, `unpackAppendCString#`, `lines`, `words`, `showLitString`, `hPutStr`, regex `compile`)                     | 5        |
 | `X24-APPEND-SAME-ELEM` | an append does not change the element type, so a `[Char]` anywhere in a connected component of (append result ↔ its list operands) establishes it everywhere in the component | 5 over 2 |
 
 `X24` is closed to a fixpoint with a union-find over the append relation. A
@@ -2364,19 +2364,19 @@ propagated into (0 refusals on every profile).
 
 On `-O1`, of M2.3c's 11,818 list flows:
 
-| | flows |
-|---|---:|
-| text | 4,431 |
+|                                                 | flows |
+| ----------------------------------------------- | ----: |
+| text                                            | 4,431 |
 | not text (element type reads as something else) | 1,788 |
-| element-type-unknown — never assumed text | 5,599 |
+| element-type-unknown — never assumed text       | 5,599 |
 
 and of the 4,431 text flows, how `Char` was established:
 
-| | flows |
-|---|---:|
-| type only (level 4: the element's `TyCon` is `Char`) | 58 |
+|                                                                     | flows |
+| ------------------------------------------------------------------- | ----: |
+| type only (level 4: the element's `TyCon` is `Char`)                |    58 |
 | structural only (the type did not agree, or there was none to read) | 1,772 |
-| both — the type and a fact that reads no type agree | 2,601 |
+| both — the type and a fact that reads no type agree                 | 2,601 |
 
 90 of the structural selections came from `X24`. The type alone carries
 only 58 flows; it is the *corroboration* it provides on 2,601 that it is
@@ -2410,68 +2410,68 @@ table or not.
 
 Recorded independently, per flow:
 
-* **`TextShape`** — `TextOnly` (every consumer is a `TEXT_HEADS` entry),
+- **`TextShape`** — `TextOnly` (every consumer is a `TEXT_HEADS` entry),
   `Mixed` (a generic list combinator or a structural `case` on the cells),
   `Unknown` (an imported head neither table knows, or the value left the
   walk), `Unobserved` (nothing observes it at all).
-* **`Literal`** and **`AppendChain { length, all_literal, opaque }`** —
+- **`Literal`** and **`AppendChain { length, all_literal, opaque }`** —
   counted in *operand segments* off the Core spine at the producer,
   following a let-bound operand by lexical identity, depth-capped at 64.
-* **Per-consumer class** — `CompleteOutput` (the whole text is the subject:
+- **Per-consumer class** — `CompleteOutput` (the whole text is the subject:
   output, `eqString`, `==`, `length`, `reverse`, a regex compile),
   `Prefix` (`isPrefixOf`, `take`, `head`, `null`, `takeWhile`, a `case` on
   the first cell), `Incremental` (the left side of `++`, `map` over the
   characters, streaming output), `Retained` (nothing is demanded here),
   `Unknown`. Derived from the consumer's own M2.3c `SpineDemand` unless
   `TEXT_HEADS` asserts otherwise.
-* **`char_semantics_required`** with its reasons — an element is exposed or
+- **`char_semantics_required`** with its reasons — an element is exposed or
   the operation depends on characters rather than on encoded bytes. **This
   does not preclude `String`**: it says a future representation must
   preserve character semantics explicitly.
-* **`SharedTails`, `PrefixConsumers`, `Storage`, `Escapes`** — inherited
+- **`SharedTails`, `PrefixConsumers`, `Storage`, `Escapes`** — inherited
   from `L14`, `L10`/`L16`, `L11`; cited, never recomputed.
 
 On `-O1`:
 
-| TextShape | flows | | consumer class | consumers |
-|---|---:|---|---|---:|
-| TextOnly | 1,862 | | CompleteOutput | 1,488 |
-| Mixed | 38 | | Prefix | 653 |
-| Unobserved | 1,004 | | Incremental | 364 |
-| Unknown | 1,527 | | Retained | 6,641 |
-| | | | Unknown | 2,891 |
+| TextShape  | flows |   | consumer class | consumers |
+| ---------- | ----: | - | -------------- | --------: |
+| TextOnly   | 1,862 |   | CompleteOutput |     1,488 |
+| Mixed      |    38 |   | Prefix         |       653 |
+| Unobserved | 1,004 |   | Incremental    |       364 |
+| Unknown    | 1,527 |   | Retained       |     6,641 |
+|            |       |   | Unknown        |     2,891 |
 
-| consumer side | consumers | | text family | consumers |
-|---|---:|---|---|---:|
-| Text | 3,690 | | Append | 1,917 |
-| Neutral | 5,072 | | Compare | 1,184 |
-| Opaque | 2,837 | | Show | 174 |
-| Structural | 232 | | Affix | 173 |
-| Generic | 206 | | CharSearch | 121 |
-| | | | Output | 61 |
-| | | | Regex | 55 |
-| | | | LinesWords | 5 |
+| consumer side | consumers |   | text family | consumers |
+| ------------- | --------: | - | ----------- | --------: |
+| Text          |     3,690 |   | Append      |     1,917 |
+| Neutral       |     5,072 |   | Compare     |     1,184 |
+| Opaque        |     2,837 |   | Show        |       174 |
+| Structural    |       232 |   | Affix       |       173 |
+| Generic       |       206 |   | CharSearch  |       121 |
+|               |           |   | Output      |        61 |
+|               |           |   | Regex       |        55 |
+|               |           |   | LinesWords  |         5 |
 
 Construction: 2,414 flows are literal (`unpackCString#`-family producers),
 1,349 are built by an append, 7 of those from literals only, and 1,268 are
 an operand of an append. The append-chain histogram, in operand segments:
 
-| segments | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| flows | 1,045 | 184 | 47 | 33 | 19 | 6 | 3 | 4 | 1 | 2 | 2 | 1 | 1 | 1 |
+| segments |     2 |   3 |  4 |  5 |  6 |  7 |  8 |  9 | 10 | 11 | 12 | 13 | 14 | 15 |
+| -------- | ----: | --: | -: | -: | -: | -: | -: | -: | -: | -: | -: | -: | -: | -: |
+| flows    | 1,045 | 184 | 47 | 33 | 19 |  6 |  3 |  4 |  1 |  2 |  2 |  1 |  1 |  1 |
 
 `char_semantics_required` holds for 882 of the 4,431, for these reasons
 (a flow may have several):
 
-| reason | count |
-|---|---:|
-| a consumer exposes individual characters | 738 |
-| an element **is forced** (M2.3c's `HeadDemand`, proven) | 383 |
-| a `(:)` alternative binds and uses the head | 177 |
-| an element **is exposed to a callback** (M2.3c's `HeadExposure`) | 161 |
-| a consumer depends on character positions or count | 69 |
-| the head is compared against a `Char` literal | 59 |
-| a `Char` literal is an element | 1 |
+| reason                                                           | count |
+| ---------------------------------------------------------------- | ----: |
+| a consumer exposes individual characters                         |   738 |
+| an element **is forced** (M2.3c's `HeadDemand`, proven)          |   383 |
+| a `(:)` alternative binds and uses the head                      |   177 |
+| an element **is exposed to a callback** (M2.3c's `HeadExposure`) |   161 |
+| a consumer depends on character positions or count               |    69 |
+| the head is compared against a `Char` literal                    |    59 |
+| a `Char` literal is an element                                   |     1 |
 
 M2.3g split the second row. Before it, `an-element-is-forced` covered 510
 flows, and for most of them the only evidence was a predicate or an `Eq`
@@ -2487,12 +2487,12 @@ Derived from the facts and clearly separated from them. **Nothing here
 decides that any flow is a Rust `String`.** Precedence: any `Unknown` fact
 first, then `NotText`, then the strong conjunction, then undecided.
 
-| advisory | flows | condition |
-|---|---:|---|
-| `StrongStringCandidate` | 185 | `TextOnly` ∧ only complete-output or incremental consumers ∧ no character observed ∧ no shared tail ∧ no prefix consumer ∧ `FiniteProducer` |
-| `TextValueUndecided` | 2,561 | text, representation open |
-| `NotText` | 2 | selected by type, consumed only structurally, and no character observed anywhere |
-| `Unknown` | 1,683 | an opaque consumer, a real escape, or an unknown consumer class |
+| advisory                | flows | condition                                                                                                                                   |
+| ----------------------- | ----: | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `StrongStringCandidate` |   185 | `TextOnly` ∧ only complete-output or incremental consumers ∧ no character observed ∧ no shared tail ∧ no prefix consumer ∧ `FiniteProducer` |
+| `TextValueUndecided`    | 2,561 | text, representation open                                                                                                                   |
+| `NotText`               |     2 | selected by type, consumed only structurally, and no character observed anywhere                                                            |
+| `Unknown`               | 1,683 | an opaque consumer, a real escape, or an unknown consumer class                                                                             |
 
 2,345 flows have no text-shaped consumer at all, whatever else is unknown
 about them — the honest measure of how much of ShellCheck's text is handled
@@ -2507,13 +2507,13 @@ position — which `text::census_site` reproduces exactly, so the two
 milestones count the same 1,118 sites. Each is mapped onto the text flow
 its argument carries, or carries a reason:
 
-| | sites |
-|---|---:|
-| map onto a text flow (all `TextValueUndecided`) | 226 |
-| the argument is a `case`/`let` with no single producer | 281 |
-| the argument is a local call result M2.3c follows as a *location* of another flow, not a flow of its own | 281 |
-| the argument's flow is not text | 234 |
-| the argument is an imported call with no axiom | 96 |
+|                                                                                                          | sites |
+| -------------------------------------------------------------------------------------------------------- | ----: |
+| map onto a text flow (all `TextValueUndecided`)                                                          |   226 |
+| the argument is a `case`/`let` with no single producer                                                   |   281 |
+| the argument is a local call result M2.3c follows as a *location* of another flow, not a flow of its own |   281 |
+| the argument's flow is not text                                                                          |   234 |
+| the argument is an imported call with no axiom                                                           |    96 |
 
 Separately, as *evidence* rather than population: of M2.3c's append
 **consumer** sites, all 1,002 `unpackAppendCString#` sites and 905 of the
@@ -2530,14 +2530,14 @@ every append-produced flow appears exactly once in the histogram; the
 per-module totals sum to the population; and every one of the census'
 append argument sites maps onto exactly one text flow or carries a reason.
 
-| profile | list flows | text | not text | elem unknown | type-only | struct-only | both | Strong | Undecided | NotText | Unknown |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `-O1` / A | 11,818 | 4,431 | 1,788 | 5,599 | 58 | 1,772 | 2,601 | 185 | 2,561 | 2 | 1,683 |
-| B | 12,146 | 4,473 | 1,782 | 5,891 | 65 | 1,826 | 2,582 | 205 | 2,588 | 0 | 1,680 |
-| C | 13,647 | 5,344 | 1,648 | 6,655 | 52 | 3,673 | 1,619 | 186 | 3,045 | 0 | 2,113 |
-| D | 23,886 | 7,783 | 2,389 | 13,714 | 108 | 5,352 | 2,323 | 202 | 4,141 | 0 | 3,440 |
-| E | 22,688 | 7,481 | 2,389 | 12,818 | 108 | 5,038 | 2,335 | 202 | 3,947 | 0 | 3,332 |
-| F | 22,807 | 7,619 | 2,387 | 12,801 | 110 | 5,187 | 2,322 | 202 | 3,945 | 0 | 3,472 |
+| profile   | list flows |  text | not text | elem unknown | type-only | struct-only |  both | Strong | Undecided | NotText | Unknown |
+| --------- | ---------: | ----: | -------: | -----------: | --------: | ----------: | ----: | -----: | --------: | ------: | ------: |
+| `-O1` / A |     11,818 | 4,431 |    1,788 |        5,599 |        58 |       1,772 | 2,601 |    185 |     2,561 |       2 |   1,683 |
+| B         |     12,146 | 4,473 |    1,782 |        5,891 |        65 |       1,826 | 2,582 |    205 |     2,588 |       0 |   1,680 |
+| C         |     13,647 | 5,344 |    1,648 |        6,655 |        52 |       3,673 | 1,619 |    186 |     3,045 |       0 |   2,113 |
+| D         |     23,886 | 7,783 |    2,389 |       13,714 |       108 |       5,352 | 2,323 |    202 |     4,141 |       0 |   3,440 |
+| E         |     22,688 | 7,481 |    2,389 |       12,818 |       108 |       5,038 | 2,335 |    202 |     3,947 |       0 |   3,332 |
+| F         |     22,807 | 7,619 |    2,387 |       12,801 |       110 |       5,187 | 2,322 |    202 |     3,945 |       0 |   3,472 |
 
 `h2r tuples`, `--verify`, `h2r laziness`, `h2r parsec`, `h2r fields` and
 `h2r lists` (with `--axioms`) are byte-identical on `-O1` before and after
@@ -2545,16 +2545,16 @@ this milestone.
 
 ### Known limits, stated rather than hidden
 
-* **Selection by type is level 4** since M2.4a — `TyCon` identity, not a
+- **Selection by type is level 4** since M2.4a — `TyCon` identity, not a
   rendered string. 58 flows rest on it alone. What it still cannot do is
   see through a type *variable*, and it does not try.
-* **The text-head table is asserted.** The entries worth re-reading are the
+- **The text-head table is asserted.** The entries worth re-reading are the
   class overrides: calling `eqString` a *complete-output* consumer when its
   spine demand is a data-dependent prefix is a claim about what a
   representation decision turns on (the whole text is the subject of the
   comparison), not about how many cells are walked. `isPrefixOf` was
   deliberately **not** overridden, so it stays a prefix consumer.
-* **`unpackCStringAscii#` has no axiom, and M2.3e established that it must
+- **`unpackCStringAscii#` has no axiom, and M2.3e established that it must
   not get one.** The 27 call sites in `ShellCheck.Formatter.JSON` and
   `.JSON1` are `$text-2.0.2$Data.Text.Show$$wunpackCStringAscii#`, and the
   `case` that consumes each one binds `(# ByteArray#, Int#, Int# #)`: it
@@ -2562,18 +2562,18 @@ this milestone.
   this milestone because it is not a list function at all, so the refusal is
   correct rather than a coverage loss. `unpackFoldrCString#` does not occur
   in this program.
-* **5,599 flows are element-type-unknown.** Most are flows with no bound
+- **5,599 flows are element-type-unknown.** Most are flows with no bound
   binder, no `(:)` alternative and no text-shaped consumer — nothing in the
   dump says what their elements are, and nothing here guesses.
-* **1,527 flows have an `Unknown` shape.** 2,837 consumers are imported
+- **1,527 flows have an `Unknown` shape.** 2,837 consumers are imported
   heads neither table knows or points at which the value left the walk;
   the largest single one is `ShellCheck.Interface.$wgo` (394 consumers).
   Whole-program work (M2.4), not a missing rule here.
-* **Append chains are a lower bound.** An operand that is a parameter, a
+- **Append chains are a lower bound.** An operand that is a parameter, a
   case, or an imported call counts as one segment and sets
   `all_literal = false`; the `opaque` field says how many such segments a
   chain has.
-* **No Rust type is chosen.** `StrongStringCandidate` is the name of a
+- **No Rust type is chosen.** `StrongStringCandidate` is the name of a
   conjunction of facts, not a decision. Even `char_semantics_required` does
   not rule `String` out — it rules out silently treating the value as
   bytes.
@@ -2594,15 +2594,15 @@ would only re-run the analysis being checked.
 
 What it re-derives, and why those and not others:
 
-| claim | `-O1` | a wrong one costs |
-|---|---:|---|
-| `Direct` field | 3,408 | a field's evaluation moves to the construction: a moved divergence |
-| `Dead` field | 9 | a field that is read is dropped |
-| `Recursive` field | 9 | M1's knot verdict misapplied |
-| list `RecursiveKnot` | 31 | ditto |
-| `VecCandidate` | 32 | a shared or infinite spine materialised |
-| `IteratorCandidate` | 727 | a spine that is re-entered or retained turned into a one-shot iterator |
-| `StrongStringCandidate` | 185 | a value whose characters are observed treated as opaque text |
+| claim                   | `-O1` | a wrong one costs                                                      |
+| ----------------------- | ----: | ---------------------------------------------------------------------- |
+| `Direct` field          | 3,408 | a field's evaluation moves to the construction: a moved divergence     |
+| `Dead` field            |     9 | a field that is read is dropped                                        |
+| `Recursive` field       |     9 | M1's knot verdict misapplied                                           |
+| list `RecursiveKnot`    |    31 | ditto                                                                  |
+| `VecCandidate`          |    32 | a shared or infinite spine materialised                                |
+| `IteratorCandidate`     |   727 | a spine that is re-entered or retained turned into a one-shot iterator |
+| `StrongStringCandidate` |   185 | a value whose characters are observed treated as opaque text           |
 
 A wrong `Deferred` / `Persistent` / `Undecided` / `Unknown` only costs
 coverage, so nothing re-derives those.
@@ -2613,13 +2613,13 @@ Two things are *asserted* rather than derived anywhere in this compiler, and
 re-deriving them would mean inventing a second unchecked assertion rather
 than checking the first. The verifier therefore consults **the same** tables:
 
-* the [library demand-semantics table](#the-library-demand-semantics-table)
+- the [library demand-semantics table](#the-library-demand-semantics-table)
   and the [text-head table](#the-text-head-table). What the verifier
   re-derives itself is everything around them: that the head really is an
   import, its stable name, which value argument of the call the value lands
   in, how many value arguments the call supplies, and hence which row
   applies;
-* **M1's** `Class::RecursiveValue`, which every milestone reads rather than
+- **M1's** `Class::RecursiveValue`, which every milestone reads rather than
   re-derives.
 
 Everything else — aliasing, reachability, scrutiny, storage, escape,
@@ -2627,14 +2627,14 @@ traversal counting — is re-derived from the arena.
 
 ### What it found
 
-| dump | claims | re-derived | **disagreements** | coverage refusals |
-|---|---:|---:|---:|---:|
-| `-O1` (and matrix A) | 4,401 | 4,391 | **0** | 10 |
-| B | 5,277 | 5,266 | **0** | 11 |
-| C | 6,127 | 6,112 | **0** | 15 |
-| D | 16,810 | 16,795 | **0** | 15 |
-| E | 15,111 | 15,096 | **0** | 15 |
-| F | 15,077 | 15,062 | **0** | 15 |
+| dump                 | claims | re-derived | **disagreements** | coverage refusals |
+| -------------------- | -----: | ---------: | ----------------: | ----------------: |
+| `-O1` (and matrix A) |  4,401 |      4,391 |             **0** |                10 |
+| B                    |  5,277 |      5,266 |             **0** |                11 |
+| C                    |  6,127 |      6,112 |             **0** |                15 |
+| D                    | 16,810 |     16,795 |             **0** |                15 |
+| E                    | 15,111 |     15,096 |             **0** |                15 |
+| F                    | 15,077 |     15,062 |             **0** |                15 |
 
 That is the state *after* the fixes below. The first run refused **483 of
 4,431 claims on `-O1`**, and those refusals were five different things —
@@ -2685,10 +2685,10 @@ storage rule to `Vec`, which *requires* storage or re-entry.
 
 Ten refusals on `-O1`, none of them a claim about the census:
 
-| n | claim | reason |
-|---:|---|---|
-| 5 | `IteratorCandidate` | `entries-counted-across-a-consed-as-tail-hop` |
-| 5 | `VecCandidate` | `the-Whole-spine-of-a-loop-is-not-re-derivable-here` |
+|  n | claim               | reason                                               |
+| -: | ------------------- | ---------------------------------------------------- |
+|  5 | `IteratorCandidate` | `entries-counted-across-a-consed-as-tail-hop`        |
+|  5 | `VecCandidate`      | `the-Whole-spine-of-a-loop-is-not-re-derivable-here` |
 
 The first: the verifier counts every consumer reached across an `L7` hop as
 an independent entry into the spine, because from the suffix's point of view
@@ -2712,12 +2712,12 @@ is a statement about the census' own walk. What it does instead is count the
 
 ### `Direct`, by what actually proved it
 
-| | `-O1` |
-|---|---:|
-| `R1-STRICT-FIELD` (GHC made the field strict) | 3,323 |
-| `R2-FIELD-IS-VALUE` (the expression is already a value) | 85 |
+|                                                                | `-O1` |
+| -------------------------------------------------------------- | ----: |
+| `R1-STRICT-FIELD` (GHC made the field strict)                  | 3,323 |
+| `R2-FIELD-IS-VALUE` (the expression is already a value)        |    85 |
 | …of which the **only** evidence is that it is a string literal | **0** |
-| `R3-SAME-FRONTIER` | 0 |
+| `R3-SAME-FRONTIER`                                             |     0 |
 
 The middle row is the one worth calling out. `R2` accepts a string literal —
 `unpackCString# "…"#` — and that is the one clause in the whole census that
@@ -2743,32 +2743,32 @@ assertion is that the list is at `End(1)` and the accumulator at `End(0)`;
 spines in the dump pass a literal `[]` as the *second* value argument and
 none as the first, which makes the position observable rather than assumed.
 
-| entry | outcome |
-|---|---|
-| `reverse1` | confirmed — 87/87 call sites, `[]` second |
-| `unpackAppendCString#` / `…Utf8#` | confirmed — 1,086 + 1 call sites, the list is the second argument and becomes the result's tail |
-| `++`, `++_$s++` | confirmed — 927 + 68 call sites; the right operand *is* the result's tail |
-| `drop`, `span`, `break`, `splitAt`, `tail` | order and suffix-aliasing confirmed against base; **0 call sites in this dump** |
-| `dropWhile`, `$wspan`, `$wbreak` | confirmed — 29 / 16 / 6 call sites |
-| `GHC.Magic.lazy` | confirmed — the identity, 72 call sites |
-| `Data.Foldable.toList` | kept; it is a class-method key and the entry is only reached at the list instance, where it is the identity. 0 call sites |
-| `GHC.List.concat`, `Data.Foldable.concat` | **corrected to `NoAlias`.** `concat = foldr (++) []` copies every inner list (each is a *left* operand of `++`), and a `[[a]]` spine cell can never be an `[a]` result cell. 0 call sites, so no output moved |
-| `Data.OldList.lines` | **corrected to `NoAlias`**, same reasoning: each line is `break`'s freshly built first component, and a `[String]` spine cell is not a `String` cell. 5 consumer sites |
+| entry                                      | outcome                                                                                                                                                                                                       |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reverse1`                                 | confirmed — 87/87 call sites, `[]` second                                                                                                                                                                     |
+| `unpackAppendCString#` / `…Utf8#`          | confirmed — 1,086 + 1 call sites, the list is the second argument and becomes the result's tail                                                                                                               |
+| `++`, `++_$s++`                            | confirmed — 927 + 68 call sites; the right operand *is* the result's tail                                                                                                                                     |
+| `drop`, `span`, `break`, `splitAt`, `tail` | order and suffix-aliasing confirmed against base; **0 call sites in this dump**                                                                                                                               |
+| `dropWhile`, `$wspan`, `$wbreak`           | confirmed — 29 / 16 / 6 call sites                                                                                                                                                                            |
+| `GHC.Magic.lazy`                           | confirmed — the identity, 72 call sites                                                                                                                                                                       |
+| `Data.Foldable.toList`                     | kept; it is a class-method key and the entry is only reached at the list instance, where it is the identity. 0 call sites                                                                                     |
+| `GHC.List.concat`, `Data.Foldable.concat`  | **corrected to `NoAlias`.** `concat = foldr (++) []` copies every inner list (each is a *left* operand of `++`), and a `[[a]]` spine cell can never be an `[a]` result cell. 0 call sites, so no output moved |
+| `Data.OldList.lines`                       | **corrected to `NoAlias`**, same reasoning: each line is `break`'s freshly built first component, and a `[String]` spine cell is not a `String` cell. 5 consumer sites                                        |
 
 Eleven entries were added, each confirmed from base-4.18.3.0's source *and*
 from the dump's own types at a call site:
 
-| added | confirmed by | calls |
-|---|---|---:|
-| `$fEqList_$s$c==1`, `$s$c==2` | ghc-prim's `instance Eq a => Eq [a]`; the dump types both arguments `[Char]`/`[String]` and the result `Bool` | 81, 2 |
-| `$fOrdList_$s$ccompare`, `$s$ccompare1` | the matching `Ord [a]` instance; result `Ordering` | 3, 72 |
-| `Data.OldList.dropLength` | `dropLength :: [a] -> [b] -> [b]`, returns a **suffix of the second** argument; the dump's binders are literally `ns`/`hs`/`delta`, `isSuffixOf`'s own names | 11 |
-| `Data.OldList.dropLengthMaybe` | the same, returning `Maybe [b]` | 31 |
-| `Data.OldList.prependToAll` | `prependToAll sep (x:xs) = sep : x : …`; separator first, list second, confirmed by the dump's `[[Char]]` second argument | 3 |
-| `GHC.List.splitAt_$s$wsplitAt'` | base's local `splitAt' :: Int -> [a] -> ([a],[a])`; the dump shows `Int#` then the list, and a literal `3#`/`1#` count | 10 |
-| `GHC.List.flipSeq` | base's `flipSeq x !_n = x`, "just flip seq": the result **is** the first argument and the second is forced and discarded | 11 |
-| `GHC.List.init1` | base's local `init' :: t -> [t] -> [t]`, floated out of `init`; the dump types the arguments `Token` and `[Token]` | 0 |
-| `GHC.List.head1` | base's `badHead :: HasCallStack => a`, the `head []` error: **no list argument at all**, which the dump confirms (the type argument is the *result* type and the value argument is a CallStack) | 0 |
+| added                                   | confirmed by                                                                                                                                                                                    | calls |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
+| `$fEqList_$s$c==1`, `$s$c==2`           | ghc-prim's `instance Eq a => Eq [a]`; the dump types both arguments `[Char]`/`[String]` and the result `Bool`                                                                                   | 81, 2 |
+| `$fOrdList_$s$ccompare`, `$s$ccompare1` | the matching `Ord [a]` instance; result `Ordering`                                                                                                                                              | 3, 72 |
+| `Data.OldList.dropLength`               | `dropLength :: [a] -> [b] -> [b]`, returns a **suffix of the second** argument; the dump's binders are literally `ns`/`hs`/`delta`, `isSuffixOf`'s own names                                    |    11 |
+| `Data.OldList.dropLengthMaybe`          | the same, returning `Maybe [b]`                                                                                                                                                                 |    31 |
+| `Data.OldList.prependToAll`             | `prependToAll sep (x:xs) = sep : x : …`; separator first, list second, confirmed by the dump's `[[Char]]` second argument                                                                       |     3 |
+| `GHC.List.splitAt_$s$wsplitAt'`         | base's local `splitAt' :: Int -> [a] -> ([a],[a])`; the dump shows `Int#` then the list, and a literal `3#`/`1#` count                                                                          |    10 |
+| `GHC.List.flipSeq`                      | base's `flipSeq x !_n = x`, "just flip seq": the result **is** the first argument and the second is forced and discarded                                                                        |    11 |
+| `GHC.List.init1`                        | base's local `init' :: t -> [t] -> [t]`, floated out of `init`; the dump types the arguments `Token` and `[Token]`                                                                              |     0 |
+| `GHC.List.head1`                        | base's `badHead :: HasCallStack => a`, the `head []` error: **no list argument at all**, which the dump confirms (the type argument is the *result* type and the value argument is a CallStack) |     0 |
 
 The last two fire zero times in this dump and are kept as the written record
 of what they are: `head1` can never be a list consumer, and `init1`'s list
@@ -2776,11 +2776,11 @@ argument is never reached by a tracked flow.
 
 Two heads keep their refusal, and for different reasons:
 
-* `$base$Data.OldList$intercalate_$spoly_go1` (3 call spines, **0** consumer
+- `$base$Data.OldList$intercalate_$spoly_go1` (3 call spines, **0** consumer
   sites) — `poly_go` is a name GHC generated; base contains no such
   definition, so an entry could only be read off the shape of a call site.
   That is a guess, and the table does not take guesses.
-* `$text-2.0.2$Data.Text.Show$$wunpackCStringAscii#` (27 call sites) — it is
+- `$text-2.0.2$Data.Text.Show$$wunpackCStringAscii#` (27 call sites) — it is
   **not a list function**. Every `case` that consumes it binds
   `(# ByteArray#, Int#, Int# #)`: it builds a `Data.Text.Text`. M2.3d
   recorded its absence as a coverage loss; it is not one, and an axiom would
@@ -2792,7 +2792,7 @@ them under that module.
 
 ### The text-head overrides, challenged
 
-* **`eqString` is classed `CompleteOutput` although its spine demand is a
+- **`eqString` is classed `CompleteOutput` although its spine demand is a
   data-dependent prefix.** *Kept.* The two facts answer different questions
   and both are recorded: M2.3c says how many cells are walked (a prefix —
   the comparison stops at the first difference), M2.3d says what the value
@@ -2802,7 +2802,7 @@ them under that module.
   whole string. The `Prefix` fact is still there, uncontradicted, and the
   advisory still refuses `StrongStringCandidate` whenever a `Prefix`
   *consumer class* is present — which is the safety-relevant use of it.
-* **`isPrefixOf` is deliberately not overridden.** *Kept.* It is the case
+- **`isPrefixOf` is deliberately not overridden.** *Kept.* It is the case
   where the prefix really is the value's role: `"foo" isPrefixOf s` reads as
   much of `s` as it needs and no more, and a representation that can answer
   it from a prefix is a legitimate choice. Overriding it to
@@ -2811,12 +2811,12 @@ them under that module.
 
 ### The two derivation orderings, challenged
 
-* **A value knot wins over everything.** *Kept.* `Recursion::RecursiveKnot`
+- **A value knot wins over everything.** *Kept.* `Recursion::RecursiveKnot`
   is M1's verdict that the binding refers to itself *through the value*;
   there is no representation that is not a knot for such a thing, whatever
   the demand facts say, so deciding it first is not a precedence choice but
   the only correct answer. The 31 flows it covers are all `LazyCandidate`.
-* **A proven `SharedTail` outranks an `Unknown` spine.** *Kept at M2.3e —
+- **A proven `SharedTail` outranks an `Unknown` spine.** *Kept at M2.3e —
   and **reversed at M2.3g**, which is the one M2.3e ruling that did not
   survive.* The reasoning below is sound about the fact and wrong about the
   advisory: two owners seeing the same cells is indeed a positive
@@ -2839,24 +2839,24 @@ Each shape has a hand-built regression test in `h2r-analysis/src/tests.rs`
 *and* a count in the real `-O1` dump, printed by `verify-rep`, so that a
 hand-built test is never the only evidence a rule was exercised.
 
-| # | shape | in `-O1` | example | verdict |
-|---|---|---:|---|---|
-| 1 | `Foo (error …)` observed only at WHNF | 53 | `ShellCheck.Checks.ShellSupport` 112 | never `Direct` |
-| 2a | an unused **lazy** field | 7 | `ShellCheck.CFG` 10329 | `Dead` |
-| 2b | an unused **strict** field | 14 | `ShellCheck.ASTLib` 1626 | **not** `Dead` — forced at WHNF |
-| 3 | forced on one branch, not another | 720 | `Main` 411 | `Deferred` |
-| 4 | `take 1 (x : expensiveTail)` | 179 | `ShellCheck.ASTLib` 1220 | `Prefix(Known)`, never `Vec` |
-| 5 | a `find`/`any` short-circuit | 921 | `Main` 140 | `Prefix(DataDependent)` + short-circuit, never `Vec` |
-| 6 | two consumers sharing one tail | 1,860 | `Main` 7448 | `SharedTail` → `Persistent` (or a constraint on an `Unknown`), never `Iterator` |
-| 7 | a finite recursive producer (a `go`) | 759 | `Main` 576 | `FiniteProducer`, not a knot |
-| 8 | an actual recursive list value | 30 | `ShellCheck.Analytics` 2042 | `RecursiveKnot` → `LazyCandidate` (one more is a knot whose spine demand is `Unknown`) |
-| 9a | stored in another ADT, holder read structurally | 181 | `Main` 140 | `StoredIn`, spine facts propagate |
-| 9b | stored in another ADT, holder escapes | 4,357 | `Main` 74 | `Unknown` |
-| 10 | through a higher-order parameter | 1,402 | `Main` 349 | `Unknown` with a reason |
-| 11 | `[Char]` used textually **and** structurally | 151 | `Main` 135 | `TextValueUndecided` + `char_semantics_required`, never `StrongString` |
-| 12 | `foldl'` over a whole list | 38 | `Main` 5566 | `Whole` spine, `IteratorCandidate` not `Vec` |
-| 13 | the right operand of `xs ++ ys` | 1,770 | `Main` 7448 | `SharedTail` on `ys` |
-| 14 | a case-binder alias under an unreachable alternative | 4 | `ShellCheck.Analytics` 99 | no escape — confirmed from both sides |
+| #  | shape                                                | in `-O1` | example                              | verdict                                                                                |
+| -- | ---------------------------------------------------- | -------: | ------------------------------------ | -------------------------------------------------------------------------------------- |
+| 1  | `Foo (error …)` observed only at WHNF                |       53 | `ShellCheck.Checks.ShellSupport` 112 | never `Direct`                                                                         |
+| 2a | an unused **lazy** field                             |        7 | `ShellCheck.CFG` 10329               | `Dead`                                                                                 |
+| 2b | an unused **strict** field                           |       14 | `ShellCheck.ASTLib` 1626             | **not** `Dead` — forced at WHNF                                                        |
+| 3  | forced on one branch, not another                    |      720 | `Main` 411                           | `Deferred`                                                                             |
+| 4  | `take 1 (x : expensiveTail)`                         |      179 | `ShellCheck.ASTLib` 1220             | `Prefix(Known)`, never `Vec`                                                           |
+| 5  | a `find`/`any` short-circuit                         |      921 | `Main` 140                           | `Prefix(DataDependent)` + short-circuit, never `Vec`                                   |
+| 6  | two consumers sharing one tail                       |    1,860 | `Main` 7448                          | `SharedTail` → `Persistent` (or a constraint on an `Unknown`), never `Iterator`        |
+| 7  | a finite recursive producer (a `go`)                 |      759 | `Main` 576                           | `FiniteProducer`, not a knot                                                           |
+| 8  | an actual recursive list value                       |       30 | `ShellCheck.Analytics` 2042          | `RecursiveKnot` → `LazyCandidate` (one more is a knot whose spine demand is `Unknown`) |
+| 9a | stored in another ADT, holder read structurally      |      181 | `Main` 140                           | `StoredIn`, spine facts propagate                                                      |
+| 9b | stored in another ADT, holder escapes                |    4,357 | `Main` 74                            | `Unknown`                                                                              |
+| 10 | through a higher-order parameter                     |    1,402 | `Main` 349                           | `Unknown` with a reason                                                                |
+| 11 | `[Char]` used textually **and** structurally         |      151 | `Main` 135                           | `TextValueUndecided` + `char_semantics_required`, never `StrongString`                 |
+| 12 | `foldl'` over a whole list                           |       38 | `Main` 5566                          | `Whole` spine, `IteratorCandidate` not `Vec`                                           |
+| 13 | the right operand of `xs ++ ys`                      |    1,770 | `Main` 7448                          | `SharedTail` on `ys`                                                                   |
+| 14 | a case-binder alias under an unreachable alternative |        4 | `ShellCheck.Analytics` 99            | no escape — confirmed from both sides                                                  |
 
 Case 14 is the one both sides had to agree on separately: the verifier does
 its own constructor-relative alternative selection and skips the case
@@ -2866,32 +2866,32 @@ escape for it either.
 
 ### M2.3e acceptance
 
-* `h2r verify-rep` re-derives every `Direct`, `Dead`, `Recursive`,
+- `h2r verify-rep` re-derives every `Direct`, `Dead`, `Recursive`,
   `RecursiveKnot`, `VecCandidate`, `IteratorCandidate` and
   `StrongStringCandidate` verdict with **0 disagreements** on `-O1` and on
   all six matrix profiles; the ten remaining refusals are the two
   weakenings written down above, both coverage-only, both named in the
   output as `C` rather than `D`.
-* `h2r tuples`, `--verify`, `--boundaries`, `h2r laziness` and `h2r parsec`
+- `h2r tuples`, `--verify`, `--boundaries`, `h2r laziness` and `h2r parsec`
   are byte-identical on `-O1` before and after.
-* `cargo test` (141), `cargo clippy --all-targets` (0 warnings) and
+- `cargo test` (141), `cargo clippy --all-targets` (0 warnings) and
   `cargo fmt --check` are clean; `ListAccounting::check`,
   `FieldAccounting::check` and `TextAccounting::check` still close on all
   seven dumps.
 
 ### Still unsound, or still unchecked
 
-* The axiom table and the text-head table remain **asserted**, and the
+- The axiom table and the text-head table remain **asserted**, and the
   verifier consults them rather than checking them. What M2.3e added is that
   every aliasing claim now cites base's own definition and a call site in
   this dump; the demand claims (`Whole`, `Incremental`, prefix) are still
   read off contracts and not proved.
-* `Produces::SameAsInput` on a polymorphic identity (`GHC.Magic.lazy`) makes
+- `Produces::SameAsInput` on a polymorphic identity (`GHC.Magic.lazy`) makes
   every call a list producer regardless of the result type. `flipSeq` was
   given `NotAList` for exactly that reason, but `lazy`'s 72 call spines were
   left as they were rather than changing published output on a point the
   verifier does not depend on.
-* The five `VecCandidate` verdicts whose `Whole` fact comes from
+- The five `VecCandidate` verdicts whose `Whole` fact comes from
   `L4-LOOP-WHOLE` rest on one walk, not two.
 
 ## M2.3f — the representation view, and what the milestone claims
@@ -3105,11 +3105,11 @@ place all three are visible together.
 
 Three rules, each narrow, each requiring the verifier's confirmation:
 
-| rule | what the thunk's right-hand side is | why it stops being a thunk |
-|---|---|---|
-| `M23-A-FIELD-ALREADY-A-VALUE` | a binding whose occurrence is a constructor field proven `Direct` by **`R2`** | the field expression is already a value, so there is no evaluation to defer |
-| `M23-B-SELECTOR-OVER-AN-EAGER-FIELD` | a lazy selection `case c of C .. x .. -> x` over a field proven `Direct` | the field is forced at construction; no deferred selection remains |
-| `M23-C-CELL-OF-A-SINGLE-PASS-SPINE` | the tail of a cell (or a text append operand) of a `Vec`/`Iterator` flow whose spine demand is `Whole` or `Incremental` | one eager pass consumes the spine, so the cell thunk becomes an iterator step |
+| rule                                 | what the thunk's right-hand side is                                                                                     | why it stops being a thunk                                                    |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `M23-A-FIELD-ALREADY-A-VALUE`        | a binding whose occurrence is a constructor field proven `Direct` by **`R2`**                                           | the field expression is already a value, so there is no evaluation to defer   |
+| `M23-B-SELECTOR-OVER-AN-EAGER-FIELD` | a lazy selection `case c of C .. x .. -> x` over a field proven `Direct`                                                | the field is forced at construction; no deferred selection remains            |
+| `M23-C-CELL-OF-A-SINGLE-PASS-SPINE`  | the tail of a cell (or a text append operand) of a `Vec`/`Iterator` flow whose spine demand is `Whole` or `Incremental` | one eager pass consumes the spine, so the cell thunk becomes an iterator step |
 
 ```
 Thunk sites explained by M2.3 (M1 × M2.2 × M2.3)
@@ -3139,14 +3139,14 @@ and **0** of the 1,118 append argument sites do.
 **Eleven, and why it is not four hundred.** The number is small and the
 reasons are structural rather than a missing rule:
 
-* the whole `Deferred` population (986 fields) is *by definition* the
+- the whole `Deferred` population (986 fields) is *by definition* the
   thunks that stay: `Deferred` says the evaluation remains where GHC put it;
-* the whole `PersistentCandidate` population (1,925 flows) has a shared tail
+- the whole `PersistentCandidate` population (1,925 flows) has a shared tail
   or a second entry, so its cells outlive any one pass;
-* 239 flows are `Vec`/`Iterator` over a **prefix** spine, which is precisely
+- 239 flows are `Vec`/`Iterator` over a **prefix** spine, which is precisely
   a spine whose tail may never be reached — eager consumption of a prefix
   does not make the unreached tail eager;
-* and `M23-A` can almost never fire *by construction*: `R2` accepts a bare
+- and `M23-A` can almost never fire *by construction*: `R2` accepts a bare
   variable only when GHC's own `whnf`/`okForSpec` flag is set on its
   binding, and a binding GHC marks `whnf` is one M1 does not call a thunk in
   the first place. The five that do fire are the shapes where the flag sits
@@ -3186,10 +3186,10 @@ claims — 3,408 `Direct`, 9 `Dead`, 9 `Recursive`, 31 `RecursiveKnot`, 32
 with **0 disagreements** on `-O1` and on B–F. Ten refusals remain on `-O1`,
 all coverage-only and both named:
 
-| n | claim | refusal | why it is a coverage loss |
-|---:|---|---|---|
-| 5 | `IteratorCandidate` | `entries-counted-across-a-consed-as-tail-hop` | the verifier counts every consumer across an `L7` hop as an independent entry; where the longer spines are alternatives of one `case`, that is one entry at run time and five here |
-| 5 | `VecCandidate` | `the-Whole-spine-of-a-loop-is-not-re-derivable-here` | `Whole` for a `go`-loop is `L4-LOOP-WHOLE`, a statement about where the recursive call *stands*; re-deriving it would be writing the loop-position analysis twice rather than checking it |
+|  n | claim               | refusal                                              | why it is a coverage loss                                                                                                                                                                 |
+| -: | ------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|  5 | `IteratorCandidate` | `entries-counted-across-a-consed-as-tail-hop`        | the verifier counts every consumer across an `L7` hop as an independent entry; where the longer spines are alternatives of one `case`, that is one entry at run time and five here        |
+|  5 | `VecCandidate`      | `the-Whole-spine-of-a-loop-is-not-re-derivable-here` | `Whole` for a `go`-loop is `L4-LOOP-WHOLE`, a statement about where the recursive call *stands*; re-deriving it would be writing the loop-position analysis twice rather than checking it |
 
 All ten are counted as **unsupported** in the accounting, never as advised.
 `R3-SAME-FRONTIER` is declined for the same reason and there are 0 of them
@@ -3240,14 +3240,14 @@ that a program function called `map` is never looked up.
 
 **The residual, itemised and owned:**
 
-| | | whose problem it is |
-|---:|---|---|
-| 15,418 | fields `Unknown` | 2,264 stored in a list cell (M2.3c's population, followed as a spine but not as a field), 311 in a tuple field (M2.2's), 1,919 (998 + 573 + 348) a **program** construction that escapes — `TokenComment`, `OuterToken`, `Comment` — which is M2.4's whole-program work, 1,912 (760 + 595 + 557) a **library** construction that escapes, and 1,708 (1,143 `eta` + 565 `eok`) an unknown higher-order callee → M2.4 higher-order |
-| 9,114 | list flows `Unknown` | 2,228 stored with no visible spine demand in a holder this module never takes apart, 620 in a holder the field census *does* know, 1,718 reaching a holder that escapes, 1,044 an unknown spine demand — and 266 of the 9,114, cutting across those reasons, carry a proven constraint (`RequiresTailSharing`, `RequiresRecursiveLaziness`) beside the unknown |
-| 80 | imported heads with **no axiom**, 1,545 of the 6,660 imported consumer sites | the largest are `ShellCheck.Interface.$wgo` (394), `GHC.Show.showLitString` (168), `Text.Parsec.Char.string1` (88), `GHC.Show.showList__` (66), `GHC.IO.Handle.Text.hPutStr2` (61), regex-tdfa's `compile` (49), `Data.Set.Internal.$fDataSet1` (45) — whole-program (the ShellCheck ones) or more axioms (the base ones) |
-| 1,683 | text flows `Unknown` | 2,837 consumers are imported heads neither table knows, or points at which the value left the walk |
-| 2,345 | text flows with no text-shaped consumer at all | the honest measure of how much of ShellCheck's text is handled by code this dump does not contain |
-| 10 | claims the verifier refuses | the two weakenings above, both coverage-only |
+|        |                                                                              | whose problem it is                                                                                                                                                                                                                                                                                                                                                                                                              |
+| -----: | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 15,418 | fields `Unknown`                                                             | 2,264 stored in a list cell (M2.3c's population, followed as a spine but not as a field), 311 in a tuple field (M2.2's), 1,919 (998 + 573 + 348) a **program** construction that escapes — `TokenComment`, `OuterToken`, `Comment` — which is M2.4's whole-program work, 1,912 (760 + 595 + 557) a **library** construction that escapes, and 1,708 (1,143 `eta` + 565 `eok`) an unknown higher-order callee → M2.4 higher-order |
+|  9,114 | list flows `Unknown`                                                         | 2,228 stored with no visible spine demand in a holder this module never takes apart, 620 in a holder the field census *does* know, 1,718 reaching a holder that escapes, 1,044 an unknown spine demand — and 266 of the 9,114, cutting across those reasons, carry a proven constraint (`RequiresTailSharing`, `RequiresRecursiveLaziness`) beside the unknown                                                                   |
+|     80 | imported heads with **no axiom**, 1,545 of the 6,660 imported consumer sites | the largest are `ShellCheck.Interface.$wgo` (394), `GHC.Show.showLitString` (168), `Text.Parsec.Char.string1` (88), `GHC.Show.showList__` (66), `GHC.IO.Handle.Text.hPutStr2` (61), regex-tdfa's `compile` (49), `Data.Set.Internal.$fDataSet1` (45) — whole-program (the ShellCheck ones) or more axioms (the base ones)                                                                                                        |
+|  1,683 | text flows `Unknown`                                                         | 2,837 consumers are imported heads neither table knows, or points at which the value left the walk                                                                                                                                                                                                                                                                                                                               |
+|  2,345 | text flows with no text-shaped consumer at all                               | the honest measure of how much of ShellCheck's text is handled by code this dump does not contain                                                                                                                                                                                                                                                                                                                                |
+|     10 | claims the verifier refuses                                                  | the two weakenings above, both coverage-only                                                                                                                                                                                                                                                                                                                                                                                     |
 
 **How to audit a site.** `h2r show <dir> <module> <node>` for the footers,
 `h2r fields --view <node>` for the field-by-field proof, `h2r lists --view
@@ -3257,18 +3257,18 @@ whole module and `--json` for any of them. All four are shown above.
 
 **Known limits, stated rather than hidden:**
 
-* ~~**rendered types are level-6 evidence.**~~ **Fixed by
+- ~~**rendered types are level-6 evidence.**~~ **Fixed by
   [M2.4a](#m24a--stable-global-identity-and-structured-types):** dump
   format 5 carries structured types and selection of `[Char]` is `TyConApp`
   with a stable `TyCon` (level 4). 58 of the 4,431 text flows rest on the
   type alone; the population and every verdict are unchanged.
-* **`R3-SAME-FRONTIER` is exercised only by its tests.** GHC's
+- **`R3-SAME-FRONTIER` is exercised only by its tests.** GHC's
   case-of-known-constructor has already eliminated every construction
   scrutinised in the frame that built it, so `R3` fires on nothing in any
   of the seven dumps. The rule stays, with a positive and a negative
   regression test, and the route-set histogram is where its absence is
   visible.
-* **the five `VecCandidate` verdicts** whose `Whole` fact comes from
+- **the five `VecCandidate` verdicts** whose `Whole` fact comes from
   `L4-LOOP-WHOLE` rest on one walk, not two — and are therefore counted as
   unsupported.
 
@@ -3304,16 +3304,16 @@ the outer return type honestly — `NotAList`, `DirectList(kind)`,
 variants keep their argument-demand and aliasing facts for the consumer
 side; recovering the components is tuple and effect normalisation's work.
 
-| entry | `Produces` before → after | base |
-|---|---|---|
-| `GHC.List.span`, `GHC.List.break` | `Incremental` → `ProductContainsList(2)` | `span p xs = (takeWhile p xs, dropWhile p xs)` — GHC/List.hs |
-| `GHC.List.$wspan`, `GHC.List.$wbreak` | `Incremental` → `ProductContainsList(2)` | the worker returns `(# [a], [a] #)`; the old note said so and the field still claimed a list |
-| `GHC.List.splitAt` | `Incremental` → `ProductContainsList(2)` | `splitAt n xs = (take n xs, drop n xs)` |
-| `GHC.List.splitAt_$s$wsplitAt'` | `Incremental` → `ProductContainsList(2)` | the specialised worker of `splitAt' :: Int -> [a] -> ([a],[a])` |
-| `GHC.List.unzip` | `Incremental` → `ProductContainsList(2)` | `unzip :: [(a,b)] -> ([a],[b])` |
-| `Data.Traversable.mapM`, `forM`, `traverse`, `sequence` | `WholeBeforeFirstCell` → `EffectContainsList(WholeBeforeFirstCell)` | `mapM :: (a -> m b) -> [a] -> m [b]` |
-| `Data.OldList.dropLengthMaybe` | `NotAList` → `OtherContainsList` | returns `Maybe [b]`; the old value was honest but said nothing about the suffix inside |
-| `GHC.Magic.lazy` | `SameAsInput` → `NotAList` | `lazy :: a -> a`; `a` is not a list at every call site, which is exactly why `flipSeq` was already `NotAList`. The "known limit" M2.3f recorded about this entry is now fixed rather than tolerated |
+| entry                                                   | `Produces` before → after                                           | base                                                                                                                                                                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GHC.List.span`, `GHC.List.break`                       | `Incremental` → `ProductContainsList(2)`                            | `span p xs = (takeWhile p xs, dropWhile p xs)` — GHC/List.hs                                                                                                                                        |
+| `GHC.List.$wspan`, `GHC.List.$wbreak`                   | `Incremental` → `ProductContainsList(2)`                            | the worker returns `(# [a], [a] #)`; the old note said so and the field still claimed a list                                                                                                        |
+| `GHC.List.splitAt`                                      | `Incremental` → `ProductContainsList(2)`                            | `splitAt n xs = (take n xs, drop n xs)`                                                                                                                                                             |
+| `GHC.List.splitAt_$s$wsplitAt'`                         | `Incremental` → `ProductContainsList(2)`                            | the specialised worker of `splitAt' :: Int -> [a] -> ([a],[a])`                                                                                                                                     |
+| `GHC.List.unzip`                                        | `Incremental` → `ProductContainsList(2)`                            | `unzip :: [(a,b)] -> ([a],[b])`                                                                                                                                                                     |
+| `Data.Traversable.mapM`, `forM`, `traverse`, `sequence` | `WholeBeforeFirstCell` → `EffectContainsList(WholeBeforeFirstCell)` | `mapM :: (a -> m b) -> [a] -> m [b]`                                                                                                                                                                |
+| `Data.OldList.dropLengthMaybe`                          | `NotAList` → `OtherContainsList`                                    | returns `Maybe [b]`; the old value was honest but said nothing about the suffix inside                                                                                                              |
+| `GHC.Magic.lazy`                                        | `SameAsInput` → `NotAList`                                          | `lazy :: a -> a`; `a` is not a list at every call site, which is exactly why `flipSeq` was already `NotAList`. The "known limit" M2.3f recorded about this entry is now fixed rather than tolerated |
 
 **99 `L0-IMPORTED` flows disappeared** on `-O1`: `$wspan` 16, `$wbreak` 6,
 `splitAt_$s$wsplitAt'` 5, `GHC.Magic.lazy` 72. (`span`, `break`, `splitAt`,
@@ -3331,13 +3331,13 @@ The enum is documented as "which elements are forced", and entries like
 element reaches (`Predicate`, `Eq`, `Ord`, `Show`, `Other`), with
 `BoundAndUsed` for a `(:)` alternative's head binder.
 
-| kept as forcing (and why) | moved to exposure |
-|---|---|
-| `eqString` — at `Char` the comparison is the `eqChar#` primop | `elem`, `notElem`, `lookup`, `isPrefixOf`, `isSuffixOf`, `isInfixOf`, `nub`, `group`, the four specialised list `==`/`compare` copies → `Eq`/`Ord` |
-| `and`, `or` — `foldr (&&)`, and `(&&)` case-analyses its argument | `takeWhile`, `dropWhile`, `span`, `break`, `any`, `all`, `find` (both copies) → `Predicate` |
-| `lines` — `break (== '\n')` on `Char` | `sort`, `sortOn`, `maximum`, `minimum` → `Ord`/`Other`; base's `sortOn` `seq`s the computed **key**, not the element |
-| `words` — `isSpace` case-analyses the `Char` | `sum` → `Other` (`(+)` comes from a dictionary) |
-| | `map`, `filter`, `foldr`, `foldl`, `foldl'`, `zipWith`, `concatMap`, `mapMaybe`, `nubBy`, `sortBy`, `groupBy`, `mapM_`/`forM_`/`traverse_`/`sequence_` and the `Traversable` four, which previously claimed `None` and now say **which** callback sees the elements |
+| kept as forcing (and why)                                         | moved to exposure                                                                                                                                                                                                                                                   |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `eqString` — at `Char` the comparison is the `eqChar#` primop     | `elem`, `notElem`, `lookup`, `isPrefixOf`, `isSuffixOf`, `isInfixOf`, `nub`, `group`, the four specialised list `==`/`compare` copies → `Eq`/`Ord`                                                                                                                  |
+| `and`, `or` — `foldr (&&)`, and `(&&)` case-analyses its argument | `takeWhile`, `dropWhile`, `span`, `break`, `any`, `all`, `find` (both copies) → `Predicate`                                                                                                                                                                         |
+| `lines` — `break (== '\n')` on `Char`                             | `sort`, `sortOn`, `maximum`, `minimum` → `Ord`/`Other`; base's `sortOn` `seq`s the computed **key**, not the element                                                                                                                                                |
+| `words` — `isSpace` case-analyses the `Char`                      | `sum` → `Other` (`(+)` comes from a dictionary)                                                                                                                                                                                                                     |
+|                                                                   | `map`, `filter`, `foldr`, `foldl`, `foldl'`, `zipWith`, `concatMap`, `mapMaybe`, `nubBy`, `sortBy`, `groupBy`, `mapM_`/`forM_`/`traverse_`/`sequence_` and the `Traversable` four, which previously claimed `None` and now say **which** callback sees the elements |
 
 **31 entries had a `head` claim weakened** from `Prefix`/`All` to `None`,
 and 53 of the 101 now carry a non-trivial `exposure`. On `-O1`,
@@ -3351,11 +3351,11 @@ In the text census, `char_semantics_required` now cites which of the two it
 saw. The flag itself barely moved — an element handed to a callback still
 has to exist as a `Char` — but the evidence did:
 
-| reason | before | after |
-|---|---:|---:|
-| `an-element-is-forced` | 510 | 383 |
-| `an-element-is-exposed-to-a-callback` | — | 161 |
-| flows with `char_semantics_required` | 887 of 4,436 | 882 of 4,431 |
+| reason                                |       before |        after |
+| ------------------------------------- | -----------: | -----------: |
+| `an-element-is-forced`                |          510 |          383 |
+| `an-element-is-exposed-to-a-callback` |            — |          161 |
+| flows with `char_semantics_required`  | 887 of 4,436 | 882 of 4,431 |
 
 (The five lost are flows the population correction removed; no flow lost
 the requirement.) The verifier splits the same way: its `StrongString`
@@ -3373,12 +3373,12 @@ positions: neither spine is necessarily walked whole, and both are
 re-traversed. The new fact is `Axiom::replays` (end-indexed arguments) and
 `Reuse::Replayed`, distinct from `Whole`, `MultiPass` and `SharedTail`:
 
-| entry | before → after | base |
-|---|---|---|
-| `GHC.List.cycle` | `Whole` → `Incremental` + replays `End(0)` | `cycle xs = xs' where xs' = xs ++ xs'` — GHC/List.hs |
-| `Data.OldList.isInfixOf` | needle `Whole` → `PrefixDataDependent`, both arguments replayed | `isInfixOf needle haystack = any (isPrefixOf needle) (tails haystack)` — OldList.hs |
-| `Data.OldList.isSuffixOf` | both spines replayed (the `Whole` demand is right here) | `isSuffixOf ns hs = maybe False id $ do delta <- dropLengthMaybe ns hs; return $ ns == dropLength delta hs` — both spines are walked once to measure and once to compare |
-| `Data.OldList.intercalate` | separator replayed, `streaming` true → **false** | `intercalate xs xss = concat (intersperse xs xss)` — the separator is inserted at every gap and copied by `concat` |
+| entry                      | before → after                                                  | base                                                                                                                                                                     |
+| -------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GHC.List.cycle`           | `Whole` → `Incremental` + replays `End(0)`                      | `cycle xs = xs' where xs' = xs ++ xs'` — GHC/List.hs                                                                                                                     |
+| `Data.OldList.isInfixOf`   | needle `Whole` → `PrefixDataDependent`, both arguments replayed | `isInfixOf needle haystack = any (isPrefixOf needle) (tails haystack)` — OldList.hs                                                                                      |
+| `Data.OldList.isSuffixOf`  | both spines replayed (the `Whole` demand is right here)         | `isSuffixOf ns hs = maybe False id $ do delta <- dropLengthMaybe ns hs; return $ ns == dropLength delta hs` — both spines are walked once to measure and once to compare |
+| `Data.OldList.intercalate` | separator replayed, `streaming` true → **false**                | `intercalate xs xss = concat (intersperse xs xss)` — the separator is inserted at every gap and copied by `concat`                                                       |
 
 The rest of the table was searched for the same shape: `dropLength` and
 `dropLengthMaybe` each make **one** pass — the replay in `isSuffixOf` is at
@@ -3395,23 +3395,23 @@ possible when the result spine and the argument spine can have the same
 element type. Two new variants were needed, and the audit is entry by
 entry:
 
-| entry | alias | base definition it rests on |
-|---|---|---|
-| `unpackAppendCString#`, `…Utf8#` | `ResultIsTailOfArg(0)` *kept* | `unpackAppendCString# :: Addr# -> [Char] -> [Char]` — the second argument is returned as the tail |
-| `GHC.Base.++`, `++_$s++` | `ResultIsTailOfArg(0)` *kept* | `(++) [] ys = ys` — GHC/Base.hs |
-| `GHC.List.tail` | `ResultIsTailOfArg(0)` *kept* | `tail (_:xs) = xs` |
-| `GHC.List.reverse1` | `ResultIsTailOfArg(0)` *kept* | `rev [] a = a` — the accumulator is returned |
-| `GHC.List.dropWhile` | `ResultSharesArg(0)` *kept* | `dropWhile p xs@(x:xs') = if p x then dropWhile p xs' else xs` |
-| `GHC.List.drop` | `ResultSharesArg(0)` *kept* | `drop n xs` returns a suffix |
-| `Data.OldList.dropLength` | `ResultSharesArg(0)` *kept* | `dropLength :: [a] -> [b] -> [b]`; the result is a suffix of the `[b]`, and the types agree |
-| `GHC.List.flipSeq` | `ResultSharesArg(1)` *kept* | `flipSeq x !_n = x` — the result *is* the first argument; `Produces` stays `NotAList` because `a` need not be a list |
-| `GHC.Magic.lazy` | `ResultSharesArg(0)` *kept* | `lazy :: a -> a`; only `Produces` was wrong |
-| `Data.Foldable.toList` | `ResultSharesArg(0)` *kept* | at the list instance, `toList = id` |
-| `GHC.List.span`, `break`, `$wspan`, `$wbreak`, `splitAt`, `splitAt_$s$wsplitAt'` | `ResultSharesArg(0)` → **`ResultContainsSuffixOfArg(0)`** | the suffix is the pair's *second component*; the outer result is a pair, and the two axes must not be spelled with one field |
-| `Data.OldList.dropLengthMaybe` | `ResultSharesArg(0)` → **`ResultContainsSuffixOfArg(0)`** | the suffix is inside the `Just` |
-| `GHC.List.head`, `last`, `!!`, `$w!!` | `NoAlias` → **`ResultSharesElementOf(i)`** | `head (x:_) = x`, `last`/`(!!)` likewise return an *element*: when the elements are lists the result shares cells with one of them, and that is **not** a shared tail on this spine |
-| `concat`, `Data.Foldable.concat`, `intercalate`, `unwords`, `unlines`, `lines` | `NoAlias` *kept* | `concat = foldr (++) []` (GHC/List.hs) makes every inner list a **left** operand of `(++)`, so it is copied — even the final `xs ++ []`; `intercalate xs xss = concat (intersperse xs xss)` (OldList.hs) inherits that; `unlines (l:ls) = l ++ '\n' : unlines ls` and `unwords (w:ws) = w ++ go ws` copy every line and every word, the last one included (the Report-prelude `foldr1` `unwords` would share it; base-4.18 does not) |
-| every remaining entry | `NoAlias` *kept* | result cells are freshly allocated |
+| entry                                                                            | alias                                                     | base definition it rests on                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `unpackAppendCString#`, `…Utf8#`                                                 | `ResultIsTailOfArg(0)` *kept*                             | `unpackAppendCString# :: Addr# -> [Char] -> [Char]` — the second argument is returned as the tail                                                                                                                                                                                                                                                                                                                                    |
+| `GHC.Base.++`, `++_$s++`                                                         | `ResultIsTailOfArg(0)` *kept*                             | `(++) [] ys = ys` — GHC/Base.hs                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `GHC.List.tail`                                                                  | `ResultIsTailOfArg(0)` *kept*                             | `tail (_:xs) = xs`                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `GHC.List.reverse1`                                                              | `ResultIsTailOfArg(0)` *kept*                             | `rev [] a = a` — the accumulator is returned                                                                                                                                                                                                                                                                                                                                                                                         |
+| `GHC.List.dropWhile`                                                             | `ResultSharesArg(0)` *kept*                               | `dropWhile p xs@(x:xs') = if p x then dropWhile p xs' else xs`                                                                                                                                                                                                                                                                                                                                                                       |
+| `GHC.List.drop`                                                                  | `ResultSharesArg(0)` *kept*                               | `drop n xs` returns a suffix                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `Data.OldList.dropLength`                                                        | `ResultSharesArg(0)` *kept*                               | `dropLength :: [a] -> [b] -> [b]`; the result is a suffix of the `[b]`, and the types agree                                                                                                                                                                                                                                                                                                                                          |
+| `GHC.List.flipSeq`                                                               | `ResultSharesArg(1)` *kept*                               | `flipSeq x !_n = x` — the result *is* the first argument; `Produces` stays `NotAList` because `a` need not be a list                                                                                                                                                                                                                                                                                                                 |
+| `GHC.Magic.lazy`                                                                 | `ResultSharesArg(0)` *kept*                               | `lazy :: a -> a`; only `Produces` was wrong                                                                                                                                                                                                                                                                                                                                                                                          |
+| `Data.Foldable.toList`                                                           | `ResultSharesArg(0)` *kept*                               | at the list instance, `toList = id`                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `GHC.List.span`, `break`, `$wspan`, `$wbreak`, `splitAt`, `splitAt_$s$wsplitAt'` | `ResultSharesArg(0)` → **`ResultContainsSuffixOfArg(0)`** | the suffix is the pair's *second component*; the outer result is a pair, and the two axes must not be spelled with one field                                                                                                                                                                                                                                                                                                         |
+| `Data.OldList.dropLengthMaybe`                                                   | `ResultSharesArg(0)` → **`ResultContainsSuffixOfArg(0)`** | the suffix is inside the `Just`                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `GHC.List.head`, `last`, `!!`, `$w!!`                                            | `NoAlias` → **`ResultSharesElementOf(i)`**                | `head (x:_) = x`, `last`/`(!!)` likewise return an *element*: when the elements are lists the result shares cells with one of them, and that is **not** a shared tail on this spine                                                                                                                                                                                                                                                  |
+| `concat`, `Data.Foldable.concat`, `intercalate`, `unwords`, `unlines`, `lines`   | `NoAlias` *kept*                                          | `concat = foldr (++) []` (GHC/List.hs) makes every inner list a **left** operand of `(++)`, so it is copied — even the final `xs ++ []`; `intercalate xs xss = concat (intersperse xs xss)` (OldList.hs) inherits that; `unlines (l:ls) = l ++ '\n' : unlines ls` and `unwords (w:ws) = w ++ go ws` copy every line and every word, the last one included (the Report-prelude `foldr1` `unwords` would share it; base-4.18 does not) |
+| every remaining entry                                                            | `NoAlias` *kept*                                          | result cells are freshly allocated                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 `ResultContainsSuffixOfArg` still puts `RequiresTailSharing` on the
 **input** flow — `span`'s second component really does keep the argument's
@@ -3430,55 +3430,55 @@ is unknown. Every `Unknown` fact now wins, the positive facts are recorded
 as constraints, and the accounting counts a constrained `Unknown` as
 unsupported like any other:
 
-| moved | from → to | constraint it now carries |
-|---:|---|---|
-| 265 | `PersistentCandidate` → `Unknown` | `RequiresTailSharing` |
-| 1 | `LazyCandidate` → `Unknown` | `RequiresRecursiveLaziness` |
+| moved | from → to                         | constraint it now carries   |
+| ----: | --------------------------------- | --------------------------- |
+|   265 | `PersistentCandidate` → `Unknown` | `RequiresTailSharing`       |
+|     1 | `LazyCandidate` → `Unknown`       | `RequiresRecursiveLaziness` |
 
 **The tables, before → after, on `-O1`:**
 
-| `h2r lists` | before | after |
-|---|---:|---:|
-| flows | 11,917 | **11,818** |
-| `L0-IMPORTED` producers | 5,065 | **4,966** |
-| `SpineDemand::Unknown` | 5,602 | **5,503** |
-| `HeadDemand::Prefix` / `None` | 972 / 5,054 | **544 / 5,482** |
-| `HeadExposure` (new) | — | 5,340 NotExposed, 460 BoundAndUsed, 515 callbacks, 5,503 Unknown |
-| `Reuse::SharedTail` | 1,867 | **1,860** |
-| `VecCandidate` | 32 | 32 |
-| `IteratorCandidate` | 727 | 727 |
-| `PersistentCandidate` | 2,197 | **1,925** |
-| `LazyCandidate` | 31 | **30** |
-| `Unknown` | 8,930 | **9,104** |
-| constraints (new) | — | 1,860 tail sharing, 31 recursive laziness, 0 replay; 266 of them on an `Unknown` |
+| `h2r lists`                   |      before |                                                                            after |
+| ----------------------------- | ----------: | -------------------------------------------------------------------------------: |
+| flows                         |      11,917 |                                                                       **11,818** |
+| `L0-IMPORTED` producers       |       5,065 |                                                                        **4,966** |
+| `SpineDemand::Unknown`        |       5,602 |                                                                        **5,503** |
+| `HeadDemand::Prefix` / `None` | 972 / 5,054 |                                                                  **544 / 5,482** |
+| `HeadExposure` (new)          |           — |                 5,340 NotExposed, 460 BoundAndUsed, 515 callbacks, 5,503 Unknown |
+| `Reuse::SharedTail`           |       1,867 |                                                                        **1,860** |
+| `VecCandidate`                |          32 |                                                                               32 |
+| `IteratorCandidate`           |         727 |                                                                              727 |
+| `PersistentCandidate`         |       2,197 |                                                                        **1,925** |
+| `LazyCandidate`               |          31 |                                                                           **30** |
+| `Unknown`                     |       8,930 |                                                                        **9,104** |
+| constraints (new)             |           — | 1,860 tail sharing, 31 recursive laziness, 0 replay; 266 of them on an `Unknown` |
 
-| `h2r text` | before | after |
-|---|---:|---:|
-| text flows | 4,436 | **4,431** |
-| `char_semantics_required` | 887 | **882** |
-| — of those, `an-element-is-forced` | 510 | **383** |
-| — of those, exposed to a callback | — | **161** |
-| `StrongStringCandidate` | 185 | 185 |
-| `Unknown` | 1,688 | **1,683** |
+| `h2r text`                         | before |     after |
+| ---------------------------------- | -----: | --------: |
+| text flows                         |  4,436 | **4,431** |
+| `char_semantics_required`          |    887 |   **882** |
+| — of those, `an-element-is-forced` |    510 |   **383** |
+| — of those, exposed to a callback  |      — |   **161** |
+| `StrongStringCandidate`            |    185 |       185 |
+| `Unknown`                          |  1,688 | **1,683** |
 
-| `h2r verify-rep` | before | after |
-|---|---:|---:|
-| claims checked / re-derived / refused | 4,401 / 4,391 / 10 | **4,401 / 4,391 / 10** |
-| disagreements | 0 | **0** |
-| shape 6 (a tail in a second place) | 1,867 | **1,860** |
-| shape 8 (a value knot) | 31 | **30** |
-| shape 9b (holder escapes) | 4,297 | **4,357** |
-| shape 10 (higher-order parameter) | 1,355 | **1,402** |
-| shape 11 (`[Char]` textual **and** structural) | 156 | **151** |
-| shape 13 (right operand of `++`) | 1,777 | **1,770** |
+| `h2r verify-rep`                               |             before |                  after |
+| ---------------------------------------------- | -----------------: | ---------------------: |
+| claims checked / re-derived / refused          | 4,401 / 4,391 / 10 | **4,401 / 4,391 / 10** |
+| disagreements                                  |                  0 |                  **0** |
+| shape 6 (a tail in a second place)             |              1,867 |              **1,860** |
+| shape 8 (a value knot)                         |                 31 |                 **30** |
+| shape 9b (holder escapes)                      |              4,297 |              **4,357** |
+| shape 10 (higher-order parameter)              |              1,355 |              **1,402** |
+| shape 11 (`[Char]` textual **and** structural) |                156 |                **151** |
+| shape 13 (right operand of `++`)               |              1,777 |              **1,770** |
 
-| accounting | before | after |
-|---|---|---|
-| list flows | 11,917 = 2,977 + 8,940 | **11,818 = 2,704 + 9,114** |
-| text flows | 4,436 = 2,748 + 1,688 | **4,431 = 2,748 + 1,683** |
-| the 1,310 list-cons sites | 29 + 402 + 879 | **29 + 303 + 978** |
-| the M1 link | 2,242 = 2,139 + 92 + 11 | **unchanged** |
-| fields | 19,830 = 3,408 + 995 + 9 + 15,418 | **unchanged** |
+| accounting                | before                            | after                      |
+| ------------------------- | --------------------------------- | -------------------------- |
+| list flows                | 11,917 = 2,977 + 8,940            | **11,818 = 2,704 + 9,114** |
+| text flows                | 4,436 = 2,748 + 1,688             | **4,431 = 2,748 + 1,683**  |
+| the 1,310 list-cons sites | 29 + 402 + 879                    | **29 + 303 + 978**         |
+| the M1 link               | 2,242 = 2,139 + 92 + 11           | **unchanged**              |
+| fields                    | 19,830 = 3,408 + 995 + 9 + 15,418 | **unchanged**              |
 
 All four accounting `check()`s close on `-O1` and on all six matrix
 profiles, where the flow counts fall by 99 / 127 / 101 / 101 / 101 / 101 and
@@ -3512,11 +3512,11 @@ tail beside an unknown consumer is `Unknown` with a constraint).
 Two things the earlier milestones had to work around were properties of the
 *dump*, not of the program:
 
-* the imported-id table was keyed by GHC **unique**, which
+- the imported-id table was keyed by GHC **unique**, which
   [M2.1 showed is not an identity](#scoping-uniques-are-not-unique) — 116,340
   binders share 42,572 uniques — so the one place a unique was still a
   linkage key was the last place a merge could hide;
-* every type arrived only as GHC's **pretty-printed string**, so
+- every type arrived only as GHC's **pretty-printed string**, so
   "the element is a `Char`" was a textual comparison (level 6) against the
   four spellings `Char`, `GHC.Types.Char`, `[Char]`, `String`, `FilePath`
   that GHC might print.
@@ -3620,15 +3620,15 @@ six matrix profiles) and every report re-captured and diffed.
 **86 of the 113 are byte-identical**, `h2r compare` over all six profiles
 among them. The 27 that are not:
 
-| what | diff |
-|---|---|
-| `text`, `text --heads` (×7 dumps) | 17 lines each: the header paragraph, and three labels that said "level 6" / "type-string" / "a rendered type". Every count identical. |
-| `text --explain` | 5,451 lines: 2,598 `X1-LIST-TYPE` and 61 `X0-ELEM-TYPE` evidence notes, 59 `type-string only` → `type only` labels, and the 17 above. |
-| `text --json` | the same 2,659 notes, plus 58 `element_type_evidence` values renamed `TypeStringOnly` → `TypeOnly`. |
-| `laziness --json` | 5,395 `unique` strings (below). Identical field-for-field once `unique` is removed. |
-| `parsec --json` | each region's edge *list order*, and `binder_unique` (below). Every region's edge multiset is identical modulo that field, and the accounting is identical. |
-| `parsec` on B, C, D | one line each: the `e.g.` exemplar of a reject-reason histogram. **Pre-existing nondeterminism**, reproduced by running the *same* binary on the *same* dump twice; the counts never move. Not introduced here and not fixed here. |
-| `matrix/<P>/provenance` (×6) | `date`, `repo_head`, `repo_dirty_inputs`, `plugin_sha256`, `binary_sha256`. `stripped_source_sha256`, `flags`, `ghc`, `cabal`, `modules` and `binary_version` are unchanged, and the module lists are identical. |
+| what                              | diff                                                                                                                                                                                                                               |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `text`, `text --heads` (×7 dumps) | 17 lines each: the header paragraph, and three labels that said "level 6" / "type-string" / "a rendered type". Every count identical.                                                                                              |
+| `text --explain`                  | 5,451 lines: 2,598 `X1-LIST-TYPE` and 61 `X0-ELEM-TYPE` evidence notes, 59 `type-string only` → `type only` labels, and the 17 above.                                                                                              |
+| `text --json`                     | the same 2,659 notes, plus 58 `element_type_evidence` values renamed `TypeStringOnly` → `TypeOnly`.                                                                                                                                |
+| `laziness --json`                 | 5,395 `unique` strings (below). Identical field-for-field once `unique` is removed.                                                                                                                                                |
+| `parsec --json`                   | each region's edge *list order*, and `binder_unique` (below). Every region's edge multiset is identical modulo that field, and the accounting is identical.                                                                        |
+| `parsec` on B, C, D               | one line each: the `e.g.` exemplar of a reject-reason histogram. **Pre-existing nondeterminism**, reproduced by running the *same* binary on the *same* dump twice; the counts never move. Not introduced here and not fixed here. |
+| `matrix/<P>/provenance` (×6)      | `date`, `repo_head`, `repo_dirty_inputs`, `plugin_sha256`, `binary_sha256`. `stripped_source_sha256`, `flags`, `ghc`, `cabal`, `modules` and `binary_version` are unchanged, and the module lists are identical.                   |
 
 **GHC renumbered the uniques, and nothing noticed.** Re-extracting with the
 new plugin shifted GHC's unique supply: **98,135 of the 116,340 binder
@@ -3683,13 +3683,13 @@ arguments is a non-trivial computation in a lazy position.
 
 ### The answer
 
-| | `-O1` | |
-|---|---:|---:|
-| population — class-op application sites | **565** | |
-| … `Exact(target)` | **0** | 0% |
-| … `FiniteSet(targets)` | **0** | 0% |
-| … `Unresolved` | **565** | 100% |
-| … partially-applied selectors (the selector is the value) | 0 | |
+|                                                           |   `-O1` |      |
+| --------------------------------------------------------- | ------: | ---: |
+| population — class-op application sites                   | **565** |      |
+| … `Exact(target)`                                         |   **0** |   0% |
+| … `FiniteSet(targets)`                                    |   **0** |   0% |
+| … `Unresolved`                                            | **565** | 100% |
+| … partially-applied selectors (the selector is the value) |       0 |      |
 
 `population = Exact + FiniteSet + Unresolved` is asserted, and so is the
 294 mapping.
@@ -3709,16 +3709,16 @@ parameters, 41 are superclass selections applied to one, 19 are bound by a
 `case` alternative and 6 are `let`-bound superclass selections — **none is
 a dfun**.
 
-| by class | sites | | by class | sites |
-|---|---:|---|---|---:|
-| Applicative | 191 | | Monoid | 55 |
-| Show | 91 | | Eq | 54 |
-| Monad | 69 | | Functor | 38 |
-| Exception | 17 | | Ord | 11 |
-| Ranged (ShellCheck's own) | 11 | | MonadState | 9 |
-| MonadReader | 7 | | MonadWriter | 7 |
-| Num | 2 | | Semigroup | 2 |
-| Foldable | 1 | | | |
+| by class                  | sites |   | by class    | sites |
+| ------------------------- | ----: | - | ----------- | ----: |
+| Applicative               |   191 |   | Monoid      |    55 |
+| Show                      |    91 |   | Eq          |    54 |
+| Monad                     |    69 |   | Functor     |    38 |
+| Exception                 |    17 |   | Ord         |    11 |
+| Ranged (ShellCheck's own) |    11 |   | MonadState  |     9 |
+| MonadReader               |     7 |   | MonadWriter |     7 |
+| Num                       |     2 |   | Semigroup   |     2 |
+| Foldable                  |     1 |   |             |       |
 
 Every site's class is identified, and 524 of the 565 from the *structured
 type* of the dictionary argument (`K2-DICT-TYPE`, level 4) rather than from
@@ -3728,13 +3728,13 @@ selector's own name gives (level 1) and whose table entry the dump's
 
 ### Why each site is unresolved
 
-| | reason | representative |
-|---:|---|---|
-| 252 | the dictionary is a parameter of an **exported** function — callers outside this module cannot be enumerated | `ShellCheck.AST` node 3465 |
-| 280 | the dictionary is a parameter of an instance method (`$ctraverse` 220, `$cfoldMap` 53, `$cfoldMap'` 3, `$celem`/`$cmaximum`/`$cminimum`/`$csum`/`$cproduct` 1 each, `$fTraversableInnerToken` 2) — a function **reached only through dispatch**: its callers are the class-op sites that select it | `ShellCheck.AST` node 6559 |
-| 17 | the dictionary is read back from a **constructor field** (`SomeException`'s existential `Exception` dictionary, 11 in `Main` + 6 in `Paths_ShellCheck`) | `Main` node 659 |
-| 7 | the **instance method is not in the dump**: mtl's `$fMonadStatesReaderT` (5), `$fMonadStatesParsecT` (2) — the instance is known exactly, its body is in another package with no unfolding | `ShellCheck.Parser` node 128333 |
-| 6 | the dictionary expression reached is not a constructor application (the mtl chains above, at a second step) | `ShellCheck.Parser` node 138963 |
+|     | reason                                                                                                                                                                                                                                                                                             | representative                  |
+| --: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| 252 | the dictionary is a parameter of an **exported** function — callers outside this module cannot be enumerated                                                                                                                                                                                       | `ShellCheck.AST` node 3465      |
+| 280 | the dictionary is a parameter of an instance method (`$ctraverse` 220, `$cfoldMap` 53, `$cfoldMap'` 3, `$celem`/`$cmaximum`/`$cminimum`/`$csum`/`$cproduct` 1 each, `$fTraversableInnerToken` 2) — a function **reached only through dispatch**: its callers are the class-op sites that select it | `ShellCheck.AST` node 6559      |
+|  17 | the dictionary is read back from a **constructor field** (`SomeException`'s existential `Exception` dictionary, 11 in `Main` + 6 in `Paths_ShellCheck`)                                                                                                                                            | `Main` node 659                 |
+|   7 | the **instance method is not in the dump**: mtl's `$fMonadStatesReaderT` (5), `$fMonadStatesParsecT` (2) — the instance is known exactly, its body is in another package with no unfolding                                                                                                         | `ShellCheck.Parser` node 128333 |
+|   6 | the dictionary expression reached is not a constructor application (the mtl chains above, at a second step)                                                                                                                                                                                        | `ShellCheck.Parser` node 138963 |
 
 The second row is the one that says what a closed-world specialiser would
 have to do. An instance method's dictionary parameter is bound at
@@ -3746,17 +3746,17 @@ an ordinary value — so the union is not claimed here. Nothing is guessed.
 
 ### Dictionary sources in the closed world
 
-| kind | `-O1` |
-|---|---:|
-| dfun — a top-level binding whose type is a class constraint | 259 |
-| dfun applied at a use site, building an instance dictionary | 609 |
-| dictionary-constructor application (`C:Show f g h`) | 10 |
-| superclass selection (`$p…`) | 72 |
-| local (`let`) dictionary binding | 206 |
-| dictionary parameter of a function | 216 |
-| dictionary bound by a `case` alternative | 35 |
-| … of all of these, admitted on their *name* because the class table does not carry their class | 838 |
-| … whose binding is not in the dump at all | 681 |
+| kind                                                                                           | `-O1` |
+| ---------------------------------------------------------------------------------------------- | ----: |
+| dfun — a top-level binding whose type is a class constraint                                    |   259 |
+| dfun applied at a use site, building an instance dictionary                                    |   609 |
+| dictionary-constructor application (`C:Show f g h`)                                            |    10 |
+| superclass selection (`$p…`)                                                                   |    72 |
+| local (`let`) dictionary binding                                                               |   206 |
+| dictionary parameter of a function                                                             |   216 |
+| dictionary bound by a `case` alternative                                                       |    35 |
+| … of all of these, admitted on their *name* because the class table does not carry their class |   838 |
+| … whose binding is not in the dump at all                                                      |   681 |
 
 The closed world is every module in the dump, indexed by stable name, so a
 dfun defined in `ShellCheck.AST` is followed from `ShellCheck.Analytics`;
@@ -3776,30 +3776,30 @@ outside the table.
 
 ### The rules
 
-| rule | level | what it says |
-|---|---:|---|
-| `K0-CLASSOP-SITE` | 5 | the spine head is a class-op selector — GHC's `isClassOpId` |
-| `K1-DICT-ARG` | 2 | the first value argument of a class-op application is the dictionary |
-| `K2-DICT-TYPE` | 4 | the class is the head `TyCon` of the dictionary's structured type |
-| `K3-CLASS-TABLE` | 5 | the method's field index, checked against `repArity` |
-| `K4-SUPERCLASS-SEL` | 1 | `$pN<Class>` selects superclass field N-1 |
-| `K5-ALIAS` | 3 | a `let`-/top-bound dictionary is followed to its right-hand side |
-| `K6-DFUN` | 3 | a global dictionary is followed to its binding in the closed world |
-| `K7-DICT-CON` | 2 | a saturated dictionary-constructor application is a dictionary |
-| `K8-PARAM-UNION` | 3 | a local function's dictionary parameter is the union over its call sites |
-| `K9-METHOD-FIELD` | 2 | the method target is the dictionary's field at the method's index |
-| `K10-FORCED` | 5 | a class-op application forces its dictionary (strict field selection) |
-| `K11-DICT-ESCAPES` | 3 | the dictionary is also used as an ordinary value |
-| `K12-PARTIAL` | 2 | the selector is applied to no value argument: the selector is the value |
+| rule                | level | what it says                                                             |
+| ------------------- | ----: | ------------------------------------------------------------------------ |
+| `K0-CLASSOP-SITE`   |     5 | the spine head is a class-op selector — GHC's `isClassOpId`              |
+| `K1-DICT-ARG`       |     2 | the first value argument of a class-op application is the dictionary     |
+| `K2-DICT-TYPE`      |     4 | the class is the head `TyCon` of the dictionary's structured type        |
+| `K3-CLASS-TABLE`    |     5 | the method's field index, checked against `repArity`                     |
+| `K4-SUPERCLASS-SEL` |     1 | `$pN<Class>` selects superclass field N-1                                |
+| `K5-ALIAS`          |     3 | a `let`-/top-bound dictionary is followed to its right-hand side         |
+| `K6-DFUN`           |     3 | a global dictionary is followed to its binding in the closed world       |
+| `K7-DICT-CON`       |     2 | a saturated dictionary-constructor application is a dictionary           |
+| `K8-PARAM-UNION`    |     3 | a local function's dictionary parameter is the union over its call sites |
+| `K9-METHOD-FIELD`   |     2 | the method target is the dictionary's field at the method's index        |
+| `K10-FORCED`        |     5 | a class-op application forces its dictionary (strict field selection)    |
+| `K11-DICT-ESCAPES`  |     3 | the dictionary is also used as an ordinary value                         |
+| `K12-PARTIAL`       |     2 | the selector is applied to no value argument: the selector is the value  |
 
 ### Dictionary-evaluation observations (no verdict)
 
-| | `-O1` |
-|---|---:|
-| the selector application forces its dictionary (`K10`) | 565 |
-| the dictionary is a variable GHC records as strict at its binder | 247 |
-| … with no strictness recorded: nothing here says it is not bottom | 277 |
-| the dictionary is also used as an ordinary value (`K11`) | 166 |
+|                                                                   | `-O1` |
+| ----------------------------------------------------------------- | ----: |
+| the selector application forces its dictionary (`K10`)            |   565 |
+| the dictionary is a variable GHC records as strict at its binder  |   247 |
+| … with no strictness recorded: nothing here says it is not bottom |   277 |
+| the dictionary is also used as an ordinary value (`K11`)          |   166 |
 
 The first row is every site, and it is the fact M2.4c has to answer to: a
 class op is a strict field selection, so a site that dispatches on a
@@ -3808,15 +3808,15 @@ dictionary can be erased anyway — is the next milestone's question.
 
 ### Across the flag matrix
 
-| | A `-O1` | B `-O2` | C | D | E | F |
-|---|---:|---:|---:|---:|---:|---:|
-| class-op sites (population) | 565 | 587 | 595 | 595 | 595 | 596 |
-| … resolved to a target | 0 | 0 | 0 | 0 | 0 | 0 |
-| census sites mapped 1:1 | 294/294 | 305/305 | 314/314 | 314/314 | 314/314 | 314/314 |
-| class-table disagreements | 0 | 0 | 0 | 0 | 0 | 0 |
-| classes outside the table | 0 | 0 | 0 | 0 | 0 | 0 |
-| dfun bindings | 259 | 259 | 271 | 282 | 282 | 282 |
-| dfun applications | 609 | 646 | 639 | 558 | 558 | 564 |
+|                             | A `-O1` | B `-O2` |       C |       D |       E |       F |
+| --------------------------- | ------: | ------: | ------: | ------: | ------: | ------: |
+| class-op sites (population) |     565 |     587 |     595 |     595 |     595 |     596 |
+| … resolved to a target      |       0 |       0 |       0 |       0 |       0 |       0 |
+| census sites mapped 1:1     | 294/294 | 305/305 | 314/314 | 314/314 | 314/314 | 314/314 |
+| class-table disagreements   |       0 |       0 |       0 |       0 |       0 |       0 |
+| classes outside the table   |       0 |       0 |       0 |       0 |       0 |       0 |
+| dfun bindings               |     259 |     259 |     271 |     282 |     282 |     282 |
+| dfun applications           |     609 |     646 |     639 |     558 |     558 |     564 |
 
 ### The gate
 
@@ -3897,12 +3897,12 @@ is hit.**
 
 ### What it found
 
-| | per module (M2.4b) | whole program |
-|---|---:|---:|
-| class-op sites (population) | 565 | 565 |
-| … `Exact(target)` | **0** | **7** |
-| … `FiniteSet(targets)` | 0 | 0 |
-| … `Unresolved` | 565 | 558 |
+|                             | per module (M2.4b) | whole program |
+| --------------------------- | -----------------: | ------------: |
+| class-op sites (population) |                565 |           565 |
+| … `Exact(target)`           |              **0** |         **7** |
+| … `FiniteSet(targets)`      |                  0 |             0 |
+| … `Unresolved`              |                565 |           558 |
 
 `population = Exact + FiniteSet + Unresolved` is asserted. Seven sites —
 all of `Ranged`, ShellCheck's own class, dispatching on
@@ -3928,16 +3928,16 @@ named. Nothing is guessed.
 
 ### Why the other 558 are unresolved
 
-| | reason | representative |
-|---:|---|---|
-| 413 | the function holding the dictionary parameter is **unreachable**: it has no occurrence anywhere in the closed world, so under `W0` nothing can name it and the site never runs | `ShellCheck.AST` node 3465 (`doAnalysis`) |
-| 53 | `instance-method-not-in-the-dump($fMonoidDual)` — `$cfoldMap`'s `Monoid` is `Dual (Endo …)`, `base`'s | `ShellCheck.AST` node 27756 |
-| 48 | `instance-method-not-in-the-dump($fMonadIO)` | `ShellCheck.Checker` node 49 |
-| 17 | the dictionary is read from a **non-dictionary constructor field** (`SomeException`'s existential) | `Main` node 659 |
-| 9 | the method sits in a dictionary field **no class-op site in the program ever selects**: it is never dispatched | `ShellCheck.AST` node 6501 |
-| 7 + 5 + 1 | mtl's `$fMonadStatesParsecT`, `$fMonadStatesReaderT`, `$fMonadReaderrParsecT` — instance known, body in another package | `ShellCheck.Parser` node 138695 |
-| 4 | the dictionary is **returned by a call the dump cannot see** | `ShellCheck.AnalyzerLib` node 734 |
-| 1 | dispatched from a site whose own dictionary is unknown | `ShellCheck.AST` node 27609 |
+|           | reason                                                                                                                                                                         | representative                            |
+| --------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
+|       413 | the function holding the dictionary parameter is **unreachable**: it has no occurrence anywhere in the closed world, so under `W0` nothing can name it and the site never runs | `ShellCheck.AST` node 3465 (`doAnalysis`) |
+|        53 | `instance-method-not-in-the-dump($fMonoidDual)` — `$cfoldMap`'s `Monoid` is `Dual (Endo …)`, `base`'s                                                                          | `ShellCheck.AST` node 27756               |
+|        48 | `instance-method-not-in-the-dump($fMonadIO)`                                                                                                                                   | `ShellCheck.Checker` node 49              |
+|        17 | the dictionary is read from a **non-dictionary constructor field** (`SomeException`'s existential)                                                                             | `Main` node 659                           |
+|         9 | the method sits in a dictionary field **no class-op site in the program ever selects**: it is never dispatched                                                                 | `ShellCheck.AST` node 6501                |
+| 7 + 5 + 1 | mtl's `$fMonadStatesParsecT`, `$fMonadStatesReaderT`, `$fMonadReaderrParsecT` — instance known, body in another package                                                        | `ShellCheck.Parser` node 138695           |
+|         4 | the dictionary is **returned by a call the dump cannot see**                                                                                                                   | `ShellCheck.AnalyzerLib` node 734         |
+|         1 | dispatched from a site whose own dictionary is unknown                                                                                                                         | `ShellCheck.AST` node 27609               |
 
 The first row is the milestone's most uncomfortable finding and it is not
 an artefact. **922 of the 2,235 top-level bindings in the dump are never
@@ -3966,28 +3966,28 @@ stored in a constructor, or handed to a callee the dump cannot see. The
 verdicts below come from facts recorded **separately** from Part 1, and the
 two are crossed rather than collapsed.
 
-* **Evaluation** (`E1-TOTAL`). A class-op application is a strict field
+- **Evaluation** (`E1-TOTAL`). A class-op application is a strict field
   selection, so it forces its dictionary; replacing `classOp d x` by
   `method x` changes behaviour only if `d` could be ⊥. A
   dictionary-constructor or dfun application *is* a value, so a boundary
   all of whose producers are such values is total and erasure moves no
   divergence; a parameter GHC records as strict is forced at entry already.
-* **Representation agreement** (`E2-AGREE`, `E3-CLONE`). Every producer at
+- **Representation agreement** (`E2-AGREE`, `E3-CLONE`). Every producer at
   every boundary a dictionary crosses must request the same erased form —
   the same instance. One instance ⇒ `Erasable`. Several, at a function that
   is never used as a value (which is what kept the set finite), ⇒
   `ErasableWithClone`, one clone per instance, **counted, never made**.
-* **Escape** (`E4-ESCAPE`). Used as an ordinary value — stored, passed to
+- **Escape** (`E4-ESCAPE`). Used as an ordinary value — stored, passed to
   an imported callee, handed to a non-dictionary parameter — ⇒ `Preserve`,
   with the holder named.
 
-| verdict | dictionary values | dictionary parameters |
-|---|---:|---:|
-| `Erasable` | 102 | 36 |
-| `ErasableWithClone` | 0 | 4 |
-| `Preserve` | 89 | 84 |
-| `Unresolved` | 0 | 92 |
-| **total** | **191** | **216** |
+| verdict             | dictionary values | dictionary parameters |
+| ------------------- | ----------------: | --------------------: |
+| `Erasable`          |               102 |                    36 |
+| `ErasableWithClone` |                 0 |                     4 |
+| `Preserve`          |                89 |                    84 |
+| `Unresolved`        |                 0 |                    92 |
+| **total**           |           **191** |               **216** |
 
 `values = Erasable + WithClone + Preserve + Unresolved` and the same for
 parameters are both asserted. The four `WithClone` parameters cost **8**
@@ -4004,10 +4004,10 @@ dfun handed to a `base` function), 80 `function-is-unreachable-in-the-closed-wor
 The 3×4 matrix is asserted to sum to the population:
 
 | target ⟍ dictionary | `Erasable` | `ErasableWithClone` | `Preserve` | `Unresolved` |
-|---|---:|---:|---:|---:|
-| `Exact` | 7 | 0 | **0** | 0 |
-| `FiniteSet` | 0 | 0 | **0** | 0 |
-| `Unresolved` | 10 | 0 | 154 | 394 |
+| ------------------- | ---------: | ------------------: | ---------: | -----------: |
+| `Exact`             |          7 |                   0 |      **0** |            0 |
+| `FiniteSet`         |          0 |                   0 |      **0** |            0 |
+| `Unresolved`        |         10 |                   0 |        154 |          394 |
 
 The bolded cells are the population this milestone exists to keep separate:
 a site whose method is known but whose dictionary must survive anyway — a
@@ -4021,16 +4021,16 @@ matrix shows it in both directions.
 
 ### Across the flag matrix
 
-| | A `-O1` | B `-O2` | C | D | E | F |
-|---|---:|---:|---:|---:|---:|---:|
-| class-op sites | 565 | 587 | 595 | 595 | 595 | 596 |
-| … `Exact` | 7 | 7 | 7 | 0 | 0 | 0 |
-| sites with a bounded dictionary | 118 | 138 | 140 | 65 | 65 | 65 |
-| parameters bounded / total | 106/216 | 98/210 | 109/222 | 64/223 | 64/223 | 72/231 |
-| values `Erasable` / total | 102/191 | 102/191 | 101/191 | 139/238 | 139/238 | 139/238 |
-| parameters `Erasable` | 36 | 28 | 34 | 28 | 28 | 28 |
-| clones a `WithClone` would cost | 8 | 6 | 8 | 12 | 12 | 12 |
-| fixpoint rounds | 7 | 7 | 7 | 7 | 7 | 7 |
+|                                 | A `-O1` | B `-O2` |       C |       D |       E |       F |
+| ------------------------------- | ------: | ------: | ------: | ------: | ------: | ------: |
+| class-op sites                  |     565 |     587 |     595 |     595 |     595 |     596 |
+| … `Exact`                       |       7 |       7 |       7 |       0 |       0 |       0 |
+| sites with a bounded dictionary |     118 |     138 |     140 |      65 |      65 |      65 |
+| parameters bounded / total      | 106/216 |  98/210 | 109/222 |  64/223 |  64/223 |  72/231 |
+| values `Erasable` / total       | 102/191 | 102/191 | 101/191 | 139/238 | 139/238 | 139/238 |
+| parameters `Erasable`           |      36 |      28 |      34 |      28 |      28 |      28 |
+| clones a `WithClone` would cost |       8 |       6 |       8 |      12 |      12 |      12 |
+| fixpoint rounds                 |       7 |       7 |       7 |       7 |       7 |       7 |
 
 Aggressive specialisation (D–F) makes the whole-program answer *worse*, not
 better: it duplicates dictionaries into more inline constructor
@@ -4083,15 +4083,15 @@ name staying distinct), `cargo clippy --all-targets` (0 warnings) and
 
 ### What remains, stated rather than hidden
 
-* The closed world is an **assumption**. If ShellCheck is built as a
+- The closed world is an **assumption**. If ShellCheck is built as a
   library for someone else, 413 of the 565 sites stop being dead and the
   answer changes.
-* The analysis is monovariant: a dfun applied to two different argument
+- The analysis is monovariant: a dfun applied to two different argument
   dictionaries has one identity here. A call-string or per-instantiation
   analysis would split some of the 44 two-instance sites.
-* `Unresolved` for a parameter is not a proof that it *cannot* be erased,
+- `Unresolved` for a parameter is not a proof that it *cannot* be erased,
   only that this proof object declines to say so.
-* A dictionary reaching an imported callee is `Preserve`d on the strength
+- A dictionary reaching an imported callee is `Preserve`d on the strength
   of the callee being outside the dump; a hand-written Rust replacement for
   that callee could take the erased form instead, and 133 of the 265
   non-`Erasable` verdicts are that case. The lowering, not this analysis,
@@ -4127,15 +4127,15 @@ fixpoint, sharing the settled dictionary sets **only** to resolve dispatch.
 The chain is `ProvenTotal < MustPreserveForce < Unknown`, bottom
 `ProvenTotal`, join `max`.
 
-| rule | level | what it says |
-|---|---:|---|
-| `E6-TOTALITY-VALUE` | 2 | a saturated dictionary-constructor application, a dfun applied or not, and a superclass selection out of a `ProvenTotal` dictionary are values ⇒ `ProvenTotal` |
-| `E6-TOTALITY-CASE` | 5 | a `case` whose scrutinee is not *already evaluated* ⇒ `MustPreserveForce`, **even when every alternative yields the same dictionary** |
-| `E6-TOTALITY-LET` | 3 | a let- or top-bound dictionary inherits its right-hand side's totality |
-| `E6-TOTALITY-PARAM` | 3 | a parameter is the join over the totality of every producer that reaches it |
-| `E6-TOTALITY-UNKNOWN` | 3 | through a call the dump cannot see, a non-dictionary constructor field, a higher-order parameter, or a budget ⇒ `Unknown` |
-| `E6-TOTALITY-OBLIGATION` | 5 | `Erasable` requires `ProvenTotal`, **or** a named `ForceObligation`; strictness is evidence, never a verdict |
-| `E7-OWNER-CLONES` | 3 | a function's clones are its distinct call-site assignment tuples |
+| rule                     | level | what it says                                                                                                                                                   |
+| ------------------------ | ----: | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `E6-TOTALITY-VALUE`      |     2 | a saturated dictionary-constructor application, a dfun applied or not, and a superclass selection out of a `ProvenTotal` dictionary are values ⇒ `ProvenTotal` |
+| `E6-TOTALITY-CASE`       |     5 | a `case` whose scrutinee is not *already evaluated* ⇒ `MustPreserveForce`, **even when every alternative yields the same dictionary**                          |
+| `E6-TOTALITY-LET`        |     3 | a let- or top-bound dictionary inherits its right-hand side's totality                                                                                         |
+| `E6-TOTALITY-PARAM`      |     3 | a parameter is the join over the totality of every producer that reaches it                                                                                    |
+| `E6-TOTALITY-UNKNOWN`    |     3 | through a call the dump cannot see, a non-dictionary constructor field, a higher-order parameter, or a budget ⇒ `Unknown`                                      |
+| `E6-TOTALITY-OBLIGATION` |     5 | `Erasable` requires `ProvenTotal`, **or** a named `ForceObligation`; strictness is evidence, never a verdict                                                   |
+| `E7-OWNER-CLONES`        |     3 | a function's clones are its distinct call-site assignment tuples                                                                                               |
 
 *Already evaluated* is deliberately narrow: a value (a literal, a lambda, a
 saturated constructor application, a dfun), a variable bound by an
@@ -4165,14 +4165,14 @@ against one of them.*
 
 #### Erasure tables, before → after
 
-| verdict | values before | values after | parameters before | parameters after |
-|---|---:|---:|---:|---:|
-| `Erasable` | 102 | 102 | 36 | 36 |
-| `ErasableWithObligation` | — | 0 | — | 0 |
-| `ErasableWithClone` | 0 | 0 | 4 | 4 |
-| `Preserve` | 89 | 89 | 84 | 84 |
-| `Unresolved` | 0 | 0 | 92 | 92 |
-| **total** | **191** | **191** | **216** | **216** |
+| verdict                  | values before | values after | parameters before | parameters after |
+| ------------------------ | ------------: | -----------: | ----------------: | ---------------: |
+| `Erasable`               |           102 |          102 |                36 |               36 |
+| `ErasableWithObligation` |             — |            0 |                 — |                0 |
+| `ErasableWithClone`      |             0 |            0 |                 4 |                4 |
+| `Preserve`               |            89 |           89 |                84 |               84 |
+| `Unresolved`             |             0 |            0 |                92 |               92 |
+| **total**                |       **191** |      **191** |           **216** |          **216** |
 
 **No verdict moved, and that is a result rather than a no-op.** The totality
 domain answers, over the 216 dictionary parameters: **118 `ProvenTotal`, 0
@@ -4191,10 +4191,10 @@ Named force obligations carried: **0**.
 The matrix gains a column and no cell moves:
 
 | target ⟍ dictionary | `Erasable` | `ErasableWithObligation` | `ErasableWithClone` | `Preserve` | `Unresolved` |
-|---|---:|---:|---:|---:|---:|
-| `Exact` | 7 | 0 | 0 | **0** | 0 |
-| `FiniteSet` | 0 | 0 | 0 | **0** | 0 |
-| `Unresolved` | 10 | 0 | 0 | 154 | 394 |
+| ------------------- | ---------: | -----------------------: | ------------------: | ---------: | -----------: |
+| `Exact`             |          7 |                        0 |                   0 |      **0** |            0 |
+| `FiniteSet`         |          0 |                        0 |                   0 |      **0** |            0 |
+| `Unresolved`        |         10 |                        0 |                   0 |        154 |          394 |
 
 #### Clone planning is per owner, not per parameter
 
@@ -4208,13 +4208,13 @@ per-parameter cardinalities. The cardinalities stay, as evidence.
 On `-O1` all four `WithClone` parameters belong to four different
 single-parameter functions, and each has exactly **one** call site:
 
-| module | function | dictionary parameters | cardinalities | tuples seen | clones |
-|---|---|---:|---|---:|---:|
-| `ShellCheck.Parser` | `allspacingOrFail` | 1 | `[2]` | 1 | 1 |
-| `ShellCheck.Parser` | `commentWarning` | 1 | `[2]` | 1 | 1 |
-| `ShellCheck.Parser` | `readNormalLiteral` | 1 | `[2]` | 1 | 1 |
-| `ShellCheck.Parser` | `splitBy` | 1 | `[2]` | 1 | 1 |
-| | | | | **total** | **8 → 4** |
+| module              | function            | dictionary parameters | cardinalities | tuples seen |    clones |
+| ------------------- | ------------------- | --------------------: | ------------- | ----------: | --------: |
+| `ShellCheck.Parser` | `allspacingOrFail`  |                     1 | `[2]`         |           1 |         1 |
+| `ShellCheck.Parser` | `commentWarning`    |                     1 | `[2]`         |           1 |         1 |
+| `ShellCheck.Parser` | `readNormalLiteral` |                     1 | `[2]`         |           1 |         1 |
+| `ShellCheck.Parser` | `splitBy`           |                     1 | `[2]`         |           1 |         1 |
+|                     |                     |                       |               |   **total** | **8 → 4** |
 
 The "2 instances" never meant two call sites: it is one call site whose
 dictionary argument is itself a two-instance parameter, which the
@@ -4230,16 +4230,16 @@ D–F the four parameters collapse onto **two** two-parameter functions,
 `[3, 3]` — a sum of 12 and a product of 9 — whose call sites use only 3 and
 4 distinct tuples: **12 → 7**.
 
-| clone plan | A `-O1` | B `-O2` | C | D | E | F |
-|---|---:|---:|---:|---:|---:|---:|
-| per-parameter cardinality sum (the old number) | 8 | 6 | 8 | 12 | 12 | 12 |
-| owner-level clones (distinct tuples) | **4** | **3** | **4** | **7** | **7** | **7** |
-| owning functions | 4 | 3 | 4 | 2 | 2 | 2 |
+| clone plan                                                 |  A `-O1` |   B `-O2` |         C |        D |        E |        F |
+| ---------------------------------------------------------- | -------: | --------: | --------: | -------: | -------: | -------: |
+| per-parameter cardinality sum (the old number)             |        8 |         6 |         8 |       12 |       12 |       12 |
+| owner-level clones (distinct tuples)                       |    **4** |     **3** |     **4** |    **7** |    **7** |    **7** |
+| owning functions                                           |        4 |         3 |         4 |        2 |        2 |        2 |
 | parameters `ProvenTotal` / `MustPreserveForce` / `Unknown` | 118/0/98 | 110/0/100 | 121/0/101 | 77/0/146 | 77/0/146 | 85/0/146 |
 
 #### Identity cleanups
 
-* `classops::World::new` keyed `tops` by `b.name` with `or_insert`, which
+- `classops::World::new` keyed `tops` by `b.name` with `or_insert`, which
   admits internal, non-unique names exactly as the hazard above describes.
   It now admits only external stable names, as `dictflow::Program` does,
   and **asserts there is no collision**. Doing so found a second defect:
@@ -4252,10 +4252,10 @@ D–F the four parameters collapse onto **two** two-parameter functions,
   `$_sys$poly_$j`. Rejecting the two pseudo-units makes *external ⇒ unique*
   true rather than nearly true, in `dictflow`, `higher` and now `classops`
   alike. **Collisions asserted: 0.** No target-enumeration number moved.
-* The doc comments on `scope.rs` and on `Ref::Global` still said a GHC
+- The doc comments on `scope.rs` and on `Ref::Global` still said a GHC
   *unique* is the key into the imported-id table. It is not, and has not
   been since dump format 5: the key is the stable name. Corrected.
-* `KVar`/`KAll` interning in the plugin and free-type-variable comparison in
+- `KVar`/`KAll` interning in the plugin and free-type-variable comparison in
   `Ty::alpha_eq` **still rest on GHC uniques**. `alpha_eq` alpha-maps
   *bound* type variables but compares *free* ones by unique, and free type
   variables are not scope-identified: format 5 carries no lexical identity
@@ -4263,7 +4263,7 @@ D–F the four parameters collapse onto **two** two-parameter functions,
   `alpha_eq` must not be used for any free-tyvar-sensitive proof until a
   later format carries lexical type-variable identity; every current caller
   compares closed or same-scope types. This is now stated on the function.
-* The "**922 unreachable top-level bindings**" above are the **zero-reference
+- The "**922 unreachable top-level bindings**" above are the **zero-reference
   subset** under `W0` — bindings with no occurrence anywhere in the dump.
   That is a valid *dead* subset (nothing can name them, so they cannot run),
   but it is **not** a `Main.main`-rooted transitive reachability set: a
@@ -4311,11 +4311,11 @@ Three kinds of function-valued boundary, each decided by the structured type
 (`H1-FUNCTION-TYPED`, GHC type identity — a `FunTy`, or a `ForAllTy` over
 one), never by a name and never by a rendering:
 
-| kind | what it is | producers are |
-|---|---|---|
-| **parameter** | a value lambda binder of function type | the argument at that index of every call site of its function, in every module |
-| **field** | a constructor field at which some match in the closed world binds a function-typed binder | the argument at that index of every saturated application of that constructor |
-| **return** | a function whose result, after its manifest value parameters, is still a function | every syntactic return point of its body, at the deepest lambda depth |
+| kind          | what it is                                                                                | producers are                                                                  |
+| ------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| **parameter** | a value lambda binder of function type                                                    | the argument at that index of every call site of its function, in every module |
+| **field**     | a constructor field at which some match in the closed world binds a function-typed binder | the argument at that index of every saturated application of that constructor  |
+| **return**    | a function whose result, after its manifest value parameters, is still a function         | every syntactic return point of its body, at the deepest lambda depth          |
 
 On the `-O1` dump that is **5,574 boundaries**: 5,464 parameters, 35 fields,
 75 returns.
@@ -4336,8 +4336,8 @@ except one set cap, below.
 
 Two closures can share one representation only when
 
-* they take the **same number of further arguments**, and
-* they capture the **same ordered list of types**, compared up to
+- they take the **same number of further arguments**, and
+- they capture the **same ordered list of types**, compared up to
   alpha-equivalence of the *structured* type
 
 (`H4-SHAPE-CLASS`). A lambda's captures are the local binders its body reads
@@ -4363,10 +4363,10 @@ analogue of M2.4c's *known method target ≠ removable dictionary*, and it is
 kept apart the same way: `enumerated` and `classes` are recorded separately
 on every boundary (`H11-SEPARATE`) and crossed only afterwards.
 
-| | one class | several / none |
-|---|---:|---:|
-| **not enumerated** | 0 | 5,322 |
-| **enumerated** | **103** | **149** |
+|                    | one class | several / none |
+| ------------------ | --------: | -------------: |
+| **not enumerated** |         0 |          5,322 |
+| **enumerated**     |   **103** |        **149** |
 
 252 boundaries have a fully accounted producer set. Of those, 103 need
 exactly one representation and 149 do not — a boundary can have a perfect
@@ -4379,12 +4379,12 @@ numbers are wrong; see [Correction (M2.4d′)](#correction-m24d--sharing-is-deci
 below for what moved and why, and note that `UniformRepresentation` is now
 called `TypeShapeUniform`.)*
 
-| kind | ExactClosure | UniformRepresentation | CloneRequired | FiniteClosureSet | Preserve | Unresolved | total |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| parameter | 47 | 20 | 138 | 0 | 6 | 5,253 | 5,464 |
-| field | 6 | 0 | 0 | 0 | 10 | 19 | 35 |
-| return | 14 | 0 | 0 | 1 | 10 | 50 | 75 |
-| **all** | **67** | **20** | **138** | **1** | **26** | **5,322** | **5,574** |
+| kind      | ExactClosure | UniformRepresentation | CloneRequired | FiniteClosureSet | Preserve | Unresolved |     total |
+| --------- | -----------: | --------------------: | ------------: | ---------------: | -------: | ---------: | --------: |
+| parameter |           47 |                    20 |           138 |                0 |        6 |      5,253 |     5,464 |
+| field     |            6 |                     0 |             0 |                0 |       10 |         19 |        35 |
+| return    |           14 |                     0 |             0 |                1 |       10 |         50 |        75 |
+| **all**   |       **67** |                **20** |       **138** |            **1** |   **26** |  **5,322** | **5,574** |
 
 The population is asserted to be the six verdicts, and the per-kind rows to
 sum to it, in `Accounting::check`. **418 clones** are counted over the 138
@@ -4399,16 +4399,16 @@ pretends otherwise.
 
 ### Why the other 5,322 are unresolved
 
-| | | |
-|---:|---|---|
+|       |                                                                                               |                                                       |
+| ----: | --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | 2,660 | the slot's function is used somewhere as a value, so its call sites are not an enumerable set | the same refusal `boundary.rs` and `dictflow.rs` make |
-| 1,953 | the slot belongs to an **anonymous** lambda, which has no name to enumerate callers by | a lambda-lifted naming, or a call-site-directed walk |
-| 413 | a call site of the function is a partial application, so the argument never lands | the partial application's own consumers |
-| 227 | the function has no occurrence anywhere in the closed world: under `H0` it is dead | a non-answer, but a different one |
-| 44 | the body's lambda chain and the binder's type disagree about the return | refused rather than picked |
-| 19 | a closure arrives from a higher-order parameter the analysis does not track | the propagation, once the anonymous lambdas are named |
-| 5 | the constructor is never applied in the closed world | dead, like the 227 |
-| 1 | the producer set exceeded the 32-entry budget (`CommandCheck` field 1) | a larger budget, or a per-caller analysis |
+| 1,953 | the slot belongs to an **anonymous** lambda, which has no name to enumerate callers by        | a lambda-lifted naming, or a call-site-directed walk  |
+|   413 | a call site of the function is a partial application, so the argument never lands             | the partial application's own consumers               |
+|   227 | the function has no occurrence anywhere in the closed world: under `H0` it is dead            | a non-answer, but a different one                     |
+|    44 | the body's lambda chain and the binder's type disagree about the return                       | refused rather than picked                            |
+|    19 | a closure arrives from a higher-order parameter the analysis does not track                   | the propagation, once the anonymous lambdas are named |
+|     5 | the constructor is never applied in the closed world                                          | dead, like the 227                                    |
+|     1 | the producer set exceeded the 32-entry budget (`CommandCheck` field 1)                        | a larger budget, or a per-caller analysis             |
 
 The 2,660 and the 1,953 are one shape between them: `ShellCheck.Parser` is
 CPS, its continuations are anonymous lambdas passed as values, and a
@@ -4427,12 +4427,12 @@ one does not.
 land on the callee's function-typed parameters, chosen by the callee's own
 binder types (`H13-LANDING`):
 
-| | | |
-|---:|---|---|
-| 31 | `CloneRequired` | the other closures at the slot disagree; a clone would carry it |
-| 22 | no boundary | the callee has no function-typed parameter at all — the closure lands on a slot whose type is instantiated out of sight |
-| 13 | `UniformRepresentation` | one representation already serves the slot |
-| 1 | `ExactClosure` | the flow's own closure is the only one there |
+|    |                         |                                                                                                                         |
+| -: | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 31 | `CloneRequired`         | the other closures at the slot disagree; a clone would carry it                                                         |
+| 22 | no boundary             | the callee has no function-typed parameter at all — the closure lands on a slot whose type is instantiated out of sight |
+| 13 | `UniformRepresentation` | one representation already serves the slot                                                                              |
+|  1 | `ExactClosure`          | the flow's own closure is the only one there                                                                            |
 
 **14 of the 67 could be reclassified by a later pass** (the 13 uniform plus
 the 1 exact): their receiving parameter is *already* one representation, so
@@ -4441,11 +4441,11 @@ are not in this flow" — is answered. It is answered, not acted on.
 
 **(b) the closure paths of the tuple residual:**
 
-| population | where it lands | |
-|---:|---|---|
-| 187 | passed to an **imported** call | 187 × no boundary: the receiving parameter belongs to a function outside the dump. `H0` says the *program* is closed; it does not make a library's parameter a slot of it. **0** reclassifiable, and the honest answer is that the lowering of that callee decides, not this analysis. |
-| 134 | **consed onto a list** | 134 × `Unresolved` on *field 0 of `(:)`* — every cons cell in the program shares one slot, and its producer set blows the budget. A closed-world list-of-closures pass has to split that slot per list, which this one deliberately does not. |
-| 114 | **stored in a program constructor** | 45 `Preserve` (`SystemInterface` and kin: read back as run-time closures), 58 `Unresolved` (mostly the shared `(,)` and `(,,)` fields, the same one-slot-for-everything problem as `(:)`), 11 no boundary (no function-typed field of that constructor is ever read back). **0** reclassifiable. |
+| population | where it lands                      |                                                                                                                                                                                                                                                                                                  |
+| ---------: | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+|        187 | passed to an **imported** call      | 187 × no boundary: the receiving parameter belongs to a function outside the dump. `H0` says the *program* is closed; it does not make a library's parameter a slot of it. **0** reclassifiable, and the honest answer is that the lowering of that callee decides, not this analysis.           |
+|        134 | **consed onto a list**              | 134 × `Unresolved` on *field 0 of `(:)`* — every cons cell in the program shares one slot, and its producer set blows the budget. A closed-world list-of-closures pass has to split that slot per list, which this one deliberately does not.                                                    |
+|        114 | **stored in a program constructor** | 45 `Preserve` (`SystemInterface` and kin: read back as run-time closures), 58 `Unresolved` (mostly the shared `(,)` and `(,,)` fields, the same one-slot-for-everything problem as `(:)`), 11 no boundary (no function-typed field of that constructor is ever read back). **0** reclassifiable. |
 
 **(c) the census' unresolved higher-order sites.** The population is the
 census' own: computations in lazy or unknown argument positions, still in
@@ -4453,10 +4453,10 @@ the unresolved tier once the Parsec proof has been fed back, and — for the
 first row — outside the Parsec-shaped population, so the 10 sites the
 recogniser rejected stay M2.1's residual and not this one's.
 
-| population | | |
-|---:|---|---|
-| **99** fold/traversal callbacks (`f`, `go1`, `f1`, `ww`, …) | 66 `Unresolved`, 31 no boundary (the head's binder type is not a `FunTy` — a type variable instantiated out of sight), 1 `UniformRepresentation`, 1 `ExactClosure` | **2** could be reclassified |
-| **22** computed closures (a `case`- or `let`-selected function) | 22 `Unresolved` — judged as expressions, since a computed closure is not a slot | **0** |
+|                                                      population |                                                                                                                                                                    |                             |
+| --------------------------------------------------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------- |
+|     **99** fold/traversal callbacks (`f`, `go1`, `f1`, `ww`, …) | 66 `Unresolved`, 31 no boundary (the head's binder type is not a `FunTy` — a type variable instantiated out of sight), 1 `UniformRepresentation`, 1 `ExactClosure` | **2** could be reclassified |
+| **22** computed closures (a `case`- or `let`-selected function) | 22 `Unresolved` — judged as expressions, since a computed closure is not a slot                                                                                    | **0**                       |
 
 The 31 "not function-typed" is worth stating plainly: a third of the control
 group is not a higher-order *representation* question at all. The callback
@@ -4470,22 +4470,22 @@ names, with its producers, its uses and its verdict.
 
 ### The rules
 
-| | level | |
-|---|---:|---|
-| `H0-CLOSED-WORLD` | 5 | the dump is the whole program and `Main.main` its only root (assumption) |
-| `H1-FUNCTION-TYPED` | 4 | a boundary is function-valued when its structured type is a `FunTy` |
-| `H2-PRODUCERS` | 3 | producers are enumerated from the IR's occurrences over the whole closed world |
-| `H3-PROPAGATE` | 3 | a producer that is a boundary contributes that boundary's set; a monovariant fixpoint |
-| `H4-SHAPE-CLASS` | 2 over 4 | same arity and the same ordered capture types, up to alpha-equivalence |
-| `H5-EXACT` | 3 | exactly one known producer reaches the slot |
-| `H6-UNIFORM` | 3 | every producer is known and they all fall in one shape class |
-| `H7-CLONE` | 3 | disagreeing producers at a local never-a-value parameter cost one clone per class |
-| `H8-PRESERVE` | 3 | a run-time closure reaches the slot, or the slot is shared outside the rewrite |
-| `H9-TAINT` | 3 | an unaccountable producer taints the set and the boundary is `Unresolved` |
-| `H10-BUDGET` | 2 | a walk over budget is `Unresolved`, never a guess |
-| `H11-SEPARATE` | 5 | an enumerated producer set is **not** one representation: separate facts |
-| `H12-USES` | 3 | uses are read from the occurrences of the boundary's binders, through aliases |
-| `H13-LANDING` | 4 | a residual closure flow lands on the callee's function-typed slots, by binder type |
+|                     |    level |                                                                                       |
+| ------------------- | -------: | ------------------------------------------------------------------------------------- |
+| `H0-CLOSED-WORLD`   |        5 | the dump is the whole program and `Main.main` its only root (assumption)              |
+| `H1-FUNCTION-TYPED` |        4 | a boundary is function-valued when its structured type is a `FunTy`                   |
+| `H2-PRODUCERS`      |        3 | producers are enumerated from the IR's occurrences over the whole closed world        |
+| `H3-PROPAGATE`      |        3 | a producer that is a boundary contributes that boundary's set; a monovariant fixpoint |
+| `H4-SHAPE-CLASS`    | 2 over 4 | same arity and the same ordered capture types, up to alpha-equivalence                |
+| `H5-EXACT`          |        3 | exactly one known producer reaches the slot                                           |
+| `H6-UNIFORM`        |        3 | every producer is known and they all fall in one shape class                          |
+| `H7-CLONE`          |        3 | disagreeing producers at a local never-a-value parameter cost one clone per class     |
+| `H8-PRESERVE`       |        3 | a run-time closure reaches the slot, or the slot is shared outside the rewrite        |
+| `H9-TAINT`          |        3 | an unaccountable producer taints the set and the boundary is `Unresolved`             |
+| `H10-BUDGET`        |        2 | a walk over budget is `Unresolved`, never a guess                                     |
+| `H11-SEPARATE`      |        5 | an enumerated producer set is **not** one representation: separate facts              |
+| `H12-USES`          |        3 | uses are read from the occurrences of the boundary's binders, through aliases         |
+| `H13-LANDING`       |        4 | a residual closure flow lands on the callee's function-typed slots, by binder type    |
 
 Nothing rests on a name. Binder names appear in the report and in nothing
 else, and the identity of a producer is `Module#node` (or the stable name of
@@ -4502,13 +4502,13 @@ no agreed arity), 1,849 forced without being applied, 1,022 returned.
 
 ### Across the flag matrix
 
-| | A (`-O1`) | B | C | D | E | F |
-|---|---:|---:|---:|---:|---:|---:|
-| boundaries | 5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
-| rounds | 10 | 10 | 11 | 11 | 11 | 11 |
-| Exact + Uniform | 87 | 178 | 231 | 862 | 850 | 833 |
-| CloneRequired | 138 | 184 | 227 | 1,006 | 996 | 1,017 |
-| Preserve | 26 | 27 | 26 | 39 | 39 | 39 |
+|                 | A (`-O1`) |     B |     C |      D |      E |      F |
+| --------------- | --------: | ----: | ----: | -----: | -----: | -----: |
+| boundaries      |     5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
+| rounds          |        10 |    10 |    11 |     11 |     11 |     11 |
+| Exact + Uniform |        87 |   178 |   231 |    862 |    850 |    833 |
+| CloneRequired   |       138 |   184 |   227 |  1,006 |    996 |  1,017 |
+| Preserve        |        26 |    27 |    26 |     39 |     39 |     39 |
 
 More inlining makes more anonymous lambdas and more boundaries, and the
 resolved share stays roughly flat: the limit is the anonymous-lambda and
@@ -4535,20 +4535,20 @@ is mutated, no codegen is emitted, and no GHC flag changed.
 
 ### What remains, stated rather than hidden
 
-* **The anonymous-lambda wall.** 4,613 of the 5,322 unresolved boundaries
+- **The anonymous-lambda wall.** 4,613 of the 5,322 unresolved boundaries
   are one of two things: a slot on a function used as a value (2,660) or a
   slot on an anonymous lambda (1,953). Both are the same shape — CPS Parsec
   — and both need a naming pass before a producer set exists at all. The
   numbers above are therefore a floor, not a ceiling.
-* **`(:)` and `(,)` are one slot for the whole program.** Treating a
+- **`(:)` and `(,)` are one slot for the whole program.** Treating a
   constructor field as a single boundary is sound and useless for the
   ubiquitous constructors: 134 + 58 of the residual land there. A per-list
   or per-site field boundary would split them; this one does not.
-* **The shape class is conservative on purpose** and merges less than a real
+- **The shape class is conservative on purpose** and merges less than a real
   closure-conversion would. Two lambdas that capture the same types in a
   different order, or capture through a `newtype`, are two classes here.
   Every `CloneRequired` count is therefore an upper bound on the clones.
-* **An `Unresolved` is not a proof that a slot cannot be uniform**, only
+- **An `Unresolved` is not a proof that a slot cannot be uniform**, only
   that this proof object declines to say so — the same disclaimer M2.4c
   makes about erasure.
 
@@ -4580,21 +4580,21 @@ although the rule says an opaque shape equals **nothing, not even another
 opaque one**. Two closures read back out of two different constructor
 fields were being counted as one representation.
 
-* every opaque producer now carries its own identity (the producer key), so
+- every opaque producer now carries its own identity (the producer key), so
   `opaque:` classes never merge;
-* there is now **one** statement of the theorem,
+- there is now **one** statement of the theorem,
   `Boundary::one_representation()` — enumerated, one class, and no opaque
   producer — and `Accounting::one_representation` is that method and
   nothing else;
-* the strictly stronger question the *rewrite* asks is named separately,
+- the strictly stronger question the *rewrite* asks is named separately,
   `Verdict::rewritable_as_one()`, and is reported beside it.
 
-| | before | after |
-|---|---:|---:|
-| `Accounting::one_representation` (`enumerated && classes == 1`) | 103 | — |
-| `Boundary::one_representation()` (the single theorem) | — | **84** |
-| `Verdict::one_representation()` / `rewritable_as_one()` | 87 | **66** |
-| distinct shape classes | 261 | **353** |
+|                                                                 | before |   after |
+| --------------------------------------------------------------- | -----: | ------: |
+| `Accounting::one_representation` (`enumerated && classes == 1`) |    103 |       — |
+| `Boundary::one_representation()` (the single theorem)           |      — |  **84** |
+| `Verdict::one_representation()` / `rewritable_as_one()`         |     87 |  **66** |
+| distinct shape classes                                          |    261 | **353** |
 
 #### 3. The clone count was a sum of per-parameter numbers
 
@@ -4607,37 +4607,37 @@ deduplicated, and the function's clones are its distinct tuples. The
 per-slot class counts stay as evidence and are never summed. A call site
 that cannot be enumerated refuses that owner's plan rather than guessing.
 
-| | before | after |
-|---|---:|---:|
-| per-parameter class cardinality (evidence) | 418 | 509 |
-| **clones planned** | 418 | **53** (→ **68** in [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found)) |
-| owning functions wanting a plan | — | 87 |
-| plans refused rather than guessed | — | 66 |
+|                                            | before |                                                                                       after |
+| ------------------------------------------ | -----: | ------------------------------------------------------------------------------------------: |
+| per-parameter class cardinality (evidence) |    418 |                                                                                         509 |
+| **clones planned**                         |    418 | **53** (→ **68** in [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found)) |
+| owning functions wanting a plan            |      — |                                                                                          87 |
+| plans refused rather than guessed          |      — |                                                                                          66 |
 
 The owners that need clones, largest first:
 
-| module | function | params | call sites | tuples | clones | per-slot classes |
-|---|---|---:|---:|---:|---:|---|
-| ShellCheck.Parser | `k` | 4 | 4 | 4 | 4 | [1, 1, 4, 3] |
-| ShellCheck.Parser | `k` | 4 | 4 | 4 | 4 | [1, 1, 4, 4] |
-| ShellCheck.Analytics | `$srunNodeAnalysis` | 1 | 5 | 3 | 3 | [5] |
-| ShellCheck.Analytics | `doVariableFlowAnalysis` | 2 | 3 | 3 | 3 | [3, 1] |
-| ShellCheck.CFGAnalysis | `go15` | 1 | 3 | 3 | 3 † | [2] |
-| ShellCheck.CFGAnalysis | `go15` | 1 | 3 | 3 | 3 † | [2] |
-| ShellCheck.CFGAnalysis | `go4` | 1 | 3 | 3 | 3 † | [2] |
-| ShellCheck.Checks.ShellSupport | `go1` | 1 | 3 | 3 | 3 † | [2] |
-| ShellCheck.Parser | `$wpoly_k` | 1 | 4 | 3 | 3 † | [6] |
-| ShellCheck.Parser | `k` | 4 | 4 | 3 | 3 | [1, 1, 4, 3] |
-| ShellCheck.Parser | `k` | 4 | 4 | 3 | 3 † | [1, 1, 6, 5] |
-| ShellCheck.Parser | `k` | 4 | 4 | 3 | 3 † | [1, 1, 6, 5] |
-| ShellCheck.ASTLib | `$sgetLiteralStringExt` | 1 | 5 | 2 | 2 | [2] |
-| ShellCheck.Analytics | `analyse` | 1 | 3 | 2 | 2 | [2] |
-| ShellCheck.Parser | `$wreadIoVariable` | 3 | 2 | 2 | 2 | [2, 2, 2] |
-| ShellCheck.Parser | `k` | 4 | 4 | 2 | 2 | [1, 1, 4, 3] |
-| ShellCheck.Parser | `k` | 4 | 4 | 2 | 2 | [1, 1, 4, 3] |
-| ShellCheck.Parser | `k` | 4 | 2 | 2 | 2 † | [3, 1, 4, 2] |
-| ShellCheck.Fixer | `$srealignColumn` | 2 | 2 | 1 | 1 | [2, 2] |
-| ShellCheck.Parser | `$wisFollowedBy` | 1 | 4 | 1 | 1 | [4] |
+| module                         | function                 | params | call sites | tuples | clones | per-slot classes |
+| ------------------------------ | ------------------------ | -----: | ---------: | -----: | -----: | ---------------- |
+| ShellCheck.Parser              | `k`                      |      4 |          4 |      4 |      4 | [1, 1, 4, 3]     |
+| ShellCheck.Parser              | `k`                      |      4 |          4 |      4 |      4 | [1, 1, 4, 4]     |
+| ShellCheck.Analytics           | `$srunNodeAnalysis`      |      1 |          5 |      3 |      3 | [5]              |
+| ShellCheck.Analytics           | `doVariableFlowAnalysis` |      2 |          3 |      3 |      3 | [3, 1]           |
+| ShellCheck.CFGAnalysis         | `go15`                   |      1 |          3 |      3 |    3 † | [2]              |
+| ShellCheck.CFGAnalysis         | `go15`                   |      1 |          3 |      3 |    3 † | [2]              |
+| ShellCheck.CFGAnalysis         | `go4`                    |      1 |          3 |      3 |    3 † | [2]              |
+| ShellCheck.Checks.ShellSupport | `go1`                    |      1 |          3 |      3 |    3 † | [2]              |
+| ShellCheck.Parser              | `$wpoly_k`               |      1 |          4 |      3 |    3 † | [6]              |
+| ShellCheck.Parser              | `k`                      |      4 |          4 |      3 |      3 | [1, 1, 4, 3]     |
+| ShellCheck.Parser              | `k`                      |      4 |          4 |      3 |    3 † | [1, 1, 6, 5]     |
+| ShellCheck.Parser              | `k`                      |      4 |          4 |      3 |    3 † | [1, 1, 6, 5]     |
+| ShellCheck.ASTLib              | `$sgetLiteralStringExt`  |      1 |          5 |      2 |      2 | [2]              |
+| ShellCheck.Analytics           | `analyse`                |      1 |          3 |      2 |      2 | [2]              |
+| ShellCheck.Parser              | `$wreadIoVariable`       |      3 |          2 |      2 |      2 | [2, 2, 2]        |
+| ShellCheck.Parser              | `k`                      |      4 |          4 |      2 |      2 | [1, 1, 4, 3]     |
+| ShellCheck.Parser              | `k`                      |      4 |          4 |      2 |      2 | [1, 1, 4, 3]     |
+| ShellCheck.Parser              | `k`                      |      4 |          2 |      2 |    2 † | [3, 1, 4, 2]     |
+| ShellCheck.Fixer               | `$srealignColumn`        |      2 |          2 |      1 |      1 | [2, 2]           |
+| ShellCheck.Parser              | `$wisFollowedBy`         |      1 |          4 |      1 |      1 | [4]              |
 
 † a tuple has a **set-valued** component — one call site whose
 function-valued argument is itself a multi-class parameter, which the
@@ -4700,44 +4700,44 @@ report says so on every run.
 
 #### The verdicts, before → after (-O1)
 
-| kind | | ExactClosure | TypeShapeUniform | CloneRequired | FiniteClosureSet | Preserve | Unresolved | total |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| parameter | before | 47 | 20 | 138 | 0 | 6 | 5,253 | 5,464 |
-| | **after** | 47 | **16** | **141** | 0 | **7** | 5,253 | 5,464 |
-| field | before | 6 | 0 | 0 | 0 | 10 | 19 | 35 |
-| | **after** | **0** | 0 | 0 | 0 | **16** | 19 | 35 |
-| return | before | 14 | 0 | 0 | 1 | 10 | 50 | 75 |
-| | **after** | **3** | 0 | 0 | 1 | **21** | 50 | 75 |
-| **all** | before | 67 | 20 | 138 | 1 | 26 | 5,322 | 5,574 |
-| | **after** | **50** | **16** | **141** | 1 | **44** | 5,322 | 5,574 |
+| kind      |           | ExactClosure | TypeShapeUniform | CloneRequired | FiniteClosureSet | Preserve | Unresolved | total |
+| --------- | --------- | -----------: | ---------------: | ------------: | ---------------: | -------: | ---------: | ----: |
+| parameter | before    |           47 |               20 |           138 |                0 |        6 |      5,253 | 5,464 |
+|           | **after** |           47 |           **16** |       **141** |                0 |    **7** |      5,253 | 5,464 |
+| field     | before    |            6 |                0 |             0 |                0 |       10 |         19 |    35 |
+|           | **after** |        **0** |                0 |             0 |                0 |   **16** |         19 |    35 |
+| return    | before    |           14 |                0 |             0 |                1 |       10 |         50 |    75 |
+|           | **after** |        **3** |                0 |             0 |                1 |   **21** |         50 |    75 |
+| **all**   | before    |           67 |               20 |           138 |                1 |       26 |      5,322 | 5,574 |
+|           | **after** |       **50** |           **16** |       **141** |                1 |   **44** |      5,322 | 5,574 |
 
 Every number that moves, with its cause:
 
-| number | before | after | cause |
-|---|---:|---:|---|
-| field `ExactClosure` | 6 | 0 | defect 1 — an exported field slot is `Preserve` |
-| return `ExactClosure` | 14 | 3 | defect 1 — exported / used-as-a-value returns |
-| parameter `TypeShapeUniform` | 20 | 16 | 3 by defect 4 (a free-tyvar class split makes them `CloneRequired`), 1 by defect 1 |
-| `CloneRequired` | 138 | 141 | defect 4 — three slots whose producers stop agreeing |
-| `Preserve` | 26 | 44 | defect 1 — +6 field, +11 return, +1 parameter |
-| enumerated | 252 | 252 | unchanged: enumeration is a different fact (`H11`) |
-| one representation | 103 | 84 | 3 by defect 4, 16 by defect 2 (opaque never shares) |
-| rewritable as one | 87 | 66 | 3 by defect 4, 18 by defect 1 |
-| distinct shape classes | 261 | 353 | +71 defect 4, +21 defect 2 |
-| per-parameter class sum | 418 | 509 | defect 4 — more classes, still only evidence |
-| **clones** | 418 | **53** | defect 3 — distinct call-site tuples, per owner (**68** since [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found), which corrected how a tuple is deduplicated) |
+| number                       | before |  after | cause                                                                                                                                                                              |
+| ---------------------------- | -----: | -----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| field `ExactClosure`         |      6 |      0 | defect 1 — an exported field slot is `Preserve`                                                                                                                                    |
+| return `ExactClosure`        |     14 |      3 | defect 1 — exported / used-as-a-value returns                                                                                                                                      |
+| parameter `TypeShapeUniform` |     20 |     16 | 3 by defect 4 (a free-tyvar class split makes them `CloneRequired`), 1 by defect 1                                                                                                 |
+| `CloneRequired`              |    138 |    141 | defect 4 — three slots whose producers stop agreeing                                                                                                                               |
+| `Preserve`                   |     26 |     44 | defect 1 — +6 field, +11 return, +1 parameter                                                                                                                                      |
+| enumerated                   |    252 |    252 | unchanged: enumeration is a different fact (`H11`)                                                                                                                                 |
+| one representation           |    103 |     84 | 3 by defect 4, 16 by defect 2 (opaque never shares)                                                                                                                                |
+| rewritable as one            |     87 |     66 | 3 by defect 4, 18 by defect 1                                                                                                                                                      |
+| distinct shape classes       |    261 |    353 | +71 defect 4, +21 defect 2                                                                                                                                                         |
+| per-parameter class sum      |    418 |    509 | defect 4 — more classes, still only evidence                                                                                                                                       |
+| **clones**                   |    418 | **53** | defect 3 — distinct call-site tuples, per owner (**68** since [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found), which corrected how a tuple is deduplicated) |
 
 #### M2.4e re-checked against the corrected `Higher`
 
 `parsec::residual_edges` reads `Higher::verdict_for`, so it was re-run. The
 41-row status table is **unchanged, row for row**:
 
-| status | before | after |
-|---|---:|---:|
-| closed by the closure graph (`P-HO-EXACT` / `P-HO-FINITE`) | 0 | 0 |
-| `boundary-Unresolved(parameter-of-an-anonymous-lambda)` | 20 | 20 |
-| `boundary-Unresolved(function-used-as-a-value)` | 19 | 19 |
-| `boundary-Unresolved(call-site-is-a-partial-application)` | 2 | 2 |
+| status                                                     | before | after |
+| ---------------------------------------------------------- | -----: | ----: |
+| closed by the closure graph (`P-HO-EXACT` / `P-HO-FINITE`) |      0 |     0 |
+| `boundary-Unresolved(parameter-of-an-anonymous-lambda)`    |     20 |    20 |
+| `boundary-Unresolved(function-used-as-a-value)`            |     19 |    19 |
+| `boundary-Unresolved(call-site-is-a-partial-application)`  |      2 |     2 |
 
 This is the expected result and not a coincidence: all 41 land on
 boundaries whose producer set is `Top`, and `H9-TAINT` is decided before
@@ -4746,18 +4746,18 @@ anything the correction touched. None of the six defects can move an
 
 #### Across the flag matrix, before → after
 
-| | | A (`-O1`) | B | C | D | E | F |
-|---|---|---:|---:|---:|---:|---:|---:|
-| boundaries | | 5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
-| Exact + TypeShapeUniform | before | 87 | 178 | 231 | 862 | 850 | 833 |
-| | **after** | **66** | **125** | **172** | **695** | **683** | **682** |
-| `CloneRequired` | before | 138 | 184 | 227 | 1,006 | 996 | 1,017 |
-| | **after** | **141** | **219** | **269** | **1,150** | **1,140** | **1,145** |
-| `Preserve` | before | 26 | 27 | 26 | 39 | 39 | 39 |
-| | **after** | **44** | **45** | **43** | **62** | **62** | **62** |
-| clones | before (a sum) | 418 | 621 | 770 | 3,118 | 3,132 | 3,210 |
-| | **after (planned)** | **53** | **61** | **65** | **154** | **154** | **176** |
-| per-slot class sum (evidence) | after | 509 | 916 | 1,182 | 5,058 | 4,982 | 5,020 |
+|                               |                     | A (`-O1`) |       B |       C |         D |         E |         F |
+| ----------------------------- | ------------------- | --------: | ------: | ------: | --------: | --------: | --------: |
+| boundaries                    |                     |     5,574 |   6,347 |   8,082 |    34,094 |    31,686 |    31,701 |
+| Exact + TypeShapeUniform      | before              |        87 |     178 |     231 |       862 |       850 |       833 |
+|                               | **after**           |    **66** | **125** | **172** |   **695** |   **683** |   **682** |
+| `CloneRequired`               | before              |       138 |     184 |     227 |     1,006 |       996 |     1,017 |
+|                               | **after**           |   **141** | **219** | **269** | **1,150** | **1,140** | **1,145** |
+| `Preserve`                    | before              |        26 |      27 |      26 |        39 |        39 |        39 |
+|                               | **after**           |    **44** |  **45** |  **43** |    **62** |    **62** |    **62** |
+| clones                        | before (a sum)      |       418 |     621 |     770 |     3,118 |     3,132 |     3,210 |
+|                               | **after (planned)** |    **53** |  **61** |  **65** |   **154** |   **154** |   **176** |
+| per-slot class sum (evidence) | after               |       509 |     916 |   1,182 |     5,058 |     4,982 |     5,020 |
 
 The shape of the correction is the same on every profile: more inlining
 makes more shape classes once free type variables stop merging, so
@@ -4774,11 +4774,11 @@ and on all six matrix profiles: `laziness`, `tuples`, `tuples --explain`,
 `dictflow`, and `parsec` itself on -O1 — including its 41-row M2.4e table.
 What does move, and why:
 
-* `boundary-CloneRequired(5)` → `boundary-CloneRequired(8)` in the M2.4e
+- `boundary-CloneRequired(5)` → `boundary-CloneRequired(8)` in the M2.4e
   section of `parsec` and `tuples --verify` on profiles C–F: defect 4, a
   free-tyvar class split at that one boundary. The M2.4e **status** of
   every row is unchanged.
-* `parsec --json` and three `e.g.` exemplar lines of `parsec` on the matrix
+- `parsec --json` and three `e.g.` exemplar lines of `parsec` on the matrix
   profiles differ — the known nondeterminism recorded at M2.4e. It was
   re-confirmed here by running the **unchanged** binary three times over
   the same dump: `arg-of-unrecognised-call`, `cont-in-non-cont-slot` and
@@ -4792,16 +4792,16 @@ GHC flag changed.
 
 #### Still unsound, stated rather than hidden
 
-* **The M3 carrier invariant** behind `TypeShapeUniform` (defect 6) is
+- **The M3 carrier invariant** behind `TypeShapeUniform` (defect 6) is
   assumed, not proved, and nothing in M2 can prove it.
-* **`Ty::alpha_eq` still compares free type variables by unique.** `H14`
+- **`Ty::alpha_eq` still compares free type variables by unique.** `H14`
   keeps the *shape class* from resting on that, but the IR predicate itself
   is unchanged and must not be given a free-tyvar-sensitive proof to carry.
-* **66 of 87 clone plans are refused**, because some function-valued
+- **66 of 87 clone plans are refused**, because some function-valued
   parameter of the owner has an unenumerable producer set. 53 is therefore
   the clone count of the 21 owners that can be planned, not of the program.
-* **Set-valued tuples are lower bounds** (†): the fixpoint is monovariant.
-* Everything M2.4d already listed under *What remains* still stands.
+- **Set-valued tuples are lower bounds** (†): the fixpoint is monovariant.
+- Everything M2.4d already listed under *What remains* still stands.
 
 ## M2.4e — the 41 residual Parsec continuation edges
 
@@ -4833,10 +4833,10 @@ Only then does the edge gain a structural role target: one producer is an
 exact one (`P-HO-EXACT`), several a finite one (`P-HO-FINITE`), both level 3
 over M2.4d's facts and citing the boundary node and every producer.
 
-| | level | |
-|---|---:|---|
-| `P-HO-EXACT` | 3 | the continuation slot's boundary is enumerated, every producer is a continuation of known role, and there is exactly one |
-| `P-HO-FINITE` | 3 | the same, with more than one: a finite set of role targets |
+|               | level |                                                                                                                          |
+| ------------- | ----: | ------------------------------------------------------------------------------------------------------------------------ |
+| `P-HO-EXACT`  |     3 | the continuation slot's boundary is enumerated, every producer is a continuation of known role, and there is exactly one |
+| `P-HO-FINITE` |     3 | the same, with more than one: a finite set of role targets                                                               |
 
 ### The answer: 0 of 41
 
@@ -4844,11 +4844,11 @@ over M2.4d's facts and citing the boundary node and every producer.
 result worth reporting — it refuses each of them for the *same reason the
 region graph did*, one for one:
 
-| | the region graph's refusal (M2.2 stage 2) | the closure graph's answer (M2.4d) |
-|---:|---|---|
-| 20 | the region's chain is not bound to a binder | `Unresolved(parameter-of-an-anonymous-lambda)` |
-| 19 | the region's parser is used as a value | `Unresolved(function-used-as-a-value)` |
-| 2 | a call of the region is not saturated exactly | `Unresolved(call-site-is-a-partial-application)` |
+|    | the region graph's refusal (M2.2 stage 2)     | the closure graph's answer (M2.4d)               |
+| -: | --------------------------------------------- | ------------------------------------------------ |
+| 20 | the region's chain is not bound to a binder   | `Unresolved(parameter-of-an-anonymous-lambda)`   |
+| 19 | the region's parser is used as a value        | `Unresolved(function-used-as-a-value)`           |
+|  2 | a call of the region is not saturated exactly | `Unresolved(call-site-is-a-partial-application)` |
 
 The cross-tabulation is exact: the 20/19/2 split of the region graph's
 reasons maps onto the 20/19/2 split of the closure graph's, edge by edge.
@@ -4881,49 +4881,49 @@ it rather than standing in for it: all 41 boundaries are **unenumerated**,
 which is why none of them closes. Nothing else in the table moves, and the
 count is still 0 closed / 41 open.*
 
-| module | node | edge | previous reason | new status | boundary |
-|---|---:|---|---|---|---|
-| `ShellCheck.Parser` | 1946 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 119: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 1930 |
-| `ShellCheck.Parser` | 1962 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 119: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 1930 |
-| `ShellCheck.Parser` | 1996 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 119: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 1928 |
-| `ShellCheck.Parser` | 2012 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 119: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 1928 |
-| `ShellCheck.Parser` | 17769 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 546: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 17767 |
-| `ShellCheck.Parser` | 40016 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 659: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 40014 |
-| `ShellCheck.Parser` | 44120 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 3 (eta) of eta#14436 at node 44107 |
-| `ShellCheck.Parser` | 44121 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 3 (eta) of eta#14436 at node 44107 |
-| `ShellCheck.Parser` | 44170 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (eta) of eta#14436 at node 44105 |
-| `ShellCheck.Parser` | 44171 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 687: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (eta) of eta#14436 at node 44105 |
-| `ShellCheck.Parser` | 55495 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 769: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 55491 |
-| `ShellCheck.Parser` | 57894 | `eta Eok → Eok [R3-CONT-CALL-ETA]` | eta of region 444: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 3 (eta) of lvl#4458 at node 57887 |
-| `ShellCheck.Parser` | 57919 | `eta Cok → Cok [R3-CONT-CALL-ETA]` | eta of region 444: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (eta) of lvl#4458 at node 57885 |
-| `ShellCheck.Parser` | 58867 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 439: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 2 (eok) of $wps#4447 at node 58854 |
-| `ShellCheck.Parser` | 58868 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 439: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 2 (eok) of $wps#4447 at node 58854 |
-| `ShellCheck.Parser` | 58921 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 439: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (cok) of $wps#4447 at node 58853 |
-| `ShellCheck.Parser` | 58922 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 439: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (cok) of $wps#4447 at node 58853 |
-| `ShellCheck.Parser` | 61995 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 802: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 61982 |
-| `ShellCheck.Parser` | 61996 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 802: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 61982 |
-| `ShellCheck.Parser` | 62045 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 802: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 61980 |
-| `ShellCheck.Parser` | 62046 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 802: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 1 (cok) of #? at node 61980 |
-| `ShellCheck.Parser` | 66715 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 4 (eta) of k#4393 at node 66700 |
-| `ShellCheck.Parser` | 66716 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 4 (eta) of k#4393 at node 66700 |
-| `ShellCheck.Parser` | 66765 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 2 (eta) of k#4393 at node 66698 |
-| `ShellCheck.Parser` | 66766 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 407: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 2 (eta) of k#4393 at node 66698 |
-| `ShellCheck.Parser` | 79705 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 866: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 79701 |
-| `ShellCheck.Parser` | 87005 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 891: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eok) of #? at node 87003 |
-| `ShellCheck.Parser` | 98148 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 976: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eta) of #? at node 98146 |
-| `ShellCheck.Parser` | 123694 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
-| `ShellCheck.Parser` | 123725 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
-| `ShellCheck.Parser` | 123767 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 5 (eta) of $wk#36309 at node 123689 |
-| `ShellCheck.Parser` | 123824 | `eta Cok → Cok [R3-CONT-CALL]` | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 3 (eta) of $wk#36309 at node 123687 |
-| `ShellCheck.Parser` | 123881 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1157: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 4 (eta) of k#36395 at node 123877 |
-| `ShellCheck.Parser` | 124015 | `eta3 Eok → Eok [R3-CONT-CALL]` | eta3 of region 1149: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 2 (eta3) of $wm1#36087 at node 123991 |
-| `ShellCheck.Parser` | 124668 | `eta Eok → Eok [R3-CONT-CALL]` | eta of region 1161: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)` | parameter 4 (eta) of k#36617 at node 124648 |
-| `ShellCheck.Parser` | 125675 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 54: a call of the region is not saturated exactly | `boundary-producer-set-is-not-enumerated (Unresolved: call-site-is-a-partial-application)` | parameter 3 (eok) of lvl#397 at node 125673 |
-| `ShellCheck.Parser` | 125720 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 53: a call of the region is not saturated exactly | `boundary-producer-set-is-not-enumerated (Unresolved: call-site-is-a-partial-application)` | parameter 3 (eok) of lvl#382 at node 125718 |
-| `ShellCheck.Parser` | 126651 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 1166: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 3 (eok) of lvl#36967 at node 126635 |
-| `ShellCheck.Parser` | 126675 | `eok Eok → Eok [R3-CONT-CALL]` | eok of region 1166: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 3 (eok) of lvl#36967 at node 126635 |
-| `ShellCheck.Parser` | 126717 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 1166: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (cok) of lvl#36967 at node 126633 |
-| `ShellCheck.Parser` | 126741 | `cok Cok → Cok [R3-CONT-CALL]` | cok of region 1166: the region's parser is used as a value | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)` | parameter 1 (cok) of lvl#36967 at node 126633 |
+| module              |   node | edge                               | previous reason                                                 | new status                                                                                 | boundary                                        |
+| ------------------- | -----: | ---------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------- |
+| `ShellCheck.Parser` |   1946 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 119: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 3 (eok) of #? at node 1930            |
+| `ShellCheck.Parser` |   1962 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 119: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 3 (eok) of #? at node 1930            |
+| `ShellCheck.Parser` |   1996 | `cok Cok → Cok [R3-CONT-CALL]`     | cok of region 119: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 1 (cok) of #? at node 1928            |
+| `ShellCheck.Parser` |   2012 | `cok Cok → Cok [R3-CONT-CALL]`     | cok of region 119: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 1 (cok) of #? at node 1928            |
+| `ShellCheck.Parser` |  17769 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 546: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 3 (eok) of #? at node 17767           |
+| `ShellCheck.Parser` |  40016 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 659: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 3 (eok) of #? at node 40014           |
+| `ShellCheck.Parser` |  44120 | `eta Eok → Eok [R3-CONT-CALL]`     | eta of region 687: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 3 (eta) of eta#14436 at node 44107    |
+| `ShellCheck.Parser` |  44121 | `eta Eok → Eok [R3-CONT-CALL]`     | eta of region 687: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 3 (eta) of eta#14436 at node 44107    |
+| `ShellCheck.Parser` |  44170 | `eta Cok → Cok [R3-CONT-CALL]`     | eta of region 687: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 1 (eta) of eta#14436 at node 44105    |
+| `ShellCheck.Parser` |  44171 | `eta Cok → Cok [R3-CONT-CALL]`     | eta of region 687: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 1 (eta) of eta#14436 at node 44105    |
+| `ShellCheck.Parser` |  55495 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 769: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 3 (eok) of #? at node 55491           |
+| `ShellCheck.Parser` |  57894 | `eta Eok → Eok [R3-CONT-CALL-ETA]` | eta of region 444: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 3 (eta) of lvl#4458 at node 57887     |
+| `ShellCheck.Parser` |  57919 | `eta Cok → Cok [R3-CONT-CALL-ETA]` | eta of region 444: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 1 (eta) of lvl#4458 at node 57885     |
+| `ShellCheck.Parser` |  58867 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 439: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 2 (eok) of $wps#4447 at node 58854    |
+| `ShellCheck.Parser` |  58868 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 439: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 2 (eok) of $wps#4447 at node 58854    |
+| `ShellCheck.Parser` |  58921 | `cok Cok → Cok [R3-CONT-CALL]`     | cok of region 439: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 1 (cok) of $wps#4447 at node 58853    |
+| `ShellCheck.Parser` |  58922 | `cok Cok → Cok [R3-CONT-CALL]`     | cok of region 439: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 1 (cok) of $wps#4447 at node 58853    |
+| `ShellCheck.Parser` |  61995 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 802: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 3 (eok) of #? at node 61982           |
+| `ShellCheck.Parser` |  61996 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 802: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 3 (eok) of #? at node 61982           |
+| `ShellCheck.Parser` |  62045 | `cok Cok → Cok [R3-CONT-CALL]`     | cok of region 802: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 1 (cok) of #? at node 61980           |
+| `ShellCheck.Parser` |  62046 | `cok Cok → Cok [R3-CONT-CALL]`     | cok of region 802: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 1 (cok) of #? at node 61980           |
+| `ShellCheck.Parser` |  66715 | `eta Eok → Eok [R3-CONT-CALL]`     | eta of region 407: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 4 (eta) of k#4393 at node 66700       |
+| `ShellCheck.Parser` |  66716 | `eta Eok → Eok [R3-CONT-CALL]`     | eta of region 407: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 4 (eta) of k#4393 at node 66700       |
+| `ShellCheck.Parser` |  66765 | `eta Cok → Cok [R3-CONT-CALL]`     | eta of region 407: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 2 (eta) of k#4393 at node 66698       |
+| `ShellCheck.Parser` |  66766 | `eta Cok → Cok [R3-CONT-CALL]`     | eta of region 407: the region's parser is used as a value       | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 2 (eta) of k#4393 at node 66698       |
+| `ShellCheck.Parser` |  79705 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 866: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 3 (eok) of #? at node 79701           |
+| `ShellCheck.Parser` |  87005 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 891: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 3 (eok) of #? at node 87003           |
+| `ShellCheck.Parser` |  98148 | `eta Eok → Eok [R3-CONT-CALL]`     | eta of region 976: the region's chain is not bound to a binder  | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 3 (eta) of #? at node 98146           |
+| `ShellCheck.Parser` | 123694 | `eta Eok → Eok [R3-CONT-CALL]`     | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 5 (eta) of $wk#36309 at node 123689   |
+| `ShellCheck.Parser` | 123725 | `eta Eok → Eok [R3-CONT-CALL]`     | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 5 (eta) of $wk#36309 at node 123689   |
+| `ShellCheck.Parser` | 123767 | `eta Eok → Eok [R3-CONT-CALL]`     | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 5 (eta) of $wk#36309 at node 123689   |
+| `ShellCheck.Parser` | 123824 | `eta Cok → Cok [R3-CONT-CALL]`     | eta of region 1155: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 3 (eta) of $wk#36309 at node 123687   |
+| `ShellCheck.Parser` | 123881 | `eta Eok → Eok [R3-CONT-CALL]`     | eta of region 1157: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 4 (eta) of k#36395 at node 123877     |
+| `ShellCheck.Parser` | 124015 | `eta3 Eok → Eok [R3-CONT-CALL]`    | eta3 of region 1149: the region's parser is used as a value     | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 2 (eta3) of $wm1#36087 at node 123991 |
+| `ShellCheck.Parser` | 124668 | `eta Eok → Eok [R3-CONT-CALL]`     | eta of region 1161: the region's chain is not bound to a binder | `boundary-producer-set-is-not-enumerated (Unresolved: parameter-of-an-anonymous-lambda)`   | parameter 4 (eta) of k#36617 at node 124648     |
+| `ShellCheck.Parser` | 125675 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 54: a call of the region is not saturated exactly | `boundary-producer-set-is-not-enumerated (Unresolved: call-site-is-a-partial-application)` | parameter 3 (eok) of lvl#397 at node 125673     |
+| `ShellCheck.Parser` | 125720 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 53: a call of the region is not saturated exactly | `boundary-producer-set-is-not-enumerated (Unresolved: call-site-is-a-partial-application)` | parameter 3 (eok) of lvl#382 at node 125718     |
+| `ShellCheck.Parser` | 126651 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 1166: the region's parser is used as a value      | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 3 (eok) of lvl#36967 at node 126635   |
+| `ShellCheck.Parser` | 126675 | `eok Eok → Eok [R3-CONT-CALL]`     | eok of region 1166: the region's parser is used as a value      | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 3 (eok) of lvl#36967 at node 126635   |
+| `ShellCheck.Parser` | 126717 | `cok Cok → Cok [R3-CONT-CALL]`     | cok of region 1166: the region's parser is used as a value      | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 1 (cok) of lvl#36967 at node 126633   |
+| `ShellCheck.Parser` | 126741 | `cok Cok → Cok [R3-CONT-CALL]`     | cok of region 1166: the region's parser is used as a value      | `boundary-producer-set-is-not-enumerated (Unresolved: function-used-as-a-value)`           | parameter 1 (cok) of lvl#36967 at node 126633   |
 
 ### What this is checked by
 
@@ -4980,17 +4980,17 @@ the same reason: the verifier must not be able to see a `Verdict` at all.
 
 ### What it re-derives, and why those
 
-| claim | `-O1` | a wrong one costs |
-|---|---:|---|
-| class-op site `Exact(target)` | 7 | a call redirected into the wrong instance's method |
-| class-op site, bounded `DictSet` | 118 | an instance outside the set dispatched at run time |
-| dictionary parameter, bounded `DictSet` | 106 | the same, one level up |
-| dictionary value `Erasable` | 102 | a dictionary that is still needed is deleted |
-| dictionary parameter `Erasable` / `WithClone` / `WithObligation` | 36 / 4 / 0 | a dictionary, or a force, that is still needed is deleted |
-| owner-level dictionary clone plan | 4 | fewer specialisations than the call sites that exist |
-| higher-order `ExactClosure` / `TypeShapeUniform` / `CloneRequired` / `FiniteClosureSet` | 50 / 16 / 141 / 1 | one representation given to a slot two live closures disagree about |
-| owner-level closure clone plan | 21 plans, 68 clones (53 before [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found)) | ditto |
-| | **606 claims** | |
+| claim                                                                                   |                                                                                                  `-O1` | a wrong one costs                                                   |
+| --------------------------------------------------------------------------------------- | -----------------------------------------------------------------------------------------------------: | ------------------------------------------------------------------- |
+| class-op site `Exact(target)`                                                           |                                                                                                      7 | a call redirected into the wrong instance's method                  |
+| class-op site, bounded `DictSet`                                                        |                                                                                                    118 | an instance outside the set dispatched at run time                  |
+| dictionary parameter, bounded `DictSet`                                                 |                                                                                                    106 | the same, one level up                                              |
+| dictionary value `Erasable`                                                             |                                                                                                    102 | a dictionary that is still needed is deleted                        |
+| dictionary parameter `Erasable` / `WithClone` / `WithObligation`                        |                                                                                             36 / 4 / 0 | a dictionary, or a force, that is still needed is deleted           |
+| owner-level dictionary clone plan                                                       |                                                                                                      4 | fewer specialisations than the call sites that exist                |
+| higher-order `ExactClosure` / `TypeShapeUniform` / `CloneRequired` / `FiniteClosureSet` |                                                                                      50 / 16 / 141 / 1 | one representation given to a slot two live closures disagree about |
+| owner-level closure clone plan                                                          | 21 plans, 68 clones (53 before [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found)) | ditto                                                               |
+|                                                                                         |                                                                                         **606 claims** |                                                                     |
 
 A wrong `Unresolved` or a wrong `Preserve` costs only coverage, so nothing
 re-derives those — the same asymmetry M2.3e states.
@@ -5049,14 +5049,14 @@ the pseudo-units makes this walk's own assertion fail on `-O1` with exactly
 
 ### What it found
 
-| dump | claims | re-derived | **disagreements** | coverage refusals |
-|---|---:|---:|---:|---:|
-| `-O1` (and matrix A) | 606 | 606 | **0** | 0 |
-| B | 749 | 749 | **0** | 0 |
-| C | 867 | 867 | **0** | 0 |
-| D | 2,209 | 2,209 | **0** | 0 |
-| E | 2,187 | 2,187 | **0** | 0 |
-| F | 2,209 | 2,209 | **0** | 0 |
+| dump                 | claims | re-derived | **disagreements** | coverage refusals |
+| -------------------- | -----: | ---------: | ----------------: | ----------------: |
+| `-O1` (and matrix A) |    606 |        606 |             **0** |                 0 |
+| B                    |    749 |        749 |             **0** |                 0 |
+| C                    |    867 |        867 |             **0** |                 0 |
+| D                    |  2,209 |      2,209 |             **0** |                 0 |
+| E                    |  2,187 |      2,187 |             **0** |                 0 |
+| F                    |  2,209 |      2,209 |             **0** |                 0 |
 
 Not one claim refused, on any dump, in either sense: this walk re-derived
 every positive verdict M2.4 publishes, and it never had to decline. The
@@ -5064,13 +5064,13 @@ populations it built on the way are the same ones, which is a second
 agreement and a separate one — the claim list says nothing about how many
 class-op sites exist:
 
-| this walk's own population | A (`-O1`) | B | C | D | E | F |
-|---|---:|---:|---:|---:|---:|---:|
-| class-op sites | 565 | 587 | 595 | 595 | 595 | 596 |
-| dictionary parameters | 216 | 210 | 222 | 223 | 223 | 231 |
-| dictionary identities | 191 | 191 | 191 | 238 | 238 | 238 |
-| function-valued boundaries | 5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
-| rounds (dictionary / totality / closure) | 7/4/10 | 7/4/10 | 7/4/11 | 7/7/11 | 7/7/11 | 7/7/11 |
+| this walk's own population               | A (`-O1`) |      B |      C |      D |      E |      F |
+| ---------------------------------------- | --------: | -----: | -----: | -----: | -----: | -----: |
+| class-op sites                           |       565 |    587 |    595 |    595 |    595 |    596 |
+| dictionary parameters                    |       216 |    210 |    222 |    223 |    223 |    231 |
+| dictionary identities                    |       191 |    191 |    191 |    238 |    238 |    238 |
+| function-valued boundaries               |     5,574 |  6,347 |  8,082 | 34,094 | 31,686 | 31,701 |
+| rounds (dictionary / totality / closure) |    7/4/10 | 7/4/10 | 7/4/11 | 7/7/11 | 7/7/11 | 7/7/11 |
 
 ### The whole population, not just the claimed part
 
@@ -5081,31 +5081,31 @@ boundary, in the analyses' own column order, and every published table comes
 back cell for cell on `-O1`:
 
 | this walk's own verdicts (`-O1`) | `Erasable` | `…WithObligation` | `…WithClone` | `Preserve` | `Unresolved` |
-|---|---:|---:|---:|---:|---:|
-| dictionary values (191) | 102 | 0 | 0 | 89 | 0 |
-| dictionary parameters (216) | 36 | 0 | 4 | 84 | 92 |
+| -------------------------------- | ---------: | ----------------: | -----------: | ---------: | -----------: |
+| dictionary values (191)          |        102 |                 0 |            0 |         89 |            0 |
+| dictionary parameters (216)      |         36 |                 0 |            4 |         84 |           92 |
 
-| | `ProvenTotal` | `MustPreserveForce` | `Unknown` |
-|---|---:|---:|---:|
-| dictionary parameters (216) | 118 | 0 | 98 |
+|                             | `ProvenTotal` | `MustPreserveForce` | `Unknown` |
+| --------------------------- | ------------: | ------------------: | --------: |
+| dictionary parameters (216) |           118 |                   0 |        98 |
 
-| | `ExactClosure` | `TypeShapeUniform` | `CloneRequired` | `FiniteClosureSet` | `Preserve` | `Unresolved` |
-|---|---:|---:|---:|---:|---:|---:|
-| boundaries (5,574) | 50 | 16 | 141 | 1 | 44 | 5,322 |
+|                    | `ExactClosure` | `TypeShapeUniform` | `CloneRequired` | `FiniteClosureSet` | `Preserve` | `Unresolved` |
+| ------------------ | -------------: | -----------------: | --------------: | -----------------: | ---------: | -----------: |
+| boundaries (5,574) |             50 |                 16 |             141 |                  1 |         44 |        5,322 |
 
 It holds on every profile too. Every cell of
 [M2.4c′'s](#across-the-flag-matrix-1) and
 [M2.4d′'s](#across-the-flag-matrix-before--after) matrix tables comes back:
 
-| this walk's own verdicts | A (`-O1`) | B | C | D | E | F |
-|---|---:|---:|---:|---:|---:|---:|
-| values `Erasable` | 102 | 102 | 101 | 139 | 139 | 139 |
-| parameters `Erasable` | 36 | 28 | 34 | 28 | 28 | 28 |
-| parameters `ErasableWithClone` | 4 | 3 | 4 | 4 | 4 | 4 |
-| parameters `ProvenTotal` / `MustPreserveForce` / `Unknown` | 118/0/98 | 110/0/100 | 121/0/101 | 77/0/146 | 77/0/146 | 85/0/146 |
-| `ExactClosure` + `TypeShapeUniform` | 66 | 125 | 172 | 695 | 683 | 682 |
-| `CloneRequired` | 141 | 219 | 269 | 1,150 | 1,140 | 1,145 |
-| boundary `Preserve` | 44 | 45 | 43 | 62 | 62 | 62 |
+| this walk's own verdicts                                   | A (`-O1`) |         B |         C |        D |        E |        F |
+| ---------------------------------------------------------- | --------: | --------: | --------: | -------: | -------: | -------: |
+| values `Erasable`                                          |       102 |       102 |       101 |      139 |      139 |      139 |
+| parameters `Erasable`                                      |        36 |        28 |        34 |       28 |       28 |       28 |
+| parameters `ErasableWithClone`                             |         4 |         3 |         4 |        4 |        4 |        4 |
+| parameters `ProvenTotal` / `MustPreserveForce` / `Unknown` |  118/0/98 | 110/0/100 | 121/0/101 | 77/0/146 | 77/0/146 | 85/0/146 |
+| `ExactClosure` + `TypeShapeUniform`                        |        66 |       125 |       172 |      695 |      683 |      682 |
+| `CloneRequired`                                            |       141 |       219 |       269 |    1,150 |    1,140 |    1,145 |
+| boundary `Preserve`                                        |        44 |        45 |        43 |       62 |       62 |       62 |
 
 These are not claim checks — a difference here would be a difference to look
 at, not a `D` — and there is no difference: the erasure table of
@@ -5131,28 +5131,28 @@ Each shape is a hand-built fixture in `tests.rs` **and** a count in the real
 `-O1` dump, printed by `h2r verify-m24`, so that a fixture is never the only
 evidence a rule was exercised. Every count is this walk's own.
 
-| # | shape | in `-O1` | example | must be |
-|---:|---|---:|---|---|
-| 1 | bounded dictionary identity whose producer is not total | **0** | — | never `Erasable` |
-| 2 | one dictionary parameter, two or more instances | 36 | `ShellCheck.Parser` 1645 | a finite set; `ErasableWithClone(n)` where it is erasable at all (4 of the 36 here) |
-| 3 | a dictionary used as an ordinary value *and* as a selector's dictionary | 11 | `ShellCheck.AST` 23582 | `Preserve`; the target is unaffected |
-| 4 | a dictionary parameter of unknown totality | 98 | `ShellCheck.AST` 3461 | `Unresolved` / `Preserve(totality)` |
-| 5 | a superclass selector site (`$pN<Class>`) | 72 | `Main` 659 | follows to the superclass instance |
-| 6 | a dictionary parameter fed through dispatch | 15 | `Main` 7766 | terminates; the fixpoint is monotone |
-| 7 | a partially applied class-op selector | **0** | — | recorded, no target claimed |
-| 8 | an exported or valued function slot whose producers *do* agree | 18 | `ShellCheck.AnalyzerLib` binder 2508 | `Preserve`, decided before agreement |
-| 9 | a slot two opaque producers reach | 4 | `ShellCheck.Interface` field 0 of `SystemInterface` | two classes: opaque unifies with nothing |
-| 10 | a capture type carrying a free type variable | 292 | `ShellCheck.AST` 3463 | a producer-private key: unifies with nothing |
-| 11 | a value field bound after an existential type binder | 25 | `Main` 623 | value-field indexing, not raw binder position |
-| 11a | …and the field is function-typed | 4 | `ShellCheck.Formatter.JSON` 4217 | pairs with the constructor's value argument |
-| 12 | an owner with two or more slots, planned jointly | 11 | `ShellCheck.Analytics` `doVariableFlowAnalysis` (2 slots, 3 tuples) | clones = distinct call-site tuples |
-| 13 | several representations at one slot, at a local | 141 | `ShellCheck.ASTLib` binder 1422 | `CloneRequired` |
-| 13a | …the same, at an exported or valued slot | 10 | `ShellCheck.AnalyzerLib` field 0 of `Checker` | `Preserve` |
-| 14 | a finite closure set at a slot no clone can serve | 1 | `ShellCheck.Checks.ShellSupport` return binder 942 | `FiniteClosureSet(n)` |
-| 15 | a three-argument closure named like a Parsec continuation | 124 | `ShellCheck.Parser` 3450 | arity and captures decide; no name is read |
-| 16 | a `case` on the alternative binder of a **lazy** field | 6,625 | `Main` 518 | a force: the binder is an unevaluated thunk |
-| 17 | …the same, on a **GHC-strict** field's binder | 168 | `ShellCheck.ASTLib` 8186 | already evaluated: the `case` deletes nothing |
-| 18 | a `case`/`let` head carrying outer value arguments | **0** | — | refused, never peeled: the arguments would be dropped |
+|   # | shape                                                                   | in `-O1` | example                                                             | must be                                                                             |
+| --: | ----------------------------------------------------------------------- | -------: | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+|   1 | bounded dictionary identity whose producer is not total                 |    **0** | —                                                                   | never `Erasable`                                                                    |
+|   2 | one dictionary parameter, two or more instances                         |       36 | `ShellCheck.Parser` 1645                                            | a finite set; `ErasableWithClone(n)` where it is erasable at all (4 of the 36 here) |
+|   3 | a dictionary used as an ordinary value *and* as a selector's dictionary |       11 | `ShellCheck.AST` 23582                                              | `Preserve`; the target is unaffected                                                |
+|   4 | a dictionary parameter of unknown totality                              |       98 | `ShellCheck.AST` 3461                                               | `Unresolved` / `Preserve(totality)`                                                 |
+|   5 | a superclass selector site (`$pN<Class>`)                               |       72 | `Main` 659                                                          | follows to the superclass instance                                                  |
+|   6 | a dictionary parameter fed through dispatch                             |       15 | `Main` 7766                                                         | terminates; the fixpoint is monotone                                                |
+|   7 | a partially applied class-op selector                                   |    **0** | —                                                                   | recorded, no target claimed                                                         |
+|   8 | an exported or valued function slot whose producers *do* agree          |       18 | `ShellCheck.AnalyzerLib` binder 2508                                | `Preserve`, decided before agreement                                                |
+|   9 | a slot two opaque producers reach                                       |        4 | `ShellCheck.Interface` field 0 of `SystemInterface`                 | two classes: opaque unifies with nothing                                            |
+|  10 | a capture type carrying a free type variable                            |      292 | `ShellCheck.AST` 3463                                               | a producer-private key: unifies with nothing                                        |
+|  11 | a value field bound after an existential type binder                    |       25 | `Main` 623                                                          | value-field indexing, not raw binder position                                       |
+| 11a | …and the field is function-typed                                        |        4 | `ShellCheck.Formatter.JSON` 4217                                    | pairs with the constructor's value argument                                         |
+|  12 | an owner with two or more slots, planned jointly                        |       11 | `ShellCheck.Analytics` `doVariableFlowAnalysis` (2 slots, 3 tuples) | clones = distinct call-site tuples                                                  |
+|  13 | several representations at one slot, at a local                         |      141 | `ShellCheck.ASTLib` binder 1422                                     | `CloneRequired`                                                                     |
+| 13a | …the same, at an exported or valued slot                                |       10 | `ShellCheck.AnalyzerLib` field 0 of `Checker`                       | `Preserve`                                                                          |
+|  14 | a finite closure set at a slot no clone can serve                       |        1 | `ShellCheck.Checks.ShellSupport` return binder 942                  | `FiniteClosureSet(n)`                                                               |
+|  15 | a three-argument closure named like a Parsec continuation               |      124 | `ShellCheck.Parser` 3450                                            | arity and captures decide; no name is read                                          |
+|  16 | a `case` on the alternative binder of a **lazy** field                  |    6,625 | `Main` 518                                                          | a force: the binder is an unevaluated thunk                                         |
+|  17 | …the same, on a **GHC-strict** field's binder                           |      168 | `ShellCheck.ASTLib` 8186                                            | already evaluated: the `case` deletes nothing                                       |
+|  18 | a `case`/`let` head carrying outer value arguments                      |    **0** | —                                                                   | refused, never peeled: the arguments would be dropped                               |
 
 *Rows 16–18 were added by
 [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found), one
@@ -5209,7 +5209,7 @@ no `case` to find.
 
 There was no disagreement about a verdict. There was one about the **record**:
 
-* [M2.4d′ defect 5](#5-existentialgadt-fields-were-indexed-by-raw-binder-position)
+- [M2.4d′ defect 5](#5-existentialgadt-fields-were-indexed-by-raw-binder-position)
   says "No number moves on the -O1 dump — GHC's ShellCheck Core has no
   alternative binding a function-typed field after an existential type
   binder". The first half is right and the second half is **wrong**. There
@@ -5229,12 +5229,12 @@ There was no disagreement about a verdict. There was one about the **record**:
 Two weakenings are written down rather than hidden, and neither fired on any
 of the seven dumps:
 
-* **A `Top` set of this walk's own is a coverage refusal (`C`), never a
+- **A `Top` set of this walk's own is a coverage refusal (`C`), never a
   disagreement (`D`).** `Top` says only that *this* walk could not account
   for every producer, which is this walk being blunter. What would be a
   disagreement is naming a producer the analysis does not have, and that is
   `X_SET_DIFFERS`.
-* **The narrower *already evaluated*** above. A refusal it caused would be
+- __The narrower *already evaluated*__ above. A refusal it caused would be
   this walk over-refusing, and would be reported as a disagreement for a
   human to resolve — `X_NOT_TOTAL` — rather than silently absorbed.
 
@@ -5250,13 +5250,13 @@ seven dumps, of which **224 are byte-identical** and the other 14 are the
 **pre-existing `parsec` nondeterminism** and nothing else (every run's
 standard error was captured too, and all 224 are empty):
 
-* `parsec` on B, C and D and `parsec --explain` on B, C, E and F differ in
+- `parsec` on B, C and D and `parsec --explain` on B, C, E and F differ in
   exactly **one `e.g.` exemplar line each** — the same reject reason with a
   different witness, every count identical. That is the witness-picking
   M2.4a's gate recorded and M2.4d′ re-confirmed by running an unchanged
   binary three times; *which* of the profiles it lands on moves from run to
   run, which is the point.
-* `parsec --json` differs on all seven dumps in each region's edge list
+- `parsec --json` differs on all seven dumps in each region's edge list
   order, and is **multiset-identical on all seven** when every list is
   canonicalised.
 
@@ -5273,27 +5273,27 @@ flag changed.
 
 ### Still unsound, or still unchecked
 
-* **The four trusted inputs are trusted.** In particular the class table is
+- **The four trusted inputs are trusted.** In particular the class table is
   an axiom on both sides of this check, and a wrong field order would be
   wrong in the same way twice. What the two sides do check against each other
   is every *use* of it, including the `repArity` cross-check, which is what a
   wrong entry would have to survive.
-* **The closed world is an assumption**, and this walk rests on it exactly as
+- **The closed world is an assumption**, and this walk rests on it exactly as
   M2.4c and M2.4d do. Re-deriving a producer set does not re-derive the right
   to enumerate it.
-* **`Unresolved` and `Preserve` are not re-derived *as claims*.** A milestone
+- **`Unresolved` and `Preserve` are not re-derived *as claims*.** A milestone
   that refused too much would pass the claim check in silence; that is the
   deliberate asymmetry, because only the positive verdicts can miscompile.
   What narrows it is the whole-population table above, where this walk's own
   `Preserve` and `Unresolved` counts are printed and agree cell for cell —
   but a difference there is a difference to look at and not a `D`, and no
   *reason* attached to a refusal is compared at all.
-* **The monovariant lower bounds stand.** Four dictionary plans and eight
+- **The monovariant lower bounds stand.** Four dictionary plans and eight
   closure plans on `-O1` have a set-valued tuple component, and their clone
   counts are lower bounds on both sides — this walk re-derives the same
   tuples and flags the same lower bound, which is agreement about a bound
   and not a closing of it.
-* **`TypeShapeUniform`'s M3 carrier invariant** is assumed here too. This
+- **`TypeShapeUniform`'s M3 carrier invariant** is assumed here too. This
   walk re-derives the shape classes; it cannot promise a lowering.
 
 ## M2.4g — the views, the provenance, the accounting, and what the milestone claims
@@ -5526,10 +5526,10 @@ only by a call-string analysis.
 **The 3×5 matrix** crosses questions 1 and 3 rather than collapsing them:
 
 | target ⟍ dictionary | `Erasable` | `…WithObligation` | `…WithClone` | `Preserve` | `Unresolved` |
-|---|---:|---:|---:|---:|---:|
-| `Exact` | 7 | 0 | 0 | **0** | 0 |
-| `FiniteSet` | 0 | 0 | 0 | **0** | 0 |
-| `Unresolved` | 10 | 0 | 0 | 154 | 394 |
+| ------------------- | ---------: | ----------------: | -----------: | ---------: | -----------: |
+| `Exact`             |          7 |                 0 |            0 |      **0** |            0 |
+| `FiniteSet`         |          0 |                 0 |            0 |      **0** |            0 |
+| `Unresolved`        |         10 |                 0 |            0 |        154 |          394 |
 
 The bolded cells — a site whose method is known but whose dictionary must
 survive anyway — are **0**, and the other direction is populated: 10 sites
@@ -5540,26 +5540,26 @@ unattributed row would be the milestone hiding what it did not do. The site
 rows sum to the 558 `Unresolved` and the boundary rows to the 44 `Preserve`
 plus 5,322 `Unresolved`, both asserted.
 
-| | class-op sites | whose problem it is |
-|---:|---|---|
-| 413 | `function-is-unreachable-in-the-closed-world` | `W0`: dead in the closed world — if ShellCheck is built as a library they come back |
+|                     | class-op sites                                                                                                                           | whose problem it is                                                                               |
+| ------------------: | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+|                 413 | `function-is-unreachable-in-the-closed-world`                                                                                            | `W0`: dead in the closed world — if ShellCheck is built as a library they come back               |
 | 53 + 48 + 7 + 5 + 1 | `instance-method-not-in-the-dump` (`$fMonoidDual`, `$fMonadIO`, `$fMonadStatesParsecT`, `$fMonadStatesReaderT`, `$fMonadReaderrParsecT`) | the instance is known and its body is in another package: a bigger dump, or a hand-written callee |
-| 17 | `dictionary-read-from-a-non-dictionary-constructor-field` | `SomeException`'s existential dictionary field: M3, or a hand-written `Exception` lowering |
-| 9 | `method-is-never-dispatched-in-the-closed-world` | no class-op site in the program selects that field: dead under `W0` |
-| 4 | `dictionary-returned-by-a-call-the-dump-cannot-see` | a bigger dump |
-| 1 | `dispatched-from-a-site-with-an-unknown-dictionary` | closable only when that site's dictionary is |
+|                  17 | `dictionary-read-from-a-non-dictionary-constructor-field`                                                                                | `SomeException`'s existential dictionary field: M3, or a hand-written `Exception` lowering        |
+|                   9 | `method-is-never-dispatched-in-the-closed-world`                                                                                         | no class-op site in the program selects that field: dead under `W0`                               |
+|                   4 | `dictionary-returned-by-a-call-the-dump-cannot-see`                                                                                      | a bigger dump                                                                                     |
+|                   1 | `dispatched-from-a-site-with-an-unknown-dictionary`                                                                                      | closable only when that site's dictionary is                                                      |
 
-| | function-valued boundaries | whose problem it is |
-|---:|---|---|
-| 2,660 + 1,953 = **4,613** | `function-used-as-a-value`, `parameter-of-an-anonymous-lambda` | the Parsec CPS wall: a naming pass for the anonymous lambdas, then a call-string view |
-| 413 | `call-site-is-a-partial-application` | the partial application's own consumers |
-| 227 | `function-is-unreachable-in-the-closed-world` | dead under `H0` |
-| 44 | `expression-is-not-a-closure` | the body's lambda chain and the binder's type disagree about the return: refused rather than picked |
-| 22 + 3 | `a-closure-read-back-from-a-constructor-field`, `a-closure-returned-by-an-imported-call` | a genuine run-time closure: the lowering decides, not this analysis |
-| 19 | `closure-from-an-untracked-higher-order-parameter` | the propagation, once the anonymous lambdas are named |
-| 14 + 5 | `the-boundary-is-exported-…`, `…-belongs-to-a-function-used-as-a-value` | shared outside the rewrite: M3's ownership question |
-| 5 | `constructor-is-never-applied-in-the-closed-world` | dead under `H0` |
-| 1 | `closure-set-exceeded-the-budget` | a larger budget, or a per-caller analysis |
+|                           | function-valued boundaries                                                               | whose problem it is                                                                                 |
+| ------------------------: | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| 2,660 + 1,953 = **4,613** | `function-used-as-a-value`, `parameter-of-an-anonymous-lambda`                           | the Parsec CPS wall: a naming pass for the anonymous lambdas, then a call-string view               |
+|                       413 | `call-site-is-a-partial-application`                                                     | the partial application's own consumers                                                             |
+|                       227 | `function-is-unreachable-in-the-closed-world`                                            | dead under `H0`                                                                                     |
+|                        44 | `expression-is-not-a-closure`                                                            | the body's lambda chain and the binder's type disagree about the return: refused rather than picked |
+|                    22 + 3 | `a-closure-read-back-from-a-constructor-field`, `a-closure-returned-by-an-imported-call` | a genuine run-time closure: the lowering decides, not this analysis                                 |
+|                        19 | `closure-from-an-untracked-higher-order-parameter`                                       | the propagation, once the anonymous lambdas are named                                               |
+|                    14 + 5 | `the-boundary-is-exported-…`, `…-belongs-to-a-function-used-as-a-value`                  | shared outside the rewrite: M3's ownership question                                                 |
+|                         5 | `constructor-is-never-applied-in-the-closed-world`                                       | dead under `H0`                                                                                     |
+|                         1 | `closure-set-exceeded-the-budget`                                                        | a larger budget, or a per-caller analysis                                                           |
 
 ### The cross-milestone links
 
@@ -5583,17 +5583,17 @@ unknown higher-order value — the population whose two largest rows M2.3's
 residual table names as *1,143 `eta` + 565 `eok`*. Each is now asked of the
 closure graph, by the callee binder M2.3 itself named:
 
-| holder | n | what the closure graph says |
-|---|---:|---|
-| `eta` | 1,143 | `Unresolved` 1,035, `CloneRequired` 84, `ExactClosure` 20, no boundary 4 |
-| `eok` | 565 | `Unresolved` 554, `CloneRequired` 11 |
-| `cok` | 282 | `Unresolved` 275, `CloneRequired` 7 |
-| `eerr` | 182 | `Unresolved` 178, `CloneRequired` 4 |
-| `cerr` | 146 | `Unresolved` 146 |
-| `reader` | 36 | `TypeShapeUniform` 36 |
-| `eta3` | 29 | `Unresolved` 29 |
-| `z'` | 21 | `CloneRequired` 21 |
-| 14 more | 50 | no boundary 36, `Unresolved` 8, `ExactClosure` 3, `Preserve` 3 |
+| holder   |     n | what the closure graph says                                              |
+| -------- | ----: | ------------------------------------------------------------------------ |
+| `eta`    | 1,143 | `Unresolved` 1,035, `CloneRequired` 84, `ExactClosure` 20, no boundary 4 |
+| `eok`    |   565 | `Unresolved` 554, `CloneRequired` 11                                     |
+| `cok`    |   282 | `Unresolved` 275, `CloneRequired` 7                                      |
+| `eerr`   |   182 | `Unresolved` 178, `CloneRequired` 4                                      |
+| `cerr`   |   146 | `Unresolved` 146                                                         |
+| `reader` |    36 | `TypeShapeUniform` 36                                                    |
+| `eta3`   |    29 | `Unresolved` 29                                                          |
+| `z'`     |    21 | `CloneRequired` 21                                                       |
+| 14 more  |    50 | no boundary 36, `Unresolved` 8, `ExactClosure` 3, `Preserve` 3           |
 
 **59 could be reclassified** (36 `reader` + 20 `eta` + 3 `color`). The shape
 of the answer is M2.4d's own: five of the six largest holders are Parsec's
@@ -5633,13 +5633,13 @@ side is a saturated application of a dfun the whole-program flow holds as a
 dictionary identity, and whose identity is `Erasable` with the verifier's
 confirmation. The population and every refusal are printed:
 
-| | | |
-|---:|---|---|
-| 152 | of the 2,242 thunk sites are `$d…` bindings (`Origin::Dictionary`) | the population this link draws on |
-| 131 | name a dictionary the whole-program flow holds an identity for | …and **all 131** are `Preserve(used as an ordinary value)` |
-| 18 | have a head the flow holds no identity for | not a dictionary M2.4c gave a verdict to |
-| 3 | are a superclass selection (`$pN<Class> d`) | a *field of* a dictionary, not an identity of its own |
-| 0 | are `Erasable` but unconfirmed | an unconfirmed claim is unsupported and never proven |
+|     |                                                                    |                                                            |
+| --: | ------------------------------------------------------------------ | ---------------------------------------------------------- |
+| 152 | of the 2,242 thunk sites are `$d…` bindings (`Origin::Dictionary`) | the population this link draws on                          |
+| 131 | name a dictionary the whole-program flow holds an identity for     | …and **all 131** are `Preserve(used as an ordinary value)` |
+|  18 | have a head the flow holds no identity for                         | not a dictionary M2.4c gave a verdict to                   |
+|   3 | are a superclass selection (`$pN<Class> d`)                        | a *field of* a dictionary, not an identity of its own      |
+|   0 | are `Erasable` but unconfirmed                                     | an unconfirmed claim is unsupported and never proven       |
 
 Every one of the 152 is `Memo` in M1's own table, and 131 of them build a
 dictionary that `E4-ESCAPE` says is handed on as an ordinary value. A
@@ -5648,16 +5648,16 @@ its thunk. The number is 0 and it is a result.
 
 ### Across the flag matrix
 
-| | A (`-O1`) | B | C | D | E | F |
-|---|---:|---:|---:|---:|---:|---:|
-| class-op sites / `Exact` | 565 / 7 | 587 / 7 | 595 / 7 | 595 / 0 | 595 / 0 | 596 / 0 |
-| … dictionary bounded | 118 | 138 | 140 | 65 | 65 | 65 |
-| boundaries | 5,574 | 6,347 | 8,082 | 34,094 | 31,686 | 31,701 |
+|                                                       |     A (`-O1`) |               B |               C |                 D |                 E |                 F |
+| ----------------------------------------------------- | ------------: | --------------: | --------------: | ----------------: | ----------------: | ----------------: |
+| class-op sites / `Exact`                              |       565 / 7 |         587 / 7 |         595 / 7 |           595 / 0 |           595 / 0 |           596 / 0 |
+| … dictionary bounded                                  |           118 |             138 |             140 |                65 |                65 |                65 |
+| boundaries                                            |         5,574 |           6,347 |           8,082 |            34,094 |            31,686 |            31,701 |
 | … enumerated / one representation / rewritable as one | 252 / 84 / 66 | 391 / 143 / 125 | 486 / 189 / 172 | 1,909 / 718 / 695 | 1,887 / 706 / 683 | 1,891 / 705 / 682 |
-| dictionary values / parameters | 191 / 216 | 191 / 210 | 191 / 222 | 238 / 223 | 238 / 223 | 238 / 231 |
-| clone plans (dictionary / closure) | 4 / 68 | 3 / 83 | 4 / 87 | 7 / 207 | 7 / 207 | 7 / 227 |
-| claims / disagreements | 606 / 0 | 749 / 0 | 867 / 0 | 2,209 / 0 | 2,187 / 0 | 2,209 / 0 |
-| M1 thunk sites explained by M2.4 | 0 | 0 | 0 | 0 | 0 | 0 |
+| dictionary values / parameters                        |     191 / 216 |       191 / 210 |       191 / 222 |         238 / 223 |         238 / 223 |         238 / 231 |
+| clone plans (dictionary / closure)                    |        4 / 68 |          3 / 83 |          4 / 87 |           7 / 207 |           7 / 207 |           7 / 227 |
+| claims / disagreements                                |       606 / 0 |         749 / 0 |         867 / 0 |         2,209 / 0 |         2,187 / 0 |         2,209 / 0 |
+| M1 thunk sites explained by M2.4                      |             0 |               0 |               0 |                 0 |                 0 |                 0 |
 
 The accounting closes on all seven dumps, and `rewritable ≤ one
 representation ≤ enumerated` holds on all seven.
@@ -5685,7 +5685,7 @@ Sorting that walk by the binder fixes all three. It is a **report-order
 change only**: nothing in the proof depends on the order, and every count is
 an aggregate over all of it.
 
-* **the counts are unchanged.** Apart from the `e.g.` exemplar lines,
+- **the counts are unchanged.** Apart from the `e.g.` exemplar lines,
   `parsec --explain` is line-for-line **multiset identical** before and
   after on all seven dumps, and `parsec --json` is identical on all seven
   once each region's `edges`, `evidence` and `rejects` lists are
@@ -5699,7 +5699,7 @@ an aggregate over all of it.
   random, so the *before* capture is one of several outputs it could have
   produced, and the new one always picks the lowest-numbered role binder's.
   The 41-row M2.4e table is byte-identical on every dump.
-* **two runs are now identical.** Three consecutive runs of `h2r parsec`,
+- **two runs are now identical.** Three consecutive runs of `h2r parsec`,
   `parsec --explain` and `parsec --json` on `-O1`, on B and on C give
   **one md5 each — nine hashes for twenty-seven runs**. Against the same
   three runs of the *unchanged* binary on B, `--json` and `--explain` give
@@ -5719,12 +5719,12 @@ corrections, and one of them the **verifier had copied rather than
 derived** — which is a defect in the verification and not only in the
 analysis.
 
-| | what was wrong | what it moved |
-|---|---|---|
+|       | what was wrong                                                                                                                                                                                                                                                                  | what it moved                                                                                                                                                                                                                                                                                                                                                    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **1** | three defects in the totality domain, in `dictflow.rs` **and** reproduced in `verify_m24.rs`: every alternative binder counted as *already evaluated*; the totality join kept one obligation and lost the rest; an applied `case`/`let` head was peeled, dropping its arguments | no verdict on any of the seven dumps, and `dictflow`'s report is byte-identical on all seven — but the first shape occurs **6,625** times in `-O1` and misses every verdict only because none of them sits on a dictionary path, where the totality transfer reaches no `case` at all. Each defect now has a hand-built counterexample and a counted row (16–18) |
-| **2** | `H15-OWNER-CLONES` deduplicated clone tuples with `Shape::short()` — arity and capture **count** — contradicting `Shape::class()`, which is what every other part of M2.4d calls a representation | closure clones **53 → 68** on `-O1`, and up on every dump: 61 → **83** (B), 65 → **87** (C), 154 → **207** (D and E), 176 → **227** (F). The verifier's independent recount agrees on all seven |
-| **3** | a clone-plan claim carried only its cardinality and an `ErasableWithObligation` claim carried no obligation at all, so `check_plan` compared `tuples == n` and a different plan of the same size passed | no number; the claim protocol and two refusal reasons are new, and `[verified: yes]` now requires a content-checked claim |
-| **4** | `parsec::residual_edges` gated target enumeration on the *representation* verdict, admitting three verdicts and refusing `CloneRequired` | still **0 closed** on all seven dumps, and the 41-row `-O1` table keeps every other column — but on C, D, E and F four edges per profile that the old rule refused as `boundary-CloneRequired(8)` are now asked the role question and refused by it instead, and every status names the enumeration answer with the verdict beside it |
+| **2** | `H15-OWNER-CLONES` deduplicated clone tuples with `Shape::short()` — arity and capture **count** — contradicting `Shape::class()`, which is what every other part of M2.4d calls a representation                                                                               | closure clones **53 → 68** on `-O1`, and up on every dump: 61 → **83** (B), 65 → **87** (C), 154 → **207** (D and E), 176 → **227** (F). The verifier's independent recount agrees on all seven                                                                                                                                                                  |
+| **3** | a clone-plan claim carried only its cardinality and an `ErasableWithObligation` claim carried no obligation at all, so `check_plan` compared `tuples == n` and a different plan of the same size passed                                                                         | no number; the claim protocol and two refusal reasons are new, and `[verified: yes]` now requires a content-checked claim                                                                                                                                                                                                                                        |
+| **4** | `parsec::residual_edges` gated target enumeration on the *representation* verdict, admitting three verdicts and refusing `CloneRequired`                                                                                                                                        | still **0 closed** on all seven dumps, and the 41-row `-O1` table keeps every other column — but on C, D, E and F four edges per profile that the old rule refused as `boundary-CloneRequired(8)` are now asked the role question and refused by it instead, and every status names the enumeration answer with the verdict beside it                            |
 
 #### 1 — the totality domain, three defects, and a verifier that had copied them
 
@@ -5771,11 +5771,11 @@ hand-built counterexamples are not the only evidence the corrected rules were
 exercised, and so that a zero is a fact about the dump rather than about
 where the walk looked:
 
-| row | shape | `-O1`/A | B | C | D | E | F | example on `-O1` |
-|---:|---|---:|---:|---:|---:|---:|---:|---|
-| 16 | a `case` on the alternative binder of a **lazy** field | **6,625** | 7,539 | 7,570 | 12,372 | 11,348 | 11,287 | `Main` node 518 |
-| 17 | …the same, on a **GHC-strict** field's binder | 168 | 204 | 222 | 459 | 339 | 339 | `ShellCheck.ASTLib` node 8186 |
-| 18 | a `case`/`let` head carrying outer value arguments | **0** | **0** | **0** | **0** | **0** | **0** | — |
+| row | shape                                                  |   `-O1`/A |     B |     C |      D |      E |      F | example on `-O1`              |
+| --: | ------------------------------------------------------ | --------: | ----: | ----: | -----: | -----: | -----: | ----------------------------- |
+|  16 | a `case` on the alternative binder of a **lazy** field | **6,625** | 7,539 | 7,570 | 12,372 | 11,348 | 11,287 | `Main` node 518               |
+|  17 | …the same, on a **GHC-strict** field's binder          |       168 |   204 |   222 |    459 |    339 |    339 | `ShellCheck.ASTLib` node 8186 |
+|  18 | a `case`/`let` head carrying outer value arguments     |     **0** | **0** | **0** |  **0** |  **0** |  **0** | —                             |
 
 Defect (a) was therefore **live in the program** — 6,625 of the 6,793
 alternative-binder scrutinees in `-O1` bind a lazy field and were being read
@@ -5845,22 +5845,22 @@ independently.
 
 **Closure clones, per owning function, before → after (`-O1`):**
 
-| module | owning function | plans | clones before | clones after |
-|---|---|---:|---:|---:|
-| `ShellCheck.ASTLib` | `$sgetLiteralStringExt` | 1 | 2 | 2 |
-| `ShellCheck.Analytics` | `$srunNodeAnalysis` | 1 | 3 | **5** |
-| `ShellCheck.Analytics` | `analyse` | 1 | 2 | 2 |
-| `ShellCheck.Analytics` | `doVariableFlowAnalysis` | 1 | 3 | 3 |
-| `ShellCheck.CFGAnalysis` | `go15` | 2 | 6 | 6 |
-| `ShellCheck.CFGAnalysis` | `go4` | 1 | 3 | 3 |
-| `ShellCheck.Checks.ShellSupport` | `go1` | 1 | 3 | 3 |
-| `ShellCheck.Fixer` | `$srealignColumn` | 1 | 1 | **2** |
-| `ShellCheck.Parser` | `$wisFollowedBy` | 1 | 1 | **4** |
-| `ShellCheck.Parser` | `$wpoly_k` | 1 | 3 | **4** |
-| `ShellCheck.Parser` | `$wreadIoVariable` | 1 | 2 | 2 |
-| `ShellCheck.Parser` | `k` (eight distinct binders) | 8 | 23 | **30** |
-| `ShellCheck.Parser` | `readAmbiguous` | 1 | 1 | **2** |
-| **total** | | **21** | **53** | **68** |
+| module                           | owning function              |  plans | clones before | clones after |
+| -------------------------------- | ---------------------------- | -----: | ------------: | -----------: |
+| `ShellCheck.ASTLib`              | `$sgetLiteralStringExt`      |      1 |             2 |            2 |
+| `ShellCheck.Analytics`           | `$srunNodeAnalysis`          |      1 |             3 |        **5** |
+| `ShellCheck.Analytics`           | `analyse`                    |      1 |             2 |            2 |
+| `ShellCheck.Analytics`           | `doVariableFlowAnalysis`     |      1 |             3 |            3 |
+| `ShellCheck.CFGAnalysis`         | `go15`                       |      2 |             6 |            6 |
+| `ShellCheck.CFGAnalysis`         | `go4`                        |      1 |             3 |            3 |
+| `ShellCheck.Checks.ShellSupport` | `go1`                        |      1 |             3 |            3 |
+| `ShellCheck.Fixer`               | `$srealignColumn`            |      1 |             1 |        **2** |
+| `ShellCheck.Parser`              | `$wisFollowedBy`             |      1 |             1 |        **4** |
+| `ShellCheck.Parser`              | `$wpoly_k`                   |      1 |             3 |        **4** |
+| `ShellCheck.Parser`              | `$wreadIoVariable`           |      1 |             2 |            2 |
+| `ShellCheck.Parser`              | `k` (eight distinct binders) |      8 |            23 |       **30** |
+| `ShellCheck.Parser`              | `readAmbiguous`              |      1 |             1 |        **2** |
+| **total**                        |                              | **21** |        **53** |       **68** |
 
 Six of the thirteen owning functions move and seven do not; the refusals do
 not move either (66 of 87 owners still refuse rather than guess), the
@@ -5880,12 +5880,12 @@ verdict *label*: an obligation at the wrong node would have passed.
 
 A claim now carries its content:
 
-* **`Claim::groups`** — the plan as a **partition of the owner's call
+- **`Claim::groups`** — the plan as a **partition of the owner's call
   sites**, one entry per planned clone, each site by address
   (`Module#node`), rendered by one shared `group_lines`. This is the content
   of a clone plan that survives being derived twice: *which call shares a
   clone with which*. It is compared for every plan.
-* **`Claim::tuples`** — the deduplicated tuple set itself. For a
+- **`Claim::tuples`** — the deduplicated tuple set itself. For a
   **dictionary** plan the components are dictionary identities — addresses —
   and the set is compared directly. For a **closure** plan they are shape
   classes, and the two walks derive their capture keys independently and
@@ -5893,7 +5893,7 @@ A claim now carries its content:
   `1/[…]`); comparing those strings would compare two renderings and not two
   facts, so the tuples are the record and `groups` is the check. Addressing
   is not sharing; rendering a derived fact would be.
-* **`Claim::obligations`** — every force the verdict leaves to be
+- **`Claim::obligations`** — every force the verdict leaves to be
   discharged, as `Module#at forces what`, an address both sides build from
   their own derivation.
 
@@ -5997,19 +5997,19 @@ error was captured too and is identical on both sides everywhere.
 
 The 98 are fourteen reports × seven dumps, and nothing else:
 
-| report | lines moved (`-O1` … F) | what moved |
-|---|---|---|
-| `classops` | 2 | the one closure-clone line of the accounting block it shares with `higher` |
-| `classops --json` | — | the `named_forces` key, added; no existing value |
-| `dictflow --json` | — | `obligation` → `obligations` on values and parameters (empty on every dump), plus `groups` on each clone plan and `named_forces`; **no existing value changes** |
-| `higher` | 52 … 70 | the clone-plan table: 53 → 68 and the per-owner rows that produced it |
-| `higher --json` | 1 | `owner_clones`, and nothing else |
-| `higher --view-all` | 20 | the clone tuples in each boundary view, now the full shape class |
-| `m24` | 8 … 9 | the closure-clone row, and the three `parsec` residual status lines |
-| `m24 --json` | — | the same two, in `accounting.erasure.plans` and `m21ResidualEdges` |
-| `parsec`, `parsec --explain` | 135 … 1,007 | every residual edge's status string, plus one `representation verdict …` evidence line each |
-| `tuples --verify` | 6 … 7 | the same residual summary, which this report prints in brief |
-| `verify-m24`, `--explain`, `--json` | 3, and 5 on E and F | the three appended shape rows (16–18); on E and F also row 12's exemplar, `Main $s$wgo1` 1 → 2 tuples, which is the H15 correction again |
+| report                              | lines moved (`-O1` … F) | what moved                                                                                                                                                      |
+| ----------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `classops`                          | 2                       | the one closure-clone line of the accounting block it shares with `higher`                                                                                      |
+| `classops --json`                   | —                       | the `named_forces` key, added; no existing value                                                                                                                |
+| `dictflow --json`                   | —                       | `obligation` → `obligations` on values and parameters (empty on every dump), plus `groups` on each clone plan and `named_forces`; **no existing value changes** |
+| `higher`                            | 52 … 70                 | the clone-plan table: 53 → 68 and the per-owner rows that produced it                                                                                           |
+| `higher --json`                     | 1                       | `owner_clones`, and nothing else                                                                                                                                |
+| `higher --view-all`                 | 20                      | the clone tuples in each boundary view, now the full shape class                                                                                                |
+| `m24`                               | 8 … 9                   | the closure-clone row, and the three `parsec` residual status lines                                                                                             |
+| `m24 --json`                        | —                       | the same two, in `accounting.erasure.plans` and `m21ResidualEdges`                                                                                              |
+| `parsec`, `parsec --explain`        | 135 … 1,007             | every residual edge's status string, plus one `representation verdict …` evidence line each                                                                     |
+| `tuples --verify`                   | 6 … 7                   | the same residual summary, which this report prints in brief                                                                                                    |
+| `verify-m24`, `--explain`, `--json` | 3, and 5 on E and F     | the three appended shape rows (16–18); on E and F also row 12's exemplar, `Main $s$wgo1` 1 → 2 tuples, which is the H15 correction again                        |
 
 Everything else is **byte-identical on all seven dumps**, including
 `dictflow` itself (the totality corrections move no verdict), `parsec
@@ -6083,12 +6083,12 @@ answer beside it.
 work rather than by a failing test, and all in the direction of the analysis
 having claimed more than its evidence:
 
-| | what was wrong | what it moved |
-|---|---|---|
-| [M2.4c′](#correction-m24c--totality-is-not-the-same-fact-as-identity) | `Erasable` was decided from *bounded dictionary identity*, which a MAY-analysis over a `case` gives without the producer being total; and the per-parameter clone cardinalities were summed | no verdict moved (`MustPreserveForce` is 0 because `-O1` floats every dictionary out of every scrutinee — an instrumented fact, re-derived by M2.4f) and 8 clones → **4** |
-| [M2.4d′](#correction-m24d--sharing-is-decided-before-agreement-and-a-free-type-variable-identifies-nothing) | six defects: `H8` decided after `H5`/`H6`; two different one-representation theorems and opaque shapes merging; per-parameter clone counts summed; free type variables merging unrelated closures; existential fields indexed by raw binder position; `UniformRepresentation` named a Rust fact it is not | `ExactClosure` 67 → **50**, `Preserve` 26 → **44**, one representation 103 → **84**, rewritable 87 → **66**, shape classes 261 → **353**, clones 418 → **53** (→ **68** in M2.4h) |
-| [M2.4f](#the-one-correction-this-produced) | the *record*, not a verdict: M2.4d′ said ShellCheck's Core has no alternative binding a function-typed field after an existential type binder. It has four | no number moved; the prose was corrected and the shape is now counted on every run (rows 11 and 11a) |
-| [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found) | four: three in the totality domain (every alternative binder read as already evaluated, the obligation join keeping one of a set, an applied `case`/`let` head peeled) which `verify_m24.rs` had **copied rather than derived**; clone tuples deduplicated by arity-and-capture-count instead of by representation class; a claim protocol that carried counts where the check needed contents; and `parsec::residual_edges` gating target enumeration on the representation verdict | closure clones 53 → **68**; nothing else moved as a number — the three totality shapes are absent from all seven dumps and the 41 Parsec edges still close **0** — but the claim protocol, two refusal reasons and the `parsec` status column are new |
+|                                                                                                             | what was wrong                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | what it moved                                                                                                                                                                                                                                         |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [M2.4c′](#correction-m24c--totality-is-not-the-same-fact-as-identity)                                       | `Erasable` was decided from *bounded dictionary identity*, which a MAY-analysis over a `case` gives without the producer being total; and the per-parameter clone cardinalities were summed                                                                                                                                                                                                                                                                                          | no verdict moved (`MustPreserveForce` is 0 because `-O1` floats every dictionary out of every scrutinee — an instrumented fact, re-derived by M2.4f) and 8 clones → **4**                                                                             |
+| [M2.4d′](#correction-m24d--sharing-is-decided-before-agreement-and-a-free-type-variable-identifies-nothing) | six defects: `H8` decided after `H5`/`H6`; two different one-representation theorems and opaque shapes merging; per-parameter clone counts summed; free type variables merging unrelated closures; existential fields indexed by raw binder position; `UniformRepresentation` named a Rust fact it is not                                                                                                                                                                            | `ExactClosure` 67 → **50**, `Preserve` 26 → **44**, one representation 103 → **84**, rewritable 87 → **66**, shape classes 261 → **353**, clones 418 → **53** (→ **68** in M2.4h)                                                                     |
+| [M2.4f](#the-one-correction-this-produced)                                                                  | the *record*, not a verdict: M2.4d′ said ShellCheck's Core has no alternative binding a function-typed field after an existential type binder. It has four                                                                                                                                                                                                                                                                                                                           | no number moved; the prose was corrected and the shape is now counted on every run (rows 11 and 11a)                                                                                                                                                  |
+| [M2.4h](#correction-m24h--four-defects-the-owners-review-of-m24-found)                                      | four: three in the totality domain (every alternative binder read as already evaluated, the obligation join keeping one of a set, an applied `case`/`let` head peeled) which `verify_m24.rs` had **copied rather than derived**; clone tuples deduplicated by arity-and-capture-count instead of by representation class; a claim protocol that carried counts where the check needed contents; and `parsec::residual_edges` gating target enumeration on the representation verdict | closure clones 53 → **68**; nothing else moved as a number — the three totality shapes are absent from all seven dumps and the 41 Parsec edges still close **0** — but the claim protocol, two refusal reasons and the `parsec` status column are new |
 
 **Trusted inputs and assumptions, named.** The first four are the trusted
 inputs: consulted and never verified, on both sides of the M2.4f check, and
@@ -6123,7 +6123,7 @@ the *verdicts* rest on rather than inputs either walk reads.
 
 **What remains, and who owns it.**
 
-* **`Main.main`-rooted reachability — done, and conditional.**
+- **`Main.main`-rooted reachability — done, and conditional.**
   [M3a](#m3a--mainmain-rooted-reachability) computed the rooted set: 9,831
   of the 13,828 top-level bindings are dead on `-O1`, 8,855 more than the
   zero-reference subset sees. What it also found is that the dump is
@@ -6132,26 +6132,26 @@ the *verdicts* rest on rather than inputs either walk reads.
   dead verdicts are conditional on that, and every stable-name linkage in
   the compiler — `dictflow`'s, `classops`'s and `higher`'s — has the same
   gap. Fixing the plugin's naming is M3b's first task.
-* **M3: the canonical closure carrier.** Until the lowering promises one,
+- **M3: the canonical closure carrier.** Until the lowering promises one,
   `TypeShapeUniform` is a Haskell-type fact and the 16 boundaries carrying
   it are not yet one Rust representation.
-* **M3: a call-string analysis for the set-valued tuples.** 4 dictionary
+- **M3: a call-string analysis for the set-valued tuples.** 4 dictionary
   plans and 8 closure plans on `-O1` have a tuple with a set-valued
   component, because the fixpoint is monovariant (`W5`, `H3`). Their clone
   counts are lower bounds on both sides of the verifier — agreement about a
   bound, not a closing of it.
-* **The anonymous-lambda naming pass.** 4,613 of the 5,322 unresolved
+- **The anonymous-lambda naming pass.** 4,613 of the 5,322 unresolved
   boundaries, all 41 Parsec edges and five of the six largest M2.3 closure
   holders are one shape: `ShellCheck.Parser` is CPS, its continuations are
   anonymous lambdas passed as values, and a higher-order analysis that wants
   them has to name them first.
-* **A future dump format: global types and unfoldings.** The class table is
+- **A future dump format: global types and unfoldings.** The class table is
   an axiom only because the dump carries neither for a global — still true of
   format 6, which widened the id table to every *external* global but did not
   add a type or an unfolding body to it. A format that did would make the
   table **derivable**, and the one level-5 assumption that both
   sides of the M2.4f check share would go.
-* **`Unresolved` and `Preserve` are not re-derived as claims** — the
+- **`Unresolved` and `Preserve` are not re-derived as claims** — the
   deliberate asymmetry, narrowed but not closed by M2.4f's whole-population
   table.
 
@@ -6178,19 +6178,19 @@ Every existing report is **byte-identical** before and after, on
 `--explain`), `classops --per-module`, `compare` and the `--json` form of
 each — with three deliberate movements and nothing else:
 
-* **`classops` and `higher` gain the accounting section**, 85 lines
+- **`classops` and `higher` gain the accounting section**, 85 lines
   appended after everything they already print, so **not one existing line
   moves** — the *after* file starts with the *before* file byte for byte,
   on all seven dumps and with `--explain`. Their `--json` gains no key at
   all, because the views are their own `--view`/`--view-all` reports, and
   `classops --per-module` gains nothing at all: that mode exists to
   reproduce M2.4b exactly.
-* **`parsec --explain` and `parsec --json`** change *order* only —
+- **`parsec --explain` and `parsec --json`** change *order* only —
   multiset-identical and canonical-JSON-identical on all seven dumps — and
   `parsec` itself changes one `e.g.` exemplar line on B, C, E and F, which
   is the nondeterminism being fixed rather than a report changing. All
   three are now stable across runs.
-* **`show`** gains M2.4 marks and footers on nodes that have them —
+- **`show`** gains M2.4 marks and footers on nodes that have them —
   `ShellCheck.Parser 141341` gains one inline mark and an eight-line
   boundary footer, `ShellCheck.AST 5293` is unchanged because it has
   neither — and `--no-classops --no-higher` reproduces the previous output
@@ -6217,17 +6217,17 @@ constructs the new IR. `h2r-core-ir` stays the flattened dumped Core,
 `h2r-analysis` stays the proof-producing layer, `h2r-rt` stays the runtime
 target. The sub-milestones:
 
-| | |
-|---|---|
-| **M3a** | `Main.main`-rooted reachability — **done**, with a linkage hole it measured rather than hid |
+|          |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **M3a**  | `Main.main`-rooted reachability — **done**, with a linkage hole it measured rather than hid                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | **M3a′** | dump post-CoreTidy Core and re-establish whole-program identity — **done.** The resolver decides locality lexically; the plugin runs `CoreTidy` itself, serialises the tidied program and joins back, field by field, the facts CoreTidy discards (`demand`, `oneShot`, `exported`), with the alignment proved per module at extraction time. All seven dumps regenerated, `A5-IN-WORLD-MISSING` **0** on every one, dump format 6. **The M1–M2.4 re-baseline on the new dumps has not been done and is the next piece of work.** See [M3a′](#m3a--dump-post-coretidy-core-and-re-establish-whole-program-identity) |
-| **M3b** | the normalised IR — NIR, ANF/CFG-shaped, `FnId`/`ValueId`/`BlockId`, explicit `Delay`/`Force`/closure create/return, every instruction carrying `Origin { module, source_node/binder, rule }`, and **no `OpaqueCore` escape hatch** |
-| **M3c** | canonical carriers `Carrier(T)` plus closure conversion, so no anonymous `Lam` remains — this is what closes the open invariant `TypeShapeUniform` rests on |
-| **M3d** | polyvariant specialisation keyed by `(FnId, DictAssignment, ClosureShapeAssignment)` from a live-rooted worklist, closing the set-valued clone lower bounds without a call-string length |
-| **M3e** | explicit evaluation: M1 consumed — `Delay`, `Lazy`, shared and recursive thunks — and every M2.4 force obligation becomes a `Force` |
-| **M3f** | apply the certified representation rewrites. `Erasable` is *permission, not obligation*; every destructive rewrite gets a certificate naming the source address and the proof rule or claim it rests on |
-| **M3g** | lower the proven Parsec CPS regions into blocks and jumps using M2.1's regions and edges — no re-recognition, no names |
-| **M3h** | the lowering audit, and a thin canary emitter compiling at least one nontrivial reachable leaf SCC against `h2r-rt` |
+| **M3b**  | the normalised IR — NIR, ANF/CFG-shaped, `FnId`/`ValueId`/`BlockId`, explicit `Delay`/`Force`/closure create/return, every instruction carrying `Origin { module, source_node/binder, rule }`, and **no `OpaqueCore` escape hatch**                                                                                                                                                                                                                                                                                                                                                                                 |
+| **M3c**  | canonical carriers `Carrier(T)` plus closure conversion, so no anonymous `Lam` remains — this is what closes the open invariant `TypeShapeUniform` rests on                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **M3d**  | polyvariant specialisation keyed by `(FnId, DictAssignment, ClosureShapeAssignment)` from a live-rooted worklist, closing the set-valued clone lower bounds without a call-string length                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **M3e**  | explicit evaluation: M1 consumed — `Delay`, `Lazy`, shared and recursive thunks — and every M2.4 force obligation becomes a `Force`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **M3f**  | apply the certified representation rewrites. `Erasable` is *permission, not obligation*; every destructive rewrite gets a certificate naming the source address and the proof rule or claim it rests on                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **M3g**  | lower the proven Parsec CPS regions into blocks and jumps using M2.1's regions and edges — no re-recognition, no names                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| **M3h**  | the lowering audit, and a thin canary emitter compiling at least one nontrivial reachable leaf SCC against `h2r-rt`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 **Acceptance for all of M3:** the complete `Main.main`-reachable ShellCheck
 program exists as an explicit, proof-carrying NIR with no implicit laziness
@@ -6267,11 +6267,11 @@ make one of them stand for the others.
 
 An edge is established two ways, and two ways only:
 
-* **`A2-EDGE-LOCAL`** — `Module::resolve` gives `Ref::Local(b)` and
+- **`A2-EDGE-LOCAL`** — `Module::resolve` gives `Ref::Local(b)` and
   `Module::binding(b).site` is `Top`. Lexical binder identity; the binding
   *site* decides, never the name. This is the only rule that can ever reach
   an internally-named top-level binding.
-* **`A3-EDGE-GLOBAL`** — the resolver gives `Ref::Global` and the
+- **`A3-EDGE-GLOBAL`** — the resolver gives `Ref::Global` and the
   occurrence's stable name is the name of an *external* top-level binding
   of some in-world module. The same linkage `W1-GLOBAL-CALLERS` and
   `classops::World` already use; external names only, because an internal
@@ -6285,20 +6285,20 @@ definition is outside the world.
 
 ### The rules
 
-| Rule | Evidence | Meaning |
-|---|---|---|
-| `A0-CLOSED-WORLD` | 5 | The dump is the whole program and `Main.main` is its only root. This is `W0-CLOSED-WORLD` / `H0-CLOSED-WORLD` **cited, not re-asserted**: an assumption about the build that no walk can prove, and the one every `dead` verdict below rests on. |
-| `A1-ROOT-MAIN` | 4 over 1 | The root is the top-level binding of the dump's `Main` module whose stable name is `$<that module's unit>$Main$main`, found structurally through the world index. Not exactly one such binding is a named failure, never a guess. |
-| `A2-EDGE-LOCAL` | 1 | An occurrence the resolver maps to a binder bound at top level is an edge to that binding. |
-| `A3-EDGE-GLOBAL` | 3 | A global occurrence whose stable name is an external top-level binding of an in-world module is an edge to it. |
-| `A4-IMPORT` | 4 | A global occurrence whose stable name belongs to no in-world module is an import reference, counted per name, separately from live and from dead code. Not an edge. |
-| `A5-IN-WORLD-MISSING` | 4 over 5 | A global occurrence whose stable name's unit *and* module are an in-world module's, that no top-level binding of that module defines, and that GHC's own flags do not mark as a data constructor or a class-op selector. Its own category. **It is not 0** — see below. |
-| `A6-LIVE-CLOSURE` | 3 | Live is the transitive closure of `A2`/`A3` edges from the `A1` roots, and nothing else. |
-| `A7-DEAD-NO-REFS` | 3 | No occurrence anywhere in the closed world. This **calls** `dictflow`'s own `Program::is_unreachable_top`, the predicate behind `T_UNREACHABLE`, rather than restating it, so the two cannot drift. |
-| `A8-DEAD-ONLY-FROM-DEAD` | 3 | Referenced, but every top-level binding that references it is itself dead. The population the zero-reference subset could not see. |
-| `A9-WITNESS` | 3 | Every live binding carries one **shortest** chain of edges from a root to it, so the verdict is checkable by hand from the report. |
-| `A10-ACCOUNTING` | 5 | `top = live + dead` per module and in total; `dead = no-refs + only-from-dead`. Asserted, never assumed. |
-| `A11-MISSING-IMPACT` | 6 | A **name**-matched bound on what an `A5` hole could cost. Diagnostics only. No edge, no verdict and no accounting figure rests on it, and it exists only so the damage can be stated as a number. |
+| Rule                     | Evidence | Meaning                                                                                                                                                                                                                                                                 |
+| ------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `A0-CLOSED-WORLD`        | 5        | The dump is the whole program and `Main.main` is its only root. This is `W0-CLOSED-WORLD` / `H0-CLOSED-WORLD` **cited, not re-asserted**: an assumption about the build that no walk can prove, and the one every `dead` verdict below rests on.                        |
+| `A1-ROOT-MAIN`           | 4 over 1 | The root is the top-level binding of the dump's `Main` module whose stable name is `$<that module's unit>$Main$main`, found structurally through the world index. Not exactly one such binding is a named failure, never a guess.                                       |
+| `A2-EDGE-LOCAL`          | 1        | An occurrence the resolver maps to a binder bound at top level is an edge to that binding.                                                                                                                                                                              |
+| `A3-EDGE-GLOBAL`         | 3        | A global occurrence whose stable name is an external top-level binding of an in-world module is an edge to it.                                                                                                                                                          |
+| `A4-IMPORT`              | 4        | A global occurrence whose stable name belongs to no in-world module is an import reference, counted per name, separately from live and from dead code. Not an edge.                                                                                                     |
+| `A5-IN-WORLD-MISSING`    | 4 over 5 | A global occurrence whose stable name's unit *and* module are an in-world module's, that no top-level binding of that module defines, and that GHC's own flags do not mark as a data constructor or a class-op selector. Its own category. **It is not 0** — see below. |
+| `A6-LIVE-CLOSURE`        | 3        | Live is the transitive closure of `A2`/`A3` edges from the `A1` roots, and nothing else.                                                                                                                                                                                |
+| `A7-DEAD-NO-REFS`        | 3        | No occurrence anywhere in the closed world. This **calls** `dictflow`'s own `Program::is_unreachable_top`, the predicate behind `T_UNREACHABLE`, rather than restating it, so the two cannot drift.                                                                     |
+| `A8-DEAD-ONLY-FROM-DEAD` | 3        | Referenced, but every top-level binding that references it is itself dead. The population the zero-reference subset could not see.                                                                                                                                      |
+| `A9-WITNESS`             | 3        | Every live binding carries one **shortest** chain of edges from a root to it, so the verdict is checkable by hand from the report.                                                                                                                                      |
+| `A10-ACCOUNTING`         | 5        | `top = live + dead` per module and in total; `dead = no-refs + only-from-dead`. Asserted, never assumed.                                                                                                                                                                |
+| `A11-MISSING-IMPACT`     | 6        | A **name**-matched bound on what an `A5` hole could cost. Diagnostics only. No edge, no verdict and no accounting figure rests on it, and it exists only so the damage can be stated as a number.                                                                       |
 
 Trusted inputs, named on every run and shared with the verifier: `W0`; the
 module list; the root name; the IR's resolver (`Module::resolve`,
@@ -6307,37 +6307,37 @@ and data-constructor record.
 
 ### The result on `-O1`
 
-| module | top | live | dead, no references | dead, only dead referrers |
-|---|---:|---:|---:|---:|
-| `Main` | 502 | 409 | 18 | 75 |
-| `Paths_ShellCheck` | 63 | 0 | 9 | 54 |
-| `ShellCheck.AST` | 1083 | 35 | 320 | 728 |
-| `ShellCheck.ASTLib` | 346 | 150 | 44 | 152 |
-| `ShellCheck.Analytics` | 2676 | 489 | 14 | 2173 |
-| `ShellCheck.Analyzer` | 8 | 3 | 1 | 4 |
-| `ShellCheck.AnalyzerLib` | 650 | 309 | 82 | 259 |
-| `ShellCheck.CFG` | 1003 | 0 | 104 | 899 |
-| `ShellCheck.CFGAnalysis` | 895 | 0 | 128 | 767 |
-| `ShellCheck.Checker` | 36 | 33 | 1 | 2 |
-| `ShellCheck.Checks.Commands` | 1254 | 0 | 17 | 1237 |
-| `ShellCheck.Checks.ControlFlow` | 16 | 0 | 4 | 12 |
-| `ShellCheck.Checks.Custom` | 9 | 0 | 2 | 7 |
-| `ShellCheck.Checks.ShellSupport` | 906 | 0 | 7 | 899 |
-| `ShellCheck.Data` | 1340 | 1078 | 1 | 261 |
-| `ShellCheck.Fixer` | 92 | 0 | 9 | 83 |
-| `ShellCheck.Formatter.CheckStyle` | 53 | 0 | 2 | 51 |
-| `ShellCheck.Formatter.Diff` | 156 | 0 | 6 | 150 |
-| `ShellCheck.Formatter.Format` | 62 | 0 | 14 | 48 |
-| `ShellCheck.Formatter.GCC` | 22 | 0 | 2 | 20 |
-| `ShellCheck.Formatter.JSON` | 69 | 0 | 7 | 62 |
-| `ShellCheck.Formatter.JSON1` | 91 | 0 | 9 | 82 |
-| `ShellCheck.Formatter.Quiet` | 11 | 0 | 2 | 9 |
-| `ShellCheck.Formatter.TTY` | 93 | 0 | 2 | 91 |
-| `ShellCheck.Interface` | 680 | 1 | 137 | 542 |
-| `ShellCheck.Parser` | 1645 | 1487 | 24 | 134 |
-| `ShellCheck.Prelude` | 42 | 0 | 6 | 36 |
-| `ShellCheck.Regex` | 25 | 3 | 4 | 18 |
-| **total** | **13828** | **3997** | **976** | **8855** |
+| module                            |       top |     live | dead, no references | dead, only dead referrers |
+| --------------------------------- | --------: | -------: | ------------------: | ------------------------: |
+| `Main`                            |       502 |      409 |                  18 |                        75 |
+| `Paths_ShellCheck`                |        63 |        0 |                   9 |                        54 |
+| `ShellCheck.AST`                  |      1083 |       35 |                 320 |                       728 |
+| `ShellCheck.ASTLib`               |       346 |      150 |                  44 |                       152 |
+| `ShellCheck.Analytics`            |      2676 |      489 |                  14 |                      2173 |
+| `ShellCheck.Analyzer`             |         8 |        3 |                   1 |                         4 |
+| `ShellCheck.AnalyzerLib`          |       650 |      309 |                  82 |                       259 |
+| `ShellCheck.CFG`                  |      1003 |        0 |                 104 |                       899 |
+| `ShellCheck.CFGAnalysis`          |       895 |        0 |                 128 |                       767 |
+| `ShellCheck.Checker`              |        36 |       33 |                   1 |                         2 |
+| `ShellCheck.Checks.Commands`      |      1254 |        0 |                  17 |                      1237 |
+| `ShellCheck.Checks.ControlFlow`   |        16 |        0 |                   4 |                        12 |
+| `ShellCheck.Checks.Custom`        |         9 |        0 |                   2 |                         7 |
+| `ShellCheck.Checks.ShellSupport`  |       906 |        0 |                   7 |                       899 |
+| `ShellCheck.Data`                 |      1340 |     1078 |                   1 |                       261 |
+| `ShellCheck.Fixer`                |        92 |        0 |                   9 |                        83 |
+| `ShellCheck.Formatter.CheckStyle` |        53 |        0 |                   2 |                        51 |
+| `ShellCheck.Formatter.Diff`       |       156 |        0 |                   6 |                       150 |
+| `ShellCheck.Formatter.Format`     |        62 |        0 |                  14 |                        48 |
+| `ShellCheck.Formatter.GCC`        |        22 |        0 |                   2 |                        20 |
+| `ShellCheck.Formatter.JSON`       |        69 |        0 |                   7 |                        62 |
+| `ShellCheck.Formatter.JSON1`      |        91 |        0 |                   9 |                        82 |
+| `ShellCheck.Formatter.Quiet`      |        11 |        0 |                   2 |                         9 |
+| `ShellCheck.Formatter.TTY`        |        93 |        0 |                   2 |                        91 |
+| `ShellCheck.Interface`            |       680 |        1 |                 137 |                       542 |
+| `ShellCheck.Parser`               |      1645 |     1487 |                  24 |                       134 |
+| `ShellCheck.Prelude`              |        42 |        0 |                   6 |                        36 |
+| `ShellCheck.Regex`                |        25 |        3 |                   4 |                        18 |
+| **total**                         | **13828** | **3997** |             **976** |                  **8855** |
 
 17,695 edges over 21,636 occurrences — 17,197 intra-module, **498**
 inter-module, which is how thin the linkage between ShellCheck's modules
@@ -6357,14 +6357,14 @@ is now the only place the predicate exists.
 
 ### The subset check
 
-| | `-O1` |
-|---|---:|
-| zero-reference (`dictflow`'s own `T_UNREACHABLE` predicate) | 977 |
-| …of which are **roots** | 1 |
-| …of which are rooted-dead | 976 |
-| …neither dead nor a root — the gate asserts 0 | **0** |
-| rooted dead | 9,831 |
-| **additional dead the rooted analysis finds** | **8,855** |
+|                                                             |     `-O1` |
+| ----------------------------------------------------------- | --------: |
+| zero-reference (`dictflow`'s own `T_UNREACHABLE` predicate) |       977 |
+| …of which are **roots**                                     |         1 |
+| …of which are rooted-dead                                   |       976 |
+| …neither dead nor a root — the gate asserts 0               |     **0** |
+| rooted dead                                                 |     9,831 |
+| **additional dead the rooted analysis finds**               | **8,855** |
 
 The gate is `zero-reference \ roots ⊆ dead`, not `zero-reference ⊆ dead`,
 and the difference is not a fudge: a program's entry point is not called by
@@ -6375,19 +6375,19 @@ zero-reference binding that is live. It is named in the report every run.
 
 Three shapes, all of them invisible to a zero-reference test:
 
-* **Recursive functions whose only reference is their own.** 506 dead
+- **Recursive functions whose only reference is their own.** 506 dead
   bindings occur inside their own right-hand side and nowhere else —
   `ShellCheck.ASTLib getCommandSequences` (6 referrers, all dead),
   `ShellCheck.AST $s$c==` (4), `Paths_ShellCheck lastChar` (2). A
   zero-reference test counts the self-occurrence and lets every one of them
   through.
-* **Dead components that hang together.** `ShellCheck.AST $trModule` is
+- **Dead components that hang together.** `ShellCheck.AST $trModule` is
   referenced by **140** other bindings and every one of them is dead; the
   `Typeable` machinery of a module nothing reaches is a large, densely
   connected, entirely dead subgraph. `ShellCheck.CFG $trModule` (63),
   `ShellCheck.Interface $trModule` (51) and `ShellCheck.Checks.Commands
   lvl` (54) are the same shape.
-* **Instance and dictionary chains.** `Main $fEqStatus` ← `$fOrdStatus`,
+- **Instance and dictionary chains.** `Main $fEqStatus` ← `$fOrdStatus`,
   `Main $fSemigroupStatus` ← `$cstimes`, `$fMonoidStatus`, `Main $c==` ←
   `$fEqStatus`: a dictionary is referenced by exactly the instance that
   builds it, and nothing reaches the instance.
@@ -6416,11 +6416,11 @@ appear in the module's interface file. So the defining module's dump
 carries the *pre-tidy* name while every downstream module, which read the
 *tidied* interface, refers to the same binding by the *post-tidy* one:
 
-| the reference, in the module that makes it | the binding, in its own dump |
-|---|---|
-| `ShellCheck.Analyzer` → `$…$ShellCheck.Checks.Commands$$wchecker` | `$_in$$wchecker` |
-| `ShellCheck.Analytics` → `$…$ShellCheck.ASTLib$$wgetPath` | `$_in$$wgetPath` |
-| `Main` → `$…$ShellCheck.Formatter.TTY$format1` | *(nothing: no binding of that occurrence name exists in `ShellCheck.Formatter.TTY`'s dump at all — `format1` is a name `CoreTidy` invents)* |
+| the reference, in the module that makes it                        | the binding, in its own dump                                                                                                                |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ShellCheck.Analyzer` → `$…$ShellCheck.Checks.Commands$$wchecker` | `$_in$$wchecker`                                                                                                                            |
+| `ShellCheck.Analytics` → `$…$ShellCheck.ASTLib$$wgetPath`         | `$_in$$wgetPath`                                                                                                                            |
+| `Main` → `$…$ShellCheck.Formatter.TTY$format1`                    | *(nothing: no binding of that occurrence name exists in `ShellCheck.Formatter.TTY`'s dump at all — `format1` is a name `CoreTidy` invents)* |
 
 The closed world cannot see that the two names are one binding, so the
 reference establishes no edge. On `-O1` that is **112 stable names over
@@ -6432,10 +6432,10 @@ whose answer *depends* on it.
 
 What it costs, stated two ways and neither of them a repair:
 
-* the **sound** bound, which uses no name: the 19 modules an unlinkable
+- the **sound** bound, which uses no name: the 19 modules an unlinkable
   live-referenced name points into hold **8,131 of the 9,831** dead
   bindings, so those verdicts are conditional;
-* the **constructive** bound (`A11-MISSING-IMPACT`, evidence level 6):
+- the **constructive** bound (`A11-MISSING-IMPACT`, evidence level 6):
   **18** of the 112 names do have top-level bindings of the right module
   with the matching *occurrence* name — 23 of them, and every one a `$w…`
   worker, the one form `CoreTidy` leaves alone. They are
@@ -6479,17 +6479,17 @@ M2.4's two unresolved populations. It costs one `dictflow` and one
 site inside a binding the linkage hole wrongly calls dead is counted dead
 here too.
 
-| | `-O1` |
-|---|---:|
-| class-op dispatch sites | 565 |
-| …`Unresolved` | 558 |
-| …inside a rooted-dead top-level binding | **484** |
-| …`Unresolved` for `function-is-unreachable-in-the-closed-world` | 413 |
-| …inside a rooted-dead top-level binding | **413** |
-| function-valued boundaries | 5,574 |
-| …`Unresolved` | 5,322 |
-| …inside a rooted-dead top-level binding | **331** |
-| …a constructor field, which has no one binding to be inside | 19 |
+|                                                                 |   `-O1` |
+| --------------------------------------------------------------- | ------: |
+| class-op dispatch sites                                         |     565 |
+| …`Unresolved`                                                   |     558 |
+| …inside a rooted-dead top-level binding                         | **484** |
+| …`Unresolved` for `function-is-unreachable-in-the-closed-world` |     413 |
+| …inside a rooted-dead top-level binding                         | **413** |
+| function-valued boundaries                                      |   5,574 |
+| …`Unresolved`                                                   |   5,322 |
+| …inside a rooted-dead top-level binding                         | **331** |
+| …a constructor field, which has no one binding to be inside     |      19 |
 
 All 413 sites M2.4c attributed to the zero-reference subset are rooted-dead,
 as they must be, and the rooted analysis adds 71 more — 484 of the 558
@@ -6513,18 +6513,18 @@ climbs `Module::parent` to the root and reads the `Edge::Top` it arrived
 by, giving an owner map, and phrases every check over that map and over
 `Module::occurrences`, the IR's own occurrence index.
 
-| | what it re-derives | claims on `-O1` |
-|---|---|---:|
-| `V1-ROOTS` | the roots are exactly `Main`'s `$<unit>$Main$main`, and every binding carrying that name is a root | 2 |
-| `V2-POPULATION` | every top-level binding of every module appears exactly once in `live ∪ dead`, with the module and stable name it claims | 41,484 |
-| `V3-LIVE-CLOSED` | no live right-hand side names a dead top-level binding | 6,111 |
-| `V4-DEAD-UNREFERENCED` | every occurrence of a dead binder, intra-module through `occurrences` and inter-module through the stable-name scan, lies inside a dead right-hand side | 14,526 |
-| `V5-WITNESS` | every witness starts at a root, ends at its binding, and every hop is an edge re-derived here | 3,997 |
-| `V6-EDGES` | the recorded edges are exactly the IR's, rule and occurrence count included | 35,390 |
-| `V7-DEAD-REASON` | every dead reason and referrer list is the one the IR gives | 9,831 |
-| `V8-ACCOUNTING` | the identities hold over the *contents*, not the counters | 30 |
-| `V9-ZERO-REFERENCE` | the zero-reference set is exactly the unreferenced bindings, every one dead or a root | 1,954 |
-| | **total** | **113,325** |
+|                        | what it re-derives                                                                                                                                      | claims on `-O1` |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------: |
+| `V1-ROOTS`             | the roots are exactly `Main`'s `$<unit>$Main$main`, and every binding carrying that name is a root                                                      |               2 |
+| `V2-POPULATION`        | every top-level binding of every module appears exactly once in `live ∪ dead`, with the module and stable name it claims                                |          41,484 |
+| `V3-LIVE-CLOSED`       | no live right-hand side names a dead top-level binding                                                                                                  |           6,111 |
+| `V4-DEAD-UNREFERENCED` | every occurrence of a dead binder, intra-module through `occurrences` and inter-module through the stable-name scan, lies inside a dead right-hand side |          14,526 |
+| `V5-WITNESS`           | every witness starts at a root, ends at its binding, and every hop is an edge re-derived here                                                           |           3,997 |
+| `V6-EDGES`             | the recorded edges are exactly the IR's, rule and occurrence count included                                                                             |          35,390 |
+| `V7-DEAD-REASON`       | every dead reason and referrer list is the one the IR gives                                                                                             |           9,831 |
+| `V8-ACCOUNTING`        | the identities hold over the *contents*, not the counters                                                                                               |              30 |
+| `V9-ZERO-REFERENCE`    | the zero-reference set is exactly the unreferenced bindings, every one dead or a root                                                                   |           1,954 |
+|                        | **total**                                                                                                                                               |     **113,325** |
 
 **0 disagreements on all seven dumps.** Six tests make it bite: a dead
 binding moved to live, a live one moved to dead (checked in both
@@ -6534,19 +6534,19 @@ check fires, not merely that the audit fails.
 
 ### Across the flag matrix
 
-| | `core-json` | A `-O1` | B `-O2` | C | D | E | F |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| top-level bindings | 13,828 | 13,828 | 13,957 | 6,073 | 7,209 | 7,209 | 7,197 |
-| live | 3,997 | 3,997 | 3,525 | 1,260 | 1,484 | 1,484 | 1,482 |
-| dead, no references | 976 | 976 | 1,000 | 930 | 1,057 | 1,057 | 1,055 |
-| dead, only dead referrers | 8,855 | 8,855 | 9,432 | 3,883 | 4,668 | 4,668 | 4,660 |
-| zero-reference set | 977 | 977 | 1,001 | 931 | 1,058 | 1,058 | 1,056 |
-| …not dead and not a root | **0** | **0** | **0** | **0** | **0** | **0** | **0** |
-| `A5-IN-WORLD-MISSING` names | 112 | 112 | 125 | 83 | 109 | 109 | 109 |
-| …dead bindings they make conditional | 8,131 | 8,131 | 8,949 | 3,889 | 4,854 | 4,854 | 4,845 |
-| verifier claims | 113,325 | 113,325 | 115,720 | 50,133 | 64,002 | 63,582 | 63,479 |
-| verifier disagreements | **0** | **0** | **0** | **0** | **0** | **0** | **0** |
-| accounting identities | all hold | all hold | all hold | all hold | all hold | all hold | all hold |
+|                                      | `core-json` |  A `-O1` |  B `-O2` |        C |        D |        E |        F |
+| ------------------------------------ | ----------: | -------: | -------: | -------: | -------: | -------: | -------: |
+| top-level bindings                   |      13,828 |   13,828 |   13,957 |    6,073 |    7,209 |    7,209 |    7,197 |
+| live                                 |       3,997 |    3,997 |    3,525 |    1,260 |    1,484 |    1,484 |    1,482 |
+| dead, no references                  |         976 |      976 |    1,000 |      930 |    1,057 |    1,057 |    1,055 |
+| dead, only dead referrers            |       8,855 |    8,855 |    9,432 |    3,883 |    4,668 |    4,668 |    4,660 |
+| zero-reference set                   |         977 |      977 |    1,001 |      931 |    1,058 |    1,058 |    1,056 |
+| …not dead and not a root             |       **0** |    **0** |    **0** |    **0** |    **0** |    **0** |    **0** |
+| `A5-IN-WORLD-MISSING` names          |         112 |      112 |      125 |       83 |      109 |      109 |      109 |
+| …dead bindings they make conditional |       8,131 |    8,131 |    8,949 |    3,889 |    4,854 |    4,854 |    4,845 |
+| verifier claims                      |     113,325 |  113,325 |  115,720 |   50,133 |   64,002 |   63,582 |   63,479 |
+| verifier disagreements               |       **0** |    **0** |    **0** |    **0** |    **0** |    **0** |    **0** |
+| accounting identities                |    all hold | all hold | all hold | all hold | all hold | all hold | all hold |
 
 `compiler/core-json` and `matrix/A` produce byte-identical reports, as they
 should: A *is* the `-O1` profile. C's top-level population is less than half
@@ -6636,13 +6636,13 @@ top-level binder as a `GlobalId` — including the ones whose `Name` stays
 internal — so on a post-tidy dump the bit no longer separates an import
 from a module-local top-level binding.
 
-* An in-scope binder now wins whatever the flag says; only an occurrence
+- An in-scope binder now wins whatever the flag says; only an occurrence
   with **no in-scope binder at all** is `Ref::Global`.
-* `isGlobal` stays in the JSON and in `Expr::Var` as a GHC diagnostic fact.
+- `isGlobal` stays in the JSON and in `Expr::Var` as a GHC diagnostic fact.
   It is no longer the local-vs-import identity decision, and the doc
   comments that said module-level binders are `LocalId`s all the way
   through are corrected.
-* The test being removed was also what kept an *import* from being captured
+- The test being removed was also what kept an *import* from being captured
   by a same-unique local binder, so that guard is re-established explicitly:
   an occurrence that resolves lexically although its **own stable name** is
   an external name of another module is a **unique collision**
@@ -6650,20 +6650,20 @@ from a module-local top-level binding.
   already carries, against the module's own identity — nothing is keyed by
   a unique — and `h2r stats` prints the count on every dump, with the
   offending modules when it is not 0.
-* `split_stable_name` / `is_external_name` / `is_internal_unit` moved to
+- `split_stable_name` / `is_external_name` / `is_internal_unit` moved to
   `h2r-core-ir`, where dump format 5's names live; `h2r-analysis` delegates,
   so the IR's collision guard and `dictflow`'s linkage index cannot drift.
 
 **The compatibility proof.** On the *unchanged* `-O1` dump and the six
 unchanged matrix dumps, with the resolver changed:
 
-| | |
-|---|---:|
-| reports captured on `core-json`, stdout and stderr apart | 94 |
-| …byte-identical before and after | **94** |
-| matrix files (`stats`, `stats --per-module`, `lower --reachability` × A–F) | 24 |
-| …byte-identical before and after | **24** |
-| unique collisions, on all seven existing dumps | **0** |
+|                                                                            |        |
+| -------------------------------------------------------------------------- | -----: |
+| reports captured on `core-json`, stdout and stderr apart                   |     94 |
+| …byte-identical before and after                                           | **94** |
+| matrix files (`stats`, `stats --per-module`, `lower --reachability` × A–F) |     24 |
+| …byte-identical before and after                                           | **24** |
+| unique collisions, on all seven existing dumps                             |  **0** |
 
 The 94 are `stats` (+`--per-module`), `laziness`, `parsec`, `tuples`
 (+`--verify`, `--boundaries`), `fields`, `lists` (+`--axioms`), `text`
@@ -6708,38 +6708,38 @@ not in the tree, because of the gate.
 rebuild every `IdInfo` from `vanillaIdInfo` and put back only some fields.
 Read from GHC 9.6.7's own source:
 
-| binder class | tidied by | kept | **zapped** |
-|---|---|---|---|
-| top level, external name | `tidyTopIdInfo` | arity, `dmd_sig`, CPR, occ-info (`zapFragileOcc`), inline pragma, unfolding | per-binder demand, call arity, rules |
-| top level, internal name | `tidyTopIdInfo` | arity, `dmd_sig`, CPR, minimal unfolding | **occ-info**, per-binder demand, call arity, inline pragma, rules |
-| `let` / `letrec` | `tidyLetBndr` | occ-info, arity, `dmd_sig` (DmdEnv zapped), **per-binder demand**, inline pragma, unfolding | CPR, call arity, one-shot |
-| **lambda** | `tidyIdBndr` | occ-info, **one-shot**, trimmed unfolding | **arity, `dmd_sig`, per-binder demand, CPR, `IdDetails`** |
-| **case binder, alt binder** | `tidyIdBndr` | occ-info, trimmed unfolding | **arity, `dmd_sig`, per-binder demand, CPR, `IdDetails`** |
+| binder class                | tidied by       | kept                                                                                        | **zapped**                                                        |
+| --------------------------- | --------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| top level, external name    | `tidyTopIdInfo` | arity, `dmd_sig`, CPR, occ-info (`zapFragileOcc`), inline pragma, unfolding                 | per-binder demand, call arity, rules                              |
+| top level, internal name    | `tidyTopIdInfo` | arity, `dmd_sig`, CPR, minimal unfolding                                                    | **occ-info**, per-binder demand, call arity, inline pragma, rules |
+| `let` / `letrec`            | `tidyLetBndr`   | occ-info, arity, `dmd_sig` (DmdEnv zapped), **per-binder demand**, inline pragma, unfolding | CPR, call arity, one-shot                                         |
+| **lambda**                  | `tidyIdBndr`    | occ-info, **one-shot**, trimmed unfolding                                                   | **arity, `dmd_sig`, per-binder demand, CPR, `IdDetails`**         |
+| **case binder, alt binder** | `tidyIdBndr`    | occ-info, trimmed unfolding                                                                 | **arity, `dmd_sig`, per-binder demand, CPR, `IdDetails`**         |
 
 Measured, not inferred: one `-O1` extraction of all 28 modules emitted
 twice through the *same* emitter, once from `mg_binds` and once from
 `cg_binds`. Binders carrying a non-trivial value, pre-tidy → post-tidy:
 
-| field | top | let | lam | case | alt |
-|---|---:|---:|---:|---:|---:|
-| binders in the class | 13828 → 13752 | 6156 → 6125 | 24202 → 23950 | 25076 → 24923 | 47078 → 46819 |
-| `arity != 0` | 3067 → 2994 | 2755 → 2738 | 0 → 0 | 0 → 0 | 0 → 0 |
-| `dmdSig` non-empty | 3179 → 3106 | 3182 → 2738 | 0 → 0 | 0 → 0 | 0 → 0 |
-| `dmdSig` has a strict arg | 2426 → 2363 | 1617 → 1608 | 0 → 0 | 0 → 0 | 0 → 0 |
-| `dmdSig` has an absent arg | 195 → 194 | 410 → 410 | 0 → 0 | 0 → 0 | 0 → 0 |
-| `dmdSig` diverges | 132 → 132 | 25 → 25 | 0 → 0 | 0 → 0 | 0 → 0 |
-| `cprSig` non-empty | 581 → 547 | 38 → **0** | 0 → 0 | 0 → 0 | 0 → 0 |
-| **`demand` strict** | 0 → 0 | 1059 → 1044 | **6026 → 0** | **532 → 0** | **22956 → 0** |
-| **`demand` absent** | 0 → 0 | 0 → 0 | **1515 → 0** | **21065 → 0** | **14344 → 0** |
-| **`demand` usedOnce** | 0 → 0 | 460 → 454 | **9518 → 0** | **21890 → 0** | **29245 → 0** |
-| **`demand` pretty ≠ `L`** | 820 → **0** | 4114 → 4089 | **11544 → 0** | **21911 → 0** | **35170 → 0** |
-| `occInfo` dead | 0 → 0 | 0 → 0 | 1513 → 1511 | 20675 → 20546 | 0 → 0 |
-| `occInfo` loopBreaker | 691 → **250** | 874 → 865 | 0 → 0 | 0 → 0 | 0 → 0 |
-| `oneShot` | 25 → 0 | 187 → 0 | 6119 → 6098 | 0 → 0 | 0 → 0 |
-| `hasUnfolding` | 13828 → 11792 | 5828 → **3245** | 0 → 0 | 24687 → 24530 | 5388 → 5377 |
-| `isJoinPoint` | 0 → 0 | 1119 → 1102 | 0 → 0 | 0 → 0 | 0 → 0 |
-| `details` non-empty | 945 → 848 | 1423 → 1327 | 0 → 0 | 0 → 0 | 4 → 4 |
-| **`exported`** | **1200 → 13752** | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 |
+| field                      |              top |             let |           lam |          case |           alt |
+| -------------------------- | ---------------: | --------------: | ------------: | ------------: | ------------: |
+| binders in the class       |    13828 → 13752 |     6156 → 6125 | 24202 → 23950 | 25076 → 24923 | 47078 → 46819 |
+| `arity != 0`               |      3067 → 2994 |     2755 → 2738 |         0 → 0 |         0 → 0 |         0 → 0 |
+| `dmdSig` non-empty         |      3179 → 3106 |     3182 → 2738 |         0 → 0 |         0 → 0 |         0 → 0 |
+| `dmdSig` has a strict arg  |      2426 → 2363 |     1617 → 1608 |         0 → 0 |         0 → 0 |         0 → 0 |
+| `dmdSig` has an absent arg |        195 → 194 |       410 → 410 |         0 → 0 |         0 → 0 |         0 → 0 |
+| `dmdSig` diverges          |        132 → 132 |         25 → 25 |         0 → 0 |         0 → 0 |         0 → 0 |
+| `cprSig` non-empty         |        581 → 547 |      38 → **0** |         0 → 0 |         0 → 0 |         0 → 0 |
+| **`demand` strict**        |            0 → 0 |     1059 → 1044 |  **6026 → 0** |   **532 → 0** | **22956 → 0** |
+| **`demand` absent**        |            0 → 0 |           0 → 0 |  **1515 → 0** | **21065 → 0** | **14344 → 0** |
+| **`demand` usedOnce**      |            0 → 0 |       460 → 454 |  **9518 → 0** | **21890 → 0** | **29245 → 0** |
+| **`demand` pretty ≠ `L`**  |      820 → **0** |     4114 → 4089 | **11544 → 0** | **21911 → 0** | **35170 → 0** |
+| `occInfo` dead             |            0 → 0 |           0 → 0 |   1513 → 1511 | 20675 → 20546 |         0 → 0 |
+| `occInfo` loopBreaker      |    691 → **250** |       874 → 865 |         0 → 0 |         0 → 0 |         0 → 0 |
+| `oneShot`                  |           25 → 0 |         187 → 0 |   6119 → 6098 |         0 → 0 |         0 → 0 |
+| `hasUnfolding`             |    13828 → 11792 | 5828 → **3245** |         0 → 0 | 24687 → 24530 |   5388 → 5377 |
+| `isJoinPoint`              |            0 → 0 |     1119 → 1102 |         0 → 0 |         0 → 0 |         0 → 0 |
+| `details` non-empty        |        945 → 848 |     1423 → 1327 |         0 → 0 |         0 → 0 |         4 → 4 |
+| **`exported`**             | **1200 → 13752** |           0 → 0 |         0 → 0 |         0 → 0 |         0 → 0 |
 
 The id table grows, as it should: 2,972 → 8,056 entries, `hasUnfolding`
 2,043 → 7,103, `isClassOp` 56 → 56, `dataCon` 1,071 → 1,064. Those extra
@@ -6750,29 +6750,29 @@ binder is what signatures are read from.
 **Verdict: the gate fires.** Three of the four zapped fields are read by
 M1–M2.4 proofs in exactly the binder classes tidy zaps them in:
 
-| reader | binder class | field |
-|---|---|---|
-| `h2r-analysis/src/fields.rs` `demand_of` (M2.3b) | **alt binder** | `demand.strict` → `DemandHow::StrictByGhc` |
-| `h2r-analysis/src/lists/mod.rs` `head_forced` (M2.3c) | **alt binder** | `demand.strict && !absent` |
-| `h2r-analysis/src/dictflow.rs:2267` (M2.4c) | **lambda** | `demand.strict` under `BindSite::Lam` |
-| `h2r-analysis/src/classops.rs:960` (M2.4b) | **lambda** (dictionary parameter) | `demand.strict` → `dict_known_strict` |
-| `h2r-analysis/src/dictflow.rs:1623` (M2.4c) | **lambda** (dictionary parameter) | `demand.strict` → `Param::known_strict` |
-| `h2r-analysis/src/{dictflow,higher,boundary,verify,verify_rep,verify_m24}.rs` | top level | `exported`, which post-tidy is `isGlobalId` and so **uniformly true** |
+| reader                                                                        | binder class                      | field                                                                 |
+| ----------------------------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------------- |
+| `h2r-analysis/src/fields.rs` `demand_of` (M2.3b)                              | **alt binder**                    | `demand.strict` → `DemandHow::StrictByGhc`                            |
+| `h2r-analysis/src/lists/mod.rs` `head_forced` (M2.3c)                         | **alt binder**                    | `demand.strict && !absent`                                            |
+| `h2r-analysis/src/dictflow.rs:2267` (M2.4c)                                   | **lambda**                        | `demand.strict` under `BindSite::Lam`                                 |
+| `h2r-analysis/src/classops.rs:960` (M2.4b)                                    | **lambda** (dictionary parameter) | `demand.strict` → `dict_known_strict`                                 |
+| `h2r-analysis/src/dictflow.rs:1623` (M2.4c)                                   | **lambda** (dictionary parameter) | `demand.strict` → `Param::known_strict`                               |
+| `h2r-analysis/src/{dictflow,higher,boundary,verify,verify_rep,verify_m24}.rs` | top level                         | `exported`, which post-tidy is `isGlobalId` and so **uniformly true** |
 
 Run on the two dumps, the damage is what the census predicts:
 
-| report | pre-tidy | post-tidy |
-|---|---:|---:|
-| `fields`: observed / unobserved / escaped | 1407 / 13 / 7746 | 191 / 1 / 8931 |
-| `fields`: `Always` verdicts | 196 | 34 |
-| `fields`: `Conditional` verdicts | 915 | 275 |
-| `lists`: `SpineDemand::Unknown` | 5503 | 8895 |
-| `lists`: `Whole` | 141 | 62 |
-| `lists`: `Prefix(DataDependent)` | 921 | 145 |
-| `classops`: dictionary known strict at its binder | 247 | 0 |
-| `classops`: sites with a bounded instance set (≥1) | 10 | 0 |
-| `dictflow`: `Exact(target)` class-op sites | 7 (1.2%) | 0 (0.0%) |
-| `laziness`: potential thunk sites | 2242 | 2228 |
+| report                                             |         pre-tidy |      post-tidy |
+| -------------------------------------------------- | ---------------: | -------------: |
+| `fields`: observed / unobserved / escaped          | 1407 / 13 / 7746 | 191 / 1 / 8931 |
+| `fields`: `Always` verdicts                        |              196 |             34 |
+| `fields`: `Conditional` verdicts                   |              915 |            275 |
+| `lists`: `SpineDemand::Unknown`                    |             5503 |           8895 |
+| `lists`: `Whole`                                   |              141 |             62 |
+| `lists`: `Prefix(DataDependent)`                   |              921 |            145 |
+| `classops`: dictionary known strict at its binder  |              247 |              0 |
+| `classops`: sites with a bounded instance set (≥1) |               10 |              0 |
+| `dictflow`: `Exact(target)` class-op sites         |         7 (1.2%) |       0 (0.0%) |
+| `laziness`: potential thunk sites                  |             2242 |           2228 |
 
 `laziness` (M1) survives — its binders are `let` binders, where tidy keeps
 the demand. M2.3b, M2.3c, M2.4b and M2.4c do not.
@@ -6785,19 +6785,19 @@ is where it stops and hands the decision back.
 The post-tidy `-O1` dump was extracted and run through `lower
 --reachability` anyway, to price the decision:
 
-| | pre-tidy (committed) | post-tidy (scratch) |
-|---|---:|---:|
-| top-level bindings | 13,828 | 13,752 |
-| live | 3,997 | **9,795** |
-| dead, no references | 976 | 905 |
-| dead, only dead referrers | 8,855 | 3,052 |
-| share dead | 71.1% | **28.8%** |
-| inter-module edges (`A3`) | 498 | **1,288** |
-| `A5-IN-WORLD-MISSING` names | **112** over 1,232 occurrences | **0** |
-| in-world names GHC's flags explain | 277 data cons, 3 class ops | 277 data cons, **0** class ops |
-| zero-reference set, not dead and not a root | 0 | 0 |
-| verifier claims / disagreements | 113,325 / 0 | 116,029 / **0** |
-| `stats` unique collisions | 0 | **0** |
+|                                             |           pre-tidy (committed) |            post-tidy (scratch) |
+| ------------------------------------------- | -----------------------------: | -----------------------------: |
+| top-level bindings                          |                         13,828 |                         13,752 |
+| live                                        |                          3,997 |                      **9,795** |
+| dead, no references                         |                            976 |                            905 |
+| dead, only dead referrers                   |                          8,855 |                          3,052 |
+| share dead                                  |                          71.1% |                      **28.8%** |
+| inter-module edges (`A3`)                   |                            498 |                      **1,288** |
+| `A5-IN-WORLD-MISSING` names                 | **112** over 1,232 occurrences |                          **0** |
+| in-world names GHC's flags explain          |     277 data cons, 3 class ops | 277 data cons, **0** class ops |
+| zero-reference set, not dead and not a root |                              0 |                              0 |
+| verifier claims / disagreements             |                    113,325 / 0 |                116,029 / **0** |
+| `stats` unique collisions                   |                              0 |                          **0** |
 
 Every module gains a nonzero live count. `ShellCheck.Checks.Commands` goes
 from 0 live to 1,184; `Checks.ShellSupport` from 0 to 870; `Analytics` from
@@ -6828,37 +6828,37 @@ become real top-level bindings (top-level `IdDetails` `[ClassOp]`: 0 → 4).
 Top-level bindings per module, pre-tidy → post-tidy, with the count whose
 stable name is external:
 
-| module | binds | external names |
-|---|---|---|
-| `Main` | 502 → 501 | 29 → 80 |
-| `Paths_ShellCheck` | 63 → 63 | 10 → 63 |
-| `ShellCheck.AST` | 1083 → 1083 | 381 → 840 |
-| `ShellCheck.ASTLib` | 346 → 345 | 85 → 190 |
-| `ShellCheck.Analytics` | 2676 → 2667 | 15 → 991 |
-| `ShellCheck.Analyzer` | 8 → 8 | 3 → 8 |
-| `ShellCheck.AnalyzerLib` | 650 → 649 | 117 → 334 |
-| `ShellCheck.CFG` | 1003 → 993 | 124 → 557 |
-| `ShellCheck.CFGAnalysis` | 895 → 867 | 145 → 490 |
-| `ShellCheck.Checker` | 36 → 36 | 2 → 6 |
-| `ShellCheck.Checks.Commands` | 1254 → 1240 | 13 → 65 |
-| `ShellCheck.Checks.ControlFlow` | 16 → 14 | 3 → 14 |
-| `ShellCheck.Checks.Custom` | 9 → 9 | 2 → 9 |
-| `ShellCheck.Checks.ShellSupport` | 906 → 901 | 7 → 134 |
-| `ShellCheck.Data` | 1340 → 1340 | 20 → 1340 |
-| `ShellCheck.Fixer` | 92 → 96 | 15 → 63 |
-| `ShellCheck.Formatter.CheckStyle` | 53 → 53 | 2 → 38 |
-| `ShellCheck.Formatter.Diff` | 156 → 155 | 12 → 33 |
-| `ShellCheck.Formatter.Format` | 62 → 62 | 17 → 44 |
-| `ShellCheck.Formatter.GCC` | 22 → 22 | 2 → 11 |
-| `ShellCheck.Formatter.JSON` | 69 → 66 | 5 → 38 |
-| `ShellCheck.Formatter.JSON1` | 91 → 88 | 9 → 56 |
-| `ShellCheck.Formatter.Quiet` | 11 → 11 | 2 → 11 |
-| `ShellCheck.Formatter.TTY` | 93 → 93 | 2 → 8 |
-| `ShellCheck.Interface` | 680 → 678 | 175 → 549 |
-| `ShellCheck.Parser` | 1645 → 1645 | 76 → 105 |
-| `ShellCheck.Prelude` | 42 → 42 | 7 → 16 |
-| `ShellCheck.Regex` | 25 → 25 | 8 → 13 |
-| **total** | **13828 → 13752** | **1288 → 6106** |
+| module                            | binds             | external names  |
+| --------------------------------- | ----------------- | --------------- |
+| `Main`                            | 502 → 501         | 29 → 80         |
+| `Paths_ShellCheck`                | 63 → 63           | 10 → 63         |
+| `ShellCheck.AST`                  | 1083 → 1083       | 381 → 840       |
+| `ShellCheck.ASTLib`               | 346 → 345         | 85 → 190        |
+| `ShellCheck.Analytics`            | 2676 → 2667       | 15 → 991        |
+| `ShellCheck.Analyzer`             | 8 → 8             | 3 → 8           |
+| `ShellCheck.AnalyzerLib`          | 650 → 649         | 117 → 334       |
+| `ShellCheck.CFG`                  | 1003 → 993        | 124 → 557       |
+| `ShellCheck.CFGAnalysis`          | 895 → 867         | 145 → 490       |
+| `ShellCheck.Checker`              | 36 → 36           | 2 → 6           |
+| `ShellCheck.Checks.Commands`      | 1254 → 1240       | 13 → 65         |
+| `ShellCheck.Checks.ControlFlow`   | 16 → 14           | 3 → 14          |
+| `ShellCheck.Checks.Custom`        | 9 → 9             | 2 → 9           |
+| `ShellCheck.Checks.ShellSupport`  | 906 → 901         | 7 → 134         |
+| `ShellCheck.Data`                 | 1340 → 1340       | 20 → 1340       |
+| `ShellCheck.Fixer`                | 92 → 96           | 15 → 63         |
+| `ShellCheck.Formatter.CheckStyle` | 53 → 53           | 2 → 38          |
+| `ShellCheck.Formatter.Diff`       | 156 → 155         | 12 → 33         |
+| `ShellCheck.Formatter.Format`     | 62 → 62           | 17 → 44         |
+| `ShellCheck.Formatter.GCC`        | 22 → 22           | 2 → 11          |
+| `ShellCheck.Formatter.JSON`       | 69 → 66           | 5 → 38          |
+| `ShellCheck.Formatter.JSON1`      | 91 → 88           | 9 → 56          |
+| `ShellCheck.Formatter.Quiet`      | 11 → 11           | 2 → 11          |
+| `ShellCheck.Formatter.TTY`        | 93 → 93           | 2 → 8           |
+| `ShellCheck.Interface`            | 680 → 678         | 175 → 549       |
+| `ShellCheck.Parser`               | 1645 → 1645       | 76 → 105        |
+| `ShellCheck.Prelude`              | 42 → 42           | 7 → 16          |
+| `ShellCheck.Regex`                | 25 → 25           | 8 → 13          |
+| **total**                         | **13828 → 13752** | **1288 → 6106** |
 
 `ShellCheck.Fixer` is the only module that gains bindings net (92 → 96):
 implicit bindings injected. Everywhere else the trimming of rule-only-live
@@ -6873,15 +6873,15 @@ Three `-O1` builds of the stripped ShellCheck tree from the same sources:
 **(a)** no plugin at all, **(b)** the plugin as committed, **(c)** the
 post-tidy plugin.
 
-| | result |
-|---|---|
-| interface surface, (b) vs (c) | **identical** except 27 `addDependentFile` lines naming the plugin's own `.so` (different path, different content) and the 27 `interface hash:` values that follow from them. **`ABI hash` and `export-list hash` are unchanged on every one of the 27 modules.** |
-| interface surface, (a) vs (b) | differs only in the same kind of bookkeeping: `plugin package dependencies`, the plugin `.so` `addDependentFile` lines, `trusted package dependencies`, and the hashes that follow. |
-| executable behaviour | **identical**, all three. 117 invocations — every `*.sh` in the repo (3 files) plus 12 inline cases exercising the parser, analytics and the fixer, each through `-f tty/json/json1/gcc/checkstyle/diff/quiet`, plus `--version` and `--help`; output **and** exit codes compared. 710 lines of output, byte-identical. |
-| deterministic repeat extraction, plugin (c) | **byte-identical** across two independent build trees and two process runs, all 28 dumps; the two binaries also hash the same. |
-| deterministic repeat extraction, plugin (b) | the re-extraction reproduced the committed `compiler/core-json` **to the byte**, and its binary hash equals the one in `compiler/matrix/A/provenance`. |
-| `shellcheck` binary sha256 | (a) `1c2e2f59…`, (b) `38905705…`, (c) `192b82c8…` — **all three differ.** |
-| module `.o` sha256 | 20 of the 27 differ between (a) and (b), and **the same 20** between (b) and (c). |
+|                                             | result                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| interface surface, (b) vs (c)               | **identical** except 27 `addDependentFile` lines naming the plugin's own `.so` (different path, different content) and the 27 `interface hash:` values that follow from them. **`ABI hash` and `export-list hash` are unchanged on every one of the 27 modules.**                                                       |
+| interface surface, (a) vs (b)               | differs only in the same kind of bookkeeping: `plugin package dependencies`, the plugin `.so` `addDependentFile` lines, `trusted package dependencies`, and the hashes that follow.                                                                                                                                     |
+| executable behaviour                        | **identical**, all three. 117 invocations — every `*.sh` in the repo (3 files) plus 12 inline cases exercising the parser, analytics and the fixer, each through `-f tty/json/json1/gcc/checkstyle/diff/quiet`, plus `--version` and `--help`; output **and** exit codes compared. 710 lines of output, byte-identical. |
+| deterministic repeat extraction, plugin (c) | **byte-identical** across two independent build trees and two process runs, all 28 dumps; the two binaries also hash the same.                                                                                                                                                                                          |
+| deterministic repeat extraction, plugin (b) | the re-extraction reproduced the committed `compiler/core-json` **to the byte**, and its binary hash equals the one in `compiler/matrix/A/provenance`.                                                                                                                                                                  |
+| `shellcheck` binary sha256                  | (a) `1c2e2f59…`, (b) `38905705…`, (c) `192b82c8…` — **all three differ.**                                                                                                                                                                                                                                               |
+| module `.o` sha256                          | 20 of the 27 differ between (a) and (b), and **the same 20** between (b) and (c).                                                                                                                                                                                                                                       |
 
 The binaries and objects **do** move, and (a) vs (b) shows a plugin that
 touches nothing moves them too — so the move is not evidence about the
@@ -6967,24 +6967,24 @@ owner per field**, and it supplies only what CoreTidy discards.
 
 ### The provenance contract
 
-| field | top | let | lam | case | alt | why |
-|---|---|---|---|---|---|---|
-| `demand` | **pre** | post | **pre** | **pre** | **pre** | `tidyIdBndr` rebuilds lambda/case/alt binders from `vanillaIdInfo` (`Core/Tidy.hs:305-308`, which sets only occ-info, the unfolding and one-shot); `tidyTopIdInfo`'s setter list has no `setDemandInfo` (`Iface/Tidy.hs:1225-1241`). `tidyLetBndr` **does** keep it (`Core/Tidy.hs:356`), so a `let` binder's demand is CoreTidy's. |
-| `oneShot` | **pre** | **pre** | post | post | post | Neither `tidyTopIdInfo` nor `tidyLetBndr` puts it back; `tidyIdBndr` sets it explicitly for lambda binders (`Core/Tidy.hs:308`, *Note [Preserve OneShotInfo]*), which is the only class a reader uses it on. |
-| `exported` | **pre** | post | post | post | post | Post-tidy every top-level binder is a `GlobalId`, so `isExportedId` is uniformly `True` and carries no information. Nested binders are `False` on both sides. |
-| `arity`, `callArity`, `dmdSig`, `cprSig`, `occInfo`, `details`, `hasUnfolding`, `isJoinPoint`, `isDataCon`, the type | post | post | post | post | post | CoreTidy finalises these, and the finalised value is the one the compiled program has. |
+| field                                                                                                                | top     | let     | lam     | case    | alt     | why                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------------------------------------------------------------------------- | ------- | ------- | ------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `demand`                                                                                                             | **pre** | post    | **pre** | **pre** | **pre** | `tidyIdBndr` rebuilds lambda/case/alt binders from `vanillaIdInfo` (`Core/Tidy.hs:305-308`, which sets only occ-info, the unfolding and one-shot); `tidyTopIdInfo`'s setter list has no `setDemandInfo` (`Iface/Tidy.hs:1225-1241`). `tidyLetBndr` **does** keep it (`Core/Tidy.hs:356`), so a `let` binder's demand is CoreTidy's. |
+| `oneShot`                                                                                                            | **pre** | **pre** | post    | post    | post    | Neither `tidyTopIdInfo` nor `tidyLetBndr` puts it back; `tidyIdBndr` sets it explicitly for lambda binders (`Core/Tidy.hs:308`, *Note [Preserve OneShotInfo]*), which is the only class a reader uses it on.                                                                                                                        |
+| `exported`                                                                                                           | **pre** | post    | post    | post    | post    | Post-tidy every top-level binder is a `GlobalId`, so `isExportedId` is uniformly `True` and carries no information. Nested binders are `False` on both sides.                                                                                                                                                                       |
+| `arity`, `callArity`, `dmdSig`, `cprSig`, `occInfo`, `details`, `hasUnfolding`, `isJoinPoint`, `isDataCon`, the type | post    | post    | post    | post    | post    | CoreTidy finalises these, and the finalised value is the one the compiled program has.                                                                                                                                                                                                                                              |
 
 Which reader needs which joined field, named rather than asserted:
 
-| field | binder class | reader | milestone |
-|---|---|---|---|
-| `demand.strict` | alternative binder | `h2r-analysis/src/fields.rs:883` (`demand_of`) | M2.3b |
-| `demand.strict && !absent` | alternative binder | `h2r-analysis/src/lists/mod.rs:1359` (`head_forced`) | M2.3c |
-| `demand.strict` | lambda binder | `h2r-analysis/src/dictflow.rs:2267` | M2.4c |
-| `demand.strict` | lambda (dictionary parameter) | `h2r-analysis/src/classops.rs:960` (`dict_known_strict`) | M2.4b |
-| `demand.strict` | lambda (dictionary parameter) | `h2r-analysis/src/dictflow.rs:1623` (`Param::known_strict`) | M2.4c |
-| `exported` | top level | `dictflow`, `higher`, `boundary`, `flow`, `m24`, `tuples`, `classops`, `verify`, `verify_rep`, `verify_m24` | M2.2–M2.4 |
-| `one_shot` | **lambda** — taken *post*-tidy | `h2r-analysis/src/laziness.rs:421` (`transparent_lambda`) | M1 |
+| field                      | binder class                   | reader                                                                                                      | milestone |
+| -------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------- | --------- |
+| `demand.strict`            | alternative binder             | `h2r-analysis/src/fields.rs:883` (`demand_of`)                                                              | M2.3b     |
+| `demand.strict && !absent` | alternative binder             | `h2r-analysis/src/lists/mod.rs:1359` (`head_forced`)                                                        | M2.3c     |
+| `demand.strict`            | lambda binder                  | `h2r-analysis/src/dictflow.rs:2267`                                                                         | M2.4c     |
+| `demand.strict`            | lambda (dictionary parameter)  | `h2r-analysis/src/classops.rs:960` (`dict_known_strict`)                                                    | M2.4b     |
+| `demand.strict`            | lambda (dictionary parameter)  | `h2r-analysis/src/dictflow.rs:1623` (`Param::known_strict`)                                                 | M2.4c     |
+| `exported`                 | top level                      | `dictflow`, `higher`, `boundary`, `flow`, `m24`, `tuples`, `classops`, `verify`, `verify_rep`, `verify_m24` | M2.2–M2.4 |
+| `one_shot`                 | **lambda** — taken *post*-tidy | `h2r-analysis/src/laziness.rs:421` (`transparent_lambda`)                                                   | M1        |
 
 Two fields CoreTidy drops are deliberately **not** joined, because the search
 for readers found none: `cprSig` on a `let` binder (`tidyLetBndr` has no
@@ -7000,11 +7000,11 @@ The brief proposed redefining `exported` as membership of the tidied `Name` in
 `isExportedId`. **It does not**, and the plugin measures the gap on every
 module. Over the `-O1` world:
 
-| | |
-|---|---:|
-| aligned top-level binders with pre-tidy `isExportedId` — the **emitted** `exported` | 1200 |
-| …in `availsToNameSet (mg_exports)` — emitted as `sourceExported` | 342 |
-| …disagreements | 858 |
+|                                                                                       |      |
+| ------------------------------------------------------------------------------------- | ---: |
+| aligned top-level binders with pre-tidy `isExportedId` — the **emitted** `exported`   | 1200 |
+| …in `availsToNameSet (mg_exports)` — emitted as `sourceExported`                      |  342 |
+| …disagreements                                                                        |  858 |
 | aligned top-level binders whose tidied `Name` is external — emitted as `externalName` | 6102 |
 
 1200 − 342 = 858 exactly, so the source export list is a **strict subset** of
@@ -7045,22 +7045,20 @@ checks that on every aligned pair: **44,858 import occurrences agree in name
 and unique, 0 disagree.**
 
 **(c) Order is preserved end to end; the implicit bindings are a prefix; a
-trimmed binding never has an exported binder.** `tidyProgram`
-(`Iface/Tidy.hs:381-387`) builds `all_binds = implicit_binds ++ binds`, where
-`implicit_binds = concatMap getImplicitBinds tcs` (`:381`). `getImplicitBinds`
-(`:611-626`) yields exactly the class selectors (`getClassImplicitBinds`,
-`ClassOpId`) and the data constructor **wrappers** (`getTyConImplicitBinds`,
-`DataConWrapId`) — constructor *workers* are never Core bindings, which is why
+trimmed binding never has an exported binder.** ``tidyProgram``
+(``Iface/Tidy.hs:381-387``) builds ``all_binds = implicit_binds ++ binds``, where
+``implicit_binds = concatMap getImplicitBinds tcs`` (``:381``). ``getImplicitBinds``
+(``:611-626``) yields exactly the class selectors (``getClassImplicitBinds``,
+``ClassOpId``) and the data constructor **wrappers** (``getTyConImplicitBinds``,
+``DataConWrapId``) — constructor *workers* are never Core bindings, which is why
 M3a's "277 data-constructor names explained by GHC's own flags" is still the
-right classification for them. `findExternalRules` (`:976-1050`) then filters
-that list with `trim_binds`, which keeps a `CoreBind` group **whole** when
-`any needed bndrs` and discards it **whole** otherwise (`:1039-1045`), where
-`needed bndr = isExportedId bndr || bndr \`elemVarSet\` needed_fvs` (`:1046`).
-`tidyTopBinds` is `mapAccumL tidyTopBind` (`:1165`) — one tidied group per
-input group, in order — and `tidyTopBind` keeps `NonRec`/`Rec` and the order of
-a `Rec` group's pairs (`:1174-1190`). The only later insertion is
-`sptCreateStaticBinds` (`:390-392`), which runs only when `StaticPointers` is
-on (`Driver/Config/Tidy.hs:33-35`); the pass reads `opt_static_ptr_opts` and
+right classification for them. ``findExternalRules`` (``:976-1050``) then filters
+that list with ``trim_binds``, which keeps a ``CoreBind`` group **whole** when
+``any needed bndrs`` and discards it **whole** otherwise (``:1039-1045``), where
+``needed bndr = isExportedId bndr || bndr \``elemVarSet\` needed_fvs`` (``:1046``). ``tidyTopBinds``is``mapAccumL tidyTopBind`` (``:1165``) — one tidied group per
+input group, in order — and ``tidyTopBind``keeps``NonRec``/``Rec``and the order of
+a``Rec`` group's pairs (``:1174-1190``). The only later insertion is ``sptCreateStaticBinds`` (``:390-392``), which runs only when ``StaticPointers`` is
+on (``Driver/Config/Tidy.hs:33-35``); the pass reads ``opt_static_ptr_opts` and
 records that it is **off on all 28 modules**, so the SPT column is 0 by
 construction and not by hope.
 
@@ -7118,37 +7116,37 @@ the build. The Rust loader reads `*.core.json` only
 Groups are `CoreBind`s — a recursive group is one — and `bOut`/`bTrim` are
 top-level *binders*, which is what the dump's top-level pair count is.
 
-| module | aligned | implicit | trimmed | spt | unique FP | tied | vacuous | bOut | bTrim | `exported` | `sourceExported` | `externalName` |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `Main` | 500 | 0 | 1 | 0 | 487 | 13 | 13 | 501 | 1 | 24 | 1 | 80 |
-| `Paths_ShellCheck` | 63 | 0 | 0 | 0 | 63 | 0 | 0 | 63 | 0 | 9 | 8 | 63 |
-| `ShellCheck.AST` | 1067 | 0 | 0 | 0 | 1063 | 4 | 4 | 1083 | 0 | 381 | 6 | 840 |
-| `ShellCheck.ASTLib` | 328 | 0 | 1 | 0 | 319 | 9 | 9 | 345 | 1 | 85 | 78 | 190 |
-| `ShellCheck.Analytics` | 2659 | 0 | 9 | 0 | 2632 | 27 | 27 | 2667 | 9 | 8 | 2 | 991 |
-| `ShellCheck.Analyzer` | 8 | 0 | 0 | 0 | 8 | 0 | 0 | 8 | 0 | 3 | 2 | 8 |
-| `ShellCheck.AnalyzerLib` | 648 | 0 | 1 | 0 | 645 | 3 | 3 | 649 | 1 | 117 | 81 | 334 |
-| `ShellCheck.CFG` | 973 | 0 | 10 | 0 | 930 | 43 | 43 | 993 | 10 | 121 | 7 | 557 |
-| `ShellCheck.CFGAnalysis` | 866 | 0 | 28 | 0 | 853 | 13 | 13 | 867 | 28 | 124 | 19 | 490 |
-| `ShellCheck.Checker` | 36 | 0 | 0 | 0 | 36 | 0 | 0 | 36 | 0 | 2 | 1 | 6 |
-| `ShellCheck.Checks.Commands` | 1238 | 0 | 14 | 0 | 1232 | 6 | 6 | 1240 | 14 | 10 | 2 | 65 |
-| `ShellCheck.Checks.ControlFlow` | 14 | 0 | 2 | 0 | 14 | 0 | 0 | 14 | 2 | 3 | 2 | 14 |
-| `ShellCheck.Checks.Custom` | 9 | 0 | 0 | 0 | 7 | 2 | 2 | 9 | 0 | 2 | 1 | 9 |
-| `ShellCheck.Checks.ShellSupport` | 901 | 0 | 5 | 0 | 895 | 6 | 6 | 901 | 5 | 4 | 1 | 134 |
-| `ShellCheck.Data` | 1340 | 0 | 0 | 0 | 1340 | 0 | 0 | 1340 | 0 | 20 | 19 | 1340 |
-| `ShellCheck.Fixer` | 91 | **4** | 0 | 0 | 91 | 0 | 0 | 96 | 0 | 15 | 3 | 59 |
-| `ShellCheck.Formatter.CheckStyle` | 53 | 0 | 0 | 0 | 53 | 0 | 0 | 53 | 0 | 2 | 1 | 38 |
-| `ShellCheck.Formatter.Diff` | 154 | 0 | 1 | 0 | 154 | 0 | 0 | 155 | 1 | 9 | 1 | 33 |
-| `ShellCheck.Formatter.Format` | 62 | 0 | 0 | 0 | 62 | 0 | 0 | 62 | 0 | 17 | 14 | 44 |
-| `ShellCheck.Formatter.GCC` | 22 | 0 | 0 | 0 | 22 | 0 | 0 | 22 | 0 | 2 | 1 | 11 |
-| `ShellCheck.Formatter.JSON` | 66 | 0 | 3 | 0 | 63 | 3 | 3 | 66 | 3 | 5 | 1 | 38 |
-| `ShellCheck.Formatter.JSON1` | 88 | 0 | 3 | 0 | 84 | 4 | 4 | 88 | 3 | 9 | 1 | 56 |
-| `ShellCheck.Formatter.Quiet` | 11 | 0 | 0 | 0 | 11 | 0 | 0 | 11 | 0 | 2 | 1 | 11 |
-| `ShellCheck.Formatter.TTY` | 93 | 0 | 0 | 0 | 93 | 0 | 0 | 93 | 0 | 2 | 1 | 8 |
-| `ShellCheck.Interface` | 678 | 0 | 2 | 0 | 674 | 4 | 4 | 678 | 2 | 175 | 74 | 549 |
-| `ShellCheck.Parser` | 1625 | 0 | 0 | 0 | 1601 | 24 | 24 | 1645 | 0 | 34 | 1 | 105 |
-| `ShellCheck.Prelude` | 42 | 0 | 0 | 0 | 42 | 0 | 0 | 42 | 0 | 7 | 6 | 16 |
-| `ShellCheck.Regex` | 25 | 0 | 0 | 0 | 25 | 0 | 0 | 25 | 0 | 8 | 7 | 13 |
-| **TOTAL** | **13660** | **4** | **80** | **0** | **13499** | **161** | **161** | **13752** | **80** | **1200** | **342** | **6102** |
+| module                            |   aligned | implicit | trimmed |   spt | unique FP |    tied | vacuous |      bOut |  bTrim | `exported` | `sourceExported` | `externalName` |
+| --------------------------------- | --------: | -------: | ------: | ----: | --------: | ------: | ------: | --------: | -----: | ---------: | ---------------: | -------------: |
+| `Main`                            |       500 |        0 |       1 |     0 |       487 |      13 |      13 |       501 |      1 |         24 |                1 |             80 |
+| `Paths_ShellCheck`                |        63 |        0 |       0 |     0 |        63 |       0 |       0 |        63 |      0 |          9 |                8 |             63 |
+| `ShellCheck.AST`                  |      1067 |        0 |       0 |     0 |      1063 |       4 |       4 |      1083 |      0 |        381 |                6 |            840 |
+| `ShellCheck.ASTLib`               |       328 |        0 |       1 |     0 |       319 |       9 |       9 |       345 |      1 |         85 |               78 |            190 |
+| `ShellCheck.Analytics`            |      2659 |        0 |       9 |     0 |      2632 |      27 |      27 |      2667 |      9 |          8 |                2 |            991 |
+| `ShellCheck.Analyzer`             |         8 |        0 |       0 |     0 |         8 |       0 |       0 |         8 |      0 |          3 |                2 |              8 |
+| `ShellCheck.AnalyzerLib`          |       648 |        0 |       1 |     0 |       645 |       3 |       3 |       649 |      1 |        117 |               81 |            334 |
+| `ShellCheck.CFG`                  |       973 |        0 |      10 |     0 |       930 |      43 |      43 |       993 |     10 |        121 |                7 |            557 |
+| `ShellCheck.CFGAnalysis`          |       866 |        0 |      28 |     0 |       853 |      13 |      13 |       867 |     28 |        124 |               19 |            490 |
+| `ShellCheck.Checker`              |        36 |        0 |       0 |     0 |        36 |       0 |       0 |        36 |      0 |          2 |                1 |              6 |
+| `ShellCheck.Checks.Commands`      |      1238 |        0 |      14 |     0 |      1232 |       6 |       6 |      1240 |     14 |         10 |                2 |             65 |
+| `ShellCheck.Checks.ControlFlow`   |        14 |        0 |       2 |     0 |        14 |       0 |       0 |        14 |      2 |          3 |                2 |             14 |
+| `ShellCheck.Checks.Custom`        |         9 |        0 |       0 |     0 |         7 |       2 |       2 |         9 |      0 |          2 |                1 |              9 |
+| `ShellCheck.Checks.ShellSupport`  |       901 |        0 |       5 |     0 |       895 |       6 |       6 |       901 |      5 |          4 |                1 |            134 |
+| `ShellCheck.Data`                 |      1340 |        0 |       0 |     0 |      1340 |       0 |       0 |      1340 |      0 |         20 |               19 |           1340 |
+| `ShellCheck.Fixer`                |        91 |    **4** |       0 |     0 |        91 |       0 |       0 |        96 |      0 |         15 |                3 |             59 |
+| `ShellCheck.Formatter.CheckStyle` |        53 |        0 |       0 |     0 |        53 |       0 |       0 |        53 |      0 |          2 |                1 |             38 |
+| `ShellCheck.Formatter.Diff`       |       154 |        0 |       1 |     0 |       154 |       0 |       0 |       155 |      1 |          9 |                1 |             33 |
+| `ShellCheck.Formatter.Format`     |        62 |        0 |       0 |     0 |        62 |       0 |       0 |        62 |      0 |         17 |               14 |             44 |
+| `ShellCheck.Formatter.GCC`        |        22 |        0 |       0 |     0 |        22 |       0 |       0 |        22 |      0 |          2 |                1 |             11 |
+| `ShellCheck.Formatter.JSON`       |        66 |        0 |       3 |     0 |        63 |       3 |       3 |        66 |      3 |          5 |                1 |             38 |
+| `ShellCheck.Formatter.JSON1`      |        88 |        0 |       3 |     0 |        84 |       4 |       4 |        88 |      3 |          9 |                1 |             56 |
+| `ShellCheck.Formatter.Quiet`      |        11 |        0 |       0 |     0 |        11 |       0 |       0 |        11 |      0 |          2 |                1 |             11 |
+| `ShellCheck.Formatter.TTY`        |        93 |        0 |       0 |     0 |        93 |       0 |       0 |        93 |      0 |          2 |                1 |              8 |
+| `ShellCheck.Interface`            |       678 |        0 |       2 |     0 |       674 |       4 |       4 |       678 |      2 |        175 |               74 |            549 |
+| `ShellCheck.Parser`               |      1625 |        0 |       0 |     0 |      1601 |      24 |      24 |      1645 |      0 |         34 |                1 |            105 |
+| `ShellCheck.Prelude`              |        42 |        0 |       0 |     0 |        42 |       0 |       0 |        42 |      0 |          7 |                6 |             16 |
+| `ShellCheck.Regex`                |        25 |        0 |       0 |     0 |        25 |       0 |       0 |        25 |      0 |          8 |                7 |             13 |
+| **TOTAL**                         | **13660** |    **4** |  **80** | **0** | **13499** | **161** | **161** | **13752** | **80** |   **1200** |          **342** |       **6102** |
 
 **The net −76 explained rather than observed.** 13,828 pre-tidy top-level
 binders = 13,748 aligned + 80 trimmed; 13,752 emitted = 13,748 aligned + 4
@@ -7178,33 +7176,33 @@ themselves.) The totals below then differ from the owning column only by
 population, and the population differs only by the 80 trimmed binders (−) and
 the 4 implicit ones (+).
 
-| binder class | pre | post-raw | joined |
-|---|---:|---:|---:|
-| top | 13828 | 13752 | 13752 |
-| let | 6156 | 6125 | 6125 |
-| lam | 24202 | 23950 | 23950 |
-| case | 25076 | 24923 | 24923 |
-| alt | 47078 | 46819 | 46819 |
+| binder class |   pre | post-raw | joined |
+| ------------ | ----: | -------: | -----: |
+| top          | 13828 |    13752 |  13752 |
+| let          |  6156 |     6125 |   6125 |
+| lam          | 24202 |    23950 |  23950 |
+| case         | 25076 |    24923 |  24923 |
+| alt          | 47078 |    46819 |  46819 |
 
 Only the rows where `joined` is not literally equal to the owning column are
 listed; every other row is equal to the byte, and the full table is in the
 scratchpad. Each difference here is a *population* difference, attributed:
 
-| field | class | pre | post-raw | joined | owner | difference |
-|---|---|---:|---:|---:|---|---|
-| `demand absent` | lam | 1515 | 0 | 1513 | pre | −2 trimmed |
-| `demand absent` | case | 21065 | 0 | 20936 | pre | −129 trimmed |
-| `demand absent` | alt | 14344 | 0 | 14282 | pre | −62 trimmed |
-| `demand pretty != L` | top | 820 | 0 | 818 | pre | −2 trimmed |
-| `demand pretty != L` | lam | 11544 | 0 | 11386 | pre | −158 trimmed |
-| `demand pretty != L` | case | 21911 | 0 | 21776 | pre | −135 trimmed |
-| `demand pretty != L` | alt | 35170 | 0 | 35015 | pre | −155 trimmed |
-| `demand strict` | lam | 6026 | 0 | 5900 | pre | −126 trimmed |
-| `demand strict` | alt | 22956 | 0 | 22872 | pre | −84 trimmed |
-| `demand usedOnce` | lam | 9518 | 0 | 9382 | pre | −136 trimmed |
-| `demand usedOnce` | case | 21890 | 0 | 21755 | pre | −135 trimmed |
-| `demand usedOnce` | alt | 29245 | 0 | 29107 | pre | −138 trimmed |
-| `exported` | top | 1200 | 346 | 1204 | pre | +4 implicit (all four in `Fixer`'s export list) |
+| field                | class |   pre | post-raw | joined | owner | difference                                      |
+| -------------------- | ----- | ----: | -------: | -----: | ----- | ----------------------------------------------- |
+| `demand absent`      | lam   |  1515 |        0 |   1513 | pre   | −2 trimmed                                      |
+| `demand absent`      | case  | 21065 |        0 |  20936 | pre   | −129 trimmed                                    |
+| `demand absent`      | alt   | 14344 |        0 |  14282 | pre   | −62 trimmed                                     |
+| `demand pretty != L` | top   |   820 |        0 |    818 | pre   | −2 trimmed                                      |
+| `demand pretty != L` | lam   | 11544 |        0 |  11386 | pre   | −158 trimmed                                    |
+| `demand pretty != L` | case  | 21911 |        0 |  21776 | pre   | −135 trimmed                                    |
+| `demand pretty != L` | alt   | 35170 |        0 |  35015 | pre   | −155 trimmed                                    |
+| `demand strict`      | lam   |  6026 |        0 |   5900 | pre   | −126 trimmed                                    |
+| `demand strict`      | alt   | 22956 |        0 |  22872 | pre   | −84 trimmed                                     |
+| `demand usedOnce`    | lam   |  9518 |        0 |   9382 | pre   | −136 trimmed                                    |
+| `demand usedOnce`    | case  | 21890 |        0 |  21755 | pre   | −135 trimmed                                    |
+| `demand usedOnce`    | alt   | 29245 |        0 |  29107 | pre   | −138 trimmed                                    |
+| `exported`           | top   |  1200 |      346 |   1204 | pre   | +4 implicit (all four in `Fixer`'s export list) |
 
 `demand strict` on a **case** binder is 532 in all three of pre, post-raw's
 would-be value and joined, because none of the trimmed bindings held one;
@@ -7234,19 +7232,19 @@ changed with it. Format 5 was the program **before** `CoreTidy`; format 6 is
 the program **after** it — the one GHC hands to codegen. Field names and
 shapes are format 5's; what a consumer may conclude from them is not.
 
-| | format 5 | format 6 |
-|---|---|---|
-| top-level names | pre-tidy: a binding can carry a name no other module uses | CoreTidy's: a stable name links across modules |
-| top-level binder `isGlobalId` | `False` (module-local binders are `LocalId`s) | `True` for all of them — which is why the resolver decides locality lexically (see above) |
-| population | `mg_binds` | `cg_binds`: the implicit class-op selectors and constructor wrappers injected, the rule-only-live bindings trimmed |
-| `ids` (id table) | every referenced `GlobalId` | only those with an **external** `Name` — an internal stable string is not unique (M2.4h) |
-| `demand` | GHC's, everywhere | GHC's, everywhere — joined back on top/lam/case/alt, CoreTidy's on lets |
-| `oneShot` | GHC's, everywhere | joined back on top/let, CoreTidy's on lambdas |
-| `exported` | `isExportedId` | `isExportedId`, unchanged in meaning and value (implicit bindings: the source export list) |
-| `arity`, `callArity`, `dmdSig`, `cprSig`, `occInfo`, `details`, `hasUnfolding`, `isJoinPoint`, `isDataCon`, types | pre-tidy | **CoreTidy's finalised values** |
-| `whnf` / `trivial` / `cheap` / `okForSpec` | on the pre-tidy RHS | on the tidied RHS |
-| `externalName`, `sourceExported` | — | **new**, top-level binders only, **diagnostics**; nothing reads them |
-| structured types, hash-consed `types` table, stable-name keys | yes | yes, unchanged |
+|                                                                                                                   | format 5                                                  | format 6                                                                                                           |
+| ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| top-level names                                                                                                   | pre-tidy: a binding can carry a name no other module uses | CoreTidy's: a stable name links across modules                                                                     |
+| top-level binder `isGlobalId`                                                                                     | `False` (module-local binders are `LocalId`s)             | `True` for all of them — which is why the resolver decides locality lexically (see above)                          |
+| population                                                                                                        | `mg_binds`                                                | `cg_binds`: the implicit class-op selectors and constructor wrappers injected, the rule-only-live bindings trimmed |
+| `ids` (id table)                                                                                                  | every referenced `GlobalId`                               | only those with an **external** `Name` — an internal stable string is not unique (M2.4h)                           |
+| `demand`                                                                                                          | GHC's, everywhere                                         | GHC's, everywhere — joined back on top/lam/case/alt, CoreTidy's on lets                                            |
+| `oneShot`                                                                                                         | GHC's, everywhere                                         | joined back on top/let, CoreTidy's on lambdas                                                                      |
+| `exported`                                                                                                        | `isExportedId`                                            | `isExportedId`, unchanged in meaning and value (implicit bindings: the source export list)                         |
+| `arity`, `callArity`, `dmdSig`, `cprSig`, `occInfo`, `details`, `hasUnfolding`, `isJoinPoint`, `isDataCon`, types | pre-tidy                                                  | **CoreTidy's finalised values**                                                                                    |
+| `whnf` / `trivial` / `cheap` / `okForSpec`                                                                        | on the pre-tidy RHS                                       | on the tidied RHS                                                                                                  |
+| `externalName`, `sourceExported`                                                                                  | —                                                         | **new**, top-level binders only, **diagnostics**; nothing reads them                                               |
+| structured types, hash-consed `types` table, stable-name keys                                                     | yes                                                       | yes, unchanged                                                                                                     |
 
 `h2r-core-ir` loads **both**: `raw::FORMATS_ACCEPTED = [5, 6]`, the number is
 recorded on `Module::format`, `h2r stats` prints it, and **no analysis
@@ -7268,14 +7266,14 @@ differing files in every pairing.) `compiler/matrix/A` is a fourth,
 independent `-O1` extraction and its reachability report is identical to
 `compiler/core-json`'s line for line.
 
-| profile | top | live | dead (0-ref) | dead (only-dead) | % dead | inter-module edges | `A5` names | `A5` occurrences | verifier claims / disagreements |
-|---|---|---|---|---|---|---|---|---|---|
-| **A** `-O1` | 13828 → 13752 | 3997 → **9795** | 976 → 905 | 8855 → 3052 | 71.1 → **28.8** | 498 → **1288** | 112 → **0** | 1232 → **0** | 113325/0 → 116029/0 |
-| **B** `-O2` | 13957 → 13867 | 3525 → **9894** | 1000 → 921 | 9432 → 3052 | 74.7 → **28.7** | 490 → **1317** | 125 → **0** | 1376 → **0** | 115720/0 → 118510/0 |
-| **C** | 6073 → 6035 | 1260 → **2759** | 930 → 893 | 3883 → 2383 | 79.3 → **54.3** | 487 → **816** | 83 → **0** | 659 → **0** | 50133/0 → 51433/0 |
-| **D** | 7209 → 6889 | 1484 → **3082** | 1057 → 921 | 4668 → 2886 | 79.4 → **55.3** | 635 → **1084** | 109 → **0** | 1793 → **0** | 64002/0 → 63668/0 |
-| **E** | 7209 → 6889 | 1484 → **3082** | 1057 → 921 | 4668 → 2886 | 79.4 → **55.3** | 635 → **1084** | 109 → **0** | 1451 → **0** | 63582/0 → 63077/0 |
-| **F** | 7197 → 6879 | 1482 → **3078** | 1055 → 921 | 4660 → 2880 | 79.4 → **55.3** | 642 → **1085** | 109 → **0** | 1433 → **0** | 63479/0 → 62977/0 |
+| profile     | top           | live            | dead (0-ref) | dead (only-dead) | % dead          | inter-module edges | `A5` names  | `A5` occurrences | verifier claims / disagreements |
+| ----------- | ------------- | --------------- | ------------ | ---------------- | --------------- | ------------------ | ----------- | ---------------- | ------------------------------- |
+| **A** `-O1` | 13828 → 13752 | 3997 → **9795** | 976 → 905    | 8855 → 3052      | 71.1 → **28.8** | 498 → **1288**     | 112 → **0** | 1232 → **0**     | 113325/0 → 116029/0             |
+| **B** `-O2` | 13957 → 13867 | 3525 → **9894** | 1000 → 921   | 9432 → 3052      | 74.7 → **28.7** | 490 → **1317**     | 125 → **0** | 1376 → **0**     | 115720/0 → 118510/0             |
+| **C**       | 6073 → 6035   | 1260 → **2759** | 930 → 893    | 3883 → 2383      | 79.3 → **54.3** | 487 → **816**      | 83 → **0**  | 659 → **0**      | 50133/0 → 51433/0               |
+| **D**       | 7209 → 6889   | 1484 → **3082** | 1057 → 921   | 4668 → 2886      | 79.4 → **55.3** | 635 → **1084**     | 109 → **0** | 1793 → **0**     | 64002/0 → 63668/0               |
+| **E**       | 7209 → 6889   | 1484 → **3082** | 1057 → 921   | 4668 → 2886      | 79.4 → **55.3** | 635 → **1084**     | 109 → **0** | 1451 → **0**     | 63582/0 → 63077/0               |
+| **F**       | 7197 → 6879   | 1482 → **3078** | 1055 → 921   | 4660 → 2880      | 79.4 → **55.3** | 642 → **1085**     | 109 → **0** | 1433 → **0**     | 63479/0 → 62977/0               |
 
 `A5-IN-WORLD-MISSING` is **0 on all seven dumps**, which was the gate.
 `STATUS — THE DEAD SET IS CONDITIONAL` therefore does not print on any of
@@ -7289,19 +7287,19 @@ bindings at all (fact (c)).
 
 Every module now has a nonzero live count. The ones that had none:
 
-| module | live, old → new |
-|---|---|
-| `ShellCheck.Checks.Commands` | 0 → 1184 |
-| `ShellCheck.Checks.ShellSupport` | 0 → 870 |
-| `ShellCheck.CFG` | 0 → 355 |
-| `ShellCheck.CFGAnalysis` | 0 → 292 |
-| `ShellCheck.Formatter.Diff` | 0 → 106 |
-| `ShellCheck.Formatter.TTY` | 0 → 87 |
+| module                                                                            | live, old → new                |
+| --------------------------------------------------------------------------------- | ------------------------------ |
+| `ShellCheck.Checks.Commands`                                                      | 0 → 1184                       |
+| `ShellCheck.Checks.ShellSupport`                                                  | 0 → 870                        |
+| `ShellCheck.CFG`                                                                  | 0 → 355                        |
+| `ShellCheck.CFGAnalysis`                                                          | 0 → 292                        |
+| `ShellCheck.Formatter.Diff`                                                       | 0 → 106                        |
+| `ShellCheck.Formatter.TTY`                                                        | 0 → 87                         |
 | `ShellCheck.Formatter.JSON1` / `JSON` / `CheckStyle` / `GCC` / `Format` / `Quiet` | 0 → 48 / 44 / 47 / 16 / 19 / 4 |
-| `ShellCheck.Fixer` | 0 → 30 |
-| `ShellCheck.Prelude` | 0 → 29 |
-| `ShellCheck.Analytics` | 489 → 2646 |
-| `ShellCheck.Interface` | 1 → 30 |
+| `ShellCheck.Fixer`                                                                | 0 → 30                         |
+| `ShellCheck.Prelude`                                                              | 0 → 29                         |
+| `ShellCheck.Analytics`                                                            | 489 → 2646                     |
+| `ShellCheck.Interface`                                                            | 1 → 30                         |
 
 ### The two pinned links, and `lower --link`
 
@@ -7365,10 +7363,10 @@ world that violates `A13` failing loudly.
 
 ### Two new rules, reported with their counts
 
-| rule | level | meaning | `-O1` |
-|---|---|---|---:|
-| `A12-EXTERNAL-UNIQUE` | 5 | every external in-world stable name is defined by exactly one top-level binding | 6106 names defined, **0** collisions |
-| `A13-GLOBAL-EXTERNAL` | 4 | no `Ref::Global` occurrence carries an internal stable name | **0** occurrences, **0** distinct names |
+| rule                  | level | meaning                                                                         |                                   `-O1` |
+| --------------------- | ----- | ------------------------------------------------------------------------------- | --------------------------------------: |
+| `A12-EXTERNAL-UNIQUE` | 5     | every external in-world stable name is defined by exactly one top-level binding |    6106 names defined, **0** collisions |
+| `A13-GLOBAL-EXTERNAL` | 4     | no `Ref::Global` occurrence carries an internal stable name                     | **0** occurrences, **0** distinct names |
 
 `A12` is what makes `A3-EDGE-GLOBAL` an identity rather than a guess.
 `RootError::NameCollisions` already *refused* a world where it fails; now the
@@ -7383,21 +7381,21 @@ on all seven.
 The old `-O1` dump in the scratchpad still loads, and with the final binary
 produces, for every report:
 
-| | |
-|---|---:|
-| report files captured (stdout and stderr apart) | 94 |
-| …byte-identical to the previous capture | **88** |
-| …differing | **6**, and every difference is an *added line* |
+|                                                 |                                                |
+| ----------------------------------------------- | ---------------------------------------------: |
+| report files captured (stdout and stderr apart) |                                             94 |
+| …byte-identical to the previous capture         |                                         **88** |
+| …differing                                      | **6**, and every difference is an *added line* |
 
-* `stats`, `stats --per-module`: one added line each, `dump format 5
+- `stats`, `stats --per-module`: one added line each, `dump format 5
   (pre-CoreTidy)`. Nothing else.
-* `lower --reachability`, `… --m24-link`: one added eight-line block, the
+- `lower --reachability`, `… --m24-link`: one added eight-line block, the
   identity-rule counts. The `STATUS — THE DEAD SET IS CONDITIONAL` block is
   **unchanged and still printed**, because `A5` is 112 on that dump — the new
   one-line verdict only appears when `A5` is 0, so the wording change is
   invisible here.
-* `lower --rules`: the two added rule rows.
-* `lower --json`: five added `accounting` keys
+- `lower --rules`: the two added rule rows.
+- `lower --json`: five added `accounting` keys
   (`external_names_defined` 1288, `external_name_collisions` 0,
   `global_internal_names` 0, `global_internal_occurrences` 0,
   `unique_collisions` 0) and the two added rules. Compared structurally with
@@ -7409,14 +7407,14 @@ Three builds of the stripped ShellCheck tree from the same sources: **(a)** no
 plugin, **(b)** the plugin as it was before this milestone (pre-tidy dump,
 no extra tidy), **(d)** the final plugin.
 
-| | result |
-|---|---|
-| executable behaviour, (a) vs (b) vs (d) | **identical** — 117 invocations (every `*.sh` in the repo through 7 formatters, 12 inline cases through 7 formatters plus the fixer, `--version`, `--help`), output *and* exit codes, 710 lines, byte-identical in all three |
-| interface surface, **(b) vs (d)** — the measurement that isolates the extra tidy | **`ABI hash` and `export-list hash` unchanged on all 27 modules.** The only differences are the 27 `addDependentFile` lines naming the plugin's own `.so` (different path, different content) and the 27 `interface hash:` values that follow: 108 diff lines, 54 of each, and nothing else |
-| interface surface, (a) vs (d) | differs only in plugin-presence bookkeeping: `plugin package dependencies`, `trusted package dependencies`, the `.so` and package `addDependentFile` lines, and — on the two modules Safe Haskell had inferred safe, `Paths_ShellCheck` and `ShellCheck.Prelude` — `trusted: safe-inferred` → `trusted: none`, which does move those two `ABI hash`es. That is *loading a plugin at all*, not the extra tidy: (b) vs (d) shows the extra tidy moves neither |
-| object symbols, (b) vs (d) | 20 of the 27 `.o` files differ byte-wise; **9,504 defined symbols in each, and of the 1,418 symbol names that differ, 0 are anything but a `<unique>_str` string-literal symbol or a `.Lr<unique>_bytes` local label** — symbols whose *names are internal uniques*. Consistent with, and only with, internal-unique perturbation |
-| `shellcheck` binary sha256 | (a) `1c2e2f59…`, (d) `2468445e…` — they differ, as (a) vs (b) already did for a plugin that touched nothing |
-| deterministic repeat extraction | byte-identical across three independent build trees and three process runs, all 28 dumps and all 28 sidecars |
+|                                                                                  | result                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| executable behaviour, (a) vs (b) vs (d)                                          | **identical** — 117 invocations (every `*.sh` in the repo through 7 formatters, 12 inline cases through 7 formatters plus the fixer, `--version`, `--help`), output *and* exit codes, 710 lines, byte-identical in all three                                                                                                                                                                                                                                |
+| interface surface, **(b) vs (d)** — the measurement that isolates the extra tidy | **`ABI hash` and `export-list hash` unchanged on all 27 modules.** The only differences are the 27 `addDependentFile` lines naming the plugin's own `.so` (different path, different content) and the 27 `interface hash:` values that follow: 108 diff lines, 54 of each, and nothing else                                                                                                                                                                 |
+| interface surface, (a) vs (d)                                                    | differs only in plugin-presence bookkeeping: `plugin package dependencies`, `trusted package dependencies`, the `.so` and package `addDependentFile` lines, and — on the two modules Safe Haskell had inferred safe, `Paths_ShellCheck` and `ShellCheck.Prelude` — `trusted: safe-inferred` → `trusted: none`, which does move those two `ABI hash`es. That is *loading a plugin at all*, not the extra tidy: (b) vs (d) shows the extra tidy moves neither |
+| object symbols, (b) vs (d)                                                       | 20 of the 27 `.o` files differ byte-wise; **9,504 defined symbols in each, and of the 1,418 symbol names that differ, 0 are anything but a `<unique>_str` string-literal symbol or a `.Lr<unique>_bytes` local label** — symbols whose *names are internal uniques*. Consistent with, and only with, internal-unique perturbation                                                                                                                           |
+| `shellcheck` binary sha256                                                       | (a) `1c2e2f59…`, (d) `2468445e…` — they differ, as (a) vs (b) already did for a plugin that touched nothing                                                                                                                                                                                                                                                                                                                                                 |
+| deterministic repeat extraction                                                  | byte-identical across three independent build trees and three process runs, all 28 dumps and all 28 sidecars                                                                                                                                                                                                                                                                                                                                                |
 
 What still could not be determined, unchanged from the earlier record:
 whether the `.o` bytes differ *only* in those symbol names and the relocations
@@ -7430,28 +7428,28 @@ which is what the join had to avoid. **These are not a re-baseline**; the
 M1–M2.4 numbers in this document are still the ones for the old dumps, and
 re-deriving them is the next agent's work.
 
-| report | old (pre-tidy) | raw post-tidy | **new (joined)** |
-|---|---:|---:|---:|
-| `fields`: observed / unobserved / escaped | 1407 / 13 / 7746 | 191 / 1 / 8931 | **1395 / 1 / 7727** |
-| `fields`: `Always` verdicts | 196 | 34 | **196** |
-| `fields`: `Conditional` verdicts | 915 | 275 | **895** |
-| `lists`: `SpineDemand::Unknown` | 5503 | 8895 | **5503** |
-| `lists`: `Whole` | 141 | 62 | **141** |
-| `lists`: `Prefix(DataDependent)` | 921 | 145 | **921** |
-| `classops`: dictionary known strict at its binder | 247 | 0 | **236** |
-| `classops`: class-op dispatch sites | 565 | 554 | **554** |
-| `dictflow`: `Exact(target)` sites | 7 (1.2%) | 0 | **0 (0.0%)** |
-| `laziness`: potential thunk sites | 2242 | 2228 | **2228** |
+| report                                            |   old (pre-tidy) |  raw post-tidy |    **new (joined)** |
+| ------------------------------------------------- | ---------------: | -------------: | ------------------: |
+| `fields`: observed / unobserved / escaped         | 1407 / 13 / 7746 | 191 / 1 / 8931 | **1395 / 1 / 7727** |
+| `fields`: `Always` verdicts                       |              196 |             34 |             **196** |
+| `fields`: `Conditional` verdicts                  |              915 |            275 |             **895** |
+| `lists`: `SpineDemand::Unknown`                   |             5503 |           8895 |            **5503** |
+| `lists`: `Whole`                                  |              141 |             62 |             **141** |
+| `lists`: `Prefix(DataDependent)`                  |              921 |            145 |             **921** |
+| `classops`: dictionary known strict at its binder |              247 |              0 |             **236** |
+| `classops`: class-op dispatch sites               |              565 |            554 |             **554** |
+| `dictflow`: `Exact(target)` sites                 |         7 (1.2%) |              0 |        **0 (0.0%)** |
+| `laziness`: potential thunk sites                 |             2242 |           2228 |            **2228** |
 
 Every reader lands at or beside its old value, not at the raw one — except
 `dictflow`'s `Exact`, which is 0 on both. That one was chased down rather
 than waved through, and it is **not the join failing**:
 
-* all 7 `Exact` sites were `setRange`, `end` and `start` — the `Range` class
+- all 7 `Exact` sites were `setRange`, `end` and `start` — the `Range` class
   of `ShellCheck.Fixer`;
-* those are exactly the four class-op selectors `getImplicitBinds` now injects
+- those are exactly the four class-op selectors `getImplicitBinds` now injects
   as **real top-level bindings** of `ShellCheck.Fixer`;
-* so an occurrence of one is no longer a `Ref::Global` naming a class-op
+- so an occurrence of one is no longer a `Ref::Global` naming a class-op
   selector the dump does not contain. It resolves `Ref::Local` to a top-level
   binding of its own module, and `dictflow` no longer classifies it as a
   class-op dispatch site at all. The site population falls 565 → 554, and the
@@ -7469,12 +7467,12 @@ join looks like.
 
 Every independent verifier on the new `-O1` dump:
 
-| verifier | claims | disagreements |
-|---|---:|---:|
-| `tuples --verify` | 1227 removable verdicts | **0** |
-| `verify-rep` | every M2.3 representation verdict | **0** |
-| `verify-m24` | every positive M2.4 claim | **0** |
-| `lower --reachability`'s | 116029 | **0** |
+| verifier                 |                            claims | disagreements |
+| ------------------------ | --------------------------------: | ------------: |
+| `tuples --verify`        |           1227 removable verdicts |         **0** |
+| `verify-rep`             | every M2.3 representation verdict |         **0** |
+| `verify-m24`             |         every positive M2.4 claim |         **0** |
+| `lower --reachability`'s |                            116029 |         **0** |
 
 `cargo fmt --all --check` clean, `cargo clippy --workspace --all-targets -- -D
 warnings` clean, `cargo test --workspace` **270 passing** (263 before, plus
@@ -7494,22 +7492,21 @@ Every number in the M1–M2.4 sections above is still the number for the old
 pre-tidy dumps, and is still correct *for those dumps*, which remain readable.
 The Step-4 table above is a sanity pass, not a baseline.
 
-
 ## What ShellCheck actually needs
 
 Surveyed against the tree at the repo root:
 
-* **Template Haskell** appears in 13 modules and is *only* `$quickCheckAll`;
+- **Template Haskell** appears in 13 modules and is *only* `$quickCheckAll`;
   `striptests` removes it, so a production build needs neither TH nor
   QuickCheck.
-* **No `unsafePerformIO`** anywhere.
-* `Control.Monad.ST` / `Data.STRef` are used in exactly one place,
+- **No `unsafePerformIO`** anywhere.
+- `Control.Monad.ST` / `Data.STRef` are used in exactly one place,
   `ShellCheck.CFGAnalysis`, and can lower to scoped Rust mutability.
-* Extensions in use: `FlexibleContexts`, `DeriveGeneric`, `DeriveAnyClass`,
+- Extensions in use: `FlexibleContexts`, `DeriveGeneric`, `DeriveAnyClass`,
   `DeriveTraversable`, `PatternSynonyms`, `PatternGuards`, `ViewPatterns`,
   `RankNTypes`, `MultiWayIf`, `OverloadedStrings`, `NondecreasingIndentation`,
   `NoMonomorphismRestriction` — all handled by GHC before we see Core.
-* Library surface to replace on the Rust side: `base`, `containers`, `array`,
+- Library surface to replace on the Rust side: `base`, `containers`, `array`,
   `bytestring`, `directory`, `filepath`, `mtl`/`transformers` (collapsed into
   explicit parameters), `parsec` (the substantial one), `regex-tdfa`, `aeson`,
   `Diff`, `fgl`.
@@ -7520,7 +7517,6 @@ The `prop_*` corpus that `striptests` removes is the oracle: build ShellCheck
 once with GHC and once through this pipeline, run the same inputs through both,
 and require identical diagnostics, positions, fixes, exit status and output
 formats. Differential fuzzing over generated shell scripts extends it.
-
 
 ## GHC flag matrix — can GHC be tuned into producing more Rust-shaped Core?
 
@@ -7545,45 +7541,45 @@ give byte-identical output on a sample script in the tty, JSON and gcc
 formats. Re-extracting profile A reproduces the census to the last count:
 the dumps are deterministic.
 
-| | A `-O1` | B `-O2` | C = B `-fno-full-laziness` | D = C `-fspecialise-aggressively -fexpose-all-unfoldings` | E = D `-fstatic-argument-transformation` | F = E `-fstrictness-before=2` |
-|---|---:|---:|---:|---:|---:|---:|
-| Core nodes | 409,622 | 469,070 | 498,825 | 1,197,283 | 1,116,489 | 1,119,151 |
-| extraction time | 101 s | 114 s | 111 s | 252 s | 237 s | 241 s |
-| thunk sites | 2,242 | 2,389 | 2,849 | 7,311 | 7,131 | 7,109 |
-| memo, under many-entry lambda | 1,242 | 1,328 | 1,509 | 3,904 | 3,778 | 3,757 |
-| `lvl…` float-outs | 307 | 340 | **89** | 275 | 275 | 271 |
-| genuine CAFs | 238 | 230 | **53** | 34 | 34 | 34 |
-| recursive values | 69 | 65 | 45 | 119 | 119 | 119 |
-| class-op dispatch sites | 294 | 305 | 314 | 314 | 314 | 314 |
-| unsaturated call positions | 108 | 120 | 197 | 473 | 473 | 472 |
-| lazy/unknown computations | 8,351 | 9,268 | 10,039 | 25,771 | 24,186 | 24,188 |
-| … exact target tier | **93%** | 92% | 91% | 91% | 91% | 91% |
-| … finite target set | 8 | 8 | 25 | 84 | 84 | 106 |
-| … producer known, target unresolved | 118 | 124 | 125 | 318 | 318 | 318 |
-| … unresolved tier | **5%** | 5% | 7% | 6% | 6% | 6% |
-| … exact *by the head alone*, before the Parsec proof | **68%** | 66% | 64% | 47% | 49% | 49% |
-| … Parsec CPS | **27%** | 29% | 32% | 41% | 40% | 38% |
-| thunk sites per 1k nodes | 5 | 5 | 5 | 6 | 6 | 6 |
-| saturated tuple constructions, boxed | 1,765 | 1,989 | 2,250 | 4,369 | 4,380 | 4,465 |
-| … removable after the boundary check | 542 | 630 | 567 | 935 | 969 | 969 |
-| … proven a real value | 551 | 683 | 674 | 923 | 900 | 900 |
-| saturated tuple constructions, unboxed | 819 | 1,020 | 943 | 1,751 | 1,751 | 1,752 |
-| … removable after the boundary check | 667 | 839 | 798 | 1,574 | 1,574 | 1,575 |
-| **tuples proven removable by def-use** | **56%** | 57% | 53% | 65% | 65% | 64% |
-| representation boundaries crossed | 580 | 691 | 851 | 1,972 | 2,006 | 2,003 |
-| … a uniform split | 351 | 452 | 486 | 697 | 731 | 728 |
-| … flows downgraded because one is not | 247 | 277 | 334 | 1,497 | 1,497 | 1,501 |
-| **normalised** (removable, verified *and* composable) | **1,206** | 1,464 | 1,360 | 2,504 | 2,538 | 2,539 |
-| … verifier disagreements | 0 | 0 | 0 | 0 | 0 | 0 |
-| … scalar views built, all with 0 unplaced | 1,209 | 1,469 | 1,365 | 2,509 | 2,543 | 2,544 |
-| M1 thunk sites explained by tuple transport | 92 | 103 | 120 | 121 | 121 | 121 |
+|                                                       |   A `-O1` | B `-O2` | C = B `-fno-full-laziness` | D = C `-fspecialise-aggressively -fexpose-all-unfoldings` | E = D `-fstatic-argument-transformation` | F = E `-fstrictness-before=2` |
+| ----------------------------------------------------- | --------: | ------: | -------------------------: | --------------------------------------------------------: | ---------------------------------------: | ----------------------------: |
+| Core nodes                                            |   409,622 | 469,070 |                    498,825 |                                                 1,197,283 |                                1,116,489 |                     1,119,151 |
+| extraction time                                       |     101 s |   114 s |                      111 s |                                                     252 s |                                    237 s |                         241 s |
+| thunk sites                                           |     2,242 |   2,389 |                      2,849 |                                                     7,311 |                                    7,131 |                         7,109 |
+| memo, under many-entry lambda                         |     1,242 |   1,328 |                      1,509 |                                                     3,904 |                                    3,778 |                         3,757 |
+| `lvl…` float-outs                                     |       307 |     340 |                     **89** |                                                       275 |                                      275 |                           271 |
+| genuine CAFs                                          |       238 |     230 |                     **53** |                                                        34 |                                       34 |                            34 |
+| recursive values                                      |        69 |      65 |                         45 |                                                       119 |                                      119 |                           119 |
+| class-op dispatch sites                               |       294 |     305 |                        314 |                                                       314 |                                      314 |                           314 |
+| unsaturated call positions                            |       108 |     120 |                        197 |                                                       473 |                                      473 |                           472 |
+| lazy/unknown computations                             |     8,351 |   9,268 |                     10,039 |                                                    25,771 |                                   24,186 |                        24,188 |
+| … exact target tier                                   |   **93%** |     92% |                        91% |                                                       91% |                                      91% |                           91% |
+| … finite target set                                   |         8 |       8 |                         25 |                                                        84 |                                       84 |                           106 |
+| … producer known, target unresolved                   |       118 |     124 |                        125 |                                                       318 |                                      318 |                           318 |
+| … unresolved tier                                     |    **5%** |      5% |                         7% |                                                        6% |                                       6% |                            6% |
+| … exact *by the head alone*, before the Parsec proof  |   **68%** |     66% |                        64% |                                                       47% |                                      49% |                           49% |
+| … Parsec CPS                                          |   **27%** |     29% |                        32% |                                                       41% |                                      40% |                           38% |
+| thunk sites per 1k nodes                              |         5 |       5 |                          5 |                                                         6 |                                        6 |                             6 |
+| saturated tuple constructions, boxed                  |     1,765 |   1,989 |                      2,250 |                                                     4,369 |                                    4,380 |                         4,465 |
+| … removable after the boundary check                  |       542 |     630 |                        567 |                                                       935 |                                      969 |                           969 |
+| … proven a real value                                 |       551 |     683 |                        674 |                                                       923 |                                      900 |                           900 |
+| saturated tuple constructions, unboxed                |       819 |   1,020 |                        943 |                                                     1,751 |                                    1,751 |                         1,752 |
+| … removable after the boundary check                  |       667 |     839 |                        798 |                                                     1,574 |                                    1,574 |                         1,575 |
+| **tuples proven removable by def-use**                |   **56%** |     57% |                        53% |                                                       65% |                                      65% |                           64% |
+| representation boundaries crossed                     |       580 |     691 |                        851 |                                                     1,972 |                                    2,006 |                         2,003 |
+| … a uniform split                                     |       351 |     452 |                        486 |                                                       697 |                                      731 |                           728 |
+| … flows downgraded because one is not                 |       247 |     277 |                        334 |                                                     1,497 |                                    1,497 |                         1,501 |
+| **normalised** (removable, verified *and* composable) | **1,206** |   1,464 |                      1,360 |                                                     2,504 |                                    2,538 |                         2,539 |
+| … verifier disagreements                              |         0 |       0 |                          0 |                                                         0 |                                        0 |                             0 |
+| … scalar views built, all with 0 unplaced             |     1,209 |   1,469 |                      1,365 |                                                     2,509 |                                    2,543 |                         2,544 |
+| M1 thunk sites explained by tuple transport           |        92 |     103 |                        120 |                                                       121 |                                      121 |                           121 |
 
 Findings:
 
-* **The flags change the program's size, not its shape.** Per-node ratios
+- **The flags change the program's size, not its shape.** Per-node ratios
   are flat across A–C; D–F are worse. `-O1` is the most Rust-shaped profile
   on every resolvability metric.
-* **Inlining replicates Parsec's CPS, it does not dissolve it.** Exposing
+- **Inlining replicates Parsec's CPS, it does not dissolve it.** Exposing
   all unfoldings triples the Core and takes Parsec-attributed sites from
   2,305 to 10,816. The Parsec normalisation pass is unavoidable; it should
   run on the smallest Core that still exhibits the pattern. The structural
@@ -7593,7 +7589,7 @@ Findings:
   there: they are derived per region from that region's own types, so
   replicated code with a different result type is measured against its own
   erasure, not against `-O1`'s.
-* **GHC's specialiser does not finish the dictionary job.** Class-op
+- **GHC's specialiser does not finish the dictionary job.** Class-op
   dispatch sites *rise* (294 → 314) under `-fspecialise-aggressively`; the
   remaining dispatch is in code GHC cannot specialise (dictionaries stored
   in data, polymorphic recursion, unexposed instances). Closed-world
@@ -7602,14 +7598,14 @@ Findings:
   on every profile, **none** of the 565–596 class-op sites has a statically
   known dictionary, because a selector applied to a visible dfun is exactly
   what GHC has already rewritten.
-* **Full laziness is doing useful work for us.** Turning it off removes the
+- **Full laziness is doing useful work for us.** Turning it off removes the
   `lvl…` float-outs and most CAFs as predicted, but the constant
   expressions it had hoisted to top level — string literals, partial
   applications, ~7,700 top-level bindings in all — are *static data* in
   Rust; inside functions they become lets captured by inner lambdas, and
   the memo population grows by 18% (the captured-by-a-lambda part by 21%).
   Better to keep the hoisting and lower top-level constants to statics.
-* **The tuple proof holds up under replication.** Inlining more (D–F)
+- **The tuple proof holds up under replication.** Inlining more (D–F)
   triples the constructions and the *share* proven removable goes up, not
   down (56% → 65%), because the extra copies are worker/wrapper returns
   whose call sites are all local. `-fno-full-laziness` (C) is the only
@@ -7618,7 +7614,7 @@ Findings:
   which is the one shape the def-use proof refuses. The independent
   verifier agrees with the census on all six, with no disagreement
   anywhere.
-* Static-argument transformation trims ~7% of nodes; an extra strictness
+- Static-argument transformation trims ~7% of nodes; an extra strictness
   pass changes nothing.
 
 Decision: stay on `-O1` for the survey dump. Revisit per pass (e.g. SAT

@@ -1,11 +1,11 @@
 [workspace]
 resolver = "3"
-members = [
-    "crates/h2r-core-ir",
-    "crates/h2r-rt",
-    "crates/h2r-analysis",
-    "crates/h2r-lower",
-    "crates/h2r-cli",
+members  = [
+  "crates/h2r-analysis",
+  "crates/h2r-cli",
+  "crates/h2r-core-ir",
+  "crates/h2r-lower",
+  "crates/h2r-rt",
 ]
 
 [workspace.package]
@@ -14,12 +14,12 @@ edition = "2024"
 license = "GPL-3.0-only"
 
 [workspace.dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["unbounded_depth"] }
-walkdir = "2"
-h2r-core-ir = { path = "crates/h2r-core-ir" }
-h2r-rt = { path = "crates/h2r-rt" }
+anyhow       = "1"
+clap         = { version = "4", features = ["derive"] }
 h2r-analysis = { path = "crates/h2r-analysis" }
-h2r-lower = { path = "crates/h2r-lower" }
+h2r-core-ir  = { path = "crates/h2r-core-ir" }
+h2r-lower    = { path = "crates/h2r-lower" }
+h2r-rt       = { path = "crates/h2r-rt" }
+serde        = { version = "1", features = ["derive"] }
+serde_json   = { version = "1", features = ["unbounded_depth"] }
+walkdir      = "2"

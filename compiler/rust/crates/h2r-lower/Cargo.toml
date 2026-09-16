@@ -1,14 +1,14 @@
 [package]
-name = "h2r-lower"
+name              = "h2r-lower"
 version.workspace = true
 edition.workspace = true
+description       = "Lowering: the reachable program, and the IR it becomes"
 license.workspace = true
-description = "Lowering: the reachable program, and the IR it becomes"
 
 [dependencies]
-h2r-core-ir.workspace = true
 h2r-analysis.workspace = true
-serde.workspace = true
+h2r-core-ir.workspace  = true
+serde.workspace        = true
 
 [dev-dependencies]
 serde_json.workspace = true
