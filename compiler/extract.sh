@@ -33,6 +33,10 @@
 #   H2R_KEEP_DIR    if set, the built binary, cabal's build plan and a
 #                   provenance record are copied here so the profile can be
 #                   compared and measured without rebuilding it
+#   H2R_JOBS        concurrent build jobs (default number of available CPUs)
+#
+# Successful output is reused only when inputs and output checksums match.
+# An interrupted build with the same inputs resumes through Cabal.
 #
 # The flags apply to the ShellCheck package only. Dependencies (parsec,
 # containers, mtl, ...) are built with their Hackage defaults, so a profile
@@ -47,6 +51,7 @@ opt=${H2R_OPT:--O1}
 keep_dir=${H2R_KEEP_DIR:-}
 
 # ghcup installs are not on PATH in non-interactive shells.
+# shellcheck source=/dev/null
 [ -f "$HOME/.ghcup/env" ] && . "$HOME/.ghcup/env"
 
 command -v cabal >/dev/null || {
@@ -54,20 +59,42 @@ command -v cabal >/dev/null || {
 	exit 1
 }
 
-echo "==> staging sources in $build_dir"
-rm -rf "$build_dir" "$out_dir"
-mkdir -p "$build_dir" "$out_dir"
-for item in src shellcheck.hs ShellCheck.cabal striptests LICENSE README.md CHANGELOG.md shellcheck.1.md manpage; do
-	cp -r "$repo_root/$item" "$build_dir/"
-done
+fingerprint=$(
+	{
+		printf '%s\n' "$opt" "$out_dir" "$keep_dir"
+		ghc --numeric-version
+		cabal --numeric-version
+		(cd "$repo_root" && {
+			find src compiler/h2r-plugin/src -type f -print0
+			printf '%s\0' shellcheck.hs ShellCheck.cabal striptests LICENSE README.md CHANGELOG.md shellcheck.1.md manpage compiler/h2r-plugin/h2r-plugin.cabal compiler/extract.sh
+		} | sort -z | xargs -0 sha256sum)
+	} | sha256sum
+)
 
-echo "==> stripping tests (removes Template Haskell and QuickCheck)"
-(cd "$build_dir" && ./striptests)
+if [ -f "$out_dir/inputs.sha256" ] && [ "$(cat "$out_dir/inputs.sha256")" = "$fingerprint" ] \
+	&& (cd "$out_dir" && sha256sum --check --status outputs.sha256); then
+	echo "==> extraction unchanged: $out_dir"
+	exit 0
+fi
 
-echo "==> wiring in the Core dump plugin"
-# The plugin has to be an ordinary dependency for GHC to be able to load it.
-sed -i 's/^\( *\)build-depends:/\1build-depends:\n\1  h2r-plugin,/' "$build_dir/ShellCheck.cabal"
-cat >"$build_dir/cabal.project" <<EOF
+if [ -f "$build_dir/inputs.sha256" ] && [ "$(cat "$build_dir/inputs.sha256")" = "$fingerprint" ] \
+	&& [ ! -f "$out_dir/outputs.sha256" ]; then
+	echo "==> resuming extraction in $build_dir"
+else
+	echo "==> staging sources in $build_dir"
+	rm -rf "$build_dir" "$out_dir"
+	mkdir -p "$build_dir" "$out_dir"
+	for item in src shellcheck.hs ShellCheck.cabal striptests LICENSE README.md CHANGELOG.md shellcheck.1.md manpage; do
+		cp -r "$repo_root/$item" "$build_dir/"
+	done
+
+	echo "==> stripping tests (removes Template Haskell and QuickCheck)"
+	(cd "$build_dir" && ./striptests)
+
+	echo "==> wiring in the Core dump plugin"
+	# The plugin has to be an ordinary dependency for GHC to be able to load it.
+	sed -i 's/^\( *\)build-depends:/\1build-depends:\n\1  h2r-plugin,/' "$build_dir/ShellCheck.cabal"
+	cat >"$build_dir/cabal.project" <<EOF
 packages:
   .
   $repo_root/compiler/h2r-plugin
@@ -75,9 +102,11 @@ packages:
 package ShellCheck
   ghc-options: $opt -fplugin=H2R.CorePlugin -fplugin-opt=H2R.CorePlugin:outdir=$out_dir
 EOF
+	printf '%s\n' "$fingerprint" >"$build_dir/inputs.sha256"
+fi
 
 echo "==> building (this runs the full optimisation pipeline)"
-(cd "$build_dir" && cabal build -j"$(nproc)" shellcheck)
+(cd "$build_dir" && cabal build -j"${H2R_JOBS:-$(nproc)}" shellcheck)
 
 echo
 echo "==> wrote $(find "$out_dir" -name '*.core.json' | wc -l) module dumps to $out_dir"
@@ -108,3 +137,17 @@ if [ -n "$keep_dir" ]; then
 	} >"$keep_dir/provenance"
 	cat "$keep_dir/provenance"
 fi
+
+# Commit the completion record only after extraction and artifact copying succeed.
+test -s "$out_dir/Main.core.json"
+(
+	cd "$out_dir"
+	sha256sum -- *.core.json *.tidy-align.txt
+	if [ -n "$keep_dir" ]; then
+		sha256sum "$keep_dir/shellcheck" "$keep_dir/plan.json" "$keep_dir/modules" "$keep_dir/provenance"
+	else
+		sha256sum "$binary" "$build_dir/dist-newstyle/cache/plan.json"
+	fi
+) >"$out_dir/outputs.sha256.tmp"
+mv "$out_dir/outputs.sha256.tmp" "$out_dir/outputs.sha256"
+printf '%s\n' "$fingerprint" >"$out_dir/inputs.sha256"

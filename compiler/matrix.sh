@@ -9,7 +9,7 @@
 #   flags        the GHC flags (applied to the ShellCheck package only; the
 #                dependencies are built with their Hackage defaults)
 #   core-json/   the Core dumps
-#   shellcheck   the built binary, for behavioural comparison and timing
+#   `shellcheck` the built binary, for behavioural comparison and timing
 #   plan.json    cabal's build plan (every dependency version and flag)
 #   provenance   source, plugin and toolchain revisions the dumps came from
 #   modules      the module list, so profiles can be checked for the same set
@@ -40,16 +40,25 @@ for p in "${selected[@]}"; do
 	echo "$flags" >"$dir/flags"
 	echo "==> profile $p: $flags"
 	start=$(date +%s)
-	H2R_OPT="$flags" \
+	if ! H2R_OPT="$flags" \
 		H2R_BUILD_DIR="$dir/build" \
 		H2R_CORE_DIR="$dir/core-json" \
 		H2R_KEEP_DIR="$dir" \
-		"$repo_root/compiler/extract.sh" >"$dir/extract.log" 2>&1
+		"$repo_root/compiler/extract.sh" >"$dir/extract.log.next" 2>&1; then
+		mv "$dir/extract.log.next" "$dir/extract.log"
+		echo "    extraction failed; see $dir/extract.log" >&2
+		exit 1
+	fi
+	if grep -q '^==> extraction unchanged:' "$dir/extract.log.next"; then
+		cat "$dir/extract.log.next"
+		rm -- "$dir/extract.log.next"
+		continue
+	fi
+	mv "$dir/extract.log.next" "$dir/extract.log"
 	end=$(date +%s)
 	echo $((end - start)) >"$dir/time"
 	echo "    done in $((end - start))s, $(du -sh "$dir/core-json" | cut -f1) of Core"
-	# The build tree is large; the binary, plan and dumps have been kept.
-	rm -rf "$dir/build"
+	# Keep Cabal's build tree so an interrupted extraction can resume.
 done
 
 echo
