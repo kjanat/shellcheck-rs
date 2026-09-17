@@ -5068,6 +5068,101 @@ fn one_class_site(c: &classops::Census) -> &classops::Site {
     &c.sites[0]
 }
 
+fn local_selector_module(classified: bool) -> Module {
+    let mut selector = binder("showsPrec", demand(false, false));
+    selector["name"] = json!(SHOWS_PREC);
+    selector["arity"] = json!(1);
+    selector["dmdSig"] = json!({"args": [demand(true, false)], "diverges": false, "pretty": ""});
+    selector["details"] = json!("[ClassOp]");
+    let mut ids = class_ids(vec![]);
+    // Occurrence signatures may be stale; only the classification is used.
+    ids[SHOWS_PREC]["arity"] = json!(99);
+    ids[SHOWS_PREC]["dmdSig"] = json!({"args": [], "diverges": true, "pretty": "stale"});
+    ids[SHOWS_PREC]["isClassOp"] = json!(classified);
+    class_module(
+        "GHC.Show",
+        vec![
+            (selector, dict_lam(&[("dict", TY_SHOW_T)], var("method"))),
+            (dict_top("$fShowT", TY_SHOW_T, false), show_dict()),
+            (
+                binder("use", demand(false, false)),
+                app(named_gvar("showsPrec", SHOWS_PREC), var("$fShowT")),
+            ),
+        ],
+        ids,
+    )
+}
+
+#[test]
+fn local_classop_uses_the_definition_flag_but_keeps_binder_signatures() {
+    let m = local_selector_module(true);
+    let c = class_census(std::slice::from_ref(&m));
+    let site = one_class_site(&c);
+    assert!(matches!(site.outcome, Outcome::Exact(_)));
+    assert_eq!(
+        site.n_value_args, 1,
+        "a dictionary-only selector is saturated"
+    );
+    let (head, _) = m.spine(site.node);
+    let sig = crate::scope::Scope::new(&m).head_sig(head).unwrap();
+    assert!(matches!(
+        sig.source,
+        crate::scope::SigSource::BindingSite(crate::scope::BindSite::Top)
+    ));
+    assert_eq!(sig.arity, 1);
+    assert_eq!(sig.sig_arity(), 1);
+    assert!(!sig.diverges);
+    assert!(sig.is_class_op);
+
+    let mods = [&m];
+    let (claims, _, _) = crate::m24_claims::claims(&mods);
+    assert!(
+        claims
+            .iter()
+            .any(|c| c.kind == verify_m24::ClaimKind::SiteExact)
+    );
+    let audit = verify_m24::verify(&mods, &claims);
+    assert_eq!(audit.real_disagreements(), 0);
+    assert_eq!(audit.coverage_refusals(), 0);
+}
+
+#[test]
+fn local_classop_does_not_infer_classification_from_pretty_details() {
+    let m = local_selector_module(false);
+    assert!(class_census(&[m]).sites.is_empty());
+}
+
+#[test]
+fn local_classop_flag_does_not_leak_to_a_shadowing_lambda() {
+    let mut shadow = lam_binder("showsPrec", false);
+    shadow["name"] = json!(SHOWS_PREC);
+    let m = class_module(
+        "GHC.Show",
+        vec![(
+            binder("use", demand(false, false)),
+            json!({"node": "Lam", "binder": shadow,
+                "body": app(named_gvar("showsPrec", SHOWS_PREC), var("dict"))}),
+        )],
+        class_ids(vec![]),
+    );
+    let occurrence = m
+        .exprs
+        .iter()
+        .position(|e| {
+            matches!(e,
+        h2r_core_ir::Expr::Var { name, .. } if name == SHOWS_PREC)
+        })
+        .unwrap() as u32;
+    assert!(m.resolve(occurrence).is_some());
+    assert!(
+        !crate::scope::Scope::new(&m)
+            .head_sig(occurrence)
+            .unwrap()
+            .is_class_op
+    );
+    assert!(class_census(&[m]).sites.is_empty());
+}
+
 /// A selector applied to a dictionary this module builds: one origin, one
 /// method field, one target.
 #[test]

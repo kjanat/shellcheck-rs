@@ -29,18 +29,18 @@ ShellCheck Haskell
 
 ## Milestones
 
-|                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | state                                                           |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| **M1**          | the residual-laziness census: why does each local binding that survives GHC still exist? 2,242 potential thunk sites, classified and cross-checked against GHC's own demand and cardinality                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | done                                                            |
-| **M2 baseline** | who receives the 8,351 lazy arguments — resolution, proven tier, abstraction family                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | done                                                            |
-| **M2.1**        | proving Parsec's CPS roles structurally, and feeding the proof back into the census                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | done                                                            |
-| **M2.2**        | which tuples are transport and which are values: 2,584 constructions, an independent verifier, a representation-boundary check, the scalar view                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | done                                                            |
-| **M2.2.1**      | the generic aggregate def-use walk (`flow.rs`) lifted out of the tuple census, so every later population is a client of one walk                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | done                                                            |
-| **M2.3**        | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link, **g** the correction to the axiom layer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | done                                                            |
-| **M2.4a**       | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | done                                                            |
-| **M2.4b**       | the closed-world class-op census: 565 dispatch sites, the 294 mapped 1:1, every class identified — and not one dictionary statically known                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | done                                                            |
-| **M2.4**        | the closed-world dictionary and higher-order milestone, in three separate questions: **can the call target be enumerated** (7 of 565 sites, the dictionary bounded at 118), **can an abstraction boundary use one representation** (5,574 function-valued boundaries, 252 enumerated, 84 one representation, 66 rewritable as one, 68 clones planned per owner), and **can the object disappear** (102 of 191 dictionary values `Erasable`, 36 of 216 parameters `Erasable` and 4 more with a clone, 4 owner-level clones) — **c** whole-program dictionary flow with its own totality domain, **d** higher-order representation agreement, **e** the 41 Parsec edges (0 closed, and why), **f** the independent re-derivation of all 606 positive claims with 0 disagreements on all seven dumps, **g** the views, the provenance, the accounting and the four cross-milestone links, **c′/d′/h** the three corrections | done                                                            |
-| **M3**          | The lowering — Core plus the M1–M2.4 proofs to an explicit, proof-carrying NIR and a compiled Rust canary. **a** the `Main.main`-rooted live set, and the finding that the dump's *pre-tidy* naming could not link 112 cross-module references, which made 8,131 dead verdicts conditional. **a′** the dumps regenerated post-`CoreTidy` with the pre-tidy proof facts joined back on: **9,795 live and 3,957 dead of 13,752** top-level bindings, `A5-IN-WORLD-MISSING` **0 on all seven dumps**, 116,029 claims re-derived with 0 disagreements, dump format 6                                                                                                                                                                                                                                                                                                                                                         | in progress: M3a, M3a′ and the format-6 baseline done; M3b next |
+|                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | state                                                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **M1**          | the residual-laziness census: why does each local binding that survives GHC still exist? 2,242 potential thunk sites, classified and cross-checked against GHC's own demand and cardinality                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | done                                                                                                                                     |
+| **M2 baseline** | who receives the 8,351 lazy arguments — resolution, proven tier, abstraction family                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | done                                                                                                                                     |
+| **M2.1**        | proving Parsec's CPS roles structurally, and feeding the proof back into the census                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | done                                                                                                                                     |
+| **M2.2**        | which tuples are transport and which are values: 2,584 constructions, an independent verifier, a representation-boundary check, the scalar view                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | done                                                                                                                                     |
+| **M2.2.1**      | the generic aggregate def-use walk (`flow.rs`) lifted out of the tuple census, so every later population is a client of one walk                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | done                                                                                                                                     |
+| **M2.3**        | the representation question for everything else — **b** constructor fields, **c** list spines, **d** text, **e** the independent re-derivation, **f** the views, the provenance, the accounting and the cross-milestone link, **g** the correction to the axiom layer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | done                                                                                                                                     |
+| **M2.4a**       | the dump-format bump underneath it: stable global identity, structured types, and `[Char]` moved from a rendered string to `TyCon` identity — with every M1–M2.3 number unchanged                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | done                                                                                                                                     |
+| **M2.4b**       | the closed-world class-op census: 565 dispatch sites, the 294 mapped 1:1, every class identified — and not one dictionary statically known                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | done                                                                                                                                     |
+| **M2.4**        | the closed-world dictionary and higher-order milestone, in three separate questions: **can the call target be enumerated** (7 of 565 sites, the dictionary bounded at 118), **can an abstraction boundary use one representation** (5,574 function-valued boundaries, 252 enumerated, 84 one representation, 66 rewritable as one, 68 clones planned per owner), and **can the object disappear** (102 of 191 dictionary values `Erasable`, 36 of 216 parameters `Erasable` and 4 more with a clone, 4 owner-level clones) — **c** whole-program dictionary flow with its own totality domain, **d** higher-order representation agreement, **e** the 41 Parsec edges (0 closed, and why), **f** the independent re-derivation of all 606 positive claims with 0 disagreements on all seven dumps, **g** the views, the provenance, the accounting and the four cross-milestone links, **c′/d′/h** the three corrections | done                                                                                                                                     |
+| **M3**          | The lowering — Core plus the M1–M2.4 proofs to an explicit, proof-carrying NIR and a compiled Rust canary. **a** the `Main.main`-rooted live set, and the finding that the dump's *pre-tidy* naming could not link 112 cross-module references, which made 8,131 dead verdicts conditional. **a′** the dumps regenerated post-`CoreTidy` with the pre-tidy proof facts joined back on: **9,795 live and 3,957 dead of 13,752** top-level bindings, `A5-IN-WORLD-MISSING` **0 on all seven dumps**, 116,029 claims re-derived with 0 disagreements, dump format 6                                                                                                                                                                                                                                                                                                                                                         | The format-6 baseline run and verifier checks are complete. Before/after accounting and site-level attribution remain open; see todo.md. |
 
 ## Layout
 
@@ -6217,17 +6217,17 @@ constructs the new IR. `h2r-core-ir` stays the flattened dumped Core,
 `h2r-analysis` stays the proof-producing layer, `h2r-rt` stays the runtime
 target. The sub-milestones:
 
-|          |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **M3a**  | `Main.main`-rooted reachability — **done**, with a linkage hole it measured rather than hid                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **M3a′** | dump post-CoreTidy Core and re-establish whole-program identity — **done.** The resolver decides locality lexically; the plugin runs `CoreTidy` itself, serialises the tidied program and joins back, field by field, the facts CoreTidy discards (`demand`, `oneShot`, `exported`), with the alignment proved per module at extraction time. All seven dumps regenerated, `A5-IN-WORLD-MISSING` **0** on every one, dump format 6. **The M1–M2.4 baseline is complete on all seven dumps.** See the [format-6 baseline](#format-6-baseline-2026-09-16). See [M3a′](#m3a--dump-post-coretidy-core-and-re-establish-whole-program-identity) |
-| **M3b**  | the normalised IR — NIR, ANF/CFG-shaped, `FnId`/`ValueId`/`BlockId`, explicit `Delay`/`Force`/closure create/return, every instruction carrying `Origin { module, source_node/binder, rule }`, and **no `OpaqueCore` escape hatch**                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **M3c**  | canonical carriers `Carrier(T)` plus closure conversion, so no anonymous `Lam` remains — this is what closes the open invariant `TypeShapeUniform` rests on                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **M3d**  | polyvariant specialisation keyed by `(FnId, DictAssignment, ClosureShapeAssignment)` from a live-rooted worklist, closing the set-valued clone lower bounds without a call-string length                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| **M3e**  | explicit evaluation: M1 consumed — `Delay`, `Lazy`, shared and recursive thunks — and every M2.4 force obligation becomes a `Force`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **M3f**  | apply the certified representation rewrites. `Erasable` is *permission, not obligation*; every destructive rewrite gets a certificate naming the source address and the proof rule or claim it rests on                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **M3g**  | lower the proven Parsec CPS regions into blocks and jumps using M2.1's regions and edges — no re-recognition, no names                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| **M3h**  | the lowering audit, and a thin canary emitter compiling at least one nontrivial reachable leaf SCC against `h2r-rt`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+|          |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **M3a**  | `Main.main`-rooted reachability — **done**, with a linkage hole it measured rather than hid                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **M3a′** | dump post-CoreTidy Core and re-establish whole-program identity — **done.** The resolver decides locality lexically; the plugin runs `CoreTidy` itself, serialises the tidied program and joins back, field by field, the facts CoreTidy discards (`demand`, `oneShot`, `exported`), with the alignment proved per module at extraction time. All seven dumps regenerated, `A5-IN-WORLD-MISSING` **0** on every one, dump format 6. **The format-6 baseline run and verifier checks are complete. Before/after accounting and site-level attribution remain open; see todo.md.** See the [format-6 baseline](#format-6-baseline-2026-09-16). See [M3a′](#m3a--dump-post-coretidy-core-and-re-establish-whole-program-identity) |
+| **M3b**  | the normalised IR — NIR, ANF/CFG-shaped, `FnId`/`ValueId`/`BlockId`, explicit `Delay`/`Force`/closure create/return, every instruction carrying `Origin { module, source_node/binder, rule }`, and **no `OpaqueCore` escape hatch**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **M3c**  | canonical carriers `Carrier(T)` plus closure conversion, so no anonymous `Lam` remains — this is what closes the open invariant `TypeShapeUniform` rests on                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **M3d**  | polyvariant specialisation keyed by `(FnId, DictAssignment, ClosureShapeAssignment)` from a live-rooted worklist, closing the set-valued clone lower bounds without a call-string length                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **M3e**  | explicit evaluation: M1 consumed — `Delay`, `Lazy`, shared and recursive thunks — and every M2.4 force obligation becomes a `Force`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **M3f**  | apply the certified representation rewrites. `Erasable` is *permission, not obligation*; every destructive rewrite gets a certificate naming the source address and the proof rule or claim it rests on                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **M3g**  | lower the proven Parsec CPS regions into blocks and jumps using M2.1's regions and edges — no re-recognition, no names                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **M3h**  | the lowering audit, and a thin canary emitter compiling at least one nontrivial reachable leaf SCC against `h2r-rt`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 **Acceptance for all of M3:** the complete `Main.main`-reachable ShellCheck
 program exists as an explicit, proof-carrying NIR with no implicit laziness
@@ -7488,11 +7488,15 @@ links, the two names M3a could not resolve resolve structurally, and the
 identity rules are asserted with their counts. The dump is format 6 and says
 so.
 
-**The M1–M2.4 baseline is complete on all seven format-6 dumps.**
+**The format-6 baseline run and verifier checks are complete. Before/after
+accounting and site-level attribution remain open; see todo.md.**
 The M1–M2.4 sections above retain the historical pre-tidy counts; the current
 counts and remaining proof limitations follow below. M3b is next.
 
 ### Format-6 baseline (2026-09-16)
+
+Historical snapshot before the local-selector census correction below.
+The 2026-09-17 correction supersedes its class-op and M2.4 counts.
 
 The canonical input remains `-O1`, with GHC 9.6.7 and Cabal 3.18.1.0.
 Source and analysis revision: `49005a34b2334edcb45d0a1f45dbef4935e36681`.
@@ -7526,7 +7530,7 @@ CoreTidy trims bindings and introduces implicit selector bindings, so the
 population changes; the proof predicates have not been relaxed. In particular,
 the four `Range` selectors now have bodies in the dumped world. Their eleven
 local call sites, including the seven former exact targets, leave the imported
-class-op census. This baseline keeps that census definition: local selector
+class-op census. This initial baseline kept that census definition: local selector
 calls are ordinary calls to available bindings. Zero exact targets among the
 remaining 554 sites does not mean the seven known calls became unknown.
 
@@ -7556,6 +7560,535 @@ Outputs stay in `compiler/core-json` and `compiler/matrix/<profile>`; canonical
 reports live in `compiler/matrix/canonical/reports`. Each report directory
 contains text, JSON, input fingerprints and output checksums. Build trees are
 retained for incremental extraction.
+
+### Evidence: the four local `Ranged` selectors and the census exclusion (2026-09-16)
+
+This records the pre-correction exclusion. The 2026-09-17 correction below
+uses this evidence to restore the local sites to the census.
+
+Site-level evidence for the population-definition sentence above, "local
+selector calls are ordinary calls to available bindings", read from the
+canonical `-O1` dump and reports, no extraction run.
+
+**The four bindings.** `ShellCheck.Fixer.tidy-align.txt` (`getImplicitBinds`,
+lines 54-58) names `start_rYqD`, `end_rYqE`, `overlap_rYqF`, `setRange_rYqG`.
+`ShellCheck.Fixer.core.json` has each as a top-level pair, arity 1, RHS node
+`Lam`, binder `details` field `"[ClassOp]"`:
+
+| occ        | stable name                                            | unique | RHS `ExprId` | binder JSON path            |
+| ---------- | ------------------------------------------------------ | ------ | -----------: | --------------------------- |
+| `start`    | `$ShellCheck-0.11.0-inplace$ShellCheck.Fixer$start`    | rYqD   |            0 | `.binds[0].pairs[0].binder` |
+| `end`      | `$ShellCheck-0.11.0-inplace$ShellCheck.Fixer$end`      | rYqE   |            1 | `.binds[1].pairs[0].binder` |
+| `overlap`  | `$ShellCheck-0.11.0-inplace$ShellCheck.Fixer$overlap`  | rYqF   |            2 | `.binds[2].pairs[0].binder` |
+| `setRange` | `$ShellCheck-0.11.0-inplace$ShellCheck.Fixer$setRange` | rYqG   |            3 | `.binds[3].pairs[0].binder` |
+
+The RHS `ExprId` is `h2r show`'s own node address: `h2r show compiler/core-json
+ShellCheck.Fixer <N>` on each of `0`-`3` prints `-- in top-level binding
+<occ>, node <N>` followed by the `Lam` from that occ's definition, confirming
+the id names that exact node. `BinderId` is a separate arena index the
+loader assigns when it flattens the raw dump into a `Module`
+(`h2r-core-ir/src/lib.rs:25`); `h2r show` never prints one (no binder in its
+output, lambda parameter, case binder or alt binder, carries a bracketed
+id, only `Var`/`Case`/`App`/`Lam`-root nodes do), so the JSON path above is
+given instead. That path is a raw-JSON array index into `RawModule.binds`,
+not a `BinderId` and not an `ExprId`: confirmed directly against
+`ShellCheck.Fixer.core.json` (`.binds[0..3]`, each a non-recursive
+one-pair group, `occ` `start`/`end`/`overlap`/`setRange` in that order,
+`details == "[ClassOp]"`).
+
+**Applications inside `ShellCheck.Fixer`.** Every `Var` occurrence of the
+four names, spine head traced to its `App` root, one row per full
+application. `head ExprId` and `spine-root ExprId` are read directly off
+`h2r show compiler/core-json ShellCheck.Fixer --depth 40 --no-parsec
+--no-tuples --no-fields --no-lists --no-text --no-classops --no-higher`,
+which prints `[spine-root]head[head-id] arg1[id1] arg2[id2] …` for a spine
+and never prints `@Type`/coercion arguments, so the printed argument count
+is already the value-argument count:
+
+| owner            | selector   | head `ExprId` | spine-root `ExprId` | value args |
+| ---------------- | ---------- | ------------: | ------------------: | ---------: |
+| `$dmoverlap`     | `start`    |          1922 |                1855 |          2 |
+| `$dmoverlap`     | `end`      |          1916 |                1857 |          2 |
+| `$dmoverlap`     | `start`    |          1910 |                1884 |          2 |
+| `$dmoverlap`     | `end`      |          1904 |                1886 |          2 |
+| `removeTabStops` | `setRange` |          1257 |                1158 |          3 |
+| `removeTabStops` | `start`    |          1249 |                1209 |          2 |
+| `removeTabStops` | `start`    |          1239 |                1213 |          1 |
+| `removeTabStops` | `start`    |          1226 |                1220 |          2 |
+| `removeTabStops` | `end`      |          1205 |                1165 |          2 |
+| `removeTabStops` | `end`      |          1195 |                1169 |          1 |
+| `removeTabStops` | `end`      |          1182 |                1176 |          2 |
+
+Eleven rows, matching "eleven local call sites" above: `$dmoverlap` has 2×
+`start` and 2× `end`, each 2 value args (the dictionary and one
+`PositionedComment`/`Replacement`); `removeTabStops` has 3× `start` and 3×
+`end`, each selector once at 1 value arg and twice at 2. The 1-arg row is
+the point-free `g = start $dRanged`: `start`'s binder arity is 1 (its
+single parameter is the dictionary itself, per the four-bindings table
+above), so this application is saturated, not partial, and returns the
+extracted method value, itself a function; `scope.rs`'s binding-site
+branch excludes it on `is_class_op: false`, not on argument count. Plus
+1× `setRange` at 3 (dictionary, the constructed `(start.., end..)` pair,
+`range`). `overlap` has zero rows: it is never applied in the module and
+never appears in `ShellCheck.Fixer.core.json`'s `ids` table. The `setRange`
+application sits in the body of `removeTabStops`
+(`binds[32].pairs[0].binder.occ == "removeTabStops"`), the function the
+historical Exact-verdict example above names.
+
+**The exclusion, traced for the `removeTabStops`/`setRange` application.**
+`removeTabStops` and `setRange` are both top-level bindings of
+`ShellCheck.Fixer`, so the occurrence resolves lexically within the module.
+`Scope::head_sig` (`h2r-analysis/src/scope.rs:108`) takes the binding-site
+branch at line 112 (`self.binding_of(head)` is `Some`) and returns at lines
+114-122 with `is_class_op: false` fixed at line 121, under the comment
+"Locals are never constructors or class methods" at line 119. The id-table
+branch at lines 124-134, which reads `IdInfo::is_class_op`, is never reached
+for this occurrence. `Census::add_module`
+(`h2r-analysis/src/classops.rs:731-741`) calls `s.head_sig(head)` at line
+736 and drops the site at line 739 (`if !sig.is_class_op { continue; }`). No
+`Site` is built for this application.
+
+**What ClassOp information survives, and where.** `raw::Binder`
+(`h2r-core-ir/src/raw.rs:213-263`), the type `head_sig`'s binding-site
+branch reads at `scope.rs:113`, carries no `is_class_op` field: not stored
+on that type at all. It does carry `details: Option<String>`
+(`raw.rs:243`), and the dump has `details == "[ClassOp]"` on all four
+binders; `head_sig` never reads `b.details`. `raw::IdInfo`
+(`raw.rs:134-154`) does carry `is_class_op: bool` (`raw.rs:144`), and the
+module's own `ids` table has redundant entries for `start`, `end` and
+`setRange` (not `overlap`, never referenced) with `isClassOp: true`, per the
+redundancy `raw.rs:62-68` documents for a module's own externalised
+top-level binders. That table is never consulted for these three: the
+binding-site branch returns at `scope.rs:122`, before line 126
+(`self.m.ids.get(name)`) runs.
+
+**Proven.** The eleven applications above are excluded from the classop
+population by `scope.rs:112-122` and `classops.rs:736-739`, for the reason
+traced above, on this dump. `dictflow.json`'s `.parameters` entry for
+`removeTabStops`'s `$dRanged` (`owner: "removeTabStops", occ: "$dRanged"`)
+still resolves to `{Set: ["ShellCheck.Fixer#18"]}`, i.e.
+`$fRangedPositionedComment`, the instance the historical Exact-verdict
+example above names, independently of the classop-site exclusion:
+`dictflow`'s own parameter union does not read `Census`'s site population.
+
+**The seven method targets, traced on format 6 (2026-09-17).** All seven
+applications in `removeTabStops` pass its own dictionary parameter. In the
+raw RHS, their first value argument has unique `aYPX`, and the enclosing
+parameter at `.binds[32].pairs[0].rhs.body.binder` is the sole binding of
+that unique within the function. This is a lexical binding check within
+this dump, not a cross-build unique match. The parameter's producer set in
+`dictflow.json` is the singleton `{ShellCheck.Fixer#18}`.
+
+The selector bodies themselves case on `C:Ranged` and return alternative
+fields 0 (`start`), 1 (`end`), 2 (`overlap`) and 3 (`setRange`). This field
+mapping follows the bound variables in the case alternatives, not their
+diagnostic names. Dictionary construction node 18 supplies `pcStartPos`,
+`pcEndPos`, `$fRangedPositionedComment_$coverlap` and
+`$fRangedPositionedComment_$csetRange` in that order. Combining that
+constructor with each selector body gives all seven targets:
+
+| spine root | dictionary argument | selector   | field | selected method                                         |
+| ---------: | ------------------: | ---------- | ----: | ------------------------------------------------------- |
+|       1158 |                1256 | `setRange` |     3 | `ShellCheck.Fixer.$fRangedPositionedComment_$csetRange` |
+|       1209 |                1248 | `start`    |     0 | `ShellCheck.Interface.pcStartPos`                       |
+|       1213 |                1238 | `start`    |     0 | `ShellCheck.Interface.pcStartPos`                       |
+|       1220 |                1225 | `start`    |     0 | `ShellCheck.Interface.pcStartPos`                       |
+|       1165 |                1204 | `end`      |     1 | `ShellCheck.Interface.pcEndPos`                         |
+|       1169 |                1194 | `end`      |     1 | `ShellCheck.Interface.pcEndPos`                         |
+|       1176 |                1181 | `end`      |     1 | `ShellCheck.Interface.pcEndPos`                         |
+
+These are manually re-derived targets from existing proof facts and Core,
+not seven `Exact` entries emitted by the pre-correction class-op census:
+it excluded all seven before target analysis. The same dictionary-field
+selection and singleton-target rule is implemented by `field_expr` and
+`outcome_of` in `h2r-analysis/src/dictflow.rs`. The two dictionary-only
+applications select known method values even without applying those
+methods to a `PositionedComment`.
+
+The other four applications are in `$dmoverlap`; its dictionary parameter
+has `Top(function-is-unreachable-in-the-closed-world)` in `dictflow.json`.
+They therefore supply no additional known targets under the existing
+producer-set rules. The eleven excluded applications split into seven
+with a determined target and four without one.
+
+This reconstructs the seven-target result on the current program and
+agrees with the historical seven-target aggregate and the recorded
+`setRange` example. It is not an old-node-to-new-node identity proof:
+the six other historical site records were not found in the available
+captures. The census decision and implementation follow below.
+
+### Local class-op selectors remain in the census (2026-09-17)
+
+A class-op call remains a class-op call when its definition is available
+locally. `Scope::head_sig` first resolves lexical identity. For a top-level
+binding, it reads GHC's structured `isClassOp` flag from the redundant
+id-table entry keyed by that definition's stable name. Arity, demand and
+divergence still come from the binding site. Nested binders cannot inherit
+the flag from a shadowed global name. No pretty `IdDetails` string is parsed,
+no unique is used for linkage, and no new dump or format is required.
+
+The independent M2.4 verifier implements the same input contract through
+its own lookup; it does not call the analysis helper. Target resolution,
+dictionary boundedness and dictionary erasure remain separate questions.
+An exact target does not by itself grant permission to erase a dictionary.
+
+On canonical `-O1`, all eleven local `Ranged` applications re-enter the
+population: seven resolve to the method targets in the evidence table and
+four remain unresolved because their owner, `$dmoverlap`, is unreachable.
+Thus `554 = 0 + 554` becomes `565 = 7 + 558`; bounded dictionary sets rise
+from 111 to 118. Dead-attributed class-op sites rise from 409 to 413, exactly
+the four `$dmoverlap` applications. The independent verifier confirms 615
+claims (previously 601), with zero disagreements and zero coverage refusals.
+The added claims are seven exact targets and seven bounded dictionary sets.
+
+All seven existing dumps were checked with `mise run baseline:reports`:
+
+| profile   | sites | Exact | unresolved | bounded dictionaries | verified claims |
+| --------- | ----: | ----: | ---------: | -------------------: | --------------: |
+| canonical |   565 |     7 |        558 |                  118 |             615 |
+| A         |   565 |     7 |        558 |                  118 |             615 |
+| B         |   587 |     7 |        580 |                  138 |             753 |
+| C         |   595 |     7 |        588 |                  140 |             881 |
+| D         |   595 |     0 |        595 |                   65 |           2,215 |
+| E         |   595 |     0 |        595 |                   65 |           2,193 |
+| F         |   596 |     0 |        596 |                   65 |           2,219 |
+
+Sources: `compiler/matrix/<profile>/reports/m24.json` →
+`.accounting.targets`, `.accounting.claims`, and `verify-m24.txt`.
+Finite target sets remain zero. Every profile gains eleven census sites;
+unreachable owners still prevent target claims. All seven independent M2.4
+checks report zero disagreements and zero coverage refusals. The complete
+erasure and representation accounting, and M1 thunk-site totals, are unchanged
+from the pre-correction reports for every profile.
+
+Three regression tests cover local classification with stale occurrence
+signatures, rejection of pretty-string inference, and lexical shadowing.
+Workspace tests and Clippy (`--all-targets -- -D warnings`) pass.
+
+### Format-6 baseline — before/after accounting tables (2026-09-16)
+
+These tables retain the pre-correction snapshot. Report paths name the
+captures used at that time; rerunning `baseline:reports` updates those files
+to the current compiler. See the dated local-selector correction above for
+the changed M2.4 results.
+
+Partial fill of the before/after accounting brief 1 asked for, per milestone,
+across all seven profiles. Site-level attribution (why a number differs
+between two profiles) is not attempted here; that is separate, still-open
+work. Sources are named under each table by report file and JSON path.
+Where the historical (pre-tidy) README section documents the exact same
+metric for canonical/`-O1`, it is given alongside; where it does not, the
+cell says "niet vastgelegd" rather than 0.
+
+#### 1. M1 — thunk-site breakdown
+
+Source: `m24.json` → `.m1Link` (`rows`, `by_m23`, `by_tuples`, `thunk_sites`).
+`residual = thunk_sites − by_m23 − by_tuples − by_m24` (`by_m24` is 0 on
+every profile).
+
+| profile   | thunk sites (before) | removed by tuples (M2.2) | removed by M2.3 | removed by M2.4 | residual |
+| --------- | -------------------: | -----------------------: | --------------: | --------------: | -------: |
+| canonical |                2,228 |                       92 |               9 |               0 |    2,127 |
+| A         |                2,228 |                       92 |               9 |               0 |    2,127 |
+| B         |                2,375 |                      103 |               8 |               0 |    2,264 |
+| C         |                2,833 |                      120 |               4 |               0 |    2,709 |
+| D         |                7,234 |                      121 |              10 |               0 |    7,103 |
+| E         |                7,054 |                      121 |              10 |               0 |    6,923 |
+| F         |                7,032 |                      121 |              10 |               0 |    6,901 |
+
+`.m1Link.rows` itself, the four thunk-site classes summed into each
+`by_m23`/`by_tuples` column above (`by_m24` is 0 in every row on every
+profile, so it is dropped here):
+
+| profile   | eager-position (before / by_m23 / by_tuples) | lazy-position (before / by_m23 / by_tuples) | memoisation-required (before / by_m23 / by_tuples) | recursive value (before) |
+| --------- | -------------------------------------------: | ------------------------------------------: | -------------------------------------------------: | -----------------------: |
+| canonical |                                   14 / 3 / 0 |                                 254 / 3 / 3 |                                     1,891 / 3 / 89 |                       69 |
+| A         |                                   14 / 3 / 0 |                                 254 / 3 / 3 |                                     1,891 / 3 / 89 |                       69 |
+| B         |                                   14 / 3 / 0 |                                 259 / 4 / 3 |                                    2,037 / 1 / 100 |                       65 |
+| C         |                                   10 / 0 / 0 |                                 541 / 2 / 2 |                                    2,237 / 2 / 118 |                       45 |
+| D         |                                   16 / 6 / 0 |                                 750 / 2 / 2 |                                    6,349 / 2 / 119 |                      119 |
+| E         |                                   16 / 6 / 0 |                                 756 / 2 / 2 |                                    6,163 / 2 / 119 |                      119 |
+| F         |                                   16 / 6 / 0 |                                 756 / 2 / 2 |                                    6,141 / 2 / 119 |                      119 |
+
+Recursive values contribute 0 to `by_m23` and `by_tuples` on every profile;
+row `before` values sum to `thunk_sites` (e.g. canonical: `14 + 254 + 1891 +
+69 = 2228`), and each row's `by_m23`/`by_tuples` sum to the table above's
+"removed by" totals (e.g. canonical `by_tuples`: `0 + 3 + 89 = 92`).
+
+Historical comparison, canonical/`-O1` only (source: [M1](#m1--how-much-haskell-is-left-after-ghc), the "Potential thunk sites" row):
+
+| metric                     | old (pre-tidy) | new (format 6) |
+| -------------------------- | -------------: | -------------: |
+| thunk sites (before)       |          2,242 |          2,228 |
+| removed by tuples (M2.2)   |             92 |             92 |
+| removed by M2.3            |             11 |              9 |
+| residual after M2 removals |          2,139 |          2,127 |
+
+#### 2. M2.1 — Parsec population and residual edges
+
+Source: `parsec.json` → `.accounting` (`population`, `exact`, `finite`,
+`region_unresolved`, `rejected`); `m24.json` → `.m21ResidualEdges` (array
+length).
+
+| profile   | population | exact | finite | region_unresolved | rejected | residual edges |
+| --------- | ---------: | ----: | -----: | ----------------: | -------: | -------------: |
+| canonical |      1,872 | 1,858 |      8 |                 0 |        6 |             41 |
+| A         |      1,872 | 1,858 |      8 |                 0 |        6 |             41 |
+| B         |      2,195 | 2,081 |      8 |                99 |        7 |             50 |
+| C         |      2,241 | 2,061 |     25 |               144 |       11 |             71 |
+| D         |      9,127 | 8,407 |     84 |               583 |       53 |            249 |
+| E         |      8,047 | 7,471 |     84 |               439 |       53 |            249 |
+| F         |      7,523 | 6,903 |     82 |               485 |       53 |            330 |
+
+Historical comparison, canonical/`-O1` only (source: [M2.1 — Results on the
+`-O1` dump](#results-on-the--o1-dump), "The 2,117 Parsec-shaped unresolved
+sites"; candidate/proven regions of 1,301 are already unchanged in the
+Format-6 baseline table above):
+
+| metric            | old (pre-tidy) | new (format 6) |
+| ----------------- | -------------: | -------------: |
+| population        |          2,117 |          1,872 |
+| exact             |          2,099 |          1,858 |
+| finite            |              8 |              8 |
+| region_unresolved |              0 |              0 |
+| rejected          |             10 |              6 |
+
+#### 3. M2.2 — tuples, boxed and unboxed separately
+
+Source: `tuples.json` → `.accounting.milestone` (`before`, `normalised`,
+`preserved`, `unsupported`, per `boxed` flag).
+
+| profile   | boxed before | boxed normalised | boxed preserved | boxed unsupported | unboxed before | unboxed normalised | unboxed preserved | unboxed unsupported |
+| --------- | -----------: | ---------------: | --------------: | ----------------: | -------------: | -----------------: | ----------------: | ------------------: |
+| canonical |        1,754 |              539 |             550 |               665 |            812 |                688 |                 0 |                 124 |
+| A         |        1,754 |              539 |             550 |               665 |            812 |                688 |                 0 |                 124 |
+| B         |        1,978 |              625 |             682 |               671 |          1,013 |                860 |                 0 |                 153 |
+| C         |        2,239 |              562 |             673 |             1,004 |            936 |                798 |                 0 |                 138 |
+| D         |        4,252 |              930 |             903 |             2,419 |          1,724 |              1,564 |                 0 |                 160 |
+| E         |        4,263 |              964 |             880 |             2,419 |          1,724 |              1,564 |                 0 |                 160 |
+| F         |        4,348 |              964 |             880 |             2,504 |          1,725 |              1,565 |                 0 |                 160 |
+
+Historical comparison, canonical/`-O1` only (source: [M2.2 —
+Accounting](#accounting-1), the `M2.2 accounting` block):
+
+| metric                                            | old (pre-tidy) | new (format 6) |
+| ------------------------------------------------- | -------------: | -------------: |
+| boxed before                                      |          1,765 |          1,754 |
+| boxed normalised                                  |            539 |            539 |
+| boxed preserved                                   |            551 |            550 |
+| boxed unsupported                                 |            675 |            665 |
+| unboxed before                                    |            819 |            812 |
+| unboxed normalised                                |            667 |            688 |
+| unboxed preserved                                 |              0 |              0 |
+| unboxed unsupported                               |            152 |            124 |
+| removable without cloning (total normalised)      |          1,206 |          1,227 |
+| removable only via a clone (`RemovableWithClone`) |              3 |              3 |
+| removable locally (def-use), before composition   |          1,453 |          1,439 |
+
+`removable without cloning` old is [M2.2's own
+line](#two-numbers-two-questions--kept-apart-on-purpose); new is
+`tuples.json` → `.accounting.removable_with_clone` (clone count, unchanged
+at 3) and the boxed+unboxed `normalised` sum above (1,227, already in the
+Format-6 baseline table as "M2.2 jointly removable tuples"). "removable
+locally (def-use), before composition" old is [the 1,453
+figure](#two-numbers-two-questions--kept-apart-on-purpose); new is `of the
+N flow(s) def-use proved removable` in `boundaries.txt` (canonical/A: 1,439),
+per profile below.
+
+| profile   | removable locally (def-use) | of which cross ≥1 boundary | of which cross none |
+| --------- | --------------------------: | -------------------------: | ------------------: |
+| canonical |                       1,439 |                      1,010 |                 429 |
+| A         |                       1,439 |                      1,010 |                 429 |
+| B         |                       1,727 |                      1,249 |                 478 |
+| C         |                       1,680 |                      1,259 |                 421 |
+| D         |                       3,970 |                      3,096 |                 874 |
+| E         |                       4,004 |                      3,130 |                 874 |
+| F         |                       4,009 |                      3,135 |                 874 |
+
+Source: `boundaries.txt` per profile, the "of the N flow(s) def-use proved
+removable, X cross at least one boundary and Y cross none" line.
+
+#### 4. M2.3 — fields, lists, text
+
+Source: `verify-rep.json` → `.m23Accounting.fields[4]` (the `"total"` row:
+`before`, `dead`, `proven_eager`, `proven_lazy`, `unsupported`);
+`.m23Accounting.lists` (`before`, `advised`, `unsupported`);
+`.m23Accounting.text` (`before`, `advised`, `unsupported`);
+`.crossCheck` (`checked`, `agreed`). `checked − agreed` below is labelled
+"coverage refusals", matching [M2.3's own table](#what-it-found): every
+dump's independent walker reports **0** actual disagreements, on this
+baseline as on the pre-tidy one.
+
+| profile   | fields before | fields dead | fields direct (proven_eager) | fields proven_lazy | fields unsupported | lists before | lists advised | lists unsupported | text before | text advised | text unsupported | crossCheck checked | crossCheck agreed | crossCheck coverage refusals |
+| --------- | ------------: | ----------: | ---------------------------: | -----------------: | -----------------: | -----------: | ------------: | ----------------: | ----------: | -----------: | ---------------: | -----------------: | ----------------: | ---------------------------: |
+| canonical |        19,746 |           2 |                        3,346 |                987 |             15,411 |       11,813 |         2,704 |             9,109 |       4,431 |        2,748 |            1,683 |              4,332 |             4,322 |                           10 |
+| A         |        19,746 |           2 |                        3,346 |                987 |             15,411 |       11,813 |         2,704 |             9,109 |       4,431 |        2,748 |            1,683 |              4,332 |             4,322 |                           10 |
+| B         |        21,954 |          23 |                        4,142 |              1,026 |             16,763 |       12,136 |         2,832 |             9,304 |       4,473 |        2,793 |            1,680 |              5,148 |             5,137 |                           11 |
+| C         |        23,319 |          18 |                        4,571 |                791 |             17,939 |       13,641 |         3,108 |            10,533 |       5,343 |        3,231 |            2,112 |              6,069 |             6,054 |                           15 |
+| D         |        51,741 |         109 |                       14,286 |                985 |             36,361 |       23,798 |         4,468 |            19,330 |       7,780 |        4,345 |            3,435 |             16,604 |            16,589 |                           15 |
+| E         |        47,009 |          79 |                       12,686 |                931 |             33,313 |       22,600 |         4,301 |            18,299 |       7,478 |        4,151 |            3,327 |             14,905 |            14,890 |                           15 |
+| F         |        47,049 |          79 |                       12,674 |                932 |             33,364 |       22,719 |         4,259 |            18,460 |       7,616 |        4,149 |            3,467 |             14,871 |            14,856 |                           15 |
+
+`crossCheck agreed` / `coverage refusals` are already the Format-6 baseline
+table's "M2.3 confirmed / refused" column; repeated here beside the
+`m23Accounting` fields/lists/text split, which is not otherwise tabulated.
+Unconfirmed claims (per `.m23Accounting.unconfirmed`) are kept apart from
+this table, per the instruction to not conflate them with confirmed
+counts: canonical has 5 unconfirmed `list IteratorCandidate` and 5
+unconfirmed `list VecCandidate` claims, not counted above as either
+confirmed or as population.
+
+Historical comparison, canonical/`-O1` only:
+
+| metric                                            |        old (pre-tidy) |        new (format 6) | old source                                                       |
+| ------------------------------------------------- | --------------------: | --------------------: | ---------------------------------------------------------------- |
+| fields: `Direct`                                  |                 3,408 |                 3,346 | [M2.3b — Accounting](#accounting-4), profile row `-O1`/A         |
+| fields: `Dead`                                    |                     9 |                     2 | same                                                             |
+| lists: flows (before)                             |                11,818 |                11,813 | [M2.3c — Accounting](#accounting-5), profile row `-O1`/A         |
+| lists: `Iterator` / `Persistent` / `Vec` / `Lazy` | 727 / 1,925 / 32 / 30 | 722 / 1,925 / 27 / 30 | same                                                             |
+| lists: `Unknown`                                  |                 9,104 |                 9,109 | same                                                             |
+| text: flows (before)                              |                 4,431 |                 4,431 | [M2.3d — Accounting](#accounting-6), profile row `-O1`/A         |
+| text: `Strong` / `Undecided` / `NotText`          |       185 / 2,561 / 2 |       185 / 2,561 / 2 | same                                                             |
+| text: `Unknown`                                   |                 1,683 |                 1,683 | same                                                             |
+| crossCheck checked / agreed / coverage refusals   |    4,401 / 4,391 / 10 |    4,332 / 4,322 / 10 | [M2.3 — What it found](#what-it-found), `-O1` (and matrix A) row |
+
+#### 5. M2.4 — class-op targets, representation, erasure, totality, clone plans
+
+Source: `m24.json` → `.accounting.targets` (`sites`, `exact`, `finite`,
+`unresolved`, `dict_bounded`); `.accounting.representation` (`boundaries`,
+`enumerated`, `one_representation`, `rewritable_as_one`, `claims`/`verified`);
+`.accounting.erasure` (`values`, `verified_values`, `params`,
+`verified_params`, `param_totality`); `.accounting.erasure.plans` (labelled
+"dictionary clones (E7-OWNER-CLONES)" and "closure clones
+(H15-OWNER-CLONES)").
+
+**Targets and representation**
+
+| profile   | class-op sites | exact | finite | unresolved | dict-bounded | boundaries | enumerated | one-representation | rewritable-as-one |
+| --------- | -------------: | ----: | -----: | ---------: | -----------: | ---------: | ---------: | -----------------: | ----------------: |
+| canonical |            554 |     0 |      0 |        554 |          111 |      5,572 |        265 |                 92 |                70 |
+| A         |            554 |     0 |      0 |        554 |          111 |      5,572 |        265 |                 92 |                70 |
+| B         |            576 |     0 |      0 |        576 |          131 |      6,337 |        399 |                146 |               124 |
+| C         |            584 |     0 |      0 |        584 |          133 |      8,080 |        503 |                201 |               180 |
+| D         |            584 |     0 |      0 |        584 |           65 |     33,967 |      1,929 |                730 |               709 |
+| E         |            584 |     0 |      0 |        584 |           65 |     31,559 |      1,907 |                718 |               697 |
+| F         |            585 |     0 |      0 |        585 |           65 |     31,582 |      1,913 |                717 |               696 |
+
+**Erasure and totality** (values / params totals, and the `param_totality`
+triple `[ProvenTotal, MustPreserveForce, Unknown]`)
+
+| profile   | values | verified values | params | verified params | totality: ProvenTotal | totality: MustPreserveForce | totality: Unknown |
+| --------- | -----: | --------------: | -----: | --------------: | --------------------: | --------------------------: | ----------------: |
+| canonical |    190 |             103 |    218 |              41 |                   119 |                           0 |                99 |
+| A         |    190 |             103 |    218 |              41 |                   119 |                           0 |                99 |
+| B         |    190 |             103 |    212 |              32 |                   111 |                           0 |               101 |
+| C         |    190 |             103 |    224 |              39 |                   122 |                           0 |               102 |
+| D         |    195 |             121 |    224 |              32 |                    76 |                           0 |               148 |
+| E         |    195 |             121 |    224 |              32 |                    76 |                           0 |               148 |
+| F         |    195 |             121 |    232 |              32 |                    84 |                           0 |               148 |
+
+`values`/`params` above are totals; the `Erasable`/`WithObligation`/
+`WithClone`/`Preserve`/`Unresolved` verdict split behind them
+(`.accounting.erasure.value_verdicts` / `.param_verdicts`, same order) is
+not otherwise tabulated per profile:
+
+| profile   | value verdicts: Erasable | WithObligation | WithClone | Preserve | Unresolved | param verdicts: Erasable | WithObligation | WithClone | Preserve | Unresolved |
+| --------- | -----------------------: | -------------: | --------: | -------: | ---------: | -----------------------: | -------------: | --------: | -------: | ---------: |
+| canonical |                      103 |              0 |         0 |       87 |          0 |                       37 |              0 |         4 |       84 |         93 |
+| A         |                      103 |              0 |         0 |       87 |          0 |                       37 |              0 |         4 |       84 |         93 |
+| B         |                      103 |              0 |         0 |       87 |          0 |                       29 |              0 |         3 |       85 |         95 |
+| C         |                      103 |              0 |         0 |       87 |          0 |                       35 |              0 |         4 |       89 |         96 |
+| D         |                      121 |              0 |         0 |       74 |          0 |                       28 |              0 |         4 |       89 |        103 |
+| E         |                      121 |              0 |         0 |       74 |          0 |                       28 |              0 |         4 |       89 |        103 |
+| F         |                      121 |              0 |         0 |       74 |          0 |                       28 |              0 |         4 |       97 |        103 |
+
+Value verdicts sum to `values` on every profile; param verdicts sum to
+`params` (e.g. canonical params: `37 + 0 + 4 + 84 + 93 = 218`).
+
+**Clone plans** — dictionary clones (E7-OWNER-CLONES) and closure clones
+(H15-OWNER-CLONES), each as cardinality-sum / clones-planned /
+owners-planned / owners-refused / verified
+
+| profile   | dict: cardinality sum | dict: clones | dict: owners planned | dict: owners refused | dict: verified | closure: cardinality sum | closure: clones | closure: owners planned | closure: owners refused | closure: verified |
+| --------- | --------------------: | -----------: | -------------------: | -------------------: | -------------: | -----------------------: | --------------: | ----------------------: | ----------------------: | ----------------: |
+| canonical |                     8 |            4 |                    4 |                    0 |              4 |                      512 |              71 |                      22 |                      66 |                22 |
+| A         |                     8 |            4 |                    4 |                    0 |              4 |                      512 |              71 |                      22 |                      66 |                22 |
+| B         |                     6 |            3 |                    3 |                    0 |              3 |                      919 |              86 |                      25 |                     119 |                25 |
+| C         |                     8 |            4 |                    4 |                    0 |              4 |                    1,185 |              90 |                      26 |                     156 |                26 |
+| D         |                    12 |            7 |                    2 |                    0 |              2 |                    5,124 |             202 |                      60 |                     756 |                60 |
+| E         |                    12 |            7 |                    2 |                    0 |              2 |                    5,048 |             202 |                      60 |                     744 |                60 |
+| F         |                    12 |            7 |                    2 |                    0 |              2 |                    5,088 |             226 |                      72 |                     738 |                72 |
+
+Note on terminology, per the instruction not to confuse these: `enumerated`
+(a boundary's producer set is fully known) is not `one_representation`
+(that set needs exactly one representation), which is not
+`rewritable_as_one` (the stronger, per-rewrite question); all three are
+separate columns above, taken as-is from `.accounting.representation`.
+
+Historical comparison, canonical/`-O1` only:
+
+| metric                                                                          |            old (pre-tidy) |           new (format 6) | old source                                                                                                                                            |
+| ------------------------------------------------------------------------------- | ------------------------: | -----------------------: | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| class-op sites, per-module census population                                    |                       565 |                      554 | [M2.4b — The answer](#the-answer)                                                                                                                     |
+| class-op sites, whole-program `Exact`                                           |                         7 |                        0 | [M2.4c — What it found](#what-it-found) (see also this baseline's `Range`-selector note above)                                                        |
+| class-op sites, whole-program `Unresolved`                                      |                       558 |                      554 | same                                                                                                                                                  |
+| representation boundaries                                                       |                     5,574 |                    5,572 | [M2.4d′ — verdicts, before → after](#the-verdicts-before--after--o1)                                                                                  |
+| representation: enumerated                                                      |                       252 |                      265 | same                                                                                                                                                  |
+| representation: one_representation                                              |                        84 |                       92 | same                                                                                                                                                  |
+| representation: rewritable_as_one                                               |                        66 |                       70 | same                                                                                                                                                  |
+| erasure values: `Erasable`/`WithObligation`/`WithClone`/`Preserve`/`Unresolved` |  102/0/0/89/0 (total 191) | 103/0/0/87/0 (total 190) | [Erasure tables, before → after](#erasure-tables-before--after)                                                                                       |
+| erasure params: `Erasable`/`WithObligation`/`WithClone`/`Preserve`/`Unresolved` |  36/0/4/84/92 (total 216) | 37/0/4/84/93 (total 218) | same                                                                                                                                                  |
+| totality params: ProvenTotal/MustPreserveForce/Unknown                          |      118/0/98 (total 216) |     119/0/99 (total 218) | same                                                                                                                                                  |
+| dictionary clone plan: cardinality sum / clones / owning functions              |                 8 / 4 / 4 |                8 / 4 / 4 | [Clone planning is per owner](#clone-planning-is-per-owner-not-per-parameter)                                                                         |
+| closure clone plan: clones / owners planned / owners refused                    | 68 / 21 / 66 (post-M2.4h) |             71 / 22 / 66 | [M2.4h correction](#correction-m24h--four-defects-the-owners-review-of-m24-found) via [M2.4d′](#3-the-clone-count-was-a-sum-of-per-parameter-numbers) |
+
+The dictionary clone plan (E7) is unchanged across the re-baseline: same
+cardinality sum, same clone count, same four owning functions. The closure
+clone plan (H15) moves by 3 clones (68 → 71) and 1 owning function
+(21 → 22); no cause is attributed here, per the instruction to leave
+site-level attribution open.
+
+#### 6. Reachability — the 28-module canonical table
+
+Source: `reachability.json` → `.reachability.accounting.modules`, canonical
+profile only, all 28 modules (A is byte-identical to canonical). Totals:
+13,752 top, 9,795 live, 3,957 dead (`dead_no_refs + dead_only_from_dead`).
+
+| module                          |        top |      live | dead_no_refs | dead_only_from_dead |
+| ------------------------------- | ---------: | --------: | -----------: | ------------------: |
+| Main                            |        501 |       409 |           17 |                  75 |
+| Paths_ShellCheck                |         63 |         5 |            9 |                  49 |
+| ShellCheck.AST                  |      1,083 |        98 |          320 |                 665 |
+| ShellCheck.ASTLib               |        345 |       264 |           43 |                  38 |
+| ShellCheck.Analytics            |      2,667 |     2,646 |            6 |                  15 |
+| ShellCheck.Analyzer             |          8 |         3 |            1 |                   4 |
+| ShellCheck.AnalyzerLib          |        649 |       327 |           81 |                 241 |
+| ShellCheck.CFG                  |        993 |       355 |           94 |                 544 |
+| ShellCheck.CFGAnalysis          |        867 |       292 |          100 |                 475 |
+| ShellCheck.Checker              |         36 |        33 |            1 |                   2 |
+| ShellCheck.Checks.Commands      |      1,240 |     1,184 |            6 |                  50 |
+| ShellCheck.Checks.ControlFlow   |         14 |         6 |            3 |                   5 |
+| ShellCheck.Checks.Custom        |          9 |         2 |            2 |                   5 |
+| ShellCheck.Checks.ShellSupport  |        901 |       870 |            2 |                  29 |
+| ShellCheck.Data                 |      1,340 |     1,335 |            1 |                   4 |
+| ShellCheck.Fixer                |         96 |        30 |           10 |                  56 |
+| ShellCheck.Formatter.CheckStyle |         53 |        47 |            2 |                   4 |
+| ShellCheck.Formatter.Diff       |        155 |       106 |            5 |                  44 |
+| ShellCheck.Formatter.Format     |         62 |        19 |           14 |                  29 |
+| ShellCheck.Formatter.GCC        |         22 |        16 |            2 |                   4 |
+| ShellCheck.Formatter.JSON       |         66 |        44 |            5 |                  17 |
+| ShellCheck.Formatter.JSON1      |         88 |        48 |            7 |                  33 |
+| ShellCheck.Formatter.Quiet      |         11 |         4 |            2 |                   5 |
+| ShellCheck.Formatter.TTY        |         93 |        87 |            2 |                   4 |
+| ShellCheck.Interface            |        678 |        30 |          136 |                 512 |
+| ShellCheck.Parser               |      1,645 |     1,487 |           24 |                 134 |
+| ShellCheck.Prelude              |         42 |        29 |            6 |                   7 |
+| ShellCheck.Regex                |         25 |        19 |            4 |                   2 |
+| **Total (28 modules)**          | **13,752** | **9,795** |      **905** |           **3,052** |
+
+`905 + 3,052 = 3,957`. This is the "authoritative per-module live table"
+still requested by todo.md; the pointers from the historical milestone
+sections to it are not added here.
 
 ## What ShellCheck actually needs
 

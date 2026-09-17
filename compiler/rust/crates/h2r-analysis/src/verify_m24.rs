@@ -474,7 +474,8 @@ fn vargs(m: &Module, args: &[ExprId]) -> Vec<ExprId> {
 /// `isClassOp` bit, the `exported` bit and the strictness bits are GHC's
 /// own and are read from the authoritative source — the binder at its
 /// binding site when the head is bound in this module, the id table when
-/// it is an import.
+/// it is an import. A local top-level selector's classification is in the
+/// redundant id-table entry for its definition; its arity stays binder-owned.
 #[derive(Debug, Clone, Copy)]
 struct Sig<'m> {
     arity: u32,
@@ -490,10 +491,11 @@ fn head_sig<'m>(m: &'m Module, head: ExprId) -> Option<Sig<'m>> {
         let binder: &Binder = m.binder(b);
         return Some(Sig {
             arity: binder.arity.unwrap_or(0),
-            // A binder bound in this module is never a constructor and
-            // never a class method: those are globals.
             data_con: None,
-            is_class_op: false,
+            // Re-derive independently of Scope: lexical identity first,
+            // then the resolved top-level definition's classification.
+            is_class_op: m.binding(b).site == BindSite::Top
+                && m.ids.get(&binder.name).is_some_and(|info| info.is_class_op),
         });
     }
     let info: &IdInfo = m.ids.get(name)?;

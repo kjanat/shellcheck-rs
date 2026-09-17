@@ -8,9 +8,9 @@
 		{
 			"external": {
 				"command": "mise",
-				"arguments": ["x", "dprint", "--", "dprint", "fmt", "--stdin", "{buffer_path}"]
-			}
-		}
+				"arguments": ["x", "dprint", "--", "dprint", "fmt", "--stdin", "{buffer_path}"],
+			},
+		},
 	],
-	"lsp": {}
+	"lsp": {},
 }

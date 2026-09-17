@@ -8,8 +8,8 @@
 //! unique is used here at all**: the one lookup that leaves this module is
 //! the linkage key into the imported-id table, and since dump format 5 the
 //! key is the *stable name* — unit, module and occurrence — of an
-//! occurrence the resolver has already classified as
-//! [`h2r_core_ir::Ref::Global`], never its unique.
+//! occurrence the resolver has classified as [`h2r_core_ir::Ref::Global`],
+//! or of its resolved top-level definition, never its unique.
 //!
 //! What this module adds on top of identity is the *signature* question.
 //! GHC does not keep the `IdInfo` on occurrence `Var`s of local ids up to
@@ -18,6 +18,10 @@
 //! dumps is keyed by stable name but populated from occurrences, so for
 //! anything bound in this module it may disagree with the binder. Imported ids have
 //! no binding site here; for them the id table is all there is.
+//! The exception is `isClassOpId`: this is the Id's classification, not
+//! stale occurrence demand information. Post-CoreTidy selector definitions
+//! are local top-level binders, with that flag in their redundant id-table
+//! entry. Read only that flag there, after resolving the binding site.
 //!
 //! Every consumer that needs the arity or demand signature of a head
 //! ([`crate::shape`] for argument position and partial-application shape,
@@ -29,7 +33,8 @@ use serde::Serialize;
 
 pub use h2r_core_ir::{BindInfo, BindSite};
 
-/// Which source a [`HeadSig`] was read from.
+/// The source of a [`HeadSig`]'s arity and demand signature. A local
+/// top-level selector's classification flag additionally uses its id-table entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SigSource {
     /// The binder at the binding site in this module.
@@ -116,9 +121,12 @@ impl<'m> Scope<'m> {
                 arity: b.arity.unwrap_or(0),
                 dmd_args: b.dmd_sig.as_ref().map(|s| s.args.as_slice()).unwrap_or(&[]),
                 diverges: b.dmd_sig.as_ref().is_some_and(|s| s.diverges),
-                // Locals are never constructors or class methods.
+                // A local top-level selector keeps its GHC classification.
+                // Nested binders must not inherit it from a shadowed name.
+                // Arity and demand still come exclusively from the binder.
                 data_con: None,
-                is_class_op: false,
+                is_class_op: bound.site == BindSite::Top
+                    && self.m.ids.get(&b.name).is_some_and(|info| info.is_class_op),
             });
         }
         // Linkage, not identity: the resolver has already said this
