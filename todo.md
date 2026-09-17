@@ -1,0 +1,104 @@
+# TODO
+
+## Milestone tags
+
+- [ ] Finish the acceptance checks from brief 1 below, then create and push an
+      annotated `h2r-m3a-prime` tag (or `h2r-m3a`) on the closing commit.
+      `ce18ea37d73870324b4fc79a7f208ccd80640710` records the baseline run, but does
+      not yet document every acceptance item from that brief.
+- [ ] Optional: `h2r-o1-baseline` on `ca4cc6b8352e4404152402424b054bf07507b3b6`.
+- [ ] Optional: `h2r-m2-baseline` on `00a0a09144b82d9fd8501ac4d575194b10665d4d`.
+
+## Compiler
+
+- [x] Complete brief 1's before/after accounting tables for every milestone,
+      including erasure, totality and clone plans across the optimization profiles.
+      Done in the "Format-6 baseline — before/after accounting tables"
+      subsection of `compiler/README.md`. Canonical/`-O1` before/after is filled
+      where the historical README documents the same metric; site-level
+      attribution of the differences is still open (see the unchecked items
+      below).
+- [ ] Complete its gate-8 attribution: distinguish linkage, trimmed bindings,
+      implicit selectors and finalized `OccInfo`/arity, with an `--explain` example
+      for each observed cause. Include dead-attributed dispatch sites, target and
+      producer sets, set-valued clone plans and residual Parsec edges.
+- [x] Count local `Ranged` selectors using the structured GHC class-op flag
+      after lexical resolution, preserving binder-owned signatures. Analysis
+      and independent verification now include all eleven calls; canonical
+      recovers seven Exact targets. All seven profiles pass verification,
+      with erasure and representation accounting unchanged. Evidence and
+      results: "Local class-op selectors remain in the census (2026-09-17)"
+      in `compiler/README.md`; three regression tests cover the rule.
+- [ ] Add the authoritative per-module live table and pointers from the
+      historical milestone sections; reconcile the README's completion claim with
+      these remaining acceptance items.
+- [ ] Audit coverage of the requested `--explain` captures and final validation
+      gate. Reuse completed dumps and reports through mise; do not rerun them merely
+      because the original brief describes their capture.
+- [ ] Attribute the remaining `.o` byte differences beyond `nm` symbol evidence
+      (explicitly deferred in the source summary).
+- [ ] M3b: implement explicit, proof-carrying NIR with `Delay`/`Force`, closures
+      and instruction origins; no `OpaqueCore` fallback.
+- [ ] Continue M3c–M3h: carriers, closure conversion, specialization, certified
+      transformations, Parsec lowering and a compiled Rust canary. See the
+      [M3 roadmap](compiler/README.md#m3--the-lowering).
+- [ ] Revisit the 41 residual Parsec continuation edges and the canonical
+      baseline's 10 M2.3 verification coverage refusals. These remain conservative
+      limitations, not prerequisites for starting M3b.
+
+## Diagnostic bugs and conformance gaps
+
+Tracked together in [issue #3](https://github.com/kjanat/shellcheck-rs/issues/3):
+
+- [ ] Detect likely interpreter-path typos such as `#!/use/bin/env bash`
+      without rejecting valid custom paths.
+- [ ] Fix crashes on `x=$(coproc foo)` and `$'\U110000'`; check out-of-range
+      and surrogate escapes in the Rust port too.
+- [ ] Follow up upstream's rejection of valid Bash `! # comment`.
+- [ ] Improve parser context for `${ ` and `((())`.
+- [ ] Diagnose the Unicode dash in `echo $((1 – 2))` correctly.
+- [ ] Review quote-error positioning, empty SC1072 details, zero-width spans
+      and notes lost after later parse failures. Preserve the already-fixed port
+      cases as regressions; source notes are linked from issue #3.
+
+## Original follow-up prompts
+
+Source: `Pasted markdown(20260915-171114).md`, supplied on 2026-09-16.
+The two briefs below are preserved verbatim. Their checkout path, head SHA,
+`capture.sh` and scratch directories are historical: use the current checkout
+and the existing `baseline` / `baseline:reports` mise tasks. Their standing
+instructions are part of the quoted briefs, not authorization to commit or push.
+Brief 1's capture and verifier work is already done; the remaining acceptance
+items are listed above. M3c–M3h had no individual prompts yet.
+
+## Planned brief 1: M3a′-3, the re-baseline
+
+> You are implementing the third and final part of **M3a′** in `/home/user/shellcheck-rs`, branch `h2r-compiler`, head `77d6166`. The seven dumps are now format 6 (post-CoreTidy structure with pre-tidy demand joined on) and `A5 = 0` everywhere. Every M1–M2.4 number in `compiler/README.md` was measured on the format-5 dumps and must be re-baselined. You do not change any analysis semantics unless a re-baseline exposes a defect, and then you stop and report rather than fix.
+>
+> Standing constraints: commit only on `h2r-compiler`, never push, no model names anywhere, no `-fpolymorphic-specialisation`, no background pollers, nothing running at hand-back, names are diagnostics never proof, exact accounting or stop.
+>
+> 1. **Capture.** Using `…/scratchpad/m3a-prime/capture.sh`, capture every report (`stats`, `laziness`, `parsec`, `tuples` with `--verify` and `--boundaries`, `fields`, `lists`, `text`, `verify-rep`, `classops`, `dictflow`, `higher`, `verify-m24`, `m24`, `lower --reachability`, plus `--json`/`--explain` forms) on all seven new dumps into `m3a-prime/new-dumps/<profile>/`. The old captures are in `old-dumps-old-resolver/` and `old-matrix-old-resolver/`.
+> 2. **Verifiers first.** All independent verifiers (`tuples --verify`, `verify-rep`, `verify-m24`, `lower`) must report 0 disagreements on all seven dumps. Any disagreement halts the milestone: report it with the claim, do not patch.
+> 3. **The re-baseline tables.** For each milestone, a before→after table on `-O1` and a compact one across A–F: M1 link (`2,242 = 2,139 + 92 + 11 + 0` becomes its new identity), M2.1 Parsec sites and residual edges, M2.2 tuples (`2,584 → 1,206`, the `1,453 vs 1,206` pair, `630+144+547`), M2.3 fields/lists/text, M2.4 class-op sites, erasure, totality, clone plans, higher boundaries. Every accounting identity re-asserted on the new dumps.
+> 4. **The linkage-dependent M2.4 conclusions**, your predecessor's gate 8: the 413 dead-attributed class-op sites (now against rooted-dead on the authoritative live set), dictionary targets and bounded sets, higher producer sets, the 4 + 8 set-valued clone plans, and the 41 residual Parsec edges. State for each whether the number moved because of linkage, because of the trimmed 80, because of the 4 implicit selectors, or because of tidy's finalised `OccInfo`/arity, and prove the attribution by the `--explain` of at least one moved site per cause.
+> 5. **The** **`Range`** **selector question.** `dictflow` Exact 7 → 0 because Fixer's `Range` selectors are now in-world bindings. Decide with evidence whether a call to an in-world class-op selector binding is a dispatch site the class-op census should still count (it is `[ClassOp]` by `IdDetails`, and the id table's `isClassOp` no longer applies because it resolves `Ref::Local`). Propose the rule; do not implement it if it changes M2.4b semantics, report it as the first M3b-adjacent correction.
+> 6. **M3a authoritative.** Re-run M3a on all seven dumps, remove the "lower bound because A5" qualifier from the M3a section and acceptance, and write the authoritative per-module live table.
+> 7. **README.** A dated `### M3a′ re-baseline` subsection with the tables above; every milestone section gets a one-line pointer "numbers re-baselined on format 6 in M3a′, see …" rather than a rewrite of its history; roadmap row M3a′ done, M3b next.
+> 8. fmt, clippy `-D warnings`, `cargo test --workspace` (270). Hand back with the tables, the verifier results, the attribution evidence, and judgment calls.
+
+## Planned brief 2: M3b, the normalized IR and conservative baseline lowering
+
+> You are implementing **M3b** in `/home/user/shellcheck-rs`, branch `h2r-compiler`, in crate `compiler/rust/crates/h2r-lower`. Read the `## M3 — the lowering` definition in `compiler/README.md`, the M3a and M3a′ sections, `h2r-lower/src/reachability.rs`, `h2r-core-ir/src/lib.rs`, and `h2r-rt/src/lib.rs`. M3b creates the owned, Rust-facing normalized IR (NIR) and lowers **every** `Main.main`-reachable binding into it conservatively. No cleverness yet, no Rust emission, no Core mutation.
+>
+> Standing constraints as before: commit only on `h2r-compiler`, never push, no model names, no format bump, no `-fpolymorphic-specialisation`, no background pollers, nothing running at hand-back, exact accounting or stop. The source Core arena and all M1–M2.4 proof objects are immutable inputs.
+>
+> 1. **The NIR** (`h2r-lower/src/nir/`): ANF/CFG-shaped, not a nested Core tree. Stable `FnId`, `ValueId`, `BlockId`. Instructions: direct call, closure call, external call (by stable name into a named external table), constructor creation, case/switch on constructor tag and on literal, literal, cast-erased move, `MakeClosure` (code + captured values, anonymous lambdas are allowed in M3b only as *named* `FnId`s whose origin says `AnonymousLambda`; M3c does the real conversion), `Delay` (a thunk of a block), `Force`, `Return`, `Jump`. Every instruction carries `Origin { module, source ExprId or BinderId, rule }`. Types: a `NirTy` derived from `Ty` with the same structure; unresolved shapes become `NirTy::Opaque(source Ty)`, never dropped.
+> 2. **No escape hatch.** There is no `OpaqueCore` instruction. Every reachable Core construct lowers: `Let` (Rec and NonRec) to `Delay` unless M1 proves the RHS is a value at that position (`ArgShape` value classes, `Position::is_eager`), in which case a plain value; `Case` to `Force` + switch with the case binder bound; `Lam` to a named function plus `MakeClosure` at the use site; `App` spines to saturated direct calls when the head resolves to a known-arity function and the spine is saturated exactly, else closure call with a PAP; `Cast`/`Tick` erased with the origin recorded; `Type`/`Coercion` arguments dropped with a count; literals lowered; `unpackCString#` applications to a string literal value. If a construct cannot be lowered, that is a milestone-stopping bug to report, not a fallback.
+> 3. **Laziness is conservative in M3b.** Every non-value `Let` RHS and every lazy argument position (`Position::escapes()`) becomes `Delay`; every scrutinee, head, and strict position becomes `Force`. M3e will consume M1 to remove `Delay`s; M3b must place them everywhere the semantics could require one.
+> 4. **The rooted set is the population.** Lower exactly the `LiveSet::live` bindings of M3a; dead bindings are not lowered. Accounting: `live = lowered`, exactly; per function `core nodes = lowered nodes + erased (cast/tick/type/coercion) nodes`, asserted; every `FnId` has one owner binding; every `ValueId` is defined once and before use in dominance order (assert with a simple dominance check on the CFG).
+> 5. **Independent check** (`nir/verify.rs`): re-walk the source Core of every lowered function and confirm, for each Core node, that an NIR instruction with that origin exists and has the right kind, and that the NIR CFG has no unreachable blocks and no block without a terminator; bite tests that corrupt a lowered function.
+> 6. **CLI**: `h2r lower --nir <dump-dir>` with `--fn <stable-name>` printing one function's NIR in a readable text form with origins, `--stats` giving instruction histograms per module, and `--json`. Byte-identity: every existing report unchanged (capture before/after with `capture.sh`).
+> 7. **Tests** on the synthetic two-module world plus one nontrivial real function per shape (a `Rec` let, a Parsec CPS region, a dictionary-taking function, a case on a strict-field constructor).
+> 8. **README**: `## M3b` with the NIR definition, the lowering rules table (each rule id: what Core shape, what NIR shape, what is conservative about it and which later milestone removes it), the accounting, the verifier, the per-module instruction table, and the acceptance line: *every live binding has an NIR owner, no live Core construct is unlowered, every* *`Delay`* *and* *`Force`* *is placed conservatively and traceable to a position rule*.
+>
+> Hand back with the commit list, the accounting identities, the verifier result, the instruction histograms, and the constructs you found hardest to lower and how.

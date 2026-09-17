@@ -1,0 +1,26 @@
+cabal-version:      2.4
+name:               h2r-plugin
+version:            0.1.0.0
+synopsis:           GHC plugin that serialises optimised Core to JSON for the Haskell-to-Rust compiler
+license:            GPL-3.0-only
+build-type:         Simple
+
+library
+    hs-source-dirs:   src
+    exposed-modules:  H2R.CorePlugin
+    build-depends:    base        >= 4.14 && < 5
+                    -- Pinned: the post-CoreTidy dump and the IdInfo join rest on
+                    -- documented GHC 9.6.7 internals (GHC.Core.Tidy,
+                    -- GHC.Iface.Tidy, GHC.Driver.Config.Tidy) whose line-cited
+                    -- behaviour is asserted per module at extraction time. A
+                    -- different series must be re-read and re-proved, not
+                    -- assumed; there are no version-specific branches here.
+                    , ghc         >= 9.6  && < 9.7
+                    , aeson       >= 2.0  && < 2.3
+                    , bytestring  >= 0.10 && < 0.13
+                    , containers  >= 0.6  && < 0.9
+                    , directory   >= 1.3  && < 1.4
+                    , filepath    >= 1.4  && < 1.6
+                    , text        >= 1.2  && < 2.2
+    default-language: Haskell2010
+    ghc-options:      -Wall -Wno-name-shadowing -Wno-unused-imports

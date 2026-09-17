@@ -1,0 +1,13 @@
+[package]
+name              = "h2r-analysis"
+version.workspace = true
+edition.workspace = true
+description       = "Analyses over GHC Core: the residual-laziness census"
+license.workspace = true
+
+[dependencies]
+h2r-core-ir.workspace = true
+serde.workspace       = true
+
+[dev-dependencies]
+serde_json.workspace = true
