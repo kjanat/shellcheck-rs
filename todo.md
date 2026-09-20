@@ -60,7 +60,11 @@
       reachability. `nir::lower::lower_leaf` now lowers top-level literals and
       parameter-returning functions with leading value lambdas; erased ticks and
       parameter origins are recorded. Unsupported forms fail with source addresses.
-      Whole-program lowering, source-aware verification, calls, switches,
+      Leaf lowering now runs an independent source-aware verifier: exact literal
+      payloads, returned lexical parameters, types, origins and complete source
+      accounting are checked. Corruption tests include structurally valid wrong
+      returns and extra forcing. This verifies only the supported leaf subset.
+      Whole-program lowering and verification, calls, switches,
       closures, thunk regions and CLI integration remain unimplemented. Casts
       require source/target type evidence absent from the current `Expr::Cast`.
 - [ ] Continue M3c–M3h: carriers, closure conversion, specialization, certified

@@ -145,10 +145,12 @@ pub fn lower_leaf(
             },
         }],
     };
-    verify::verify(&function).map_err(|reason| fail(Some(current), &reason))?;
-    Ok(LoweredLeaf {
+    let lowered = LoweredLeaf {
         function,
         parameters,
         erased_ticks,
-    })
+    };
+    verify::verify_leaf(module, module_index, owner, id, &lowered)
+        .map_err(|reason| fail(Some(current), &reason))?;
+    Ok(lowered)
 }

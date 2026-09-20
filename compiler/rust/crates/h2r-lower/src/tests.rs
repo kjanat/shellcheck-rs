@@ -169,6 +169,188 @@ fn nir_records_erased_ticks_and_rejects_nonlocal_returns() {
     );
 }
 
+#[test]
+fn nir_source_verifier_checks_literal_payload_and_origins() {
+    use crate::nir::{
+        FnId, Operation, Rule, Source,
+        lower::lower_leaf,
+        verify::{verify, verify_leaf},
+    };
+    let m = module(
+        "Main",
+        vec![(binder(&sn("Main", "f"), "f", "f"), lit())],
+        json!({}),
+    );
+    let owner = m.top[0].pairs[0].binder;
+    let original = lower_leaf(&m, 0, owner, FnId(0)).unwrap();
+    let accounting = verify_leaf(&m, 0, owner, FnId(0), &original).unwrap();
+    assert_eq!(accounting.source_nodes, 1);
+    assert_eq!(accounting.value_nodes, 1);
+    for corruption in 0..6 {
+        let mut candidate = original.clone();
+        let block = &mut candidate.function.blocks[0];
+        match corruption {
+            0 | 1 => {
+                let Operation::Literal(literal) = &mut block.instructions[0].operation else {
+                    unreachable!()
+                };
+                if corruption == 0 {
+                    literal.pretty = "42".into();
+                } else {
+                    literal.kind = "string".into();
+                }
+            }
+            2 => block.instructions[0].origin.source = Source::Expr(u32::MAX),
+            3 => block.instructions[0].origin.rule = Rule::EraseCast,
+            4 => block.terminator.origin.source = Source::Binder(owner),
+            _ => block.terminator.origin.rule = Rule::Jump,
+        }
+        // All these corruptions pass structural verification.
+        verify(&candidate.function).unwrap();
+        assert!(
+            verify_leaf(&m, 0, owner, FnId(0), &candidate).is_err(),
+            "corruption {corruption}"
+        );
+    }
+}
+
+fn nir_two_parameter_module() -> Module {
+    use h2r_core_ir::Ty;
+    let mut m = module(
+        "Main",
+        vec![(
+            binder(&sn("Main", "first"), "first", "f"),
+            lam("x", lam("y", lvar("x"))),
+        )],
+        json!({}),
+    );
+    let ty = m.types[0].clone();
+    let inner = Ty::Fun {
+        mult: Box::new(ty.clone()),
+        arg: Box::new(ty.clone()),
+        res: Box::new(ty.clone()),
+    };
+    m.types.push(Ty::Fun {
+        mult: Box::new(ty.clone()),
+        arg: Box::new(ty),
+        res: Box::new(inner),
+    });
+    let owner = m.top[0].pairs[0].binder;
+    m.binders[owner as usize].ty = 1;
+    m
+}
+
+#[test]
+fn nir_source_verifier_rejects_wrong_parameter_and_added_force() {
+    use crate::nir::{
+        Exit, FnId, Instruction, Operation, Rule, Value, ValueId,
+        lower::lower_leaf,
+        verify::{verify, verify_leaf},
+    };
+    let m = nir_two_parameter_module();
+    let owner = m.top[0].pairs[0].binder;
+    let original = lower_leaf(&m, 0, owner, FnId(0)).unwrap();
+    let accounting = verify_leaf(&m, 0, owner, FnId(0), &original).unwrap();
+    assert_eq!(accounting.source_nodes, 3);
+    assert_eq!(accounting.parameter_nodes, 2);
+    for corruption in 0..4 {
+        let mut candidate = original.clone();
+        let block = &mut candidate.function.blocks[0];
+        match corruption {
+            0 => block.terminator.exit = Exit::Return(block.params[1].id),
+            1 => candidate.parameters.swap(0, 1),
+            2 => candidate.parameters[0].0 = u32::MAX,
+            _ => {
+                let mut origin = block.terminator.origin.clone();
+                origin.rule = Rule::StrictPosition;
+                block.instructions.push(Instruction {
+                    result: Value {
+                        id: ValueId(2),
+                        ty: block.params[0].ty.clone(),
+                    },
+                    operation: Operation::Force(block.params[0].id),
+                    origin,
+                });
+                block.terminator.exit = Exit::Return(ValueId(2));
+            }
+        }
+        verify(&candidate.function).unwrap();
+        assert!(
+            verify_leaf(&m, 0, owner, FnId(0), &candidate).is_err(),
+            "corruption {corruption}"
+        );
+    }
+    // Numeric IDs are not semantic identities: consistent renumbering is valid.
+    let mut renamed = original;
+    renamed.function.blocks[0].params[0].id = ValueId(99);
+    renamed.function.blocks[0].terminator.exit = Exit::Return(ValueId(99));
+    renamed.parameters[0].1 = ValueId(99);
+    verify_leaf(&m, 0, owner, FnId(0), &renamed).unwrap();
+}
+
+#[test]
+fn nir_source_verifier_accounts_for_ticks_and_checks_identity() {
+    use crate::nir::{FnId, lower::lower_leaf, verify::verify_leaf};
+    let m = module(
+        "Main",
+        vec![(
+            binder(&sn("Main", "f"), "f", "f"),
+            json!({"node": "Tick", "expr": {"node": "Tick", "expr": lit()}}),
+        )],
+        json!({}),
+    );
+    let owner = m.top[0].pairs[0].binder;
+    let original = lower_leaf(&m, 4, owner, FnId(7)).unwrap();
+    let accounting = verify_leaf(&m, 4, owner, FnId(7), &original).unwrap();
+    assert_eq!(accounting.source_nodes, 3);
+    assert_eq!(accounting.erased_ticks, 2);
+    for corruption in 0..5 {
+        let mut candidate = original.clone();
+        match corruption {
+            0 => {
+                candidate.erased_ticks.pop();
+            }
+            1 => candidate.erased_ticks.push(candidate.erased_ticks[0]),
+            2 => candidate.erased_ticks.reverse(),
+            3 => candidate.function.owner = u32::MAX,
+            _ => candidate.function.id = FnId(99),
+        }
+        assert!(
+            verify_leaf(&m, 4, owner, FnId(7), &candidate).is_err(),
+            "corruption {corruption}"
+        );
+    }
+    assert!(verify_leaf(&m, 5, owner, FnId(7), &original).is_err());
+}
+
+#[test]
+fn nir_source_verifier_rejects_forged_types_and_unsupported_source() {
+    use crate::nir::{
+        FnId,
+        lower::lower_leaf,
+        verify::{verify, verify_leaf},
+    };
+    let mut m = nir_two_parameter_module();
+    let owner = m.top[0].pairs[0].binder;
+    let mut candidate = lower_leaf(&m, 0, owner, FnId(0)).unwrap();
+    let forged = h2r_core_ir::Ty::Lit {
+        kind: "Nat".into(),
+        text: "42".into(),
+    };
+    candidate.function.result_ty = forged.clone();
+    candidate.function.blocks[0].params[0].ty = forged;
+    verify(&candidate.function).unwrap();
+    assert!(verify_leaf(&m, 0, owner, FnId(0), &candidate).is_err());
+    let original = lower_leaf(&m, 0, owner, FnId(0)).unwrap();
+    let rhs = m.top[0].pairs[0].rhs;
+    m.exprs[rhs as usize] = h2r_core_ir::Expr::Coercion;
+    assert!(
+        verify_leaf(&m, 0, owner, FnId(0), &original)
+            .unwrap_err()
+            .contains("unsupported leaf source")
+    );
+}
+
 /// The one-entry type table every fixture carries. Nothing in M3a reads a
 /// type; the table exists because format 5 has one.
 fn ty_table() -> Value {

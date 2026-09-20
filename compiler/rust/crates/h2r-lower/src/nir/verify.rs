@@ -1,9 +1,156 @@
-//! Structural checks only. These do not certify correspondence with Core,
-//! literal types, force placement or casts; that needs a source-aware verifier.
+//! Structural CFG checks and independent source correspondence for leaf NIR.
+//! The leaf check trusts loaded, well-typed Core and its lexical resolver.
+//! It does not validate GHC's literal typing or certify later lowering forms.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeafAccounting {
+    pub source_nodes: usize,
+    pub parameter_nodes: usize,
+    pub value_nodes: usize,
+    pub erased_ticks: usize,
+}
+
+/// Independently check the complete supported source subtree. Never rerun the
+/// lowering builder or infer correctness from its origin records alone. Expected
+/// identity is supplied by the caller, not taken from the candidate function.
+/// IDs may be renumbered; parameter order and source ownership may not change.
+pub fn verify_leaf(
+    module: &h2r_core_ir::Module,
+    module_index: usize,
+    owner: BinderId,
+    id: FnId,
+    lowered: &lower::LoweredLeaf,
+) -> Result<LeafAccounting, String> {
+    use h2r_core_ir::{BinderKind, Expr};
+
+    let function = &lowered.function;
+    if (function.module, function.owner, function.id) != (module_index, owner, id) {
+        return Err("leaf identity mismatch".into());
+    }
+    let pair = module
+        .top
+        .iter()
+        .flat_map(|b| &b.pairs)
+        .find(|pair| pair.binder == owner)
+        .ok_or("leaf owner is not a top-level binding")?;
+    verify(function)?;
+    if function.blocks.len() != 1 {
+        return Err("leaf must have exactly one block".into());
+    }
+    let block = &function.blocks[0];
+    let Exit::Return(returned) = block.terminator.exit else {
+        return Err("leaf must terminate with return".into());
+    };
+    let mut ty = module.binder_ty(owner);
+    let mut params = Vec::new();
+    let mut ticks = Vec::new();
+    let mut leaf = None;
+    let mut source_nodes = 0;
+    for expr in module.preorder(pair.rhs) {
+        source_nodes += 1;
+        match module.expr(expr) {
+            Expr::Tick(_) => ticks.push(expr),
+            Expr::Lam { binder, .. } => {
+                if module.binder(*binder).kind != BinderKind::Id {
+                    return Err("unsupported type lambda in leaf source".into());
+                }
+                let Ty::Fun { arg, res, .. } = ty else {
+                    return Err("source lambda lacks a function type".into());
+                };
+                let param = block
+                    .params
+                    .get(params.len())
+                    .ok_or("missing leaf parameter")?;
+                if !arg.alpha_eq(module.binder_ty(*binder)) || !arg.alpha_eq(&param.ty) {
+                    return Err("leaf parameter type differs from source".into());
+                }
+                params.push((expr, *binder, param.id));
+                ty = res;
+            }
+            Expr::Lit(_) | Expr::Var { .. } => {
+                if leaf.replace(expr).is_some() {
+                    return Err("multiple leaf values in source".into());
+                }
+            }
+            _ => return Err(format!("unsupported leaf source at expression {expr}")),
+        }
+    }
+    if params.len() != block.params.len()
+        || lowered.parameters
+            != params
+                .iter()
+                .map(|(expr, _, value)| (*expr, *value))
+                .collect::<Vec<_>>()
+    {
+        return Err("leaf parameter provenance mismatch".into());
+    }
+    if ticks != lowered.erased_ticks {
+        return Err("erased tick provenance mismatch".into());
+    }
+    if !ty.alpha_eq(&function.result_ty) {
+        return Err("leaf result type differs from source".into());
+    }
+    let expr = leaf.ok_or("missing leaf value in source")?;
+    let return_origin = &block.terminator.origin;
+    if return_origin.source != Source::Expr(expr) || return_origin.rule != Rule::Return {
+        return Err("leaf return origin mismatch".into());
+    }
+    match module.expr(expr) {
+        Expr::Lit(source) => {
+            if block.instructions.len() != 1 {
+                return Err("literal leaf must have exactly one instruction".into());
+            }
+            let instruction = &block.instructions[0];
+            let Operation::Literal(literal) = &instruction.operation else {
+                return Err("source literal was not lowered as a literal".into());
+            };
+            if literal.kind != source.kind || literal.pretty != source.pretty {
+                return Err("literal payload differs from source".into());
+            }
+            if instruction.origin.source != Source::Expr(expr)
+                || instruction.origin.rule != Rule::Literal
+            {
+                return Err("literal origin mismatch".into());
+            }
+            if instruction.result.id != returned || !instruction.result.ty.alpha_eq(ty) {
+                return Err("literal result mismatch".into());
+            }
+        }
+        Expr::Var { .. } => {
+            if !block.instructions.is_empty() {
+                return Err("parameter leaf must not introduce instructions".into());
+            }
+            let binder = module
+                .resolve(expr)
+                .ok_or("leaf source is not a local reference")?;
+            let param = params
+                .iter()
+                .find(|(_, source, _)| *source == binder)
+                .ok_or("leaf source does not refer to a parameter")?;
+            if param.2 != returned || !module.binder_ty(binder).alpha_eq(ty) {
+                return Err("returned parameter differs from source".into());
+            }
+        }
+        _ => return Err("unsupported leaf value".into()),
+    }
+    let accounting = LeafAccounting {
+        source_nodes,
+        parameter_nodes: params.len(),
+        value_nodes: 1,
+        erased_ticks: ticks.len(),
+    };
+    // Counts source nodes, not NIR instructions: a literal's instruction and
+    // return share a source node; lambda nodes become entry parameters.
+    if source_nodes != accounting.parameter_nodes + accounting.value_nodes + accounting.erased_ticks
+    {
+        return Err("leaf source accounting does not close".into());
+    }
+    Ok(accounting)
+}
 
 /// Reject malformed CFGs and SSA uses. Block-local availability is deliberately
 /// stronger than dominance: all incoming values must be explicit parameters.
