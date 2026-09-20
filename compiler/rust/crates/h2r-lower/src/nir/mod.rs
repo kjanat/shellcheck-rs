@@ -1,6 +1,7 @@
 //! First NIR building block: typed, source-attributed scalar control flow.
 //!
-//! This is not yet a Core lowering pass. Calls, switches, closures and thunk
+//! `lower::lower_leaf` translates a restricted subset of Core leaves.
+//! Calls, switches, closures and thunk
 //! regions will extend this model as their lowering rules are implemented.
 //! Values cross block boundaries explicitly through block parameters; there
 //! are no implicit captures. IDs are function-local except for `FnId`, which
@@ -8,6 +9,7 @@
 
 use h2r_core_ir::{BinderId, ExprId, Lit, Ty};
 
+pub mod lower;
 pub mod verify;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

@@ -23,6 +23,152 @@ use crate::verify::{
 
 const UNIT: &str = "u";
 
+#[test]
+fn nir_lowers_literal_with_source_origin() {
+    use crate::nir::{FnId, Operation, Rule, Source, lower::lower_leaf};
+    let m = module(
+        "Main",
+        vec![(binder(&sn("Main", "constant"), "constant", "c"), lit())],
+        json!({}),
+    );
+    let pair = &m.top[0].pairs[0];
+    let result = lower_leaf(&m, 3, pair.binder, FnId(7)).unwrap();
+    assert_eq!(result.function.id, FnId(7));
+    assert_eq!(result.function.owner, pair.binder);
+    let instruction = &result.function.blocks[0].instructions[0];
+    assert_eq!(instruction.origin.module, 3);
+    assert_eq!(instruction.origin.source, Source::Expr(pair.rhs));
+    assert_eq!(instruction.origin.rule, Rule::Literal);
+    assert!(matches!(&instruction.operation, Operation::Literal(lit) if lit.pretty == "0"));
+    assert!(result.parameters.is_empty());
+    assert!(result.erased_ticks.is_empty());
+}
+
+#[test]
+fn nir_lowers_identity_by_lexical_binder_not_name() {
+    use crate::nir::{Exit, FnId, ValueId, lower::lower_leaf};
+    use h2r_core_ir::Ty;
+    // The lambda deliberately shadows the top-level binder's unique.
+    let mut m = module(
+        "Main",
+        vec![(binder(&sn("Main", "id"), "id", "x"), lam("x", lvar("x")))],
+        json!({}),
+    );
+    let owner = m.top[0].pairs[0].binder;
+    let rhs = m.top[0].pairs[0].rhs;
+    let ty = m.types[0].clone();
+    m.types.push(Ty::Fun {
+        mult: Box::new(ty.clone()),
+        arg: Box::new(ty.clone()),
+        res: Box::new(ty),
+    });
+    m.binders[owner as usize].ty = 1;
+    let result = lower_leaf(&m, 0, owner, FnId(0)).unwrap();
+    assert_eq!(result.parameters, vec![(rhs, ValueId(0))]);
+    assert_eq!(result.function.blocks[0].params.len(), 1);
+    assert!(result.function.blocks[0].instructions.is_empty());
+    assert!(matches!(
+        result.function.blocks[0].terminator.exit,
+        Exit::Return(ValueId(0))
+    ));
+}
+
+#[test]
+fn nir_refuses_unsupported_core_with_source_address() {
+    use crate::nir::{FnId, lower::lower_leaf};
+    for rhs in [app(lit(), lit()), json!({"node": "Cast", "expr": lit()})] {
+        let m = module(
+            "Main",
+            vec![(binder(&sn("Main", "f"), "f", "f"), rhs)],
+            json!({}),
+        );
+        let pair = &m.top[0].pairs[0];
+        let error = lower_leaf(&m, 2, pair.binder, FnId(0)).unwrap_err();
+        assert_eq!(error.source, Some(pair.rhs));
+        assert_eq!(error.module, 2);
+        assert_eq!(error.owner, pair.binder);
+    }
+}
+
+#[test]
+fn nir_rejects_inconsistent_lambda_signatures() {
+    use crate::nir::{FnId, lower::lower_leaf};
+    use h2r_core_ir::Ty;
+    let mut m = module(
+        "Main",
+        vec![(binder(&sn("Main", "id"), "id", "f"), lam("x", lvar("x")))],
+        json!({}),
+    );
+    let owner = m.top[0].pairs[0].binder;
+    assert!(
+        lower_leaf(&m, 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("function type")
+    );
+    let original = m.types[0].clone();
+    let other = Ty::Lit {
+        kind: "Nat".into(),
+        text: "2".into(),
+    };
+    m.types.push(Ty::Fun {
+        mult: Box::new(original.clone()),
+        arg: Box::new(other.clone()),
+        res: Box::new(original.clone()),
+    });
+    m.binders[owner as usize].ty = 1;
+    assert!(
+        lower_leaf(&m, 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("parameter type mismatch")
+    );
+    m.types[1] = Ty::Fun {
+        mult: Box::new(original.clone()),
+        arg: Box::new(original),
+        res: Box::new(other),
+    };
+    assert!(
+        lower_leaf(&m, 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("returned parameter type mismatch")
+    );
+}
+
+#[test]
+fn nir_records_erased_ticks_and_rejects_nonlocal_returns() {
+    use crate::nir::{FnId, lower::lower_leaf};
+    let m = module(
+        "Main",
+        vec![(
+            binder(&sn("Main", "f"), "f", "f"),
+            json!({"node": "Tick", "expr": lit()}),
+        )],
+        json!({}),
+    );
+    let pair = &m.top[0].pairs[0];
+    let result = lower_leaf(&m, 0, pair.binder, FnId(0)).unwrap();
+    assert_eq!(result.erased_ticks, vec![pair.rhs]);
+    let m = module(
+        "Main",
+        vec![(binder(&sn("Main", "f"), "f", "f"), lvar("f"))],
+        json!({}),
+    );
+    assert!(
+        lower_leaf(&m, 0, m.top[0].pairs[0].binder, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("non-parameter")
+    );
+    assert!(
+        lower_leaf(&m, 0, u32::MAX, FnId(0))
+            .unwrap_err()
+            .source
+            .is_none()
+    );
+}
+
 /// The one-entry type table every fixture carries. Nothing in M3a reads a
 /// type; the table exists because format 5 has one.
 fn ty_table() -> Value {

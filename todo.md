@@ -57,8 +57,12 @@
       Started: `h2r-lower/src/nir/` models scalar CFGs with typed values,
       instruction/terminator origins and explicit block arguments. Its structural
       verifier checks definitions, local use order, jump/return types and graph
-      reachability. Core lowering, source-aware verification, calls, switches,
-      closures, thunk regions and CLI integration are not implemented yet.
+      reachability. `nir::lower::lower_leaf` now lowers top-level literals and
+      parameter-returning functions with leading value lambdas; erased ticks and
+      parameter origins are recorded. Unsupported forms fail with source addresses.
+      Whole-program lowering, source-aware verification, calls, switches,
+      closures, thunk regions and CLI integration remain unimplemented. Casts
+      require source/target type evidence absent from the current `Expr::Cast`.
 - [ ] Continue M3c–M3h: carriers, closure conversion, specialization, certified
       transformations, Parsec lowering and a compiled Rust canary. See the
       [M3 roadmap](compiler/README.md#m3--the-lowering).
