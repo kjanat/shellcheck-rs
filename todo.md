@@ -54,6 +54,11 @@
       (explicitly deferred in the source summary).
 - [ ] M3b: implement explicit, proof-carrying NIR with `Delay`/`Force`, closures
       and instruction origins; no `OpaqueCore` fallback.
+      Started: `h2r-lower/src/nir/` models scalar CFGs with typed values,
+      instruction/terminator origins and explicit block arguments. Its structural
+      verifier checks definitions, local use order, jump/return types and graph
+      reachability. Core lowering, source-aware verification, calls, switches,
+      closures, thunk regions and CLI integration are not implemented yet.
 - [ ] Continue M3c–M3h: carriers, closure conversion, specialization, certified
       transformations, Parsec lowering and a compiled Rust canary. See the
       [M3 roadmap](compiler/README.md#m3--the-lowering).
