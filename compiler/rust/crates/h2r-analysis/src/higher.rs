@@ -823,8 +823,8 @@ pub struct OwnerPlan {
     pub module: String,
     pub owner: String,
     /// The owning function's binder. An address, for a consumer that has
-    /// to name this plan; `owner` is not one. Not serialised: no report
-    /// reads it.
+    /// to name this plan; `owner` is not one. The CLI exposes it separately
+    /// beside the plan in `higher --explain --json`.
     #[serde(skip)]
     pub owner_binder: BinderId,
     /// The function's function-valued parameters, by `occ#index`.

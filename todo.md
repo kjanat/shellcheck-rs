@@ -22,6 +22,17 @@
       implicit selectors and finalized `OccInfo`/arity, with an `--explain` example
       for each observed cause. Include dead-attributed dispatch sites, target and
       producer sets, set-valued clone plans and residual Parsec edges.
+      Current canonical evidence is captured by `mise run baseline:explain`
+      and documented in "Gate-8 attribution: reason provenance versus rooted
+      death (2026-09-21)": only 193 of 413 unreachable-reason sites have
+      rooted-dead owners; 220 have live owners and an inherited unknown-set
+      reason. The closure delta is localized to AST (0 → 1 owner, 0 → 3
+      clones); its current three call-site groups and full producer shapes
+      are captured in `higher-plans.json`. `$wgetPath` supplies a historical
+      missing-link/current-resolved example. Remaining: historical per-site
+      trimming and arity/Dead-OccInfo attribution, and the prior producer set
+      proving why the AST plan appeared. Old format-5 captures are absent
+      from this checkout; loop-breaker OccInfo is not an analysis input.
 - [x] Count local `Ranged` selectors using the structured GHC class-op flag
       after lexical resolution, preserving binder-owned signatures. Analysis
       and independent verification now include all eleven calls; canonical

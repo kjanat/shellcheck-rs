@@ -142,6 +142,45 @@ for profile in canonical A B C D E F; do
 done
 '''
 
+[tasks."baseline:explain"]
+description = "Capture reusable gate-8 explanations from existing dumps (default: canonical)"
+run         = '''
+set -eu
+bin="$PWD/compiler/rust/target/release/h2r"
+test -x "$bin"
+[ "$#" -gt 0 ] || set -- canonical
+for profile in "$@"; do
+  case "$profile" in canonical|A|B|C|D|E|F) ;; *) echo "Unknown profile: $profile" >&2; exit 1 ;; esac
+  dir="$PWD/compiler/matrix/$profile/core-json"
+  [ "$profile" != canonical ] || dir="$PWD/compiler/core-json"
+  test -f "$dir/Main.core.json"
+  out="$PWD/compiler/matrix/$profile/explain"
+  mkdir -p "$out"
+  fingerprint=$({ sha256sum "$bin"; find "$dir" -name '*.core.json' -type f -print0 | sort -z | xargs -0 sha256sum; } | sha256sum)
+  for command in dictflow higher higher-plans parsec traverse-reachability path-link; do
+    report="$command.txt"
+    [ "$command" != higher-plans ] || report="$command.json"
+    if [ -f "$out/$command.inputs" ] && [ "$(cat "$out/$command.inputs")" = "$fingerprint" ] &&
+        (cd "$out" && sha256sum --check --status "$command.sha256"); then
+      echo "$profile: $command explanation unchanged"
+      continue
+    fi
+    if [ "$command" = higher-plans ]; then
+      "$bin" higher "$dir" --explain --json >"$out/$report"
+    elif [ "$command" = path-link ]; then
+      "$bin" lower "$dir" --reachability --link '$ShellCheck-0.11.0-inplace$ShellCheck.ASTLib$$wgetPath' >"$out/$report"
+    elif [ "$command" = traverse-reachability ]; then
+      "$bin" lower "$dir" --reachability --explain '$ShellCheck-0.11.0-inplace$ShellCheck.AST$$fTraversableInnerToken_$ctraverse' >"$out/$report"
+    else
+      "$bin" "$command" "$dir" --explain >"$out/$report"
+    fi
+    (cd "$out" && sha256sum "$report" >"$command.sha256")
+    printf '%s\n' "$fingerprint" >"$out/$command.inputs"
+    echo "$profile: $command explanation captured"
+  done
+done
+'''
+
 # Examples:
 #   mise run matrix C
 #   mise run matrix A B C

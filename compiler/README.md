@@ -7765,6 +7765,140 @@ Three regression tests cover local classification with stale occurrence
 signatures, rejection of pretty-string inference, and lexical shadowing.
 Workspace tests and Clippy (`--all-targets -- -D warnings`) pass.
 
+### Gate-8 attribution: reason provenance versus rooted death (2026-09-21)
+
+The corrected census restores 413 sites whose unresolved reason is
+`function-is-unreachable-in-the-closed-world`. **Only 193 of those sites
+are inside rooted-dead top-level bindings.** The other 220 are inside
+rooted-live bindings. Across all 558 unresolved dispatch sites, 262 have
+rooted-dead owners. These are the current canonical `reachability.txt`
+cross-reference counts; the earlier 413/413 result in
+[M3a's residual section](#where-m24s-residual-sits) used conditional,
+pre-tidy reachability and must not be carried forward as an invariant.
+
+The reason is provenance of an unknown dictionary set, not a reachability
+verdict on the consuming site. `dictflow::producers_of` seeds it at a
+zero-reference function; parameter propagation and `DictSet::join` carry
+`Top(reason)` onward. Joining two unknown sets keeps the lexicographically
+smaller reason. A live consumer can therefore display a reason originating
+in dead code. Its target remains `Unresolved`; this grants no erasure or
+dead-code-removal permission.
+
+Concrete counterexample, from the current binary's explanations:
+
+```text
+ShellCheck.AST node 6559  Applicative.liftA2
+  -> Unresolved function-is-unreachable-in-the-closed-world
+ShellCheck.AST $fTraversableInnerToken_$ctraverse.$dApplicative#0
+  Top(function-is-unreachable-in-the-closed-world)
+```
+
+The enclosing top-level binding is binder 361,
+`$ShellCheck-0.11.0-inplace$ShellCheck.AST$$fTraversableInnerToken_$ctraverse`.
+`lower --reachability --explain` confirms it is live via the six-edge path
+`Main.main → main1 → poly_$j1 → checkScript → analyzeScript → $wrunChecker
+→ $fTraversableInnerToken_$ctraverse`. The last four edges use authoritative
+cross-module linkage. This disproves interpreting the site's reason as
+its owner's dead verdict, without changing either analysis's semantics.
+
+`mise run baseline:explain` captures canonical `dictflow`, `higher` and
+`parsec --explain`, plus that reachability witness, under
+`compiler/matrix/canonical/explain/`. Profile arguments select other existing
+dumps. The task uses the existing release binary, fingerprints it and the
+dumps, and reuses checksum-verified captures; it does not build or extract.
+
+The captures also preserve the other current gate-8 evidence:
+
+- Dictionary clone planning: four owners, each with one set-valued tuple
+  containing the Identity and IO Monad dictionaries; four clones are a
+  lower bound, not eight independent specializations.
+- Closure clone planning: 71 clones across 22 planned owners, with eight
+  set-valued lower-bound plans. For example, `$wpoly_k2` has six classes in
+  its parameter set but four distinct assignment tuples, one set-valued.
+- Residual Parsec edges: all 41 remain unresolved, split into 2 partial-call,
+  19 function-as-value and 20 anonymous-lambda refusals. For example,
+  `ShellCheck.Parser#1946` reaches anonymous `eok` parameter 3 at node 1930;
+  the closure graph cannot enumerate its producer set.
+- Local selectors: the eleven-site correction and seven exact targets are
+  accounted for in the preceding section, independently of rooted death.
+
+#### The three extra closure clones, localized
+
+`higher --explain --json` now includes every `clonePlans` entry with its
+`ownerBinder`, full shape tuples and call-site partition. The text explanation
+also includes every owner; the ordinary summary still shows the first 20.
+The existing JSON fields are unchanged. `baseline:explain` saves this evidence
+as `higher-plans.json` alongside the text captures.
+
+Comparing the historical M2.4h owner table with the current plans gives:
+
+| module                         | historical owners / clones | current owners / clones |
+| ------------------------------ | -------------------------: | ----------------------: |
+| ShellCheck.AST                 |                      0 / 0 |                   1 / 3 |
+| ShellCheck.ASTLib              |                      1 / 2 |                   1 / 2 |
+| ShellCheck.Analytics           |                     3 / 10 |                  3 / 10 |
+| ShellCheck.CFGAnalysis         |                      3 / 9 |                   3 / 9 |
+| ShellCheck.Checks.ShellSupport |                      1 / 3 |                   1 / 3 |
+| ShellCheck.Fixer               |                      1 / 2 |                   1 / 2 |
+| ShellCheck.Parser              |                    12 / 42 |                 12 / 42 |
+| **Total**                      |                **21 / 68** |             **22 / 71** |
+
+The extra current owner is `ShellCheck.AST` binder 322,
+`$fTraversableInnerToken_$s$ctraverse`, parameter `eta#0` (binder 2933,
+lambda node 10424). Its three clone groups are singleton call sites:
+`ShellCheck.AST#1105`, `ShellCheck.Analytics#51637`, and
+`ShellCheck.Parser#106026`. The corresponding producers are
+`ShellCheck.AST#1085`, `ShellCheck.Analytics#1769`, and
+`ShellCheck.Parser#104248`. All have arity 1. Their capture vectors differ:
+two function types; no captures; and a Map type plus a function type.
+Thus these really are three shape classes, including two that the short
+rendering would both call "arity 1, 2 captures". This plan has no set-valued
+component: all three clones are fully enumerated.
+
+This locates the net delta at module level and identifies the entire current
+AST plan. Equal totals elsewhere do not prove that each historical binder or
+producer set survived unchanged. The AST sidecar records zero trimmed and
+zero implicit bindings, excluding creation of this owner by selector injection
+or local trimming. The cross-module producers make repaired linkage a concrete
+candidate cause, but the missing historical producer set prevents claiming
+that it alone caused the change.
+
+#### What each proposed cause actually establishes
+
+- **Linkage — a paired named example survives.** The historical A5 section
+  records Analytics referring to external `ShellCheck.ASTLib.$wgetPath` while
+  its definition was `$_in$$wgetPath`. The current `path-link.txt` capture
+  resolves that same external reference to ASTLib binder 142: 52 occurrences
+  across four modules, 43 referring top-level bindings, and a six-edge live
+  witness. Of those occurrences, 51 cross module boundaries. The original
+  missing definition and the current resolved definition are documented;
+  no occurrence-name guess is used to construct the current edge.
+- **Trimming — population is proved, verdict deltas are not.** The sidecars
+  identify all 80 removed binders. For example, Main loses
+  `$s$w$c<*>_sdG7`, kept alive only by an auto-rule. Its body is absent from
+  the current dump, so a current `--explain` cannot recover its old thunk,
+  boundary or producer contribution. The population identity is
+  `13,828 − 80 + 4 = 13,752`; it is not a per-analysis attribution.
+- **Implicit selectors — closed.** The preceding selector evidence supplies
+  the four definitions, eleven sites, seven exact targets and four
+  unreachable-owner sites. This has its own checked correction.
+- **OccInfo — exclude the irrelevant field change.** The recorded top-level
+  loop-breaker count falls from 691 to 250, but no analysis consumes that
+  variant. The only `occ_info` read in the analysis crate is M1's
+  `OccInfo::Dead` check (`laziness.rs`). In particular, the loop-breaker
+  delta cannot explain an H15 clone-plan change. **Arity is separate:**
+  `higher` does read binder signatures for known functions and partial
+  applications. The current AST plan's three producers all have arity 1;
+  their historical signatures are not preserved in the owner table.
+
+Gate 8 remains open specifically for historical per-site trimming and arity/
+Dead-OccInfo attribution, and for proving the causal transition of the new AST
+clone plan. The checkout contains the seven format-6 dump directories, not
+the brief's `old-dumps-old-resolver` or `old-matrix-old-resolver` captures.
+The historical owner table supplies counts but no binder-addressed producer
+sets. Closing these remaining claims requires those artifacts or a controlled
+historical extraction; matching aggregate numbers is insufficient.
+
 ### Format-6 baseline — before/after accounting tables (2026-09-16)
 
 These tables retain the pre-correction snapshot. Report paths name the

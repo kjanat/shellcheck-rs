@@ -5742,13 +5742,22 @@ fn higher(
         .collect();
 
     if json {
-        let out = serde_json::json!({
+        let mut out = serde_json::json!({
             "boundaries": shown,
             "producers": h.producers,
             "accounting": a,
             "feedback": feedback,
             "rules": RULES,
         });
+        if explain {
+            out["clonePlans"] = serde_json::json!(
+                h.owners
+                    .iter()
+                    .filter(|o| module.is_none_or(|x| o.module == x))
+                    .map(|o| serde_json::json!({"ownerBinder": o.owner_binder, "plan": o}))
+                    .collect::<Vec<_>>()
+            );
+        }
         serde_json::to_writer(std::io::stdout().lock(), &out)?;
         println!();
         return Ok(());
@@ -5869,7 +5878,8 @@ fn higher(
             o.owner.clone(),
         )
     });
-    for o in owners.iter().take(20) {
+    let owner_limit = if explain { owners.len() } else { 20 };
+    for o in owners.iter().take(owner_limit) {
         println!(
             "  {:<22} {:<30} {:>7} {:>6} {:>7} {:>7}",
             o.module,
@@ -5898,8 +5908,8 @@ fn higher(
             );
         }
     }
-    if owners.len() > 20 {
-        println!("  ... and {} more owner(s)", owners.len() - 20);
+    if owners.len() > owner_limit {
+        println!("  ... and {} more owner(s)", owners.len() - owner_limit);
     }
 
     println!();
