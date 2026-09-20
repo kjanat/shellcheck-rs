@@ -66,9 +66,10 @@ fn nir_report(modules: &[Module], name: &str) -> Result<String> {
     let accounting = verify_leaf(&modules[module_index], module_index, owner, id, &lowered)
         .map_err(|error| anyhow::anyhow!("NIR source verification failed: {error}"))?;
     Ok(format!(
-        "NIR leaf: {name}\nScope: one reachable function; not whole-program lowering\nVerified source nodes: {} = {} parameters + {} value + {} erased ticks\n{}",
+        "NIR leaf: {name}\nScope: one reachable function; not whole-program lowering\nVerified source nodes: {} = {} parameters + {} type parameters + {} value + {} erased ticks\n{}",
         accounting.source_nodes,
         accounting.parameter_nodes,
+        accounting.type_parameter_nodes,
         accounting.value_nodes,
         accounting.erased_ticks,
         format_leaf(&lowered),
@@ -869,7 +870,7 @@ mod nir_tests {
         let first = nir_report(&modules, "$u$Main$leaf").unwrap();
         assert_eq!(first, nir_report(&modules, "$u$Main$leaf").unwrap());
         assert!(first.contains("not whole-program lowering"));
-        assert!(first.contains("1 = 0 parameters + 1 value + 0 erased ticks"));
+        assert!(first.contains("1 = 0 parameters + 0 type parameters + 1 value + 0 erased ticks"));
         assert!(first.contains("literal int \"7\""));
         assert!(first.contains("return v0"));
         assert!(first.contains("Expr("));

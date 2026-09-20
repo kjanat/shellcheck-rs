@@ -126,7 +126,12 @@ mise run lower:leaf compiler/core-json --fn '$_in$usageHeader1'
 This invokes `h2r lower --nir --fn '<stable-name>'`. It requires complete
 in-world linkage and a verified live set, selects one exact unambiguous name,
 and prints source-verified NIR plus node accounting. Currently supported:
-literals and parameter-returning functions with leading value lambdas and ticks.
+literals and parameter-returning functions with leading type/value lambdas and
+ticks. Type lambdas become explicit type parameters, not runtime arguments.
+Signature/body type variables are paired by binder position, permitting GHC's
+alpha-renaming; ambiguous repeated type-variable uniques are conservatively
+refused. All NIR value types remain in signature scope, while erased type-lambda
+origins retain the source binders and their kinds.
 Dead bindings and unsupported forms fail; there is no fallback or claim that
 the whole program was lowered. NIR output is diagnostic text, not emitted Rust;
 `--json` is not supported for this mode yet.

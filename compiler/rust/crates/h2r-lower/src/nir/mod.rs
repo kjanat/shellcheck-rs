@@ -7,7 +7,7 @@
 //! are no implicit captures. IDs are function-local except for `FnId`, which
 //! will be allocated by the program lowering driver.
 
-use h2r_core_ir::{BinderId, ExprId, Lit, Ty};
+use h2r_core_ir::{BinderId, ExprId, Lit, Ty, TyVarId};
 
 pub mod lower;
 pub mod pretty;
@@ -92,6 +92,9 @@ pub struct Function {
     pub id: FnId,
     pub module: usize,
     pub owner: BinderId,
+    /// Quantified variables in source-signature scope. NIR value types retain
+    /// that scope even when Core's lambda binders were alpha-renamed.
+    pub type_params: Vec<TyVarId>,
     pub result_ty: Ty,
     pub entry: BlockId,
     /// The entry block's parameters are the function's arguments.

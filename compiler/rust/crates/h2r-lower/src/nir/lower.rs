@@ -1,5 +1,5 @@
 //! Conservative first slice of Core lowering: top-level literal and argument
-//! leaves, with leading value lambdas. Unsupported constructs fail explicitly.
+//! leaves, with leading type/value lambdas. Unsupported constructs fail explicitly.
 //! This is not a whole-program driver or an independent semantic verifier.
 
 use std::collections::BTreeMap;
@@ -21,6 +21,9 @@ pub struct LoweredLeaf {
     pub function: Function,
     /// Leading lambdas become entry parameters, not runtime instructions.
     pub parameters: Vec<(ExprId, ValueId)>,
+    /// Type lambdas introduce no runtime value; retain their lexical binders
+    /// (including their kind in the immutable source module) and source nodes.
+    pub type_parameters: Vec<(ExprId, BinderId)>,
     /// Ticks have no runtime representation but retain their source addresses.
     pub erased_ticks: Vec<ExprId>,
 }
@@ -50,6 +53,8 @@ pub fn lower_leaf(
     let mut ty = module.binder_ty(owner);
     let mut params = Vec::new();
     let mut parameters = Vec::new();
+    let mut type_parameters = Vec::new();
+    let mut type_scope: Vec<(TyVarId, TyVarId)> = Vec::new();
     let mut erased_ticks = Vec::new();
     let mut locals = BTreeMap::new();
     loop {
@@ -59,13 +64,38 @@ pub fn lower_leaf(
                 current = *body;
             }
             Expr::Lam { binder, body } => {
-                if module.binder(*binder).kind != BinderKind::Id {
-                    return Err(fail(Some(current), "type lambdas are not lowered yet"));
+                let source_binder = module.binder(*binder);
+                if source_binder.kind == BinderKind::Tyvar {
+                    let Ty::ForAll {
+                        binder: signature,
+                        body: result,
+                    } = ty
+                    else {
+                        return Err(fail(Some(current), "type lambda needs a forall type"));
+                    };
+                    // Uniques are used only within this explicitly paired scope.
+                    if type_scope.iter().any(|(sig, local)| {
+                        sig.unique == signature.unique || local.unique == source_binder.unique
+                    }) {
+                        return Err(fail(Some(current), "ambiguous type-variable scope"));
+                    }
+                    type_scope.push((
+                        signature.clone(),
+                        TyVarId {
+                            name: source_binder.name.clone(),
+                            occ: source_binder.occ.clone(),
+                            unique: source_binder.unique.clone(),
+                        },
+                    ));
+                    type_parameters.push((current, *binder));
+                    ty = result;
+                    current = *body;
+                    continue;
                 }
                 let Ty::Fun { arg, res, .. } = ty else {
                     return Err(fail(Some(current), "value lambda needs a function type"));
                 };
-                if !arg.alpha_eq(module.binder_ty(*binder)) {
+                if !same_scoped_type(arg, module.binder_ty(*binder), &type_scope) {
                     return Err(fail(Some(current), "lambda parameter type mismatch"));
                 }
                 let value = ValueId(params.len() as u32);
@@ -110,7 +140,7 @@ pub fn lower_leaf(
                     "non-parameter references are not lowered yet",
                 )
             })?;
-            if !module.binder_ty(binder).alpha_eq(ty) {
+            if !same_scoped_type(ty, module.binder_ty(binder), &type_scope) {
                 return Err(fail(Some(current), "returned parameter type mismatch"));
             }
             value
@@ -134,6 +164,10 @@ pub fn lower_leaf(
         module: module_index,
         owner,
         result_ty: ty.clone(),
+        type_params: type_scope
+            .iter()
+            .map(|(signature, _)| signature.clone())
+            .collect(),
         entry: BlockId(0),
         blocks: vec![Block {
             id: BlockId(0),
@@ -148,9 +182,27 @@ pub fn lower_leaf(
     let lowered = LoweredLeaf {
         function,
         parameters,
+        type_parameters,
         erased_ticks,
     };
     verify::verify_leaf(module, module_index, owner, id, &lowered)
         .map_err(|reason| fail(Some(current), &reason))?;
     Ok(lowered)
+}
+
+/// Close explicitly paired variables before comparing signature/body types.
+fn same_scoped_type(signature: &Ty, body: &Ty, scope: &[(TyVarId, TyVarId)]) -> bool {
+    let mut signature = signature.clone();
+    let mut body = body.clone();
+    for (sig, local) in scope.iter().rev() {
+        signature = Ty::ForAll {
+            binder: sig.clone(),
+            body: Box::new(signature),
+        };
+        body = Ty::ForAll {
+            binder: local.clone(),
+            body: Box::new(body),
+        };
+    }
+    signature.alpha_eq(&body)
 }

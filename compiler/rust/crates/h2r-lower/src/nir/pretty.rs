@@ -10,6 +10,9 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
         "fn f{} [module {}, binder {}] -> {:?}\n",
         f.id.0, f.module, f.owner, f.result_ty
     );
+    for param in &f.type_params {
+        writeln!(out, "  type param {} [{}]", param.occ, param.unique).unwrap();
+    }
     for block in &f.blocks {
         writeln!(
             out,
@@ -58,6 +61,9 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
     }
     for (expr, value) in &leaf.parameters {
         writeln!(out, "  lambda Expr({expr}) -> param v{}", value.0).unwrap();
+    }
+    for (expr, binder) in &leaf.type_parameters {
+        writeln!(out, "  erased type lambda Expr({expr}) -> Binder({binder})").unwrap();
     }
     for expr in &leaf.erased_ticks {
         writeln!(out, "  erased tick Expr({expr})").unwrap();

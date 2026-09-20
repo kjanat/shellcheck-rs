@@ -10,6 +10,7 @@ use super::*;
 pub struct LeafAccounting {
     pub source_nodes: usize,
     pub parameter_nodes: usize,
+    pub type_parameter_nodes: usize,
     pub value_nodes: usize,
     pub erased_ticks: usize,
 }
@@ -47,6 +48,8 @@ pub fn verify_leaf(
     };
     let mut ty = module.binder_ty(owner);
     let mut params = Vec::new();
+    let mut type_params = Vec::new();
+    let mut type_scope: Vec<(TyVarId, TyVarId)> = Vec::new();
     let mut ticks = Vec::new();
     let mut leaf = None;
     let mut source_nodes = 0;
@@ -55,8 +58,31 @@ pub fn verify_leaf(
         match module.expr(expr) {
             Expr::Tick(_) => ticks.push(expr),
             Expr::Lam { binder, .. } => {
-                if module.binder(*binder).kind != BinderKind::Id {
-                    return Err("unsupported type lambda in leaf source".into());
+                let source = module.binder(*binder);
+                if source.kind == BinderKind::Tyvar {
+                    let Ty::ForAll {
+                        binder: signature,
+                        body,
+                    } = ty
+                    else {
+                        return Err("source type lambda lacks a forall type".into());
+                    };
+                    if type_scope.iter().any(|(sig, local)| {
+                        sig.unique == signature.unique || local.unique == source.unique
+                    }) {
+                        return Err("ambiguous source type-variable scope".into());
+                    }
+                    type_scope.push((
+                        signature.clone(),
+                        TyVarId {
+                            name: source.name.clone(),
+                            occ: source.occ.clone(),
+                            unique: source.unique.clone(),
+                        },
+                    ));
+                    type_params.push((expr, *binder));
+                    ty = body;
+                    continue;
                 }
                 let Ty::Fun { arg, res, .. } = ty else {
                     return Err("source lambda lacks a function type".into());
@@ -65,7 +91,9 @@ pub fn verify_leaf(
                     .params
                     .get(params.len())
                     .ok_or("missing leaf parameter")?;
-                if !arg.alpha_eq(module.binder_ty(*binder)) || !arg.alpha_eq(&param.ty) {
+                if !source_type_matches(arg, module.binder_ty(*binder), &type_scope)
+                    || !arg.alpha_eq(&param.ty)
+                {
                     return Err("leaf parameter type differs from source".into());
                 }
                 params.push((expr, *binder, param.id));
@@ -78,6 +106,15 @@ pub fn verify_leaf(
             }
             _ => return Err(format!("unsupported leaf source at expression {expr}")),
         }
+    }
+    if lowered.type_parameters != type_params
+        || function.type_params
+            != type_scope
+                .iter()
+                .map(|(sig, _)| sig.clone())
+                .collect::<Vec<_>>()
+    {
+        return Err("leaf type parameter provenance mismatch".into());
     }
     if params.len() != block.params.len()
         || lowered.parameters
@@ -131,7 +168,9 @@ pub fn verify_leaf(
                 .iter()
                 .find(|(_, source, _)| *source == binder)
                 .ok_or("leaf source does not refer to a parameter")?;
-            if param.2 != returned || !module.binder_ty(binder).alpha_eq(ty) {
+            if param.2 != returned
+                || !source_type_matches(ty, module.binder_ty(binder), &type_scope)
+            {
                 return Err("returned parameter differs from source".into());
             }
         }
@@ -140,16 +179,39 @@ pub fn verify_leaf(
     let accounting = LeafAccounting {
         source_nodes,
         parameter_nodes: params.len(),
+        type_parameter_nodes: type_params.len(),
         value_nodes: 1,
         erased_ticks: ticks.len(),
     };
     // Counts source nodes, not NIR instructions: a literal's instruction and
     // return share a source node; lambda nodes become entry parameters.
-    if source_nodes != accounting.parameter_nodes + accounting.value_nodes + accounting.erased_ticks
+    if source_nodes
+        != accounting.parameter_nodes
+            + accounting.type_parameter_nodes
+            + accounting.value_nodes
+            + accounting.erased_ticks
     {
         return Err("leaf source accounting does not close".into());
     }
     Ok(accounting)
+}
+
+// Rebuild quantified types independently of the lowering builder. Only the
+// source IR's structural alpha-equivalence is shared.
+fn source_type_matches(expected: &Ty, actual: &Ty, binders: &[(TyVarId, TyVarId)]) -> bool {
+    let mut expected = expected.clone();
+    let mut actual = actual.clone();
+    for (signature, source) in binders.iter().rev() {
+        expected = Ty::ForAll {
+            binder: signature.clone(),
+            body: Box::new(expected),
+        };
+        actual = Ty::ForAll {
+            binder: source.clone(),
+            body: Box::new(actual),
+        };
+    }
+    expected.alpha_eq(&actual)
 }
 
 /// Reject malformed CFGs and SSA uses. Block-local availability is deliberately
@@ -251,6 +313,7 @@ mod tests {
         };
         Function {
             id: FnId(0),
+            type_params: vec![],
             module: 0,
             owner: 0,
             result_ty: ty.clone(),

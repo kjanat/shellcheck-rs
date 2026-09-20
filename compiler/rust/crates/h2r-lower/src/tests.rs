@@ -351,6 +351,139 @@ fn nir_source_verifier_rejects_forged_types_and_unsupported_source() {
     );
 }
 
+fn nir_polymorphic_module() -> Module {
+    use h2r_core_ir::{Ty, TyVarId};
+    let type_lambda = |unique: &str, body: Value| {
+        let mut b = binder("$_in$a", "a", unique);
+        b["kind"] = json!("tyvar");
+        json!({"node": "Lam", "binder": b, "body": body})
+    };
+    let mut m = module(
+        "Main",
+        vec![(
+            binder(&sn("Main", "first"), "first", "f"),
+            type_lambda(
+                "localA",
+                type_lambda("localB", lam("x", lam("y", lvar("x")))),
+            ),
+        )],
+        json!({}),
+    );
+    // Same spelling, different uniques in the signature and body: correspondence
+    // must come from paired forall/type-lambda positions, not names.
+    let tv = |unique: &str| TyVarId {
+        name: "$_in$a".into(),
+        occ: "a".into(),
+        unique: unique.into(),
+    };
+    let a = tv("sigA");
+    let b = tv("sigB");
+    let fun = |arg: Ty, res: Ty| Ty::Fun {
+        mult: Box::new(m.types[0].clone()),
+        arg: Box::new(arg),
+        res: Box::new(res),
+    };
+    let signature = Ty::ForAll {
+        binder: a.clone(),
+        body: Box::new(Ty::ForAll {
+            binder: b.clone(),
+            body: Box::new(fun(Ty::Var(a.clone()), fun(Ty::Var(b), Ty::Var(a)))),
+        }),
+    };
+    m.types
+        .extend([signature, Ty::Var(tv("localA")), Ty::Var(tv("localB"))]);
+    for binder in &mut m.binders {
+        binder.ty = match binder.unique.as_str() {
+            "f" => 1,
+            "x" => 2,
+            "y" => 3,
+            _ => 0,
+        };
+    }
+    m
+}
+
+#[test]
+fn nir_lowers_alpha_renamed_type_lambdas_without_runtime_arguments() {
+    use crate::nir::{FnId, ValueId, lower::lower_leaf, pretty::format_leaf, verify::verify_leaf};
+    let m = nir_polymorphic_module();
+    let owner = m.top[0].pairs[0].binder;
+    let leaf = lower_leaf(&m, 0, owner, FnId(0)).unwrap();
+    assert_eq!(leaf.type_parameters.len(), 2);
+    assert_eq!(leaf.function.type_params[0].unique, "sigA");
+    assert_eq!(leaf.function.type_params[1].unique, "sigB");
+    assert_eq!(leaf.function.blocks[0].params.len(), 2);
+    assert_eq!(leaf.function.blocks[0].params[0].id, ValueId(0));
+    assert!(leaf.function.blocks[0].instructions.is_empty());
+    let accounting = verify_leaf(&m, 0, owner, FnId(0), &leaf).unwrap();
+    assert_eq!(accounting.source_nodes, 5);
+    assert_eq!(accounting.type_parameter_nodes, 2);
+    assert_eq!(accounting.parameter_nodes, 2);
+    assert!(format_leaf(&leaf).contains("type param a [sigA]"));
+    assert!(format_leaf(&leaf).contains("erased type lambda"));
+}
+
+#[test]
+fn nir_type_lambda_verifier_rejects_corrupt_provenance() {
+    use crate::nir::{
+        FnId,
+        lower::lower_leaf,
+        verify::{verify, verify_leaf},
+    };
+    let m = nir_polymorphic_module();
+    let owner = m.top[0].pairs[0].binder;
+    let original = lower_leaf(&m, 0, owner, FnId(0)).unwrap();
+    for corruption in 0..5 {
+        let mut leaf = original.clone();
+        match corruption {
+            0 => {
+                leaf.type_parameters.pop();
+            }
+            1 => leaf.type_parameters.swap(0, 1),
+            2 => leaf.type_parameters[0].1 = owner,
+            3 => leaf.function.type_params.swap(0, 1),
+            _ => leaf.function.type_params[0].unique = "forged".into(),
+        }
+        verify(&leaf.function).unwrap();
+        assert!(
+            verify_leaf(&m, 0, owner, FnId(0), &leaf).is_err(),
+            "corruption {corruption}"
+        );
+    }
+}
+
+#[test]
+fn nir_rejects_wrong_or_ambiguous_type_lambda_scope() {
+    use crate::nir::{FnId, lower::lower_leaf};
+    for corruption in 0..4 {
+        let mut m = nir_polymorphic_module();
+        let owner = m.top[0].pairs[0].binder;
+        match corruption {
+            0 => m.binders[owner as usize].ty = 0, // Type lambda without forall.
+            1 => {
+                // Free variable must not be mistaken for the bound type.
+                let h2r_core_ir::Ty::Var(v) = &mut m.types[2] else {
+                    unreachable!()
+                };
+                v.unique = "unbound".into();
+            }
+            2 => {
+                // Returning/accepting the other quantified type is not alpha-renaming.
+                let x = m.binders.iter_mut().find(|b| b.unique == "x").unwrap();
+                x.ty = 3;
+            }
+            _ => {
+                let b = m.binders.iter_mut().find(|b| b.unique == "localB").unwrap();
+                b.unique = "localA".into();
+            }
+        }
+        assert!(
+            lower_leaf(&m, 0, owner, FnId(0)).is_err(),
+            "corruption {corruption}"
+        );
+    }
+}
+
 /// The one-entry type table every fixture carries. Nothing in M3a reads a
 /// type; the table exists because format 5 has one.
 fn ty_table() -> Value {
