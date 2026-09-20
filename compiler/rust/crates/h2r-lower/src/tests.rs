@@ -132,7 +132,7 @@ fn nir_rejects_inconsistent_lambda_signatures() {
         lower_leaf(&m, 0, owner, FnId(0))
             .unwrap_err()
             .reason
-            .contains("returned parameter type mismatch")
+            .contains("returned reference type mismatch")
     );
 }
 
@@ -152,14 +152,17 @@ fn nir_records_erased_ticks_and_rejects_nonlocal_returns() {
     assert_eq!(result.erased_ticks, vec![pair.rhs]);
     let m = module(
         "Main",
-        vec![(binder(&sn("Main", "f"), "f", "f"), lvar("f"))],
+        vec![(
+            binder(&sn("Main", "f"), "f", "f"),
+            gvar("$base$M$external", "external"),
+        )],
         json!({}),
     );
     assert!(
         lower_leaf(&m, 0, m.top[0].pairs[0].binder, FnId(0))
             .unwrap_err()
             .reason
-            .contains("non-parameter")
+            .contains("external references")
     );
     assert!(
         lower_leaf(&m, 0, u32::MAX, FnId(0))
@@ -348,6 +351,123 @@ fn nir_source_verifier_rejects_forged_types_and_unsupported_source() {
         verify_leaf(&m, 0, owner, FnId(0), &original)
             .unwrap_err()
             .contains("unsupported leaf source")
+    );
+}
+
+#[test]
+fn nir_preserves_top_reference_identity_without_forcing() {
+    use crate::nir::{FnId, Operation, Rule, lower::lower_leaf, verify::verify_leaf};
+    let m = module(
+        "Main",
+        vec![
+            (binder(&sn("Main", "f"), "f", "f"), lvar("g")),
+            (binder("$_in$same", "same", "g"), lit()),
+            (binder("$_in$same", "same", "h"), lit()),
+        ],
+        json!({}),
+    );
+    let owner = m.top[0].pairs[0].binder;
+    let target = m.top[1].pairs[0].binder;
+    let leaf = lower_leaf(&m, 5, owner, FnId(10)).unwrap();
+    let block = &leaf.function.blocks[0];
+    assert_eq!(block.instructions.len(), 1);
+    assert!(
+        matches!(block.instructions[0].operation, Operation::TopReference { module: 5, binder } if binder == target)
+    );
+    assert_eq!(block.instructions[0].origin.rule, Rule::TopReference);
+    assert_eq!(
+        verify_leaf(&m, 5, owner, FnId(10), &leaf)
+            .unwrap()
+            .source_nodes,
+        1
+    );
+}
+
+#[test]
+fn nir_top_reference_verifier_rejects_wrong_targets_and_operations() {
+    use crate::nir::{
+        FnId, Operation, Rule, Source,
+        lower::lower_leaf,
+        verify::{verify, verify_leaf},
+    };
+    let m = module(
+        "Main",
+        vec![
+            (binder(&sn("Main", "f"), "f", "f"), lvar("g")),
+            (binder(&sn("Main", "g"), "g", "g"), lit()),
+            (binder(&sn("Main", "h"), "h", "h"), lit()),
+        ],
+        json!({}),
+    );
+    let owner = m.top[0].pairs[0].binder;
+    let target = m.top[1].pairs[0].binder;
+    let other = m.top[2].pairs[0].binder;
+    let original = lower_leaf(&m, 0, owner, FnId(0)).unwrap();
+    for corruption in 0..5 {
+        let mut leaf = original.clone();
+        let instruction = &mut leaf.function.blocks[0].instructions[0];
+        match corruption {
+            0 => {
+                instruction.operation = Operation::TopReference {
+                    module: 0,
+                    binder: other,
+                }
+            }
+            1 => {
+                instruction.operation = Operation::TopReference {
+                    module: 99,
+                    binder: target,
+                }
+            }
+            2 => instruction.origin.rule = Rule::Literal,
+            3 => instruction.origin.source = Source::Expr(u32::MAX),
+            _ => {
+                instruction.operation = Operation::Literal(h2r_core_ir::Lit {
+                    kind: "int".into(),
+                    pretty: "0".into(),
+                })
+            }
+        }
+        verify(&leaf.function).unwrap();
+        assert!(
+            verify_leaf(&m, 0, owner, FnId(0), &leaf).is_err(),
+            "corruption {corruption}"
+        );
+    }
+}
+
+#[test]
+fn nir_retains_recursive_top_reference_and_rejects_mismatched_type() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf};
+    let m = module(
+        "Main",
+        vec![(binder(&sn("Main", "f"), "f", "f"), lvar("f"))],
+        json!({}),
+    );
+    let owner = m.top[0].pairs[0].binder;
+    let leaf = lower_leaf(&m, 0, owner, FnId(0)).unwrap();
+    assert!(
+        matches!(leaf.function.blocks[0].instructions[0].operation, Operation::TopReference { binder, .. } if binder == owner)
+    );
+    let mut m = module(
+        "Main",
+        vec![
+            (binder(&sn("Main", "f"), "f", "f"), lvar("g")),
+            (binder(&sn("Main", "g"), "g", "g"), lit()),
+        ],
+        json!({}),
+    );
+    m.types.push(h2r_core_ir::Ty::Lit {
+        kind: "Nat".into(),
+        text: "42".into(),
+    });
+    let target = m.top[1].pairs[0].binder;
+    m.binders[target as usize].ty = 1;
+    assert!(
+        lower_leaf(&m, 0, m.top[0].pairs[0].binder, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("reference type mismatch")
     );
 }
 

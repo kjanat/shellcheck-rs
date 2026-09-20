@@ -31,6 +31,7 @@ pub enum Source {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rule {
     Literal,
+    TopReference,
     EraseCast,
     StrictPosition,
     Return,
@@ -55,6 +56,13 @@ pub struct Value {
 #[derive(Debug, Clone)]
 pub enum Operation {
     Literal(Lit),
+    /// Obtain the existing shared top-level value without forcing it, calling
+    /// it or allocating another copy. This is a binding identity, not a FnId:
+    /// the target may be a function, CAF or recursive thunk.
+    TopReference {
+        module: usize,
+        binder: BinderId,
+    },
     Move(ValueId),
     Force(ValueId),
 }

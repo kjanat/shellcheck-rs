@@ -61,6 +61,9 @@
       parameter-returning functions with leading type/value lambdas; erased ticks,
       type-lambda binders and parameter origins are recorded. Alpha-renamed type
       binders are matched through explicit scope pairing, never by spelling.
+      Same-module top-level references now retain shared binding identity without
+      forcing or calling the target; source verification checks the exact target,
+      type and origin. Cross-module references remain unsupported.
       Unsupported forms fail with source addresses.
       Leaf lowering now runs an independent source-aware verifier: exact literal
       payloads, returned lexical parameters, types, origins and complete source

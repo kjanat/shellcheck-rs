@@ -29,6 +29,9 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                 Operation::Literal(lit) => format!("literal {} {:?}", lit.kind, lit.pretty),
                 Operation::Move(value) => format!("move v{}", value.0),
                 Operation::Force(value) => format!("force v{}", value.0),
+                Operation::TopReference { module, binder } => {
+                    format!("top-ref module {module} binder {binder}")
+                }
             };
             writeln!(
                 out,

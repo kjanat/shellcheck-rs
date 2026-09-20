@@ -893,13 +893,21 @@ mod nir_tests {
         );
         assert!(
             nir_report(&modules, "$u$Main$main")
-                .unwrap_err()
-                .to_string()
-                .contains("non-parameter")
+                .unwrap()
+                .contains("top-ref module 0")
         );
         let dead = modules[0].top[2].pairs[0].binder;
         modules[0].binders[dead as usize].name = "$u$Main$leaf".into();
         assert!(nir_report(&modules, "$u$Main$leaf").is_err());
+        let mut modules = [fixture()];
+        let source = modules[0].top[1].pairs[0].rhs;
+        modules[0].exprs[source as usize] = h2r_core_ir::Expr::Coercion;
+        assert!(
+            nir_report(&modules, "$u$Main$leaf")
+                .unwrap_err()
+                .to_string()
+                .contains("type or coercion")
+        );
     }
 
     #[test]

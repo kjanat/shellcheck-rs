@@ -126,8 +126,11 @@ mise run lower:leaf compiler/core-json --fn '$_in$usageHeader1'
 This invokes `h2r lower --nir --fn '<stable-name>'`. It requires complete
 in-world linkage and a verified live set, selects one exact unambiguous name,
 and prints source-verified NIR plus node accounting. Currently supported:
-literals and parameter-returning functions with leading type/value lambdas and
-ticks. Type lambdas become explicit type parameters, not runtime arguments.
+literals, parameter returns and references to top-level bindings in the same
+module, with leading type/value lambdas and ticks. A `top-ref` obtains the
+existing shared value without calling or forcing it; it identifies the target
+by module and lexical binder, not its name. Imports from other modules remain
+unsupported. Type lambdas become explicit type parameters, not runtime arguments.
 Signature/body type variables are paired by binder position, permitting GHC's
 alpha-renaming; ambiguous repeated type-variable uniques are conservatively
 refused. All NIR value types remain in signature scope, while erased type-lambda

@@ -158,20 +158,47 @@ pub fn verify_leaf(
             }
         }
         Expr::Var { .. } => {
-            if !block.instructions.is_empty() {
-                return Err("parameter leaf must not introduce instructions".into());
-            }
             let binder = module
                 .resolve(expr)
                 .ok_or("leaf source is not a local reference")?;
-            let param = params
-                .iter()
-                .find(|(_, source, _)| *source == binder)
-                .ok_or("leaf source does not refer to a parameter")?;
-            if param.2 != returned
-                || !source_type_matches(ty, module.binder_ty(binder), &type_scope)
-            {
-                return Err("returned parameter differs from source".into());
+            if !source_type_matches(ty, module.binder_ty(binder), &type_scope) {
+                return Err("returned reference type differs from source".into());
+            }
+            let param = params.iter().find(|(_, source, _)| *source == binder);
+            if let Some(param) = param {
+                if !block.instructions.is_empty() {
+                    return Err("parameter leaf must not introduce instructions".into());
+                }
+                if param.2 != returned {
+                    return Err("returned parameter differs from source".into());
+                }
+            } else {
+                // Independently enumerate top-level pairs rather than trusting
+                // the builder's binding-site test or the candidate's target.
+                if !module
+                    .top
+                    .iter()
+                    .flat_map(|bind| &bind.pairs)
+                    .any(|pair| pair.binder == binder)
+                {
+                    return Err("leaf source does not refer to a top-level binding".into());
+                }
+                if block.instructions.len() != 1 {
+                    return Err("top reference leaf must have exactly one instruction".into());
+                }
+                let instruction = &block.instructions[0];
+                if !matches!(instruction.operation, Operation::TopReference { module, binder: target } if module == module_index && target == binder)
+                {
+                    return Err("top reference target differs from source".into());
+                }
+                if instruction.origin.source != Source::Expr(expr)
+                    || instruction.origin.rule != Rule::TopReference
+                {
+                    return Err("top reference origin mismatch".into());
+                }
+                if instruction.result.id != returned || !instruction.result.ty.alpha_eq(ty) {
+                    return Err("top reference result mismatch".into());
+                }
             }
         }
         _ => return Err("unsupported leaf value".into()),
@@ -243,7 +270,7 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 return Err("instruction origin belongs to another module".into());
             }
             match instruction.operation {
-                Operation::Literal(_) => {}
+                Operation::Literal(_) | Operation::TopReference { .. } => {}
                 Operation::Move(value) | Operation::Force(value) => {
                     if !available.contains_key(&value) {
                         return Err(format!("unavailable operand {value:?}"));

@@ -1,10 +1,10 @@
-//! Conservative first slice of Core lowering: top-level literal and argument
+//! Conservative first slice of Core lowering: literal, argument and top-reference
 //! leaves, with leading type/value lambdas. Unsupported constructs fail explicitly.
 //! This is not a whole-program driver or an independent semantic verifier.
 
 use std::collections::BTreeMap;
 
-use h2r_core_ir::{BinderKind, Expr, Module};
+use h2r_core_ir::{BindSite, BinderKind, Expr, Module};
 
 use super::*;
 
@@ -134,16 +134,31 @@ pub fn lower_leaf(
             let binder = module
                 .resolve(current)
                 .ok_or_else(|| fail(Some(current), "external references are not lowered yet"))?;
-            let value = locals.get(&binder).copied().ok_or_else(|| {
-                fail(
-                    Some(current),
-                    "non-parameter references are not lowered yet",
-                )
-            })?;
             if !same_scoped_type(ty, module.binder_ty(binder), &type_scope) {
-                return Err(fail(Some(current), "returned parameter type mismatch"));
+                return Err(fail(Some(current), "returned reference type mismatch"));
             }
-            value
+            if let Some(value) = locals.get(&binder) {
+                *value
+            } else if matches!(module.binding(binder).site, BindSite::Top) {
+                let value = ValueId(params.len() as u32);
+                instructions.push(Instruction {
+                    result: Value {
+                        id: value,
+                        ty: ty.clone(),
+                    },
+                    operation: Operation::TopReference {
+                        module: module_index,
+                        binder,
+                    },
+                    origin: origin(Rule::TopReference),
+                });
+                value
+            } else {
+                return Err(fail(
+                    Some(current),
+                    "reference is neither a parameter nor a top-level binding",
+                ));
+            }
         }
         Expr::Cast(_) => {
             return Err(fail(
