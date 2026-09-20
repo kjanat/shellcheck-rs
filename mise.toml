@@ -94,6 +94,16 @@ file        = "compiler/extract.sh"
 description = "Extract the GHC optimization matrix; optional profile names are forwarded"
 file        = "compiler/matrix.sh"
 
+[tasks."baseline:historical"]
+description        = "Reconstruct canonical format-5 Core at the corrected M2.4 checkpoint"
+env.H2R_SOURCE_REF = "aa5b7f3763ea6c95dc0412ac2bbae6fddee6c487"
+env.H2R_BUILD_DIR  = "{{ config_root }}/compiler/matrix/format5/build"
+env.H2R_CORE_DIR   = "{{ config_root }}/compiler/matrix/format5/core-json"
+env.H2R_KEEP_DIR   = "{{ config_root }}/compiler/matrix/format5"
+env.H2R_PLAN       = "{{ config_root }}/compiler/matrix/A/plan.json"
+env.H2R_OPT        = "-O1"
+file               = "compiler/extract.sh"
+
 [tasks.baseline]
 description = "Extract and verify the canonical dump and all six optimization profiles"
 run         = [
@@ -140,6 +150,40 @@ for profile in canonical A B C D E F; do
   printf '%s\n' "$fingerprint" >"$out/inputs.sha256"
   echo "$profile: reports captured and verification passed"
 done
+'''
+
+[tasks."baseline:historical-reports"]
+description = "Verify and capture the reconstructed canonical format-5 baseline"
+run         = '''
+set -eu
+bin="$PWD/compiler/rust/target/release/h2r"
+dir="$PWD/compiler/matrix/format5/core-json"
+out="$PWD/compiler/matrix/format5/reports"
+test -x "$bin"
+test -f "$dir/Main.core.json"
+mkdir -p "$out"
+fingerprint=$({ sha256sum "$bin"; find "$dir" -name '*.core.json' -type f -print0 | sort -z | xargs -0 sha256sum; } | sha256sum)
+if [ -f "$out/inputs.sha256" ] && [ "$(cat "$out/inputs.sha256")" = "$fingerprint" ] &&
+    (cd "$out" && sha256sum --check --status reports.sha256); then
+  echo "format5: verified reports unchanged"
+  exit 0
+fi
+"$bin" stats "$dir" --per-module >"$out/stats.txt"
+for command in laziness higher dictflow; do
+  "$bin" "$command" "$dir" --explain >"$out/$command.txt"
+  "$bin" "$command" "$dir" --explain --json >"$out/$command.json"
+done
+for command in m24 verify-m24; do
+  "$bin" "$command" "$dir" >"$out/$command.txt"
+  "$bin" "$command" "$dir" --json >"$out/$command.json"
+done
+"$bin" lower "$dir" --reachability --json >"$out/reachability.json"
+grep -Eq '^dump format +5 ' "$out/stats.txt"
+grep -Eq '^modules +28$' "$out/stats.txt"
+grep -Eq '^ +DISAGREEMENTS.* +0$' "$out/verify-m24.txt"
+(cd "$out" && sha256sum -- *.txt *.json >reports.sha256)
+printf '%s\n' "$fingerprint" >"$out/inputs.sha256"
+echo "format5: reports captured and verification passed"
 '''
 
 [tasks."baseline:explain"]

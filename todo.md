@@ -30,9 +30,13 @@
       clones); its current three call-site groups and full producer shapes
       are captured in `higher-plans.json`. `$wgetPath` supplies a historical
       missing-link/current-resolved example. Remaining: historical per-site
-      trimming and arity/Dead-OccInfo attribution, and the prior producer set
-      proving why the AST plan appeared. Old format-5 captures are absent
-      from this checkout; loop-breaker OccInfo is not an analysis input.
+      trimming and arity/Dead-OccInfo attribution. Canonical format-5 inputs
+      are now reconstructed in `compiler/matrix/format5/` via
+      `baseline:historical` and `baseline:historical-reports`. They reproduce
+      the historical counts and prove the AST transition: one local producer
+      (`ExactClosure`) becomes three after external callers link correctly
+      (`CloneRequired(3)`), with unchanged arity. Loop-breaker OccInfo is not
+      an analysis input.
 - [x] Count local `Ranged` selectors using the structured GHC class-op flag
       after lexical resolution, preserving binder-owned signatures. Analysis
       and independent verification now include all eleven calls; canonical

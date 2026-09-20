@@ -34,6 +34,8 @@
 #                   provenance record are copied here so the profile can be
 #                   compared and measured without rebuilding it
 #   H2R_JOBS        concurrent build jobs (default number of available CPUs)
+#   H2R_SOURCE_REF  optional historical commit for sources and plugin
+#   H2R_PLAN        optional existing Cabal plan to pin dependency versions
 #
 # Successful output is reused only when inputs and output checksums match.
 # An interrupted build with the same inputs resumes through Cabal.
@@ -49,6 +51,14 @@ build_dir=${H2R_BUILD_DIR:-$repo_root/compiler/build}
 out_dir=${H2R_CORE_DIR:-$repo_root/compiler/core-json}
 opt=${H2R_OPT:--O1}
 keep_dir=${H2R_KEEP_DIR:-}
+source_ref=${H2R_SOURCE_REF:-}
+dependency_plan=${H2R_PLAN:-}
+plugin_dir="$repo_root/compiler/h2r-plugin"
+if [ -n "$source_ref" ]; then
+	source_ref=$(git -C "$repo_root" rev-parse --verify "$source_ref^{commit}")
+	plugin_dir="$build_dir/compiler/h2r-plugin"
+fi
+source_items=(src shellcheck.hs ShellCheck.cabal striptests LICENSE README.md CHANGELOG.md shellcheck.1.md manpage)
 
 # ghcup installs are not on PATH in non-interactive shells.
 # shellcheck source=/dev/null
@@ -64,10 +74,17 @@ fingerprint=$(
 		printf '%s\n' "$opt" "$out_dir" "$keep_dir"
 		ghc --numeric-version
 		cabal --numeric-version
-		(cd "$repo_root" && {
-			find src compiler/h2r-plugin/src -type f -print0
-			printf '%s\0' shellcheck.hs ShellCheck.cabal striptests LICENSE README.md CHANGELOG.md shellcheck.1.md manpage compiler/h2r-plugin/h2r-plugin.cabal compiler/extract.sh
-		} | sort -z | xargs -0 sha256sum)
+		printf '%s\n' "$source_ref"
+		[ -z "$dependency_plan" ] || sha256sum "$dependency_plan"
+		if [ -n "$source_ref" ]; then
+			git -C "$repo_root" archive "$source_ref" -- "${source_items[@]}" compiler/h2r-plugin | sha256sum
+			sha256sum "$repo_root/compiler/extract.sh"
+		else
+			(cd "$repo_root" && {
+				find src compiler/h2r-plugin/src -type f -print0
+				printf '%s\0' shellcheck.hs ShellCheck.cabal striptests LICENSE README.md CHANGELOG.md shellcheck.1.md manpage compiler/h2r-plugin/h2r-plugin.cabal compiler/extract.sh
+			} | sort -z | xargs -0 sha256sum)
+		fi
 	} | sha256sum
 )
 
@@ -84,12 +101,19 @@ else
 	echo "==> staging sources in $build_dir"
 	rm -rf "$build_dir" "$out_dir"
 	mkdir -p "$build_dir" "$out_dir"
-	for item in src shellcheck.hs ShellCheck.cabal striptests LICENSE README.md CHANGELOG.md shellcheck.1.md manpage; do
-		cp -r "$repo_root/$item" "$build_dir/"
-	done
+	if [ -n "$source_ref" ]; then
+		git -C "$repo_root" archive "$source_ref" -- "${source_items[@]}" | tar -x -C "$build_dir"
+	else
+		for item in "${source_items[@]}"; do
+			cp -r "$repo_root/$item" "$build_dir/"
+		done
+	fi
 
 	echo "==> stripping tests (removes Template Haskell and QuickCheck)"
 	(cd "$build_dir" && ./striptests)
+	if [ -n "$source_ref" ]; then
+		git -C "$repo_root" archive "$source_ref" -- compiler/h2r-plugin | tar -x -C "$build_dir"
+	fi
 
 	echo "==> wiring in the Core dump plugin"
 	# The plugin has to be an ordinary dependency for GHC to be able to load it.
@@ -97,11 +121,14 @@ else
 	cat >"$build_dir/cabal.project" <<EOF
 packages:
   .
-  $repo_root/compiler/h2r-plugin
+  $plugin_dir
 
 package ShellCheck
   ghc-options: $opt -fplugin=H2R.CorePlugin -fplugin-opt=H2R.CorePlugin:outdir=$out_dir
 EOF
+	if [ -n "$dependency_plan" ]; then
+		jq -r '[."install-plan"[] | select(."pkg-name" != "ShellCheck" and ."pkg-name" != "h2r-plugin") | "any.\(."pkg-name") == \(."pkg-version")"] | unique | "constraints: " + join(",\n  ")' "$dependency_plan" >"$build_dir/cabal.project.local"
+	fi
 	printf '%s\n' "$fingerprint" >"$build_dir/inputs.sha256"
 fi
 
@@ -126,8 +153,9 @@ if [ -n "$keep_dir" ]; then
 		echo "flags=$opt"
 		echo "flags_scope=package ShellCheck only; dependencies at Hackage defaults"
 		echo "repo_head=$(git -C "$repo_root" rev-parse HEAD)"
+		echo "source_ref=${source_ref:-working-tree}"
 		echo "repo_dirty_inputs=$(git -C "$repo_root" status --porcelain -- src shellcheck.hs ShellCheck.cabal striptests compiler/h2r-plugin | wc -l)"
-		echo "plugin_sha256=$(cat "$repo_root"/compiler/h2r-plugin/h2r-plugin.cabal "$repo_root"/compiler/h2r-plugin/src/H2R/*.hs | sha256sum | cut -d' ' -f1)"
+		echo "plugin_sha256=$(cat "$plugin_dir"/h2r-plugin.cabal "$plugin_dir"/src/H2R/*.hs | sha256sum | cut -d' ' -f1)"
 		echo "stripped_source_sha256=$(cd "$build_dir" && find src shellcheck.hs ShellCheck.cabal -type f | sort | xargs cat | sha256sum | cut -d' ' -f1)"
 		echo "ghc=$(ghc --numeric-version)"
 		echo "cabal=$(cabal --numeric-version)"
@@ -142,6 +170,7 @@ fi
 test -s "$out_dir/Main.core.json"
 (
 	cd "$out_dir"
+	shopt -s nullglob
 	sha256sum -- *.core.json *.tidy-align.txt
 	if [ -n "$keep_dir" ]; then
 		sha256sum "$keep_dir/shellcheck" "$keep_dir/plan.json" "$keep_dir/modules" "$keep_dir/provenance"

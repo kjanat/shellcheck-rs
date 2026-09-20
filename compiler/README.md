@@ -7859,9 +7859,8 @@ This locates the net delta at module level and identifies the entire current
 AST plan. Equal totals elsewhere do not prove that each historical binder or
 producer set survived unchanged. The AST sidecar records zero trimmed and
 zero implicit bindings, excluding creation of this owner by selector injection
-or local trimming. The cross-module producers make repaired linkage a concrete
-candidate cause, but the missing historical producer set prevents claiming
-that it alone caused the change.
+or local trimming. The reconstruction below now supplies the historical
+producer set and identifies repaired linkage as the cause of this transition.
 
 #### What each proposed cause actually establishes
 
@@ -7891,13 +7890,47 @@ that it alone caused the change.
   applications. The current AST plan's three producers all have arity 1;
   their historical signatures are not preserved in the owner table.
 
-Gate 8 remains open specifically for historical per-site trimming and arity/
-Dead-OccInfo attribution, and for proving the causal transition of the new AST
-clone plan. The checkout contains the seven format-6 dump directories, not
-the brief's `old-dumps-old-resolver` or `old-matrix-old-resolver` captures.
-The historical owner table supplies counts but no binder-addressed producer
-sets. Closing these remaining claims requires those artifacts or a controlled
-historical extraction; matching aggregate numbers is insufficient.
+Gate 8 remains open for historical per-site trimming and arity/Dead-OccInfo
+attribution. The canonical reconstruction below removes the missing-input
+blocker and closes the AST clone-plan transition.
+
+#### Reconstructed canonical format-5 input (2026-09-21)
+
+`mise run baseline:historical` reconstructs commit
+`aa5b7f3763ea6c95dc0412ac2bbae6fddee6c487` with its original plugin and
+ShellCheck sources, GHC 9.6.7 and package-local `-O1`. It archives the
+requested files into `compiler/matrix/format5/build`; it does not switch
+branches or create a worktree. Dependency versions are constrained by
+`compiler/matrix/A/plan.json`. All dependency unit IDs match that plan,
+and the stripped source hash matches profile A exactly:
+`e588f5a2854d9356e5b43cdcb268e8265f6d603c4efb13dc03c11fe3444fcf7f`.
+
+The 28 dumps (76 MiB) are in `compiler/matrix/format5/core-json`; the binary,
+build plan and provenance remain beside them. These are reconstructed
+historical inputs, not recovered original captures. The current analyzer's
+`baseline:historical-reports` task reproduces 13,828 top-level bindings,
+2,242 thunk sites, 565 dispatch sites / 7 Exact targets, and 68 closure
+clones across 21 owners. The independent M2.4 verifier confirms 606 claims
+with zero disagreements and zero coverage refusals. Both tasks reuse
+checksum-verified outputs on a second invocation.
+
+The old AST definition is binder 322, `$_in$$s$ctraverse`, arity 2;
+the new one is binder 322,
+`$ShellCheck-0.11.0-inplace$ShellCheck.AST$$fTraversableInnerToken_$s$ctraverse`,
+also arity 2 with the same function type. A paired walk confirms the same
+1,026-node expression topology and 348 variable-reference links, mapping
+binders by position rather than assuming unique equality.
+
+The old `higher.json` records parameter `eta#0` at node 10424 as
+`ExactClosure`, with only producer `ShellCheck.AST#1085`. Analytics and Parser
+already carry the final external name in their format-5 id tables (arity 2),
+but the old internal definition cannot link to it. In format 6 those callers
+reach the definition and contribute `ShellCheck.Analytics#1769` and
+`ShellCheck.Parser#104248`. The parameter becomes `CloneRequired(3)` and
+enters the owner plan with the three groups listed above. The original local
+producer's full shape is unchanged. This is the concrete linkage-driven
+transition behind the extra owner and three clones; it is not an arity change
+or a newly injected definition.
 
 ### Format-6 baseline — before/after accounting tables (2026-09-16)
 
