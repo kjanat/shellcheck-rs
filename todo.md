@@ -64,8 +64,10 @@
       payloads, returned lexical parameters, types, origins and complete source
       accounting are checked. Corruption tests include structurally valid wrong
       returns and extra forcing. This verifies only the supported leaf subset.
-      Whole-program lowering and verification, calls, switches,
-      closures, thunk regions and CLI integration remain unimplemented. Casts
+      `mise run lower:leaf compiler/core-json --fn '<stable-name>'` now exposes
+      verified leaf NIR with source accounting; dead, ambiguous and unsupported
+      selections fail. Whole-program lowering and verification, calls, switches,
+      closures and thunk regions remain unimplemented. Casts
       require source/target type evidence absent from the current `Expr::Cast`.
 - [ ] Continue M3c–M3h: carriers, closure conversion, specialization, certified
       transformations, Parsec lowering and a compiled Rust canary. See the

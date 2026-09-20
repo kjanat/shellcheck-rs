@@ -18,6 +18,63 @@ use h2r_lower::reachability::{
 };
 use h2r_lower::verify::{Audit, verify};
 
+/// Lower only an explicitly selected live leaf. No successful result here
+/// implies that the rest of the program has been lowered.
+pub fn nir(dir: &Path, name: &str) -> Result<()> {
+    let modules = load_dir(dir)?;
+    print!("{}", nir_report(&modules, name)?);
+    Ok(())
+}
+
+fn nir_report(modules: &[Module], name: &str) -> Result<String> {
+    use h2r_lower::nir::{FnId, lower::lower_leaf, pretty::format_leaf, verify::verify_leaf};
+
+    let selected: Vec<_> = modules.iter().collect();
+    let live = LiveSet::of_modules(selected.iter().copied())
+        .map_err(|error| anyhow::anyhow!("the live graph has no root: {error}"))?;
+    if !live.in_world_missing.is_empty() {
+        bail!("NIR requires complete in-world linkage; A5-IN-WORLD-MISSING is nonzero");
+    }
+    let audit = verify(&selected, &live);
+    if audit.total_disagreements != 0 {
+        bail!(
+            "reachability verification failed: {} disagreements",
+            audit.total_disagreements
+        );
+    }
+    let matches = live.by_name(name);
+    let [node] = matches.as_slice() else {
+        bail!(
+            "--fn requires one exact stable name; {name:?} matched {} bindings",
+            matches.len()
+        );
+    };
+    if !live.is_live(*node) {
+        bail!("selected binding {name:?} is not reachable from Main.main");
+    }
+    let binding = live.node(*node);
+    let module_index = binding.key.module as usize;
+    let owner = binding.key.binder;
+    let id = FnId(*node);
+    let lowered = lower_leaf(&modules[module_index], module_index, owner, id).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot lower {name:?} at {:?}: {}",
+            error.source,
+            error.reason
+        )
+    })?;
+    let accounting = verify_leaf(&modules[module_index], module_index, owner, id, &lowered)
+        .map_err(|error| anyhow::anyhow!("NIR source verification failed: {error}"))?;
+    Ok(format!(
+        "NIR leaf: {name}\nScope: one reachable function; not whole-program lowering\nVerified source nodes: {} = {} parameters + {} value + {} erased ticks\n{}",
+        accounting.source_nodes,
+        accounting.parameter_nodes,
+        accounting.value_nodes,
+        accounting.erased_ticks,
+        format_leaf(&lowered),
+    ))
+}
+
 /// One row of the [`A5-IN-WORLD-MISSING`] table, grouped by the module the
 /// unlinkable name points into: how many names, how many occurrences, and
 /// which live modules carry them.
@@ -45,8 +102,8 @@ pub fn lower(
     }
     if !reachability {
         bail!(
-            "h2r lower needs a question. M3a implements one: --reachability \
-             (the Main.main-rooted live set). --rules prints the rule table."
+            "h2r lower needs --reachability or --nir --fn <stable-name>. \
+             --rules prints the reachability rule table."
         );
     }
     let modules = load_dir(dir)?;
@@ -759,4 +816,107 @@ fn print_m24_link(modules: &[&Module], live: &LiveSet) {
     println!("      Unresolved                                         {b_unresolved:>6}");
     println!("        …inside a rooted-dead top-level binding          {b_unresolved_dead:>6}");
     println!("        …a constructor field, with no one binding to be in {b_field:>4}");
+}
+
+#[cfg(test)]
+mod nir_tests {
+    use super::*;
+    use h2r_core_ir::raw;
+    use serde_json::{Value, json};
+
+    fn binder(name: &str) -> Value {
+        json!({
+            "kind": "id", "name": format!("$u$Main${name}"), "occ": name, "unique": name,
+            "type": "T", "ty": 0, "arity": 0, "callArity": 0, "exported": true,
+            "dmdSig": {"args": [], "diverges": false, "pretty": ""}, "cprSig": "",
+            "demand": {"strict": false, "absent": false, "usedOnce": false, "pretty": "L"},
+            "occInfo": {"kind": "many", "tailCalled": false}, "oneShot": false,
+            "details": "", "hasUnfolding": false, "isJoinPoint": false, "isDataCon": false
+        })
+    }
+
+    fn fixture() -> Module {
+        fixture_with_link(false)
+    }
+
+    fn fixture_with_link(missing: bool) -> Module {
+        let lit = json!({"node": "Lit", "lit": {"kind": "int", "pretty": "7"}});
+        let target = if missing { "missing" } else { "leaf" };
+        let mut binds = Vec::new();
+        for (name, rhs) in [
+            (
+                "main",
+                json!({"node": "Var", "name": format!("$u$Main${target}"), "occ": target, "unique": target, "isGlobal": missing}),
+            ),
+            ("leaf", lit.clone()),
+            ("dead", lit),
+        ] {
+            binds.push(
+                json!({"rec": false, "pairs": [{"binder": binder(name), "rhs": rhs,
+                "whnf": true, "trivial": true, "cheap": true, "okForSpec": true}]}),
+            );
+        }
+        Module::from_raw(serde_json::from_value(json!({
+            "format": raw::FORMAT, "module": "Main", "unit": "u", "ids": {},
+            "types": [{"kind": "TyConApp", "tycon": {"name": "$u$Main$T", "occ": "T", "unique": "T"}, "args": []}],
+            "binds": binds
+        })).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn reports_verified_live_leaf_deterministically() {
+        let modules = [fixture()];
+        let first = nir_report(&modules, "$u$Main$leaf").unwrap();
+        assert_eq!(first, nir_report(&modules, "$u$Main$leaf").unwrap());
+        assert!(first.contains("not whole-program lowering"));
+        assert!(first.contains("1 = 0 parameters + 1 value + 0 erased ticks"));
+        assert!(first.contains("literal int \"7\""));
+        assert!(first.contains("return v0"));
+        assert!(first.contains("Expr("));
+    }
+
+    #[test]
+    fn refuses_dead_missing_ambiguous_and_unsupported_bindings() {
+        let mut modules = [fixture()];
+        assert!(
+            nir_report(&modules, "$u$Main$dead")
+                .unwrap_err()
+                .to_string()
+                .contains("not reachable")
+        );
+        assert!(
+            nir_report(&modules, "leaf")
+                .unwrap_err()
+                .to_string()
+                .contains("matched 0")
+        );
+        assert!(
+            nir_report(&modules, "$u$Main$main")
+                .unwrap_err()
+                .to_string()
+                .contains("non-parameter")
+        );
+        let dead = modules[0].top[2].pairs[0].binder;
+        modules[0].binders[dead as usize].name = "$u$Main$leaf".into();
+        assert!(nir_report(&modules, "$u$Main$leaf").is_err());
+    }
+
+    #[test]
+    fn refuses_missing_root_and_incomplete_linkage() {
+        let mut m = fixture();
+        let owner = m.top[0].pairs[0].binder;
+        m.binders[owner as usize].name = "$u$Main$notMain".into();
+        assert!(
+            nir_report(&[m], "$u$Main$leaf")
+                .unwrap_err()
+                .to_string()
+                .contains("no root")
+        );
+        assert!(
+            nir_report(&[fixture_with_link(true)], "$u$Main$leaf")
+                .unwrap_err()
+                .to_string()
+                .contains("A5-IN-WORLD-MISSING")
+        );
+    }
 }

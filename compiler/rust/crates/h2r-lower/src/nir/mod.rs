@@ -10,6 +10,7 @@
 use h2r_core_ir::{BinderId, ExprId, Lit, Ty};
 
 pub mod lower;
+pub mod pretty;
 pub mod verify;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

@@ -115,6 +115,22 @@ cargo run --release --bin h2r -- lower ../core-json --reachability --m24-link
 cargo run --release --bin h2r -- lower ../core-json --rules                 # the A0-A11 rule table
 ```
 
+### First NIR leaves
+
+From the repository root, lower one reachable leaf from an existing dump:
+
+```sh
+mise run lower:leaf compiler/core-json --fn '$_in$usageHeader1'
+```
+
+This invokes `h2r lower --nir --fn '<stable-name>'`. It requires complete
+in-world linkage and a verified live set, selects one exact unambiguous name,
+and prints source-verified NIR plus node accounting. Currently supported:
+literals and parameter-returning functions with leading value lambdas and ticks.
+Dead bindings and unsupported forms fail; there is no fallback or claim that
+the whole program was lowered. NIR output is diagnostic text, not emitted Rust;
+`--json` is not supported for this mode yet.
+
 ## M1 — how much Haskell is left after GHC?
 
 `h2r laziness` classifies every local binding that survives GHC's optimiser

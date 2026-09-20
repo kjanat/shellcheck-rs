@@ -346,9 +346,15 @@ enum Command {
     Lower {
         dir: PathBuf,
         /// The M3a question: which top-level bindings can `Main.main`
-        /// reach? Required — M3a implements this one and no other.
+        /// reach?
         #[arg(long)]
         reachability: bool,
+        /// Lower and verify one reachable leaf function (not the whole program).
+        #[arg(long, requires = "fn_name", conflicts_with_all = ["reachability", "json", "rules", "explain", "link", "m24_link"])]
+        nir: bool,
+        /// Exact stable name of the leaf to lower; ambiguous names are rejected.
+        #[arg(long = "fn", requires = "nir")]
+        fn_name: Option<String>,
         /// Emit the live set, the verifier's audit and the rules as JSON.
         #[arg(long)]
         json: bool,
@@ -554,12 +560,20 @@ fn main() -> Result<()> {
         Command::Lower {
             dir,
             reachability,
+            nir,
+            fn_name,
             json,
             rules,
             explain,
             link,
             m24_link,
-        } => lower::lower(&dir, reachability, json, rules, explain, link, m24_link),
+        } => {
+            if nir {
+                lower::nir(&dir, fn_name.as_deref().expect("clap requires --fn"))
+            } else {
+                lower::lower(&dir, reachability, json, rules, explain, link, m24_link)
+            }
+        }
         Command::Parsec {
             dir,
             module,
@@ -6422,4 +6436,42 @@ fn verify_m24(dir: &Path, json: bool, explain: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn leaf_nir_requires_a_name_and_rejects_other_report_modes() {
+        assert!(
+            Cli::try_parse_from(["h2r", "lower", "dumps", "--nir", "--fn", "$u$Main$f"]).is_ok()
+        );
+        assert!(Cli::try_parse_from(["h2r", "lower", "dumps", "--nir"]).is_err());
+        assert!(Cli::try_parse_from(["h2r", "lower", "dumps", "--fn", "$u$Main$f"]).is_err());
+        for flag in ["--reachability", "--json", "--rules", "--m24-link"] {
+            assert!(
+                Cli::try_parse_from(["h2r", "lower", "dumps", "--nir", "--fn", "$u$Main$f", flag])
+                    .is_err(),
+                "{flag}"
+            );
+        }
+        for flag in ["--explain", "--link"] {
+            assert!(
+                Cli::try_parse_from([
+                    "h2r",
+                    "lower",
+                    "dumps",
+                    "--nir",
+                    "--fn",
+                    "$u$Main$f",
+                    flag,
+                    "$u$Main$f"
+                ])
+                .is_err(),
+                "{flag}"
+            );
+        }
+        assert!(Cli::try_parse_from(["h2r", "lower", "dumps", "--reachability", "--json"]).is_ok());
+    }
 }
