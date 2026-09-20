@@ -76,6 +76,18 @@ run         = [
 description = "Build and test upstream ShellCheck with the canonical GHC"
 run         = "cabal test"
 
+[tasks."conformance:corpus"]
+description = "Report extracted upstream properties and coverage gaps"
+run         = "cargo run --release --manifest-path compiler/rust/Cargo.toml -p h2r-conformance -- corpus"
+
+[tasks.conformance]
+description = "Compare --candidate with the Haskell oracle on upstream properties"
+run         = "cargo run --release --manifest-path compiler/rust/Cargo.toml -p h2r-conformance -- gate"
+
+[tasks."conformance:fuzz"]
+description = "Seeded differential fuzzing of --candidate against the Haskell oracle"
+run         = "cargo run --release --manifest-path compiler/rust/Cargo.toml -p h2r-conformance -- fuzz"
+
 [tasks.hls-install]
 confirm     = "Do you want to install the hls language server"
 description = "install hls in non-ci environments"

@@ -3,6 +3,7 @@ resolver = "3"
 members  = [
   "crates/h2r-analysis",
   "crates/h2r-cli",
+  "crates/h2r-conformance",
   "crates/h2r-core-ir",
   "crates/h2r-lower",
   "crates/h2r-rt",

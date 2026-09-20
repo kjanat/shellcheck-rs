@@ -8278,6 +8278,11 @@ Surveyed against the tree at the repo root:
 
 ## Conformance
 
+The [binary conformance harness](rust/crates/h2r-conformance/README.md) reuses
+the `rust-port` corpus extractor and fuzz generator. Run `mise run conformance
+--candidate <binary>` or `mise run conformance:fuzz --candidate <binary>`;
+the candidate is explicit and need not link to any Rust-port library.
+
 The `prop_*` corpus that `striptests` removes is the oracle: build ShellCheck
 once with GHC and once through this pipeline, run the same inputs through both,
 and require identical diagnostics, positions, fixes, exit status and output

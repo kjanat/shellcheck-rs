@@ -126,6 +126,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "h2r-conformance"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "h2r-core-ir"
 version = "0.1.0"
 dependencies = [
