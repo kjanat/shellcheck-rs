@@ -1635,6 +1635,155 @@ fn scalar_emission_refuses_recursive_closure() {
     );
 }
 
+fn primitive_emission_world(symbol: &str) -> Vec<Module> {
+    let mut modules = scalar_emission_world();
+    let name = format!("$ghc-prim$GHC.Prim${symbol}");
+    for expr in &mut modules[0].exprs {
+        if let h2r_core_ir::Expr::Var { name: target, .. } = expr
+            && *target == sn("Lib", "target")
+        {
+            *target = name.clone();
+        }
+    }
+    modules[0].ids.insert(
+        name.clone(),
+        serde_json::from_value(json!({
+            "name": name, "occ": symbol, "arity": 2, "details": "[PrimOp]",
+            "isJoinPoint": false, "dataCon": null,
+            "dmdSig": {"args": [], "diverges": false, "pretty": ""}
+        }))
+        .unwrap(),
+    );
+    modules
+}
+
+#[test]
+fn int_arithmetic_is_source_verified_and_emits_wrapping_operations() {
+    use crate::nir::{
+        FnId, IntArithmetic, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    for (symbol, expected, method) in [
+        ("+#", IntArithmetic::Add, "wrapping_add"),
+        ("-#", IntArithmetic::Subtract, "wrapping_sub"),
+        ("*#", IntArithmetic::Multiply, "wrapping_mul"),
+    ] {
+        let modules = primitive_emission_world(symbol);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        assert!(
+            matches!(leaf.function.blocks[0].instructions.last().unwrap().operation,
+            Operation::IntArithmetic { op, .. } if op == expected)
+        );
+        let counts = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert_eq!(counts.value_application_nodes, 2);
+        let emitted = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        assert!(emitted.contains(method));
+        assert_eq!(emitted.matches("fn f_").count(), 1);
+        for mutation in 0..7 {
+            let mut bad = leaf.clone();
+            let instruction = bad.function.blocks[0].instructions.last_mut().unwrap();
+            let Operation::IntArithmetic { op, arguments } = &mut instruction.operation else {
+                panic!()
+            };
+            match mutation {
+                0 => {
+                    *op = if expected == IntArithmetic::Add {
+                        IntArithmetic::Subtract
+                    } else {
+                        IntArithmetic::Add
+                    }
+                }
+                1 => arguments.swap(0, 1),
+                2 => {
+                    arguments.pop();
+                }
+                3 => arguments[0] = crate::nir::ValueId(999),
+                4 => instruction.origin.rule = crate::nir::Rule::CallTop,
+                5 => instruction.origin.source = crate::nir::Source::Binder(owner),
+                _ => instruction.result.ty = modules[0].types[1].clone(),
+            }
+            assert!(
+                verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
+                "{symbol} mutation {mutation}"
+            );
+        }
+    }
+}
+
+#[test]
+fn int_arithmetic_refuses_unknown_names_metadata_types_and_arity() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    for symbol in ["quotInt#", "plusWord#", "notARealPrimOp#"] {
+        assert!(
+            crate::emit::emit_entry(&primitive_emission_world(symbol), &sn("Main", "main"))
+                .is_err()
+        );
+    }
+    for mutation in 0..5 {
+        let mut modules = primitive_emission_world("+#");
+        let name = "$ghc-prim$GHC.Prim$+#";
+        match mutation {
+            0 => modules[0].ids.get_mut(name).unwrap().arity = 1,
+            1 => modules[0].ids.get_mut(name).unwrap().details = "[VanillaId]".into(),
+            2 => {
+                modules[0].ids.remove(name);
+            }
+            3 => modules[0].ids.get_mut(name).unwrap().name = "$other$GHC.Prim$+#".into(),
+            _ => {
+                let h2r_core_ir::Ty::Con { tycon, .. } = &mut modules[0].types[0] else {
+                    panic!()
+                };
+                tycon.name = "$ghc-prim$GHC.Prim$Word#".into();
+            }
+        }
+        let owner = modules[0].top[0].pairs[0].binder;
+        assert!(
+            lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn primitive_spelling_does_not_override_a_lexical_call_target() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world};
+    let name = "$ghc-prim$GHC.Prim$+#";
+    let mut head = lvar("target");
+    head["name"] = json!(name);
+    let mut modules = nir_call_world(false);
+    let types = modules[0].types.clone();
+    let ids = primitive_emission_world("+#")[0].ids.clone();
+    modules[0] = module(
+        "Main",
+        vec![
+            (
+                binder(&sn("Main", "main"), "main", "main"),
+                lam("x", lam("y", app(app(head, lvar("x")), lvar("y")))),
+            ),
+            (binder(name, "+#", "target"), lam("a", lam("b", lvar("a")))),
+        ],
+        json!({}),
+    );
+    modules[0].types = types;
+    modules[0].ids = ids;
+    let top_binders: Vec<_> = modules[0]
+        .top
+        .iter()
+        .flat_map(|g| &g.pairs)
+        .map(|p| p.binder)
+        .collect();
+    for binder in top_binders {
+        modules[0].binders[binder as usize].ty = 1;
+        modules[0].binders[binder as usize].arity = Some(2);
+    }
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    assert!(matches!(
+        leaf.function.blocks[0].instructions[0].operation,
+        Operation::CallTop { .. }
+    ));
+}
+
 fn nir_polymorphic_module() -> Module {
     use h2r_core_ir::{Ty, TyVarId};
     let type_lambda = |unique: &str, body: Value| {

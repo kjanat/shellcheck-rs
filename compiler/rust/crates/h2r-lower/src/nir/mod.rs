@@ -12,6 +12,7 @@ use h2r_core_ir::{BinderId, ExprId, Lit, Ty, TyVarId};
 mod instantiate;
 pub mod lower;
 pub mod pretty;
+mod primitive;
 pub mod program;
 pub mod verify;
 mod world;
@@ -37,6 +38,7 @@ pub enum Rule {
     TopReference,
     InstantiateTop,
     CallTop,
+    IntArithmetic,
     EraseCast,
     StrictPosition,
     Return,
@@ -60,6 +62,11 @@ pub struct Value {
 
 #[derive(Debug, Clone)]
 pub enum Operation {
+    /// Strict, wrapping machine-Int arithmetic; operands and result are Int#.
+    IntArithmetic {
+        op: IntArithmetic,
+        arguments: Vec<ValueId>,
+    },
     Literal(Lit),
     /// Obtain the existing shared top-level value without forcing it, calling
     /// it or allocating another copy. This is a binding identity, not a FnId:
@@ -88,6 +95,13 @@ pub enum Operation {
     },
     Move(ValueId),
     Force(ValueId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntArithmetic {
+    Add,
+    Subtract,
+    Multiply,
 }
 
 #[derive(Debug, Clone)]

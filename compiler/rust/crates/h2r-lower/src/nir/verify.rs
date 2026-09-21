@@ -198,12 +198,20 @@ fn verify_leaf_impl(
             source_types.reverse();
             value_applications = source_args.len();
             type_applications = source_types.len();
-            let (target_module, target_binder, head_ty) =
-                instantiate::target(module, module_index, modules, head)?;
+            let primitive = primitive::resolve(module, head);
+            let primitive_ty = primitive::signature();
+            let target = if primitive.is_some() {
+                None
+            } else {
+                Some(instantiate::target(module, module_index, modules, head)?)
+            };
+            let head_ty = target.map_or(&primitive_ty, |(_, _, ty)| ty);
             let instantiated = instantiate::apply(head_ty, &source_types)?;
             let mut signature = &instantiated;
-            let target_source = modules.map_or(module, |world| &world[target_module]);
-            if target_source.binder(target_binder).arity != Some(source_args.len() as u32) {
+            let arity = target.map_or(Some(2), |(m, b, _)| {
+                modules.map_or(module, |world| &world[m]).binder(b).arity
+            });
+            if arity != Some(source_args.len() as u32) {
                 return Err("source call is not saturated at known target arity".into());
             }
             if !world::closed_type(signature) || !world::closed_type(ty) {
@@ -280,23 +288,34 @@ fn verify_leaf_impl(
                 return Err("direct call must contain only its atomic arguments and call".into());
             }
             let instruction = &block.instructions[argument_instructions];
-            let Operation::CallTop {
-                module: target,
-                binder,
-                type_arguments,
-                arguments,
-            } = &instruction.operation
-            else {
-                return Err("source call was not lowered as a direct call".into());
+            let expected_rule = if let Some(expected) = primitive {
+                if !matches!(&instruction.operation, Operation::IntArithmetic { op, arguments }
+                    if *op == expected && arguments == &values)
+                {
+                    return Err("primitive operation or arguments differ from source".into());
+                }
+                Rule::IntArithmetic
+            } else {
+                let (target_module, target_binder, _) = target.expect("resolved source target");
+                let Operation::CallTop {
+                    module: target,
+                    binder,
+                    type_arguments,
+                    arguments,
+                } = &instruction.operation
+                else {
+                    return Err("source call was not lowered as a direct call".into());
+                };
+                if (*target, *binder) != (target_module, target_binder)
+                    || arguments != &values
+                    || type_arguments != &source_types
+                {
+                    return Err("direct call target or arguments differ from source".into());
+                }
+                Rule::CallTop
             };
-            if (*target, *binder) != (target_module, target_binder)
-                || arguments != &values
-                || type_arguments != &source_types
-            {
-                return Err("direct call target or arguments differ from source".into());
-            }
             if instruction.origin.source != Source::Expr(expr)
-                || instruction.origin.rule != Rule::CallTop
+                || instruction.origin.rule != expected_rule
             {
                 return Err("direct call origin mismatch".into());
             }
@@ -535,6 +554,20 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 Operation::Move(value) | Operation::Force(value) => {
                     if !available.contains_key(&value) {
                         return Err(format!("unavailable operand {value:?}"));
+                    }
+                }
+                Operation::IntArithmetic { ref arguments, .. } => {
+                    let signature = primitive::signature();
+                    let Ty::Fun { arg: int, .. } = signature else {
+                        unreachable!()
+                    };
+                    if arguments.len() != 2
+                        || !instruction.result.ty.alpha_eq(&int)
+                        || arguments
+                            .iter()
+                            .any(|v| !available.get(v).is_some_and(|ty| ty.alpha_eq(&int)))
+                    {
+                        return Err("Int# arithmetic requires two available Int# operands and an Int# result".into());
                     }
                 }
                 Operation::CallTop { ref arguments, .. } => {

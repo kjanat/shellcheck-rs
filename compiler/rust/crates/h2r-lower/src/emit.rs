@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use h2r_core_ir::{Module, Ty};
 
-use crate::nir::{Exit, FnId, Operation, lower::lower_leaf_in_world};
+use crate::nir::{Exit, FnId, IntArithmetic, Operation, lower::lower_leaf_in_world};
 
 type Key = (usize, u32);
 
@@ -76,6 +76,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 return Err("unsupported instruction carrier".into());
             }
             match &instruction.operation {
+                Operation::IntArithmetic { .. } => {}
                 Operation::Literal(lit) => {
                     integer(&lit.kind, &lit.pretty)?;
                 }
@@ -121,6 +122,14 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         .unwrap();
         for instruction in &block.instructions {
             let expression = match &instruction.operation {
+                Operation::IntArithmetic { op, arguments } => {
+                    let method = match op {
+                        IntArithmetic::Add => "wrapping_add",
+                        IntArithmetic::Subtract => "wrapping_sub",
+                        IntArithmetic::Multiply => "wrapping_mul",
+                    };
+                    format!("v{}.{method}(v{})", arguments[0].0, arguments[1].0)
+                }
                 Operation::Literal(lit) => format!("{}i64", integer(&lit.kind, &lit.pretty)?),
                 Operation::TopReference { module, binder } => {
                     if !functions[&(*module, *binder)].function.blocks[0]

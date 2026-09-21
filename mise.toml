@@ -84,10 +84,11 @@ set -eu
 cargo build --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r
 out=compiler/build/canary
 oracle="$out/oracle"
-for entry in forward constant; do
+for entry in forward constant add subtractInt multiply; do
   name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
   compiler/rust/target/release/h2r emit-rust "$out/core" --entry "$name" --output "$out/$entry.rs"
   rustc --edition=2024 -O "$out/$entry.rs" -o "$out/$entry"
+  rustc --edition=2024 -C overflow-checks=yes "$out/$entry.rs" -o "$out/$entry-checked"
 done
 before=$(sha256sum "$out/forward.rs")
 if compiler/rust/target/release/h2r emit-rust "$out/core" --entry '$main$Main$main' --output "$out/forward.rs" 2> "$out/refusal.stderr"; then
@@ -98,16 +99,22 @@ test "$before" = "$(sha256sum "$out/forward.rs")"
 cases=0
 for x in -9223372036854775808 -100 -1 0 1 42 9223372036854775807; do
   "$oracle" constant "$x" > "$out/oracle.stdout" 2> "$out/oracle.stderr"
-  "$out/constant" "$x" > "$out/rust.stdout" 2> "$out/rust.stderr"
-  cmp "$out/oracle.stdout" "$out/rust.stdout"
-  cmp "$out/oracle.stderr" "$out/rust.stderr"
-  cases=$((cases + 1))
-  for y in -9223372036854775808 -17 0 23 9223372036854775807; do
-    "$oracle" forward "$x" "$y" > "$out/oracle.stdout" 2> "$out/oracle.stderr"
-    "$out/forward" "$x" "$y" > "$out/rust.stdout" 2> "$out/rust.stderr"
+  for mode in '' '-checked'; do
+    "$out/constant$mode" "$x" > "$out/rust.stdout" 2> "$out/rust.stderr"
     cmp "$out/oracle.stdout" "$out/rust.stdout"
     cmp "$out/oracle.stderr" "$out/rust.stderr"
     cases=$((cases + 1))
+  done
+  for y in -9223372036854775808 -17 -1 0 1 23 9223372036854775807; do
+    for entry in forward add subtractInt multiply; do
+      "$oracle" "$entry" "$x" "$y" > "$out/oracle.stdout" 2> "$out/oracle.stderr"
+      for mode in '' '-checked'; do
+        "$out/$entry$mode" "$x" "$y" > "$out/rust.stdout" 2> "$out/rust.stderr"
+        cmp "$out/oracle.stdout" "$out/rust.stdout"
+        cmp "$out/oracle.stderr" "$out/rust.stderr"
+        cases=$((cases + 1))
+      done
+    done
   done
 done
 printf '%s differential cases passed (stdout, stderr, successful exit).\n' "$cases"

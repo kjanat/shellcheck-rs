@@ -244,14 +244,24 @@ fn lower_leaf_impl(
             }
             argument_sources.reverse();
             type_arguments.reverse();
-            let (target_module, binder, head_ty) =
-                instantiate::target(module, module_index, modules, head)
-                    .map_err(|reason| fail(Some(head), &reason))?;
+            let primitive = primitive::resolve(module, head);
+            let primitive_ty = primitive::signature();
+            let target = if primitive.is_some() {
+                None
+            } else {
+                Some(
+                    instantiate::target(module, module_index, modules, head)
+                        .map_err(|reason| fail(Some(head), &reason))?,
+                )
+            };
+            let head_ty = target.map_or(&primitive_ty, |(_, _, ty)| ty);
             let instantiated = instantiate::apply(head_ty, &type_arguments)
                 .map_err(|reason| fail(Some(current), &reason))?;
             let mut signature = &instantiated;
-            let target_source = modules.map_or(module, |world| &world[target_module]);
-            if target_source.binder(binder).arity != Some(argument_sources.len() as u32) {
+            let arity = target.map_or(Some(2), |(m, b, _)| {
+                modules.map_or(module, |world| &world[m]).binder(b).arity
+            });
+            if arity != Some(argument_sources.len() as u32) {
                 return Err(fail(
                     Some(current),
                     "direct call must match known target arity",
@@ -342,13 +352,22 @@ fn lower_leaf_impl(
                     id: value,
                     ty: ty.clone(),
                 },
-                operation: Operation::CallTop {
-                    module: target_module,
-                    binder,
-                    type_arguments,
-                    arguments,
+                operation: if let Some(op) = primitive {
+                    Operation::IntArithmetic { op, arguments }
+                } else {
+                    let (module, binder, _) = target.expect("resolved direct target");
+                    Operation::CallTop {
+                        module,
+                        binder,
+                        type_arguments,
+                        arguments,
+                    }
                 },
-                origin: origin(Rule::CallTop),
+                origin: origin(if primitive.is_some() {
+                    Rule::IntArithmetic
+                } else {
+                    Rule::CallTop
+                }),
             });
             value
         }

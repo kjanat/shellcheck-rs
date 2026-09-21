@@ -26,6 +26,7 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
         }
         for instruction in &block.instructions {
             let operation = match &instruction.operation {
+                Operation::IntArithmetic { op, arguments } => format!("int-{op:?} {arguments:?}"),
                 Operation::Literal(lit) => format!("literal {} {:?}", lit.kind, lit.pretty),
                 Operation::Move(value) => format!("move v{}", value.0),
                 Operation::Force(value) => format!("force v{}", value.0),
