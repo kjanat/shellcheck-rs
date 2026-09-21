@@ -1,6 +1,7 @@
 {-# LANGUAGE MagicHash #-}
 module Canary (forward, constant, add, subtractInt, multiply, composed, chained, shared,
-  eqInt, neInt, ltInt, leInt, gtInt, geInt, minimumInt, selectInt, nestedBranch) where
+  eqInt, neInt, ltInt, leInt, gtInt, geInt, minimumInt, selectInt, nestedBranch,
+  operandBranches, scrutineeBranch, sharedBranch, branchCall) where
 
 import GHC.Exts (Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#))
 import Helpers (first)
@@ -88,3 +89,27 @@ nestedBranch x y = case add x y of
     _ -> case x of
       0# -> first y z
       _ -> add z x
+
+{-# NOINLINE operandBranches #-}
+operandBranches :: Int# -> Int# -> Int#
+operandBranches x y =
+  (case x of { 0# -> y; a -> a +# y }) *#
+  (case y of { 1# -> x; b -> b -# x })
+
+{-# NOINLINE scrutineeBranch #-}
+scrutineeBranch :: Int# -> Int# -> Int#
+scrutineeBranch x y = case (case x of { 0# -> y; a -> a -# y }) of
+  0# -> add x y
+  1# -> multiply x y
+  z -> subtractInt z x
+
+{-# NOINLINE sharedBranch #-}
+sharedBranch :: Int# -> Int# -> Int#
+sharedBranch x y = case add x y of
+  z -> z +# (case z <# x of { 0# -> z *# y; _ -> z -# x })
+
+{-# NOINLINE branchCall #-}
+branchCall :: Int# -> Int# -> Int#
+branchCall x y = first
+  (case x of { 0# -> y; a -> a +# y })
+  (case y of { 0# -> x; b -> b -# x })

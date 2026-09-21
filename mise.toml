@@ -72,8 +72,16 @@ dir         = "{{ config_root }}/compiler/canary"
 run         = '''
 set -eu
 cabal build --offline --builddir=../build/canary/cabal h2r-canary
-mkdir -p ../build/canary/oracle-build
-cabal exec --builddir=../build/canary/cabal -- ghc --make Main.hs -O1 -fno-worker-wrapper -fforce-recomp -package h2r-plugin -fplugin=H2R.CorePlugin -fplugin-opt=H2R.CorePlugin:outdir=../build/canary/core -odir ../build/canary/oracle-build -hidir ../build/canary/oracle-build -o ../build/canary/oracle
+for optimization in O1 O0; do
+  out=../build/canary
+  set --
+  if [ "$optimization" = O0 ]; then
+    out="$out/unoptimized"
+    set -- -fmax-simplifier-iterations=0
+  fi
+  mkdir -p "$out/oracle-build"
+  cabal exec --builddir=../build/canary/cabal -- ghc --make Main.hs "-$optimization" "$@" -fno-worker-wrapper -fforce-recomp -package h2r-plugin -fplugin=H2R.CorePlugin -fplugin-opt="H2R.CorePlugin:outdir=$out/core" -odir "$out/oracle-build" -hidir "$out/oracle-build" -o "$out/oracle"
+done
 '''
 
 [tasks.canary]
@@ -82,12 +90,29 @@ depends     = ["canary:extract"]
 run         = '''
 set -eu
 cargo build --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r
+cases=0
+for profile in optimized unoptimized; do
 out=compiler/build/canary
-oracle="$out/oracle"
 binary_entries='forward add subtractInt multiply composed chained shared eqInt neInt ltInt leInt gtInt geInt minimumInt selectInt nestedBranch'
+if [ "$profile" = unoptimized ]; then
+  out="$out/unoptimized"
+  binary_entries="$binary_entries operandBranches scrutineeBranch sharedBranch branchCall"
+fi
+oracle="$out/oracle"
 for entry in constant $binary_entries; do
   name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
   compiler/rust/target/release/h2r emit-rust "$out/core" --entry "$name" --output "$out/$entry.rs"
+  if [ "$profile" = unoptimized ]; then
+    case "$entry" in
+      operandBranches|scrutineeBranch|sharedBranch|branchCall)
+        compiler/rust/target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
+        if ! rg -q ' = evaluate b[0-9]+' "$out/$entry.nir"; then
+          echo "$entry did not exercise non-tail region lowering" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  fi
   rustc --edition=2024 -O "$out/$entry.rs" -o "$out/$entry"
   rustc --edition=2024 -C overflow-checks=yes "$out/$entry.rs" -o "$out/$entry-checked"
 done
@@ -97,7 +122,6 @@ if compiler/rust/target/release/h2r emit-rust "$out/core" --entry '$main$Main$ma
   exit 1
 fi
 test "$before" = "$(sha256sum "$out/forward.rs")"
-cases=0
 for x in -9223372036854775808 -100 -1 0 1 42 9223372036854775807; do
   "$oracle" constant "$x" > "$out/oracle.stdout" 2> "$out/oracle.stderr"
   for mode in '' '-checked'; do
@@ -117,6 +141,7 @@ for x in -9223372036854775808 -100 -1 0 1 42 9223372036854775807; do
       done
     done
   done
+done
 done
 printf '%s differential cases passed (stdout, stderr, successful exit).\n' "$cases"
 '''

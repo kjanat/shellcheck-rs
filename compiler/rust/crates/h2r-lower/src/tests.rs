@@ -1861,6 +1861,147 @@ fn branching_world() -> Vec<Module> {
     ))
 }
 
+fn region_expression() -> Value {
+    int_op(
+        "*#",
+        int_case(
+            lvar("x"),
+            "a",
+            int_op("+#", lvar("a"), lvar("y")),
+            vec![(0, lvar("y"))],
+        ),
+        int_case(
+            int_case(lvar("y"), "b", lvar("b"), vec![(0, lvar("x"))]),
+            "c",
+            int_op("-#", lvar("c"), lvar("x")),
+            vec![(1, int_op("+#", lvar("c"), lvar("y")))],
+        ),
+    )
+}
+
+#[test]
+fn scalar_regions_compose_operands_scrutinees_and_strict_scopes() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    for body in [
+        region_expression(),
+        strict_case(
+            region_expression(),
+            "shared",
+            int_op(
+                "+#",
+                lvar("shared"),
+                int_case(lvar("shared"), "s", lvar("s"), vec![(0, lvar("x"))]),
+            ),
+        ),
+        int_case(region_expression(), "s", lvar("s"), vec![(0, lvar("y"))]),
+        int_op(
+            "+#",
+            strict_case(lvar("x"), "single", lvar("single")),
+            lvar("y"),
+        ),
+        app(
+            app(gvar(&sn("Lib", "target"), "target"), region_expression()),
+            lvar("x"),
+        ),
+    ] {
+        let modules = scalar_expression_world(body);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let counts = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert_eq!(
+            counts.source_nodes,
+            modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
+        );
+        assert!(
+            leaf.function
+                .blocks
+                .iter()
+                .flat_map(|b| &b.instructions)
+                .any(|i| matches!(i.operation, Operation::EvaluateBlock { .. }))
+        );
+        crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+    }
+    let modules = scalar_expression_world(region_expression());
+    let rust = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+    assert_eq!(
+        rust.matches("wrapping_mul").count(),
+        1,
+        "continuation must not be cloned into arms"
+    );
+    assert_eq!(rust.matches("match v").count(), 3);
+}
+
+#[test]
+fn scalar_region_verifier_rejects_forged_calls_captures_and_cycles() {
+    use crate::nir::{
+        BlockId, FnId, Operation, Rule, Source, ValueId, lower::lower_leaf_in_world,
+        verify::verify_leaf_in_world,
+    };
+    let modules = scalar_expression_world(region_expression());
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..10 {
+        let mut bad = leaf.clone();
+        let instruction = &mut bad.function.blocks[0].instructions[0];
+        let Operation::EvaluateBlock { target, arguments } = &mut instruction.operation else {
+            panic!()
+        };
+        match mutation {
+            0 => *target = BlockId(0),
+            1 => *target = BlockId(999),
+            2 => arguments.swap(0, 1),
+            3 => arguments[0] = arguments[1],
+            4 => {
+                arguments.pop();
+            }
+            5 => arguments[0] = instruction.result.id,
+            6 => instruction.origin.rule = Rule::IntSwitch,
+            7 => instruction.origin.source = Source::Binder(owner),
+            8 => instruction.result.id = ValueId(999),
+            _ => {
+                *target = leaf.function.blocks[0]
+                    .instructions
+                    .iter()
+                    .find_map(|i| match i.operation {
+                        Operation::EvaluateBlock { target: other, .. } if other != *target => {
+                            Some(other)
+                        }
+                        _ => None,
+                    })
+                    .unwrap()
+            }
+        }
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn scalar_regions_refuse_unsupported_arms_and_escaped_binders() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    for arm in [
+        json!({"node": "Coercion"}),
+        lvar("not-in-scope"),
+        app(gvar("$missing$Module$function", "function"), lvar("x")),
+    ] {
+        let modules = scalar_expression_world(int_op(
+            "+#",
+            int_case(lvar("x"), "inner", lvar("inner"), vec![(0, arm)]),
+            lvar("y"),
+        ));
+        assert!(crate::emit::emit_entry(&modules, &sn("Main", "main")).is_err());
+    }
+    let modules = scalar_expression_world(int_op(
+        "+#",
+        int_case(lvar("x"), "inner", lvar("inner"), vec![(0, lvar("y"))]),
+        lvar("inner"),
+    ));
+    let owner = modules[0].top[0].pairs[0].binder;
+    assert!(lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err());
+}
+
 #[test]
 fn scalar_switches_have_explicit_environments_and_complete_source_accounting() {
     use crate::nir::{Exit, FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
@@ -1945,10 +2086,14 @@ fn scalar_switch_verifier_rejects_forged_control_flow_and_environments() {
 
 #[test]
 fn scalar_switch_ids_are_not_source_identities() {
+    check_scalar_renumbering(branching_world());
+    check_scalar_renumbering(scalar_expression_world(region_expression()));
+}
+
+fn check_scalar_renumbering(modules: Vec<Module>) {
     use crate::nir::{
         Exit, FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
     };
-    let modules = branching_world();
     let owner = modules[0].top[0].pairs[0].binder;
     let mut leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
     leaf.function.entry.0 += 100;
@@ -1963,6 +2108,12 @@ fn scalar_switch_ids_are_not_source_identities() {
         for instruction in &mut block.instructions {
             instruction.result.id.0 += 1000;
             match &mut instruction.operation {
+                Operation::EvaluateBlock { target, arguments } => {
+                    target.0 += 100;
+                    for value in arguments {
+                        value.0 += 1000;
+                    }
+                }
                 Operation::IntBinary { arguments, .. } | Operation::CallTop { arguments, .. } => {
                     for value in arguments {
                         value.0 += 1000;

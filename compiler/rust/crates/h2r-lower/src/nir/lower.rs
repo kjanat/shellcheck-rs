@@ -191,8 +191,8 @@ fn fresh_value(context: &BodyContext<'_>) -> ValueId {
     ValueId(id)
 }
 
-/// Tail cases become explicit CFG successors. Non-tail expressions retain the
-/// conservative scalar evaluator; branches are never evaluated speculatively.
+/// Tail cases become explicit CFG successors. Non-tail cases call scalar
+/// regions and resume without cloning their continuation into every arm.
 fn lower_tail(
     context: &BodyContext<'_>,
     source: ExprId,
@@ -215,6 +215,16 @@ fn lower_tail(
     let mut instructions = Vec::new();
     let mut locals = locals.clone();
     let id = BlockId(blocks.len() as u32);
+    // Reserve the ID before lowering operands, which can allocate regions.
+    blocks.push(Block {
+        id,
+        params: context.params.to_vec(),
+        instructions: Vec::new(),
+        terminator: Terminator {
+            exit: Exit::Return(ValueId(u32::MAX)),
+            origin: origin(Rule::Return),
+        },
+    });
     if let Expr::Case {
         scrut,
         binder,
@@ -263,10 +273,11 @@ fn lower_tail(
             module.binder_ty(*binder),
             &mut locals,
             &mut instructions,
+            blocks,
         )?;
         let mut args: Vec<_> = context.params.iter().map(|p| p.id).collect();
         args.push(scrutinee);
-        blocks.push(Block {
+        blocks[id.0 as usize] = Block {
             id,
             params: context.params.to_vec(),
             instructions,
@@ -274,7 +285,7 @@ fn lower_tail(
                 exit: Exit::Return(scrutinee),
                 origin: origin(Rule::IntSwitch),
             },
-        });
+        };
         let mut arms = Vec::new();
         let mut default = None;
         for (pattern, rhs) in alternatives {
@@ -319,8 +330,8 @@ fn lower_tail(
             args,
         };
     } else {
-        let value = lower_value(context, source, ty, &mut locals, &mut instructions)?;
-        blocks.push(Block {
+        let value = lower_value(context, source, ty, &mut locals, &mut instructions, blocks)?;
+        blocks[id.0 as usize] = Block {
             id,
             params: context.params.to_vec(),
             instructions,
@@ -328,7 +339,7 @@ fn lower_tail(
                 exit: Exit::Return(value),
                 origin: origin(Rule::Return),
             },
-        });
+        };
     }
     Ok(id)
 }
@@ -339,6 +350,7 @@ fn lower_value(
     ty: &Ty,
     locals: &mut BTreeMap<BinderId, ValueId>,
     instructions: &mut Vec<Instruction>,
+    blocks: &mut Vec<Block>,
 ) -> Result<ValueId, LowerError> {
     let BodyContext {
         module,
@@ -497,7 +509,10 @@ fn lower_value(
                 };
                 let value = match module.expr(source) {
                     Expr::App { .. } if primitive::is_int(arg) => {
-                        lower_value(context, source, arg, locals, instructions)?
+                        lower_value(context, source, arg, locals, instructions, blocks)?
+                    }
+                    Expr::Case { .. } if primitive::is_int(arg) => {
+                        lower_region(context, source, arg, locals, instructions, blocks)?
                     }
                     Expr::Lit(lit) => {
                         let value = fresh_value(context);
@@ -563,7 +578,7 @@ fn lower_value(
                     _ => {
                         return Err(fail(
                             Some(source),
-                            "call arguments must be parameters, literals, top-level references or Int# applications",
+                            "call arguments must be parameters, literals, top-level references or Int# applications/cases",
                         ));
                     }
                 };
@@ -640,6 +655,9 @@ fn lower_value(
             alts,
             ..
         } => {
+            if alts.len() != 1 || !matches!(alts[0].con, h2r_core_ir::AltCon::Default) {
+                return lower_region(context, current, ty, locals, instructions, blocks);
+            }
             let [alt] = alts.as_slice() else {
                 return Err(fail(
                     Some(current),
@@ -663,6 +681,7 @@ fn lower_value(
                 module.binder_ty(*binder),
                 locals,
                 instructions,
+                blocks,
             )?;
             let value = fresh_value(context);
             instructions.push(Instruction {
@@ -674,7 +693,7 @@ fn lower_value(
                 origin: origin(Rule::StrictPosition),
             });
             let previous = locals.insert(*binder, value);
-            let result = lower_value(context, alt.rhs, ty, locals, instructions);
+            let result = lower_value(context, alt.rhs, ty, locals, instructions, blocks);
             if let Some(previous) = previous {
                 locals.insert(*binder, previous);
             } else {
@@ -693,6 +712,53 @@ fn lower_value(
         }
     };
 
+    Ok(value)
+}
+
+fn lower_region(
+    context: &BodyContext<'_>,
+    source: ExprId,
+    ty: &Ty,
+    locals: &BTreeMap<BinderId, ValueId>,
+    instructions: &mut Vec<Instruction>,
+    blocks: &mut Vec<Block>,
+) -> Result<ValueId, LowerError> {
+    let mut params = Vec::new();
+    let mut arguments = Vec::new();
+    let mut region_locals = BTreeMap::new();
+    for (binder, value) in locals {
+        let source_value = context
+            .params
+            .iter()
+            .chain(instructions.iter().map(|i| &i.result))
+            .find(|p| p.id == *value)
+            .expect("lexical value available");
+        let id = fresh_value(context);
+        params.push(Value {
+            id,
+            ty: source_value.ty.clone(),
+        });
+        arguments.push(*value);
+        region_locals.insert(*binder, id);
+    }
+    let region_context = BodyContext {
+        params: &params,
+        ..*context
+    };
+    let target = lower_tail(&region_context, source, ty, &region_locals, blocks)?;
+    let value = fresh_value(context);
+    instructions.push(Instruction {
+        result: Value {
+            id: value,
+            ty: ty.clone(),
+        },
+        operation: Operation::EvaluateBlock { target, arguments },
+        origin: Origin {
+            module: context.module_index,
+            source: Source::Expr(source),
+            rule: Rule::EvaluateBlock,
+        },
+    });
     Ok(value)
 }
 

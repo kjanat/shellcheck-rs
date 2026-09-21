@@ -169,17 +169,19 @@ fn verify_leaf_impl(
         return Err("leaf result type differs from source".into());
     }
     let expr = leaf.ok_or("missing leaf value in source")?;
+    let visited = std::cell::RefCell::new(BTreeSet::new());
     let context = ValueContext {
         module,
         module_index,
         modules,
         params: &params,
         type_scope: &type_scope,
+        function,
+        visited: &visited,
     };
-    let mut visited = BTreeSet::new();
     let (type_applications, value_applications, value_nodes) =
-        verify_tail(&context, function, block.id, expr, ty, &mut visited)?;
-    if visited.len() != function.blocks.len() {
+        verify_tail(&context, function, block.id, expr, ty)?;
+    if visited.borrow().len() != function.blocks.len() {
         return Err("source correspondence leaves unused blocks".into());
     }
     let accounting = LeafAccounting {
@@ -211,6 +213,8 @@ fn verify_leaf_impl(
 }
 
 struct ValueContext<'a> {
+    function: &'a Function,
+    visited: &'a std::cell::RefCell<BTreeSet<BlockId>>,
     module: &'a h2r_core_ir::Module,
     module_index: usize,
     modules: Option<&'a [h2r_core_ir::Module]>,
@@ -224,9 +228,8 @@ fn verify_tail(
     id: BlockId,
     expr: ExprId,
     ty: &Ty,
-    visited: &mut BTreeSet<BlockId>,
 ) -> Result<(usize, usize, usize), String> {
-    if !visited.insert(id) {
+    if !context.visited.borrow_mut().insert(id) {
         return Err("source branch is cyclic or shared".into());
     }
     let block = function
@@ -324,8 +327,7 @@ fn verify_tail(
                     params: &params,
                     ..*context
                 };
-                let (bt, bv, bn) =
-                    verify_tail(&branch_context, function, target, alt.rhs, ty, visited)?;
+                let (bt, bv, bn) = verify_tail(&branch_context, function, target, alt.rhs, ty)?;
                 nt += bt;
                 nv += bv;
                 nn += bn;
@@ -358,7 +360,48 @@ fn verify_value(
         modules,
         params,
         type_scope,
+        ..
     } = *context;
+    if let [instruction] = block.instructions.as_slice()
+        && let Operation::EvaluateBlock { target, arguments } = &instruction.operation
+    {
+        if !matches!(module.expr(expr), Expr::Case { .. })
+            || !primitive::is_int(ty)
+            || instruction.origin.source != Source::Expr(expr)
+            || instruction.origin.rule != Rule::EvaluateBlock
+            || instruction.result.id != returned
+            || !instruction.result.ty.alpha_eq(ty)
+        {
+            return Err("scalar region result or source mismatch".into());
+        }
+        let target_block = context
+            .function
+            .blocks
+            .iter()
+            .find(|b| b.id == *target)
+            .ok_or("missing scalar region")?;
+        let mut captured = context.params.to_vec();
+        captured.sort_by_key(|(_, binder, _)| *binder);
+        if arguments
+            != &captured
+                .iter()
+                .map(|(_, _, value)| *value)
+                .collect::<Vec<_>>()
+            || target_block.params.len() != captured.len()
+        {
+            return Err("scalar region captures differ from source scope".into());
+        }
+        let params: Vec<_> = captured
+            .iter()
+            .zip(&target_block.params)
+            .map(|((origin, binder, _), value)| (*origin, *binder, value.id))
+            .collect();
+        let region_context = ValueContext {
+            params: &params,
+            ..*context
+        };
+        return verify_tail(&region_context, context.function, *target, expr, ty);
+    }
     let mut value_nodes = 1;
     let mut type_applications = 0;
     let mut value_applications = 0;
@@ -409,7 +452,7 @@ fn verify_value(
                     return Err("source call signature lacks an arrow".into());
                 };
                 let value = match module.expr(*source) {
-                    Expr::App { .. } if primitive::is_int(arg) => {
+                    Expr::App { .. } | Expr::Case { .. } if primitive::is_int(arg) => {
                         let end = block.instructions[argument_instructions..]
                             .iter()
                             .position(|i| i.origin.source == Source::Expr(*source))
@@ -776,6 +819,38 @@ pub fn verify(function: &Function) -> Result<(), String> {
     if !blocks.contains_key(&function.entry) {
         return Err("missing entry block".into());
     }
+    // Region returns belong to their call site, not necessarily the enclosing
+    // function's result type. Ordinary control-flow successors inherit it.
+    let mut return_types: BTreeMap<BlockId, &Ty> = BTreeMap::new();
+    let mut pending_types = vec![(function.entry, &function.result_ty)];
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            if let Operation::EvaluateBlock { target, .. } = instruction.operation {
+                pending_types.push((target, &instruction.result.ty));
+            }
+        }
+    }
+    while let Some((id, ty)) = pending_types.pop() {
+        if let Some(previous) = return_types.insert(id, ty) {
+            if !previous.alpha_eq(ty) {
+                return Err("conflicting region return types".into());
+            }
+            continue;
+        }
+        match &blocks
+            .get(&id)
+            .ok_or("missing region block")?
+            .terminator
+            .exit
+        {
+            Exit::Return(_) => {}
+            Exit::Jump { target, .. } => pending_types.push((*target, ty)),
+            Exit::IntSwitch { arms, default, .. } => {
+                pending_types.push((*default, ty));
+                pending_types.extend(arms.iter().map(|(_, target)| (*target, ty)));
+            }
+        }
+    }
     for block in &function.blocks {
         let mut available: BTreeMap<_, _> = block.params.iter().map(|v| (v.id, &v.ty)).collect();
         for instruction in &block.instructions {
@@ -783,6 +858,15 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 return Err("instruction origin belongs to another module".into());
             }
             match instruction.operation {
+                Operation::EvaluateBlock {
+                    target,
+                    ref arguments,
+                } => {
+                    if !primitive::is_int(&instruction.result.ty) {
+                        return Err("region evaluation requires an Int# result".into());
+                    }
+                    verify_edge(&blocks, &available, target, arguments)?;
+                }
                 Operation::Literal(_)
                 | Operation::TopReference { .. }
                 | Operation::InstantiateTop { .. } => {}
@@ -823,7 +907,7 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 let ty = available
                     .get(value)
                     .ok_or_else(|| format!("unavailable return {value:?}"))?;
-                if !ty.alpha_eq(&function.result_ty) {
+                if !ty.alpha_eq(return_types.get(&block.id).ok_or("unreachable block")?) {
                     return Err("return type mismatch".into());
                 }
             }
@@ -855,6 +939,11 @@ pub fn verify(function: &Function) -> Result<(), String> {
     let mut pending = vec![function.entry];
     while let Some(id) = pending.pop() {
         if visited.insert(id) {
+            for instruction in &blocks[&id].instructions {
+                if let Operation::EvaluateBlock { target, .. } = instruction.operation {
+                    pending.push(target);
+                }
+            }
             match &blocks[&id].terminator.exit {
                 Exit::Return(_) => {}
                 Exit::Jump { target, .. } => pending.push(*target),
@@ -944,6 +1033,57 @@ mod tests {
         assert_eq!(verify(&f), Ok(()));
         f.blocks[1].terminator.exit = Exit::Return(ValueId(0));
         assert!(verify(&f).unwrap_err().contains("unavailable return"));
+    }
+
+    #[test]
+    fn region_return_type_is_checked_independently_of_function_result() {
+        let mut f = fixture();
+        let Ty::Fun { arg: int, .. } = primitive::signature() else {
+            panic!()
+        };
+        let origin = f.blocks[0].terminator.origin.clone();
+        f.blocks[0].params.push(Value {
+            id: ValueId(1),
+            ty: (*int).clone(),
+        });
+        f.blocks[0].instructions.push(Instruction {
+            result: Value {
+                id: ValueId(2),
+                ty: (*int).clone(),
+            },
+            operation: Operation::EvaluateBlock {
+                target: BlockId(1),
+                arguments: vec![ValueId(1)],
+            },
+            origin: Origin {
+                rule: Rule::EvaluateBlock,
+                ..origin
+            },
+        });
+        f.blocks.push(Block {
+            id: BlockId(1),
+            params: vec![Value {
+                id: ValueId(3),
+                ty: *int,
+            }],
+            instructions: vec![],
+            terminator: Terminator {
+                exit: Exit::Return(ValueId(3)),
+                origin: f.blocks[0].terminator.origin.clone(),
+            },
+        });
+        verify(&f).unwrap();
+        let mut bad = f.clone();
+        bad.blocks[1].params[0].ty = f.result_ty.clone();
+        assert!(verify(&bad).is_err());
+        let mut bad = f.clone();
+        bad.blocks[0].terminator.exit = Exit::Jump {
+            target: BlockId(1),
+            args: vec![ValueId(1)],
+        };
+        assert_eq!(verify(&bad).unwrap_err(), "conflicting region return types");
+        f.blocks[0].instructions[0].result.ty = f.result_ty.clone();
+        assert!(verify(&f).is_err());
     }
 
     #[test]

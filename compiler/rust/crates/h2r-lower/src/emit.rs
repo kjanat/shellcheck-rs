@@ -80,7 +80,9 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 return Err("unsupported instruction carrier".into());
             }
             match &instruction.operation {
-                Operation::IntBinary { .. } | Operation::Move(_) => {}
+                Operation::IntBinary { .. }
+                | Operation::Move(_)
+                | Operation::EvaluateBlock { .. } => {}
                 Operation::Literal(lit) => {
                     integer(&lit.kind, &lit.pretty)?;
                 }
@@ -139,6 +141,14 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             .unwrap();
             for instruction in &block.instructions {
                 let expression = match &instruction.operation {
+                    Operation::EvaluateBlock { target, arguments } => {
+                        let args = arguments
+                            .iter()
+                            .map(|v| format!("v{}", v.0))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("b_{}({args})", target.0)
+                    }
                     Operation::Move(value) => format!("v{}", value.0),
                     Operation::IntBinary { op, arguments } => {
                         let left = arguments[0].0;

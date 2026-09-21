@@ -44,6 +44,7 @@ pub enum Rule {
     Return,
     Jump,
     IntSwitch,
+    EvaluateBlock,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +64,12 @@ pub struct Value {
 
 #[derive(Debug, Clone)]
 pub enum Operation {
+    /// Evaluate a scalar region once and resume at the next instruction with
+    /// its result. Captures are explicit arguments, never ambient locals.
+    EvaluateBlock {
+        target: BlockId,
+        arguments: Vec<ValueId>,
+    },
     /// Strict machine-Int operations; comparisons produce Int# 0 or 1.
     /// Arithmetic wraps. Both operands and the result are Int#.
     IntBinary {

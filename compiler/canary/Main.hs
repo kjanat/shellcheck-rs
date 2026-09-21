@@ -2,7 +2,8 @@
 module Main (main) where
 
 import Canary (forward, constant, add, subtractInt, multiply, composed, chained, shared,
-  eqInt, neInt, ltInt, leInt, gtInt, geInt, minimumInt, selectInt, nestedBranch)
+  eqInt, neInt, ltInt, leInt, gtInt, geInt, minimumInt, selectInt, nestedBranch,
+  operandBranches, scrutineeBranch, sharedBranch, branchCall)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -44,4 +45,12 @@ main = do
       (I# x, I# y) -> print (I# (selectInt x y))
     ["nestedBranch", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (nestedBranch x y))
+    ["operandBranches", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (operandBranches x y))
+    ["scrutineeBranch", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (scrutineeBranch x y))
+    ["sharedBranch", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (sharedBranch x y))
+    ["branchCall", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (branchCall x y))
     _ -> fail "expected a canary entry and its integer arguments"

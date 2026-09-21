@@ -27,6 +27,9 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
         for instruction in &block.instructions {
             let operation = match &instruction.operation {
                 Operation::IntBinary { op, arguments } => format!("int-{op:?} {arguments:?}"),
+                Operation::EvaluateBlock { target, arguments } => {
+                    format!("evaluate b{} {arguments:?}", target.0)
+                }
                 Operation::Literal(lit) => format!("literal {} {:?}", lit.kind, lit.pretty),
                 Operation::Move(value) => format!("move v{}", value.0),
                 Operation::Force(value) => format!("force v{}", value.0),
