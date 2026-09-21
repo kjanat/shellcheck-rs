@@ -28,6 +28,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Emit standalone Rust for a supported pure Int# entry and all its dependencies.
+    EmitRust {
+        dir: PathBuf,
+        #[arg(long)]
+        entry: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Summarise the Core dumps in a directory.
     Stats {
         /// Directory containing *.core.json
@@ -402,6 +410,13 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     with_big_stack(move || match cli.command {
+        Command::EmitRust { dir, entry, output } => {
+            let modules = load_dir(&dir)?;
+            let source =
+                h2r_lower::emit::emit_entry(&modules, &entry).map_err(anyhow::Error::msg)?;
+            std::fs::write(output, source)?;
+            Ok(())
+        }
         Command::Stats { dir, per_module } => stats(&dir, per_module),
         Command::Binders { dir, module } => binders(&dir, &module),
         Command::Compare { dirs } => compare(&dirs),

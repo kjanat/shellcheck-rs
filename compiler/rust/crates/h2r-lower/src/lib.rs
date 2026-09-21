@@ -8,6 +8,7 @@
 //! the program can actually reach from `Main.main`, with a witness for
 //! every live binding and a named reason for every dead one.
 
+pub mod emit;
 pub mod nir;
 pub mod reachability;
 pub mod verify;

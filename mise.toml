@@ -66,6 +66,53 @@ description = "Build the GHC Core-dump plugin"
 dir         = "{{ config_root }}/compiler/h2r-plugin"
 run         = "cabal build all"
 
+[tasks."canary:extract"]
+description = "Build the small Haskell oracle and regenerate its Core dumps"
+dir         = "{{ config_root }}/compiler/canary"
+run         = '''
+set -eu
+cabal build --offline --builddir=../build/canary/cabal h2r-canary
+mkdir -p ../build/canary/oracle-build
+cabal exec --builddir=../build/canary/cabal -- ghc --make Main.hs -O1 -fno-worker-wrapper -fforce-recomp -package h2r-plugin -fplugin=H2R.CorePlugin -fplugin-opt=H2R.CorePlugin:outdir=../build/canary/core -odir ../build/canary/oracle-build -hidir ../build/canary/oracle-build -o ../build/canary/oracle
+'''
+
+[tasks.canary]
+description = "Emit Rust from real Core, compile it, and compare with Haskell"
+depends     = ["canary:extract"]
+run         = '''
+set -eu
+cargo build --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r
+out=compiler/build/canary
+oracle="$out/oracle"
+for entry in forward constant; do
+  name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
+  compiler/rust/target/release/h2r emit-rust "$out/core" --entry "$name" --output "$out/$entry.rs"
+  rustc --edition=2024 -O "$out/$entry.rs" -o "$out/$entry"
+done
+before=$(sha256sum "$out/forward.rs")
+if compiler/rust/target/release/h2r emit-rust "$out/core" --entry '$main$Main$main' --output "$out/forward.rs" 2> "$out/refusal.stderr"; then
+  echo "unsupported IO entry was incorrectly emitted" >&2
+  exit 1
+fi
+test "$before" = "$(sha256sum "$out/forward.rs")"
+cases=0
+for x in -9223372036854775808 -100 -1 0 1 42 9223372036854775807; do
+  "$oracle" constant "$x" > "$out/oracle.stdout" 2> "$out/oracle.stderr"
+  "$out/constant" "$x" > "$out/rust.stdout" 2> "$out/rust.stderr"
+  cmp "$out/oracle.stdout" "$out/rust.stdout"
+  cmp "$out/oracle.stderr" "$out/rust.stderr"
+  cases=$((cases + 1))
+  for y in -9223372036854775808 -17 0 23 9223372036854775807; do
+    "$oracle" forward "$x" "$y" > "$out/oracle.stdout" 2> "$out/oracle.stderr"
+    "$out/forward" "$x" "$y" > "$out/rust.stdout" 2> "$out/rust.stderr"
+    cmp "$out/oracle.stdout" "$out/rust.stdout"
+    cmp "$out/oracle.stderr" "$out/rust.stderr"
+    cases=$((cases + 1))
+  done
+done
+printf '%s differential cases passed (stdout, stderr, successful exit).\n' "$cases"
+'''
+
 [tasks.check]
 alias       = "c"
 description = "H2R source gate: format, lint, tests, and plugin build"

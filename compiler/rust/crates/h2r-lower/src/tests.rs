@@ -1551,6 +1551,90 @@ fn nir_top_argument_verifier_rejects_target_origin_type_and_forcing_changes() {
     assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &original).is_err());
 }
 
+fn scalar_emission_world() -> Vec<Module> {
+    use h2r_core_ir::{Expr, Ty, TyConId};
+    let mut modules = nir_literal_call_world(false);
+    for m in &mut modules {
+        let int = Ty::Con {
+            tycon: TyConId {
+                name: "$ghc-prim$GHC.Prim$Int#".into(),
+                occ: "Int#".into(),
+                unique: "int".into(),
+            },
+            args: vec![],
+        };
+        let arrow = |res| Ty::Fun {
+            mult: Box::new(int.clone()),
+            arg: Box::new(int.clone()),
+            res: Box::new(res),
+        };
+        m.types = vec![int.clone(), arrow(arrow(int.clone()))];
+        for expr in &mut m.exprs {
+            if let Expr::Lit(lit) = expr {
+                lit.kind = "number".into();
+                lit.pretty.push('#');
+            }
+        }
+    }
+    modules
+}
+
+#[test]
+fn scalar_emission_is_deterministic_and_includes_dependencies() {
+    let modules = scalar_emission_world();
+    let source = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+    assert_eq!(
+        source,
+        crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap()
+    );
+    assert_eq!(source.matches("fn f_").count(), 2);
+    assert!(source.contains("10i64"));
+    assert!(source.contains("-> i64"));
+    assert!(source.contains("target_pointer_width = \"64\""));
+    assert!(!source.contains("unsafe"));
+}
+
+#[test]
+fn scalar_emission_refuses_unsupported_dependency_and_unsafe_literals() {
+    use h2r_core_ir::Expr;
+    let mut modules = scalar_emission_world();
+    let rhs = modules[1].top[0].pairs[0].rhs;
+    modules[1].exprs[rhs as usize] = Expr::Coercion;
+    assert!(crate::emit::emit_entry(&modules, &sn("Main", "main")).is_err());
+    // Conversely, an unsupported owner outside the selected closure is irrelevant.
+    let mut modules = scalar_emission_world();
+    let rhs = modules[0].top[0].pairs[0].rhs;
+    modules[0].exprs[rhs as usize] = Expr::Coercion;
+    assert!(crate::emit::emit_entry(&modules, &sn("Lib", "target")).is_ok());
+    for payload in ["9223372036854775808#", "42u64", "0; panic!()#"] {
+        let mut modules = scalar_emission_world();
+        for expr in &mut modules[0].exprs {
+            if let Expr::Lit(lit) = expr {
+                lit.pretty = payload.into();
+            }
+        }
+        assert!(crate::emit::emit_entry(&modules, &sn("Main", "main")).is_err());
+    }
+    assert!(crate::emit::emit_entry(&nir_call_world(true), &sn("Main", "main")).is_err());
+    assert!(crate::emit::emit_entry(&scalar_emission_world(), "main").is_err());
+}
+
+#[test]
+fn scalar_emission_refuses_recursive_closure() {
+    let mut modules = scalar_emission_world();
+    // Main's existing source call now resolves back to its own definition.
+    let target = modules[1].top[0].pairs[0].binder;
+    modules[1].binders[target as usize].name = sn("Lib", "unused");
+    let owner = modules[0].top[0].pairs[0].binder;
+    modules[0].binders[owner as usize].name = sn("Lib", "target");
+    modules[0].binders[owner as usize].arity = Some(2);
+    assert!(
+        crate::emit::emit_entry(&modules, &sn("Lib", "target"))
+            .unwrap_err()
+            .contains("recursive")
+    );
+}
+
 fn nir_polymorphic_module() -> Module {
     use h2r_core_ir::{Ty, TyVarId};
     let type_lambda = |unique: &str, body: Value| {

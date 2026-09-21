@@ -109,6 +109,14 @@ cargo run --release --bin h2r -- lower ../core-json --reachability --m24-link
 cargo run --release --bin h2r -- lower ../core-json --rules                 # the A0-A11 rule table
 ```
 
+### Executable scalar canary
+
+`mise run canary` now runs a complete small pipeline: compile the real Haskell sources in `compiler/canary/` with GHC 9.6.7 and the format-6 plugin; lower the selected pure entries and every dependency; emit standalone Rust; compile with `rustc`; compare the two executables on 42 inputs, including signed 64-bit boundaries. Standard output, standard error and successful exit are checked. The helper lives in a separate Haskell module, so this exercises actual cross-module linkage as well as argument order and literals.
+
+Generated Rust, binaries and Core dumps live under `compiler/build/canary/`. The task is rerunnable and regenerates dumps even if Cabal considers its build up to date. No wrapper scripts or temporary worktrees are needed. `h2r emit-rust <dump-dir> --entry '<external-stable-name>' --output program.rs` exposes the emitter independently; a refused entry leaves an existing output file untouched.
+
+This is deliberately a **pure scalar backend**, not ShellCheck code generation: only acyclic, monomorphic `Int#` functions with supported source-verified NIR and a complete dependency closure are emitted. The target must be 64-bit. Lifted/lazy values, general recursion, polymorphic specialization, switches, primitive arithmetic and Haskell `IO` remain unsupported. Integer command-line parsing and printing are explicit test adapters, not translated Haskell `main`. The canary checks that attempting to emit the Haskell IO entry fails without replacing already-generated code. M3 as a whole remains open.
+
 ### First NIR leaves
 
 From the repository root, lower one reachable leaf from an existing dump:
