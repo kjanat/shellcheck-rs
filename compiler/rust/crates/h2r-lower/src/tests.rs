@@ -1045,7 +1045,7 @@ fn nir_direct_calls_reject_extra_forcing_and_computed_arguments() {
             lower_leaf_in_world(&[m], 0, owner, FnId(0))
                 .unwrap_err()
                 .reason
-                .contains("parameters, literals or top-level references")
+                .contains("parameters, literals, top-level references or Int# applications")
         );
     }
 }
@@ -1632,6 +1632,196 @@ fn scalar_emission_refuses_recursive_closure() {
         crate::emit::emit_entry(&modules, &sn("Lib", "target"))
             .unwrap_err()
             .contains("recursive")
+    );
+}
+
+fn int_op(symbol: &str, left: Value, right: Value) -> Value {
+    app(
+        app(gvar(&format!("$ghc-prim$GHC.Prim${symbol}"), symbol), left),
+        right,
+    )
+}
+
+fn strict_case(scrut: Value, unique: &str, body: Value) -> Value {
+    json!({
+        "node": "Case", "scrut": scrut,
+        "binder": binder("$_in$intermediate", "intermediate", unique),
+        "type": "Int#", "ty": 0,
+        "alts": [{"con": {"kind": "DEFAULT"}, "binders": [], "rhs": body}]
+    })
+}
+
+fn scalar_expression_world(body: Value) -> Vec<Module> {
+    let mut world = scalar_emission_world();
+    let types = world[0].types.clone();
+    world[0] = module(
+        "Main",
+        vec![(
+            binder(&sn("Main", "main"), "main", "main"),
+            lam("x", lam("y", body)),
+        )],
+        json!({}),
+    );
+    world[0].types = types;
+    let owner = world[0].top[0].pairs[0].binder;
+    world[0].binders[owner as usize].ty = 1;
+    world[0].binders[owner as usize].arity = Some(2);
+    for symbol in ["+#", "-#", "*#"] {
+        world[0]
+            .ids
+            .extend(primitive_emission_world(symbol)[0].ids.clone());
+    }
+    world
+}
+
+#[test]
+fn scalar_composition_verifies_nested_calls_and_strict_case_chains() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let sum = || int_op("+#", lvar("x"), lvar("y"));
+    for body in [
+        int_op("*#", sum(), int_op("-#", lvar("x"), lvar("y"))),
+        strict_case(
+            sum(),
+            "s",
+            strict_case(
+                int_op("-#", lvar("s"), lvar("y")),
+                "t",
+                int_op("*#", lvar("s"), lvar("t")),
+            ),
+        ),
+        strict_case(
+            strict_case(sum(), "inner", lvar("inner")),
+            "outer",
+            lvar("outer"),
+        ),
+        // A discarded result must not discard the scrutinee evaluation.
+        strict_case(
+            app(
+                app(gvar(&sn("Lib", "target"), "target"), lvar("x")),
+                lvar("y"),
+            ),
+            "unused",
+            lvar("x"),
+        ),
+    ] {
+        let modules = scalar_expression_world(body);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let accounting = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert_eq!(
+            accounting.source_nodes,
+            modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
+        );
+        let emitted = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        assert!(emitted.contains("fn f_"));
+        for index in 0..leaf.function.blocks[0].instructions.len() {
+            for mutation in 0..4 {
+                let mut bad = leaf.clone();
+                let instruction = &mut bad.function.blocks[0].instructions[index];
+                match mutation {
+                    0 => instruction.origin.source = crate::nir::Source::Binder(owner),
+                    1 => instruction.operation = Operation::Move(crate::nir::ValueId(0)),
+                    2 => instruction.origin.rule = crate::nir::Rule::EraseCast,
+                    _ => {
+                        bad.function.blocks[0].instructions.remove(index);
+                    }
+                }
+                assert!(
+                    verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
+                    "index {index}, mutation {mutation}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn strict_cases_refuse_branching_wrong_types_and_alternative_binders() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let modules = scalar_expression_world(strict_case(
+        int_op("+#", lvar("x"), lvar("y")),
+        "s",
+        lvar("s"),
+    ));
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..6 {
+        let mut bad = scalar_expression_world(strict_case(
+            int_op("+#", lvar("x"), lvar("y")),
+            "s",
+            lvar("s"),
+        ));
+        let m = &mut bad[0];
+        let h2r_core_ir::Expr::Case {
+            binder, ty, alts, ..
+        } = m
+            .exprs
+            .iter_mut()
+            .find(|e| matches!(e, h2r_core_ir::Expr::Case { .. }))
+            .unwrap()
+        else {
+            panic!()
+        };
+        match mutation {
+            0 => alts.clear(),
+            1 => alts.push(alts[0].clone()),
+            2 => alts[0].binders.push(*binder),
+            3 => *ty = 1,
+            4 => m.binders[*binder as usize].ty = 1,
+            _ => {
+                alts[0].con = h2r_core_ir::AltCon::LitAlt {
+                    lit: h2r_core_ir::Lit {
+                        kind: "number".into(),
+                        pretty: "0#".into(),
+                    },
+                }
+            }
+        }
+        assert!(
+            lower_leaf_in_world(&bad, 0, owner, FnId(0)).is_err(),
+            "mutation {mutation}"
+        );
+        assert!(
+            verify_leaf_in_world(&bad, 0, owner, FnId(0), &leaf).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn computed_arguments_do_not_enable_eager_lifted_evaluation() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    let mut modules = scalar_expression_world(app(
+        app(
+            gvar(&sn("Lib", "target"), "target"),
+            app(
+                app(gvar(&sn("Lib", "target"), "target"), lvar("x")),
+                lvar("y"),
+            ),
+        ),
+        lvar("y"),
+    ));
+    for module in &mut modules {
+        for ty in &mut module.types {
+            fn lift(ty: &mut h2r_core_ir::Ty) {
+                match ty {
+                    h2r_core_ir::Ty::Con { tycon, .. } => tycon.name = "$base$GHC.Types$Int".into(),
+                    h2r_core_ir::Ty::Fun { arg, res, .. } => {
+                        lift(arg);
+                        lift(res);
+                    }
+                    _ => {}
+                }
+            }
+            lift(ty);
+        }
+    }
+    let owner = modules[0].top[0].pairs[0].binder;
+    assert!(
+        lower_leaf_in_world(&modules, 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("call arguments")
     );
 }
 

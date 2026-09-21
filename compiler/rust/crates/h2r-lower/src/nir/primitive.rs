@@ -5,6 +5,10 @@ use h2r_core_ir::{Expr, ExprId, Module, Ty, TyConId};
 
 use super::IntArithmetic;
 
+pub(super) fn is_int(ty: &Ty) -> bool {
+    matches!(ty, Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Prim$Int#" && args.is_empty())
+}
+
 pub(super) fn resolve(module: &Module, head: ExprId) -> Option<IntArithmetic> {
     let Expr::Var { name, .. } = module.expr(head) else {
         return None;

@@ -76,7 +76,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 return Err("unsupported instruction carrier".into());
             }
             match &instruction.operation {
-                Operation::IntArithmetic { .. } => {}
+                Operation::IntArithmetic { .. } | Operation::Move(_) => {}
                 Operation::Literal(lit) => {
                     integer(&lit.kind, &lit.pretty)?;
                 }
@@ -122,6 +122,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         .unwrap();
         for instruction in &block.instructions {
             let expression = match &instruction.operation {
+                Operation::Move(value) => format!("v{}", value.0),
                 Operation::IntArithmetic { op, arguments } => {
                     let method = match op {
                         IntArithmetic::Add => "wrapping_add",

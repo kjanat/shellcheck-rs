@@ -135,11 +135,11 @@ fn verify_leaf_impl(
                     return Err("multiple leaf values in source".into());
                 }
             }
-            Expr::App { .. } => {
+            Expr::App { .. } | Expr::Case { .. } => {
                 if leaf.replace(expr).is_some() {
                     return Err("multiple leaf values in source".into());
                 }
-                // The application verifier below validates this entire subtree.
+                // The expression verifier below validates this entire subtree.
                 source_nodes += source.count();
                 break;
             }
@@ -175,6 +175,69 @@ fn verify_leaf_impl(
     if return_origin.source != Source::Expr(expr) || return_origin.rule != Rule::Return {
         return Err("leaf return origin mismatch".into());
     }
+    let context = ValueContext {
+        module,
+        module_index,
+        modules,
+        params: &params,
+        type_scope: &type_scope,
+    };
+    let (type_applications, value_applications, value_nodes) =
+        verify_value(&context, block, expr, ty, returned)?;
+    let accounting = LeafAccounting {
+        source_nodes,
+        parameter_nodes: params.len(),
+        type_parameter_nodes: type_params.len(),
+        value_nodes,
+        type_application_nodes: type_applications,
+        type_argument_nodes: type_applications,
+        value_application_nodes: value_applications,
+        value_argument_nodes: value_applications,
+        erased_ticks: ticks.len(),
+    };
+    // Counts source nodes, not NIR instructions: a literal's instruction and
+    // return share a source node; lambda nodes become entry parameters.
+    if source_nodes
+        != accounting.parameter_nodes
+            + accounting.type_parameter_nodes
+            + accounting.value_nodes
+            + accounting.type_application_nodes
+            + accounting.type_argument_nodes
+            + accounting.value_application_nodes
+            + accounting.value_argument_nodes
+            + accounting.erased_ticks
+    {
+        return Err("leaf source accounting does not close".into());
+    }
+    Ok(accounting)
+}
+
+struct ValueContext<'a> {
+    module: &'a h2r_core_ir::Module,
+    module_index: usize,
+    modules: Option<&'a [h2r_core_ir::Module]>,
+    params: &'a [(ExprId, BinderId, ValueId)],
+    type_scope: &'a [(TyVarId, TyVarId)],
+}
+
+/// Walk source expressions independently, consuming exactly the corresponding
+/// instruction slice. Strict case markers split evaluation from its continuation.
+fn verify_value(
+    context: &ValueContext<'_>,
+    block: &Block,
+    expr: ExprId,
+    ty: &Ty,
+    returned: ValueId,
+) -> Result<(usize, usize, usize), String> {
+    use h2r_core_ir::Expr;
+    let ValueContext {
+        module,
+        module_index,
+        modules,
+        params,
+        type_scope,
+    } = *context;
+    let mut value_nodes = 1;
     let mut type_applications = 0;
     let mut value_applications = 0;
     match module.expr(expr) {
@@ -224,6 +287,23 @@ fn verify_leaf_impl(
                     return Err("source call signature lacks an arrow".into());
                 };
                 let value = match module.expr(*source) {
+                    Expr::App { .. } if primitive::is_int(arg) => {
+                        let end = block.instructions[argument_instructions..]
+                            .iter()
+                            .position(|i| i.origin.source == Source::Expr(*source))
+                            .map(|offset| argument_instructions + offset)
+                            .ok_or("missing computed Int# argument")?;
+                        let result = block.instructions[end].result.id;
+                        let mut nested = block.clone();
+                        nested.instructions =
+                            block.instructions[argument_instructions..=end].to_vec();
+                        let (nt, nv, nn) = verify_value(context, &nested, *source, arg, result)?;
+                        type_applications += nt;
+                        value_applications += nv;
+                        value_nodes += nn - 1;
+                        argument_instructions = end + 1;
+                        result
+                    }
                     Expr::Lit(expected) => {
                         let instruction = block
                             .instructions
@@ -285,7 +365,9 @@ fn verify_leaf_impl(
                 signature = res;
             }
             if block.instructions.len() != argument_instructions + 1 {
-                return Err("direct call must contain only its atomic arguments and call".into());
+                return Err(
+                    "direct call must contain exactly its argument evaluations and call".into(),
+                );
             }
             let instruction = &block.instructions[argument_instructions];
             let expected_rule = if let Some(expected) = primitive {
@@ -431,7 +513,7 @@ fn verify_leaf_impl(
             let binder = module
                 .resolve(expr)
                 .ok_or("leaf source is not a local reference")?;
-            if !source_type_matches(ty, module.binder_ty(binder), &type_scope) {
+            if !source_type_matches(ty, module.binder_ty(binder), type_scope) {
                 return Err("returned reference type differs from source".into());
             }
             let param = params.iter().find(|(_, source, _)| *source == binder);
@@ -471,34 +553,65 @@ fn verify_leaf_impl(
                 }
             }
         }
+        Expr::Case {
+            scrut,
+            binder,
+            ty: result_ty,
+            alts,
+            ..
+        } => {
+            let [alt] = alts.as_slice() else {
+                return Err("source strict case must have one alternative".into());
+            };
+            if !matches!(alt.con, h2r_core_ir::AltCon::Default)
+                || !alt.binders.is_empty()
+                || !primitive::is_int(module.binder_ty(*binder))
+                || !primitive::is_int(ty)
+                || !module.ty(*result_ty).alpha_eq(ty)
+            {
+                return Err("source strict case has unsupported type or alternative".into());
+            }
+            let split = block
+                .instructions
+                .iter()
+                .position(|i| {
+                    i.origin.source == Source::Expr(expr) && i.origin.rule == Rule::StrictPosition
+                })
+                .ok_or("missing strict case binding")?;
+            let binding = &block.instructions[split];
+            let Operation::Move(scrutinee) = binding.operation else {
+                return Err("strict case binding must preserve the evaluated scrutinee".into());
+            };
+            if !binding.result.ty.alpha_eq(module.binder_ty(*binder)) {
+                return Err("strict case binder type mismatch".into());
+            }
+            let mut prefix = block.clone();
+            prefix.instructions.truncate(split);
+            let (st, sv, sn) = verify_value(
+                context,
+                &prefix,
+                *scrut,
+                module.binder_ty(*binder),
+                scrutinee,
+            )?;
+            let mut suffix = block.clone();
+            suffix.instructions = block.instructions[split + 1..].to_vec();
+            suffix.params.push(binding.result.clone());
+            let mut extended_params = params.to_vec();
+            extended_params.push((expr, *binder, binding.result.id));
+            let extended = ValueContext {
+                params: &extended_params,
+                ..*context
+            };
+            let (bt, bv, bn) = verify_value(&extended, &suffix, alt.rhs, ty, returned)?;
+            type_applications = st + bt;
+            value_applications = sv + bv;
+            value_nodes = 1 + sn + bn;
+        }
         _ => return Err("unsupported leaf value".into()),
     }
-    let accounting = LeafAccounting {
-        source_nodes,
-        parameter_nodes: params.len(),
-        type_parameter_nodes: type_params.len(),
-        value_nodes: 1,
-        type_application_nodes: type_applications,
-        type_argument_nodes: type_applications,
-        value_application_nodes: value_applications,
-        value_argument_nodes: value_applications,
-        erased_ticks: ticks.len(),
-    };
-    // Counts source nodes, not NIR instructions: a literal's instruction and
-    // return share a source node; lambda nodes become entry parameters.
-    if source_nodes
-        != accounting.parameter_nodes
-            + accounting.type_parameter_nodes
-            + accounting.value_nodes
-            + accounting.type_application_nodes
-            + accounting.type_argument_nodes
-            + accounting.value_application_nodes
-            + accounting.value_argument_nodes
-            + accounting.erased_ticks
-    {
-        return Err("leaf source accounting does not close".into());
-    }
-    Ok(accounting)
+
+    Ok((type_applications, value_applications, value_nodes))
 }
 
 // Rebuild quantified types independently of the lowering builder. Only the

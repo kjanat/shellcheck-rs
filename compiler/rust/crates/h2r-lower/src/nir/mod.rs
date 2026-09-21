@@ -84,7 +84,8 @@ pub enum Operation {
     },
     /// Saturated direct call when the enclosing function is entered. Parameter
     /// values (possibly lazy), literals and shared top-level references are
-    /// passed without pre-forcing.
+    /// passed without pre-forcing. Computed Int# arguments are evaluated first;
+    /// this does not permit eager evaluation of computed lifted arguments.
     /// The target is identified independently of whether it has been lowered.
     CallTop {
         module: usize,

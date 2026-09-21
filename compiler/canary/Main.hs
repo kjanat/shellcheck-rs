@@ -1,7 +1,7 @@
 {-# LANGUAGE MagicHash #-}
 module Main (main) where
 
-import Canary (forward, constant, add, subtractInt, multiply)
+import Canary (forward, constant, add, subtractInt, multiply, composed, chained, shared)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -19,4 +19,10 @@ main = do
       (I# x, I# y) -> print (I# (subtractInt x y))
     ["multiply", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (multiply x y))
-    _ -> fail "expected forward/add/subtractInt/multiply INT INT or constant INT"
+    ["composed", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (composed x y))
+    ["chained", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (chained x y))
+    ["shared", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (shared x y))
+    _ -> fail "expected forward/add/subtractInt/multiply/composed/chained/shared INT INT or constant INT"

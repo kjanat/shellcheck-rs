@@ -1,5 +1,5 @@
-//! Conservative first slice of Core lowering: literal, argument and top-reference
-//! leaves, with leading type/value lambdas. Unsupported constructs fail explicitly.
+//! Conservative scalar Core lowering: leaves, direct calls, Int# composition
+//! and strict DEFAULT cases. Unsupported constructs fail explicitly.
 //! This is not a whole-program driver or an independent semantic verifier.
 
 use std::collections::BTreeMap;
@@ -137,15 +137,93 @@ fn lower_leaf_impl(
             _ => break,
         }
     }
+    let mut instructions = Vec::new();
+    let context = BodyContext {
+        module,
+        module_index,
+        owner,
+        modules,
+        params: &params,
+        type_scope: &type_scope,
+    };
+    let value = lower_value(&context, current, ty, &mut locals, &mut instructions)?;
     let origin = |rule| Origin {
         module: module_index,
         source: Source::Expr(current),
         rule,
     };
-    let mut instructions = Vec::new();
+    let function = Function {
+        id,
+        module: module_index,
+        owner,
+        result_ty: ty.clone(),
+        type_params: type_scope
+            .iter()
+            .map(|(signature, _)| signature.clone())
+            .collect(),
+        entry: BlockId(0),
+        blocks: vec![Block {
+            id: BlockId(0),
+            params,
+            instructions,
+            terminator: Terminator {
+                exit: Exit::Return(value),
+                origin: origin(Rule::Return),
+            },
+        }],
+    };
+    let lowered = LoweredLeaf {
+        function,
+        parameters,
+        type_parameters,
+        erased_ticks,
+    };
+    let verified = match modules {
+        Some(modules) => verify::verify_leaf_in_world(modules, module_index, owner, id, &lowered),
+        None => verify::verify_leaf(module, module_index, owner, id, &lowered),
+    };
+    verified.map_err(|reason| fail(Some(current), &reason))?;
+    Ok(lowered)
+}
+
+struct BodyContext<'a> {
+    module: &'a Module,
+    module_index: usize,
+    owner: BinderId,
+    modules: Option<&'a [Module]>,
+    params: &'a [Value],
+    type_scope: &'a [(TyVarId, TyVarId)],
+}
+
+fn lower_value(
+    context: &BodyContext<'_>,
+    current: ExprId,
+    ty: &Ty,
+    locals: &mut BTreeMap<BinderId, ValueId>,
+    instructions: &mut Vec<Instruction>,
+) -> Result<ValueId, LowerError> {
+    let BodyContext {
+        module,
+        module_index,
+        owner,
+        modules,
+        params,
+        type_scope,
+    } = *context;
+    let fail = |source, reason: &str| LowerError {
+        module: module_index,
+        owner,
+        source,
+        reason: reason.into(),
+    };
+    let origin = |rule| Origin {
+        module: module_index,
+        source: Source::Expr(current),
+        rule,
+    };
     let value = match module.expr(current) {
         Expr::Lit(lit) => {
-            let value = ValueId(params.len() as u32);
+            let value = ValueId((params.len() + instructions.len()) as u32);
             instructions.push(Instruction {
                 result: Value {
                     id: value,
@@ -171,7 +249,7 @@ fn lower_leaf_impl(
             if !ty.alpha_eq(target_ty) {
                 return Err(fail(Some(current), "import reference type mismatch"));
             }
-            let value = ValueId(params.len() as u32);
+            let value = ValueId((params.len() + instructions.len()) as u32);
             instructions.push(Instruction {
                 result: Value {
                     id: value,
@@ -189,13 +267,13 @@ fn lower_leaf_impl(
             let binder = module
                 .resolve(current)
                 .ok_or_else(|| fail(Some(current), "external references are not lowered yet"))?;
-            if !same_scoped_type(ty, module.binder_ty(binder), &type_scope) {
+            if !same_scoped_type(ty, module.binder_ty(binder), type_scope) {
                 return Err(fail(Some(current), "returned reference type mismatch"));
             }
             if let Some(value) = locals.get(&binder) {
                 *value
             } else if matches!(module.binding(binder).site, BindSite::Top) {
-                let value = ValueId(params.len() as u32);
+                let value = ValueId((params.len() + instructions.len()) as u32);
                 instructions.push(Instruction {
                     result: Value {
                         id: value,
@@ -279,6 +357,9 @@ fn lower_leaf_impl(
                     return Err(fail(Some(current), "direct call lacks a value arrow"));
                 };
                 let value = match module.expr(source) {
+                    Expr::App { .. } if primitive::is_int(arg) => {
+                        lower_value(context, source, arg, locals, instructions)?
+                    }
                     Expr::Lit(lit) => {
                         let value = ValueId((params.len() + instructions.len()) as u32);
                         instructions.push(Instruction {
@@ -300,7 +381,14 @@ fn lower_leaf_impl(
                             .resolve(source)
                             .and_then(|binder| locals.get(&binder))
                         {
-                            if !arg.alpha_eq(&params[value.0 as usize].ty) {
+                            if !arg.alpha_eq(
+                                &params
+                                    .iter()
+                                    .chain(instructions.iter().map(|i: &Instruction| &i.result))
+                                    .find(|v| v.id == *value)
+                                    .expect("available local value")
+                                    .ty,
+                            ) {
                                 return Err(fail(
                                     Some(source),
                                     "direct call argument type mismatch",
@@ -336,7 +424,7 @@ fn lower_leaf_impl(
                     _ => {
                         return Err(fail(
                             Some(source),
-                            "call arguments must be parameters, literals or top-level references",
+                            "call arguments must be parameters, literals, top-level references or Int# applications",
                         ));
                     }
                 };
@@ -390,7 +478,7 @@ fn lower_leaf_impl(
             if !world::closed_type(ty) || !ty.alpha_eq(&result_ty) {
                 return Err(fail(Some(current), "type application result mismatch"));
             }
-            let value = ValueId(params.len() as u32);
+            let value = ValueId((params.len() + instructions.len()) as u32);
             instructions.push(Instruction {
                 result: Value {
                     id: value,
@@ -406,44 +494,67 @@ fn lower_leaf_impl(
             value
         }
         Expr::Let { .. } => return Err(fail(Some(current), "let bindings are not lowered yet")),
-        Expr::Case { .. } => return Err(fail(Some(current), "cases are not lowered yet")),
+        Expr::Case {
+            scrut,
+            binder,
+            ty: result_ty,
+            alts,
+            ..
+        } => {
+            let [alt] = alts.as_slice() else {
+                return Err(fail(
+                    Some(current),
+                    "strict Int# case requires one DEFAULT alternative",
+                ));
+            };
+            if !matches!(alt.con, h2r_core_ir::AltCon::Default)
+                || !alt.binders.is_empty()
+                || !primitive::is_int(module.binder_ty(*binder))
+                || !primitive::is_int(ty)
+                || !module.ty(*result_ty).alpha_eq(ty)
+            {
+                return Err(fail(
+                    Some(current),
+                    "unsupported strict case type or alternative",
+                ));
+            }
+            let scrutinee = lower_value(
+                context,
+                *scrut,
+                module.binder_ty(*binder),
+                locals,
+                instructions,
+            )?;
+            let value = ValueId((params.len() + instructions.len()) as u32);
+            instructions.push(Instruction {
+                result: Value {
+                    id: value,
+                    ty: module.binder_ty(*binder).clone(),
+                },
+                operation: Operation::Move(scrutinee),
+                origin: origin(Rule::StrictPosition),
+            });
+            let previous = locals.insert(*binder, value);
+            let result = lower_value(context, alt.rhs, ty, locals, instructions);
+            if let Some(previous) = previous {
+                locals.insert(*binder, previous);
+            } else {
+                locals.remove(binder);
+            }
+            result?
+        }
         Expr::Type { .. } | Expr::Coercion => {
             return Err(fail(Some(current), "type or coercion in value position"));
         }
-        Expr::Lam { .. } | Expr::Tick(_) => unreachable!("leading lambdas and ticks were consumed"),
+        Expr::Lam { .. } | Expr::Tick(_) => {
+            return Err(fail(
+                Some(current),
+                "nested lambda or tick is not lowered yet",
+            ));
+        }
     };
-    let function = Function {
-        id,
-        module: module_index,
-        owner,
-        result_ty: ty.clone(),
-        type_params: type_scope
-            .iter()
-            .map(|(signature, _)| signature.clone())
-            .collect(),
-        entry: BlockId(0),
-        blocks: vec![Block {
-            id: BlockId(0),
-            params,
-            instructions,
-            terminator: Terminator {
-                exit: Exit::Return(value),
-                origin: origin(Rule::Return),
-            },
-        }],
-    };
-    let lowered = LoweredLeaf {
-        function,
-        parameters,
-        type_parameters,
-        erased_ticks,
-    };
-    let verified = match modules {
-        Some(modules) => verify::verify_leaf_in_world(modules, module_index, owner, id, &lowered),
-        None => verify::verify_leaf(module, module_index, owner, id, &lowered),
-    };
-    verified.map_err(|reason| fail(Some(current), &reason))?;
-    Ok(lowered)
+
+    Ok(value)
 }
 
 /// Close explicitly paired variables before comparing signature/body types.
