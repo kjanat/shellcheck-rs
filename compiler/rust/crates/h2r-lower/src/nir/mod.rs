@@ -7,17 +7,63 @@
 //! are no implicit captures. IDs are function-local except for `FnId`, which
 //! will be allocated by the program lowering driver.
 
-use h2r_core_ir::{BinderId, ExprId, Lit, Ty, TyVarId};
+use h2r_core_ir::{BinderId, ExprId, Lit, Module, Ty, TyVarId};
+
+/// The modules one pass may read. Constructor layouts, imported bindings and
+/// class evidence are whole-world facts: a function specialized at a type from
+/// another module needs that module's evidence, not its own module's.
+/// Without a loaded world the only readable module is the one being lowered,
+/// and anything cross-module refuses rather than guessing.
+#[derive(Clone, Copy)]
+pub struct World<'a> {
+    pub module: &'a Module,
+    pub index: usize,
+    pub modules: Option<&'a [Module]>,
+}
+
+impl<'a> World<'a> {
+    pub fn of(modules: &'a [Module], index: usize) -> Result<World<'a>, String> {
+        Ok(World {
+            module: modules
+                .get(index)
+                .ok_or("module index is outside the loaded world")?,
+            index,
+            modules: Some(modules),
+        })
+    }
+
+    pub fn at(&self, index: usize) -> Result<&'a Module, String> {
+        match self.modules {
+            Some(modules) => modules
+                .get(index)
+                .ok_or_else(|| "module index is outside the loaded world".into()),
+            None if index == self.index => Ok(self.module),
+            None => Err("cross-module evidence requires a loaded world".into()),
+        }
+    }
+
+    /// Every readable module, with its index.
+    pub fn iter(&self) -> Box<dyn Iterator<Item = (usize, &'a Module)> + '_> {
+        match self.modules {
+            Some(modules) => Box::new(modules.iter().enumerate()),
+            None => Box::new(std::iter::once((self.index, self.module))),
+        }
+    }
+}
 
 pub(crate) mod boxed;
 pub mod data;
+mod dict;
 mod instantiate;
+mod linkage;
 pub mod lower;
 pub mod pretty;
 mod primitive;
 pub mod program;
+pub mod specialize;
+pub mod subst;
 pub mod verify;
-mod world;
+mod view;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FnId(pub u32);
@@ -57,6 +103,12 @@ pub enum Rule {
     CallLocal,
     MakeClosure,
     Apply,
+    /// An application spine whose value arguments were all proven-unique
+    /// dictionaries, so the spine denotes one instance and nothing else.
+    ResolveInstance,
+    /// A class method selector applied to a proven-unique dictionary,
+    /// resolved to that instance's method.
+    ResolveMethod,
 }
 
 #[derive(Debug, Clone)]
@@ -130,34 +182,79 @@ pub enum Operation {
         arguments: Vec<ValueId>,
     },
     Literal(Lit),
-    /// Obtain the existing shared top-level value without forcing it, calling
-    /// it or allocating another copy. This is a binding identity, not a FnId:
-    /// the target may be a function, CAF or recursive thunk.
+    /// Obtain the existing shared value of one instance of a top-level binding
+    /// without forcing it, calling it or allocating another copy. This is a
+    /// binding identity, not a FnId: the target may be a function, CAF or
+    /// recursive thunk. Type and dictionary arguments are compile-time
+    /// specialization evidence and carry no runtime operand.
     TopReference {
         module: usize,
         binder: BinderId,
-    },
-    /// Type-only instantiation of a shared top-level value. No value arguments,
-    /// runtime call, evaluation or allocation; retain specialization evidence.
-    InstantiateTop {
-        module: usize,
-        binder: BinderId,
-        arguments: Vec<Ty>,
+        /// Leading compile-time type arguments, in source application order.
+        type_arguments: Vec<Ty>,
+        /// Leading dictionary arguments the instance was specialized on.
+        dictionaries: Vec<DictionaryRef>,
     },
     /// Saturated direct call when the enclosing function is entered. Parameter
     /// values (possibly lazy), literals and shared top-level references are
     /// passed without pre-forcing. Computed Int# arguments are evaluated first;
     /// computed supported lifted arguments are explicit DelayBlock results.
-    /// The target is identified independently of whether it has been lowered.
+    /// The target instance is identified independently of whether it has been
+    /// lowered; its type and dictionary arguments precede the runtime ones.
     CallTop {
         module: usize,
         binder: BinderId,
         /// Leading compile-time type arguments, in source application order.
         type_arguments: Vec<Ty>,
+        /// Leading dictionary arguments the instance was specialized on.
+        dictionaries: Vec<DictionaryRef>,
         arguments: Vec<ValueId>,
     },
     Move(ValueId),
     Force(ValueId),
+}
+
+/// A dictionary argument an instance was specialized on: itself an instance of
+/// a top-level dictionary producer, so a parameterized instance such as
+/// `Show [Int]` is `$fShowList` at `[Int]` with `Show Int` as its argument.
+/// This is a compile-time identity; it allocates nothing at runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DictionaryRef {
+    pub module: usize,
+    pub binder: BinderId,
+    pub type_arguments: Vec<Ty>,
+    pub dictionaries: Vec<DictionaryRef>,
+}
+
+impl DictionaryRef {
+    /// Two references name the same dictionary when their targets and their
+    /// closed type arguments agree up to alpha-equivalence.
+    pub fn same(&self, other: &DictionaryRef) -> bool {
+        self.module == other.module
+            && self.binder == other.binder
+            && self.type_arguments.len() == other.type_arguments.len()
+            && self.dictionaries.len() == other.dictionaries.len()
+            && self
+                .type_arguments
+                .iter()
+                .zip(&other.type_arguments)
+                .all(|(a, b)| a.alpha_eq(b))
+            && self
+                .dictionaries
+                .iter()
+                .zip(&other.dictionaries)
+                .all(|(a, b)| a.same(b))
+    }
+}
+
+/// Do two instance-argument lists name the same instance?
+pub fn same_dictionaries(left: &[DictionaryRef], right: &[DictionaryRef]) -> bool {
+    left.len() == right.len() && left.iter().zip(right).all(|(a, b)| a.same(b))
+}
+
+/// Do two type-argument lists name the same instance?
+pub fn same_types(left: &[Ty], right: &[Ty]) -> bool {
+    left.len() == right.len() && left.iter().zip(right).all(|(a, b)| a.alpha_eq(b))
 }
 
 #[derive(Debug, Clone)]
@@ -234,6 +331,13 @@ pub struct Function {
     /// Quantified variables in source-signature scope. NIR value types retain
     /// that scope even when Core's lambda binders were alpha-renamed.
     pub type_params: Vec<TyVarId>,
+    /// Specialization evidence: the closed types this instance's leading
+    /// quantifiers were instantiated at, in source binding order. Empty for an
+    /// owner lowered at its own signature.
+    pub type_arguments: Vec<Ty>,
+    /// Specialization evidence: the dictionaries this instance's leading
+    /// dictionary lambdas were bound to. They bind no runtime parameter.
+    pub dictionaries: Vec<DictionaryRef>,
     pub result_ty: Ty,
     pub entry: BlockId,
     /// The entry block's parameters are the function's arguments.

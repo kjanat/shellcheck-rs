@@ -10,10 +10,134 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   recursiveSum, mutualRecursion, localLoop, localMutual, localJoin, recursiveList,
   recursiveTree, localLazy,
   higherOrder, partialTop, localClosure, returnedClosure, closureBranch, functionField,
-  closureUnused, escapingRecursive, overApplied) where
+  closureUnused, escapingRecursive, overApplied,
+  polyTwoTypes, polyCrossModule, polyHigherOrder, polyRecursive, polyNested,
+  classTwoInstances, classDefaultMethod, classSuperclass, classCrossModule,
+  classParameterized, classMethodValue) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#))
-import Helpers (first)
+import Helpers (first, crossPoly, crossApply, Sized(..), Described(..), Small(..))
+
+--------------------------------------------------------------------------------
+-- Polymorphism: one function used at several types, across modules, as a
+-- higher-order argument, and recursively.
+--------------------------------------------------------------------------------
+
+data Wrap = Wrap Int
+data Pair a = Pair a a
+
+{-# NOINLINE polyIdentity #-}
+polyIdentity :: a -> a
+polyIdentity x = x
+
+{-# NOINLINE unwrap #-}
+unwrap :: Wrap -> Int
+unwrap (Wrap n) = n
+
+-- The same binding at `Int` and at `Wrap`: two instances, one source.
+{-# NOINLINE polyTwoTypes #-}
+polyTwoTypes :: Int -> Int -> Int
+polyTwoTypes x y = boxedSum (polyIdentity x) (unwrap (polyIdentity (Wrap y)))
+
+-- `crossPoly` is defined in Helpers and instantiated here, at two types.
+{-# NOINLINE polyCrossModule #-}
+polyCrossModule :: Int -> Int -> Int
+polyCrossModule x y = boxedSum (crossPoly (Wrap x) y) (crossPoly y x)
+
+{-# NOINLINE bumpWrap #-}
+bumpWrap :: Wrap -> Wrap
+bumpWrap (Wrap n) = boxedSucc n `seq` Wrap (boxedSucc n)
+
+{-# NOINLINE boxedSucc #-}
+boxedSucc :: Int -> Int
+boxedSucc (I# n) = I# (n +# 1#)
+
+-- A polymorphic function taking a function argument, at two element types.
+{-# NOINLINE polyHigherOrder #-}
+polyHigherOrder :: Int -> Int -> Int
+polyHigherOrder x y =
+  boxedSum (crossApply boxedSucc x) (unwrap (crossApply bumpWrap (Wrap y)))
+
+{-# NOINLINE polyCount #-}
+polyCount :: [a] -> Int -> Int
+polyCount [] acc = acc
+polyCount (_:rest) acc = polyCount rest (boxedSucc acc)
+
+-- Recursive specialization: the self-call reuses the instance it is inside.
+{-# NOINLINE polyRecursive #-}
+polyRecursive :: Int -> Int -> Int
+polyRecursive x y =
+  boxedSum (polyCount [x, y, x] (I# 0#)) (polyCount [Wrap x, Wrap y] y)
+
+{-# NOINLINE firstOfPair #-}
+firstOfPair :: Pair a -> a
+firstOfPair (Pair a _) = a
+
+-- A nested instance: the type argument is itself a constructor application.
+{-# NOINLINE polyNested #-}
+polyNested :: Int -> Int -> Int
+polyNested x y =
+  boxedSum (firstOfPair (Pair x y)) (firstOfPair (firstOfPair (Pair (Pair y x) (Pair x y))))
+
+--------------------------------------------------------------------------------
+-- Typeclasses: distinct instances, a default method, a superclass path, a
+-- parameterized instance and a method used as a value.
+--------------------------------------------------------------------------------
+
+data Large = Large Int
+
+instance Sized Large where
+  size (Large n) = mulInt n (I# 3#)
+  label _ = I# 5#
+
+instance Described Large where
+  describeIt v = mulInt (size v) (I# 7#)
+
+instance Sized a => Sized (Pair a) where
+  size p = boxedSum (size (firstOfPair p)) (label (firstOfPair p))
+
+instance Described a => Described (Pair a)
+
+{-# NOINLINE mulInt #-}
+mulInt :: Int -> Int -> Int
+mulInt (I# a) (I# b) = I# (a *# b)
+
+-- Two instances of one class, each with its own method bodies.
+{-# NOINLINE classTwoInstances #-}
+classTwoInstances :: Int -> Int -> Int
+classTwoInstances x y = boxedSum (size (Small x)) (size (Large y))
+
+-- `Small` takes `Described`'s default `describeIt`; `Large` overrides it.
+{-# NOINLINE classDefaultMethod #-}
+classDefaultMethod :: Int -> Int -> Int
+classDefaultMethod x y = boxedSum (describeIt (Small x)) (describeIt (Large y))
+
+-- The default `weigh` reaches `size` through the superclass field of the
+-- `Described` dictionary rather than through its own class.
+{-# NOINLINE classSuperclass #-}
+classSuperclass :: Int -> Int -> Int
+classSuperclass x y = boxedSum (weigh (Small x)) (weigh (Large y))
+
+-- `label` is a default method of a class declared in another module.
+{-# NOINLINE classCrossModule #-}
+classCrossModule :: Int -> Int -> Int
+classCrossModule x y = boxedSum (label (Small x)) (label (Large y))
+
+-- `Sized (Pair a)` is a dictionary built from another dictionary.
+{-# NOINLINE classParameterized #-}
+classParameterized :: Int -> Int -> Int
+classParameterized x y =
+  boxedSum (size (Pair (Small x) (Small y))) (describeIt (Pair (Large y) (Large x)))
+
+{-# NOINLINE applySized #-}
+applySized :: (Large -> Int) -> Int -> Int
+applySized f n = f (Large n)
+
+-- A class method passed as a value: the spine is absorbed into one instance
+-- reference, and the call becomes an ordinary indirect application.
+{-# NOINLINE classMethodValue #-}
+classMethodValue :: Int -> Int -> Int
+classMethodValue x y = boxedSum (applySized size x) (applySized describeIt y)
 
 {-# NOINLINE overApplied #-}
 overApplied :: Int -> Int -> Int

@@ -12,7 +12,10 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   recursiveSum, mutualRecursion, localLoop, localMutual, localJoin, recursiveList,
   recursiveTree, localLazy,
   higherOrder, partialTop, localClosure, returnedClosure, closureBranch, functionField,
-  closureUnused, escapingRecursive, overApplied)
+  closureUnused, escapingRecursive, overApplied,
+  polyTwoTypes, polyCrossModule, polyHigherOrder, polyRecursive, polyNested,
+  classTwoInstances, classDefaultMethod, classSuperclass, classCrossModule,
+  classParameterized, classMethodValue)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -20,6 +23,17 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
+    ["polyTwoTypes", a, b] -> print (polyTwoTypes (read a) (read b))
+    ["polyCrossModule", a, b] -> print (polyCrossModule (read a) (read b))
+    ["polyHigherOrder", a, b] -> print (polyHigherOrder (read a) (read b))
+    ["polyRecursive", a, b] -> print (polyRecursive (read a) (read b))
+    ["polyNested", a, b] -> print (polyNested (read a) (read b))
+    ["classTwoInstances", a, b] -> print (classTwoInstances (read a) (read b))
+    ["classDefaultMethod", a, b] -> print (classDefaultMethod (read a) (read b))
+    ["classSuperclass", a, b] -> print (classSuperclass (read a) (read b))
+    ["classCrossModule", a, b] -> print (classCrossModule (read a) (read b))
+    ["classParameterized", a, b] -> print (classParameterized (read a) (read b))
+    ["classMethodValue", a, b] -> print (classMethodValue (read a) (read b))
     ["overApplied", a, b] -> print (overApplied (read a) (read b))
     ["closureUnused", a, b] -> print (closureUnused (read a) (read b))
     ["escapingRecursive", a, b] -> print (escapingRecursive (read a) (read b))

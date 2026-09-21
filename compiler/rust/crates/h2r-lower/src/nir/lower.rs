@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 
 use h2r_core_ir::{BindSite, BinderKind, Expr, Module};
 
+use super::subst::Substitution;
+use super::view::TypeView;
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +26,12 @@ pub struct LoweredLeaf {
     /// Type lambdas introduce no runtime value; retain their lexical binders
     /// (including their kind in the immutable source module) and source nodes.
     pub type_parameters: Vec<(ExprId, BinderId)>,
+    /// Type lambdas this instance consumed, paired with the closed type each
+    /// was specialized at. Source order; disjoint from `type_parameters`.
+    pub type_instantiations: Vec<(ExprId, BinderId, Ty)>,
+    /// Dictionary lambdas this instance consumed, paired with the dictionary
+    /// each was specialized on. They bind no runtime parameter.
+    pub dictionary_parameters: Vec<(ExprId, BinderId, DictionaryRef)>,
     /// Ticks have no runtime representation but retain their source addresses.
     pub erased_ticks: Vec<ExprId>,
 }
@@ -37,7 +45,7 @@ pub fn lower_leaf(
     owner: BinderId,
     id: FnId,
 ) -> Result<LoweredLeaf, LowerError> {
-    lower_leaf_impl(module, module_index, owner, id, None)
+    lower_leaf_impl(module, module_index, owner, id, None, &[], &[])
 }
 
 /// Lower with access to authoritative in-world definitions for imports.
@@ -47,21 +55,46 @@ pub fn lower_leaf_in_world(
     owner: BinderId,
     id: FnId,
 ) -> Result<LoweredLeaf, LowerError> {
+    lower_leaf_specialized(modules, module_index, owner, id, &[], &[])
+}
+
+/// Lower one instance of an owner: its leading quantifiers bound to the given
+/// closed types and its leading dictionary lambdas to the given dictionaries.
+/// Empty argument lists are the owner's own signature.
+pub fn lower_leaf_specialized(
+    modules: &[Module],
+    module_index: usize,
+    owner: BinderId,
+    id: FnId,
+    type_arguments: &[Ty],
+    dictionaries: &[DictionaryRef],
+) -> Result<LoweredLeaf, LowerError> {
     let module = modules.get(module_index).ok_or_else(|| LowerError {
         module: module_index,
         owner,
         source: None,
         reason: "module index is outside the loaded world".into(),
     })?;
-    lower_leaf_impl(module, module_index, owner, id, Some(modules))
+    lower_leaf_impl(
+        module,
+        module_index,
+        owner,
+        id,
+        Some(modules),
+        type_arguments,
+        dictionaries,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_leaf_impl(
     module: &Module,
     module_index: usize,
     owner: BinderId,
     id: FnId,
     modules: Option<&[Module]>,
+    type_arguments: &[Ty],
+    dictionaries: &[DictionaryRef],
 ) -> Result<LoweredLeaf, LowerError> {
     let fail = |source, reason: &str| LowerError {
         module: module_index,
@@ -75,14 +108,28 @@ fn lower_leaf_impl(
         .flat_map(|b| &b.pairs)
         .find(|pair| pair.binder == owner)
         .ok_or_else(|| fail(None, "owner is not a top-level binding"))?;
+    // Bind the source type lambdas first, so the body's types can be read
+    // through one substituted view of the module's immutable type table.
+    let (subst, signature) = bind_type_arguments(module, pair.rhs, owner, type_arguments)
+        .map_err(|reason| fail(Some(pair.rhs), &reason))?;
+    let view = TypeView::specialized(module, &subst);
     let mut current = pair.rhs;
-    let mut ty = module.binder_ty(owner);
+    let mut ty = &signature;
     let mut params = Vec::new();
     let mut parameters = Vec::new();
     let mut type_parameters = Vec::new();
+    let mut type_instantiations = Vec::new();
     let mut type_scope: Vec<(TyVarId, TyVarId)> = Vec::new();
     let mut erased_ticks = Vec::new();
     let mut locals = BTreeMap::new();
+    let mut instantiated = 0;
+    let mut dictionary_parameters = Vec::new();
+    let mut dictionary_scope: BTreeMap<BinderId, DictionaryRef> = BTreeMap::new();
+    let world = World {
+        module,
+        index: module_index,
+        modules,
+    };
     loop {
         match module.expr(current) {
             Expr::Tick(body) => {
@@ -92,6 +139,16 @@ fn lower_leaf_impl(
             Expr::Lam { binder, body } => {
                 let source_binder = module.binder(*binder);
                 if source_binder.kind == BinderKind::Tyvar {
+                    if instantiated < type_arguments.len() {
+                        type_instantiations.push((
+                            current,
+                            *binder,
+                            type_arguments[instantiated].clone(),
+                        ));
+                        instantiated += 1;
+                        current = *body;
+                        continue;
+                    }
                     let Ty::ForAll {
                         binder: signature,
                         body: result,
@@ -121,8 +178,26 @@ fn lower_leaf_impl(
                 let Ty::Fun { arg, res, .. } = ty else {
                     return Err(fail(Some(current), "value lambda needs a function type"));
                 };
-                if !same_scoped_type(arg, module.binder_ty(*binder), &type_scope) {
+                if !same_scoped_type(arg, view.binder_ty(*binder), &type_scope) {
                     return Err(fail(Some(current), "lambda parameter type mismatch"));
+                }
+                // A dictionary the instance was specialized on binds no runtime
+                // parameter: its identity is already in the instance key.
+                if dictionary_parameters.len() < dictionaries.len() {
+                    let reference = &dictionaries[dictionary_parameters.len()];
+                    let expected = dict::reference_type(&world, reference)
+                        .map_err(|reason| fail(Some(current), &reason))?;
+                    if !arg.alpha_eq(&expected) {
+                        return Err(fail(
+                            Some(current),
+                            "dictionary parameter type differs from the instance's dictionary",
+                        ));
+                    }
+                    dictionary_parameters.push((current, *binder, reference.clone()));
+                    dictionary_scope.insert(*binder, reference.clone());
+                    ty = res;
+                    current = *body;
+                    continue;
                 }
                 let value = ValueId(params.len() as u32);
                 params.push(Value {
@@ -137,15 +212,24 @@ fn lower_leaf_impl(
             _ => break,
         }
     }
+    if instantiated != type_arguments.len() || dictionary_parameters.len() != dictionaries.len() {
+        return Err(fail(
+            Some(current),
+            "instance supplies more arguments than the owner's leading lambdas bind",
+        ));
+    }
     let next_value = std::cell::Cell::new(params.len() as u32);
     let context = BodyContext {
         module,
+        view: &view,
         module_index,
         owner,
         modules,
         params: &params,
         next_value: &next_value,
         type_scope: &type_scope,
+        subst: &subst,
+        dictionary_scope: &dictionary_scope,
         functions: &BTreeMap::new(),
     };
     let mut blocks = Vec::new();
@@ -159,6 +243,8 @@ fn lower_leaf_impl(
             .iter()
             .map(|(signature, _)| signature.clone())
             .collect(),
+        type_arguments: type_arguments.to_vec(),
+        dictionaries: dictionaries.to_vec(),
         entry,
         blocks,
     };
@@ -166,25 +252,136 @@ fn lower_leaf_impl(
         function,
         parameters,
         type_parameters,
+        type_instantiations,
+        dictionary_parameters,
         erased_ticks,
     };
     let verified = match modules {
-        Some(modules) => verify::verify_leaf_in_world(modules, module_index, owner, id, &lowered),
+        Some(modules) => verify::verify_leaf_specialized(
+            modules,
+            module_index,
+            owner,
+            id,
+            &lowered,
+            type_arguments,
+            dictionaries,
+        ),
         None => verify::verify_leaf(module, module_index, owner, id, &lowered),
     };
     verified.map_err(|reason| fail(Some(current), &reason))?;
     Ok(lowered)
 }
 
+/// Pair the instance's closed type arguments with the owner's leading type
+/// lambdas and the matching quantifiers of its signature. Substitution is
+/// capture-safe, so a rebinding quantifier inside the body is left alone.
+pub(super) fn bind_type_arguments(
+    module: &Module,
+    rhs: ExprId,
+    owner: BinderId,
+    type_arguments: &[Ty],
+) -> Result<(Substitution, Ty), String> {
+    let mut subst = Substitution::default();
+    let mut signature = module.binder_ty(owner).clone();
+    if type_arguments.is_empty() {
+        return Ok((subst, signature));
+    }
+    let mut current = rhs;
+    for argument in type_arguments {
+        if !linkage::closed_type(argument) {
+            return Err("specialization requires closed structured type arguments".into());
+        }
+        while let Expr::Tick(body) = module.expr(current) {
+            current = *body;
+        }
+        let Expr::Lam { binder, body } = module.expr(current) else {
+            return Err("instance has more type arguments than the owner binds".into());
+        };
+        let source = module.binder(*binder);
+        if source.kind != BinderKind::Tyvar {
+            return Err("instance type argument meets a value lambda".into());
+        }
+        let Ty::ForAll {
+            binder: quantifier,
+            body: result,
+        } = signature
+        else {
+            return Err("specialized type lambda needs a forall type".into());
+        };
+        let mut instantiated = *result;
+        super::subst::substitute_capture_safe(&mut instantiated, &quantifier.unique, argument);
+        signature = instantiated;
+        subst.bind(
+            TyVarId {
+                name: source.name.clone(),
+                occ: source.occ.clone(),
+                unique: source.unique.clone(),
+            },
+            argument.clone(),
+        )?;
+        current = *body;
+    }
+    if !linkage::closed_type(&signature) {
+        return Err("specialized signature is not closed".into());
+    }
+    Ok((subst, signature))
+}
+
 struct BodyContext<'a> {
     module: &'a Module,
+    view: &'a TypeView<'a>,
     module_index: usize,
     owner: BinderId,
     modules: Option<&'a [Module]>,
     params: &'a [Value],
     next_value: &'a std::cell::Cell<u32>,
     type_scope: &'a [(TyVarId, TyVarId)],
+    /// This instance's type arguments, for reading source types in scope.
+    subst: &'a Substitution,
+    /// Dictionary lambdas the instance key absorbed. These are compile-time
+    /// identities that scope over the whole body, not runtime values.
+    dictionary_scope: &'a BTreeMap<BinderId, DictionaryRef>,
     functions: &'a BTreeMap<BinderId, (BlockId, Vec<BinderId>, usize)>,
+}
+
+impl<'a> BodyContext<'a> {
+    fn world(&self) -> World<'a> {
+        World {
+            module: self.module,
+            index: self.module_index,
+            modules: self.modules,
+        }
+    }
+
+    fn scope(&self) -> dict::Scope<'a> {
+        dict::Scope {
+            module: self.module_index,
+            types: self.subst,
+            dictionaries: self.dictionary_scope,
+        }
+    }
+}
+
+fn reference_operation(reference: &DictionaryRef) -> Operation {
+    Operation::TopReference {
+        module: reference.module,
+        binder: reference.binder,
+        type_arguments: reference.type_arguments.clone(),
+        dictionaries: reference.dictionaries.clone(),
+    }
+}
+
+/// Which source rule produced an instance reference: a resolved class method, a
+/// spine absorbed into an instance key, or a plain shared top-level value.
+fn instance_rule(target: &dict::CallTarget) -> Rule {
+    if target.method {
+        Rule::ResolveMethod
+    } else if target.reference.type_arguments.is_empty() && target.reference.dictionaries.is_empty()
+    {
+        Rule::TopReference
+    } else {
+        Rule::ResolveInstance
+    }
 }
 
 fn fresh_value(context: &BodyContext<'_>) -> ValueId {
@@ -228,6 +425,8 @@ fn lower_tail_at(
     id: BlockId,
 ) -> Result<BlockId, LowerError> {
     let module = context.module;
+    let view = context.view;
+    let world = context.world();
     let fail = |reason: String| LowerError {
         module: context.module_index,
         owner: context.owner,
@@ -257,11 +456,11 @@ fn lower_tail_at(
         alts,
         ..
     } = module.expr(source)
-        && !data::lifted(module, module.binder_ty(*binder))
+        && !data::lifted(&world, view.binder_ty(*binder))
     {
-        if !primitive::is_int(module.binder_ty(*binder))
-            || !data::supported(module, ty)
-            || !module.ty(*result_ty).alpha_eq(ty)
+        if !primitive::is_int(view.binder_ty(*binder))
+            || !data::supported(&world, ty)
+            || !view.ty(*result_ty).alpha_eq(ty)
             || alts.iter().any(|a| !a.binders.is_empty())
         {
             return Err(fail(
@@ -296,7 +495,7 @@ fn lower_tail_at(
         let scrutinee = lower_value(
             context,
             *scrut,
-            module.binder_ty(*binder),
+            view.binder_ty(*binder),
             &mut locals,
             &mut instructions,
             blocks,
@@ -334,7 +533,7 @@ fn lower_tail_at(
             }
             let case_value = Value {
                 id: fresh_value(context),
-                ty: module.binder_ty(*binder).clone(),
+                ty: view.binder_ty(*binder).clone(),
             };
             branch_locals.insert(*binder, case_value.id);
             params.push(case_value);
@@ -380,6 +579,7 @@ fn lower_value(
 ) -> Result<ValueId, LowerError> {
     let BodyContext {
         module,
+        view,
         module_index,
         owner,
         modules,
@@ -387,6 +587,7 @@ fn lower_value(
         type_scope,
         ..
     } = *context;
+    let world = context.world();
     let fail = |source, reason: &str| LowerError {
         module: module_index,
         owner,
@@ -404,7 +605,7 @@ fn lower_value(
     let mut types = Vec::new();
     while let Expr::App { fun, arg } = module.expr(head) {
         if let Expr::Type { ty, .. } = module.expr(*arg) {
-            types.push(module.ty(*ty).clone());
+            types.push(view.ty(*ty).clone());
         } else {
             if !types.is_empty() {
                 return Err(fail(
@@ -417,7 +618,7 @@ fn lower_value(
         head = *fun;
     }
     if let Some(constructor) =
-        data::resolve(module, head, ty).map_err(|e| fail(Some(current), &e))?
+        data::resolve(&world, module_index, head, ty).map_err(|e| fail(Some(current), &e))?
     {
         sources.reverse();
         types.reverse();
@@ -432,7 +633,7 @@ fn lower_value(
         }
         let mut arguments = Vec::new();
         for (source, field) in sources.into_iter().zip(&constructor.fields) {
-            let value = if data::lifted(module, field)
+            let value = if data::lifted(&world, field)
                 && !matches!(module.expr(source), Expr::Var { .. })
             {
                 lower_region(context, source, field, locals, instructions, blocks, true)?
@@ -473,10 +674,10 @@ fn lower_value(
         Expr::Var { name, .. } if module.reference(current) == Some(h2r_core_ir::Ref::Global) => {
             let modules = modules
                 .ok_or_else(|| fail(Some(current), "external references require a loaded world"))?;
-            let (target_module, binder) = world::imported_top(modules, name)
+            let (target_module, binder) = linkage::imported_top(modules, name)
                 .map_err(|reason| fail(Some(current), &reason))?;
             let target_ty = modules[target_module].binder_ty(binder);
-            if !world::closed_type(ty) || !world::closed_type(target_ty) {
+            if !linkage::closed_type(ty) || !linkage::closed_type(target_ty) {
                 return Err(fail(
                     Some(current),
                     "import reference requires closed structured types",
@@ -492,6 +693,8 @@ fn lower_value(
                     ty: ty.clone(),
                 },
                 operation: Operation::TopReference {
+                    type_arguments: Vec::new(),
+                    dictionaries: Vec::new(),
                     module: target_module,
                     binder,
                 },
@@ -503,7 +706,7 @@ fn lower_value(
             let binder = module
                 .resolve(current)
                 .ok_or_else(|| fail(Some(current), "external references are not lowered yet"))?;
-            if !same_scoped_type(ty, module.binder_ty(binder), type_scope) {
+            if !same_scoped_type(ty, view.binder_ty(binder), type_scope) {
                 return Err(fail(Some(current), "returned reference type mismatch"));
             }
             if let Some((target, captures, 0)) = context.functions.get(&binder) {
@@ -564,6 +767,8 @@ fn lower_value(
                         ty: ty.clone(),
                     },
                     operation: Operation::TopReference {
+                        type_arguments: Vec::new(),
+                        dictionaries: Vec::new(),
                         module: module_index,
                         binder,
                     },
@@ -589,7 +794,7 @@ fn lower_value(
             let mut type_arguments = Vec::new();
             while let Expr::App { fun, arg } = module.expr(head) {
                 if let Expr::Type { ty, .. } = module.expr(*arg) {
-                    type_arguments.push(module.ty(*ty).clone());
+                    type_arguments.push(view.ty(*ty).clone());
                     head = *fun;
                     continue;
                 }
@@ -622,27 +827,50 @@ fn lower_value(
                     None
                 } else {
                     Some(
-                        instantiate::target(module, module_index, modules, head)
-                            .map_err(|reason| fail(Some(head), &reason))?,
+                        dict::call_target(
+                            &context.world(),
+                            &context.scope(),
+                            head,
+                            &type_arguments,
+                            &argument_sources,
+                        )
+                        .map_err(|reason| fail(Some(head), &reason))?
+                        .ok_or_else(|| {
+                            fail(Some(head), "application requires a top-level binding")
+                        })?,
                     )
                 };
             let head_ty = indirect.map_or_else(
                 || {
                     local.map_or_else(
-                        || target.map_or(&primitive_ty, |(_, _, ty)| ty),
-                        |(b, _)| module.binder_ty(b),
+                        || {
+                            target
+                                .as_ref()
+                                .map_or(&primitive_ty, |resolved| &resolved.signature)
+                        },
+                        |(b, _)| view.binder_ty(b),
                     )
                 },
-                |b| module.binder_ty(b),
+                |b| view.binder_ty(b),
             );
-            let instantiated = instantiate::apply(head_ty, &type_arguments)
-                .map_err(|reason| fail(Some(current), &reason))?;
+            let instantiated = match &target {
+                // Already instantiated at the instance's type arguments.
+                Some(resolved) => resolved.signature.clone(),
+                None => instantiate::apply(head_ty, &type_arguments)
+                    .map_err(|reason| fail(Some(current), &reason))?,
+            };
             let mut signature = &instantiated;
+            let argument_sources = match &target {
+                Some(resolved) => resolved.arguments.clone(),
+                None => argument_sources,
+            };
             let arity = local.map_or_else(
                 || {
-                    target.map_or(Some(if constructor { 1 } else { 2 }), |(m, b, _)| {
-                        modules.map_or(module, |world| &world[m]).binder(b).arity
-                    })
+                    target
+                        .as_ref()
+                        .map_or(Some(if constructor { 1 } else { 2 }), |resolved| {
+                            Some(resolved.arity as u32)
+                        })
                 },
                 |(_, (_, _, arity))| Some(*arity as u32),
             );
@@ -650,19 +878,42 @@ fn lower_value(
             if apply
                 && (primitive.is_some()
                     || constructor
-                    || !type_arguments.is_empty()
-                    || !data::function(module, head_ty))
+                    || (target.is_none() && !type_arguments.is_empty())
+                    || !data::function(&world, head_ty))
             {
                 return Err(fail(
                     Some(current),
                     "direct call must match known target arity",
                 ));
             }
-            if !world::closed_type(signature) || !world::closed_type(ty) {
+            if !linkage::closed_type(signature) || !linkage::closed_type(ty) {
                 return Err(fail(
                     Some(current),
                     "direct call requires closed structured types",
                 ));
+            }
+            // Every value argument was a dictionary: the spine denotes one
+            // instance, with no runtime call and no allocation.
+            if let Some(resolved) = &target
+                && argument_sources.is_empty()
+            {
+                if !instantiated.alpha_eq(ty) {
+                    return Err(fail(Some(current), "instance reference type mismatch"));
+                }
+                let value = fresh_value(context);
+                instructions.push(Instruction {
+                    result: Value {
+                        id: value,
+                        ty: ty.clone(),
+                    },
+                    operation: reference_operation(&resolved.reference),
+                    origin: origin(if resolved.method {
+                        Rule::ResolveMethod
+                    } else {
+                        Rule::ResolveInstance
+                    }),
+                });
+                return Ok(value);
             }
             let mut arguments = Vec::new();
             for source in argument_sources {
@@ -677,7 +928,7 @@ fn lower_value(
                         lower_region(context, source, arg, locals, instructions, blocks, false)?
                     }
                     Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. } | Expr::Lam { .. }
-                        if data::lifted(module, arg) =>
+                        if data::lifted(&world, arg) =>
                     {
                         lower_region(context, source, arg, locals, instructions, blocks, true)?
                     }
@@ -701,7 +952,7 @@ fn lower_value(
                         if module
                             .resolve(source)
                             .is_some_and(|b| context.functions.contains_key(&b))
-                            || data::resolve(module, source, arg)
+                            || data::resolve(&world, module_index, source, arg)
                                 .map_err(|e| fail(Some(source), &e))?
                                 .is_some()
                         {
@@ -728,7 +979,7 @@ fn lower_value(
                             let (argument_module, argument_binder, argument_ty) =
                                 instantiate::target(module, module_index, modules, source)
                                     .map_err(|reason| fail(Some(source), &reason))?;
-                            if !world::closed_type(argument_ty) || !arg.alpha_eq(argument_ty) {
+                            if !linkage::closed_type(argument_ty) || !arg.alpha_eq(argument_ty) {
                                 return Err(fail(Some(source), "top-level argument type mismatch"));
                             }
                             let value = fresh_value(context);
@@ -738,6 +989,8 @@ fn lower_value(
                                     ty: (**arg).clone(),
                                 },
                                 operation: Operation::TopReference {
+                                    type_arguments: Vec::new(),
+                                    dictionaries: Vec::new(),
                                     module: argument_module,
                                     binder: argument_binder,
                                 },
@@ -763,17 +1016,35 @@ fn lower_value(
             if !signature.alpha_eq(ty) {
                 return Err(fail(Some(current), "direct call result type mismatch"));
             }
-            let callee = if apply {
-                Some(lower_value(
+            let callee = match (apply, &target) {
+                (false, _) => None,
+                // The callee is one instance, not the bare head: its type and
+                // dictionary arguments are compile-time evidence, so nothing
+                // in the source spine corresponds to them at runtime.
+                (true, Some(resolved)) => {
+                    let value = fresh_value(context);
+                    instructions.push(Instruction {
+                        result: Value {
+                            id: value,
+                            ty: instantiated.clone(),
+                        },
+                        operation: reference_operation(&resolved.reference),
+                        origin: Origin {
+                            module: module_index,
+                            source: Source::Expr(head),
+                            rule: instance_rule(resolved),
+                        },
+                    });
+                    Some(value)
+                }
+                (true, None) => Some(lower_value(
                     context,
                     head,
                     head_ty,
                     locals,
                     instructions,
                     blocks,
-                )?)
-            } else {
-                None
+                )?),
             };
             let value = fresh_value(context);
             instructions.push(Instruction {
@@ -802,11 +1073,12 @@ fn lower_value(
                         arguments: actual,
                     }
                 } else {
-                    let (module, binder, _) = target.expect("resolved direct target");
+                    let resolved = target.as_ref().expect("resolved direct target");
                     Operation::CallTop {
-                        module,
-                        binder,
-                        type_arguments,
+                        module: resolved.reference.module,
+                        binder: resolved.reference.binder,
+                        type_arguments: resolved.reference.type_arguments.clone(),
+                        dictionaries: resolved.reference.dictionaries.clone(),
                         arguments,
                     }
                 },
@@ -818,6 +1090,8 @@ fn lower_value(
                     Rule::IntBinary
                 } else if local.is_some() {
                     Rule::CallLocal
+                } else if target.as_ref().is_some_and(|r| r.method) {
+                    Rule::ResolveMethod
                 } else {
                     Rule::CallTop
                 }),
@@ -831,7 +1105,7 @@ fn lower_value(
                 let Expr::Type { ty, .. } = module.expr(*arg) else {
                     return Err(fail(Some(head), "value applications are not lowered yet"));
                 };
-                arguments.push(module.ty(*ty).clone());
+                arguments.push(view.ty(*ty).clone());
                 head = *fun;
             }
             arguments.reverse();
@@ -840,7 +1114,7 @@ fn lower_value(
                     .map_err(|reason| fail(Some(head), &reason))?;
             let result_ty = instantiate::apply(head_ty, &arguments)
                 .map_err(|reason| fail(Some(current), &reason))?;
-            if !world::closed_type(ty) || !ty.alpha_eq(&result_ty) {
+            if !linkage::closed_type(ty) || !ty.alpha_eq(&result_ty) {
                 return Err(fail(Some(current), "type application result mismatch"));
             }
             let value = fresh_value(context);
@@ -849,10 +1123,11 @@ fn lower_value(
                     id: value,
                     ty: ty.clone(),
                 },
-                operation: Operation::InstantiateTop {
+                operation: Operation::TopReference {
                     module: target_module,
                     binder,
-                    arguments,
+                    type_arguments: arguments,
+                    dictionaries: Vec::new(),
                 },
                 origin: origin(Rule::InstantiateTop),
             });
@@ -883,9 +1158,30 @@ fn lower_value(
                     "lazy let requires one non-recursive binding",
                 ));
             };
-            let binding_ty = module.binder_ty(pair.binder);
+            // A dictionary the desugarer bound locally is a compile-time
+            // identity, not a runtime value: binding it here keeps the method
+            // calls under it resolvable and allocates nothing.
+            let extended;
+            if !bind.recursive
+                && module.binder(pair.binder).is_join_point != Some(true)
+                && let Some(reference) =
+                    dict::resolve_dictionary(&world, &context.scope(), pair.rhs, 0)
+                        .map_err(|reason| fail(Some(current), &reason))?
+            {
+                extended = {
+                    let mut scope = context.dictionary_scope.clone();
+                    scope.insert(pair.binder, reference);
+                    scope
+                };
+                let nested = BodyContext {
+                    dictionary_scope: &extended,
+                    ..*context
+                };
+                return lower_value(&nested, *body, ty, locals, instructions, blocks);
+            }
+            let binding_ty = view.binder_ty(pair.binder);
             if bind.recursive
-                || !data::lifted(module, binding_ty)
+                || !data::lifted(&world, binding_ty)
                 || module.binder(pair.binder).is_join_point == Some(true)
             {
                 return Err(fail(
@@ -930,16 +1226,16 @@ fn lower_value(
             ty: result_ty,
             alts,
             ..
-        } if data::is_data(module, module.binder_ty(*binder)) => {
-            if !module.ty(*result_ty).alpha_eq(ty) || !data::supported(module, ty) {
+        } if data::is_data(&world, view.binder_ty(*binder)) => {
+            if !view.ty(*result_ty).alpha_eq(ty) || !data::supported(&world, ty) {
                 return Err(fail(Some(current), "algebraic case result mismatch"));
             }
-            let family = data::family(module, module.binder_ty(*binder))
+            let family = data::family(&world, view.binder_ty(*binder))
                 .map_err(|e| fail(Some(current), &e))?;
             let scrutinee = lower_value(
                 context,
                 *scrut,
-                module.binder_ty(*binder),
+                view.binder_ty(*binder),
                 locals,
                 instructions,
                 blocks,
@@ -975,7 +1271,7 @@ fn lower_value(
                     || fields
                         .iter()
                         .zip(&alt.binders)
-                        .any(|(ty, b)| !ty.alpha_eq(module.binder_ty(*b)))
+                        .any(|(ty, b)| !ty.alpha_eq(view.binder_ty(*b)))
                 {
                     return Err(fail(Some(current), "case field layout mismatch"));
                 }
@@ -996,7 +1292,7 @@ fn lower_value(
                     let id = fresh_value(context);
                     branch_params.push(Value {
                         id,
-                        ty: module.binder_ty(*b).clone(),
+                        ty: view.binder_ty(*b).clone(),
                     });
                     branch_locals.insert(*b, id);
                 }
@@ -1034,7 +1330,7 @@ fn lower_value(
             ty: result_ty,
             alts,
             ..
-        } if boxed::is_int(module.binder_ty(*binder)) => {
+        } if boxed::is_int(view.binder_ty(*binder)) => {
             let [alt] = alts.as_slice() else {
                 return Err(fail(
                     Some(current),
@@ -1044,20 +1340,20 @@ fn lower_value(
             let field = match alt.binders.as_slice() {
                 [field]
                     if boxed::alternative(&alt.con)
-                        && primitive::is_int(module.binder_ty(*field)) =>
+                        && primitive::is_int(view.binder_ty(*field)) =>
                 {
                     Some(*field)
                 }
                 [] if matches!(alt.con, h2r_core_ir::AltCon::Default) => None,
                 _ => return Err(fail(Some(current), "unsupported boxed Int alternative")),
             };
-            if !module.ty(*result_ty).alpha_eq(ty) {
+            if !view.ty(*result_ty).alpha_eq(ty) {
                 return Err(fail(Some(current), "boxed case result type mismatch"));
             }
             let scrutinee = lower_value(
                 context,
                 *scrut,
-                module.binder_ty(*binder),
+                view.binder_ty(*binder),
                 locals,
                 instructions,
                 blocks,
@@ -1091,7 +1387,7 @@ fn lower_value(
             ..
         } => {
             if alts.len() != 1 || !matches!(alts[0].con, h2r_core_ir::AltCon::Default) {
-                if !primitive::is_int(module.binder_ty(*binder)) {
+                if !primitive::is_int(view.binder_ty(*binder)) {
                     return Err(fail(Some(current), "unsupported case scrutinee carrier"));
                 }
                 return lower_region(context, current, ty, locals, instructions, blocks, false);
@@ -1104,9 +1400,9 @@ fn lower_value(
             };
             if !matches!(alt.con, h2r_core_ir::AltCon::Default)
                 || !alt.binders.is_empty()
-                || !primitive::is_int(module.binder_ty(*binder))
-                || !data::supported(module, ty)
-                || !module.ty(*result_ty).alpha_eq(ty)
+                || !primitive::is_int(view.binder_ty(*binder))
+                || !data::supported(&world, ty)
+                || !view.ty(*result_ty).alpha_eq(ty)
             {
                 return Err(fail(
                     Some(current),
@@ -1116,7 +1412,7 @@ fn lower_value(
             let scrutinee = lower_value(
                 context,
                 *scrut,
-                module.binder_ty(*binder),
+                view.binder_ty(*binder),
                 locals,
                 instructions,
                 blocks,
@@ -1125,7 +1421,7 @@ fn lower_value(
             instructions.push(Instruction {
                 result: Value {
                     id: value,
-                    ty: module.binder_ty(*binder).clone(),
+                    ty: view.binder_ty(*binder).clone(),
                 },
                 operation: Operation::Move(scrutinee),
                 origin: origin(Rule::StrictPosition),
@@ -1174,6 +1470,8 @@ fn lower_functions(
         reason: reason.into(),
     };
     let module = context.module;
+    let view = context.view;
+    let world = context.world();
     let captures: Vec<_> = locals.keys().copied().collect();
     let capture_types: Vec<_> = locals
         .values()
@@ -1193,15 +1491,15 @@ fn lower_functions(
     let mut bodies = Vec::new();
     for pair in &bind.pairs {
         let mut rhs = pair.rhs;
-        let mut result = module.binder_ty(pair.binder);
+        let mut result = view.binder_ty(pair.binder);
         let mut parameters = Vec::new();
         while let Expr::Lam { binder, body } = module.expr(rhs) {
             let Ty::Fun { arg, res, .. } = result else {
                 return Err(fail("local functions require monomorphic value lambdas"));
             };
             if module.binder(*binder).kind != BinderKind::Id
-                || !arg.alpha_eq(module.binder_ty(*binder))
-                || !data::supported(module, arg)
+                || !arg.alpha_eq(view.binder_ty(*binder))
+                || !data::supported(&world, arg)
             {
                 return Err(fail("unsupported local function parameter"));
             }
@@ -1212,8 +1510,8 @@ fn lower_functions(
         if (parameters.is_empty()
             && !(module.binder(pair.binder).is_join_point == Some(true)
                 && module.binder(pair.binder).arity == Some(0)))
-            || !data::supported(module, result)
-            || !world::closed_type(module.binder_ty(pair.binder))
+            || !data::supported(&world, result)
+            || !linkage::closed_type(view.binder_ty(pair.binder))
         {
             return Err(fail("local functions require supported closed signatures"));
         }
@@ -1246,11 +1544,7 @@ fn lower_functions(
             .iter()
             .copied()
             .zip(capture_types.iter().cloned())
-            .chain(
-                parameters
-                    .iter()
-                    .map(|b| (*b, module.binder_ty(*b).clone())),
-            )
+            .chain(parameters.iter().map(|b| (*b, view.binder_ty(*b).clone())))
         {
             let id = fresh_value(context);
             scope.insert(binder, id);
@@ -1310,7 +1604,7 @@ fn lower_lambda(
         source: Some(source),
         reason: reason.into(),
     };
-    if !data::function(context.module, ty) {
+    if !data::function(&context.world(), ty) {
         return Err(fail(
             "closure requires a supported monomorphic function type",
         ));
@@ -1340,7 +1634,7 @@ fn lower_lambda(
             return Err(fail("closure lambda lacks function arrow"));
         };
         if context.module.binder(*binder).kind != BinderKind::Id
-            || !arg.alpha_eq(context.module.binder_ty(*binder))
+            || !arg.alpha_eq(context.view.binder_ty(*binder))
         {
             return Err(fail("closure lambda parameter mismatch"));
         }

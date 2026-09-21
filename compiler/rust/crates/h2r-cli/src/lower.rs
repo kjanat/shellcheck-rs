@@ -37,6 +37,180 @@ pub fn nir_program(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Specialize and report every instance the roots need. With `--fn` the root
+/// is that one binding and the full NIR of each instance is printed; without
+/// it, every live binding is a root and the report is the whole-program
+/// measure: how many instances the live set requires, how many lower, and what
+/// the remaining blockers are.
+///
+/// Refusals are recorded rather than fatal, so the report is the whole picture
+/// of what the roots reach. The instances a refused one would itself have
+/// required stay unknown, which makes every count a lower bound.
+pub fn nir_specialize(dir: &Path, name: Option<&str>) -> Result<()> {
+    let modules = load_dir(dir)?;
+    let (report, refused) = nir_specialize_report(&modules, name)?;
+    print!("{report}");
+    if refused != 0 {
+        bail!("specialization incomplete: {refused} instances refused");
+    }
+    Ok(())
+}
+
+/// The live set every NIR path roots from: complete in-world linkage, and no
+/// disagreement with the independent verifier.
+fn audited_live_set(modules: &[Module]) -> Result<LiveSet> {
+    let selected: Vec<_> = modules.iter().collect();
+    let live = LiveSet::of_modules(selected.iter().copied())
+        .map_err(|error| anyhow::anyhow!("the live graph has no root: {error}"))?;
+    if !live.in_world_missing.is_empty() {
+        bail!("NIR requires complete in-world linkage; A5-IN-WORLD-MISSING is nonzero");
+    }
+    let audit = verify(&selected, &live);
+    if audit.total_disagreements != 0 {
+        bail!(
+            "reachability verification failed: {} disagreements",
+            audit.total_disagreements
+        );
+    }
+    Ok(live)
+}
+
+fn nir_specialize_report(modules: &[Module], name: Option<&str>) -> Result<(String, usize)> {
+    use h2r_lower::nir::{pretty::format_leaf, specialize};
+    use std::fmt::Write;
+
+    let live = audited_live_set(modules)?;
+    let (roots, heading) = match name {
+        Some(name) => {
+            let matches = live.by_name(name);
+            let [node] = matches.as_slice() else {
+                bail!(
+                    "specialization needs one exact stable root name; {name:?} matched {} bindings",
+                    matches.len()
+                );
+            };
+            if !live.is_live(*node) {
+                bail!("selected binding {name:?} is not reachable from Main.main");
+            }
+            let binding = live.node(*node);
+            (
+                vec![specialize::Instance::whole(
+                    binding.key.module as usize,
+                    binding.key.binder,
+                )],
+                format!("NIR specialization root: {name}"),
+            )
+        }
+        None => {
+            let roots: Vec<_> = live
+                .live
+                .iter()
+                .map(|binding| {
+                    let key = live.node(binding.node).key;
+                    specialize::Instance::whole(key.module as usize, key.binder)
+                })
+                .collect();
+            let heading = format!(
+                "NIR specialization roots: {} live bindings\nScope: the instances a \
+                 dependency-closed program would need, as far as the lowered ones reveal; \
+                 a refused instance hides its own requirements, so every count is a lower bound",
+                roots.len()
+            );
+            (roots, heading)
+        }
+    };
+    let program = specialize::survey(modules, &roots);
+    let owners = program.instances_per_owner();
+    let specialized = program
+        .instances
+        .iter()
+        .filter(|i| !i.type_arguments.is_empty() || !i.dictionaries.is_empty())
+        .count();
+    let dictionaries = program
+        .instances
+        .iter()
+        .filter(|i| !i.dictionaries.is_empty())
+        .count();
+    let lowered = program.lowered_count();
+    let refused = program.refused.len();
+    let mut out = format!(
+        "{heading}\nInstances: {} = {lowered} lowered + {refused} refused, over {} owners\nSpecialized: {specialized} at type or dictionary arguments, of which {dictionaries} carry a dictionary\n",
+        lowered + refused,
+        owners.len(),
+    );
+    if name.is_some() {
+        for (index, instance) in program.instances.iter().enumerate() {
+            let Some(leaf) = program.leaf(index) else {
+                continue;
+            };
+            writeln!(
+                out,
+                "INSTANCE {index} {:?} at {} type arguments, {} dictionaries",
+                modules[instance.module].binder(instance.binder).name,
+                instance.type_arguments.len(),
+                instance.dictionaries.len(),
+            )
+            .unwrap();
+            out.push_str(&format_leaf(leaf));
+        }
+        for error in &program.refused {
+            writeln!(
+                out,
+                "REFUSED {:?}: {} [required through {}]",
+                modules[error.instance.module]
+                    .binder(error.instance.binder)
+                    .name,
+                error.reason,
+                error
+                    .path
+                    .iter()
+                    .map(|step| modules[step.module].binder(step.binder).name.clone())
+                    .collect::<Vec<_>>()
+                    .join(" -> "),
+            )
+            .unwrap();
+        }
+    } else {
+        // The blockers, by what actually stopped each instance. The source
+        // address varies per site, so it is dropped from the grouping key.
+        let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
+        for error in &program.refused {
+            let reason = error
+                .reason
+                .split(" (at source expression ")
+                .next()
+                .unwrap_or(&error.reason);
+            *reasons.entry(reason.to_string()).or_insert(0) += 1;
+        }
+        let mut ranked: Vec<_> = reasons.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        writeln!(out, "Blockers, by reason:").unwrap();
+        for (reason, count) in &ranked {
+            writeln!(out, "{count:8}  {reason}").unwrap();
+        }
+        writeln!(out, "Specialized instances:").unwrap();
+        for (index, instance) in program.instances.iter().enumerate() {
+            if instance.type_arguments.is_empty() && instance.dictionaries.is_empty() {
+                continue;
+            }
+            writeln!(
+                out,
+                "    {} {:?} at {} type arguments, {} dictionaries",
+                if program.leaf(index).is_some() {
+                    "lowered"
+                } else {
+                    "refused"
+                },
+                modules[instance.module].binder(instance.binder).name,
+                instance.type_arguments.len(),
+                instance.dictionaries.len(),
+            )
+            .unwrap();
+        }
+    }
+    Ok((out, refused))
+}
+
 fn nir_program_report(modules: &[Module]) -> Result<(String, usize)> {
     use h2r_lower::nir::{pretty::format_leaf, program::lower_program};
     use std::fmt::Write;
@@ -79,19 +253,7 @@ fn nir_report(modules: &[Module], name: &str) -> Result<String> {
         FnId, lower::lower_leaf_in_world, pretty::format_leaf, verify::verify_leaf_in_world,
     };
 
-    let selected: Vec<_> = modules.iter().collect();
-    let live = LiveSet::of_modules(selected.iter().copied())
-        .map_err(|error| anyhow::anyhow!("the live graph has no root: {error}"))?;
-    if !live.in_world_missing.is_empty() {
-        bail!("NIR requires complete in-world linkage; A5-IN-WORLD-MISSING is nonzero");
-    }
-    let audit = verify(&selected, &live);
-    if audit.total_disagreements != 0 {
-        bail!(
-            "reachability verification failed: {} disagreements",
-            audit.total_disagreements
-        );
-    }
+    let live = audited_live_set(modules)?;
     let matches = live.by_name(name);
     let [node] = matches.as_slice() else {
         bail!(
@@ -1023,6 +1185,28 @@ mod nir_tests {
                 .to_string()
                 .contains("type or coercion")
         );
+    }
+
+    #[test]
+    fn specialization_roots_from_an_audited_live_set() {
+        let mut m = fixture();
+        let owner = m.top[0].pairs[0].binder;
+        m.binders[owner as usize].name = "$u$Main$notMain".into();
+        assert!(
+            nir_specialize_report(&[m], None)
+                .unwrap_err()
+                .to_string()
+                .contains("no root")
+        );
+        assert!(
+            nir_specialize_report(&[fixture_with_link(true)], None)
+                .unwrap_err()
+                .to_string()
+                .contains("A5-IN-WORLD-MISSING")
+        );
+        let (report, refused) = nir_specialize_report(&[fixture()], None).unwrap();
+        assert_eq!(refused, 0);
+        assert!(report.contains("NIR specialization roots: 2 live bindings"));
     }
 
     #[test]

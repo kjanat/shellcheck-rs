@@ -376,7 +376,7 @@ fn nir_preserves_top_reference_identity_without_forcing() {
     let block = &leaf.function.blocks[0];
     assert_eq!(block.instructions.len(), 1);
     assert!(
-        matches!(block.instructions[0].operation, Operation::TopReference { module: 5, binder } if binder == target)
+        matches!(block.instructions[0].operation, Operation::TopReference { module: 5, binder, .. } if binder == target)
     );
     assert_eq!(block.instructions[0].origin.rule, Rule::TopReference);
     assert_eq!(
@@ -415,12 +415,16 @@ fn nir_top_reference_verifier_rejects_wrong_targets_and_operations() {
                 instruction.operation = Operation::TopReference {
                     module: 0,
                     binder: other,
+                    type_arguments: Vec::new(),
+                    dictionaries: Vec::new(),
                 }
             }
             1 => {
                 instruction.operation = Operation::TopReference {
                     module: 99,
                     binder: target,
+                    type_arguments: Vec::new(),
+                    dictionaries: Vec::new(),
                 }
             }
             2 => instruction.origin.rule = Rule::Literal,
@@ -508,7 +512,7 @@ fn nir_links_imports_by_stable_name_and_keeps_source_origins() {
     let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
     let instruction = &leaf.function.blocks[0].instructions[0];
     assert!(
-        matches!(instruction.operation, Operation::TopReference { module: 1, binder } if binder == target)
+        matches!(instruction.operation, Operation::TopReference { module: 1, binder, .. } if binder == target)
     );
     assert_eq!(instruction.origin.module, 0);
     assert_eq!(
@@ -544,12 +548,16 @@ fn nir_import_verifier_rejects_forged_target_origin_and_operation() {
                 instruction.operation = Operation::TopReference {
                     module: 0,
                     binder: owner,
+                    type_arguments: Vec::new(),
+                    dictionaries: Vec::new(),
                 }
             }
             1 => {
                 instruction.operation = Operation::TopReference {
                     module: 1,
                     binder: u32::MAX,
+                    type_arguments: Vec::new(),
+                    dictionaries: Vec::new(),
                 }
             }
             2 => instruction.origin.rule = Rule::Literal,
@@ -777,8 +785,10 @@ fn nir_type_applications_preserve_order_and_account_for_source_nodes() {
         let [instruction] = leaf.function.blocks[0].instructions.as_slice() else {
             panic!()
         };
-        let Operation::InstantiateTop {
-            module, arguments, ..
+        let Operation::TopReference {
+            module,
+            type_arguments: arguments,
+            ..
         } = &instruction.operation
         else {
             panic!()
@@ -812,10 +822,11 @@ fn nir_type_application_verifier_rejects_forged_evidence() {
     for mutation in 0..6 {
         let mut leaf = original.clone();
         let instruction = &mut leaf.function.blocks[0].instructions[0];
-        let Operation::InstantiateTop {
+        let Operation::TopReference {
             module,
             binder,
-            arguments,
+            type_arguments: arguments,
+            ..
         } = &mut instruction.operation
         else {
             panic!()
@@ -1482,7 +1493,7 @@ fn nir_top_arguments_preserve_local_recursive_and_imported_identity() {
     let instructions = &leaf.function.blocks[0].instructions;
     assert_eq!(instructions.len(), 3);
     for index in 0..2 {
-        let Operation::TopReference { module, binder } = instructions[index].operation else {
+        let Operation::TopReference { module, binder, .. } = instructions[index].operation else {
             panic!()
         };
         assert_eq!(module, index);
@@ -1518,12 +1529,16 @@ fn nir_top_argument_verifier_rejects_target_origin_type_and_forcing_changes() {
                 instruction.operation = Operation::TopReference {
                     module: 1,
                     binder: modules[1].top[1].pairs[0].binder,
+                    type_arguments: Vec::new(),
+                    dictionaries: Vec::new(),
                 }
             }
             1 => {
                 instruction.operation = Operation::TopReference {
                     module: 0,
                     binder: u32::MAX,
+                    type_arguments: Vec::new(),
+                    dictionaries: Vec::new(),
                 }
             }
             2 => instruction.origin.rule = Rule::Literal,
@@ -1631,7 +1646,9 @@ fn scalar_emission_accepts_recursive_functions() {
     modules[0].binders[owner as usize].name = sn("Lib", "target");
     modules[0].binders[owner as usize].arity = Some(2);
     let source = crate::emit::emit_entry(&modules, &sn("Lib", "target")).unwrap();
-    assert!(source.contains("HStep::Next(HState::B_0_0_0"));
+    // Instance 0 is the entry, and the self-call transfers back to its entry
+    // block rather than growing the native stack.
+    assert!(source.contains("HStep::Next(HState::B_0_0("));
 }
 
 fn local_function_world(recursive: bool) -> Vec<Module> {
@@ -3067,9 +3084,14 @@ fn data_constructor_names_never_override_lexical_bindings() {
         "fixture must actually resolve lexically"
     );
     assert!(
-        crate::nir::data::resolve(m, source, &m.types[3])
-            .unwrap()
-            .is_none()
+        crate::nir::data::resolve(
+            &crate::nir::World::of(&modules, 0).unwrap(),
+            0,
+            source,
+            &m.types[3]
+        )
+        .unwrap()
+        .is_none()
     );
 }
 
@@ -4233,4 +4255,731 @@ fn a_global_occurrence_with_an_internal_name_is_counted_not_ignored() {
         "A13 must fail loudly: {:?}",
         a.check()
     );
+}
+
+//------------------------------------------------------------------------------
+// Specialization: instances, dictionaries, and what corrupting either costs
+//------------------------------------------------------------------------------
+
+fn tylam(unique: &str, body: Value) -> Value {
+    json!({"node": "Lam", "binder": {
+        "kind": "tyvar", "name": format!("$_in${unique}"), "occ": unique,
+        "unique": unique, "type": "*", "ty": 0
+    }, "body": body})
+}
+
+fn type_arg(index: u32, pretty: &str) -> Value {
+    json!({"node": "Type", "ty": index, "type": pretty})
+}
+
+/// One binder's signature, arity and `IdDetails`, by occurrence. Every
+/// occurrence in these fixtures is distinct, so this is unambiguous.
+fn set_binder(modules: &mut [Module], occ: &str, ty: u32, arity: u32, details: &str) {
+    let mut found = 0;
+    for module in modules.iter_mut() {
+        for binder in &mut module.binders {
+            if binder.occ == occ {
+                binder.ty = ty;
+                binder.arity = Some(arity);
+                binder.details = Some(details.into());
+                found += 1;
+            }
+        }
+    }
+    assert!(found > 0, "no binder named {occ} in the fixture");
+}
+
+fn specialization_types() -> Vec<h2r_core_ir::Ty> {
+    use h2r_core_ir::{Ty, TyConId, TyVarId};
+    let con = |name: &str, args| Ty::Con {
+        tycon: TyConId {
+            name: sn("Types", name),
+            occ: name.into(),
+            unique: name.into(),
+        },
+        args,
+    };
+    let arrow = |arg: Ty, res: Ty| Ty::Fun {
+        mult: Box::new(con("Many", vec![])),
+        arg: Box::new(arg),
+        res: Box::new(res),
+    };
+    let a = TyVarId {
+        name: "$_in$a".into(),
+        occ: "a".into(),
+        unique: "a".into(),
+    };
+    let t = con("T", vec![]);
+    let u = con("U", vec![]);
+    let var = Ty::Var(a.clone());
+    vec![
+        t.clone(),                       // 0: T
+        u.clone(),                       // 1: U
+        arrow(t.clone(), t.clone()),     // 2: T -> T
+        arrow(u.clone(), u.clone()),     // 3: U -> U
+        var.clone(),                     // 4: a
+        arrow(var.clone(), var.clone()), // 5: a -> a
+        Ty::ForAll {
+            binder: a.clone(),
+            body: Box::new(arrow(var.clone(), var.clone())),
+        }, // 6: forall a. a -> a
+        con("C", vec![var.clone()]),     // 7: C a
+        con("C", vec![t.clone()]),       // 8: C T
+        con("C", vec![u.clone()]),       // 9: C U
+        Ty::ForAll {
+            binder: a.clone(),
+            body: Box::new(arrow(
+                con("C", vec![var.clone()]),
+                arrow(var.clone(), var.clone()),
+            )),
+        }, // 10: forall a. C a -> a -> a
+        Ty::ForAll {
+            binder: a.clone(),
+            body: Box::new(arrow(
+                arrow(var.clone(), var.clone()),
+                arrow(arrow(var.clone(), var.clone()), con("C", vec![var.clone()])),
+            )),
+        }, // 11: the class constructor's worker signature
+        con("L", vec![var]),             // 12: L a
+    ]
+}
+
+/// A nullary constructor, so the fixture's types are supported carriers.
+fn nullary_constructor(name: &str, signature: u32) -> raw::ConstructorInfo {
+    raw::ConstructorInfo {
+        name: sn("Types", &format!("Mk{name}")),
+        worker: sn("Types", &format!("Mk{name}")),
+        family: sn("Types", name),
+        family_size: 1,
+        tag: 1,
+        signature,
+        rep_arity: 0,
+        strict: Vec::new(),
+        vanilla: true,
+        newtype: Some(false),
+        unlifted: Some(false),
+        unboxed: Some(false),
+        existential: Some(false),
+        equalities: Some(false),
+        class_dictionary: Some(false),
+    }
+}
+
+fn class_constructor() -> raw::ConstructorInfo {
+    raw::ConstructorInfo {
+        name: sn("Types", "C:C"),
+        worker: sn("Types", "C:C"),
+        family: sn("Types", "C"),
+        family_size: 1,
+        tag: 1,
+        signature: 11,
+        rep_arity: 2,
+        strict: vec![false, false],
+        // A class dictionary is not `isVanillaDataCon` once it has a
+        // superclass, so the finer evidence is what the lowering reads.
+        vanilla: false,
+        newtype: Some(false),
+        unlifted: Some(false),
+        unboxed: Some(false),
+        existential: Some(false),
+        equalities: Some(false),
+        class_dictionary: Some(true),
+    }
+}
+
+/// A two-module world: one polymorphic identity, one class with two
+/// instances, one dictionary-taking function, and one growing recursion.
+///
+/// ```text
+/// Lib.poly     = /\a \px. px                       forall a. a -> a
+/// Lib.grow     = /\a \gx. grow @(L a) gx           forall a. a -> a
+/// Lib.method   = /\a \mv. case mv of C:C f1 f2 -> f1   (a class-op selector)
+/// Lib.dictT    = C:C @T tm1 tm2                    C T
+/// Lib.dictU    = C:C @U um1 um2                    C U
+/// Lib.tm1/tm2  = \t1/\t2. t1/t2                    T -> T
+/// Lib.um1/um2  = \u1/\u2. u1/u2                    U -> U
+/// Lib.viaDict  = /\a \dd \dx. method @a dd dx      forall a. C a -> a -> a
+/// Main.useT    = \yt. poly @T yt                   T -> T
+/// Main.useU    = \yu. poly @U yu                   U -> U
+/// Main.useDict = \yd. viaDict @T dictT yd          T -> T
+/// Main.useOpen = \od \oy. method @T od oy          C T -> T -> T
+/// Main.useGrow = \yg. grow @T yg                   T -> T
+/// ```
+fn nir_specialization_world() -> Vec<Module> {
+    let selector = class_case(
+        lvar("mv"),
+        "mw",
+        &sn("Types", "C:C"),
+        vec!["f1", "f2"],
+        lvar("f1"),
+        5,
+    );
+    let lib = vec![
+        (
+            binder(&sn("Lib", "poly"), "poly", "poly"),
+            tylam("a", lam("px", lvar("px"))),
+        ),
+        (
+            binder(&sn("Lib", "grow"), "grow", "grow"),
+            tylam(
+                "a",
+                lam(
+                    "gx",
+                    app(
+                        app(gvar(&sn("Lib", "grow"), "grow"), type_arg(12, "L a")),
+                        lvar("gx"),
+                    ),
+                ),
+            ),
+        ),
+        (
+            binder(&sn("Lib", "method"), "method", "method"),
+            tylam("a", lam("mv", selector)),
+        ),
+        (
+            binder(&sn("Lib", "dictT"), "dictT", "dictT"),
+            app(
+                app(
+                    app(gvar(&sn("Types", "C:C"), "C:C"), type_arg(0, "T")),
+                    gvar(&sn("Lib", "tm1"), "tm1"),
+                ),
+                gvar(&sn("Lib", "tm2"), "tm2"),
+            ),
+        ),
+        (
+            binder(&sn("Lib", "dictU"), "dictU", "dictU"),
+            app(
+                app(
+                    app(gvar(&sn("Types", "C:C"), "C:C"), type_arg(1, "U")),
+                    gvar(&sn("Lib", "um1"), "um1"),
+                ),
+                gvar(&sn("Lib", "um2"), "um2"),
+            ),
+        ),
+        (
+            binder(&sn("Lib", "tm1"), "tm1", "tm1"),
+            lam("t1", lvar("t1")),
+        ),
+        (
+            binder(&sn("Lib", "tm2"), "tm2", "tm2"),
+            lam("t2", lvar("t2")),
+        ),
+        (
+            binder(&sn("Lib", "um1"), "um1", "um1"),
+            lam("u1", lvar("u1")),
+        ),
+        (
+            binder(&sn("Lib", "um2"), "um2", "um2"),
+            lam("u2", lvar("u2")),
+        ),
+        (
+            binder(&sn("Lib", "viaDict"), "viaDict", "viaDict"),
+            tylam(
+                "a",
+                lam(
+                    "dd",
+                    lam(
+                        "dx",
+                        app(
+                            app(
+                                app(gvar(&sn("Lib", "method"), "method"), type_arg(4, "a")),
+                                lvar("dd"),
+                            ),
+                            lvar("dx"),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ];
+    let call_poly = |index: u32, pretty: &str, arg: &str| {
+        app(
+            app(gvar(&sn("Lib", "poly"), "poly"), type_arg(index, pretty)),
+            lvar(arg),
+        )
+    };
+    let main = vec![
+        (
+            binder(&sn("Main", "useT"), "useT", "useT"),
+            lam("yt", call_poly(0, "T", "yt")),
+        ),
+        (
+            binder(&sn("Main", "useU"), "useU", "useU"),
+            lam("yu", call_poly(1, "U", "yu")),
+        ),
+        (
+            binder(&sn("Main", "useDict"), "useDict", "useDict"),
+            lam(
+                "yd",
+                app(
+                    app(
+                        app(gvar(&sn("Lib", "viaDict"), "viaDict"), type_arg(0, "T")),
+                        gvar(&sn("Lib", "dictT"), "dictT"),
+                    ),
+                    lvar("yd"),
+                ),
+            ),
+        ),
+        (
+            binder(&sn("Main", "useOpen"), "useOpen", "useOpen"),
+            lam(
+                "od",
+                lam(
+                    "oy",
+                    app(
+                        app(
+                            app(gvar(&sn("Lib", "method"), "method"), type_arg(0, "T")),
+                            lvar("od"),
+                        ),
+                        lvar("oy"),
+                    ),
+                ),
+            ),
+        ),
+        (
+            binder(&sn("Main", "useGrow"), "useGrow", "useGrow"),
+            lam(
+                "yg",
+                app(
+                    app(gvar(&sn("Lib", "grow"), "grow"), type_arg(0, "T")),
+                    lvar("yg"),
+                ),
+            ),
+        ),
+    ];
+    let mut modules = vec![
+        module("Main", main, json!({})),
+        module("Lib", lib, json!({})),
+    ];
+    let types = specialization_types();
+    for m in &mut modules {
+        m.types = types.clone();
+        m.constructors = vec![
+            class_constructor(),
+            nullary_constructor("T", 0),
+            nullary_constructor("U", 1),
+        ];
+    }
+    for (occ, ty, arity) in [
+        ("poly", 6, 1),
+        ("grow", 14, 1),
+        ("method", 10, 1),
+        ("viaDict", 10, 2),
+        ("dictT", 8, 0),
+        ("dictU", 9, 0),
+        ("tm1", 2, 1),
+        ("tm2", 2, 1),
+        ("um1", 3, 1),
+        ("um2", 3, 1),
+        ("useT", 2, 1),
+        ("useU", 3, 1),
+        ("useDict", 2, 1),
+        ("useGrow", 2, 1),
+        // Lambda binders: the signature decides the parameter type, but the
+        // binder's own type must agree with it.
+        ("px", 4, 0),
+        ("gx", 0, 0),
+        ("mv", 7, 0),
+        ("mw", 7, 0),
+        ("f1", 5, 0),
+        ("f2", 5, 0),
+        ("dd", 7, 0),
+        ("dx", 4, 0),
+        ("t1", 0, 0),
+        ("t2", 0, 0),
+        ("u1", 1, 0),
+        ("u2", 1, 0),
+        ("yt", 0, 0),
+        ("yu", 1, 0),
+        ("yd", 0, 0),
+        ("yg", 0, 0),
+        ("od", 8, 0),
+        ("oy", 0, 0),
+    ] {
+        set_binder(&mut modules, occ, ty, arity, "");
+    }
+    set_binder(&mut modules, "method", 10, 1, "[ClassOp]");
+    set_binder(&mut modules, "dictT", 8, 0, "[DFunId]");
+    set_binder(&mut modules, "dictU", 9, 0, "[DFunId]");
+    // `useOpen` takes the dictionary at runtime: C T -> T -> T.
+    let open = h2r_core_ir::Ty::Fun {
+        mult: Box::new(modules[0].types[0].clone()),
+        arg: Box::new(modules[0].types[8].clone()),
+        res: Box::new(modules[0].types[2].clone()),
+    };
+    // 14: forall a. T -> T. Only the type argument grows along `grow`'s
+    // recursion, so the fixture stays well typed while the instance key does
+    // not converge.
+    let growing = h2r_core_ir::Ty::ForAll {
+        binder: h2r_core_ir::TyVarId {
+            name: "$_in$a".into(),
+            occ: "a".into(),
+            unique: "a".into(),
+        },
+        body: Box::new(modules[0].types[2].clone()),
+    };
+    for m in &mut modules {
+        m.types.push(open.clone());
+        m.types.push(growing.clone());
+    }
+    set_binder(&mut modules, "useOpen", 13, 2, "");
+    modules
+}
+
+fn class_case(
+    scrut: Value,
+    case_binder: &str,
+    constructor: &str,
+    fields: Vec<&str>,
+    rhs: Value,
+    ty: u32,
+) -> Value {
+    json!({
+        "node": "Case",
+        "scrut": scrut,
+        "binder": binder("$_sys$w", case_binder, case_binder),
+        "ty": ty, "type": "R",
+        "alts": [{
+            "con": {"kind": "DataAlt", "name": constructor, "occ": "C:C", "tag": 1},
+            "binders": fields.iter().map(|f| binder("$_sys$f", f, f)).collect::<Vec<_>>(),
+            "rhs": rhs
+        }]
+    })
+}
+
+fn owner_of(modules: &[Module], module_index: usize, occ: &str) -> u32 {
+    modules[module_index]
+        .top
+        .iter()
+        .flat_map(|g| &g.pairs)
+        .find(|p| modules[module_index].binder(p.binder).occ == occ)
+        .expect("fixture binding")
+        .binder
+}
+
+/// One source binding, lowered once per type its call sites use it at, with
+/// the instances reached from two different roots interned only once.
+#[test]
+fn specialization_lowers_one_binding_at_each_type_it_is_used_at() {
+    use crate::nir::specialize::{Instance, specialize};
+    let modules = nir_specialization_world();
+    let use_t = Instance::whole(0, owner_of(&modules, 0, "useT"));
+    let use_u = Instance::whole(0, owner_of(&modules, 0, "useU"));
+    let poly = owner_of(&modules, 1, "poly");
+    let program = specialize(&modules, &[use_t.clone(), use_u]).unwrap();
+    let instances: Vec<_> = program
+        .instances
+        .iter()
+        .filter(|i| i.module == 1 && i.binder == poly)
+        .collect();
+    assert_eq!(instances.len(), 2, "one instance per type argument");
+    assert!(!instances[0].same(instances[1]));
+    assert_ne!(instances[0].key(), instances[1].key());
+    assert_eq!(program.instances.len(), 4);
+    assert!(program.refused.is_empty());
+    // Each instance is monomorphic: the quantifier is gone and the parameter
+    // carries the concrete type the call site supplied.
+    for (index, instance) in program.instances.iter().enumerate() {
+        let leaf = program.leaf(index).expect("lowered");
+        assert!(leaf.function.type_params.is_empty());
+        if instance.binder == poly && instance.module == 1 {
+            assert_eq!(leaf.function.type_arguments.len(), 1);
+            assert_eq!(
+                leaf.function.blocks[0].params[0].ty,
+                instance.type_arguments[0]
+            );
+            assert_eq!(leaf.type_instantiations.len(), 1);
+        }
+    }
+    // Reaching the same instance twice interns it once.
+    let twice = specialize(&modules, &[use_t.clone(), use_t]).unwrap();
+    assert_eq!(twice.instances.len(), 2);
+}
+
+/// An instance chain whose type arguments keep growing is refused with the
+/// chain that produced it, rather than being allowed to run forever.
+#[test]
+fn specialization_refuses_an_unbounded_instance_chain() {
+    use crate::nir::specialize::{Instance, OWNER_BUDGET, specialize, survey};
+    let modules = nir_specialization_world();
+    let root = Instance::whole(0, owner_of(&modules, 0, "useGrow"));
+    let error = specialize(&modules, std::slice::from_ref(&root)).unwrap_err();
+    assert!(
+        error.reason.contains("does not terminate"),
+        "{}",
+        error.reason
+    );
+    assert!(!error.path.is_empty(), "a refusal names how it was reached");
+    assert_eq!(error.path[0].binder, root.binder);
+    // Recording mode stops at the same bound instead of running away.
+    let recorded = survey(&modules, &[root]);
+    assert!(!recorded.refused.is_empty());
+    assert!(recorded.instances.len() <= OWNER_BUDGET + 2);
+}
+
+/// A budget refusal is recorded before its instance is interned, so a survey
+/// considered its lowered count plus its refusals, not `instances.len()`.
+#[test]
+fn specialization_counts_a_budget_refusal_outside_the_interned_instances() {
+    use crate::nir::specialize::{Instance, survey};
+    let modules = nir_specialization_world();
+    let root = Instance::whole(0, owner_of(&modules, 0, "useGrow"));
+    let recorded = survey(&modules, &[root]);
+    let budget = recorded
+        .refused
+        .iter()
+        .filter(|error| error.reason.contains("budget"))
+        .count();
+    assert!(budget > 0, "the growing chain is stopped by a budget");
+    assert_eq!(
+        recorded.lowered_count() + recorded.refused.len(),
+        recorded.instances.len() + budget,
+    );
+}
+
+/// A class method whose dictionary is proven unique becomes a direct call to
+/// that instance's method, and the dictionary itself is never built.
+#[test]
+fn specialization_resolves_a_class_method_to_its_instance() {
+    use crate::nir::specialize::{Instance, specialize};
+    use crate::nir::{Operation, Rule};
+    let modules = nir_specialization_world();
+    let root = Instance::whole(0, owner_of(&modules, 0, "useDict"));
+    let program = specialize(&modules, &[root]).unwrap();
+    let dict_t = owner_of(&modules, 1, "dictT");
+    assert!(
+        !program
+            .instances
+            .iter()
+            .any(|i| i.module == 1 && i.binder == dict_t),
+        "a resolved dictionary is never built"
+    );
+    let via = owner_of(&modules, 1, "viaDict");
+    let index = program
+        .instances
+        .iter()
+        .position(|i| i.module == 1 && i.binder == via)
+        .expect("the dictionary-taking function is specialized");
+    let instance = &program.instances[index];
+    assert_eq!(instance.dictionaries.len(), 1);
+    assert_eq!(instance.dictionaries[0].binder, dict_t);
+    let leaf = program.leaf(index).expect("lowered");
+    // One runtime parameter: the dictionary lambda is gone.
+    assert_eq!(leaf.function.blocks[0].params.len(), 1);
+    assert_eq!(leaf.dictionary_parameters.len(), 1);
+    let tm1 = owner_of(&modules, 1, "tm1");
+    let call = leaf.function.blocks[0]
+        .instructions
+        .iter()
+        .find(|i| matches!(i.operation, Operation::CallTop { .. }))
+        .expect("the method call");
+    assert_eq!(call.origin.rule, Rule::ResolveMethod);
+    assert!(
+        matches!(&call.operation, Operation::CallTop { binder, dictionaries, .. }
+            if *binder == tm1 && dictionaries.is_empty())
+    );
+}
+
+/// A dictionary that is not proven unique keeps its runtime dispatch: the
+/// selector stays a constructor match and the call stays indirect.
+#[test]
+fn specialization_preserves_dispatch_for_an_unproven_dictionary() {
+    use crate::nir::specialize::{Instance, specialize};
+    use crate::nir::{Operation, Rule};
+    let modules = nir_specialization_world();
+    let root = Instance::whole(0, owner_of(&modules, 0, "useOpen"));
+    let program = specialize(&modules, &[root]).unwrap();
+    let caller = program.leaf(0).expect("lowered");
+    let operations: Vec<_> = caller.function.blocks[0]
+        .instructions
+        .iter()
+        .map(|i| (&i.operation, i.origin.rule))
+        .collect();
+    assert!(
+        operations
+            .iter()
+            .any(|(op, rule)| matches!(op, Operation::TopReference { .. })
+                && *rule == Rule::ResolveInstance),
+        "the selector is referenced as an instance, not resolved to a method"
+    );
+    assert!(
+        operations
+            .iter()
+            .any(|(op, _)| matches!(op, Operation::Apply { .. })),
+        "the dispatch stays an indirect application"
+    );
+    let method = owner_of(&modules, 1, "method");
+    let index = program
+        .instances
+        .iter()
+        .position(|i| i.module == 1 && i.binder == method)
+        .expect("the selector itself is specialized");
+    let selector = program.leaf(index).expect("lowered");
+    assert!(
+        selector
+            .function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.instructions)
+            .any(|i| matches!(i.operation, Operation::MatchData { .. })),
+        "the selector still matches the dictionary's constructor"
+    );
+}
+
+/// The verifier re-derives the substitution from the source, so a candidate
+/// whose types were substituted differently is rejected.
+#[test]
+fn verifier_rejects_a_wrong_substitution() {
+    use crate::nir::lower::lower_leaf_specialized;
+    use crate::nir::verify::verify_leaf_specialized;
+    use crate::nir::{FnId, Operation};
+    let modules = nir_specialization_world();
+    let poly = owner_of(&modules, 1, "poly");
+    let t = modules[1].types[0].clone();
+    let u = modules[1].types[1].clone();
+    let original =
+        lower_leaf_specialized(&modules, 1, poly, FnId(0), std::slice::from_ref(&t), &[]).unwrap();
+    verify_leaf_specialized(
+        &modules,
+        1,
+        poly,
+        FnId(0),
+        &original,
+        std::slice::from_ref(&t),
+        &[],
+    )
+    .unwrap();
+    // The instance the caller asked for is the caller's to state.
+    assert!(
+        verify_leaf_specialized(
+            &modules,
+            1,
+            poly,
+            FnId(0),
+            &original,
+            std::slice::from_ref(&u),
+            &[]
+        )
+        .is_err()
+    );
+    for corruption in 0..4 {
+        let mut candidate = original.clone();
+        match corruption {
+            0 => candidate.function.type_arguments = vec![u.clone()],
+            1 => candidate.function.blocks[0].params[0].ty = u.clone(),
+            2 => candidate.function.result_ty = u.clone(),
+            _ => candidate.type_instantiations[0].2 = u.clone(),
+        }
+        assert!(
+            verify_leaf_specialized(
+                &modules,
+                1,
+                poly,
+                FnId(0),
+                &candidate,
+                std::slice::from_ref(&t),
+                &[]
+            )
+            .is_err(),
+            "corruption {corruption} survived verification"
+        );
+    }
+    // A call site's own type evidence is checked against the source too.
+    let use_t = owner_of(&modules, 0, "useT");
+    let caller = lower_leaf_specialized(&modules, 0, use_t, FnId(1), &[], &[]).unwrap();
+    let mut candidate = caller.clone();
+    let Operation::CallTop { type_arguments, .. } =
+        &mut candidate.function.blocks[0].instructions[0].operation
+    else {
+        panic!("the call site is a direct call")
+    };
+    *type_arguments = vec![u];
+    assert!(verify_leaf_specialized(&modules, 0, use_t, FnId(1), &candidate, &[], &[]).is_err());
+}
+
+/// Dictionary evidence is checked the same way: a candidate that names a
+/// different dictionary, or a different method, is rejected.
+#[test]
+fn verifier_rejects_a_wrong_dictionary_target() {
+    use crate::nir::lower::lower_leaf_specialized;
+    use crate::nir::verify::verify_leaf_specialized;
+    use crate::nir::{DictionaryRef, FnId, Operation};
+    let modules = nir_specialization_world();
+    let via = owner_of(&modules, 1, "viaDict");
+    let dict_t = owner_of(&modules, 1, "dictT");
+    let dict_u = owner_of(&modules, 1, "dictU");
+    let tm2 = owner_of(&modules, 1, "tm2");
+    let t = modules[1].types[0].clone();
+    let reference = |binder| DictionaryRef {
+        module: 1,
+        binder,
+        type_arguments: Vec::new(),
+        dictionaries: Vec::new(),
+    };
+    let expected = [reference(dict_t)];
+    let original = lower_leaf_specialized(
+        &modules,
+        1,
+        via,
+        FnId(0),
+        std::slice::from_ref(&t),
+        &expected,
+    )
+    .unwrap();
+    verify_leaf_specialized(
+        &modules,
+        1,
+        via,
+        FnId(0),
+        &original,
+        std::slice::from_ref(&t),
+        &expected,
+    )
+    .unwrap();
+    // A different dictionary is a different instance, and the caller says which.
+    assert!(
+        verify_leaf_specialized(
+            &modules,
+            1,
+            via,
+            FnId(0),
+            &original,
+            std::slice::from_ref(&t),
+            &[reference(dict_u)]
+        )
+        .is_err()
+    );
+    for corruption in 0..4 {
+        let mut candidate = original.clone();
+        match corruption {
+            0 => candidate.function.dictionaries = Vec::new(),
+            1 => candidate.function.dictionaries = vec![reference(dict_u)],
+            2 => candidate.dictionary_parameters[0].2 = reference(dict_u),
+            _ => {
+                let call = candidate.function.blocks[0]
+                    .instructions
+                    .iter_mut()
+                    .find(|i| matches!(i.operation, Operation::CallTop { .. }))
+                    .expect("the method call");
+                let Operation::CallTop { binder, .. } = &mut call.operation else {
+                    unreachable!()
+                };
+                // The other method of the same dictionary: same shape, wrong target.
+                *binder = tm2;
+            }
+        }
+        assert!(
+            verify_leaf_specialized(
+                &modules,
+                1,
+                via,
+                FnId(0),
+                &candidate,
+                std::slice::from_ref(&t),
+                &expected
+            )
+            .is_err(),
+            "dictionary corruption {corruption} survived verification"
+        );
+    }
 }

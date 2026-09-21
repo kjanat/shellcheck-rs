@@ -363,6 +363,13 @@ enum Command {
         /// Exact stable name of the leaf to lower; ambiguous names are rejected.
         #[arg(long = "fn", requires = "nir")]
         fn_name: Option<String>,
+        /// Specialize instead of lowering each binding at its own signature:
+        /// walk every instance the root requires, at the closed types and
+        /// proven-unique dictionaries its call sites supply. Without --fn
+        /// every live binding is a root and the report is the whole-program
+        /// instance survey.
+        #[arg(long, requires = "nir")]
+        specialize: bool,
         /// Emit the live set, the verifier's audit and the rules as JSON.
         #[arg(long)]
         json: bool,
@@ -577,6 +584,7 @@ fn main() -> Result<()> {
             reachability,
             nir,
             fn_name,
+            specialize,
             json,
             rules,
             explain,
@@ -584,9 +592,10 @@ fn main() -> Result<()> {
             m24_link,
         } => {
             if nir {
-                match fn_name.as_deref() {
-                    Some(name) => lower::nir(&dir, name),
-                    None => lower::nir_program(&dir),
+                match (specialize, fn_name.as_deref()) {
+                    (true, name) => lower::nir_specialize(&dir, name),
+                    (false, Some(name)) => lower::nir(&dir, name),
+                    (false, None) => lower::nir_program(&dir),
                 }
             } else {
                 lower::lower(&dir, reachability, json, rules, explain, link, m24_link)

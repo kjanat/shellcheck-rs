@@ -2,7 +2,24 @@
 
 use std::fmt::Write;
 
-use super::{Exit, Operation, lower::LoweredLeaf};
+use super::{DictionaryRef, Exit, Operation, lower::LoweredLeaf};
+
+/// Instance evidence, printed as the compile-time identity it is.
+fn dictionary_list(dictionaries: &[DictionaryRef]) -> String {
+    let entries: Vec<_> = dictionaries
+        .iter()
+        .map(|d| {
+            format!(
+                "module {} binder {} types {:?} dicts {}",
+                d.module,
+                d.binder,
+                d.type_arguments,
+                dictionary_list(&d.dictionaries)
+            )
+        })
+        .collect();
+    format!("[{}]", entries.join("; "))
+}
 
 pub fn format_leaf(leaf: &LoweredLeaf) -> String {
     let f = &leaf.function;
@@ -12,6 +29,12 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
     );
     for param in &f.type_params {
         writeln!(out, "  type param {} [{}]", param.occ, param.unique).unwrap();
+    }
+    for argument in &f.type_arguments {
+        writeln!(out, "  specialized at {argument:?}").unwrap();
+    }
+    if !f.dictionaries.is_empty() {
+        writeln!(out, "  dictionaries {}", dictionary_list(&f.dictionaries)).unwrap();
     }
     for block in &f.blocks {
         writeln!(
@@ -70,24 +93,27 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                 Operation::Literal(lit) => format!("literal {} {:?}", lit.kind, lit.pretty),
                 Operation::Move(value) => format!("move v{}", value.0),
                 Operation::Force(value) => format!("force v{}", value.0),
-                Operation::TopReference { module, binder } => {
-                    format!("top-ref module {module} binder {binder}")
-                }
-                Operation::InstantiateTop {
+                Operation::TopReference {
                     module,
                     binder,
-                    arguments,
+                    type_arguments,
+                    dictionaries,
                 } => {
-                    format!("instantiate-top module {module} binder {binder} types {arguments:?}")
+                    format!(
+                        "top-ref module {module} binder {binder} types {type_arguments:?} dicts {}",
+                        dictionary_list(dictionaries)
+                    )
                 }
                 Operation::CallTop {
                     module,
                     binder,
                     type_arguments,
+                    dictionaries,
                     arguments,
                 } => {
                     format!(
-                        "call-top module {module} binder {binder} types {type_arguments:?} args {arguments:?}"
+                        "call-top module {module} binder {binder} types {type_arguments:?} dicts {} args {arguments:?}",
+                        dictionary_list(dictionaries)
                     )
                 }
             };
@@ -134,6 +160,21 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
     }
     for (expr, binder) in &leaf.type_parameters {
         writeln!(out, "  erased type lambda Expr({expr}) -> Binder({binder})").unwrap();
+    }
+    for (expr, binder, argument) in &leaf.type_instantiations {
+        writeln!(
+            out,
+            "  instantiated type lambda Expr({expr}) -> Binder({binder}) = {argument:?}"
+        )
+        .unwrap();
+    }
+    for (expr, binder, dictionary) in &leaf.dictionary_parameters {
+        writeln!(
+            out,
+            "  erased dictionary lambda Expr({expr}) -> Binder({binder}) = {}",
+            dictionary_list(std::slice::from_ref(dictionary))
+        )
+        .unwrap();
     }
     for expr in &leaf.erased_ticks {
         writeln!(out, "  erased tick Expr({expr})").unwrap();

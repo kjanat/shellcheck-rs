@@ -93,6 +93,56 @@ pub struct ConstructorInfo {
     /// Vanilla lifted algebraic representation: no newtypes, unboxed sums/
     /// tuples, unlifted datatypes, existential or equality evidence fields.
     pub vanilla: bool,
+    /// Additive evidence, each a separate GHC fact, so the four reasons
+    /// `vanilla` can be false are told apart. A class dictionary carries its
+    /// superclass as a *constraint* field, which makes GHC's own
+    /// `isVanillaDataCon` false although the representation is an ordinary
+    /// boxed record; an existential or a GADT equality is a different matter
+    /// and stays unsupported. `None` on a dump taken before this evidence
+    /// existed, where only `vanilla` is known and the conservative answer is
+    /// the only one available.
+    #[serde(default)]
+    pub newtype: Option<bool>,
+    #[serde(default)]
+    pub unlifted: Option<bool>,
+    #[serde(default)]
+    pub unboxed: Option<bool>,
+    #[serde(default)]
+    pub existential: Option<bool>,
+    #[serde(default)]
+    pub equalities: Option<bool>,
+    /// GHC's `isClassTyCon`: this family is a class's dictionary. Nothing on
+    /// the Rust side can tell a dictionary from a one-constructor record by
+    /// its shape, and an occurrence name is not evidence.
+    #[serde(rename = "class", default)]
+    pub class_dictionary: Option<bool>,
+}
+
+impl ConstructorInfo {
+    /// An ordinary boxed, lifted constructor whose fields are all values.
+    /// `vanilla` alone answers this for a plain data type; for a class
+    /// dictionary it does not, because a superclass is a constraint field.
+    pub fn boxed_record(&self) -> bool {
+        if self.vanilla {
+            return true;
+        }
+        matches!(
+            (
+                self.newtype,
+                self.unlifted,
+                self.unboxed,
+                self.existential,
+                self.equalities,
+            ),
+            (
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(false)
+            )
+        )
+    }
 }
 
 /// A type constructor's identity: its stable name. The unique is a

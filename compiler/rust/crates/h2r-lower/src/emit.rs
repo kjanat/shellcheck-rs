@@ -1,17 +1,21 @@
 //! Monomorphic scalar/algebraic functions and their complete dependency
 //! closure. Text I/O is an explicit integer-only generated CLI adapter,
 //! not a translation of Haskell IO. Unsupported carriers/operations fail closed.
+//!
+//! Emission works on *instances*, not bindings: one polymorphic or
+//! dictionary-taking source binding becomes one Rust function per instance the
+//! program actually needs, named by its instance index. A call site names the
+//! instance it resolved to, so nothing here re-derives a specialization.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use h2r_core_ir::{Module, Ty};
 
 use crate::nir::{
-    Block, Exit, FnId, Function, IntBinary, Operation, boxed, data, lower::lower_leaf_in_world,
+    Block, DictionaryRef, Exit, Function, IntBinary, Operation, boxed, data,
+    specialize::{self, Instance},
 };
-
-type Key = (usize, u32);
 
 fn scalar(ty: &Ty) -> bool {
     boxed::is_int(ty)
@@ -111,7 +115,32 @@ fn integer(kind: &str, pretty: &str) -> Result<i64, String> {
         .map_err(|_| "Int# literal is not a signed 64-bit decimal".into())
 }
 
-/// Select one exact external entry and lower every required definition. No
+/// The instance a reference names. Specialization interned it already, so a
+/// missing entry would be a driver defect rather than a source refusal.
+fn instance_of(
+    specialization: &specialize::Specialization,
+    reference: &DictionaryRef,
+) -> Result<usize, String> {
+    specialization
+        .resolve(reference)
+        .ok_or_else(|| "a call names an instance the specialization pass did not lower".into())
+}
+
+fn reference_of(
+    module: usize,
+    binder: u32,
+    type_arguments: &[Ty],
+    dictionaries: &[DictionaryRef],
+) -> DictionaryRef {
+    DictionaryRef {
+        module,
+        binder,
+        type_arguments: type_arguments.to_vec(),
+        dictionaries: dictionaries.to_vec(),
+    }
+}
+
+/// Select one exact external entry and lower every required instance. No
 /// source is returned until the entire closure has passed lowering and checks.
 pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
     if !h2r_core_ir::is_external_name(entry) {
@@ -129,25 +158,26 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 .map(move |pair| (m, pair.binder))
         })
         .collect();
-    let [root] = matches.as_slice() else {
+    let [(root_module, root_binder)] = matches.as_slice() else {
         return Err(format!("entry matched {} definitions", matches.len()));
     };
-    let mut pending = vec![*root];
-    let mut functions = BTreeMap::new();
-    let mut edges = BTreeMap::<Key, BTreeSet<Key>>::new();
-    let supported = |ty: &Ty| modules.iter().any(|m| data::supported(m, ty));
-    while let Some(key @ (module, binder)) = pending.pop() {
-        if functions.contains_key(&key) {
-            continue;
-        }
-        let leaf = lower_leaf_in_world(modules, module, binder, FnId(functions.len() as u32))
-            .map_err(|error| {
-                format!(
-                    "module {module} binder {binder} at {:?}: {}",
-                    error.source, error.reason
-                )
-            })?;
+    let specialization =
+        specialize::specialize(modules, &[Instance::whole(*root_module, *root_binder)])
+            .map_err(|error| error.to_string())?;
+    let evidence = crate::nir::World::of(modules, 0)?;
+    let supported = |ty: &Ty| data::supported(&evidence, ty);
+    let leaves: Vec<&crate::nir::lower::LoweredLeaf> = specialization
+        .lowered
+        .iter()
+        .map(|leaf| {
+            leaf.as_ref()
+                .expect("a complete specialization lowers every instance")
+        })
+        .collect();
+    let mut edges: Vec<BTreeSet<usize>> = Vec::with_capacity(leaves.len());
+    for (index, leaf) in leaves.iter().enumerate() {
         let function = &leaf.function;
+        let instance = &specialization.instances[index];
         if !function.type_params.is_empty()
             || !supported(&function.result_ty)
             || function
@@ -157,7 +187,8 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 .any(|p| !supported(&p.ty))
         {
             return Err(format!(
-                "module {module} binder {binder}: emission requires monomorphic supported scalar/algebraic carriers"
+                "module {} binder {}: emission requires monomorphic supported scalar/algebraic carriers",
+                instance.module, instance.binder
             ));
         }
         let mut dependencies = BTreeSet::new();
@@ -184,18 +215,30 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                     }
                     integer(&lit.kind, &lit.pretty)?;
                 }
-                Operation::TopReference { module, binder }
-                | Operation::CallTop { module, binder, .. } => {
-                    dependencies.insert((*module, *binder));
+                Operation::TopReference {
+                    module,
+                    binder,
+                    type_arguments,
+                    dictionaries,
+                }
+                | Operation::CallTop {
+                    module,
+                    binder,
+                    type_arguments,
+                    dictionaries,
+                    ..
+                } => {
+                    dependencies.insert(instance_of(
+                        &specialization,
+                        &reference_of(*module, *binder, type_arguments, dictionaries),
+                    )?);
                 }
                 _ => return Err("unsupported operation in scalar Rust backend".into()),
             }
         }
-        pending.extend(dependencies.iter().copied());
-        edges.insert(key, dependencies);
-        functions.insert(key, leaf);
+        edges.push(dependencies);
     }
-    let entry_function = &functions[root].function;
+    let entry_function = &leaves[0].function;
     let direct_arity = entry_function.blocks[0].params.len();
     let mut entry_types: Vec<_> = entry_function.blocks[0]
         .params
@@ -215,25 +258,25 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
     }
     // Refuse cycles involving a value, even through a function. Only function
     // recursion is supported here, not productive recursive thunk graphs.
-    for (key, leaf) in &functions {
+    for (index, leaf) in leaves.iter().enumerate() {
         if !leaf.function.blocks[0].params.is_empty() {
             continue;
         }
         let mut seen = BTreeSet::new();
-        let mut pending: Vec<_> = edges[key].iter().copied().collect();
+        let mut pending: Vec<_> = edges[index].iter().copied().collect();
         while let Some(next) = pending.pop() {
-            if next == *key {
+            if next == index {
                 return Err("recursive value dependency closure is not supported".into());
             }
             if seen.insert(next) {
-                pending.extend(edges[&next].iter().copied());
+                pending.extend(edges[next].iter().copied());
             }
         }
     }
     let mut out = String::from(
         "// Generated from source-verified scalar NIR. CLI I/O is an adapter.\n#[cfg(not(target_pointer_width = \"64\"))]\ncompile_error!(\"Int# backend requires a 64-bit target\");\n",
     );
-    let has_boxed = functions.values().any(|leaf| {
+    let has_boxed = leaves.iter().any(|leaf| {
         carrier(&leaf.function.result_ty) != "i64"
             || leaf.function.blocks.iter().any(|b| {
                 b.params
@@ -251,7 +294,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
     // including mutually recursive top-level functions and local join loops.
     out.push_str("#[allow(non_camel_case_types)]\nenum HState {\n");
     let mut dispatch = String::new();
-    for ((m, b), leaf) in &functions {
+    for (index, leaf) in leaves.iter().enumerate() {
         for block in &leaf.function.blocks {
             if carrier(block_result(&leaf.function, block)) != "i64" {
                 continue;
@@ -268,10 +311,10 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 .map(|p| format!("v{}", p.id.0))
                 .collect::<Vec<_>>()
                 .join(", ");
-            writeln!(out, "B_{m}_{b}_{}({types}),", block.id.0).unwrap();
+            writeln!(out, "B_{index}_{}({types}),", block.id.0).unwrap();
             writeln!(
                 dispatch,
-                "HState::B_{m}_{b}_{}({args}) => s_{m}_{b}_{}({args}),",
+                "HState::B_{index}_{}({args}) => s_{index}_{}({args}),",
                 block.id.0, block.id.0
             )
             .unwrap();
@@ -280,7 +323,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
     out.push_str("}\nenum HStep { Done(i64), Next(HState) }\nfn h_run(mut state: HState) -> i64 { loop { let step = match state {\n");
     out.push_str(&dispatch);
     out.push_str("}; match step { HStep::Done(value) => return value, HStep::Next(next) => state = next } } }\n");
-    for ((module, binder), leaf) in &functions {
+    for (index, leaf) in leaves.iter().enumerate() {
         let block = &leaf.function.blocks[0];
         let parameters = block
             .params
@@ -303,14 +346,18 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                     .map(|p| format!("v{}", p.id.0))
                     .collect::<Vec<_>>()
                     .join(", ");
-                writeln!(out, "fn b_{module}_{binder}_{}({block_parameters}) -> i64 {{ h_run(HState::B_{module}_{binder}_{}({args})) }}", block.id.0, block.id.0).unwrap();
+                writeln!(out, "fn b_{index}_{}({block_parameters}) -> i64 {{ h_run(HState::B_{index}_{}({args})) }}", block.id.0, block.id.0).unwrap();
             }
             writeln!(
                 out,
-                "    #[allow(unused_variables)]\n    fn {}_{module}_{binder}_{}({block_parameters}) -> {} {{",
+                "    #[allow(unused_variables)]\n    fn {}_{index}_{}({block_parameters}) -> {} {{",
                 if scalar_block { "s" } else { "b" },
                 block.id.0,
-                if scalar_block { "HStep" } else { carrier(block_result(&leaf.function, block)) }
+                if scalar_block {
+                    "HStep"
+                } else {
+                    carrier(block_result(&leaf.function, block))
+                }
             )
             .unwrap();
             let value = |id: crate::nir::ValueId| {
@@ -328,9 +375,9 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 }
             };
             let mut tail_transfer = false;
-            for (index, instruction) in block.instructions.iter().enumerate() {
+            for (position, instruction) in block.instructions.iter().enumerate() {
                 if scalar_block
-                    && index + 1 == block.instructions.len()
+                    && position + 1 == block.instructions.len()
                     && matches!(block.terminator.exit, Exit::Return(v) if v == instruction.result.id)
                 {
                     let destination = match &instruction.operation {
@@ -338,19 +385,24 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                         | Operation::EvaluateBlock { target, arguments }
                         | Operation::LocalScope {
                             target, arguments, ..
-                        } => Some((*module, *binder, *target, arguments)),
+                        } => Some((index, *target, arguments)),
                         Operation::CallTop {
-                            module: m,
-                            binder: b,
+                            module,
+                            binder,
                             type_arguments,
+                            dictionaries,
                             arguments,
-                        } if type_arguments.is_empty() => {
-                            Some((*m, *b, functions[&(*m, *b)].function.entry, arguments))
+                        } => {
+                            let target = instance_of(
+                                &specialization,
+                                &reference_of(*module, *binder, type_arguments, dictionaries),
+                            )?;
+                            Some((target, leaves[target].function.entry, arguments))
                         }
                         _ => None,
                     };
-                    if let Some((m, b, target, arguments)) = destination {
-                        let target_block = functions[&(m, b)]
+                    if let Some((target_index, target, arguments)) = destination {
+                        let target_block = leaves[target_index]
                             .function
                             .blocks
                             .iter()
@@ -366,7 +418,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             .join(", ");
                         writeln!(
                             out,
-                            "    HStep::Next(HState::B_{m}_{b}_{}({args}))",
+                            "    HStep::Next(HState::B_{target_index}_{}({args}))",
                             target.0
                         )
                         .unwrap();
@@ -383,7 +435,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             .find(|b| b.id == *target)
                             .expect("verified closure target");
                         closure(
-                            &format!("b_{module}_{binder}_{}", target.0),
+                            &format!("b_{index}_{}", target.0),
                             &arguments.iter().map(|v| value(*v)).collect::<Vec<_>>(),
                             &instruction.result.ty,
                             target_block.params.len() - arguments.len(),
@@ -478,7 +530,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             };
                             write!(
                                 code,
-                                " {pattern} => b_{module}_{binder}_{}({}),",
+                                " {pattern} => b_{index}_{}({}),",
                                 arm.target.0,
                                 args.join(", ")
                             )
@@ -502,7 +554,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             .collect::<Vec<_>>()
                             .join(", ");
                         format!(
-                            "{{ {captures} {}::defer(move || b_{module}_{binder}_{}({args}).force()) }}",
+                            "{{ {captures} {}::defer(move || b_{index}_{}({args}).force()) }}",
                             carrier(&instruction.result.ty),
                             target.0
                         )
@@ -519,7 +571,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             .map(|v| value(*v))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        format!("b_{module}_{binder}_{}({args})", target.0)
+                        format!("b_{index}_{}({args})", target.0)
                     }
                     Operation::Move(v) => value(*v),
                     Operation::IntBinary { op, arguments } => {
@@ -538,37 +590,35 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                         }
                     }
                     Operation::Literal(lit) => format!("{}i64", integer(&lit.kind, &lit.pretty)?),
-                    Operation::TopReference { module, binder } => {
-                        let arity = functions[&(*module, *binder)].function.blocks[0]
-                            .params
-                            .len();
+                    Operation::TopReference {
+                        module,
+                        binder,
+                        type_arguments,
+                        dictionaries,
+                    } => {
+                        let target = instance_of(
+                            &specialization,
+                            &reference_of(*module, *binder, type_arguments, dictionaries),
+                        )?;
+                        let arity = leaves[target].function.blocks[0].params.len();
                         if arity == 0 {
-                            format!("f_{module}_{binder}()")
+                            format!("f_{target}()")
                         } else {
-                            closure(
-                                &format!("f_{module}_{binder}"),
-                                &[],
-                                &instruction.result.ty,
-                                arity,
-                            )?
+                            closure(&format!("f_{target}"), &[], &instruction.result.ty, arity)?
                         }
                     }
                     Operation::CallTop {
                         module,
                         binder,
-                        arguments,
                         type_arguments,
+                        dictionaries,
+                        arguments,
                     } => {
-                        if !type_arguments.is_empty() {
-                            return Err(
-                                "polymorphic calls need specialization before emission".into()
-                            );
-                        }
-                        if functions[&(*module, *binder)].function.blocks[0]
-                            .params
-                            .len()
-                            != arguments.len()
-                        {
+                        let target = instance_of(
+                            &specialization,
+                            &reference_of(*module, *binder, type_arguments, dictionaries),
+                        )?;
+                        if leaves[target].function.blocks[0].params.len() != arguments.len() {
                             return Err("emitted target parameter count disagrees with call".into());
                         }
                         let args = arguments
@@ -576,7 +626,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             .map(|arg| value(*arg))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        format!("f_{module}_{binder}({args})")
+                        format!("f_{target}({args})")
                     }
                     _ => return Err("unsupported operation in scalar Rust backend".into()),
                 };
@@ -590,7 +640,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             }
             let call = |target: &crate::nir::BlockId, args: &[crate::nir::ValueId]| {
                 format!(
-                    "b_{module}_{binder}_{}({})",
+                    "b_{index}_{}({})",
                     target.0,
                     args.iter()
                         .map(|v| value(*v))
@@ -601,7 +651,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             let transfer = |target: &crate::nir::BlockId, args: &[crate::nir::ValueId]| {
                 if scalar_block {
                     format!(
-                        "HStep::Next(HState::B_{module}_{binder}_{}({}))",
+                        "HStep::Next(HState::B_{index}_{}({}))",
                         target.0,
                         args.iter()
                             .map(|v| value(*v))
@@ -646,7 +696,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         }
         writeln!(
             out,
-            "#[allow(unused_variables)]\nfn f_{module}_{binder}({parameters}) -> {} {{",
+            "#[allow(unused_variables)]\nfn f_{index}({parameters}) -> {} {{",
             carrier(&leaf.function.result_ty)
         )
         .unwrap();
@@ -659,22 +709,17 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         if carrier(&leaf.function.result_ty) != "i64" {
             let result_carrier = carrier(&leaf.function.result_ty);
             if block.params.is_empty() {
-                writeln!(out, "    std::thread_local! {{ static VALUE: {result_carrier} = {result_carrier}::defer(|| b_{module}_{binder}_{}().force()); }}\n    VALUE.with(Clone::clone)\n}}", leaf.function.entry.0).unwrap();
+                writeln!(out, "    std::thread_local! {{ static VALUE: {result_carrier} = {result_carrier}::defer(|| b_{index}_{}().force()); }}\n    VALUE.with(Clone::clone)\n}}", leaf.function.entry.0).unwrap();
             } else {
                 writeln!(
                     out,
-                    "    {result_carrier}::defer(move || b_{module}_{binder}_{}({args}).force())\n}}",
+                    "    {result_carrier}::defer(move || b_{index}_{}({args}).force())\n}}",
                     leaf.function.entry.0
                 )
                 .unwrap();
             }
         } else {
-            writeln!(
-                out,
-                "    b_{module}_{binder}_{}({args})\n}}",
-                leaf.function.entry.0
-            )
-            .unwrap();
+            writeln!(out, "    b_{index}_{}({args})\n}}", leaf.function.entry.0).unwrap();
         }
     }
     let arity = entry_types.len();
@@ -691,12 +736,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         .collect::<Vec<_>>()
         .join(", ");
     if direct_arity == arity {
-        writeln!(
-            out,
-            "#[allow(unused_imports)]\nuse f_{}_{} as h2r_entry;",
-            root.0, root.1
-        )
-        .unwrap();
+        writeln!(out, "#[allow(unused_imports)]\nuse f_0 as h2r_entry;").unwrap();
     } else {
         let params = entry_types
             .iter()
@@ -717,10 +757,8 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             .join(", ");
         writeln!(
             out,
-            "fn h2r_entry({params}) -> {} {{ f_{}_{}({direct}).apply(vec![{extra}]).{}() }}",
+            "fn h2r_entry({params}) -> {} {{ f_0({direct}).apply(vec![{extra}]).{}() }}",
             carrier(entry_result),
-            root.0,
-            root.1,
             field_kind(entry_result).1
         )
         .unwrap();

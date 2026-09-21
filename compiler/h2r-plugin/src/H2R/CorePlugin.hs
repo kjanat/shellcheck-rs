@@ -54,6 +54,7 @@ import System.IO (IOMode (WriteMode), hPutStr, hPutStrLn, hSetEncoding, stderr,
                   utf8, withFile)
 
 import GHC.Plugins
+import GHC.Core.DataCon (dataConFullSig)
 import GHC.Core.TyCo.Rep (TyLit (..), Type (..))
 import GHC.Core.Type (expandTypeSynonyms)
 import GHC.Core.Utils (exprIsCheap, exprIsHNF, exprIsTrivial, exprOkForSpeculation)
@@ -1440,7 +1441,7 @@ programConstructors binds = M.elems $ M.fromList
 
 constructorJ :: DynFlags -> TyS -> DataCon -> Value
 constructorJ dflags tys dc = object
-    [ "name" .= nameStableString (dataConName dc)
+    ([ "name" .= nameStableString (dataConName dc)
     , "worker" .= nameStableString (varName (dataConWorkId dc))
     , "family" .= nameStableString (tyConName (dataConTyCon dc))
     , "tag" .= dataConTag dc
@@ -1452,7 +1453,29 @@ constructorJ dflags tys dc = object
                     && isLiftedTypeKind (tyConResKind (dataConTyCon dc))
                     && not (isUnboxedTupleTyCon (dataConTyCon dc))
                     && not (isUnboxedSumTyCon (dataConTyCon dc)))
+    -- The reasons 'isVanillaDataCon' can be false, separately, so a class
+    -- dictionary's superclass constraint field is not mistaken for an
+    -- existential or a GADT equality.
+    , "newtype" .= isNewTyCon (dataConTyCon dc)
+    , "unlifted" .= not (isLiftedTypeKind (tyConResKind (dataConTyCon dc)))
+    , "unboxed" .= (isUnboxedTupleTyCon (dataConTyCon dc)
+                    || isUnboxedSumTyCon (dataConTyCon dc))
+    -- Whether this family is a class's dictionary. GHC knows; nothing on the
+    -- Rust side can tell a dictionary from a one-constructor record by its
+    -- shape, and an occurrence name is not evidence.
+    , "class" .= isClassTyCon (dataConTyCon dc)
+    ] ++ constructorScopeJ dc)
+
+-- | The two parts of a constructor's signature that make a field more than a
+-- value: existentially quantified variables, and GADT equality evidence.
+-- 'dataConFullSig' is the only exported way to reach the equality spec.
+constructorScopeJ :: DataCon -> [(Key.Key, Value)]
+constructorScopeJ dc =
+    [ "existential" .= not (null exVars)
+    , "equalities" .= not (null eqSpec)
     ]
+  where
+    (_, exVars, eqSpec, _, _, _) = dataConFullSig dc
 
 -- | The index of a type in a table that already contains it.  'tyTable' is
 -- built from the program types and constructor worker signatures, which is

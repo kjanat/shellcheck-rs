@@ -96,6 +96,33 @@ sha256sum compiler/rust/target/release/h2r compiler/core-json/*.core.json >"$out
 (cd "$out" && sha256sum nir.txt nir.stderr >outputs.sha256)
 '''
 
+[tasks."lower:specialize"]
+description = "Survey the instances the live set needs, and rank the blockers"
+usage       = '''
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+flag "--fn <name>" help="Specialize from one root and print each instance's NIR"
+'''
+run         = '''
+set -eu
+cargo build --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r
+out="$PWD/compiler/build/coverage"
+mkdir -p "$out"
+set --
+[ -z "${usage_fn:-}" ] || set -- --fn "${usage_fn}"
+status=0
+compiler/rust/target/release/h2r lower "${usage_dir?}" --nir --specialize "$@" \
+  >"$out/specialize.txt" 2>"$out/specialize.stderr" || status=$?
+if [ "$status" -ne 0 ]; then
+  if [ "$status" -ne 1 ] || ! grep -Eq '^Error: specialization incomplete: [0-9]+ instances refused$' "$out/specialize.stderr"; then
+    cat "$out/specialize.stderr" >&2
+    exit "$status"
+  fi
+fi
+grep -E '^(Instances|Specialized):' "$out/specialize.txt"
+sha256sum compiler/rust/target/release/h2r "${usage_dir?}"/*.core.json >"$out/specialize.inputs.sha256"
+(cd "$out" && sha256sum specialize.txt specialize.stderr >specialize.sha256)
+'''
+
 [tasks.plugin]
 description = "Build the GHC Core-dump plugin"
 dir         = "{{ config_root }}/compiler/h2r-plugin"
@@ -134,6 +161,10 @@ binary_entries="$binary_entries dataChoice dataPair dataNested dataDefault dataL
 binary_entries="$binary_entries localJoin recursiveList localLazy"
 binary_entries="$binary_entries higherOrder partialTop localClosure returnedClosure closureBranch functionField"
 binary_entries="$binary_entries closureUnused escapingRecursive overApplied"
+specialization_entries='polyTwoTypes polyCrossModule polyHigherOrder polyRecursive polyNested'
+specialization_entries="$specialization_entries classTwoInstances classDefaultMethod classSuperclass"
+specialization_entries="$specialization_entries classCrossModule classParameterized classMethodValue"
+binary_entries="$binary_entries $specialization_entries"
 recursive_entries='recursiveSum mutualRecursion localLoop localMutual'
 if [ "$profile" = unoptimized ]; then
   out="$out/unoptimized"
@@ -171,7 +202,35 @@ for entry in constant boxedCaf $binary_entries $recursive_entries recursiveTree;
   rustc --edition=2024 -O "$out/$entry.rs" -o "$out/$entry"
   rustc --edition=2024 -C overflow-checks=yes "$out/$entry.rs" -o "$out/$entry-checked"
 done
+# Specialization evidence, in both profiles: every instance the entry needs
+# must lower, and each entry must exercise the form it was written for.
+for entry in $specialization_entries; do
+  name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
+  compiler/rust/target/release/h2r lower "$out/core" --nir --specialize --fn "$name" > "$out/$entry.instances"
+  grep -Eq '^Instances: [0-9]+ = [0-9]+ lowered \+ 0 refused, over [0-9]+ owners$' "$out/$entry.instances"
+done
+# The same source binding, lowered once per type it is used at. CoreTidy
+# decides whether a binding's name is external, so match its occurrence.
+test "$(grep -c 'INSTANCE .*[$]polyIdentity"' "$out/polyTwoTypes.instances")" -eq 2
+test "$(grep -c 'INSTANCE .*[$]crossPoly"' "$out/polyCrossModule.instances")" -eq 2
+test "$(grep -c 'INSTANCE .*[$]crossApply"' "$out/polyHigherOrder.instances")" -eq 2
+# A recursive polymorphic function: two instances, each reusing itself.
+test "$(grep -c 'INSTANCE .*[$]polyCount"' "$out/polyRecursive.instances")" -eq 2
+test "$(grep -c 'INSTANCE .*[$]firstOfPair"' "$out/polyNested.instances")" -eq 2
+# No class method survives as a dispatch through its selector: each resolved
+# to the instance's own method.
+test "$(grep -c 'INSTANCE .*[$]size"' "$out/classTwoInstances.instances")" -eq 0
 if [ "$profile" = unoptimized ]; then
+  # -O1 inlines the dictionaries away before the dump, so the dictionary
+  # spines only exist to be resolved in the unoptimized profile.
+  for entry in classTwoInstances classDefaultMethod classSuperclass classCrossModule classMethodValue classParameterized; do
+    grep -q 'ResolveMethod' "$out/$entry.instances"
+  done
+  # A default method, a superclass field read and a dictionary built from
+  # another dictionary each specialize on the dictionary itself.
+  for entry in classDefaultMethod classSuperclass classCrossModule classParameterized; do
+    grep -Eq 'INSTANCE [0-9]+ .* at 1 type arguments, 1 dictionaries' "$out/$entry.instances"
+  done
   for spec in chooseData:construct readData:match-data readNested:match-data readMaybe:match-data listFirst:match-data applyInt:apply partialTop:apply localClosure:make-closure makeAdder:make-closure escapingRecursive:make-closure; do
     entry=${spec%:*}
     operation=${spec#*:}

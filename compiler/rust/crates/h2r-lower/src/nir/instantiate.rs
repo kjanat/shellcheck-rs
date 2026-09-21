@@ -3,7 +3,7 @@
 
 use h2r_core_ir::{BindSite, BinderId, Expr, ExprId, Module, Ref, Ty};
 
-use super::world;
+use super::linkage;
 
 pub(super) fn target<'a>(
     module: &'a Module,
@@ -20,7 +20,7 @@ pub(super) fn target<'a>(
         }
         Some(Ref::Global) => {
             let modules = modules.ok_or("application import requires a loaded world")?;
-            let (index, binder) = world::imported_top(modules, name)?;
+            let (index, binder) = linkage::imported_top(modules, name)?;
             Ok((index, binder, modules[index].binder_ty(binder)))
         }
         _ => Err("application requires a top-level binding".into()),
@@ -30,7 +30,7 @@ pub(super) fn target<'a>(
 /// Closed arguments cannot capture variables during substitution. GHC remains
 /// trusted for kind correctness, as for all loaded source types in leaf lowering.
 pub(super) fn apply(head: &Ty, arguments: &[Ty]) -> Result<Ty, String> {
-    if !world::closed_type(head) || arguments.iter().any(|arg| !world::closed_type(arg)) {
+    if !linkage::closed_type(head) || arguments.iter().any(|arg| !linkage::closed_type(arg)) {
         return Err("type application requires closed structured types".into());
     }
     let mut result = head.clone();
@@ -39,23 +39,8 @@ pub(super) fn apply(head: &Ty, arguments: &[Ty]) -> Result<Ty, String> {
             return Err("type application exceeds forall parameters".into());
         };
         result = *body;
-        let mut work = vec![&mut result];
-        while let Some(ty) = work.pop() {
-            match ty {
-                Ty::Var(var) if var.unique == binder.unique => *ty = argument.clone(),
-                Ty::Con { args, .. } => work.extend(args.iter_mut()),
-                Ty::App { fun, arg } => work.extend([fun.as_mut(), arg.as_mut()]),
-                Ty::Fun { mult, arg, res } => {
-                    work.extend([mult.as_mut(), arg.as_mut(), res.as_mut()])
-                }
-                Ty::ForAll {
-                    binder: inner,
-                    body,
-                } if inner.unique != binder.unique => work.push(body),
-                _ => {}
-            }
-        }
-        if !world::closed_type(&result) {
+        super::subst::substitute_capture_safe(&mut result, &binder.unique, argument);
+        if !linkage::closed_type(&result) {
             return Err("type instantiation leaves ambiguous type scope".into());
         }
     }

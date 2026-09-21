@@ -111,7 +111,7 @@ cargo run --release --bin h2r -- lower ../core-json --rules                 # th
 
 ### Executable compiler canary
 
-`mise run canary` runs a complete small pipeline: compile the real Haskell sources in `compiler/canary/` with GHC 9.6.7 and the format-6 plugin; lower the selected pure entries and every dependency; emit standalone Rust; compile with `rustc`; compare against the Haskell oracle. Both `-O1` and `-O0 -fmax-simplifier-iterations=0` check 2,735 entry/input combinations, each with optimized and overflow-checked Rust: **10,940 comparisons**. Signed 64-bit boundaries exercise overflowing arithmetic. Standard output, standard error and successful exit are checked. Alongside scalar control flow and lazy bindings, the suite covers sums, products, nested constructor patterns, DEFAULT, case-binder reuse, strict/lazy fields, `Maybe Int`, finite `[Int]` values, recursion and higher-order calls.
+`mise run canary` runs a complete small pipeline: compile the real Haskell sources in `compiler/canary/` with GHC 9.6.7 and the format-6 plugin; lower the selected pure entries and every dependency; emit standalone Rust; compile with `rustc`; compare against the Haskell oracle. Both `-O1` and `-O0 -fmax-simplifier-iterations=0` check 3,274 entry/input combinations, each with optimized and overflow-checked Rust: **13,096 comparisons**. Signed 64-bit boundaries exercise overflowing arithmetic. Standard output, standard error and successful exit are checked. Alongside scalar control flow and lazy bindings, the suite covers sums, products, nested constructor patterns, DEFAULT, case-binder reuse, strict/lazy fields, `Maybe Int`, finite `[Int]` values, recursion and higher-order calls.
 
 Disabling the simplifier in the second profile is deliberate: even ordinary `-O0` rewrites these cases into tail position. The task requires `EvaluateBlock` in the four non-tail examples' verified NIR, so a GHC transformation cannot silently remove the feature under test. They cover two branching operands, a branching scrutinee, capture of a previously computed value and branching arguments to a cross-module call. These examples now also pass at `-O1`, including the boxed constant CAFs introduced by GHC. The test-only second profile does not change the canonical ShellCheck extraction profile.
 
@@ -119,9 +119,9 @@ Disabling the simplifier in the second profile is deliberate: even ordinary `-O0
 
 Generated Rust, binaries and Core dumps live under `compiler/build/canary/`. The task is rerunnable and regenerates dumps even if Cabal considers its build up to date. No wrapper scripts or temporary worktrees are needed. `h2r emit-rust <dump-dir> --entry '<external-stable-name>' --output program.rs` exposes the emitter independently; a refused entry leaves an existing output file untouched.
 
-This is a **pure backend**, not ShellCheck code generation: monomorphic functions over `Int#`, boxed `Int`, supported algebraic values and function values are emitted only with source-verified NIR and a complete dependency closure. Direct self/mutual recursion, local functions/join points, escaping closures and partial application are supported. `LocalScope` records definitions and body regions; `CallLocal` passes explicit captures and arguments. `MakeClosure` retains code and lexical captures; `Apply` checks argument/result types independently against structured function types. Anonymous lambdas, returned functions and function-valued fields use the same shared lazy carrier. Partial application retains arguments without forcing them; overapplication enters the returned function. Source verification checks lexical visibility, signatures, definition identity, capture order and complete source accounting. Scalar direct tail calls and Int# switches use a dispatcher loop; indirect calls, non-tail calls and lifted-result recursion still use the native stack. Constructor type parameters may be instantiated with closed supported types; this is not general function specialization. The target must be 64-bit. GADTs/existentials, newtype casts, unlifted datatypes, unsupported field carriers, recursive value/thunk graphs, ordinary unlifted lets, polymorphic function specialization, partial constructor/primitive workers and Haskell `IO` remain unsupported. Integer command-line parsing and printing are explicit test adapters, not translated Haskell `main`; algebraic and function values are internal, not CLI inputs/outputs. The CLI adapter also accepts function aliases and function-producing entries whose full signature takes and returns only Int#/Int. Unsupported entries fail without replacing already-generated code. M3 as a whole remains open.
+This is a **pure backend**, not ShellCheck code generation: functions over `Int#`, boxed `Int`, supported algebraic values and function values are emitted only with source-verified NIR and a complete dependency closure. Direct self/mutual recursion, local functions/join points, escaping closures and partial application are supported. `LocalScope` records definitions and body regions; `CallLocal` passes explicit captures and arguments. `MakeClosure` retains code and lexical captures; `Apply` checks argument/result types independently against structured function types. Anonymous lambdas, returned functions and function-valued fields use the same shared lazy carrier. Partial application retains arguments without forcing them; overapplication enters the returned function. Source verification checks lexical visibility, signatures, definition identity, capture order and complete source accounting. Scalar direct tail calls and Int# switches use a dispatcher loop; indirect calls, non-tail calls and lifted-result recursion still use the native stack. A polymorphic function is emitted once per instance — the type arguments and dictionaries it is used at — and a class method resolves to its instance where that instance is proven unique; a dictionary that is not proven unique keeps its runtime dispatch, and an unbounded instance chain is refused with the chain that produced it. The target must be 64-bit. GADTs/existentials, newtype casts, unlifted datatypes, unsupported field carriers, recursive value/thunk graphs, ordinary unlifted lets, partial constructor/primitive workers and Haskell `IO` remain unsupported. Integer command-line parsing and printing are explicit test adapters, not translated Haskell `main`; algebraic and function values are internal, not CLI inputs/outputs. The CLI adapter also accepts function aliases and function-producing entries whose full signature takes and returns only Int#/Int. Unsupported entries fail without replacing already-generated code. M3 as a whole remains open.
 
-Recursion fixtures cover self/mutual calls, non-tail tree recursion, list traversal, captured local loops, join points and lazy local arguments. Scalar tail loops run one million iterations in both Rust build modes. Both Core profiles require `LocalScope` and `CallLocal` in the local-loop NIR. Higher-order fixtures cover captured lambdas, top/local partial application, returned functions, function-valued branches/fields, escaping recursive closures, overapplication and eta-reduced entry aliases. After closure support, canonical NIR coverage is **5,395 / 9,795 live bindings**, with 4,400 refusals and 3,957 dead bindings skipped (+57 lowered); `mise run lower:coverage` reuses the unchanged constructor-bearing dumps.
+Recursion fixtures cover self/mutual calls, non-tail tree recursion, list traversal, captured local loops, join points and lazy local arguments. Scalar tail loops run one million iterations in both Rust build modes. Both Core profiles require `LocalScope` and `CallLocal` in the local-loop NIR. Higher-order fixtures cover captured lambdas, top/local partial application, returned functions, function-valued branches/fields, escaping recursive closures, overapplication and eta-reduced entry aliases. After closure support, canonical NIR coverage is **5,395 / 9,795 live bindings**, with 4,400 refusals and 3,957 dead bindings skipped (+57 lowered); `mise run lower:coverage` reuses the unchanged constructor-bearing dumps. Specialization fixtures cover one function at several types, cross-module instantiation, a polymorphic higher-order argument, recursive specialization, a nested type argument, two instances of one class, a default method, a superclass field read, a cross-module class, a parameterized instance and a method used as a value. After specialization the same per-owner measure reads 5,402 / 4,393 / 3,957, and `mise run lower:specialize` reports the instance survey the milestone actually moves.
 
 General constructor lowering requires the optional format-6 `constructors` table: stable constructor/worker/family identities, complete family size, tag, structured worker signature, representation arity and representation-field strictness. The plugin includes complete families referenced by terms, patterns and binder types. Old dumps remain readable, but cannot justify this new lowering without fresh extraction. No pretty-type or constructor-name heuristic supplies missing evidence. Canonical ShellCheck and canary dumps now contain this metadata; the six optimization-matrix profiles have not been refreshed for this addition.
 
@@ -3493,7 +3493,7 @@ A new crate, `h2r-lower`, consumes `h2r-core-ir` and `h2r-analysis` and construc
 | **M3a′** | dump post-CoreTidy Core and re-establish whole-program identity — **done.** The resolver decides locality lexically; the plugin runs `CoreTidy` itself, serialises the tidied program and joins back, field by field, the facts CoreTidy discards (`demand`, `oneShot`, `exported`), with the alignment proved per module at extraction time. All seven dumps regenerated, `A5-IN-WORLD-MISSING` **0** on every one, dump format 6. **The format-6 baseline run and verifier checks are complete. Before/after accounting and site-level attribution remain open; see todo.md.** See the [format-6 baseline](#format-6-baseline-2026-09-16). See [M3a′](#m3a--dump-post-coretidy-core-and-re-establish-whole-program-identity) |
 | **M3b**  | the normalised IR — NIR, ANF/CFG-shaped, `FnId`/`ValueId`/`BlockId`, explicit `Delay`/`Force`/closure create/return, every instruction carrying `Origin { module, source_node/binder, rule }`, and **no `OpaqueCore` escape hatch**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | **M3c**  | canonical carriers `Carrier(T)` plus closure conversion, so no anonymous `Lam` remains — this is what closes the open invariant `TypeShapeUniform` rests on                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **M3d**  | polyvariant specialisation keyed by `(FnId, DictAssignment, ClosureShapeAssignment)` from a live-rooted worklist, closing the set-valued clone lower bounds without a call-string length                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **M3d**  | polyvariant specialisation keyed by `(FnId, DictAssignment, ClosureShapeAssignment)` from a live-rooted worklist, closing the set-valued clone lower bounds without a call-string length — **done** for the type-and-dictionary key: an instance is `(module, binder, type arguments, dictionaries)`, interned under a canonical alpha-equivalence key and driven from a live-rooted worklist. Closure-shape assignment is not part of the key. See [M3d](#m3d--polymorphism-and-typeclass-specialization)                                                                                                                                                                                                                     |
 | **M3e**  | explicit evaluation: M1 consumed — `Delay`, `Lazy`, shared and recursive thunks — and every M2.4 force obligation becomes a `Force`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | **M3f**  | apply the certified representation rewrites. `Erasable` is *permission, not obligation*; every destructive rewrite gets a certificate naming the source address and the proof rule or claim it rests on                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | **M3g**  | lower the proven Parsec CPS regions into blocks and jumps using M2.1's regions and edges — no re-recognition, no names                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -4679,6 +4679,106 @@ Source: `reachability.json` → `.reachability.accounting.modules`, canonical pr
 | **Total (28 modules)**          | **13,752** | **9,795** |      **905** |           **3,052** |
 
 `905 + 3,052 = 3,957`. This is the "authoritative per-module live table" still requested by todo.md; the pointers from the historical milestone sections to it are not added here.
+
+## M3d — polymorphism and typeclass specialization
+
+A polymorphic binding has no single Rust function. `poly :: forall a. a -> a` is one Core binding and as many Rust functions as the program uses it at, so the unit the lowering owns stops being a binding and becomes an **instance**: a top-level binding together with the closed types and the proven-unique dictionaries its leading lambdas were bound to.
+
+### What a dictionary turns out to be
+
+Reading the Core rather than assuming: a class dictionary is an ordinary single-constructor data value, and a class method selector is an ordinary case on it.
+
+```text
+area   = \@a (v :: Shape a) -> case v of C:Shape v2 v3 v4 -> v2
+$fShapeSq = C:Shape @Sq $fShapeSq_$carea $fShapeSq_$cname $fShapeSq_$cperimeter
+```
+
+So dispatch needed no new NIR operation — `Construct`, `MatchData` and `Apply` already express it. What it needed was evidence: the selector's field index is read out of the selector's own body, and an instance dictionary's fields out of the constructor application its binding is. GHC's `IdDetails` (`[ClassOp]`, `[DFunId]`) corroborates each shape. An occurrence name is never the proof.
+
+At `-O0` this is not an optimisation but the only way the program can be emitted at all. GHC's unoptimised desugaring produces a knot:
+
+```text
+$fShapeSq = C:Shape @Sq $carea1 $cname1 $cperimeter1
+$cname1   = $dmname @Sq $fShapeSq
+```
+
+a recursive CAF the emitter refuses. Resolving `name @Sq $fShapeSq` to `$cname1` statically, and `$cname1` to the instance `$dmname` at `([Sq], [$fShapeSq])`, breaks the knot because the dictionary is never built.
+
+### The rules
+
+| Rule              | Source shape                                                                  | What the instance key absorbs                               |
+| ----------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `InstantiateTop`  | `f @T…` with no value arguments                                               | the type arguments                                          |
+| `ResolveInstance` | `f @T… d…` whose every value argument is a proven-unique dictionary           | the type and dictionary arguments; the spine is a reference |
+| `ResolveMethod`   | `sel @T… d args…` where `sel` is a class-op selector and `d` is proven unique | the selector and the dictionary; the call names the method  |
+| `CallTop`         | anything else that saturates a known target                                   | the leading dictionary arguments, if any                    |
+
+A dictionary resolves when it is a top-level binding whose right-hand side is a saturated class-constructor application, a dictionary the instance already bound, a superclass field of one of those, or a top-level name whose right-hand side is one of those read in its own arguments' scope. **Anything else keeps its runtime dispatch**: the dictionary stays an ordinary value, the selector stays a constructor match and the call stays an indirect application. Nothing is guessed, and nothing silently falls back to a different meaning.
+
+### Substitution, and what makes an instance the same instance
+
+Substitution is capture-safe: a quantifier whose variable occurs free in a replacement is renamed before the replacement is inserted, so `forall b. a -> b` at `a := b` cannot become `forall b. b -> b`. Nothing rewrites Core; an instance reads every type through one substituted view of the module's immutable type table.
+
+Instance identity is a canonical key built from the *structured* type — stable type-constructor names and de Bruijn levels, with every string length-framed — so two keys are equal exactly when the types are alpha-equivalent. Equal keys intern to one instance, which is what makes a recursive cycle terminate: a self-call finds the instance it is already inside.
+
+Growth is bounded explicitly. An instance chain whose type arguments keep growing (`f @a` calling `f @(L a)`) is refused with the chain that produced it, against a nesting budget and a per-owner budget, rather than being allowed to run. Detection does not depend on noticing the pattern; it depends on the budget, so no chain can outrun it.
+
+### Constructor evidence is a whole-world fact
+
+A function from one module specialized at a type declared in another needs that other module's constructor evidence, so every layout query now searches the loaded world. Where several modules describe the same constructor, they must agree; a disagreement is an error rather than a first-wins pick.
+
+The dump gained four additive facts per constructor, because GHC's `isVanillaDataCon` is false for a class dictionary with a superclass — the superclass is a *constraint* field — and that is not distinguishable from an existential or a GADT equality without asking. `newtype`, `unlifted`, `unboxed`, `existential`, `equalities` and `class` are each a separate GHC fact; older dumps carry none of them and keep the conservative answer.
+
+Extending the format means re-extracting every dump, so the M1–M2.4 reports were recaptured against the new ones (`mise run baseline:reports`, all seven profiles, verification passing on each). All eight text reports — `stats`, `laziness`, `parsec`, `higher`, `classops`, `dictflow`, `m24`, `verify-m24` — are byte-identical to the ones taken before. Three JSON forms differ. Every number in them is unchanged and so is the count of scalar paths (`higher` 206,177, `laziness` 379,789, `parsec` 259,854); the textual differences are GHC uniques, in `laziness.json`'s `"unique"` fields and in the free type-variable names embedded in `higher.json` and `parsec.json`'s shape keys. A unique is a per-compilation serial number that nothing keys by.
+
+### Verification
+
+The verifier re-derives the substitution and the dictionary scope **from the source and the caller's stated instance**, never from the candidate's own evidence, then checks every type, target and origin against them. Corruption tests cover a wrong type argument, a wrong parameter or result type, wrong instantiation provenance, a wrong type argument on a call site, a missing or swapped dictionary, wrong dictionary provenance, and a method target swapped for the other method of the same dictionary. Each is rejected.
+
+### Results
+
+The canary compares generated Rust against the GHC oracle in both profiles over **13,096 differential cases**, in optimised and overflow-checked builds. Eleven new entries cover one function at several types, cross-module instantiation, a polymorphic higher-order argument, recursive specialization, a nested type argument, two instances of one class, a default method, a superclass field read, a cross-module class, a parameterized instance and a method used as a value.
+
+Canonical NIR coverage, per owner at its own signature (`mise run lower:coverage`): **5,402 lowered / 4,393 refused / 3,957 dead**, against 5,395 / 4,400 before. That measure barely moves, and should not: a polymorphic owner still cannot be lowered at its own open signature, and what specialization changes is which *instances* exist.
+
+The measure this milestone moves is the instance survey (`mise run lower:specialize`), every live binding as a root:
+
+```text
+Instances: 9811 = 5407 lowered + 4404 refused, over 9795 owners
+Specialized: 16 at type or dictionary arguments, of which 0 carry a dictionary
+```
+
+### The blockers, ranked
+
+```text
+   2891  imported binding is outside the loaded world
+    498  unsupported constructor field carrier
+    389  algebraic case result mismatch
+    338  switch requires Int# scrutinee, Int#/Int result and no alternative binders
+     97  type application requires closed structured types
+     55  lazy let requires a supported non-recursive lifted value, not a join point
+     24  type arguments must precede value arguments
+     23  unsupported constructor family or representation
+     21  casts need source and target type evidence
+     14  instance reference needs closed structured type arguments
+     14  local functions require supported closed signatures
+      8  call arguments require supported Int#/Int computations or shared references
+      8  unsupported local function parameter
+      7  direct call must match known target arity
+      4  local functions require monomorphic value lambdas
+      4  non-exhaustive algebraic case
+      4  unsupported case scrutinee carrier
+      2  constructor type arguments or saturation mismatch
+      1  boxed case result type mismatch
+      1  lazy let requires one non-recursive binding
+      1  unsupported strict case type or alternative
+```
+
+Read against the milestone's own question, this ranks the blockers the survey reached, and nothing beyond them. The dominant one is the external library boundary — 2,891 references into `base`, `containers`, `bytestring` and the rest, which are outside the 28-module dump — followed by carrier coverage for constructor fields, algebraic case results and non-`Int#` switches. The specialization-shaped residue among them is small: 97 open type applications, 24 interleaved spines, 14 open instance arguments and 7 arity mismatches.
+
+What that establishes is the subset now implemented, not the size of what is left. The survey discovers an instance only through a call site it has already lowered, so each of the 4,404 refusals hides its own requirements, and the specialization those hidden instances would demand is unmeasured. The ranking above becomes an answer about substantial pure programs only once the carrier and boundary blockers are cleared and a survey reaches past them.
+
+Two further facts worth stating rather than leaving implied. `Main.main` cannot be a survey root at all: its Core opens with a cast through the `IO` newtype, so a single-root survey stops on the first instruction. And only 16 specialized instances appear on the canonical `-O1` dump, none of them carrying a dictionary, because `-O1` has already specialised the dictionaries away before the dump is taken. The dictionary machinery is therefore exercised by the canary's unoptimised profile and the unit fixtures, and by no canonical instance.
 
 ## What ShellCheck actually needs
 
