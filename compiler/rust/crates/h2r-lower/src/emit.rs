@@ -117,6 +117,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 | Operation::Move(_)
                 | Operation::BoxInt(_)
                 | Operation::UnboxInt(_)
+                | Operation::DelayBlock { .. }
                 | Operation::EvaluateBlock { .. } => {}
                 Operation::Literal(lit) => {
                     if boxed::is_int(&instruction.result.ty) {
@@ -209,6 +210,22 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             };
             for instruction in &block.instructions {
                 let expression = match &instruction.operation {
+                    Operation::DelayBlock { target, arguments } => {
+                        let captures = arguments
+                            .iter()
+                            .enumerate()
+                            .map(|(n, v)| format!("let c{n} = {};", value(*v)))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let args = (0..arguments.len())
+                            .map(|n| format!("c{n}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(
+                            "{{ {captures} HInt::defer(move || b_{}({args}).force()) }}",
+                            target.0
+                        )
+                    }
                     Operation::BoxInt(v) => format!("HInt::ready(v{})", v.0),
                     Operation::UnboxInt(v) => format!("v{}.force()", v.0),
                     Operation::EvaluateBlock { target, arguments } => {

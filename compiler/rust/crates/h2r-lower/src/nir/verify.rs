@@ -133,7 +133,7 @@ fn verify_leaf_impl(
                     return Err("multiple leaf values in source".into());
                 }
             }
-            Expr::App { .. } | Expr::Case { .. } => {
+            Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. } => {
                 if leaf.replace(expr).is_some() {
                     return Err("multiple leaf values in source".into());
                 }
@@ -363,12 +363,24 @@ fn verify_value(
         ..
     } = *context;
     if let [instruction] = block.instructions.as_slice()
-        && let Operation::EvaluateBlock { target, arguments } = &instruction.operation
+        && let Operation::EvaluateBlock { target, arguments }
+        | Operation::DelayBlock { target, arguments } = &instruction.operation
     {
-        if !matches!(module.expr(expr), Expr::Case { .. })
+        let delayed = matches!(instruction.operation, Operation::DelayBlock { .. });
+        let valid_source = if delayed {
+            boxed::is_int(ty)
+        } else {
+            matches!(module.expr(expr), Expr::Case { .. } | Expr::Let { .. })
+        };
+        if !valid_source
             || !(primitive::is_int(ty) || boxed::is_int(ty))
             || instruction.origin.source != Source::Expr(expr)
-            || instruction.origin.rule != Rule::EvaluateBlock
+            || instruction.origin.rule
+                != if delayed {
+                    Rule::DelayBlock
+                } else {
+                    Rule::EvaluateBlock
+                }
             || instruction.result.id != returned
             || !instruction.result.ty.alpha_eq(ty)
         {
@@ -457,13 +469,23 @@ fn verify_value(
                     return Err("source call signature lacks an arrow".into());
                 };
                 let value = match module.expr(*source) {
-                    Expr::App { .. } | Expr::Case { .. } if primitive::is_int(arg) => {
+                    Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. }
+                        if primitive::is_int(arg) || boxed::is_int(arg) =>
+                    {
                         let end = block.instructions[argument_instructions..]
                             .iter()
                             .position(|i| i.origin.source == Source::Expr(*source))
                             .map(|offset| argument_instructions + offset)
                             .ok_or("missing computed Int# argument")?;
                         let result = block.instructions[end].result.id;
+                        if boxed::is_int(arg)
+                            && !matches!(
+                                block.instructions[end].operation,
+                                Operation::DelayBlock { .. }
+                            )
+                        {
+                            return Err("computed lifted argument must remain delayed".into());
+                        }
                         let mut nested = block.clone();
                         nested.instructions =
                             block.instructions[argument_instructions..=end].to_vec();
@@ -728,6 +750,56 @@ fn verify_value(
                 }
             }
         }
+        Expr::Let { bind, body } => {
+            let [pair] = bind.pairs.as_slice() else {
+                return Err("source lazy let requires one binding".into());
+            };
+            let binding_ty = module.binder_ty(pair.binder);
+            if bind.recursive
+                || !boxed::is_int(binding_ty)
+                || module.binder(pair.binder).is_join_point == Some(true)
+            {
+                return Err("unsupported recursive, unlifted or join-point let".into());
+            }
+            let split = block
+                .instructions
+                .iter()
+                .position(|i| {
+                    i.origin.source == Source::Expr(expr) && i.origin.rule == Rule::LazyBinding
+                })
+                .ok_or("missing lazy binding marker")?;
+            let binding = &block.instructions[split];
+            let Operation::Move(rhs) = binding.operation else {
+                return Err("lazy let must preserve shared identity".into());
+            };
+            if !binding.result.ty.alpha_eq(binding_ty) {
+                return Err("lazy binding type mismatch".into());
+            }
+            let mut prefix = block.clone();
+            prefix.instructions.truncate(split);
+            if !matches!(module.expr(pair.rhs), Expr::Var { .. })
+                && !prefix
+                    .instructions
+                    .last()
+                    .is_some_and(|i| matches!(i.operation, Operation::DelayBlock { .. }))
+            {
+                return Err("computed lazy binding must be delayed".into());
+            }
+            let (rt, rv, rn) = verify_value(context, &prefix, pair.rhs, binding_ty, rhs)?;
+            let mut suffix = block.clone();
+            suffix.instructions = block.instructions[split + 1..].to_vec();
+            suffix.params.push(binding.result.clone());
+            let mut params = params.to_vec();
+            params.push((expr, pair.binder, binding.result.id));
+            let extended = ValueContext {
+                params: &params,
+                ..*context
+            };
+            let (bt, bv, bn) = verify_value(&extended, &suffix, *body, ty, returned)?;
+            type_applications = rt + bt;
+            value_applications = rv + bv;
+            value_nodes = 1 + rn + bn;
+        }
         Expr::Case {
             scrut,
             binder,
@@ -904,7 +976,9 @@ pub fn verify(function: &Function) -> Result<(), String> {
     let mut pending_types = vec![(function.entry, &function.result_ty)];
     for block in &function.blocks {
         for instruction in &block.instructions {
-            if let Operation::EvaluateBlock { target, .. } = instruction.operation {
+            if let Operation::EvaluateBlock { target, .. } | Operation::DelayBlock { target, .. } =
+                instruction.operation
+            {
                 pending_types.push((target, &instruction.result.ty));
             }
         }
@@ -937,6 +1011,15 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 return Err("instruction origin belongs to another module".into());
             }
             match instruction.operation {
+                Operation::DelayBlock {
+                    target,
+                    ref arguments,
+                } => {
+                    if !boxed::is_int(&instruction.result.ty) {
+                        return Err("delayed region requires a boxed Int result".into());
+                    }
+                    verify_edge(&blocks, &available, target, arguments)?;
+                }
                 Operation::BoxInt(value) | Operation::UnboxInt(value) => {
                     let input = available
                         .get(&value)
@@ -1034,7 +1117,9 @@ pub fn verify(function: &Function) -> Result<(), String> {
     while let Some(id) = pending.pop() {
         if visited.insert(id) {
             for instruction in &blocks[&id].instructions {
-                if let Operation::EvaluateBlock { target, .. } = instruction.operation {
+                if let Operation::EvaluateBlock { target, .. }
+                | Operation::DelayBlock { target, .. } = instruction.operation
+                {
                     pending.push(target);
                 }
             }

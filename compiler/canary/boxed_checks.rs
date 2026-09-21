@@ -67,3 +67,80 @@ mod caf {
         assert!(second.is_evaluated());
     }
 }
+
+mod lazy_argument {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/lazyArgument.rs"));
+    #[test]
+    fn computed_unused_argument_stays_unevaluated() {
+        let poison = HInt::defer(|| panic!("computed unused argument forced"));
+        assert_eq!(h2r_entry(HInt::ready(42), poison.clone()).force(), 42);
+        assert!(!poison.is_evaluated());
+    }
+}
+
+mod lazy_branch {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/lazyBranch.rs"));
+    #[test]
+    fn case_inside_unused_argument_does_not_force_scrutinee() {
+        let poison = HInt::defer(|| panic!("deferred case entered early"));
+        assert_eq!(h2r_entry(HInt::ready(13), poison.clone()).force(), 13);
+        assert!(!poison.is_evaluated());
+    }
+}
+
+mod lazy_unused {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/lazyUnused.rs"));
+    #[test]
+    fn unused_local_computation_remains_lazy() {
+        let poison = HInt::defer(|| panic!("unused local computation forced"));
+        assert_eq!(h2r_entry(HInt::ready(19), poison.clone()).force(), 19);
+        assert!(!poison.is_evaluated());
+    }
+}
+
+mod lazy_let {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/lazyLet.rs"));
+    #[test]
+    fn shared_local_captures_survive_and_are_not_forced_early() {
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = calls.clone();
+        let x = HInt::defer(move || {
+            counter.set(counter.get() + 1);
+            10
+        });
+        let result = h2r_entry(x, HInt::ready(11));
+        assert_eq!(calls.get(), 0);
+        assert_eq!(result.force(), 42);
+        assert_eq!(result.force(), 42);
+        assert_eq!(calls.get(), 1);
+    }
+}
+
+mod lazy_nested {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/lazyNested.rs"));
+    #[test]
+    fn nested_thunks_retain_shared_outer_bindings() {
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = calls.clone();
+        let x = HInt::defer(move || {
+            counter.set(counter.get() + 1);
+            3
+        });
+        let result = h2r_entry(x, HInt::ready(4));
+        assert_eq!(calls.get(), 0);
+        assert_eq!(result.force(), 17);
+        assert_eq!(calls.get(), 1);
+    }
+}
+
+mod lazy_strict {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/lazyStrictUse.rs"));
+    #[test]
+    fn case_forces_the_shared_local_only_when_demanded() {
+        let x = HInt::defer(|| 6);
+        let result = h2r_entry(x.clone(), HInt::ready(9));
+        assert!(!x.is_evaluated());
+        assert_eq!(result.force(), 30);
+        assert!(x.is_evaluated());
+    }
+}

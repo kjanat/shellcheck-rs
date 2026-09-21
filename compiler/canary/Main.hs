@@ -5,7 +5,8 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   eqInt, neInt, ltInt, leInt, gtInt, geInt, minimumInt, selectInt, nestedBranch,
   operandBranches, scrutineeBranch, sharedBranch, branchCall,
   makeBox, boxedSum, boxedIgnore, boxedChoose, boxedRoundTrip, boxedShared,
-  boxedStrictIgnore, boxedCaf)
+  boxedStrictIgnore, boxedCaf,
+  lazyArgument, lazyLet, lazyNested, lazyUnused, lazyBranch, lazyStrictUse)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -66,4 +67,10 @@ main = do
     ["boxedShared", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (boxedShared x y))
     ["boxedCaf"] -> print boxedCaf
+    ["lazyArgument", a, b] -> print (lazyArgument (read a) (read b))
+    ["lazyLet", a, b] -> print (lazyLet (read a) (read b))
+    ["lazyNested", a, b] -> print (lazyNested (read a) (read b))
+    ["lazyUnused", a, b] -> print (lazyUnused (read a) (read b))
+    ["lazyBranch", a, b] -> print (lazyBranch (read a) (read b))
+    ["lazyStrictUse", a, b] -> print (lazyStrictUse (read a) (read b))
     _ -> fail "expected a canary entry and its integer arguments"

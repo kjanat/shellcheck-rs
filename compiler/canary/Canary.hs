@@ -3,7 +3,8 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   eqInt, neInt, ltInt, leInt, gtInt, geInt, minimumInt, selectInt, nestedBranch,
   operandBranches, scrutineeBranch, sharedBranch, branchCall,
   makeBox, boxedSum, boxedIgnore, boxedChoose, boxedRoundTrip, boxedShared,
-  boxedStrictIgnore, boxedCaf) where
+  boxedStrictIgnore, boxedCaf,
+  lazyArgument, lazyLet, lazyNested, lazyUnused, lazyBranch, lazyStrictUse) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#))
 import Helpers (first)
@@ -148,3 +149,30 @@ boxedShared x y = case boxedIgnore boxedCaf boxedCaf of I# z -> z +# x +# y
 {-# NOINLINE boxedStrictIgnore #-}
 boxedStrictIgnore :: Int -> Int -> Int
 boxedStrictIgnore x y = case x of I# _ -> y
+
+{-# NOINLINE lazyArgument #-}
+lazyArgument :: Int -> Int -> Int
+lazyArgument x y = boxedIgnore x (boxedSum y y)
+
+{-# NOINLINE lazyLet #-}
+lazyLet :: Int -> Int -> Int
+lazyLet x y = let z = boxedSum x y in boxedSum z z
+
+{-# NOINLINE lazyNested #-}
+lazyNested :: Int -> Int -> Int
+lazyNested x y =
+  let a = boxedSum x y
+      b = boxedSum a x
+  in boxedSum b a
+
+{-# NOINLINE lazyUnused #-}
+lazyUnused :: Int -> Int -> Int
+lazyUnused x y = let z = boxedSum y y in boxedIgnore x z
+
+{-# NOINLINE lazyBranch #-}
+lazyBranch :: Int -> Int -> Int
+lazyBranch x y = boxedIgnore x (case y of I# n -> I# (n +# 1#))
+
+{-# NOINLINE lazyStrictUse #-}
+lazyStrictUse :: Int -> Int -> Int
+lazyStrictUse x y = let z = boxedSum x y in case z of I# n -> I# (n +# n)

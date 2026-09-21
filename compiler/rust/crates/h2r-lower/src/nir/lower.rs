@@ -517,8 +517,13 @@ fn lower_value(
                     Expr::App { .. } if primitive::is_int(arg) => {
                         lower_value(context, source, arg, locals, instructions, blocks)?
                     }
-                    Expr::Case { .. } if primitive::is_int(arg) => {
-                        lower_region(context, source, arg, locals, instructions, blocks)?
+                    Expr::Case { .. } | Expr::Let { .. } if primitive::is_int(arg) => {
+                        lower_region(context, source, arg, locals, instructions, blocks, false)?
+                    }
+                    Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. }
+                        if boxed::is_int(arg) =>
+                    {
+                        lower_region(context, source, arg, locals, instructions, blocks, true)?
                     }
                     Expr::Lit(lit) => {
                         let value = fresh_value(context);
@@ -584,7 +589,7 @@ fn lower_value(
                     _ => {
                         return Err(fail(
                             Some(source),
-                            "call arguments must be parameters, literals, top-level references or Int# applications/cases",
+                            "call arguments require supported Int#/Int computations or shared references",
                         ));
                     }
                 };
@@ -657,7 +662,54 @@ fn lower_value(
             });
             value
         }
-        Expr::Let { .. } => return Err(fail(Some(current), "let bindings are not lowered yet")),
+        Expr::Let { bind, body } => {
+            let [pair] = bind.pairs.as_slice() else {
+                return Err(fail(
+                    Some(current),
+                    "lazy let requires one non-recursive binding",
+                ));
+            };
+            let binding_ty = module.binder_ty(pair.binder);
+            if bind.recursive
+                || !boxed::is_int(binding_ty)
+                || module.binder(pair.binder).is_join_point == Some(true)
+            {
+                return Err(fail(
+                    Some(current),
+                    "lazy let requires a non-recursive boxed Int, not a join point",
+                ));
+            }
+            let rhs = if matches!(module.expr(pair.rhs), Expr::Var { .. }) {
+                lower_value(context, pair.rhs, binding_ty, locals, instructions, blocks)?
+            } else {
+                lower_region(
+                    context,
+                    pair.rhs,
+                    binding_ty,
+                    locals,
+                    instructions,
+                    blocks,
+                    true,
+                )?
+            };
+            let value = fresh_value(context);
+            instructions.push(Instruction {
+                result: Value {
+                    id: value,
+                    ty: binding_ty.clone(),
+                },
+                operation: Operation::Move(rhs),
+                origin: origin(Rule::LazyBinding),
+            });
+            let previous = locals.insert(pair.binder, value);
+            let result = lower_value(context, *body, ty, locals, instructions, blocks);
+            if let Some(previous) = previous {
+                locals.insert(pair.binder, previous);
+            } else {
+                locals.remove(&pair.binder);
+            }
+            result?
+        }
         Expr::Case {
             scrut,
             binder,
@@ -721,7 +773,7 @@ fn lower_value(
             ..
         } => {
             if alts.len() != 1 || !matches!(alts[0].con, h2r_core_ir::AltCon::Default) {
-                return lower_region(context, current, ty, locals, instructions, blocks);
+                return lower_region(context, current, ty, locals, instructions, blocks, false);
             }
             let [alt] = alts.as_slice() else {
                 return Err(fail(
@@ -787,6 +839,7 @@ fn lower_region(
     locals: &BTreeMap<BinderId, ValueId>,
     instructions: &mut Vec<Instruction>,
     blocks: &mut Vec<Block>,
+    delayed: bool,
 ) -> Result<ValueId, LowerError> {
     let mut params = Vec::new();
     let mut arguments = Vec::new();
@@ -817,11 +870,19 @@ fn lower_region(
             id: value,
             ty: ty.clone(),
         },
-        operation: Operation::EvaluateBlock { target, arguments },
+        operation: if delayed {
+            Operation::DelayBlock { target, arguments }
+        } else {
+            Operation::EvaluateBlock { target, arguments }
+        },
         origin: Origin {
             module: context.module_index,
             source: Source::Expr(source),
-            rule: Rule::EvaluateBlock,
+            rule: if delayed {
+                Rule::DelayBlock
+            } else {
+                Rule::EvaluateBlock
+            },
         },
     });
     Ok(value)

@@ -1,8 +1,8 @@
 //! First NIR building block: typed, source-attributed scalar control flow.
 //!
 //! `lower::lower_leaf` translates a restricted subset of Core leaves.
-//! General calls, constructor switches, closures and thunk
-//! regions will extend this model as their lowering rules are implemented.
+//! General calls, constructor families, closures and recursive thunk graphs
+//! will extend this model as their lowering rules are implemented.
 //! Values cross block boundaries explicitly through block parameters; there
 //! are no implicit captures. IDs are function-local except for `FnId`, which
 //! will be allocated by the program lowering driver.
@@ -48,6 +48,8 @@ pub enum Rule {
     EvaluateBlock,
     BoxInt,
     UnboxInt,
+    DelayBlock,
+    LazyBinding,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +69,12 @@ pub struct Value {
 
 #[derive(Debug, Clone)]
 pub enum Operation {
+    /// Allocate one shared boxed-Int thunk. Explicit captures are retained
+    /// without forcing them; the region runs only on demand, at most once.
+    DelayBlock {
+        target: BlockId,
+        arguments: Vec<ValueId>,
+    },
     BoxInt(ValueId),
     /// Force a boxed Int to WHNF and extract its strict Int# field.
     UnboxInt(ValueId),
@@ -100,7 +108,7 @@ pub enum Operation {
     /// Saturated direct call when the enclosing function is entered. Parameter
     /// values (possibly lazy), literals and shared top-level references are
     /// passed without pre-forcing. Computed Int# arguments are evaluated first;
-    /// this does not permit eager evaluation of computed lifted arguments.
+    /// computed boxed Int arguments are explicit DelayBlock results.
     /// The target is identified independently of whether it has been lowered.
     CallTop {
         module: usize,

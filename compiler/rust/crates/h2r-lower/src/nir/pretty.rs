@@ -26,6 +26,9 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
         }
         for instruction in &block.instructions {
             let operation = match &instruction.operation {
+                Operation::DelayBlock { target, arguments } => {
+                    format!("delay b{} {arguments:?}", target.0)
+                }
                 Operation::BoxInt(value) => format!("box-int v{}", value.0),
                 Operation::UnboxInt(value) => format!("unbox-int v{}", value.0),
                 Operation::IntBinary { op, arguments } => format!("int-{op:?} {arguments:?}"),

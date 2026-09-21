@@ -2062,8 +2062,7 @@ fn boxed_constructor_verifier_rejects_changed_field_and_eager_lifted_arguments()
     let mut leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
     leaf.function.blocks[0].instructions[0].operation = Operation::BoxInt(crate::nir::ValueId(1));
     assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
-    // Supporting an Int carrier does not authorize forcing a computed lifted
-    // argument. Until explicit thunk regions exist this must remain a refusal.
+    // A computed lifted argument is accepted only with explicit delay evidence.
     let modules = boxed_world(
         app(
             app(gvar(&sn("Main", "main"), "main"), box_int(lvar("y"))),
@@ -2073,12 +2072,265 @@ fn boxed_constructor_verifier_rejects_changed_field_and_eager_lifted_arguments()
         false,
     );
     let owner = modules[0].top[0].pairs[0].binder;
-    assert!(
-        lower_leaf_in_world(&modules, 0, owner, FnId(0))
-            .unwrap_err()
-            .reason
-            .contains("call arguments")
+    let mut leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    let instruction = &mut leaf.function.blocks[0].instructions[0];
+    let Operation::DelayBlock { target, arguments } = &instruction.operation else {
+        panic!()
+    };
+    instruction.operation = Operation::EvaluateBlock {
+        target: *target,
+        arguments: arguments.clone(),
+    };
+    instruction.origin.rule = crate::nir::Rule::EvaluateBlock;
+    assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
+}
+
+fn lazy_let(unique: &str, rhs: Value, body: Value) -> Value {
+    let mut local = binder("$_in$local", "local", unique);
+    local["ty"] = json!(2);
+    json!({"node":"Let", "bind":{"rec":false, "pairs":[{
+        "binder":local, "rhs":rhs, "whnf":false, "trivial":false, "cheap":false, "okForSpec":false
+    }]}, "body":body})
+}
+
+#[test]
+fn lazy_lets_preserve_scope_sharing_and_complete_source_accounting() {
+    use crate::nir::{
+        FnId, Operation, Rule, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    let bodies = [
+        lazy_let(
+            "z",
+            box_int(lvar("y")),
+            unbox_int(lvar("z"), int_op("+#", lvar("field"), lvar("field")), false),
+        ),
+        lazy_let("z", box_int(lvar("y")), lvar("y")),
+        lazy_let("z", lvar("x"), unbox_int(lvar("z"), lvar("field"), false)),
+        lazy_let(
+            "z",
+            box_int(lvar("y")),
+            lazy_let(
+                "w",
+                unbox_int(
+                    lvar("z"),
+                    box_int(int_op("+#", lvar("field"), lvar("y"))),
+                    true,
+                ),
+                unbox_int(lvar("w"), lvar("field"), false),
+            ),
+        ),
+        lazy_let(
+            "x",
+            box_int(lvar("y")),
+            unbox_int(lvar("x"), lvar("field"), false),
+        ),
+        int_op(
+            "+#",
+            lazy_let(
+                "z",
+                box_int(lvar("y")),
+                unbox_int(lvar("z"), lvar("field"), false),
+            ),
+            lvar("y"),
+        ),
+    ];
+    for body in bodies {
+        let modules = boxed_world(body, true, false);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let counts = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert_eq!(
+            counts.source_nodes,
+            modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
+        );
+        assert!(
+            leaf.function
+                .blocks
+                .iter()
+                .flat_map(|b| &b.instructions)
+                .any(|i| i.origin.rule == Rule::LazyBinding
+                    && matches!(i.operation, Operation::Move(_)))
+        );
+        crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        check_scalar_renumbering(modules);
+    }
+}
+
+#[test]
+fn lazy_let_verifier_rejects_eagerness_recapture_cycles_and_wrong_identity() {
+    use crate::nir::{
+        BlockId, FnId, Operation, Rule, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    let modules = boxed_world(
+        lazy_let(
+            "z",
+            box_int(lvar("y")),
+            unbox_int(lvar("z"), lvar("field"), false),
+        ),
+        true,
+        false,
     );
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..9 {
+        let mut bad = leaf.clone();
+        let block = &mut bad.function.blocks[0];
+        let Operation::DelayBlock { target, arguments } = &mut block.instructions[0].operation
+        else {
+            panic!()
+        };
+        match mutation {
+            0 => *target = BlockId(0),
+            1 => arguments.swap(0, 1),
+            2 => arguments[0] = crate::nir::ValueId(999),
+            3 => {
+                arguments.pop();
+            }
+            4 => {
+                block.instructions[0].operation = Operation::EvaluateBlock {
+                    target: *target,
+                    arguments: arguments.clone(),
+                };
+                block.instructions[0].origin.rule = Rule::EvaluateBlock;
+            }
+            5 => block.instructions[1].operation = Operation::Move(block.params[0].id),
+            6 => block.instructions[1].origin.rule = Rule::StrictPosition,
+            7 => {
+                block.instructions.remove(1);
+            }
+            _ => block.instructions[0].result.ty = modules[0].types[0].clone(),
+        }
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn lazy_lets_refuse_recursive_join_unlifted_and_out_of_scope_bindings() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    for mutation in 0..6 {
+        let mut body = lazy_let(
+            "z",
+            box_int(lvar("y")),
+            unbox_int(lvar("z"), lvar("field"), false),
+        );
+        match mutation {
+            0 => body["bind"]["rec"] = json!(true),
+            1 => body["bind"]["pairs"][0]["binder"]["isJoinPoint"] = json!(true),
+            2 => body["bind"]["pairs"][0]["binder"]["ty"] = json!(0),
+            3 => body["bind"]["pairs"][0]["rhs"] = lvar("z"),
+            4 => body["body"] = lvar("missing"),
+            _ => body["bind"]["pairs"][0]["rhs"] = json!({"node":"Coercion"}),
+        }
+        let modules = boxed_world(body, true, false);
+        let owner = modules[0].top[0].pairs[0].binder;
+        assert!(
+            lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn lazy_argument_cases_and_lets_cannot_be_replaced_by_eager_regions() {
+    use crate::nir::{
+        FnId, Operation, Rule,
+        lower::lower_leaf_in_world,
+        verify::{verify, verify_leaf_in_world},
+    };
+    let mut branch = int_case(lvar("y"), "s", box_int(lvar("s")), vec![(0, lvar("x"))]);
+    branch["ty"] = json!(2);
+    for argument in [branch, lazy_let("z", box_int(lvar("y")), lvar("z"))] {
+        let modules = boxed_world(
+            app(app(gvar(&sn("Main", "main"), "main"), argument), lvar("y")),
+            true,
+            false,
+        );
+        let owner = modules[0].top[0].pairs[0].binder;
+        let mut leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let instruction = &mut leaf.function.blocks[0].instructions[0];
+        let Operation::DelayBlock { target, arguments } = &instruction.operation else {
+            panic!()
+        };
+        instruction.operation = Operation::EvaluateBlock {
+            target: *target,
+            arguments: arguments.clone(),
+        };
+        instruction.origin.rule = Rule::EvaluateBlock;
+        verify(&leaf.function).unwrap(); // Well typed, but semantically too strict.
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf)
+                .unwrap_err()
+                .contains("must remain delayed")
+        );
+        check_scalar_renumbering(modules);
+    }
+}
+
+#[test]
+fn lazy_variable_alias_reuses_the_existing_value_without_a_new_thunk() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world};
+    let modules = boxed_world(lazy_let("z", lvar("x"), lvar("z")), true, true);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    assert_eq!(leaf.function.blocks.len(), 1);
+    let block = &leaf.function.blocks[0];
+    assert_eq!(block.instructions.len(), 1);
+    assert!(
+        matches!(block.instructions[0].operation, Operation::Move(value) if value == block.params[0].id)
+    );
+}
+
+#[test]
+fn thunk_source_verification_rejects_well_typed_capture_swaps_and_eager_lets() {
+    use crate::nir::{
+        FnId, Operation, Rule,
+        lower::lower_leaf_in_world,
+        verify::{verify, verify_leaf_in_world},
+    };
+    let mut modules = boxed_world(
+        lazy_let(
+            "z",
+            unbox_int(lvar("x"), box_int(lvar("field")), true),
+            lvar("z"),
+        ),
+        true,
+        true,
+    );
+    let boxed_ty = modules[0].types[2].clone();
+    if let h2r_core_ir::Ty::Fun { res, .. } = &mut modules[0].types[1]
+        && let h2r_core_ir::Ty::Fun { arg, .. } = res.as_mut()
+    {
+        **arg = boxed_ty;
+    }
+    modules[0]
+        .binders
+        .iter_mut()
+        .find(|b| b.unique == "y")
+        .unwrap()
+        .ty = 2;
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for eager in [false, true] {
+        let mut bad = leaf.clone();
+        let instruction = &mut bad.function.blocks[0].instructions[0];
+        let Operation::DelayBlock { target, arguments } = &mut instruction.operation else {
+            panic!()
+        };
+        if eager {
+            instruction.operation = Operation::EvaluateBlock {
+                target: *target,
+                arguments: arguments.clone(),
+            };
+            instruction.origin.rule = Rule::EvaluateBlock;
+        } else {
+            arguments.swap(0, 1);
+        }
+        verify(&bad.function).unwrap();
+        assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err());
+    }
 }
 
 #[test]
@@ -2310,7 +2562,8 @@ fn check_scalar_renumbering(modules: Vec<Module>) {
         for instruction in &mut block.instructions {
             instruction.result.id.0 += 1000;
             match &mut instruction.operation {
-                Operation::EvaluateBlock { target, arguments } => {
+                Operation::EvaluateBlock { target, arguments }
+                | Operation::DelayBlock { target, arguments } => {
                     target.0 += 100;
                     for value in arguments {
                         value.0 += 1000;

@@ -94,6 +94,7 @@ cases=0
 for profile in optimized unoptimized; do
 out=compiler/build/canary
 binary_entries='forward add subtractInt multiply composed chained shared eqInt neInt ltInt leInt gtInt geInt minimumInt selectInt nestedBranch operandBranches scrutineeBranch sharedBranch branchCall makeBox boxedSum boxedIgnore boxedChoose boxedRoundTrip boxedShared boxedStrictIgnore'
+binary_entries="$binary_entries lazyArgument lazyLet lazyNested lazyUnused lazyBranch lazyStrictUse"
 if [ "$profile" = unoptimized ]; then
   out="$out/unoptimized"
 fi
@@ -109,6 +110,21 @@ for entry in constant boxedCaf $binary_entries; do
           echo "$entry did not exercise non-tail region lowering" >&2
           exit 1
         fi
+        ;;
+      lazyArgument|lazyLet|lazyNested|lazyUnused|lazyBranch)
+        compiler/rust/target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
+        if ! rg -q ' = delay b[0-9]+' "$out/$entry.nir"; then
+          echo "$entry did not exercise thunk-region lowering" >&2
+          exit 1
+        fi
+        case "$entry" in
+          lazyLet|lazyNested)
+            if ! rg -q ', LazyBinding\]' "$out/$entry.nir"; then
+              echo "$entry did not exercise shared local binding lowering" >&2
+              exit 1
+            fi
+            ;;
+        esac
         ;;
     esac
   fi
