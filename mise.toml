@@ -61,6 +61,30 @@ run         = "cargo run --release --locked --manifest-path compiler/rust/Cargo.
 description = "Attempt verified NIR for all live bindings: <dump-dir>; fails on refusals"
 run         = "cargo run --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r -- lower --nir"
 
+[tasks."lower:coverage"]
+description = "Refresh canonical Core and capture verified NIR coverage"
+depends     = ["extract"]
+run         = '''
+set -eu
+cargo build --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r
+out="$PWD/compiler/build/coverage"
+mkdir -p "$out"
+for dump in compiler/core-json/*.core.json; do
+  jq -e '.format == 6 and (.constructors | type == "array")' "$dump" >/dev/null
+done
+status=0
+compiler/rust/target/release/h2r lower compiler/core-json --nir >"$out/nir.txt" 2>"$out/nir.stderr" || status=$?
+if [ "$status" -ne 0 ]; then
+  if [ "$status" -ne 1 ] || ! grep -Eq '^Error: NIR lowering incomplete: [0-9]+ live bindings refused$' "$out/nir.stderr"; then
+    cat "$out/nir.stderr" >&2
+    exit "$status"
+  fi
+fi
+grep -E '^Live owners: [0-9]+ = [0-9]+ lowered \+ [0-9]+ refused; [0-9]+ dead skipped$' "$out/nir.txt"
+sha256sum compiler/rust/target/release/h2r compiler/core-json/*.core.json >"$out/inputs.sha256"
+(cd "$out" && sha256sum nir.txt nir.stderr >outputs.sha256)
+'''
+
 [tasks.plugin]
 description = "Build the GHC Core-dump plugin"
 dir         = "{{ config_root }}/compiler/h2r-plugin"
@@ -223,9 +247,10 @@ file        = "scripts/hls.sh"
 # -----------------------------------------------------------------------------
 
 [tasks.extract]
-alias       = "x"
-description = "Extract canonical -O1 format-6 Core into compiler/core-json"
-file        = "compiler/extract.sh"
+alias             = "x"
+description       = "Extract canonical -O1 format-6 Core into compiler/core-json"
+env.H2R_BUILD_DIR = "{{ config_root }}/compiler/build/canonical"
+file              = "compiler/extract.sh"
 
 [tasks.matrix]
 description = "Extract the GHC optimization matrix; optional profile names are forwarded"
