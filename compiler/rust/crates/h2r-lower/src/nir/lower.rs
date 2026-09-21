@@ -221,6 +221,63 @@ fn lower_leaf_impl(
                 "casts need source and target type evidence",
             ));
         }
+        Expr::App { arg, .. } if !matches!(module.expr(*arg), Expr::Type { .. }) => {
+            let mut head = current;
+            let mut arguments = Vec::new();
+            while let Expr::App { fun, arg } = module.expr(head) {
+                let binder = module.resolve(*arg).ok_or_else(|| {
+                    fail(Some(*arg), "call arguments must be existing parameters")
+                })?;
+                let value = locals.get(&binder).ok_or_else(|| {
+                    fail(Some(*arg), "call arguments must be existing parameters")
+                })?;
+                arguments.push(*value);
+                head = *fun;
+            }
+            arguments.reverse();
+            let (target_module, binder, mut signature) =
+                instantiate::target(module, module_index, modules, head)
+                    .map_err(|reason| fail(Some(head), &reason))?;
+            let target_source = modules.map_or(module, |world| &world[target_module]);
+            if target_source.binder(binder).arity != Some(arguments.len() as u32) {
+                return Err(fail(
+                    Some(current),
+                    "direct call must match known target arity",
+                ));
+            }
+            if !world::closed_type(signature) || !world::closed_type(ty) {
+                return Err(fail(
+                    Some(current),
+                    "direct call requires closed structured types",
+                ));
+            }
+            for argument in &arguments {
+                let Ty::Fun { arg, res, .. } = signature else {
+                    return Err(fail(Some(current), "direct call lacks a value arrow"));
+                };
+                if !arg.alpha_eq(&params[argument.0 as usize].ty) {
+                    return Err(fail(Some(current), "direct call argument type mismatch"));
+                }
+                signature = res;
+            }
+            if !signature.alpha_eq(ty) {
+                return Err(fail(Some(current), "direct call result type mismatch"));
+            }
+            let value = ValueId(params.len() as u32);
+            instructions.push(Instruction {
+                result: Value {
+                    id: value,
+                    ty: ty.clone(),
+                },
+                operation: Operation::CallTop {
+                    module: target_module,
+                    binder,
+                    arguments,
+                },
+                origin: origin(Rule::CallTop),
+            });
+            value
+        }
         Expr::App { .. } => {
             let mut head = current;
             let mut arguments = Vec::new();

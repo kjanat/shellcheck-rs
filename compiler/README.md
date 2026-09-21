@@ -131,6 +131,8 @@ lowering pass, not dependency-closed executable output, even with zero refusals.
 On the canonical format-6 dumps, the first pass lowers 2,618 of 9,795 live
 owners, refuses 7,177 and skips 3,957 dead owners. These are binding counts,
 not a percentage of compiler completion.
+With saturated parameter-only direct calls, this becomes 2,624 lowered and
+7,171 refused, with the same live/dead totals.
 
 The single-leaf task invokes `h2r lower --nir --fn '<stable-name>'`. It requires complete
 in-world linkage and a verified live set, selects one exact unambiguous name,
@@ -146,10 +148,16 @@ Type lambdas become explicit type parameters, not runtime arguments.
 Type-only application spines (`f @T @U`) on top-level bindings now produce
 `instantiate-top`, retaining the ordered type arguments without calling or
 forcing the shared value. This first slice requires closed structured head,
-argument and result types; parameter-headed and value applications remain
+argument and result types; parameter-headed type applications remain
 unsupported. The source verifier checks the target, argument order, substituted
 result and every application/type-argument node. Kind correctness is trusted
-from GHC, not re-proved here. Canonical binding totals above are unchanged.
+from GHC, not re-proved here. Type-only support did not change canonical totals.
+Saturated direct value calls (`call-top`) now pass existing entry parameters
+unchanged, without extra forcing. The source checker verifies lexical argument
+order, closed argument/result types, exact target and GHC's declared arity.
+Mixed type/value applications, computed arguments, partial/over-applications,
+unknown arity and higher-order calls remain unsupported. This is NIR only:
+runtime calling conventions and executable code generation are still pending.
 Signature/body type variables are paired by binder position, permitting GHC's
 alpha-renaming; ambiguous repeated type-variable uniques are conservatively
 refused. All NIR value types remain in signature scope, while erased type-lambda

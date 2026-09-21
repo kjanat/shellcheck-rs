@@ -39,6 +39,13 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                 } => {
                     format!("instantiate-top module {module} binder {binder} types {arguments:?}")
                 }
+                Operation::CallTop {
+                    module,
+                    binder,
+                    arguments,
+                } => {
+                    format!("call-top module {module} binder {binder} args {arguments:?}")
+                }
             };
             writeln!(
                 out,

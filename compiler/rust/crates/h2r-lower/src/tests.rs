@@ -84,7 +84,11 @@ fn nir_refuses_unsupported_core_with_source_address() {
         );
         let pair = &m.top[0].pairs[0];
         let error = lower_leaf(&m, 2, pair.binder, FnId(0)).unwrap_err();
-        assert_eq!(error.source, Some(pair.rhs));
+        let expected_source = match m.expr(pair.rhs) {
+            h2r_core_ir::Expr::App { arg, .. } => *arg,
+            _ => pair.rhs,
+        };
+        assert_eq!(error.source, Some(expected_source));
         assert_eq!(error.module, 2);
         assert_eq!(error.owner, pair.binder);
     }
@@ -859,6 +863,250 @@ fn nir_type_applications_refuse_value_arguments_open_types_and_wrong_results() {
             lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err(),
             "mutation {mutation}"
         );
+    }
+}
+
+fn nir_call_world(imported: bool) -> Vec<Module> {
+    use h2r_core_ir::Ty;
+    let head = if imported {
+        gvar(&sn("Lib", "target"), "target")
+    } else {
+        lvar("target")
+    };
+    let source = (
+        binder(&sn("Main", "main"), "main", "main"),
+        lam("x", lam("y", app(app(head, lvar("y")), lvar("x")))),
+    );
+    let target = (
+        binder(
+            &sn(if imported { "Lib" } else { "Main" }, "target"),
+            "target",
+            "target",
+        ),
+        lam("a", lam("b", lvar("a"))),
+    );
+    let mut modules = if imported {
+        vec![
+            module("Main", vec![source], json!({})),
+            module("Lib", vec![target], json!({})),
+        ]
+    } else {
+        vec![module("Main", vec![source, target], json!({}))]
+    };
+    for m in &mut modules {
+        let t = m.types[0].clone();
+        let arrow = |res| Ty::Fun {
+            mult: Box::new(t.clone()),
+            arg: Box::new(t.clone()),
+            res: Box::new(res),
+        };
+        m.types.push(arrow(arrow(t.clone())));
+        for pair in m.top.iter().flat_map(|g| &g.pairs) {
+            m.binders[pair.binder as usize].ty = 1;
+            m.binders[pair.binder as usize].arity = Some(2);
+        }
+    }
+    modules
+}
+
+#[test]
+fn nir_direct_calls_pass_parameters_without_forcing() {
+    use crate::nir::{
+        FnId, Operation, ValueId, lower::lower_leaf_in_world, program::lower_program,
+        verify::verify_leaf_in_world,
+    };
+    for imported in [false, true] {
+        let modules = nir_call_world(imported);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let [instruction] = leaf.function.blocks[0].instructions.as_slice() else {
+            panic!()
+        };
+        let Operation::CallTop {
+            module, arguments, ..
+        } = &instruction.operation
+        else {
+            panic!()
+        };
+        assert_eq!(*module, usize::from(imported));
+        assert_eq!(arguments, &[ValueId(1), ValueId(0)]);
+        let counts = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert_eq!(
+            (
+                counts.source_nodes,
+                counts.parameter_nodes,
+                counts.value_application_nodes,
+                counts.value_argument_nodes
+            ),
+            (7, 2, 2, 2)
+        );
+        let attempt = lower_program(&modules).unwrap();
+        assert_eq!(attempt.lowered.len(), 2);
+        assert!(attempt.refused.is_empty());
+    }
+}
+
+#[test]
+fn nir_direct_call_verifier_rejects_wrong_target_arguments_and_origin() {
+    use crate::nir::{
+        FnId, Operation, Rule, Source, ValueId,
+        lower::lower_leaf_in_world,
+        verify::{verify, verify_leaf_in_world},
+    };
+    let modules = nir_call_world(true);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let original = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..6 {
+        let mut leaf = original.clone();
+        let instruction = &mut leaf.function.blocks[0].instructions[0];
+        let Operation::CallTop {
+            module,
+            binder,
+            arguments,
+        } = &mut instruction.operation
+        else {
+            panic!()
+        };
+        match mutation {
+            0 => arguments.reverse(),
+            1 => {
+                arguments.pop();
+            }
+            2 => *module = 0,
+            3 => *binder = u32::MAX,
+            4 => instruction.origin.rule = Rule::TopReference,
+            _ => instruction.origin.source = Source::Expr(u32::MAX),
+        }
+        verify(&leaf.function).unwrap();
+        assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
+    }
+    let mut leaf = original;
+    let Operation::CallTop { arguments, .. } =
+        &mut leaf.function.blocks[0].instructions[0].operation
+    else {
+        panic!()
+    };
+    arguments[0] = ValueId(u32::MAX);
+    assert!(
+        verify(&leaf.function)
+            .unwrap_err()
+            .contains("unavailable call argument")
+    );
+}
+
+#[test]
+fn nir_direct_calls_reject_extra_forcing_and_computed_arguments() {
+    use crate::nir::{
+        FnId, Operation, ValueId,
+        lower::lower_leaf_in_world,
+        verify::{verify, verify_leaf_in_world},
+    };
+    let modules = nir_call_world(true);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let mut leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    let mut extra = leaf.function.blocks[0].instructions[0].clone();
+    extra.result.id = ValueId(99);
+    extra.result.ty = leaf.function.blocks[0].params[0].ty.clone();
+    extra.operation = Operation::Force(ValueId(0));
+    leaf.function.blocks[0].instructions.insert(0, extra);
+    verify(&leaf.function).unwrap();
+    assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
+
+    for argument in [
+        lit(),
+        app(lvar("x"), lvar("x")),
+        json!({"node": "Type", "ty": 0, "type": "T"}),
+    ] {
+        let mut m = module(
+            "Main",
+            vec![
+                (
+                    binder(&sn("Main", "main"), "main", "main"),
+                    lam("x", app(app(lvar("f"), argument), lvar("x"))),
+                ),
+                (binder(&sn("Main", "f"), "f", "f"), lit()),
+            ],
+            json!({}),
+        );
+        let t = m.types[0].clone();
+        m.types.push(h2r_core_ir::Ty::Fun {
+            mult: Box::new(t.clone()),
+            arg: Box::new(t.clone()),
+            res: Box::new(t),
+        });
+        let owner = m.top[0].pairs[0].binder;
+        m.binders[owner as usize].ty = 1;
+        assert!(
+            lower_leaf_in_world(&[m], 0, owner, FnId(0))
+                .unwrap_err()
+                .reason
+                .contains("existing parameters")
+        );
+    }
+}
+
+#[test]
+fn nir_direct_calls_require_exact_known_arity_and_closed_types() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    use h2r_core_ir::Ty;
+    for arity in [None, Some(0), Some(1), Some(3)] {
+        let mut modules = nir_call_world(true);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let target = modules[1].top[0].pairs[0].binder;
+        let original = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        modules[1].binders[target as usize].arity = arity;
+        assert!(
+            lower_leaf_in_world(&modules, 0, owner, FnId(0))
+                .unwrap_err()
+                .reason
+                .contains("arity")
+        );
+        assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &original).is_err());
+    }
+    let mut modules = nir_call_world(true);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let Ty::Fun { arg, .. } = &mut modules[1].types[1] else {
+        panic!()
+    };
+    **arg = Ty::Opaque { pretty: "T".into() };
+    assert!(
+        lower_leaf_in_world(&modules, 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("closed structured")
+    );
+}
+
+#[test]
+fn nir_direct_calls_refuse_wrong_argument_and_result_types() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    use h2r_core_ir::Ty;
+    for change_argument in [false, true] {
+        let mut modules = nir_call_world(true);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let original = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let Ty::Fun { arg, res, .. } = &mut modules[1].types[1] else {
+            panic!()
+        };
+        let wrong = Ty::Lit {
+            kind: "Nat".into(),
+            text: "42".into(),
+        };
+        if change_argument {
+            **arg = wrong;
+        } else {
+            let Ty::Fun { res, .. } = res.as_mut() else {
+                panic!()
+            };
+            **res = wrong;
+        }
+        assert!(
+            lower_leaf_in_world(&modules, 0, owner, FnId(0))
+                .unwrap_err()
+                .reason
+                .contains("type mismatch")
+        );
+        assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &original).is_err());
     }
 }
 

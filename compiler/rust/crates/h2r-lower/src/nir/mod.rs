@@ -1,7 +1,7 @@
 //! First NIR building block: typed, source-attributed scalar control flow.
 //!
 //! `lower::lower_leaf` translates a restricted subset of Core leaves.
-//! Calls, switches, closures and thunk
+//! General calls, switches, closures and thunk
 //! regions will extend this model as their lowering rules are implemented.
 //! Values cross block boundaries explicitly through block parameters; there
 //! are no implicit captures. IDs are function-local except for `FnId`, which
@@ -36,6 +36,7 @@ pub enum Rule {
     Literal,
     TopReference,
     InstantiateTop,
+    CallTop,
     EraseCast,
     StrictPosition,
     Return,
@@ -73,6 +74,14 @@ pub enum Operation {
         module: usize,
         binder: BinderId,
         arguments: Vec<Ty>,
+    },
+    /// Saturated direct call when the enclosing function is entered. Existing
+    /// argument values (possibly lazy) are passed unchanged, never pre-forced.
+    /// The target is identified independently of whether it has been lowered.
+    CallTop {
+        module: usize,
+        binder: BinderId,
+        arguments: Vec<ValueId>,
     },
     Move(ValueId),
     Force(ValueId),

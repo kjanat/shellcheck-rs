@@ -12,18 +12,18 @@ pub(super) fn target<'a>(
     head: ExprId,
 ) -> Result<(usize, BinderId, &'a Ty), String> {
     let Expr::Var { name, .. } = module.expr(head) else {
-        return Err("type application requires a top-level variable head".into());
+        return Err("application requires a top-level variable head".into());
     };
     match module.reference(head) {
         Some(Ref::Local(binder)) if matches!(module.binding(binder).site, BindSite::Top) => {
             Ok((module_index, binder, module.binder_ty(binder)))
         }
         Some(Ref::Global) => {
-            let modules = modules.ok_or("type application import requires a loaded world")?;
+            let modules = modules.ok_or("application import requires a loaded world")?;
             let (index, binder) = world::imported_top(modules, name)?;
             Ok((index, binder, modules[index].binder_ty(binder)))
         }
-        _ => Err("type application requires a top-level binding".into()),
+        _ => Err("application requires a top-level binding".into()),
     }
 }
 

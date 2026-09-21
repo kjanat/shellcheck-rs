@@ -14,6 +14,8 @@ pub struct LeafAccounting {
     pub value_nodes: usize,
     pub type_application_nodes: usize,
     pub type_argument_nodes: usize,
+    pub value_application_nodes: usize,
+    pub value_argument_nodes: usize,
     pub erased_ticks: usize,
 }
 
@@ -174,7 +176,73 @@ fn verify_leaf_impl(
         return Err("leaf return origin mismatch".into());
     }
     let mut type_applications = 0;
+    let mut value_applications = 0;
     match module.expr(expr) {
+        Expr::App { arg, .. } if !matches!(module.expr(*arg), Expr::Type { .. }) => {
+            let mut source_args = Vec::new();
+            let mut head = expr;
+            while let Expr::App { fun, arg } = module.expr(head) {
+                let binder = module
+                    .resolve(*arg)
+                    .ok_or("call source argument is not a lexical parameter")?;
+                let parameter = params
+                    .iter()
+                    .find(|(_, source, _)| *source == binder)
+                    .ok_or("call source argument is not an entry parameter")?;
+                source_args.push(parameter.2);
+                head = *fun;
+            }
+            source_args.reverse();
+            value_applications = source_args.len();
+            let (target_module, target_binder, mut signature) =
+                instantiate::target(module, module_index, modules, head)?;
+            let target_source = modules.map_or(module, |world| &world[target_module]);
+            if target_source.binder(target_binder).arity != Some(source_args.len() as u32) {
+                return Err("source call is not saturated at known target arity".into());
+            }
+            if !world::closed_type(signature) || !world::closed_type(ty) {
+                return Err("source call requires closed structured types".into());
+            }
+            for value in &source_args {
+                let Ty::Fun { arg, res, .. } = signature else {
+                    return Err("source call signature lacks an arrow".into());
+                };
+                let parameter = block
+                    .params
+                    .iter()
+                    .find(|param| param.id == *value)
+                    .ok_or("missing call source parameter")?;
+                if !arg.alpha_eq(&parameter.ty) {
+                    return Err("source call parameter type mismatch".into());
+                }
+                signature = res;
+            }
+            let [instruction] = block.instructions.as_slice() else {
+                return Err("direct call leaf must have exactly one instruction".into());
+            };
+            let Operation::CallTop {
+                module: target,
+                binder,
+                arguments,
+            } = &instruction.operation
+            else {
+                return Err("source call was not lowered as a direct call".into());
+            };
+            if (*target, *binder) != (target_module, target_binder) || arguments != &source_args {
+                return Err("direct call target or arguments differ from source".into());
+            }
+            if instruction.origin.source != Source::Expr(expr)
+                || instruction.origin.rule != Rule::CallTop
+            {
+                return Err("direct call origin mismatch".into());
+            }
+            if instruction.result.id != returned
+                || !signature.alpha_eq(ty)
+                || !instruction.result.ty.alpha_eq(ty)
+            {
+                return Err("direct call result mismatch".into());
+            }
+        }
         Expr::App { .. } => {
             // Read argument order from the source, never from candidate NIR.
             let mut spine = Vec::new();
@@ -329,6 +397,8 @@ fn verify_leaf_impl(
         value_nodes: 1,
         type_application_nodes: type_applications,
         type_argument_nodes: type_applications,
+        value_application_nodes: value_applications,
+        value_argument_nodes: value_applications,
         erased_ticks: ticks.len(),
     };
     // Counts source nodes, not NIR instructions: a literal's instruction and
@@ -339,6 +409,8 @@ fn verify_leaf_impl(
             + accounting.value_nodes
             + accounting.type_application_nodes
             + accounting.type_argument_nodes
+            + accounting.value_application_nodes
+            + accounting.value_argument_nodes
             + accounting.erased_ticks
     {
         return Err("leaf source accounting does not close".into());
@@ -399,6 +471,13 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 Operation::Move(value) | Operation::Force(value) => {
                     if !available.contains_key(&value) {
                         return Err(format!("unavailable operand {value:?}"));
+                    }
+                }
+                Operation::CallTop { ref arguments, .. } => {
+                    for value in arguments {
+                        if !available.contains_key(value) {
+                            return Err(format!("unavailable call argument {value:?}"));
+                        }
                     }
                 }
             }

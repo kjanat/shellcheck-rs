@@ -116,7 +116,7 @@ fn nir_report(modules: &[Module], name: &str) -> Result<String> {
     let accounting = verify_leaf_in_world(modules, module_index, owner, id, &lowered)
         .map_err(|error| anyhow::anyhow!("NIR source verification failed: {error}"))?;
     Ok(format!(
-        "NIR leaf: {name}\nScope: one reachable function; not whole-program lowering\nVerified source nodes: {} = {} parameters + {} type parameters + {} value + {} erased ticks + {} type applications + {} type arguments\n{}",
+        "NIR leaf: {name}\nScope: one reachable function; not whole-program lowering\nVerified source nodes: {} = {} parameters + {} type parameters + {} value + {} erased ticks + {} type applications + {} type arguments + {} value applications + {} value arguments\n{}",
         accounting.source_nodes,
         accounting.parameter_nodes,
         accounting.type_parameter_nodes,
@@ -124,6 +124,8 @@ fn nir_report(modules: &[Module], name: &str) -> Result<String> {
         accounting.erased_ticks,
         accounting.type_application_nodes,
         accounting.type_argument_nodes,
+        accounting.value_application_nodes,
+        accounting.value_argument_nodes,
         format_leaf(&lowered),
     ))
 }

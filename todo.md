@@ -68,8 +68,13 @@
       types. Missing/ambiguous imports and scope-unsafe types remain refused.
       Closed type-only applications of top-level bindings now retain ordered
       instantiation evidence, with structural substitution and source-node
-      accounting. Open-type, parameter-headed and value applications remain
+      accounting. Open-type and parameter-headed type applications remain
       unsupported; this does not yet increase canonical lowering coverage.
+      Saturated direct value calls with existing entry parameters now preserve
+      argument identity without forcing. Target arity, closed types and source
+      correspondence are checked; canonical coverage increases to 2,624 owners.
+      Mixed type/value calls, computed arguments, partial application and
+      higher-order calls remain unsupported.
       Unsupported forms fail with source addresses.
       `mise run lower:program <dump-dir>` now attempts every live owner after
       auditing reachability, retaining verified leaves and explicit refusals.
@@ -81,7 +86,7 @@
       returns and extra forcing. This verifies only the supported leaf subset.
       `mise run lower:leaf compiler/core-json --fn '<stable-name>'` now exposes
       verified leaf NIR with source accounting; dead, ambiguous and unsupported
-      selections fail. Whole-program lowering and verification, calls, switches,
+      selections fail. Whole-program lowering and verification, general calls, switches,
       closures and thunk regions remain unimplemented. Casts
       require source/target type evidence absent from the current `Expr::Cast`.
 - [ ] Continue M3c–M3h: carriers, closure conversion, specialization, certified
