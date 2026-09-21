@@ -43,15 +43,15 @@ run         = "dprint fmt"
 alias       = "l"
 description = "Lint Rust and TOML"
 run         = [
-  "cargo clippy --manifest-path compiler/rust/Cargo.toml --workspace --all-targets -- -D warnings",
-  "tombi lint --error-on-warnings mise.toml compiler/rust/Cargo.toml compiler/rust/crates/*/Cargo.toml",
-  "dprint check"
+  "cargo lint",
+  "tombi lint --error-on-warnings",
+  "dprint check",
 ]
 
 [tasks.test]
 alias       = "t"
 description = "Run the H2R Rust workspace tests"
-run         = "cargo test --manifest-path compiler/rust/Cargo.toml --workspace"
+run         = "cargo test --workspace"
 
 [tasks."lower:leaf"]
 description = "Lower and verify one live function"
@@ -60,7 +60,7 @@ arg "[dir]" default="compiler/core-json" help="Core dump directory"
 flag "--fn <name>" required=#true help="Stable function name (quote names containing $)"
 '''
 run         = '''
-cargo run --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r -- lower --nir "${usage_dir?}" --fn "${usage_fn?}"
+cargo locked-release --bin h2r -- lower --nir "${usage_dir?}" --fn "${usage_fn?}"
 '''
 
 [tasks."lower:program"]
@@ -69,7 +69,7 @@ usage       = '''
 arg "[dir]" default="compiler/core-json" help="Core dump directory"
 '''
 run         = '''
-cargo run --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r -- lower --nir "${usage_dir?}"
+cargo locked-release --bin h2r -- lower --nir "${usage_dir?}"
 '''
 
 [tasks."lower:coverage"]
@@ -77,14 +77,14 @@ description = "Refresh canonical Core and capture verified NIR coverage"
 depends     = ["extract"]
 run         = '''
 set -eu
-cargo build --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r
+cargo locked-build --bin h2r
 out="$PWD/compiler/build/coverage"
 mkdir -p "$out"
 for dump in compiler/core-json/*.core.json; do
   jq -e '.format == 6 and (.constructors | type == "array")' "$dump" >/dev/null
 done
 status=0
-compiler/rust/target/release/h2r lower compiler/core-json --nir >"$out/nir.txt" 2>"$out/nir.stderr" || status=$?
+target/release/h2r lower compiler/core-json --nir >"$out/nir.txt" 2>"$out/nir.stderr" || status=$?
 if [ "$status" -ne 0 ]; then
   if [ "$status" -ne 1 ] || ! grep -Eq '^Error: NIR lowering incomplete: [0-9]+ live bindings refused$' "$out/nir.stderr"; then
     cat "$out/nir.stderr" >&2
@@ -92,7 +92,7 @@ if [ "$status" -ne 0 ]; then
   fi
 fi
 grep -E '^Live owners: [0-9]+ = [0-9]+ lowered \+ [0-9]+ refused; [0-9]+ dead skipped$' "$out/nir.txt"
-sha256sum compiler/rust/target/release/h2r compiler/core-json/*.core.json >"$out/inputs.sha256"
+sha256sum target/release/h2r compiler/core-json/*.core.json >"$out/inputs.sha256"
 (cd "$out" && sha256sum nir.txt nir.stderr >outputs.sha256)
 '''
 
@@ -104,13 +104,13 @@ flag "--fn <name>" help="Specialize from one root and print each instance's NIR"
 '''
 run         = '''
 set -eu
-cargo build --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r
+cargo locked-build --bin h2r
 out="$PWD/compiler/build/coverage"
 mkdir -p "$out"
 set --
 [ -z "${usage_fn:-}" ] || set -- --fn "${usage_fn}"
 status=0
-compiler/rust/target/release/h2r lower "${usage_dir?}" --nir --specialize "$@" \
+target/release/h2r lower "${usage_dir?}" --nir --specialize "$@" \
   >"$out/specialize.txt" 2>"$out/specialize.stderr" || status=$?
 if [ "$status" -ne 0 ]; then
   if [ "$status" -ne 1 ] || ! grep -Eq '^Error: specialization incomplete: [0-9]+ instances refused$' "$out/specialize.stderr"; then
@@ -119,7 +119,7 @@ if [ "$status" -ne 0 ]; then
   fi
 fi
 grep -E '^(Instances|Specialized):' "$out/specialize.txt"
-sha256sum compiler/rust/target/release/h2r "${usage_dir?}"/*.core.json >"$out/specialize.inputs.sha256"
+sha256sum target/release/h2r "${usage_dir?}"/*.core.json >"$out/specialize.inputs.sha256"
 (cd "$out" && sha256sum specialize.txt specialize.stderr >specialize.sha256)
 '''
 
@@ -151,7 +151,7 @@ description = "Emit Rust from real Core, compile it, and compare with Haskell"
 depends     = ["canary:extract"]
 run         = '''
 set -eu
-cargo build --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r
+cargo locked-build --bin h2r
 cases=0
 for profile in optimized unoptimized; do
 out=compiler/build/canary
@@ -172,18 +172,18 @@ fi
 oracle="$out/oracle"
 for entry in constant boxedCaf $binary_entries $recursive_entries recursiveTree; do
   name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
-  compiler/rust/target/release/h2r emit-rust "$out/core" --entry "$name" --output "$out/$entry.rs"
+  target/release/h2r emit-rust "$out/core" --entry "$name" --output "$out/$entry.rs"
   if [ "$profile" = unoptimized ]; then
     case "$entry" in
       operandBranches|scrutineeBranch|sharedBranch|branchCall)
-        compiler/rust/target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
+        target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
         if ! rg -q ' = evaluate b[0-9]+' "$out/$entry.nir"; then
           echo "$entry did not exercise non-tail region lowering" >&2
           exit 1
         fi
         ;;
       lazyArgument|lazyLet|lazyNested|lazyUnused|lazyBranch)
-        compiler/rust/target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
+        target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
         if ! rg -q ' = delay b[0-9]+' "$out/$entry.nir"; then
           echo "$entry did not exercise thunk-region lowering" >&2
           exit 1
@@ -206,7 +206,7 @@ done
 # must lower, and each entry must exercise the form it was written for.
 for entry in $specialization_entries; do
   name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
-  compiler/rust/target/release/h2r lower "$out/core" --nir --specialize --fn "$name" > "$out/$entry.instances"
+  target/release/h2r lower "$out/core" --nir --specialize --fn "$name" > "$out/$entry.instances"
   grep -Eq '^Instances: [0-9]+ = [0-9]+ lowered \+ 0 refused, over [0-9]+ owners$' "$out/$entry.instances"
 done
 # The same source binding, lowered once per type it is used at. CoreTidy
@@ -235,7 +235,7 @@ if [ "$profile" = unoptimized ]; then
     entry=${spec%:*}
     operation=${spec#*:}
     name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
-    compiler/rust/target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
+    target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
     if ! rg -q " = $operation " "$out/$entry.nir"; then
       echo "$entry did not exercise algebraic $operation lowering" >&2
       exit 1
@@ -253,7 +253,7 @@ for x in -1 0 1 2 7; do
 done
 for entry in $recursive_entries; do
   name=$(jq -er --arg entry "$entry" '.binds[].pairs[].binder | select(.occ == $entry) | .name' "$out/core/Canary.core.json")
-  compiler/rust/target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
+  target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
   case "$entry" in
     localLoop|localMutual)
       rg -q ' = local-scope ' "$out/$entry.nir"
@@ -280,7 +280,7 @@ for entry in $recursive_entries; do
   done
 done
 before=$(sha256sum "$out/forward.rs")
-if compiler/rust/target/release/h2r emit-rust "$out/core" --entry '$main$Main$main' --output "$out/forward.rs" 2> "$out/refusal.stderr"; then
+if target/release/h2r emit-rust "$out/core" --entry '$main$Main$main' --output "$out/forward.rs" 2> "$out/refusal.stderr"; then
   echo "unsupported IO entry was incorrectly emitted" >&2
   exit 1
 fi
@@ -322,9 +322,9 @@ printf '%s differential cases passed (stdout, stderr, successful exit).\n' "$cas
 alias       = "c"
 description = "H2R source gate: format, lint, tests, and plugin build"
 run         = [
-  "cargo fmt --manifest-path compiler/rust/Cargo.toml --all -- --check",
-  "cargo clippy --manifest-path compiler/rust/Cargo.toml --workspace --all-targets -- -D warnings",
-  "cargo test --manifest-path compiler/rust/Cargo.toml --workspace",
+  "cargo fmt --all -- --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo test --workspace",
   "mise run plugin",
 ]
 
@@ -338,15 +338,15 @@ run         = "cabal test"
 
 [tasks."conformance:corpus"]
 description = "Report extracted upstream properties and coverage gaps"
-run         = "cargo run --release --manifest-path compiler/rust/Cargo.toml -p h2r-conformance -- corpus"
+run         = "cargo run --release -p h2r-conformance -- corpus"
 
 [tasks.conformance]
 description = "Compare --candidate with the Haskell oracle on upstream properties"
-run         = "cargo run --release --manifest-path compiler/rust/Cargo.toml -p h2r-conformance -- gate"
+run         = "cargo run --release -p h2r-conformance -- gate"
 
 [tasks."conformance:fuzz"]
 description = "Seeded differential fuzzing of --candidate against the Haskell oracle"
-run         = "cargo run --release --manifest-path compiler/rust/Cargo.toml -p h2r-conformance -- fuzz"
+run         = "cargo run --release -p h2r-conformance -- fuzz"
 
 [tasks.hls-install]
 confirm     = "Do you want to install the hls language server"
@@ -389,8 +389,8 @@ run         = [
 description = "Capture and verify analysis reports for the seven existing dumps"
 run         = '''
 set -eu
-cargo build --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r
-bin="$PWD/compiler/rust/target/release/h2r"
+cargo locked-build --bin h2r
+bin="$PWD/target/release/h2r"
 for profile in canonical A B C D E F; do
   dir="$PWD/compiler/matrix/$profile/core-json"
   [ "$profile" != canonical ] || dir="$PWD/compiler/core-json"
@@ -429,7 +429,7 @@ done
 description = "Verify and capture the reconstructed canonical format-5 baseline"
 run         = '''
 set -eu
-bin="$PWD/compiler/rust/target/release/h2r"
+bin="$PWD/target/release/h2r"
 dir="$PWD/compiler/matrix/format5/core-json"
 out="$PWD/compiler/matrix/format5/reports"
 test -x "$bin"
@@ -468,7 +468,7 @@ arg "[profiles]" var=#true default="canonical" help="Existing dump profiles to e
 '''
 run         = '''
 set -eu
-bin="$PWD/compiler/rust/target/release/h2r"
+bin="$PWD/target/release/h2r"
 test -x "$bin"
 # Usage supplies a shell-escaped list, restricted to the choices above.
 eval "set -- ${usage_profiles?}"
@@ -515,8 +515,7 @@ done
 [tasks.h2r]
 alias       = "h"
 description = "Run the H2R CLI; arguments are forwarded after `--`"
-dir         = "compiler/rust"
-run         = "cargo run --release --bin h2r --"
+run         = "cargo h2r"
 
 # Examples:
 #   mise run h2r stats ../core-json
@@ -527,10 +526,10 @@ run         = "cargo run --release --bin h2r --"
 alias       = "p"
 description = "Run the independent proof verifiers on the canonical dump"
 run         = [
-  "cargo run --release --manifest-path compiler/rust/Cargo.toml --bin h2r -- tuples compiler/core-json --verify",
-  "cargo run --release --manifest-path compiler/rust/Cargo.toml --bin h2r -- verify-rep compiler/core-json",
-  "cargo run --release --manifest-path compiler/rust/Cargo.toml --bin h2r -- verify-m24 compiler/core-json",
-  "cargo run --release --manifest-path compiler/rust/Cargo.toml --bin h2r -- lower compiler/core-json --reachability",
+  "cargo h2r tuples compiler/core-json --verify",
+  "cargo h2r verify-rep compiler/core-json",
+  "cargo h2r verify-m24 compiler/core-json",
+  "cargo h2r lower compiler/core-json --reachability",
 ]
 
 [tasks.full]

@@ -30,7 +30,7 @@ stack.yaml.lock
 # h2r compiler
 compiler/build/
 compiler/core-json/
-compiler/rust/target/
+target/
 compiler/h2r-plugin/dist-newstyle/
 compiler/matrix/
 compiler/conformance/

@@ -1,0 +1,8 @@
+#:schema https://www.schemastore.org/cargo-config.json
+
+[alias]
+h2r            = "rr --bin h2r --"
+lint           = "clippy --workspace --all-targets -- -D warnings"
+locked-build   = "build --release --locked"
+locked-release = "cargo run --release --locked"
+rr             = "run --release"
