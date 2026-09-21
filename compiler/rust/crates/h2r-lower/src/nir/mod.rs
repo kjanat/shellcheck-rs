@@ -1,7 +1,7 @@
 //! First NIR building block: typed, source-attributed scalar control flow.
 //!
 //! `lower::lower_leaf` translates a restricted subset of Core leaves.
-//! General calls, switches, closures and thunk
+//! General calls, constructor switches, closures and thunk
 //! regions will extend this model as their lowering rules are implemented.
 //! Values cross block boundaries explicitly through block parameters; there
 //! are no implicit captures. IDs are function-local except for `FnId`, which
@@ -38,11 +38,12 @@ pub enum Rule {
     TopReference,
     InstantiateTop,
     CallTop,
-    IntArithmetic,
+    IntBinary,
     EraseCast,
     StrictPosition,
     Return,
     Jump,
+    IntSwitch,
 }
 
 #[derive(Debug, Clone)]
@@ -62,9 +63,10 @@ pub struct Value {
 
 #[derive(Debug, Clone)]
 pub enum Operation {
-    /// Strict, wrapping machine-Int arithmetic; operands and result are Int#.
-    IntArithmetic {
-        op: IntArithmetic,
+    /// Strict machine-Int operations; comparisons produce Int# 0 or 1.
+    /// Arithmetic wraps. Both operands and the result are Int#.
+    IntBinary {
+        op: IntBinary,
         arguments: Vec<ValueId>,
     },
     Literal(Lit),
@@ -99,10 +101,16 @@ pub enum Operation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IntArithmetic {
+pub enum IntBinary {
     Add,
     Subtract,
     Multiply,
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
 }
 
 #[derive(Debug, Clone)]
@@ -115,7 +123,18 @@ pub struct Instruction {
 #[derive(Debug, Clone)]
 pub enum Exit {
     Return(ValueId),
-    Jump { target: BlockId, args: Vec<ValueId> },
+    Jump {
+        target: BlockId,
+        args: Vec<ValueId>,
+    },
+    /// Evaluate exactly one arm. All successor blocks receive the same explicit
+    /// environment followed by the evaluated case binder; no implicit captures.
+    IntSwitch {
+        scrutinee: ValueId,
+        arms: Vec<(i64, BlockId)>,
+        default: BlockId,
+        args: Vec<ValueId>,
+    },
 }
 
 #[derive(Debug, Clone)]

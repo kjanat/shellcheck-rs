@@ -26,7 +26,7 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
         }
         for instruction in &block.instructions {
             let operation = match &instruction.operation {
-                Operation::IntArithmetic { op, arguments } => format!("int-{op:?} {arguments:?}"),
+                Operation::IntBinary { op, arguments } => format!("int-{op:?} {arguments:?}"),
                 Operation::Literal(lit) => format!("literal {} {:?}", lit.kind, lit.pretty),
                 Operation::Move(value) => format!("move v{}", value.0),
                 Operation::Force(value) => format!("force v{}", value.0),
@@ -63,6 +63,15 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
             .unwrap();
         }
         let exit = match &block.terminator.exit {
+            Exit::IntSwitch {
+                scrutinee,
+                arms,
+                default,
+                args,
+            } => format!(
+                "int-switch v{} {arms:?} default {default:?} args {args:?}",
+                scrutinee.0
+            ),
             Exit::Return(value) => format!("return v{}", value.0),
             Exit::Jump { target, args } => format!(
                 "jump b{}({})",

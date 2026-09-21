@@ -84,7 +84,8 @@ set -eu
 cargo build --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r
 out=compiler/build/canary
 oracle="$out/oracle"
-for entry in forward constant add subtractInt multiply composed chained shared; do
+binary_entries='forward add subtractInt multiply composed chained shared eqInt neInt ltInt leInt gtInt geInt minimumInt selectInt nestedBranch'
+for entry in constant $binary_entries; do
   name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
   compiler/rust/target/release/h2r emit-rust "$out/core" --entry "$name" --output "$out/$entry.rs"
   rustc --edition=2024 -O "$out/$entry.rs" -o "$out/$entry"
@@ -106,7 +107,7 @@ for x in -9223372036854775808 -100 -1 0 1 42 9223372036854775807; do
     cases=$((cases + 1))
   done
   for y in -9223372036854775808 -17 -1 0 1 23 9223372036854775807; do
-    for entry in forward add subtractInt multiply composed chained shared; do
+    for entry in $binary_entries; do
       "$oracle" "$entry" "$x" "$y" > "$out/oracle.stdout" 2> "$out/oracle.stderr"
       for mode in '' '-checked'; do
         "$out/$entry$mode" "$x" "$y" > "$out/rust.stdout" 2> "$out/rust.stderr"

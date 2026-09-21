@@ -1666,7 +1666,7 @@ fn scalar_expression_world(body: Value) -> Vec<Module> {
     let owner = world[0].top[0].pairs[0].binder;
     world[0].binders[owner as usize].ty = 1;
     world[0].binders[owner as usize].arity = Some(2);
-    for symbol in ["+#", "-#", "*#"] {
+    for symbol in ["+#", "-#", "*#", "==#", "/=#", "<#", "<=#", ">#", ">=#"] {
         world[0]
             .ids
             .extend(primitive_emission_world(symbol)[0].ids.clone());
@@ -1736,7 +1736,7 @@ fn scalar_composition_verifies_nested_calls_and_strict_case_chains() {
 }
 
 #[test]
-fn strict_cases_refuse_branching_wrong_types_and_alternative_binders() {
+fn scalar_cases_refuse_duplicate_defaults_wrong_types_and_alternative_binders() {
     use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
     let modules = scalar_expression_world(strict_case(
         int_op("+#", lvar("x"), lvar("y")),
@@ -1825,6 +1825,242 @@ fn computed_arguments_do_not_enable_eager_lifted_evaluation() {
     );
 }
 
+fn int_case(scrut: Value, unique: &str, default: Value, arms: Vec<(i64, Value)>) -> Value {
+    let mut value = strict_case(scrut, unique, default);
+    for (pattern, rhs) in arms {
+        value["alts"].as_array_mut().unwrap().push(json!({
+            "con": {"kind": "LitAlt", "lit": {"kind": "number", "pretty": format!("{pattern}#")}},
+            "binders": [], "rhs": rhs
+        }));
+    }
+    value
+}
+
+fn branching_world() -> Vec<Module> {
+    scalar_expression_world(int_case(
+        int_op("+#", lvar("x"), lvar("y")),
+        "s",
+        int_case(
+            int_op("<#", lvar("s"), lvar("x")),
+            "less",
+            int_op("*#", lvar("s"), lvar("y")),
+            vec![(0, int_op("-#", lvar("s"), lvar("x")))],
+        ),
+        vec![
+            (-1, lvar("s")),
+            (
+                0,
+                app(
+                    app(gvar(&sn("Lib", "target"), "target"), lvar("y")),
+                    lvar("x"),
+                ),
+            ),
+            (i64::MIN, lvar("x")),
+            (i64::MAX, lvar("y")),
+        ],
+    ))
+}
+
+#[test]
+fn scalar_switches_have_explicit_environments_and_complete_source_accounting() {
+    use crate::nir::{Exit, FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let modules = branching_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    assert_eq!(leaf.function.blocks.len(), 8);
+    let counts = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+    assert_eq!(
+        counts.source_nodes,
+        modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
+    );
+    let Exit::IntSwitch { args, arms, .. } = &leaf.function.blocks[0].terminator.exit else {
+        panic!()
+    };
+    assert_eq!(args.len(), 3);
+    assert_eq!(
+        arms.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+        [-1, 0, i64::MIN, i64::MAX]
+    );
+    let rust = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+    assert_eq!(rust.matches("match v").count(), 2);
+    assert!(rust.contains("-9223372036854775808i64 =>"));
+    assert!(rust.contains("9223372036854775807i64 =>"));
+    assert_eq!(
+        rust.matches("fn f_").count(),
+        2,
+        "branch-only import must be emitted"
+    );
+}
+
+#[test]
+fn scalar_switch_verifier_rejects_forged_control_flow_and_environments() {
+    use crate::nir::{
+        BlockId, Exit, FnId, Rule, Source, ValueId, lower::lower_leaf_in_world,
+        verify::verify_leaf_in_world,
+    };
+    let modules = branching_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..13 {
+        let mut bad = leaf.clone();
+        let block = &mut bad.function.blocks[0];
+        let Exit::IntSwitch {
+            scrutinee,
+            arms,
+            default,
+            args,
+        } = &mut block.terminator.exit
+        else {
+            panic!()
+        };
+        match mutation {
+            0 => arms[0].0 = 99,
+            1 => arms.swap(0, 1),
+            2 => std::mem::swap(&mut arms[0].1, default),
+            3 => args.swap(0, 1),
+            4 => *scrutinee = ValueId(0),
+            5 => args[2] = ValueId(0),
+            6 => *default = BlockId(0),
+            7 => arms[0].1 = BlockId(999),
+            8 => block.terminator.origin.rule = Rule::Return,
+            9 => block.terminator.origin.source = Source::Binder(owner),
+            10 => {
+                arms.pop();
+            }
+            11 => {
+                let duplicate = bad.function.blocks.last().unwrap().clone();
+                bad.function.blocks.push(duplicate);
+            }
+            _ => {
+                let last = bad.function.blocks.last_mut().unwrap();
+                last.terminator.exit = Exit::Return(last.params[0].id);
+            }
+        }
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn scalar_switch_ids_are_not_source_identities() {
+    use crate::nir::{
+        Exit, FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    let modules = branching_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    let mut leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    leaf.function.entry.0 += 100;
+    for (_, value) in &mut leaf.parameters {
+        value.0 += 1000;
+    }
+    for block in &mut leaf.function.blocks {
+        block.id.0 += 100;
+        for param in &mut block.params {
+            param.id.0 += 1000;
+        }
+        for instruction in &mut block.instructions {
+            instruction.result.id.0 += 1000;
+            match &mut instruction.operation {
+                Operation::IntBinary { arguments, .. } | Operation::CallTop { arguments, .. } => {
+                    for value in arguments {
+                        value.0 += 1000;
+                    }
+                }
+                Operation::Move(value) | Operation::Force(value) => value.0 += 1000,
+                _ => {}
+            }
+        }
+        match &mut block.terminator.exit {
+            Exit::Return(value) => value.0 += 1000,
+            Exit::IntSwitch {
+                scrutinee,
+                arms,
+                default,
+                args,
+            } => {
+                scrutinee.0 += 1000;
+                default.0 += 100;
+                for (_, target) in arms {
+                    target.0 += 100;
+                }
+                for arg in args {
+                    arg.0 += 1000;
+                }
+            }
+            Exit::Jump { .. } => panic!("fixture has no jumps"),
+        }
+    }
+    leaf.function.blocks.reverse();
+    verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+}
+
+#[test]
+fn scalar_switches_refuse_incomplete_or_unsafe_source_patterns() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    for mutation in 0..6 {
+        let mut source = int_case(lvar("x"), "s", lvar("s"), vec![(0, lvar("y"))]);
+        let alts = source["alts"].as_array_mut().unwrap();
+        match mutation {
+            0 => {
+                alts.remove(0);
+            }
+            1 => alts.push(alts[1].clone()),
+            2 => alts[1]["con"]["lit"]["pretty"] = json!("9223372036854775808#"),
+            3 => alts[1]["con"]["lit"]["pretty"] = json!("0#;panic!()"),
+            4 => alts[1]["con"]["lit"]["kind"] = json!("string"),
+            _ => {
+                alts[1]["con"] = json!({"kind": "DataAlt", "name": "$x$M$C", "occ": "C", "tag": 1})
+            }
+        }
+        let modules = scalar_expression_world(source);
+        let owner = modules[0].top[0].pairs[0].binder;
+        assert!(
+            lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err(),
+            "mutation {mutation}"
+        );
+    }
+    // Even a branch which these particular arguments would not select must
+    // have a lowerable, fully validated dependency closure.
+    let modules = scalar_expression_world(int_case(
+        lvar("x"),
+        "s",
+        lvar("s"),
+        vec![(0, json!({"node": "Coercion"}))],
+    ));
+    assert!(crate::emit::emit_entry(&modules, &sn("Main", "main")).is_err());
+}
+
+#[test]
+fn all_int_comparisons_preserve_operator_and_int_result() {
+    use crate::nir::{
+        FnId, IntBinary, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    for (symbol, expected, rust_op) in [
+        ("==#", IntBinary::Equal, " == "),
+        ("/=#", IntBinary::NotEqual, " != "),
+        ("<#", IntBinary::Less, " < "),
+        ("<=#", IntBinary::LessEqual, " <= "),
+        (">#", IntBinary::Greater, " > "),
+        (">=#", IntBinary::GreaterEqual, " >= "),
+    ] {
+        let modules = scalar_expression_world(int_op(symbol, lvar("x"), lvar("y")));
+        let owner = modules[0].top[0].pairs[0].binder;
+        let mut leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let Operation::IntBinary { op, arguments } =
+            &mut leaf.function.blocks[0].instructions[0].operation
+        else {
+            panic!()
+        };
+        assert_eq!(*op, expected);
+        arguments.swap(0, 1);
+        assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
+        let rust = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        assert!(rust.contains("i64::from(") && rust.contains(rust_op));
+    }
+}
+
 fn primitive_emission_world(symbol: &str) -> Vec<Module> {
     let mut modules = scalar_emission_world();
     let name = format!("$ghc-prim$GHC.Prim${symbol}");
@@ -1850,19 +2086,19 @@ fn primitive_emission_world(symbol: &str) -> Vec<Module> {
 #[test]
 fn int_arithmetic_is_source_verified_and_emits_wrapping_operations() {
     use crate::nir::{
-        FnId, IntArithmetic, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+        FnId, IntBinary, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
     };
     for (symbol, expected, method) in [
-        ("+#", IntArithmetic::Add, "wrapping_add"),
-        ("-#", IntArithmetic::Subtract, "wrapping_sub"),
-        ("*#", IntArithmetic::Multiply, "wrapping_mul"),
+        ("+#", IntBinary::Add, "wrapping_add"),
+        ("-#", IntBinary::Subtract, "wrapping_sub"),
+        ("*#", IntBinary::Multiply, "wrapping_mul"),
     ] {
         let modules = primitive_emission_world(symbol);
         let owner = modules[0].top[0].pairs[0].binder;
         let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
         assert!(
             matches!(leaf.function.blocks[0].instructions.last().unwrap().operation,
-            Operation::IntArithmetic { op, .. } if op == expected)
+            Operation::IntBinary { op, .. } if op == expected)
         );
         let counts = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
         assert_eq!(counts.value_application_nodes, 2);
@@ -1872,15 +2108,15 @@ fn int_arithmetic_is_source_verified_and_emits_wrapping_operations() {
         for mutation in 0..7 {
             let mut bad = leaf.clone();
             let instruction = bad.function.blocks[0].instructions.last_mut().unwrap();
-            let Operation::IntArithmetic { op, arguments } = &mut instruction.operation else {
+            let Operation::IntBinary { op, arguments } = &mut instruction.operation else {
                 panic!()
             };
             match mutation {
                 0 => {
-                    *op = if expected == IntArithmetic::Add {
-                        IntArithmetic::Subtract
+                    *op = if expected == IntBinary::Add {
+                        IntBinary::Subtract
                     } else {
-                        IntArithmetic::Add
+                        IntBinary::Add
                     }
                 }
                 1 => arguments.swap(0, 1),

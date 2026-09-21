@@ -1,5 +1,5 @@
 //! Conservative scalar Core lowering: leaves, direct calls, Int# composition
-//! and strict DEFAULT cases. Unsupported constructs fail explicitly.
+//! and Int# literal/default switches. Unsupported constructs fail explicitly.
 //! This is not a whole-program driver or an independent semantic verifier.
 
 use std::collections::BTreeMap;
@@ -137,21 +137,18 @@ fn lower_leaf_impl(
             _ => break,
         }
     }
-    let mut instructions = Vec::new();
+    let next_value = std::cell::Cell::new(params.len() as u32);
     let context = BodyContext {
         module,
         module_index,
         owner,
         modules,
         params: &params,
+        next_value: &next_value,
         type_scope: &type_scope,
     };
-    let value = lower_value(&context, current, ty, &mut locals, &mut instructions)?;
-    let origin = |rule| Origin {
-        module: module_index,
-        source: Source::Expr(current),
-        rule,
-    };
+    let mut blocks = Vec::new();
+    let entry = lower_tail(&context, current, ty, &locals, &mut blocks)?;
     let function = Function {
         id,
         module: module_index,
@@ -161,16 +158,8 @@ fn lower_leaf_impl(
             .iter()
             .map(|(signature, _)| signature.clone())
             .collect(),
-        entry: BlockId(0),
-        blocks: vec![Block {
-            id: BlockId(0),
-            params,
-            instructions,
-            terminator: Terminator {
-                exit: Exit::Return(value),
-                origin: origin(Rule::Return),
-            },
-        }],
+        entry,
+        blocks,
     };
     let lowered = LoweredLeaf {
         function,
@@ -192,7 +181,156 @@ struct BodyContext<'a> {
     owner: BinderId,
     modules: Option<&'a [Module]>,
     params: &'a [Value],
+    next_value: &'a std::cell::Cell<u32>,
     type_scope: &'a [(TyVarId, TyVarId)],
+}
+
+fn fresh_value(context: &BodyContext<'_>) -> ValueId {
+    let id = context.next_value.get();
+    context.next_value.set(id + 1);
+    ValueId(id)
+}
+
+/// Tail cases become explicit CFG successors. Non-tail expressions retain the
+/// conservative scalar evaluator; branches are never evaluated speculatively.
+fn lower_tail(
+    context: &BodyContext<'_>,
+    source: ExprId,
+    ty: &Ty,
+    locals: &BTreeMap<BinderId, ValueId>,
+    blocks: &mut Vec<Block>,
+) -> Result<BlockId, LowerError> {
+    let module = context.module;
+    let fail = |reason: String| LowerError {
+        module: context.module_index,
+        owner: context.owner,
+        source: Some(source),
+        reason,
+    };
+    let origin = |rule| Origin {
+        module: context.module_index,
+        source: Source::Expr(source),
+        rule,
+    };
+    let mut instructions = Vec::new();
+    let mut locals = locals.clone();
+    let id = BlockId(blocks.len() as u32);
+    if let Expr::Case {
+        scrut,
+        binder,
+        ty: result_ty,
+        alts,
+        ..
+    } = module.expr(source)
+    {
+        if !primitive::is_int(module.binder_ty(*binder))
+            || !primitive::is_int(ty)
+            || !module.ty(*result_ty).alpha_eq(ty)
+            || alts.iter().any(|a| !a.binders.is_empty())
+        {
+            return Err(fail(
+                "switch requires Int# scrutinee/result and no alternative binders".into(),
+            ));
+        }
+        let mut patterns = std::collections::BTreeSet::new();
+        let mut defaults = 0;
+        let mut alternatives = Vec::new();
+        for alt in alts {
+            let pattern = match &alt.con {
+                h2r_core_ir::AltCon::Default => {
+                    defaults += 1;
+                    None
+                }
+                h2r_core_ir::AltCon::LitAlt { lit } => {
+                    let value = primitive::int_literal(lit).map_err(&fail)?;
+                    if !patterns.insert(value) {
+                        return Err(fail("duplicate Int# case alternative".into()));
+                    }
+                    Some(value)
+                }
+                _ => return Err(fail("constructor alternatives are not scalar".into())),
+            };
+            alternatives.push((pattern, alt.rhs));
+        }
+        if defaults != 1 {
+            return Err(fail(
+                "Int# switch requires exactly one DEFAULT alternative".into(),
+            ));
+        }
+        let scrutinee = lower_value(
+            context,
+            *scrut,
+            module.binder_ty(*binder),
+            &mut locals,
+            &mut instructions,
+        )?;
+        let mut args: Vec<_> = context.params.iter().map(|p| p.id).collect();
+        args.push(scrutinee);
+        blocks.push(Block {
+            id,
+            params: context.params.to_vec(),
+            instructions,
+            terminator: Terminator {
+                exit: Exit::Return(scrutinee),
+                origin: origin(Rule::IntSwitch),
+            },
+        });
+        let mut arms = Vec::new();
+        let mut default = None;
+        for (pattern, rhs) in alternatives {
+            let mut params: Vec<_> = context
+                .params
+                .iter()
+                .map(|p| Value {
+                    id: fresh_value(context),
+                    ty: p.ty.clone(),
+                })
+                .collect();
+            let mut branch_locals = BTreeMap::new();
+            for (binder, value) in &locals {
+                let position = context
+                    .params
+                    .iter()
+                    .position(|p| p.id == *value)
+                    .ok_or_else(|| fail("case environment contains an unbound value".into()))?;
+                branch_locals.insert(*binder, params[position].id);
+            }
+            let case_value = Value {
+                id: fresh_value(context),
+                ty: module.binder_ty(*binder).clone(),
+            };
+            branch_locals.insert(*binder, case_value.id);
+            params.push(case_value);
+            let branch_context = BodyContext {
+                params: &params,
+                ..*context
+            };
+            let target = lower_tail(&branch_context, rhs, ty, &branch_locals, blocks)?;
+            if let Some(pattern) = pattern {
+                arms.push((pattern, target));
+            } else {
+                default = Some(target);
+            }
+        }
+        blocks[id.0 as usize].terminator.exit = Exit::IntSwitch {
+            scrutinee,
+            arms,
+            default: default.expect("validated DEFAULT"),
+            args,
+        };
+    } else {
+        let value = lower_value(context, source, ty, &mut locals, &mut instructions)?;
+        blocks.push(Block {
+            id,
+            params: context.params.to_vec(),
+            instructions,
+            terminator: Terminator {
+                exit: Exit::Return(value),
+                origin: origin(Rule::Return),
+            },
+        });
+    }
+    Ok(id)
 }
 
 fn lower_value(
@@ -209,6 +347,7 @@ fn lower_value(
         modules,
         params,
         type_scope,
+        ..
     } = *context;
     let fail = |source, reason: &str| LowerError {
         module: module_index,
@@ -223,7 +362,7 @@ fn lower_value(
     };
     let value = match module.expr(current) {
         Expr::Lit(lit) => {
-            let value = ValueId((params.len() + instructions.len()) as u32);
+            let value = fresh_value(context);
             instructions.push(Instruction {
                 result: Value {
                     id: value,
@@ -249,7 +388,7 @@ fn lower_value(
             if !ty.alpha_eq(target_ty) {
                 return Err(fail(Some(current), "import reference type mismatch"));
             }
-            let value = ValueId((params.len() + instructions.len()) as u32);
+            let value = fresh_value(context);
             instructions.push(Instruction {
                 result: Value {
                     id: value,
@@ -273,7 +412,7 @@ fn lower_value(
             if let Some(value) = locals.get(&binder) {
                 *value
             } else if matches!(module.binding(binder).site, BindSite::Top) {
-                let value = ValueId((params.len() + instructions.len()) as u32);
+                let value = fresh_value(context);
                 instructions.push(Instruction {
                     result: Value {
                         id: value,
@@ -361,7 +500,7 @@ fn lower_value(
                         lower_value(context, source, arg, locals, instructions)?
                     }
                     Expr::Lit(lit) => {
-                        let value = ValueId((params.len() + instructions.len()) as u32);
+                        let value = fresh_value(context);
                         instructions.push(Instruction {
                             result: Value {
                                 id: value,
@@ -402,7 +541,7 @@ fn lower_value(
                             if !world::closed_type(argument_ty) || !arg.alpha_eq(argument_ty) {
                                 return Err(fail(Some(source), "top-level argument type mismatch"));
                             }
-                            let value = ValueId((params.len() + instructions.len()) as u32);
+                            let value = fresh_value(context);
                             instructions.push(Instruction {
                                 result: Value {
                                     id: value,
@@ -434,14 +573,14 @@ fn lower_value(
             if !signature.alpha_eq(ty) {
                 return Err(fail(Some(current), "direct call result type mismatch"));
             }
-            let value = ValueId((params.len() + instructions.len()) as u32);
+            let value = fresh_value(context);
             instructions.push(Instruction {
                 result: Value {
                     id: value,
                     ty: ty.clone(),
                 },
                 operation: if let Some(op) = primitive {
-                    Operation::IntArithmetic { op, arguments }
+                    Operation::IntBinary { op, arguments }
                 } else {
                     let (module, binder, _) = target.expect("resolved direct target");
                     Operation::CallTop {
@@ -452,7 +591,7 @@ fn lower_value(
                     }
                 },
                 origin: origin(if primitive.is_some() {
-                    Rule::IntArithmetic
+                    Rule::IntBinary
                 } else {
                     Rule::CallTop
                 }),
@@ -478,7 +617,7 @@ fn lower_value(
             if !world::closed_type(ty) || !ty.alpha_eq(&result_ty) {
                 return Err(fail(Some(current), "type application result mismatch"));
             }
-            let value = ValueId((params.len() + instructions.len()) as u32);
+            let value = fresh_value(context);
             instructions.push(Instruction {
                 result: Value {
                     id: value,
@@ -525,7 +664,7 @@ fn lower_value(
                 locals,
                 instructions,
             )?;
-            let value = ValueId((params.len() + instructions.len()) as u32);
+            let value = fresh_value(context);
             instructions.push(Instruction {
                 result: Value {
                     id: value,

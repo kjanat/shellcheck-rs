@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use h2r_core_ir::{Module, Ty};
 
-use crate::nir::{Exit, FnId, IntArithmetic, Operation, lower::lower_leaf_in_world};
+use crate::nir::{Exit, FnId, IntBinary, Operation, lower::lower_leaf_in_world};
 
 type Key = (usize, u32);
 
@@ -64,19 +64,23 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         let function = &leaf.function;
         if !function.type_params.is_empty()
             || !scalar(&function.result_ty)
-            || function.blocks[0].params.iter().any(|p| !scalar(&p.ty))
+            || function
+                .blocks
+                .iter()
+                .flat_map(|b| &b.params)
+                .any(|p| !scalar(&p.ty))
         {
             return Err(format!(
                 "module {module} binder {binder}: only monomorphic Int# functions can be emitted"
             ));
         }
         let mut dependencies = BTreeSet::new();
-        for instruction in &function.blocks[0].instructions {
+        for instruction in function.blocks.iter().flat_map(|b| &b.instructions) {
             if !scalar(&instruction.result.ty) {
                 return Err("unsupported instruction carrier".into());
             }
             match &instruction.operation {
-                Operation::IntArithmetic { .. } | Operation::Move(_) => {}
+                Operation::IntBinary { .. } | Operation::Move(_) => {}
                 Operation::Literal(lit) => {
                     integer(&lit.kind, &lit.pretty)?;
                 }
@@ -120,63 +124,118 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             "#[allow(unused_variables)]\nfn f_{module}_{binder}({parameters}) -> i64 {{"
         )
         .unwrap();
-        for instruction in &block.instructions {
-            let expression = match &instruction.operation {
-                Operation::Move(value) => format!("v{}", value.0),
-                Operation::IntArithmetic { op, arguments } => {
-                    let method = match op {
-                        IntArithmetic::Add => "wrapping_add",
-                        IntArithmetic::Subtract => "wrapping_sub",
-                        IntArithmetic::Multiply => "wrapping_mul",
-                    };
-                    format!("v{}.{method}(v{})", arguments[0].0, arguments[1].0)
-                }
-                Operation::Literal(lit) => format!("{}i64", integer(&lit.kind, &lit.pretty)?),
-                Operation::TopReference { module, binder } => {
-                    if !functions[&(*module, *binder)].function.blocks[0]
-                        .params
-                        .is_empty()
-                    {
-                        return Err("function-valued reference cannot use the Int# carrier".into());
-                    }
-                    format!("f_{module}_{binder}()")
-                }
-                Operation::CallTop {
-                    module,
-                    binder,
-                    arguments,
-                    type_arguments,
-                } => {
-                    if !type_arguments.is_empty() {
-                        return Err("polymorphic calls need specialization before emission".into());
-                    }
-                    if functions[&(*module, *binder)].function.blocks[0]
-                        .params
-                        .len()
-                        != arguments.len()
-                    {
-                        return Err("emitted target parameter count disagrees with call".into());
-                    }
-                    let args = arguments
-                        .iter()
-                        .map(|arg| format!("v{}", arg.0))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("f_{module}_{binder}({args})")
-                }
-                _ => return Err("unsupported operation in scalar Rust backend".into()),
-            };
+        for block in &leaf.function.blocks {
+            let block_parameters = block
+                .params
+                .iter()
+                .map(|p| format!("v{}: i64", p.id.0))
+                .collect::<Vec<_>>()
+                .join(", ");
             writeln!(
                 out,
-                "    let v{}: i64 = {expression};",
-                instruction.result.id.0
+                "    #[allow(unused_variables)]\n    fn b_{}({block_parameters}) -> i64 {{",
+                block.id.0
             )
             .unwrap();
+            for instruction in &block.instructions {
+                let expression = match &instruction.operation {
+                    Operation::Move(value) => format!("v{}", value.0),
+                    Operation::IntBinary { op, arguments } => {
+                        let left = arguments[0].0;
+                        let right = arguments[1].0;
+                        match op {
+                            IntBinary::Add => format!("v{left}.wrapping_add(v{right})"),
+                            IntBinary::Subtract => format!("v{left}.wrapping_sub(v{right})"),
+                            IntBinary::Multiply => format!("v{left}.wrapping_mul(v{right})"),
+                            IntBinary::Equal => format!("i64::from(v{left} == v{right})"),
+                            IntBinary::NotEqual => format!("i64::from(v{left} != v{right})"),
+                            IntBinary::Less => format!("i64::from(v{left} < v{right})"),
+                            IntBinary::LessEqual => format!("i64::from(v{left} <= v{right})"),
+                            IntBinary::Greater => format!("i64::from(v{left} > v{right})"),
+                            IntBinary::GreaterEqual => format!("i64::from(v{left} >= v{right})"),
+                        }
+                    }
+                    Operation::Literal(lit) => format!("{}i64", integer(&lit.kind, &lit.pretty)?),
+                    Operation::TopReference { module, binder } => {
+                        if !functions[&(*module, *binder)].function.blocks[0]
+                            .params
+                            .is_empty()
+                        {
+                            return Err(
+                                "function-valued reference cannot use the Int# carrier".into()
+                            );
+                        }
+                        format!("f_{module}_{binder}()")
+                    }
+                    Operation::CallTop {
+                        module,
+                        binder,
+                        arguments,
+                        type_arguments,
+                    } => {
+                        if !type_arguments.is_empty() {
+                            return Err(
+                                "polymorphic calls need specialization before emission".into()
+                            );
+                        }
+                        if functions[&(*module, *binder)].function.blocks[0]
+                            .params
+                            .len()
+                            != arguments.len()
+                        {
+                            return Err("emitted target parameter count disagrees with call".into());
+                        }
+                        let args = arguments
+                            .iter()
+                            .map(|arg| format!("v{}", arg.0))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("f_{module}_{binder}({args})")
+                    }
+                    _ => return Err("unsupported operation in scalar Rust backend".into()),
+                };
+                writeln!(
+                    out,
+                    "    let v{}: i64 = {expression};",
+                    instruction.result.id.0
+                )
+                .unwrap();
+            }
+            let call = |target: &crate::nir::BlockId, args: &[crate::nir::ValueId]| {
+                format!(
+                    "b_{}({})",
+                    target.0,
+                    args.iter()
+                        .map(|v| format!("v{}", v.0))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            match &block.terminator.exit {
+                Exit::Return(value) => writeln!(out, "    v{}", value.0).unwrap(),
+                Exit::Jump { target, args } => writeln!(out, "    {}", call(target, args)).unwrap(),
+                Exit::IntSwitch {
+                    scrutinee,
+                    arms,
+                    default,
+                    args,
+                } => {
+                    writeln!(out, "    match v{} {{", scrutinee.0).unwrap();
+                    for (pattern, target) in arms {
+                        writeln!(out, "        {pattern}i64 => {},", call(target, args)).unwrap();
+                    }
+                    writeln!(out, "        _ => {},\n    }}", call(default, args)).unwrap();
+                }
+            }
+            writeln!(out, "    }}").unwrap();
         }
-        let Exit::Return(value) = block.terminator.exit else {
-            return Err("scalar backend requires a return".into());
-        };
-        writeln!(out, "    v{}\n}}", value.0).unwrap();
+        let args = leaf.function.blocks[0]
+            .params
+            .iter()
+            .map(|p| format!("v{}", p.id.0))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(out, "    b_{}({args})\n}}", leaf.function.entry.0).unwrap();
     }
     let arity = functions[root].function.blocks[0].params.len();
     let args = (0..arity)

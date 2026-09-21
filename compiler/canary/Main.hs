@@ -1,7 +1,8 @@
 {-# LANGUAGE MagicHash #-}
 module Main (main) where
 
-import Canary (forward, constant, add, subtractInt, multiply, composed, chained, shared)
+import Canary (forward, constant, add, subtractInt, multiply, composed, chained, shared,
+  eqInt, neInt, ltInt, leInt, gtInt, geInt, minimumInt, selectInt, nestedBranch)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -25,4 +26,22 @@ main = do
       (I# x, I# y) -> print (I# (chained x y))
     ["shared", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (shared x y))
-    _ -> fail "expected forward/add/subtractInt/multiply/composed/chained/shared INT INT or constant INT"
+    ["eqInt", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (eqInt x y))
+    ["neInt", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (neInt x y))
+    ["ltInt", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (ltInt x y))
+    ["leInt", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (leInt x y))
+    ["gtInt", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (gtInt x y))
+    ["geInt", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (geInt x y))
+    ["minimumInt", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (minimumInt x y))
+    ["selectInt", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (selectInt x y))
+    ["nestedBranch", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (nestedBranch x y))
+    _ -> fail "expected a canary entry and its integer arguments"

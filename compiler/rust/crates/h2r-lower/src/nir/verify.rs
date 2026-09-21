@@ -69,13 +69,11 @@ fn verify_leaf_impl(
         .find(|pair| pair.binder == owner)
         .ok_or("leaf owner is not a top-level binding")?;
     verify(function)?;
-    if function.blocks.len() != 1 {
-        return Err("leaf must have exactly one block".into());
-    }
-    let block = &function.blocks[0];
-    let Exit::Return(returned) = block.terminator.exit else {
-        return Err("leaf must terminate with return".into());
-    };
+    let block = function
+        .blocks
+        .iter()
+        .find(|b| b.id == function.entry)
+        .ok_or("missing entry")?;
     let mut ty = module.binder_ty(owner);
     let mut params = Vec::new();
     let mut type_params = Vec::new();
@@ -171,10 +169,6 @@ fn verify_leaf_impl(
         return Err("leaf result type differs from source".into());
     }
     let expr = leaf.ok_or("missing leaf value in source")?;
-    let return_origin = &block.terminator.origin;
-    if return_origin.source != Source::Expr(expr) || return_origin.rule != Rule::Return {
-        return Err("leaf return origin mismatch".into());
-    }
     let context = ValueContext {
         module,
         module_index,
@@ -182,8 +176,12 @@ fn verify_leaf_impl(
         params: &params,
         type_scope: &type_scope,
     };
+    let mut visited = BTreeSet::new();
     let (type_applications, value_applications, value_nodes) =
-        verify_value(&context, block, expr, ty, returned)?;
+        verify_tail(&context, function, block.id, expr, ty, &mut visited)?;
+    if visited.len() != function.blocks.len() {
+        return Err("source correspondence leaves unused blocks".into());
+    }
     let accounting = LeafAccounting {
         source_nodes,
         parameter_nodes: params.len(),
@@ -218,6 +216,130 @@ struct ValueContext<'a> {
     modules: Option<&'a [h2r_core_ir::Module]>,
     params: &'a [(ExprId, BinderId, ValueId)],
     type_scope: &'a [(TyVarId, TyVarId)],
+}
+
+fn verify_tail(
+    context: &ValueContext<'_>,
+    function: &Function,
+    id: BlockId,
+    expr: ExprId,
+    ty: &Ty,
+    visited: &mut BTreeSet<BlockId>,
+) -> Result<(usize, usize, usize), String> {
+    if !visited.insert(id) {
+        return Err("source branch is cyclic or shared".into());
+    }
+    let block = function
+        .blocks
+        .iter()
+        .find(|b| b.id == id)
+        .ok_or("missing source branch")?;
+    if block.terminator.origin.source != Source::Expr(expr) {
+        return Err("tail origin differs from source".into());
+    }
+    let module = context.module;
+    match (&block.terminator.exit, module.expr(expr)) {
+        (
+            Exit::IntSwitch {
+                scrutinee,
+                arms,
+                default,
+                args,
+            },
+            h2r_core_ir::Expr::Case {
+                scrut,
+                binder,
+                ty: result_ty,
+                alts,
+                ..
+            },
+        ) => {
+            if block.terminator.origin.rule != Rule::IntSwitch
+                || !primitive::is_int(module.binder_ty(*binder))
+                || !primitive::is_int(ty)
+                || !module.ty(*result_ty).alpha_eq(ty)
+                || alts.iter().any(|a| !a.binders.is_empty())
+            {
+                return Err("invalid scalar source switch".into());
+            }
+            let (mut nt, mut nv, mut nn) = verify_value(
+                context,
+                block,
+                *scrut,
+                module.binder_ty(*binder),
+                *scrutinee,
+            )?;
+            nn += 1; // The source case node, separate from its scrutinee and arms.
+            let mut expected_args: Vec<_> = block.params.iter().map(|p| p.id).collect();
+            expected_args.push(*scrutinee);
+            if *args != expected_args {
+                return Err("switch environment differs from source".into());
+            }
+            let mut seen_patterns = BTreeSet::new();
+            let mut defaults = 0;
+            let mut arm_index = 0;
+            for alt in alts {
+                let target = match &alt.con {
+                    h2r_core_ir::AltCon::Default => {
+                        defaults += 1;
+                        *default
+                    }
+                    h2r_core_ir::AltCon::LitAlt { lit } => {
+                        let literal = primitive::int_literal(lit)?;
+                        if !seen_patterns.insert(literal) {
+                            return Err("duplicate source pattern".into());
+                        }
+                        let (pattern, target) = arms.get(arm_index).ok_or("missing switch arm")?;
+                        arm_index += 1;
+                        if *pattern != literal {
+                            return Err("switch pattern differs from source".into());
+                        }
+                        *target
+                    }
+                    _ => return Err("non-scalar source alternative".into()),
+                };
+                let target_block = function
+                    .blocks
+                    .iter()
+                    .find(|b| b.id == target)
+                    .ok_or("missing switch block")?;
+                if target_block.params.len() != block.params.len() + 1 {
+                    return Err("source branch environment arity mismatch".into());
+                }
+                let mut params = Vec::new();
+                for (origin, binder, value) in context.params {
+                    let position = block
+                        .params
+                        .iter()
+                        .position(|p| p.id == *value)
+                        .ok_or("unknown source environment value")?;
+                    params.push((*origin, *binder, target_block.params[position].id));
+                }
+                params.push((
+                    expr,
+                    *binder,
+                    target_block.params.last().ok_or("missing case binder")?.id,
+                ));
+                let branch_context = ValueContext {
+                    params: &params,
+                    ..*context
+                };
+                let (bt, bv, bn) =
+                    verify_tail(&branch_context, function, target, alt.rhs, ty, visited)?;
+                nt += bt;
+                nv += bv;
+                nn += bn;
+            }
+            if defaults != 1 || arm_index != arms.len() {
+                return Err("switch alternative census mismatch".into());
+            }
+            Ok((nt, nv, nn))
+        }
+        (Exit::Return(returned), _) if block.terminator.origin.rule == Rule::Return => {
+            verify_value(context, block, expr, ty, *returned)
+        }
+        _ => Err("terminator differs from source control flow".into()),
+    }
 }
 
 /// Walk source expressions independently, consuming exactly the corresponding
@@ -371,12 +493,12 @@ fn verify_value(
             }
             let instruction = &block.instructions[argument_instructions];
             let expected_rule = if let Some(expected) = primitive {
-                if !matches!(&instruction.operation, Operation::IntArithmetic { op, arguments }
+                if !matches!(&instruction.operation, Operation::IntBinary { op, arguments }
                     if *op == expected && arguments == &values)
                 {
                     return Err("primitive operation or arguments differ from source".into());
                 }
-                Rule::IntArithmetic
+                Rule::IntBinary
             } else {
                 let (target_module, target_binder, _) = target.expect("resolved source target");
                 let Operation::CallTop {
@@ -669,7 +791,7 @@ pub fn verify(function: &Function) -> Result<(), String> {
                         return Err(format!("unavailable operand {value:?}"));
                     }
                 }
-                Operation::IntArithmetic { ref arguments, .. } => {
+                Operation::IntBinary { ref arguments, .. } => {
                     let signature = primitive::signature();
                     let Ty::Fun { arg: int, .. } = signature else {
                         unreachable!()
@@ -705,35 +827,69 @@ pub fn verify(function: &Function) -> Result<(), String> {
                     return Err("return type mismatch".into());
                 }
             }
-            Exit::Jump { target, args } => {
-                let target = blocks
-                    .get(target)
-                    .ok_or_else(|| format!("missing jump target {target:?}"))?;
-                if args.len() != target.params.len() {
-                    return Err("jump argument count mismatch".into());
+            Exit::Jump { target, args } => verify_edge(&blocks, &available, *target, args)?,
+            Exit::IntSwitch {
+                scrutinee,
+                arms,
+                default,
+                args,
+            } => {
+                if !available
+                    .get(scrutinee)
+                    .is_some_and(|ty| primitive::is_int(ty))
+                {
+                    return Err("switch scrutinee must be an available Int#".into());
                 }
-                for (arg, param) in args.iter().zip(&target.params) {
-                    let ty = available
-                        .get(arg)
-                        .ok_or_else(|| format!("unavailable jump argument {arg:?}"))?;
-                    if !ty.alpha_eq(&param.ty) {
-                        return Err("jump argument type mismatch".into());
+                let mut patterns = BTreeSet::new();
+                for (pattern, target) in arms {
+                    if !patterns.insert(*pattern) {
+                        return Err("duplicate switch pattern".into());
                     }
+                    verify_edge(&blocks, &available, *target, args)?;
                 }
+                verify_edge(&blocks, &available, *default, args)?;
             }
         }
     }
     let mut visited = BTreeSet::new();
     let mut pending = vec![function.entry];
     while let Some(id) = pending.pop() {
-        if visited.insert(id)
-            && let Exit::Jump { target, .. } = &blocks[&id].terminator.exit
-        {
-            pending.push(*target);
+        if visited.insert(id) {
+            match &blocks[&id].terminator.exit {
+                Exit::Return(_) => {}
+                Exit::Jump { target, .. } => pending.push(*target),
+                Exit::IntSwitch { arms, default, .. } => {
+                    pending.push(*default);
+                    pending.extend(arms.iter().map(|(_, target)| *target));
+                }
+            }
         }
     }
     if visited.len() != blocks.len() {
         return Err("unreachable block".into());
+    }
+    Ok(())
+}
+
+fn verify_edge(
+    blocks: &BTreeMap<BlockId, &Block>,
+    available: &BTreeMap<ValueId, &Ty>,
+    target: BlockId,
+    args: &[ValueId],
+) -> Result<(), String> {
+    let target = blocks
+        .get(&target)
+        .ok_or_else(|| format!("missing jump target {target:?}"))?;
+    if args.len() != target.params.len() {
+        return Err("jump argument count mismatch".into());
+    }
+    for (arg, param) in args.iter().zip(&target.params) {
+        let ty = available
+            .get(arg)
+            .ok_or_else(|| format!("unavailable jump argument {arg:?}"))?;
+        if !ty.alpha_eq(&param.ty) {
+            return Err("jump argument type mismatch".into());
+        }
     }
     Ok(())
 }
