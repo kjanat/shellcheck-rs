@@ -66,6 +66,10 @@
       type and origin. Cross-module references now resolve exact external stable
       names to a unique in-world definition, requiring matching closed structured
       types. Missing/ambiguous imports and scope-unsafe types remain refused.
+      Closed type-only applications of top-level bindings now retain ordered
+      instantiation evidence, with structural substitution and source-node
+      accounting. Open-type, parameter-headed and value applications remain
+      unsupported; this does not yet increase canonical lowering coverage.
       Unsupported forms fail with source addresses.
       `mise run lower:program <dump-dir>` now attempts every live owner after
       auditing reachability, retaining verified leaves and explicit refusals.

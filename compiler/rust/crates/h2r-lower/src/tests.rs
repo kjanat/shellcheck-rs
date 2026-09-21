@@ -699,6 +699,169 @@ fn nir_world_lookup_does_not_override_lexical_parameters() {
     assert_eq!(leaf.function.blocks[0].params.len(), 1);
 }
 
+fn nir_type_application_world(imported: bool) -> Vec<Module> {
+    use h2r_core_ir::{Expr, Ty, TyConId, TyVarId};
+    let target_module = if imported { "Lib" } else { "Main" };
+    let head = if imported {
+        gvar(&sn("Lib", "f"), "f")
+    } else {
+        lvar("f")
+    };
+    let rhs = app(
+        app(head, json!({"node": "Type", "ty": 0, "type": "T"})),
+        json!({"node": "Type", "ty": 0, "type": "U"}),
+    );
+    let target = (binder(&sn(target_module, "f"), "f", "f"), lvar("f"));
+    let mut pairs = vec![(binder(&sn("Main", "main"), "main", "main"), rhs)];
+    if !imported {
+        pairs.push(target.clone());
+    }
+    let mut modules = vec![module("Main", pairs, json!({}))];
+    if imported {
+        modules.push(module("Lib", vec![target], json!({})));
+    }
+    let con = |name: &str, args| Ty::Con {
+        tycon: TyConId {
+            name: sn("Types", name),
+            occ: name.into(),
+            unique: name.into(),
+        },
+        args,
+    };
+    let a = TyVarId {
+        name: "a".into(),
+        occ: "a".into(),
+        unique: "a".into(),
+    };
+    let b = TyVarId {
+        name: "b".into(),
+        occ: "b".into(),
+        unique: "b".into(),
+    };
+    let t = con("T", vec![]);
+    let u = con("U", vec![]);
+    let poly = Ty::ForAll {
+        binder: a.clone(),
+        body: Box::new(Ty::ForAll {
+            binder: b.clone(),
+            body: Box::new(con("Pair", vec![Ty::Var(a), Ty::Var(b)])),
+        }),
+    };
+    let result = con("Pair", vec![t.clone(), u.clone()]);
+    for m in &mut modules {
+        m.types = vec![t.clone(), u.clone(), poly.clone(), result.clone()];
+        for pair in m.top.iter().flat_map(|g| &g.pairs) {
+            let binder = &mut m.binders[pair.binder as usize];
+            binder.ty = if binder.occ == "main" { 3 } else { 2 };
+        }
+        for expr in &mut m.exprs {
+            if let Expr::Type { ty, pretty } = expr {
+                *ty = if pretty == "T" { 0 } else { 1 };
+            }
+        }
+    }
+    modules
+}
+
+#[test]
+fn nir_type_applications_preserve_order_and_account_for_source_nodes() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    for imported in [false, true] {
+        let modules = nir_type_application_world(imported);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let [instruction] = leaf.function.blocks[0].instructions.as_slice() else {
+            panic!()
+        };
+        let Operation::InstantiateTop {
+            module, arguments, ..
+        } = &instruction.operation
+        else {
+            panic!()
+        };
+        assert_eq!(*module, usize::from(imported));
+        assert_eq!(arguments, &modules[0].types[..2]);
+        assert_eq!(instruction.result.ty, modules[0].types[3]);
+        let accounting = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert_eq!(
+            (
+                accounting.source_nodes,
+                accounting.type_application_nodes,
+                accounting.type_argument_nodes,
+                accounting.value_nodes
+            ),
+            (5, 2, 2, 1)
+        );
+    }
+}
+
+#[test]
+fn nir_type_application_verifier_rejects_forged_evidence() {
+    use crate::nir::{
+        FnId, Operation, Rule, Source,
+        lower::lower_leaf_in_world,
+        verify::{verify, verify_leaf_in_world},
+    };
+    let modules = nir_type_application_world(true);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let original = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..6 {
+        let mut leaf = original.clone();
+        let instruction = &mut leaf.function.blocks[0].instructions[0];
+        let Operation::InstantiateTop {
+            module,
+            binder,
+            arguments,
+        } = &mut instruction.operation
+        else {
+            panic!()
+        };
+        match mutation {
+            0 => arguments.reverse(),
+            1 => {
+                arguments.pop();
+            }
+            2 => *module = 0,
+            3 => *binder = u32::MAX,
+            4 => instruction.origin.rule = Rule::TopReference,
+            _ => instruction.origin.source = Source::Expr(u32::MAX),
+        }
+        verify(&leaf.function).unwrap();
+        assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
+    }
+}
+
+#[test]
+fn nir_type_applications_refuse_value_arguments_open_types_and_wrong_results() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    use h2r_core_ir::{Expr, Ty, TyVarId};
+    for mutation in 0..4 {
+        let mut modules = nir_type_application_world(false);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let rhs = modules[0].top[0].pairs[0].rhs;
+        let Expr::App { arg, .. } = modules[0].expr(rhs) else {
+            panic!()
+        };
+        let arg = *arg;
+        match mutation {
+            0 => modules[0].exprs[arg as usize] = Expr::Coercion,
+            1 => {
+                modules[0].types[1] = Ty::Var(TyVarId {
+                    name: "b".into(),
+                    occ: "b".into(),
+                    unique: "b".into(),
+                })
+            }
+            2 => modules[0].binders[owner as usize].ty = 0,
+            _ => modules[0].types[2] = modules[0].types[0].clone(),
+        }
+        assert!(
+            lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
 fn nir_polymorphic_module() -> Module {
     use h2r_core_ir::{Ty, TyVarId};
     let type_lambda = |unique: &str, body: Value| {

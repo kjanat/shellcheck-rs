@@ -12,6 +12,8 @@ pub struct LeafAccounting {
     pub parameter_nodes: usize,
     pub type_parameter_nodes: usize,
     pub value_nodes: usize,
+    pub type_application_nodes: usize,
+    pub type_argument_nodes: usize,
     pub erased_ticks: usize,
 }
 
@@ -79,7 +81,8 @@ fn verify_leaf_impl(
     let mut ticks = Vec::new();
     let mut leaf = None;
     let mut source_nodes = 0;
-    for expr in module.preorder(pair.rhs) {
+    let mut source = module.preorder(pair.rhs);
+    while let Some(expr) = source.next() {
         source_nodes += 1;
         match module.expr(expr) {
             Expr::Tick(_) => ticks.push(expr),
@@ -130,6 +133,14 @@ fn verify_leaf_impl(
                     return Err("multiple leaf values in source".into());
                 }
             }
+            Expr::App { .. } => {
+                if leaf.replace(expr).is_some() {
+                    return Err("multiple leaf values in source".into());
+                }
+                // The application verifier below validates this entire subtree.
+                source_nodes += source.count();
+                break;
+            }
             _ => return Err(format!("unsupported leaf source at expression {expr}")),
         }
     }
@@ -162,7 +173,65 @@ fn verify_leaf_impl(
     if return_origin.source != Source::Expr(expr) || return_origin.rule != Rule::Return {
         return Err("leaf return origin mismatch".into());
     }
+    let mut type_applications = 0;
     match module.expr(expr) {
+        Expr::App { .. } => {
+            // Read argument order from the source, never from candidate NIR.
+            let mut spine = Vec::new();
+            let mut head = expr;
+            loop {
+                match module.expr(head) {
+                    Expr::App { fun, arg } => {
+                        if !matches!(module.expr(*arg), Expr::Type { .. }) {
+                            return Err("source application has a value argument".into());
+                        }
+                        spine.push(*arg);
+                        head = *fun;
+                    }
+                    Expr::Var { .. } => break,
+                    _ => return Err("unsupported source type application head".into()),
+                }
+            }
+            let arguments: Vec<_> = spine
+                .iter()
+                .rev()
+                .map(|arg| {
+                    let Expr::Type { ty, .. } = module.expr(*arg) else {
+                        unreachable!()
+                    };
+                    module.ty(*ty).clone()
+                })
+                .collect();
+            type_applications = arguments.len();
+            let (target_module, target_binder, head_ty) =
+                instantiate::target(module, module_index, modules, head)?;
+            let expected = instantiate::apply(head_ty, &arguments)?;
+            if !world::closed_type(ty) || !expected.alpha_eq(ty) {
+                return Err("source type application result mismatch".into());
+            }
+            let [instruction] = block.instructions.as_slice() else {
+                return Err("type application must have exactly one instruction".into());
+            };
+            let Operation::InstantiateTop {
+                module: target,
+                binder,
+                arguments: actual,
+            } = &instruction.operation
+            else {
+                return Err("source type application lacks instantiation evidence".into());
+            };
+            if (*target, *binder) != (target_module, target_binder) || actual != &arguments {
+                return Err("type application target or arguments differ from source".into());
+            }
+            if instruction.origin.source != Source::Expr(expr)
+                || instruction.origin.rule != Rule::InstantiateTop
+            {
+                return Err("type application origin mismatch".into());
+            }
+            if instruction.result.id != returned || !instruction.result.ty.alpha_eq(&expected) {
+                return Err("type application result mismatch".into());
+            }
+        }
         Expr::Lit(source) => {
             if block.instructions.len() != 1 {
                 return Err("literal leaf must have exactly one instruction".into());
@@ -258,6 +327,8 @@ fn verify_leaf_impl(
         parameter_nodes: params.len(),
         type_parameter_nodes: type_params.len(),
         value_nodes: 1,
+        type_application_nodes: type_applications,
+        type_argument_nodes: type_applications,
         erased_ticks: ticks.len(),
     };
     // Counts source nodes, not NIR instructions: a literal's instruction and
@@ -266,6 +337,8 @@ fn verify_leaf_impl(
         != accounting.parameter_nodes
             + accounting.type_parameter_nodes
             + accounting.value_nodes
+            + accounting.type_application_nodes
+            + accounting.type_argument_nodes
             + accounting.erased_ticks
     {
         return Err("leaf source accounting does not close".into());
@@ -320,7 +393,9 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 return Err("instruction origin belongs to another module".into());
             }
             match instruction.operation {
-                Operation::Literal(_) | Operation::TopReference { .. } => {}
+                Operation::Literal(_)
+                | Operation::TopReference { .. }
+                | Operation::InstantiateTop { .. } => {}
                 Operation::Move(value) | Operation::Force(value) => {
                     if !available.contains_key(&value) {
                         return Err(format!("unavailable operand {value:?}"));

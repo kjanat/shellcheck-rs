@@ -221,7 +221,40 @@ fn lower_leaf_impl(
                 "casts need source and target type evidence",
             ));
         }
-        Expr::App { .. } => return Err(fail(Some(current), "applications are not lowered yet")),
+        Expr::App { .. } => {
+            let mut head = current;
+            let mut arguments = Vec::new();
+            while let Expr::App { fun, arg } = module.expr(head) {
+                let Expr::Type { ty, .. } = module.expr(*arg) else {
+                    return Err(fail(Some(head), "value applications are not lowered yet"));
+                };
+                arguments.push(module.ty(*ty).clone());
+                head = *fun;
+            }
+            arguments.reverse();
+            let (target_module, binder, head_ty) =
+                instantiate::target(module, module_index, modules, head)
+                    .map_err(|reason| fail(Some(head), &reason))?;
+            let result_ty = instantiate::apply(head_ty, &arguments)
+                .map_err(|reason| fail(Some(current), &reason))?;
+            if !world::closed_type(ty) || !ty.alpha_eq(&result_ty) {
+                return Err(fail(Some(current), "type application result mismatch"));
+            }
+            let value = ValueId(params.len() as u32);
+            instructions.push(Instruction {
+                result: Value {
+                    id: value,
+                    ty: ty.clone(),
+                },
+                operation: Operation::InstantiateTop {
+                    module: target_module,
+                    binder,
+                    arguments,
+                },
+                origin: origin(Rule::InstantiateTop),
+            });
+            value
+        }
         Expr::Let { .. } => return Err(fail(Some(current), "let bindings are not lowered yet")),
         Expr::Case { .. } => return Err(fail(Some(current), "cases are not lowered yet")),
         Expr::Type { .. } | Expr::Coercion => {

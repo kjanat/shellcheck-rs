@@ -143,6 +143,13 @@ one definition; missing or ambiguous definitions are refused. Cross-module types
 must be closed and structurally equal up to bound-variable renaming: free type
 variables, internal type-constructor names and opaque type text are refused.
 Type lambdas become explicit type parameters, not runtime arguments.
+Type-only application spines (`f @T @U`) on top-level bindings now produce
+`instantiate-top`, retaining the ordered type arguments without calling or
+forcing the shared value. This first slice requires closed structured head,
+argument and result types; parameter-headed and value applications remain
+unsupported. The source verifier checks the target, argument order, substituted
+result and every application/type-argument node. Kind correctness is trusted
+from GHC, not re-proved here. Canonical binding totals above are unchanged.
 Signature/body type variables are paired by binder position, permitting GHC's
 alpha-renaming; ambiguous repeated type-variable uniques are conservatively
 refused. All NIR value types remain in signature scope, while erased type-lambda

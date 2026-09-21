@@ -9,6 +9,7 @@
 
 use h2r_core_ir::{BinderId, ExprId, Lit, Ty, TyVarId};
 
+mod instantiate;
 pub mod lower;
 pub mod pretty;
 pub mod program;
@@ -34,6 +35,7 @@ pub enum Source {
 pub enum Rule {
     Literal,
     TopReference,
+    InstantiateTop,
     EraseCast,
     StrictPosition,
     Return,
@@ -64,6 +66,13 @@ pub enum Operation {
     TopReference {
         module: usize,
         binder: BinderId,
+    },
+    /// Type-only instantiation of a shared top-level value. No value arguments,
+    /// runtime call, evaluation or allocation; retain specialization evidence.
+    InstantiateTop {
+        module: usize,
+        binder: BinderId,
+        arguments: Vec<Ty>,
     },
     Move(ValueId),
     Force(ValueId),

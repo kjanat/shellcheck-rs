@@ -32,6 +32,13 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                 Operation::TopReference { module, binder } => {
                     format!("top-ref module {module} binder {binder}")
                 }
+                Operation::InstantiateTop {
+                    module,
+                    binder,
+                    arguments,
+                } => {
+                    format!("instantiate-top module {module} binder {binder} types {arguments:?}")
+                }
             };
             writeln!(
                 out,
