@@ -54,12 +54,23 @@ description = "Run the H2R Rust workspace tests"
 run         = "cargo test --manifest-path compiler/rust/Cargo.toml --workspace"
 
 [tasks."lower:leaf"]
-description = "Lower and verify one live leaf: <dump-dir> --fn '<stable-name>'"
-run         = "cargo run --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r -- lower --nir"
+description = "Lower and verify one live function"
+usage       = '''
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+flag "--fn <name>" required=#true help="Stable function name (quote names containing $)"
+'''
+run         = '''
+cargo run --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r -- lower --nir "${usage_dir?}" --fn "${usage_fn?}"
+'''
 
 [tasks."lower:program"]
-description = "Attempt verified NIR for all live bindings: <dump-dir>; fails on refusals"
-run         = "cargo run --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r -- lower --nir"
+description = "Attempt verified NIR for all live bindings; fails on refusals"
+usage       = '''
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+'''
+run         = '''
+cargo run --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r -- lower --nir "${usage_dir?}"
+'''
 
 [tasks."lower:coverage"]
 description = "Refresh canonical Core and capture verified NIR coverage"
@@ -391,11 +402,17 @@ echo "format5: reports captured and verification passed"
 
 [tasks."baseline:explain"]
 description = "Capture reusable gate-8 explanations from existing dumps (default: canonical)"
+usage       = '''
+arg "[profiles]" var=#true default="canonical" help="Existing dump profiles to explain" {
+  choices "canonical" "A" "B" "C" "D" "E" "F"
+}
+'''
 run         = '''
 set -eu
 bin="$PWD/compiler/rust/target/release/h2r"
 test -x "$bin"
-[ "$#" -gt 0 ] || set -- canonical
+# Usage supplies a shell-escaped list, restricted to the choices above.
+eval "set -- ${usage_profiles?}"
 for profile in "$@"; do
   case "$profile" in canonical|A|B|C|D|E|F) ;; *) echo "Unknown profile: $profile" >&2; exit 1 ;; esac
   dir="$PWD/compiler/matrix/$profile/core-json"
