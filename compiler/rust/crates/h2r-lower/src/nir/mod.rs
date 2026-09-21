@@ -13,6 +13,7 @@ pub mod lower;
 pub mod pretty;
 pub mod program;
 pub mod verify;
+mod world;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FnId(pub u32);

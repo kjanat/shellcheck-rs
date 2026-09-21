@@ -7,7 +7,7 @@ use crate::reachability::LiveSet;
 
 use super::{
     FnId,
-    lower::{LowerError, LoweredLeaf, lower_leaf},
+    lower::{LowerError, LoweredLeaf, lower_leaf_in_world},
 };
 
 #[derive(Debug)]
@@ -49,12 +49,7 @@ pub fn lower_program(modules: &[Module]) -> Result<ProgramAttempt, String> {
             continue;
         }
         let index = binding.key.module as usize;
-        match lower_leaf(
-            &modules[index],
-            index,
-            binding.key.binder,
-            FnId(node as u32),
-        ) {
+        match lower_leaf_in_world(modules, index, binding.key.binder, FnId(node as u32)) {
             Ok(leaf) => attempt.lowered.push(leaf),
             Err(error) => attempt.refused.push(error),
         }

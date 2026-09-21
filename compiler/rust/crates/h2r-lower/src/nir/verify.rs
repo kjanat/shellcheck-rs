@@ -26,6 +26,32 @@ pub fn verify_leaf(
     id: FnId,
     lowered: &lower::LoweredLeaf,
 ) -> Result<LeafAccounting, String> {
+    verify_leaf_impl(module, module_index, owner, id, lowered, None)
+}
+
+/// Verify against the source world, resolving imports from source names rather
+/// than trusting the candidate's target module or binder.
+pub fn verify_leaf_in_world(
+    modules: &[h2r_core_ir::Module],
+    module_index: usize,
+    owner: BinderId,
+    id: FnId,
+    lowered: &lower::LoweredLeaf,
+) -> Result<LeafAccounting, String> {
+    let module = modules
+        .get(module_index)
+        .ok_or("module index is outside the loaded world")?;
+    verify_leaf_impl(module, module_index, owner, id, lowered, Some(modules))
+}
+
+fn verify_leaf_impl(
+    module: &h2r_core_ir::Module,
+    module_index: usize,
+    owner: BinderId,
+    id: FnId,
+    lowered: &lower::LoweredLeaf,
+    modules: Option<&[h2r_core_ir::Module]>,
+) -> Result<LeafAccounting, String> {
     use h2r_core_ir::{BinderKind, Expr};
 
     let function = &lowered.function;
@@ -155,6 +181,30 @@ pub fn verify_leaf(
             }
             if instruction.result.id != returned || !instruction.result.ty.alpha_eq(ty) {
                 return Err("literal result mismatch".into());
+            }
+        }
+        Expr::Var { name, .. } if module.reference(expr) == Some(h2r_core_ir::Ref::Global) => {
+            let modules = modules.ok_or("import source requires a loaded world")?;
+            let (target_module, target_binder) = world::imported_top(modules, name)?;
+            let target_ty = modules[target_module].binder_ty(target_binder);
+            if !world::closed_type(ty) || !world::closed_type(target_ty) || !ty.alpha_eq(target_ty)
+            {
+                return Err("import source lacks matching closed structured types".into());
+            }
+            let [instruction] = block.instructions.as_slice() else {
+                return Err("import leaf must have exactly one instruction".into());
+            };
+            if !matches!(instruction.operation, Operation::TopReference { module, binder } if module == target_module && binder == target_binder)
+            {
+                return Err("import target differs from source".into());
+            }
+            if instruction.origin.source != Source::Expr(expr)
+                || instruction.origin.rule != Rule::TopReference
+            {
+                return Err("import origin mismatch".into());
+            }
+            if instruction.result.id != returned || !instruction.result.ty.alpha_eq(ty) {
+                return Err("import result mismatch".into());
             }
         }
         Expr::Var { .. } => {

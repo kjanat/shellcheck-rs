@@ -75,7 +75,9 @@ fn nir_program_report(modules: &[Module]) -> Result<(String, usize)> {
 }
 
 fn nir_report(modules: &[Module], name: &str) -> Result<String> {
-    use h2r_lower::nir::{FnId, lower::lower_leaf, pretty::format_leaf, verify::verify_leaf};
+    use h2r_lower::nir::{
+        FnId, lower::lower_leaf_in_world, pretty::format_leaf, verify::verify_leaf_in_world,
+    };
 
     let selected: Vec<_> = modules.iter().collect();
     let live = LiveSet::of_modules(selected.iter().copied())
@@ -104,14 +106,14 @@ fn nir_report(modules: &[Module], name: &str) -> Result<String> {
     let module_index = binding.key.module as usize;
     let owner = binding.key.binder;
     let id = FnId(*node);
-    let lowered = lower_leaf(&modules[module_index], module_index, owner, id).map_err(|error| {
+    let lowered = lower_leaf_in_world(modules, module_index, owner, id).map_err(|error| {
         anyhow::anyhow!(
             "cannot lower {name:?} at {:?}: {}",
             error.source,
             error.reason
         )
     })?;
-    let accounting = verify_leaf(&modules[module_index], module_index, owner, id, &lowered)
+    let accounting = verify_leaf_in_world(modules, module_index, owner, id, &lowered)
         .map_err(|error| anyhow::anyhow!("NIR source verification failed: {error}"))?;
     Ok(format!(
         "NIR leaf: {name}\nScope: one reachable function; not whole-program lowering\nVerified source nodes: {} = {} parameters + {} type parameters + {} value + {} erased ticks\n{}",

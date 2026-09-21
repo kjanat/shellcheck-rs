@@ -37,6 +37,32 @@ pub fn lower_leaf(
     owner: BinderId,
     id: FnId,
 ) -> Result<LoweredLeaf, LowerError> {
+    lower_leaf_impl(module, module_index, owner, id, None)
+}
+
+/// Lower with access to authoritative in-world definitions for imports.
+pub fn lower_leaf_in_world(
+    modules: &[Module],
+    module_index: usize,
+    owner: BinderId,
+    id: FnId,
+) -> Result<LoweredLeaf, LowerError> {
+    let module = modules.get(module_index).ok_or_else(|| LowerError {
+        module: module_index,
+        owner,
+        source: None,
+        reason: "module index is outside the loaded world".into(),
+    })?;
+    lower_leaf_impl(module, module_index, owner, id, Some(modules))
+}
+
+fn lower_leaf_impl(
+    module: &Module,
+    module_index: usize,
+    owner: BinderId,
+    id: FnId,
+    modules: Option<&[Module]>,
+) -> Result<LoweredLeaf, LowerError> {
     let fail = |source, reason: &str| LowerError {
         module: module_index,
         owner,
@@ -130,6 +156,35 @@ pub fn lower_leaf(
             });
             value
         }
+        Expr::Var { name, .. } if module.reference(current) == Some(h2r_core_ir::Ref::Global) => {
+            let modules = modules
+                .ok_or_else(|| fail(Some(current), "external references require a loaded world"))?;
+            let (target_module, binder) = world::imported_top(modules, name)
+                .map_err(|reason| fail(Some(current), &reason))?;
+            let target_ty = modules[target_module].binder_ty(binder);
+            if !world::closed_type(ty) || !world::closed_type(target_ty) {
+                return Err(fail(
+                    Some(current),
+                    "import reference requires closed structured types",
+                ));
+            }
+            if !ty.alpha_eq(target_ty) {
+                return Err(fail(Some(current), "import reference type mismatch"));
+            }
+            let value = ValueId(params.len() as u32);
+            instructions.push(Instruction {
+                result: Value {
+                    id: value,
+                    ty: ty.clone(),
+                },
+                operation: Operation::TopReference {
+                    module: target_module,
+                    binder,
+                },
+                origin: origin(Rule::TopReference),
+            });
+            value
+        }
         Expr::Var { .. } => {
             let binder = module
                 .resolve(current)
@@ -200,8 +255,11 @@ pub fn lower_leaf(
         type_parameters,
         erased_ticks,
     };
-    verify::verify_leaf(module, module_index, owner, id, &lowered)
-        .map_err(|reason| fail(Some(current), &reason))?;
+    let verified = match modules {
+        Some(modules) => verify::verify_leaf_in_world(modules, module_index, owner, id, &lowered),
+        None => verify::verify_leaf(module, module_index, owner, id, &lowered),
+    };
+    verified.map_err(|reason| fail(Some(current), &reason))?;
     Ok(lowered)
 }
 

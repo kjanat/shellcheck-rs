@@ -135,11 +135,14 @@ not a percentage of compiler completion.
 The single-leaf task invokes `h2r lower --nir --fn '<stable-name>'`. It requires complete
 in-world linkage and a verified live set, selects one exact unambiguous name,
 and prints source-verified NIR plus node accounting. Currently supported:
-literals, parameter returns and references to top-level bindings in the same
-module, with leading type/value lambdas and ticks. A `top-ref` obtains the
+literals, parameter returns and references to top-level bindings in the loaded
+world, with leading type/value lambdas and ticks. A `top-ref` obtains the
 existing shared value without calling or forcing it; it identifies the target
-by module and lexical binder, not its name. Imports from other modules remain
-unsupported. Type lambdas become explicit type parameters, not runtime arguments.
+by module and lexical binder. Imports resolve by exact external stable name to
+one definition; missing or ambiguous definitions are refused. Cross-module types
+must be closed and structurally equal up to bound-variable renaming: free type
+variables, internal type-constructor names and opaque type text are refused.
+Type lambdas become explicit type parameters, not runtime arguments.
 Signature/body type variables are paired by binder position, permitting GHC's
 alpha-renaming; ambiguous repeated type-variable uniques are conservatively
 refused. All NIR value types remain in signature scope, while erased type-lambda

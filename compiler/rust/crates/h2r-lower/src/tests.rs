@@ -471,6 +471,234 @@ fn nir_retains_recursive_top_reference_and_rejects_mismatched_type() {
     );
 }
 
+fn nir_import_world() -> Vec<Module> {
+    vec![
+        module(
+            "Main",
+            vec![(
+                binder(&sn("Main", "main"), "main", "main"),
+                gvar(&sn("Lib", "value"), "value"),
+            )],
+            json!({}),
+        ),
+        module(
+            "Lib",
+            vec![(
+                binder(&sn("Lib", "value"), "value", "different-unique"),
+                lit(),
+            )],
+            json!({}),
+        ),
+    ]
+}
+
+#[test]
+fn nir_links_imports_by_stable_name_and_keeps_source_origins() {
+    use crate::nir::{
+        FnId, Operation, lower::lower_leaf_in_world, program::lower_program,
+        verify::verify_leaf_in_world,
+    };
+    let modules = nir_import_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    let target = modules[1].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    let instruction = &leaf.function.blocks[0].instructions[0];
+    assert!(
+        matches!(instruction.operation, Operation::TopReference { module: 1, binder } if binder == target)
+    );
+    assert_eq!(instruction.origin.module, 0);
+    assert_eq!(
+        verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf)
+            .unwrap()
+            .source_nodes,
+        1
+    );
+    let attempt = lower_program(&modules).unwrap();
+    assert_eq!(
+        (attempt.live, attempt.lowered.len(), attempt.refused.len()),
+        (2, 2, 0)
+    );
+    assert!(lower_leaf_in_world(&modules, 99, owner, FnId(0)).is_err());
+    assert!(verify_leaf_in_world(&modules, 99, owner, FnId(0), &leaf).is_err());
+}
+
+#[test]
+fn nir_import_verifier_rejects_forged_target_origin_and_operation() {
+    use crate::nir::{
+        FnId, Operation, Rule,
+        lower::lower_leaf_in_world,
+        verify::{verify, verify_leaf_in_world},
+    };
+    let modules = nir_import_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    let original = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..5 {
+        let mut leaf = original.clone();
+        let instruction = &mut leaf.function.blocks[0].instructions[0];
+        match mutation {
+            0 => {
+                instruction.operation = Operation::TopReference {
+                    module: 0,
+                    binder: owner,
+                }
+            }
+            1 => {
+                instruction.operation = Operation::TopReference {
+                    module: 1,
+                    binder: u32::MAX,
+                }
+            }
+            2 => instruction.origin.rule = Rule::Literal,
+            3 => instruction.origin.source = crate::nir::Source::Expr(u32::MAX),
+            _ => {
+                instruction.operation = Operation::Literal(h2r_core_ir::Lit {
+                    kind: "int".into(),
+                    pretty: "0".into(),
+                })
+            }
+        }
+        verify(&leaf.function).unwrap();
+        assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
+    }
+}
+
+#[test]
+fn nir_imports_refuse_missing_ambiguous_and_internal_names() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    let mut modules = nir_import_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    assert!(
+        lower_leaf_in_world(&modules[..1], 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("outside the loaded world")
+    );
+    modules.push(module(
+        "Other",
+        vec![(binder(&sn("Lib", "value"), "value", "v2"), lit())],
+        json!({}),
+    ));
+    assert!(
+        lower_leaf_in_world(&modules, 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("ambiguous")
+    );
+    let modules = [module(
+        "Main",
+        vec![(
+            binder(&sn("Main", "main"), "main", "main"),
+            gvar("$_in$value", "value"),
+        )],
+        json!({}),
+    )];
+    assert!(
+        lower_leaf_in_world(&modules, 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("external stable name")
+    );
+}
+
+#[test]
+fn nir_imports_require_closed_structured_types_in_both_modules() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    use h2r_core_ir::{Ty, TyVarId};
+    let modules = nir_import_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for bad_ty in [
+        Ty::Var(TyVarId {
+            name: "a".into(),
+            occ: "a".into(),
+            unique: "same-free-unique".into(),
+        }),
+        Ty::Opaque {
+            pretty: "same printed type".into(),
+        },
+        Ty::Con {
+            tycon: h2r_core_ir::TyConId {
+                name: "$_in$T".into(),
+                occ: "T".into(),
+                unique: "T".into(),
+            },
+            args: vec![],
+        },
+    ] {
+        let mut modules = nir_import_world();
+        // Matching uniques/text must not make unrelated scopes equal.
+        modules[0].types[0] = bad_ty.clone();
+        modules[1].types[0] = bad_ty;
+        assert!(
+            lower_leaf_in_world(&modules, 0, owner, FnId(0))
+                .unwrap_err()
+                .reason
+                .contains("closed structured")
+        );
+        let mut forged = leaf.clone();
+        forged.function.result_ty = modules[0].types[0].clone();
+        forged.function.blocks[0].instructions[0].result.ty = modules[0].types[0].clone();
+        assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &forged).is_err());
+    }
+    let mut modules = nir_import_world();
+    modules[1].types[0] = Ty::Lit {
+        kind: "Nat".into(),
+        text: "42".into(),
+    };
+    assert!(
+        lower_leaf_in_world(&modules, 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("type mismatch")
+    );
+}
+
+#[test]
+fn nir_imports_accept_closed_alpha_renamed_foralls() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    use h2r_core_ir::{Ty, TyVarId};
+    let mut modules = nir_import_world();
+    for (index, module) in modules.iter_mut().enumerate() {
+        let var = TyVarId {
+            name: "a".into(),
+            occ: "a".into(),
+            unique: format!("a{index}"),
+        };
+        module.types[0] = Ty::ForAll {
+            binder: var.clone(),
+            body: Box::new(Ty::Var(var)),
+        };
+    }
+    let owner = modules[0].top[0].pairs[0].binder;
+    lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+}
+
+#[test]
+fn nir_world_lookup_does_not_override_lexical_parameters() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    use h2r_core_ir::Ty;
+    let mut modules = nir_import_world();
+    modules[0] = module(
+        "Main",
+        vec![(
+            binder(&sn("Main", "main"), "main", "main"),
+            lam("value", lvar("value")),
+        )],
+        json!({}),
+    );
+    let ty = modules[0].types[0].clone();
+    modules[0].types.push(Ty::Fun {
+        mult: Box::new(ty.clone()),
+        arg: Box::new(ty.clone()),
+        res: Box::new(ty),
+    });
+    let owner = modules[0].top[0].pairs[0].binder;
+    modules[0].binders[owner as usize].ty = 1;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    assert!(leaf.function.blocks[0].instructions.is_empty());
+    assert_eq!(leaf.function.blocks[0].params.len(), 1);
+}
+
 fn nir_polymorphic_module() -> Module {
     use h2r_core_ir::{Ty, TyVarId};
     let type_lambda = |unique: &str, body: Value| {

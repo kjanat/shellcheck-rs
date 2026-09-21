@@ -63,7 +63,9 @@
       binders are matched through explicit scope pairing, never by spelling.
       Same-module top-level references now retain shared binding identity without
       forcing or calling the target; source verification checks the exact target,
-      type and origin. Cross-module references remain unsupported.
+      type and origin. Cross-module references now resolve exact external stable
+      names to a unique in-world definition, requiring matching closed structured
+      types. Missing/ambiguous imports and scope-unsafe types remain refused.
       Unsupported forms fail with source addresses.
       `mise run lower:program <dump-dir>` now attempts every live owner after
       auditing reachability, retaining verified leaves and explicit refusals.
