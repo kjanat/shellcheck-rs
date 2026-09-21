@@ -1,6 +1,46 @@
 //! Executable checks of generated code with deferred, instrumented inputs.
 #![allow(dead_code)]
 
+mod higher_order {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/higherOrder.rs"));
+    #[test]
+    fn repeated_closure_calls_share_lazy_captures() {
+        let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = count.clone();
+        let x = HInt::defer(move || {
+            counter.set(counter.get() + 1);
+            10
+        });
+        let result = h2r_entry(x, HInt::ready(22));
+        assert_eq!(count.get(), 0);
+        assert_eq!(result.force(), 42);
+        assert_eq!(result.force(), 42);
+        assert_eq!(count.get(), 1);
+    }
+}
+
+mod closure_unused {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/closureUnused.rs"));
+    #[test]
+    fn unused_function_value_does_not_evaluate_its_producer() {
+        let poison = HInt::defer(|| panic!("unused function producer forced"));
+        assert_eq!(h2r_entry(poison.clone(), HInt::ready(42)).force(), 42);
+        assert!(!poison.is_evaluated());
+    }
+}
+
+mod returned_closure {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/returnedClosure.rs"));
+    #[test]
+    fn returned_function_remains_lazy_until_demanded() {
+        let x = HInt::defer(|| 20);
+        let result = h2r_entry(x.clone(), HInt::ready(22));
+        assert!(!x.is_evaluated());
+        assert_eq!(result.force(), 42);
+        assert!(x.is_evaluated());
+    }
+}
+
 mod local_lazy {
     include!(concat!(env!("H2R_CANARY_DIR"), "/localLazy.rs"));
     #[test]

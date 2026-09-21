@@ -1,8 +1,8 @@
 //! Typed, source-attributed scalar and algebraic control flow.
 //!
 //! `lower::lower_leaf` translates a restricted subset of Core leaves.
-//! Saturated direct calls and constructor families are supported; closures and
-//! recursive thunk graphs will extend this model in later lowering rules.
+//! Direct and closure calls, explicit captures and constructor families are
+//! supported; recursive thunk graphs remain outside this subset.
 //! Values cross block boundaries explicitly through block parameters; there
 //! are no implicit captures. IDs are function-local except for `FnId`, which
 //! will be allocated by the program lowering driver.
@@ -55,6 +55,8 @@ pub enum Rule {
     MatchData,
     LocalScope,
     CallLocal,
+    MakeClosure,
+    Apply,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +76,16 @@ pub struct Value {
 
 #[derive(Debug, Clone)]
 pub enum Operation {
+    /// Code plus explicit lexical captures. Function arguments follow captures
+    /// in the target block; no ambient environment or mutable backpatching.
+    MakeClosure {
+        target: BlockId,
+        arguments: Vec<ValueId>,
+    },
+    Apply {
+        callee: ValueId,
+        arguments: Vec<ValueId>,
+    },
     /// Lexical function definitions, followed by entering the let body.
     /// Definitions capture the surrounding value environment explicitly.
     LocalScope {

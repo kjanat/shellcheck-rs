@@ -26,6 +26,12 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
         }
         for instruction in &block.instructions {
             let operation = match &instruction.operation {
+                Operation::MakeClosure { target, arguments } => {
+                    format!("make-closure b{} {arguments:?}", target.0)
+                }
+                Operation::Apply { callee, arguments } => {
+                    format!("apply v{} {arguments:?}", callee.0)
+                }
                 Operation::LocalScope {
                     definitions,
                     target,

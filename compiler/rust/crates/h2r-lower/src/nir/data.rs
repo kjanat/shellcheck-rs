@@ -20,7 +20,11 @@ pub fn is_data(module: &Module, ty: &Ty) -> bool {
 }
 
 pub fn lifted(module: &Module, ty: &Ty) -> bool {
-    boxed::is_int(ty) || is_data(module, ty)
+    boxed::is_int(ty) || is_data(module, ty) || function(module, ty)
+}
+
+pub fn function(module: &Module, ty: &Ty) -> bool {
+    matches!(ty, Ty::Fun { arg, res, .. } if world::closed_type(ty) && supported(module, arg) && supported(module, res))
 }
 
 pub fn supported(module: &Module, ty: &Ty) -> bool {

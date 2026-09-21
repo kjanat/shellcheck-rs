@@ -23,9 +23,55 @@ fn carrier(ty: &Ty) -> &'static str {
         "HInt"
     } else if scalar(ty) {
         "i64"
+    } else if matches!(ty, Ty::Fun { .. }) {
+        "HClosure"
     } else {
         "HData"
     }
+}
+
+fn field_kind(ty: &Ty) -> (&'static str, &'static str) {
+    match carrier(ty) {
+        "i64" => ("Int64", "int64"),
+        "HInt" => ("Int", "int"),
+        "HClosure" => ("Closure", "closure"),
+        _ => ("Data", "data"),
+    }
+}
+
+fn closure(
+    target: &str,
+    captures: &[String],
+    signature: &Ty,
+    arity: usize,
+) -> Result<String, String> {
+    if arity == 0 {
+        return Err("closure has no value parameters".into());
+    }
+    let bindings = captures
+        .iter()
+        .enumerate()
+        .map(|(n, v)| format!("let c{n} = {v};"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut args = captures
+        .iter()
+        .enumerate()
+        .map(|(n, _)| format!("c{n}.clone()"))
+        .collect::<Vec<_>>();
+    let mut result = signature;
+    for n in 0..arity {
+        let Ty::Fun { arg, res, .. } = result else {
+            return Err("closure code arity exceeds signature".into());
+        };
+        args.push(format!("a[{n}].{}()", field_kind(arg).1));
+        result = res;
+    }
+    Ok(format!(
+        "{{ {bindings} HClosure::ready({arity}, move |a| HField::{}({target}({}))) }}",
+        field_kind(result).0,
+        args.join(", ")
+    ))
 }
 
 // Source correspondence has already established acyclic regions and consistent
@@ -89,7 +135,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
     let mut pending = vec![*root];
     let mut functions = BTreeMap::new();
     let mut edges = BTreeMap::<Key, BTreeSet<Key>>::new();
-    let supported = |ty: &Ty| scalar(ty) || modules.iter().any(|m| data::is_data(m, ty));
+    let supported = |ty: &Ty| modules.iter().any(|m| data::supported(m, ty));
     while let Some(key @ (module, binder)) = pending.pop() {
         if functions.contains_key(&key) {
             continue;
@@ -128,7 +174,10 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 | Operation::UnboxInt(_)
                 | Operation::DelayBlock { .. }
                 | Operation::EvaluateBlock { .. } => {}
-                Operation::CallLocal { .. } | Operation::LocalScope { .. } => {}
+                Operation::CallLocal { .. }
+                | Operation::LocalScope { .. }
+                | Operation::MakeClosure { .. }
+                | Operation::Apply { .. } => {}
                 Operation::Literal(lit) => {
                     if carrier(&instruction.result.ty) != "i64" {
                         return Err("boxed Int requires constructor evidence, not a literal".into());
@@ -146,12 +195,19 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         edges.insert(key, dependencies);
         functions.insert(key, leaf);
     }
-    if !scalar(&functions[root].function.result_ty)
-        || functions[root].function.blocks[0]
-            .params
-            .iter()
-            .any(|p| !scalar(&p.ty))
-    {
+    let entry_function = &functions[root].function;
+    let direct_arity = entry_function.blocks[0].params.len();
+    let mut entry_types: Vec<_> = entry_function.blocks[0]
+        .params
+        .iter()
+        .map(|p| &p.ty)
+        .collect();
+    let mut entry_result = &entry_function.result_ty;
+    while let Ty::Fun { arg, res, .. } = entry_result {
+        entry_types.push(arg);
+        entry_result = res;
+    }
+    if !scalar(entry_result) || entry_types.iter().any(|t| !scalar(t)) {
         return Err(
             "CLI adapter requires Int#/Int inputs and output; algebraic values may be internal"
                 .into(),
@@ -189,7 +245,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
     if has_boxed {
         out.push_str("\n#[allow(dead_code)]\nmod h2r_rt {\n");
         out.push_str(include_str!("../../h2r-rt/src/lib.rs"));
-        out.push_str("\n}\n#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField};\n");
+        out.push_str("\n}\n#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField, Closure as HClosure};\n");
     }
     // An explicit dispatcher makes scalar tail transfers stack bounded,
     // including mutually recursive top-level functions and local join loops.
@@ -319,6 +375,41 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                     }
                 }
                 let expression = match &instruction.operation {
+                    Operation::MakeClosure { target, arguments } => {
+                        let target_block = leaf
+                            .function
+                            .blocks
+                            .iter()
+                            .find(|b| b.id == *target)
+                            .expect("verified closure target");
+                        closure(
+                            &format!("b_{module}_{binder}_{}", target.0),
+                            &arguments.iter().map(|v| value(*v)).collect::<Vec<_>>(),
+                            &instruction.result.ty,
+                            target_block.params.len() - arguments.len(),
+                        )?
+                    }
+                    Operation::Apply { callee, arguments } => {
+                        let args = arguments
+                            .iter()
+                            .map(|v| {
+                                let ty = &block
+                                    .params
+                                    .iter()
+                                    .chain(block.instructions.iter().map(|i| &i.result))
+                                    .find(|p| p.id == *v)
+                                    .expect("verified argument")
+                                    .ty;
+                                format!("HField::{}({})", field_kind(ty).0, value(*v))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(
+                            "v{}.apply(vec![{args}]).{}()",
+                            callee.0,
+                            field_kind(&instruction.result.ty).1
+                        )
+                    }
                     Operation::Construct {
                         constructor,
                         arguments,
@@ -330,6 +421,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                                 let variant = match carrier(t) {
                                     "i64" => "Int64",
                                     "HInt" => "Int",
+                                    "HClosure" => "Closure",
                                     _ => "Data",
                                 };
                                 format!("HField::{variant}({})", value(*v))
@@ -375,6 +467,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                                     let method = match carrier(t) {
                                         "i64" => "int64",
                                         "HInt" => "int",
+                                        "HClosure" => "closure",
                                         _ => "data",
                                     };
                                     args.push(format!("node.fields[{i}].{method}()"));
@@ -446,15 +539,19 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                     }
                     Operation::Literal(lit) => format!("{}i64", integer(&lit.kind, &lit.pretty)?),
                     Operation::TopReference { module, binder } => {
-                        if !functions[&(*module, *binder)].function.blocks[0]
+                        let arity = functions[&(*module, *binder)].function.blocks[0]
                             .params
-                            .is_empty()
-                        {
-                            return Err(
-                                "function-valued reference cannot use the Int# carrier".into()
-                            );
+                            .len();
+                        if arity == 0 {
+                            format!("f_{module}_{binder}()")
+                        } else {
+                            closure(
+                                &format!("f_{module}_{binder}"),
+                                &[],
+                                &instruction.result.ty,
+                                arity,
+                            )?
                         }
-                        format!("f_{module}_{binder}()")
                     }
                     Operation::CallTop {
                         module,
@@ -580,13 +677,12 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             .unwrap();
         }
     }
-    let arity = functions[root].function.blocks[0].params.len();
-    let args = functions[root].function.blocks[0]
-        .params
+    let arity = entry_types.len();
+    let args = entry_types
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            if boxed::is_int(&p.ty) {
+            if boxed::is_int(p) {
                 format!("HInt::ready(args[{i}])")
             } else {
                 format!("args[{i}]")
@@ -594,17 +690,46 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         })
         .collect::<Vec<_>>()
         .join(", ");
-    writeln!(
-        out,
-        "#[allow(unused_imports)]\nuse f_{}_{} as h2r_entry;",
-        root.0, root.1
-    )
-    .unwrap();
-    let force = if boxed::is_int(&functions[root].function.result_ty) {
+    if direct_arity == arity {
+        writeln!(
+            out,
+            "#[allow(unused_imports)]\nuse f_{}_{} as h2r_entry;",
+            root.0, root.1
+        )
+        .unwrap();
+    } else {
+        let params = entry_types
+            .iter()
+            .enumerate()
+            .map(|(n, t)| format!("a{n}: {}", carrier(t)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let direct = (0..direct_arity)
+            .map(|n| format!("a{n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let extra = entry_types
+            .iter()
+            .enumerate()
+            .skip(direct_arity)
+            .map(|(n, t)| format!("HField::{}(a{n})", field_kind(t).0))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            out,
+            "fn h2r_entry({params}) -> {} {{ f_{}_{}({direct}).apply(vec![{extra}]).{}() }}",
+            carrier(entry_result),
+            root.0,
+            root.1,
+            field_kind(entry_result).1
+        )
+        .unwrap();
+    }
+    let force = if boxed::is_int(entry_result) {
         ".force()"
     } else {
         ""
     };
-    writeln!(out, "fn main() {{\n    let args: Vec<i64> = std::env::args().skip(1).map(|s| s.parse().expect(\"expected signed 64-bit integer\")).collect();\n    assert_eq!(args.len(), {arity}, \"wrong argument count\");\n    println!(\"{{}}\", f_{}_{}({args}){force});\n}}", root.0, root.1).unwrap();
+    writeln!(out, "fn main() {{\n    let args: Vec<i64> = std::env::args().skip(1).map(|s| s.parse().expect(\"expected signed 64-bit integer\")).collect();\n    assert_eq!(args.len(), {arity}, \"wrong argument count\");\n    println!(\"{{}}\", h2r_entry({args}){force});\n}}").unwrap();
     Ok(out)
 }

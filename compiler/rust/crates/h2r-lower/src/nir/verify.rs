@@ -419,6 +419,9 @@ fn verify_value(
     if let Some(counts) = verify_constructor(context, block, expr, ty, returned)? {
         return Ok(counts);
     }
+    if matches!(module.expr(expr), Expr::Lam { .. }) {
+        return verify_lambda(context, block, expr, ty, returned);
+    }
     if let Expr::Case { binder, .. } = module.expr(expr)
         && data::is_data(module, module.binder_ty(*binder))
     {
@@ -453,19 +456,28 @@ fn verify_value(
             let local = module
                 .resolve(head)
                 .and_then(|b| context.functions.get(&b).map(|f| (b, f)));
+            let indirect = module
+                .resolve(head)
+                .filter(|b| params.iter().any(|(_, binder, _)| binder == b));
             let primitive_ty = if constructor {
                 boxed::signature()
             } else {
                 primitive::signature()
             };
-            let target = if primitive.is_some() || constructor || local.is_some() {
-                None
-            } else {
-                Some(instantiate::target(module, module_index, modules, head)?)
-            };
-            let head_ty = local.map_or_else(
-                || target.map_or(&primitive_ty, |(_, _, ty)| ty),
-                |(b, _)| module.binder_ty(b),
+            let target =
+                if primitive.is_some() || constructor || local.is_some() || indirect.is_some() {
+                    None
+                } else {
+                    Some(instantiate::target(module, module_index, modules, head)?)
+                };
+            let head_ty = indirect.map_or_else(
+                || {
+                    local.map_or_else(
+                        || target.map_or(&primitive_ty, |(_, _, ty)| ty),
+                        |(b, _)| module.binder_ty(b),
+                    )
+                },
+                |b| module.binder_ty(b),
             );
             let instantiated = instantiate::apply(head_ty, &source_types)?;
             let mut signature = &instantiated;
@@ -477,7 +489,13 @@ fn verify_value(
                 },
                 |(_, (_, _, arity))| Some(*arity as u32),
             );
-            if arity != Some(source_args.len() as u32) {
+            let apply = indirect.is_some() || arity != Some(source_args.len() as u32);
+            if apply
+                && (primitive.is_some()
+                    || constructor
+                    || !source_types.is_empty()
+                    || !data::function(module, head_ty))
+            {
                 return Err("source call is not saturated at known target arity".into());
             }
             if !world::closed_type(signature) || !world::closed_type(ty) {
@@ -490,7 +508,7 @@ fn verify_value(
                     return Err("source call signature lacks an arrow".into());
                 };
                 let value = match module.expr(*source) {
-                    Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. }
+                    Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. } | Expr::Lam { .. }
                         if data::supported(module, arg) =>
                     {
                         let end = block.instructions[argument_instructions..]
@@ -540,7 +558,11 @@ fn verify_value(
                         let parameter = module.resolve(*source).and_then(|binder| {
                             params.iter().find(|(_, source, _)| *source == binder)
                         });
-                        if data::resolve(module, *source, arg)?.is_some() {
+                        if module
+                            .resolve(*source)
+                            .is_some_and(|b| context.functions.contains_key(&b))
+                            || data::resolve(module, *source, arg)?.is_some()
+                        {
                             let instruction = block
                                 .instructions
                                 .get(argument_instructions)
@@ -586,6 +608,34 @@ fn verify_value(
                 };
                 values.push(value);
                 signature = res;
+            }
+            if apply {
+                let instruction = block
+                    .instructions
+                    .last()
+                    .ok_or("missing closure application")?;
+                let Operation::Apply { callee, arguments } = &instruction.operation else {
+                    return Err("missing indirect application".into());
+                };
+                let mut prefix = block.clone();
+                prefix.instructions = block.instructions
+                    [argument_instructions..block.instructions.len() - 1]
+                    .to_vec();
+                let (nt, nv, nn) = verify_value(context, &prefix, head, head_ty, *callee)?;
+                if arguments != &values
+                    || instruction.origin.source != Source::Expr(expr)
+                    || instruction.origin.rule != Rule::Apply
+                    || instruction.result.id != returned
+                    || !instruction.result.ty.alpha_eq(ty)
+                    || !signature.alpha_eq(ty)
+                {
+                    return Err("closure application differs from source".into());
+                }
+                return Ok((
+                    type_applications + nt,
+                    value_applications + nv,
+                    value_nodes + nn - 1,
+                ));
             }
             if block.instructions.len() != argument_instructions + 1 {
                 return Err(
@@ -783,6 +833,30 @@ fn verify_value(
                     || instruction.origin.rule != Rule::CallLocal
                 {
                     return Err("nullary join differs from source".into());
+                }
+                return Ok((0, 0, 1));
+            }
+            if let Some((target, captures, _)) = context.functions.get(&binder) {
+                let arguments = captures
+                    .iter()
+                    .map(|b| {
+                        params
+                            .iter()
+                            .find(|(_, binder, _)| binder == b)
+                            .map(|(_, _, v)| *v)
+                            .ok_or("missing local closure capture")
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let [instruction] = block.instructions.as_slice() else {
+                    return Err("local closure requires one instruction".into());
+                };
+                if !matches!(&instruction.operation, Operation::MakeClosure { target: actual, arguments: args } if actual == target && args == &arguments)
+                    || instruction.result.id != returned
+                    || !instruction.result.ty.alpha_eq(ty)
+                    || instruction.origin.source != Source::Expr(expr)
+                    || instruction.origin.rule != Rule::MakeClosure
+                {
+                    return Err("local closure differs from source".into());
                 }
                 return Ok((0, 0, 1));
             }
@@ -1014,6 +1088,75 @@ fn verify_value(
 
 // Check each lexical definition once; calls validate its identity and captures
 // without recursively revisiting its body.
+fn verify_lambda(
+    context: &ValueContext<'_>,
+    block: &Block,
+    expr: ExprId,
+    ty: &Ty,
+    returned: ValueId,
+) -> Result<(usize, usize, usize), String> {
+    use h2r_core_ir::{BinderKind, Expr};
+    if !data::function(context.module, ty) {
+        return Err("unsupported closure signature".into());
+    }
+    let [i] = block.instructions.as_slice() else {
+        return Err("lambda requires one closure".into());
+    };
+    let Operation::MakeClosure { target, arguments } = &i.operation else {
+        return Err("lambda is not a closure".into());
+    };
+    if i.origin.source != Source::Expr(expr)
+        || i.origin.rule != Rule::MakeClosure
+        || i.result.id != returned
+        || !i.result.ty.alpha_eq(ty)
+    {
+        return Err("lambda provenance mismatch".into());
+    }
+    let mut captured = context.params.to_vec();
+    captured.sort_by_key(|(_, b, _)| *b);
+    if *arguments != captured.iter().map(|(_, _, v)| *v).collect::<Vec<_>>() {
+        return Err("lambda capture mismatch".into());
+    }
+    let target_block = context
+        .function
+        .blocks
+        .iter()
+        .find(|b| b.id == *target)
+        .ok_or("missing lambda body")?;
+    let mut bindings: Vec<_> = captured.iter().map(|(e, b, _)| (*e, *b)).collect();
+    let mut rhs = expr;
+    let mut result = ty;
+    let mut lambdas = 0;
+    while let Expr::Lam { binder, body } = context.module.expr(rhs) {
+        let Ty::Fun { arg, res, .. } = result else {
+            return Err("lambda arrow mismatch".into());
+        };
+        if context.module.binder(*binder).kind != BinderKind::Id
+            || !arg.alpha_eq(context.module.binder_ty(*binder))
+        {
+            return Err("lambda argument mismatch".into());
+        }
+        bindings.push((rhs, *binder));
+        lambdas += 1;
+        rhs = *body;
+        result = res;
+    }
+    if bindings.len() != target_block.params.len() {
+        return Err("lambda parameter count mismatch".into());
+    }
+    let params: Vec<_> = bindings
+        .iter()
+        .zip(&target_block.params)
+        .map(|((e, b), p)| (*e, *b, p.id))
+        .collect();
+    let nested = ValueContext {
+        params: &params,
+        ..*context
+    };
+    let (nt, nv, nn) = verify_tail(&nested, context.function, *target, rhs, result)?;
+    Ok((nt, nv, nn + lambdas))
+}
+
 fn verify_local_scope(
     context: &ValueContext<'_>,
     block: &Block,
@@ -1442,6 +1585,23 @@ pub fn verify(function: &Function) -> Result<(), String> {
     let mut pending_types = vec![(function.entry, &function.result_ty)];
     for block in &function.blocks {
         for instruction in &block.instructions {
+            if let Operation::MakeClosure { target, arguments } = &instruction.operation {
+                let target_block = blocks.get(target).ok_or("missing closure target")?;
+                let count = target_block
+                    .params
+                    .len()
+                    .checked_sub(arguments.len())
+                    .filter(|n| *n > 0)
+                    .ok_or("closure requires value parameters")?;
+                let mut result = &instruction.result.ty;
+                for _ in 0..count {
+                    let Ty::Fun { res, .. } = result else {
+                        return Err("closure arity exceeds function type".into());
+                    };
+                    result = res;
+                }
+                pending_types.push((*target, result));
+            }
             if let Operation::LocalScope { definitions, .. } = &instruction.operation {
                 pending_types.extend(definitions.iter().map(|d| (d.target, &d.result_ty)));
             }
@@ -1485,6 +1645,53 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 return Err("instruction origin belongs to another module".into());
             }
             match instruction.operation {
+                Operation::MakeClosure {
+                    target,
+                    ref arguments,
+                } => {
+                    let target_block = blocks.get(&target).ok_or("missing closure body")?;
+                    if !world::closed_type(&instruction.result.ty) {
+                        return Err("open closure signature".into());
+                    }
+                    for (n, arg) in arguments.iter().enumerate() {
+                        if !available.get(arg).is_some_and(|t| {
+                            target_block.params.get(n).is_some_and(|p| p.ty.alpha_eq(t))
+                        }) {
+                            return Err("closure capture type mismatch".into());
+                        }
+                    }
+                    let mut signature = &instruction.result.ty;
+                    for param in &target_block.params[arguments.len()..] {
+                        let Ty::Fun { arg, res, .. } = signature else {
+                            return Err("closure signature lacks arrow".into());
+                        };
+                        if !arg.alpha_eq(&param.ty) {
+                            return Err("closure parameter type mismatch".into());
+                        }
+                        signature = res;
+                    }
+                }
+                Operation::Apply {
+                    callee,
+                    ref arguments,
+                } => {
+                    let mut signature = *available.get(&callee).ok_or("unavailable closure")?;
+                    if arguments.is_empty() {
+                        return Err("empty application".into());
+                    }
+                    for value in arguments {
+                        let Ty::Fun { arg, res, .. } = signature else {
+                            return Err("application lacks arrow".into());
+                        };
+                        if !available.get(value).is_some_and(|t| t.alpha_eq(arg)) {
+                            return Err("application argument type mismatch".into());
+                        }
+                        signature = res;
+                    }
+                    if !signature.alpha_eq(&instruction.result.ty) {
+                        return Err("application result type mismatch".into());
+                    }
+                }
                 Operation::Construct {
                     ref constructor,
                     ref arguments,
@@ -1552,7 +1759,7 @@ pub fn verify(function: &Function) -> Result<(), String> {
                     ref arguments,
                 } => {
                     if primitive::is_int(&instruction.result.ty)
-                        || !matches!(instruction.result.ty, Ty::Con { .. })
+                        || !matches!(instruction.result.ty, Ty::Con { .. } | Ty::Fun { .. })
                         || !world::closed_type(&instruction.result.ty)
                     {
                         return Err("delayed region requires a boxed Int result".into());
@@ -1585,7 +1792,7 @@ pub fn verify(function: &Function) -> Result<(), String> {
                     ref arguments,
                     ..
                 } => {
-                    if !matches!(instruction.result.ty, Ty::Con { .. })
+                    if !matches!(instruction.result.ty, Ty::Con { .. } | Ty::Fun { .. })
                         || !world::closed_type(&instruction.result.ty)
                     {
                         return Err("region evaluation requires an Int# or Int result".into());
@@ -1674,7 +1881,8 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 if let Operation::EvaluateBlock { target, .. }
                 | Operation::DelayBlock { target, .. }
                 | Operation::CallLocal { target, .. }
-                | Operation::LocalScope { target, .. } = instruction.operation
+                | Operation::LocalScope { target, .. }
+                | Operation::MakeClosure { target, .. } = instruction.operation
                 {
                     pending.push(target);
                 }

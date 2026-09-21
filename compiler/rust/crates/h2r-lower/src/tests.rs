@@ -1664,6 +1664,107 @@ fn local_function_world(recursive: bool) -> Vec<Module> {
     )
 }
 
+fn closure_world() -> Vec<Module> {
+    let mut f = binder("$_in$f", "f", "f");
+    f["ty"] = json!(1);
+    f["arity"] = json!(2);
+    let p = binder("$_in$p", "p", "p");
+    let pair = |binder, rhs| json!({"binder":binder,"rhs":rhs,"whnf":true,"cheap":true,"trivial":false,"okForSpec":true});
+    let body = json!({"node":"Let","bind":{"rec":false,"pairs":[pair(f,lam("a",lam("b",int_op("+#", lvar("a"), lvar("b")))))]},"body":{
+        "node":"Let","bind":{"rec":false,"pairs":[pair(p,app(lvar("f"),lvar("x")))]},"body":app(lvar("p"),lvar("y"))
+    }});
+    let mut modules = scalar_expression_world(body);
+    let h2r_core_ir::Ty::Fun { res, .. } = modules[0].types[1].clone() else {
+        panic!()
+    };
+    modules[0].types.push(*res);
+    let p = modules[0]
+        .binders
+        .iter_mut()
+        .find(|b| b.unique == "p")
+        .unwrap();
+    p.ty = 2;
+    modules
+}
+
+#[test]
+fn closures_partial_application_and_indirect_calls_are_source_verified() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let modules = closure_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    let counts = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+    assert_eq!(
+        counts.source_nodes,
+        modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
+    );
+    assert!(
+        leaf.function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.instructions)
+            .any(|i| matches!(i.operation, Operation::MakeClosure { .. }))
+    );
+    assert_eq!(
+        leaf.function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.instructions)
+            .filter(|i| matches!(i.operation, Operation::Apply { .. }))
+            .count(),
+        2
+    );
+    assert!(
+        crate::emit::emit_entry(&modules, &sn("Main", "main"))
+            .unwrap()
+            .contains("HClosure::ready(2")
+    );
+    for mutation in 0..6 {
+        let mut bad = leaf.clone();
+        if mutation < 3 {
+            let i = bad
+                .function
+                .blocks
+                .iter_mut()
+                .flat_map(|b| &mut b.instructions)
+                .find(|i| matches!(i.operation, Operation::MakeClosure { .. }))
+                .unwrap();
+            let Operation::MakeClosure { target, arguments } = &mut i.operation else {
+                panic!()
+            };
+            match mutation {
+                0 => arguments.swap(0, 1),
+                1 => *target = crate::nir::BlockId(0),
+                _ => i.origin.rule = crate::nir::Rule::CallLocal,
+            }
+        } else {
+            let i = bad
+                .function
+                .blocks
+                .iter_mut()
+                .flat_map(|b| &mut b.instructions)
+                .find(|i| matches!(i.operation, Operation::Apply { .. }))
+                .unwrap();
+            let Operation::Apply { callee, arguments } = &mut i.operation else {
+                panic!()
+            };
+            match mutation {
+                3 => *callee = arguments[0],
+                4 => arguments.clear(),
+                _ => {
+                    i.result.ty = h2r_core_ir::Ty::Opaque {
+                        pretty: "bad result".into(),
+                    }
+                }
+            }
+        }
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
 #[test]
 fn local_functions_and_join_loops_have_verified_captures() {
     use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
@@ -1679,6 +1780,94 @@ fn local_functions_and_join_loops_have_verified_captures() {
         let source = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
         assert!(source.contains("HStep::Next"));
     }
+}
+
+#[test]
+fn anonymous_returned_lambda_is_source_verified_and_tamper_checked() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let p = binder("$_in$p", "p", "p");
+    let lambda = lam("z", int_op("+#", lvar("x"), lvar("z")));
+    let body = json!({"node":"Let","bind":{"rec":false,"pairs":[{"binder":p,"rhs":int_case(lvar("x"),"s",lambda,vec![]),"whnf":false,"cheap":false,"trivial":false,"okForSpec":false}]},"body":app(lvar("p"),lvar("y"))});
+    let mut modules = scalar_expression_world(body);
+    let h2r_core_ir::Ty::Fun { res, .. } = modules[0].types[1].clone() else {
+        panic!()
+    };
+    modules[0].types.push(*res);
+    modules[0]
+        .binders
+        .iter_mut()
+        .find(|b| b.unique == "p")
+        .unwrap()
+        .ty = 2;
+    for e in &mut modules[0].exprs {
+        if let h2r_core_ir::Expr::Case { ty, .. } = e {
+            *ty = 2;
+        }
+    }
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+    crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+    for mutation in 0..3 {
+        let mut bad = leaf.clone();
+        let i = bad
+            .function
+            .blocks
+            .iter_mut()
+            .flat_map(|b| &mut b.instructions)
+            .find(|i| matches!(i.operation, Operation::MakeClosure { .. }))
+            .unwrap();
+        let Operation::MakeClosure { target, arguments } = &mut i.operation else {
+            panic!()
+        };
+        match mutation {
+            0 => arguments.swap(0, 1),
+            1 => *target = crate::nir::BlockId(0),
+            _ => i.origin.source = crate::nir::Source::Expr(u32::MAX),
+        }
+        assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err());
+    }
+}
+
+#[test]
+fn function_scrutinee_cases_refuse_instead_of_reentering_the_same_region() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    let mut m = scalar_expression_world(
+        json!({"node":"Case","scrut":gvar(&sn("Lib","target"),"target"),"binder":binder("$_in$f","f","f"),"ty":0,"type":"Int#","alts":[]}),
+    );
+    m[0].binders
+        .iter_mut()
+        .find(|b| b.unique == "f")
+        .unwrap()
+        .ty = 1;
+    let owner = m[0].top[0].pairs[0].binder;
+    assert!(
+        lower_leaf_in_world(&m, 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("scrutinee")
+    );
+}
+
+#[test]
+fn function_alias_entry_uses_the_returned_closure() {
+    let mut modules = scalar_emission_world();
+    // Rebuild lexical references by loading a new source module.
+    let types = modules[0].types.clone();
+    modules[0] = module(
+        "Main",
+        vec![(
+            binder(&sn("Main", "main"), "main", "main"),
+            gvar(&sn("Lib", "target"), "target"),
+        )],
+        json!({}),
+    );
+    modules[0].types = types;
+    let owner = modules[0].top[0].pairs[0].binder;
+    modules[0].binders[owner as usize].ty = 1;
+    let source = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+    assert!(source.contains("fn h2r_entry(a0: i64, a1: i64)"));
+    assert!(source.contains(".apply(vec![HField::Int64(a0), HField::Int64(a1)])"));
 }
 
 #[test]

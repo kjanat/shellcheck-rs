@@ -121,6 +121,8 @@ binary_entries='forward add subtractInt multiply composed chained shared eqInt n
 binary_entries="$binary_entries lazyArgument lazyLet lazyNested lazyUnused lazyBranch lazyStrictUse"
 binary_entries="$binary_entries dataChoice dataPair dataNested dataDefault dataLazy dataStrict dataMaybe dataList dataCaseBinder"
 binary_entries="$binary_entries localJoin recursiveList localLazy"
+binary_entries="$binary_entries higherOrder partialTop localClosure returnedClosure closureBranch functionField"
+binary_entries="$binary_entries closureUnused escapingRecursive overApplied"
 recursive_entries='recursiveSum mutualRecursion localLoop localMutual'
 if [ "$profile" = unoptimized ]; then
   out="$out/unoptimized"
@@ -159,7 +161,7 @@ for entry in constant boxedCaf $binary_entries $recursive_entries recursiveTree;
   rustc --edition=2024 -C overflow-checks=yes "$out/$entry.rs" -o "$out/$entry-checked"
 done
 if [ "$profile" = unoptimized ]; then
-  for spec in chooseData:construct readData:match-data readNested:match-data readMaybe:match-data listFirst:match-data; do
+  for spec in chooseData:construct readData:match-data readNested:match-data readMaybe:match-data listFirst:match-data applyInt:apply partialTop:apply localClosure:make-closure makeAdder:make-closure escapingRecursive:make-closure; do
     entry=${spec%:*}
     operation=${spec#*:}
     name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")

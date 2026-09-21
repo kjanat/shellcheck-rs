@@ -111,6 +111,7 @@ pub enum Field {
     Int64(i64),
     Int(Int),
     Data(Data),
+    Closure(Closure),
 }
 
 impl Field {
@@ -121,6 +122,9 @@ impl Field {
                 v.force();
             }
             Self::Data(v) => {
+                v.force();
+            }
+            Self::Closure(v) => {
                 v.force();
             }
         }
@@ -142,6 +146,115 @@ impl Field {
             Self::Data(v) => v.clone(),
             _ => panic!("invalid data field"),
         }
+    }
+    pub fn closure(&self) -> Closure {
+        match self {
+            Self::Closure(v) => v.clone(),
+            _ => panic!("invalid function carrier"),
+        }
+    }
+}
+
+/// A shared lazy function value. Partial application retains arguments without
+/// forcing them; saturation invokes code exactly once per call, not per closure.
+#[derive(Clone)]
+pub struct Closure(Shared<ClosureCode>);
+
+#[derive(Clone)]
+pub struct ClosureCode {
+    arity: usize,
+    code: Rc<dyn Fn(Vec<Field>) -> Field>,
+    supplied: Vec<Field>,
+}
+
+impl Closure {
+    pub fn ready(arity: usize, code: impl Fn(Vec<Field>) -> Field + 'static) -> Self {
+        assert!(arity > 0);
+        Self(Rc::new(Lazy::ready(ClosureCode {
+            arity,
+            code: Rc::new(code),
+            supplied: Vec::new(),
+        })))
+    }
+    pub fn defer(init: impl FnOnce() -> ClosureCode + 'static) -> Self {
+        Self(shared(init))
+    }
+    pub fn force(&self) -> ClosureCode {
+        self.0.force().clone()
+    }
+    pub fn is_evaluated(&self) -> bool {
+        self.0.is_evaluated()
+    }
+    pub fn apply(&self, arguments: Vec<Field>) -> Field {
+        let mut result = Field::Closure(self.clone());
+        for argument in arguments {
+            let mut function = result.closure().force();
+            function.supplied.push(argument);
+            result = if function.supplied.len() == function.arity {
+                (function.code)(function.supplied)
+            } else {
+                Field::Closure(Self(Rc::new(Lazy::ready(function))))
+            };
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod closure_tests {
+    use super::*;
+
+    #[test]
+    fn partial_application_is_lazy_shared_and_reusable() {
+        let calls = Rc::new(std::cell::Cell::new(0));
+        let counter = calls.clone();
+        let function = Closure::ready(2, move |args| {
+            counter.set(counter.get() + 1);
+            args[0].clone()
+        });
+        let forced = Rc::new(std::cell::Cell::new(0));
+        let counter = forced.clone();
+        let x = Int::defer(move || {
+            counter.set(counter.get() + 1);
+            42
+        });
+        let partial = function.apply(vec![Field::Int(x)]).closure();
+        assert_eq!(calls.get(), 0);
+        assert_eq!(forced.get(), 0);
+        for _ in 0..2 {
+            let poison = Int::defer(|| panic!("unused argument forced"));
+            assert_eq!(partial.apply(vec![Field::Int(poison)]).int().force(), 42);
+        }
+        assert_eq!(calls.get(), 2);
+        assert_eq!(forced.get(), 1);
+    }
+
+    #[test]
+    fn overapplication_enters_returned_closure() {
+        let f = Closure::ready(1, |args| {
+            let x = args[0].int64();
+            Field::Closure(Closure::ready(1, move |args| {
+                Field::Int64(x + args[0].int64())
+            }))
+        });
+        assert_eq!(
+            f.apply(vec![Field::Int64(20), Field::Int64(22)]).int64(),
+            42
+        );
+    }
+
+    #[test]
+    fn deferred_function_is_shared_without_entering_its_body() {
+        let n = Rc::new(std::cell::Cell::new(0));
+        let count = n.clone();
+        let f = Closure::defer(move || {
+            count.set(count.get() + 1);
+            Closure::ready(1, |args| args[0].clone()).force()
+        });
+        assert!(!f.is_evaluated());
+        assert_eq!(f.clone().apply(vec![Field::Int64(1)]).int64(), 1);
+        assert_eq!(f.apply(vec![Field::Int64(2)]).int64(), 2);
+        assert_eq!(n.get(), 1);
     }
 }
 

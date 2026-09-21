@@ -10,7 +10,9 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   dataChoice, dataPair, dataNested, dataDefault, dataLazy, dataStrict,
   dataMaybe, dataList, dataCaseBinder,
   recursiveSum, mutualRecursion, localLoop, localMutual, localJoin, recursiveList,
-  recursiveTree, localLazy)
+  recursiveTree, localLazy,
+  higherOrder, partialTop, localClosure, returnedClosure, closureBranch, functionField,
+  closureUnused, escapingRecursive, overApplied)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -18,6 +20,15 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
+    ["overApplied", a, b] -> print (overApplied (read a) (read b))
+    ["closureUnused", a, b] -> print (closureUnused (read a) (read b))
+    ["escapingRecursive", a, b] -> print (escapingRecursive (read a) (read b))
+    ["higherOrder", a, b] -> print (higherOrder (read a) (read b))
+    ["partialTop", a, b] -> print (partialTop (read a) (read b))
+    ["localClosure", a, b] -> print (localClosure (read a) (read b))
+    ["returnedClosure", a, b] -> print (returnedClosure (read a) (read b))
+    ["closureBranch", a, b] -> print (closureBranch (read a) (read b))
+    ["functionField", a, b] -> print (functionField (read a) (read b))
     ["recursiveTree", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (recursiveTree x y))
     ["localLazy", a, b] -> print (localLazy (read a) (read b))

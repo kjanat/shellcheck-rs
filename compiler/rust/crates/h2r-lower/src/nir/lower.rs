@@ -530,6 +530,30 @@ fn lower_value(
                 });
                 return Ok(value);
             }
+            if let Some((target, captures, _)) = context.functions.get(&binder) {
+                let arguments = captures
+                    .iter()
+                    .map(|b| {
+                        locals
+                            .get(b)
+                            .copied()
+                            .ok_or_else(|| fail(Some(current), "closure capture out of scope"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let value = fresh_value(context);
+                instructions.push(Instruction {
+                    result: Value {
+                        id: value,
+                        ty: ty.clone(),
+                    },
+                    operation: Operation::MakeClosure {
+                        target: *target,
+                        arguments,
+                    },
+                    origin: origin(Rule::MakeClosure),
+                });
+                return Ok(value);
+            }
             if let Some(value) = locals.get(&binder) {
                 *value
             } else if matches!(module.binding(binder).site, BindSite::Top) {
@@ -587,22 +611,29 @@ fn lower_value(
             let local = module
                 .resolve(head)
                 .and_then(|b| context.functions.get(&b).map(|f| (b, f)));
+            let indirect = module.resolve(head).filter(|b| locals.contains_key(b));
             let primitive_ty = if constructor {
                 boxed::signature()
             } else {
                 primitive::signature()
             };
-            let target = if primitive.is_some() || constructor || local.is_some() {
-                None
-            } else {
-                Some(
-                    instantiate::target(module, module_index, modules, head)
-                        .map_err(|reason| fail(Some(head), &reason))?,
-                )
-            };
-            let head_ty = local.map_or_else(
-                || target.map_or(&primitive_ty, |(_, _, ty)| ty),
-                |(b, _)| module.binder_ty(b),
+            let target =
+                if primitive.is_some() || constructor || local.is_some() || indirect.is_some() {
+                    None
+                } else {
+                    Some(
+                        instantiate::target(module, module_index, modules, head)
+                            .map_err(|reason| fail(Some(head), &reason))?,
+                    )
+                };
+            let head_ty = indirect.map_or_else(
+                || {
+                    local.map_or_else(
+                        || target.map_or(&primitive_ty, |(_, _, ty)| ty),
+                        |(b, _)| module.binder_ty(b),
+                    )
+                },
+                |b| module.binder_ty(b),
             );
             let instantiated = instantiate::apply(head_ty, &type_arguments)
                 .map_err(|reason| fail(Some(current), &reason))?;
@@ -615,7 +646,13 @@ fn lower_value(
                 },
                 |(_, (_, _, arity))| Some(*arity as u32),
             );
-            if arity != Some(argument_sources.len() as u32) {
+            let apply = indirect.is_some() || arity != Some(argument_sources.len() as u32);
+            if apply
+                && (primitive.is_some()
+                    || constructor
+                    || !type_arguments.is_empty()
+                    || !data::function(module, head_ty))
+            {
                 return Err(fail(
                     Some(current),
                     "direct call must match known target arity",
@@ -639,7 +676,7 @@ fn lower_value(
                     Expr::Case { .. } | Expr::Let { .. } if primitive::is_int(arg) => {
                         lower_region(context, source, arg, locals, instructions, blocks, false)?
                     }
-                    Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. }
+                    Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. } | Expr::Lam { .. }
                         if data::lifted(module, arg) =>
                     {
                         lower_region(context, source, arg, locals, instructions, blocks, true)?
@@ -661,9 +698,12 @@ fn lower_value(
                         value
                     }
                     Expr::Var { .. } => {
-                        if data::resolve(module, source, arg)
-                            .map_err(|e| fail(Some(source), &e))?
-                            .is_some()
+                        if module
+                            .resolve(source)
+                            .is_some_and(|b| context.functions.contains_key(&b))
+                            || data::resolve(module, source, arg)
+                                .map_err(|e| fail(Some(source), &e))?
+                                .is_some()
                         {
                             lower_value(context, source, arg, locals, instructions, blocks)?
                         } else if let Some(value) = module
@@ -723,13 +763,27 @@ fn lower_value(
             if !signature.alpha_eq(ty) {
                 return Err(fail(Some(current), "direct call result type mismatch"));
             }
+            let callee = if apply {
+                Some(lower_value(
+                    context,
+                    head,
+                    head_ty,
+                    locals,
+                    instructions,
+                    blocks,
+                )?)
+            } else {
+                None
+            };
             let value = fresh_value(context);
             instructions.push(Instruction {
                 result: Value {
                     id: value,
                     ty: ty.clone(),
                 },
-                operation: if constructor {
+                operation: if let Some(callee) = callee {
+                    Operation::Apply { callee, arguments }
+                } else if constructor {
                     Operation::BoxInt(arguments[0])
                 } else if let Some(op) = primitive {
                     Operation::IntBinary { op, arguments }
@@ -756,7 +810,9 @@ fn lower_value(
                         arguments,
                     }
                 },
-                origin: origin(if constructor {
+                origin: origin(if apply {
+                    Rule::Apply
+                } else if constructor {
                     Rule::BoxInt
                 } else if primitive.is_some() {
                     Rule::IntBinary
@@ -1035,6 +1091,9 @@ fn lower_value(
             ..
         } => {
             if alts.len() != 1 || !matches!(alts[0].con, h2r_core_ir::AltCon::Default) {
+                if !primitive::is_int(module.binder_ty(*binder)) {
+                    return Err(fail(Some(current), "unsupported case scrutinee carrier"));
+                }
                 return lower_region(context, current, ty, locals, instructions, blocks, false);
             }
             let [alt] = alts.as_slice() else {
@@ -1083,7 +1142,10 @@ fn lower_value(
         Expr::Type { .. } | Expr::Coercion => {
             return Err(fail(Some(current), "type or coercion in value position"));
         }
-        Expr::Lam { .. } | Expr::Tick(_) => {
+        Expr::Lam { .. } => {
+            return lower_lambda(context, current, ty, locals, instructions, blocks);
+        }
+        Expr::Tick(_) => {
             return Err(fail(
                 Some(current),
                 "nested lambda or tick is not lowered yet",
@@ -1232,6 +1294,81 @@ fn lower_functions(
         rule: Rule::LocalScope,
     };
     Ok(value)
+}
+
+fn lower_lambda(
+    context: &BodyContext<'_>,
+    source: ExprId,
+    ty: &Ty,
+    locals: &BTreeMap<BinderId, ValueId>,
+    instructions: &mut Vec<Instruction>,
+    blocks: &mut Vec<Block>,
+) -> Result<ValueId, LowerError> {
+    let fail = |reason: &str| LowerError {
+        module: context.module_index,
+        owner: context.owner,
+        source: Some(source),
+        reason: reason.into(),
+    };
+    if !data::function(context.module, ty) {
+        return Err(fail(
+            "closure requires a supported monomorphic function type",
+        ));
+    }
+    let mut params = Vec::new();
+    let mut scope = BTreeMap::new();
+    let mut arguments = Vec::new();
+    for (binder, value) in locals {
+        let original = context
+            .params
+            .iter()
+            .chain(instructions.iter().map(|i| &i.result))
+            .find(|v| v.id == *value)
+            .ok_or_else(|| fail("missing closure capture"))?;
+        let id = fresh_value(context);
+        params.push(Value {
+            id,
+            ty: original.ty.clone(),
+        });
+        scope.insert(*binder, id);
+        arguments.push(*value);
+    }
+    let mut rhs = source;
+    let mut result = ty;
+    while let Expr::Lam { binder, body } = context.module.expr(rhs) {
+        let Ty::Fun { arg, res, .. } = result else {
+            return Err(fail("closure lambda lacks function arrow"));
+        };
+        if context.module.binder(*binder).kind != BinderKind::Id
+            || !arg.alpha_eq(context.module.binder_ty(*binder))
+        {
+            return Err(fail("closure lambda parameter mismatch"));
+        }
+        let id = fresh_value(context);
+        params.push(Value {
+            id,
+            ty: (**arg).clone(),
+        });
+        scope.insert(*binder, id);
+        result = res;
+        rhs = *body;
+    }
+    let nested = BodyContext {
+        params: &params,
+        ..*context
+    };
+    let target = lower_tail(&nested, rhs, result, &scope, blocks)?;
+    let id = fresh_value(context);
+    instructions.push(Instruction {
+        result: Value { id, ty: ty.clone() },
+        operation: Operation::MakeClosure { target, arguments },
+        origin: Origin {
+            module: context.module_index,
+            source: Source::Expr(source),
+            rule: Rule::MakeClosure,
+        },
+    });
+    Ok(id)
 }
 
 fn lower_region(

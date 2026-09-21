@@ -8,10 +8,85 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   dataChoice, dataPair, dataNested, dataDefault, dataLazy, dataStrict,
   dataMaybe, dataList, dataCaseBinder,
   recursiveSum, mutualRecursion, localLoop, localMutual, localJoin, recursiveList,
-  recursiveTree, localLazy) where
+  recursiveTree, localLazy,
+  higherOrder, partialTop, localClosure, returnedClosure, closureBranch, functionField,
+  closureUnused, escapingRecursive, overApplied) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#))
 import Helpers (first)
+
+{-# NOINLINE overApplied #-}
+overApplied :: Int -> Int -> Int
+overApplied x y = chooseFunction x y
+
+{-# NOINLINE ignoreFunction #-}
+ignoreFunction :: (Int -> Int) -> Int -> Int
+ignoreFunction _ y = y
+
+{-# NOINLINE closureUnused #-}
+closureUnused :: Int -> Int -> Int
+closureUnused x y = ignoreFunction (makeAdder x) y
+
+{-# NOINLINE escapingRecursive #-}
+escapingRecursive :: Int -> Int -> Int
+escapingRecursive x y =
+  let {-# NOINLINE go #-}
+      go :: Int -> Int
+      go (I# n) = case n <=# 0# of
+        0# -> go (I# (n -# 1#))
+        _ -> boxedSum x y
+  in applyInt go (I# 7#)
+
+{-# NOINLINE applyInt #-}
+applyInt :: (Int -> Int) -> Int -> Int
+applyInt f x = f x
+
+{-# NOINLINE applyTwice #-}
+applyTwice :: (Int -> Int) -> Int -> Int
+applyTwice f x = f (f x)
+
+{-# NOINLINE higherOrder #-}
+higherOrder :: Int -> Int -> Int
+higherOrder x y = applyTwice (\z -> boxedSum x z) y
+
+{-# NOINLINE partialTop #-}
+partialTop :: Int -> Int -> Int
+partialTop x y = applyInt (boxedSum x) y
+
+{-# NOINLINE localClosure #-}
+localClosure :: Int -> Int -> Int
+localClosure x y =
+  let {-# NOINLINE addCaptured #-}
+      addCaptured z = boxedSum x z
+  in applyTwice addCaptured y
+
+{-# NOINLINE makeAdder #-}
+makeAdder :: Int -> (Int -> Int)
+makeAdder x = case x of I# n -> \y -> boxedSum (I# n) y
+
+{-# NOINLINE returnedClosure #-}
+returnedClosure :: Int -> Int -> Int
+returnedClosure x y = applyInt (makeAdder x) y
+
+{-# NOINLINE chooseFunction #-}
+chooseFunction :: Int -> (Int -> Int)
+chooseFunction (I# n) = case n of
+  0# -> \y -> y
+  _ -> \y -> boxedSum (I# n) y
+
+{-# NOINLINE closureBranch #-}
+closureBranch :: Int -> Int -> Int
+closureBranch x y = applyInt (chooseFunction x) y
+
+data FunctionBox = FunctionBox (Int -> Int)
+
+{-# NOINLINE useFunctionBox #-}
+useFunctionBox :: FunctionBox -> Int -> Int
+useFunctionBox (FunctionBox f) x = f x
+
+{-# NOINLINE functionField #-}
+functionField :: Int -> Int -> Int
+functionField x y = useFunctionBox (FunctionBox (boxedSum x)) y
 
 {-# NOINLINE recursiveTree #-}
 recursiveTree :: Int# -> Int# -> Int#
