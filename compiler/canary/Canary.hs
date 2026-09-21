@@ -6,10 +6,83 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   boxedStrictIgnore, boxedCaf,
   lazyArgument, lazyLet, lazyNested, lazyUnused, lazyBranch, lazyStrictUse,
   dataChoice, dataPair, dataNested, dataDefault, dataLazy, dataStrict,
-  dataMaybe, dataList, dataCaseBinder) where
+  dataMaybe, dataList, dataCaseBinder,
+  recursiveSum, mutualRecursion, localLoop, localMutual, localJoin, recursiveList,
+  recursiveTree, localLazy) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#))
 import Helpers (first)
+
+{-# NOINLINE recursiveTree #-}
+recursiveTree :: Int# -> Int# -> Int#
+recursiveTree n x = case n <=# 0# of
+  0# -> recursiveTree (n -# 1#) x +# recursiveTree (n -# 1#) x
+  _ -> x
+
+{-# NOINLINE localLazy #-}
+localLazy :: Int -> Int -> Int
+localLazy x y =
+  let {-# NOINLINE go #-}
+      go :: Int -> Int -> Int
+      go (I# n) unused = case n <=# 0# of
+        0# -> go (I# (n -# 1#)) unused
+        _ -> x
+  in go (I# 7#) y
+
+{-# NOINLINE recursiveSum #-}
+recursiveSum :: Int# -> Int# -> Int#
+recursiveSum n acc = case n <=# 0# of
+  0# -> recursiveSum (n -# 1#) (acc +# n)
+  _ -> acc
+
+{-# NOINLINE mutualRecursion #-}
+mutualRecursion :: Int# -> Int# -> Int#
+mutualRecursion n acc = case n <=# 0# of
+  0# -> mutualOther (n -# 1#) (acc +# 2#)
+  _ -> acc
+
+{-# NOINLINE mutualOther #-}
+mutualOther :: Int# -> Int# -> Int#
+mutualOther n acc = case n <=# 0# of
+  0# -> mutualRecursion (n -# 1#) (acc -# 1#)
+  _ -> acc
+
+{-# NOINLINE localLoop #-}
+localLoop :: Int# -> Int# -> Int#
+localLoop n step =
+  let go i acc = case i <=# 0# of
+        0# -> go (i -# 1#) (acc +# step)
+        _ -> acc
+  in go n 0#
+
+{-# NOINLINE localMutual #-}
+localMutual :: Int# -> Int# -> Int#
+localMutual n step =
+  let evenGo i = case i <=# 0# of
+        0# -> oddGo (i -# 1#)
+        _ -> step
+      oddGo i = case i <=# 0# of
+        0# -> evenGo (i -# 1#)
+        _ -> step +# 1#
+  in evenGo n
+
+{-# NOINLINE localJoin #-}
+localJoin :: Int# -> Int# -> Int#
+localJoin n x =
+  let {-# NOINLINE finish #-}
+      finish y = (y +# x) *# (y -# x)
+  in case n of
+    0# -> finish (x +# 1#)
+    _ -> finish (x -# 2#)
+
+{-# NOINLINE listSum #-}
+listSum :: [Int] -> Int
+listSum [] = I# 0#
+listSum (x:xs) = boxedSum x (listSum xs)
+
+{-# NOINLINE recursiveList #-}
+recursiveList :: Int -> Int -> Int
+recursiveList x y = listSum [x, y, x]
 
 data Choice = Empty | One Int | Two Int Int
 data Nested = Nested Choice Choice

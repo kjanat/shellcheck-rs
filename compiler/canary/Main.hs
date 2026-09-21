@@ -8,7 +8,9 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   boxedStrictIgnore, boxedCaf,
   lazyArgument, lazyLet, lazyNested, lazyUnused, lazyBranch, lazyStrictUse,
   dataChoice, dataPair, dataNested, dataDefault, dataLazy, dataStrict,
-  dataMaybe, dataList, dataCaseBinder)
+  dataMaybe, dataList, dataCaseBinder,
+  recursiveSum, mutualRecursion, localLoop, localMutual, localJoin, recursiveList,
+  recursiveTree, localLazy)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -16,6 +18,20 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
+    ["recursiveTree", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (recursiveTree x y))
+    ["localLazy", a, b] -> print (localLazy (read a) (read b))
+    ["recursiveSum", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (recursiveSum x y))
+    ["mutualRecursion", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (mutualRecursion x y))
+    ["localLoop", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (localLoop x y))
+    ["localMutual", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (localMutual x y))
+    ["localJoin", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (localJoin x y))
+    ["recursiveList", a, b] -> print (recursiveList (read a) (read b))
     ["dataChoice", a, b] -> print (dataChoice (read a) (read b))
     ["dataPair", a, b] -> print (dataPair (read a) (read b))
     ["dataNested", a, b] -> print (dataNested (read a) (read b))

@@ -1622,7 +1622,7 @@ fn scalar_emission_refuses_unsupported_dependency_and_unsafe_literals() {
 }
 
 #[test]
-fn scalar_emission_refuses_recursive_closure() {
+fn scalar_emission_accepts_recursive_functions() {
     let mut modules = scalar_emission_world();
     // Main's existing source call now resolves back to its own definition.
     let target = modules[1].top[0].pairs[0].binder;
@@ -1630,11 +1630,159 @@ fn scalar_emission_refuses_recursive_closure() {
     let owner = modules[0].top[0].pairs[0].binder;
     modules[0].binders[owner as usize].name = sn("Lib", "target");
     modules[0].binders[owner as usize].arity = Some(2);
-    assert!(
-        crate::emit::emit_entry(&modules, &sn("Lib", "target"))
-            .unwrap_err()
-            .contains("recursive")
+    let source = crate::emit::emit_entry(&modules, &sn("Lib", "target")).unwrap();
+    assert!(source.contains("HStep::Next(HState::B_0_0_0"));
+}
+
+fn local_function_world(recursive: bool) -> Vec<Module> {
+    let mut b = binder("$_in$go", "go", "go");
+    b["ty"] = json!(1);
+    b["arity"] = json!(2);
+    b["isJoinPoint"] = json!(true);
+    let rhs = if recursive {
+        int_case(
+            lvar("i"),
+            "s",
+            app(
+                app(
+                    lvar("go"),
+                    int_op(
+                        "-#",
+                        lvar("i"),
+                        json!({"node":"Lit","lit":{"kind":"number","pretty":"1#"}}),
+                    ),
+                ),
+                int_op("+#", lvar("acc"), lvar("y")),
+            ),
+            vec![(0, lvar("acc"))],
+        )
+    } else {
+        int_op("+#", lvar("acc"), lvar("y"))
+    };
+    scalar_expression_world(
+        json!({"node":"Let", "bind":{"rec":recursive,"pairs":[{"binder":b,"rhs":lam("i",lam("acc",rhs)),"whnf":true,"cheap":true,"trivial":false,"okForSpec":true}]}, "body":app(app(lvar("go"),lvar("x")),lvar("y"))}),
+    )
+}
+
+#[test]
+fn local_functions_and_join_loops_have_verified_captures() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    for recursive in [false, true] {
+        let modules = local_function_world(recursive);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let accounting = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert_eq!(
+            accounting.source_nodes,
+            modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
+        );
+        let source = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        assert!(source.contains("HStep::Next"));
+    }
+}
+
+#[test]
+fn local_function_verifier_rejects_capture_target_and_definition_corruption() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let modules = local_function_world(true);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..7 {
+        let mut bad = leaf.clone();
+        if mutation < 4 {
+            let Operation::LocalScope {
+                definitions,
+                target,
+                arguments,
+            } = &mut bad.function.blocks[0].instructions[0].operation
+            else {
+                panic!()
+            };
+            match mutation {
+                0 => arguments.swap(0, 1),
+                1 => definitions[0].binder = owner,
+                2 => definitions[0].target = *target,
+                _ => definitions.clear(),
+            }
+        } else {
+            let i = bad
+                .function
+                .blocks
+                .iter_mut()
+                .flat_map(|b| &mut b.instructions)
+                .find(|i| matches!(i.operation, Operation::CallLocal { .. }))
+                .unwrap();
+            let Operation::CallLocal { target, arguments } = &mut i.operation else {
+                panic!()
+            };
+            match mutation {
+                4 => arguments.swap(0, 1),
+                5 => *target = crate::nir::BlockId(0),
+                _ => {
+                    arguments.pop();
+                }
+            }
+        }
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn recursive_values_and_escaping_local_functions_are_refused() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    let mut m = module(
+        "Main",
+        vec![(
+            binder(&sn("Main", "cycle"), "cycle", "cycle"),
+            lvar("cycle"),
+        )],
+        json!({}),
     );
+    m.types = scalar_emission_world()[0].types.clone();
+    assert!(
+        crate::emit::emit_entry(&[m], &sn("Main", "cycle"))
+            .unwrap_err()
+            .contains("recursive value")
+    );
+    for mutation in 0..3 {
+        let mut modules = local_function_world(true);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let let_id = modules[0]
+            .exprs
+            .iter()
+            .position(|e| matches!(e, h2r_core_ir::Expr::Let { .. }))
+            .unwrap();
+        let h2r_core_ir::Expr::Let { bind, body } = modules[0].exprs[let_id].clone() else {
+            panic!()
+        };
+        match mutation {
+            0 => {
+                // Recursive RHS is not in scope in a non-recursive binding.
+                let h2r_core_ir::Expr::Let { bind, .. } = &mut modules[0].exprs[let_id] else {
+                    panic!()
+                };
+                bind.recursive = false;
+            }
+            1 => {
+                // Returning a function instead of a saturated call is not supported.
+                let h2r_core_ir::Expr::App { fun, .. } = modules[0].expr(body) else {
+                    panic!()
+                };
+                let replacement = modules[0].expr(*fun).clone();
+                modules[0].exprs[body as usize] = replacement;
+            }
+            _ => {
+                modules[0].binders[bind.pairs[0].binder as usize].ty = 0;
+            }
+        }
+        assert!(
+            lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err(),
+            "mutation {mutation}"
+        );
+    }
 }
 
 fn int_op(symbol: &str, left: Value, right: Value) -> Value {
@@ -2220,7 +2368,10 @@ fn lazy_lets_refuse_recursive_join_unlifted_and_out_of_scope_bindings() {
         );
         match mutation {
             0 => body["bind"]["rec"] = json!(true),
-            1 => body["bind"]["pairs"][0]["binder"]["isJoinPoint"] = json!(true),
+            1 => {
+                body["bind"]["pairs"][0]["binder"]["isJoinPoint"] = json!(true);
+                body["bind"]["pairs"][0]["binder"]["arity"] = json!(1);
+            }
             2 => body["bind"]["pairs"][0]["binder"]["ty"] = json!(0),
             3 => body["bind"]["pairs"][0]["rhs"] = lvar("z"),
             4 => body["body"] = lvar("missing"),

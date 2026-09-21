@@ -178,6 +178,7 @@ fn verify_leaf_impl(
         type_scope: &type_scope,
         function,
         visited: &visited,
+        functions: &BTreeMap::new(),
     };
     let (type_applications, value_applications, value_nodes) =
         verify_tail(&context, function, block.id, expr, ty)?;
@@ -220,6 +221,7 @@ struct ValueContext<'a> {
     modules: Option<&'a [h2r_core_ir::Module]>,
     params: &'a [(ExprId, BinderId, ValueId)],
     type_scope: &'a [(TyVarId, TyVarId)],
+    functions: &'a BTreeMap<BinderId, (BlockId, Vec<BinderId>, usize)>,
 }
 
 fn verify_tail(
@@ -448,22 +450,33 @@ fn verify_value(
             type_applications = source_types.len();
             let primitive = primitive::resolve(module, head);
             let constructor = boxed::resolves(module, head);
+            let local = module
+                .resolve(head)
+                .and_then(|b| context.functions.get(&b).map(|f| (b, f)));
             let primitive_ty = if constructor {
                 boxed::signature()
             } else {
                 primitive::signature()
             };
-            let target = if primitive.is_some() || constructor {
+            let target = if primitive.is_some() || constructor || local.is_some() {
                 None
             } else {
                 Some(instantiate::target(module, module_index, modules, head)?)
             };
-            let head_ty = target.map_or(&primitive_ty, |(_, _, ty)| ty);
+            let head_ty = local.map_or_else(
+                || target.map_or(&primitive_ty, |(_, _, ty)| ty),
+                |(b, _)| module.binder_ty(b),
+            );
             let instantiated = instantiate::apply(head_ty, &source_types)?;
             let mut signature = &instantiated;
-            let arity = target.map_or(Some(if constructor { 1 } else { 2 }), |(m, b, _)| {
-                modules.map_or(module, |world| &world[m]).binder(b).arity
-            });
+            let arity = local.map_or_else(
+                || {
+                    target.map_or(Some(if constructor { 1 } else { 2 }), |(m, b, _)| {
+                        modules.map_or(module, |world| &world[m]).binder(b).arity
+                    })
+                },
+                |(_, (_, _, arity))| Some(*arity as u32),
+            );
             if arity != Some(source_args.len() as u32) {
                 return Err("source call is not saturated at known target arity".into());
             }
@@ -592,6 +605,24 @@ fn verify_value(
                     return Err("primitive operation or arguments differ from source".into());
                 }
                 Rule::IntBinary
+            } else if let Some((_, (expected, captures, _))) = local {
+                let mut arguments = captures
+                    .iter()
+                    .map(|b| {
+                        params
+                            .iter()
+                            .find(|(_, binder, _)| binder == b)
+                            .map(|(_, _, v)| *v)
+                            .ok_or("missing local call capture")
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                arguments.extend(values);
+                if !matches!(&instruction.operation, Operation::CallLocal { target, arguments: actual } if target == expected && actual == &arguments)
+                    || !source_types.is_empty()
+                {
+                    return Err("local call target or captures differ from source".into());
+                }
+                Rule::CallLocal
             } else {
                 let (target_module, target_binder, _) = target.expect("resolved source target");
                 let Operation::CallTop {
@@ -731,6 +762,30 @@ fn verify_value(
             if !source_type_matches(ty, module.binder_ty(binder), type_scope) {
                 return Err("returned reference type differs from source".into());
             }
+            if let Some((target, captures, 0)) = context.functions.get(&binder) {
+                let arguments = captures
+                    .iter()
+                    .map(|b| {
+                        params
+                            .iter()
+                            .find(|(_, binder, _)| binder == b)
+                            .map(|(_, _, v)| *v)
+                            .ok_or("missing nullary join capture")
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let [instruction] = block.instructions.as_slice() else {
+                    return Err("nullary join requires one call".into());
+                };
+                if !matches!(&instruction.operation, Operation::CallLocal { target: actual, arguments: args } if actual == target && args == &arguments)
+                    || instruction.result.id != returned
+                    || !instruction.result.ty.alpha_eq(ty)
+                    || instruction.origin.source != Source::Expr(expr)
+                    || instruction.origin.rule != Rule::CallLocal
+                {
+                    return Err("nullary join differs from source".into());
+                }
+                return Ok((0, 0, 1));
+            }
             let param = params.iter().find(|(_, source, _)| *source == binder);
             if let Some(param) = param {
                 if !block.instructions.is_empty() {
@@ -769,6 +824,15 @@ fn verify_value(
             }
         }
         Expr::Let { bind, body } => {
+            if !bind.pairs.is_empty()
+                && bind.pairs.iter().all(|p| {
+                    matches!(module.expr(p.rhs), Expr::Lam { .. })
+                        || (module.binder(p.binder).is_join_point == Some(true)
+                            && module.binder(p.binder).arity == Some(0))
+                })
+            {
+                return verify_local_scope(context, block, expr, ty, returned);
+            }
             let [pair] = bind.pairs.as_slice() else {
                 return Err("source lazy let requires one binding".into());
             };
@@ -946,6 +1010,176 @@ fn verify_value(
     }
 
     Ok((type_applications, value_applications, value_nodes))
+}
+
+// Check each lexical definition once; calls validate its identity and captures
+// without recursively revisiting its body.
+fn verify_local_scope(
+    context: &ValueContext<'_>,
+    block: &Block,
+    expr: ExprId,
+    ty: &Ty,
+    returned: ValueId,
+) -> Result<(usize, usize, usize), String> {
+    use h2r_core_ir::{BinderKind, Expr};
+    let module = context.module;
+    let Expr::Let { bind, body } = module.expr(expr) else {
+        return Err("local scope source is not a let".into());
+    };
+    let [instruction] = block.instructions.as_slice() else {
+        return Err("local scope requires exactly one instruction".into());
+    };
+    let Operation::LocalScope {
+        definitions,
+        target,
+        arguments,
+    } = &instruction.operation
+    else {
+        return Err("missing local scope".into());
+    };
+    if instruction.origin.source != Source::Expr(expr)
+        || instruction.origin.rule != Rule::LocalScope
+        || instruction.result.id != returned
+        || !instruction.result.ty.alpha_eq(ty)
+        || definitions.len() != bind.pairs.len()
+    {
+        return Err("local scope provenance mismatch".into());
+    }
+    let mut captured = context.params.to_vec();
+    captured.sort_by_key(|(_, b, _)| *b);
+    if *arguments != captured.iter().map(|(_, _, v)| *v).collect::<Vec<_>>() {
+        return Err("local scope captures differ from source".into());
+    }
+    let capture_types = captured
+        .iter()
+        .map(|(_, _, v)| {
+            block
+                .params
+                .iter()
+                .find(|p| p.id == *v)
+                .map(|p| &p.ty)
+                .ok_or("missing captured value")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut functions = context.functions.clone();
+    let mut bodies = Vec::new();
+    let mut counts = (0, 0, 1);
+    for (pair, definition) in bind.pairs.iter().zip(definitions) {
+        if pair.binder != definition.binder {
+            return Err("local definition identity mismatch".into());
+        }
+        let mut rhs = pair.rhs;
+        let mut result = module.binder_ty(pair.binder);
+        let mut lambdas = Vec::new();
+        while let Expr::Lam { binder, body } = module.expr(rhs) {
+            let Ty::Fun { arg, res, .. } = result else {
+                return Err("local lambda lacks value arrow".into());
+            };
+            if module.binder(*binder).kind != BinderKind::Id
+                || !arg.alpha_eq(module.binder_ty(*binder))
+                || !data::supported(module, arg)
+            {
+                return Err("invalid local lambda parameter".into());
+            }
+            lambdas.push((rhs, *binder));
+            result = res;
+            rhs = *body;
+        }
+        if (lambdas.is_empty()
+            && !(module.binder(pair.binder).is_join_point == Some(true)
+                && module.binder(pair.binder).arity == Some(0)))
+            || !world::closed_type(module.binder_ty(pair.binder))
+            || !data::supported(module, result)
+            || !result.alpha_eq(&definition.result_ty)
+        {
+            return Err("local definition signature mismatch".into());
+        }
+        functions.insert(
+            pair.binder,
+            (
+                definition.target,
+                captured.iter().map(|(_, b, _)| *b).collect(),
+                lambdas.len(),
+            ),
+        );
+        counts.2 += lambdas.len();
+        bodies.push((rhs, lambdas));
+    }
+    for (definition, (rhs, lambdas)) in definitions.iter().zip(bodies) {
+        let target_block = context
+            .function
+            .blocks
+            .iter()
+            .find(|b| b.id == definition.target)
+            .ok_or("missing local definition block")?;
+        let expected_types: Vec<_> = capture_types
+            .iter()
+            .copied()
+            .chain(lambdas.iter().map(|(_, b)| module.binder_ty(*b)))
+            .collect();
+        if target_block.params.len() != expected_types.len()
+            || target_block
+                .params
+                .iter()
+                .zip(expected_types)
+                .any(|(p, t)| !p.ty.alpha_eq(t))
+        {
+            return Err("local definition parameter layout mismatch".into());
+        }
+        let params: Vec<_> = captured
+            .iter()
+            .map(|(e, b, _)| (*e, *b))
+            .chain(lambdas)
+            .zip(&target_block.params)
+            .map(|((e, b), p)| (e, b, p.id))
+            .collect();
+        let nested = ValueContext {
+            params: &params,
+            functions: if bind.recursive {
+                &functions
+            } else {
+                context.functions
+            },
+            ..*context
+        };
+        let (nt, nv, nn) = verify_tail(
+            &nested,
+            context.function,
+            definition.target,
+            rhs,
+            &definition.result_ty,
+        )?;
+        counts.0 += nt;
+        counts.1 += nv;
+        counts.2 += nn;
+    }
+    let target_block = context
+        .function
+        .blocks
+        .iter()
+        .find(|b| b.id == *target)
+        .ok_or("missing local scope body")?;
+    if target_block.params.len() != captured.len()
+        || target_block
+            .params
+            .iter()
+            .zip(&capture_types)
+            .any(|(p, t)| !p.ty.alpha_eq(t))
+    {
+        return Err("local body capture layout mismatch".into());
+    }
+    let params: Vec<_> = captured
+        .iter()
+        .zip(&target_block.params)
+        .map(|((e, b, _), p)| (*e, *b, p.id))
+        .collect();
+    let nested = ValueContext {
+        params: &params,
+        functions: &functions,
+        ..*context
+    };
+    let (nt, nv, nn) = verify_tail(&nested, context.function, *target, *body, ty)?;
+    Ok((counts.0 + nt, counts.1 + nv, counts.2 + nn))
 }
 
 // Rebuild quantified types independently of the lowering builder. Only the
@@ -1208,11 +1442,16 @@ pub fn verify(function: &Function) -> Result<(), String> {
     let mut pending_types = vec![(function.entry, &function.result_ty)];
     for block in &function.blocks {
         for instruction in &block.instructions {
+            if let Operation::LocalScope { definitions, .. } = &instruction.operation {
+                pending_types.extend(definitions.iter().map(|d| (d.target, &d.result_ty)));
+            }
             if let Operation::MatchData { arms, .. } = &instruction.operation {
                 pending_types.extend(arms.iter().map(|a| (a.target, &instruction.result.ty)));
             }
-            if let Operation::EvaluateBlock { target, .. } | Operation::DelayBlock { target, .. } =
-                instruction.operation
+            if let Operation::EvaluateBlock { target, .. }
+            | Operation::DelayBlock { target, .. }
+            | Operation::CallLocal { target, .. }
+            | Operation::LocalScope { target, .. } = instruction.operation
             {
                 pending_types.push((target, &instruction.result.ty));
             }
@@ -1336,6 +1575,15 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 Operation::EvaluateBlock {
                     target,
                     ref arguments,
+                }
+                | Operation::CallLocal {
+                    target,
+                    ref arguments,
+                }
+                | Operation::LocalScope {
+                    target,
+                    ref arguments,
+                    ..
                 } => {
                     if !matches!(instruction.result.ty, Ty::Con { .. })
                         || !world::closed_type(&instruction.result.ty)
@@ -1417,11 +1665,16 @@ pub fn verify(function: &Function) -> Result<(), String> {
     while let Some(id) = pending.pop() {
         if visited.insert(id) {
             for instruction in &blocks[&id].instructions {
+                if let Operation::LocalScope { definitions, .. } = &instruction.operation {
+                    pending.extend(definitions.iter().map(|d| d.target));
+                }
                 if let Operation::MatchData { arms, .. } = &instruction.operation {
                     pending.extend(arms.iter().map(|a| a.target));
                 }
                 if let Operation::EvaluateBlock { target, .. }
-                | Operation::DelayBlock { target, .. } = instruction.operation
+                | Operation::DelayBlock { target, .. }
+                | Operation::CallLocal { target, .. }
+                | Operation::LocalScope { target, .. } = instruction.operation
                 {
                     pending.push(target);
                 }

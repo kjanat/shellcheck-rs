@@ -26,6 +26,17 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
         }
         for instruction in &block.instructions {
             let operation = match &instruction.operation {
+                Operation::LocalScope {
+                    definitions,
+                    target,
+                    arguments,
+                } => format!(
+                    "local-scope {definitions:?} body b{} {arguments:?}",
+                    target.0
+                ),
+                Operation::CallLocal { target, arguments } => {
+                    format!("call-local b{} {arguments:?}", target.0)
+                }
                 Operation::Construct {
                     constructor,
                     arguments,

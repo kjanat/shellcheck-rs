@@ -53,6 +53,8 @@ pub enum Rule {
     LazyBinding,
     Construct,
     MatchData,
+    LocalScope,
+    CallLocal,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +74,17 @@ pub struct Value {
 
 #[derive(Debug, Clone)]
 pub enum Operation {
+    /// Lexical function definitions, followed by entering the let body.
+    /// Definitions capture the surrounding value environment explicitly.
+    LocalScope {
+        definitions: Vec<LocalDefinition>,
+        target: BlockId,
+        arguments: Vec<ValueId>,
+    },
+    CallLocal {
+        target: BlockId,
+        arguments: Vec<ValueId>,
+    },
     Construct {
         constructor: data::Constructor,
         arguments: Vec<ValueId>,
@@ -133,6 +146,13 @@ pub enum Operation {
     },
     Move(ValueId),
     Force(ValueId),
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalDefinition {
+    pub binder: BinderId,
+    pub target: BlockId,
+    pub result_ty: Ty,
 }
 
 #[derive(Debug, Clone)]

@@ -1,6 +1,26 @@
 //! Executable checks of generated code with deferred, instrumented inputs.
 #![allow(dead_code)]
 
+mod local_lazy {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/localLazy.rs"));
+    #[test]
+    fn recursive_local_calls_preserve_lazy_captures_and_arguments() {
+        let poison = HInt::defer(|| panic!("unused recursive argument forced"));
+        let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = count.clone();
+        let input = HInt::defer(move || {
+            counter.set(counter.get() + 1);
+            42
+        });
+        let result = h2r_entry(input, poison.clone());
+        assert_eq!(count.get(), 0);
+        assert_eq!(result.force(), 42);
+        assert_eq!(result.force(), 42);
+        assert_eq!(count.get(), 1);
+        assert!(!poison.is_evaluated());
+    }
+}
+
 mod data_lazy {
     include!(concat!(env!("H2R_CANARY_DIR"), "/dataLazy.rs"));
     #[test]

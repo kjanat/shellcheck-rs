@@ -146,6 +146,7 @@ fn lower_leaf_impl(
         params: &params,
         next_value: &next_value,
         type_scope: &type_scope,
+        functions: &BTreeMap::new(),
     };
     let mut blocks = Vec::new();
     let entry = lower_tail(&context, current, ty, &locals, &mut blocks)?;
@@ -183,6 +184,7 @@ struct BodyContext<'a> {
     params: &'a [Value],
     next_value: &'a std::cell::Cell<u32>,
     type_scope: &'a [(TyVarId, TyVarId)],
+    functions: &'a BTreeMap<BinderId, (BlockId, Vec<BinderId>, usize)>,
 }
 
 fn fresh_value(context: &BodyContext<'_>) -> ValueId {
@@ -200,6 +202,31 @@ fn lower_tail(
     locals: &BTreeMap<BinderId, ValueId>,
     blocks: &mut Vec<Block>,
 ) -> Result<BlockId, LowerError> {
+    let id = BlockId(blocks.len() as u32);
+    blocks.push(Block {
+        id,
+        params: Vec::new(),
+        instructions: Vec::new(),
+        terminator: Terminator {
+            exit: Exit::Return(ValueId(u32::MAX)),
+            origin: Origin {
+                module: context.module_index,
+                source: Source::Expr(source),
+                rule: Rule::Return,
+            },
+        },
+    });
+    lower_tail_at(context, source, ty, locals, blocks, id)
+}
+
+fn lower_tail_at(
+    context: &BodyContext<'_>,
+    source: ExprId,
+    ty: &Ty,
+    locals: &BTreeMap<BinderId, ValueId>,
+    blocks: &mut Vec<Block>,
+    id: BlockId,
+) -> Result<BlockId, LowerError> {
     let module = context.module;
     let fail = |reason: String| LowerError {
         module: context.module_index,
@@ -214,9 +241,7 @@ fn lower_tail(
     };
     let mut instructions = Vec::new();
     let mut locals = locals.clone();
-    let id = BlockId(blocks.len() as u32);
-    // Reserve the ID before lowering operands, which can allocate regions.
-    blocks.push(Block {
+    blocks[id.0 as usize] = Block {
         id,
         params: context.params.to_vec(),
         instructions: Vec::new(),
@@ -224,7 +249,7 @@ fn lower_tail(
             exit: Exit::Return(ValueId(u32::MAX)),
             origin: origin(Rule::Return),
         },
-    });
+    };
     if let Expr::Case {
         scrut,
         binder,
@@ -481,6 +506,30 @@ fn lower_value(
             if !same_scoped_type(ty, module.binder_ty(binder), type_scope) {
                 return Err(fail(Some(current), "returned reference type mismatch"));
             }
+            if let Some((target, captures, 0)) = context.functions.get(&binder) {
+                let arguments = captures
+                    .iter()
+                    .map(|b| {
+                        locals
+                            .get(b)
+                            .copied()
+                            .ok_or_else(|| fail(Some(current), "nullary join capture out of scope"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let value = fresh_value(context);
+                instructions.push(Instruction {
+                    result: Value {
+                        id: value,
+                        ty: ty.clone(),
+                    },
+                    operation: Operation::CallLocal {
+                        target: *target,
+                        arguments,
+                    },
+                    origin: origin(Rule::CallLocal),
+                });
+                return Ok(value);
+            }
             if let Some(value) = locals.get(&binder) {
                 *value
             } else if matches!(module.binding(binder).site, BindSite::Top) {
@@ -535,12 +584,15 @@ fn lower_value(
             type_arguments.reverse();
             let primitive = primitive::resolve(module, head);
             let constructor = boxed::resolves(module, head);
+            let local = module
+                .resolve(head)
+                .and_then(|b| context.functions.get(&b).map(|f| (b, f)));
             let primitive_ty = if constructor {
                 boxed::signature()
             } else {
                 primitive::signature()
             };
-            let target = if primitive.is_some() || constructor {
+            let target = if primitive.is_some() || constructor || local.is_some() {
                 None
             } else {
                 Some(
@@ -548,13 +600,21 @@ fn lower_value(
                         .map_err(|reason| fail(Some(head), &reason))?,
                 )
             };
-            let head_ty = target.map_or(&primitive_ty, |(_, _, ty)| ty);
+            let head_ty = local.map_or_else(
+                || target.map_or(&primitive_ty, |(_, _, ty)| ty),
+                |(b, _)| module.binder_ty(b),
+            );
             let instantiated = instantiate::apply(head_ty, &type_arguments)
                 .map_err(|reason| fail(Some(current), &reason))?;
             let mut signature = &instantiated;
-            let arity = target.map_or(Some(if constructor { 1 } else { 2 }), |(m, b, _)| {
-                modules.map_or(module, |world| &world[m]).binder(b).arity
-            });
+            let arity = local.map_or_else(
+                || {
+                    target.map_or(Some(if constructor { 1 } else { 2 }), |(m, b, _)| {
+                        modules.map_or(module, |world| &world[m]).binder(b).arity
+                    })
+                },
+                |(_, (_, _, arity))| Some(*arity as u32),
+            );
             if arity != Some(argument_sources.len() as u32) {
                 return Err(fail(
                     Some(current),
@@ -673,6 +733,20 @@ fn lower_value(
                     Operation::BoxInt(arguments[0])
                 } else if let Some(op) = primitive {
                     Operation::IntBinary { op, arguments }
+                } else if let Some((_, (target, captures, _))) = local {
+                    let mut actual = captures
+                        .iter()
+                        .map(|b| {
+                            locals.get(b).copied().ok_or_else(|| {
+                                fail(Some(current), "local function capture out of scope")
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    actual.extend(arguments);
+                    Operation::CallLocal {
+                        target: *target,
+                        arguments: actual,
+                    }
                 } else {
                     let (module, binder, _) = target.expect("resolved direct target");
                     Operation::CallTop {
@@ -686,6 +760,8 @@ fn lower_value(
                     Rule::BoxInt
                 } else if primitive.is_some() {
                     Rule::IntBinary
+                } else if local.is_some() {
+                    Rule::CallLocal
                 } else {
                     Rule::CallTop
                 }),
@@ -727,6 +803,24 @@ fn lower_value(
             value
         }
         Expr::Let { bind, body } => {
+            if !bind.pairs.is_empty()
+                && bind.pairs.iter().all(|p| {
+                    matches!(module.expr(p.rhs), Expr::Lam { .. })
+                        || (module.binder(p.binder).is_join_point == Some(true)
+                            && module.binder(p.binder).arity == Some(0))
+                })
+            {
+                return lower_functions(
+                    context,
+                    current,
+                    bind,
+                    *body,
+                    ty,
+                    locals,
+                    instructions,
+                    blocks,
+                );
+            }
             let [pair] = bind.pairs.as_slice() else {
                 return Err(fail(
                     Some(current),
@@ -997,6 +1091,146 @@ fn lower_value(
         }
     };
 
+    Ok(value)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_functions(
+    context: &BodyContext<'_>,
+    source: ExprId,
+    bind: &h2r_core_ir::Bind,
+    body: ExprId,
+    ty: &Ty,
+    locals: &BTreeMap<BinderId, ValueId>,
+    instructions: &mut Vec<Instruction>,
+    blocks: &mut Vec<Block>,
+) -> Result<ValueId, LowerError> {
+    let fail = |reason: &str| LowerError {
+        module: context.module_index,
+        owner: context.owner,
+        source: Some(source),
+        reason: reason.into(),
+    };
+    let module = context.module;
+    let captures: Vec<_> = locals.keys().copied().collect();
+    let capture_types: Vec<_> = locals
+        .values()
+        .map(|id| {
+            context
+                .params
+                .iter()
+                .chain(instructions.iter().map(|i| &i.result))
+                .find(|v| v.id == *id)
+                .expect("available capture")
+                .ty
+                .clone()
+        })
+        .collect();
+    let mut functions = context.functions.clone();
+    let mut definitions = Vec::new();
+    let mut bodies = Vec::new();
+    for pair in &bind.pairs {
+        let mut rhs = pair.rhs;
+        let mut result = module.binder_ty(pair.binder);
+        let mut parameters = Vec::new();
+        while let Expr::Lam { binder, body } = module.expr(rhs) {
+            let Ty::Fun { arg, res, .. } = result else {
+                return Err(fail("local functions require monomorphic value lambdas"));
+            };
+            if module.binder(*binder).kind != BinderKind::Id
+                || !arg.alpha_eq(module.binder_ty(*binder))
+                || !data::supported(module, arg)
+            {
+                return Err(fail("unsupported local function parameter"));
+            }
+            parameters.push(*binder);
+            result = res;
+            rhs = *body;
+        }
+        if (parameters.is_empty()
+            && !(module.binder(pair.binder).is_join_point == Some(true)
+                && module.binder(pair.binder).arity == Some(0)))
+            || !data::supported(module, result)
+            || !world::closed_type(module.binder_ty(pair.binder))
+        {
+            return Err(fail("local functions require supported closed signatures"));
+        }
+        let target = BlockId(blocks.len() as u32);
+        blocks.push(Block {
+            id: target,
+            params: Vec::new(),
+            instructions: Vec::new(),
+            terminator: Terminator {
+                exit: Exit::Return(ValueId(u32::MAX)),
+                origin: Origin {
+                    module: context.module_index,
+                    source: Source::Expr(rhs),
+                    rule: Rule::Return,
+                },
+            },
+        });
+        functions.insert(pair.binder, (target, captures.clone(), parameters.len()));
+        definitions.push(LocalDefinition {
+            binder: pair.binder,
+            target,
+            result_ty: result.clone(),
+        });
+        bodies.push((rhs, parameters));
+    }
+    for (definition, (rhs, parameters)) in definitions.iter().zip(bodies) {
+        let mut params = Vec::new();
+        let mut scope = BTreeMap::new();
+        for (binder, ty) in captures
+            .iter()
+            .copied()
+            .zip(capture_types.iter().cloned())
+            .chain(
+                parameters
+                    .iter()
+                    .map(|b| (*b, module.binder_ty(*b).clone())),
+            )
+        {
+            let id = fresh_value(context);
+            scope.insert(binder, id);
+            params.push(Value { id, ty });
+        }
+        let nested = BodyContext {
+            params: &params,
+            functions: if bind.recursive {
+                &functions
+            } else {
+                context.functions
+            },
+            ..*context
+        };
+        lower_tail_at(
+            &nested,
+            rhs,
+            &definition.result_ty,
+            &scope,
+            blocks,
+            definition.target,
+        )?;
+    }
+    let nested = BodyContext {
+        functions: &functions,
+        ..*context
+    };
+    let value = lower_region(&nested, body, ty, locals, instructions, blocks, false)?;
+    let instruction = instructions.last_mut().expect("body region");
+    let Operation::EvaluateBlock { target, arguments } = &instruction.operation else {
+        unreachable!()
+    };
+    instruction.operation = Operation::LocalScope {
+        definitions,
+        target: *target,
+        arguments: arguments.clone(),
+    };
+    instruction.origin = Origin {
+        module: context.module_index,
+        source: Source::Expr(source),
+        rule: Rule::LocalScope,
+    };
     Ok(value)
 }
 
