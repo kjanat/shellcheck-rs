@@ -2,127 +2,36 @@
 
 ## Milestone tags
 
-- [ ] Finish the acceptance checks from brief 1 below, then create and push an
-      annotated `h2r-m3a-prime` tag (or `h2r-m3a`) on the closing commit.
-      `ce18ea37d73870324b4fc79a7f208ccd80640710` records the baseline run, but does
-      not yet document every acceptance item from that brief.
+- [ ] Finish the acceptance checks from brief 1 below, then create and push an annotated `h2r-m3a-prime` tag (or `h2r-m3a`) on the closing commit. `ce18ea37d73870324b4fc79a7f208ccd80640710` records the baseline run, but does not yet document every acceptance item from that brief.
 - [ ] Optional: `h2r-o1-baseline` on `ca4cc6b8352e4404152402424b054bf07507b3b6`.
 - [ ] Optional: `h2r-m2-baseline` on `00a0a09144b82d9fd8501ac4d575194b10665d4d`.
 
 ## Compiler
 
-- [x] Complete brief 1's before/after accounting tables for every milestone,
-      including erasure, totality and clone plans across the optimization profiles.
-      Done in the "Format-6 baseline — before/after accounting tables"
-      subsection of `compiler/README.md`. Canonical/`-O1` before/after is filled
-      where the historical README documents the same metric; site-level
-      attribution of the differences is still open (see the unchecked items
-      below).
-- [ ] Complete its gate-8 attribution: distinguish linkage, trimmed bindings,
-      implicit selectors and finalized `OccInfo`/arity, with an `--explain` example
-      for each observed cause. Include dead-attributed dispatch sites, target and
-      producer sets, set-valued clone plans and residual Parsec edges.
-      Current canonical evidence is captured by `mise run baseline:explain`
-      and documented in "Gate-8 attribution: reason provenance versus rooted
-      death (2026-09-21)": only 193 of 413 unreachable-reason sites have
-      rooted-dead owners; 220 have live owners and an inherited unknown-set
-      reason. The closure delta is localized to AST (0 → 1 owner, 0 → 3
-      clones); its current three call-site groups and full producer shapes
-      are captured in `higher-plans.json`. `$wgetPath` supplies a historical
-      missing-link/current-resolved example. Remaining: historical per-site
-      trimming and arity/Dead-OccInfo attribution. Canonical format-5 inputs
-      are now reconstructed in `compiler/matrix/format5/` via
-      `baseline:historical` and `baseline:historical-reports`. They reproduce
-      the historical counts and prove the AST transition: one local producer
-      (`ExactClosure`) becomes three after external callers link correctly
-      (`CloneRequired(3)`), with unchanged arity. Loop-breaker OccInfo is not
-      an analysis input.
-- [x] Count local `Ranged` selectors using the structured GHC class-op flag
-      after lexical resolution, preserving binder-owned signatures. Analysis
-      and independent verification now include all eleven calls; canonical
-      recovers seven Exact targets. All seven profiles pass verification,
-      with erasure and representation accounting unchanged. Evidence and
-      results: "Local class-op selectors remain in the census (2026-09-17)"
-      in `compiler/README.md`; three regression tests cover the rule.
-- [ ] Add the authoritative per-module live table and pointers from the
-      historical milestone sections; reconcile the README's completion claim with
-      these remaining acceptance items.
-- [ ] Audit coverage of the requested `--explain` captures and final validation
-      gate. Reuse completed dumps and reports through mise; do not rerun them merely
-      because the original brief describes their capture.
-- [ ] Attribute the remaining `.o` byte differences beyond `nm` symbol evidence
-      (explicitly deferred in the source summary).
-- [ ] M3b: implement explicit, proof-carrying NIR with `Delay`/`Force`, closures
-      and instruction origins; no `OpaqueCore` fallback.
-      Started: `h2r-lower/src/nir/` models scalar CFGs with typed values,
-      instruction/terminator origins and explicit block arguments. Its structural
-      verifier checks definitions, local use order, jump/return types and graph
-      reachability. `nir::lower::lower_leaf` now lowers top-level literals and
-      parameter-returning functions with leading type/value lambdas; erased ticks,
-      type-lambda binders and parameter origins are recorded. Alpha-renamed type
-      binders are matched through explicit scope pairing, never by spelling.
-      Same-module top-level references now retain shared binding identity without
-      forcing or calling the target; source verification checks the exact target,
-      type and origin. Cross-module references now resolve exact external stable
-      names to a unique in-world definition, requiring matching closed structured
-      types. Missing/ambiguous imports and scope-unsafe types remain refused.
-      Closed type-only applications of top-level bindings now retain ordered
-      instantiation evidence, with structural substitution and source-node
-      accounting. Open-type and parameter-headed type applications remain
-      unsupported; this does not yet increase canonical lowering coverage.
-      Saturated direct value calls with existing entry parameters now preserve
-      argument identity without forcing. Target arity, closed types and source
-      correspondence are checked; canonical coverage increases to 2,624 owners.
-      Leading closed type arguments can now precede the value arguments; ordered
-      instantiation evidence and substituted call types are source-verified.
-      Canonical coverage remains 2,624. Interleaved spines, open type arguments,
-      computed arguments, partial application and
-      higher-order calls remain unsupported.
-      Unsupported forms fail with source addresses.
-      `mise run lower:program <dump-dir>` now attempts every live owner after
-      auditing reachability, retaining verified leaves and explicit refusals.
-      Live = lowered + refused; dead owners are skipped. Refusals cause a nonzero
-      exit. This partial pass does not yet produce a dependency-closed program.
-      Leaf lowering now runs an independent source-aware verifier: exact literal
-      payloads, returned lexical parameters, types, origins and complete source
-      accounting are checked. Corruption tests include structurally valid wrong
-      returns and extra forcing. This verifies only the supported leaf subset.
-      `mise run lower:leaf compiler/core-json --fn '<stable-name>'` now exposes
-      verified leaf NIR with source accounting; dead, ambiguous and unsupported
-      selections fail. Whole-program lowering and verification, general calls, switches,
-      closures and thunk regions remain unimplemented. Casts
-      require source/target type evidence absent from the current `Expr::Cast`.
-- [ ] Continue M3c–M3h: carriers, closure conversion, specialization, certified
-      transformations, Parsec lowering and a compiled Rust canary. See the
-      [M3 roadmap](compiler/README.md#m3--the-lowering).
-- [ ] Revisit the 41 residual Parsec continuation edges and the canonical
-      baseline's 10 M2.3 verification coverage refusals. These remain conservative
-      limitations, not prerequisites for starting M3b.
+- [x] Complete brief 1's before/after accounting tables for every milestone, including erasure, totality and clone plans across the optimization profiles. Done in the "Format-6 baseline — before/after accounting tables" subsection of `compiler/README.md`. Canonical/`-O1` before/after is filled where the historical README documents the same metric; site-level attribution of the differences is still open (see the unchecked items below).
+- [ ] Complete its gate-8 attribution: distinguish linkage, trimmed bindings, implicit selectors and finalized `OccInfo`/arity, with an `--explain` example for each observed cause. Include dead-attributed dispatch sites, target and producer sets, set-valued clone plans and residual Parsec edges. Current canonical evidence is captured by `mise run baseline:explain` and documented in "Gate-8 attribution: reason provenance versus rooted death (2026-09-21)": only 193 of 413 unreachable-reason sites have rooted-dead owners; 220 have live owners and an inherited unknown-set reason. The closure delta is localized to AST (0 → 1 owner, 0 → 3 clones); its current three call-site groups and full producer shapes are captured in `higher-plans.json`. `$wgetPath` supplies a historical missing-link/current-resolved example. Remaining: historical per-site trimming and arity/Dead-OccInfo attribution. Canonical format-5 inputs are now reconstructed in `compiler/matrix/format5/` via `baseline:historical` and `baseline:historical-reports`. They reproduce the historical counts and prove the AST transition: one local producer (`ExactClosure`) becomes three after external callers link correctly (`CloneRequired(3)`), with unchanged arity. Loop-breaker OccInfo is not an analysis input.
+- [x] Count local `Ranged` selectors using the structured GHC class-op flag after lexical resolution, preserving binder-owned signatures. Analysis and independent verification now include all eleven calls; canonical recovers seven Exact targets. All seven profiles pass verification, with erasure and representation accounting unchanged. Evidence and results: "Local class-op selectors remain in the census (2026-09-17)" in `compiler/README.md`; three regression tests cover the rule.
+- [ ] Add the authoritative per-module live table and pointers from the historical milestone sections; reconcile the README's completion claim with these remaining acceptance items.
+- [ ] Audit coverage of the requested `--explain` captures and final validation gate. Reuse completed dumps and reports through mise; do not rerun them merely because the original brief describes their capture.
+- [ ] Attribute the remaining `.o` byte differences beyond `nm` symbol evidence (explicitly deferred in the source summary).
+- [ ] M3b: implement explicit, proof-carrying NIR with `Delay`/`Force`, closures and instruction origins; no `OpaqueCore` fallback. Started: `h2r-lower/src/nir/` models scalar CFGs with typed values, instruction/terminator origins and explicit block arguments. Its structural verifier checks definitions, local use order, jump/return types and graph reachability. `nir::lower::lower_leaf` now lowers top-level literals and parameter-returning functions with leading type/value lambdas; erased ticks, type-lambda binders and parameter origins are recorded. Alpha-renamed type binders are matched through explicit scope pairing, never by spelling. Same-module top-level references now retain shared binding identity without forcing or calling the target; source verification checks the exact target, type and origin. Cross-module references now resolve exact external stable names to a unique in-world definition, requiring matching closed structured types. Missing/ambiguous imports and scope-unsafe types remain refused. Closed type-only applications of top-level bindings now retain ordered instantiation evidence, with structural substitution and source-node accounting. Open-type and parameter-headed type applications remain unsupported; this does not yet increase canonical lowering coverage. Saturated direct value calls with existing entry parameters now preserve argument identity without forcing. Target arity, closed types and source correspondence are checked; canonical coverage increases to 2,624 owners. Leading closed type arguments can now precede the value arguments; ordered instantiation evidence and substituted call types are source-verified. Canonical coverage remains 2,624. Interleaved spines, open type arguments, computed arguments, partial application and higher-order calls remain unsupported. Unsupported forms fail with source addresses. `mise run lower:program <dump-dir>` now attempts every live owner after auditing reachability, retaining verified leaves and explicit refusals. Live = lowered + refused; dead owners are skipped. Refusals cause a nonzero exit. This partial pass does not yet produce a dependency-closed program. Leaf lowering now runs an independent source-aware verifier: exact literal payloads, returned lexical parameters, types, origins and complete source accounting are checked. Corruption tests include structurally valid wrong returns and extra forcing. This verifies only the supported leaf subset. `mise run lower:leaf compiler/core-json --fn '<stable-name>'` now exposes verified leaf NIR with source accounting; dead, ambiguous and unsupported selections fail. Whole-program lowering and verification, general calls, switches, closures and thunk regions remain unimplemented. Casts require source/target type evidence absent from the current `Expr::Cast`.
+- [ ] Continue M3c–M3h: carriers, closure conversion, specialization, certified transformations, Parsec lowering and a compiled Rust canary. See the [M3 roadmap](compiler/README.md#m3--the-lowering).
+- [ ] Revisit the 41 residual Parsec continuation edges and the canonical baseline's 10 M2.3 verification coverage refusals. These remain conservative limitations, not prerequisites for starting M3b.
 
 ## Diagnostic bugs and conformance gaps
 
 Tracked together in [issue #3](https://github.com/kjanat/shellcheck-rs/issues/3):
 
-- [ ] Detect likely interpreter-path typos such as `#!/use/bin/env bash`
-      without rejecting valid custom paths.
-- [ ] Fix crashes on `x=$(coproc foo)` and `$'\U110000'`; check out-of-range
-      and surrogate escapes in the Rust port too.
+- [ ] Detect likely interpreter-path typos such as `#!/use/bin/env bash` without rejecting valid custom paths.
+- [ ] Fix crashes on `x=$(coproc foo)` and `$'\U110000'`; check out-of-range and surrogate escapes in the Rust port too.
 - [ ] Follow up upstream's rejection of valid Bash `! # comment`.
 - [ ] Improve parser context for `${ ` and `((())`.
 - [ ] Diagnose the Unicode dash in `echo $((1 – 2))` correctly.
-- [ ] Review quote-error positioning, empty SC1072 details, zero-width spans
-      and notes lost after later parse failures. Preserve the already-fixed port
-      cases as regressions; source notes are linked from issue #3.
+- [ ] Review quote-error positioning, empty SC1072 details, zero-width spans and notes lost after later parse failures. Preserve the already-fixed port cases as regressions; source notes are linked from issue #3.
 
 ## Original follow-up prompts
 
-Source: `Pasted markdown(20260915-171114).md`, supplied on 2026-09-16.
-The two briefs below are preserved verbatim. Their checkout path, head SHA,
-`capture.sh` and scratch directories are historical: use the current checkout
-and the existing `baseline` / `baseline:reports` mise tasks. Their standing
-instructions are part of the quoted briefs, not authorization to commit or push.
-Brief 1's capture and verifier work is already done; the remaining acceptance
-items are listed above. M3c–M3h had no individual prompts yet.
+Source: `Pasted markdown(20260915-171114).md`, supplied on 2026-09-16. The two briefs below are preserved verbatim. Their checkout path, head SHA, `capture.sh` and scratch directories are historical: use the current checkout and the existing `baseline` / `baseline:reports` mise tasks. Their standing instructions are part of the quoted briefs, not authorization to commit or push. Brief 1's capture and verifier work is already done; the remaining acceptance items are listed above. M3c–M3h had no individual prompts yet.
 
 ## Planned brief 1: M3a′-3, the re-baseline
 

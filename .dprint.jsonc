@@ -13,10 +13,18 @@
 				"cacheKeyFiles": ["tombi.toml"],
 				"setupCommand": "mise i",
 			},
-			// { "command": "rustfmt", "exts": ["rs"], "cacheKeyFiles": ["rustfmt.toml"], "setupCommand": "mise i" },
+			{
+				"command": "rustfmt",
+				"exts": ["rs"],
+				"cacheKeyFiles": ["rustfmt.toml"],
+				"setupCommand": "mise i",
+			},
 		],
 	},
-	"markdown": { "associations": ["!shellcheck.1.md"] },
+	"markdown": {
+		"associations": ["!shellcheck.1.md"],
+		"textWrap": "never",
+	},
 	"json": {
 		"jsonTrailingCommaFiles": [".{vscode,zed}/*.json", ".dprint.json"],
 		"trailingCommas": "jsonc",

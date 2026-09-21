@@ -8,14 +8,11 @@ ShellCheck is a GPLv3 tool that gives warnings and suggestions for bash/sh shell
 
 The goals of ShellCheck are
 
-- To point out and clarify typical beginner's syntax issues that cause a shell
-  to give cryptic error messages.
+- To point out and clarify typical beginner's syntax issues that cause a shell to give cryptic error messages.
 
-- To point out and clarify typical intermediate level semantic problems that
-  cause a shell to behave strangely and counter-intuitively.
+- To point out and clarify typical intermediate level semantic problems that cause a shell to behave strangely and counter-intuitively.
 
-- To point out subtle caveats, corner cases and pitfalls that may cause an
-  advanced user's otherwise working script to fail under future circumstances.
+- To point out subtle caveats, corner cases and pitfalls that may cause an advanced user's otherwise working script to fail under future circumstances.
 
 See [the gallery of bad code](README.md#user-content-gallery-of-bad-code) for examples of what ShellCheck can help you identify!
 
@@ -84,8 +81,7 @@ You can see ShellCheck suggestions directly in a variety of editors.
 
 ### In your build or test suites
 
-While ShellCheck is mostly intended for interactive use, it can easily be added to builds or test suites.
-It makes canonical use of exit codes, so you can just add a `shellcheck` command as part of the process.
+While ShellCheck is mostly intended for interactive use, it can easily be added to builds or test suites. It makes canonical use of exit codes, so you can just add a `shellcheck` command as part of the process.
 
 For example, in a Makefile:
 
@@ -115,16 +111,11 @@ Services and platforms that have ShellCheck pre-installed and ready to use:
 - [Trunk Code Quality](https://trunk.io/code-quality) (universal linter; [allows you to explicitly version your shellcheck install](https://github.com/trunk-io/plugins/blob/bcbb361dcdbe4619af51ea7db474d7fb87540d20/.trunk/trunk.yaml#L32)) via the [shellcheck plugin](https://github.com/trunk-io/plugins/blob/main/linters/shellcheck/plugin.yaml)
 - [CodeRabbit](https://coderabbit.ai/)
 
-Most other services, including [GitLab](https://about.gitlab.com/), let you install
-ShellCheck yourself, either through the system's package manager (see [Installing](#installing)),
-or by downloading and unpacking a [binary release](#installing-a-pre-compiled-binary).
+Most other services, including [GitLab](https://about.gitlab.com/), let you install ShellCheck yourself, either through the system's package manager (see [Installing](#installing)), or by downloading and unpacking a [binary release](#installing-a-pre-compiled-binary).
 
-It's a good idea to manually install a specific ShellCheck version regardless. This avoids
-any surprise build breaks when a new version with new warnings is published.
+It's a good idea to manually install a specific ShellCheck version regardless. This avoids any surprise build breaks when a new version with new warnings is published.
 
-For customized filtering or reporting, ShellCheck can output simple JSON, CheckStyle compatible XML,
-GCC compatible warnings as well as human readable text (with or without ANSI colors). See the
-[Integration](https://github.com/koalaman/shellcheck/wiki/Integration) wiki page for more documentation.
+For customized filtering or reporting, ShellCheck can output simple JSON, CheckStyle compatible XML, GCC compatible warnings as well as human readable text (with or without ANSI colors). See the [Integration](https://github.com/koalaman/shellcheck/wiki/Integration) wiki page for more documentation.
 
 ## Installing
 
@@ -245,11 +236,9 @@ Alternatively, you can download pre-compiled binaries for the latest release her
 - [macOS, x86_64](https://github.com/koalaman/shellcheck/releases/download/stable/shellcheck-stable.darwin.x86_64.tar.xz)
 - [Windows, x86](https://github.com/koalaman/shellcheck/releases/download/stable/shellcheck-stable.zip)
 
-or see the [GitHub Releases](https://github.com/koalaman/shellcheck/releases) for other releases
-(including the [latest](https://github.com/koalaman/shellcheck/releases/tag/latest) meta-release for daily git builds).
+or see the [GitHub Releases](https://github.com/koalaman/shellcheck/releases) for other releases (including the [latest](https://github.com/koalaman/shellcheck/releases/tag/latest) meta-release for daily git builds).
 
-There are currently no official binaries for Apple Silicon, but third party builds are available via
-[ShellCheck for Visual Studio Code](https://github.com/vscode-shellcheck/shellcheck-binaries/releases).
+There are currently no official binaries for Apple Silicon, but third party builds are available via [ShellCheck for Visual Studio Code](https://github.com/vscode-shellcheck/shellcheck-binaries/releases).
 
 Distro packages already come with a `man` page. If you are building from source, it can be installed with:
 
@@ -275,15 +264,11 @@ repos:
 
 Travis CI has now integrated ShellCheck by default, so you don't need to manually install it.
 
-If you still want to do so in order to upgrade at your leisure or ensure you're
-using the latest release, follow the steps below to install a binary version.
+If you still want to do so in order to upgrade at your leisure or ensure you're using the latest release, follow the steps below to install a binary version.
 
 ### Installing a pre-compiled binary
 
-The pre-compiled binaries come in `tar.xz` files. To decompress them, make sure
-`xz` is installed.
-On Debian/Ubuntu/Mint, you can `apt install xz-utils`.
-On Redhat/Fedora/CentOS, `yum -y install xz`.
+The pre-compiled binaries come in `tar.xz` files. To decompress them, make sure `xz` is installed. On Debian/Ubuntu/Mint, you can `apt install xz-utils`. On Redhat/Fedora/CentOS, `yum -y install xz`.
 
 A simple installer may do something like:
 
@@ -333,10 +318,7 @@ $ which shellcheck
 ~/.cabal/bin/shellcheck
 ```
 
-On native Windows, the `PATH` should already be set up, but the system
-may use a legacy codepage. In `cmd.exe`, `powershell.exe` and Powershell ISE,
-make sure to use a TrueType font, not a Raster font, and set the active
-codepage to UTF-8 (65001) with `chcp`:
+On native Windows, the `PATH` should already be set up, but the system may use a legacy codepage. In `cmd.exe`, `powershell.exe` and Powershell ISE, make sure to use a TrueType font, not a Raster font, and set the active codepage to UTF-8 (65001) with `chcp`:
 
 ```cmd
 chcp 65001
@@ -527,8 +509,7 @@ while getopts "a" f; do case $f in "b") # Unhandled getopts flags
 
 > At first you're like "shellcheck is awesome" but then you're like "wtf are we still using bash"
 
-Alexander Tarasikov,
-[via Twitter](https://twitter.com/astarasikov/status/568825996532707330)
+Alexander Tarasikov, [via Twitter](https://twitter.com/astarasikov/status/568825996532707330)
 
 ## Ignoring issues
 
@@ -544,12 +525,9 @@ Please use the GitHub issue tracker for any bugs or feature suggestions:
 
 ## Contributing
 
-Please submit patches to code or documentation as GitHub pull requests! Check
-out the [DevGuide](https://github.com/koalaman/shellcheck/wiki/DevGuide) on the
-ShellCheck Wiki.
+Please submit patches to code or documentation as GitHub pull requests! Check out the [DevGuide](https://github.com/koalaman/shellcheck/wiki/DevGuide) on the ShellCheck Wiki.
 
-Contributions must be licensed under the GNU GPLv3.
-The contributor retains the copyright.
+Contributions must be licensed under the GNU GPLv3. The contributor retains the copyright.
 
 ## Copyright
 
