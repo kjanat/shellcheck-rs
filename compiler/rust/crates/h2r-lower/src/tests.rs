@@ -1879,6 +1879,208 @@ fn region_expression() -> Value {
     )
 }
 
+fn box_int(value: Value) -> Value {
+    app(gvar(crate::nir::boxed::CONSTRUCTOR, "I#"), value)
+}
+
+fn unbox_int(scrut: Value, body: Value, boxed_result: bool) -> Value {
+    let mut value = strict_case(scrut, "boxed_case", body);
+    value["binder"]["ty"] = json!(2);
+    value["ty"] = json!(if boxed_result { 2 } else { 0 });
+    value["alts"][0]["con"] =
+        json!({"kind":"DataAlt", "name":crate::nir::boxed::CONSTRUCTOR, "occ":"I#", "tag":1});
+    value["alts"][0]["binders"] = json!([binder("$_in$field", "field", "field")]);
+    value
+}
+
+fn boxed_world(body: Value, boxed_x: bool, boxed_result: bool) -> Vec<Module> {
+    use h2r_core_ir::Ty;
+    let mut modules = scalar_expression_world(body);
+    let m = &mut modules[0];
+    let boxed = Box::new(Ty::Con {
+        tycon: h2r_core_ir::TyConId {
+            name: crate::nir::boxed::INT.into(),
+            occ: "Int".into(),
+            unique: "boxed-int".into(),
+        },
+        args: vec![],
+    });
+    m.types.push(*boxed.clone());
+    if let Ty::Fun { arg, res, .. } = &mut m.types[1] {
+        if boxed_x {
+            *arg = boxed.clone();
+        }
+        if let Ty::Fun { res, .. } = res.as_mut()
+            && boxed_result
+        {
+            *res = boxed;
+        }
+    }
+    if boxed_x {
+        for binder in &mut m.binders {
+            if binder.unique == "x" {
+                binder.ty = 2;
+            }
+        }
+    }
+    let name = crate::nir::boxed::CONSTRUCTOR;
+    m.ids.insert(
+        name.into(),
+        serde_json::from_value(json!({
+            "name": name, "occ":"I#", "arity":1, "details":"[DataCon]", "isJoinPoint":false,
+            "dataCon":{"name":name, "repArity":1, "tag":1, "strictFields":[false]},
+            "dmdSig":{"args":[], "diverges":false, "pretty":""}
+        }))
+        .unwrap(),
+    );
+    modules
+}
+
+#[test]
+fn boxed_int_construction_cases_and_captures_are_source_verified() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let mut branch = int_case(
+        lvar("y"),
+        "s",
+        box_int(lvar("s")),
+        vec![(0, box_int(lvar("y")))],
+    );
+    branch["ty"] = json!(2);
+    let mut default_case = unbox_int(lvar("x"), lvar("y"), false);
+    default_case["alts"][0]["con"] = json!({"kind":"DEFAULT"});
+    default_case["alts"][0]["binders"] = json!([]);
+    for (body, input, result) in [
+        (box_int(int_op("+#", lvar("x"), lvar("y"))), false, true),
+        (
+            unbox_int(box_int(lvar("x")), lvar("field"), false),
+            false,
+            false,
+        ),
+        (
+            unbox_int(lvar("x"), int_op("+#", lvar("field"), lvar("y")), false),
+            true,
+            false,
+        ),
+        (unbox_int(lvar("x"), lvar("boxed_case"), true), true, true),
+        (
+            unbox_int(
+                lvar("x"),
+                int_case(lvar("field"), "s", lvar("s"), vec![(0, lvar("y"))]),
+                false,
+            ),
+            true,
+            false,
+        ),
+        (default_case, true, false),
+        (branch.clone(), false, true),
+        (unbox_int(branch, lvar("field"), false), false, false),
+    ] {
+        let modules = boxed_world(body, input, result);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let counts = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert_eq!(
+            counts.source_nodes,
+            modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
+        );
+        let rust = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        assert!(rust.contains("use h2r_rt::Int as HInt"));
+        check_scalar_renumbering(modules);
+    }
+}
+
+#[test]
+fn boxed_constructor_requires_exact_identity_metadata_and_carriers() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    for mutation in 0..6 {
+        let mut modules = boxed_world(box_int(lvar("x")), false, true);
+        let info = modules[0]
+            .ids
+            .get_mut(crate::nir::boxed::CONSTRUCTOR)
+            .unwrap();
+        match mutation {
+            0 => info.arity = 2,
+            1 => info.details = "[VanillaId]".into(),
+            2 => info.data_con.as_mut().unwrap().name = "$other$Types$I#".into(),
+            3 => info.data_con.as_mut().unwrap().tag = 2,
+            4 => info.data_con.as_mut().unwrap().rep_arity = 2,
+            _ => info.data_con = None,
+        }
+        let owner = modules[0].top[0].pairs[0].binder;
+        assert!(
+            lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err(),
+            "mutation {mutation}"
+        );
+    }
+    for mutation in 0..5 {
+        let mut body = unbox_int(lvar("x"), lvar("field"), false);
+        match mutation {
+            0 => body["alts"][0]["con"]["tag"] = json!(2),
+            1 => body["alts"][0]["con"]["name"] = json!("$other$Types$I#"),
+            2 => body["alts"][0]["binders"][0]["ty"] = json!(2),
+            3 => body["alts"][0]["binders"] = json!([]),
+            _ => body["ty"] = json!(2),
+        }
+        let modules = boxed_world(body, true, false);
+        assert!(crate::emit::emit_entry(&modules, &sn("Main", "main")).is_err());
+    }
+}
+
+#[test]
+fn boxed_case_verifier_rejects_removed_forcing_and_wrong_fields() {
+    use crate::nir::{
+        FnId, Operation, Rule, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    let modules = boxed_world(
+        unbox_int(lvar("x"), int_op("+#", lvar("field"), lvar("y")), false),
+        true,
+        false,
+    );
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..5 {
+        let mut bad = leaf.clone();
+        let instruction = &mut bad.function.blocks[0].instructions[0];
+        match mutation {
+            0 => instruction.operation = Operation::Move(crate::nir::ValueId(1)),
+            1 => instruction.operation = Operation::BoxInt(crate::nir::ValueId(1)),
+            2 => instruction.origin.rule = Rule::StrictPosition,
+            3 => instruction.result.ty = modules[0].types[2].clone(),
+            _ => {
+                bad.function.blocks[0].instructions.remove(0);
+            }
+        }
+        assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err());
+    }
+}
+
+#[test]
+fn boxed_constructor_verifier_rejects_changed_field_and_eager_lifted_arguments() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let modules = boxed_world(box_int(lvar("x")), false, true);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let mut leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    leaf.function.blocks[0].instructions[0].operation = Operation::BoxInt(crate::nir::ValueId(1));
+    assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
+    // Supporting an Int carrier does not authorize forcing a computed lifted
+    // argument. Until explicit thunk regions exist this must remain a refusal.
+    let modules = boxed_world(
+        app(
+            app(gvar(&sn("Main", "main"), "main"), box_int(lvar("y"))),
+            lvar("y"),
+        ),
+        true,
+        false,
+    );
+    let owner = modules[0].top[0].pairs[0].binder;
+    assert!(
+        lower_leaf_in_world(&modules, 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("call arguments")
+    );
+}
+
 #[test]
 fn scalar_regions_compose_operands_scrutinees_and_strict_scopes() {
     use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
@@ -2119,7 +2321,10 @@ fn check_scalar_renumbering(modules: Vec<Module>) {
                         value.0 += 1000;
                     }
                 }
-                Operation::Move(value) | Operation::Force(value) => value.0 += 1000,
+                Operation::Move(value)
+                | Operation::Force(value)
+                | Operation::BoxInt(value)
+                | Operation::UnboxInt(value) => value.0 += 1000,
                 _ => {}
             }
         }

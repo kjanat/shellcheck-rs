@@ -28,7 +28,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Emit standalone Rust for a supported pure Int# entry and all its dependencies.
+    /// Emit standalone Rust for a supported pure Int#/Int entry and all its dependencies.
     EmitRust {
         dir: PathBuf,
         #[arg(long)]

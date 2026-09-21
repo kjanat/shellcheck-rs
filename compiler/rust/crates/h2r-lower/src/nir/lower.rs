@@ -232,14 +232,15 @@ fn lower_tail(
         alts,
         ..
     } = module.expr(source)
+        && !boxed::is_int(module.binder_ty(*binder))
     {
         if !primitive::is_int(module.binder_ty(*binder))
-            || !primitive::is_int(ty)
+            || !(primitive::is_int(ty) || boxed::is_int(ty))
             || !module.ty(*result_ty).alpha_eq(ty)
             || alts.iter().any(|a| !a.binders.is_empty())
         {
             return Err(fail(
-                "switch requires Int# scrutinee/result and no alternative binders".into(),
+                "switch requires Int# scrutinee, Int#/Int result and no alternative binders".into(),
             ));
         }
         let mut patterns = std::collections::BTreeSet::new();
@@ -474,8 +475,13 @@ fn lower_value(
             argument_sources.reverse();
             type_arguments.reverse();
             let primitive = primitive::resolve(module, head);
-            let primitive_ty = primitive::signature();
-            let target = if primitive.is_some() {
+            let constructor = boxed::resolves(module, head);
+            let primitive_ty = if constructor {
+                boxed::signature()
+            } else {
+                primitive::signature()
+            };
+            let target = if primitive.is_some() || constructor {
                 None
             } else {
                 Some(
@@ -487,7 +493,7 @@ fn lower_value(
             let instantiated = instantiate::apply(head_ty, &type_arguments)
                 .map_err(|reason| fail(Some(current), &reason))?;
             let mut signature = &instantiated;
-            let arity = target.map_or(Some(2), |(m, b, _)| {
+            let arity = target.map_or(Some(if constructor { 1 } else { 2 }), |(m, b, _)| {
                 modules.map_or(module, |world| &world[m]).binder(b).arity
             });
             if arity != Some(argument_sources.len() as u32) {
@@ -594,7 +600,9 @@ fn lower_value(
                     id: value,
                     ty: ty.clone(),
                 },
-                operation: if let Some(op) = primitive {
+                operation: if constructor {
+                    Operation::BoxInt(arguments[0])
+                } else if let Some(op) = primitive {
                     Operation::IntBinary { op, arguments }
                 } else {
                     let (module, binder, _) = target.expect("resolved direct target");
@@ -605,7 +613,9 @@ fn lower_value(
                         arguments,
                     }
                 },
-                origin: origin(if primitive.is_some() {
+                origin: origin(if constructor {
+                    Rule::BoxInt
+                } else if primitive.is_some() {
                     Rule::IntBinary
                 } else {
                     Rule::CallTop
@@ -654,6 +664,61 @@ fn lower_value(
             ty: result_ty,
             alts,
             ..
+        } if boxed::is_int(module.binder_ty(*binder)) => {
+            let [alt] = alts.as_slice() else {
+                return Err(fail(
+                    Some(current),
+                    "boxed Int case requires one exhaustive alternative",
+                ));
+            };
+            let field = match alt.binders.as_slice() {
+                [field]
+                    if boxed::alternative(&alt.con)
+                        && primitive::is_int(module.binder_ty(*field)) =>
+                {
+                    Some(*field)
+                }
+                [] if matches!(alt.con, h2r_core_ir::AltCon::Default) => None,
+                _ => return Err(fail(Some(current), "unsupported boxed Int alternative")),
+            };
+            if !module.ty(*result_ty).alpha_eq(ty) {
+                return Err(fail(Some(current), "boxed case result type mismatch"));
+            }
+            let scrutinee = lower_value(
+                context,
+                *scrut,
+                module.binder_ty(*binder),
+                locals,
+                instructions,
+                blocks,
+            )?;
+            let value = fresh_value(context);
+            let Ty::Fun { arg: int, .. } = primitive::signature() else {
+                unreachable!()
+            };
+            instructions.push(Instruction {
+                result: Value {
+                    id: value,
+                    ty: *int,
+                },
+                operation: Operation::UnboxInt(scrutinee),
+                origin: origin(Rule::UnboxInt),
+            });
+            let previous = locals.clone();
+            locals.insert(*binder, scrutinee);
+            if let Some(field) = field {
+                locals.insert(field, value);
+            }
+            let result = lower_value(context, alt.rhs, ty, locals, instructions, blocks);
+            *locals = previous;
+            result?
+        }
+        Expr::Case {
+            scrut,
+            binder,
+            ty: result_ty,
+            alts,
+            ..
         } => {
             if alts.len() != 1 || !matches!(alts[0].con, h2r_core_ir::AltCon::Default) {
                 return lower_region(context, current, ty, locals, instructions, blocks);
@@ -667,7 +732,7 @@ fn lower_value(
             if !matches!(alt.con, h2r_core_ir::AltCon::Default)
                 || !alt.binders.is_empty()
                 || !primitive::is_int(module.binder_ty(*binder))
-                || !primitive::is_int(ty)
+                || !(primitive::is_int(ty) || boxed::is_int(ty))
                 || !module.ty(*result_ty).alpha_eq(ty)
             {
                 return Err(fail(

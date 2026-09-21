@@ -73,6 +73,28 @@ pub fn shared<T>(f: impl FnOnce() -> T + 'static) -> Shared<T> {
     Rc::new(Lazy::new(f))
 }
 
+/// A shared, call-by-need boxed machine Int. Its I# field is unlifted.
+#[derive(Clone)]
+pub struct Int(Shared<i64>);
+
+impl Int {
+    pub fn defer(f: impl FnOnce() -> i64 + 'static) -> Self {
+        Self(shared(f))
+    }
+    pub fn ready(value: i64) -> Self {
+        Self(Rc::new(Lazy::ready(value)))
+    }
+    pub fn force(&self) -> i64 {
+        *self.0.force()
+    }
+    pub fn is_evaluated(&self) -> bool {
+        self.0.is_evaluated()
+    }
+    pub fn shares_with(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +137,23 @@ mod tests {
         let b = Rc::clone(&a);
         assert_eq!(a.force().len(), 3);
         assert!(b.is_evaluated());
+    }
+
+    #[test]
+    fn boxed_int_clones_share_one_delayed_evaluation() {
+        let calls = Rc::new(Cell::new(0));
+        let counter = calls.clone();
+        let value = Int::defer(move || {
+            counter.set(counter.get() + 1);
+            42
+        });
+        let alias = value.clone();
+        assert!(value.shares_with(&alias));
+        assert!(!alias.is_evaluated());
+        assert_eq!(alias.force(), 42);
+        assert_eq!(value.force(), 42);
+        assert_eq!(calls.get(), 1);
+        assert!(value.is_evaluated());
+        assert!(Int::ready(7).is_evaluated());
     }
 }

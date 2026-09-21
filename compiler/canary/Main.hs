@@ -3,7 +3,9 @@ module Main (main) where
 
 import Canary (forward, constant, add, subtractInt, multiply, composed, chained, shared,
   eqInt, neInt, ltInt, leInt, gtInt, geInt, minimumInt, selectInt, nestedBranch,
-  operandBranches, scrutineeBranch, sharedBranch, branchCall)
+  operandBranches, scrutineeBranch, sharedBranch, branchCall,
+  makeBox, boxedSum, boxedIgnore, boxedChoose, boxedRoundTrip, boxedShared,
+  boxedStrictIgnore, boxedCaf)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -53,4 +55,15 @@ main = do
       (I# x, I# y) -> print (I# (sharedBranch x y))
     ["branchCall", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (branchCall x y))
+    ["makeBox", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (makeBox x y)
+    ["boxedSum", a, b] -> print (boxedSum (read a) (read b))
+    ["boxedIgnore", a, b] -> print (boxedIgnore (read a) (read b))
+    ["boxedChoose", a, b] -> print (boxedChoose (read a) (read b))
+    ["boxedStrictIgnore", a, b] -> print (boxedStrictIgnore (read a) (read b))
+    ["boxedRoundTrip", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (boxedRoundTrip x y))
+    ["boxedShared", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (boxedShared x y))
+    ["boxedCaf"] -> print boxedCaf
     _ -> fail "expected a canary entry and its integer arguments"

@@ -259,7 +259,7 @@ fn verify_tail(
         ) => {
             if block.terminator.origin.rule != Rule::IntSwitch
                 || !primitive::is_int(module.binder_ty(*binder))
-                || !primitive::is_int(ty)
+                || !(primitive::is_int(ty) || boxed::is_int(ty))
                 || !module.ty(*result_ty).alpha_eq(ty)
                 || alts.iter().any(|a| !a.binders.is_empty())
             {
@@ -366,7 +366,7 @@ fn verify_value(
         && let Operation::EvaluateBlock { target, arguments } = &instruction.operation
     {
         if !matches!(module.expr(expr), Expr::Case { .. })
-            || !primitive::is_int(ty)
+            || !(primitive::is_int(ty) || boxed::is_int(ty))
             || instruction.origin.source != Source::Expr(expr)
             || instruction.origin.rule != Rule::EvaluateBlock
             || instruction.result.id != returned
@@ -427,8 +427,13 @@ fn verify_value(
             value_applications = source_args.len();
             type_applications = source_types.len();
             let primitive = primitive::resolve(module, head);
-            let primitive_ty = primitive::signature();
-            let target = if primitive.is_some() {
+            let constructor = boxed::resolves(module, head);
+            let primitive_ty = if constructor {
+                boxed::signature()
+            } else {
+                primitive::signature()
+            };
+            let target = if primitive.is_some() || constructor {
                 None
             } else {
                 Some(instantiate::target(module, module_index, modules, head)?)
@@ -436,7 +441,7 @@ fn verify_value(
             let head_ty = target.map_or(&primitive_ty, |(_, _, ty)| ty);
             let instantiated = instantiate::apply(head_ty, &source_types)?;
             let mut signature = &instantiated;
-            let arity = target.map_or(Some(2), |(m, b, _)| {
+            let arity = target.map_or(Some(if constructor { 1 } else { 2 }), |(m, b, _)| {
                 modules.map_or(module, |world| &world[m]).binder(b).arity
             });
             if arity != Some(source_args.len() as u32) {
@@ -535,7 +540,12 @@ fn verify_value(
                 );
             }
             let instruction = &block.instructions[argument_instructions];
-            let expected_rule = if let Some(expected) = primitive {
+            let expected_rule = if constructor {
+                if !matches!(instruction.operation, Operation::BoxInt(value) if values == [value]) {
+                    return Err("Int constructor field differs from source".into());
+                }
+                Rule::BoxInt
+            } else if let Some(expected) = primitive {
                 if !matches!(&instruction.operation, Operation::IntBinary { op, arguments }
                     if *op == expected && arguments == &values)
                 {
@@ -724,6 +734,75 @@ fn verify_value(
             ty: result_ty,
             alts,
             ..
+        } if boxed::is_int(module.binder_ty(*binder)) => {
+            let [alt] = alts.as_slice() else {
+                return Err("boxed source case is not exhaustive".into());
+            };
+            let field = match alt.binders.as_slice() {
+                [field]
+                    if boxed::alternative(&alt.con)
+                        && primitive::is_int(module.binder_ty(*field)) =>
+                {
+                    Some(*field)
+                }
+                [] if matches!(alt.con, h2r_core_ir::AltCon::Default) => None,
+                _ => return Err("invalid boxed source alternative".into()),
+            };
+            if !module.ty(*result_ty).alpha_eq(ty) {
+                return Err("boxed source case result mismatch".into());
+            }
+            let split = block
+                .instructions
+                .iter()
+                .position(|i| {
+                    i.origin.source == Source::Expr(expr) && i.origin.rule == Rule::UnboxInt
+                })
+                .ok_or("missing boxed case forcing")?;
+            let binding = &block.instructions[split];
+            let Operation::UnboxInt(scrutinee) = binding.operation else {
+                return Err("boxed case must force its scrutinee".into());
+            };
+            let mut prefix = block.clone();
+            prefix.instructions.truncate(split);
+            let (st, sv, sn) = verify_value(
+                context,
+                &prefix,
+                *scrut,
+                module.binder_ty(*binder),
+                scrutinee,
+            )?;
+            let scrutinee_value = block
+                .params
+                .iter()
+                .chain(prefix.instructions.iter().map(|i| &i.result))
+                .find(|v| v.id == scrutinee)
+                .ok_or("missing boxed scrutinee")?;
+            let mut suffix = block.clone();
+            suffix.instructions = block.instructions[split + 1..].to_vec();
+            if !suffix.params.iter().any(|p| p.id == scrutinee) {
+                suffix.params.push(scrutinee_value.clone());
+            }
+            suffix.params.push(binding.result.clone());
+            let mut params = params.to_vec();
+            params.push((expr, *binder, scrutinee));
+            if let Some(field) = field {
+                params.push((expr, field, binding.result.id));
+            }
+            let extended = ValueContext {
+                params: &params,
+                ..*context
+            };
+            let (bt, bv, bn) = verify_value(&extended, &suffix, alt.rhs, ty, returned)?;
+            type_applications = st + bt;
+            value_applications = sv + bv;
+            value_nodes = 1 + sn + bn;
+        }
+        Expr::Case {
+            scrut,
+            binder,
+            ty: result_ty,
+            alts,
+            ..
         } => {
             let [alt] = alts.as_slice() else {
                 return Err("source strict case must have one alternative".into());
@@ -731,7 +810,7 @@ fn verify_value(
             if !matches!(alt.con, h2r_core_ir::AltCon::Default)
                 || !alt.binders.is_empty()
                 || !primitive::is_int(module.binder_ty(*binder))
-                || !primitive::is_int(ty)
+                || !(primitive::is_int(ty) || boxed::is_int(ty))
                 || !module.ty(*result_ty).alpha_eq(ty)
             {
                 return Err("source strict case has unsupported type or alternative".into());
@@ -858,12 +937,27 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 return Err("instruction origin belongs to another module".into());
             }
             match instruction.operation {
+                Operation::BoxInt(value) | Operation::UnboxInt(value) => {
+                    let input = available
+                        .get(&value)
+                        .ok_or("unavailable constructor operand")?;
+                    let valid = if matches!(instruction.operation, Operation::BoxInt(_)) {
+                        primitive::is_int(input) && boxed::is_int(&instruction.result.ty)
+                    } else {
+                        boxed::is_int(input) && primitive::is_int(&instruction.result.ty)
+                    };
+                    if !valid {
+                        return Err("boxed Int carrier mismatch".into());
+                    }
+                }
                 Operation::EvaluateBlock {
                     target,
                     ref arguments,
                 } => {
-                    if !primitive::is_int(&instruction.result.ty) {
-                        return Err("region evaluation requires an Int# result".into());
+                    if !(primitive::is_int(&instruction.result.ty)
+                        || boxed::is_int(&instruction.result.ty))
+                    {
+                        return Err("region evaluation requires an Int# or Int result".into());
                     }
                     verify_edge(&blocks, &available, target, arguments)?;
                 }

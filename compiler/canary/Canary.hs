@@ -1,9 +1,11 @@
 {-# LANGUAGE MagicHash #-}
 module Canary (forward, constant, add, subtractInt, multiply, composed, chained, shared,
   eqInt, neInt, ltInt, leInt, gtInt, geInt, minimumInt, selectInt, nestedBranch,
-  operandBranches, scrutineeBranch, sharedBranch, branchCall) where
+  operandBranches, scrutineeBranch, sharedBranch, branchCall,
+  makeBox, boxedSum, boxedIgnore, boxedChoose, boxedRoundTrip, boxedShared,
+  boxedStrictIgnore, boxedCaf) where
 
-import GHC.Exts (Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#))
+import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#))
 import Helpers (first)
 
 {-# NOINLINE forward #-}
@@ -113,3 +115,36 @@ branchCall :: Int# -> Int# -> Int#
 branchCall x y = first
   (case x of { 0# -> y; a -> a +# y })
   (case y of { 0# -> x; b -> b -# x })
+
+{-# NOINLINE makeBox #-}
+makeBox :: Int# -> Int# -> Int
+makeBox x y = I# (x +# y)
+
+{-# NOINLINE boxedSum #-}
+boxedSum :: Int -> Int -> Int
+boxedSum (I# x) (I# y) = I# (x +# y)
+
+{-# NOINLINE boxedIgnore #-}
+boxedIgnore :: Int -> Int -> Int
+boxedIgnore x _ = x
+
+{-# NOINLINE boxedChoose #-}
+boxedChoose :: Int -> Int -> Int
+boxedChoose x y = case x of
+  I# n -> case n of { 0# -> y; _ -> x }
+
+{-# NOINLINE boxedRoundTrip #-}
+boxedRoundTrip :: Int# -> Int# -> Int#
+boxedRoundTrip x y = case makeBox x y of I# z -> z
+
+{-# NOINLINE boxedCaf #-}
+boxedCaf :: Int
+boxedCaf = I# 42#
+
+{-# NOINLINE boxedShared #-}
+boxedShared :: Int# -> Int# -> Int#
+boxedShared x y = case boxedIgnore boxedCaf boxedCaf of I# z -> z +# x +# y
+
+{-# NOINLINE boxedStrictIgnore #-}
+boxedStrictIgnore :: Int -> Int -> Int
+boxedStrictIgnore x y = case x of I# _ -> y

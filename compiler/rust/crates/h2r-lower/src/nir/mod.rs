@@ -9,6 +9,7 @@
 
 use h2r_core_ir::{BinderId, ExprId, Lit, Ty, TyVarId};
 
+pub(crate) mod boxed;
 mod instantiate;
 pub mod lower;
 pub mod pretty;
@@ -45,6 +46,8 @@ pub enum Rule {
     Jump,
     IntSwitch,
     EvaluateBlock,
+    BoxInt,
+    UnboxInt,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +67,9 @@ pub struct Value {
 
 #[derive(Debug, Clone)]
 pub enum Operation {
+    BoxInt(ValueId),
+    /// Force a boxed Int to WHNF and extract its strict Int# field.
+    UnboxInt(ValueId),
     /// Evaluate a scalar region once and resume at the next instruction with
     /// its result. Captures are explicit arguments, never ambient locals.
     EvaluateBlock {
