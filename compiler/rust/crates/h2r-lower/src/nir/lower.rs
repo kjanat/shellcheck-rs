@@ -224,7 +224,21 @@ fn lower_leaf_impl(
         Expr::App { arg, .. } if !matches!(module.expr(*arg), Expr::Type { .. }) => {
             let mut head = current;
             let mut arguments = Vec::new();
+            let mut type_arguments = Vec::new();
             while let Expr::App { fun, arg } = module.expr(head) {
+                if let Expr::Type { ty, .. } = module.expr(*arg) {
+                    type_arguments.push(module.ty(*ty).clone());
+                    head = *fun;
+                    continue;
+                }
+                // Traversal is right-to-left: after reaching type arguments,
+                // another value argument would mean an interleaved spine.
+                if !type_arguments.is_empty() {
+                    return Err(fail(
+                        Some(head),
+                        "type arguments must precede value arguments",
+                    ));
+                }
                 let binder = module.resolve(*arg).ok_or_else(|| {
                     fail(Some(*arg), "call arguments must be existing parameters")
                 })?;
@@ -235,9 +249,13 @@ fn lower_leaf_impl(
                 head = *fun;
             }
             arguments.reverse();
-            let (target_module, binder, mut signature) =
+            type_arguments.reverse();
+            let (target_module, binder, head_ty) =
                 instantiate::target(module, module_index, modules, head)
                     .map_err(|reason| fail(Some(head), &reason))?;
+            let instantiated = instantiate::apply(head_ty, &type_arguments)
+                .map_err(|reason| fail(Some(current), &reason))?;
+            let mut signature = &instantiated;
             let target_source = modules.map_or(module, |world| &world[target_module]);
             if target_source.binder(binder).arity != Some(arguments.len() as u32) {
                 return Err(fail(
@@ -272,6 +290,7 @@ fn lower_leaf_impl(
                 operation: Operation::CallTop {
                     module: target_module,
                     binder,
+                    type_arguments,
                     arguments,
                 },
                 origin: origin(Rule::CallTop),

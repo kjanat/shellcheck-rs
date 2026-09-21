@@ -155,7 +155,10 @@ from GHC, not re-proved here. Type-only support did not change canonical totals.
 Saturated direct value calls (`call-top`) now pass existing entry parameters
 unchanged, without extra forcing. The source checker verifies lexical argument
 order, closed argument/result types, exact target and GHC's declared arity.
-Mixed type/value applications, computed arguments, partial/over-applications,
+Leading closed type arguments followed by parameter arguments (`f @T x`) are
+supported too: substitution happens before checking value argument/result types,
+and arity counts only value arguments. Both argument lists and all source nodes
+are verified. Interleaved type/value spines, free type arguments, computed arguments, partial/over-applications,
 unknown arity and higher-order calls remain unsupported. This is NIR only:
 runtime calling conventions and executable code generation are still pending.
 Signature/body type variables are paired by binder position, permitting GHC's

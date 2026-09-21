@@ -73,7 +73,10 @@
       Saturated direct value calls with existing entry parameters now preserve
       argument identity without forcing. Target arity, closed types and source
       correspondence are checked; canonical coverage increases to 2,624 owners.
-      Mixed type/value calls, computed arguments, partial application and
+      Leading closed type arguments can now precede the value arguments; ordered
+      instantiation evidence and substituted call types are source-verified.
+      Canonical coverage remains 2,624. Interleaved spines, open type arguments,
+      computed arguments, partial application and
       higher-order calls remain unsupported.
       Unsupported forms fail with source addresses.
       `mise run lower:program <dump-dir>` now attempts every live owner after

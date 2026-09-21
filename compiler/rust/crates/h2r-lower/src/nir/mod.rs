@@ -81,6 +81,8 @@ pub enum Operation {
     CallTop {
         module: usize,
         binder: BinderId,
+        /// Leading compile-time type arguments, in source application order.
+        type_arguments: Vec<Ty>,
         arguments: Vec<ValueId>,
     },
     Move(ValueId),

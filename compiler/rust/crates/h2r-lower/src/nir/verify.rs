@@ -180,8 +180,17 @@ fn verify_leaf_impl(
     match module.expr(expr) {
         Expr::App { arg, .. } if !matches!(module.expr(*arg), Expr::Type { .. }) => {
             let mut source_args = Vec::new();
+            let mut source_types = Vec::new();
             let mut head = expr;
             while let Expr::App { fun, arg } = module.expr(head) {
+                if let Expr::Type { ty, .. } = module.expr(*arg) {
+                    source_types.push(module.ty(*ty).clone());
+                    head = *fun;
+                    continue;
+                }
+                if !source_types.is_empty() {
+                    return Err("source call interleaves type and value arguments".into());
+                }
                 let binder = module
                     .resolve(*arg)
                     .ok_or("call source argument is not a lexical parameter")?;
@@ -193,9 +202,13 @@ fn verify_leaf_impl(
                 head = *fun;
             }
             source_args.reverse();
+            source_types.reverse();
             value_applications = source_args.len();
-            let (target_module, target_binder, mut signature) =
+            type_applications = source_types.len();
+            let (target_module, target_binder, head_ty) =
                 instantiate::target(module, module_index, modules, head)?;
+            let instantiated = instantiate::apply(head_ty, &source_types)?;
+            let mut signature = &instantiated;
             let target_source = modules.map_or(module, |world| &world[target_module]);
             if target_source.binder(target_binder).arity != Some(source_args.len() as u32) {
                 return Err("source call is not saturated at known target arity".into());
@@ -223,12 +236,16 @@ fn verify_leaf_impl(
             let Operation::CallTop {
                 module: target,
                 binder,
+                type_arguments,
                 arguments,
             } = &instruction.operation
             else {
                 return Err("source call was not lowered as a direct call".into());
             };
-            if (*target, *binder) != (target_module, target_binder) || arguments != &source_args {
+            if (*target, *binder) != (target_module, target_binder)
+                || arguments != &source_args
+                || type_arguments != &source_types
+            {
                 return Err("direct call target or arguments differ from source".into());
             }
             if instruction.origin.source != Source::Expr(expr)
