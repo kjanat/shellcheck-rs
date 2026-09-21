@@ -123,6 +123,8 @@ The single-leaf task invokes `h2r lower --nir --fn '<stable-name>'`. It requires
 
 Literal value arguments are also supported, including alongside entry parameters. Each literal gets its expected type from the instantiated callee signature and retains its exact source payload and origin; the verifier checks every literal instruction before the call. This relies on GHC's literal typing and introduces no extra forcing. Canonical coverage remains 2,624 bindings.
 
+Top-level references can now be passed as arguments too, including same-module recursive values and imports resolved in the loaded world. Their shared binding identity is preserved without forcing or copying the referenced value. Argument types must match the instantiated callee signature; source verification checks each reference target, origin and position. This raises canonical coverage to 2,651 lowered / 7,144 refused, with 3,957 dead bindings skipped.
+
 ## M1 — how much Haskell is left after GHC?
 
 `h2r laziness` classifies every local binding that survives GHC's optimiser and explains *why* it still exists, from two cross-checked sources: GHC's own demand (strict / absent / used-once), occurrence and one-shot information, and a syntactic occurrence analysis of our own (which case alternatives and lambdas sit between the `let` and each use, and what each use *position* demands of the value).

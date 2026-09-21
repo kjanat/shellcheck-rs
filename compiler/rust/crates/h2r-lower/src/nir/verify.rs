@@ -210,7 +210,7 @@ fn verify_leaf_impl(
                 return Err("source call requires closed structured types".into());
             }
             let mut values = Vec::new();
-            let mut literal_count = 0;
+            let mut argument_instructions = 0;
             for source in &source_args {
                 let Ty::Fun { arg, res, .. } = signature else {
                     return Err("source call signature lacks an arrow".into());
@@ -219,7 +219,7 @@ fn verify_leaf_impl(
                     Expr::Lit(expected) => {
                         let instruction = block
                             .instructions
-                            .get(literal_count)
+                            .get(argument_instructions)
                             .ok_or("missing call literal")?;
                         let Operation::Literal(actual) = &instruction.operation else {
                             return Err("call literal was not lowered as a literal".into());
@@ -232,36 +232,54 @@ fn verify_leaf_impl(
                         {
                             return Err("call literal differs from source".into());
                         }
-                        literal_count += 1;
+                        argument_instructions += 1;
                         instruction.result.id
                     }
                     Expr::Var { .. } => {
-                        let binder = module
-                            .resolve(*source)
-                            .ok_or("call argument is not local")?;
-                        let parameter = params
-                            .iter()
-                            .find(|(_, source, _)| *source == binder)
-                            .ok_or("call argument is not an entry parameter")?;
-                        let value = block
-                            .params
-                            .iter()
-                            .find(|value| value.id == parameter.2)
-                            .ok_or("missing call source parameter")?;
-                        if !arg.alpha_eq(&value.ty) {
-                            return Err("source call parameter type mismatch".into());
+                        let parameter = module.resolve(*source).and_then(|binder| {
+                            params.iter().find(|(_, source, _)| *source == binder)
+                        });
+                        if let Some(parameter) = parameter {
+                            let value = block
+                                .params
+                                .iter()
+                                .find(|value| value.id == parameter.2)
+                                .ok_or("missing call source parameter")?;
+                            if !arg.alpha_eq(&value.ty) {
+                                return Err("source call parameter type mismatch".into());
+                            }
+                            value.id
+                        } else {
+                            let (argument_module, argument_binder, argument_ty) =
+                                instantiate::target(module, module_index, modules, *source)?;
+                            if !world::closed_type(argument_ty) || !arg.alpha_eq(argument_ty) {
+                                return Err("source top-level argument type mismatch".into());
+                            }
+                            let instruction = block
+                                .instructions
+                                .get(argument_instructions)
+                                .ok_or("missing top-level call argument")?;
+                            if !matches!(instruction.operation, Operation::TopReference { module, binder }
+                                if module == argument_module && binder == argument_binder)
+                                || instruction.origin.source != Source::Expr(*source)
+                                || instruction.origin.rule != Rule::TopReference
+                                || !instruction.result.ty.alpha_eq(arg)
+                            {
+                                return Err("top-level call argument differs from source".into());
+                            }
+                            argument_instructions += 1;
+                            instruction.result.id
                         }
-                        value.id
                     }
                     _ => return Err("unsupported call source argument".into()),
                 };
                 values.push(value);
                 signature = res;
             }
-            if block.instructions.len() != literal_count + 1 {
-                return Err("direct call must contain only its literals and call".into());
+            if block.instructions.len() != argument_instructions + 1 {
+                return Err("direct call must contain only its atomic arguments and call".into());
             }
-            let instruction = &block.instructions[literal_count];
+            let instruction = &block.instructions[argument_instructions];
             let Operation::CallTop {
                 module: target,
                 binder,

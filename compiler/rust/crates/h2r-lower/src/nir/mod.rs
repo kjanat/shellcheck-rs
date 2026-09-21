@@ -76,7 +76,8 @@ pub enum Operation {
         arguments: Vec<Ty>,
     },
     /// Saturated direct call when the enclosing function is entered. Parameter
-    /// values (possibly lazy) and literal values are passed without pre-forcing.
+    /// values (possibly lazy), literals and shared top-level references are
+    /// passed without pre-forcing.
     /// The target is identified independently of whether it has been lowered.
     CallTop {
         module: usize,

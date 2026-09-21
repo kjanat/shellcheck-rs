@@ -1045,7 +1045,7 @@ fn nir_direct_calls_reject_extra_forcing_and_computed_arguments() {
             lower_leaf_in_world(&[m], 0, owner, FnId(0))
                 .unwrap_err()
                 .reason
-                .contains("parameters or literals")
+                .contains("parameters, literals or top-level references")
         );
     }
 }
@@ -1417,6 +1417,138 @@ fn nir_call_literal_verifier_rejects_payload_origin_order_and_extra_forcing() {
             "mutation {mutation}"
         );
     }
+}
+
+fn nir_top_argument_world() -> Vec<Module> {
+    let types = nir_call_world(true)[0].types.clone();
+    let mut modules = vec![
+        module(
+            "Main",
+            vec![
+                (
+                    binder(&sn("Main", "main"), "main", "main"),
+                    lam(
+                        "x",
+                        lam(
+                            "y",
+                            app(
+                                app(gvar(&sn("Lib", "target"), "target"), lvar("shared")),
+                                gvar(&sn("Lib", "shared"), "remote"),
+                            ),
+                        ),
+                    ),
+                ),
+                (
+                    binder(&sn("Main", "shared"), "shared", "shared"),
+                    lvar("shared"),
+                ),
+            ],
+            json!({}),
+        ),
+        module(
+            "Lib",
+            vec![
+                (
+                    binder(&sn("Lib", "target"), "target", "target"),
+                    lam("a", lam("b", lvar("a"))),
+                ),
+                (
+                    binder(&sn("Lib", "shared"), "shared", "different-unique"),
+                    lit(),
+                ),
+            ],
+            json!({}),
+        ),
+    ];
+    for m in &mut modules {
+        m.types = types.clone();
+        let owner = m.top[0].pairs[0].binder;
+        m.binders[owner as usize].ty = 1;
+        m.binders[owner as usize].arity = Some(2);
+    }
+    modules
+}
+
+#[test]
+fn nir_top_arguments_preserve_local_recursive_and_imported_identity() {
+    use crate::nir::{
+        FnId, Operation, ValueId, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    let modules = nir_top_argument_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    let instructions = &leaf.function.blocks[0].instructions;
+    assert_eq!(instructions.len(), 3);
+    for index in 0..2 {
+        let Operation::TopReference { module, binder } = instructions[index].operation else {
+            panic!()
+        };
+        assert_eq!(module, index);
+        assert_eq!(binder, modules[index].top[1].pairs[0].binder);
+    }
+    let Operation::CallTop { arguments, .. } = &instructions[2].operation else {
+        panic!()
+    };
+    assert_eq!(arguments, &[ValueId(2), ValueId(3)]);
+    assert_eq!(
+        verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf)
+            .unwrap()
+            .source_nodes,
+        7
+    );
+}
+
+#[test]
+fn nir_top_argument_verifier_rejects_target_origin_type_and_forcing_changes() {
+    use crate::nir::{
+        FnId, Operation, Rule, ValueId,
+        lower::lower_leaf_in_world,
+        verify::{verify, verify_leaf_in_world},
+    };
+    let modules = nir_top_argument_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    let original = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..5 {
+        let mut leaf = original.clone();
+        let instruction = &mut leaf.function.blocks[0].instructions[0];
+        match mutation {
+            0 => {
+                instruction.operation = Operation::TopReference {
+                    module: 1,
+                    binder: modules[1].top[1].pairs[0].binder,
+                }
+            }
+            1 => {
+                instruction.operation = Operation::TopReference {
+                    module: 0,
+                    binder: u32::MAX,
+                }
+            }
+            2 => instruction.origin.rule = Rule::Literal,
+            3 => {
+                instruction.result.ty = h2r_core_ir::Ty::Lit {
+                    kind: "Nat".into(),
+                    text: "42".into(),
+                }
+            }
+            _ => instruction.operation = Operation::Force(ValueId(0)),
+        }
+        verify(&leaf.function).unwrap();
+        assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
+    }
+    let mut modules = modules;
+    let target = modules[1].top[1].pairs[0].binder;
+    modules[1]
+        .types
+        .push(h2r_core_ir::Ty::Opaque { pretty: "T".into() });
+    modules[1].binders[target as usize].ty = 2;
+    assert!(
+        lower_leaf_in_world(&modules, 0, owner, FnId(0))
+            .unwrap_err()
+            .reason
+            .contains("top-level argument type mismatch")
+    );
+    assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &original).is_err());
 }
 
 fn nir_polymorphic_module() -> Module {

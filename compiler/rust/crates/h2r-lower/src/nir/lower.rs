@@ -286,24 +286,47 @@ fn lower_leaf_impl(
                         value
                     }
                     Expr::Var { .. } => {
-                        let value = module
+                        if let Some(value) = module
                             .resolve(source)
                             .and_then(|binder| locals.get(&binder))
-                            .ok_or_else(|| {
-                                fail(
+                        {
+                            if !arg.alpha_eq(&params[value.0 as usize].ty) {
+                                return Err(fail(
                                     Some(source),
-                                    "call arguments must be parameters or literals",
-                                )
-                            })?;
-                        if !arg.alpha_eq(&params[value.0 as usize].ty) {
-                            return Err(fail(Some(source), "direct call argument type mismatch"));
+                                    "direct call argument type mismatch",
+                                ));
+                            }
+                            *value
+                        } else {
+                            let (argument_module, argument_binder, argument_ty) =
+                                instantiate::target(module, module_index, modules, source)
+                                    .map_err(|reason| fail(Some(source), &reason))?;
+                            if !world::closed_type(argument_ty) || !arg.alpha_eq(argument_ty) {
+                                return Err(fail(Some(source), "top-level argument type mismatch"));
+                            }
+                            let value = ValueId((params.len() + instructions.len()) as u32);
+                            instructions.push(Instruction {
+                                result: Value {
+                                    id: value,
+                                    ty: (**arg).clone(),
+                                },
+                                operation: Operation::TopReference {
+                                    module: argument_module,
+                                    binder: argument_binder,
+                                },
+                                origin: Origin {
+                                    module: module_index,
+                                    source: Source::Expr(source),
+                                    rule: Rule::TopReference,
+                                },
+                            });
+                            value
                         }
-                        *value
                     }
                     _ => {
                         return Err(fail(
                             Some(source),
-                            "call arguments must be parameters or literals",
+                            "call arguments must be parameters, literals or top-level references",
                         ));
                     }
                 };
