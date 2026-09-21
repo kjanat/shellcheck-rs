@@ -26,6 +26,21 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
         }
         for instruction in &block.instructions {
             let operation = match &instruction.operation {
+                Operation::Construct {
+                    constructor,
+                    arguments,
+                } => format!(
+                    "construct {} tag {} {arguments:?}",
+                    constructor.name, constructor.tag
+                ),
+                Operation::MatchData {
+                    scrutinee,
+                    arguments,
+                    arms,
+                } => format!(
+                    "match-data v{} captures {arguments:?} arms {arms:?}",
+                    scrutinee.0
+                ),
                 Operation::DelayBlock { target, arguments } => {
                     format!("delay b{} {arguments:?}", target.0)
                 }

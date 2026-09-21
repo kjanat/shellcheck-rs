@@ -1,8 +1,8 @@
-//! First NIR building block: typed, source-attributed scalar control flow.
+//! Typed, source-attributed scalar and algebraic control flow.
 //!
 //! `lower::lower_leaf` translates a restricted subset of Core leaves.
-//! General calls, constructor families, closures and recursive thunk graphs
-//! will extend this model as their lowering rules are implemented.
+//! Saturated direct calls and constructor families are supported; closures and
+//! recursive thunk graphs will extend this model in later lowering rules.
 //! Values cross block boundaries explicitly through block parameters; there
 //! are no implicit captures. IDs are function-local except for `FnId`, which
 //! will be allocated by the program lowering driver.
@@ -10,6 +10,7 @@
 use h2r_core_ir::{BinderId, ExprId, Lit, Ty, TyVarId};
 
 pub(crate) mod boxed;
+pub mod data;
 mod instantiate;
 pub mod lower;
 pub mod pretty;
@@ -50,6 +51,8 @@ pub enum Rule {
     UnboxInt,
     DelayBlock,
     LazyBinding,
+    Construct,
+    MatchData,
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +72,18 @@ pub struct Value {
 
 #[derive(Debug, Clone)]
 pub enum Operation {
-    /// Allocate one shared boxed-Int thunk. Explicit captures are retained
+    Construct {
+        constructor: data::Constructor,
+        arguments: Vec<ValueId>,
+    },
+    /// Force just the outer constructor, then enter exactly one arm. Arm
+    /// parameters are captures, case binder, and constructor fields (in order).
+    MatchData {
+        scrutinee: ValueId,
+        arguments: Vec<ValueId>,
+        arms: Vec<DataArm>,
+    },
+    /// Allocate one shared lifted thunk. Explicit captures are retained
     /// without forcing them; the region runs only on demand, at most once.
     DelayBlock {
         target: BlockId,
@@ -108,7 +122,7 @@ pub enum Operation {
     /// Saturated direct call when the enclosing function is entered. Parameter
     /// values (possibly lazy), literals and shared top-level references are
     /// passed without pre-forcing. Computed Int# arguments are evaluated first;
-    /// computed boxed Int arguments are explicit DelayBlock results.
+    /// computed supported lifted arguments are explicit DelayBlock results.
     /// The target is identified independently of whether it has been lowered.
     CallTop {
         module: usize,
@@ -119,6 +133,13 @@ pub enum Operation {
     },
     Move(ValueId),
     Force(ValueId),
+}
+
+#[derive(Debug, Clone)]
+pub struct DataArm {
+    /// None is DEFAULT, which receives no field parameters.
+    pub constructor: Option<data::Constructor>,
+    pub target: BlockId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

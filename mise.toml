@@ -95,6 +95,7 @@ for profile in optimized unoptimized; do
 out=compiler/build/canary
 binary_entries='forward add subtractInt multiply composed chained shared eqInt neInt ltInt leInt gtInt geInt minimumInt selectInt nestedBranch operandBranches scrutineeBranch sharedBranch branchCall makeBox boxedSum boxedIgnore boxedChoose boxedRoundTrip boxedShared boxedStrictIgnore'
 binary_entries="$binary_entries lazyArgument lazyLet lazyNested lazyUnused lazyBranch lazyStrictUse"
+binary_entries="$binary_entries dataChoice dataPair dataNested dataDefault dataLazy dataStrict dataMaybe dataList dataCaseBinder"
 if [ "$profile" = unoptimized ]; then
   out="$out/unoptimized"
 fi
@@ -131,6 +132,18 @@ for entry in constant boxedCaf $binary_entries; do
   rustc --edition=2024 -O "$out/$entry.rs" -o "$out/$entry"
   rustc --edition=2024 -C overflow-checks=yes "$out/$entry.rs" -o "$out/$entry-checked"
 done
+if [ "$profile" = unoptimized ]; then
+  for spec in chooseData:construct readData:match-data readNested:match-data readMaybe:match-data listFirst:match-data; do
+    entry=${spec%:*}
+    operation=${spec#*:}
+    name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
+    compiler/rust/target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
+    if ! rg -q " = $operation " "$out/$entry.nir"; then
+      echo "$entry did not exercise algebraic $operation lowering" >&2
+      exit 1
+    fi
+  done
+fi
 before=$(sha256sum "$out/forward.rs")
 if compiler/rust/target/release/h2r emit-rust "$out/core" --entry '$main$Main$main' --output "$out/forward.rs" 2> "$out/refusal.stderr"; then
   echo "unsupported IO entry was incorrectly emitted" >&2

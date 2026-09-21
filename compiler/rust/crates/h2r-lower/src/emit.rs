@@ -1,5 +1,5 @@
-//! First executable backend: acyclic, monomorphic Int#/Int entry points and their
-//! complete dependency closure. Text I/O is an explicit generated CLI adapter,
+//! Acyclic monomorphic scalar/algebraic functions and their complete dependency
+//! closure. Text I/O is an explicit integer-only generated CLI adapter,
 //! not a translation of Haskell IO. Unsupported carriers/operations fail closed.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,7 +8,7 @@ use std::fmt::Write;
 use h2r_core_ir::{Module, Ty};
 
 use crate::nir::{
-    Block, Exit, FnId, Function, IntBinary, Operation, boxed, lower::lower_leaf_in_world,
+    Block, Exit, FnId, Function, IntBinary, Operation, boxed, data, lower::lower_leaf_in_world,
 };
 
 type Key = (usize, u32);
@@ -19,7 +19,13 @@ fn scalar(ty: &Ty) -> bool {
 }
 
 fn carrier(ty: &Ty) -> &'static str {
-    if boxed::is_int(ty) { "HInt" } else { "i64" }
+    if boxed::is_int(ty) {
+        "HInt"
+    } else if scalar(ty) {
+        "i64"
+    } else {
+        "HData"
+    }
 }
 
 // Source correspondence has already established acyclic regions and consistent
@@ -83,6 +89,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
     let mut pending = vec![*root];
     let mut functions = BTreeMap::new();
     let mut edges = BTreeMap::<Key, BTreeSet<Key>>::new();
+    let supported = |ty: &Ty| scalar(ty) || modules.iter().any(|m| data::is_data(m, ty));
     while let Some(key @ (module, binder)) = pending.pop() {
         if functions.contains_key(&key) {
             continue;
@@ -96,31 +103,33 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             })?;
         let function = &leaf.function;
         if !function.type_params.is_empty()
-            || !scalar(&function.result_ty)
+            || !supported(&function.result_ty)
             || function
                 .blocks
                 .iter()
                 .flat_map(|b| &b.params)
-                .any(|p| !scalar(&p.ty))
+                .any(|p| !supported(&p.ty))
         {
             return Err(format!(
-                "module {module} binder {binder}: only monomorphic Int#/Int functions can be emitted"
+                "module {module} binder {binder}: emission requires monomorphic supported scalar/algebraic carriers"
             ));
         }
         let mut dependencies = BTreeSet::new();
         for instruction in function.blocks.iter().flat_map(|b| &b.instructions) {
-            if !scalar(&instruction.result.ty) {
+            if !supported(&instruction.result.ty) {
                 return Err("unsupported instruction carrier".into());
             }
             match &instruction.operation {
-                Operation::IntBinary { .. }
+                Operation::Construct { .. }
+                | Operation::MatchData { .. }
+                | Operation::IntBinary { .. }
                 | Operation::Move(_)
                 | Operation::BoxInt(_)
                 | Operation::UnboxInt(_)
                 | Operation::DelayBlock { .. }
                 | Operation::EvaluateBlock { .. } => {}
                 Operation::Literal(lit) => {
-                    if boxed::is_int(&instruction.result.ty) {
+                    if carrier(&instruction.result.ty) != "i64" {
                         return Err("boxed Int requires constructor evidence, not a literal".into());
                     }
                     integer(&lit.kind, &lit.pretty)?;
@@ -135,6 +144,17 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         pending.extend(dependencies.iter().copied());
         edges.insert(key, dependencies);
         functions.insert(key, leaf);
+    }
+    if !scalar(&functions[root].function.result_ty)
+        || functions[root].function.blocks[0]
+            .params
+            .iter()
+            .any(|p| !scalar(&p.ty))
+    {
+        return Err(
+            "CLI adapter requires Int#/Int inputs and output; algebraic values may be internal"
+                .into(),
+        );
     }
     // Refuse recursive definitions until the runtime/stack semantics are covered.
     let mut done = BTreeSet::new();
@@ -153,18 +173,18 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         "// Generated from source-verified scalar NIR. CLI I/O is an adapter.\n#[cfg(not(target_pointer_width = \"64\"))]\ncompile_error!(\"Int# backend requires a 64-bit target\");\n",
     );
     let has_boxed = functions.values().any(|leaf| {
-        boxed::is_int(&leaf.function.result_ty)
+        carrier(&leaf.function.result_ty) != "i64"
             || leaf.function.blocks.iter().any(|b| {
                 b.params
                     .iter()
                     .chain(b.instructions.iter().map(|i| &i.result))
-                    .any(|v| boxed::is_int(&v.ty))
+                    .any(|v| carrier(&v.ty) != "i64")
             })
     });
     if has_boxed {
         out.push_str("\n#[allow(dead_code)]\nmod h2r_rt {\n");
         out.push_str(include_str!("../../h2r-rt/src/lib.rs"));
-        out.push_str("\n}\nuse h2r_rt::Int as HInt;\n");
+        out.push_str("\n}\n#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField};\n");
     }
     for ((module, binder), leaf) in &functions {
         let block = &leaf.function.blocks[0];
@@ -202,7 +222,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                     .find(|v| v.id == id)
                     .expect("verified operand")
                     .ty;
-                if boxed::is_int(ty) {
+                if carrier(ty) != "i64" {
                     format!("v{}.clone()", id.0)
                 } else {
                     format!("v{}", id.0)
@@ -210,6 +230,84 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             };
             for instruction in &block.instructions {
                 let expression = match &instruction.operation {
+                    Operation::Construct {
+                        constructor,
+                        arguments,
+                    } => {
+                        let fields = arguments
+                            .iter()
+                            .zip(&constructor.fields)
+                            .map(|(v, t)| {
+                                let variant = match carrier(t) {
+                                    "i64" => "Int64",
+                                    "HInt" => "Int",
+                                    _ => "Data",
+                                };
+                                format!("HField::{variant}({})", value(*v))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let strict = constructor
+                            .strict
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, s)| **s)
+                            .map(|(i, _)| format!("fields[{i}].force();"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        format!(
+                            "{{ let fields = vec![{fields}]; {strict} HData::ready({:?}, fields) }}",
+                            constructor.name
+                        )
+                    }
+                    Operation::MatchData {
+                        scrutinee,
+                        arguments,
+                        arms,
+                    } => {
+                        let captures = arguments
+                            .iter()
+                            .map(|v| value(*v))
+                            .chain(std::iter::once(value(*scrutinee)))
+                            .collect::<Vec<_>>();
+                        let mut code = format!(
+                            "{{ let node = v{}.force(); match node.constructor {{",
+                            scrutinee.0
+                        );
+                        // DEFAULT may be first in Core; Rust's wildcard must be last.
+                        for arm in arms
+                            .iter()
+                            .filter(|a| a.constructor.is_some())
+                            .chain(arms.iter().filter(|a| a.constructor.is_none()))
+                        {
+                            let mut args = captures.clone();
+                            let pattern = if let Some(c) = &arm.constructor {
+                                for (i, t) in c.fields.iter().enumerate() {
+                                    let method = match carrier(t) {
+                                        "i64" => "int64",
+                                        "HInt" => "int",
+                                        _ => "data",
+                                    };
+                                    args.push(format!("node.fields[{i}].{method}()"));
+                                }
+                                format!("{:?}", c.name)
+                            } else {
+                                "_".into()
+                            };
+                            write!(
+                                code,
+                                " {pattern} => b_{}({}),",
+                                arm.target.0,
+                                args.join(", ")
+                            )
+                            .unwrap();
+                        }
+                        if arms.iter().all(|a| a.constructor.is_some()) {
+                            code.push_str(" _ => panic!(\"invalid constructor family\"),");
+                        }
+                        code.push_str(" } }");
+                        code
+                    }
                     Operation::DelayBlock { target, arguments } => {
                         let captures = arguments
                             .iter()
@@ -222,7 +320,8 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             .collect::<Vec<_>>()
                             .join(", ");
                         format!(
-                            "{{ {captures} HInt::defer(move || b_{}({args}).force()) }}",
+                            "{{ {captures} {}::defer(move || b_{}({args}).force()) }}",
+                            carrier(&instruction.result.ty),
                             target.0
                         )
                     }
@@ -333,13 +432,14 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             .map(|p| format!("v{}", p.id.0))
             .collect::<Vec<_>>()
             .join(", ");
-        if boxed::is_int(&leaf.function.result_ty) {
+        if carrier(&leaf.function.result_ty) != "i64" {
+            let result_carrier = carrier(&leaf.function.result_ty);
             if block.params.is_empty() {
-                writeln!(out, "    std::thread_local! {{ static VALUE: HInt = HInt::defer(|| b_{}().force()); }}\n    VALUE.with(Clone::clone)\n}}", leaf.function.entry.0).unwrap();
+                writeln!(out, "    std::thread_local! {{ static VALUE: {result_carrier} = {result_carrier}::defer(|| b_{}().force()); }}\n    VALUE.with(Clone::clone)\n}}", leaf.function.entry.0).unwrap();
             } else {
                 writeln!(
                     out,
-                    "    HInt::defer(move || b_{}({args}).force())\n}}",
+                    "    {result_carrier}::defer(move || b_{}({args}).force())\n}}",
                     leaf.function.entry.0
                 )
                 .unwrap();

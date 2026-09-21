@@ -1,6 +1,60 @@
 //! Executable checks of generated code with deferred, instrumented inputs.
 #![allow(dead_code)]
 
+mod data_lazy {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/dataLazy.rs"));
+    #[test]
+    fn matching_product_does_not_force_unused_computed_field() {
+        let poison = HInt::defer(|| panic!("unused constructor field forced"));
+        let result = h2r_entry(HInt::ready(42), poison.clone());
+        assert!(!result.is_evaluated());
+        assert_eq!(result.force(), 42);
+        assert!(!poison.is_evaluated());
+    }
+}
+
+mod data_nested {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/dataNested.rs"));
+    #[test]
+    fn nested_patterns_only_force_selected_fields() {
+        let poison = HInt::defer(|| panic!("unselected nested field forced"));
+        assert_eq!(h2r_entry(HInt::ready(7), poison.clone()).force(), 7);
+        assert!(!poison.is_evaluated());
+    }
+}
+
+mod data_strict {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/dataStrict.rs"));
+    #[test]
+    fn strict_field_forced_at_constructor_demand_not_function_call() {
+        let x = HInt::defer(|| 13);
+        let result = h2r_entry(x.clone(), HInt::ready(42));
+        assert!(!x.is_evaluated());
+        assert_eq!(result.force(), 42);
+        assert!(x.is_evaluated());
+    }
+}
+
+mod data_list {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/dataList.rs"));
+    #[test]
+    fn list_head_does_not_force_tail_elements() {
+        let poison = HInt::defer(|| panic!("tail element forced"));
+        assert_eq!(h2r_entry(HInt::ready(42), poison.clone()).force(), 42);
+        assert!(!poison.is_evaluated());
+    }
+}
+
+mod data_default {
+    include!(concat!(env!("H2R_CANARY_DIR"), "/dataDefault.rs"));
+    #[test]
+    fn default_arm_does_not_force_discarded_fields() {
+        let poison = HInt::defer(|| panic!("discarded alternative field forced"));
+        assert_eq!(h2r_entry(HInt::ready(1), poison.clone()).force(), 0);
+        assert!(!poison.is_evaluated());
+    }
+}
+
 mod ignored {
     include!(concat!(env!("H2R_CANARY_DIR"), "/boxedIgnore.rs"));
     #[test]

@@ -95,10 +95,109 @@ impl Int {
     }
 }
 
+/// A general algebraic value. The outer node and every lifted field have
+/// independent memoisation cells; inspecting a tag never forces lazy fields.
+#[derive(Clone)]
+pub struct Data(Shared<Node>);
+
+#[derive(Clone)]
+pub struct Node {
+    pub constructor: &'static str,
+    pub fields: Vec<Field>,
+}
+
+#[derive(Clone)]
+pub enum Field {
+    Int64(i64),
+    Int(Int),
+    Data(Data),
+}
+
+impl Field {
+    pub fn force(&self) {
+        match self {
+            Self::Int64(_) => {}
+            Self::Int(v) => {
+                v.force();
+            }
+            Self::Data(v) => {
+                v.force();
+            }
+        }
+    }
+    pub fn int64(&self) -> i64 {
+        match self {
+            Self::Int64(v) => *v,
+            _ => panic!("invalid Int# field"),
+        }
+    }
+    pub fn int(&self) -> Int {
+        match self {
+            Self::Int(v) => v.clone(),
+            _ => panic!("invalid Int field"),
+        }
+    }
+    pub fn data(&self) -> Data {
+        match self {
+            Self::Data(v) => v.clone(),
+            _ => panic!("invalid data field"),
+        }
+    }
+}
+
+impl Data {
+    pub fn defer(f: impl FnOnce() -> Node + 'static) -> Self {
+        Self(shared(f))
+    }
+    pub fn ready(constructor: &'static str, fields: Vec<Field>) -> Self {
+        Self(Rc::new(Lazy::ready(Node {
+            constructor,
+            fields,
+        })))
+    }
+    pub fn force(&self) -> Node {
+        self.0.force().clone()
+    }
+    pub fn is_evaluated(&self) -> bool {
+        self.0.is_evaluated()
+    }
+    pub fn shares_with(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn algebraic_tag_demand_preserves_lazy_fields_and_shared_identity() {
+        let field = Int::defer(|| panic!("tag inspection forced a lazy field"));
+        let retained = field.clone();
+        let data = Data::defer(move || Node {
+            constructor: "Pair",
+            fields: vec![Field::Int(field)],
+        });
+        let copy = data.clone();
+        assert!(data.shares_with(&copy));
+        assert!(!copy.is_evaluated());
+        let node = copy.force();
+        assert_eq!(node.constructor, "Pair");
+        assert!(data.is_evaluated());
+        assert!(!retained.is_evaluated());
+        assert!(node.fields[0].int().shares_with(&retained));
+    }
+
+    #[test]
+    fn recursive_datatype_carriers_hold_finite_nested_values() {
+        let tail = Data::ready("Nil", vec![]);
+        let list = Data::ready("Cons", vec![Field::Int64(42), Field::Data(tail.clone())]);
+        let node = list.force();
+        assert_eq!(node.fields[0].int64(), 42);
+        assert!(node.fields[1].data().shares_with(&tail));
+        assert_eq!(node.fields[1].data().force().constructor, "Nil");
+    }
 
     #[test]
     fn evaluates_at_most_once() {

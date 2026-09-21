@@ -6,7 +6,9 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   operandBranches, scrutineeBranch, sharedBranch, branchCall,
   makeBox, boxedSum, boxedIgnore, boxedChoose, boxedRoundTrip, boxedShared,
   boxedStrictIgnore, boxedCaf,
-  lazyArgument, lazyLet, lazyNested, lazyUnused, lazyBranch, lazyStrictUse)
+  lazyArgument, lazyLet, lazyNested, lazyUnused, lazyBranch, lazyStrictUse,
+  dataChoice, dataPair, dataNested, dataDefault, dataLazy, dataStrict,
+  dataMaybe, dataList, dataCaseBinder)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -14,6 +16,15 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
+    ["dataChoice", a, b] -> print (dataChoice (read a) (read b))
+    ["dataPair", a, b] -> print (dataPair (read a) (read b))
+    ["dataNested", a, b] -> print (dataNested (read a) (read b))
+    ["dataDefault", a, b] -> print (dataDefault (read a) (read b))
+    ["dataLazy", a, b] -> print (dataLazy (read a) (read b))
+    ["dataStrict", a, b] -> print (dataStrict (read a) (read b))
+    ["dataMaybe", a, b] -> print (dataMaybe (read a) (read b))
+    ["dataList", a, b] -> print (dataList (read a) (read b))
+    ["dataCaseBinder", a, b] -> print (dataCaseBinder (read a) (read b))
     ["forward", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (forward x y))
     ["constant", a] -> case read a of

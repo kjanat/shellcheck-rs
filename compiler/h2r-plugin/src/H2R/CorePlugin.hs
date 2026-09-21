@@ -287,6 +287,7 @@ moduleJ dflags modName unitStr exportSet slots = object
     , "unit"     .= unitStr
     , "ids"      .= idTable dflags binds
     , "types"    .= tsValues tys
+    , "constructors" .= map (constructorJ dflags tys) (programConstructors binds)
     , "binds"    .= map (topBindJ dflags tys exportSet) emitted
     ]
   where
@@ -1407,11 +1408,55 @@ collectTys binds = concatMap bindTys binds
 tyTable :: DynFlags -> CoreProgram -> TyS
 tyTable dflags binds =
     foldl' (\s t -> snd (internTy dflags s (expandTypeSynonyms t))) emptyTyS
-           (collectTys binds)
+           (collectTys binds ++ map (varType . dataConWorkId) (programConstructors binds))
+
+-- Full families, including constructors only mentioned by a pattern. This is
+-- optional format-6 evidence: old dumps remain readable but cannot justify
+-- general algebraic lowering without it.
+programConstructors :: CoreProgram -> [DataCon]
+programConstructors binds = M.elems $ M.fromList
+    [ (nameStableString (dataConName dc), dc)
+    | found <- concatMap goBind binds ++ concatMap typeCons (collectTys binds)
+    , dc <- tyConDataCons (dataConTyCon found) ]
+  where
+    goBind (NonRec _ e) = go e
+    goBind (Rec ps) = concatMap (go . snd) ps
+    go (Var v) = case isDataConId_maybe v of Just dc -> [dc]; Nothing -> []
+    go (App f a) = go f ++ go a
+    go (Lam _ e) = go e
+    go (Let b e) = goBind b ++ go e
+    go (Case s _ _ as) = go s ++ concat [con c ++ go r | Alt c _ r <- as]
+    go (Cast e _) = go e
+    go (Tick _ e) = go e
+    go _ = []
+    con (DataAlt dc) = [dc]
+    con _ = []
+    typeCons (TyConApp tc args) = (if isAlgTyCon tc then tyConDataCons tc else [])
+                                  ++ concatMap typeCons args
+    typeCons (FunTy _ _ a r) = typeCons a ++ typeCons r
+    typeCons (ForAllTy _ t) = typeCons t
+    typeCons (AppTy f a) = typeCons f ++ typeCons a
+    typeCons _ = []
+
+constructorJ :: DynFlags -> TyS -> DataCon -> Value
+constructorJ dflags tys dc = object
+    [ "name" .= nameStableString (dataConName dc)
+    , "worker" .= nameStableString (varName (dataConWorkId dc))
+    , "family" .= nameStableString (tyConName (dataConTyCon dc))
+    , "tag" .= dataConTag dc
+    , "familySize" .= length (tyConDataCons (dataConTyCon dc))
+    , "signature" .= tyIx dflags tys (varType (dataConWorkId dc))
+    , "repArity" .= dataConRepArity dc
+    , "strict" .= map isMarkedStrict (dataConRepStrictness dc)
+    , "vanilla" .= (isVanillaDataCon dc && not (isNewTyCon (dataConTyCon dc))
+                    && isLiftedTypeKind (tyConResKind (dataConTyCon dc))
+                    && not (isUnboxedTupleTyCon (dataConTyCon dc))
+                    && not (isUnboxedSumTyCon (dataConTyCon dc)))
+    ]
 
 -- | The index of a type in a table that already contains it.  'tyTable' is
--- built from exactly the types 'collectTys' yields, which is exactly the set
--- the emitters ask about, so this is always a lookup; interning is pure, so
+-- built from the program types and constructor worker signatures, which is
+-- exactly the set the emitters ask about, so this is always a lookup; interning is pure, so
 -- running it against the finished table cannot disturb it.
 tyIx :: DynFlags -> TyS -> Type -> Int
 tyIx dflags tys t = fst (internTy dflags tys (expandTypeSynonyms t))

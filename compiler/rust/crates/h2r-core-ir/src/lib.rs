@@ -440,6 +440,7 @@ pub struct Module {
     /// occurrence resolves lexically ([`Ref::Local`]), and the binder — not
     /// the table — is what every signature is read from.
     pub ids: HashMap<String, IdInfo>,
+    pub constructors: Vec<raw::ConstructorInfo>,
     /// The module's types, rebuilt from the dump's hash-consed table.
     /// Binders and `Type` nodes index into this.
     pub types: Vec<Ty>,
@@ -898,6 +899,7 @@ impl Module {
             name: raw.module,
             unit: raw.unit,
             ids: raw.ids,
+            constructors: raw.constructors,
             types,
             exprs: b
                 .exprs

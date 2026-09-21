@@ -1045,7 +1045,9 @@ fn nir_direct_calls_reject_extra_forcing_and_computed_arguments() {
             lower_leaf_in_world(&[m], 0, owner, FnId(0))
                 .unwrap_err()
                 .reason
-                .contains("parameters, literals, top-level references or Int# applications")
+                .contains(
+                    "call arguments require supported Int#/Int computations or shared references"
+                )
         );
     }
 }
@@ -2544,6 +2546,290 @@ fn scalar_switch_ids_are_not_source_identities() {
     check_scalar_renumbering(scalar_expression_world(region_expression()));
 }
 
+fn data_construct(name: &str, fields: Vec<Value>) -> Value {
+    fields.into_iter().fold(gvar(&sn("Main", name), name), app)
+}
+
+fn data_case(scrut: Value, default: bool) -> Value {
+    let mut case = strict_case(scrut, "case_data", lvar("x"));
+    case["binder"]["ty"] = json!(3);
+    case["alts"] = json!([
+        {"con":{"kind":"DataAlt", "name":sn("Main","Empty"), "occ":"Empty", "tag":1}, "binders":[], "rhs":lvar("y")},
+        {"con":{"kind":"DataAlt", "name":sn("Main","Pair"), "occ":"Pair", "tag":2}, "binders":[binder("$_in$a","a","a"), binder("$_in$b","b","b")], "rhs":int_op("-#",lvar("a"),lvar("b"))}
+    ]);
+    if default {
+        case["alts"][0]["con"] = json!({"kind":"DEFAULT"});
+    }
+    case
+}
+
+fn data_world(body: Value) -> Vec<Module> {
+    use h2r_core_ir::Ty;
+    let mut modules = boxed_world(body, false, false);
+    let m = &mut modules[0];
+    let ty = Ty::Con {
+        tycon: h2r_core_ir::TyConId {
+            name: sn("Main", "Choice"),
+            occ: "Choice".into(),
+            unique: "choice".into(),
+        },
+        args: vec![],
+    };
+    m.types.push(ty.clone());
+    let int = m.types[0].clone();
+    m.types.push(Ty::Fun {
+        mult: Box::new(int.clone()),
+        arg: Box::new(int.clone()),
+        res: Box::new(Ty::Fun {
+            mult: Box::new(int.clone()),
+            arg: Box::new(int),
+            res: Box::new(ty),
+        }),
+    });
+    for (name, tag, signature, arity) in [("Empty", 1, 3, 0), ("Pair", 2, 4, 2)] {
+        m.constructors.push(serde_json::from_value(json!({"name":sn("Main",name),"worker":sn("Main",name),"family":sn("Main","Choice"),"familySize":2,"tag":tag,"signature":signature,"repArity":arity,"strict":vec![false;arity],"vanilla":true})).unwrap());
+    }
+    modules
+}
+
+#[test]
+fn data_constructors_and_cases_close_source_accounting_and_renumber() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    for body in [
+        data_case(data_construct("Pair", vec![lvar("x"), lvar("y")]), false),
+        data_case(data_construct("Empty", vec![]), true),
+        int_op(
+            "+#",
+            data_case(data_construct("Pair", vec![lvar("x"), lvar("y")]), true),
+            lvar("x"),
+        ),
+    ] {
+        let modules = data_world(body);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let accounting = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert_eq!(
+            accounting.source_nodes,
+            modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
+        );
+        let rust = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        assert!(rust.contains("HData::ready"));
+        assert!(rust.contains("match node.constructor"));
+        check_scalar_renumbering(modules);
+    }
+}
+
+#[test]
+fn data_layout_evidence_is_mandatory_and_complete() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    for mutation in 0..9 {
+        let mut modules = data_world(data_case(
+            data_construct("Pair", vec![lvar("x"), lvar("y")]),
+            false,
+        ));
+        let m = &mut modules[0];
+        match mutation {
+            0 => m.constructors.clear(),
+            1 => {
+                m.constructors.pop();
+            }
+            2 => m.constructors[1].signature = u32::MAX,
+            3 => m.constructors[1].vanilla = false,
+            4 => m.constructors[1].rep_arity = 1,
+            5 => m.constructors[1].strict.clear(),
+            6 => m.constructors[1].tag = 1,
+            7 => m.constructors[1].family_size = 3,
+            _ => m.constructors.push(m.constructors[1].clone()),
+        }
+        let owner = m.top[0].pairs[0].binder;
+        assert!(
+            lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn data_lets_preserve_shared_aliases_and_delayed_construction() {
+    use crate::nir::{FnId, Operation, Rule, lower::lower_leaf_in_world};
+    let mut body = lazy_let(
+        "z",
+        data_construct("Pair", vec![lvar("x"), lvar("y")]),
+        data_case(lvar("z"), false),
+    );
+    body["bind"]["pairs"][0]["binder"]["ty"] = json!(3);
+    let modules = data_world(body);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    assert!(
+        leaf.function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.instructions)
+            .any(|i| matches!(i.operation, Operation::DelayBlock { .. }))
+    );
+    assert_eq!(
+        leaf.function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.instructions)
+            .filter(|i| i.origin.rule == Rule::LazyBinding)
+            .count(),
+        1
+    );
+    check_scalar_renumbering(modules);
+}
+
+#[test]
+fn data_nullary_workers_in_call_arguments_are_not_linked_as_functions() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world};
+    let body = app(
+        gvar(&sn("Helper", "consume"), "consume"),
+        data_construct("Empty", vec![]),
+    );
+    let mut modules = data_world(body);
+    let data_ty = modules[0].types[3].clone();
+    let int_ty = modules[0].types[0].clone();
+    let target = modules[1].top[0].pairs[0].binder;
+    modules[1].binders[target as usize].name = sn("Helper", "consume");
+    modules[1].binders[target as usize].arity = Some(1);
+    let index = modules[1].types.len() as u32;
+    modules[1].types.push(h2r_core_ir::Ty::Fun {
+        mult: Box::new(int_ty.clone()),
+        arg: Box::new(data_ty),
+        res: Box::new(int_ty),
+    });
+    modules[1].binders[target as usize].ty = index;
+    let leaf =
+        lower_leaf_in_world(&modules, 0, modules[0].top[0].pairs[0].binder, FnId(0)).unwrap();
+    assert!(matches!(
+        leaf.function.blocks[0].instructions[0].operation,
+        Operation::Construct { .. }
+    ));
+}
+
+#[test]
+fn data_constructor_names_never_override_lexical_bindings() {
+    use h2r_core_ir::Expr;
+    // Rebuild with a lambda shadow using the worker's exact stable name/unique.
+    let mut shadow = binder(&sn("Main", "Pair"), "Pair", "Pair");
+    shadow["ty"] = json!(4);
+    let body = json!({"node":"Lam","binder":shadow,"body":data_case(data_construct("Pair",vec![lvar("x"),lvar("y")]),false)});
+    let modules = data_world(body);
+    let m = &modules[0];
+    let source = m
+        .exprs
+        .iter()
+        .position(|e| matches!(e,Expr::Var{name,..} if *name==sn("Main","Pair")))
+        .unwrap() as u32;
+    assert!(
+        m.resolve(source).is_some(),
+        "fixture must actually resolve lexically"
+    );
+    assert!(
+        crate::nir::data::resolve(m, source, &m.types[3])
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn data_source_verifier_rejects_corrupted_layout_fields_and_control_flow() {
+    use crate::nir::{
+        FnId, Operation, Rule, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    let modules = data_world(data_case(
+        data_construct("Pair", vec![lvar("x"), lvar("y")]),
+        false,
+    ));
+    let owner = modules[0].top[0].pairs[0].binder;
+    let good = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..12 {
+        let mut bad = good.clone();
+        if mutation < 6 {
+            let instruction = bad
+                .function
+                .blocks
+                .iter_mut()
+                .flat_map(|b| &mut b.instructions)
+                .find(|i| matches!(i.operation, Operation::Construct { .. }))
+                .unwrap();
+            let Operation::Construct {
+                constructor,
+                arguments,
+            } = &mut instruction.operation
+            else {
+                unreachable!()
+            };
+            match mutation {
+                0 => arguments.swap(0, 1),
+                1 => constructor.tag = 1,
+                2 => constructor.name = sn("Main", "Empty"),
+                3 => constructor.strict[0] = true,
+                4 => constructor.fields.swap(0, 1), // same types: corrupt result instead
+                _ => instruction.origin.rule = Rule::Literal,
+            }
+            if mutation == 4 {
+                constructor.result = modules[0].types[0].clone();
+            }
+        } else {
+            let entry = bad.function.entry;
+            let instruction = bad
+                .function
+                .blocks
+                .iter_mut()
+                .flat_map(|b| &mut b.instructions)
+                .find(|i| matches!(i.operation, Operation::MatchData { .. }))
+                .unwrap();
+            let Operation::MatchData {
+                scrutinee,
+                arguments,
+                arms,
+            } = &mut instruction.operation
+            else {
+                unreachable!()
+            };
+            match mutation {
+                6 => arguments.swap(0, 1),
+                7 => arms.swap(0, 1),
+                8 => {
+                    arms.pop();
+                }
+                9 => arms[0].target = entry,
+                10 => *scrutinee = arguments[0],
+                _ => arms[1].constructor.as_mut().unwrap().strict[0] = true,
+            }
+        }
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn data_patterns_require_correct_fields_unique_tags_and_exhaustiveness() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    for mutation in 0..6 {
+        let mut body = data_case(data_construct("Empty", vec![]), false);
+        match mutation {
+            0 => {
+                body["alts"].as_array_mut().unwrap().pop();
+            }
+            1 => body["alts"][1]["con"]["tag"] = json!(1),
+            2 => body["alts"][1]["binders"][0]["ty"] = json!(2),
+            3 => body["alts"][1]["binders"] = json!([]),
+            4 => body["alts"][1]["con"]["name"] = json!(sn("Other", "Pair")),
+            _ => body["alts"][1]["rhs"] = json!({"node":"Coercion"}),
+        }
+        let modules = data_world(body);
+        assert!(
+            lower_leaf_in_world(&modules, 0, modules[0].top[0].pairs[0].binder, FnId(0)).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
 fn check_scalar_renumbering(modules: Vec<Module>) {
     use crate::nir::{
         Exit, FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
@@ -2562,6 +2848,24 @@ fn check_scalar_renumbering(modules: Vec<Module>) {
         for instruction in &mut block.instructions {
             instruction.result.id.0 += 1000;
             match &mut instruction.operation {
+                Operation::Construct { arguments, .. } => {
+                    for value in arguments {
+                        value.0 += 1000;
+                    }
+                }
+                Operation::MatchData {
+                    scrutinee,
+                    arguments,
+                    arms,
+                } => {
+                    scrutinee.0 += 1000;
+                    for value in arguments {
+                        value.0 += 1000;
+                    }
+                    for arm in arms {
+                        arm.target.0 += 100;
+                    }
+                }
                 Operation::EvaluateBlock { target, arguments }
                 | Operation::DelayBlock { target, arguments } => {
                     target.0 += 100;

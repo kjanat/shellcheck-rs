@@ -67,10 +67,32 @@ pub struct RawModule {
     /// `CoreTidy` the module's own externalised top-level binders can
     /// appear, redundantly, when the module references them.
     pub ids: HashMap<String, IdInfo>,
+    /// Optional, additive format-6 evidence. Absence is not permission to
+    /// infer general constructor layouts from names or pretty types.
+    #[serde(default)]
+    pub constructors: Vec<ConstructorInfo>,
     /// The module's hash-consed type table. Every child index is smaller
     /// than its parent's, so the table can be rebuilt in one forward pass.
     pub types: Vec<RawTy>,
     pub binds: Vec<RawBind>,
+}
+
+/// Optional worker-layout evidence for complete algebraic constructor families.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConstructorInfo {
+    pub name: String,
+    pub worker: String,
+    pub family: String,
+    #[serde(rename = "familySize")]
+    pub family_size: u32,
+    pub tag: u32,
+    pub signature: TyId,
+    #[serde(rename = "repArity")]
+    pub rep_arity: u32,
+    pub strict: Vec<bool>,
+    /// Vanilla lifted algebraic representation: no newtypes, unboxed sums/
+    /// tuples, unlifted datatypes, existential or equality evidence fields.
+    pub vanilla: bool,
 }
 
 /// A type constructor's identity: its stable name. The unique is a

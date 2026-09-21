@@ -1,5 +1,5 @@
-//! Conservative scalar Core lowering: leaves, direct calls, Int# composition
-//! and Int# literal/default switches. Unsupported constructs fail explicitly.
+//! Conservative Core lowering: direct calls, scalar control flow, lazy regions
+//! and algebraic construction/matching. Unsupported constructs fail explicitly.
 //! This is not a whole-program driver or an independent semantic verifier.
 
 use std::collections::BTreeMap;
@@ -232,10 +232,10 @@ fn lower_tail(
         alts,
         ..
     } = module.expr(source)
-        && !boxed::is_int(module.binder_ty(*binder))
+        && !data::lifted(module, module.binder_ty(*binder))
     {
         if !primitive::is_int(module.binder_ty(*binder))
-            || !(primitive::is_int(ty) || boxed::is_int(ty))
+            || !data::supported(module, ty)
             || !module.ty(*result_ty).alpha_eq(ty)
             || alts.iter().any(|a| !a.binders.is_empty())
         {
@@ -373,6 +373,65 @@ fn lower_value(
         source: Source::Expr(current),
         rule,
     };
+    // Constructor spines include nullary workers and type-only applications.
+    let mut head = current;
+    let mut sources = Vec::new();
+    let mut types = Vec::new();
+    while let Expr::App { fun, arg } = module.expr(head) {
+        if let Expr::Type { ty, .. } = module.expr(*arg) {
+            types.push(module.ty(*ty).clone());
+        } else {
+            if !types.is_empty() {
+                return Err(fail(
+                    Some(current),
+                    "type arguments must precede value arguments",
+                ));
+            }
+            sources.push(*arg);
+        }
+        head = *fun;
+    }
+    if let Some(constructor) =
+        data::resolve(module, head, ty).map_err(|e| fail(Some(current), &e))?
+    {
+        sources.reverse();
+        types.reverse();
+        let Ty::Con { args, .. } = ty else {
+            unreachable!()
+        };
+        if types != *args || sources.len() != constructor.fields.len() {
+            return Err(fail(
+                Some(current),
+                "constructor type arguments or saturation mismatch",
+            ));
+        }
+        let mut arguments = Vec::new();
+        for (source, field) in sources.into_iter().zip(&constructor.fields) {
+            let value = if data::lifted(module, field)
+                && !matches!(module.expr(source), Expr::Var { .. })
+            {
+                lower_region(context, source, field, locals, instructions, blocks, true)?
+            } else if matches!(module.expr(source), Expr::Case { .. } | Expr::Let { .. }) {
+                lower_region(context, source, field, locals, instructions, blocks, false)?
+            } else {
+                lower_value(context, source, field, locals, instructions, blocks)?
+            };
+            arguments.push(value);
+        }
+        let value = fresh_value(context);
+        instructions.push(Instruction {
+            result: Value {
+                id: value,
+                ty: ty.clone(),
+            },
+            operation: Operation::Construct {
+                constructor,
+                arguments,
+            },
+            origin: origin(Rule::Construct),
+        });
+        return Ok(value);
+    }
     let value = match module.expr(current) {
         Expr::Lit(lit) => {
             let value = fresh_value(context);
@@ -521,7 +580,7 @@ fn lower_value(
                         lower_region(context, source, arg, locals, instructions, blocks, false)?
                     }
                     Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. }
-                        if boxed::is_int(arg) =>
+                        if data::lifted(module, arg) =>
                     {
                         lower_region(context, source, arg, locals, instructions, blocks, true)?
                     }
@@ -542,7 +601,12 @@ fn lower_value(
                         value
                     }
                     Expr::Var { .. } => {
-                        if let Some(value) = module
+                        if data::resolve(module, source, arg)
+                            .map_err(|e| fail(Some(source), &e))?
+                            .is_some()
+                        {
+                            lower_value(context, source, arg, locals, instructions, blocks)?
+                        } else if let Some(value) = module
                             .resolve(source)
                             .and_then(|binder| locals.get(&binder))
                         {
@@ -671,12 +735,12 @@ fn lower_value(
             };
             let binding_ty = module.binder_ty(pair.binder);
             if bind.recursive
-                || !boxed::is_int(binding_ty)
+                || !data::lifted(module, binding_ty)
                 || module.binder(pair.binder).is_join_point == Some(true)
             {
                 return Err(fail(
                     Some(current),
-                    "lazy let requires a non-recursive boxed Int, not a join point",
+                    "lazy let requires a supported non-recursive lifted value, not a join point",
                 ));
             }
             let rhs = if matches!(module.expr(pair.rhs), Expr::Var { .. }) {
@@ -709,6 +773,110 @@ fn lower_value(
                 locals.remove(&pair.binder);
             }
             result?
+        }
+        Expr::Case {
+            scrut,
+            binder,
+            ty: result_ty,
+            alts,
+            ..
+        } if data::is_data(module, module.binder_ty(*binder)) => {
+            if !module.ty(*result_ty).alpha_eq(ty) || !data::supported(module, ty) {
+                return Err(fail(Some(current), "algebraic case result mismatch"));
+            }
+            let family = data::family(module, module.binder_ty(*binder))
+                .map_err(|e| fail(Some(current), &e))?;
+            let scrutinee = lower_value(
+                context,
+                *scrut,
+                module.binder_ty(*binder),
+                locals,
+                instructions,
+                blocks,
+            )?;
+            let captures: Vec<_> = locals.iter().map(|(b, v)| (*b, *v)).collect();
+            let arguments: Vec<_> = captures.iter().map(|(_, v)| *v).collect();
+            let mut arms = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            let mut default = false;
+            for alt in alts {
+                let constructor = match &alt.con {
+                    h2r_core_ir::AltCon::DataAlt { name, tag, .. } => {
+                        let c = family
+                            .iter()
+                            .find(|c| c.name == *name && c.tag == *tag)
+                            .ok_or_else(|| fail(Some(current), "case constructor not in family"))?
+                            .clone();
+                        if !seen.insert(*tag) {
+                            return Err(fail(Some(current), "duplicate constructor pattern"));
+                        }
+                        Some(c)
+                    }
+                    h2r_core_ir::AltCon::Default if !default => {
+                        default = true;
+                        None
+                    }
+                    _ => return Err(fail(Some(current), "invalid algebraic alternative")),
+                };
+                let fields = constructor
+                    .as_ref()
+                    .map_or(&[][..], |c| c.fields.as_slice());
+                if fields.len() != alt.binders.len()
+                    || fields
+                        .iter()
+                        .zip(&alt.binders)
+                        .any(|(ty, b)| !ty.alpha_eq(module.binder_ty(*b)))
+                {
+                    return Err(fail(Some(current), "case field layout mismatch"));
+                }
+                let mut branch_params = Vec::new();
+                let mut branch_locals = BTreeMap::new();
+                for (b, v) in &captures {
+                    let ty = &params
+                        .iter()
+                        .chain(instructions.iter().map(|i| &i.result))
+                        .find(|p| p.id == *v)
+                        .expect("available capture")
+                        .ty;
+                    let id = fresh_value(context);
+                    branch_params.push(Value { id, ty: ty.clone() });
+                    branch_locals.insert(*b, id);
+                }
+                for b in std::iter::once(binder).chain(&alt.binders) {
+                    let id = fresh_value(context);
+                    branch_params.push(Value {
+                        id,
+                        ty: module.binder_ty(*b).clone(),
+                    });
+                    branch_locals.insert(*b, id);
+                }
+                let branch_context = BodyContext {
+                    params: &branch_params,
+                    ..*context
+                };
+                let target = lower_tail(&branch_context, alt.rhs, ty, &branch_locals, blocks)?;
+                arms.push(DataArm {
+                    constructor,
+                    target,
+                });
+            }
+            if arms.is_empty() || (!default && seen.len() != family.len()) {
+                return Err(fail(Some(current), "non-exhaustive algebraic case"));
+            }
+            let value = fresh_value(context);
+            instructions.push(Instruction {
+                result: Value {
+                    id: value,
+                    ty: ty.clone(),
+                },
+                operation: Operation::MatchData {
+                    scrutinee,
+                    arguments,
+                    arms,
+                },
+                origin: origin(Rule::MatchData),
+            });
+            value
         }
         Expr::Case {
             scrut,
@@ -784,7 +952,7 @@ fn lower_value(
             if !matches!(alt.con, h2r_core_ir::AltCon::Default)
                 || !alt.binders.is_empty()
                 || !primitive::is_int(module.binder_ty(*binder))
-                || !(primitive::is_int(ty) || boxed::is_int(ty))
+                || !data::supported(module, ty)
                 || !module.ty(*result_ty).alpha_eq(ty)
             {
                 return Err(fail(

@@ -259,7 +259,7 @@ fn verify_tail(
         ) => {
             if block.terminator.origin.rule != Rule::IntSwitch
                 || !primitive::is_int(module.binder_ty(*binder))
-                || !(primitive::is_int(ty) || boxed::is_int(ty))
+                || !data::supported(module, ty)
                 || !module.ty(*result_ty).alpha_eq(ty)
                 || alts.iter().any(|a| !a.binders.is_empty())
             {
@@ -368,12 +368,12 @@ fn verify_value(
     {
         let delayed = matches!(instruction.operation, Operation::DelayBlock { .. });
         let valid_source = if delayed {
-            boxed::is_int(ty)
+            data::lifted(module, ty)
         } else {
             matches!(module.expr(expr), Expr::Case { .. } | Expr::Let { .. })
         };
         if !valid_source
-            || !(primitive::is_int(ty) || boxed::is_int(ty))
+            || !data::supported(module, ty)
             || instruction.origin.source != Source::Expr(expr)
             || instruction.origin.rule
                 != if delayed {
@@ -413,6 +413,14 @@ fn verify_value(
             ..*context
         };
         return verify_tail(&region_context, context.function, *target, expr, ty);
+    }
+    if let Some(counts) = verify_constructor(context, block, expr, ty, returned)? {
+        return Ok(counts);
+    }
+    if let Expr::Case { binder, .. } = module.expr(expr)
+        && data::is_data(module, module.binder_ty(*binder))
+    {
+        return verify_data_case(context, block, expr, ty, returned);
     }
     let mut value_nodes = 1;
     let mut type_applications = 0;
@@ -470,7 +478,7 @@ fn verify_value(
                 };
                 let value = match module.expr(*source) {
                     Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. }
-                        if primitive::is_int(arg) || boxed::is_int(arg) =>
+                        if data::supported(module, arg) =>
                     {
                         let end = block.instructions[argument_instructions..]
                             .iter()
@@ -478,7 +486,7 @@ fn verify_value(
                             .map(|offset| argument_instructions + offset)
                             .ok_or("missing computed Int# argument")?;
                         let result = block.instructions[end].result.id;
-                        if boxed::is_int(arg)
+                        if data::lifted(module, arg)
                             && !matches!(
                                 block.instructions[end].operation,
                                 Operation::DelayBlock { .. }
@@ -519,7 +527,17 @@ fn verify_value(
                         let parameter = module.resolve(*source).and_then(|binder| {
                             params.iter().find(|(_, source, _)| *source == binder)
                         });
-                        if let Some(parameter) = parameter {
+                        if data::resolve(module, *source, arg)?.is_some() {
+                            let instruction = block
+                                .instructions
+                                .get(argument_instructions)
+                                .ok_or("missing nullary constructor argument")?;
+                            let mut nested = block.clone();
+                            nested.instructions = vec![instruction.clone()];
+                            verify_value(context, &nested, *source, arg, instruction.result.id)?;
+                            argument_instructions += 1;
+                            instruction.result.id
+                        } else if let Some(parameter) = parameter {
                             let value = block
                                 .params
                                 .iter()
@@ -756,7 +774,7 @@ fn verify_value(
             };
             let binding_ty = module.binder_ty(pair.binder);
             if bind.recursive
-                || !boxed::is_int(binding_ty)
+                || !data::lifted(module, binding_ty)
                 || module.binder(pair.binder).is_join_point == Some(true)
             {
                 return Err("unsupported recursive, unlifted or join-point let".into());
@@ -882,7 +900,7 @@ fn verify_value(
             if !matches!(alt.con, h2r_core_ir::AltCon::Default)
                 || !alt.binders.is_empty()
                 || !primitive::is_int(module.binder_ty(*binder))
-                || !(primitive::is_int(ty) || boxed::is_int(ty))
+                || !data::supported(module, ty)
                 || !module.ty(*result_ty).alpha_eq(ty)
             {
                 return Err("source strict case has unsupported type or alternative".into());
@@ -948,6 +966,220 @@ fn source_type_matches(expected: &Ty, actual: &Ty, binders: &[(TyVarId, TyVarId)
     expected.alpha_eq(&actual)
 }
 
+fn verify_constructor(
+    context: &ValueContext<'_>,
+    block: &Block,
+    expr: ExprId,
+    ty: &Ty,
+    returned: ValueId,
+) -> Result<Option<(usize, usize, usize)>, String> {
+    use h2r_core_ir::Expr;
+    let module = context.module;
+    let mut head = expr;
+    let mut args = Vec::new();
+    let mut types = Vec::new();
+    while let Expr::App { fun, arg } = module.expr(head) {
+        match module.expr(*arg) {
+            Expr::Type { ty, .. } => types.push(module.ty(*ty).clone()),
+            _ if types.is_empty() => args.push(*arg),
+            _ => return Err("interleaved source constructor spine".into()),
+        }
+        head = *fun;
+    }
+    let Some(expected) = data::resolve(module, head, ty)? else {
+        return Ok(None);
+    };
+    args.reverse();
+    types.reverse();
+    let Ty::Con { args: instance, .. } = ty else {
+        unreachable!()
+    };
+    if types != *instance || args.len() != expected.fields.len() {
+        return Err("source constructor saturation/type arguments mismatch".into());
+    }
+    let instruction = block
+        .instructions
+        .last()
+        .ok_or("missing constructor instruction")?;
+    let Operation::Construct {
+        constructor,
+        arguments,
+    } = &instruction.operation
+    else {
+        return Err("source constructor was not constructed".into());
+    };
+    if constructor != &expected
+        || instruction.origin.source != Source::Expr(expr)
+        || instruction.origin.rule != Rule::Construct
+        || instruction.result.id != returned
+        || !instruction.result.ty.alpha_eq(ty)
+        || arguments.len() != args.len()
+    {
+        return Err("constructor identity, layout, result or origin mismatch".into());
+    }
+    let mut nt = types.len();
+    let mut nv = args.len();
+    let mut nn = 1;
+    let mut offset = 0;
+    for ((source, field), value) in args.iter().zip(&expected.fields).zip(arguments) {
+        let parameter = module
+            .resolve(*source)
+            .and_then(|b| context.params.iter().find(|(_, binder, _)| *binder == b));
+        let end = if parameter.is_some() {
+            offset
+        } else {
+            block.instructions[offset..block.instructions.len() - 1]
+                .iter()
+                .position(|i| i.result.id == *value)
+                .map(|i| offset + i + 1)
+                .ok_or("missing constructor field evaluation")?
+        };
+        let mut argument = block.clone();
+        argument.instructions = block.instructions[offset..end].to_vec();
+        if data::lifted(module, field)
+            && !matches!(module.expr(*source), Expr::Var { .. })
+            && !argument
+                .instructions
+                .last()
+                .is_some_and(|i| matches!(i.operation, Operation::DelayBlock { .. }))
+        {
+            return Err("constructor field computation must remain delayed".into());
+        }
+        let (at, av, an) = verify_value(context, &argument, *source, field, *value)?;
+        nt += at;
+        nv += av;
+        nn += an - 1;
+        offset = end;
+    }
+    if offset + 1 != block.instructions.len() {
+        return Err("extra constructor instructions".into());
+    }
+    Ok(Some((nt, nv, nn)))
+}
+
+fn verify_data_case(
+    context: &ValueContext<'_>,
+    block: &Block,
+    expr: ExprId,
+    ty: &Ty,
+    returned: ValueId,
+) -> Result<(usize, usize, usize), String> {
+    let module = context.module;
+    let h2r_core_ir::Expr::Case {
+        scrut,
+        binder,
+        ty: result,
+        alts,
+        ..
+    } = module.expr(expr)
+    else {
+        unreachable!()
+    };
+    let instruction = block.instructions.last().ok_or("missing algebraic match")?;
+    let Operation::MatchData {
+        scrutinee,
+        arguments,
+        arms,
+    } = &instruction.operation
+    else {
+        return Err("case must force and match constructor".into());
+    };
+    if instruction.origin.rule != Rule::MatchData
+        || instruction.origin.source != Source::Expr(expr)
+        || instruction.result.id != returned
+        || !instruction.result.ty.alpha_eq(ty)
+        || !module.ty(*result).alpha_eq(ty)
+        || arms.len() != alts.len()
+        || arms.is_empty()
+    {
+        return Err("algebraic case result/origin/arity mismatch".into());
+    }
+    let mut prefix = block.clone();
+    prefix.instructions.pop();
+    let (mut nt, mut nv, mut nn) = verify_value(
+        context,
+        &prefix,
+        *scrut,
+        module.binder_ty(*binder),
+        *scrutinee,
+    )?;
+    nn += 1;
+    let family = data::family(module, module.binder_ty(*binder))?;
+    let mut captured = context.params.to_vec();
+    captured.sort_by_key(|(_, b, _)| *b);
+    if *arguments != captured.iter().map(|(_, _, v)| *v).collect::<Vec<_>>() {
+        return Err("case captures differ from lexical scope".into());
+    }
+    let mut seen = BTreeSet::new();
+    let mut default = false;
+    for (alt, arm) in alts.iter().zip(arms) {
+        let expected = match &alt.con {
+            h2r_core_ir::AltCon::DataAlt { name, tag, .. } => {
+                let c = family
+                    .iter()
+                    .find(|c| c.name == *name && c.tag == *tag)
+                    .ok_or("case constructor outside source family")?;
+                if !seen.insert(*tag) {
+                    return Err("duplicate source constructor alternative".into());
+                }
+                Some(c)
+            }
+            h2r_core_ir::AltCon::Default if !default => {
+                default = true;
+                None
+            }
+            _ => return Err("invalid source algebraic pattern".into()),
+        };
+        if arm.constructor.as_ref() != expected {
+            return Err("case pattern differs from source".into());
+        }
+        let fields = expected.map_or(&[][..], |c| c.fields.as_slice());
+        if fields.len() != alt.binders.len()
+            || fields
+                .iter()
+                .zip(&alt.binders)
+                .any(|(t, b)| !t.alpha_eq(module.binder_ty(*b)))
+        {
+            return Err("source pattern field layout mismatch".into());
+        }
+        let target = context
+            .function
+            .blocks
+            .iter()
+            .find(|b| b.id == arm.target)
+            .ok_or("missing case arm")?;
+        if target.params.len() != captured.len() + 1 + fields.len() {
+            return Err("case arm parameter count mismatch".into());
+        }
+        let mut params: Vec<_> = captured
+            .iter()
+            .zip(&target.params)
+            .map(|((e, b, _), p)| (*e, *b, p.id))
+            .collect();
+        for (b, p) in std::iter::once(binder)
+            .chain(&alt.binders)
+            .zip(&target.params[captured.len()..])
+        {
+            if !p.ty.alpha_eq(module.binder_ty(*b)) {
+                return Err("case arm binder type mismatch".into());
+            }
+            params.push((expr, *b, p.id));
+        }
+        let branch = ValueContext {
+            params: &params,
+            ..*context
+        };
+        let (at, av, an) = verify_tail(&branch, context.function, arm.target, alt.rhs, ty)?;
+        nt += at;
+        nv += av;
+        nn += an;
+    }
+    if !default && seen.len() != family.len() {
+        return Err("non-exhaustive source algebraic case".into());
+    }
+    Ok((nt, nv, nn))
+}
+
 /// Reject malformed CFGs and SSA uses. Block-local availability is deliberately
 /// stronger than dominance: all incoming values must be explicit parameters.
 pub fn verify(function: &Function) -> Result<(), String> {
@@ -976,6 +1208,9 @@ pub fn verify(function: &Function) -> Result<(), String> {
     let mut pending_types = vec![(function.entry, &function.result_ty)];
     for block in &function.blocks {
         for instruction in &block.instructions {
+            if let Operation::MatchData { arms, .. } = &instruction.operation {
+                pending_types.extend(arms.iter().map(|a| (a.target, &instruction.result.ty)));
+            }
             if let Operation::EvaluateBlock { target, .. } | Operation::DelayBlock { target, .. } =
                 instruction.operation
             {
@@ -1011,11 +1246,76 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 return Err("instruction origin belongs to another module".into());
             }
             match instruction.operation {
+                Operation::Construct {
+                    ref constructor,
+                    ref arguments,
+                } => {
+                    if !constructor.result.alpha_eq(&instruction.result.ty)
+                        || constructor.fields.len() != arguments.len()
+                        || constructor.strict.len() != arguments.len()
+                        || constructor.tag == 0
+                        || arguments
+                            .iter()
+                            .zip(&constructor.fields)
+                            .any(|(v, t)| !available.get(v).is_some_and(|a| a.alpha_eq(t)))
+                    {
+                        return Err("constructor field/result type mismatch".into());
+                    }
+                }
+                Operation::MatchData {
+                    scrutinee,
+                    ref arguments,
+                    ref arms,
+                } => {
+                    let scrut_ty = available.get(&scrutinee).ok_or("missing case scrutinee")?;
+                    let mut patterns = BTreeSet::new();
+                    let mut default = false;
+                    if arms.is_empty() {
+                        return Err("empty algebraic match".into());
+                    }
+                    for arm in arms {
+                        let target = blocks.get(&arm.target).ok_or("missing constructor arm")?;
+                        let fields = if let Some(c) = &arm.constructor {
+                            if !c.result.alpha_eq(scrut_ty) || c.tag == 0 || !patterns.insert(c.tag)
+                            {
+                                return Err("invalid constructor match layout".into());
+                            }
+                            &c.fields[..]
+                        } else {
+                            if default {
+                                return Err("duplicate DEFAULT".into());
+                            }
+                            default = true;
+                            &[]
+                        };
+                        let expected: Vec<_> = arguments
+                            .iter()
+                            .map(|v| available.get(v).copied().ok_or("missing case capture"))
+                            .collect::<Result<_, _>>()?;
+                        let expected: Vec<_> = expected
+                            .into_iter()
+                            .chain(std::iter::once(*scrut_ty))
+                            .chain(fields)
+                            .collect();
+                        if target.params.len() != expected.len()
+                            || target
+                                .params
+                                .iter()
+                                .zip(expected)
+                                .any(|(p, t)| !p.ty.alpha_eq(t))
+                        {
+                            return Err("constructor arm edge type mismatch".into());
+                        }
+                    }
+                }
                 Operation::DelayBlock {
                     target,
                     ref arguments,
                 } => {
-                    if !boxed::is_int(&instruction.result.ty) {
+                    if primitive::is_int(&instruction.result.ty)
+                        || !matches!(instruction.result.ty, Ty::Con { .. })
+                        || !world::closed_type(&instruction.result.ty)
+                    {
                         return Err("delayed region requires a boxed Int result".into());
                     }
                     verify_edge(&blocks, &available, target, arguments)?;
@@ -1037,8 +1337,8 @@ pub fn verify(function: &Function) -> Result<(), String> {
                     target,
                     ref arguments,
                 } => {
-                    if !(primitive::is_int(&instruction.result.ty)
-                        || boxed::is_int(&instruction.result.ty))
+                    if !matches!(instruction.result.ty, Ty::Con { .. })
+                        || !world::closed_type(&instruction.result.ty)
                     {
                         return Err("region evaluation requires an Int# or Int result".into());
                     }
@@ -1117,6 +1417,9 @@ pub fn verify(function: &Function) -> Result<(), String> {
     while let Some(id) = pending.pop() {
         if visited.insert(id) {
             for instruction in &blocks[&id].instructions {
+                if let Operation::MatchData { arms, .. } = &instruction.operation {
+                    pending.extend(arms.iter().map(|a| a.target));
+                }
                 if let Operation::EvaluateBlock { target, .. }
                 | Operation::DelayBlock { target, .. } = instruction.operation
                 {

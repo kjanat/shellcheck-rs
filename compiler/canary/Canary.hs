@@ -4,10 +4,98 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   operandBranches, scrutineeBranch, sharedBranch, branchCall,
   makeBox, boxedSum, boxedIgnore, boxedChoose, boxedRoundTrip, boxedShared,
   boxedStrictIgnore, boxedCaf,
-  lazyArgument, lazyLet, lazyNested, lazyUnused, lazyBranch, lazyStrictUse) where
+  lazyArgument, lazyLet, lazyNested, lazyUnused, lazyBranch, lazyStrictUse,
+  dataChoice, dataPair, dataNested, dataDefault, dataLazy, dataStrict,
+  dataMaybe, dataList, dataCaseBinder) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#))
 import Helpers (first)
+
+data Choice = Empty | One Int | Two Int Int
+data Nested = Nested Choice Choice
+data StrictPair = StrictPair !Int Int
+
+{-# NOINLINE chooseData #-}
+chooseData :: Int -> Int -> Choice
+chooseData x@(I# n) y = case n of
+  0# -> Empty
+  1# -> One y
+  _ -> Two x y
+
+{-# NOINLINE readData #-}
+readData :: Choice -> Int
+readData c = case c of
+  Empty -> I# 17#
+  One x -> x
+  Two x y -> boxedSum x y
+
+{-# NOINLINE dataChoice #-}
+dataChoice :: Int -> Int -> Int
+dataChoice x y = readData (chooseData x y)
+
+{-# NOINLINE firstPair #-}
+firstPair :: Choice -> Int
+firstPair (Two x _) = x
+firstPair _ = I# 0#
+
+{-# NOINLINE dataPair #-}
+dataPair :: Int -> Int -> Int
+dataPair x y = firstPair (Two x y)
+
+{-# NOINLINE readNested #-}
+readNested :: Nested -> Int
+readNested (Nested a b) = case a of
+  Empty -> readData b
+  One x -> x
+  Two x _ -> x
+
+{-# NOINLINE dataNested #-}
+dataNested :: Int -> Int -> Int
+dataNested x y = readNested (Nested (chooseData x y) (One y))
+
+{-# NOINLINE dataDefault #-}
+dataDefault :: Int -> Int -> Int
+dataDefault x y = firstPair (chooseData x y)
+
+{-# NOINLINE dataLazy #-}
+dataLazy :: Int -> Int -> Int
+dataLazy x y = firstPair (Two x (boxedSum y y))
+
+{-# NOINLINE readStrict #-}
+readStrict :: StrictPair -> Int
+readStrict (StrictPair _ y) = y
+
+{-# NOINLINE dataStrict #-}
+dataStrict :: Int -> Int -> Int
+dataStrict x y = readStrict (StrictPair x y)
+
+{-# NOINLINE readMaybe #-}
+readMaybe :: Maybe Int -> Int
+readMaybe Nothing = I# 0#
+readMaybe (Just x) = x
+
+{-# NOINLINE dataMaybe #-}
+dataMaybe :: Int -> Int -> Int
+dataMaybe x y = boxedSum (readMaybe (Just x)) (readMaybe Nothing)
+
+{-# NOINLINE listFirst #-}
+listFirst :: [Int] -> Int
+listFirst [] = I# 0#
+listFirst (x:_) = x
+
+{-# NOINLINE dataList #-}
+dataList :: Int -> Int -> Int
+dataList x y = listFirst [x, y]
+
+{-# NOINLINE inspectAgain #-}
+inspectAgain :: Choice -> Int
+inspectAgain c = case c of
+  Empty -> I# 0#
+  other -> readData other
+
+{-# NOINLINE dataCaseBinder #-}
+dataCaseBinder :: Int -> Int -> Int
+dataCaseBinder x y = inspectAgain (chooseData x y)
 
 {-# NOINLINE forward #-}
 forward :: Int# -> Int# -> Int#
