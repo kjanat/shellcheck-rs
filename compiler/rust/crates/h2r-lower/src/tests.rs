@@ -85,7 +85,7 @@ fn nir_refuses_unsupported_core_with_source_address() {
         let pair = &m.top[0].pairs[0];
         let error = lower_leaf(&m, 2, pair.binder, FnId(0)).unwrap_err();
         let expected_source = match m.expr(pair.rhs) {
-            h2r_core_ir::Expr::App { arg, .. } => *arg,
+            h2r_core_ir::Expr::App { fun, .. } => *fun,
             _ => pair.rhs,
         };
         assert_eq!(error.source, Some(expected_source));
@@ -1013,7 +1013,7 @@ fn nir_direct_calls_reject_extra_forcing_and_computed_arguments() {
     verify(&leaf.function).unwrap();
     assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
 
-    for argument in [lit(), app(lvar("x"), lvar("x"))] {
+    for argument in [json!({"node": "Coercion"}), app(lvar("x"), lvar("x"))] {
         let mut m = module(
             "Main",
             vec![
@@ -1029,15 +1029,23 @@ fn nir_direct_calls_reject_extra_forcing_and_computed_arguments() {
         m.types.push(h2r_core_ir::Ty::Fun {
             mult: Box::new(t.clone()),
             arg: Box::new(t.clone()),
-            res: Box::new(t),
+            res: Box::new(t.clone()),
         });
+        m.types.push(h2r_core_ir::Ty::Fun {
+            mult: Box::new(t.clone()),
+            arg: Box::new(t),
+            res: Box::new(m.types[1].clone()),
+        });
+        let target = m.top[1].pairs[0].binder;
+        m.binders[target as usize].ty = 2;
+        m.binders[target as usize].arity = Some(2);
         let owner = m.top[0].pairs[0].binder;
         m.binders[owner as usize].ty = 1;
         assert!(
             lower_leaf_in_world(&[m], 0, owner, FnId(0))
                 .unwrap_err()
                 .reason
-                .contains("existing parameters")
+                .contains("parameters or literals")
         );
     }
 }
@@ -1292,6 +1300,123 @@ fn nir_mixed_calls_refuse_interleaved_and_open_type_arguments() {
             .contains("closed structured")
     );
     assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
+}
+
+fn nir_literal_call_world(two_literals: bool) -> Vec<Module> {
+    let literal = |n: &str| json!({"node": "Lit", "lit": {"kind": "int", "pretty": n}});
+    let mut modules = nir_call_world(true);
+    let types = modules[0].types.clone();
+    let last = if two_literals {
+        literal("20")
+    } else {
+        lvar("x")
+    };
+    modules[0] = module(
+        "Main",
+        vec![(
+            binder(&sn("Main", "main"), "main", "main"),
+            lam(
+                "x",
+                lam(
+                    "y",
+                    app(
+                        app(gvar(&sn("Lib", "target"), "target"), literal("10")),
+                        last,
+                    ),
+                ),
+            ),
+        )],
+        json!({}),
+    );
+    modules[0].types = types;
+    let owner = modules[0].top[0].pairs[0].binder;
+    modules[0].binders[owner as usize].ty = 1;
+    modules
+}
+
+#[test]
+fn nir_call_literals_have_typed_values_and_complete_accounting() {
+    use crate::nir::{
+        FnId, Operation, ValueId, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    for two in [false, true] {
+        let modules = nir_literal_call_world(two);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let instructions = &leaf.function.blocks[0].instructions;
+        assert_eq!(instructions.len(), if two { 3 } else { 2 });
+        assert!(
+            matches!(&instructions[0].operation, Operation::Literal(lit) if lit.pretty == "10")
+        );
+        assert_eq!(instructions[0].result.ty, modules[0].types[0]);
+        let Operation::CallTop { arguments, .. } = &instructions.last().unwrap().operation else {
+            panic!()
+        };
+        assert_eq!(
+            arguments,
+            &[ValueId(2), if two { ValueId(3) } else { ValueId(0) }]
+        );
+        assert_eq!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf)
+                .unwrap()
+                .source_nodes,
+            7
+        );
+    }
+}
+
+#[test]
+fn nir_call_literal_verifier_rejects_payload_origin_order_and_extra_forcing() {
+    use crate::nir::{
+        FnId, Operation, Rule, Source, ValueId,
+        lower::lower_leaf_in_world,
+        verify::{verify, verify_leaf_in_world},
+    };
+    let modules = nir_literal_call_world(true);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let original = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..8 {
+        let mut leaf = original.clone();
+        let instructions = &mut leaf.function.blocks[0].instructions;
+        match mutation {
+            0 | 1 => {
+                let Operation::Literal(lit) = &mut instructions[0].operation else {
+                    panic!()
+                };
+                if mutation == 0 {
+                    lit.pretty = "999".into();
+                } else {
+                    lit.kind = "string".into();
+                }
+            }
+            2 => instructions[0].origin.source = Source::Expr(u32::MAX),
+            3 => instructions[0].origin.rule = Rule::CallTop,
+            4 => instructions.swap(0, 1),
+            5 => {
+                let Operation::CallTop { arguments, .. } = &mut instructions[2].operation else {
+                    panic!()
+                };
+                arguments.reverse();
+            }
+            6 => {
+                instructions[0].result.ty = h2r_core_ir::Ty::Lit {
+                    kind: "Nat".into(),
+                    text: "42".into(),
+                }
+            }
+            _ => {
+                let mut extra = instructions[0].clone();
+                extra.result.id = ValueId(99);
+                extra.operation = Operation::Force(ValueId(0));
+                instructions.insert(0, extra);
+            }
+        }
+        verify(&leaf.function).unwrap();
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err(),
+            "mutation {mutation}"
+        );
+    }
 }
 
 fn nir_polymorphic_module() -> Module {

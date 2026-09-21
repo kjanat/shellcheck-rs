@@ -121,6 +121,8 @@ To attempt every reachable binding, run `mise run lower:program compiler/core-js
 
 The single-leaf task invokes `h2r lower --nir --fn '<stable-name>'`. It requires complete in-world linkage and a verified live set, selects one exact unambiguous name, and prints source-verified NIR plus node accounting. Currently supported: literals, parameter returns and references to top-level bindings in the loaded world, with leading type/value lambdas and ticks. A `top-ref` obtains the existing shared value without calling or forcing it; it identifies the target by module and lexical binder. Imports resolve by exact external stable name to one definition; missing or ambiguous definitions are refused. Cross-module types must be closed and structurally equal up to bound-variable renaming: free type variables, internal type-constructor names and opaque type text are refused. Type lambdas become explicit type parameters, not runtime arguments. Type-only application spines (`f @T @U`) on top-level bindings now produce `instantiate-top`, retaining the ordered type arguments without calling or forcing the shared value. This first slice requires closed structured head, argument and result types; parameter-headed type applications remain unsupported. The source verifier checks the target, argument order, substituted result and every application/type-argument node. Kind correctness is trusted from GHC, not re-proved here. Type-only support did not change canonical totals. Saturated direct value calls (`call-top`) now pass existing entry parameters unchanged, without extra forcing. The source checker verifies lexical argument order, closed argument/result types, exact target and GHC's declared arity. Leading closed type arguments followed by parameter arguments (`f @T x`) are supported too: substitution happens before checking value argument/result types, and arity counts only value arguments. Both argument lists and all source nodes are verified. Interleaved type/value spines, free type arguments, computed arguments, partial/over-applications, unknown arity and higher-order calls remain unsupported. This is NIR only: runtime calling conventions and executable code generation are still pending. Signature/body type variables are paired by binder position, permitting GHC's alpha-renaming; ambiguous repeated type-variable uniques are conservatively refused. All NIR value types remain in signature scope, while erased type-lambda origins retain the source binders and their kinds. Dead bindings and unsupported forms fail; there is no fallback or claim that the whole program was lowered. NIR output is diagnostic text, not emitted Rust; `--json` is not supported for this mode yet.
 
+Literal value arguments are also supported, including alongside entry parameters. Each literal gets its expected type from the instantiated callee signature and retains its exact source payload and origin; the verifier checks every literal instruction before the call. This relies on GHC's literal typing and introduces no extra forcing. Canonical coverage remains 2,624 bindings.
+
 ## M1 — how much Haskell is left after GHC?
 
 `h2r laziness` classifies every local binding that survives GHC's optimiser and explains *why* it still exists, from two cross-checked sources: GHC's own demand (strict / absent / used-once), occurrence and one-shot information, and a syntactic occurrence analysis of our own (which case alternatives and lambdas sit between the `let` and each use, and what each use *position* demands of the value).
@@ -223,7 +225,7 @@ The census puts 2,532 of the 8,351 lazy/unknown argument sites in the "target un
 
 `ParsecT s u m a` is a function of a state and four continuations. After inlining, the newtype is gone and what is left is a lambda chain whose **parameter types** still say exactly what each parameter is — the plugin dumps GHC's pretty-printed type for every binder, and those types survive optimisation:
 
-```
+```text
 \words                                                   -- the parser's own arguments
   eta :: State [Char] UserState                          -- state
   eta :: Token -> State [Char] UserState -> ParseError -> R   -- cok
@@ -292,7 +294,7 @@ The second correction is smaller and purely mechanical: `Module::spine` has alwa
 
 ### Results on the `-O1` dump
 
-```
+```text
 candidate regions                               1301   (all in ShellCheck.Parser)
 proven                                          1301
 rejected                                           0
@@ -330,7 +332,7 @@ The ten rejects are the whole non-`ShellCheck.Parser` remainder: heads named `et
 
 `R1-LAYOUT` used to *assume* the layout this dump exhibits — the five parameters contiguous and in Parsec's order, and "at most two" trailing transformer arguments. Both are now derived from the types at every region and every call, and reported:
 
-```
+```text
 R1-UNPARSER-SIG  chains checked against unParser's argument list   1301
   … refused: continuation types are not unParser's                   0
   … refused: a / s / u / r do not agree (R1-TYPE-AGREE)              0
@@ -355,7 +357,7 @@ Across the flag matrix the checks do bite, which is the point of running them. C
 
 `h2r show` loads the proof object by default for a module that has regions (`--no-parsec` turns it off). It annotates region entries, role binders, their occurrences and the spine roots of proven edges inline, and prints the evidence for the node asked about:
 
-```
+```sh
 $ h2r show compiler/core-json ShellCheck.Parser 141341 --depth 1
 -- in top-level binding readVariableName, node 141341
 eta[#141341]{Cok of region 5}
@@ -376,7 +378,7 @@ That is the `<?>` case in full: the binder *is* the region's `cok`, and this use
 
 `h2r parsec --cfg <region-entry-node>` (or `--cfg-all --module M`, and `--json` for either) prints the region's control-flow graph: its parameters with their roles, and every edge — each terminator with the values it hands back, and each parser call with the continuation filling every slot, each successor naming where that continuation comes from (own parameter, wrapped lambda, nested region, or derived continuation). Nothing is lowered: the graph is the deliverable.
 
-```
+```sh
 $ h2r parsec compiler/core-json --module ShellCheck.Parser --cfg 11028
 region 458 of ShellCheck.Parser — entry node 11028 (PROVEN)
   unParser: state State String UserState, value Token, result SCBase m b (erases to 2 trailing argument(s))
@@ -681,7 +683,7 @@ Asserted in code, not eyeballed (`Accounting::check`): the boxed constructions s
 
 Stage 3 adds the milestone's own equation, per representation:
 
-```
+```text
 before = normalised + preserved + unsupported
 ```
 
@@ -689,7 +691,7 @@ before = normalised + preserved + unsupported
 
 *normalised* is narrowed once more by stage 4: a flow that crosses a [representation boundary](#composing-the-views-can-all-1453-be-applied-at-once) that is not a uniform split is not normalised either, whether its own proof holds or not.
 
-```
+```text
 M2.2 accounting — before = normalised + preserved + unsupported
                      before  normalised  preserved  unsupported
   boxed                1765         539        551          675
@@ -717,7 +719,7 @@ There are two removability numbers in this milestone and they answer different q
 
 The 247 between them is the work a representation-agreement pass would have to do. The **3** `RemovableWithClone` parameter boundaries are the first concrete evidence in this compiler for a cloning pass: a callee whose parameter cannot be split because different callers want different representations, where specialising a copy of the callee would resolve it. **No cloning pass is implemented**, and they are counted as unsupported rather than as a removal waiting to happen.
 
-```
+```sh
 $ h2r compare A=compiler/core-json
 removable locally (def-use)           1453
 removable without cloning             1206
@@ -728,7 +730,7 @@ removable without cloning             1206
 
 Proving a tuple is transport is not the same as saying what replaces it. `h2r tuples --scalar <construction-node>` (and `--scalar-all`, `--json`) prints the program with that tuple gone, at the level of the IR — nothing is lowered and no Core is rewritten. The construction's fields become named scalars `f0…f{n-1}`; every consumer becomes bindings over them; every line names the nodes it reads and the rule that justifies it:
 
-```
+```sh
 $ h2r tuples compiler/core-json --module ShellCheck.Analytics --scalar 30892
 ShellCheck.Analytics node 30892 — unboxed (#,#) of arity 2, fate WorkerReturn [verified: yes]
   scalars
@@ -779,7 +781,7 @@ Once a parameter boundary *is* a uniform split, a function that returns that par
 
 **The assertion this milestone is about.** Every removable flow whose view crosses a boundary — `PassedTo`, `Returned`, and their transitive hops, including through `T4-RETUPLE` and `T12-NESTED` — must have **every** crossed boundary `UniformSplit`. Otherwise the flow is **downgraded now**: `CloneRequired` moves it to the new fate `RemovableWithClone`, which keeps the flow's own proof but is counted as *unsupported* until a cloning decision exists; anything else moves it to `Unresolved` with the reason `boundary-not-uniform (<boundary>)`. Downgrading is itself a fixpoint — a flow that stops being removable stops asking for scalars at every other boundary it produces into — and it only ever shrinks the removable set, so it settles (2 rounds on `-O1`, 3 on B).
 
-```
+```sh
 $ h2r tuples compiler/core-json --boundaries
   verdict          kind           boxed  unboxed   both    total
   CloneRequired    parameter          5        0      0        5
@@ -813,7 +815,7 @@ The single most common shape is the one the milestone was written for: `Main`'s 
 
 `--explain` lists each boundary's producers and consumers with node ids, and `--json` carries the boundaries and the downgrades:
 
-```
+```sh
 $ h2r tuples compiler/core-json --module Main --boundaries --explain
 Main return of p#1107 — Unresolved (producers-request-different-representations)
   crossed by unboxed tuple(s)
@@ -829,7 +831,7 @@ Main return of p#1107 — Unresolved (producers-request-different-representation
 
 ### Auditing one construction
 
-```
+```sh
 $ h2r tuples compiler/core-json --module ShellCheck.Analytics --explain
 ShellCheck.Analytics node 30892 — unboxed tuple of arity 2, fate WorkerReturn
     T0-TUPLE-CON     node(s) 30892, 31017: unboxed tuple of arity 2 ($ghc-prim$GHC.Prim$(#,#)), 2 value argument(s)
@@ -845,7 +847,7 @@ Every node id there is a `h2r show` argument. `--json` dumps the flows, their co
 
 `h2r show` loads the tuple proof object by default for a module that has flows (`--no-tuples` turns it off, exactly like `--no-parsec`). It marks constructions, alias binders, consumers and their occurrences inline, and prints the flow's own evidence for the node asked about:
 
-```
+```sh
 $ h2r show compiler/core-json ShellCheck.Checks.Commands 4714 --depth 2
 -- in top-level binding lvl, node 4714
 ([#4714]{tuple flow #46 construction, arity 3, Unresolved}(,,)[#4725] ()[#4720] s1[#4718] w1[#4716])
@@ -881,7 +883,7 @@ A node that takes part in several flows gets one footer per flow — node 4635 a
 
 `h2r tuples` answers it exactly, with a deliberately narrow rule: a thunk site is **explained by tuple transport** when the binding M1 reports is a potential thunk site, its right-hand side *is* a lazy selection (`T3-SELECTED`) or a field-wise re-tupling (`T4-RETUPLE`), and the tuple it reads is **normalised** — removable *and* verified. A `Preserve` or `Unresolved` tuple keeps its box, so its selectors stay; a removable verdict only one walk proves does not count either.
 
-```
+```text
 Thunk sites explained by tuple transport (M1 × M2.2)
                                                  before explained    after
   sinkable, lands in an evaluating position          14         0       14
@@ -1664,7 +1666,7 @@ cargo run --release --bin h2r -- show ../core-json ShellCheck.AST 5293       # +
 
 The **field view** puts every field of one construction on one line — the three facts, the derived rep, and the *route* that proved it — and under it the observations that justify the facts, each with its node ids, plus (for `Unknown`) the escape with its refined reason. `FieldView::check` asserts that every field of the construction appears exactly once and that no line names a field outside its arity:
 
-```
+```sh
 $ h2r fields compiler/core-json --module ShellCheck.CFG --view 10329
 ShellCheck.CFG node 10329 — Range (program), arity 2, observed
     f0  demand=Never  strict=LazyField  rec=Acyclic  ⇒ Dead  [R5-DEAD]
@@ -1685,7 +1687,7 @@ ShellCheck.CFG node 10329 — Range (program), arity 2, observed
 
 The **list view** prints the producer, every cell, every consumer with the rule that classified it *and the demand that one consumer contributes*, the the facts each with the rule that decided it, and the advisory with the fact conjunction it came from. `ListView::check` asserts every consumer appears exactly once. Where a fact is the *absence* of a rule firing — `SinglePass` is "no `L14` and no `L15`" — the view says that rather than naming a rule that did not fire:
 
-```
+```sh
 $ h2r lists compiler/core-json --module ShellCheck.ASTLib --view 1220
 ShellCheck.ASTLib node 1220 — Nil flow, 2 consumer(s), advisory IteratorCandidate
     producer  node 1220
@@ -1710,7 +1712,7 @@ ShellCheck.ASTLib node 1220 — Nil flow, 2 consumer(s), advisory IteratorCandid
 
 The **text view** is the text facts *on top of* the list view — selection evidence with the rule that established `Char`, shape, per-consumer classes with `(asserted)` marked where `TEXT_HEADS` overrode M2.3c's spine demand, the char-semantics reasons, the append chain — and then prints the whole list view underneath, so the inherited facts are visible rather than cited:
 
-```
+```sh
 $ h2r text compiler/core-json --module ShellCheck.Formatter.GCC --view 11
 ShellCheck.Formatter.GCC node 11 — text flow, ImportedCall by both, shape TextOnly, advisory TextValueUndecided
     selection (how Char was established: both)
@@ -1734,7 +1736,7 @@ ShellCheck.Formatter.GCC node 11 — text flow, ImportedCall by both, shape Text
 
 The three proof objects are loaded by default whenever the module has any, exactly as the Parsec and tuple objects are, and `--no-fields`, `--no-lists`, `--no-text` opt out one at a time. They annotate constructions, field binders, producers, cells, tail aliases and consumers inline, and print one footer per site the node takes part in — as itself or as an *occurrence* of one of those binders:
 
-```
+```sh
 $ h2r show compiler/core-json ShellCheck.AST 5293 --depth 1
 -- in top-level binding $bT_WhileExpression, node 5293
 ([#5293]{Inner_T_WhileExpression construction, arity 2, Unknown 2}Inner_T_WhileExpression[#5298] c[#5297] l[#5295])
@@ -1758,7 +1760,7 @@ A list footer carries the facts and the advisory (`SpineDemand Prefix(DataDepend
 
 Asserted in code (`m23::RepAccounting::check`) and printed by `h2r fields`, `lists`, `text` and `verify-rep` — always whole, so no command shows a fragment of it. The rule is M2.2's, pointing the same way: **any claim the verifier did not confirm, for coverage or otherwise, is unsupported and never proven.**
 
-```
+```text
 M2.3 accounting — fields: total = proven-eager + proven-lazy + dead + unsupported
                           total proven-eager  proven-lazy   dead  unsupported
   program !                   0            0            0      0            0
@@ -1783,7 +1785,7 @@ M2.3 accounting — the M2 census' argument sites
 
 The **route-set histogram** is printed unconditionally, zero rows included, because the overlap between the three `Direct` rules is the interesting part and an absent row hides a zero:
 
-```
+```text
 Direct, by the route **set** that proves it (printed in full, zeros included)
      2648  R1
       675  R1+R2
@@ -1806,7 +1808,7 @@ Three rules, each narrow, each requiring the verifier's confirmation:
 | `M23-B-SELECTOR-OVER-AN-EAGER-FIELD` | a lazy selection `case c of C .. x .. -> x` over a field proven `Direct`                                                | the field is forced at construction; no deferred selection remains            |
 | `M23-C-CELL-OF-A-SINGLE-PASS-SPINE`  | the tail of a cell (or a text append operand) of a `Vec`/`Iterator` flow whose spine demand is `Whole` or `Incremental` | one eager pass consumes the spine, so the cell thunk becomes an iterator step |
 
-```
+```text
 Thunk sites explained by M2.3 (M1 × M2.2 × M2.3)
                                                   before  by tuples   by M2.3   after
   sinkable, lands in an evaluating position           14          0         3      11
@@ -2953,7 +2955,7 @@ Row 15 belongs half to [M2.4e](#m24e--the-41-residual-parsec-continuation-edges)
 
 M2.4c′ says `MustPreserveForce` is **0** for a reason stronger than "every force was discharged": an instrumented run showed the totality walk reaches *no `case` node at all* on any dictionary path, GHC's `-O1` having floated every dictionary out of every scrutinee. This walk counts the same thing in its own transfer and reports it on every run:
 
-```
+```text
   case nodes this walk's totality transfer reaches on a dictionary path: 0
 ```
 
@@ -3010,7 +3012,7 @@ cargo run --release --bin h2r -- m24 ../core-json                             # 
 
 The **class-op view** puts one dispatch site on the page: the class and the method with the field the selector reads, the dictionary argument, the per-module origin chain with each step's rule, the **whole-program producer set at every parameter hop** the dictionary passes through, the target outcome, the totality fact, the erasure verdict with its reason, and the owner's clone-plan row where the owner has one. Every fact carries the verifier's answer, and a claim `verify-m24` refused is never printed as proven. `ClassopViews::check` asserts that **every site of the module appears exactly once**, and `ClassopView::check` that no parameter hop is listed twice — the walk up the parameter chain terminates and never doubles back.
 
-```
+```sh
 $ h2r classops compiler/core-json --view 1154
 ShellCheck.Fixer node 1154 — Ranged.setRange, dispatch on node 1252 → Exact(ShellCheck.Fixer.$csetRange)
     class Ranged … method setRange (field 3) … selector $ShellCheck-0.11.0-inplace$ShellCheck.Fixer$setRange
@@ -3037,7 +3039,7 @@ That one site is the milestone in miniature: M2.4b could only say `Unresolved(di
 
 The **boundary view** puts one function-valued slot on the page: the slot with its owner and whether it is exported or belongs to a function used as a value, every producer with its **full shape class and its capture types**, every use, and — the part the milestone's own corrections make necessary — the **rule order** that produced the verdict, with the answer at every step and an arrow on the one that fired. `H8-PRESERVE` is decided before `H5` and `H6` ([M2.4d′ defect 1](#1-h8-was-decided-after-h5h6)), and the view shows the earlier questions answered rather than skipped. `BoundaryViews::check` asserts **every boundary of the module appears exactly once**, and `BoundaryView::check` that every producer appears once and that *rewritable as one* never exceeds *one representation*.
 
-```
+```sh
 $ h2r higher compiler/core-json --view 51239
 ShellCheck.Analytics parameter 0 (readFunc) of doVariableFlowAnalysis#1867 — param of doVariableFlowAnalysis, producers 3 (classes 3) → CloneRequired
     slot     param parameter 0 (readFunc) of doVariableFlowAnalysis#1867 at node 51239 of doVariableFlowAnalysis
@@ -3075,7 +3077,7 @@ ShellCheck.Analytics parameter 0 (readFunc) of doVariableFlowAnalysis#1867 — p
 
 The two proof objects are loaded by default whenever the module has any, exactly as the Parsec, tuple and three representation objects are, and `--no-classops` / `--no-higher` opt out one at a time. They annotate class-op sites, dictionary values, dictionary-parameter binders and their occurrences, function-valued slots and their binders, and every closure producer — inline, and with one footer per site the node takes part in:
 
-```
+```sh
 $ h2r show compiler/core-json ShellCheck.Fixer 1154 --depth 1
 ([#1154]{class-op site Ranged.setRange ⇒ Exact}setRange[#1253]
    $dRanged[#1252]{occurrence of dictionary parameter 0 of removeTabStops} … )
@@ -3086,7 +3088,7 @@ node 1154
   this node: the class-op application itself; per-module Unresolved(dictionary-parameter-of-an-exported-function) [verified target: yes]
 ```
 
-```
+```sh
 $ h2r show compiler/core-json ShellCheck.Analytics 51239 --depth 0
 \readFunc{function-valued param ⇒ CloneRequired} writeFunc¹{function-valued param ⇒ TypeShapeUniform} … ->
 
@@ -3103,7 +3105,7 @@ All seven proof objects' marks are concatenated rather than merged, so it stays 
 
 Asserted in code (`m24::Accounting::check`) and printed whole by `h2r classops`, `h2r higher` and `h2r m24`. The milestone has spent two corrections learning that these are three questions and not one: **a known method target is not a removable dictionary** (M2.4c) and **an enumerated producer set is not one representation** (M2.4d). They are never added together and never reported as one number.
 
-```
+```text
 (1) can the call target be enumerated?   sites = Exact + FiniteSet + Unresolved
   class-op dispatch sites (population)              565
   Exact(target)                                       7
@@ -3113,7 +3115,7 @@ Asserted in code (`m24::Accounting::check`) and printed whole by `h2r classops`,
   re-derived by verify-m24 (Exact / bounded)          7 / 118
 ```
 
-```
+```text
 (2) can this abstraction boundary use one representation?
     boundaries = ExactClosure + TypeShapeUniform + FiniteClosureSet + CloneRequired
                + Preserve + Unresolved
@@ -3130,7 +3132,7 @@ Asserted in code (`m24::Accounting::check`) and printed whole by `h2r classops`,
   re-derived by verify-m24 (of the claims)          208 / 208
 ```
 
-```
+```text
 (3) can the dictionary or closure object actually disappear?
     values / parameters = Erasable + WithObligation + WithClone + Preserve
                         + Unresolved
@@ -3213,7 +3215,7 @@ Four, and **nothing is reclassified**: every fate M2.2 recorded, every tier M2.1
 
 **Back to M1 — the thunk sites.** The M1 table gains a fourth column, and the invariant it exists to state is asserted:
 
-```
+```text
 Thunk sites explained by M2.4 (M1 × M2.2 × M2.3 × M2.4)
                                                       before  by tuples   by M2.3   by M2.4   after
   sinkable, lands in an evaluating position               14          0         3         0      11
@@ -3306,7 +3308,7 @@ Defects (b) and (c) have nothing to bite on for the same reason, and (c) additio
 
 The tuple component is `class()` now. `short()` survives as `tuples_short`, display only, and the correction is visible in it: `ShellCheck.Fixer` `$srealignColumn` has two call sites whose tuples both render as `arity 1, 1 capture(s), arity 1, 1 capture(s)` and whose classes are (type names abbreviated to their last component)
 
-```
+```text
 arity=1;captures=[!ShellCheck.Fixer#1181!F(C(Many),faYH6,C(Position))], arity=1;captures=[!ShellCheck.Fixer#1170!C(Ranged,faYH6)]
 arity=1;captures=[!ShellCheck.Fixer#1225!F(C(Many),faYH6,C(Position))], arity=1;captures=[!ShellCheck.Fixer#1214!C(Ranged,faYH6)]
 ```
@@ -3445,7 +3447,7 @@ No Core is mutated, no codegen is emitted, no GHC flag changed, no `rust-port` f
 
 M2.4 closed the last of the analysis milestones. M3 is the first one that **builds** something: it does not end with another census, it constructs a new program representation.
 
-```
+```text
 GHC Core + M1–M2.4 proof objects → reachable program → explicit semantic NIR
   → closure conversion + specialisation → apply certified transformations
   → Rust-facing normal form → small generated-Rust canary
@@ -3794,7 +3796,7 @@ Every module gains a nonzero live count. `ShellCheck.Checks.Commands` goes from 
 
 The two pinned links resolve structurally, through the external-name index and not by any name heuristic:
 
-```
+```text
 ShellCheck.Checks.Commands $wchecker  — LIVE, 5 hops
   Main$main [A1] → Main$main1 [A2] → Main $_in$poly_$j1 [A2]
   → ShellCheck.Checker$checkScript [A3] → ShellCheck.Analyzer$analyzeScript [A3]
@@ -4077,7 +4079,7 @@ Every module now has a nonzero live count. The ones that had none:
 
 `LiveSet::link` answers, for one **external** stable name: the single top-level binding that defines it, found through the external-name index and never by a name heuristic; every binding that refers to it, grouped by module and by the rule that made the edge; and its shortest witness chain from `Main.main`. The fact lives in the proof object so it can be tested; `h2r lower --reachability --link <stable name>` prints it. An internal name is **refused with the reason**, not answered — internal stable strings are not unique, so there is no single binding to point at.
 
-```
+```sh
 $ h2r lower --reachability compiler/core-json \
       --link '$ShellCheck-0.11.0-inplace$ShellCheck.Checks.Commands$$wchecker'
 
@@ -4098,7 +4100,7 @@ $ h2r lower --reachability compiler/core-json \
       5. ShellCheck.Checks.Commands  $…$ShellCheck.Checks.Commands$$wchecker [A3-EDGE-GLOBAL]
 ```
 
-```
+```sh
 $ h2r lower --reachability compiler/core-json \
       --link '$ShellCheck-0.11.0-inplace$ShellCheck.Formatter.TTY$format1'
 

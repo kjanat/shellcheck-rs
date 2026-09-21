@@ -75,8 +75,8 @@ pub enum Operation {
         binder: BinderId,
         arguments: Vec<Ty>,
     },
-    /// Saturated direct call when the enclosing function is entered. Existing
-    /// argument values (possibly lazy) are passed unchanged, never pre-forced.
+    /// Saturated direct call when the enclosing function is entered. Parameter
+    /// values (possibly lazy) and literal values are passed without pre-forcing.
     /// The target is identified independently of whether it has been lowered.
     CallTop {
         module: usize,

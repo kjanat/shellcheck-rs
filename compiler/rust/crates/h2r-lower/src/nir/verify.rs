@@ -191,14 +191,7 @@ fn verify_leaf_impl(
                 if !source_types.is_empty() {
                     return Err("source call interleaves type and value arguments".into());
                 }
-                let binder = module
-                    .resolve(*arg)
-                    .ok_or("call source argument is not a lexical parameter")?;
-                let parameter = params
-                    .iter()
-                    .find(|(_, source, _)| *source == binder)
-                    .ok_or("call source argument is not an entry parameter")?;
-                source_args.push(parameter.2);
+                source_args.push(*arg);
                 head = *fun;
             }
             source_args.reverse();
@@ -216,23 +209,59 @@ fn verify_leaf_impl(
             if !world::closed_type(signature) || !world::closed_type(ty) {
                 return Err("source call requires closed structured types".into());
             }
-            for value in &source_args {
+            let mut values = Vec::new();
+            let mut literal_count = 0;
+            for source in &source_args {
                 let Ty::Fun { arg, res, .. } = signature else {
                     return Err("source call signature lacks an arrow".into());
                 };
-                let parameter = block
-                    .params
-                    .iter()
-                    .find(|param| param.id == *value)
-                    .ok_or("missing call source parameter")?;
-                if !arg.alpha_eq(&parameter.ty) {
-                    return Err("source call parameter type mismatch".into());
-                }
+                let value = match module.expr(*source) {
+                    Expr::Lit(expected) => {
+                        let instruction = block
+                            .instructions
+                            .get(literal_count)
+                            .ok_or("missing call literal")?;
+                        let Operation::Literal(actual) = &instruction.operation else {
+                            return Err("call literal was not lowered as a literal".into());
+                        };
+                        if actual.kind != expected.kind
+                            || actual.pretty != expected.pretty
+                            || instruction.origin.source != Source::Expr(*source)
+                            || instruction.origin.rule != Rule::Literal
+                            || !instruction.result.ty.alpha_eq(arg)
+                        {
+                            return Err("call literal differs from source".into());
+                        }
+                        literal_count += 1;
+                        instruction.result.id
+                    }
+                    Expr::Var { .. } => {
+                        let binder = module
+                            .resolve(*source)
+                            .ok_or("call argument is not local")?;
+                        let parameter = params
+                            .iter()
+                            .find(|(_, source, _)| *source == binder)
+                            .ok_or("call argument is not an entry parameter")?;
+                        let value = block
+                            .params
+                            .iter()
+                            .find(|value| value.id == parameter.2)
+                            .ok_or("missing call source parameter")?;
+                        if !arg.alpha_eq(&value.ty) {
+                            return Err("source call parameter type mismatch".into());
+                        }
+                        value.id
+                    }
+                    _ => return Err("unsupported call source argument".into()),
+                };
+                values.push(value);
                 signature = res;
             }
-            let [instruction] = block.instructions.as_slice() else {
-                return Err("direct call leaf must have exactly one instruction".into());
-            };
+            if block.instructions.len() != literal_count + 1 {
+                return Err("direct call must contain only its literals and call".into());
+            }
+            let instruction = &block.instructions[literal_count];
             let Operation::CallTop {
                 module: target,
                 binder,
@@ -243,7 +272,7 @@ fn verify_leaf_impl(
                 return Err("source call was not lowered as a direct call".into());
             };
             if (*target, *binder) != (target_module, target_binder)
-                || arguments != &source_args
+                || arguments != &values
                 || type_arguments != &source_types
             {
                 return Err("direct call target or arguments differ from source".into());
