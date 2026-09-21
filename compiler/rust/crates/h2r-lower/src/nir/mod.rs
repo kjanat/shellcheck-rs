@@ -11,6 +11,7 @@ use h2r_core_ir::{BinderId, ExprId, Lit, Ty, TyVarId};
 
 pub mod lower;
 pub mod pretty;
+pub mod program;
 pub mod verify;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

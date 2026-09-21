@@ -26,6 +26,54 @@ pub fn nir(dir: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Print all outcomes before returning failure for an incomplete lowering pass.
+pub fn nir_program(dir: &Path) -> Result<()> {
+    let modules = load_dir(dir)?;
+    let (report, refused) = nir_program_report(&modules)?;
+    print!("{report}");
+    if refused != 0 {
+        bail!("NIR lowering incomplete: {refused} live bindings refused");
+    }
+    Ok(())
+}
+
+fn nir_program_report(modules: &[Module]) -> Result<(String, usize)> {
+    use h2r_lower::nir::{pretty::format_leaf, program::lower_program};
+    use std::fmt::Write;
+
+    let attempt = lower_program(modules).map_err(anyhow::Error::msg)?;
+    let mut out = format!(
+        "NIR program attempt (leaf subset; no executable output)\nLive owners: {} = {} lowered + {} refused; {} dead skipped\n",
+        attempt.live,
+        attempt.lowered.len(),
+        attempt.refused.len(),
+        attempt.dead,
+    );
+    for leaf in &attempt.lowered {
+        let function = &leaf.function;
+        writeln!(
+            out,
+            "LOWERED {:?}",
+            modules[function.module].binder(function.owner).name
+        )
+        .unwrap();
+        out.push_str(&format_leaf(leaf));
+    }
+    for error in &attempt.refused {
+        writeln!(
+            out,
+            "REFUSED module {} binder {} {:?} at {:?}: {}",
+            error.module,
+            error.owner,
+            modules[error.module].binder(error.owner).name,
+            error.source,
+            error.reason
+        )
+        .unwrap();
+    }
+    Ok((out, attempt.refused.len()))
+}
+
 fn nir_report(modules: &[Module], name: &str) -> Result<String> {
     use h2r_lower::nir::{FnId, lower::lower_leaf, pretty::format_leaf, verify::verify_leaf};
 
@@ -103,7 +151,7 @@ pub fn lower(
     }
     if !reachability {
         bail!(
-            "h2r lower needs --reachability or --nir --fn <stable-name>. \
+            "h2r lower needs --reachability or --nir [--fn <stable-name>]. \
              --rules prints the reachability rule table."
         );
     }
@@ -862,6 +910,67 @@ mod nir_tests {
             "types": [{"kind": "TyConApp", "tycon": {"name": "$u$Main$T", "occ": "T", "unique": "T"}, "args": []}],
             "binds": binds
         })).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn program_attempt_accounts_for_every_live_owner_and_skips_dead() {
+        use h2r_lower::nir::{FnId, program::lower_program};
+        let mut modules = [fixture()];
+        // Dead unsupported code must not turn the attempt into a refusal.
+        let dead_rhs = modules[0].top[2].pairs[0].rhs;
+        modules[0].exprs[dead_rhs as usize] = h2r_core_ir::Expr::Coercion;
+        let attempt = lower_program(&modules).unwrap();
+        assert_eq!((attempt.live, attempt.dead), (2, 1));
+        assert!(attempt.refused.is_empty());
+        assert_eq!(
+            attempt
+                .lowered
+                .iter()
+                .map(|leaf| leaf.function.id)
+                .collect::<Vec<_>>(),
+            vec![FnId(0), FnId(1)]
+        );
+        let (report, refusals) = nir_program_report(&modules).unwrap();
+        assert_eq!(refusals, 0);
+        assert!(report.contains("2 = 2 lowered + 0 refused; 1 dead skipped"));
+        assert!(report.contains("no executable output"));
+        assert_eq!(report, nir_program_report(&modules).unwrap().0);
+    }
+
+    #[test]
+    fn program_attempt_retains_successes_and_addressed_refusals() {
+        use h2r_lower::nir::program::lower_program;
+        let mut modules = [fixture()];
+        let pair = &modules[0].top[1].pairs[0];
+        let (owner, rhs) = (pair.binder, pair.rhs);
+        modules[0].exprs[rhs as usize] = h2r_core_ir::Expr::Coercion;
+        let attempt = lower_program(&modules).unwrap();
+        // Main's reference can lower even when its target cannot. Never mistake
+        // the accepted vector for a dependency-closed executable program.
+        assert_eq!((attempt.lowered.len(), attempt.refused.len()), (1, 1));
+        let refusal = &attempt.refused[0];
+        assert_eq!(
+            (refusal.module, refusal.owner, refusal.source),
+            (0, owner, Some(rhs))
+        );
+        assert!(refusal.reason.contains("type or coercion"));
+        let (report, refusals) = nir_program_report(&modules).unwrap();
+        assert_eq!(refusals, 1);
+        assert!(report.contains("2 = 1 lowered + 1 refused"));
+        assert!(report.contains("LOWERED"));
+        assert!(report.contains("REFUSED"));
+        assert!(report.contains(&format!("at Some({rhs})")));
+    }
+
+    #[test]
+    fn program_attempt_requires_authoritative_reachability() {
+        use h2r_lower::nir::program::lower_program;
+        assert!(lower_program(&[]).unwrap_err().contains("no root"));
+        assert!(
+            lower_program(&[fixture_with_link(true)])
+                .unwrap_err()
+                .contains("A5-IN-WORLD-MISSING")
+        );
     }
 
     #[test]

@@ -123,7 +123,16 @@ From the repository root, lower one reachable leaf from an existing dump:
 mise run lower:leaf compiler/core-json --fn '$_in$usageHeader1'
 ```
 
-This invokes `h2r lower --nir --fn '<stable-name>'`. It requires complete
+To attempt every reachable binding, run `mise run lower:program compiler/core-json`.
+This prints source-verified NIR for supported owners and an addressed refusal for
+every unsupported owner, then exits nonzero if any were refused. Dead owners are
+skipped. Accepted references may still target refused owners: this is a partial
+lowering pass, not dependency-closed executable output, even with zero refusals.
+On the canonical format-6 dumps, the first pass lowers 2,618 of 9,795 live
+owners, refuses 7,177 and skips 3,957 dead owners. These are binding counts,
+not a percentage of compiler completion.
+
+The single-leaf task invokes `h2r lower --nir --fn '<stable-name>'`. It requires complete
 in-world linkage and a verified live set, selects one exact unambiguous name,
 and prints source-verified NIR plus node accounting. Currently supported:
 literals, parameter returns and references to top-level bindings in the same

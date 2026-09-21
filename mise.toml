@@ -57,6 +57,10 @@ run         = "cargo test --manifest-path compiler/rust/Cargo.toml --workspace"
 description = "Lower and verify one live leaf: <dump-dir> --fn '<stable-name>'"
 run         = "cargo run --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r -- lower --nir"
 
+[tasks."lower:program"]
+description = "Attempt verified NIR for all live bindings: <dump-dir>; fails on refusals"
+run         = "cargo run --release --locked --manifest-path compiler/rust/Cargo.toml --bin h2r -- lower --nir"
+
 [tasks.plugin]
 description = "Build the GHC Core-dump plugin"
 dir         = "{{ config_root }}/compiler/h2r-plugin"

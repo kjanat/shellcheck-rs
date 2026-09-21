@@ -65,6 +65,10 @@
       forcing or calling the target; source verification checks the exact target,
       type and origin. Cross-module references remain unsupported.
       Unsupported forms fail with source addresses.
+      `mise run lower:program <dump-dir>` now attempts every live owner after
+      auditing reachability, retaining verified leaves and explicit refusals.
+      Live = lowered + refused; dead owners are skipped. Refusals cause a nonzero
+      exit. This partial pass does not yet produce a dependency-closed program.
       Leaf lowering now runs an independent source-aware verifier: exact literal
       payloads, returned lexical parameters, types, origins and complete source
       accounting are checked. Corruption tests include structurally valid wrong

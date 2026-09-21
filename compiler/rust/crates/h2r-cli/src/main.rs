@@ -349,8 +349,8 @@ enum Command {
         /// reach?
         #[arg(long)]
         reachability: bool,
-        /// Lower and verify one reachable leaf function (not the whole program).
-        #[arg(long, requires = "fn_name", conflicts_with_all = ["reachability", "json", "rules", "explain", "link", "m24_link"])]
+        /// Attempt all reachable bindings, or select one with --fn. No executable output yet.
+        #[arg(long, conflicts_with_all = ["reachability", "json", "rules", "explain", "link", "m24_link"])]
         nir: bool,
         /// Exact stable name of the leaf to lower; ambiguous names are rejected.
         #[arg(long = "fn", requires = "nir")]
@@ -569,7 +569,10 @@ fn main() -> Result<()> {
             m24_link,
         } => {
             if nir {
-                lower::nir(&dir, fn_name.as_deref().expect("clap requires --fn"))
+                match fn_name.as_deref() {
+                    Some(name) => lower::nir(&dir, name),
+                    None => lower::nir_program(&dir),
+                }
             } else {
                 lower::lower(&dir, reachability, json, rules, explain, link, m24_link)
             }
@@ -6443,11 +6446,11 @@ mod cli_tests {
     use super::*;
 
     #[test]
-    fn leaf_nir_requires_a_name_and_rejects_other_report_modes() {
+    fn nir_accepts_optional_name_and_rejects_other_report_modes() {
         assert!(
             Cli::try_parse_from(["h2r", "lower", "dumps", "--nir", "--fn", "$u$Main$f"]).is_ok()
         );
-        assert!(Cli::try_parse_from(["h2r", "lower", "dumps", "--nir"]).is_err());
+        assert!(Cli::try_parse_from(["h2r", "lower", "dumps", "--nir"]).is_ok());
         assert!(Cli::try_parse_from(["h2r", "lower", "dumps", "--fn", "$u$Main$f"]).is_err());
         for flag in ["--reachability", "--json", "--rules", "--m24-link"] {
             assert!(
