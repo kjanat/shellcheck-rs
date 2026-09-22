@@ -149,173 +149,18 @@ done
 [tasks.canary]
 description = "Emit Rust from real Core, compile it, and compare with Haskell"
 depends     = ["canary:extract"]
+run         = "cargo rr --bin h2r-canary"
+
+[tasks."canary:explain"]
+description = "Print one canary entry's NIR, the instances it needs, and its emission"
+usage       = '''
+arg "<entry>" help="Occurrence name from compiler/canary/Canary.hs"
+flag "--profile <profile>" default="both" help="Which Core dump to read" {
+  choices "both" "optimized" "unoptimized"
+}
+'''
 run         = '''
-set -eu
-cargo locked-build --bin h2r
-cases=0
-for profile in optimized unoptimized; do
-out=compiler/build/canary
-binary_entries='forward add subtractInt multiply composed chained shared eqInt neInt ltInt leInt gtInt geInt minimumInt selectInt nestedBranch operandBranches scrutineeBranch sharedBranch branchCall makeBox boxedSum boxedIgnore boxedChoose boxedRoundTrip boxedShared boxedStrictIgnore'
-binary_entries="$binary_entries lazyArgument lazyLet lazyNested lazyUnused lazyBranch lazyStrictUse"
-binary_entries="$binary_entries dataChoice dataPair dataNested dataDefault dataLazy dataStrict dataMaybe dataList dataCaseBinder"
-binary_entries="$binary_entries localJoin recursiveList localLazy"
-binary_entries="$binary_entries higherOrder partialTop localClosure returnedClosure closureBranch functionField"
-binary_entries="$binary_entries closureUnused escapingRecursive overApplied"
-specialization_entries='polyTwoTypes polyCrossModule polyHigherOrder polyRecursive polyNested'
-specialization_entries="$specialization_entries classTwoInstances classDefaultMethod classSuperclass"
-specialization_entries="$specialization_entries classCrossModule classParameterized classMethodValue"
-binary_entries="$binary_entries $specialization_entries"
-recursive_entries='recursiveSum mutualRecursion localLoop localMutual'
-if [ "$profile" = unoptimized ]; then
-  out="$out/unoptimized"
-fi
-oracle="$out/oracle"
-for entry in constant boxedCaf $binary_entries $recursive_entries recursiveTree; do
-  name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
-  target/release/h2r emit-rust "$out/core" --entry "$name" --output "$out/$entry.rs"
-  if [ "$profile" = unoptimized ]; then
-    case "$entry" in
-      operandBranches|scrutineeBranch|sharedBranch|branchCall)
-        target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
-        if ! rg -q ' = evaluate b[0-9]+' "$out/$entry.nir"; then
-          echo "$entry did not exercise non-tail region lowering" >&2
-          exit 1
-        fi
-        ;;
-      lazyArgument|lazyLet|lazyNested|lazyUnused|lazyBranch)
-        target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
-        if ! rg -q ' = delay b[0-9]+' "$out/$entry.nir"; then
-          echo "$entry did not exercise thunk-region lowering" >&2
-          exit 1
-        fi
-        case "$entry" in
-          lazyLet|lazyNested)
-            if ! rg -q ', LazyBinding\]' "$out/$entry.nir"; then
-              echo "$entry did not exercise shared local binding lowering" >&2
-              exit 1
-            fi
-            ;;
-        esac
-        ;;
-    esac
-  fi
-  rustc --edition=2024 -O "$out/$entry.rs" -o "$out/$entry"
-  rustc --edition=2024 -C overflow-checks=yes "$out/$entry.rs" -o "$out/$entry-checked"
-done
-# Specialization evidence, in both profiles: every instance the entry needs
-# must lower, and each entry must exercise the form it was written for.
-for entry in $specialization_entries; do
-  name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
-  target/release/h2r lower "$out/core" --nir --specialize --fn "$name" > "$out/$entry.instances"
-  grep -Eq '^Instances: [0-9]+ = [0-9]+ lowered \+ 0 refused, over [0-9]+ owners$' "$out/$entry.instances"
-done
-# The same source binding, lowered once per type it is used at. CoreTidy
-# decides whether a binding's name is external, so match its occurrence.
-test "$(grep -c 'INSTANCE .*[$]polyIdentity"' "$out/polyTwoTypes.instances")" -eq 2
-test "$(grep -c 'INSTANCE .*[$]crossPoly"' "$out/polyCrossModule.instances")" -eq 2
-test "$(grep -c 'INSTANCE .*[$]crossApply"' "$out/polyHigherOrder.instances")" -eq 2
-# A recursive polymorphic function: two instances, each reusing itself.
-test "$(grep -c 'INSTANCE .*[$]polyCount"' "$out/polyRecursive.instances")" -eq 2
-test "$(grep -c 'INSTANCE .*[$]firstOfPair"' "$out/polyNested.instances")" -eq 2
-# No class method survives as a dispatch through its selector: each resolved
-# to the instance's own method.
-test "$(grep -c 'INSTANCE .*[$]size"' "$out/classTwoInstances.instances")" -eq 0
-if [ "$profile" = unoptimized ]; then
-  # -O1 inlines the dictionaries away before the dump, so the dictionary
-  # spines only exist to be resolved in the unoptimized profile.
-  for entry in classTwoInstances classDefaultMethod classSuperclass classCrossModule classMethodValue classParameterized; do
-    grep -q 'ResolveMethod' "$out/$entry.instances"
-  done
-  # A default method, a superclass field read and a dictionary built from
-  # another dictionary each specialize on the dictionary itself.
-  for entry in classDefaultMethod classSuperclass classCrossModule classParameterized; do
-    grep -Eq 'INSTANCE [0-9]+ .* at 1 type arguments, 1 dictionaries' "$out/$entry.instances"
-  done
-  for spec in chooseData:construct readData:match-data readNested:match-data readMaybe:match-data listFirst:match-data applyInt:apply partialTop:apply localClosure:make-closure makeAdder:make-closure escapingRecursive:make-closure; do
-    entry=${spec%:*}
-    operation=${spec#*:}
-    name=$(jq -er --arg entry "$entry" '[.binds[].pairs[].binder | select(.occ == $entry) | .name] | if length == 1 then .[0] else error("ambiguous entry") end' "$out/core/Canary.core.json")
-    target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
-    if ! rg -q " = $operation " "$out/$entry.nir"; then
-      echo "$entry did not exercise algebraic $operation lowering" >&2
-      exit 1
-    fi
-  done
-fi
-for x in -1 0 1 2 7; do
-  "$oracle" recursiveTree "$x" 23 > "$out/oracle.stdout" 2> "$out/oracle.stderr"
-  for mode in '' '-checked'; do
-    "$out/recursiveTree$mode" "$x" 23 > "$out/rust.stdout" 2> "$out/rust.stderr"
-    cmp "$out/oracle.stdout" "$out/rust.stdout"
-    cmp "$out/oracle.stderr" "$out/rust.stderr"
-    cases=$((cases + 1))
-  done
-done
-for entry in $recursive_entries; do
-  name=$(jq -er --arg entry "$entry" '.binds[].pairs[].binder | select(.occ == $entry) | .name' "$out/core/Canary.core.json")
-  target/release/h2r lower "$out/core" --nir --fn "$name" > "$out/$entry.nir"
-  case "$entry" in
-    localLoop|localMutual)
-      rg -q ' = local-scope ' "$out/$entry.nir"
-      rg -q ' = call-local ' "$out/$entry.nir"
-      ;;
-  esac
-  for x in -1 0 1 2 7 100; do
-    for y in -17 0 23; do
-      "$oracle" "$entry" "$x" "$y" > "$out/oracle.stdout" 2> "$out/oracle.stderr"
-      for mode in '' '-checked'; do
-        "$out/$entry$mode" "$x" "$y" > "$out/rust.stdout" 2> "$out/rust.stderr"
-        cmp "$out/oracle.stdout" "$out/rust.stdout"
-        cmp "$out/oracle.stderr" "$out/rust.stderr"
-        cases=$((cases + 1))
-      done
-    done
-  done
-  "$oracle" "$entry" 1000000 1 > "$out/oracle.stdout" 2> "$out/oracle.stderr"
-  for mode in '' '-checked'; do
-    "$out/$entry$mode" 1000000 1 > "$out/rust.stdout" 2> "$out/rust.stderr"
-    cmp "$out/oracle.stdout" "$out/rust.stdout"
-    cmp "$out/oracle.stderr" "$out/rust.stderr"
-    cases=$((cases + 1))
-  done
-done
-before=$(sha256sum "$out/forward.rs")
-if target/release/h2r emit-rust "$out/core" --entry '$main$Main$main' --output "$out/forward.rs" 2> "$out/refusal.stderr"; then
-  echo "unsupported IO entry was incorrectly emitted" >&2
-  exit 1
-fi
-test "$before" = "$(sha256sum "$out/forward.rs")"
-H2R_CANARY_DIR="$PWD/$out" rustc --edition=2024 --test compiler/canary/boxed_checks.rs -o "$out/boxed-checks"
-"$out/boxed-checks"
-"$oracle" boxedCaf > "$out/oracle.stdout" 2> "$out/oracle.stderr"
-for mode in '' '-checked'; do
-  "$out/boxedCaf$mode" > "$out/rust.stdout" 2> "$out/rust.stderr"
-  cmp "$out/oracle.stdout" "$out/rust.stdout"
-  cmp "$out/oracle.stderr" "$out/rust.stderr"
-  cases=$((cases + 1))
-done
-for x in -9223372036854775808 -100 -1 0 1 42 9223372036854775807; do
-  "$oracle" constant "$x" > "$out/oracle.stdout" 2> "$out/oracle.stderr"
-  for mode in '' '-checked'; do
-    "$out/constant$mode" "$x" > "$out/rust.stdout" 2> "$out/rust.stderr"
-    cmp "$out/oracle.stdout" "$out/rust.stdout"
-    cmp "$out/oracle.stderr" "$out/rust.stderr"
-    cases=$((cases + 1))
-  done
-  for y in -9223372036854775808 -17 -1 0 1 23 9223372036854775807; do
-    for entry in $binary_entries; do
-      "$oracle" "$entry" "$x" "$y" > "$out/oracle.stdout" 2> "$out/oracle.stderr"
-      for mode in '' '-checked'; do
-        "$out/$entry$mode" "$x" "$y" > "$out/rust.stdout" 2> "$out/rust.stderr"
-        cmp "$out/oracle.stdout" "$out/rust.stdout"
-        cmp "$out/oracle.stderr" "$out/rust.stderr"
-        cases=$((cases + 1))
-      done
-    done
-  done
-done
-done
-printf '%s differential cases passed (stdout, stderr, successful exit).\n' "$cases"
+cargo rr --bin h2r-canary -- --explain "${usage_entry?}" --profile "${usage_profile?}"
 '''
 
 [tasks.check]

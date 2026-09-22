@@ -109,6 +109,9 @@ pub struct Node {
 #[derive(Clone)]
 pub enum Field {
     Int64(i64),
+    /// An unboxed `Char#`: a Unicode code point, kept apart from `Int64` so a
+    /// mixed-up field is a panic rather than a silently wrong character.
+    Char(i64),
     Int(Int),
     Data(Data),
     Closure(Closure),
@@ -117,7 +120,7 @@ pub enum Field {
 impl Field {
     pub fn force(&self) {
         match self {
-            Self::Int64(_) => {}
+            Self::Int64(_) | Self::Char(_) => {}
             Self::Int(v) => {
                 v.force();
             }
@@ -133,6 +136,12 @@ impl Field {
         match self {
             Self::Int64(v) => *v,
             _ => panic!("invalid Int# field"),
+        }
+    }
+    pub fn char_code(&self) -> i64 {
+        match self {
+            Self::Char(v) => *v,
+            _ => panic!("invalid Char# field"),
         }
     }
     pub fn int(&self) -> Int {
@@ -276,6 +285,287 @@ impl Data {
     }
     pub fn shares_with(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// How a Haskell string literal's bytes become characters.
+///
+/// GHC picks the unpacker when it emits the literal: `unpackCString#` for a
+/// string whose characters are all ASCII 1..127, and `unpackCStringUtf8#`
+/// otherwise, whose bytes are modified UTF-8 — an embedded NUL is the
+/// overlong `C0 80`, which no validating UTF-8 decoder accepts. Both walks
+/// stop at the first NUL byte, exactly as `GHC.CString`'s do.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Encoding {
+    Latin1,
+    Utf8,
+}
+
+/// The code point at `at`, and where the next one starts. The compiler already
+/// refused a literal these steps could not walk, so a malformed one here is a
+/// compiler defect rather than an input error.
+fn code_point(bytes: &'static [u8], at: usize, encoding: Encoding) -> (i64, usize) {
+    let first = bytes[at];
+    if encoding == Encoding::Latin1 {
+        return (i64::from(first), at + 1);
+    }
+    let (width, lead) = match first {
+        0x00..=0x7f => (1, u32::from(first)),
+        0xc0..=0xdf => (2, u32::from(first) - 0xc0),
+        0xe0..=0xef => (3, u32::from(first) - 0xe0),
+        _ => (4, u32::from(first) - 0xf0),
+    };
+    let codepoint = bytes[at + 1..at + width]
+        .iter()
+        .fold(lead, |acc, byte| (acc << 6) + (u32::from(*byte) - 0x80));
+    (i64::from(codepoint), at + width)
+}
+
+/// One cell of a literal's `[Char]`, built only when it is demanded. The tail
+/// is a thunk over the rest of the bytes, so `head` of a long literal decodes
+/// one character and `null` decodes none.
+fn unpack_at(
+    bytes: &'static [u8],
+    at: usize,
+    encoding: Encoding,
+    names: StringNames,
+    tail: Data,
+) -> Node {
+    if at >= bytes.len() || bytes[at] == 0 {
+        return tail.force();
+    }
+    let (codepoint, next) = code_point(bytes, at, encoding);
+    Node {
+        constructor: names.cons,
+        fields: vec![
+            Field::Data(Data::ready(names.character, vec![Field::Char(codepoint)])),
+            Field::Data(Data::defer(move || {
+                unpack_at(bytes, next, encoding, names, tail)
+            })),
+        ],
+    }
+}
+
+/// The constructor names the generated code matches these cells against. They
+/// come from the compiler's own layout evidence, not from this crate.
+#[derive(Clone, Copy)]
+pub struct StringNames {
+    pub cons: &'static str,
+    pub nil: &'static str,
+    pub character: &'static str,
+}
+
+/// A string literal as a lazy `[Char]`, appended to `tail`.
+pub fn unpack_string(
+    bytes: &'static [u8],
+    encoding: Encoding,
+    names: StringNames,
+    tail: Data,
+) -> Data {
+    Data::defer(move || unpack_at(bytes, 0, encoding, names, tail))
+}
+
+/// The names of a list's two cells, from the compiler's layout evidence.
+#[derive(Clone, Copy)]
+pub struct ListNames {
+    pub cons: &'static str,
+    pub nil: &'static str,
+}
+
+/// `GHC.Base.(++)`: the left spine copied onto the right one, lazily.
+///
+/// Forcing the result to WHNF forces the left list to WHNF and nothing else,
+/// so the right list is never touched until the left runs out, and a cell of
+/// the left list is copied only when the corresponding result cell is
+/// demanded. The right list is reached, not copied: its cells are shared.
+pub fn append_list(left: Data, right: Data, names: ListNames) -> Data {
+    Data::defer(move || {
+        let node = left.force();
+        if node.constructor == names.nil {
+            return right.force();
+        }
+        let tail = node.fields[1].data();
+        Node {
+            constructor: names.cons,
+            fields: vec![
+                node.fields[0].clone(),
+                Field::Data(append_list(tail, right, names)),
+            ],
+        }
+    })
+}
+
+#[cfg(test)]
+mod append_tests {
+    use super::*;
+
+    const NAMES: ListNames = ListNames {
+        cons: ":",
+        nil: "[]",
+    };
+
+    fn ints(values: &[i64]) -> Data {
+        values
+            .iter()
+            .rev()
+            .fold(Data::ready(NAMES.nil, vec![]), |tail, value| {
+                Data::ready(NAMES.cons, vec![Field::Int64(*value), Field::Data(tail)])
+            })
+    }
+
+    fn collect(list: &Data) -> Vec<i64> {
+        let mut out = Vec::new();
+        let mut current = list.clone();
+        loop {
+            let node = current.force();
+            if node.constructor == NAMES.nil {
+                return out;
+            }
+            out.push(node.fields[0].int64());
+            current = node.fields[1].data();
+        }
+    }
+
+    #[test]
+    fn appending_joins_both_spines_in_order() {
+        assert_eq!(
+            collect(&append_list(ints(&[1, 2]), ints(&[3]), NAMES)),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            collect(&append_list(ints(&[]), ints(&[3, 4]), NAMES)),
+            vec![3, 4]
+        );
+        assert_eq!(collect(&append_list(ints(&[]), ints(&[]), NAMES)), vec![]);
+    }
+
+    #[test]
+    fn neither_argument_is_forced_before_the_result_is() {
+        let left = Data::defer(|| panic!("append forced its left argument"));
+        let right = Data::defer(|| panic!("append forced its right argument"));
+        let joined = append_list(left, right, NAMES);
+        assert!(!joined.is_evaluated());
+    }
+
+    #[test]
+    fn the_right_list_is_reached_rather_than_copied() {
+        let forced = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = forced.clone();
+        let right = Data::defer(move || {
+            counter.set(counter.get() + 1);
+            ints(&[9]).force()
+        });
+        let joined = append_list(ints(&[1]), right.clone(), NAMES);
+        let first = joined.force();
+        // One cell demanded: the right list has not been looked at yet.
+        assert_eq!(forced.get(), 0);
+        assert_eq!(first.fields[0].int64(), 1);
+        // Reaching the end enters the right list once, and its cells are the
+        // ones it already had rather than copies.
+        let rest = first.fields[1].data().force();
+        assert_eq!(rest.fields[0].int64(), 9);
+        assert_eq!(forced.get(), 1);
+        assert!(right.is_evaluated());
+    }
+
+    #[test]
+    fn a_lazy_element_survives_the_copy_unforced() {
+        let element = Int::defer(|| panic!("append forced an element"));
+        let left = Data::ready(
+            NAMES.cons,
+            vec![
+                Field::Int(element.clone()),
+                Field::Data(Data::ready(NAMES.nil, vec![])),
+            ],
+        );
+        let joined = append_list(left, Data::ready(NAMES.nil, vec![]), NAMES);
+        let node = joined.force();
+        assert!(node.fields[0].int().shares_with(&element));
+        assert!(!element.is_evaluated());
+    }
+}
+
+/// A string literal as a lazy `[Char]` ending in `[]`.
+pub fn unpack_literal(bytes: &'static [u8], encoding: Encoding, names: StringNames) -> Data {
+    unpack_string(bytes, encoding, names, Data::ready(names.nil, vec![]))
+}
+
+#[cfg(test)]
+mod string_tests {
+    use super::*;
+
+    const NAMES: StringNames = StringNames {
+        cons: ":",
+        nil: "[]",
+        character: "C#",
+    };
+
+    fn collect(list: &Data) -> Vec<i64> {
+        let mut out = Vec::new();
+        let mut current = list.clone();
+        loop {
+            let node = current.force();
+            if node.constructor == NAMES.nil {
+                return out;
+            }
+            out.push(node.fields[0].data().force().fields[0].char_code());
+            current = node.fields[1].data();
+        }
+    }
+
+    #[test]
+    fn a_literal_decodes_to_its_own_code_points() {
+        assert_eq!(
+            collect(&unpack_literal(b"hi\0", Encoding::Latin1, NAMES)),
+            vec![104, 105]
+        );
+        assert_eq!(
+            collect(&unpack_literal("é€\0".as_bytes(), Encoding::Utf8, NAMES)),
+            vec![0xe9, 0x20ac]
+        );
+        // GHC's overlong NUL, which a validating decoder would reject.
+        assert_eq!(
+            collect(&unpack_literal(b"a\xc0\x80b\0", Encoding::Utf8, NAMES)),
+            vec![0x61, 0x00, 0x62]
+        );
+        assert!(collect(&unpack_literal(b"\0", Encoding::Latin1, NAMES)).is_empty());
+    }
+
+    #[test]
+    fn only_the_demanded_prefix_is_decoded_and_the_tail_is_not_forced() {
+        let poison = Data::defer(|| panic!("an undemanded string tail was forced"));
+        let list = unpack_string(b"abc\0", Encoding::Latin1, NAMES, poison);
+        let first = list.force();
+        assert_eq!(
+            first.fields[0].data().force().fields[0].char_code(),
+            i64::from(b'a')
+        );
+        // The rest of the literal is still a thunk.
+        assert!(!first.fields[1].data().is_evaluated());
+    }
+
+    #[test]
+    fn an_appended_tail_continues_the_list_once_the_literal_runs_out() {
+        let tail = unpack_literal(b"de\0", Encoding::Latin1, NAMES);
+        let joined = unpack_string(b"abc\0", Encoding::Latin1, NAMES, tail);
+        assert_eq!(collect(&joined), vec![97, 98, 99, 100, 101]);
+        // An empty literal is its tail, with no cell of its own.
+        let tail = unpack_literal(b"xy\0", Encoding::Latin1, NAMES);
+        assert_eq!(
+            collect(&unpack_string(b"\0", Encoding::Latin1, NAMES, tail)),
+            vec![120, 121]
+        );
+    }
+
+    #[test]
+    fn forcing_one_cell_twice_decodes_it_once() {
+        let list = unpack_literal(b"ab\0", Encoding::Latin1, NAMES);
+        let node = list.force();
+        let tail = node.fields[1].data();
+        assert!(!tail.is_evaluated());
+        tail.force();
+        assert!(tail.is_evaluated());
+        assert!(list.force().fields[1].data().shares_with(&tail));
     }
 }
 

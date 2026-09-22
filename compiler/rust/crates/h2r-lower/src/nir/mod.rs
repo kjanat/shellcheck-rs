@@ -54,6 +54,8 @@ impl<'a> World<'a> {
 pub(crate) mod boxed;
 pub mod data;
 mod dict;
+pub mod diverge;
+pub mod external;
 mod instantiate;
 mod linkage;
 pub mod lower;
@@ -61,6 +63,7 @@ pub mod pretty;
 mod primitive;
 pub mod program;
 pub mod specialize;
+pub mod strings;
 pub mod subst;
 pub mod verify;
 mod view;
@@ -97,7 +100,13 @@ pub enum Rule {
     UnboxInt,
     DelayBlock,
     LazyBinding,
+    /// A `let` at an unboxed type: Core's strict binding, evaluated in place.
+    StrictBinding,
     Construct,
+    MakeUnboxedTuple,
+    /// A `case` on an unboxed tuple, which binds its components and branches
+    /// nowhere: the family has exactly one constructor.
+    UnboxedTupleField,
     MatchData,
     LocalScope,
     CallLocal,
@@ -109,6 +118,13 @@ pub enum Rule {
     /// A class method selector applied to a proven-unique dictionary,
     /// resolved to that instance's method.
     ResolveMethod,
+    CharCompare,
+    OrdChar,
+    ChrChar,
+    UnpackString,
+    AppendList,
+    /// A call GHC's demand analysis proved never returns.
+    Diverge,
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +169,24 @@ pub enum Operation {
         constructor: data::Constructor,
         arguments: Vec<ValueId>,
     },
+    /// Build an unboxed tuple: several values side by side, with no box, no
+    /// tag and nothing allocated. GHC's own type system guarantees one is
+    /// never bound lazily, stored in a lifted field or passed where a value is
+    /// expected, so unlike `Construct` there is nothing here to delay and no
+    /// field strictness to honour.
+    MakeUnboxedTuple {
+        arguments: Vec<ValueId>,
+    },
+    /// One component of an unboxed tuple, by position.
+    ///
+    /// Not a projection through a heap object and not a forcing: an unboxed
+    /// tuple *is* its components, so this only names one of them. It is what a
+    /// `case` on an unboxed tuple does, which is why such a case is no control
+    /// flow at all.
+    UnboxedTupleField {
+        tuple: ValueId,
+        index: usize,
+    },
     /// Force just the outer constructor, then enter exactly one arm. Arm
     /// parameters are captures, case binder, and constructor fields (in order).
     MatchData {
@@ -180,6 +214,34 @@ pub enum Operation {
     IntBinary {
         op: IntBinary,
         arguments: Vec<ValueId>,
+    },
+    /// Strict comparison of two Char#; the result is Int# 0 or 1.
+    ///
+    /// GHC orders `Char#` as an *unsigned* machine word and `chr#` narrows
+    /// nothing, so this is the order `Ord Char` has only for values that are
+    /// code points. `chr# -1#` is the largest `Char#`, not the smallest.
+    CharCompare {
+        op: CharCompare,
+        arguments: Vec<ValueId>,
+    },
+    /// `ord#`: the code point of a Char#, as an Int#.
+    OrdChar(ValueId),
+    /// `chr#`: an Int# read as a code point. Unchecked and non-narrowing, as
+    /// GHC's is: `ord#` after it returns the original word, whatever it was,
+    /// and a value outside the Unicode range is the caller's error.
+    ChrChar(ValueId),
+    /// One of `GHC.CString`'s unpackers applied to a string literal: the whole
+    /// spine, because an `Addr#` is not a value this backend carries. The
+    /// result is a `[Char]` built on demand, one cell at a time.
+    UnpackString(Box<UnpackString>),
+    /// `GHC.Base.(++)` at a closed element type. Neither list is forced here;
+    /// the result's cells are built as they are demanded, and the right list
+    /// is reached, not copied.
+    AppendList {
+        left: ValueId,
+        right: ValueId,
+        nil: data::Constructor,
+        cons: data::Constructor,
     },
     Literal(Lit),
     /// Obtain the existing shared value of one instance of a top-level binding
@@ -271,6 +333,34 @@ pub struct DataArm {
     pub target: BlockId,
 }
 
+/// A string literal and everything needed to build the list it denotes.
+/// The constructor layouts come from the loaded world, like every other
+/// construction: the runtime is handed the evidence, it does not assume it.
+#[derive(Debug, Clone)]
+pub struct UnpackString {
+    /// The literal's own bytes, as GHC emitted them.
+    pub bytes: Vec<u8>,
+    pub encoding: strings::Encoding,
+    /// What the last cell's tail is: `unpackAppendCString#`'s second argument,
+    /// or nothing, which means `[]`.
+    pub tail: Option<ValueId>,
+    pub nil: data::Constructor,
+    pub cons: data::Constructor,
+    /// `C#`, which wraps each decoded code point.
+    pub character: data::Constructor,
+}
+
+/// A code-point comparison of two Char#.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharCompare {
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntBinary {
     Add,
@@ -300,11 +390,25 @@ pub enum Exit {
     },
     /// Evaluate exactly one arm. All successor blocks receive the same explicit
     /// environment followed by the evaluated case binder; no implicit captures.
+    /// The scrutinee is an unboxed scalar and each pattern is its exact value:
+    /// a code point for Char#, the number itself for Int#.
     IntSwitch {
         scrutinee: ValueId,
         arms: Vec<(i64, BlockId)>,
         default: BlockId,
         args: Vec<ValueId>,
+    },
+    /// A call that does not return, so the block has no successor and produces
+    /// no value. The name is the binding GHC would have entered, carried for
+    /// the runtime diagnostic; the arguments that would have built GHC's own
+    /// message are not evaluated, because this backend does not reproduce it.
+    ///
+    /// `ty` is the type the call stands in for. A dead end inhabits every
+    /// type, so unlike every other exit there is no value to read it off, and
+    /// the block's context is the only thing that knows it.
+    Diverge {
+        name: String,
+        ty: Ty,
     },
 }
 

@@ -188,6 +188,8 @@ fn nir_specialize_report(modules: &[Module], name: Option<&str>) -> Result<(Stri
         for (reason, count) in &ranked {
             writeln!(out, "{count:8}  {reason}").unwrap();
         }
+        out.push_str(&blocked_subjects(&program));
+        out.push_str(&external_demand(&program));
         writeln!(out, "Specialized instances:").unwrap();
         for (index, instance) in program.instances.iter().enumerate() {
             if instance.type_arguments.is_empty() && instance.dictionaries.is_empty() {
@@ -209,6 +211,100 @@ fn nir_specialize_report(modules: &[Module], name: Option<&str>) -> Result<(Stri
         }
     }
     Ok((out, refused))
+}
+
+/// Most demanded first, ties broken by the key so a report is reproducible.
+fn rank_counts<K: Ord>(counts: BTreeMap<K, usize>) -> Vec<(K, usize)> {
+    let mut ranked: Vec<_> = counts.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    ranked
+}
+
+/// What each refusal was about, where the refusing site knew: the type
+/// constructor whose carrier is missing, the family whose layout is not
+/// supported. A reason says which rule stopped an instance; this says which
+/// type would have to be carried for that rule to pass. Refusals whose site
+/// named no subject are counted but not itemised.
+fn blocked_subjects(program: &h2r_lower::nir::specialize::Specialization) -> String {
+    use std::fmt::Write;
+
+    const EXTERNAL: &str = "imported binding is outside the loaded world";
+    let mut subjects: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for error in &program.refused {
+        let reason = error
+            .reason
+            .split(" (at source expression ")
+            .next()
+            .unwrap_or(&error.reason);
+        if reason == EXTERNAL {
+            continue;
+        }
+        if let Some(subject) = error.detail.as_deref() {
+            *subjects.entry((reason, subject)).or_insert(0) += 1;
+        }
+    }
+    if subjects.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("Blockers, by the type they are about:\n");
+    for ((reason, subject), count) in rank_counts(subjects) {
+        writeln!(out, "{count:8}  {subject}  ({reason})").unwrap();
+    }
+    out
+}
+
+/// The external boundary, ranked by demand: which library bindings the survey
+/// asked for and could not find in the loaded world. One instance may name the
+/// same binding at several sites and is counted once per site it refused at, so
+/// these are refusals, not distinct call sites, and — like every survey count —
+/// a lower bound: a refused instance never revealed its own requirements.
+fn external_demand(program: &h2r_lower::nir::specialize::Specialization) -> String {
+    use h2r_core_ir::split_stable_name;
+    use std::fmt::Write;
+
+    const OUTSIDE: &str = "imported binding is outside the loaded world";
+    let mut bindings: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut origins: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for error in &program.refused {
+        if !error.reason.starts_with(OUTSIDE) {
+            continue;
+        }
+        let Some(name) = error.detail.as_deref() else {
+            continue;
+        };
+        *bindings.entry(name).or_insert(0) += 1;
+        if let Some((unit, module, _)) = split_stable_name(name) {
+            *origins.entry((unit, module)).or_insert(0) += 1;
+        }
+    }
+    if bindings.is_empty() {
+        return String::new();
+    }
+    let named: usize = bindings.values().sum();
+    let unnamed = program
+        .refused
+        .iter()
+        .filter(|error| error.reason.starts_with(OUTSIDE) && error.detail.is_none())
+        .count();
+    let mut out = format!(
+        "External boundary: {} distinct bindings over {named} refusals, in {} modules{}\n",
+        bindings.len(),
+        origins.len(),
+        if unnamed == 0 {
+            String::new()
+        } else {
+            format!("; {unnamed} refusals named no occurrence")
+        }
+    );
+    writeln!(out, "External modules, by refusals:").unwrap();
+    for ((unit, module), count) in rank_counts(origins) {
+        writeln!(out, "{count:8}  {unit}:{module}").unwrap();
+    }
+    writeln!(out, "External bindings, by refusals:").unwrap();
+    for (name, count) in rank_counts(bindings) {
+        writeln!(out, "{count:8}  {name}").unwrap();
+    }
+    out
 }
 
 fn nir_program_report(modules: &[Module]) -> Result<(String, usize)> {
@@ -1057,7 +1153,10 @@ mod nir_tests {
     }
 
     fn fixture_with_link(missing: bool) -> Module {
-        let lit = json!({"node": "Lit", "lit": {"kind": "int", "pretty": "7"}});
+        let lit = json!({
+            "node": "Lit",
+            "lit": {"kind": "number", "pretty": "7#", "value": "7", "numType": "Int"},
+        });
         let target = if missing { "missing" } else { "leaf" };
         let mut binds = Vec::new();
         for (name, rhs) in [
@@ -1148,7 +1247,7 @@ mod nir_tests {
         assert_eq!(first, nir_report(&modules, "$u$Main$leaf").unwrap());
         assert!(first.contains("not whole-program lowering"));
         assert!(first.contains("1 = 0 parameters + 0 type parameters + 1 value + 0 erased ticks"));
-        assert!(first.contains("literal int \"7\""));
+        assert!(first.contains("literal number \"7#\""));
         assert!(first.contains("return v0"));
         assert!(first.contains("Expr("));
     }

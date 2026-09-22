@@ -84,7 +84,7 @@ impl Pretty<'_> {
                 let _ = write!(out, "@({t})");
             }
             Expr::Coercion => out.push_str("@~"),
-            Expr::Cast(e) => {
+            Expr::Cast { expr: e, .. } => {
                 out.push('(');
                 self.expr(out, *e, indent, depth + 1);
                 let _ = write!(out, " `cast`){}", self.tag(id));

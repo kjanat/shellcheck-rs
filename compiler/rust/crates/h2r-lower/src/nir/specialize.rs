@@ -105,6 +105,12 @@ fn dictionary_key(dictionaries: &[DictionaryRef]) -> String {
 pub struct SpecializeError {
     pub instance: Instance,
     pub reason: String,
+    /// The Core node the refusal was raised at, in the instance's own module.
+    /// A budget refusal has none: it is decided before any body is read.
+    pub source: Option<h2r_core_ir::ExprId>,
+    /// The subject the refusal named, where it knew one: an external stable
+    /// name, a type constructor. A ranking key, never evidence.
+    pub detail: Option<String>,
     /// The instances that required this one, root first. A refusal names the
     /// path that reached it, not merely the binding that failed.
     pub path: Vec<Instance>,
@@ -185,7 +191,7 @@ impl Specialization {
 pub fn specialize(
     modules: &[Module],
     roots: &[Instance],
-) -> Result<Specialization, SpecializeError> {
+) -> Result<Specialization, Box<SpecializeError>> {
     specialize_with(modules, roots, OnRefusal::Stop)
 }
 
@@ -201,11 +207,11 @@ pub fn specialize_with(
     modules: &[Module],
     roots: &[Instance],
     on_refusal: OnRefusal,
-) -> Result<Specialization, SpecializeError> {
+) -> Result<Specialization, Box<SpecializeError>> {
     let mut worklist = Worklist::default();
     for root in roots {
         if let Err(error) = worklist.intern(root.clone(), None)
-            && let Some(error) = worklist.refuse(error, on_refusal)
+            && let Some(error) = worklist.refuse(*error, on_refusal)
         {
             return Err(error);
         }
@@ -228,6 +234,8 @@ pub fn specialize_with(
                         Some(source) => format!("{} (at source expression {source})", error.reason),
                         None => error.reason.clone(),
                     },
+                    source: error.source,
+                    detail: error.detail.clone(),
                     path: worklist.path(id),
                 };
                 if let Some(error) = worklist.refuse(refusal, on_refusal) {
@@ -266,7 +274,7 @@ pub fn specialize_with(
         worklist.lowered[id] = Some(leaf);
         for instance in required {
             if let Err(error) = worklist.intern(instance, Some(id))
-                && let Some(error) = worklist.refuse(error, on_refusal)
+                && let Some(error) = worklist.refuse(*error, on_refusal)
             {
                 return Err(error);
             }
@@ -303,9 +311,13 @@ impl Worklist {
         chain
     }
 
-    fn refuse(&mut self, error: SpecializeError, on_refusal: OnRefusal) -> Option<SpecializeError> {
+    fn refuse(
+        &mut self,
+        error: SpecializeError,
+        on_refusal: OnRefusal,
+    ) -> Option<Box<SpecializeError>> {
         match on_refusal {
-            OnRefusal::Stop => Some(error),
+            OnRefusal::Stop => Some(Box::new(error)),
             OnRefusal::Record => {
                 self.refused.push(error);
                 None
@@ -317,15 +329,19 @@ impl Worklist {
         &mut self,
         instance: Instance,
         parent: Option<usize>,
-    ) -> Result<usize, SpecializeError> {
+    ) -> Result<usize, Box<SpecializeError>> {
         let key = instance.key();
         if let Some(existing) = self.index.get(&key) {
             return Ok(*existing);
         }
-        let fail = |reason: &str, this: &Worklist| SpecializeError {
-            instance: instance.clone(),
-            reason: reason.into(),
-            path: parent.map_or_else(Vec::new, |p| this.path(p)),
+        let fail = |reason: &str, this: &Worklist| {
+            Box::new(SpecializeError {
+                instance: instance.clone(),
+                reason: reason.into(),
+                source: None,
+                detail: None,
+                path: parent.map_or_else(Vec::new, |p| this.path(p)),
+            })
         };
         if instance.depth() > TYPE_DEPTH_BUDGET {
             return Err(fail(

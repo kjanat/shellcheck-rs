@@ -114,6 +114,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "h2r-canary"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "h2r-core-ir",
+ "h2r-lower",
+]
+
+[[package]]
 name = "h2r-cli"
 version = "0.1.0"
 dependencies = [

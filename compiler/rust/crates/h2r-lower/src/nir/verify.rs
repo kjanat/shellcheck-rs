@@ -210,7 +210,7 @@ fn verify_leaf_impl(
                     return Err("multiple leaf values in source".into());
                 }
             }
-            Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. } => {
+            Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. } | Expr::Cast { .. } => {
                 if leaf.replace(expr).is_some() {
                     return Err("multiple leaf values in source".into());
                 }
@@ -392,7 +392,7 @@ fn verify_tail(
             },
         ) => {
             if block.terminator.origin.rule != Rule::IntSwitch
-                || !primitive::is_int(view.binder_ty(*binder))
+                || !primitive::is_scalar(view.binder_ty(*binder))
                 || !data::supported(&world, ty)
                 || !view.ty(*result_ty).alpha_eq(ty)
                 || alts.iter().any(|a| !a.binders.is_empty())
@@ -417,7 +417,7 @@ fn verify_tail(
                         *default
                     }
                     h2r_core_ir::AltCon::LitAlt { lit } => {
-                        let literal = primitive::int_literal(lit)?;
+                        let literal = primitive::scalar_literal(view.binder_ty(*binder), lit)?;
                         if !seen_patterns.insert(literal) {
                             return Err("duplicate source pattern".into());
                         }
@@ -468,6 +468,23 @@ fn verify_tail(
         }
         (Exit::Return(returned), _) if block.terminator.origin.rule == Rule::Return => {
             verify_value(context, block, expr, ty, *returned)
+        }
+        (Exit::Diverge { name, ty: exit }, _) if block.terminator.origin.rule == Rule::Diverge => {
+            let divergent =
+                divergent_spine(context, expr).ok_or("a dead end exit has no diverging source")?;
+            if divergent.name != *name {
+                return Err("dead end names a binding its source does not".into());
+            }
+            if !exit.alpha_eq(ty) {
+                return Err("dead end type differs from source".into());
+            }
+            if !block.instructions.is_empty() {
+                return Err("a dead end evaluates nothing".into());
+            }
+            // The spine is erased as a unit — head, application nodes and every
+            // argument subtree — because none of it runs. It is accounted here
+            // rather than left for a recursion that will never visit it.
+            Ok((0, 0, context.module.preorder(expr).count()))
         }
         _ => Err("terminator differs from source control flow".into()),
     }
@@ -545,11 +562,22 @@ fn verify_value(
         };
         return verify_tail(&region_context, context.function, *target, expr, ty);
     }
+    if let Some(counts) = verify_unboxed_tuple(context, block, expr, ty, returned)? {
+        return Ok(counts);
+    }
     if let Some(counts) = verify_constructor(context, block, expr, ty, returned)? {
         return Ok(counts);
     }
     if matches!(module.expr(expr), Expr::Lam { .. }) {
         return verify_lambda(context, block, expr, ty, returned);
+    }
+    if let Expr::Case { binder, .. } = module.expr(expr)
+        && matches!(
+            data::unboxed_tuple_constructor(&world, view.binder_ty(*binder)),
+            Ok(Some(_))
+        )
+    {
+        return verify_unboxed_tuple_case(context, block, expr, ty, returned);
     }
     if let Expr::Case { binder, .. } = module.expr(expr)
         && data::is_data(&world, view.binder_ty(*binder))
@@ -559,6 +587,116 @@ fn verify_value(
     let mut value_nodes = 1;
     let mut type_applications = 0;
     let mut value_applications = 0;
+    if let Some((entry, type_arguments, argument_sources)) = external_spine(context, expr) {
+        // The signature, the element type and the cell layouts are all
+        // re-derived here from the source spine and the world.
+        let signature = entry
+            .signature(&type_arguments)
+            .ok_or("source external call type arguments mismatch")?;
+        let element = entry
+            .element(&type_arguments)
+            .ok_or("source external call type arguments mismatch")?;
+        if !linkage::closed_type(&signature) {
+            return Err("source external call requires closed structured types".into());
+        }
+        let (nil, cons) = data::list_layouts(&world, &element)?;
+        let instruction = block.instructions.last().ok_or("missing external call")?;
+        let Operation::AppendList {
+            left,
+            right,
+            nil: claimed_nil,
+            cons: claimed_cons,
+        } = &instruction.operation
+        else {
+            return Err("source external call was not lowered as one".into());
+        };
+        if entry != external::External::Append
+            || claimed_nil != &nil
+            || claimed_cons != &cons
+            || instruction.origin.source != Source::Expr(expr)
+            || instruction.origin.rule != Rule::AppendList
+            || instruction.result.id != returned
+            || !instruction.result.ty.alpha_eq(signature.fun_result())
+            || !instruction.result.ty.alpha_eq(ty)
+        {
+            return Err("external call differs from source".into());
+        }
+        let operands = [*left, *right];
+        let limit = block.instructions.len() - 1;
+        let mut remaining = &signature;
+        let mut consumed = 0;
+        let mut counts = (type_arguments.len(), entry.value_arity(), 1);
+        for (position, source) in argument_sources.iter().enumerate() {
+            let Ty::Fun { arg, res, .. } = remaining else {
+                return Err("source external call signature lacks an arrow".into());
+            };
+            let (nt, nv, nn, next) = verify_lazy_argument(
+                context,
+                block,
+                consumed,
+                limit,
+                *source,
+                arg,
+                operands[position],
+            )?;
+            counts = (counts.0 + nt, counts.1 + nv, counts.2 + nn);
+            consumed = next;
+            remaining = res;
+        }
+        if consumed != limit {
+            return Err("an external call is its arguments and itself".into());
+        }
+        // Each type argument is a source node of its own, and so is each
+        // application node; the head variable is the one remaining value node.
+        return Ok((counts.0, counts.1, counts.2));
+    }
+    if let Some((unpacker, literal, tail_source)) = unpacker_spine(&world, module_index, expr) {
+        // Re-read the literal, the encoding and the layouts from the source and
+        // the world. Nothing here is taken from the candidate instruction.
+        let expected_bytes = strings::address_literal(&world, module_index, literal)
+            .ok_or("source string unpacker lacks a literal address")?
+            .string_bytes()?;
+        strings::decode(&expected_bytes, unpacker.encoding)?;
+        let (nil, cons, character) = data::string_layouts(&world)?;
+        let string = strings::string_ty();
+        if !ty.alpha_eq(&string) {
+            return Err("a source string literal unpacks to [Char]".into());
+        }
+        let instruction = block
+            .instructions
+            .last()
+            .ok_or("missing unpacked string literal")?;
+        let Operation::UnpackString(unpack) = &instruction.operation else {
+            return Err("source string unpacker was not lowered as one".into());
+        };
+        if unpack.bytes != expected_bytes
+            || unpack.encoding != unpacker.encoding
+            || unpack.nil != nil
+            || unpack.cons != cons
+            || unpack.character != character
+            || unpack.tail.is_some() != tail_source.is_some()
+            || instruction.origin.source != Source::Expr(expr)
+            || instruction.origin.rule != Rule::UnpackString
+            || instruction.result.id != returned
+            || !instruction.result.ty.alpha_eq(&string)
+        {
+            return Err("unpacked string literal differs from source".into());
+        }
+        if let Some(source) = tail_source {
+            let tail = unpack.tail.expect("checked above");
+            let limit = block.instructions.len() - 1;
+            let (nt, nv, nn, next) =
+                verify_lazy_argument(context, block, 0, limit, source, &string, tail)?;
+            if next != limit {
+                return Err("an appended string literal is its tail and itself".into());
+            }
+            return Ok((nt, nv + unpacker.arity() as usize, nn + 1));
+        }
+        if block.instructions.len() != 1 {
+            return Err("an unpacked string literal is one instruction".into());
+        }
+        return Ok((0, unpacker.arity() as usize, 1));
+    }
     match module.expr(expr) {
         Expr::App { arg, .. } if !matches!(module.expr(*arg), Expr::Type { .. }) => {
             let mut source_args = Vec::new();
@@ -588,44 +726,54 @@ fn verify_value(
             let indirect = module
                 .resolve(head)
                 .filter(|b| params.iter().any(|(_, binder, _)| binder == b));
-            let primitive_ty = if constructor {
-                boxed::signature()
-            } else {
-                primitive::signature()
+            let primitive_ty = match primitive {
+                _ if constructor => boxed::signature(),
+                Some(prim) => prim.signature(),
+                None => primitive::signature(),
             };
-            let target =
-                if primitive.is_some() || constructor || local.is_some() || indirect.is_some() {
-                    None
-                } else {
-                    Some(
-                        dict::call_target(
-                            &context.world(),
-                            &context.scope(),
-                            head,
-                            &source_types,
-                            &source_args,
-                        )?
-                        .ok_or("source application requires a top-level binding")?,
-                    )
-                };
+            let cast_head = match module.expr(head) {
+                Expr::Cast { to: Some(to), .. } => Some(view.ty(*to).clone()),
+                _ => None,
+            };
+            let target = if cast_head.is_some()
+                || primitive.is_some()
+                || constructor
+                || local.is_some()
+                || indirect.is_some()
+            {
+                None
+            } else {
+                Some(
+                    dict::call_target(
+                        &context.world(),
+                        &context.scope(),
+                        head,
+                        &source_types,
+                        &source_args,
+                    )?
+                    .ok_or("source application requires a top-level binding")?,
+                )
+            };
             // The dictionary arguments the instance key absorbed are still
             // source nodes, and are accounted here rather than lowered.
             for erased in target.iter().flat_map(|resolved| &resolved.erased) {
                 value_nodes += module.preorder(*erased).count() - 1;
             }
-            let head_ty = indirect.map_or_else(
-                || {
-                    local.map_or_else(
-                        || {
-                            target
-                                .as_ref()
-                                .map_or(&primitive_ty, |resolved| &resolved.signature)
-                        },
-                        |(b, _)| view.binder_ty(b),
-                    )
-                },
-                |b| view.binder_ty(b),
-            );
+            let head_ty = cast_head.as_ref().unwrap_or_else(|| {
+                indirect.map_or_else(
+                    || {
+                        local.map_or_else(
+                            || {
+                                target
+                                    .as_ref()
+                                    .map_or(&primitive_ty, |resolved| &resolved.signature)
+                            },
+                            |(b, _)| view.binder_ty(b),
+                        )
+                    },
+                    |b| view.binder_ty(b),
+                )
+            });
             let instantiated = match &target {
                 Some(resolved) => resolved.signature.clone(),
                 None => instantiate::apply(head_ty, &source_types)?,
@@ -635,24 +783,33 @@ fn verify_value(
                 Some(resolved) => resolved.arguments.clone(),
                 None => source_args,
             };
-            let arity = local.map_or_else(
-                || {
-                    target
-                        .as_ref()
-                        .map_or(Some(if constructor { 1 } else { 2 }), |resolved| {
-                            Some(resolved.arity as u32)
-                        })
-                },
-                |(_, (_, _, arity))| Some(*arity as u32),
-            );
-            let apply = indirect.is_some() || arity != Some(source_args.len() as u32);
+            let arity = if cast_head.is_some() {
+                None
+            } else {
+                local.map_or_else(
+                    || {
+                        target.as_ref().map_or_else(
+                            || Some(if constructor { 1 } else { primitive?.arity() }),
+                            |resolved| Some(resolved.arity as u32),
+                        )
+                    },
+                    |(_, (_, _, arity))| Some(*arity as u32),
+                )
+            };
+            let apply = cast_head.is_some()
+                || indirect.is_some()
+                || arity != Some(source_args.len() as u32);
             if apply
                 && (primitive.is_some()
                     || constructor
                     || (target.is_none() && !source_types.is_empty())
                     || !data::function(&world, head_ty))
             {
-                return Err("source call is not saturated at known target arity".into());
+                return Err(
+                    "a source call this shape is a partial application of a primop, a \
+                     constructor, an open spine or an uncarried function type"
+                        .into(),
+                );
             }
             if !linkage::closed_type(signature) || !linkage::closed_type(ty) {
                 return Err("source call requires closed structured types".into());
@@ -688,7 +845,11 @@ fn verify_value(
                     return Err("source call signature lacks an arrow".into());
                 };
                 let value = match module.expr(*source) {
-                    Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. } | Expr::Lam { .. }
+                    Expr::App { .. }
+                    | Expr::Case { .. }
+                    | Expr::Let { .. }
+                    | Expr::Lam { .. }
+                    | Expr::Cast { .. }
                         if data::supported(&world, arg) =>
                     {
                         let end = block.instructions[argument_instructions..]
@@ -849,12 +1010,21 @@ fn verify_value(
                 }
                 Rule::BoxInt
             } else if let Some(expected) = primitive {
-                if !matches!(&instruction.operation, Operation::IntBinary { op, arguments }
-                    if *op == expected && arguments == &values)
-                {
+                let agrees = match (expected, &instruction.operation) {
+                    (primitive::Prim::Int(expected), Operation::IntBinary { op, arguments }) => {
+                        *op == expected && arguments == &values
+                    }
+                    (primitive::Prim::Char(expected), Operation::CharCompare { op, arguments }) => {
+                        *op == expected && arguments == &values
+                    }
+                    (primitive::Prim::Ord, Operation::OrdChar(value))
+                    | (primitive::Prim::Chr, Operation::ChrChar(value)) => values == [*value],
+                    _ => false,
+                };
+                if !agrees {
                     return Err("primitive operation or arguments differ from source".into());
                 }
-                Rule::IntBinary
+                expected_primitive_rule(expected)
             } else if let Some((_, (expected, captures, _))) = local {
                 let mut arguments = captures
                     .iter()
@@ -971,6 +1141,44 @@ fn verify_value(
             if instruction.result.id != returned || !instruction.result.ty.alpha_eq(&expected) {
                 return Err("type application result mismatch".into());
             }
+        }
+        Expr::Cast {
+            expr: inner,
+            from,
+            to,
+            role,
+        } => {
+            // Re-derived from the source's own coercion kind and the world's
+            // carriers, never from the candidate's `Move`.
+            let (Some(from), Some(to), Some(_)) = (from, to, role) else {
+                return Err("source cast carries no coercion kind".into());
+            };
+            let source_ty = view.ty(*from).clone();
+            let target_ty = view.ty(*to);
+            let carrier = data::carrier(&world, &source_ty);
+            if !target_ty.alpha_eq(ty)
+                || carrier.is_none()
+                || carrier != data::carrier(&world, target_ty)
+            {
+                return Err("source cast changes the carrier or the result type".into());
+            }
+            let instruction = block.instructions.last().ok_or("missing erased cast")?;
+            let Operation::Move(moved) = instruction.operation else {
+                return Err("an erased cast must preserve the value".into());
+            };
+            if instruction.origin.source != Source::Expr(expr)
+                || instruction.origin.rule != Rule::EraseCast
+                || instruction.result.id != returned
+                || !instruction.result.ty.alpha_eq(ty)
+            {
+                return Err("erased cast differs from source".into());
+            }
+            let mut prefix = block.clone();
+            prefix.instructions.truncate(block.instructions.len() - 1);
+            let (it, iv, in_) = verify_value(context, &prefix, *inner, &source_ty, moved)?;
+            type_applications = it;
+            value_applications = iv;
+            value_nodes = 1 + in_;
         }
         Expr::Lit(source) => {
             if block.instructions.len() != 1 {
@@ -1145,34 +1353,48 @@ fn verify_value(
             }
             let binding_ty = view.binder_ty(pair.binder);
             if bind.recursive
-                || !data::lifted(&world, binding_ty)
+                || !data::supported(&world, binding_ty)
                 || module.binder(pair.binder).is_join_point == Some(true)
             {
-                return Err("unsupported recursive, unlifted or join-point let".into());
+                return Err("unsupported recursive, unsupported-carrier or join-point let".into());
             }
+            // Which rule the binding must carry is decided here, from the
+            // source type: a lifted let is a thunk, an unboxed one is not.
+            let delayed = data::lifted(&world, binding_ty);
+            let expected_rule = if delayed {
+                Rule::LazyBinding
+            } else {
+                Rule::StrictBinding
+            };
             let split = block
                 .instructions
                 .iter()
                 .position(|i| {
-                    i.origin.source == Source::Expr(expr) && i.origin.rule == Rule::LazyBinding
+                    i.origin.source == Source::Expr(expr) && i.origin.rule == expected_rule
                 })
-                .ok_or("missing lazy binding marker")?;
+                .ok_or("missing let binding marker")?;
             let binding = &block.instructions[split];
             let Operation::Move(rhs) = binding.operation else {
-                return Err("lazy let must preserve shared identity".into());
+                return Err("a let must preserve shared identity".into());
             };
             if !binding.result.ty.alpha_eq(binding_ty) {
-                return Err("lazy binding type mismatch".into());
+                return Err("let binding type mismatch".into());
             }
             let mut prefix = block.clone();
             prefix.instructions.truncate(split);
             if !matches!(module.expr(pair.rhs), Expr::Var { .. })
-                && !prefix
-                    .instructions
-                    .last()
-                    .is_some_and(|i| matches!(i.operation, Operation::DelayBlock { .. }))
+                && !prefix.instructions.last().is_some_and(|i| {
+                    if delayed {
+                        matches!(i.operation, Operation::DelayBlock { .. })
+                    } else {
+                        matches!(
+                            i.operation,
+                            Operation::EvaluateBlock { .. } | Operation::CallLocal { .. }
+                        ) || primitive::is_scalar(&i.result.ty)
+                    }
+                })
             {
-                return Err("computed lazy binding must be delayed".into());
+                return Err("a computed let binding must match its strictness".into());
             }
             let (rt, rv, rn) = verify_value(context, &prefix, pair.rhs, binding_ty, rhs)?;
             let mut suffix = block.clone();
@@ -1265,7 +1487,7 @@ fn verify_value(
             };
             if !matches!(alt.con, h2r_core_ir::AltCon::Default)
                 || !alt.binders.is_empty()
-                || !primitive::is_int(view.binder_ty(*binder))
+                || !primitive::is_scalar(view.binder_ty(*binder))
                 || !data::supported(&world, ty)
                 || !view.ty(*result_ty).alpha_eq(ty)
             {
@@ -1572,6 +1794,181 @@ fn verify_reference(instruction: &Instruction, expected: &DictionaryRef) -> Resu
     Ok(())
 }
 
+/// Verify one argument that is passed without being forced: the instructions
+/// that produced it, or — when it produced none — the parameter it names.
+///
+/// Returns the type applications and value applications inside it, how much it
+/// adds to the enclosing value-node count, and the first instruction index the
+/// caller may still use. A computed argument must have stayed delayed; a
+/// reference to something already in scope allocates nothing and so leaves no
+/// instruction to find.
+fn verify_lazy_argument(
+    context: &ValueContext<'_>,
+    block: &Block,
+    from: usize,
+    limit: usize,
+    source: ExprId,
+    ty: &Ty,
+    value: ValueId,
+) -> Result<(usize, usize, usize, usize), String> {
+    use h2r_core_ir::Expr;
+    let module = context.module;
+    let computed = matches!(
+        module.expr(source),
+        Expr::App { .. }
+            | Expr::Case { .. }
+            | Expr::Let { .. }
+            | Expr::Lam { .. }
+            | Expr::Cast { .. }
+    );
+    let found = block.instructions[from..limit]
+        .iter()
+        .position(|i| i.origin.source == Source::Expr(source))
+        .map(|offset| from + offset);
+    let Some(end) = found else {
+        if computed {
+            return Err("a computed lazy argument left no instruction".into());
+        }
+        let binder = module
+            .resolve(source)
+            .ok_or("a lazy argument names nothing this scope binds")?;
+        let parameter = context
+            .params
+            .iter()
+            .find(|(_, bound, _)| *bound == binder)
+            .ok_or("a lazy argument is neither computed nor a parameter")?;
+        if parameter.2 != value {
+            return Err("lazy argument operand differs from source".into());
+        }
+        let declared = block
+            .params
+            .iter()
+            .find(|p| p.id == value)
+            .ok_or("missing lazy argument parameter")?;
+        if !declared.ty.alpha_eq(ty) {
+            return Err("lazy argument parameter type mismatch".into());
+        }
+        return Ok((0, 0, 0, from));
+    };
+    if computed
+        && !matches!(
+            block.instructions[end].operation,
+            Operation::DelayBlock { .. }
+        )
+    {
+        return Err("a computed lazy argument must remain delayed".into());
+    }
+    if block.instructions[end].result.id != value {
+        return Err("lazy argument operand differs from source".into());
+    }
+    let mut nested = block.clone();
+    nested.instructions = block.instructions[from..=end].to_vec();
+    let (nt, nv, nn) = verify_value(context, &nested, source, ty, value)?;
+    Ok((nt, nv, nn - 1, end + 1))
+}
+
+/// The same external spine the builder recognises, re-derived from the source.
+fn external_spine(
+    context: &ValueContext<'_>,
+    current: ExprId,
+) -> Option<(external::External, Vec<Ty>, Vec<ExprId>)> {
+    use h2r_core_ir::Expr;
+    let module = context.module;
+    let mut head = current;
+    let mut types = Vec::new();
+    let mut values = Vec::new();
+    while let Expr::App { fun, arg } = module.expr(head) {
+        match module.expr(*arg) {
+            Expr::Type { ty, .. } => types.push(context.view.ty(*ty).clone()),
+            _ if types.is_empty() => values.push(*arg),
+            _ => return None,
+        }
+        head = *fun;
+    }
+    types.reverse();
+    values.reverse();
+    if module.reference(head) != Some(h2r_core_ir::Ref::Global) {
+        return None;
+    }
+    let entry = external::resolve(module, head)?;
+    if types.len() != entry.type_arity() || values.len() != entry.value_arity() {
+        return None;
+    }
+    types.iter().all(linkage::closed_type).then_some(())?;
+    Some((entry, types, values))
+}
+
+/// The same dead end the builder recognises, re-derived from the source alone.
+/// Shares nothing with the builder but the IR and `diverge`'s own rule.
+fn divergent_spine(context: &ValueContext<'_>, current: ExprId) -> Option<diverge::Divergent> {
+    use h2r_core_ir::Expr;
+    let module = context.module;
+    let mut head = current;
+    let mut values = 0usize;
+    while let Expr::App { fun, arg } = module.expr(head) {
+        if !matches!(module.expr(*arg), Expr::Type { .. }) {
+            values += 1;
+        }
+        head = *fun;
+    }
+    if module.reference(head) != Some(h2r_core_ir::Ref::Global) {
+        return None;
+    }
+    let divergent = diverge::resolve(module, head)?;
+    if values < divergent.arity {
+        return None;
+    }
+    let defined_here = context.world().iter().any(|(_, loaded)| {
+        loaded
+            .top
+            .iter()
+            .flat_map(|group| &group.pairs)
+            .any(|pair| loaded.binder(pair.binder).name == divergent.name)
+    });
+    (!defined_here).then_some(divergent)
+}
+
+/// The same spine the builder recognises, re-derived from the source alone.
+fn unpacker_spine<'a>(
+    world: &World<'a>,
+    module_index: usize,
+    current: ExprId,
+) -> Option<(strings::Unpacker, ExprId, Option<ExprId>)> {
+    use h2r_core_ir::Expr;
+    let module = world.at(module_index).ok()?;
+    let mut head = current;
+    let mut arguments = Vec::new();
+    while let Expr::App { fun, arg } = module.expr(head) {
+        if matches!(module.expr(*arg), Expr::Type { .. }) {
+            return None;
+        }
+        arguments.push(*arg);
+        head = *fun;
+    }
+    arguments.reverse();
+    if module.reference(head) != Some(h2r_core_ir::Ref::Global) {
+        return None;
+    }
+    let unpacker = strings::resolve(module, head)?;
+    if arguments.len() != unpacker.arity() as usize {
+        return None;
+    }
+    let literal = *arguments.first()?;
+    strings::address_literal(world, module_index, literal)?;
+    Some((unpacker, literal, arguments.get(1).copied()))
+}
+
+/// Which rule a resolved primop must carry. Derived here from the source's own
+/// resolution, never read back out of the candidate instruction.
+fn expected_primitive_rule(prim: primitive::Prim) -> Rule {
+    match prim {
+        primitive::Prim::Int(_) => Rule::IntBinary,
+        primitive::Prim::Char(_) => Rule::CharCompare,
+        primitive::Prim::Ord => Rule::OrdChar,
+        primitive::Prim::Chr => Rule::ChrChar,
+    }
+}
+
 /// Which rule an instance reference in callee position must carry.
 fn expected_instance_rule(target: &dict::CallTarget) -> Rule {
     if target.method {
@@ -1600,6 +1997,97 @@ fn source_type_matches(expected: &Ty, actual: &Ty, binders: &[(TyVarId, TyVarId)
         };
     }
     expected.alpha_eq(&actual)
+}
+
+/// An unboxed tuple built from its components, re-derived from the source
+/// spine. The same shape as a constructor, minus everything a box implies:
+/// no tag, no layout to read, and no field strictness to honour.
+fn verify_unboxed_tuple(
+    context: &ValueContext<'_>,
+    block: &Block,
+    expr: ExprId,
+    ty: &Ty,
+    returned: ValueId,
+) -> Result<Option<(usize, usize, usize)>, String> {
+    use h2r_core_ir::Expr;
+    let module = context.module;
+    let view = context.view;
+    let world = context.world();
+    let mut head = expr;
+    let mut args = Vec::new();
+    let mut types = Vec::new();
+    while let Expr::App { fun, arg } = module.expr(head) {
+        match module.expr(*arg) {
+            Expr::Type { ty, .. } => types.push(view.ty(*ty).clone()),
+            _ if types.is_empty() => args.push(*arg),
+            _ => return Err("interleaved source unboxed tuple spine".into()),
+        }
+        head = *fun;
+    }
+    let Some(fields) = data::unboxed_tuple_worker(&world, context.module_index, head, ty)? else {
+        return Ok(None);
+    };
+    args.reverse();
+    types.reverse();
+    let Ty::Con { args: instance, .. } = ty else {
+        unreachable!()
+    };
+    if types != *instance || args.len() != fields.len() {
+        return Err("source unboxed tuple saturation/type arguments mismatch".into());
+    }
+    let instruction = block
+        .instructions
+        .last()
+        .ok_or("missing unboxed tuple instruction")?;
+    let Operation::MakeUnboxedTuple { arguments } = &instruction.operation else {
+        return Err("source unboxed tuple was not built as one".into());
+    };
+    if instruction.origin.source != Source::Expr(expr)
+        || instruction.origin.rule != Rule::MakeUnboxedTuple
+        || instruction.result.id != returned
+        || !instruction.result.ty.alpha_eq(ty)
+        || arguments.len() != args.len()
+    {
+        return Err("unboxed tuple components, result or origin mismatch".into());
+    }
+    let mut nt = types.len();
+    let mut nv = args.len();
+    let mut nn = 1;
+    let mut offset = 0;
+    for ((source, field), value) in args.iter().zip(&fields).zip(arguments) {
+        let parameter = module
+            .resolve(*source)
+            .and_then(|b| context.params.iter().find(|(_, binder, _)| *binder == b));
+        let end = if parameter.is_some() {
+            offset
+        } else {
+            block.instructions[offset..block.instructions.len() - 1]
+                .iter()
+                .position(|i| i.result.id == *value)
+                .map(|i| offset + i + 1)
+                .ok_or("missing unboxed tuple component evaluation")?
+        };
+        let mut argument = block.clone();
+        argument.instructions = block.instructions[offset..end].to_vec();
+        if data::lifted(&world, field)
+            && !matches!(module.expr(*source), Expr::Var { .. })
+            && !argument
+                .instructions
+                .last()
+                .is_some_and(|i| matches!(i.operation, Operation::DelayBlock { .. }))
+        {
+            return Err("an unboxed tuple's lifted component must remain delayed".into());
+        }
+        let (at, av, an) = verify_value(context, &argument, *source, field, *value)?;
+        nt += at;
+        nv += av;
+        nn += an - 1;
+        offset = end;
+    }
+    if offset + 1 != block.instructions.len() {
+        return Err("extra unboxed tuple instructions".into());
+    }
+    Ok(Some((nt, nv, nn)))
 }
 
 fn verify_constructor(
@@ -1693,6 +2181,139 @@ fn verify_constructor(
         return Err("extra constructor instructions".into());
     }
     Ok(Some((nt, nv, nn)))
+}
+
+/// A `case` on an unboxed tuple, re-derived from the source.
+///
+/// It names components and branches nowhere, so what must hold is that the
+/// scrutinee was evaluated, that each binder is the projection its position
+/// says, and that the body followed in the same block. A projection that read
+/// the wrong index would be a miscompile, so the index is checked against the
+/// binder's position in the source alternative, never against the candidate.
+fn verify_unboxed_tuple_case(
+    context: &ValueContext<'_>,
+    block: &Block,
+    expr: ExprId,
+    ty: &Ty,
+    returned: ValueId,
+) -> Result<(usize, usize, usize), String> {
+    use h2r_core_ir::Expr;
+    let module = context.module;
+    let view = context.view;
+    let world = context.world();
+    let Expr::Case {
+        scrut,
+        binder,
+        ty: result_ty,
+        alts,
+        ..
+    } = module.expr(expr)
+    else {
+        return Err("source is not a case".into());
+    };
+    let (constructor, fields) = data::unboxed_tuple_constructor(&world, view.binder_ty(*binder))?
+        .ok_or("source case scrutinee is not an unboxed tuple")?;
+    if !view.ty(*result_ty).alpha_eq(ty) || !data::supported(&world, ty) {
+        return Err("source unboxed tuple case result mismatch".into());
+    }
+    let [alt] = alts.as_slice() else {
+        return Err("a source unboxed tuple case has exactly one alternative".into());
+    };
+    // `DEFAULT` names the tuple and nothing else; the constructor pattern also
+    // names the components. Both are bind-and-continue, and GHC emits both.
+    let components: &[BinderId] = match &alt.con {
+        h2r_core_ir::AltCon::DataAlt { name, tag, .. } if *name == constructor && *tag == 1 => {
+            &alt.binders
+        }
+        h2r_core_ir::AltCon::Default if alt.binders.is_empty() => &[],
+        _ => {
+            return Err(
+                "a source unboxed tuple case matches its one constructor or binds nothing".into(),
+            );
+        }
+    };
+    if !components.is_empty()
+        && (components.len() != fields.len()
+            || fields
+                .iter()
+                .zip(components)
+                .any(|(t, b)| !t.alpha_eq(view.binder_ty(*b))))
+    {
+        return Err("source unboxed tuple case field layout mismatch".into());
+    }
+    // The scrutinee's instructions come first, then this case's own naming —
+    // the binder, then one projection per component — then the body's. The
+    // naming is found by its source address, so a nested case inside the
+    // scrutinee cannot be mistaken for it.
+    let naming: Vec<usize> = block
+        .instructions
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| {
+            i.origin.source == Source::Expr(expr) && i.origin.rule == Rule::UnboxedTupleField
+        })
+        .map(|(n, _)| n)
+        .collect();
+    if naming.len() != components.len() + 1 {
+        return Err("an unboxed tuple case names its binder and every component".into());
+    }
+    let split = naming[0];
+    if naming.iter().enumerate().any(|(n, at)| *at != split + n) {
+        return Err("unboxed tuple naming is not consecutive".into());
+    }
+    let Operation::Move(tuple) = block.instructions[split].operation else {
+        return Err("an unboxed tuple case binder names its scrutinee".into());
+    };
+    let named = block.instructions[split].result.id;
+    if !block.instructions[split]
+        .result
+        .ty
+        .alpha_eq(view.binder_ty(*binder))
+    {
+        return Err("unboxed tuple case binder type mismatch".into());
+    }
+    let mut scrutinee_block = block.clone();
+    scrutinee_block.instructions = block.instructions[..split].to_vec();
+    let (nt, nv, mut nn) = verify_value(
+        context,
+        &scrutinee_block,
+        *scrut,
+        view.binder_ty(*binder),
+        tuple,
+    )?;
+    nn += 1; // The source case node, separate from its scrutinee and its body.
+    let mut params: Vec<(ExprId, BinderId, ValueId)> = context.params.to_vec();
+    params.push((expr, *binder, named));
+    for (index, (component, field)) in components.iter().zip(&fields).enumerate() {
+        let instruction = &block.instructions[split + 1 + index];
+        let Operation::UnboxedTupleField {
+            tuple: from,
+            index: position,
+        } = &instruction.operation
+        else {
+            return Err("unboxed tuple projections are not consecutive".into());
+        };
+        if *from != named || *position != index || !instruction.result.ty.alpha_eq(field) {
+            return Err("unboxed tuple projection source, position or type mismatch".into());
+        }
+        params.push((expr, *component, instruction.result.id));
+    }
+    let projections = components.len() + 1;
+    let body_context = ValueContext {
+        params: &params,
+        ..*context
+    };
+    let mut body = block.clone();
+    body.instructions = block.instructions[split + projections..].to_vec();
+    let mut body_params = scrutinee_block.params.clone();
+    body_params.extend(
+        block.instructions[..split + projections]
+            .iter()
+            .map(|i| i.result.clone()),
+    );
+    body.params = body_params;
+    let (bt, bv, bn) = verify_value(&body_context, &body, alt.rhs, ty, returned)?;
+    Ok((nt + bt, nv + bv, nn + bn))
 }
 
 fn verify_data_case(
@@ -1894,6 +2515,9 @@ pub fn verify(function: &Function) -> Result<(), String> {
             .exit
         {
             Exit::Return(_) => {}
+            // No successor to carry the expected type on to. The per-block
+            // check below compares it, as it does for a return.
+            Exit::Diverge { .. } => {}
             Exit::Jump { target, .. } => pending_types.push((*target, ty)),
             Exit::IntSwitch { arms, default, .. } => {
                 pending_types.push((*default, ty));
@@ -1969,6 +2593,20 @@ pub fn verify(function: &Function) -> Result<(), String> {
                             .any(|(v, t)| !available.get(v).is_some_and(|a| a.alpha_eq(t)))
                     {
                         return Err("constructor field/result type mismatch".into());
+                    }
+                }
+                // What the components are is a question about the type, and
+                // this pass has no world to ask. Source correspondence checks
+                // them against the tuple's own signature; here only the SSA
+                // shape is in reach.
+                Operation::MakeUnboxedTuple { ref arguments } => {
+                    if arguments.iter().any(|v| !available.contains_key(v)) {
+                        return Err("unavailable unboxed tuple component".into());
+                    }
+                }
+                Operation::UnboxedTupleField { tuple, .. } => {
+                    if !available.contains_key(&tuple) {
+                        return Err("unavailable unboxed tuple".into());
                     }
                 }
                 Operation::MatchData {
@@ -2069,10 +2707,7 @@ pub fn verify(function: &Function) -> Result<(), String> {
                     }
                 }
                 Operation::IntBinary { ref arguments, .. } => {
-                    let signature = primitive::signature();
-                    let Ty::Fun { arg: int, .. } = signature else {
-                        unreachable!()
-                    };
+                    let int = primitive::int_ty();
                     if arguments.len() != 2
                         || !instruction.result.ty.alpha_eq(&int)
                         || arguments
@@ -2082,12 +2717,77 @@ pub fn verify(function: &Function) -> Result<(), String> {
                         return Err("Int# arithmetic requires two available Int# operands and an Int# result".into());
                     }
                 }
+                Operation::CharCompare { ref arguments, .. } => {
+                    let character = primitive::char_ty();
+                    if arguments.len() != 2
+                        || !instruction.result.ty.alpha_eq(&primitive::int_ty())
+                        || arguments
+                            .iter()
+                            .any(|v| !available.get(v).is_some_and(|ty| ty.alpha_eq(&character)))
+                    {
+                        return Err(
+                            "a Char# comparison requires two available Char# operands and an \
+                             Int# result"
+                                .into(),
+                        );
+                    }
+                }
+                Operation::OrdChar(value) | Operation::ChrChar(value) => {
+                    let (operand, result) =
+                        if matches!(instruction.operation, Operation::OrdChar(_)) {
+                            (primitive::char_ty(), primitive::int_ty())
+                        } else {
+                            (primitive::int_ty(), primitive::char_ty())
+                        };
+                    if !available
+                        .get(&value)
+                        .is_some_and(|ty| ty.alpha_eq(&operand))
+                        || !instruction.result.ty.alpha_eq(&result)
+                    {
+                        return Err("code-point conversion carrier mismatch".into());
+                    }
+                }
                 Operation::CallTop { ref arguments, .. } => {
                     for value in arguments {
                         if !available.contains_key(value) {
                             return Err(format!("unavailable call argument {value:?}"));
                         }
                     }
+                }
+                Operation::AppendList {
+                    left,
+                    right,
+                    ref nil,
+                    ref cons,
+                } => {
+                    let list = &instruction.result.ty;
+                    let element = list
+                        .list_elem()
+                        .ok_or("append produces a list, not another carrier")?;
+                    if !nil.result.alpha_eq(list)
+                        || !cons.result.alpha_eq(list)
+                        || cons.fields.len() != 2
+                        || !cons.fields[0].alpha_eq(element)
+                        || !cons.fields[1].alpha_eq(list)
+                        || [left, right]
+                            .iter()
+                            .any(|v| !available.get(v).is_some_and(|ty| ty.alpha_eq(list)))
+                    {
+                        return Err("append operands and cells must be the same list".into());
+                    }
+                }
+                Operation::UnpackString(ref unpack) => {
+                    if !instruction.result.ty.alpha_eq(&strings::string_ty()) {
+                        return Err("an unpacked string literal is a [Char]".into());
+                    }
+                    if let Some(tail) = unpack.tail
+                        && !available
+                            .get(&tail)
+                            .is_some_and(|ty| ty.alpha_eq(&strings::string_ty()))
+                    {
+                        return Err("an appended string tail must be an available [Char]".into());
+                    }
+                    strings::decode(&unpack.bytes, unpack.encoding)?;
                 }
             }
             available.insert(instruction.result.id, &instruction.result.ty);
@@ -2104,6 +2804,14 @@ pub fn verify(function: &Function) -> Result<(), String> {
                     return Err("return type mismatch".into());
                 }
             }
+            // A dead end produces no value, so its declared type is the only
+            // statement of what it stands in for, and it must be the type the
+            // block was required to produce.
+            Exit::Diverge { ty, .. } => {
+                if !ty.alpha_eq(return_types.get(&block.id).ok_or("unreachable block")?) {
+                    return Err("dead end type mismatch".into());
+                }
+            }
             Exit::Jump { target, args } => verify_edge(&blocks, &available, *target, args)?,
             Exit::IntSwitch {
                 scrutinee,
@@ -2113,9 +2821,9 @@ pub fn verify(function: &Function) -> Result<(), String> {
             } => {
                 if !available
                     .get(scrutinee)
-                    .is_some_and(|ty| primitive::is_int(ty))
+                    .is_some_and(|ty| primitive::is_scalar(ty))
                 {
-                    return Err("switch scrutinee must be an available Int#".into());
+                    return Err("switch scrutinee must be an available unboxed scalar".into());
                 }
                 let mut patterns = BTreeSet::new();
                 for (pattern, target) in arms {
@@ -2149,7 +2857,7 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 }
             }
             match &blocks[&id].terminator.exit {
-                Exit::Return(_) => {}
+                Exit::Return(_) | Exit::Diverge { .. } => {}
                 Exit::Jump { target, .. } => pending.push(*target),
                 Exit::IntSwitch { arms, default, .. } => {
                     pending.push(*default);

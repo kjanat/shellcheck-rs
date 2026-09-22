@@ -39,7 +39,9 @@ fn nir_lowers_literal_with_source_origin() {
     assert_eq!(instruction.origin.module, 3);
     assert_eq!(instruction.origin.source, Source::Expr(pair.rhs));
     assert_eq!(instruction.origin.rule, Rule::Literal);
-    assert!(matches!(&instruction.operation, Operation::Literal(lit) if lit.pretty == "0"));
+    assert!(
+        matches!(&instruction.operation, Operation::Literal(lit) if lit.number("Int") == Ok(0))
+    );
     assert!(result.parameters.is_empty());
     assert!(result.erased_ticks.is_empty());
 }
@@ -432,7 +434,7 @@ fn nir_top_reference_verifier_rejects_wrong_targets_and_operations() {
             _ => {
                 instruction.operation = Operation::Literal(h2r_core_ir::Lit {
                     kind: "int".into(),
-                    pretty: "0".into(),
+                    ..h2r_core_ir::Lit::int(0)
                 })
             }
         }
@@ -565,12 +567,232 @@ fn nir_import_verifier_rejects_forged_target_origin_and_operation() {
             _ => {
                 instruction.operation = Operation::Literal(h2r_core_ir::Lit {
                     kind: "int".into(),
-                    pretty: "0".into(),
+                    ..h2r_core_ir::Lit::int(0)
                 })
             }
         }
         verify(&leaf.function).unwrap();
         assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
+    }
+}
+
+/// A world whose `Main.main` builds an unboxed tuple from its two parameters
+/// and immediately takes it apart again.
+///
+/// The constructor evidence is what GHC's own is for a tuple: unboxed,
+/// unlifted, one constructor in the family, and not a newtype.
+fn unboxed_tuple_world() -> Vec<Module> {
+    use h2r_core_ir::Ty;
+    let tuple_name = "$u$M$Pair#";
+    let body = json!({
+        "node": "Case",
+        "scrut": app(app(gvar(tuple_name, "Pair#"), lvar("x")), lvar("y")),
+        "binder": binder("$_in$wild", "wild", "wild"),
+        "type": "Int#", "ty": 0,
+        "alts": [{
+            "con": {"kind": "DataAlt", "name": tuple_name, "occ": "Pair#", "tag": 1},
+            "binders": [binder("$_in$p", "p", "p"), binder("$_in$q", "q", "q")],
+            "rhs": int_op("-#", lvar("p"), lvar("q"))
+        }]
+    });
+    let mut modules = scalar_expression_world(body);
+    let m = &mut modules[0];
+    let int = m.types[0].clone();
+    let tuple = Ty::Con {
+        tycon: h2r_core_ir::TyConId {
+            name: tuple_name.into(),
+            occ: "Pair#".into(),
+            unique: "pair-hash".into(),
+        },
+        args: vec![],
+    };
+    let tuple_index = m.types.len() as u32;
+    m.types.push(tuple.clone());
+    let signature = m.types.len() as u32;
+    m.types.push(Ty::Fun {
+        mult: Box::new(int.clone()),
+        arg: Box::new(int.clone()),
+        res: Box::new(Ty::Fun {
+            mult: Box::new(int.clone()),
+            arg: Box::new(int),
+            res: Box::new(tuple),
+        }),
+    });
+    for b in &mut m.binders {
+        if b.unique == "wild" {
+            b.ty = tuple_index;
+        }
+    }
+    m.constructors.push(
+        serde_json::from_value(json!({
+            "name": tuple_name, "worker": tuple_name, "family": tuple_name,
+            "familySize": 1, "tag": 1, "signature": signature, "repArity": 2,
+            "strict": [false, false], "vanilla": false,
+            "newtype": false, "unlifted": true, "unboxed": true,
+            "existential": false, "equalities": false
+        }))
+        .unwrap(),
+    );
+    modules
+}
+
+/// An unboxed tuple projection that read the wrong component would be a
+/// miscompile, so the verifier re-derives every index from the source
+/// alternative's binder order rather than from the candidate.
+#[test]
+fn unboxed_tuple_verifier_rejects_a_swapped_projection() {
+    use crate::nir::{
+        FnId, Operation, Rule,
+        lower::lower_leaf_in_world,
+        verify::{verify, verify_leaf_in_world},
+    };
+    let modules = unboxed_tuple_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    let original = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    let projections = original.function.blocks[0]
+        .instructions
+        .iter()
+        .filter(|i| matches!(i.operation, Operation::UnboxedTupleField { .. }))
+        .count();
+    assert_eq!(projections, 2, "both components are named");
+    for mutation in 0..3 {
+        let mut leaf = original.clone();
+        let block = &mut leaf.function.blocks[0];
+        let at = block
+            .instructions
+            .iter()
+            .position(|i| matches!(i.operation, Operation::UnboxedTupleField { index: 0, .. }))
+            .expect("the first component is projected");
+        match mutation {
+            // Read component 1 where the source named component 0.
+            0 => {
+                if let Operation::UnboxedTupleField { index, .. } =
+                    &mut block.instructions[at].operation
+                {
+                    *index = 1;
+                }
+            }
+            1 => block.instructions[at].origin.rule = Rule::Construct,
+            _ => block.instructions[at].origin.source = crate::nir::Source::Expr(u32::MAX),
+        }
+        verify(&leaf.function).unwrap();
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err(),
+            "mutation {mutation} survived"
+        );
+    }
+}
+
+/// A world whose `Main.main` calls an import GHC's demand analysis marked as a
+/// dead end."" Nothing in the world defines it, so the signature is the only
+/// evidence there is, which is exactly the situation the rule is for.
+fn nir_dead_end_world(diverges: bool, signature_arity: usize, applied: usize) -> Vec<Module> {
+    let dead_end = "$base$GHC.Err$errorWithoutStackTrace";
+    let mut body = gvar(dead_end, "errorWithoutStackTrace");
+    for _ in 0..applied {
+        body = app(body, lit());
+    }
+    let mut modules = vec![module(
+        "Main",
+        vec![(binder(&sn("Main", "main"), "main", "main"), body)],
+        json!({}),
+    )];
+    modules[0].ids.insert(
+        dead_end.into(),
+        serde_json::from_value(json!({
+            "name": dead_end, "occ": "errorWithoutStackTrace",
+            "arity": signature_arity, "details": "", "isJoinPoint": false, "dataCon": null,
+            "dmdSig": {
+                "args": vec![demand(); signature_arity],
+                "diverges": diverges,
+                "pretty": if diverges { "<S>b" } else { "<S>" },
+            }
+        }))
+        .unwrap(),
+    );
+    modules
+}
+
+/// A call GHC proved never returns becomes a terminator, and the verifier
+/// re-derives that from the demand signature rather than from the candidate.
+#[test]
+fn nir_lowers_a_proven_dead_end_as_a_terminator() {
+    use crate::nir::{Exit, FnId, Rule, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let modules = nir_dead_end_world(true, 1, 1);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    let block = &leaf.function.blocks[0];
+    assert!(
+        block.instructions.is_empty(),
+        "a dead end evaluates nothing"
+    );
+    assert!(matches!(
+        &block.terminator.exit,
+        Exit::Diverge { name, .. } if name == "$base$GHC.Err$errorWithoutStackTrace"
+    ));
+    assert_eq!(block.terminator.origin.rule, Rule::Diverge);
+    verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+}
+
+#[test]
+fn emission_refuses_dead_ends_without_runtime_semantics() {
+    // Even a recognized error function cannot be replaced by exit(1): its
+    // argument may diverge, and exception text/handling remain observable.
+    let modules = nir_dead_end_world(true, 1, 1);
+    let error = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap_err();
+    assert!(
+        error.contains("unimplemented non-returning call"),
+        "{error}"
+    );
+}
+
+/// Without the divergence, and below the signature's own arity, the same
+/// spine is an ordinary call: a partial application returns perfectly well.
+#[test]
+fn a_dead_end_needs_divergence_and_saturation() {
+    use crate::nir::{Exit, FnId, lower::lower_leaf_in_world};
+    for (diverges, applied) in [(false, 1), (true, 0)] {
+        let modules = nir_dead_end_world(diverges, 2, applied);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let lowered = lower_leaf_in_world(&modules, 0, owner, FnId(0));
+        let diverged = lowered.is_ok_and(|leaf| {
+            leaf.function
+                .blocks
+                .iter()
+                .any(|b| matches!(b.terminator.exit, Exit::Diverge { .. }))
+        });
+        assert!(!diverged, "diverges={diverges} applied={applied}");
+    }
+}
+
+/// A forged dead end is rejected: the source must say the same thing.
+#[test]
+fn dead_end_verifier_rejects_a_forged_name_type_and_rule() {
+    use crate::nir::{
+        Exit, FnId, Rule,
+        lower::lower_leaf_in_world,
+        verify::{verify, verify_leaf_in_world},
+    };
+    let modules = nir_dead_end_world(true, 1, 1);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let original = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    for mutation in 0..3 {
+        let mut leaf = original.clone();
+        let terminator = &mut leaf.function.blocks[0].terminator;
+        match mutation {
+            0 => {
+                if let Exit::Diverge { name, .. } = &mut terminator.exit {
+                    *name = "$base$GHC.Err$undefined".into();
+                }
+            }
+            1 => terminator.origin.rule = Rule::Return,
+            _ => terminator.origin.source = crate::nir::Source::Expr(u32::MAX),
+        }
+        verify(&leaf.function).unwrap();
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err(),
+            "mutation {mutation} survived"
+        );
     }
 }
 
@@ -1065,7 +1287,9 @@ fn nir_direct_calls_reject_extra_forcing_and_computed_arguments() {
 
 #[test]
 fn nir_direct_calls_require_exact_known_arity_and_closed_types() {
-    use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    use crate::nir::{
+        FnId, lower::lower_leaf_in_world, pretty::format_leaf, verify::verify_leaf_in_world,
+    };
     use h2r_core_ir::Ty;
     for arity in [None, Some(0), Some(1), Some(3)] {
         let mut modules = nir_call_world(true);
@@ -1073,11 +1297,16 @@ fn nir_direct_calls_require_exact_known_arity_and_closed_types() {
         let target = modules[1].top[0].pairs[0].binder;
         let original = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
         modules[1].binders[target as usize].arity = arity;
+        // A forged arity either refuses outright or makes the call indirect,
+        // which is a different leaf. What must never happen is the original
+        // leaf still standing, and the verifier below is what says so.
+        let relowered = lower_leaf_in_world(&modules, 0, owner, FnId(0));
         assert!(
-            lower_leaf_in_world(&modules, 0, owner, FnId(0))
-                .unwrap_err()
-                .reason
-                .contains("arity")
+            match &relowered {
+                Err(_) => true,
+                Ok(leaf) => format_leaf(leaf) != format_leaf(&original),
+            },
+            "arity {arity:?} changed nothing"
         );
         assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &original).is_err());
     }
@@ -1316,14 +1545,10 @@ fn nir_mixed_calls_refuse_interleaved_and_open_type_arguments() {
 }
 
 fn nir_literal_call_world(two_literals: bool) -> Vec<Module> {
-    let literal = |n: &str| json!({"node": "Lit", "lit": {"kind": "int", "pretty": n}});
+    let literal = |n: i64| json!({"node": "Lit", "lit": int_lit(n)});
     let mut modules = nir_call_world(true);
     let types = modules[0].types.clone();
-    let last = if two_literals {
-        literal("20")
-    } else {
-        lvar("x")
-    };
+    let last = if two_literals { literal(20) } else { lvar("x") };
     modules[0] = module(
         "Main",
         vec![(
@@ -1332,10 +1557,7 @@ fn nir_literal_call_world(two_literals: bool) -> Vec<Module> {
                 "x",
                 lam(
                     "y",
-                    app(
-                        app(gvar(&sn("Lib", "target"), "target"), literal("10")),
-                        last,
-                    ),
+                    app(app(gvar(&sn("Lib", "target"), "target"), literal(10)), last),
                 ),
             ),
         )],
@@ -1359,7 +1581,7 @@ fn nir_call_literals_have_typed_values_and_complete_accounting() {
         let instructions = &leaf.function.blocks[0].instructions;
         assert_eq!(instructions.len(), if two { 3 } else { 2 });
         assert!(
-            matches!(&instructions[0].operation, Operation::Literal(lit) if lit.pretty == "10")
+            matches!(&instructions[0].operation, Operation::Literal(lit) if lit.number("Int") == Ok(10))
         );
         assert_eq!(instructions[0].result.ty, modules[0].types[0]);
         let Operation::CallTop { arguments, .. } = &instructions.last().unwrap().operation else {
@@ -1623,15 +1845,38 @@ fn scalar_emission_refuses_unsupported_dependency_and_unsafe_literals() {
     let rhs = modules[0].top[0].pairs[0].rhs;
     modules[0].exprs[rhs as usize] = Expr::Coercion;
     assert!(crate::emit::emit_entry(&modules, &sn("Lib", "target")).is_ok());
-    for payload in ["9223372036854775808#", "42u64", "0; panic!()#"] {
+    // A forged value, a width the carrier does not have, and a missing
+    // `LitNumType`. GHC's rendering is not read, so corrupting it changes
+    // nothing; these corrupt what a decoder actually uses.
+    for forgery in 0..4 {
         let mut modules = scalar_emission_world();
         for expr in &mut modules[0].exprs {
             if let Expr::Lit(lit) = expr {
-                lit.pretty = payload.into();
+                match forgery {
+                    0 => lit.value = Some("9223372036854775808".into()),
+                    1 => lit.value = Some("0; panic!()".into()),
+                    2 => lit.num_type = Some("Word64".into()),
+                    _ => lit.num_type = None,
+                }
             }
         }
-        assert!(crate::emit::emit_entry(&modules, &sn("Main", "main")).is_err());
+        assert!(
+            crate::emit::emit_entry(&modules, &sn("Main", "main")).is_err(),
+            "forgery {forgery}"
+        );
     }
+    // The rendering is a diagnostic: changing it alone cannot change the code.
+    let source = crate::emit::emit_entry(&scalar_emission_world(), &sn("Main", "main")).unwrap();
+    let mut modules = scalar_emission_world();
+    for expr in &mut modules[0].exprs {
+        if let Expr::Lit(lit) = expr {
+            lit.pretty = "0; panic!()#".into();
+        }
+    }
+    assert_eq!(
+        source,
+        crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap()
+    );
     assert!(crate::emit::emit_entry(&nir_call_world(true), &sn("Main", "main")).is_err());
     assert!(crate::emit::emit_entry(&scalar_emission_world(), "main").is_err());
 }
@@ -1663,11 +1908,7 @@ fn local_function_world(recursive: bool) -> Vec<Module> {
             app(
                 app(
                     lvar("go"),
-                    int_op(
-                        "-#",
-                        lvar("i"),
-                        json!({"node":"Lit","lit":{"kind":"number","pretty":"1#"}}),
-                    ),
+                    int_op("-#", lvar("i"), json!({"node": "Lit", "lit": int_lit(1)})),
                 ),
                 int_op("+#", lvar("acc"), lvar("y")),
             ),
@@ -2126,10 +2367,7 @@ fn scalar_cases_refuse_duplicate_defaults_wrong_types_and_alternative_binders() 
             4 => m.binders[*binder as usize].ty = 1,
             _ => {
                 alts[0].con = h2r_core_ir::AltCon::LitAlt {
-                    lit: h2r_core_ir::Lit {
-                        kind: "number".into(),
-                        pretty: "0#".into(),
-                    },
+                    lit: h2r_core_ir::Lit::int(0),
                 }
             }
         }
@@ -2185,7 +2423,7 @@ fn int_case(scrut: Value, unique: &str, default: Value, arms: Vec<(i64, Value)>)
     let mut value = strict_case(scrut, unique, default);
     for (pattern, rhs) in arms {
         value["alts"].as_array_mut().unwrap().push(json!({
-            "con": {"kind": "LitAlt", "lit": {"kind": "number", "pretty": format!("{pattern}#")}},
+            "con": {"kind": "LitAlt", "lit": int_lit(pattern)},
             "binders": [], "rhs": rhs
         }));
     }
@@ -3265,6 +3503,7 @@ fn check_scalar_renumbering(modules: Vec<Module>) {
                 }
             }
             Exit::Jump { .. } => panic!("fixture has no jumps"),
+            Exit::Diverge { .. } => panic!("fixture has no dead ends"),
         }
     }
     leaf.function.blocks.reverse();
@@ -3282,8 +3521,8 @@ fn scalar_switches_refuse_incomplete_or_unsafe_source_patterns() {
                 alts.remove(0);
             }
             1 => alts.push(alts[1].clone()),
-            2 => alts[1]["con"]["lit"]["pretty"] = json!("9223372036854775808#"),
-            3 => alts[1]["con"]["lit"]["pretty"] = json!("0#;panic!()"),
+            2 => alts[1]["con"]["lit"]["value"] = json!("9223372036854775808"),
+            3 => alts[1]["con"]["lit"]["numType"] = json!("Word64"),
             4 => alts[1]["con"]["lit"]["kind"] = json!("string"),
             _ => {
                 alts[1]["con"] = json!({"kind": "DataAlt", "name": "$x$M$C", "occ": "C", "tag": 1})
@@ -3664,7 +3903,18 @@ fn lam(unique: &str, body: Value) -> Value {
 }
 
 fn lit() -> Value {
-    json!({"node": "Lit", "lit": {"kind": "int", "pretty": "0"}})
+    json!({"node": "Lit", "lit": int_lit(0)})
+}
+
+/// An `Int#` literal as the dump carries one: GHC's rendering *and* the exact
+/// value with its `LitNumType`, which is what every decoder reads.
+fn int_lit(value: i64) -> Value {
+    json!({
+        "kind": "number",
+        "pretty": format!("{value}#"),
+        "value": value.to_string(),
+        "numType": "Int",
+    })
 }
 
 /// The stable name of a top-level binding of `module`.

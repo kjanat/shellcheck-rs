@@ -122,6 +122,18 @@ impl ConstructorInfo {
     /// An ordinary boxed, lifted constructor whose fields are all values.
     /// `vanilla` alone answers this for a plain data type; for a class
     /// dictionary it does not, because a superclass is a constraint field.
+    /// GHC's unboxed tuple: no heap object, no tag, and exactly one
+    /// constructor whose fields *are* the values, side by side.
+    ///
+    /// `unboxed` is GHC's `isUnboxedTupleTyCon || isUnboxedSumTyCon`. A sum
+    /// has one constructor per alternative and needs a discriminant to say
+    /// which one is present; a tuple has exactly one. The family size is what
+    /// tells them apart, and it is GHC's count, not an inference from the
+    /// name.
+    pub fn unboxed_tuple(&self) -> bool {
+        self.unboxed == Some(true) && self.family_size == 1 && self.newtype == Some(false)
+    }
+
     pub fn boxed_record(&self) -> bool {
         if self.vanilla {
             return true;
@@ -392,6 +404,16 @@ pub enum RawExpr {
     },
     Cast {
         expr: Box<RawExpr>,
+        /// The coercion's two types and its role. A coercion has no runtime
+        /// content, so these are the only evidence a consumer has for deciding
+        /// whether erasing the cast preserves the representation. Absent on a
+        /// dump taken before they were emitted, where the answer is a refusal.
+        #[serde(default)]
+        from: Option<TyId>,
+        #[serde(default)]
+        to: Option<TyId>,
+        #[serde(default)]
+        role: Option<String>,
     },
     Tick {
         expr: Box<RawExpr>,
@@ -426,8 +448,115 @@ pub enum AltCon {
     Default,
 }
 
+/// A Core literal. `pretty` is GHC's own rendering, which escapes, so it is a
+/// diagnostic and never a value. The exact fields below carry the value itself;
+/// a dump taken before they existed has none of them, and a consumer that needs
+/// an exact value refuses rather than parsing the rendering.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Lit {
     pub kind: String,
     pub pretty: String,
+    /// `LitChar`: the Unicode code point.
+    #[serde(default)]
+    pub codepoint: Option<u32>,
+    /// `LitString`: the bytes, lower-case hex, two digits each. A Haskell
+    /// string literal is an `Addr#` to bytes, not to text.
+    #[serde(default)]
+    pub bytes: Option<String>,
+    /// `LitNumber`: the exact value in decimal. Arbitrary precision, because
+    /// `LitNumBigNat` is.
+    #[serde(default)]
+    pub value: Option<String>,
+    /// `LitNumber`: which `LitNumType` GHC gave it. The width and signedness
+    /// of a numeric literal are this, never the spelling.
+    #[serde(rename = "numType", default)]
+    pub num_type: Option<String>,
+}
+
+impl Lit {
+    /// An `Int#` literal as the dump carries one, for tests and fixtures.
+    pub fn int(value: i64) -> Lit {
+        Lit {
+            kind: "number".into(),
+            pretty: format!("{value}#"),
+            codepoint: None,
+            bytes: None,
+            value: Some(value.to_string()),
+            num_type: Some("Int".into()),
+        }
+    }
+
+    /// A `Char#` literal as the dump carries one, for tests and fixtures.
+    pub fn character(value: char) -> Lit {
+        Lit {
+            kind: "char".into(),
+            pretty: format!("'{}'#", value.escape_default()),
+            codepoint: Some(value as u32),
+            bytes: None,
+            value: None,
+            num_type: None,
+        }
+    }
+
+    /// An `Addr#` string literal as the dump carries one, for tests and
+    /// fixtures. A Haskell string literal addresses bytes, not text.
+    pub fn string(bytes: &[u8]) -> Lit {
+        Lit {
+            kind: "string".into(),
+            pretty: format!("{:?}#", String::from_utf8_lossy(bytes)),
+            codepoint: None,
+            bytes: Some(bytes.iter().map(|b| format!("{b:02x}")).collect()),
+            value: None,
+            num_type: None,
+        }
+    }
+
+    /// The exact bytes of a `LitString`.
+    pub fn string_bytes(&self) -> Result<Vec<u8>, String> {
+        if self.kind != "string" {
+            return Err("literal is not a string".into());
+        }
+        let hex = self
+            .bytes
+            .as_deref()
+            .ok_or("this dump carries no exact bytes for a string literal")?;
+        if hex.len() % 2 != 0 {
+            return Err("string literal bytes are not whole octets".into());
+        }
+        (0..hex.len() / 2)
+            .map(|i| {
+                u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+                    .map_err(|_| "string literal bytes are not hexadecimal".to_string())
+            })
+            .collect()
+    }
+
+    /// The exact code point of a `LitChar`.
+    pub fn char_codepoint(&self) -> Result<u32, String> {
+        if self.kind != "char" {
+            return Err("literal is not a character".into());
+        }
+        self.codepoint
+            .ok_or_else(|| "this dump carries no exact code point for a character literal".into())
+    }
+
+    /// The exact value of a `LitNumber` of the named `LitNumType`, as `i128`
+    /// so every fixed-width GHC number fits without wrapping.
+    pub fn number(&self, num_type: &str) -> Result<i128, String> {
+        if self.kind != "number" {
+            return Err("literal is not a number".into());
+        }
+        match self.num_type.as_deref() {
+            Some(found) if found == num_type => {}
+            Some(found) => {
+                return Err(format!("numeric literal is a {found}, not a {num_type}"));
+            }
+            None => return Err("this dump carries no LitNumType for a numeric literal".into()),
+        }
+        self.value
+            .as_deref()
+            .ok_or("this dump carries no exact value for a numeric literal")?
+            .parse()
+            .map_err(|_| "numeric literal does not fit a signed 128-bit value".into())
+    }
 }

@@ -15,7 +15,17 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   closureUnused, escapingRecursive, overApplied,
   polyTwoTypes, polyCrossModule, polyHigherOrder, polyRecursive, polyNested,
   classTwoInstances, classDefaultMethod, classSuperclass, classCrossModule,
-  classParameterized, classMethodValue)
+  classParameterized, classMethodValue,
+  charRoundTrip, charOrder, charSwitch, charField,
+  stringLength, stringIndex, stringEmpty, stringUnicode, stringUnicodeIndex,
+  stringNulByte, stringAppend, stringShared, stringUnused, stringLazyHead,
+  stringHighLatin1, stringCount,
+  newtypeRoundTrip, newtypeField, newtypeFunction, stringAppendShared,
+  errorUnusedArgument, errorUnusedLet, errorUnusedShared,
+  tupleRoundTrip, tupleSwap, tupleSolo, tupleWide, tupleBoxed, tupleNested,
+  tupleLazyComponent, tupleUnusedComponent,
+  textWords, textLines, textFind, textReverse, textFilter, textMap,
+  textSlice, textZip, textCompare, textUnicodeWords)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -125,4 +135,86 @@ main = do
     ["lazyUnused", a, b] -> print (lazyUnused (read a) (read b))
     ["lazyBranch", a, b] -> print (lazyBranch (read a) (read b))
     ["lazyStrictUse", a, b] -> print (lazyStrictUse (read a) (read b))
+    ["charRoundTrip", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (charRoundTrip x y))
+    ["charOrder", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (charOrder x y))
+    ["charSwitch", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (charSwitch x y))
+    ["charField", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (charField x y))
+    ["stringLength", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringLength x y))
+    ["stringIndex", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringIndex x y))
+    ["stringEmpty", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringEmpty x y))
+    ["stringUnicode", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringUnicode x y))
+    ["stringUnicodeIndex", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringUnicodeIndex x y))
+    ["stringNulByte", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringNulByte x y))
+    ["stringAppend", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringAppend x y))
+    ["stringShared", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringShared x y))
+    ["stringUnused", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringUnused x y))
+    ["stringLazyHead", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringLazyHead x y))
+    ["stringHighLatin1", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringHighLatin1 x y))
+    ["stringCount", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringCount x y))
+    ["newtypeRoundTrip", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (newtypeRoundTrip x y))
+    ["newtypeField", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (newtypeField x y))
+    ["newtypeFunction", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (newtypeFunction x y))
+    ["stringAppendShared", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringAppendShared x y))
+    ["errorUnusedArgument", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (errorUnusedArgument x y))
+    ["errorUnusedLet", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (errorUnusedLet x y))
+    ["errorUnusedShared", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (errorUnusedShared x y))
+    ["tupleRoundTrip", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (tupleRoundTrip x y))
+    ["tupleSwap", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (tupleSwap x y))
+    ["tupleSolo", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (tupleSolo x y))
+    ["tupleWide", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (tupleWide x y))
+    ["tupleBoxed", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (tupleBoxed x y))
+    ["tupleNested", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (tupleNested x y))
+    ["tupleLazyComponent", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (tupleLazyComponent x y))
+    ["tupleUnusedComponent", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (tupleUnusedComponent x y))
+    ["textWords", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (textWords x y))
+    ["textLines", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (textLines x y))
+    ["textFind", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (textFind x y))
+    ["textReverse", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (textReverse x y))
+    ["textFilter", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (textFilter x y))
+    ["textMap", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (textMap x y))
+    ["textSlice", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (textSlice x y))
+    ["textZip", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (textZip x y))
+    ["textCompare", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (textCompare x y))
+    ["textUnicodeWords", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (textUnicodeWords x y))
     _ -> fail "expected a canary entry and its integer arguments"

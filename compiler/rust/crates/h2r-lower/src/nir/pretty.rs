@@ -73,6 +73,12 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                     "construct {} tag {} {arguments:?}",
                     constructor.name, constructor.tag
                 ),
+                Operation::MakeUnboxedTuple { arguments } => {
+                    format!("unboxed-tuple {arguments:?}")
+                }
+                Operation::UnboxedTupleField { tuple, index } => {
+                    format!("unboxed-tuple-field v{} .{index}", tuple.0)
+                }
                 Operation::MatchData {
                     scrutinee,
                     arguments,
@@ -87,6 +93,23 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                 Operation::BoxInt(value) => format!("box-int v{}", value.0),
                 Operation::UnboxInt(value) => format!("unbox-int v{}", value.0),
                 Operation::IntBinary { op, arguments } => format!("int-{op:?} {arguments:?}"),
+                Operation::CharCompare { op, arguments } => {
+                    format!("char-{op:?} {arguments:?}")
+                }
+                Operation::OrdChar(value) => format!("ord-char v{}", value.0),
+                Operation::ChrChar(value) => format!("chr-char v{}", value.0),
+                Operation::AppendList { left, right, .. } => {
+                    format!("append-list v{} v{}", left.0, right.0)
+                }
+                Operation::UnpackString(unpack) => format!(
+                    "unpack-string {:?} {} bytes{}",
+                    unpack.encoding,
+                    unpack.bytes.len(),
+                    match unpack.tail {
+                        Some(tail) => format!(" onto v{}", tail.0),
+                        None => String::new(),
+                    }
+                ),
                 Operation::EvaluateBlock { target, arguments } => {
                     format!("evaluate b{} {arguments:?}", target.0)
                 }
@@ -139,6 +162,7 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                 scrutinee.0
             ),
             Exit::Return(value) => format!("return v{}", value.0),
+            Exit::Diverge { name, .. } => format!("diverge {name}"),
             Exit::Jump { target, args } => format!(
                 "jump b{}({})",
                 target.0,

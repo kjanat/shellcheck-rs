@@ -45,7 +45,9 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.ByteString.Lazy as BL
 import Data.List (foldl', intercalate, stripPrefix)
 import qualified Data.Map.Strict as M
-import Data.Bits (xor)
+import Data.Bits (shiftR, xor, (.&.))
+import qualified Data.ByteString as BS
+import Data.Char (ord)
 import qualified Data.Set as S
 import Data.Maybe (fromMaybe, isJust)
 import System.Directory (createDirectoryIfMissing)
@@ -54,7 +56,9 @@ import System.IO (IOMode (WriteMode), hPutStr, hPutStrLn, hSetEncoding, stderr,
                   utf8, withFile)
 
 import GHC.Plugins
+import GHC.Core.Coercion (coercionKind, coercionRole)
 import GHC.Core.DataCon (dataConFullSig)
+import GHC.Data.Pair (Pair (..))
 import GHC.Core.TyCo.Rep (TyLit (..), Type (..))
 import GHC.Core.Type (expandTypeSynonyms)
 import GHC.Core.Utils (exprIsCheap, exprIsHNF, exprIsTrivial, exprOkForSpeculation)
@@ -1186,9 +1190,20 @@ exprJ dflags tys = go
             , "ty"      .= tyIx dflags tys ty
             , "alts"    .= zipWith altJ preAlts alts
             ]
-        Cast e _co -> object
+        -- A coercion has no runtime content: `Cast e co` evaluates exactly as
+        -- `e` does.  What it changes is the *type*, so a consumer that wants
+        -- to erase one needs to know which two types it relates and under
+        -- which role, and must decide for itself whether they share a
+        -- representation.  `coercionKind` is that evidence; the coercion
+        -- itself is not serialised.
+        Cast e co ->
+            let Pair from to = coercionKind co
+            in object
             [ "node" .= ("Cast" :: String)
             , "expr" .= go (mpre >>= \p -> case p of Cast r _ -> Just r; _ -> Nothing) e
+            , "from" .= tyIx dflags tys from
+            , "to"   .= tyIx dflags tys to
+            , "role" .= sdoc dflags (ppr (coercionRole co))
             ]
         Tick _t e -> object
             [ "node" .= ("Tick" :: String)
@@ -1228,12 +1243,30 @@ exprJ dflags tys = go
             ]
         DEFAULT -> object [ "kind" .= ("DEFAULT" :: String) ]
 
+-- | A literal, with its exact value beside GHC's rendering.
+--
+-- @pretty@ is @ppr@'s output, which escapes: @LitString@ goes through
+-- 'pprHsBytes' and @LitChar@ through 'pprPrimChar', so a byte outside the
+-- printable ASCII range arrives as an escape sequence in GHC's own spelling.
+-- Reconstructing the value from that text would be re-implementing GHC's
+-- escaping backwards, so the exact value is emitted as well: @codepoint@ for
+-- a character, lower-case hex @bytes@ for a string, and a decimal @value@
+-- with its @numType@ for a number. These are additive; a dump taken before
+-- they existed carries none of them and a consumer that needs an exact value
+-- must refuse rather than parse @pretty@.
 litJ :: DynFlags -> Literal -> Value
-litJ dflags l = object
-    [ "kind"   .= litKind
-    , "pretty" .= sdoc dflags (ppr l)
-    ]
+litJ dflags l = object (common ++ exact)
   where
+    common =
+        [ "kind"   .= litKind
+        , "pretty" .= sdoc dflags (ppr l)
+        ]
+    exact = case l of
+        LitChar c     -> [ "codepoint" .= ord c ]
+        LitString bs  -> [ "bytes"     .= hexBytes bs ]
+        LitNumber t i -> [ "value"     .= show i, "numType" .= numTypeName t ]
+        _             -> []
+
     litKind :: String
     litKind = case l of
         LitChar{}   -> "char"
@@ -1242,6 +1275,27 @@ litJ dflags l = object
         LitFloat{}  -> "float"
         LitDouble{} -> "double"
         _           -> "other"
+
+    numTypeName :: LitNumType -> String
+    numTypeName = \case
+        LitNumBigNat -> "BigNat"
+        LitNumInt    -> "Int"
+        LitNumInt8   -> "Int8"
+        LitNumInt16  -> "Int16"
+        LitNumInt32  -> "Int32"
+        LitNumInt64  -> "Int64"
+        LitNumWord   -> "Word"
+        LitNumWord8  -> "Word8"
+        LitNumWord16 -> "Word16"
+        LitNumWord32 -> "Word32"
+        LitNumWord64 -> "Word64"
+
+-- | The bytes of a @LitString@, lower-case hex, two digits each.
+hexBytes :: BS.ByteString -> String
+hexBytes = concatMap byte . BS.unpack
+  where
+    byte w = [hexDigit (w `shiftR` 4), hexDigit (w .&. 0x0f)]
+    hexDigit d = "0123456789abcdef" !! fromIntegral d
 
 --------------------------------------------------------------------------------
 -- Structured types
@@ -1400,7 +1454,10 @@ collectTys binds = concatMap bindTys binds
         Case s b ty as -> exprTys s ++ [varType b, ty]
                             ++ concat [ map varType bs ++ exprTys r
                                       | Alt _ bs r <- as ]
-        Cast e _       -> exprTys e
+        -- A coercion's two types are dumped, so the table must contain
+        -- them: `tyIx` is a lookup, not an insertion.
+        Cast e co      -> let Pair from to = coercionKind co
+                          in from : to : exprTys e
         Tick _ e       -> exprTys e
         Type t         -> [t]
         Coercion _     -> []

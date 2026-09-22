@@ -282,7 +282,17 @@ pub enum Expr {
         ty_pretty: String,
         alts: Vec<Alt>,
     },
-    Cast(ExprId),
+    /// `Cast e co`. A coercion has no runtime content — this evaluates as `e`
+    /// does — so what it carries is the two types the coercion relates and its
+    /// role. Whether erasing it preserves the representation is the consumer's
+    /// question, and these are the evidence for answering it. `None` on a dump
+    /// taken before the plugin emitted them.
+    Cast {
+        expr: ExprId,
+        from: Option<TyId>,
+        to: Option<TyId>,
+        role: Option<String>,
+    },
     Tick(ExprId),
     /// A type argument: structurally, and as GHC rendered it.
     Type {
@@ -465,6 +475,14 @@ impl Module {
         &self.exprs[id as usize]
     }
 
+    /// The literal at a node, when the node is one.
+    pub fn expr_lit(&self, id: ExprId) -> Option<&Lit> {
+        match self.expr(id) {
+            Expr::Lit(lit) => Some(lit),
+            _ => None,
+        }
+    }
+
     pub fn binder(&self, id: BinderId) -> &Binder {
         &self.binders[id as usize]
     }
@@ -494,7 +512,7 @@ impl Module {
                 v.extend(alts.iter().map(|a| a.rhs));
                 v
             }
-            Expr::Cast(e) | Expr::Tick(e) => vec![*e],
+            Expr::Cast { expr: e, .. } | Expr::Tick(e) => vec![*e],
             Expr::Var { .. } | Expr::Lit(_) | Expr::Type { .. } | Expr::Coercion => vec![],
         }
     }
@@ -521,7 +539,7 @@ impl Module {
     pub fn strip(&self, mut id: ExprId) -> ExprId {
         loop {
             match self.expr(id) {
-                Expr::Cast(e) | Expr::Tick(e) => id = *e,
+                Expr::Cast { expr: e, .. } | Expr::Tick(e) => id = *e,
                 _ => return id,
             }
         }
@@ -795,7 +813,7 @@ impl Module {
                     stack.push(Op::Bind(*binder));
                     stack.push(Op::Enter(*scrut));
                 }
-                Expr::Cast(e) | Expr::Tick(e) => stack.push(Op::Enter(*e)),
+                Expr::Cast { expr: e, .. } | Expr::Tick(e) => stack.push(Op::Enter(*e)),
                 Expr::Lit(_) | Expr::Type { .. } | Expr::Coercion => {}
             }
         }
@@ -920,6 +938,52 @@ impl Module {
         Ok(m)
     }
 
+    /// Every type index a node carries must name an entry of this module's
+    /// table. A dump that violates it is refused at [`Module::load`] rather
+    /// than indexed out of bounds wherever the node is first read — which is
+    /// how a plugin that dumped a type it had not interned first showed up.
+    ///
+    /// This guards the dump boundary. A module built in a test from JSON goes
+    /// through [`Module::from_raw`] directly and is not checked: a fixture
+    /// declares only the types it reads.
+    fn check_type_references(&self) -> Result<()> {
+        let bound = self.types.len() as TyId;
+        let check = |id: Option<TyId>, what: &str, node: ExprId| -> Result<()> {
+            match id {
+                Some(id) if id >= bound => bail!(
+                    "module {}: node {node}'s {what} type index {id} is past the \
+                     table's {bound} entries",
+                    self.name
+                ),
+                _ => Ok(()),
+            }
+        };
+        for (node, expr) in self.exprs.iter().enumerate() {
+            let node = node as ExprId;
+            match expr {
+                Expr::Cast { from, to, .. } => {
+                    check(*from, "cast source", node)?;
+                    check(*to, "cast target", node)?;
+                }
+                Expr::Case { ty, .. } | Expr::Type { ty, .. } => {
+                    check(Some(*ty), "result", node)?;
+                }
+                _ => {}
+            }
+        }
+        for (index, binder) in self.binders.iter().enumerate() {
+            if binder.ty >= bound {
+                bail!(
+                    "module {}: binder {index}'s type index {} is past the \
+                     table's {bound} entries",
+                    self.name,
+                    binder.ty
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let bytes =
             std::fs::read(path).with_context(|| format!("reading Core dump {}", path.display()))?;
@@ -930,7 +994,11 @@ impl Module {
         de.disable_recursion_limit();
         let raw = raw::RawModule::deserialize(&mut de)
             .with_context(|| format!("parsing Core dump {}", path.display()))?;
-        Self::from_raw(raw)
+        let module = Self::from_raw(raw)?;
+        module
+            .check_type_references()
+            .with_context(|| format!("reading Core dump {}", path.display()))?;
+        Ok(module)
     }
 }
 
@@ -1070,7 +1138,17 @@ impl Builder {
                         alts,
                     }
                 }
-                raw::RawExpr::Cast { expr } => Expr::Cast(self.push(*expr, p, Edge::Cast)),
+                raw::RawExpr::Cast {
+                    expr,
+                    from,
+                    to,
+                    role,
+                } => Expr::Cast {
+                    expr: self.push(*expr, p, Edge::Cast),
+                    from,
+                    to,
+                    role: role.clone(),
+                },
                 raw::RawExpr::Tick { expr } => Expr::Tick(self.push(*expr, p, Edge::Tick)),
                 raw::RawExpr::Type { ty, pretty } => Expr::Type { ty, pretty },
                 raw::RawExpr::Coercion => Expr::Coercion,

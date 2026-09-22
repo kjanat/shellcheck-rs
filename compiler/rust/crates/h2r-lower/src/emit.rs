@@ -13,29 +13,85 @@ use std::fmt::Write;
 use h2r_core_ir::{Module, Ty};
 
 use crate::nir::{
-    Block, DictionaryRef, Exit, Function, IntBinary, Operation, boxed, data,
+    Block, CharCompare, DictionaryRef, Exit, Function, IntBinary, Operation, World, boxed, data,
     specialize::{self, Instance},
 };
 
-fn scalar(ty: &Ty) -> bool {
-    boxed::is_int(ty)
-        || matches!(ty, Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Prim$Int#" && args.is_empty())
+/// An unboxed scalar, or the boxed `Int` the CLI adapter also accepts.
+fn scalar(world: &World<'_>, ty: &Ty) -> bool {
+    let ty = represented(world, ty);
+    boxed::is_int(&ty) || unboxed(&ty)
 }
 
-fn carrier(ty: &Ty) -> &'static str {
-    if boxed::is_int(ty) {
-        "HInt"
-    } else if scalar(ty) {
-        "i64"
+/// A newtype is carried as the type it wraps, so every carrier question below
+/// is asked of the representation. A type whose representation cannot be
+/// determined is left as it is; it has no carrier either way, and is refused
+/// where that matters rather than guessed at here.
+fn represented(world: &World<'_>, ty: &Ty) -> Ty {
+    data::represented(world, ty).unwrap_or_else(|| ty.clone())
+}
+
+/// `Int#` and `Char#` both ride a machine word. Which one a value is stays in
+/// its NIR type and in its runtime field tag; it is never inferred from the
+/// carrier, which is why `field_kind` reads the type rather than the carrier.
+fn unboxed(ty: &Ty) -> bool {
+    matches!(ty, Ty::Con { tycon, args } if args.is_empty()
+        && (tycon.name == "$ghc-prim$GHC.Prim$Int#" || tycon.name == "$ghc-prim$GHC.Prim$Char#"))
+}
+
+fn is_char(ty: &Ty) -> bool {
+    matches!(ty, Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Prim$Char#" && args.is_empty())
+}
+
+/// The Rust type a carrier is held in. The cases are `data::Carrier`'s, named
+/// here rather than decided again: a value whose NIR type says one thing and
+/// whose emitted type says another is a miscompile.
+///
+/// An unboxed tuple is the one composite: it has no representation of its own,
+/// so its Rust type is built from its components' and nests as they do.
+fn carrier(world: &World<'_>, ty: &Ty) -> String {
+    let ty = represented(world, ty);
+    if boxed::is_int(&ty) {
+        "HInt".into()
+    } else if unboxed(&ty) {
+        "i64".into()
     } else if matches!(ty, Ty::Fun { .. }) {
-        "HClosure"
+        "HClosure".into()
+    } else if let Ok(Some(fields)) = data::unboxed_tuple_fields(world, &ty) {
+        let components: Vec<String> = fields.iter().map(|f| carrier(world, f)).collect();
+        // Rust needs the trailing comma to tell a one-tuple from a
+        // parenthesised type; GHC's `Solo#` is exactly that case.
+        match components.as_slice() {
+            [one] => format!("({one},)"),
+            many => format!("({})", many.join(", ")),
+        }
     } else {
-        "HData"
+        "HData".into()
     }
 }
 
-fn field_kind(ty: &Ty) -> (&'static str, &'static str) {
-    match carrier(ty) {
+/// Whether the two agree. `carrier` answers structurally and calls anything
+/// that is neither a scalar nor an arrow `HData`, which is a plausible answer
+/// for a type that has no carrier at all; `data::carrier` consults the world's
+/// constructor evidence and says so. Every emitted type is checked against
+/// both, so a type that reached emission without a carrier is an error rather
+/// than an `HData` that nothing can build.
+fn carrier_agrees(world: &World<'_>, ty: &Ty) -> bool {
+    match data::carrier(world, ty) {
+        Some(data::Carrier::Scalar) => carrier(world, ty) == "i64",
+        Some(data::Carrier::Int) => carrier(world, ty) == "HInt",
+        Some(data::Carrier::Function) => carrier(world, ty) == "HClosure",
+        Some(data::Carrier::Data) => carrier(world, ty) == "HData",
+        Some(data::Carrier::Tuple) => carrier(world, ty).starts_with('('),
+        None => true,
+    }
+}
+
+fn field_kind(world: &World<'_>, ty: &Ty) -> (&'static str, &'static str) {
+    if is_char(&represented(world, ty)) {
+        return ("Char", "char_code");
+    }
+    match carrier(world, ty).as_str() {
         "i64" => ("Int64", "int64"),
         "HInt" => ("Int", "int"),
         "HClosure" => ("Closure", "closure"),
@@ -44,6 +100,7 @@ fn field_kind(ty: &Ty) -> (&'static str, &'static str) {
 }
 
 fn closure(
+    world: &World<'_>,
     target: &str,
     captures: &[String],
     signature: &Ty,
@@ -68,12 +125,12 @@ fn closure(
         let Ty::Fun { arg, res, .. } = result else {
             return Err("closure code arity exceeds signature".into());
         };
-        args.push(format!("a[{n}].{}()", field_kind(arg).1));
+        args.push(format!("a[{n}].{}()", field_kind(world, arg).1));
         result = res;
     }
     Ok(format!(
         "{{ {bindings} HClosure::ready({arity}, move |a| HField::{}({target}({}))) }}",
-        field_kind(result).0,
+        field_kind(world, result).0,
         args.join(", ")
     ))
 }
@@ -91,6 +148,9 @@ fn block_result<'a>(function: &'a Function, block: &'a Block) -> &'a Ty {
                 .expect("verified return")
                 .ty;
         }
+        // A dead end returns nothing, so its type is the one the exit was
+        // built against rather than one read off a successor.
+        Exit::Diverge { ty, .. } => return ty,
         Exit::Jump { target, .. } => target,
         Exit::IntSwitch { default, .. } => default,
     };
@@ -104,15 +164,17 @@ fn block_result<'a>(function: &'a Function, block: &'a Block) -> &'a Ty {
     )
 }
 
-fn integer(kind: &str, pretty: &str) -> Result<i64, String> {
-    if kind != "number" {
-        return Err("Int# emission requires a numeric Core literal".into());
+/// The machine word an unboxed literal denotes: the number itself for `Int#`,
+/// the code point for `Char#`. Read from the dump's exact value, never from
+/// GHC's rendering, which escapes.
+fn scalar_literal(world: &World<'_>, ty: &Ty, lit: &h2r_core_ir::Lit) -> Result<i64, String> {
+    if is_char(&represented(world, ty)) {
+        let codepoint = lit.char_codepoint()?;
+        char::from_u32(codepoint).ok_or("Char# literal is not a Unicode code point")?;
+        return Ok(i64::from(codepoint));
     }
-    pretty
-        .strip_suffix('#')
-        .ok_or("unsupported Int# literal spelling")?
-        .parse()
-        .map_err(|_| "Int# literal is not a signed 64-bit decimal".into())
+    i64::try_from(lit.number("Int")?)
+        .map_err(|_| "Int# literal does not fit a signed 64-bit word".into())
 }
 
 /// The instance a reference names. Specialization interned it already, so a
@@ -165,6 +227,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         specialize::specialize(modules, &[Instance::whole(*root_module, *root_binder)])
             .map_err(|error| error.to_string())?;
     let evidence = crate::nir::World::of(modules, 0)?;
+    let world = &evidence;
     let supported = |ty: &Ty| data::supported(&evidence, ty);
     let leaves: Vec<&crate::nir::lower::LoweredLeaf> = specialization
         .lowered
@@ -177,6 +240,13 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
     let mut edges: Vec<BTreeSet<usize>> = Vec::with_capacity(leaves.len());
     for (index, leaf) in leaves.iter().enumerate() {
         let function = &leaf.function;
+        for block in &function.blocks {
+            if let Exit::Diverge { name, .. } = &block.terminator.exit {
+                return Err(format!(
+                    "unimplemented non-returning call: {name}; demand evidence does not specify its runtime behavior"
+                ));
+            }
+        }
         let instance = &specialization.instances[index];
         if !function.type_params.is_empty()
             || !supported(&function.result_ty)
@@ -196,6 +266,9 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             if !supported(&instruction.result.ty) {
                 return Err("unsupported instruction carrier".into());
             }
+            if !carrier_agrees(world, &instruction.result.ty) {
+                return Err("an emitted carrier disagrees with the NIR's".into());
+            }
             match &instruction.operation {
                 Operation::Construct { .. }
                 | Operation::MatchData { .. }
@@ -203,17 +276,24 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 | Operation::Move(_)
                 | Operation::BoxInt(_)
                 | Operation::UnboxInt(_)
+                | Operation::CharCompare { .. }
+                | Operation::OrdChar(_)
+                | Operation::ChrChar(_)
+                | Operation::UnpackString(_)
+                | Operation::AppendList { .. }
                 | Operation::DelayBlock { .. }
+                | Operation::MakeUnboxedTuple { .. }
+                | Operation::UnboxedTupleField { .. }
                 | Operation::EvaluateBlock { .. } => {}
                 Operation::CallLocal { .. }
                 | Operation::LocalScope { .. }
                 | Operation::MakeClosure { .. }
                 | Operation::Apply { .. } => {}
                 Operation::Literal(lit) => {
-                    if carrier(&instruction.result.ty) != "i64" {
+                    if carrier(world, &instruction.result.ty) != "i64" {
                         return Err("boxed Int requires constructor evidence, not a literal".into());
                     }
-                    integer(&lit.kind, &lit.pretty)?;
+                    scalar_literal(world, &instruction.result.ty, lit)?;
                 }
                 Operation::TopReference {
                     module,
@@ -250,7 +330,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         entry_types.push(arg);
         entry_result = res;
     }
-    if !scalar(entry_result) || entry_types.iter().any(|t| !scalar(t)) {
+    if !scalar(world, entry_result) || entry_types.iter().any(|t| !scalar(world, t)) {
         return Err(
             "CLI adapter requires Int#/Int inputs and output; algebraic values may be internal"
                 .into(),
@@ -277,18 +357,18 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         "// Generated from source-verified scalar NIR. CLI I/O is an adapter.\n#[cfg(not(target_pointer_width = \"64\"))]\ncompile_error!(\"Int# backend requires a 64-bit target\");\n",
     );
     let has_boxed = leaves.iter().any(|leaf| {
-        carrier(&leaf.function.result_ty) != "i64"
+        carrier(world, &leaf.function.result_ty) != "i64"
             || leaf.function.blocks.iter().any(|b| {
                 b.params
                     .iter()
                     .chain(b.instructions.iter().map(|i| &i.result))
-                    .any(|v| carrier(&v.ty) != "i64")
+                    .any(|v| carrier(world, &v.ty) != "i64")
             })
     });
     if has_boxed {
         out.push_str("\n#[allow(dead_code)]\nmod h2r_rt {\n");
         out.push_str(include_str!("../../h2r-rt/src/lib.rs"));
-        out.push_str("\n}\n#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField, Closure as HClosure};\n");
+        out.push_str("\n}\n#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField, Closure as HClosure};\n#[allow(unused_imports)]\nuse h2r_rt::{Encoding as HEncoding, ListNames as HListNames, StringNames as HStringNames};\n");
     }
     // An explicit dispatcher makes scalar tail transfers stack bounded,
     // including mutually recursive top-level functions and local join loops.
@@ -296,13 +376,13 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
     let mut dispatch = String::new();
     for (index, leaf) in leaves.iter().enumerate() {
         for block in &leaf.function.blocks {
-            if carrier(block_result(&leaf.function, block)) != "i64" {
+            if carrier(world, block_result(&leaf.function, block)) != "i64" {
                 continue;
             }
             let types = block
                 .params
                 .iter()
-                .map(|p| carrier(&p.ty))
+                .map(|p| carrier(world, &p.ty))
                 .collect::<Vec<_>>()
                 .join(", ");
             let args = block
@@ -328,15 +408,15 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         let parameters = block
             .params
             .iter()
-            .map(|p| format!("v{}: {}", p.id.0, carrier(&p.ty)))
+            .map(|p| format!("v{}: {}", p.id.0, carrier(world, &p.ty)))
             .collect::<Vec<_>>()
             .join(", ");
         for block in &leaf.function.blocks {
-            let scalar_block = carrier(block_result(&leaf.function, block)) == "i64";
+            let scalar_block = carrier(world, block_result(&leaf.function, block)) == "i64";
             let block_parameters = block
                 .params
                 .iter()
-                .map(|p| format!("v{}: {}", p.id.0, carrier(&p.ty)))
+                .map(|p| format!("v{}: {}", p.id.0, carrier(world, &p.ty)))
                 .collect::<Vec<_>>()
                 .join(", ");
             if scalar_block {
@@ -354,9 +434,9 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 if scalar_block { "s" } else { "b" },
                 block.id.0,
                 if scalar_block {
-                    "HStep"
+                    "HStep".into()
                 } else {
-                    carrier(block_result(&leaf.function, block))
+                    carrier(world, block_result(&leaf.function, block))
                 }
             )
             .unwrap();
@@ -368,7 +448,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                     .find(|v| v.id == id)
                     .expect("verified operand")
                     .ty;
-                if carrier(ty) != "i64" {
+                if carrier(world, ty) != "i64" {
                     format!("v{}.clone()", id.0)
                 } else {
                     format!("v{}", id.0)
@@ -435,6 +515,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             .find(|b| b.id == *target)
                             .expect("verified closure target");
                         closure(
+                            world,
                             &format!("b_{index}_{}", target.0),
                             &arguments.iter().map(|v| value(*v)).collect::<Vec<_>>(),
                             &instruction.result.ty,
@@ -452,14 +533,14 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                                     .find(|p| p.id == *v)
                                     .expect("verified argument")
                                     .ty;
-                                format!("HField::{}({})", field_kind(ty).0, value(*v))
+                                format!("HField::{}({})", field_kind(world, ty).0, value(*v))
                             })
                             .collect::<Vec<_>>()
                             .join(", ");
                         format!(
                             "v{}.apply(vec![{args}]).{}()",
                             callee.0,
-                            field_kind(&instruction.result.ty).1
+                            field_kind(world, &instruction.result.ty).1
                         )
                     }
                     Operation::Construct {
@@ -470,13 +551,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             .iter()
                             .zip(&constructor.fields)
                             .map(|(v, t)| {
-                                let variant = match carrier(t) {
-                                    "i64" => "Int64",
-                                    "HInt" => "Int",
-                                    "HClosure" => "Closure",
-                                    _ => "Data",
-                                };
-                                format!("HField::{variant}({})", value(*v))
+                                format!("HField::{}({})", field_kind(world, t).0, value(*v))
                             })
                             .collect::<Vec<_>>()
                             .join(", ");
@@ -516,13 +591,10 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             let mut args = captures.clone();
                             let pattern = if let Some(c) = &arm.constructor {
                                 for (i, t) in c.fields.iter().enumerate() {
-                                    let method = match carrier(t) {
-                                        "i64" => "int64",
-                                        "HInt" => "int",
-                                        "HClosure" => "closure",
-                                        _ => "data",
-                                    };
-                                    args.push(format!("node.fields[{i}].{method}()"));
+                                    args.push(format!(
+                                        "node.fields[{i}].{}()",
+                                        field_kind(world, t).1
+                                    ));
                                 }
                                 format!("{:?}", c.name)
                             } else {
@@ -542,6 +614,18 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                         code.push_str(" } }");
                         code
                     }
+                    // No allocation and no tag: a Rust tuple is exactly what
+                    // GHC's unboxed tuple is.
+                    Operation::MakeUnboxedTuple { arguments } => {
+                        let components: Vec<String> = arguments.iter().map(|v| value(*v)).collect();
+                        match components.as_slice() {
+                            [one] => format!("({one},)"),
+                            many => format!("({})", many.join(", ")),
+                        }
+                    }
+                    Operation::UnboxedTupleField { tuple, index } => {
+                        format!("{}.{index}", value(*tuple))
+                    }
                     Operation::DelayBlock { target, arguments } => {
                         let captures = arguments
                             .iter()
@@ -555,12 +639,75 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             .join(", ");
                         format!(
                             "{{ {captures} {}::defer(move || b_{index}_{}({args}).force()) }}",
-                            carrier(&instruction.result.ty),
+                            carrier(world, &instruction.result.ty),
                             target.0
                         )
                     }
+                    Operation::AppendList {
+                        left,
+                        right,
+                        nil,
+                        cons,
+                    } => format!(
+                        "h2r_rt::append_list({}, {}, HListNames {{ cons: {:?}, nil: {:?} }})",
+                        value(*left),
+                        value(*right),
+                        cons.name,
+                        nil.name
+                    ),
+                    Operation::UnpackString(unpack) => {
+                        let bytes: String = unpack
+                            .bytes
+                            .iter()
+                            .map(|byte| format!("\\x{byte:02x}"))
+                            .collect();
+                        let names = format!(
+                            "HStringNames {{ cons: {:?}, nil: {:?}, character: {:?} }}",
+                            unpack.cons.name, unpack.nil.name, unpack.character.name
+                        );
+                        let encoding = match unpack.encoding {
+                            crate::nir::strings::Encoding::Latin1 => "Latin1",
+                            crate::nir::strings::Encoding::Utf8 => "Utf8",
+                        };
+                        match unpack.tail {
+                            Some(tail) => format!(
+                                "h2r_rt::unpack_string(b\"{bytes}\", HEncoding::{encoding}, {names}, {})",
+                                value(tail)
+                            ),
+                            None => format!(
+                                "h2r_rt::unpack_literal(b\"{bytes}\", HEncoding::{encoding}, {names})"
+                            ),
+                        }
+                    }
                     Operation::BoxInt(v) => format!("HInt::ready(v{})", v.0),
                     Operation::UnboxInt(v) => format!("v{}.force()", v.0),
+                    // Char# and Int# share the carrier, so a code-point
+                    // conversion moves the word and changes only the type.
+                    Operation::OrdChar(v) | Operation::ChrChar(v) => format!("v{}", v.0),
+                    Operation::CharCompare { op, arguments } => {
+                        let left = arguments[0].0;
+                        let right = arguments[1].0;
+                        let comparison = match op {
+                            CharCompare::Equal => "==",
+                            CharCompare::NotEqual => "!=",
+                            CharCompare::Less => "<",
+                            CharCompare::LessEqual => "<=",
+                            CharCompare::Greater => ">",
+                            CharCompare::GreaterEqual => ">=",
+                        };
+                        // GHC orders Char# as an unsigned machine word, and
+                        // `chr#` narrows nothing, so `chr# -1#` is the largest
+                        // Char# rather than the smallest. Equality does not
+                        // care about the signedness; the four orderings do.
+                        match op {
+                            CharCompare::Equal | CharCompare::NotEqual => {
+                                format!("i64::from(v{left} {comparison} v{right})")
+                            }
+                            _ => format!(
+                                "i64::from((v{left} as u64) {comparison} (v{right} as u64))"
+                            ),
+                        }
+                    }
                     Operation::EvaluateBlock { target, arguments }
                     | Operation::CallLocal { target, arguments }
                     | Operation::LocalScope {
@@ -589,7 +736,9 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             IntBinary::GreaterEqual => format!("i64::from(v{left} >= v{right})"),
                         }
                     }
-                    Operation::Literal(lit) => format!("{}i64", integer(&lit.kind, &lit.pretty)?),
+                    Operation::Literal(lit) => {
+                        format!("{}i64", scalar_literal(world, &instruction.result.ty, lit)?)
+                    }
                     Operation::TopReference {
                         module,
                         binder,
@@ -604,7 +753,13 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                         if arity == 0 {
                             format!("f_{target}()")
                         } else {
-                            closure(&format!("f_{target}"), &[], &instruction.result.ty, arity)?
+                            closure(
+                                world,
+                                &format!("f_{target}"),
+                                &[],
+                                &instruction.result.ty,
+                                arity,
+                            )?
                         }
                     }
                     Operation::CallTop {
@@ -634,7 +789,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                     out,
                     "    let v{}: {} = {expression};",
                     instruction.result.id.0,
-                    carrier(&instruction.result.ty)
+                    carrier(world, &instruction.result.ty)
                 )
                 .unwrap();
             }
@@ -674,6 +829,9 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                         }
                     )
                     .unwrap(),
+                    Exit::Diverge { .. } => {
+                        return Err("unimplemented non-returning call".into());
+                    }
                     Exit::Jump { target, args } => {
                         writeln!(out, "    {}", transfer(target, args)).unwrap()
                     }
@@ -697,7 +855,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         writeln!(
             out,
             "#[allow(unused_variables)]\nfn f_{index}({parameters}) -> {} {{",
-            carrier(&leaf.function.result_ty)
+            carrier(world, &leaf.function.result_ty)
         )
         .unwrap();
         let args = leaf.function.blocks[0]
@@ -706,8 +864,12 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             .map(|p| format!("v{}", p.id.0))
             .collect::<Vec<_>>()
             .join(", ");
-        if carrier(&leaf.function.result_ty) != "i64" {
-            let result_carrier = carrier(&leaf.function.result_ty);
+        // A lifted result is returned as a thunk the caller forces; an
+        // unlifted one is returned as it is. An unboxed tuple is unlifted and
+        // cannot be delayed at all — GHC's type system already forbids it, so
+        // deferring one would be emitting code for a value that cannot exist.
+        if data::lifted(world, &leaf.function.result_ty) {
+            let result_carrier = carrier(world, &leaf.function.result_ty);
             if block.params.is_empty() {
                 writeln!(out, "    std::thread_local! {{ static VALUE: {result_carrier} = {result_carrier}::defer(|| b_{index}_{}().force()); }}\n    VALUE.with(Clone::clone)\n}}", leaf.function.entry.0).unwrap();
             } else {
@@ -741,7 +903,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         let params = entry_types
             .iter()
             .enumerate()
-            .map(|(n, t)| format!("a{n}: {}", carrier(t)))
+            .map(|(n, t)| format!("a{n}: {}", carrier(world, t)))
             .collect::<Vec<_>>()
             .join(", ");
         let direct = (0..direct_arity)
@@ -752,14 +914,14 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             .iter()
             .enumerate()
             .skip(direct_arity)
-            .map(|(n, t)| format!("HField::{}(a{n})", field_kind(t).0))
+            .map(|(n, t)| format!("HField::{}(a{n})", field_kind(world, t).0))
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(
             out,
             "fn h2r_entry({params}) -> {} {{ f_0({direct}).apply(vec![{extra}]).{}() }}",
-            carrier(entry_result),
-            field_kind(entry_result).1
+            carrier(world, entry_result),
+            field_kind(world, entry_result).1
         )
         .unwrap();
     }

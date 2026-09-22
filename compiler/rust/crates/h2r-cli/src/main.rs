@@ -642,7 +642,7 @@ fn node_name(e: &Expr) -> &'static str {
         Expr::Lam { .. } => "Lam",
         Expr::Let { .. } => "Let",
         Expr::Case { .. } => "Case",
-        Expr::Cast(_) => "Cast",
+        Expr::Cast { .. } => "Cast",
         Expr::Tick(_) => "Tick",
         Expr::Type { .. } => "Type",
         Expr::Coercion => "Coercion",

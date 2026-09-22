@@ -26,7 +26,7 @@ impl RhsKind {
     pub fn of(s: &Scope, id: ExprId) -> RhsKind {
         let m = s.m;
         let inner = m.strip(id);
-        let cast = inner != id && matches!(m.expr(id), Expr::Cast(_));
+        let cast = inner != id && matches!(m.expr(id), Expr::Cast { .. });
         let kind = match m.expr(inner) {
             Expr::Lam { binder, .. } => {
                 // A chain of type lambdas around a value is not a function.
@@ -59,7 +59,7 @@ impl RhsKind {
             }
             Expr::Case { .. } => RhsKind::Case,
             Expr::Let { .. } => RhsKind::Let,
-            Expr::Cast(_) | Expr::Tick(_) => unreachable!("stripped"),
+            Expr::Cast { .. } | Expr::Tick(_) => unreachable!("stripped"),
             Expr::Type { .. } | Expr::Coercion => RhsKind::Other,
         };
         if cast && kind == RhsKind::Other {

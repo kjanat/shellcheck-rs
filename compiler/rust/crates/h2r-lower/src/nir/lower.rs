@@ -16,6 +16,55 @@ pub struct LowerError {
     pub owner: BinderId,
     pub source: Option<ExprId>,
     pub reason: String,
+    /// The concrete subject the refusal is about — an external stable name, a
+    /// type constructor — where the refusing site knows one. Ranking blockers
+    /// by reason alone cannot say *which* dependency or carrier is missing.
+    pub detail: Option<String>,
+}
+
+impl LowerError {
+    /// Name the subject of a refusal. Nothing reads this back as evidence.
+    pub(super) fn about(mut self, subject: impl Into<String>) -> Self {
+        self.detail = Some(subject.into());
+        self
+    }
+}
+
+/// Name the occurrence a refusal is about, when the source node is a variable.
+/// A spelling is a ranking key here and never evidence for a decision.
+fn named(module: &Module, source: ExprId, error: LowerError) -> LowerError {
+    match module.expr(source) {
+        Expr::Var { name, .. } => error.about(name.clone()),
+        _ => error,
+    }
+}
+
+/// Which part of a function type has no carrier, for a refusal that is about
+/// the type rather than the call. The first argument or the result that fails,
+/// so a ranking names the type to carry next rather than the arrow it sat in.
+fn unsupported_component(world: &World<'_>, ty: &Ty) -> String {
+    let mut current = ty;
+    while let Ty::Fun { arg, res, .. } = current {
+        if !data::supported(world, arg) {
+            return type_head(arg);
+        }
+        current = res;
+    }
+    type_head(current)
+}
+
+/// The head of a type, as a ranking key. Not an identity and not evidence.
+pub fn type_head(ty: &Ty) -> String {
+    match ty {
+        Ty::Con { tycon, args } if args.is_empty() => tycon.name.clone(),
+        Ty::Con { tycon, args } => format!("{} /{}", tycon.name, args.len()),
+        Ty::Fun { .. } => "->".into(),
+        Ty::Var(_) => "a type variable".into(),
+        Ty::ForAll { .. } => "forall".into(),
+        Ty::App { .. } => "a type application".into(),
+        Ty::Lit { kind, .. } => format!("a {kind} type literal"),
+        Ty::Opaque { .. } => "an opaque type".into(),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +123,7 @@ pub fn lower_leaf_specialized(
         owner,
         source: None,
         reason: "module index is outside the loaded world".into(),
+        detail: None,
     })?;
     lower_leaf_impl(
         module,
@@ -101,6 +151,7 @@ fn lower_leaf_impl(
         owner,
         source,
         reason: reason.into(),
+        detail: None,
     };
     let pair = module
         .top
@@ -384,6 +435,127 @@ fn instance_rule(target: &dict::CallTarget) -> Rule {
     }
 }
 
+/// A saturated `GHC.CString` unpacker applied to a string literal, as one
+/// spine: the unpacker, the literal's node and the list it appends to. An
+/// unpacker applied to anything but a literal is not this shape, because this
+/// backend has no `Addr#` value to give it.
+fn unpacker_spine(
+    context: &BodyContext<'_>,
+    current: ExprId,
+) -> Option<(strings::Unpacker, ExprId, Option<ExprId>)> {
+    let module = context.module;
+    let mut head = current;
+    let mut arguments = Vec::new();
+    while let Expr::App { fun, arg } = module.expr(head) {
+        if matches!(module.expr(*arg), Expr::Type { .. }) {
+            return None;
+        }
+        arguments.push(*arg);
+        head = *fun;
+    }
+    arguments.reverse();
+    if module.reference(head) != Some(h2r_core_ir::Ref::Global) {
+        return None;
+    }
+    let unpacker = strings::resolve(module, head)?;
+    if arguments.len() != unpacker.arity() as usize {
+        return None;
+    }
+    let literal = *arguments.first()?;
+    strings::address_literal(&context.world(), context.module_index, literal)?;
+    Some((unpacker, literal, arguments.get(1).copied()))
+}
+
+/// A saturated call to an implemented library function, as one spine: the
+/// entry, its closed type arguments and its value arguments. A partial
+/// application is not this shape and falls through to the ordinary path,
+/// which refuses it by name.
+fn external_spine(
+    context: &BodyContext<'_>,
+    current: ExprId,
+) -> Option<(external::External, Vec<Ty>, Vec<ExprId>)> {
+    let module = context.module;
+    let mut head = current;
+    let mut types = Vec::new();
+    let mut values = Vec::new();
+    while let Expr::App { fun, arg } = module.expr(head) {
+        match module.expr(*arg) {
+            Expr::Type { ty, .. } => types.push(context.view.ty(*ty).clone()),
+            // Right-to-left: a value argument after a type argument is an
+            // interleaved spine, which none of these entries has.
+            _ if types.is_empty() => values.push(*arg),
+            _ => return None,
+        }
+        head = *fun;
+    }
+    types.reverse();
+    values.reverse();
+    if module.reference(head) != Some(h2r_core_ir::Ref::Global) {
+        return None;
+    }
+    let entry = external::resolve(module, head)?;
+    if types.len() != entry.type_arity() || values.len() != entry.value_arity() {
+        return None;
+    }
+    types.iter().all(linkage::closed_type).then_some(())?;
+    Some((entry, types, values))
+}
+
+/// A saturated call to a binding GHC proved never returns.
+///
+/// The binding must be one this world cannot link. When the body *is* in the
+/// world it is lowered like any other, because a dead end is not one
+/// behaviour: `let x = x in x` loops, `error` stops, and only the body says
+/// which. This rule covers the case where there is no body to ask.
+fn divergent_spine(context: &BodyContext<'_>, current: ExprId) -> Option<diverge::Divergent> {
+    let module = context.module;
+    let mut head = current;
+    let mut values = 0usize;
+    while let Expr::App { fun, arg } = module.expr(head) {
+        if !matches!(module.expr(*arg), Expr::Type { .. }) {
+            values += 1;
+        }
+        head = *fun;
+    }
+    if module.reference(head) != Some(h2r_core_ir::Ref::Global) {
+        return None;
+    }
+    let divergent = diverge::resolve(module, head)?;
+    // Fewer arguments than the demand signature's own count is a partial
+    // application, which is a value and returns perfectly well.
+    if values < divergent.arity {
+        return None;
+    }
+    let defined_here = context.world().iter().any(|(_, loaded)| {
+        loaded
+            .top
+            .iter()
+            .flat_map(|group| &group.pairs)
+            .any(|pair| loaded.binder(pair.binder).name == divergent.name)
+    });
+    (!defined_here).then_some(divergent)
+}
+
+/// The one operation a resolved primop denotes. Its carriers were already
+/// fixed by the asserted signature the arguments were lowered at.
+fn primitive_operation(prim: primitive::Prim, arguments: Vec<ValueId>) -> Operation {
+    match prim {
+        primitive::Prim::Int(op) => Operation::IntBinary { op, arguments },
+        primitive::Prim::Char(op) => Operation::CharCompare { op, arguments },
+        primitive::Prim::Ord => Operation::OrdChar(arguments[0]),
+        primitive::Prim::Chr => Operation::ChrChar(arguments[0]),
+    }
+}
+
+fn primitive_rule(prim: primitive::Prim) -> Rule {
+    match prim {
+        primitive::Prim::Int(_) => Rule::IntBinary,
+        primitive::Prim::Char(_) => Rule::CharCompare,
+        primitive::Prim::Ord => Rule::OrdChar,
+        primitive::Prim::Chr => Rule::ChrChar,
+    }
+}
+
 fn fresh_value(context: &BodyContext<'_>) -> ValueId {
     let id = context.next_value.get();
     context.next_value.set(id + 1);
@@ -432,6 +604,7 @@ fn lower_tail_at(
         owner: context.owner,
         source: Some(source),
         reason,
+        detail: None,
     };
     let origin = |rule| Origin {
         module: context.module_index,
@@ -457,15 +630,25 @@ fn lower_tail_at(
         ..
     } = module.expr(source)
         && !data::lifted(&world, view.binder_ty(*binder))
+        // An unboxed tuple is unlifted too, but a case on one is not a switch:
+        // it binds components and branches nowhere. It belongs on the value
+        // path, which is where the tail falls through to.
+        && !matches!(
+            data::unboxed_tuple_constructor(&world, view.binder_ty(*binder)),
+            Ok(Some(_))
+        )
     {
-        if !primitive::is_int(view.binder_ty(*binder))
+        if !primitive::is_scalar(view.binder_ty(*binder))
             || !data::supported(&world, ty)
             || !view.ty(*result_ty).alpha_eq(ty)
             || alts.iter().any(|a| !a.binders.is_empty())
         {
             return Err(fail(
-                "switch requires Int# scrutinee, Int#/Int result and no alternative binders".into(),
-            ));
+                "switch requires an unboxed scalar scrutinee, a supported result and no \
+                 alternative binders"
+                    .into(),
+            )
+            .about(type_head(view.binder_ty(*binder))));
         }
         let mut patterns = std::collections::BTreeSet::new();
         let mut defaults = 0;
@@ -477,9 +660,10 @@ fn lower_tail_at(
                     None
                 }
                 h2r_core_ir::AltCon::LitAlt { lit } => {
-                    let value = primitive::int_literal(lit).map_err(&fail)?;
+                    let value =
+                        primitive::scalar_literal(view.binder_ty(*binder), lit).map_err(&fail)?;
                     if !patterns.insert(value) {
-                        return Err(fail("duplicate Int# case alternative".into()));
+                        return Err(fail("duplicate scalar case alternative".into()));
                     }
                     Some(value)
                 }
@@ -489,7 +673,7 @@ fn lower_tail_at(
         }
         if defaults != 1 {
             return Err(fail(
-                "Int# switch requires exactly one DEFAULT alternative".into(),
+                "a scalar switch requires exactly one DEFAULT alternative".into(),
             ));
         }
         let scrutinee = lower_value(
@@ -554,6 +738,21 @@ fn lower_tail_at(
             default: default.expect("validated DEFAULT"),
             args,
         };
+    } else if let Some(divergent) = divergent_spine(context, source) {
+        // The arguments that would have built GHC's message are not lowered:
+        // nothing reads them, because the diagnostic is not reproduced.
+        blocks[id.0 as usize] = Block {
+            id,
+            params: context.params.to_vec(),
+            instructions: Vec::new(),
+            terminator: Terminator {
+                exit: Exit::Diverge {
+                    name: divergent.name,
+                    ty: ty.clone(),
+                },
+                origin: origin(Rule::Diverge),
+            },
+        };
     } else {
         let value = lower_value(context, source, ty, &mut locals, &mut instructions, blocks)?;
         blocks[id.0 as usize] = Block {
@@ -593,6 +792,7 @@ fn lower_value(
         owner,
         source,
         reason: reason.into(),
+        detail: None,
     };
     let origin = |rule| Origin {
         module: module_index,
@@ -617,8 +817,49 @@ fn lower_value(
         }
         head = *fun;
     }
-    if let Some(constructor) =
-        data::resolve(&world, module_index, head, ty).map_err(|e| fail(Some(current), &e))?
+    if let Some(fields) = data::unboxed_tuple_worker(&world, module_index, head, ty)
+        .map_err(|e| fail(Some(current), &e).about(type_head(ty)))?
+    {
+        sources.reverse();
+        types.reverse();
+        let Ty::Con { args, .. } = ty else {
+            unreachable!()
+        };
+        if types != *args || sources.len() != fields.len() {
+            return Err(fail(
+                Some(current),
+                "unboxed tuple type arguments or saturation mismatch",
+            ));
+        }
+        let mut arguments = Vec::new();
+        for (source, field) in sources.into_iter().zip(&fields) {
+            // A lifted component is still a lifted value: an unboxed tuple
+            // holds what it is given without forcing it, exactly as a
+            // constructor field does.
+            let value = if data::lifted(&world, field)
+                && !matches!(module.expr(source), Expr::Var { .. })
+            {
+                lower_region(context, source, field, locals, instructions, blocks, true)?
+            } else if matches!(module.expr(source), Expr::Case { .. } | Expr::Let { .. }) {
+                lower_region(context, source, field, locals, instructions, blocks, false)?
+            } else {
+                lower_value(context, source, field, locals, instructions, blocks)?
+            };
+            arguments.push(value);
+        }
+        let value = fresh_value(context);
+        instructions.push(Instruction {
+            result: Value {
+                id: value,
+                ty: ty.clone(),
+            },
+            operation: Operation::MakeUnboxedTuple { arguments },
+            origin: origin(Rule::MakeUnboxedTuple),
+        });
+        return Ok(value);
+    }
+    if let Some(constructor) = data::resolve(&world, module_index, head, ty)
+        .map_err(|e| fail(Some(current), &e).about(type_head(ty)))?
     {
         sources.reverse();
         types.reverse();
@@ -675,7 +916,7 @@ fn lower_value(
             let modules = modules
                 .ok_or_else(|| fail(Some(current), "external references require a loaded world"))?;
             let (target_module, binder) = linkage::imported_top(modules, name)
-                .map_err(|reason| fail(Some(current), &reason))?;
+                .map_err(|reason| fail(Some(current), &reason).about(name.clone()))?;
             let target_ty = modules[target_module].binder_ty(binder);
             if !linkage::closed_type(ty) || !linkage::closed_type(target_ty) {
                 return Err(fail(
@@ -782,11 +1023,170 @@ fn lower_value(
                 ));
             }
         }
-        Expr::Cast(_) => {
-            return Err(fail(
-                Some(current),
-                "casts need source and target type evidence",
-            ));
+        Expr::Cast {
+            expr,
+            from,
+            to,
+            role,
+        } => {
+            // A coercion has no runtime content: this evaluates exactly as the
+            // cast expression does. What changes is the type, so erasing the
+            // cast is sound here only when both sides are held the same way —
+            // the NIR is typed, and a value read at the wrong carrier is a
+            // miscompile. The coercion's own kind is the evidence for that;
+            // a dump that carries none leaves nothing to decide on.
+            let (Some(from), Some(to), Some(role)) = (from, to, role) else {
+                return Err(fail(
+                    Some(current),
+                    "casts need source and target type evidence",
+                ));
+            };
+            let source_ty = view.ty(*from).clone();
+            let target_ty = view.ty(*to);
+            if !target_ty.alpha_eq(ty) {
+                return Err(fail(
+                    Some(current),
+                    "cast target differs from the expression's own type",
+                ));
+            }
+            let Some(carrier) = data::carrier(&world, &source_ty) else {
+                return Err(fail(Some(current), "cast source has no supported carrier")
+                    .about(type_head(&source_ty)));
+            };
+            if data::carrier(&world, target_ty) != Some(carrier) {
+                return Err(
+                    fail(Some(current), "a cast must not change the carrier").about(format!(
+                        "{} to {} ({role})",
+                        type_head(&source_ty),
+                        type_head(target_ty)
+                    )),
+                );
+            }
+            let inner = lower_value(context, *expr, &source_ty, locals, instructions, blocks)?;
+            let value = fresh_value(context);
+            instructions.push(Instruction {
+                result: Value {
+                    id: value,
+                    ty: ty.clone(),
+                },
+                operation: Operation::Move(inner),
+                origin: origin(Rule::EraseCast),
+            });
+            value
+        }
+        Expr::App { arg, .. }
+            if !matches!(module.expr(*arg), Expr::Type { .. })
+                && unpacker_spine(context, current).is_some() =>
+        {
+            let (unpacker, literal, tail_source) =
+                unpacker_spine(context, current).expect("matched spine");
+            if !ty.alpha_eq(&strings::string_ty()) {
+                return Err(fail(Some(current), "a string literal unpacks to [Char]"));
+            }
+            let bytes = strings::address_literal(&world, module_index, literal)
+                .ok_or_else(|| fail(Some(literal), "string unpacker needs a literal address"))?
+                .string_bytes()
+                .map_err(|reason| fail(Some(literal), &reason))?;
+            // Decode here so a malformed literal is refused before anything is
+            // built; the emitted code walks the same bytes at run time.
+            strings::decode(&bytes, unpacker.encoding).map_err(|r| fail(Some(literal), &r))?;
+            let (nil, cons, character) =
+                data::string_layouts(&world).map_err(|r| fail(Some(current), &r))?;
+            let tail = tail_source
+                .map(|source| {
+                    let list = strings::string_ty();
+                    match module.expr(source) {
+                        Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. } => {
+                            lower_region(context, source, &list, locals, instructions, blocks, true)
+                        }
+                        _ => lower_value(context, source, &list, locals, instructions, blocks),
+                    }
+                })
+                .transpose()?;
+            let value = fresh_value(context);
+            instructions.push(Instruction {
+                result: Value {
+                    id: value,
+                    ty: ty.clone(),
+                },
+                operation: Operation::UnpackString(Box::new(UnpackString {
+                    bytes,
+                    encoding: unpacker.encoding,
+                    tail,
+                    nil,
+                    cons,
+                    character,
+                })),
+                origin: origin(Rule::UnpackString),
+            });
+            value
+        }
+        Expr::App { arg, .. }
+            if !matches!(module.expr(*arg), Expr::Type { .. })
+                && external_spine(context, current).is_some() =>
+        {
+            let (entry, type_arguments, argument_sources) =
+                external_spine(context, current).expect("matched spine");
+            let signature = entry
+                .signature(&type_arguments)
+                .ok_or_else(|| fail(Some(current), "external call type arguments mismatch"))?;
+            let element = entry
+                .element(&type_arguments)
+                .ok_or_else(|| fail(Some(current), "external call type arguments mismatch"))?;
+            if !linkage::closed_type(&signature) {
+                return Err(fail(
+                    Some(current),
+                    "external call requires closed structured types",
+                ));
+            }
+            let (nil, cons) = data::list_layouts(&world, &element)
+                .map_err(|reason| fail(Some(current), &reason))?;
+            let mut remaining = &signature;
+            let mut arguments = Vec::new();
+            for source in argument_sources {
+                let Ty::Fun { arg, res, .. } = remaining else {
+                    return Err(fail(Some(current), "external call lacks a value arrow"));
+                };
+                // Neither list is forced: a lazy argument stays a thunk, as it
+                // would be in any other lifted argument position.
+                let value = match module.expr(source) {
+                    Expr::App { .. }
+                    | Expr::Case { .. }
+                    | Expr::Let { .. }
+                    | Expr::Lam { .. }
+                    | Expr::Cast { .. } => {
+                        lower_region(context, source, arg, locals, instructions, blocks, true)?
+                    }
+                    _ => lower_value(context, source, arg, locals, instructions, blocks)?,
+                };
+                arguments.push(value);
+                remaining = res;
+            }
+            if !remaining.alpha_eq(ty) {
+                return Err(fail(Some(current), "external call result type mismatch"));
+            }
+            let [left, right] = arguments.as_slice() else {
+                return Err(fail(Some(current), "append takes two lists"));
+            };
+            let value = fresh_value(context);
+            instructions.push(Instruction {
+                result: Value {
+                    id: value,
+                    ty: ty.clone(),
+                },
+                operation: match entry {
+                    external::External::Append => Operation::AppendList {
+                        left: *left,
+                        right: *right,
+                        nil,
+                        cons,
+                    },
+                },
+                origin: origin(match entry {
+                    external::External::Append => Rule::AppendList,
+                }),
+            });
+            value
         }
         Expr::App { arg, .. } if !matches!(module.expr(*arg), Expr::Type { .. }) => {
             let mut head = current;
@@ -817,42 +1217,61 @@ fn lower_value(
                 .resolve(head)
                 .and_then(|b| context.functions.get(&b).map(|f| (b, f)));
             let indirect = module.resolve(head).filter(|b| locals.contains_key(b));
-            let primitive_ty = if constructor {
-                boxed::signature()
-            } else {
-                primitive::signature()
+            // The asserted signature of the head, when it is not a binding this
+            // world can link: a primop's own GHC type, or `I#`'s worker type.
+            let primitive_ty = match primitive {
+                _ if constructor => boxed::signature(),
+                Some(prim) => prim.signature(),
+                None => primitive::signature(),
             };
-            let target =
-                if primitive.is_some() || constructor || local.is_some() || indirect.is_some() {
-                    None
-                } else {
-                    Some(
-                        dict::call_target(
-                            &context.world(),
-                            &context.scope(),
+            // A cast names its own type, so an application whose head is one
+            // can still be lowered: the head is a value of the cast's target
+            // type and the call is indirect, exactly as through a parameter.
+            let cast_head = match module.expr(head) {
+                Expr::Cast { to: Some(to), .. } => Some(view.ty(*to).clone()),
+                _ => None,
+            };
+            let target = if cast_head.is_some()
+                || primitive.is_some()
+                || constructor
+                || local.is_some()
+                || indirect.is_some()
+            {
+                None
+            } else {
+                Some(
+                    dict::call_target(
+                        &context.world(),
+                        &context.scope(),
+                        head,
+                        &type_arguments,
+                        &argument_sources,
+                    )
+                    .map_err(|reason| named(module, head, fail(Some(head), &reason)))?
+                    .ok_or_else(|| {
+                        named(
+                            module,
                             head,
-                            &type_arguments,
-                            &argument_sources,
+                            fail(Some(head), "application requires a top-level binding"),
                         )
-                        .map_err(|reason| fail(Some(head), &reason))?
-                        .ok_or_else(|| {
-                            fail(Some(head), "application requires a top-level binding")
-                        })?,
-                    )
-                };
-            let head_ty = indirect.map_or_else(
-                || {
-                    local.map_or_else(
-                        || {
-                            target
-                                .as_ref()
-                                .map_or(&primitive_ty, |resolved| &resolved.signature)
-                        },
-                        |(b, _)| view.binder_ty(b),
-                    )
-                },
-                |b| view.binder_ty(b),
-            );
+                    })?,
+                )
+            };
+            let head_ty = cast_head.as_ref().unwrap_or_else(|| {
+                indirect.map_or_else(
+                    || {
+                        local.map_or_else(
+                            || {
+                                target
+                                    .as_ref()
+                                    .map_or(&primitive_ty, |resolved| &resolved.signature)
+                            },
+                            |(b, _)| view.binder_ty(b),
+                        )
+                    },
+                    |b| view.binder_ty(b),
+                )
+            });
             let instantiated = match &target {
                 // Already instantiated at the instance's type arguments.
                 Some(resolved) => resolved.signature.clone(),
@@ -864,27 +1283,52 @@ fn lower_value(
                 Some(resolved) => resolved.arguments.clone(),
                 None => argument_sources,
             };
-            let arity = local.map_or_else(
-                || {
-                    target
-                        .as_ref()
-                        .map_or(Some(if constructor { 1 } else { 2 }), |resolved| {
-                            Some(resolved.arity as u32)
-                        })
-                },
-                |(_, (_, _, arity))| Some(*arity as u32),
-            );
-            let apply = indirect.is_some() || arity != Some(argument_sources.len() as u32);
-            if apply
-                && (primitive.is_some()
-                    || constructor
-                    || (target.is_none() && !type_arguments.is_empty())
-                    || !data::function(&world, head_ty))
-            {
-                return Err(fail(
-                    Some(current),
-                    "direct call must match known target arity",
-                ));
+            let arity = if cast_head.is_some() {
+                None
+            } else {
+                local.map_or_else(
+                    || {
+                        target.as_ref().map_or_else(
+                            || Some(if constructor { 1 } else { primitive?.arity() }),
+                            |resolved| Some(resolved.arity as u32),
+                        )
+                    },
+                    |(_, (_, _, arity))| Some(*arity as u32),
+                )
+            };
+            let apply = cast_head.is_some()
+                || indirect.is_some()
+                || arity != Some(argument_sources.len() as u32);
+            if apply {
+                // Four different things end up here, and saying which one is
+                // the difference between "this call is unsaturated" and "this
+                // type has no carrier" — the second is the usual answer, and
+                // it names a type rather than a call.
+                if primitive.is_some() {
+                    return Err(fail(
+                        Some(current),
+                        "a primop must be applied to exactly its own arguments",
+                    ));
+                }
+                if constructor {
+                    return Err(fail(
+                        Some(current),
+                        "a constructor must be applied to exactly its own fields",
+                    ));
+                }
+                if target.is_none() && !type_arguments.is_empty() {
+                    return Err(fail(
+                        Some(current),
+                        "an indirect call cannot carry type arguments",
+                    ));
+                }
+                if !data::function(&world, head_ty) {
+                    return Err(fail(
+                        Some(current),
+                        "partial application needs a carried function type",
+                    )
+                    .about(unsupported_component(&world, head_ty)));
+                }
             }
             if !linkage::closed_type(signature) || !linkage::closed_type(ty) {
                 return Err(fail(
@@ -921,13 +1365,17 @@ fn lower_value(
                     return Err(fail(Some(current), "direct call lacks a value arrow"));
                 };
                 let value = match module.expr(source) {
-                    Expr::App { .. } if primitive::is_int(arg) => {
+                    Expr::App { .. } | Expr::Cast { .. } if primitive::is_scalar(arg) => {
                         lower_value(context, source, arg, locals, instructions, blocks)?
                     }
-                    Expr::Case { .. } | Expr::Let { .. } if primitive::is_int(arg) => {
+                    Expr::Case { .. } | Expr::Let { .. } if primitive::is_scalar(arg) => {
                         lower_region(context, source, arg, locals, instructions, blocks, false)?
                     }
-                    Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. } | Expr::Lam { .. }
+                    Expr::App { .. }
+                    | Expr::Case { .. }
+                    | Expr::Let { .. }
+                    | Expr::Lam { .. }
+                    | Expr::Cast { .. }
                         if data::lifted(&world, arg) =>
                     {
                         lower_region(context, source, arg, locals, instructions, blocks, true)?
@@ -978,7 +1426,9 @@ fn lower_value(
                         } else {
                             let (argument_module, argument_binder, argument_ty) =
                                 instantiate::target(module, module_index, modules, source)
-                                    .map_err(|reason| fail(Some(source), &reason))?;
+                                    .map_err(|reason| {
+                                        named(module, source, fail(Some(source), &reason))
+                                    })?;
                             if !linkage::closed_type(argument_ty) || !arg.alpha_eq(argument_ty) {
                                 return Err(fail(Some(source), "top-level argument type mismatch"));
                             }
@@ -1056,8 +1506,8 @@ fn lower_value(
                     Operation::Apply { callee, arguments }
                 } else if constructor {
                     Operation::BoxInt(arguments[0])
-                } else if let Some(op) = primitive {
-                    Operation::IntBinary { op, arguments }
+                } else if let Some(prim) = primitive {
+                    primitive_operation(prim, arguments)
                 } else if let Some((_, (target, captures, _))) = local {
                     let mut actual = captures
                         .iter()
@@ -1086,8 +1536,8 @@ fn lower_value(
                     Rule::Apply
                 } else if constructor {
                     Rule::BoxInt
-                } else if primitive.is_some() {
-                    Rule::IntBinary
+                } else if let Some(prim) = primitive {
+                    primitive_rule(prim)
                 } else if local.is_some() {
                     Rule::CallLocal
                 } else if target.as_ref().is_some_and(|r| r.method) {
@@ -1111,7 +1561,7 @@ fn lower_value(
             arguments.reverse();
             let (target_module, binder, head_ty) =
                 instantiate::target(module, module_index, modules, head)
-                    .map_err(|reason| fail(Some(head), &reason))?;
+                    .map_err(|reason| named(module, head, fail(Some(head), &reason)))?;
             let result_ty = instantiate::apply(head_ty, &arguments)
                 .map_err(|reason| fail(Some(current), &reason))?;
             if !linkage::closed_type(ty) || !ty.alpha_eq(&result_ty) {
@@ -1155,7 +1605,7 @@ fn lower_value(
             let [pair] = bind.pairs.as_slice() else {
                 return Err(fail(
                     Some(current),
-                    "lazy let requires one non-recursive binding",
+                    "a let group binds several values at once",
                 ));
             };
             // A dictionary the desugarer bound locally is a compile-time
@@ -1180,27 +1630,49 @@ fn lower_value(
                 return lower_value(&nested, *body, ty, locals, instructions, blocks);
             }
             let binding_ty = view.binder_ty(pair.binder);
-            if bind.recursive
-                || !data::lifted(&world, binding_ty)
-                || module.binder(pair.binder).is_join_point == Some(true)
-            {
+            // Three different things used to share one sentence here, which
+            // made the ranking unable to say which of them the live set
+            // actually contains. They are separate refusals now.
+            if bind.recursive {
+                return Err(
+                    fail(Some(current), "a recursive value binding").about(type_head(binding_ty))
+                );
+            }
+            if module.binder(pair.binder).is_join_point == Some(true) {
+                return Err(fail(Some(current), "a join point bound as a value")
+                    .about(type_head(binding_ty)));
+            }
+            if !data::supported(&world, binding_ty) {
                 return Err(fail(
                     Some(current),
-                    "lazy let requires a supported non-recursive lifted value, not a join point",
-                ));
+                    "a let binds a value whose type has no carrier",
+                )
+                .about(type_head(binding_ty)));
             }
-            let rhs = if matches!(module.expr(pair.rhs), Expr::Var { .. }) {
-                lower_value(context, pair.rhs, binding_ty, locals, instructions, blocks)?
-            } else {
-                lower_region(
+            // A `let` at an unboxed type is not a thunk. Core only admits one
+            // whose right-hand side is ok for speculation, and it is evaluated
+            // where it stands, so binding it eagerly is what it means.
+            let delayed = data::lifted(&world, binding_ty);
+            let rhs = match module.expr(pair.rhs) {
+                Expr::Var { .. } => {
+                    lower_value(context, pair.rhs, binding_ty, locals, instructions, blocks)?
+                }
+                // A strict scalar computation is emitted where it stands; only
+                // its own control flow needs a region of its own.
+                _ if !delayed
+                    && !matches!(module.expr(pair.rhs), Expr::Case { .. } | Expr::Let { .. }) =>
+                {
+                    lower_value(context, pair.rhs, binding_ty, locals, instructions, blocks)?
+                }
+                _ => lower_region(
                     context,
                     pair.rhs,
                     binding_ty,
                     locals,
                     instructions,
                     blocks,
-                    true,
-                )?
+                    delayed,
+                )?,
             };
             let value = fresh_value(context);
             instructions.push(Instruction {
@@ -1209,7 +1681,11 @@ fn lower_value(
                     ty: binding_ty.clone(),
                 },
                 operation: Operation::Move(rhs),
-                origin: origin(Rule::LazyBinding),
+                origin: origin(if delayed {
+                    Rule::LazyBinding
+                } else {
+                    Rule::StrictBinding
+                }),
             });
             let previous = locals.insert(pair.binder, value);
             let result = lower_value(context, *body, ty, locals, instructions, blocks);
@@ -1220,6 +1696,109 @@ fn lower_value(
             }
             result?
         }
+        // A `case` on an unboxed tuple is no control flow: the family has one
+        // constructor, nothing is in a box and nothing is forced. It names the
+        // components and carries straight on into the body.
+        Expr::Case {
+            scrut,
+            binder,
+            ty: result_ty,
+            alts,
+            ..
+        } if matches!(
+            data::unboxed_tuple_constructor(&world, view.binder_ty(*binder)),
+            Ok(Some(_))
+        ) =>
+        {
+            let (constructor, fields) =
+                data::unboxed_tuple_constructor(&world, view.binder_ty(*binder))
+                    .map_err(|e| fail(Some(current), &e))?
+                    .expect("matched an unboxed tuple");
+            if !view.ty(*result_ty).alpha_eq(ty) || !data::supported(&world, ty) {
+                return Err(
+                    fail(Some(current), "unboxed tuple case result mismatch").about(type_head(ty))
+                );
+            }
+            let [alt] = alts.as_slice() else {
+                return Err(fail(
+                    Some(current),
+                    "an unboxed tuple case has exactly one alternative",
+                ));
+            };
+            // Two forms, and GHC emits both. `DEFAULT` names the tuple in
+            // the case binder and nothing else; the constructor pattern also
+            // names the components. Neither is a branch, and at `-O0` an
+            // unboxed tuple case is usually the first wrapping the second.
+            let components: &[BinderId] = match &alt.con {
+                h2r_core_ir::AltCon::DataAlt { name, tag, .. }
+                    if *name == constructor && *tag == 1 =>
+                {
+                    &alt.binders
+                }
+                h2r_core_ir::AltCon::Default if alt.binders.is_empty() => &[],
+                _ => {
+                    return Err(fail(
+                        Some(current),
+                        "an unboxed tuple case matches its one constructor or binds nothing",
+                    ));
+                }
+            };
+            if !components.is_empty()
+                && (components.len() != fields.len()
+                    || fields
+                        .iter()
+                        .zip(components)
+                        .any(|(t, b)| !t.alpha_eq(view.binder_ty(*b))))
+            {
+                return Err(fail(
+                    Some(current),
+                    "unboxed tuple case field layout mismatch",
+                ));
+            }
+            let tuple = lower_value(
+                context,
+                *scrut,
+                view.binder_ty(*binder),
+                locals,
+                instructions,
+                blocks,
+            )?;
+            // The case binder names the tuple itself and the alternative's
+            // binders name its components. Both are already evaluated, so
+            // neither naming is a forcing.
+            //
+            // The binder is bound even when the source never reads it, because
+            // it is what marks where the scrutinee's instructions end: a
+            // nullary unboxed tuple has no components to project and would
+            // otherwise leave the boundary unstated.
+            let mut inner = locals.clone();
+            let named = fresh_value(context);
+            instructions.push(Instruction {
+                result: Value {
+                    id: named,
+                    ty: view.binder_ty(*binder).clone(),
+                },
+                operation: Operation::Move(tuple),
+                origin: origin(Rule::UnboxedTupleField),
+            });
+            inner.insert(*binder, named);
+            for (index, (component, field)) in components.iter().zip(&fields).enumerate() {
+                let value = fresh_value(context);
+                instructions.push(Instruction {
+                    result: Value {
+                        id: value,
+                        ty: field.clone(),
+                    },
+                    operation: Operation::UnboxedTupleField {
+                        tuple: named,
+                        index,
+                    },
+                    origin: origin(Rule::UnboxedTupleField),
+                });
+                inner.insert(*component, value);
+            }
+            lower_value(context, alt.rhs, ty, &mut inner, instructions, blocks)?
+        }
         Expr::Case {
             scrut,
             binder,
@@ -1228,10 +1807,12 @@ fn lower_value(
             ..
         } if data::is_data(&world, view.binder_ty(*binder)) => {
             if !view.ty(*result_ty).alpha_eq(ty) || !data::supported(&world, ty) {
-                return Err(fail(Some(current), "algebraic case result mismatch"));
+                return Err(
+                    fail(Some(current), "algebraic case result mismatch").about(type_head(ty))
+                );
             }
             let family = data::family(&world, view.binder_ty(*binder))
-                .map_err(|e| fail(Some(current), &e))?;
+                .map_err(|e| fail(Some(current), &e).about(type_head(view.binder_ty(*binder))))?;
             let scrutinee = lower_value(
                 context,
                 *scrut,
@@ -1387,20 +1968,21 @@ fn lower_value(
             ..
         } => {
             if alts.len() != 1 || !matches!(alts[0].con, h2r_core_ir::AltCon::Default) {
-                if !primitive::is_int(view.binder_ty(*binder)) {
-                    return Err(fail(Some(current), "unsupported case scrutinee carrier"));
+                if !primitive::is_scalar(view.binder_ty(*binder)) {
+                    return Err(fail(Some(current), "unsupported case scrutinee carrier")
+                        .about(type_head(view.binder_ty(*binder))));
                 }
                 return lower_region(context, current, ty, locals, instructions, blocks, false);
             }
             let [alt] = alts.as_slice() else {
                 return Err(fail(
                     Some(current),
-                    "strict Int# case requires one DEFAULT alternative",
+                    "a strict scalar case requires one DEFAULT alternative",
                 ));
             };
             if !matches!(alt.con, h2r_core_ir::AltCon::Default)
                 || !alt.binders.is_empty()
-                || !primitive::is_int(view.binder_ty(*binder))
+                || !primitive::is_scalar(view.binder_ty(*binder))
                 || !data::supported(&world, ty)
                 || !view.ty(*result_ty).alpha_eq(ty)
             {
@@ -1468,6 +2050,7 @@ fn lower_functions(
         owner: context.owner,
         source: Some(source),
         reason: reason.into(),
+        detail: None,
     };
     let module = context.module;
     let view = context.view;
@@ -1603,6 +2186,7 @@ fn lower_lambda(
         owner: context.owner,
         source: Some(source),
         reason: reason.into(),
+        detail: None,
     };
     if !data::function(&context.world(), ty) {
         return Err(fail(

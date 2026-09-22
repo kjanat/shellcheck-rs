@@ -132,7 +132,7 @@ fn brief(m: &Module, id: ExprId) -> String {
         }
         Expr::Type { pretty, .. } => format!("@{pretty}"),
         Expr::Coercion => "<coercion>".to_string(),
-        Expr::Cast(_) | Expr::Tick(_) => "…".to_string(),
+        Expr::Cast { .. } | Expr::Tick(_) => "…".to_string(),
     }
 }
 
