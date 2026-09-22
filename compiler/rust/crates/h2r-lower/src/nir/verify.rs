@@ -656,6 +656,14 @@ fn verify_value(
         let characters = data::string_layouts(&world).map(|(_, _, character)| character);
         let truths = data::bool_layouts(&world);
         let orderings = data::ordering_layouts(&world);
+        let mapped = match entry.list_function() {
+            Some(ListOp::Map) => Some(data::list_layouts(&world, &type_arguments[1])?),
+            _ => None,
+        };
+        let truth = match entry.list_function() {
+            Some(function) if function.takes_predicate() => Some(truths.clone()?),
+            _ => None,
+        };
         let family = || {
             data::represented(&world, &type_arguments[0])
                 .filter(|ty| data::carrier(&world, ty) == Some(data::Carrier::Data))
@@ -715,6 +723,15 @@ fn verify_value(
                     }) =>
             {
                 (vec![predicate.left, predicate.right], Rule::ListPredicate)
+            }
+            (Operation::ListFunction(list), _)
+                if entry.list_function() == Some(list.function)
+                    && list.arguments.len() == entry.value_arity()
+                    && same_lists(&list.nil, &list.cons)
+                    && list.mapped == mapped
+                    && list.truth == truth =>
+            {
+                (list.arguments.clone(), Rule::ListFunction)
             }
             _ => return Err("source external call was not lowered as one".into()),
         };
@@ -2972,6 +2989,56 @@ pub fn verify(function: &Function) -> Result<(), String> {
                         || !predicate.true_.result.alpha_eq(&data::bool_ty())
                     {
                         return Err("list predicate operands, equality and layouts disagree".into());
+                    }
+                }
+                Operation::ListFunction(ref list) => {
+                    let input = &list.nil.result;
+                    let element = input
+                        .list_elem()
+                        .ok_or("a list function reads a list, not another carrier")?;
+                    let cells = |nil: &data::Constructor, cons: &data::Constructor| {
+                        let list = &nil.result;
+                        list.list_elem().is_some_and(|element| {
+                            cons.result.alpha_eq(list)
+                                && cons.fields.len() == 2
+                                && cons.fields[0].alpha_eq(element)
+                                && cons.fields[1].alpha_eq(list)
+                        })
+                    };
+                    let mut types = vec![element.clone()];
+                    if let Some((_, cons)) = &list.mapped {
+                        types.extend(cons.fields.first().cloned());
+                    }
+                    let signature = list
+                        .function
+                        .external()
+                        .signature(&types)
+                        .ok_or("a list function's cells do not instantiate its signature")?;
+                    let mut remaining = &signature;
+                    for argument in &list.arguments {
+                        let Ty::Fun { arg, res, .. } = remaining else {
+                            return Err("a list function has more operands than arrows".into());
+                        };
+                        if !available.get(argument).is_some_and(|ty| ty.alpha_eq(arg)) {
+                            return Err("a list function operand has the wrong type".into());
+                        }
+                        remaining = res;
+                    }
+                    if list.arguments.len() != list.function.external().value_arity()
+                        || !remaining.alpha_eq(&instruction.result.ty)
+                        || !cells(&list.nil, &list.cons)
+                        || list.mapped.is_some() != (list.function == ListOp::Map)
+                        || list
+                            .mapped
+                            .as_ref()
+                            .is_some_and(|(nil, cons)| !cells(nil, cons))
+                        || list.truth.is_some() != list.function.takes_predicate()
+                        || list.truth.as_ref().is_some_and(|(false_, true_)| {
+                            !false_.result.alpha_eq(&data::bool_ty())
+                                || !true_.result.alpha_eq(&data::bool_ty())
+                        })
+                    {
+                        return Err("list function operands, result and cells disagree".into());
                     }
                 }
                 Operation::DataToTag {

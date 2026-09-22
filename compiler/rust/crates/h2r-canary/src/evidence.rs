@@ -294,6 +294,10 @@ fn matches(operation: &Operation, op: Op) -> bool {
         Op::DataToTag => matches!(operation, Operation::DataToTag { .. }),
         Op::TagToEnum => matches!(operation, Operation::TagToEnum { .. }),
         Op::PointerEquality => matches!(operation, Operation::PointerEquality { .. }),
+        Op::ListFunction(function) => matches!(
+            operation,
+            Operation::ListFunction(found) if found.function == function
+        ),
         Op::ListPredicate(predicate, equality) => matches!(
             operation,
             Operation::ListPredicate(found)

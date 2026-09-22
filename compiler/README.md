@@ -4894,7 +4894,7 @@ The external boundary fell from 2,891 refusals to **546**, over 95 distinct bind
 
 ### The dependency list as M4 left it
 
-These are the bindings the survey reached and refused, by package, as the ranking stood when M4's boundary work finished — 482 refusals over 82 bindings, then 546 over 95 once casts and newtypes pushed the survey deeper. It is kept as M4's record; the current list is in [Remaining runtime and external dependencies](#remaining-runtime-and-external-dependencies), which now stands at 384 over 104. Every count is a lower bound: a refused instance never revealed its own requirements.
+These are the bindings the survey reached and refused, by package, as the ranking stood when M4's boundary work finished — 482 refusals over 82 bindings, then 546 over 95 once casts and newtypes pushed the survey deeper. It is kept as M4's record; the current list is in [Remaining runtime and external dependencies](#remaining-runtime-and-external-dependencies), which now stands at 330 over 102. Every count is a lower bound: a refused instance never revealed its own requirements.
 
 | Package                  | Refusals | The bindings                                                                                                                                                           |
 | ------------------------ | -------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -5133,39 +5133,94 @@ Two tools answer the questions this work kept asking:
 
 `h2r lower --nir --specialize --fn` and `canary:explain` now print what each refusal is about.
 
+## Library list functions
+
+`map`, `reverse1`, `++_$s++`, `dropWhile`, `$wlenAcc`, `takeWhile`, `filter` and `reverse` had 75 refusals between them, 29 of them `map`'s. The dump records `hasUnfolding: false` for all eight, so each is implemented in `h2r-rt` against base 4.18.3.0's equations and resolved through the external table at its exact signature:
+
+```haskell
+map _ []     = []
+map f (x:xs) = f x : map f xs
+
+filter _pred []    = []
+filter pred (x:xs)
+  | pred x         = x : filter pred xs
+  | otherwise      = filter pred xs
+
+takeWhile _ []          =  []
+takeWhile p (x:xs)
+            | p x       =  x : takeWhile p xs
+            | otherwise =  []
+
+dropWhile _ []          =  []
+dropWhile p xs@(x:xs')
+            | p x       =  dropWhile p xs'
+            | otherwise =  xs
+
+reverse l =  rev l []
+  where
+    rev []     a = a
+    rev (x:xs) a = rev xs (x:a)
+
+lenAcc []     n = n
+lenAcc (_:ys) n = lenAcc ys (n+1)
+```
+
+Three of the names are GHC's. `reverse1` is `reverse`'s local `rev`, and `reverse`'s unfolding is `reverse1 l []`. `$wlenAcc :: [a] -> Int# -> Int#` is `lenAcc`'s worker, and its addition wraps. Its `IdInfo` says `[StrictWorker([!])]`, and the table requires exactly that. `++_$s++ :: a -> [a] -> [a] -> [a]` is SpecConstr's specialisation of `(++)`, and base's own rule defines it:
+
+```
+"SC:++0" forall sc sc1. ++ (sc : sc1) = ++_$s++ sc sc1
+```
+
+So `++_$s++ x xs ys` is one cell holding `x`, whose tail is `xs ++ ys`.
+
+`Operation::ListFunction` carries the function, its value arguments, the input list's cells, `map`'s result cells, and `False` and `True` for the three functions that take a predicate. All the layouts come from the world. The source verifier derives each of them again from the spine. The structural verifier instantiates the function's signature at the cells' element types and checks every operand and the result against it.
+
+Each function forces what its equations force. `map` builds a cell when one is demanded and applies the function once, when that element is forced. The element is a thunk in its own carrier: `Int`, data or a function. `filter` skips failing elements inside one cell's evaluation. `takeWhile` stops at the first failure and never touches the rest. `dropWhile` returns the first failing cell itself. `reverse1` forces the spine and nothing else, and its accumulator only when the list ends.
+
+### Fixtures
+
+Seventeen entries run over the 49 boundary input pairs. `map` runs at data, `Int` and function elements (`mapChars`, `mapInts`, `mapFunctions`). `mapLazy`, `mapUnapplied`, `filterLazy`, `takeWhileLazy`, `dropWhileLazy`, `reverseLazy`, `lengthLazy` and `consAppendLazy` put a failing computation where the definition must not look. At `-O1`, `reverse` becomes `reverse1` and `(x : xs) ++ ys` becomes `++_$s++`. At `-O0` the same fixtures call `reverse` and `(++)`, and the evidence checks ask for each call in its own profile. `lengthChars` and `lengthLazy` run in the optimized profile only: `-O0` calls `GHC.List.length`, which ShellCheck never reaches, and the canary asserts that refusal.
+
+Nine forced-error probes pin what each function forces: `map`'s spine and its function, `filter`'s predicate, `takeWhile`'s element, `dropWhile`'s spine, the tail `reverse` and `length` walk to, and the right list `++_$s++` reaches once the left runs out. For `mapChars`, `filterChars`, `takeWhileChars` and `dropWhileChars`, five forgeries of the verified instruction must be rejected: a different function, reversed operands, a predicate's `Bool` added or removed, `map`'s result cells added or removed, and a wrong rule.
+
+### Results
+
+Canonical NIR coverage per owner: **8,498 lowered / 1,297 refused / 3,957 dead**, against 8,457 / 1,338. The instance survey: **9,833 = 8,516 lowered + 1,317 refused**, 958 of them at a closed signature, against 999. All eight functions are gone from the external list. The canary passes **26,806 differential cases**, with 41 forced-error and branch probes in the optimized profile and 37 in the unoptimized one.
+
 ## Remaining runtime and external dependencies
 
-`mise run lower:specialize` against the canonical `-O1` dump reports **384 refusals over 104 bindings in 35 modules**. The groups below are by the work each needs, not by package.
+`mise run lower:specialize` against the canonical `-O1` dump reports **330 refusals over 102 bindings in 37 modules**. The groups below are by the work each needs, not by package.
 
-| What it needs                                                                                                                                           | Refusals | Where                                                                                                                                                                                                                                                                                                            |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **List and string functions whose bodies the dump does not contain.**                                                                                   |       97 | `base:GHC.Base` 40 (`map` 29, `++_$s++` 10, `++` 1), `base:GHC.List` 41 (`reverse1` 13, `dropWhile` 9, `$wlenAcc` 7, `takeWhile` 4, `filter` 2, six more at 1), `base:Data.OldList` 12 (`dropLengthMaybe` 4, `lines` 3, `unlines` 2, three more at 1), `base:Data.Maybe.mapMaybe` 3, `base:Data.List.NonEmpty` 1 |
-| **`containers`.** `Set` and `Map` balancing, linking, equality and forcing.                                                                             |       67 | `Data.Set.Internal` 49 (`balanceR` 13, `link` 13, `insertMax` 8, `balanceL` 6), `Data.Map.Internal` 18 (`balanceL` 6, `balanceR` 3, `insertMax` 3)                                                                                                                                                               |
-| **Foreign libraries.** Nothing in this backend substitutes for them.                                                                                    |       61 | `regex-tdfa` 49 (`Text.Regex.TDFA.String.compile`), `aeson` 4, `fgl` 3, `filepath` 3, `parsec` 2                                                                                                                                                                                                                 |
-| **`text`.**                                                                                                                                             |       27 | `Data.Text.Show.$wunpackCStringAscii#`                                                                                                                                                                                                                                                                           |
-| **`Eq`/`Ord` for lists, tuples and `Int`.**                                                                                                             |       24 | `ghc-prim:GHC.Classes` (`$fOrdList_$ccompare` 5, `eqInt` 4, `$fEqList_$s$c==1` 3, `$fEqList_$c==` 2, `compareInt` 2, `compareInt#` 2, six more at 1)                                                                                                                                                             |
-| **Primops with no implementation yet.**                                                                                                                 |       24 | `ghc-prim:GHC.Prim` 20 (`uncheckedIShiftRA#` 8, `leWord#` 7, `unsafeFreezeArray#` 2, `andI#`, `orI#`, `quotRemInt#`), `ghc-prim:GHC.Magic.runRW#` 4                                                                                                                                                              |
-| **`Integer`.** This backend has no carrier for arbitrary precision.                                                                                     |       19 | `ghc-bignum:GHC.Num.Integer` (`integerEq` 7, `integerCompare` 5, `integerAdd` 2, `integerGe` 2, three more at 1)                                                                                                                                                                                                 |
-| **Monad transformer dictionaries.** `Applicative`, `Functor` and `Monad` for `StateT`, `WriterT` and `RWST`, and `MonadReader`/`MonadWriter` over them. |       16 | `transformers` 13, `mtl` 3                                                                                                                                                                                                                                                                                       |
-| **Other `base` class dictionaries.**                                                                                                                    |       14 | `$fApplicativeMaybe` 9, `Foldable []` 2, `pure @[]` 1, `Monoid (a, b, c, d)` 1, `(+) @Int` 1                                                                                                                                                                                                                     |
-| **`Show`.**                                                                                                                                             |       11 | `base:GHC.Show` 10 (`$w$cshowsPrec15` 7, `$fShow(,)_itos'` 2, `$wshowSignedInt` 1), `base:Data.Version.$wshowVersion` 1                                                                                                                                                                                          |
-| **`Read`.**                                                                                                                                             |       10 | `base:Text.Read` 8 (`readEither2` 4, `readEither5` 4), `base:Text.ParserCombinators.ReadP.run` 2                                                                                                                                                                                                                 |
-| **IO.**                                                                                                                                                 |        8 | `base:GHC.IO.Handle.Text.hPutStr2` 6, `base:System.Environment.getEnv1` 1, `base:System.Console.GetOpt.usageInfo` 1                                                                                                                                                                                              |
-| **Unicode character tables.**                                                                                                                           |        3 | `base:GHC.Unicode.$wisAlpha` 2, `SimpleLowerCaseMapping.$wtoSimpleLowerCase` 1                                                                                                                                                                                                                                   |
-| **Everything else.**                                                                                                                                    |        3 | `base:GHC.Base.id`, `base:GHC.Base.maxInt`, `base:System.Info.os`                                                                                                                                                                                                                                                |
+| What it needs                                                                                                                                           | Refusals | Where                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`containers`.** `Set` and `Map` balancing, linking, equality and forcing.                                                                             |       67 | `Data.Set.Internal` 49 (`balanceR` 13, `link` 13, `insertMax` 8, `balanceL` 6), `Data.Map.Internal` 18 (`balanceL` 6, `balanceR` 3, `insertMax` 3)                                                                                        |
+| **Foreign libraries.** Nothing in this backend substitutes for them.                                                                                    |       61 | `regex-tdfa` 49 (`Text.Regex.TDFA.String.compile`), `aeson` 4, `fgl` 3, `filepath` 3, `parsec` 2                                                                                                                                          |
+| **`text`.**                                                                                                                                             |       27 | `Data.Text.Show.$wunpackCStringAscii#`                                                                                                                                                                                                    |
+| **`Eq`/`Ord` for lists, tuples and `Int`.**                                                                                                             |       24 | `ghc-prim:GHC.Classes` (`$fOrdList_$ccompare` 5, `eqInt` 4, `$fEqList_$s$c==1` 3, `$fEqList_$c==` 2, `compareInt` 2, `compareInt#` 2, six more at 1)                                                                                      |
+| **Primops with no implementation yet.**                                                                                                                 |       24 | `ghc-prim:GHC.Prim` 20 (`uncheckedIShiftRA#` 8, `leWord#` 7, `unsafeFreezeArray#` 2, `andI#`, `orI#`, `quotRemInt#`), `ghc-prim:GHC.Magic.runRW#` 4                                                                                       |
+| **List and string functions whose bodies the dump does not contain.**                                                                                   |       22 | `base:Data.OldList` 12 (`dropLengthMaybe` 4, `lines` 3, `unlines` 2, `nubBy`, `sortBy`, `words`), `base:GHC.List` 6 (`$wbreak`, `$wspan`, `flipSeq`, `init1`, `lookup`, `zip`), `base:Data.Maybe.mapMaybe` 3, `base:Data.List.NonEmpty` 1 |
+| **`Integer`.** This backend has no carrier for arbitrary precision.                                                                                     |       19 | `ghc-bignum:GHC.Num.Integer` (`integerEq` 7, `integerCompare` 5, `integerAdd` 2, `integerGe` 2, three more at 1)                                                                                                                          |
+| **Monad transformer dictionaries.** `Applicative`, `Functor` and `Monad` for `StateT`, `WriterT` and `RWST`, and `MonadReader`/`MonadWriter` over them. |       16 | `transformers` 13, `mtl` 3                                                                                                                                                                                                                |
+| **Unicode character tables.** `isSpace`, `toSimpleLowerCase` and `toSimpleUpperCase` are also passed as values.                                         |       15 | `SimpleLowerCaseMapping` 8 (`toSimpleLowerCase` 7, `$wtoSimpleLowerCase` 1), `base:GHC.Unicode` 6 (`isSpace` 4, `$wisAlpha` 2), `SimpleUpperCaseMapping.toSimpleUpperCase` 1                                                              |
+| **Other `base` class dictionaries.**                                                                                                                    |       14 | `$fApplicativeMaybe` 9, `Foldable []` 2, `pure @[]` 1, `Monoid (a, b, c, d)` 1, `(+) @Int` 1                                                                                                                                              |
+| **`Show`.**                                                                                                                                             |       11 | `base:GHC.Show` 10 (`$w$cshowsPrec15` 7, `$fShow(,)_itos'` 2, `$wshowSignedInt` 1), `base:Data.Version.$wshowVersion` 1                                                                                                                   |
+| **`Read`.**                                                                                                                                             |       10 | `base:Text.Read` 8 (`readEither2` 4, `readEither5` 4), `base:Text.ParserCombinators.ReadP.run` 2                                                                                                                                          |
+| **Library functions passed as values.** An external is implemented at a saturated call; these sites pass one to `map` or `dropWhile`.                   |        9 | `base:Data.Tuple` 8 (`snd` 5, `fst` 3), `base:GHC.Base.++` 1                                                                                                                                                                              |
+| **IO.**                                                                                                                                                 |        8 | `base:GHC.IO.Handle.Text.hPutStr2` 6, `base:System.Environment.getEnv1` 1, `base:System.Console.GetOpt.usageInfo` 1                                                                                                                       |
+| **Everything else.**                                                                                                                                    |        3 | `base:GHC.Base.id`, `base:GHC.Base.maxInt`, `base:System.Info.os`                                                                                                                                                                         |
 
-Every count is a lower bound. A refused instance never revealed its own requirements, which is why clearing a blocker can raise other counts. After the list predicates, `map` rose from 24 to 29 and `System.Info.os` appeared. After `compare`, the `Map` code behind string-keyed lookups became reachable. After pointer equality, the `Set` and `Map` balancing code behind it did.
+Every count is a lower bound. A refused instance never revealed its own requirements, which is why clearing a blocker can raise other counts. After the list predicates, `map` rose from 24 to 29 and `System.Info.os` appeared. After `compare`, the `Map` code behind string-keyed lookups became reachable. After pointer equality, the `Set` and `Map` balancing code behind it did. After the list functions, the functions passed to them did: `fst`, `snd`, `isSpace` and `toSimpleLowerCase`.
 
 ### Open signatures
 
 The survey roots every live binding at its own signature. For a binding quantified over a type, that asks for code over a free type variable, and a free type variable has no carrier. The report now counts these separately from the blockers:
 
 ```
-Refused: 1358 = 999 at a closed signature + 359 at an open signature
-Open signatures: 359 refused instances of 359 bindings quantified over types they were not given; 25 of those bindings were also requested at closed types
+Refused: 1317 = 958 at a closed signature + 359 at an open signature
+Open signatures: 359 refused instances of 359 bindings quantified over types they were not given; 28 of those bindings were also requested at closed types
 ```
 
-For 334 of the 359, the survey never requested a closed instantiation. Some are artifacts of the rooting, but not all of them. `ShellCheck.CFGAnalysis`'s `ST` code is quantified over the state thread `s`, which `runST`'s rank-2 type never instantiates to a closed type, so no specialization can close it. Those are real blockers.
+For 331 of the 359, the survey never requested a closed instantiation. Some are artifacts of the rooting, but not all of them. `ShellCheck.CFGAnalysis`'s `ST` code is quantified over the state thread `s`, which `runST`'s rank-2 type never instantiates to a closed type, so no specialization can close it. Those are real blockers.
 
 Before the split, 152 of these refusals read `switch requires an unboxed scalar scrutinee, a supported result and no alternative binders`. A tail `case` went to the scalar switch whenever its scrutinee was not lifted, and a type with no carrier counted as not lifted. So a `case` over `[(String, a)]` was reported as a failed switch. The tail now switches only on a scalar carrier, and everything else reaches the case rules, which report `unsupported case scrutinee carrier`. The unboxed-tuple test also discarded its error: `(# State# s, InternalState #)` with a free `s` fails to instantiate, and that failure was read as "not a tuple" and routed to the switch as well. It now reports its own reason. One real switch refusal remains, a scalar case whose `RWST` result has no carrier.
 
@@ -5179,12 +5234,12 @@ The refusal that looked like it covered them said "a let requires a supported no
 
 | cause                                         | refusals |
 | --------------------------------------------- | -------: |
-| a let binds a value whose type has no carrier |       83 |
+| a let binds a value whose type has no carrier |       86 |
 | a let group binds several values at once      |        1 |
 | **a recursive value binding**                 |    **0** |
 | **a join point bound as a value**             |    **0** |
 
-Of the 83, 59 are at a closed signature (`WriterT` 47, `RWST` 11, `aeson`'s `Encoding'` 1) and 24 at an open one (`Monad` 11, `MonadState` 6, a `forall` 5, `RWST` 1, a function 1). None of them is about recursion. A conflated message cannot be ranked, and until it was split the ranking could not say which of the three the program actually contains.
+Of the 86, 62 are at a closed signature (`WriterT` 50, `RWST` 11, `aeson`'s `Encoding'` 1) and 24 at an open one (`Monad` 11, `MonadState` 6, a `forall` 5, `RWST` 1, a function 1). None of them is about recursion. A conflated message cannot be ranked, and until it was split the ranking could not say which of the three the program actually contains.
 
 So the knot-tying runtime this would have needed is not built. `h2r-rt`'s `Lazy::force` still panics on re-entry rather than tying a knot, the emitter still refuses a dependency cycle through a value, and the canary holds both refusals in place with their messages asserted, so a wrong answer cannot appear quietly. Building the cyclic `Rc` for zero refusals would be guessing at a requirement the survey has not stated — the same reason there is still no `ByteString` carrier.
 

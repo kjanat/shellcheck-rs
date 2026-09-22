@@ -454,6 +454,170 @@ pub fn append_list(left: Data, right: Data, names: ListNames) -> Data {
     })
 }
 
+/// The carrier of a list element that is computed on demand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lifted {
+    Int,
+    Data,
+    Closure,
+}
+
+impl Lifted {
+    fn defer(self, compute: impl FnOnce() -> Field + 'static) -> Field {
+        match self {
+            Self::Int => Field::Int(Int::defer(move || compute().int().force())),
+            Self::Data => Field::Data(Data::defer(move || compute().data().force())),
+            Self::Closure => Field::Closure(Closure::defer(move || compute().closure().force())),
+        }
+    }
+}
+
+fn nil(names: ListNames) -> Node {
+    Node {
+        constructor: names.nil,
+        fields: Vec::new(),
+    }
+}
+
+/// `GHC.Base.map`: `map f (x:xs) = f x : map f xs`.
+pub fn map_list(
+    function: Closure,
+    list: Data,
+    element: Lifted,
+    input: ListNames,
+    output: ListNames,
+) -> Data {
+    Data::defer(move || {
+        let cell = list.force();
+        if cell.constructor == input.nil {
+            return nil(output);
+        }
+        let head = cell.fields[0].clone();
+        let applied = function.clone();
+        Node {
+            constructor: output.cons,
+            fields: vec![
+                element.defer(move || applied.apply(vec![head])),
+                Field::Data(map_list(
+                    function,
+                    cell.fields[1].data(),
+                    element,
+                    input,
+                    output,
+                )),
+            ],
+        }
+    })
+}
+
+/// `GHC.List.filter`: the cells whose element satisfies the predicate.
+pub fn filter_list(predicate: Closure, list: Data, names: ListNames, truth: Truth) -> Data {
+    Data::defer(move || {
+        let mut list = list;
+        loop {
+            let cell = list.force();
+            if cell.constructor == names.nil {
+                return nil(names);
+            }
+            let head = cell.fields[0].clone();
+            let tail = cell.fields[1].data();
+            if truth.test(&predicate.apply(vec![head.clone()])) {
+                return Node {
+                    constructor: names.cons,
+                    fields: vec![
+                        head,
+                        Field::Data(filter_list(predicate, tail, names, truth)),
+                    ],
+                };
+            }
+            list = tail;
+        }
+    })
+}
+
+/// `GHC.List.takeWhile`: the longest prefix whose elements satisfy the predicate.
+pub fn take_while(predicate: Closure, list: Data, names: ListNames, truth: Truth) -> Data {
+    Data::defer(move || {
+        let cell = list.force();
+        if cell.constructor == names.nil {
+            return nil(names);
+        }
+        let head = cell.fields[0].clone();
+        if !truth.test(&predicate.apply(vec![head.clone()])) {
+            return nil(names);
+        }
+        Node {
+            constructor: names.cons,
+            fields: vec![
+                head,
+                Field::Data(take_while(predicate, cell.fields[1].data(), names, truth)),
+            ],
+        }
+    })
+}
+
+/// `GHC.List.dropWhile`: the first cell whose element fails the predicate, itself.
+pub fn drop_while(predicate: Closure, list: Data, names: ListNames, truth: Truth) -> Data {
+    Data::defer(move || {
+        let mut list = list;
+        loop {
+            let cell = list.force();
+            if cell.constructor == names.nil
+                || !truth.test(&predicate.apply(vec![cell.fields[0].clone()]))
+            {
+                return cell;
+            }
+            list = cell.fields[1].data();
+        }
+    })
+}
+
+/// `GHC.List.reverse1`, `reverse`'s `rev`: the list's elements pushed onto the accumulator.
+pub fn reverse_onto(list: Data, accumulator: Data, names: ListNames) -> Data {
+    Data::defer(move || {
+        let mut list = list;
+        let mut accumulator = accumulator;
+        loop {
+            let cell = list.force();
+            if cell.constructor == names.nil {
+                return accumulator.force();
+            }
+            accumulator = Data::ready(
+                names.cons,
+                vec![cell.fields[0].clone(), Field::Data(accumulator)],
+            );
+            list = cell.fields[1].data();
+        }
+    })
+}
+
+/// `GHC.List.reverse`: `rev l []`.
+pub fn reverse_list(list: Data, names: ListNames) -> Data {
+    reverse_onto(list, Data::ready(names.nil, Vec::new()), names)
+}
+
+/// `GHC.List.$wlenAcc`: the spine's length added to an `Int#` with wrapping addition.
+pub fn length_from(list: Data, count: i64, names: ListNames) -> i64 {
+    let mut list = list;
+    let mut count = count;
+    loop {
+        let cell = list.force();
+        if cell.constructor == names.nil {
+            return count;
+        }
+        count = count.wrapping_add(1);
+        list = cell.fields[1].data();
+    }
+}
+
+/// `GHC.Base.++_$s++`, which base's rule `SC:++0` makes `(x : xs) ++ ys`.
+pub fn cons_append(head: Field, tail: Data, right: Data, names: ListNames) -> Data {
+    Data::ready(
+        names.cons,
+        vec![head, Field::Data(append_list(tail, right, names))],
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Equality {
     Char,
@@ -471,6 +635,16 @@ impl Truth {
         Node {
             constructor: if value { self.true_ } else { self.false_ },
             fields: Vec::new(),
+        }
+    }
+    fn test(self, value: &Field) -> bool {
+        let node = value.data().force();
+        if node.constructor == self.true_ {
+            true
+        } else if node.constructor == self.false_ {
+            false
+        } else {
+            panic!("a predicate returned {}, not a Bool", node.constructor)
         }
     }
 }
@@ -805,6 +979,156 @@ mod append_tests {
 
     fn untouchable() -> Data {
         Data::defer(|| panic!("a lazily passed value was forced"))
+    }
+
+    fn positive(calls: Rc<std::cell::Cell<u32>>) -> Closure {
+        Closure::ready(1, move |a| {
+            calls.set(calls.get() + 1);
+            Field::Data(Data::ready(
+                if a[0].int64() > 0 { "True" } else { "False" },
+                vec![],
+            ))
+        })
+    }
+
+    fn cells(values: &[i64], tail: Data) -> Data {
+        values.iter().rev().fold(tail, |tail, value| {
+            Data::ready(NAMES.cons, vec![Field::Int64(*value), Field::Data(tail)])
+        })
+    }
+
+    #[test]
+    fn map_applies_once_per_demanded_element_and_builds_cells_on_demand() {
+        let calls = Rc::new(std::cell::Cell::new(0));
+        let count = calls.clone();
+        let double = Closure::ready(1, move |a| {
+            count.set(count.get() + 1);
+            Field::Int(Int::ready(2 * a[0].int64()))
+        });
+        let mapped = map_list(
+            double,
+            cells(&[1, 2], untouchable()),
+            Lifted::Int,
+            NAMES,
+            NAMES,
+        );
+        let first = mapped.force();
+        assert_eq!(calls.get(), 0);
+        let second = first.fields[1].data().force();
+        assert_eq!(second.fields[0].int().force(), 4);
+        assert_eq!(second.fields[0].int().force(), 4);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(first.fields[0].int().force(), 2);
+        assert_eq!(calls.get(), 2);
+        assert!(!second.fields[1].data().is_evaluated());
+        let empty = map_list(
+            Closure::ready(1, |_| panic!("map applied its function to nothing")),
+            ints(&[]),
+            Lifted::Int,
+            NAMES,
+            NAMES,
+        );
+        assert_eq!(empty.force().constructor, NAMES.nil);
+    }
+
+    #[test]
+    fn filter_skips_failures_inside_one_cell_and_leaves_the_rest_unforced() {
+        let calls = Rc::new(std::cell::Cell::new(0));
+        let kept = filter_list(
+            positive(calls.clone()),
+            cells(&[0, -1, 3, 0, 5], untouchable()),
+            NAMES,
+            TRUTH,
+        );
+        let first = kept.force();
+        assert_eq!(first.fields[0].int64(), 3);
+        assert_eq!(calls.get(), 3);
+        let second = first.fields[1].data().force();
+        assert_eq!(second.fields[0].int64(), 5);
+        assert_eq!(calls.get(), 5);
+        assert_eq!(
+            collect(&filter_list(positive(calls), ints(&[-2, 0]), NAMES, TRUTH)),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn take_while_stops_at_the_first_failure_without_reaching_the_tail() {
+        let calls = Rc::new(std::cell::Cell::new(0));
+        let taken = take_while(
+            positive(calls.clone()),
+            cells(&[1, 2, 0], untouchable()),
+            NAMES,
+            TRUTH,
+        );
+        assert_eq!(collect(&taken), vec![1, 2]);
+        assert_eq!(calls.get(), 3);
+        assert_eq!(
+            collect(&take_while(positive(calls), ints(&[]), NAMES, TRUTH)),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn drop_while_returns_the_first_failing_cell_itself() {
+        let calls = Rc::new(std::cell::Cell::new(0));
+        let rest = cells(&[0, 7], untouchable());
+        let list = cells(&[1, 2], rest.clone());
+        let dropped = drop_while(positive(calls.clone()), list, NAMES, TRUTH);
+        let node = dropped.force();
+        assert_eq!(calls.get(), 3);
+        assert_eq!(node.fields[0].int64(), 0);
+        assert!(
+            node.fields[1]
+                .data()
+                .shares_with(&rest.force().fields[1].data())
+        );
+        assert_eq!(
+            drop_while(positive(calls), ints(&[3]), NAMES, TRUTH)
+                .force()
+                .constructor,
+            NAMES.nil
+        );
+    }
+
+    #[test]
+    fn reverse_forces_the_spine_but_neither_elements_nor_accumulator_until_the_end() {
+        let element = Field::Int(Int::defer(|| panic!("reverse forced an element")));
+        let list = Data::ready(
+            NAMES.cons,
+            vec![element, Field::Data(cells(&[2, 3], ints(&[])))],
+        );
+        let reversed = reverse_list(list, NAMES);
+        let node = reversed.force();
+        assert_eq!(node.fields[0].int64(), 3);
+        let accumulated = reverse_onto(ints(&[1, 2]), ints(&[9]), NAMES);
+        assert_eq!(collect(&accumulated), vec![2, 1, 9]);
+        let lazy = reverse_onto(ints(&[]), untouchable(), NAMES);
+        assert!(!lazy.is_evaluated());
+        assert_eq!(collect(&reverse_list(ints(&[]), NAMES)), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn length_counts_the_spine_onto_its_start_and_wraps() {
+        let element = Field::Int(Int::defer(|| panic!("length forced an element")));
+        let list = Data::ready(NAMES.cons, vec![element, Field::Data(ints(&[5]))]);
+        assert_eq!(length_from(list, 10, NAMES), 12);
+        assert_eq!(length_from(ints(&[]), -4, NAMES), -4);
+        assert_eq!(length_from(ints(&[1, 2]), i64::MAX, NAMES), i64::MIN + 1);
+    }
+
+    #[test]
+    fn cons_append_builds_one_cell_and_leaves_everything_else_lazy() {
+        let appended = cons_append(
+            Field::Int(Int::defer(|| panic!("the head was forced"))),
+            untouchable(),
+            untouchable(),
+            NAMES,
+        );
+        assert!(appended.is_evaluated());
+        assert!(!appended.force().fields[1].data().is_evaluated());
+        let whole = cons_append(Field::Int64(1), ints(&[2]), ints(&[3]), NAMES);
+        assert_eq!(collect(&whole), vec![1, 2, 3]);
     }
 
     fn string(text: &str, tail: Data) -> Data {

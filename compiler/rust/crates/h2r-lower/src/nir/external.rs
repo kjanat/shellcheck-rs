@@ -45,6 +45,23 @@ pub enum External {
     PointerEquality,
     /// The primop `tagToEnum# :: forall a. Int# -> a`, at an enumeration type.
     TagToEnum,
+    /// `GHC.Base.map :: forall a b. (a -> b) -> [a] -> [b]`.
+    Map,
+    /// `GHC.List.filter :: forall a. (a -> Bool) -> [a] -> [a]`.
+    Filter,
+    /// `GHC.List.takeWhile :: forall a. (a -> Bool) -> [a] -> [a]`.
+    TakeWhile,
+    /// `GHC.List.dropWhile :: forall a. (a -> Bool) -> [a] -> [a]`.
+    DropWhile,
+    /// `GHC.List.reverse :: forall a. [a] -> [a]`.
+    Reverse,
+    /// `GHC.List.reverse1 :: forall a. [a] -> [a] -> [a]`, `reverse`'s accumulating loop.
+    ReverseOnto,
+    /// `GHC.List.$wlenAcc :: forall a. [a] -> Int# -> Int#`, `lenAcc`'s call-by-value worker.
+    Length,
+    /// `GHC.Base.++_$s++ :: forall a. a -> [a] -> [a] -> [a]`, which base's rule
+    /// `SC:++0` makes `(x : xs) ++ ys`.
+    ConsAppend,
 }
 
 /// The `==` a call's `Eq` dictionary supplies, read from the dictionary itself.
@@ -64,8 +81,15 @@ impl External {
             | External::Elem
             | External::IsPrefixOf
             | External::DataToTag
-            | External::TagToEnum => 1,
-            External::ErrorWithoutStackTrace => 2,
+            | External::TagToEnum
+            | External::Filter
+            | External::TakeWhile
+            | External::DropWhile
+            | External::Reverse
+            | External::ReverseOnto
+            | External::Length
+            | External::ConsAppend => 1,
+            External::ErrorWithoutStackTrace | External::Map => 2,
             External::PointerEquality => 4,
             External::EqString | External::CompareString => 0,
         }
@@ -78,6 +102,36 @@ impl External {
             External::IsPrefixOf => Some(super::Predicate::IsPrefixOf),
             External::Append
             | External::ErrorWithoutStackTrace
+            | External::CompareString
+            | External::DataToTag
+            | External::PointerEquality
+            | External::TagToEnum
+            | External::Map
+            | External::Filter
+            | External::TakeWhile
+            | External::DropWhile
+            | External::Reverse
+            | External::ReverseOnto
+            | External::Length
+            | External::ConsAppend => None,
+        }
+    }
+
+    pub fn list_function(self) -> Option<super::ListOp> {
+        match self {
+            External::Map => Some(super::ListOp::Map),
+            External::Filter => Some(super::ListOp::Filter),
+            External::TakeWhile => Some(super::ListOp::TakeWhile),
+            External::DropWhile => Some(super::ListOp::DropWhile),
+            External::Reverse => Some(super::ListOp::Reverse),
+            External::ReverseOnto => Some(super::ListOp::ReverseOnto),
+            External::Length => Some(super::ListOp::Length),
+            External::ConsAppend => Some(super::ListOp::ConsAppend),
+            External::Append
+            | External::ErrorWithoutStackTrace
+            | External::EqString
+            | External::Elem
+            | External::IsPrefixOf
             | External::CompareString
             | External::DataToTag
             | External::PointerEquality
@@ -95,7 +149,15 @@ impl External {
             | External::CompareString
             | External::DataToTag
             | External::PointerEquality
-            | External::TagToEnum => 0,
+            | External::TagToEnum
+            | External::Map
+            | External::Filter
+            | External::TakeWhile
+            | External::DropWhile
+            | External::Reverse
+            | External::ReverseOnto
+            | External::Length
+            | External::ConsAppend => 0,
         }
     }
 
@@ -107,8 +169,18 @@ impl External {
             | External::Elem
             | External::IsPrefixOf
             | External::CompareString
-            | External::PointerEquality => 2,
-            External::ErrorWithoutStackTrace | External::DataToTag | External::TagToEnum => 1,
+            | External::PointerEquality
+            | External::Map
+            | External::Filter
+            | External::TakeWhile
+            | External::DropWhile
+            | External::ReverseOnto
+            | External::Length => 2,
+            External::ErrorWithoutStackTrace
+            | External::DataToTag
+            | External::TagToEnum
+            | External::Reverse => 1,
+            External::ConsAppend => 3,
         }
     }
 
@@ -176,6 +248,39 @@ impl External {
                     arrow(type_arguments[3].clone(), super::primitive::int_ty()),
                 ))
             }
+            External::Map => Some(arrow(
+                arrow(type_arguments[0].clone(), type_arguments[1].clone()),
+                arrow(
+                    list_of(type_arguments[0].clone()),
+                    list_of(type_arguments[1].clone()),
+                ),
+            )),
+            External::Filter | External::TakeWhile | External::DropWhile => {
+                let list = list_of(type_arguments[0].clone());
+                Some(arrow(
+                    arrow(type_arguments[0].clone(), super::data::bool_ty()),
+                    arrow(list.clone(), list),
+                ))
+            }
+            External::Reverse => {
+                let list = list_of(type_arguments[0].clone());
+                Some(arrow(list.clone(), list))
+            }
+            External::ReverseOnto => {
+                let list = list_of(type_arguments[0].clone());
+                Some(arrow(list.clone(), arrow(list.clone(), list)))
+            }
+            External::Length => Some(arrow(
+                list_of(type_arguments[0].clone()),
+                arrow(super::primitive::int_ty(), super::primitive::int_ty()),
+            )),
+            External::ConsAppend => {
+                let list = list_of(type_arguments[0].clone());
+                Some(arrow(
+                    type_arguments[0].clone(),
+                    arrow(list.clone(), arrow(list.clone(), list)),
+                ))
+            }
         }
     }
 
@@ -183,9 +288,17 @@ impl External {
     /// layouts out of the world.
     pub fn element(self, type_arguments: &[Ty]) -> Option<Ty> {
         match self {
-            External::Append | External::Elem | External::IsPrefixOf => {
-                type_arguments.first().cloned()
-            }
+            External::Append
+            | External::Elem
+            | External::IsPrefixOf
+            | External::Map
+            | External::Filter
+            | External::TakeWhile
+            | External::DropWhile
+            | External::Reverse
+            | External::ReverseOnto
+            | External::Length
+            | External::ConsAppend => type_arguments.first().cloned(),
             External::ErrorWithoutStackTrace | External::EqString | External::CompareString => {
                 Some(super::strings::char_ty())
             }
@@ -213,7 +326,7 @@ pub fn equality(module: &Module, dictionary: ExprId, element: &Ty) -> Option<Equ
     }
 }
 
-fn list_of(element: Ty) -> Ty {
+pub fn list_of(element: Ty) -> Ty {
     Ty::Con {
         tycon: TyConId {
             name: h2r_core_ir::LIST_TYCON.into(),
@@ -241,7 +354,8 @@ fn arrow(arg: Ty, res: Ty) -> Ty {
 
 /// Resolve an unbound global occurrence to an implemented library function.
 /// The occurrence must be a global this world cannot link, whose `IdInfo` is
-/// its own and describes an ordinary Id.
+/// its own and describes the kind of Id the entry names: ordinary, a primop,
+/// or a call-by-value worker.
 pub fn resolve(module: &Module, head: ExprId) -> Option<External> {
     let Expr::Var { name, .. } = module.expr(head) else {
         return None;
@@ -260,13 +374,25 @@ pub fn resolve(module: &Module, head: ExprId) -> Option<External> {
         "$ghc-prim$GHC.Prim$dataToTag#" => Some(External::DataToTag),
         "$ghc-prim$GHC.Prim$reallyUnsafePtrEquality#" => Some(External::PointerEquality),
         "$ghc-prim$GHC.Prim$tagToEnum#" => Some(External::TagToEnum),
+        "$base$GHC.Base$map" => Some(External::Map),
+        "$base$GHC.List$filter" => Some(External::Filter),
+        "$base$GHC.List$takeWhile" => Some(External::TakeWhile),
+        "$base$GHC.List$dropWhile" => Some(External::DropWhile),
+        "$base$GHC.List$reverse" => Some(External::Reverse),
+        "$base$GHC.List$reverse1" => Some(External::ReverseOnto),
+        "$base$GHC.List$$wlenAcc" => Some(External::Length),
+        "$base$GHC.Base$++_$s++" => Some(External::ConsAppend),
         _ => None,
     }?;
     let primop = matches!(
         entry,
         External::DataToTag | External::PointerEquality | External::TagToEnum
     );
-    let details = if primop { "[PrimOp]" } else { "" };
+    let details = match entry {
+        _ if primop => "[PrimOp]",
+        External::Length => "[StrictWorker([!])]",
+        _ => "",
+    };
     (info.details == details && (!primop || info.arity as usize == entry.value_arity()))
         .then_some(entry)
 }
@@ -330,6 +456,71 @@ mod tests {
             External::Append.element(std::slice::from_ref(&int)),
             Some(int)
         );
+    }
+
+    #[test]
+    fn list_functions_take_base_signatures() {
+        let con = |name: &str| Ty::Con {
+            tycon: TyConId {
+                name: name.into(),
+                occ: String::new(),
+                unique: String::new(),
+            },
+            args: vec![],
+        };
+        let (a, b) = (con("A"), con("B"));
+        let (list_a, list_b) = (list_of(a.clone()), list_of(b.clone()));
+        let bool_ty = super::super::data::bool_ty();
+        let int = super::super::primitive::int_ty();
+        let predicate = arrow(a.clone(), bool_ty);
+        let cases = [
+            (
+                External::Map,
+                vec![a.clone(), b.clone()],
+                arrow(arrow(a.clone(), b), arrow(list_a.clone(), list_b)),
+                2,
+            ),
+            (
+                External::Filter,
+                vec![a.clone()],
+                arrow(predicate.clone(), arrow(list_a.clone(), list_a.clone())),
+                2,
+            ),
+            (
+                External::DropWhile,
+                vec![a.clone()],
+                arrow(predicate, arrow(list_a.clone(), list_a.clone())),
+                2,
+            ),
+            (
+                External::Reverse,
+                vec![a.clone()],
+                arrow(list_a.clone(), list_a.clone()),
+                1,
+            ),
+            (
+                External::Length,
+                vec![a.clone()],
+                arrow(list_a.clone(), arrow(int.clone(), int)),
+                2,
+            ),
+            (
+                External::ConsAppend,
+                vec![a.clone()],
+                arrow(a, arrow(list_a.clone(), arrow(list_a.clone(), list_a))),
+                3,
+            ),
+        ];
+        for (entry, types, signature, arity) in cases {
+            assert_eq!(entry.signature(&types), Some(signature), "{entry:?}");
+            assert_eq!(entry.value_arity(), arity, "{entry:?}");
+            assert_eq!(entry.dictionary_arity(), 0, "{entry:?}");
+            assert!(entry.signature(&types[1..]).is_none(), "{entry:?}");
+            assert_eq!(
+                entry.list_function().map(super::super::ListOp::external),
+                Some(entry)
+            );
+        }
     }
 
     #[test]

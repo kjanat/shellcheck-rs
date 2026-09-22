@@ -13,7 +13,8 @@ use std::fmt::Write;
 use h2r_core_ir::{Module, Ty};
 
 use crate::nir::{
-    Block, CharCompare, DictionaryRef, Exit, Function, IntBinary, Operation, World, boxed, data,
+    Block, CharCompare, DictionaryRef, Exit, Function, IntBinary, ListOp, Operation, World, boxed,
+    data,
     specialize::{self, Instance},
 };
 
@@ -282,6 +283,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 | Operation::UnpackString(_)
                 | Operation::AppendList { .. }
                 | Operation::ListPredicate(_)
+                | Operation::ListFunction(_)
                 | Operation::CompareStrings(_)
                 | Operation::DataToTag { .. }
                 | Operation::TagToEnum { .. }
@@ -766,6 +768,78 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                         predicate.false_.name,
                         predicate.true_.name
                     ),
+                    Operation::ListFunction(list) => {
+                        let names = |nil: &data::Constructor, cons: &data::Constructor| {
+                            format!(
+                                "HListNames {{ cons: {:?}, nil: {:?} }}",
+                                cons.name, nil.name
+                            )
+                        };
+                        let input = names(&list.nil, &list.cons);
+                        let truth = list
+                            .truth
+                            .as_ref()
+                            .map(|(false_, true_)| {
+                                format!(
+                                    "h2r_rt::Truth {{ false_: {:?}, true_: {:?} }}",
+                                    false_.name, true_.name
+                                )
+                            })
+                            .ok_or("a list function without a predicate's Bool");
+                        let a: Vec<String> = list.arguments.iter().map(|v| value(*v)).collect();
+                        match list.function {
+                            ListOp::Map => {
+                                let (nil, cons) =
+                                    list.mapped.as_ref().ok_or("map without its result cells")?;
+                                let element = match field_kind(world, &cons.fields[0]).0 {
+                                    kind @ ("Int" | "Data" | "Closure") => kind,
+                                    other => {
+                                        return Err(format!(
+                                            "map's element carrier {other} is not lifted"
+                                        ));
+                                    }
+                                };
+                                format!(
+                                    "h2r_rt::map_list({}, {}, h2r_rt::Lifted::{element}, {input}, {})",
+                                    a[0],
+                                    a[1],
+                                    names(nil, cons)
+                                )
+                            }
+                            ListOp::Filter => {
+                                format!(
+                                    "h2r_rt::filter_list({}, {}, {input}, {})",
+                                    a[0], a[1], truth?
+                                )
+                            }
+                            ListOp::TakeWhile => {
+                                format!(
+                                    "h2r_rt::take_while({}, {}, {input}, {})",
+                                    a[0], a[1], truth?
+                                )
+                            }
+                            ListOp::DropWhile => {
+                                format!(
+                                    "h2r_rt::drop_while({}, {}, {input}, {})",
+                                    a[0], a[1], truth?
+                                )
+                            }
+                            ListOp::Reverse => format!("h2r_rt::reverse_list({}, {input})", a[0]),
+                            ListOp::ReverseOnto => {
+                                format!("h2r_rt::reverse_onto({}, {}, {input})", a[0], a[1])
+                            }
+                            ListOp::Length => {
+                                format!("h2r_rt::length_from({}, {}, {input})", a[0], a[1])
+                            }
+                            ListOp::ConsAppend => format!(
+                                "h2r_rt::cons_append(HField::{}({}), {}, {}, {input})",
+                                field_kind(world, value_ty(list.arguments[0])).0,
+                                a[0],
+                                a[1],
+                                a[2]
+                            ),
+                        }
+                    }
                     Operation::UnpackString(unpack) => {
                         let bytes: String = unpack
                             .bytes

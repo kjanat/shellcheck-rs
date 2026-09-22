@@ -34,7 +34,12 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   compareStrings, compareLazy, compareUnsigned,
   compareSpineOrder, compareRightSpine, compareElementOrder,
   tagColour, tagMaybe, colourEqual, colourCompare, pointerChoice,
-  tagForced)
+  tagForced,
+  mapChars, mapInts, mapFunctions, mapLazy, mapUnapplied,
+  filterChars, filterLazy, takeWhileChars, takeWhileLazy, dropWhileChars, dropWhileLazy,
+  reverseChars, reverseLazy, lengthChars, lengthLazy, consAppend, consAppendLazy,
+  mapSpine, mapFunctionForced, filterPredicate, takeWhileElement, dropWhileSpine,
+  reverseTail, lengthTail, consAppendRight)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -312,4 +317,54 @@ main = do
       (I# x, I# y) -> print (errorUnicode x y)
     ["errorMultiline", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (errorMultiline x y)
+    ["mapChars", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (mapChars x y))
+    ["mapLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (mapLazy x y))
+    ["mapUnapplied", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (mapUnapplied x y))
+    ["filterChars", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (filterChars x y))
+    ["filterLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (filterLazy x y))
+    ["takeWhileChars", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (takeWhileChars x y))
+    ["takeWhileLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (takeWhileLazy x y))
+    ["dropWhileChars", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (dropWhileChars x y))
+    ["dropWhileLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (dropWhileLazy x y))
+    ["reverseChars", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (reverseChars x y))
+    ["reverseLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (reverseLazy x y))
+    ["lengthChars", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (lengthChars x y))
+    ["lengthLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (lengthLazy x y))
+    ["consAppend", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (consAppend x y))
+    ["consAppendLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (consAppendLazy x y))
+    ["mapInts", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (mapInts x y)
+    ["mapFunctions", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (mapFunctions x y)
+    ["mapSpine", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (mapSpine x y)
+    ["mapFunctionForced", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (mapFunctionForced x y)
+    ["filterPredicate", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (filterPredicate x y)
+    ["takeWhileElement", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (takeWhileElement x y)
+    ["dropWhileSpine", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (dropWhileSpine x y)
+    ["reverseTail", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (reverseTail x y)
+    ["lengthTail", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (lengthTail x y)
+    ["consAppendRight", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (consAppendRight x y)
     _ -> fail "expected a canary entry and its integer arguments"

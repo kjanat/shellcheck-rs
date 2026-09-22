@@ -105,6 +105,15 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                     "list-{:?} {:?} v{} v{}",
                     predicate.predicate, predicate.equality, predicate.left.0, predicate.right.0
                 ),
+                Operation::ListFunction(list) => format!(
+                    "list-{:?} {}",
+                    list.function,
+                    list.arguments
+                        .iter()
+                        .map(|v| format!("v{}", v.0))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
                 Operation::DataToTag {
                     value,
                     constructors,

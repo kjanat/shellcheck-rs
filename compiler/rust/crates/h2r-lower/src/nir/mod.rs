@@ -124,6 +124,7 @@ pub enum Rule {
     UnpackString,
     AppendList,
     ListPredicate,
+    ListFunction,
     CompareStrings,
     DataToTag,
     TagToEnum,
@@ -251,6 +252,7 @@ pub enum Operation {
         cons: data::Constructor,
     },
     ListPredicate(Box<ListPredicate>),
+    ListFunction(Box<ListFunction>),
     CompareStrings(Box<CompareStrings>),
     /// Force a value and return its constructor's position in the family, from zero.
     DataToTag {
@@ -394,6 +396,52 @@ pub struct ListPredicate {
     pub character: data::Constructor,
     pub false_: data::Constructor,
     pub true_: data::Constructor,
+}
+
+/// A `base` list function at closed types, with the cells it reads and builds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListFunction {
+    pub function: ListOp,
+    /// The value arguments, in the function's own order.
+    pub arguments: Vec<ValueId>,
+    /// The cells of the list the function reads.
+    pub nil: data::Constructor,
+    pub cons: data::Constructor,
+    /// `map`'s result cells, which hold its second type argument.
+    pub mapped: Option<(data::Constructor, data::Constructor)>,
+    /// `False` and `True`, for a function that takes a predicate.
+    pub truth: Option<(data::Constructor, data::Constructor)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListOp {
+    Map,
+    Filter,
+    TakeWhile,
+    DropWhile,
+    Reverse,
+    ReverseOnto,
+    Length,
+    ConsAppend,
+}
+
+impl ListOp {
+    pub fn external(self) -> external::External {
+        match self {
+            ListOp::Map => external::External::Map,
+            ListOp::Filter => external::External::Filter,
+            ListOp::TakeWhile => external::External::TakeWhile,
+            ListOp::DropWhile => external::External::DropWhile,
+            ListOp::Reverse => external::External::Reverse,
+            ListOp::ReverseOnto => external::External::ReverseOnto,
+            ListOp::Length => external::External::Length,
+            ListOp::ConsAppend => external::External::ConsAppend,
+        }
+    }
+
+    pub fn takes_predicate(self) -> bool {
+        matches!(self, ListOp::Filter | ListOp::TakeWhile | ListOp::DropWhile)
+    }
 }
 
 /// `compare` at `[Char]`.

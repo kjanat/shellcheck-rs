@@ -33,7 +33,12 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   compareStrings, compareLazy, compareUnsigned,
   compareSpineOrder, compareRightSpine, compareElementOrder,
   tagColour, tagMaybe, colourEqual, colourCompare, pointerChoice,
-  tagForced) where
+  tagForced,
+  mapChars, mapInts, mapFunctions, mapLazy, mapUnapplied,
+  filterChars, filterLazy, takeWhileChars, takeWhileLazy, dropWhileChars, dropWhileLazy,
+  reverseChars, reverseLazy, lengthChars, lengthLazy, consAppend, consAppendLazy,
+  mapSpine, mapFunctionForced, filterPredicate, takeWhileElement, dropWhileSpine,
+  reverseTail, lengthTail, consAppendRight) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#),
   Char(C#), Char#, ord#, chr#, eqChar#, neChar#, ltChar#, leChar#, gtChar#, geChar#,
@@ -1105,6 +1110,157 @@ compareElementOrder :: Int# -> Int# -> Int
 compareElementOrder _ y = case compare [errorWithoutStackTrace "left char" :: Char] [errorWithoutStackTrace "right char"] of
   EQ -> I# y
   _ -> I# (0# -# y)
+
+--------------------------------------------------------------------------------
+-- Library list functions: map, filter, takeWhile, dropWhile, reverse, length,
+-- and base's SpecConstr specialisation of `(x : xs) ++ ys`.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE bump #-}
+bump :: Int# -> Char -> Char
+bump d (C# c) = C# (chr# (ord# c +# d))
+
+{-# NOINLINE below #-}
+below :: Int# -> Char -> Bool
+below limit (C# c) = case ord# c <# limit of
+  1# -> True
+  _ -> False
+
+{-# NOINLINE scaleChar #-}
+scaleChar :: Int# -> Char -> Int
+scaleChar d (C# c) = I# (ord# c *# d)
+
+{-# NOINLINE adder #-}
+adder :: Char -> Int -> Int
+adder (C# c) (I# n) = I# (n +# ord# c)
+
+{-# NOINLINE applyEach #-}
+applyEach :: [Int -> Int] -> Int -> Int
+applyEach [] n = n
+applyEach (f : fs) n = applyEach fs (f n)
+
+{-# NOINLINE lazyLetters #-}
+lazyLetters :: [Char]
+lazyLetters = 'a' : 'z' : errorWithoutStackTrace "lazy letters"
+
+{-# NOINLINE unforcedChars #-}
+unforcedChars :: [Char]
+unforcedChars = [errorWithoutStackTrace "first char", errorWithoutStackTrace "second char"]
+
+{-# NOINLINE spineError #-}
+spineError :: [Char]
+spineError = errorWithoutStackTrace "list spine"
+
+{-# NOINLINE elementError #-}
+elementError :: [Char]
+elementError = [errorWithoutStackTrace "list element"]
+
+{-# NOINLINE tailError #-}
+tailError :: [Char]
+tailError = 'a' : errorWithoutStackTrace "list tail"
+
+{-# NOINLINE mapChars #-}
+mapChars :: Int# -> Int# -> Int#
+mapChars x y = indexChars (map (bump y) (takeChars x predicateText)) (x -# 1#)
+
+{-# NOINLINE mapInts #-}
+mapInts :: Int# -> Int# -> Int
+mapInts x y = listSum (map (scaleChar y) (takeChars x predicateText))
+
+{-# NOINLINE mapFunctions #-}
+mapFunctions :: Int# -> Int# -> Int
+mapFunctions x y = applyEach (map adder (takeChars x predicateText)) (I# y)
+
+{-# NOINLINE mapLazy #-}
+mapLazy :: Int# -> Int# -> Int#
+mapLazy _ y = indexChars (map (bump y) lazyLetters) 0#
+
+{-# NOINLINE mapUnapplied #-}
+mapUnapplied :: Int# -> Int# -> Int#
+mapUnapplied x y = countChars (map (errorWithoutStackTrace "map function") (takeChars x predicateText)) y
+
+{-# NOINLINE filterChars #-}
+filterChars :: Int# -> Int# -> Int#
+filterChars x y = indexChars (filter (below (y *# 50#)) (takeChars x predicateText)) 1#
+
+{-# NOINLINE filterLazy #-}
+filterLazy :: Int# -> Int# -> Int#
+filterLazy _ y = indexChars (filter (below 98#) lazyLetters) 0# +# y
+
+{-# NOINLINE takeWhileChars #-}
+takeWhileChars :: Int# -> Int# -> Int#
+takeWhileChars x y = sumChars (takeWhile (below (y *# 50#)) (takeChars x predicateText)) 0#
+
+{-# NOINLINE takeWhileLazy #-}
+takeWhileLazy :: Int# -> Int# -> Int#
+takeWhileLazy _ y = countChars (takeWhile (below 98#) lazyLetters) y
+
+{-# NOINLINE dropWhileChars #-}
+dropWhileChars :: Int# -> Int# -> Int#
+dropWhileChars x y = indexChars (dropWhile (below (y *# 50#)) (takeChars x predicateText)) 0#
+
+{-# NOINLINE dropWhileLazy #-}
+dropWhileLazy :: Int# -> Int# -> Int#
+dropWhileLazy _ y = indexChars (dropWhile (below 98#) lazyLetters) 0# +# y
+
+{-# NOINLINE reverseChars #-}
+reverseChars :: Int# -> Int# -> Int#
+reverseChars x y = indexChars (List.reverse (takeChars x predicateText)) y
+
+{-# NOINLINE reverseLazy #-}
+reverseLazy :: Int# -> Int# -> Int#
+reverseLazy x _ = countChars (List.reverse unforcedChars) x
+
+{-# NOINLINE lengthChars #-}
+lengthChars :: Int# -> Int# -> Int#
+lengthChars x y = case List.length (takeChars x predicateText) of
+  I# n -> n +# y
+
+{-# NOINLINE lengthLazy #-}
+lengthLazy :: Int# -> Int# -> Int#
+lengthLazy x _ = case List.length unforcedChars of
+  I# n -> n +# x
+
+{-# NOINLINE consAppend #-}
+consAppend :: Int# -> Int# -> Int#
+consAppend x y = indexChars ((charOf x : takeChars x predicateText) ++ predicateText) y
+
+{-# NOINLINE consAppendLazy #-}
+consAppendLazy :: Int# -> Int# -> Int#
+consAppendLazy x _ =
+  indexChars ((charOf x : errorWithoutStackTrace "left rest") ++ errorWithoutStackTrace "right list") 0#
+
+{-# NOINLINE mapSpine #-}
+mapSpine :: Int# -> Int# -> Int
+mapSpine _ y = I# (countChars (map (bump y) spineError) 0#)
+
+{-# NOINLINE mapFunctionForced #-}
+mapFunctionForced :: Int# -> Int# -> Int
+mapFunctionForced _ _ = I# (indexChars (map (errorWithoutStackTrace "map function") lazyLetters) 0#)
+
+{-# NOINLINE filterPredicate #-}
+filterPredicate :: Int# -> Int# -> Int
+filterPredicate _ _ = I# (countChars (filter (errorWithoutStackTrace "filter predicate") lazyLetters) 0#)
+
+{-# NOINLINE takeWhileElement #-}
+takeWhileElement :: Int# -> Int# -> Int
+takeWhileElement _ _ = I# (countChars (takeWhile (below 98#) elementError) 0#)
+
+{-# NOINLINE dropWhileSpine #-}
+dropWhileSpine :: Int# -> Int# -> Int
+dropWhileSpine _ _ = I# (countChars (dropWhile (below 98#) spineError) 0#)
+
+{-# NOINLINE reverseTail #-}
+reverseTail :: Int# -> Int# -> Int
+reverseTail _ _ = I# (countChars (List.reverse tailError) 0#)
+
+{-# NOINLINE lengthTail #-}
+lengthTail :: Int# -> Int# -> Int
+lengthTail _ _ = List.length tailError
+
+{-# NOINLINE consAppendRight #-}
+consAppendRight :: Int# -> Int# -> Int
+consAppendRight x _ = I# (countChars ((charOf x : takeChars x predicateText) ++ spineError) 0#)
 
 --------------------------------------------------------------------------------
 -- Constructor tags and pointer equality.

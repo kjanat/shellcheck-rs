@@ -505,6 +505,16 @@ fn error_probes(
             failures.push(format!("{entry}: {error}"));
         }
     }
+    for entry in [
+        "mapChars",
+        "filterChars",
+        "dropWhileChars",
+        "takeWhileChars",
+    ] {
+        if let Err(error) = list_function_evidence(modules, entry) {
+            failures.push(format!("{entry}: {error}"));
+        }
+    }
     if let Err(error) = tag_evidence(modules) {
         failures.push(format!("tagColour: {error}"));
     }
@@ -665,6 +675,61 @@ fn predicate_evidence(modules: &[Module], entry: &str) -> Result<(), String> {
         if verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &forged).is_ok() {
             return Err(format!(
                 "list predicate verifier accepted mutation {mutation}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn list_function_evidence(modules: &[Module], entry: &str) -> Result<(), String> {
+    use h2r_lower::nir::{ListOp, Operation, Rule, verify::verify_leaf_in_world};
+    let binding = evidence::resolve(modules, entry)?;
+    let leaf = lower_leaf_in_world(modules, binding.module, binding.binder, FnId(0))
+        .map_err(|e| e.reason)?;
+    verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &leaf)?;
+    for mutation in 0..5 {
+        let mut forged = leaf.clone();
+        let instruction = forged
+            .function
+            .blocks
+            .iter_mut()
+            .flat_map(|b| &mut b.instructions)
+            .find(|i| matches!(i.operation, Operation::ListFunction(_)))
+            .ok_or("no list function in the entry's own leaf")?;
+        let Operation::ListFunction(list) = &mut instruction.operation else {
+            unreachable!()
+        };
+        match mutation {
+            0 => {
+                list.function = match list.function {
+                    ListOp::Map => ListOp::Filter,
+                    ListOp::Filter => ListOp::TakeWhile,
+                    ListOp::TakeWhile => ListOp::DropWhile,
+                    ListOp::DropWhile => ListOp::Filter,
+                    ListOp::Reverse => ListOp::ReverseOnto,
+                    ListOp::ReverseOnto => ListOp::Reverse,
+                    ListOp::Length => ListOp::ReverseOnto,
+                    ListOp::ConsAppend => ListOp::Map,
+                }
+            }
+            1 => list.arguments.reverse(),
+            2 => {
+                list.truth = match list.truth {
+                    Some(_) => None,
+                    None => Some((list.nil.clone(), list.cons.clone())),
+                }
+            }
+            3 => {
+                list.mapped = match list.mapped {
+                    Some(_) => None,
+                    None => Some((list.nil.clone(), list.cons.clone())),
+                }
+            }
+            _ => instruction.origin.rule = Rule::AppendList,
+        }
+        if verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &forged).is_ok() {
+            return Err(format!(
+                "list function verifier accepted mutation {mutation}"
             ));
         }
     }

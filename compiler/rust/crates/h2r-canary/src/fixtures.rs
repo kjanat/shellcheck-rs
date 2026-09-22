@@ -13,7 +13,7 @@
 //! into one literal there, so the appending unpacker is reachable only through
 //! a tail it cannot fold.
 
-use h2r_lower::nir::{Predicate, external::Equality};
+use h2r_lower::nir::{ListOp, Predicate, external::Equality};
 
 /// Which Core profile a check applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +73,7 @@ pub enum Op {
     UnpackStringOnto,
     AppendList,
     ListPredicate(Predicate, Equality),
+    ListFunction(ListOp),
     CompareStrings,
     DataToTag,
     TagToEnum,
@@ -103,6 +104,14 @@ impl Op {
             Op::DataToTag => "dataToTag#",
             Op::TagToEnum => "tagToEnum#",
             Op::PointerEquality => "reallyUnsafePtrEquality#",
+            Op::ListFunction(ListOp::Map) => "map",
+            Op::ListFunction(ListOp::Filter) => "filter",
+            Op::ListFunction(ListOp::TakeWhile) => "takeWhile",
+            Op::ListFunction(ListOp::DropWhile) => "dropWhile",
+            Op::ListFunction(ListOp::Reverse) => "reverse",
+            Op::ListFunction(ListOp::ReverseOnto) => "reverse1",
+            Op::ListFunction(ListOp::Length) => "$wlenAcc",
+            Op::ListFunction(ListOp::ConsAppend) => "++_$s++",
             Op::ListPredicate(Predicate::EqString, Equality::Char) => "eqString",
             Op::ListPredicate(Predicate::EqString, Equality::String) => "eqString over Eq [Char]",
             Op::ListPredicate(Predicate::Elem, Equality::Char) => "elem via $fEqChar",
@@ -207,6 +216,25 @@ const fn op(kind: Op) -> Check {
 const EQ_STRING: Op = Op::ListPredicate(Predicate::EqString, Equality::Char);
 const ELEM_CHAR: Op = Op::ListPredicate(Predicate::Elem, Equality::Char);
 const PREFIX_CHAR: Op = Op::ListPredicate(Predicate::IsPrefixOf, Equality::Char);
+
+const MAP: Op = Op::ListFunction(ListOp::Map);
+const FILTER: Op = Op::ListFunction(ListOp::Filter);
+const TAKE_WHILE: Op = Op::ListFunction(ListOp::TakeWhile);
+const DROP_WHILE: Op = Op::ListFunction(ListOp::DropWhile);
+const REVERSE: &[Check] = &[
+    optimized(Evidence::ClosureOperation(Op::ListFunction(
+        ListOp::ReverseOnto,
+    ))),
+    unoptimized(Evidence::ClosureOperation(Op::ListFunction(
+        ListOp::Reverse,
+    ))),
+];
+const CONS_APPEND: &[Check] = &[
+    optimized(Evidence::ClosureOperation(Op::ListFunction(
+        ListOp::ConsAppend,
+    ))),
+    unoptimized(Evidence::ClosureOperation(Op::AppendList)),
+];
 
 const fn anywhere(kind: Op) -> Check {
     both(Evidence::ClosureOperation(kind))
@@ -374,6 +402,18 @@ pub const REFUSALS: &[Refusal] = &[
         when: When::Only(Profile::Unoptimized),
         because: Some("an Eq dictionary this backend does not implement"),
     },
+    // `-O0` calls `GHC.List.length` itself, which ShellCheck never reaches;
+    // `-O1` inlines it to the `$wlenAcc` worker these entries exist for.
+    Refusal {
+        entry: Entry::Occurrence("lengthChars"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("imported binding is outside the loaded world"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("lengthLazy"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("imported binding is outside the loaded world"),
+    },
     Refusal {
         entry: Entry::Occurrence("errorUnusedArgument"),
         when: When::Only(Profile::Optimized),
@@ -451,6 +491,15 @@ pub const ERROR_PROBES: &[Probe] = &[
     optimized_probe("compareRightSpine", 0, b"right spine"),
     optimized_probe("compareElementOrder", 0, b"left char"),
     probe("tagForced", 0, Some(b"tagged")),
+    probe("mapSpine", 0, Some(b"list spine")),
+    probe("mapFunctionForced", 0, Some(b"map function")),
+    probe("filterPredicate", 0, Some(b"filter predicate")),
+    probe("takeWhileElement", 0, Some(b"list element")),
+    probe("dropWhileSpine", 0, Some(b"list spine")),
+    probe("reverseTail", 0, Some(b"list tail")),
+    optimized_probe("lengthTail", 0, b"list tail"),
+    probe("consAppendRight", 0, Some(b"list spine")),
+    probe("consAppendRight", 2, Some(b"list spine")),
 ];
 
 /// One exported ShellCheck binding, the argument lists it is run with, and
@@ -936,6 +985,35 @@ pub const FIXTURES: &[Fixture] = &[
     prove("elemLazy", Inputs::Binary, &[anywhere(ELEM_CHAR)]),
     prove("prefixOf", Inputs::Binary, &[anywhere(PREFIX_CHAR)]),
     prove("prefixLazy", Inputs::Binary, &[anywhere(PREFIX_CHAR)]),
+    prove("mapChars", Inputs::Binary, &[anywhere(MAP)]),
+    prove("mapInts", Inputs::Binary, &[anywhere(MAP)]),
+    prove("mapFunctions", Inputs::Binary, &[anywhere(MAP)]),
+    prove("mapLazy", Inputs::Binary, &[anywhere(MAP)]),
+    prove("mapUnapplied", Inputs::Binary, &[anywhere(MAP)]),
+    prove("filterChars", Inputs::Binary, &[anywhere(FILTER)]),
+    prove("filterLazy", Inputs::Binary, &[anywhere(FILTER)]),
+    prove("takeWhileChars", Inputs::Binary, &[anywhere(TAKE_WHILE)]),
+    prove("takeWhileLazy", Inputs::Binary, &[anywhere(TAKE_WHILE)]),
+    prove("dropWhileChars", Inputs::Binary, &[anywhere(DROP_WHILE)]),
+    prove("dropWhileLazy", Inputs::Binary, &[anywhere(DROP_WHILE)]),
+    // `-O1` inlines `reverse` to its `reverse1` loop and rewrites `(x : xs) ++ ys`
+    // by base's `SC:++0`; `-O0` calls `reverse` and `(++)` themselves.
+    prove("reverseChars", Inputs::Binary, REVERSE),
+    prove("reverseLazy", Inputs::Binary, REVERSE),
+    prove_in(
+        Profile::Optimized,
+        "lengthChars",
+        Inputs::Binary,
+        &[anywhere(Op::ListFunction(ListOp::Length))],
+    ),
+    prove_in(
+        Profile::Optimized,
+        "lengthLazy",
+        Inputs::Binary,
+        &[anywhere(Op::ListFunction(ListOp::Length))],
+    ),
+    prove("consAppend", Inputs::Binary, CONS_APPEND),
+    prove("consAppendLazy", Inputs::Binary, CONS_APPEND),
     prove("tagColour", Inputs::Binary, &[anywhere(Op::DataToTag)]),
     prove("tagMaybe", Inputs::Binary, &[anywhere(Op::DataToTag)]),
     prove_in(
