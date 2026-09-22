@@ -124,6 +124,7 @@ pub enum Rule {
     UnpackString,
     AppendList,
     ListPredicate,
+    CompareStrings,
     RaiseError,
     EmptyCase,
     /// A call GHC's demand analysis proved never returns.
@@ -247,6 +248,7 @@ pub enum Operation {
         cons: data::Constructor,
     },
     ListPredicate(Box<ListPredicate>),
+    CompareStrings(Box<CompareStrings>),
     Literal(Lit),
     /// Evaluate a stack-free exception's String when this computation is entered.
     RaiseError {
@@ -374,6 +376,19 @@ pub struct ListPredicate {
     pub character: data::Constructor,
     pub false_: data::Constructor,
     pub true_: data::Constructor,
+}
+
+/// `compare` at `[Char]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompareStrings {
+    pub left: ValueId,
+    pub right: ValueId,
+    pub nil: data::Constructor,
+    pub cons: data::Constructor,
+    pub character: data::Constructor,
+    pub lt: data::Constructor,
+    pub eq: data::Constructor,
+    pub gt: data::Constructor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

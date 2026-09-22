@@ -1245,9 +1245,12 @@ fn lower_value(
                         )
                     })?,
                 ),
-                (external::External::Append | external::External::ErrorWithoutStackTrace, []) => {
-                    None
-                }
+                (
+                    external::External::Append
+                    | external::External::ErrorWithoutStackTrace
+                    | external::External::CompareString,
+                    [],
+                ) => None,
                 _ => return Err(fail(Some(current), "external call dictionary mismatch")),
             };
             let mut remaining = &signature;
@@ -1292,6 +1295,22 @@ fn lower_value(
                             message: arguments[0],
                         }
                     }
+                    (external::External::CompareString, None, None) => {
+                        let (_, _, character) = data::string_layouts(&world)
+                            .map_err(|reason| fail(Some(current), &reason))?;
+                        let (lt, eq, gt) = data::ordering_layouts(&world)
+                            .map_err(|reason| fail(Some(current), &reason))?;
+                        Operation::CompareStrings(Box::new(CompareStrings {
+                            left: arguments[0],
+                            right: arguments[1],
+                            nil,
+                            cons,
+                            character,
+                            lt,
+                            eq,
+                            gt,
+                        }))
+                    }
                     (_, Some(predicate), Some(equality)) => {
                         let (_, _, character) = data::string_layouts(&world)
                             .map_err(|reason| fail(Some(current), &reason))?;
@@ -1317,6 +1336,7 @@ fn lower_value(
                     external::External::EqString
                     | external::External::Elem
                     | external::External::IsPrefixOf => Rule::ListPredicate,
+                    external::External::CompareString => Rule::CompareStrings,
                 }),
             });
             value

@@ -282,6 +282,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 | Operation::UnpackString(_)
                 | Operation::AppendList { .. }
                 | Operation::ListPredicate(_)
+                | Operation::CompareStrings(_)
                 | Operation::RaiseError { .. }
                 | Operation::EmptyCase { .. }
                 | Operation::DelayBlock { .. }
@@ -683,6 +684,17 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                         value(*right),
                         cons.name,
                         nil.name
+                    ),
+                    Operation::CompareStrings(compare) => format!(
+                        "h2r_rt::compare_lists({}, {}, HStringNames {{ cons: {:?}, nil: {:?}, character: {:?} }}, h2r_rt::Orderings {{ lt: {:?}, eq: {:?}, gt: {:?} }})",
+                        value(compare.left),
+                        value(compare.right),
+                        compare.cons.name,
+                        compare.nil.name,
+                        compare.character.name,
+                        compare.lt.name,
+                        compare.eq.name,
+                        compare.gt.name
                     ),
                     Operation::ListPredicate(predicate) => format!(
                         "h2r_rt::{}({}, {}, h2r_rt::Equality::{:?}, HStringNames {{ cons: {:?}, nil: {:?}, character: {:?} }}, h2r_rt::Truth {{ false_: {:?}, true_: {:?} }})",

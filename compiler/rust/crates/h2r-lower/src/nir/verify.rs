@@ -647,6 +647,7 @@ fn verify_value(
         };
         let (_, _, character) = data::string_layouts(&world)?;
         let (false_, true_) = data::bool_layouts(&world)?;
+        let (lt, eq, gt) = data::ordering_layouts(&world)?;
         let instruction = block.instructions.last().ok_or("missing external call")?;
         let (operands, rule) = match (&instruction.operation, entry) {
             (
@@ -662,6 +663,14 @@ fn verify_value(
             }
             (Operation::RaiseError { message }, external::External::ErrorWithoutStackTrace) => {
                 (vec![*message], Rule::RaiseError)
+            }
+            (Operation::CompareStrings(compare), external::External::CompareString)
+                if compare.nil == nil
+                    && compare.cons == cons
+                    && compare.character == character
+                    && (&compare.lt, &compare.eq, &compare.gt) == (&lt, &eq, &gt) =>
+            {
+                (vec![compare.left, compare.right], Rule::CompareStrings)
             }
             (Operation::ListPredicate(predicate), _)
                 if entry.predicate() == Some(predicate.predicate)
@@ -2928,6 +2937,23 @@ pub fn verify(function: &Function) -> Result<(), String> {
                         || !predicate.true_.result.alpha_eq(&data::bool_ty())
                     {
                         return Err("list predicate operands, equality and layouts disagree".into());
+                    }
+                }
+                Operation::CompareStrings(ref compare) => {
+                    let string = strings::string_ty();
+                    let ordering = data::ordering_ty();
+                    if !instruction.result.ty.alpha_eq(&ordering)
+                        || [compare.left, compare.right]
+                            .iter()
+                            .any(|v| !available.get(v).is_some_and(|ty| ty.alpha_eq(&string)))
+                        || !compare.nil.result.alpha_eq(&string)
+                        || !compare.cons.result.alpha_eq(&string)
+                        || !compare.character.result.alpha_eq(&strings::char_ty())
+                        || [&compare.lt, &compare.eq, &compare.gt]
+                            .iter()
+                            .any(|c| !c.result.alpha_eq(&ordering))
+                    {
+                        return Err("string comparison operands and layouts disagree".into());
                     }
                 }
                 Operation::UnpackString(ref unpack) => {

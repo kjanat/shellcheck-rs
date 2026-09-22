@@ -73,6 +73,7 @@ pub enum Op {
     UnpackStringOnto,
     AppendList,
     ListPredicate(Predicate, Equality),
+    CompareStrings,
 }
 
 impl Op {
@@ -95,6 +96,7 @@ impl Op {
             Op::UnpackString => "unpack-string",
             Op::UnpackStringOnto => "unpack-string onto a tail",
             Op::AppendList => "append-list",
+            Op::CompareStrings => "compare @[Char]",
             Op::ListPredicate(Predicate::EqString, Equality::Char) => "eqString",
             Op::ListPredicate(Predicate::EqString, Equality::String) => "eqString over Eq [Char]",
             Op::ListPredicate(Predicate::Elem, Equality::Char) => "elem via $fEqChar",
@@ -375,35 +377,64 @@ pub const REFUSALS: &[Refusal] = &[
 ];
 
 /// Forced stack-free errors checked against the oracle and both Rust modes.
-pub const ERROR_PROBES: &[(&str, i64, Option<&[u8]>)] = &[
-    ("errorPlain", 0, Some(b"canary failure")),
-    ("errorUnboxed", 0, Some(b"canary failure")),
-    ("errorEmpty", 0, Some(b"")),
-    ("errorUnicode", 0, Some("fout: λ 🐚".as_bytes())),
-    ("errorMultiline", 0, Some(b"first\nsecond\n")),
-    ("errorNul", 0, Some(b"a")),
-    ("errorChar", 65, Some(b"Atail")),
-    ("errorChar", 0, Some(b"")),
-    ("errorChar", 0xd800, Some(b"tail")),
-    ("errorChar", 0x110000, Some(b"\xf4\x90\x80\x80tail")),
-    ("errorChar", -1, Some(b"\xef\xbf\xbf\xbftail")),
-    ("errorNulNested", 0, Some(b"inner after NUL")),
-    ("errorNestedMessage", 0, Some(b"inner")),
-    ("errorComputed", 0, Some("computed: λ 🐚".as_bytes())),
-    ("errorComputed", 1, Some("other: λ 🐚".as_bytes())),
-    ("errorBranch", 0, Some("computed: λ 🐚".as_bytes())),
-    ("errorBranch", 1, None),
-    ("errorBranch", -1, None),
-    ("eqSpineOrder", 0, Some(b"left spine")),
-    ("eqRightSpine", 0, Some(b"right spine")),
-    ("eqElementOrder", 0, Some(b"left char")),
-    ("elemSpineFirst", 0, Some(b"spine")),
-    ("elemNeedleOrder", 0, Some(b"needle")),
-    ("elemNeedleUnused", 0, None),
-    ("elemNeedleUnused", 1, Some(b"needle")),
-    ("prefixOrder", 0, Some(b"prefix spine")),
-    ("prefixListOrder", 0, Some(b"list spine")),
-    ("prefixElementOrder", 0, Some(b"prefix char")),
+#[derive(Debug, Clone, Copy)]
+pub struct Probe {
+    pub entry: &'static str,
+    pub input: i64,
+    pub message: Option<&'static [u8]>,
+    pub when: When,
+}
+
+const fn probe(entry: &'static str, input: i64, message: Option<&'static [u8]>) -> Probe {
+    Probe {
+        entry,
+        input,
+        message,
+        when: When::Both,
+    }
+}
+
+const fn optimized_probe(entry: &'static str, input: i64, message: &'static [u8]) -> Probe {
+    Probe {
+        entry,
+        input,
+        message: Some(message),
+        when: When::Only(Profile::Optimized),
+    }
+}
+
+pub const ERROR_PROBES: &[Probe] = &[
+    probe("errorPlain", 0, Some(b"canary failure")),
+    probe("errorUnboxed", 0, Some(b"canary failure")),
+    probe("errorEmpty", 0, Some(b"")),
+    probe("errorUnicode", 0, Some("fout: λ 🐚".as_bytes())),
+    probe("errorMultiline", 0, Some(b"first\nsecond\n")),
+    probe("errorNul", 0, Some(b"a")),
+    probe("errorChar", 65, Some(b"Atail")),
+    probe("errorChar", 0, Some(b"")),
+    probe("errorChar", 0xd800, Some(b"tail")),
+    probe("errorChar", 0x110000, Some(b"\xf4\x90\x80\x80tail")),
+    probe("errorChar", -1, Some(b"\xef\xbf\xbf\xbftail")),
+    probe("errorNulNested", 0, Some(b"inner after NUL")),
+    probe("errorNestedMessage", 0, Some(b"inner")),
+    probe("errorComputed", 0, Some("computed: λ 🐚".as_bytes())),
+    probe("errorComputed", 1, Some("other: λ 🐚".as_bytes())),
+    probe("errorBranch", 0, Some("computed: λ 🐚".as_bytes())),
+    probe("errorBranch", 1, None),
+    probe("errorBranch", -1, None),
+    probe("eqSpineOrder", 0, Some(b"left spine")),
+    probe("eqRightSpine", 0, Some(b"right spine")),
+    probe("eqElementOrder", 0, Some(b"left char")),
+    probe("elemSpineFirst", 0, Some(b"spine")),
+    probe("elemNeedleOrder", 0, Some(b"needle")),
+    probe("elemNeedleUnused", 0, None),
+    probe("elemNeedleUnused", 1, Some(b"needle")),
+    probe("prefixOrder", 0, Some(b"prefix spine")),
+    probe("prefixListOrder", 0, Some(b"list spine")),
+    probe("prefixElementOrder", 0, Some(b"prefix char")),
+    optimized_probe("compareSpineOrder", 0, b"left spine"),
+    optimized_probe("compareRightSpine", 0, b"right spine"),
+    optimized_probe("compareElementOrder", 0, b"left char"),
 ];
 
 /// Every fixture, in the order the report prints them.
@@ -765,6 +796,24 @@ pub const FIXTURES: &[Fixture] = &[
     prove("elemLazy", Inputs::Binary, &[anywhere(ELEM_CHAR)]),
     prove("prefixOf", Inputs::Binary, &[anywhere(PREFIX_CHAR)]),
     prove("prefixLazy", Inputs::Binary, &[anywhere(PREFIX_CHAR)]),
+    prove_in(
+        Profile::Optimized,
+        "compareStrings",
+        Inputs::Binary,
+        &[anywhere(Op::CompareStrings)],
+    ),
+    prove_in(
+        Profile::Optimized,
+        "compareLazy",
+        Inputs::Binary,
+        &[anywhere(Op::CompareStrings)],
+    ),
+    prove_in(
+        Profile::Optimized,
+        "compareUnsigned",
+        Inputs::Binary,
+        &[anywhere(Op::CompareStrings)],
+    ),
     // Unboxed tuples: GHC's multi-value return. No box, no tag, no
     // allocation, and a `case` that binds components and branches nowhere.
     prove(

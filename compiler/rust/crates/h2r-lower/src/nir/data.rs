@@ -362,6 +362,31 @@ pub fn bool_ty() -> Ty {
     }
 }
 
+pub fn ordering_ty() -> Ty {
+    Ty::Con {
+        tycon: h2r_core_ir::TyConId {
+            name: "$ghc-prim$GHC.Types$Ordering".into(),
+            occ: "Ordering".into(),
+            unique: String::new(),
+        },
+        args: vec![],
+    }
+}
+
+/// `LT`, `EQ` and `GT`, read out of the loaded world.
+pub fn ordering_layouts(
+    world: &World<'_>,
+) -> Result<(Constructor, Constructor, Constructor), String> {
+    let ty = ordering_ty();
+    let lt = layout(world, "$ghc-prim$GHC.Types$LT", &ty)?;
+    let eq = layout(world, "$ghc-prim$GHC.Types$EQ", &ty)?;
+    let gt = layout(world, "$ghc-prim$GHC.Types$GT", &ty)?;
+    if [&lt, &eq, &gt].iter().any(|c| !c.fields.is_empty()) {
+        return Err("the loaded world's Ordering layout is not the expected one".into());
+    }
+    Ok((lt, eq, gt))
+}
+
 /// `False` and `True`, read out of the loaded world.
 pub fn bool_layouts(world: &World<'_>) -> Result<(Constructor, Constructor), String> {
     let ty = bool_ty();

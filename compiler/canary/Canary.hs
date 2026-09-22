@@ -29,7 +29,9 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   textSlice, textZip, textCompare, textUnicodeWords,
   newtypeRoundTrip, newtypeField, newtypeFunction, stringAppendShared,
   stringEqual, stringEqualRule, stringEqualLazy, elemChar, elemString, elemLazy, prefixOf, prefixLazy,
-  eqSpineOrder, eqRightSpine, eqElementOrder, elemSpineFirst, elemNeedleOrder, elemNeedleUnused, prefixOrder, prefixListOrder, prefixElementOrder) where
+  eqSpineOrder, eqRightSpine, eqElementOrder, elemSpineFirst, elemNeedleOrder, elemNeedleUnused, prefixOrder, prefixListOrder, prefixElementOrder,
+  compareStrings, compareLazy, compareUnsigned,
+  compareSpineOrder, compareRightSpine, compareElementOrder) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#),
   Char(C#), Char#, ord#, chr#, eqChar#, neChar#, ltChar#, leChar#, gtChar#, geChar#)
@@ -1062,6 +1064,44 @@ prefixListOrder _ y = answer (isPrefixOf "a" (errorWithoutStackTrace "list spine
 {-# NOINLINE prefixElementOrder #-}
 prefixElementOrder :: Int# -> Int# -> Int
 prefixElementOrder _ y = answer (isPrefixOf [errorWithoutStackTrace "prefix char" :: Char] [errorWithoutStackTrace "list char"]) y
+
+{-# NOINLINE ordering #-}
+ordering :: Ordering -> Int#
+ordering LT = -1#
+ordering EQ = 0#
+ordering GT = 1#
+
+{-# NOINLINE compareStrings #-}
+compareStrings :: Int# -> Int# -> Int#
+compareStrings x y = ordering (compare (takeChars x predicateText) (takeChars y predicateText))
+
+{-# NOINLINE compareLazy #-}
+compareLazy :: Int# -> Int# -> Int#
+compareLazy x _ =
+  ordering (compare (charOf x : errorWithoutStackTrace "left tail") ('#' : errorWithoutStackTrace "right tail"))
+
+-- GHC orders `Char#` as an unsigned word, so a negative `chr#` sorts last.
+{-# NOINLINE compareUnsigned #-}
+compareUnsigned :: Int# -> Int# -> Int#
+compareUnsigned x y = ordering (compare [C# (chr# x)] [C# (chr# y)])
+
+{-# NOINLINE compareSpineOrder #-}
+compareSpineOrder :: Int# -> Int# -> Int
+compareSpineOrder _ y = case compare (errorWithoutStackTrace "left spine" :: String) (errorWithoutStackTrace "right spine") of
+  EQ -> I# y
+  _ -> I# (0# -# y)
+
+{-# NOINLINE compareRightSpine #-}
+compareRightSpine :: Int# -> Int# -> Int
+compareRightSpine x y = case compare (takeChars x "") (errorWithoutStackTrace "right spine") of
+  EQ -> I# y
+  _ -> I# (0# -# y)
+
+{-# NOINLINE compareElementOrder #-}
+compareElementOrder :: Int# -> Int# -> Int
+compareElementOrder _ y = case compare [errorWithoutStackTrace "left char" :: Char] [errorWithoutStackTrace "right char"] of
+  EQ -> I# y
+  _ -> I# (0# -# y)
 
 --------------------------------------------------------------------------------
 -- Unboxed tuples.

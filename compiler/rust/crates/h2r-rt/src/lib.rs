@@ -569,6 +569,53 @@ pub fn is_prefix_of(
     })
 }
 
+#[derive(Clone, Copy)]
+pub struct Orderings {
+    pub lt: &'static str,
+    pub eq: &'static str,
+    pub gt: &'static str,
+}
+
+/// `Ord [a]`'s `compare` over `Ord Char`'s default `compare`, which orders `Char#` as an unsigned word.
+pub fn compare_lists(
+    mut left: Data,
+    mut right: Data,
+    names: StringNames,
+    order: Orderings,
+) -> Data {
+    use std::cmp::Ordering;
+    Data::defer(move || {
+        let ordering = loop {
+            let l = left.force();
+            let r = right.force();
+            match (l.constructor == names.nil, r.constructor == names.nil) {
+                (true, true) => break Ordering::Equal,
+                (true, false) => break Ordering::Less,
+                (false, true) => break Ordering::Greater,
+                (false, false) => {
+                    let a = character(&l.fields[0].data(), names) as u64;
+                    let b = character(&r.fields[0].data(), names) as u64;
+                    match a.cmp(&b) {
+                        Ordering::Equal => {
+                            left = l.fields[1].data();
+                            right = r.fields[1].data();
+                        }
+                        other => break other,
+                    }
+                }
+            }
+        };
+        Node {
+            constructor: match ordering {
+                Ordering::Less => order.lt,
+                Ordering::Equal => order.eq,
+                Ordering::Greater => order.gt,
+            },
+            fields: Vec::new(),
+        }
+    })
+}
+
 #[cfg(test)]
 mod append_tests {
     use super::*;
@@ -682,6 +729,35 @@ mod append_tests {
         false_: "False",
         true_: "True",
     };
+
+    #[test]
+    fn string_comparison_is_unsigned_and_stops_at_the_first_difference() {
+        const ORDER: Orderings = Orderings {
+            lt: "LT",
+            eq: "EQ",
+            gt: "GT",
+        };
+        let nil = || Data::ready("[]", vec![]);
+        let order = |left, right| {
+            compare_lists(left, right, STRING, ORDER)
+                .force()
+                .constructor
+        };
+        let negative = Data::ready(
+            ":",
+            vec![
+                Field::Data(Data::ready("C#", vec![Field::Char(-1)])),
+                Field::Data(nil()),
+            ],
+        );
+        assert_eq!(order(negative, string("🐚", nil())), "GT");
+        assert_eq!(
+            order(string("ab", untouchable()), string("ac", untouchable())),
+            "LT"
+        );
+        assert_eq!(order(string("", nil()), string("a", untouchable())), "LT");
+        assert_eq!(order(string("λ", nil()), string("λ", nil())), "EQ");
+    }
 
     #[test]
     fn list_predicates_stop_where_the_library_definitions_stop() {

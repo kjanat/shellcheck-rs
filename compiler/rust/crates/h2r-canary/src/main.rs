@@ -277,15 +277,21 @@ fn profile_run(cli: &Cli, profile: Profile, jobs: usize) -> Result<Report> {
     }
 
     failures.extend(refusals(&modules, profile));
+    let probes: Vec<&fixtures::Probe> = fixtures::ERROR_PROBES
+        .iter()
+        .filter(|probe| probe.when.covers(profile))
+        .collect();
     let probe_failures = error_probes(
         &modules,
         &oracle,
+        profile,
+        &probes,
         std::time::Duration::from_secs(cli.timeout_seconds),
     );
     println!(
         "{}: {} error/branch differential probes (two Rust modes), {} failures",
         profile.name(),
-        fixtures::ERROR_PROBES.len(),
+        probes.len(),
         probe_failures.len()
     );
     failures.extend(probe_failures);
@@ -351,7 +357,13 @@ fn differ(
 
 /// Forced errors: independently assert the oracle contract, then compare both
 /// generated executables. Only the executable-name prefix differs by design.
-fn error_probes(modules: &[Module], oracle: &Path, timeout: std::time::Duration) -> Vec<String> {
+fn error_probes(
+    modules: &[Module],
+    oracle: &Path,
+    profile: Profile,
+    probes: &[&fixtures::Probe],
+    timeout: std::time::Duration,
+) -> Vec<String> {
     let mut failures = Vec::new();
     if let Err(error) = error_evidence(modules) {
         failures.push(error);
@@ -361,11 +373,22 @@ fn error_probes(modules: &[Module], oracle: &Path, timeout: std::time::Duration)
             failures.push(format!("{entry}: {error}"));
         }
     }
+    if profile == Profile::Optimized
+        && let Err(error) = compare_evidence(modules)
+    {
+        failures.push(format!("compareStrings: {error}"));
+    }
     let mut compiled = std::collections::BTreeSet::new();
     let Some(program_name) = oracle.file_name().and_then(|name| name.to_str()) else {
         return vec!["oracle path lacks a UTF-8 program name".into()];
     };
-    for &(entry, input, message) in fixtures::ERROR_PROBES {
+    for &&fixtures::Probe {
+        entry,
+        input,
+        message,
+        ..
+    } in probes
+    {
         let arguments = vec![entry.to_string(), input.to_string(), "42".into()];
         let expected_for = |name: &str| differential::Outcome {
             stdout: if message.is_some() {
@@ -507,6 +530,38 @@ fn predicate_evidence(modules: &[Module], entry: &str) -> Result<(), String> {
         if verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &forged).is_ok() {
             return Err(format!(
                 "list predicate verifier accepted mutation {mutation}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn compare_evidence(modules: &[Module]) -> Result<(), String> {
+    use h2r_lower::nir::{Operation, Rule, verify::verify_leaf_in_world};
+    let binding = evidence::resolve(modules, "compareStrings")?;
+    let leaf = lower_leaf_in_world(modules, binding.module, binding.binder, FnId(0))
+        .map_err(|e| e.reason)?;
+    verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &leaf)?;
+    for mutation in 0..3 {
+        let mut forged = leaf.clone();
+        let instruction = forged
+            .function
+            .blocks
+            .iter_mut()
+            .flat_map(|b| &mut b.instructions)
+            .find(|i| matches!(i.operation, Operation::CompareStrings(_)))
+            .ok_or("no string comparison in the entry's own leaf")?;
+        let Operation::CompareStrings(compare) = &mut instruction.operation else {
+            unreachable!()
+        };
+        match mutation {
+            0 => std::mem::swap(&mut compare.left, &mut compare.right),
+            1 => std::mem::swap(&mut compare.lt, &mut compare.gt),
+            _ => instruction.origin.rule = Rule::ListPredicate,
+        }
+        if verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &forged).is_ok() {
+            return Err(format!(
+                "string comparison verifier accepted mutation {mutation}"
             ));
         }
     }

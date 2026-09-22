@@ -30,7 +30,9 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   textWords, textLines, textFind, textReverse, textFilter, textMap,
   textSlice, textZip, textCompare, textUnicodeWords,
   stringEqual, stringEqualRule, stringEqualLazy, elemChar, elemString, elemLazy, prefixOf, prefixLazy,
-  eqSpineOrder, eqRightSpine, eqElementOrder, elemSpineFirst, elemNeedleOrder, elemNeedleUnused, prefixOrder, prefixListOrder, prefixElementOrder)
+  eqSpineOrder, eqRightSpine, eqElementOrder, elemSpineFirst, elemNeedleOrder, elemNeedleUnused, prefixOrder, prefixListOrder, prefixElementOrder,
+  compareStrings, compareLazy, compareUnsigned,
+  compareSpineOrder, compareRightSpine, compareElementOrder)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -256,6 +258,18 @@ main = do
       (I# x, I# y) -> print (prefixListOrder x y)
     ["prefixElementOrder", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (prefixElementOrder x y)
+    ["compareStrings", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (compareStrings x y))
+    ["compareLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (compareLazy x y))
+    ["compareUnsigned", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (compareUnsigned x y))
+    ["compareSpineOrder", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (compareSpineOrder x y)
+    ["compareRightSpine", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (compareRightSpine x y)
+    ["compareElementOrder", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (compareElementOrder x y)
     ["errorPlain", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (errorPlain x y)
     ["errorNestedMessage", a, b] -> case (read a, read b) of

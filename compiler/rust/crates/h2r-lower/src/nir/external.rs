@@ -36,6 +36,8 @@ pub enum External {
     Elem,
     /// `Data.OldList.isPrefixOf :: forall a. Eq a => [a] -> [a] -> Bool`.
     IsPrefixOf,
+    /// `compare :: [Char] -> [Char] -> Ordering`, `Ord [Char]`'s specialised method.
+    CompareString,
 }
 
 /// The `==` a call's `Eq` dictionary supplies, read from the dictionary itself.
@@ -53,7 +55,7 @@ impl External {
         match self {
             External::Append | External::Elem | External::IsPrefixOf => 1,
             External::ErrorWithoutStackTrace => 2,
-            External::EqString => 0,
+            External::EqString | External::CompareString => 0,
         }
     }
 
@@ -62,7 +64,7 @@ impl External {
             External::EqString => Some(super::Predicate::EqString),
             External::Elem => Some(super::Predicate::Elem),
             External::IsPrefixOf => Some(super::Predicate::IsPrefixOf),
-            External::Append | External::ErrorWithoutStackTrace => None,
+            External::Append | External::ErrorWithoutStackTrace | External::CompareString => None,
         }
     }
 
@@ -70,14 +72,21 @@ impl External {
     pub fn dictionary_arity(self) -> usize {
         match self {
             External::Elem | External::IsPrefixOf => 1,
-            External::Append | External::ErrorWithoutStackTrace | External::EqString => 0,
+            External::Append
+            | External::ErrorWithoutStackTrace
+            | External::EqString
+            | External::CompareString => 0,
         }
     }
 
     /// How many runtime values follow the dictionaries.
     pub fn value_arity(self) -> usize {
         match self {
-            External::Append | External::EqString | External::Elem | External::IsPrefixOf => 2,
+            External::Append
+            | External::EqString
+            | External::Elem
+            | External::IsPrefixOf
+            | External::CompareString => 2,
             External::ErrorWithoutStackTrace => 1,
         }
     }
@@ -122,6 +131,13 @@ impl External {
                 let list = list_of(type_arguments[0].clone());
                 Some(arrow(list.clone(), arrow(list, super::data::bool_ty())))
             }
+            External::CompareString => {
+                let string = super::strings::string_ty();
+                Some(arrow(
+                    string.clone(),
+                    arrow(string, super::data::ordering_ty()),
+                ))
+            }
         }
     }
 
@@ -132,7 +148,7 @@ impl External {
             External::Append | External::Elem | External::IsPrefixOf => {
                 type_arguments.first().cloned()
             }
-            External::ErrorWithoutStackTrace | External::EqString => {
+            External::ErrorWithoutStackTrace | External::EqString | External::CompareString => {
                 Some(super::strings::char_ty())
             }
         }
@@ -201,6 +217,7 @@ pub fn resolve(module: &Module, head: ExprId) -> Option<External> {
         "$base$GHC.Base$eqString" => Some(External::EqString),
         "$base$GHC.List$elem" => Some(External::Elem),
         "$base$Data.OldList$isPrefixOf" => Some(External::IsPrefixOf),
+        "$ghc-prim$GHC.Classes$$fOrdList_$s$ccompare1" => Some(External::CompareString),
         _ => None,
     }
 }

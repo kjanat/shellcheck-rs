@@ -105,6 +105,9 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                     "list-{:?} {:?} v{} v{}",
                     predicate.predicate, predicate.equality, predicate.left.0, predicate.right.0
                 ),
+                Operation::CompareStrings(compare) => {
+                    format!("compare-strings v{} v{}", compare.left.0, compare.right.0)
+                }
                 Operation::RaiseError { message } => format!("raise-error v{}", message.0),
                 Operation::EmptyCase { scrutinee } => format!("empty-case v{}", scrutinee.0),
                 Operation::UnpackString(unpack) => format!(
