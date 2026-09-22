@@ -283,6 +283,9 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 | Operation::AppendList { .. }
                 | Operation::ListPredicate(_)
                 | Operation::CompareStrings(_)
+                | Operation::DataToTag { .. }
+                | Operation::TagToEnum { .. }
+                | Operation::PointerEquality { .. }
                 | Operation::RaiseError { .. }
                 | Operation::EmptyCase { .. }
                 | Operation::DelayBlock { .. }
@@ -684,6 +687,40 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                         value(*right),
                         cons.name,
                         nil.name
+                    ),
+                    Operation::DataToTag {
+                        value: operand,
+                        constructors,
+                    } => {
+                        let arms: String = constructors
+                            .iter()
+                            .map(|c| format!("{:?} => {}, ", c.name, i64::from(c.tag) - 1))
+                            .collect();
+                        format!(
+                            "{{ let node = {}.force(); match node.constructor {{ {arms}other => panic!(\"dataToTag#: {{other}} is not in the family\") }} }}",
+                            value(*operand)
+                        )
+                    }
+                    Operation::TagToEnum { tag, constructors } => {
+                        let arms: String = constructors
+                            .iter()
+                            .map(|c| {
+                                format!(
+                                    "{} => HData::ready({:?}, vec![]), ",
+                                    i64::from(c.tag) - 1,
+                                    c.name
+                                )
+                            })
+                            .collect();
+                        format!(
+                            "match {} {{ {arms}other => panic!(\"tagToEnum#: {{other}} is not a tag of this family\") }}",
+                            value(*tag)
+                        )
+                    }
+                    Operation::PointerEquality { left, right } => format!(
+                        "i64::from({}.shares_with(&{}))",
+                        value(*left),
+                        value(*right)
                     ),
                     Operation::CompareStrings(compare) => format!(
                         "h2r_rt::compare_lists({}, {}, HStringNames {{ cons: {:?}, nil: {:?}, character: {:?} }}, h2r_rt::Orderings {{ lt: {:?}, eq: {:?}, gt: {:?} }})",

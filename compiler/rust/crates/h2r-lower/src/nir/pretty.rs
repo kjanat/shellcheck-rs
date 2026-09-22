@@ -105,6 +105,16 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                     "list-{:?} {:?} v{} v{}",
                     predicate.predicate, predicate.equality, predicate.left.0, predicate.right.0
                 ),
+                Operation::DataToTag {
+                    value,
+                    constructors,
+                } => format!("data-to-tag v{} of {}", value.0, constructors.len()),
+                Operation::TagToEnum { tag, constructors } => {
+                    format!("tag-to-enum v{} of {}", tag.0, constructors.len())
+                }
+                Operation::PointerEquality { left, right } => {
+                    format!("pointer-equality v{} v{}", left.0, right.0)
+                }
                 Operation::CompareStrings(compare) => {
                     format!("compare-strings v{} v{}", compare.left.0, compare.right.0)
                 }

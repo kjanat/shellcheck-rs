@@ -373,6 +373,9 @@ fn error_probes(
             failures.push(format!("{entry}: {error}"));
         }
     }
+    if let Err(error) = tag_evidence(modules) {
+        failures.push(format!("tagColour: {error}"));
+    }
     if profile == Profile::Optimized
         && let Err(error) = compare_evidence(modules)
     {
@@ -531,6 +534,35 @@ fn predicate_evidence(modules: &[Module], entry: &str) -> Result<(), String> {
             return Err(format!(
                 "list predicate verifier accepted mutation {mutation}"
             ));
+        }
+    }
+    Ok(())
+}
+
+fn tag_evidence(modules: &[Module]) -> Result<(), String> {
+    use h2r_lower::nir::{Operation, Rule, verify::verify_leaf_in_world};
+    let binding = evidence::resolve(modules, "tagColour")?;
+    let leaf = lower_leaf_in_world(modules, binding.module, binding.binder, FnId(0))
+        .map_err(|e| e.reason)?;
+    verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &leaf)?;
+    for mutation in 0..2 {
+        let mut forged = leaf.clone();
+        let instruction = forged
+            .function
+            .blocks
+            .iter_mut()
+            .flat_map(|b| &mut b.instructions)
+            .find(|i| matches!(i.operation, Operation::DataToTag { .. }))
+            .ok_or("no dataToTag# in the entry's own leaf")?;
+        let Operation::DataToTag { constructors, .. } = &mut instruction.operation else {
+            unreachable!()
+        };
+        match mutation {
+            0 => constructors.reverse(),
+            _ => instruction.origin.rule = Rule::PointerEquality,
+        }
+        if verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &forged).is_ok() {
+            return Err(format!("dataToTag# verifier accepted mutation {mutation}"));
         }
     }
     Ok(())

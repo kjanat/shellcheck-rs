@@ -31,10 +31,13 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   stringEqual, stringEqualRule, stringEqualLazy, elemChar, elemString, elemLazy, prefixOf, prefixLazy,
   eqSpineOrder, eqRightSpine, eqElementOrder, elemSpineFirst, elemNeedleOrder, elemNeedleUnused, prefixOrder, prefixListOrder, prefixElementOrder,
   compareStrings, compareLazy, compareUnsigned,
-  compareSpineOrder, compareRightSpine, compareElementOrder) where
+  compareSpineOrder, compareRightSpine, compareElementOrder,
+  tagColour, tagMaybe, colourEqual, colourCompare, pointerChoice,
+  tagForced) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#),
-  Char(C#), Char#, ord#, chr#, eqChar#, neChar#, ltChar#, leChar#, gtChar#, geChar#)
+  Char(C#), Char#, ord#, chr#, eqChar#, neChar#, ltChar#, leChar#, gtChar#, geChar#,
+  dataToTag#, reallyUnsafePtrEquality#)
 import Helpers (first, crossPoly, crossApply, Sized(..), Described(..), Small(..))
 import GHC.Base (eqString)
 import qualified GHC.List as List
@@ -1102,6 +1105,65 @@ compareElementOrder :: Int# -> Int# -> Int
 compareElementOrder _ y = case compare [errorWithoutStackTrace "left char" :: Char] [errorWithoutStackTrace "right char"] of
   EQ -> I# y
   _ -> I# (0# -# y)
+
+--------------------------------------------------------------------------------
+-- Constructor tags and pointer equality.
+--------------------------------------------------------------------------------
+
+data Colour = Red | Green | Blue deriving (Eq, Ord)
+
+{-# NOINLINE colourOf #-}
+colourOf :: Int# -> Colour
+colourOf x = case x <# 0# of
+  1# -> Red
+  _ -> case x ==# 0# of
+    1# -> Green
+    _ -> Blue
+
+{-# NOINLINE tagColour #-}
+tagColour :: Int# -> Int# -> Int#
+tagColour x _ = dataToTag# (colourOf x)
+
+{-# NOINLINE maybeOf #-}
+maybeOf :: Int# -> Maybe Int
+maybeOf x = case x <# 0# of
+  1# -> Nothing
+  _ -> Just (I# x)
+
+{-# NOINLINE tagMaybe #-}
+tagMaybe :: Int# -> Int# -> Int#
+tagMaybe x _ = dataToTag# (maybeOf x)
+
+{-# NOINLINE colourEqual #-}
+colourEqual :: Int# -> Int# -> Int#
+colourEqual x y = truth (colourOf x == colourOf y)
+
+{-# NOINLINE colourCompare #-}
+colourCompare :: Int# -> Int# -> Int#
+colourCompare x y = ordering (compare (colourOf x) (colourOf y))
+
+{-# NOINLINE tagForced #-}
+tagForced :: Int# -> Int# -> Int
+tagForced _ y = case dataToTag# (errorWithoutStackTrace "tagged" :: Colour) of
+  0# -> I# y
+  _ -> I# (0# -# y)
+
+{-# NOINLINE pairTotal #-}
+pairTotal :: Pair Int -> Int#
+pairTotal (Pair (I# a) (I# b)) = a +# b
+
+-- GHC permits false negatives here, so both choices are equal values.
+{-# NOINLINE pointerChoice #-}
+pointerChoice :: Int# -> Int# -> Int#
+pointerChoice x y =
+  let a = Pair (I# x) (I# y)
+      b = Pair (I# x) (I# y)
+  in pairTotal (case reallyUnsafePtrEquality# a b of
+       1# -> a
+       _ -> b)
+       +# pairTotal (case reallyUnsafePtrEquality# a a of
+         1# -> a
+         _ -> b)
 
 --------------------------------------------------------------------------------
 -- Unboxed tuples.

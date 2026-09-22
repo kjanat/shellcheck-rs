@@ -125,6 +125,9 @@ pub enum Rule {
     AppendList,
     ListPredicate,
     CompareStrings,
+    DataToTag,
+    TagToEnum,
+    PointerEquality,
     RaiseError,
     EmptyCase,
     /// A call GHC's demand analysis proved never returns.
@@ -249,6 +252,21 @@ pub enum Operation {
     },
     ListPredicate(Box<ListPredicate>),
     CompareStrings(Box<CompareStrings>),
+    /// Force a value and return its constructor's position in the family, from zero.
+    DataToTag {
+        value: ValueId,
+        constructors: Vec<data::Constructor>,
+    },
+    /// The nullary constructor whose position in an enumeration family is this tag.
+    TagToEnum {
+        tag: ValueId,
+        constructors: Vec<data::Constructor>,
+    },
+    /// 1 when both values are one shared object, without forcing either.
+    PointerEquality {
+        left: ValueId,
+        right: ValueId,
+    },
     Literal(Lit),
     /// Evaluate a stack-free exception's String when this computation is entered.
     RaiseError {

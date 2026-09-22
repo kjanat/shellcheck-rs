@@ -628,26 +628,40 @@ fn verify_value(
             };
             result = res;
         }
-        let element = entry
-            .element(&type_arguments)
-            .ok_or("source external call type arguments mismatch")?;
+        let element = entry.element(&type_arguments);
         if !linkage::closed_type(&signature) {
             return Err("source external call requires closed structured types".into());
         }
-        let (nil, cons) = data::list_layouts(&world, &element)?;
+        let lists = element
+            .as_ref()
+            .map(|element| data::list_layouts(&world, element))
+            .transpose()?;
+        let same_lists = |nil: &data::Constructor, cons: &data::Constructor| {
+            lists.as_ref().is_some_and(|(expected_nil, expected_cons)| {
+                nil == expected_nil && cons == expected_cons
+            })
+        };
         let (dictionaries, argument_sources) = argument_sources.split_at(entry.dictionary_arity());
         let equality = match (entry.predicate(), dictionaries) {
             (Some(Predicate::EqString), []) => Some(external::Equality::Char),
             (Some(Predicate::Elem | Predicate::IsPrefixOf), [dictionary]) => Some(
-                external::equality(module, *dictionary, &element)
+                element
+                    .as_ref()
+                    .and_then(|element| external::equality(module, *dictionary, element))
                     .ok_or("source Eq dictionary is not an implemented instance")?,
             ),
             (None, []) => None,
             _ => return Err("source external call dictionary mismatch".into()),
         };
-        let (_, _, character) = data::string_layouts(&world)?;
-        let (false_, true_) = data::bool_layouts(&world)?;
-        let (lt, eq, gt) = data::ordering_layouts(&world)?;
+        let characters = data::string_layouts(&world).map(|(_, _, character)| character);
+        let truths = data::bool_layouts(&world);
+        let orderings = data::ordering_layouts(&world);
+        let family = || {
+            data::represented(&world, &type_arguments[0])
+                .filter(|ty| data::carrier(&world, ty) == Some(data::Carrier::Data))
+                .ok_or_else(|| "source tag primop is not at an algebraic data carrier".to_string())
+                .and_then(|ty| data::family(&world, &ty))
+        };
         let instruction = block.instructions.last().ok_or("missing external call")?;
         let (operands, rule) = match (&instruction.operation, entry) {
             (
@@ -658,27 +672,47 @@ fn verify_value(
                     cons: claimed_cons,
                 },
                 external::External::Append,
-            ) if claimed_nil == &nil && claimed_cons == &cons => {
-                (vec![*left, *right], Rule::AppendList)
+            ) if same_lists(claimed_nil, claimed_cons) => (vec![*left, *right], Rule::AppendList),
+            (
+                Operation::DataToTag {
+                    value,
+                    constructors,
+                },
+                external::External::DataToTag,
+            ) if family()? == *constructors => (vec![*value], Rule::DataToTag),
+            (Operation::TagToEnum { tag, constructors }, external::External::TagToEnum)
+                if family()? == *constructors
+                    && constructors.iter().all(|c| c.fields.is_empty()) =>
+            {
+                (vec![*tag], Rule::TagToEnum)
+            }
+            (Operation::PointerEquality { left, right }, external::External::PointerEquality)
+                if type_arguments[2..]
+                    .iter()
+                    .all(|ty| data::carrier(&world, ty) == Some(data::Carrier::Data)) =>
+            {
+                (vec![*left, *right], Rule::PointerEquality)
             }
             (Operation::RaiseError { message }, external::External::ErrorWithoutStackTrace) => {
                 (vec![*message], Rule::RaiseError)
             }
             (Operation::CompareStrings(compare), external::External::CompareString)
-                if compare.nil == nil
-                    && compare.cons == cons
-                    && compare.character == character
-                    && (&compare.lt, &compare.eq, &compare.gt) == (&lt, &eq, &gt) =>
+                if same_lists(&compare.nil, &compare.cons)
+                    && characters.as_ref() == Ok(&compare.character)
+                    && orderings.as_ref().is_ok_and(|(lt, eq, gt)| {
+                        (&compare.lt, &compare.eq, &compare.gt) == (lt, eq, gt)
+                    }) =>
             {
                 (vec![compare.left, compare.right], Rule::CompareStrings)
             }
             (Operation::ListPredicate(predicate), _)
                 if entry.predicate() == Some(predicate.predicate)
                     && Some(predicate.equality) == equality
-                    && predicate.nil == nil
-                    && predicate.cons == cons
-                    && (&predicate.character, &predicate.false_, &predicate.true_)
-                        == (&character, &false_, &true_) =>
+                    && same_lists(&predicate.nil, &predicate.cons)
+                    && characters.as_ref() == Ok(&predicate.character)
+                    && truths.as_ref().is_ok_and(|(false_, true_)| {
+                        (&predicate.false_, &predicate.true_) == (false_, true_)
+                    }) =>
             {
                 (vec![predicate.left, predicate.right], Rule::ListPredicate)
             }
@@ -1925,6 +1959,7 @@ fn verify_lazy_argument(
         return Ok((0, 0, 0, from));
     };
     if computed
+        && data::lifted(&context.world(), ty)
         && !matches!(
             block.instructions[end].operation,
             Operation::DelayBlock { .. }
@@ -2937,6 +2972,50 @@ pub fn verify(function: &Function) -> Result<(), String> {
                         || !predicate.true_.result.alpha_eq(&data::bool_ty())
                     {
                         return Err("list predicate operands, equality and layouts disagree".into());
+                    }
+                }
+                Operation::DataToTag {
+                    value,
+                    ref constructors,
+                } => {
+                    if !available.contains_key(&value)
+                        || !instruction.result.ty.alpha_eq(&primitive::int_ty())
+                        || constructors
+                            .iter()
+                            .map(|c| c.tag)
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .ne(1..=constructors.len() as u32)
+                    {
+                        return Err("dataToTag# operand, result or family disagree".into());
+                    }
+                }
+                Operation::TagToEnum {
+                    tag,
+                    ref constructors,
+                } => {
+                    if !available
+                        .get(&tag)
+                        .is_some_and(|ty| ty.alpha_eq(&primitive::int_ty()))
+                        || constructors.iter().any(|c| {
+                            !c.fields.is_empty() || !c.result.alpha_eq(&instruction.result.ty)
+                        })
+                        || constructors
+                            .iter()
+                            .map(|c| c.tag)
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .ne(1..=constructors.len() as u32)
+                    {
+                        return Err("tagToEnum# operand, result or family disagree".into());
+                    }
+                }
+                Operation::PointerEquality { left, right } => {
+                    if !available.contains_key(&left)
+                        || !available.contains_key(&right)
+                        || !instruction.result.ty.alpha_eq(&primitive::int_ty())
+                    {
+                        return Err("pointer equality operands or result disagree".into());
                     }
                 }
                 Operation::CompareStrings(ref compare) => {

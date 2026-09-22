@@ -1,8 +1,9 @@
 //! Library functions this backend implements rather than links.
 //!
-//! These are not primops. They are ordinary Haskell bindings in packages the
-//! dump does not contain, so the whole-world resolver cannot find a definition
-//! to lower and the choice is to implement the function or to refuse.
+//! Most are ordinary Haskell bindings in packages the dump does not contain,
+//! so the whole-world resolver cannot find a definition to lower and the
+//! choice is to implement the function or to refuse. The three primops here
+//! take type arguments, which the monomorphic primop table does not model.
 //!
 //! Each entry asserts the exact GHC signature, and the builder checks the site
 //! against it: the spine must be saturated at the entry's own argument count,
@@ -38,6 +39,12 @@ pub enum External {
     IsPrefixOf,
     /// `compare :: [Char] -> [Char] -> Ordering`, `Ord [Char]`'s specialised method.
     CompareString,
+    /// The primop `dataToTag# :: forall a. a -> Int#`: its argument's constructor, from zero.
+    DataToTag,
+    /// The primop `reallyUnsafePtrEquality#`: whether two lifted values are one heap object.
+    PointerEquality,
+    /// The primop `tagToEnum# :: forall a. Int# -> a`, at an enumeration type.
+    TagToEnum,
 }
 
 /// The `==` a call's `Eq` dictionary supplies, read from the dictionary itself.
@@ -53,8 +60,13 @@ impl External {
     /// How many type arguments precede the value arguments.
     pub fn type_arity(self) -> usize {
         match self {
-            External::Append | External::Elem | External::IsPrefixOf => 1,
+            External::Append
+            | External::Elem
+            | External::IsPrefixOf
+            | External::DataToTag
+            | External::TagToEnum => 1,
             External::ErrorWithoutStackTrace => 2,
+            External::PointerEquality => 4,
             External::EqString | External::CompareString => 0,
         }
     }
@@ -64,7 +76,12 @@ impl External {
             External::EqString => Some(super::Predicate::EqString),
             External::Elem => Some(super::Predicate::Elem),
             External::IsPrefixOf => Some(super::Predicate::IsPrefixOf),
-            External::Append | External::ErrorWithoutStackTrace | External::CompareString => None,
+            External::Append
+            | External::ErrorWithoutStackTrace
+            | External::CompareString
+            | External::DataToTag
+            | External::PointerEquality
+            | External::TagToEnum => None,
         }
     }
 
@@ -75,7 +92,10 @@ impl External {
             External::Append
             | External::ErrorWithoutStackTrace
             | External::EqString
-            | External::CompareString => 0,
+            | External::CompareString
+            | External::DataToTag
+            | External::PointerEquality
+            | External::TagToEnum => 0,
         }
     }
 
@@ -86,8 +106,9 @@ impl External {
             | External::EqString
             | External::Elem
             | External::IsPrefixOf
-            | External::CompareString => 2,
-            External::ErrorWithoutStackTrace => 1,
+            | External::CompareString
+            | External::PointerEquality => 2,
+            External::ErrorWithoutStackTrace | External::DataToTag | External::TagToEnum => 1,
         }
     }
 
@@ -138,6 +159,23 @@ impl External {
                     arrow(string, super::data::ordering_ty()),
                 ))
             }
+            External::DataToTag => {
+                Some(arrow(type_arguments[0].clone(), super::primitive::int_ty()))
+            }
+            External::TagToEnum => {
+                Some(arrow(super::primitive::int_ty(), type_arguments[0].clone()))
+            }
+            External::PointerEquality => {
+                if !type_arguments[..2].iter().all(|levity| {
+                    matches!(levity, Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Types$Lifted" && args.is_empty())
+                }) {
+                    return None;
+                }
+                Some(arrow(
+                    type_arguments[2].clone(),
+                    arrow(type_arguments[3].clone(), super::primitive::int_ty()),
+                ))
+            }
         }
     }
 
@@ -151,6 +189,7 @@ impl External {
             External::ErrorWithoutStackTrace | External::EqString | External::CompareString => {
                 Some(super::strings::char_ty())
             }
+            External::DataToTag | External::PointerEquality | External::TagToEnum => None,
         }
     }
 }
@@ -208,18 +247,28 @@ pub fn resolve(module: &Module, head: ExprId) -> Option<External> {
         return None;
     };
     let info = module.id_info(head)?;
-    if info.name != *name || !info.details.is_empty() {
+    if info.name != *name {
         return None;
     }
-    match name.as_str() {
+    let entry = match name.as_str() {
         "$base$GHC.Base$++" => Some(External::Append),
         "$base$GHC.Err$errorWithoutStackTrace" => Some(External::ErrorWithoutStackTrace),
         "$base$GHC.Base$eqString" => Some(External::EqString),
         "$base$GHC.List$elem" => Some(External::Elem),
         "$base$Data.OldList$isPrefixOf" => Some(External::IsPrefixOf),
         "$ghc-prim$GHC.Classes$$fOrdList_$s$ccompare1" => Some(External::CompareString),
+        "$ghc-prim$GHC.Prim$dataToTag#" => Some(External::DataToTag),
+        "$ghc-prim$GHC.Prim$reallyUnsafePtrEquality#" => Some(External::PointerEquality),
+        "$ghc-prim$GHC.Prim$tagToEnum#" => Some(External::TagToEnum),
         _ => None,
-    }
+    }?;
+    let primop = matches!(
+        entry,
+        External::DataToTag | External::PointerEquality | External::TagToEnum
+    );
+    let details = if primop { "[PrimOp]" } else { "" };
+    (info.details == details && (!primop || info.arity as usize == entry.value_arity()))
+        .then_some(entry)
 }
 
 /// The quantified type these entries are written against, for a test that the

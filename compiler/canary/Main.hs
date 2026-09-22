@@ -32,7 +32,9 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   stringEqual, stringEqualRule, stringEqualLazy, elemChar, elemString, elemLazy, prefixOf, prefixLazy,
   eqSpineOrder, eqRightSpine, eqElementOrder, elemSpineFirst, elemNeedleOrder, elemNeedleUnused, prefixOrder, prefixListOrder, prefixElementOrder,
   compareStrings, compareLazy, compareUnsigned,
-  compareSpineOrder, compareRightSpine, compareElementOrder)
+  compareSpineOrder, compareRightSpine, compareElementOrder,
+  tagColour, tagMaybe, colourEqual, colourCompare, pointerChoice,
+  tagForced)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -270,6 +272,18 @@ main = do
       (I# x, I# y) -> print (compareRightSpine x y)
     ["compareElementOrder", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (compareElementOrder x y)
+    ["tagColour", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (tagColour x y))
+    ["tagMaybe", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (tagMaybe x y))
+    ["colourEqual", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (colourEqual x y))
+    ["colourCompare", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (colourCompare x y))
+    ["pointerChoice", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (pointerChoice x y))
+    ["tagForced", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (tagForced x y)
     ["errorPlain", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (errorPlain x y)
     ["errorNestedMessage", a, b] -> case (read a, read b) of

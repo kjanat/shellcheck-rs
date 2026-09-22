@@ -1218,37 +1218,49 @@ fn lower_value(
                     "stack-free error requires a lifted result",
                 ));
             }
-            let element = entry
-                .element(&type_arguments)
-                .ok_or_else(|| fail(Some(current), "external call type arguments mismatch"))?;
+            let element = entry.element(&type_arguments);
             if !linkage::closed_type(&signature) {
                 return Err(fail(
                     Some(current),
                     "external call requires closed structured types",
                 ));
             }
-            let (nil, cons) = data::list_layouts(&world, &element)
+            let lists = element
+                .as_ref()
+                .map(|element| data::list_layouts(&world, element))
+                .transpose()
                 .map_err(|reason| fail(Some(current), &reason))?;
+            let list_layouts = || {
+                lists
+                    .clone()
+                    .ok_or_else(|| fail(Some(current), "external call has no list layouts"))
+            };
             let (dictionaries, argument_sources) =
                 argument_sources.split_at(entry.dictionary_arity());
             let equality = match (entry, dictionaries) {
                 (external::External::EqString, []) => Some(external::Equality::Char),
                 (external::External::Elem | external::External::IsPrefixOf, [dictionary]) => Some(
-                    external::equality(module, *dictionary, &element).ok_or_else(|| {
-                        named(
-                            module,
-                            *dictionary,
-                            fail(
-                                Some(*dictionary),
-                                "an Eq dictionary this backend does not implement",
-                            ),
-                        )
-                    })?,
+                    element
+                        .as_ref()
+                        .and_then(|element| external::equality(module, *dictionary, element))
+                        .ok_or_else(|| {
+                            named(
+                                module,
+                                *dictionary,
+                                fail(
+                                    Some(*dictionary),
+                                    "an Eq dictionary this backend does not implement",
+                                ),
+                            )
+                        })?,
                 ),
                 (
                     external::External::Append
                     | external::External::ErrorWithoutStackTrace
-                    | external::External::CompareString,
+                    | external::External::CompareString
+                    | external::External::DataToTag
+                    | external::External::PointerEquality
+                    | external::External::TagToEnum,
                     [],
                 ) => None,
                 _ => return Err(fail(Some(current), "external call dictionary mismatch")),
@@ -1266,7 +1278,9 @@ fn lower_value(
                     | Expr::Case { .. }
                     | Expr::Let { .. }
                     | Expr::Lam { .. }
-                    | Expr::Cast { .. } => {
+                    | Expr::Cast { .. }
+                        if data::lifted(&world, arg) =>
+                    {
                         lower_region(context, source, arg, locals, instructions, blocks, true)?
                     }
                     _ => lower_value(context, source, arg, locals, instructions, blocks)?,
@@ -1284,18 +1298,83 @@ fn lower_value(
                     ty: ty.clone(),
                 },
                 operation: match (entry, entry.predicate(), equality) {
-                    (external::External::Append, None, None) => Operation::AppendList {
-                        left: arguments[0],
-                        right: arguments[1],
-                        nil,
-                        cons,
-                    },
+                    (external::External::Append, None, None) => {
+                        let (nil, cons) = list_layouts()?;
+                        Operation::AppendList {
+                            left: arguments[0],
+                            right: arguments[1],
+                            nil,
+                            cons,
+                        }
+                    }
+                    (external::External::DataToTag, None, None) => {
+                        let constructors = data::represented(&world, &type_arguments[0])
+                            .filter(|ty| data::carrier(&world, ty) == Some(data::Carrier::Data))
+                            .ok_or_else(|| {
+                                fail(
+                                    Some(current),
+                                    "dataToTag# requires an algebraic data carrier",
+                                )
+                                .about(type_head(&type_arguments[0]))
+                            })
+                            .and_then(|ty| {
+                                data::family(&world, &ty)
+                                    .map_err(|reason| fail(Some(current), &reason))
+                            })?;
+                        Operation::DataToTag {
+                            value: arguments[0],
+                            constructors,
+                        }
+                    }
+                    (external::External::TagToEnum, None, None) => {
+                        let constructors = data::represented(&world, &type_arguments[0])
+                            .filter(|ty| data::carrier(&world, ty) == Some(data::Carrier::Data))
+                            .ok_or_else(|| {
+                                fail(
+                                    Some(current),
+                                    "tagToEnum# requires an algebraic data carrier",
+                                )
+                                .about(type_head(&type_arguments[0]))
+                            })
+                            .and_then(|ty| {
+                                data::family(&world, &ty)
+                                    .map_err(|reason| fail(Some(current), &reason))
+                            })?;
+                        if constructors.iter().any(|c| !c.fields.is_empty()) {
+                            return Err(fail(
+                                Some(current),
+                                "tagToEnum# requires an enumeration type",
+                            )
+                            .about(type_head(&type_arguments[0])));
+                        }
+                        Operation::TagToEnum {
+                            tag: arguments[0],
+                            constructors,
+                        }
+                    }
+                    (external::External::PointerEquality, None, None) => {
+                        if let Some(ty) = type_arguments[2..]
+                            .iter()
+                            .find(|ty| data::carrier(&world, ty) != Some(data::Carrier::Data))
+                        {
+                            return Err(fail(
+                                Some(current),
+                                "pointer equality requires algebraic data carriers",
+                            )
+                            .about(type_head(ty)));
+                        }
+                        Operation::PointerEquality {
+                            left: arguments[0],
+                            right: arguments[1],
+                        }
+                    }
                     (external::External::ErrorWithoutStackTrace, None, None) => {
                         Operation::RaiseError {
                             message: arguments[0],
                         }
                     }
                     (external::External::CompareString, None, None) => {
+                        let (nil, cons) = list_layouts()?;
                         let (_, _, character) = data::string_layouts(&world)
                             .map_err(|reason| fail(Some(current), &reason))?;
                         let (lt, eq, gt) = data::ordering_layouts(&world)
@@ -1312,6 +1391,7 @@ fn lower_value(
                         }))
                     }
                     (_, Some(predicate), Some(equality)) => {
+                        let (nil, cons) = list_layouts()?;
                         let (_, _, character) = data::string_layouts(&world)
                             .map_err(|reason| fail(Some(current), &reason))?;
                         let (false_, true_) = data::bool_layouts(&world)
@@ -1337,6 +1417,9 @@ fn lower_value(
                     | external::External::Elem
                     | external::External::IsPrefixOf => Rule::ListPredicate,
                     external::External::CompareString => Rule::CompareStrings,
+                    external::External::DataToTag => Rule::DataToTag,
+                    external::External::TagToEnum => Rule::TagToEnum,
+                    external::External::PointerEquality => Rule::PointerEquality,
                 }),
             });
             value

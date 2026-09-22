@@ -74,6 +74,9 @@ pub enum Op {
     AppendList,
     ListPredicate(Predicate, Equality),
     CompareStrings,
+    DataToTag,
+    TagToEnum,
+    PointerEquality,
 }
 
 impl Op {
@@ -97,6 +100,9 @@ impl Op {
             Op::UnpackStringOnto => "unpack-string onto a tail",
             Op::AppendList => "append-list",
             Op::CompareStrings => "compare @[Char]",
+            Op::DataToTag => "dataToTag#",
+            Op::TagToEnum => "tagToEnum#",
+            Op::PointerEquality => "reallyUnsafePtrEquality#",
             Op::ListPredicate(Predicate::EqString, Equality::Char) => "eqString",
             Op::ListPredicate(Predicate::EqString, Equality::String) => "eqString over Eq [Char]",
             Op::ListPredicate(Predicate::Elem, Equality::Char) => "elem via $fEqChar",
@@ -355,6 +361,16 @@ pub const REFUSALS: &[Refusal] = &[
         because: Some("recursive value dependency closure is not supported"),
     },
     Refusal {
+        entry: Entry::Occurrence("colourEqual"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("imported binding is outside the loaded world"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("colourCompare"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("imported binding is outside the loaded world"),
+    },
+    Refusal {
         entry: Entry::Occurrence("elemString"),
         when: When::Only(Profile::Unoptimized),
         because: Some("an Eq dictionary this backend does not implement"),
@@ -435,6 +451,7 @@ pub const ERROR_PROBES: &[Probe] = &[
     optimized_probe("compareSpineOrder", 0, b"left spine"),
     optimized_probe("compareRightSpine", 0, b"right spine"),
     optimized_probe("compareElementOrder", 0, b"left char"),
+    probe("tagForced", 0, Some(b"tagged")),
 ];
 
 /// Every fixture, in the order the report prints them.
@@ -796,6 +813,25 @@ pub const FIXTURES: &[Fixture] = &[
     prove("elemLazy", Inputs::Binary, &[anywhere(ELEM_CHAR)]),
     prove("prefixOf", Inputs::Binary, &[anywhere(PREFIX_CHAR)]),
     prove("prefixLazy", Inputs::Binary, &[anywhere(PREFIX_CHAR)]),
+    prove("tagColour", Inputs::Binary, &[anywhere(Op::DataToTag)]),
+    prove("tagMaybe", Inputs::Binary, &[anywhere(Op::DataToTag)]),
+    prove_in(
+        Profile::Optimized,
+        "colourEqual",
+        Inputs::Binary,
+        &[anywhere(Op::DataToTag), anywhere(Op::TagToEnum)],
+    ),
+    prove_in(
+        Profile::Optimized,
+        "colourCompare",
+        Inputs::Binary,
+        &[anywhere(Op::DataToTag)],
+    ),
+    prove(
+        "pointerChoice",
+        Inputs::Binary,
+        &[anywhere(Op::PointerEquality)],
+    ),
     prove_in(
         Profile::Optimized,
         "compareStrings",

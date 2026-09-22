@@ -291,6 +291,9 @@ fn matches(operation: &Operation, op: Op) -> bool {
         ),
         Op::AppendList => matches!(operation, Operation::AppendList { .. }),
         Op::CompareStrings => matches!(operation, Operation::CompareStrings(_)),
+        Op::DataToTag => matches!(operation, Operation::DataToTag { .. }),
+        Op::TagToEnum => matches!(operation, Operation::TagToEnum { .. }),
+        Op::PointerEquality => matches!(operation, Operation::PointerEquality { .. }),
         Op::ListPredicate(predicate, equality) => matches!(
             operation,
             Operation::ListPredicate(found)
