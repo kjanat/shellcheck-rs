@@ -354,6 +354,16 @@ pub const REFUSALS: &[Refusal] = &[
     },
 ];
 
+/// Forced errors whose oracle behavior is known but whose Rust implementation
+/// is still refused. Kept separate from differential cases: no generated
+/// program has passed these comparisons yet.
+pub const ERROR_PROBES: &[(&str, &str)] = &[
+    ("errorPlain", "canary failure"),
+    ("errorEmpty", ""),
+    ("errorUnicode", "fout: λ 🐚"),
+    ("errorMultiline", "first\nsecond\n"),
+];
+
 /// Every fixture, in the order the report prints them.
 pub const FIXTURES: &[Fixture] = &[
     // Scalar arithmetic, comparison and control flow.

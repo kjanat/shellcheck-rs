@@ -277,6 +277,18 @@ fn profile_run(cli: &Cli, profile: Profile, jobs: usize) -> Result<Report> {
     }
 
     failures.extend(refusals(&modules, profile));
+    let probe_failures = error_probes(
+        &modules,
+        &oracle,
+        std::time::Duration::from_secs(cli.timeout_seconds),
+    );
+    println!(
+        "{}: {} forced-error oracle/refusal probes, {} failures",
+        profile.name(),
+        fixtures::ERROR_PROBES.len(),
+        probe_failures.len()
+    );
+    failures.extend(probe_failures);
 
     Ok(Report {
         entries: entries.len(),
@@ -339,6 +351,41 @@ fn differ(
 
 /// Entries whose only correct outcome is a refusal. A wrong answer for one of
 /// these would be a miscompile, not a missing feature.
+fn error_probes(modules: &[Module], oracle: &Path, timeout: std::time::Duration) -> Vec<String> {
+    let mut failures = Vec::new();
+    let Some(program_name) = oracle.file_name().and_then(|name| name.to_str()) else {
+        return vec!["oracle path lacks a UTF-8 program name".into()];
+    };
+    for &(entry, message) in fixtures::ERROR_PROBES {
+        let arguments = vec![entry.to_string(), "0".into(), "0".into()];
+        let expected = differential::Outcome {
+            stdout: vec![],
+            stderr: format!("{program_name}: {message}\n").into_bytes(),
+            code: Some(1),
+        };
+        match differential::invoke(oracle, &arguments, timeout) {
+            Ok(actual) if actual == expected => {}
+            Ok(actual) => failures.push(format!(
+                "{entry}: error oracle contract differs: expected {expected:?}, got {actual:?}"
+            )),
+            Err(error) => failures.push(format!("{entry}: {error}")),
+        }
+        match evidence::resolve(modules, entry) {
+            Ok(binding) => match emit_entry(modules, &binding.name) {
+                Err(reason)
+                    if reason.contains("unimplemented non-returning call")
+                        || reason.contains("imported binding is outside the loaded world") => {}
+                Err(reason) => failures.push(format!("{entry}: unexpected refusal: {reason}")),
+                Ok(_) => failures.push(format!(
+                    "{entry}: error emission enabled without differential coverage"
+                )),
+            },
+            Err(error) => failures.push(error),
+        }
+    }
+    failures
+}
+
 fn refusals(modules: &[Module], profile: Profile) -> Vec<String> {
     REFUSALS
         .iter()

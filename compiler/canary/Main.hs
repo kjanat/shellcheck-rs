@@ -21,7 +21,8 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   stringNulByte, stringAppend, stringShared, stringUnused, stringLazyHead,
   stringHighLatin1, stringCount,
   newtypeRoundTrip, newtypeField, newtypeFunction, stringAppendShared,
-  errorUnusedArgument, errorUnusedLet, errorUnusedShared,
+  errorUnusedArgument, errorUnusedLet, errorUnusedShared, errorPlain,
+  errorEmpty, errorUnicode, errorMultiline,
   tupleRoundTrip, tupleSwap, tupleSolo, tupleWide, tupleBoxed, tupleNested,
   tupleLazyComponent, tupleUnusedComponent,
   textWords, textLines, textFind, textReverse, textFilter, textMap,
@@ -217,4 +218,12 @@ main = do
       (I# x, I# y) -> print (I# (textCompare x y))
     ["textUnicodeWords", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (textUnicodeWords x y))
+    ["errorPlain", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorPlain x y)
+    ["errorEmpty", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorEmpty x y)
+    ["errorUnicode", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorUnicode x y)
+    ["errorMultiline", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorMultiline x y)
     _ -> fail "expected a canary entry and its integer arguments"

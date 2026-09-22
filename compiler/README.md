@@ -4956,6 +4956,8 @@ The analysis accounts for the arguments without lowering them. This is insuffici
 
 ### The evidence exists only at `-O1`
 
+The canary separately probes forced `errorWithoutStackTrace` calls with plain, empty, Unicode and multiline messages in both profiles. It checks the GHC oracle's exact stderr (`<program>: <message>` followed by a newline), empty stdout and exit 1, while asserting that Rust emission remains refused. These eight oracle/refusal probes are not included in the generated-code differential count. The Unicode probe requires a UTF-8 environment. Implementing the message evaluation and exception path remains the next backend step.
+
 Measured, not assumed: in the `-O0` canary dump `$base$GHC.Err$error` carries `diverges=false`, an empty demand signature and arity 0, because GHC does not slurp the signature from the interface when optimisation is off — the same reason `IdInfo.arity` is unreliable there. So the rule cannot fire in the unoptimised profile at all, and the three new canary entries are compiled and run in the optimised profile only. That is now a property of a fixture row rather than something the runner assumes, and the unoptimised profile skips them instead of failing on them.
 
 ### Results

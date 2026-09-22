@@ -19,7 +19,8 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   stringLength, stringIndex, stringEmpty, stringUnicode, stringUnicodeIndex,
   stringNulByte, stringAppend, stringShared, stringUnused, stringLazyHead,
   stringHighLatin1, stringCount, recursiveValue, recursiveValueUse,
-  errorUnusedArgument, errorUnusedLet, errorUnusedShared,
+  errorUnusedArgument, errorUnusedLet, errorUnusedShared, errorPlain,
+  errorEmpty, errorUnicode, errorMultiline,
   tupleRoundTrip, tupleSwap, tupleSolo, tupleWide, tupleBoxed, tupleNested,
   tupleLazyComponent, tupleUnusedComponent,
   textWords, textLines, textFind, textReverse, textFilter, textMap,
@@ -707,9 +708,26 @@ recursiveValueUse x _ = indexChars recursiveValue x
 -- backend evaluated a lazy binding eagerly, every one of them would abort
 -- instead of answering, in every profile and at every input.
 --
--- None of them is ever forced, so no case here asserts what GHC prints when
--- one is. That message is not reproduced; see the README.
+-- The errorUnused fixtures never force their errors. The four forced probes
+-- below pin GHC's output while generated-code emission remains refused.
 --------------------------------------------------------------------------------
+
+-- Forced errorWithoutStackTrace messages, checked against the oracle only.
+{-# NOINLINE errorPlain #-}
+errorPlain :: Int# -> Int# -> Int
+errorPlain _ _ = errorWithoutStackTrace "canary failure"
+
+{-# NOINLINE errorEmpty #-}
+errorEmpty :: Int# -> Int# -> Int
+errorEmpty _ _ = errorWithoutStackTrace ""
+
+{-# NOINLINE errorUnicode #-}
+errorUnicode :: Int# -> Int# -> Int
+errorUnicode _ _ = errorWithoutStackTrace "fout: λ 🐚"
+
+{-# NOINLINE errorMultiline #-}
+errorMultiline :: Int# -> Int# -> Int
+errorMultiline _ _ = errorWithoutStackTrace "first\nsecond\n"
 
 -- A failing argument passed to a function that ignores it.
 {-# NOINLINE errorUnusedArgument #-}
