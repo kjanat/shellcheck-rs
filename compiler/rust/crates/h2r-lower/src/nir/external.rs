@@ -28,6 +28,8 @@ pub enum External {
     /// forces only the left list to WHNF, and the right one is not touched
     /// until the left runs out.
     Append,
+    /// The uncaught, stack-free error boundary; its message is a lazy String.
+    ErrorWithoutStackTrace,
 }
 
 impl External {
@@ -35,12 +37,14 @@ impl External {
     pub fn type_arity(self) -> usize {
         match self {
             External::Append => 1,
+            External::ErrorWithoutStackTrace => 2,
         }
     }
 
     pub fn value_arity(self) -> usize {
         match self {
             External::Append => 2,
+            External::ErrorWithoutStackTrace => 1,
         }
     }
 
@@ -52,6 +56,22 @@ impl External {
             return None;
         }
         match self {
+            External::ErrorWithoutStackTrace => {
+                // This backend currently carries lifted error results only.
+                let Ty::Con { tycon, args } = &type_arguments[0] else {
+                    return None;
+                };
+                if tycon.name != "$ghc-prim$GHC.Types$BoxedRep"
+                    || args.len() != 1
+                    || !matches!(&args[0], Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Types$Lifted" && args.is_empty())
+                {
+                    return None;
+                }
+                Some(arrow(
+                    super::strings::string_ty(),
+                    type_arguments[1].clone(),
+                ))
+            }
             External::Append => {
                 let list = list_of(type_arguments[0].clone());
                 Some(arrow(list.clone(), arrow(list.clone(), list)))
@@ -64,6 +84,7 @@ impl External {
     pub fn element(self, type_arguments: &[Ty]) -> Option<Ty> {
         match self {
             External::Append => type_arguments.first().cloned(),
+            External::ErrorWithoutStackTrace => super::strings::string_ty().list_elem().cloned(),
         }
     }
 }
@@ -107,6 +128,7 @@ pub fn resolve(module: &Module, head: ExprId) -> Option<External> {
     }
     match name.as_str() {
         "$base$GHC.Base$++" => Some(External::Append),
+        "$base$GHC.Err$errorWithoutStackTrace" => Some(External::ErrorWithoutStackTrace),
         _ => None,
     }
 }
@@ -170,5 +192,37 @@ mod tests {
             External::Append.element(std::slice::from_ref(&int)),
             Some(int)
         );
+    }
+
+    #[test]
+    fn stack_free_errors_require_lifted_rep_and_preserve_function_results() {
+        let con = |name: &str, args| Ty::Con {
+            tycon: TyConId {
+                name: name.into(),
+                occ: String::new(),
+                unique: String::new(),
+            },
+            args,
+        };
+        let rep = con(
+            "$ghc-prim$GHC.Types$BoxedRep",
+            vec![con("$ghc-prim$GHC.Types$Lifted", vec![])],
+        );
+        let result = arrow(
+            super::super::strings::string_ty(),
+            super::super::strings::string_ty(),
+        );
+        let entry = External::ErrorWithoutStackTrace;
+        assert_eq!(
+            entry.signature(&[rep.clone(), result.clone()]),
+            Some(arrow(super::super::strings::string_ty(), result.clone()))
+        );
+        assert!(entry.signature(&[rep]).is_none());
+        assert!(
+            entry
+                .signature(&[con("$ghc-prim$GHC.Types$IntRep", vec![]), result])
+                .is_none()
+        );
+        assert_eq!(entry.value_arity(), 1);
     }
 }

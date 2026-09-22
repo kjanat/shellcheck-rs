@@ -123,6 +123,8 @@ pub enum Rule {
     ChrChar,
     UnpackString,
     AppendList,
+    RaiseError,
+    EmptyCase,
     /// A call GHC's demand analysis proved never returns.
     Diverge,
 }
@@ -244,6 +246,14 @@ pub enum Operation {
         cons: data::Constructor,
     },
     Literal(Lit),
+    /// Evaluate a stack-free exception's String when this computation is entered.
+    RaiseError {
+        message: ValueId,
+    },
+    /// Force a scrutinee independently proved not to return.
+    EmptyCase {
+        scrutinee: ValueId,
+    },
     /// Obtain the existing shared value of one instance of a top-level binding
     /// without forcing it, calling it or allocating another copy. This is a
     /// binding identity, not a FnId: the target may be a function, CAF or

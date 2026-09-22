@@ -283,7 +283,7 @@ fn profile_run(cli: &Cli, profile: Profile, jobs: usize) -> Result<Report> {
         std::time::Duration::from_secs(cli.timeout_seconds),
     );
     println!(
-        "{}: {} forced-error oracle/refusal probes, {} failures",
+        "{}: {} error/branch differential probes (two Rust modes), {} failures",
         profile.name(),
         fixtures::ERROR_PROBES.len(),
         probe_failures.len()
@@ -349,20 +349,36 @@ fn differ(
     Ok((ran, differences))
 }
 
-/// Entries whose only correct outcome is a refusal. A wrong answer for one of
-/// these would be a miscompile, not a missing feature.
+/// Forced errors: independently assert the oracle contract, then compare both
+/// generated executables. Only the executable-name prefix differs by design.
 fn error_probes(modules: &[Module], oracle: &Path, timeout: std::time::Duration) -> Vec<String> {
     let mut failures = Vec::new();
+    if let Err(error) = error_evidence(modules) {
+        failures.push(error);
+    }
+    let mut compiled = std::collections::BTreeSet::new();
     let Some(program_name) = oracle.file_name().and_then(|name| name.to_str()) else {
         return vec!["oracle path lacks a UTF-8 program name".into()];
     };
-    for &(entry, message) in fixtures::ERROR_PROBES {
-        let arguments = vec![entry.to_string(), "0".into(), "0".into()];
-        let expected = differential::Outcome {
-            stdout: vec![],
-            stderr: format!("{program_name}: {message}\n").into_bytes(),
-            code: Some(1),
+    for &(entry, input, message) in fixtures::ERROR_PROBES {
+        let arguments = vec![entry.to_string(), input.to_string(), "42".into()];
+        let expected_for = |name: &str| differential::Outcome {
+            stdout: if message.is_some() {
+                vec![]
+            } else {
+                b"42\n".to_vec()
+            },
+            stderr: message
+                .map(|m| {
+                    let mut bytes = format!("{name}: ").into_bytes();
+                    bytes.extend_from_slice(m);
+                    bytes.push(b'\n');
+                    bytes
+                })
+                .unwrap_or_default(),
+            code: Some(if message.is_some() { 1 } else { 0 }),
         };
+        let expected = expected_for(program_name);
         match differential::invoke(oracle, &arguments, timeout) {
             Ok(actual) if actual == expected => {}
             Ok(actual) => failures.push(format!(
@@ -372,18 +388,78 @@ fn error_probes(modules: &[Module], oracle: &Path, timeout: std::time::Duration)
         }
         match evidence::resolve(modules, entry) {
             Ok(binding) => match emit_entry(modules, &binding.name) {
-                Err(reason)
-                    if reason.contains("unimplemented non-returning call")
-                        || reason.contains("imported binding is outside the loaded world") => {}
-                Err(reason) => failures.push(format!("{entry}: unexpected refusal: {reason}")),
-                Ok(_) => failures.push(format!(
-                    "{entry}: error emission enabled without differential coverage"
-                )),
+                Err(reason) => failures.push(format!("{entry}: error emission failed: {reason}")),
+                Ok(source) => {
+                    let artifacts =
+                        differential::artifacts(oracle.parent().expect("oracle directory"), entry);
+                    if let Err(error) = std::fs::write(&artifacts.source, source) {
+                        failures.push(format!("{entry}: {error}"));
+                        continue;
+                    }
+                    for mode in Mode::ALL {
+                        let binary = artifacts.binary(mode);
+                        if !compiled.contains(binary) {
+                            if let Err(error) =
+                                differential::compile(&artifacts.source, binary, mode)
+                            {
+                                failures.push(error);
+                                continue;
+                            }
+                            compiled.insert(binary.to_path_buf());
+                        }
+                        let candidate_name = binary.file_name().unwrap().to_str().unwrap();
+                        let expected = expected_for(candidate_name);
+                        match differential::invoke(binary, &arguments[1..], timeout) {
+                            Ok(actual) if actual == expected => {}
+                            Ok(actual) => failures.push(format!(
+                                "{entry} {mode:?}: expected {expected:?}, got {actual:?}"
+                            )),
+                            Err(error) => failures.push(error),
+                        }
+                    }
+                }
             },
             Err(error) => failures.push(error),
         }
     }
     failures
+}
+
+/// Mutate real, source-verified error NIR rather than trusting successful
+/// execution alone to establish that the independent verifier rejects forgeries.
+fn error_evidence(modules: &[Module]) -> Result<(), String> {
+    use h2r_lower::nir::{Operation, Rule, ValueId, verify::verify_leaf_in_world};
+    let binding = evidence::resolve(modules, "errorPlain")?;
+    let leaf = lower_leaf_in_world(modules, binding.module, binding.binder, FnId(0))
+        .map_err(|e| e.reason)?;
+    verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &leaf)?;
+    for mutation in 0..4 {
+        let mut forged = leaf.clone();
+        let instruction = forged
+            .function
+            .blocks
+            .iter_mut()
+            .flat_map(|b| &mut b.instructions)
+            .find(|i| matches!(i.operation, Operation::RaiseError { .. }))
+            .ok_or("errorPlain lacks explicit error operation")?;
+        let Operation::RaiseError { message } = instruction.operation else {
+            unreachable!()
+        };
+        match mutation {
+            0 => {
+                instruction.operation = Operation::RaiseError {
+                    message: ValueId(u32::MAX),
+                }
+            }
+            1 => instruction.operation = Operation::Move(message),
+            2 => instruction.origin.rule = Rule::Literal,
+            _ => instruction.result.ty = h2r_lower::nir::strings::string_ty(),
+        }
+        if verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &forged).is_ok() {
+            return Err(format!("error verifier accepted mutation {mutation}"));
+        }
+    }
+    Ok(())
 }
 
 fn refusals(modules: &[Module], profile: Profile) -> Vec<String> {

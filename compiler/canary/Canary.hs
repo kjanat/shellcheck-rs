@@ -21,6 +21,8 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   stringHighLatin1, stringCount, recursiveValue, recursiveValueUse,
   errorUnusedArgument, errorUnusedLet, errorUnusedShared, errorPlain,
   errorEmpty, errorUnicode, errorMultiline, errorUnboxed,
+  errorComputed, errorBranch, errorLazyArgument, errorLazyShared, errorLazyField,
+  errorNestedMessage, errorNul, errorNulNested, errorChar,
   tupleRoundTrip, tupleSwap, tupleSolo, tupleWide, tupleBoxed, tupleNested,
   tupleLazyComponent, tupleUnusedComponent,
   textWords, textLines, textFind, textReverse, textFilter, textMap,
@@ -709,10 +711,10 @@ recursiveValueUse x _ = indexChars recursiveValue x
 -- instead of answering, in every profile and at every input.
 --
 -- The errorUnused fixtures never force their errors. The forced probes
--- below pin GHC's output while generated-code emission remains refused.
+-- below compare GHC's output with generated executables.
 --------------------------------------------------------------------------------
 
--- Forced errorWithoutStackTrace messages, checked against the oracle only.
+-- Forced errorWithoutStackTrace messages, including a computed String.
 {-# NOINLINE errorPlain #-}
 errorPlain :: Int# -> Int# -> Int
 errorPlain _ _ = errorWithoutStackTrace "canary failure"
@@ -732,6 +734,62 @@ errorUnicode _ _ = errorWithoutStackTrace "fout: λ 🐚"
 {-# NOINLINE errorMultiline #-}
 errorMultiline :: Int# -> Int# -> Int
 errorMultiline _ _ = errorWithoutStackTrace "first\nsecond\n"
+
+{-# NOINLINE errorNul #-}
+errorNul :: Int# -> Int# -> Int
+errorNul _ _ = errorWithoutStackTrace "a\0b"
+
+{-# NOINLINE errorChar #-}
+errorChar :: Int# -> Int# -> Int
+errorChar x _ = errorWithoutStackTrace (C# (chr# x) : "tail")
+
+{-# NOINLINE errorNulNested #-}
+errorNulNested :: Int# -> Int# -> Int
+errorNulNested _ _ = errorWithoutStackTrace ("a\0" ++ errorWithoutStackTrace "inner after NUL")
+
+{-# NOINLINE errorNestedMessage #-}
+errorNestedMessage :: Int# -> Int# -> Int
+errorNestedMessage _ _ = errorWithoutStackTrace ("outer: " ++ errorWithoutStackTrace "inner")
+
+{-# NOINLINE messagePart #-}
+messagePart :: Int# -> String
+messagePart x = case x ==# 0# of
+  1# -> "computed: "
+  _ -> "other: "
+
+{-# NOINLINE errorComputed #-}
+errorComputed :: Int# -> Int# -> Int
+errorComputed x _ = errorWithoutStackTrace (messagePart x ++ "λ 🐚")
+
+{-# NOINLINE errorBranch #-}
+errorBranch :: Int# -> Int# -> Int
+errorBranch x y = case x ==# 0# of
+  1# -> errorWithoutStackTrace (messagePart x ++ "λ 🐚")
+  _ -> I# y
+
+{-# NOINLINE errorLazyArgument #-}
+errorLazyArgument :: Int# -> Int# -> Int#
+errorLazyArgument x _ = case boxedIgnore (I# x) (errorWithoutStackTrace "unused argument") of
+  I# n -> n
+
+{-# NOINLINE errorLazyShared #-}
+errorLazyShared :: Int# -> Int# -> Int#
+errorLazyShared x y =
+  let z = errorWithoutStackTrace "unused shared" :: Int
+  in case boxedIgnore (I# x) z of
+       I# a -> case boxedIgnore (I# y) z of
+         I# b -> a +# b
+
+{-# NOINLINE errorLazyField #-}
+errorLazyField :: Int# -> Int# -> Int#
+errorLazyField x _ = case firstErrorPair (ErrorPair (I# x) (errorWithoutStackTrace "unused field")) of
+  I# n -> n
+
+data ErrorPair = ErrorPair Int Int
+
+{-# NOINLINE firstErrorPair #-}
+firstErrorPair :: ErrorPair -> Int
+firstErrorPair (ErrorPair a _) = a
 
 -- A failing argument passed to a function that ignores it.
 {-# NOINLINE errorUnusedArgument #-}

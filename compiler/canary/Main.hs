@@ -23,6 +23,8 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   newtypeRoundTrip, newtypeField, newtypeFunction, stringAppendShared,
   errorUnusedArgument, errorUnusedLet, errorUnusedShared, errorPlain,
   errorEmpty, errorUnicode, errorMultiline, errorUnboxed,
+  errorComputed, errorBranch, errorLazyArgument, errorLazyShared, errorLazyField,
+  errorNestedMessage, errorNul, errorNulNested, errorChar,
   tupleRoundTrip, tupleSwap, tupleSolo, tupleWide, tupleBoxed, tupleNested,
   tupleLazyComponent, tupleUnusedComponent,
   textWords, textLines, textFind, textReverse, textFilter, textMap,
@@ -220,6 +222,24 @@ main = do
       (I# x, I# y) -> print (I# (textUnicodeWords x y))
     ["errorPlain", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (errorPlain x y)
+    ["errorNestedMessage", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorNestedMessage x y)
+    ["errorNul", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorNul x y)
+    ["errorChar", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorChar x y)
+    ["errorNulNested", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorNulNested x y)
+    ["errorComputed", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorComputed x y)
+    ["errorBranch", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorBranch x y)
+    ["errorLazyArgument", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (errorLazyArgument x y))
+    ["errorLazyShared", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (errorLazyShared x y))
+    ["errorLazyField", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (errorLazyField x y))
     ["errorUnboxed", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (errorUnboxed x y))
     ["errorEmpty", a, b] -> case (read a, read b) of

@@ -830,10 +830,10 @@ fn empty_case_reads_a_local_cafs_own_demand_evidence() {
     let bottom = modules[0].top[1].pairs[0].binder;
     let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
     verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+    let error = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap_err();
     assert!(
-        crate::emit::emit_entry(&modules, &sn("Main", "main"))
-            .unwrap_err()
-            .contains("unimplemented non-returning call")
+        error.contains("supported scalar/algebraic carriers"),
+        "{error}"
     );
     modules[0].binders[bottom as usize]
         .dmd_sig

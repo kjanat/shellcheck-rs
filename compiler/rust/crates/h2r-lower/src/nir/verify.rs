@@ -562,6 +562,32 @@ fn verify_value(
         };
         return verify_tail(&region_context, context.function, *target, expr, ty);
     }
+    if let Expr::Case {
+        scrut,
+        binder,
+        alts,
+        ..
+    } = module.expr(expr)
+        && alts.is_empty()
+    {
+        divergent_spine(context, expr, ty).ok_or("empty case lacks non-return evidence")?;
+        let instruction = block.instructions.last().ok_or("missing empty case")?;
+        let Operation::EmptyCase { scrutinee } = instruction.operation else {
+            return Err("empty case must force its scrutinee".into());
+        };
+        if instruction.origin.source != Source::Expr(expr)
+            || instruction.origin.rule != Rule::EmptyCase
+            || instruction.result.id != returned
+            || !instruction.result.ty.alpha_eq(ty)
+        {
+            return Err("empty case differs from source".into());
+        }
+        let mut prefix = block.clone();
+        prefix.instructions.pop();
+        let (nt, nv, nn) =
+            verify_value(context, &prefix, *scrut, view.binder_ty(*binder), scrutinee)?;
+        return Ok((nt, nv, nn + 1));
+    }
     if let Some(counts) = verify_unboxed_tuple(context, block, expr, ty, returned)? {
         return Ok(counts);
     }
@@ -593,6 +619,16 @@ fn verify_value(
         let signature = entry
             .signature(&type_arguments)
             .ok_or("source external call type arguments mismatch")?;
+        if entry == external::External::ErrorWithoutStackTrace && !data::lifted(&world, ty) {
+            return Err("stack-free error requires a lifted result".into());
+        }
+        let mut result = &signature;
+        for _ in 0..entry.value_arity() {
+            let Ty::Fun { res, .. } = result else {
+                return Err("external signature lacks value arrow".into());
+            };
+            result = res;
+        }
         let element = entry
             .element(&type_arguments)
             .ok_or("source external call type arguments mismatch")?;
@@ -601,27 +637,31 @@ fn verify_value(
         }
         let (nil, cons) = data::list_layouts(&world, &element)?;
         let instruction = block.instructions.last().ok_or("missing external call")?;
-        let Operation::AppendList {
-            left,
-            right,
-            nil: claimed_nil,
-            cons: claimed_cons,
-        } = &instruction.operation
-        else {
-            return Err("source external call was not lowered as one".into());
+        let (operands, rule) = match (&instruction.operation, entry) {
+            (
+                Operation::AppendList {
+                    left,
+                    right,
+                    nil: claimed_nil,
+                    cons: claimed_cons,
+                },
+                external::External::Append,
+            ) if claimed_nil == &nil && claimed_cons == &cons => {
+                (vec![*left, *right], Rule::AppendList)
+            }
+            (Operation::RaiseError { message }, external::External::ErrorWithoutStackTrace) => {
+                (vec![*message], Rule::RaiseError)
+            }
+            _ => return Err("source external call was not lowered as one".into()),
         };
-        if entry != external::External::Append
-            || claimed_nil != &nil
-            || claimed_cons != &cons
-            || instruction.origin.source != Source::Expr(expr)
-            || instruction.origin.rule != Rule::AppendList
+        if instruction.origin.source != Source::Expr(expr)
+            || instruction.origin.rule != rule
             || instruction.result.id != returned
-            || !instruction.result.ty.alpha_eq(signature.fun_result())
+            || !instruction.result.ty.alpha_eq(result)
             || !instruction.result.ty.alpha_eq(ty)
         {
             return Err("external call differs from source".into());
         }
-        let operands = [*left, *right];
         let limit = block.instructions.len() - 1;
         let mut remaining = &signature;
         let mut consumed = 0;
@@ -2065,7 +2105,10 @@ fn verify_unboxed_tuple(
     let Ty::Con { args: instance, .. } = ty else {
         unreachable!()
     };
-    if types != *instance || args.len() != fields.len() {
+    if types.len() != instance.len()
+        || !types.iter().zip(instance).all(|(a, b)| a.alpha_eq(b))
+        || args.len() != fields.len()
+    {
         return Err("source unboxed tuple saturation/type arguments mismatch".into());
     }
     let instruction = block
@@ -2153,7 +2196,10 @@ fn verify_constructor(
     let Ty::Con { args: instance, .. } = ty else {
         unreachable!()
     };
-    if types != *instance || args.len() != expected.fields.len() {
+    if types.len() != instance.len()
+        || !types.iter().zip(instance).all(|(a, b)| a.alpha_eq(b))
+        || args.len() != expected.fields.len()
+    {
         return Err("source constructor saturation/type arguments mismatch".into());
     }
     let instruction = block
@@ -2785,6 +2831,19 @@ pub fn verify(function: &Function) -> Result<(), String> {
                         if !available.contains_key(value) {
                             return Err(format!("unavailable call argument {value:?}"));
                         }
+                    }
+                }
+                Operation::RaiseError { message } => {
+                    if !available
+                        .get(&message)
+                        .is_some_and(|ty| ty.alpha_eq(&strings::string_ty()))
+                    {
+                        return Err("error message must be an available String".into());
+                    }
+                }
+                Operation::EmptyCase { scrutinee } => {
+                    if !available.contains_key(&scrutinee) {
+                        return Err("empty case scrutinee unavailable".into());
                     }
                 }
                 Operation::AppendList {

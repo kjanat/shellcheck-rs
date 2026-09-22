@@ -355,6 +355,68 @@ pub struct StringNames {
     pub character: &'static str,
 }
 
+/// Render a finite Haskell String without forcing anything beyond its spine
+/// and characters. This also handles messages assembled at runtime.
+pub fn error_message(mut message: Data, names: StringNames) -> Vec<u8> {
+    let mut text = Vec::new();
+    loop {
+        let cell = message.force();
+        if cell.constructor == names.nil {
+            assert!(cell.fields.is_empty());
+            return text;
+        }
+        assert_eq!(cell.constructor, names.cons);
+        assert_eq!(cell.fields.len(), 2);
+        let character = cell.fields[0].data();
+        let character = character.force();
+        assert_eq!(character.constructor, names.character);
+        assert_eq!(character.fields.len(), 1);
+        // GHC drops surrogates but its UTF-8 encoder otherwise performs
+        // unchecked word arithmetic, even for out-of-range chr# values.
+        let code = character.fields[0].char_code() as u64;
+        match code {
+            0..=0x7f => text.push(code as u8),
+            0x80..=0x7ff => text.extend([(0xc0 + (code >> 6)) as u8, (0x80 + (code & 0x3f)) as u8]),
+            0xd800..=0xdfff => {}
+            0x800..=0xffff => text.extend([
+                (0xe0 + (code >> 12)) as u8,
+                (0x80 + ((code >> 6) & 0x3f)) as u8,
+                (0x80 + (code & 0x3f)) as u8,
+            ]),
+            _ => text.extend([
+                (0xf0u64.wrapping_add(code >> 18)) as u8,
+                (0x80 + ((code >> 12) & 0x3f)) as u8,
+                (0x80 + ((code >> 6) & 0x3f)) as u8,
+                (0x80 + (code & 0x3f)) as u8,
+            ]),
+        }
+        message = cell.fields[1].data();
+    }
+}
+
+/// The generated CLI's uncaught `errorWithoutStackTrace` boundary. Exception
+/// catching and GHC call stacks are not implemented by this adapter.
+pub fn raise_error(message: Data, names: StringNames) -> ! {
+    use std::io::Write;
+    let message = error_message(message, names);
+    // Match the oracle: a NUL truncates output, not evaluation of the
+    // message's remaining tail.
+    let message = message
+        .split(|byte| *byte == 0)
+        .next()
+        .expect("one segment");
+    let executable = std::env::args_os().next().unwrap_or_default();
+    let name = std::path::Path::new(&executable)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let mut diagnostic = format!("{name}: ").into_bytes();
+    diagnostic.extend_from_slice(message);
+    diagnostic.push(b'\n');
+    let _ = std::io::stderr().lock().write_all(&diagnostic);
+    std::process::exit(1)
+}
+
 /// A string literal as a lazy `[Char]`, appended to `tail`.
 pub fn unpack_string(
     bytes: &'static [u8],
@@ -423,6 +485,79 @@ mod append_tests {
             }
             out.push(node.fields[0].int64());
             current = node.fields[1].data();
+        }
+    }
+
+    #[test]
+    fn error_messages_preserve_empty_unicode_nul_and_newlines() {
+        const NAMES: StringNames = StringNames {
+            cons: ":",
+            nil: "[]",
+            character: "C#",
+        };
+        for (bytes, expected) in [
+            (&b"\0"[..], ""),
+            ("fout: λ 🐚\0".as_bytes(), "fout: λ 🐚"),
+            (&b"a\xc0\x80b\n\0"[..], "a\0b\n"),
+        ] {
+            assert_eq!(
+                error_message(unpack_literal(bytes, Encoding::Utf8, NAMES), NAMES),
+                expected.as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn error_messages_force_computed_spines_and_characters_once() {
+        const NAMES: StringNames = StringNames {
+            cons: ":",
+            nil: "[]",
+            character: "C#",
+        };
+        use std::cell::Cell;
+        let forced = Rc::new(Cell::new(0));
+        let count = forced.clone();
+        let character = Data::defer(move || {
+            count.set(count.get() + 1);
+            Node {
+                constructor: NAMES.character,
+                fields: vec![Field::Char(0x3bb)],
+            }
+        });
+        let message = Data::ready(
+            NAMES.cons,
+            vec![
+                Field::Data(character),
+                Field::Data(Data::ready(NAMES.nil, vec![])),
+            ],
+        );
+        assert_eq!(forced.get(), 0);
+        assert_eq!(error_message(message.clone(), NAMES), "λ".as_bytes());
+        assert_eq!(error_message(message, NAMES), "λ".as_bytes());
+        assert_eq!(forced.get(), 1);
+    }
+
+    #[test]
+    fn error_diagnostics_match_unchecked_ghc_encoding_and_drop_surrogates() {
+        let names = StringNames {
+            cons: ":",
+            nil: "[]",
+            character: "C#",
+        };
+        for (code, expected) in [
+            (-1, &b"\xef\xbf\xbf\xbf"[..]),
+            (0xd800, &b""[..]),
+            (0x110000, &b"\xf4\x90\x80\x80"[..]),
+        ] {
+            let character = Data::ready(names.character, vec![Field::Char(code)]);
+            let message = Data::ready(
+                names.cons,
+                vec![
+                    Field::Data(character),
+                    Field::Data(Data::ready(names.nil, vec![])),
+                ],
+            );
+            assert_eq!(error_message(message, names), expected);
         }
     }
 

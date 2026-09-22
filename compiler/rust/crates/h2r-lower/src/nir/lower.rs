@@ -647,10 +647,21 @@ fn lower_tail_at(
     };
     let mut instructions = Vec::new();
     let mut locals = locals.clone();
-    // An empty case has no continuation, but it does evaluate its scrutinee.
-    // Only collapse it when that scrutinee independently proves non-return.
-    // This remains analysis-only; the emitter refuses Diverge terminators.
-    if let Some(divergent) = divergent_spine(context, source, ty) {
+    // Preserve executable scrutinees and implemented calls. Demand evidence
+    // alone still yields analysis-only Diverge, which emission refuses.
+    let executable_empty = if let Expr::Case { scrut, alts, .. } = module.expr(source) {
+        alts.is_empty()
+            && (module
+                .resolve(*scrut)
+                .is_some_and(|b| matches!(module.binding(b).site, BindSite::Top))
+                || external_spine(context, *scrut).is_some())
+    } else {
+        false
+    };
+    if let Some(divergent) = divergent_spine(context, source, ty)
+        && external_spine(context, source).is_none()
+        && !executable_empty
+    {
         blocks[id.0 as usize] = Block {
             id,
             params: context.params.to_vec(),
@@ -681,6 +692,7 @@ fn lower_tail_at(
         alts,
         ..
     } = module.expr(source)
+        && !executable_empty
         && !data::lifted(&world, view.binder_ty(*binder))
         // An unboxed tuple is unlifted too, but a case on one is not a switch:
         // it binds components and branches nowhere. It belongs on the value
@@ -862,7 +874,10 @@ fn lower_value(
         let Ty::Con { args, .. } = ty else {
             unreachable!()
         };
-        if types != *args || sources.len() != fields.len() {
+        if types.len() != args.len()
+            || !types.iter().zip(args).all(|(a, b)| a.alpha_eq(b))
+            || sources.len() != fields.len()
+        {
             return Err(fail(
                 Some(current),
                 "unboxed tuple type arguments or saturation mismatch",
@@ -903,7 +918,10 @@ fn lower_value(
         let Ty::Con { args, .. } = ty else {
             unreachable!()
         };
-        if types != *args || sources.len() != constructor.fields.len() {
+        if types.len() != args.len()
+            || !types.iter().zip(args).all(|(a, b)| a.alpha_eq(b))
+            || sources.len() != constructor.fields.len()
+        {
             return Err(fail(
                 Some(current),
                 "constructor type arguments or saturation mismatch",
@@ -937,6 +955,31 @@ fn lower_value(
         return Ok(value);
     }
     let value = match module.expr(current) {
+        Expr::Case {
+            scrut,
+            binder,
+            alts,
+            ..
+        } if alts.is_empty() && divergent_spine(context, current, ty).is_some() => {
+            let operand_ty = view.binder_ty(*binder);
+            let scrutinee = lower_value(context, *scrut, operand_ty, locals, instructions, blocks)?;
+            let value = fresh_value(context);
+            instructions.push(Instruction {
+                result: Value {
+                    id: value,
+                    ty: ty.clone(),
+                },
+                operation: Operation::EmptyCase { scrutinee },
+                origin: origin(Rule::EmptyCase),
+            });
+            value
+        }
+        Expr::Case { alts, .. } if alts.is_empty() => {
+            return Err(fail(
+                Some(current),
+                "empty case scrutinee lacks supported non-return evidence",
+            ));
+        }
         Expr::Lit(lit) => {
             let value = fresh_value(context);
             instructions.push(Instruction {
@@ -1167,6 +1210,12 @@ fn lower_value(
             let signature = entry
                 .signature(&type_arguments)
                 .ok_or_else(|| fail(Some(current), "external call type arguments mismatch"))?;
+            if entry == external::External::ErrorWithoutStackTrace && !data::lifted(&world, ty) {
+                return Err(fail(
+                    Some(current),
+                    "stack-free error requires a lifted result",
+                ));
+            }
             let element = entry
                 .element(&type_arguments)
                 .ok_or_else(|| fail(Some(current), "external call type arguments mismatch"))?;
@@ -1184,8 +1233,8 @@ fn lower_value(
                 let Ty::Fun { arg, res, .. } = remaining else {
                     return Err(fail(Some(current), "external call lacks a value arrow"));
                 };
-                // Neither list is forced: a lazy argument stays a thunk, as it
-                // would be in any other lifted argument position.
+                // Lifted arguments stay thunks; each implemented operation
+                // decides when they are demanded (append versus error).
                 let value = match module.expr(source) {
                     Expr::App { .. }
                     | Expr::Case { .. }
@@ -1202,9 +1251,6 @@ fn lower_value(
             if !remaining.alpha_eq(ty) {
                 return Err(fail(Some(current), "external call result type mismatch"));
             }
-            let [left, right] = arguments.as_slice() else {
-                return Err(fail(Some(current), "append takes two lists"));
-            };
             let value = fresh_value(context);
             instructions.push(Instruction {
                 result: Value {
@@ -1213,14 +1259,18 @@ fn lower_value(
                 },
                 operation: match entry {
                     external::External::Append => Operation::AppendList {
-                        left: *left,
-                        right: *right,
+                        left: arguments[0],
+                        right: arguments[1],
                         nil,
                         cons,
+                    },
+                    external::External::ErrorWithoutStackTrace => Operation::RaiseError {
+                        message: arguments[0],
                     },
                 },
                 origin: origin(match entry {
                     external::External::Append => Rule::AppendList,
+                    external::External::ErrorWithoutStackTrace => Rule::RaiseError,
                 }),
             });
             value

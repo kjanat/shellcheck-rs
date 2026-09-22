@@ -354,25 +354,33 @@ pub const REFUSALS: &[Refusal] = &[
     },
 ];
 
-/// Forced errors whose oracle behavior is known but whose Rust implementation
-/// is still refused. Kept separate from differential cases: no generated
-/// program has passed these comparisons yet.
-pub const ERROR_PROBES: &[(&str, &str)] = &[
-    ("errorPlain", "canary failure"),
-    ("errorUnboxed", "canary failure"),
-    ("errorEmpty", ""),
-    ("errorUnicode", "fout: λ 🐚"),
-    ("errorMultiline", "first\nsecond\n"),
+/// Forced stack-free errors checked against the oracle and both Rust modes.
+pub const ERROR_PROBES: &[(&str, i64, Option<&[u8]>)] = &[
+    ("errorPlain", 0, Some(b"canary failure")),
+    ("errorUnboxed", 0, Some(b"canary failure")),
+    ("errorEmpty", 0, Some(b"")),
+    ("errorUnicode", 0, Some("fout: λ 🐚".as_bytes())),
+    ("errorMultiline", 0, Some(b"first\nsecond\n")),
+    ("errorNul", 0, Some(b"a")),
+    ("errorChar", 65, Some(b"Atail")),
+    ("errorChar", 0, Some(b"")),
+    ("errorChar", 0xd800, Some(b"tail")),
+    ("errorChar", 0x110000, Some(b"\xf4\x90\x80\x80tail")),
+    ("errorChar", -1, Some(b"\xef\xbf\xbf\xbftail")),
+    ("errorNulNested", 0, Some(b"inner after NUL")),
+    ("errorNestedMessage", 0, Some(b"inner")),
+    ("errorComputed", 0, Some("computed: λ 🐚".as_bytes())),
+    ("errorComputed", 1, Some("other: λ 🐚".as_bytes())),
+    ("errorBranch", 0, Some("computed: λ 🐚".as_bytes())),
+    ("errorBranch", 1, None),
+    ("errorBranch", -1, None),
 ];
 
 /// Every fixture, in the order the report prints them.
 pub const FIXTURES: &[Fixture] = &[
-    prove_in(
-        Profile::Optimized,
-        "errorUnboxed",
-        Inputs::EvidenceOnly,
-        &[both(Evidence::ClosureRule(RuleKind::Diverge))],
-    ),
+    run("errorLazyArgument", Inputs::Binary),
+    run("errorLazyShared", Inputs::Binary),
+    run("errorLazyField", Inputs::Binary),
     // Scalar arithmetic, comparison and control flow.
     run("constant", Inputs::Unary),
     run("forward", Inputs::Binary),

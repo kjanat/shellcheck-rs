@@ -281,6 +281,8 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 | Operation::ChrChar(_)
                 | Operation::UnpackString(_)
                 | Operation::AppendList { .. }
+                | Operation::RaiseError { .. }
+                | Operation::EmptyCase { .. }
                 | Operation::DelayBlock { .. }
                 | Operation::MakeUnboxedTuple { .. }
                 | Operation::UnboxedTupleField { .. }
@@ -440,14 +442,17 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 }
             )
             .unwrap();
-            let value = |id: crate::nir::ValueId| {
-                let ty = &block
+            let value_ty = |id: crate::nir::ValueId| {
+                &block
                     .params
                     .iter()
                     .chain(block.instructions.iter().map(|i| &i.result))
                     .find(|v| v.id == id)
                     .expect("verified operand")
-                    .ty;
+                    .ty
+            };
+            let value = |id: crate::nir::ValueId| {
+                let ty = value_ty(id);
                 if carrier(world, ty) != "i64" {
                     format!("v{}.clone()", id.0)
                 } else {
@@ -641,6 +646,27 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             "{{ {captures} {}::defer(move || b_{index}_{}({args}).force()) }}",
                             carrier(world, &instruction.result.ty),
                             target.0
+                        )
+                    }
+                    Operation::RaiseError { message } => {
+                        let (nil, cons, character) = data::string_layouts(world)?;
+                        format!(
+                            "h2r_rt::raise_error({}, HStringNames {{ nil: {:?}, cons: {:?}, character: {:?} }})",
+                            value(*message),
+                            nil.name,
+                            cons.name,
+                            character.name
+                        )
+                    }
+                    Operation::EmptyCase { scrutinee } => {
+                        let force = if data::lifted(world, value_ty(*scrutinee)) {
+                            ".force()"
+                        } else {
+                            ""
+                        };
+                        format!(
+                            "{{ let _ = {}{force}; unreachable!(\"non-returning scrutinee returned\") }}",
+                            value(*scrutinee)
                         )
                     }
                     Operation::AppendList {

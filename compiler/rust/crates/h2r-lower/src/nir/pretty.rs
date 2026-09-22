@@ -101,6 +101,8 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                 Operation::AppendList { left, right, .. } => {
                     format!("append-list v{} v{}", left.0, right.0)
                 }
+                Operation::RaiseError { message } => format!("raise-error v{}", message.0),
+                Operation::EmptyCase { scrutinee } => format!("empty-case v{}", scrutinee.0),
                 Operation::UnpackString(unpack) => format!(
                     "unpack-string {:?} {} bytes{}",
                     unpack.encoding,
