@@ -321,7 +321,7 @@ impl ClosureSet {
     pub fn reason(&self) -> Option<&str> {
         match self {
             ClosureSet::Top(r) => Some(r),
-            _ => None,
+            ClosureSet::Set(_) => None,
         }
     }
     pub fn keys(&self) -> &BTreeSet<String> {
@@ -1768,7 +1768,7 @@ fn classify_use(p: &Program, mi: usize, occ: ExprId, work: &mut Vec<(usize, Expr
                     args: 0,
                 };
             }
-            _ => {
+            Edge::AppFun => {
                 return Use {
                     kind: UseKind::Other,
                     at: parent,
@@ -2345,7 +2345,7 @@ fn judge(r: &Raw, set: &ClosureSet, ps: &[Producer], classes: usize) -> Verdict 
     if let Some(o) = ps.iter().find(|x| x.shape.is_opaque()) {
         let holder = match &o.shape {
             Shape::Opaque { why, .. } => why.clone(),
-            _ => unreachable!(),
+            Shape::Known { .. } => unreachable!(),
         };
         return Verdict::Preserve(format!("{holder} ({} node {})", o.module, o.node));
     }
@@ -2652,7 +2652,7 @@ impl Higher {
         if let Some(o) = ps.iter().find(|x| x.shape.is_opaque()) {
             let holder = match &o.shape {
                 Shape::Opaque { why, .. } => why.clone(),
-                _ => unreachable!(),
+                Shape::Known { .. } => unreachable!(),
             };
             return Verdict::Preserve(format!("{holder} ({} node {})", o.module, o.node));
         }

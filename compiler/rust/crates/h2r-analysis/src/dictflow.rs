@@ -388,7 +388,7 @@ impl DictSet {
     pub fn reason(&self) -> Option<&str> {
         match self {
             DictSet::Top(r) => Some(r),
-            _ => None,
+            DictSet::Set(_) => None,
         }
     }
     pub fn keys(&self) -> &BTreeSet<String> {

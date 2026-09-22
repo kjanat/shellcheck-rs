@@ -683,6 +683,53 @@ fn unboxed_tuple_verifier_rejects_a_swapped_projection() {
     }
 }
 
+fn case_binder_refusal(ty: h2r_core_ir::Ty) -> String {
+    use crate::nir::{FnId, lower::lower_leaf_in_world};
+    let mut modules = unboxed_tuple_world();
+    let m = &mut modules[0];
+    let index = m.types.len() as u32;
+    m.types.push(ty);
+    for b in &mut m.binders {
+        if b.unique == "wild" {
+            b.ty = index;
+        }
+    }
+    let owner = modules[0].top[0].pairs[0].binder;
+    lower_leaf_in_world(&modules, 0, owner, FnId(0))
+        .expect_err("the case must be refused")
+        .reason
+}
+
+#[test]
+fn a_case_scrutinee_without_a_carrier_is_not_a_scalar_switch() {
+    let reason = case_binder_refusal(h2r_core_ir::Ty::Var(h2r_core_ir::TyVarId {
+        name: "a".into(),
+        occ: "a".into(),
+        unique: "a".into(),
+    }));
+    assert_eq!(reason, "unsupported case scrutinee carrier");
+}
+
+#[test]
+fn an_unboxed_tuple_instantiation_failure_keeps_its_reason() {
+    let reason = case_binder_refusal(h2r_core_ir::Ty::Con {
+        tycon: h2r_core_ir::TyConId {
+            name: "$u$M$Pair#".into(),
+            occ: "Pair#".into(),
+            unique: "pair-hash".into(),
+        },
+        args: vec![h2r_core_ir::Ty::Con {
+            tycon: h2r_core_ir::TyConId {
+                name: "$ghc-prim$GHC.Prim$Int#".into(),
+                occ: "Int#".into(),
+                unique: "int-hash".into(),
+            },
+            args: vec![],
+        }],
+    });
+    assert_eq!(reason, "type application exceeds forall parameters");
+}
+
 /// A world whose `Main.main` calls an import GHC's demand analysis marked as a
 /// dead end."" Nothing in the world defines it, so the signature is the only
 /// evidence there is, which is exactly the situation the rule is for.

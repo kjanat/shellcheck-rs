@@ -693,26 +693,17 @@ fn lower_tail_at(
         ..
     } = module.expr(source)
         && !executable_empty
-        && !data::lifted(&world, view.binder_ty(*binder))
-        // An unboxed tuple is unlifted too, but a case on one is not a switch:
-        // it binds components and branches nowhere. It belongs on the value
-        // path, which is where the tail falls through to.
-        && !matches!(
-            data::unboxed_tuple_constructor(&world, view.binder_ty(*binder)),
-            Ok(Some(_))
-        )
+        && data::carrier(&world, view.binder_ty(*binder)) == Some(data::Carrier::Scalar)
     {
-        if !primitive::is_scalar(view.binder_ty(*binder))
-            || !data::supported(&world, ty)
-            || !view.ty(*result_ty).alpha_eq(ty)
-            || alts.iter().any(|a| !a.binders.is_empty())
-        {
-            return Err(fail(
-                "switch requires an unboxed scalar scrutinee, a supported result and no \
-                 alternative binders"
-                    .into(),
-            )
-            .about(type_head(view.binder_ty(*binder))));
+        if !data::supported(&world, ty) {
+            return Err(fail("a scalar switch result has no carrier".into()).about(type_head(ty)));
+        }
+        if !view.ty(*result_ty).alpha_eq(ty) {
+            return Err(fail("scalar switch result type mismatch".into()).about(type_head(ty)));
+        }
+        if alts.iter().any(|a| !a.binders.is_empty()) {
+            return Err(fail("a scalar switch alternative binds values".into())
+                .about(type_head(view.binder_ty(*binder))));
         }
         let mut patterns = std::collections::BTreeSet::new();
         let mut defaults = 0;
@@ -731,7 +722,9 @@ fn lower_tail_at(
                     }
                     Some(value)
                 }
-                _ => return Err(fail("constructor alternatives are not scalar".into())),
+                h2r_core_ir::AltCon::DataAlt { .. } => {
+                    return Err(fail("constructor alternatives are not scalar".into()));
+                }
             };
             alternatives.push((pattern, alt.rhs));
         }
@@ -954,6 +947,13 @@ fn lower_value(
         });
         return Ok(value);
     }
+    let unboxed_tuple = match module.expr(current) {
+        Expr::Case { binder, alts, .. } if !alts.is_empty() => {
+            data::unboxed_tuple_constructor(&world, view.binder_ty(*binder))
+                .map_err(|e| fail(Some(current), &e).about(type_head(view.binder_ty(*binder))))?
+        }
+        _ => None,
+    };
     let value = match module.expr(current) {
         Expr::Case {
             scrut,
@@ -1792,15 +1792,10 @@ fn lower_value(
             ty: result_ty,
             alts,
             ..
-        } if matches!(
-            data::unboxed_tuple_constructor(&world, view.binder_ty(*binder)),
-            Ok(Some(_))
-        ) =>
-        {
-            let (constructor, fields) =
-                data::unboxed_tuple_constructor(&world, view.binder_ty(*binder))
-                    .map_err(|e| fail(Some(current), &e))?
-                    .expect("matched an unboxed tuple");
+        } if unboxed_tuple.is_some() => {
+            let Some((constructor, fields)) = unboxed_tuple else {
+                unreachable!("guarded by is_some")
+            };
             if !view.ty(*result_ty).alpha_eq(ty) || !data::supported(&world, ty) {
                 return Err(
                     fail(Some(current), "unboxed tuple case result mismatch").about(type_head(ty))
@@ -2054,6 +2049,10 @@ fn lower_value(
             alts,
             ..
         } => {
+            if !data::supported(&world, view.binder_ty(*binder)) {
+                return Err(fail(Some(current), "unsupported case scrutinee carrier")
+                    .about(type_head(view.binder_ty(*binder))));
+            }
             if alts.len() != 1 || !matches!(alts[0].con, h2r_core_ir::AltCon::Default) {
                 if !primitive::is_scalar(view.binder_ty(*binder)) {
                     return Err(fail(Some(current), "unsupported case scrutinee carrier")

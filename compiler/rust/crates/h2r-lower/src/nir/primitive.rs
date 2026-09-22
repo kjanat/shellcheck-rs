@@ -61,7 +61,7 @@ pub(super) fn is_scalar(ty: &Ty) -> bool {
 /// `LitNumType`. GHC's rendering is a diagnostic and is never parsed.
 pub(super) fn int_literal(lit: &h2r_core_ir::Lit) -> Result<i64, String> {
     i64::try_from(lit.number("Int")?)
-        .map_err(|_| "Int# literal does not fit a signed 64-bit word".into())
+        .map_err(|error| format!("Int# literal does not fit a signed 64-bit word: {error}"))
 }
 
 /// The code point of a `Char#` literal. GHC's `Char#` is a Unicode code point,

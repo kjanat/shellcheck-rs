@@ -428,7 +428,9 @@ fn verify_tail(
                         }
                         *target
                     }
-                    _ => return Err("non-scalar source alternative".into()),
+                    h2r_core_ir::AltCon::DataAlt { .. } => {
+                        return Err("non-scalar source alternative".into());
+                    }
                 };
                 let target_block = function
                     .blocks
@@ -598,10 +600,7 @@ fn verify_value(
         return verify_lambda(context, block, expr, ty, returned);
     }
     if let Expr::Case { binder, .. } = module.expr(expr)
-        && matches!(
-            data::unboxed_tuple_constructor(&world, view.binder_ty(*binder)),
-            Ok(Some(_))
-        )
+        && data::unboxed_tuple_constructor(&world, view.binder_ty(*binder))?.is_some()
     {
         return verify_unboxed_tuple_case(context, block, expr, ty, returned);
     }

@@ -26,10 +26,8 @@ impl<T> Lazy<T> {
 
     /// An already-evaluated binding; the common case after strictness analysis.
     pub fn ready(value: T) -> Self {
-        let cell = OnceCell::new();
-        let _ = cell.set(value);
         Lazy {
-            value: cell,
+            value: OnceCell::from(value),
             init: RefCell::new(None),
         }
     }
@@ -46,9 +44,7 @@ impl<T> Lazy<T> {
             .borrow_mut()
             .take()
             .expect("h2r-rt: re-entrant force (<<loop>>)");
-        let v = f();
-        let _ = self.value.set(v);
-        self.value.get().expect("h2r-rt: thunk set failed")
+        self.value.get_or_init(f)
     }
 
     /// Whether the binding has already been forced.
@@ -413,8 +409,9 @@ pub fn raise_error(message: Data, names: StringNames) -> ! {
     let mut diagnostic = format!("{name}: ").into_bytes();
     diagnostic.extend_from_slice(message);
     diagnostic.push(b'\n');
-    let _ = std::io::stderr().lock().write_all(&diagnostic);
-    std::process::exit(1)
+    match std::io::stderr().lock().write_all(&diagnostic) {
+        Ok(()) | Err(_) => std::process::exit(1),
+    }
 }
 
 /// A string literal as a lazy `[Char]`, appended to `tail`.

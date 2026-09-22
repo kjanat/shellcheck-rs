@@ -8,7 +8,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// The two ways every entry is compiled.
@@ -106,33 +106,20 @@ pub fn invoke(program: &Path, arguments: &[String], timeout: Duration) -> Result
         .map_err(|error| format!("running {}: {error}", program.display()))?;
     let started = Instant::now();
     // Drain both pipes concurrently: waiting first can deadlock on full pipes.
-    let (send, receive) = mpsc::channel();
-    let readers: Vec<Box<dyn Read + Send>> = vec![
-        Box::new(child.stdout.take().expect("piped stdout")),
-        Box::new(child.stderr.take().expect("piped stderr")),
+    let [stdout, stderr] = [
+        drain(Box::new(child.stdout.take().expect("piped stdout"))),
+        drain(Box::new(child.stderr.take().expect("piped stderr"))),
     ];
-    for (index, mut reader) in readers.into_iter().enumerate() {
-        let send = send.clone();
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let result = reader.read_to_end(&mut bytes).map(|_| bytes);
-            let _ = send.send((index, result));
-        });
-    }
-    drop(send);
-    let mut streams = [None, None];
     let mut status = None;
     let result = loop {
-        while let Ok((index, result)) = receive.try_recv() {
-            streams[index] = Some(result);
-        }
         match child.try_wait() {
             Ok(Some(exit)) => status = Some(exit),
             Ok(None) => {}
             Err(error) => break Err(format!("waiting for {}: {error}", program.display())),
         }
         if let Some(exit) = status
-            && streams.iter().all(Option::is_some)
+            && stdout.is_finished()
+            && stderr.is_finished()
         {
             break Ok(exit);
         }
@@ -147,22 +134,39 @@ pub fn invoke(program: &Path, arguments: &[String], timeout: Duration) -> Result
     if result.is_err() {
         // Kill and reap the generated executable/oracle before returning.
         // Descendant-process isolation is not provided by this runner.
-        let _ = child.kill();
+        let killed = child
+            .kill()
+            .map_err(|error| format!("killing {}: {error}", program.display()));
         child
             .wait()
             .map_err(|error| format!("reaping {}: {error}", program.display()))?;
+        killed?;
     }
     let status = result?;
-    let [stdout, stderr] = streams;
     Ok(Outcome {
-        stdout: stdout
-            .unwrap()
-            .map_err(|error| format!("reading stdout: {error}"))?,
-        stderr: stderr
-            .unwrap()
-            .map_err(|error| format!("reading stderr: {error}"))?,
+        stdout: collect(stdout, "stdout")?,
+        stderr: collect(stderr, "stderr")?,
         code: status.code(),
     })
+}
+
+fn drain(mut reader: Box<dyn Read + Send>) -> JoinHandle<std::io::Result<Vec<u8>>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).map(|_| bytes)
+    })
+}
+
+fn collect(reader: JoinHandle<std::io::Result<Vec<u8>>>, stream: &str) -> Result<Vec<u8>, String> {
+    reader
+        .join()
+        .map_err(|payload| {
+            format!(
+                "reading {stream}: {}",
+                h2r_core_ir::panic_message(&*payload)
+            )
+        })?
+        .map_err(|error| format!("reading {stream}: {error}"))
 }
 
 #[cfg(all(test, unix))]

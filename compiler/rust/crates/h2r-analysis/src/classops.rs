@@ -1788,7 +1788,7 @@ impl Census {
                         *a.targets.entry(t.kind).or_default() += 1;
                     }
                 }
-                _ => {}
+                Outcome::Unresolved(_) => {}
             }
         }
         for s in &self.sources {

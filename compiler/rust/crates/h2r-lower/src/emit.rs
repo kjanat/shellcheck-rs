@@ -174,7 +174,7 @@ fn scalar_literal(world: &World<'_>, ty: &Ty, lit: &h2r_core_ir::Lit) -> Result<
         return Ok(i64::from(codepoint));
     }
     i64::try_from(lit.number("Int")?)
-        .map_err(|_| "Int# literal does not fit a signed 64-bit word".into())
+        .map_err(|error| format!("Int# literal does not fit a signed 64-bit word: {error}"))
 }
 
 /// The instance a reference names. Specialization interned it already, so a
@@ -315,7 +315,9 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                         &reference_of(*module, *binder, type_arguments, dictionaries),
                     )?);
                 }
-                _ => return Err("unsupported operation in scalar Rust backend".into()),
+                Operation::Force(_) => {
+                    return Err("unsupported operation in scalar Rust backend".into());
+                }
             }
         }
         edges.push(dependencies);
@@ -809,7 +811,9 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             .join(", ");
                         format!("f_{target}({args})")
                     }
-                    _ => return Err("unsupported operation in scalar Rust backend".into()),
+                    Operation::Force(_) => {
+                        return Err("unsupported operation in scalar Rust backend".into());
+                    }
                 };
                 writeln!(
                     out,

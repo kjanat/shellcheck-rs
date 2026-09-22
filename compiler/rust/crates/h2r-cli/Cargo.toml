@@ -16,3 +16,6 @@ h2r-analysis.workspace = true
 h2r-core-ir.workspace  = true
 h2r-lower.workspace    = true
 serde_json.workspace   = true
+
+[lints]
+workspace = true

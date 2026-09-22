@@ -145,9 +145,9 @@ fn nir_specialize_report(modules: &[Module], name: Option<&str>) -> Result<(Stri
             };
             writeln!(
                 out,
-                "INSTANCE {index} {:?} at {} type arguments, {} dictionaries",
+                "INSTANCE {index} {:?} at {}, {} dictionaries",
                 modules[instance.module].binder(instance.binder).name,
-                instance.type_arguments.len(),
+                type_arguments(instance),
                 instance.dictionaries.len(),
             )
             .unwrap();
@@ -171,24 +171,40 @@ fn nir_specialize_report(modules: &[Module], name: Option<&str>) -> Result<(Stri
             .unwrap();
         }
     } else {
-        // The blockers, by what actually stopped each instance. The source
-        // address varies per site, so it is dropped from the grouping key.
-        let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
-        for error in &program.refused {
-            let reason = error
-                .reason
-                .split(" (at source expression ")
-                .next()
-                .unwrap_or(&error.reason);
-            *reasons.entry(reason.to_string()).or_insert(0) += 1;
-        }
-        let mut ranked: Vec<_> = reasons.into_iter().collect();
-        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let (open, closed): (Vec<_>, Vec<_>) = program
+            .refused
+            .iter()
+            .partition(|error| open_signature(modules, &error.instance));
+        let requested_closed: BTreeSet<_> = program
+            .instances
+            .iter()
+            .filter(|instance| !open_signature(modules, instance))
+            .map(|instance| (instance.module, instance.binder))
+            .collect();
+        let open_owners: BTreeSet<_> = open
+            .iter()
+            .map(|error| (error.instance.module, error.instance.binder))
+            .collect();
+        writeln!(
+            out,
+            "Refused: {refused} = {} at a closed signature + {} at an open signature",
+            closed.len(),
+            open.len()
+        )
+        .unwrap();
         writeln!(out, "Blockers, by reason:").unwrap();
-        for (reason, count) in &ranked {
-            writeln!(out, "{count:8}  {reason}").unwrap();
-        }
-        out.push_str(&blocked_subjects(&program));
+        out.push_str(&rank_reasons(&closed));
+        out.push_str(&blocked_subjects("Blockers", &closed));
+        writeln!(
+            out,
+            "Open signatures: {} refused instances of {} bindings quantified over types they were not given; {} of those bindings were also requested at closed types",
+            open.len(),
+            open_owners.len(),
+            open_owners.intersection(&requested_closed).count(),
+        )
+        .unwrap();
+        out.push_str(&rank_reasons(&open));
+        out.push_str(&blocked_subjects("Open signatures", &open));
         out.push_str(&external_demand(&program));
         writeln!(out, "Specialized instances:").unwrap();
         for (index, instance) in program.instances.iter().enumerate() {
@@ -197,20 +213,61 @@ fn nir_specialize_report(modules: &[Module], name: Option<&str>) -> Result<(Stri
             }
             writeln!(
                 out,
-                "    {} {:?} at {} type arguments, {} dictionaries",
+                "    {} {:?} at {}, {} dictionaries",
                 if program.leaf(index).is_some() {
                     "lowered"
                 } else {
                     "refused"
                 },
                 modules[instance.module].binder(instance.binder).name,
-                instance.type_arguments.len(),
+                type_arguments(instance),
                 instance.dictionaries.len(),
             )
             .unwrap();
         }
     }
     Ok((out, refused))
+}
+
+fn type_arguments(instance: &h2r_lower::nir::specialize::Instance) -> String {
+    let rendered: Vec<_> = instance
+        .type_arguments
+        .iter()
+        .map(h2r_core_ir::Ty::render)
+        .collect();
+    format!("[{}]", rendered.join(", "))
+}
+
+fn open_signature(modules: &[Module], instance: &h2r_lower::nir::specialize::Instance) -> bool {
+    let mut ty = modules[instance.module].binder_ty(instance.binder);
+    let mut quantifiers = 0;
+    while let h2r_core_ir::Ty::ForAll { body, .. } = ty {
+        quantifiers += 1;
+        ty = body;
+    }
+    instance.type_arguments.len() < quantifiers
+}
+
+fn refusal_reason(error: &h2r_lower::nir::specialize::SpecializeError) -> &str {
+    error
+        .reason
+        .split(" (at source expression ")
+        .next()
+        .unwrap_or(&error.reason)
+}
+
+fn rank_reasons(errors: &[&h2r_lower::nir::specialize::SpecializeError]) -> String {
+    use std::fmt::Write;
+
+    let mut reasons: BTreeMap<&str, usize> = BTreeMap::new();
+    for error in errors {
+        *reasons.entry(refusal_reason(error)).or_insert(0) += 1;
+    }
+    let mut out = String::new();
+    for (reason, count) in rank_counts(reasons) {
+        writeln!(out, "{count:8}  {reason}").unwrap();
+    }
+    out
 }
 
 /// Most demanded first, ties broken by the key so a report is reproducible.
@@ -225,17 +282,16 @@ fn rank_counts<K: Ord>(counts: BTreeMap<K, usize>) -> Vec<(K, usize)> {
 /// supported. A reason says which rule stopped an instance; this says which
 /// type would have to be carried for that rule to pass. Refusals whose site
 /// named no subject are counted but not itemised.
-fn blocked_subjects(program: &h2r_lower::nir::specialize::Specialization) -> String {
+fn blocked_subjects(
+    heading: &str,
+    errors: &[&h2r_lower::nir::specialize::SpecializeError],
+) -> String {
     use std::fmt::Write;
 
     const EXTERNAL: &str = "imported binding is outside the loaded world";
     let mut subjects: BTreeMap<(&str, &str), usize> = BTreeMap::new();
-    for error in &program.refused {
-        let reason = error
-            .reason
-            .split(" (at source expression ")
-            .next()
-            .unwrap_or(&error.reason);
+    for error in errors {
+        let reason = refusal_reason(error);
         if reason == EXTERNAL {
             continue;
         }
@@ -246,7 +302,7 @@ fn blocked_subjects(program: &h2r_lower::nir::specialize::Specialization) -> Str
     if subjects.is_empty() {
         return String::new();
     }
-    let mut out = String::from("Blockers, by the type they are about:\n");
+    let mut out = format!("{heading}, by the type they are about:\n");
     for ((reason, subject), count) in rank_counts(subjects) {
         writeln!(out, "{count:8}  {subject}  ({reason})").unwrap();
     }

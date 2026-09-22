@@ -6,3 +6,6 @@ description       = "Runtime support for Haskell code compiled to Rust: residual
 license.workspace = true
 
 [dependencies]
+
+[lints]
+workspace = true

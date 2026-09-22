@@ -70,29 +70,29 @@ impl Pretty<'_> {
     fn expr(&self, out: &mut String, id: ExprId, indent: usize, depth: usize) {
         let m = self.module;
         if depth > self.max_depth {
-            let _ = write!(out, "…{}", self.tag(id));
+            write!(out, "…{}", self.tag(id)).unwrap();
             return;
         }
         match m.expr(id) {
             Expr::Var { occ, .. } => {
-                let _ = write!(out, "{occ}{}", self.tag(id));
+                write!(out, "{occ}{}", self.tag(id)).unwrap();
             }
             Expr::Lit(l) => {
-                let _ = write!(out, "{}{}", l.pretty, self.tag(id));
+                write!(out, "{}{}", l.pretty, self.tag(id)).unwrap();
             }
             Expr::Type { pretty: t, .. } => {
-                let _ = write!(out, "@({t})");
+                write!(out, "@({t})").unwrap();
             }
             Expr::Coercion => out.push_str("@~"),
             Expr::Cast { expr: e, .. } => {
                 out.push('(');
                 self.expr(out, *e, indent, depth + 1);
-                let _ = write!(out, " `cast`){}", self.tag(id));
+                write!(out, " `cast`){}", self.tag(id)).unwrap();
             }
             Expr::Tick(e) => self.expr(out, *e, indent, depth),
             Expr::App { .. } => {
                 let (head, args) = m.spine(id);
-                let _ = write!(out, "({}", self.tag(id));
+                write!(out, "({}", self.tag(id)).unwrap();
                 self.expr(out, head, indent, depth + 1);
                 for a in args {
                     if matches!(m.expr(m.strip(a)), Expr::Type { .. } | Expr::Coercion) {
@@ -114,13 +114,13 @@ impl Pretty<'_> {
                     }
                     cur = *body;
                 }
-                let _ = write!(out, "\\{}{} ->", params.join(" "), self.tag(id));
+                write!(out, "\\{}{} ->", params.join(" "), self.tag(id)).unwrap();
                 Self::nl(out, indent + 1);
                 self.expr(out, cur, indent + 1, depth + 1);
             }
             Expr::Let { bind, body } => {
                 let kw = if bind.recursive { "letrec" } else { "let" };
-                let _ = write!(out, "{kw}{}", self.tag(id));
+                write!(out, "{kw}{}", self.tag(id)).unwrap();
                 for p in &bind.pairs {
                     let b = m.binder(p.binder);
                     Self::nl(out, indent + 1);
@@ -130,7 +130,7 @@ impl Pretty<'_> {
                     } else {
                         ""
                     };
-                    let _ = write!(out, "{jp}{} {{dmd={dmd}}} = ", b.occ);
+                    write!(out, "{jp}{} {{dmd={dmd}}} = ", b.occ).unwrap();
                     self.expr(out, p.rhs, indent + 2, depth + 1);
                 }
                 Self::nl(out, indent);
@@ -143,9 +143,9 @@ impl Pretty<'_> {
                 alts,
                 ..
             } => {
-                let _ = write!(out, "case{} ", self.tag(id));
+                write!(out, "case{} ", self.tag(id)).unwrap();
                 self.expr(out, *scrut, indent + 1, depth + 1);
-                let _ = write!(out, " of {} {{", m.binder(*binder).occ);
+                write!(out, " of {} {{", m.binder(*binder).occ).unwrap();
                 for (i, alt) in alts.iter().enumerate() {
                     Self::nl(out, indent + 1);
                     let con = match &alt.con {
@@ -158,7 +158,7 @@ impl Pretty<'_> {
                         .iter()
                         .map(|b| m.binder(*b).occ.as_str())
                         .collect();
-                    let _ = write!(out, "[alt {i}] {con} {} ->", bs.join(" "));
+                    write!(out, "[alt {i}] {con} {} ->", bs.join(" ")).unwrap();
                     Self::nl(out, indent + 2);
                     self.expr(out, alt.rhs, indent + 2, depth + 1);
                 }

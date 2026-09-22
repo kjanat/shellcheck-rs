@@ -71,6 +71,14 @@ pub enum Ty {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Precedence {
+    Top,
+    Application,
+    Argument,
+    Atom,
+}
+
 impl Ty {
     /// The type constructor at the head of a `TyConApp`, if this is one.
     pub fn tycon(&self) -> Option<&TyConId> {
@@ -146,6 +154,64 @@ impl Ty {
                 Ty::Fun { res, .. } | Ty::ForAll { body: res, .. } => cur = res,
                 _ => return cur,
             }
+        }
+    }
+
+    pub fn render(&self) -> String {
+        self.render_at(Precedence::Top)
+    }
+
+    fn render_at(&self, context: Precedence) -> String {
+        let (text, precedence) = match self {
+            Ty::Var(var) => (var.occ.clone(), Precedence::Atom),
+            Ty::Con { tycon, args } if tycon.name == LIST_TYCON && args.len() == 1 => {
+                (format!("[{}]", args[0].render()), Precedence::Atom)
+            }
+            Ty::Con { tycon, args } if tycon.occ.starts_with("(#") && !args.is_empty() => {
+                let fields = &args[args.len() / 2..];
+                let fields: Vec<_> = fields.iter().map(Ty::render).collect();
+                (format!("(# {} #)", fields.join(", ")), Precedence::Atom)
+            }
+            Ty::Con { tycon, args } if tycon.occ.starts_with("(,") => {
+                let fields: Vec<_> = args.iter().map(Ty::render).collect();
+                (format!("({})", fields.join(", ")), Precedence::Atom)
+            }
+            Ty::Con { tycon, args } if args.is_empty() => (tycon.occ.clone(), Precedence::Atom),
+            Ty::Con { tycon, args } => {
+                let mut text = tycon.occ.clone();
+                for arg in args {
+                    text.push(' ');
+                    text.push_str(&arg.render_at(Precedence::Argument));
+                }
+                (text, Precedence::Application)
+            }
+            Ty::App { fun, arg } => (
+                format!(
+                    "{} {}",
+                    fun.render_at(Precedence::Application),
+                    arg.render_at(Precedence::Argument)
+                ),
+                Precedence::Application,
+            ),
+            Ty::Fun { arg, res, .. } => (
+                format!(
+                    "{} -> {}",
+                    arg.render_at(Precedence::Application),
+                    res.render_at(Precedence::Top)
+                ),
+                Precedence::Top,
+            ),
+            Ty::ForAll { binder, body } => (
+                format!("forall {}. {}", binder.occ, body.render()),
+                Precedence::Top,
+            ),
+            Ty::Lit { text, .. } => (text.clone(), Precedence::Atom),
+            Ty::Opaque { pretty } => (format!("({pretty})"), Precedence::Atom),
+        };
+        if precedence < context {
+            format!("({text})")
+        } else {
+            text
         }
     }
 
@@ -1241,7 +1307,15 @@ pub fn with_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static)
         .spawn(f)
         .context("spawning worker thread")?
         .join()
-        .map_err(|_| anyhow::anyhow!("worker thread panicked"))
+        .map_err(|payload| anyhow::anyhow!("worker thread panicked: {}", panic_message(&*payload)))
+}
+
+pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "a non-string panic payload".into())
 }
 
 #[cfg(test)]
@@ -1585,6 +1659,31 @@ mod tests {
 
     fn list_ty(e: Ty) -> Ty {
         con(LIST_TYCON, vec![e])
+    }
+
+    #[test]
+    fn rendering_brackets_only_where_precedence_needs_it() {
+        let int = con("$ghc-prim$GHC.Types$Int", vec![]);
+        let maybe = |t| con("$base$GHC.Maybe$Maybe", vec![t]);
+        let arrow = |arg, res| Ty::Fun {
+            mult: Box::new(con("$ghc-prim$GHC.Types$Many", vec![])),
+            arg: Box::new(arg),
+            res: Box::new(res),
+        };
+        let pair = con(
+            "$ghc-prim$GHC.Tuple.Prim$(,)",
+            vec![list_ty(char_ty()), maybe(maybe(int.clone()))],
+        );
+        assert_eq!(pair.render(), "([Char], Maybe (Maybe Int))");
+        let higher = arrow(arrow(int.clone(), int.clone()), maybe(int.clone()));
+        assert_eq!(higher.render(), "(Int -> Int) -> Maybe Int");
+        assert_eq!(maybe(higher).render(), "Maybe ((Int -> Int) -> Maybe Int)");
+        let rep = con("$ghc-prim$GHC.Types$LiftedRep", vec![]);
+        let unboxed = con(
+            "$ghc-prim$GHC.Prim$(#,#)",
+            vec![rep.clone(), rep, int.clone(), char_ty()],
+        );
+        assert_eq!(unboxed.render(), "(# Int, Char #)");
     }
 
     #[test]

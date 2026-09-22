@@ -8536,7 +8536,9 @@ fn a_case_head_with_outer_arguments_is_refused_not_peeled() {
     let p = flow_param(&f, "f");
     match &p.set {
         DictSet::Top(r) => assert_eq!(r, dictflow::T_APPLIED_CASE),
-        other => panic!("the dropped argument must refuse the set, got {other:?}"),
+        other @ DictSet::Set(_) => {
+            panic!("the dropped argument must refuse the set, got {other:?}")
+        }
     }
     assert_ne!(p.totality, Totality::ProvenTotal);
     f.accounting().check().unwrap();

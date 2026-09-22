@@ -950,7 +950,7 @@ impl Set {
     fn reason(&self) -> Option<&str> {
         match self {
             Set::Top(r) => Some(r),
-            _ => None,
+            Set::Fin(_) => None,
         }
     }
     /// Monotone join; two `Top`s keep the lexicographically smaller reason
@@ -3158,7 +3158,7 @@ fn closure_judge(r: &HRaw, set: &Set, ps: &[HProducer], classes: usize) -> HVerd
     if let Some(o) = ps.iter().find(|x| x.shape.is_opaque()) {
         let why = match &o.shape {
             PShape::Opaque { why, .. } => *why,
-            _ => unreachable!(),
+            PShape::Known { .. } => unreachable!(),
         };
         return HVerdict::Preserve(format!("{why} ({} node {})", o.module, o.node));
     }

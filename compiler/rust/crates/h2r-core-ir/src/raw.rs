@@ -526,7 +526,7 @@ impl Lit {
         (0..hex.len() / 2)
             .map(|i| {
                 u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
-                    .map_err(|_| "string literal bytes are not hexadecimal".to_string())
+                    .map_err(|error| format!("string literal bytes are not hexadecimal: {error}"))
             })
             .collect()
     }
@@ -557,6 +557,8 @@ impl Lit {
             .as_deref()
             .ok_or("this dump carries no exact value for a numeric literal")?
             .parse()
-            .map_err(|_| "numeric literal does not fit a signed 128-bit value".into())
+            .map_err(|error| {
+                format!("numeric literal does not fit a signed 128-bit value: {error}")
+            })
     }
 }

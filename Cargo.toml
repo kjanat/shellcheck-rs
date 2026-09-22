@@ -17,3 +17,9 @@ h2r-rt       = { path = "compiler/rust/crates/h2r-rt" }
 serde        = { version = "1", features = ["derive"] }
 serde_json   = { version = "1", features = ["unbounded_depth"] }
 walkdir      = "2"
+
+[workspace.lints.clippy]
+let_underscore_must_use            = "warn"
+map_err_ignore                     = "warn"
+match_wildcard_for_single_variants = "warn"
+unused_result_ok                   = "warn"
