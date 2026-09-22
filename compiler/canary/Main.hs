@@ -22,7 +22,7 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   stringHighLatin1, stringCount,
   newtypeRoundTrip, newtypeField, newtypeFunction, stringAppendShared,
   errorUnusedArgument, errorUnusedLet, errorUnusedShared, errorPlain,
-  errorEmpty, errorUnicode, errorMultiline,
+  errorEmpty, errorUnicode, errorMultiline, errorUnboxed,
   tupleRoundTrip, tupleSwap, tupleSolo, tupleWide, tupleBoxed, tupleNested,
   tupleLazyComponent, tupleUnusedComponent,
   textWords, textLines, textFind, textReverse, textFilter, textMap,
@@ -220,6 +220,8 @@ main = do
       (I# x, I# y) -> print (I# (textUnicodeWords x y))
     ["errorPlain", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (errorPlain x y)
+    ["errorUnboxed", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (errorUnboxed x y))
     ["errorEmpty", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (errorEmpty x y)
     ["errorUnicode", a, b] -> case (read a, read b) of

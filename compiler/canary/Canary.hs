@@ -20,7 +20,7 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   stringNulByte, stringAppend, stringShared, stringUnused, stringLazyHead,
   stringHighLatin1, stringCount, recursiveValue, recursiveValueUse,
   errorUnusedArgument, errorUnusedLet, errorUnusedShared, errorPlain,
-  errorEmpty, errorUnicode, errorMultiline,
+  errorEmpty, errorUnicode, errorMultiline, errorUnboxed,
   tupleRoundTrip, tupleSwap, tupleSolo, tupleWide, tupleBoxed, tupleNested,
   tupleLazyComponent, tupleUnusedComponent,
   textWords, textLines, textFind, textReverse, textFilter, textMap,
@@ -708,7 +708,7 @@ recursiveValueUse x _ = indexChars recursiveValue x
 -- backend evaluated a lazy binding eagerly, every one of them would abort
 -- instead of answering, in every profile and at every input.
 --
--- The errorUnused fixtures never force their errors. The four forced probes
+-- The errorUnused fixtures never force their errors. The forced probes
 -- below pin GHC's output while generated-code emission remains refused.
 --------------------------------------------------------------------------------
 
@@ -716,6 +716,10 @@ recursiveValueUse x _ = indexChars recursiveValue x
 {-# NOINLINE errorPlain #-}
 errorPlain :: Int# -> Int# -> Int
 errorPlain _ _ = errorWithoutStackTrace "canary failure"
+
+{-# NOINLINE errorUnboxed #-}
+errorUnboxed :: Int# -> Int# -> Int#
+errorUnboxed _ _ = case (errorWithoutStackTrace "canary failure" :: Int) of I# n -> n
 
 {-# NOINLINE errorEmpty #-}
 errorEmpty :: Int# -> Int# -> Int

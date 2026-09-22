@@ -359,6 +359,7 @@ pub const REFUSALS: &[Refusal] = &[
 /// program has passed these comparisons yet.
 pub const ERROR_PROBES: &[(&str, &str)] = &[
     ("errorPlain", "canary failure"),
+    ("errorUnboxed", "canary failure"),
     ("errorEmpty", ""),
     ("errorUnicode", "fout: λ 🐚"),
     ("errorMultiline", "first\nsecond\n"),
@@ -366,6 +367,12 @@ pub const ERROR_PROBES: &[(&str, &str)] = &[
 
 /// Every fixture, in the order the report prints them.
 pub const FIXTURES: &[Fixture] = &[
+    prove_in(
+        Profile::Optimized,
+        "errorUnboxed",
+        Inputs::EvidenceOnly,
+        &[both(Evidence::ClosureRule(RuleKind::Diverge))],
+    ),
     // Scalar arithmetic, comparison and control flow.
     run("constant", Inputs::Unary),
     run("forward", Inputs::Binary),

@@ -687,10 +687,26 @@ fn unboxed_tuple_verifier_rejects_a_swapped_projection() {
 /// dead end."" Nothing in the world defines it, so the signature is the only
 /// evidence there is, which is exactly the situation the rule is for.
 fn nir_dead_end_world(diverges: bool, signature_arity: usize, applied: usize) -> Vec<Module> {
+    nir_dead_end_cases_world(diverges, signature_arity, applied, 0)
+}
+
+fn nir_dead_end_cases_world(
+    diverges: bool,
+    signature_arity: usize,
+    applied: usize,
+    cases: usize,
+) -> Vec<Module> {
     let dead_end = "$base$GHC.Err$errorWithoutStackTrace";
     let mut body = gvar(dead_end, "errorWithoutStackTrace");
     for _ in 0..applied {
         body = app(body, lit());
+    }
+    for n in 0..cases {
+        body = json!({
+            "node": "Case", "scrut": body,
+            "binder": binder("$_sys$dead", "dead", &format!("dead{n}")),
+            "ty": 0, "type": "Int#", "alts": []
+        });
     }
     let mut modules = vec![module(
         "Main",
@@ -744,6 +760,88 @@ fn emission_refuses_dead_ends_without_runtime_semantics() {
         error.contains("unimplemented non-returning call"),
         "{error}"
     );
+}
+
+#[test]
+fn empty_cases_require_proven_nonreturn_and_preserve_source_accounting() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    for depth in [1, 2, 4] {
+        let modules = nir_dead_end_cases_world(true, 1, 1, depth);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert!(
+            crate::emit::emit_entry(&modules, &sn("Main", "main"))
+                .unwrap_err()
+                .contains("unimplemented non-returning call")
+        );
+        let mut changed = nir_dead_end_cases_world(true, 1, 1, depth);
+        changed[0].ids.values_mut().next().unwrap().dmd_sig.diverges = false;
+        assert!(verify_leaf_in_world(&changed, 0, owner, FnId(0), &leaf).is_err());
+        assert!(lower_leaf_in_world(&changed, 0, owner, FnId(0)).is_err());
+        // A mismatching empty-case result type invalidates the same candidate.
+        let mut changed = nir_dead_end_cases_world(true, 1, 1, depth);
+        let wrong = changed[0].types.len() as u32;
+        changed[0].types.push(h2r_core_ir::Ty::Opaque {
+            pretty: "wrong".into(),
+        });
+        let rhs = changed[0].top[0].pairs[0].rhs;
+        if let h2r_core_ir::Expr::Case { ty, .. } = &mut changed[0].exprs[rhs as usize] {
+            *ty = wrong;
+        }
+        assert!(verify_leaf_in_world(&changed, 0, owner, FnId(0), &leaf).is_err());
+        let mut changed = nir_dead_end_cases_world(true, 1, 1, depth);
+        let rhs = changed[0].top[0].pairs[0].rhs;
+        if let h2r_core_ir::Expr::Case { scrut, alts, .. } = &mut changed[0].exprs[rhs as usize] {
+            alts.push(h2r_core_ir::Alt {
+                con: h2r_core_ir::AltCon::Default,
+                binders: vec![],
+                rhs: *scrut,
+            });
+        }
+        assert!(verify_leaf_in_world(&changed, 0, owner, FnId(0), &leaf).is_err());
+    }
+    let modules = nir_dead_end_cases_world(true, 2, 1, 1);
+    let owner = modules[0].top[0].pairs[0].binder;
+    assert!(lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err());
+}
+
+#[test]
+fn empty_case_reads_a_local_cafs_own_demand_evidence() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let mut bottom = binder(&sn("Main", "bottom"), "bottom", "bottom");
+    bottom["dmdSig"] = json!({"args": [], "diverges": true, "pretty": "b"});
+    let mut modules = vec![module(
+        "Main",
+        vec![
+            (
+                binder(&sn("Main", "main"), "main", "main"),
+                json!({
+                    "node": "Case", "scrut": lvar("bottom"),
+                    "binder": binder("$_sys$dead", "dead", "dead"),
+                    "ty": 0, "type": "Int#", "alts": []
+                }),
+            ),
+            (bottom, lvar("bottom")),
+        ],
+        json!({}),
+    )];
+    let owner = modules[0].top[0].pairs[0].binder;
+    let bottom = modules[0].top[1].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+    assert!(
+        crate::emit::emit_entry(&modules, &sn("Main", "main"))
+            .unwrap_err()
+            .contains("unimplemented non-returning call")
+    );
+    modules[0].binders[bottom as usize]
+        .dmd_sig
+        .as_mut()
+        .unwrap()
+        .diverges = false;
+    assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
+    assert!(lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err());
 }
 
 /// Without the divergence, and below the signature's own arity, the same

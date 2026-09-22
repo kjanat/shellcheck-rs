@@ -470,8 +470,8 @@ fn verify_tail(
             verify_value(context, block, expr, ty, *returned)
         }
         (Exit::Diverge { name, ty: exit }, _) if block.terminator.origin.rule == Rule::Diverge => {
-            let divergent =
-                divergent_spine(context, expr).ok_or("a dead end exit has no diverging source")?;
+            let divergent = divergent_spine(context, expr, ty)
+                .ok_or("a dead end exit has no diverging source")?;
             if divergent.name != *name {
                 return Err("dead end names a binding its source does not".into());
             }
@@ -1900,16 +1900,49 @@ fn external_spine(
 
 /// The same dead end the builder recognises, re-derived from the source alone.
 /// Shares nothing with the builder but the IR and `diverge`'s own rule.
-fn divergent_spine(context: &ValueContext<'_>, current: ExprId) -> Option<diverge::Divergent> {
+fn divergent_spine(
+    context: &ValueContext<'_>,
+    current: ExprId,
+    ty: &Ty,
+) -> Option<diverge::Divergent> {
     use h2r_core_ir::Expr;
     let module = context.module;
     let mut head = current;
+    let mut expected = ty;
+    while let Expr::Case {
+        scrut,
+        binder,
+        ty: result,
+        alts,
+        ..
+    } = module.expr(head)
+    {
+        if !alts.is_empty() || !context.view.ty(*result).alpha_eq(expected) {
+            return None;
+        }
+        expected = context.view.binder_ty(*binder);
+        head = *scrut;
+    }
     let mut values = 0usize;
     while let Expr::App { fun, arg } = module.expr(head) {
         if !matches!(module.expr(*arg), Expr::Type { .. }) {
             values += 1;
         }
         head = *fun;
+    }
+    if matches!(module.expr(current), Expr::Case { .. })
+        && let Some(binder) = module.resolve(head)
+        && matches!(module.binding(binder).site, h2r_core_ir::BindSite::Top)
+    {
+        let source = module.binder(binder);
+        let demand = source.dmd_sig.as_ref()?;
+        return (source.details.as_deref() == Some("")
+            && demand.diverges
+            && values >= demand.args.len())
+        .then(|| diverge::Divergent {
+            name: source.name.clone(),
+            arity: demand.args.len(),
+        });
     }
     if module.reference(head) != Some(h2r_core_ir::Ref::Global) {
         return None;

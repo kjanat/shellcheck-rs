@@ -503,19 +503,53 @@ fn external_spine(
 
 /// A saturated call to a binding GHC proved never returns.
 ///
-/// The binding must be one this world cannot link. When the body *is* in the
-/// world it is lowered like any other, because a dead end is not one
-/// behaviour: `let x = x in x` loops, `error` stops, and only the body says
-/// which. This rule covers the case where there is no body to ask.
-fn divergent_spine(context: &BodyContext<'_>, current: ExprId) -> Option<diverge::Divergent> {
+/// Direct calls must be outside the loaded world. Inside an empty case, a
+/// lexical top-level binding's own demand signature can also establish that
+/// the scrutinee never returns. Neither proof establishes runtime behavior:
+/// the resulting terminator is analysis-only and cannot be emitted.
+fn divergent_spine(
+    context: &BodyContext<'_>,
+    current: ExprId,
+    ty: &Ty,
+) -> Option<diverge::Divergent> {
     let module = context.module;
     let mut head = current;
+    let mut expected = ty;
+    while let Expr::Case {
+        scrut,
+        binder,
+        ty: result,
+        alts,
+        ..
+    } = module.expr(head)
+    {
+        if !alts.is_empty() || !context.view.ty(*result).alpha_eq(expected) {
+            return None;
+        }
+        expected = context.view.binder_ty(*binder);
+        head = *scrut;
+    }
     let mut values = 0usize;
     while let Expr::App { fun, arg } = module.expr(head) {
         if !matches!(module.expr(*arg), Expr::Type { .. }) {
             values += 1;
         }
         head = *fun;
+    }
+    if current != head
+        && matches!(module.expr(current), Expr::Case { .. })
+        && let Some(binder) = module.resolve(head)
+        && matches!(module.binding(binder).site, BindSite::Top)
+    {
+        let source = module.binder(binder);
+        let demand = source.dmd_sig.as_ref()?;
+        return (source.details.as_deref() == Some("")
+            && demand.diverges
+            && values >= demand.args.len())
+        .then(|| diverge::Divergent {
+            name: source.name.clone(),
+            arity: demand.args.len(),
+        });
     }
     if module.reference(head) != Some(h2r_core_ir::Ref::Global) {
         return None;
@@ -613,6 +647,24 @@ fn lower_tail_at(
     };
     let mut instructions = Vec::new();
     let mut locals = locals.clone();
+    // An empty case has no continuation, but it does evaluate its scrutinee.
+    // Only collapse it when that scrutinee independently proves non-return.
+    // This remains analysis-only; the emitter refuses Diverge terminators.
+    if let Some(divergent) = divergent_spine(context, source, ty) {
+        blocks[id.0 as usize] = Block {
+            id,
+            params: context.params.to_vec(),
+            instructions: Vec::new(),
+            terminator: Terminator {
+                exit: Exit::Diverge {
+                    name: divergent.name,
+                    ty: ty.clone(),
+                },
+                origin: origin(Rule::Diverge),
+            },
+        };
+        return Ok(id);
+    }
     blocks[id.0 as usize] = Block {
         id,
         params: context.params.to_vec(),
@@ -737,21 +789,6 @@ fn lower_tail_at(
             arms,
             default: default.expect("validated DEFAULT"),
             args,
-        };
-    } else if let Some(divergent) = divergent_spine(context, source) {
-        // The arguments that would have built GHC's message are not lowered:
-        // nothing reads them, because the diagnostic is not reproduced.
-        blocks[id.0 as usize] = Block {
-            id,
-            params: context.params.to_vec(),
-            instructions: Vec::new(),
-            terminator: Terminator {
-                exit: Exit::Diverge {
-                    name: divergent.name,
-                    ty: ty.clone(),
-                },
-                origin: origin(Rule::Diverge),
-            },
         };
     } else {
         let value = lower_value(context, source, ty, &mut locals, &mut instructions, blocks)?;
