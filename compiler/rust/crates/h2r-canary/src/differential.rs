@@ -5,8 +5,11 @@
 //! this backend emits into a panic, so an arithmetic boundary the lowering got
 //! wrong stops being a silent difference in the low bits.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 /// The two ways every entry is compiled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,16 +96,101 @@ pub struct Outcome {
     pub code: Option<i32>,
 }
 
-pub fn invoke(program: &Path, arguments: &[String]) -> Result<Outcome, String> {
-    let output = Command::new(program)
+pub fn invoke(program: &Path, arguments: &[String], timeout: Duration) -> Result<Outcome, String> {
+    let mut child = Command::new(program)
         .args(arguments)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| format!("running {}: {error}", program.display()))?;
+    let started = Instant::now();
+    // Drain both pipes concurrently: waiting first can deadlock on full pipes.
+    let (send, receive) = mpsc::channel();
+    let readers: Vec<Box<dyn Read + Send>> = vec![
+        Box::new(child.stdout.take().expect("piped stdout")),
+        Box::new(child.stderr.take().expect("piped stderr")),
+    ];
+    for (index, mut reader) in readers.into_iter().enumerate() {
+        let send = send.clone();
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let result = reader.read_to_end(&mut bytes).map(|_| bytes);
+            let _ = send.send((index, result));
+        });
+    }
+    drop(send);
+    let mut streams = [None, None];
+    let mut status = None;
+    let result = loop {
+        while let Ok((index, result)) = receive.try_recv() {
+            streams[index] = Some(result);
+        }
+        match child.try_wait() {
+            Ok(Some(exit)) => status = Some(exit),
+            Ok(None) => {}
+            Err(error) => break Err(format!("waiting for {}: {error}", program.display())),
+        }
+        if let Some(exit) = status
+            && streams.iter().all(Option::is_some)
+        {
+            break Ok(exit);
+        }
+        if started.elapsed() >= timeout {
+            break Err(format!(
+                "{} {arguments:?}: timed out after {timeout:?}",
+                program.display()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    if result.is_err() {
+        // Kill and reap the generated executable/oracle before returning.
+        // Descendant-process isolation is not provided by this runner.
+        let _ = child.kill();
+        child
+            .wait()
+            .map_err(|error| format!("reaping {}: {error}", program.display()))?;
+    }
+    let status = result?;
+    let [stdout, stderr] = streams;
     Ok(Outcome {
-        stdout: output.stdout,
-        stderr: output.stderr,
-        code: output.status.code(),
+        stdout: stdout
+            .unwrap()
+            .map_err(|error| format!("reading stdout: {error}"))?,
+        stderr: stderr
+            .unwrap()
+            .map_err(|error| format!("reading stderr: {error}"))?,
+        code: status.code(),
     })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    fn shell(script: &str, timeout: Duration) -> Result<Outcome, String> {
+        invoke(Path::new("/bin/sh"), &["-c".into(), script.into()], timeout)
+    }
+
+    #[test]
+    fn nontermination_is_a_timeout_failure() {
+        let start = Instant::now();
+        let error = shell("while :; do :; done", Duration::from_millis(50)).unwrap_err();
+        assert!(error.contains("timed out"), "{error}");
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn pipes_are_drained_and_exit_codes_preserved() {
+        let output = shell(
+            "i=0; while [ $i -lt 10000 ]; do printf 'abcdefghij'; printf '0123456789' >&2; i=$((i+1)); done; exit 7",
+            Duration::from_secs(10),
+        ).unwrap();
+        assert_eq!(output.stdout.len(), 100000);
+        assert_eq!(output.stderr.len(), 100000);
+        assert_eq!(output.code, Some(7));
+    }
 }
 
 /// One differential case: the same entry, the same arguments, two programs.

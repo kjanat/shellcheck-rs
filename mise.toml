@@ -149,7 +149,12 @@ done
 [tasks.canary]
 description = "Emit Rust from real Core, compile it, and compare with Haskell"
 depends     = ["canary:extract"]
-run         = "cargo rr --bin h2r-canary"
+usage       = '''
+flag "--timeout-seconds <seconds>" default="10" help="Positive per-invocation time limit for oracle and generated binaries"
+'''
+run         = '''
+cargo rr --bin h2r-canary -- --timeout-seconds "${usage_timeout_seconds?}"
+'''
 
 [tasks."canary:explain"]
 description = "Print one canary entry's NIR, the instances it needs, and its emission"

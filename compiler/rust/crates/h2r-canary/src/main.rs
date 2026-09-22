@@ -53,6 +53,9 @@ struct Cli {
     /// How many entries to compile and run at once.
     #[arg(long)]
     jobs: Option<usize>,
+    /// Maximum seconds for each oracle or generated-binary invocation.
+    #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u64).range(1..))]
+    timeout_seconds: u64,
     /// Print one entry's NIR and the instances it needs, and run nothing.
     #[arg(long, value_name = "OCCURRENCE")]
     explain: Option<String>,
@@ -244,7 +247,13 @@ fn profile_run(cli: &Cli, profile: Profile, jobs: usize) -> Result<Report> {
         })
         .collect();
     let compared = parallel(&runs, jobs, |(fixture, artifacts, arguments)| {
-        differ(&oracle, fixture, artifacts, arguments)
+        differ(
+            &oracle,
+            fixture,
+            artifacts,
+            arguments,
+            std::time::Duration::from_secs(cli.timeout_seconds),
+        )
     });
     let mut cases = 0usize;
     for outcome in compared {
@@ -306,11 +315,12 @@ fn differ(
     fixture: &Fixture,
     artifacts: &Artifacts,
     arguments: &[i64],
+    timeout: std::time::Duration,
 ) -> Result<(usize, Vec<String>), String> {
     let numbers: Vec<String> = arguments.iter().map(i64::to_string).collect();
     let mut invocation = vec![fixture.occ.to_string()];
     invocation.extend(numbers.iter().cloned());
-    let expected = differential::invoke(oracle, &invocation)?;
+    let expected = differential::invoke(oracle, &invocation, timeout)?;
     let mut differences = Vec::new();
     let mut ran = 0;
     for mode in Mode::ALL {
@@ -319,7 +329,7 @@ fn differ(
             mode,
             arguments: arguments.to_vec(),
         };
-        let actual = differential::invoke(artifacts.binary(mode), &numbers)?;
+        let actual = differential::invoke(artifacts.binary(mode), &numbers, timeout)?;
         differences.extend(differential::compare(&case, &expected, &actual));
         ran += 1;
     }

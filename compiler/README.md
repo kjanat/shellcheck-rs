@@ -4934,6 +4934,8 @@ The first thing the next slice should take is on none of those lists. It is **un
 
 After this correction, the full canary passes **20,544 differential cases**. The 294 formerly executable unused-error cases are replaced by emission-refusal checks. NIR coverage remains an analysis measure, not a count of executable bindings.
 
+Each oracle and generated-binary invocation now has a default ten-second deadline, configurable with `mise run canary --timeout-seconds 10`. Both output pipes are drained concurrently. A timed-out child is killed and reaped, and the case fails even if both implementations would time out. This covers direct executables, not descendant process trees, compilation or the boxed-test harness. Forced-error equivalence still requires implementing the error semantics and extending the comparator, which currently requires successful oracle execution.
+
 `error`, `patError`, `errorEmptyList`, `undefined` and the rest of that family were the largest single group behind the external boundary. They are ordinary imported bindings whose bodies this world does not contain, so the resolver could not lower them and 96 instances were refused for the one reason that covers every unlinkable import.
 
 But a call to one of them has no result to lower. GHC's demand analysis has already proved the call is a dead end, and a dead end needs a terminator rather than a value.
