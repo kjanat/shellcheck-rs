@@ -5116,6 +5116,23 @@ Fixtures: `tagColour` and `tagMaybe` call `dataToTag#` directly in both profiles
 
 Canonical NIR coverage per owner: **8,457 lowered / 1,338 refused / 3,957 dead**, against 8,434 / 1,361. The instance survey: **9,830 = 8,472 lowered + 1,358 refused**. The three primops are gone from the external list. Coverage moved less than the 70 sites suggest, because the `Set` and `Map` code behind pointer equality now reaches its balancing functions: `containers` rose from 33 refusals to 67.
 
+## ShellCheck's own bindings, run against GHC
+
+The canary's fixtures are small Haskell programs written for each rule, and their Core is not ShellCheck's. GHC fuses, specialises and resolves dictionaries differently in a small module, so a fixture can pass while testing a different shape from the one the program uses. The library suite closes that gap for the bindings it can reach. It emits ShellCheck's own exported bindings from the canonical dump, and compares each with the same function called from a GHC-built driver (`compiler/canary/shellcheck/Main.hs`) that links the staged ShellCheck tree `mise run extract` prepares. `mise run canary:library` builds that driver, and `mise run canary` runs the suite after both profiles.
+
+The entry point now reads `String` arguments and prints results exactly as `show` does: `Int` with its precedence rule, `Char` and `String` through `showLitChar` (decimal escapes, `\&` before a digit, `\SO\&H`, the `asciiTab` names), lists, tuples, and derived `Show` over positional constructors. A type outside that set is refused by name. The driver prints with `print`, so a data type inside a result must derive `Show`; `Shell` does.
+
+Sixteen bindings run: `isDereferencingBinaryOp`, which is `elem` over a literal list, and `shellForExecutable`, a `case` over string patterns that becomes `eqString`, with operator and executable names including empty, non-ASCII and near-miss spellings, plus fourteen `ShellCheck.Data` constants. All 88 cases match.
+
+Running the constants exposed a limit in rustc. Each top-level value is a thread-local initialiser and a deferred closure, and rustc counts nested instantiations of the one `FnOnce::call_once` shim against `recursion_limit`, which is 128 by default. A chain of 280 constants exceeded it. An emitted program now declares a limit equal to its own number of shim sites, two per function plus one per instruction, when that number is above 128.
+
+Two tools answer the questions this work kept asking:
+
+- `mise run lower:sites <subject>` groups every survey refusal about one stable name or type head by the shape of the call at its site: the head, each argument (type arguments rendered, globals by name, locals with their types), where the call sits, and the refused instances with their type arguments.
+- `mise run lower:entries` lists every live exported binding with its type and whether a standalone entry emits for it, with the refusal reason otherwise. Of 105, 16 emit, and those are the suite above.
+
+`h2r lower --nir --specialize --fn` and `canary:explain` now print what each refusal is about.
+
 ## Remaining runtime and external dependencies
 
 `mise run lower:specialize` against the canonical `-O1` dump reports **384 refusals over 104 bindings in 35 modules**. The groups below are by the work each needs, not by package.

@@ -370,6 +370,14 @@ enum Command {
         /// instance survey.
         #[arg(long, requires = "nir")]
         specialize: bool,
+        /// With --specialize: group every refusal about this stable name or
+        /// type head by the shape of the call at its site.
+        #[arg(long, requires = "specialize", conflicts_with = "fn_name")]
+        sites: Option<String>,
+        /// List every live exported binding with its type and whether a
+        /// standalone Rust entry can be emitted for it.
+        #[arg(long, requires = "nir", conflicts_with_all = ["fn_name", "specialize"])]
+        entries: bool,
         /// Emit the live set, the verifier's audit and the rules as JSON.
         #[arg(long)]
         json: bool,
@@ -585,14 +593,21 @@ fn main() -> Result<()> {
             nir,
             fn_name,
             specialize,
+            sites,
+            entries,
             json,
             rules,
             explain,
             link,
             m24_link,
         } => {
-            if nir {
+            if nir && entries {
+                lower::nir_entries(&dir)
+            } else if nir {
                 match (specialize, fn_name.as_deref()) {
+                    (true, _) if let Some(subject) = sites.as_deref() => {
+                        lower::nir_sites(&dir, subject)
+                    }
                     (true, name) => lower::nir_specialize(&dir, name),
                     (false, Some(name)) => lower::nir(&dir, name),
                     (false, None) => lower::nir_program(&dir),

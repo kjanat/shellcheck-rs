@@ -148,7 +148,7 @@ done
 
 [tasks.canary]
 description = "Emit Rust from real Core, compile it, and compare with Haskell"
-depends     = ["canary:extract"]
+depends     = ["canary:extract", "canary:library"]
 usage       = '''
 flag "--timeout-seconds <seconds>" default="10" help="Positive per-invocation time limit for oracle and generated binaries"
 '''
@@ -388,3 +388,36 @@ run         = [
   { task = "check" },
   { task = "oracle" },
 ]
+
+[tasks."lower:sites"]
+description = "Group every survey refusal about one binding or type by its call shape"
+usage       = '''
+arg "<subject>" help="Stable name or type head, as the survey report prints it"
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+'''
+run         = '''
+set -eu
+cargo locked-build --bin h2r
+target/release/h2r lower "${usage_dir?}" --nir --specialize --sites "${usage_subject?}"
+'''
+
+[tasks."canary:library"]
+description = "Build the GHC driver that calls ShellCheck's own functions for the library suite"
+depends     = ["extract"]
+dir         = "{{ config_root }}/compiler/canary/shellcheck"
+run         = '''
+set -eu
+cabal build --offline --builddir=../../build/shellcheck-oracle/cabal shellcheck-oracle
+cp "$(cabal list-bin --builddir=../../build/shellcheck-oracle/cabal shellcheck-oracle)" ../../build/shellcheck-oracle/oracle
+'''
+
+[tasks."lower:entries"]
+description = "List every live exported binding with its type and whether a Rust entry emits for it"
+usage       = '''
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+'''
+run         = '''
+set -eu
+cargo locked-build --bin h2r
+target/release/h2r lower "${usage_dir?}" --nir --entries
+'''

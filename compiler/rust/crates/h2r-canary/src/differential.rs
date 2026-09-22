@@ -220,7 +220,7 @@ mod comparison_tests {
         Case {
             occ: "failure",
             mode,
-            arguments: vec![42],
+            arguments: vec!["42".into()],
             expected_exit,
         }
     }
@@ -278,14 +278,18 @@ mod comparison_tests {
 pub struct Case {
     pub occ: &'static str,
     pub mode: Mode,
-    pub arguments: Vec<i64>,
+    pub arguments: Vec<String>,
     pub expected_exit: i32,
 }
 
 impl Case {
     pub fn label(&self) -> String {
-        let arguments: Vec<String> = self.arguments.iter().map(i64::to_string).collect();
-        format!("{}{} {}", self.occ, self.mode.suffix(), arguments.join(" "))
+        format!(
+            "{}{} {}",
+            self.occ,
+            self.mode.suffix(),
+            self.arguments.join(" ")
+        )
     }
 }
 

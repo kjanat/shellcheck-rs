@@ -56,6 +56,71 @@ pub fn nir_specialize(dir: &Path, name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Every refusal the whole-program survey attributes to `subject`, grouped by
+/// the shape of the call at its site, so the next implementation is written
+/// against the forms the program actually uses.
+pub fn nir_sites(dir: &Path, subject: &str) -> Result<()> {
+    let modules = load_dir(dir)?;
+    print!("{}", nir_sites_report(&modules, subject)?);
+    Ok(())
+}
+
+/// Every live binding a Haskell caller can name, with its type and whether a
+/// standalone Rust entry can be emitted for it: the candidates for testing
+/// ShellCheck's own Core against the GHC-built library.
+pub fn nir_entries(dir: &Path) -> Result<()> {
+    use std::fmt::Write;
+
+    let modules = load_dir(dir)?;
+    let live = audited_live_set(&modules)?;
+    let mut emitted = Vec::new();
+    let mut refused: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for binding in &live.live {
+        let key = live.node(binding.node).key;
+        let module = &modules[key.module as usize];
+        let binder = module.binder(key.binder);
+        if binder.source_exported != Some(true) {
+            continue;
+        }
+        let line = format!(
+            "{} :: {}",
+            binder.name,
+            module.binder_ty(key.binder).render()
+        );
+        match h2r_lower::emit::emit_entry(&modules, &binder.name) {
+            Ok(_) => emitted.push(line),
+            Err(reason) => {
+                let reason = reason
+                    .rsplit_once(": ")
+                    .map_or(reason.as_str(), |(_, tail)| tail)
+                    .split(" (at source expression ")
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                refused.entry(reason).or_default().push(line);
+            }
+        }
+    }
+    let mut out = format!(
+        "Exported live bindings: {} emitted, {} refused\nEmitted:\n",
+        emitted.len(),
+        refused.values().map(Vec::len).sum::<usize>()
+    );
+    for line in &emitted {
+        writeln!(out, "    {line}").unwrap();
+    }
+    let mut ranked: Vec<_> = refused.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    for (reason, lines) in ranked {
+        writeln!(out, "Refused, {}: {reason}", lines.len()).unwrap();
+        for line in lines {
+            writeln!(out, "    {line}").unwrap();
+        }
+    }
+    print!("{out}");
+    Ok(())
+}
+
 /// The live set every NIR path roots from: complete in-world linkage, and no
 /// disagreement with the independent verifier.
 fn audited_live_set(modules: &[Module]) -> Result<LiveSet> {
@@ -73,6 +138,110 @@ fn audited_live_set(modules: &[Module]) -> Result<LiveSet> {
         );
     }
     Ok(live)
+}
+
+fn nir_sites_report(modules: &[Module], subject: &str) -> Result<String> {
+    use h2r_core_ir::{Edge, Expr};
+    use h2r_lower::nir::specialize;
+    use std::fmt::Write;
+
+    let live = audited_live_set(modules)?;
+    let roots: Vec<_> = live
+        .live
+        .iter()
+        .map(|binding| {
+            let key = live.node(binding.node).key;
+            specialize::Instance::whole(key.module as usize, key.binder)
+        })
+        .collect();
+    let program = specialize::survey(modules, &roots);
+    let mut groups: BTreeMap<(String, String, String), Vec<String>> = BTreeMap::new();
+    for error in &program.refused {
+        if error.detail.as_deref() != Some(subject) {
+            continue;
+        }
+        let module = &modules[error.instance.module];
+        let instance = format!(
+            "{} at {}",
+            module.binder(error.instance.binder).occ,
+            type_arguments(&error.instance)
+        );
+        let Some(site) = error.source else {
+            groups
+                .entry((
+                    refusal_reason(error).to_string(),
+                    "no source site".into(),
+                    String::new(),
+                ))
+                .or_default()
+                .push(instance);
+            continue;
+        };
+        let root = module.spine_root(site);
+        let (head, arguments) = module.spine(root);
+        let mut shape = match module.expr(head) {
+            Expr::Var { occ, .. } => occ.clone(),
+            other => format!("<{}>", expression_kind(other)),
+        };
+        for argument in arguments {
+            let argument = module.strip(argument);
+            shape.push(' ');
+            shape.push_str(&match module.expr(argument) {
+                Expr::Type { ty, .. } => format!("@{{{}}}", module.ty(*ty).render()),
+                Expr::Var { name, .. } => match module.resolve(argument) {
+                    Some(binder) => format!("(local :: {})", module.binder_ty(binder).render()),
+                    None => name.clone(),
+                },
+                Expr::App { .. } => match module.expr(module.spine(argument).0) {
+                    Expr::Var { occ, .. } => format!("({occ} ..)"),
+                    _ => "(application)".into(),
+                },
+                other => format!("<{}>", expression_kind(other)),
+            });
+        }
+        let context = match (module.parent[root as usize], &module.edge[root as usize]) {
+            (Some(parent), Edge::CaseScrut) => match module.expr(parent) {
+                Expr::Case { binder, .. } => {
+                    format!("case scrutinee :: {}", module.binder_ty(*binder).render())
+                }
+                _ => "case scrutinee".into(),
+            },
+            (None, _) => "a top-level right-hand side".into(),
+            (Some(_), edge) => format!("{edge:?}"),
+        };
+        groups
+            .entry((refusal_reason(error).to_string(), shape, context))
+            .or_default()
+            .push(instance);
+    }
+    let total: usize = groups.values().map(Vec::len).sum();
+    let mut out = format!("Sites refused about {subject}: {total}\n");
+    let mut ranked: Vec<_> = groups.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    for ((reason, shape, context), instances) in ranked {
+        writeln!(out, "{:6}  {shape}", instances.len()).unwrap();
+        writeln!(out, "        in {context}; {reason}").unwrap();
+        for instance in instances {
+            writeln!(out, "        - {instance}").unwrap();
+        }
+    }
+    Ok(out)
+}
+
+fn expression_kind(expr: &h2r_core_ir::Expr) -> &'static str {
+    use h2r_core_ir::Expr;
+    match expr {
+        Expr::Var { .. } => "variable",
+        Expr::Lit(_) => "literal",
+        Expr::App { .. } => "application",
+        Expr::Lam { .. } => "lambda",
+        Expr::Let { .. } => "let",
+        Expr::Case { .. } => "case",
+        Expr::Cast { .. } => "cast",
+        Expr::Tick(_) => "tick",
+        Expr::Type { .. } => "type",
+        Expr::Coercion => "coercion",
+    }
 }
 
 fn nir_specialize_report(modules: &[Module], name: Option<&str>) -> Result<(String, usize)> {
@@ -156,11 +325,16 @@ fn nir_specialize_report(modules: &[Module], name: Option<&str>) -> Result<(Stri
         for error in &program.refused {
             writeln!(
                 out,
-                "REFUSED {:?}: {} [required through {}]",
+                "REFUSED {:?}: {}{} [required through {}]",
                 modules[error.instance.module]
                     .binder(error.instance.binder)
                     .name,
                 error.reason,
+                error
+                    .detail
+                    .as_deref()
+                    .map(|detail| format!(" [about {detail}]"))
+                    .unwrap_or_default(),
                 error
                     .path
                     .iter()

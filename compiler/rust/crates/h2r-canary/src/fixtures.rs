@@ -348,12 +348,11 @@ pub const REFUSALS: &[Refusal] = &[
         when: When::Both,
         because: None,
     },
-    // A value defined in terms of itself: refused for its type as an entry,
-    // and for its dependency cycle when another entry reaches it.
+    // A value defined in terms of itself is refused for its dependency cycle.
     Refusal {
         entry: Entry::Occurrence("recursiveValue"),
         when: When::Both,
-        because: Some("CLI adapter requires"),
+        because: Some("recursive value dependency closure is not supported"),
     },
     Refusal {
         entry: Entry::Occurrence("recursiveValueUse"),
@@ -452,6 +451,130 @@ pub const ERROR_PROBES: &[Probe] = &[
     optimized_probe("compareRightSpine", 0, b"right spine"),
     optimized_probe("compareElementOrder", 0, b"left char"),
     probe("tagForced", 0, Some(b"tagged")),
+];
+
+/// One exported ShellCheck binding, the argument lists it is run with, and
+/// nothing else: its Core is ShellCheck's own, not a fixture written for it.
+#[derive(Debug, Clone, Copy)]
+pub struct Library {
+    pub name: &'static str,
+    pub inputs: &'static [&'static [&'static str]],
+}
+
+impl Library {
+    /// The name the oracle driver dispatches on.
+    pub fn occ(&self) -> &'static str {
+        self.name.rsplit('$').next().unwrap_or(self.name)
+    }
+}
+
+const CONSTANT: &[&[&str]] = &[&[]];
+
+const OPERATORS: &[&[&str]] = &[
+    &[""],
+    &["-eq"],
+    &["-ne"],
+    &["-lt"],
+    &["-le"],
+    &["-gt"],
+    &["-ge"],
+    &["-EQ"],
+    &["eq"],
+    &["-eq "],
+    &["-e"],
+    &["-equal"],
+    &["-\u{e9}q"],
+    &["λ"],
+];
+
+const EXECUTABLES: &[&[&str]] = &[
+    &[""],
+    &["sh"],
+    &["bash"],
+    &["bats"],
+    &["busybox"],
+    &["busybox sh"],
+    &["busybox ash"],
+    &["dash"],
+    &["ash"],
+    &["ksh"],
+    &["ksh93"],
+    &["zsh"],
+    &["Bash"],
+    &["bash "],
+    &["/bin/sh"],
+    &["🐚"],
+];
+
+const fn library(occ: &'static str, inputs: &'static [&'static [&'static str]]) -> Library {
+    Library { name: occ, inputs }
+}
+
+pub const LIBRARY: &[Library] = &[
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.AnalyzerLib$isDereferencingBinaryOp",
+        OPERATORS,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$shellForExecutable",
+        EXECUTABLES,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$internalVariables",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$specialIntegerVariables",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$specialVariablesWithoutSpaces",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$arrayVariables",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$commonCommands",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$nonReadingCommands",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$sampleWords",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$binaryTestOps",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$arithmeticBinaryTestOps",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$unaryTestOps",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$flagsForRead",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$flagsForMapfile",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$declaringCommands",
+        CONSTANT,
+    ),
+    library(
+        "$ShellCheck-0.11.0-inplace$ShellCheck.Data$privilegeElevationCommands",
+        CONSTANT,
+    ),
 ];
 
 /// Every fixture, in the order the report prints them.

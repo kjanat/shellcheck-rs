@@ -1,0 +1,4 @@
+packages: . ../../build/canonical ../../h2r-plugin
+
+package ShellCheck
+  ghc-options: -O1

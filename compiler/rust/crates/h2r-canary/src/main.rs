@@ -59,6 +59,15 @@ struct Cli {
     /// Print one entry's NIR and the instances it needs, and run nothing.
     #[arg(long, value_name = "OCCURRENCE")]
     explain: Option<String>,
+    /// The canonical ShellCheck Core the library suite emits from.
+    #[arg(long, default_value = "compiler/core-json")]
+    library_core: PathBuf,
+    /// The GHC-built driver that calls the same ShellCheck functions.
+    #[arg(long, default_value = "compiler/build/shellcheck-oracle/oracle")]
+    library_oracle: PathBuf,
+    /// Skip the ShellCheck library suite.
+    #[arg(long)]
+    no_library: bool,
 }
 
 fn main() -> Result<()> {
@@ -104,6 +113,21 @@ fn run(cli: Cli) -> Result<()> {
         );
     }
 
+    if !cli.no_library {
+        let report = library_run(&cli, jobs)?;
+        println!(
+            "library: {} ShellCheck bindings, {} differential cases",
+            report.entries, report.cases
+        );
+        cases += report.cases;
+        failures.extend(
+            report
+                .failures
+                .into_iter()
+                .map(|failure| format!("library: {failure}")),
+        );
+    }
+
     if !failures.is_empty() {
         for failure in &failures {
             eprintln!("{failure}");
@@ -124,7 +148,14 @@ fn explain(cli: &Cli, profile: Profile, occ: &str) -> Result<()> {
     println!("=== {} {} ({})", profile.name(), occ, binding.name);
     match lower_leaf_in_world(&modules, binding.module, binding.binder, FnId(0)) {
         Ok(leaf) => println!("{}", format_leaf(&leaf)),
-        Err(error) => println!("not lowered: {}", error.reason),
+        Err(error) => println!(
+            "not lowered: {}{}",
+            error.reason,
+            error
+                .detail
+                .map(|detail| format!(" [about {detail}]"))
+                .unwrap_or_default()
+        ),
     }
     let closure = survey(&modules, &[Instance::whole(binding.module, binding.binder)]);
     println!(
@@ -141,7 +172,15 @@ fn explain(cli: &Cli, profile: Profile, occ: &str) -> Result<()> {
         );
     }
     for refusal in &closure.refused {
-        println!("  refused: {}", refusal.reason);
+        println!(
+            "  refused: {}{}",
+            refusal.reason,
+            refusal
+                .detail
+                .as_deref()
+                .map(|detail| format!(" [about {detail}]"))
+                .unwrap_or_default()
+        );
     }
     match emit_entry(&modules, &binding.name) {
         Ok(source) => println!("emitted {} bytes of Rust", source.len()),
@@ -328,6 +367,99 @@ fn prepare(modules: &[Module], fixture: &Fixture, profile: Profile) -> Result<Pr
 }
 
 /// Run one argument list against the oracle and both compiled binaries.
+/// ShellCheck's own exported bindings, emitted from the canonical dump and
+/// compared with the GHC-built library called through the oracle driver.
+fn library_run(cli: &Cli, jobs: usize) -> Result<Report> {
+    if !cli.library_oracle.is_file() {
+        bail!(
+            "{} is missing; run `mise run canary:library` first",
+            cli.library_oracle.display()
+        );
+    }
+    let modules = load_dir(&cli.library_core)?;
+    let out = cli
+        .library_oracle
+        .parent()
+        .map_or_else(|| PathBuf::from("."), |dir| dir.join("entries"));
+    std::fs::create_dir_all(&out)?;
+    let mut failures = Vec::new();
+    let mut entries = Vec::new();
+    for library in fixtures::LIBRARY {
+        let occ = library.occ();
+        match emit_entry(&modules, library.name) {
+            Ok(source) => {
+                let artifacts = differential::artifacts(&out, occ);
+                std::fs::write(&artifacts.source, source)?;
+                entries.push((library, artifacts));
+            }
+            Err(reason) => failures.push(format!("{occ}: {reason}")),
+        }
+    }
+    let compilations: Vec<(&Artifacts, Mode)> = entries
+        .iter()
+        .flat_map(|(_, artifacts)| Mode::ALL.map(|mode| (artifacts, mode)))
+        .collect();
+    let rejected: Vec<String> = parallel(&compilations, jobs, |(artifacts, mode)| {
+        differential::compile(&artifacts.source, artifacts.binary(*mode), *mode)
+    })
+    .into_iter()
+    .filter_map(Result::err)
+    .collect();
+    if !rejected.is_empty() {
+        failures.extend(rejected);
+        return Ok(Report {
+            entries: entries.len(),
+            checks: 0,
+            cases: 0,
+            failures,
+        });
+    }
+    let runs: Vec<(&fixtures::Library, &Artifacts, &[&str])> = entries
+        .iter()
+        .flat_map(|(library, artifacts)| {
+            library
+                .inputs
+                .iter()
+                .map(move |inputs| (*library, artifacts, *inputs))
+        })
+        .collect();
+    let timeout = std::time::Duration::from_secs(cli.timeout_seconds);
+    let compared = parallel(&runs, jobs, |(library, artifacts, inputs)| {
+        let arguments: Vec<String> = inputs.iter().map(|input| (*input).to_string()).collect();
+        let mut invocation = vec![library.occ().to_string()];
+        invocation.extend(arguments.iter().cloned());
+        let expected = differential::invoke(&cli.library_oracle, &invocation, timeout)?;
+        let mut differences = Vec::new();
+        for mode in Mode::ALL {
+            let case = Case {
+                occ: library.occ(),
+                mode,
+                arguments: arguments.clone(),
+                expected_exit: 0,
+            };
+            let actual = differential::invoke(artifacts.binary(mode), &arguments, timeout)?;
+            differences.extend(differential::compare(&case, &expected, &actual));
+        }
+        Ok::<_, String>(differences)
+    });
+    let mut cases = 0;
+    for outcome in compared {
+        match outcome {
+            Ok(differences) => {
+                cases += Mode::ALL.len();
+                failures.extend(differences);
+            }
+            Err(error) => failures.push(error),
+        }
+    }
+    Ok(Report {
+        entries: entries.len(),
+        checks: 0,
+        cases,
+        failures,
+    })
+}
+
 fn differ(
     oracle: &Path,
     fixture: &Fixture,
@@ -345,7 +477,7 @@ fn differ(
         let case = Case {
             occ: fixture.occ,
             mode,
-            arguments: arguments.to_vec(),
+            arguments: numbers.clone(),
             expected_exit: fixture.expected_exit,
         };
         let actual = differential::invoke(artifacts.binary(mode), &numbers, timeout)?;

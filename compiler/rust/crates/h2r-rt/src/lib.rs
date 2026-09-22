@@ -616,6 +616,113 @@ pub fn compare_lists(
     })
 }
 
+const ASCII_TAB: [&str; 32] = [
+    "NUL", "SOH", "STX", "ETX", "EOT", "ENQ", "ACK", "BEL", "BS", "HT", "LF", "VT", "FF", "CR",
+    "SO", "SI", "DLE", "DC1", "DC2", "DC3", "DC4", "NAK", "SYN", "ETB", "CAN", "EM", "SUB", "ESC",
+    "FS", "GS", "RS", "US",
+];
+
+/// `GHC.Show.showLitChar`, with the following character for `protectEsc`.
+fn show_lit_char(out: &mut String, code: i64, next: Option<i64>) {
+    let is_digit = |c: Option<i64>| c.is_some_and(|c| (0x30..=0x39).contains(&c));
+    match code as u64 {
+        0x7f => out.push_str("\\DEL"),
+        0x5c => out.push_str("\\\\"),
+        0x20..=0x7e => out.push(char::from(code as u8)),
+        0x07 => out.push_str("\\a"),
+        0x08 => out.push_str("\\b"),
+        0x0c => out.push_str("\\f"),
+        0x0a => out.push_str("\\n"),
+        0x0d => out.push_str("\\r"),
+        0x09 => out.push_str("\\t"),
+        0x0b => out.push_str("\\v"),
+        0x0e => {
+            out.push_str("\\SO");
+            if next == Some(0x48) {
+                out.push_str("\\&");
+            }
+        }
+        0x00..=0x1f => {
+            out.push('\\');
+            out.push_str(ASCII_TAB[code as usize]);
+        }
+        wide => {
+            out.push('\\');
+            out.push_str(&wide.to_string());
+            if is_digit(next) {
+                out.push_str("\\&");
+            }
+        }
+    }
+}
+
+fn characters(value: &Data, names: StringNames) -> Vec<i64> {
+    let mut codes = Vec::new();
+    let mut cell = value.clone();
+    loop {
+        let node = cell.force();
+        if node.constructor == names.nil {
+            return codes;
+        }
+        codes.push(character(&node.fields[0].data(), names));
+        cell = node.fields[1].data();
+    }
+}
+
+/// `show` at `String`: `showLitString` between double quotes.
+pub fn show_string(value: &Data, names: StringNames) -> String {
+    let codes = characters(value, names);
+    let mut out = String::from("\"");
+    for (index, &code) in codes.iter().enumerate() {
+        if code == 0x22 {
+            out.push_str("\\\"");
+        } else {
+            show_lit_char(&mut out, code, codes.get(index + 1).copied());
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// `show` at `Char`.
+pub fn show_char(value: &Data, names: StringNames) -> String {
+    let code = character(value, names);
+    if code == 0x27 {
+        return "'\\''".into();
+    }
+    let mut out = String::from("'");
+    show_lit_char(&mut out, code, Some(0x27));
+    out.push('\'');
+    out
+}
+
+/// `showsPrec` at `Int`, which parenthesises a negative number above precedence 6.
+pub fn show_int(value: i64, precedence: u8) -> String {
+    if value < 0 && precedence > 6 {
+        format!("({value})")
+    } else {
+        value.to_string()
+    }
+}
+
+/// A command-line argument as a fully evaluated `[Char]`.
+pub fn string_argument(text: &str, names: StringNames) -> Data {
+    text.chars()
+        .rev()
+        .fold(Data::ready(names.nil, vec![]), |tail, c| {
+            Data::ready(
+                names.cons,
+                vec![
+                    Field::Data(Data::ready(
+                        names.character,
+                        vec![Field::Char(i64::from(u32::from(c)))],
+                    )),
+                    Field::Data(tail),
+                ],
+            )
+        })
+}
+
 #[cfg(test)]
 mod append_tests {
     use super::*;
@@ -729,6 +836,32 @@ mod append_tests {
         false_: "False",
         true_: "True",
     };
+
+    #[test]
+    fn strings_and_characters_show_as_ghc_shows_them() {
+        let nil = || Data::ready("[]", vec![]);
+        for (text, shown) in [
+            ("", "\"\""),
+            ("a\"b\\c", "\"a\\\"b\\\\c\""),
+            ("\u{e9}1", "\"\\233\\&1\""),
+            ("\u{e9}x", "\"\\233x\""),
+            ("\u{e}H\u{e}I", "\"\\SO\\&H\\SOI\""),
+            ("\n\t\u{7f}\u{0}\u{1b}", "\"\\n\\t\\DEL\\NUL\\ESC\""),
+            ("🐚", "\"\\128026\""),
+        ] {
+            assert_eq!(show_string(&string(text, nil()), STRING), shown, "{text:?}");
+        }
+        let char_of = |text: &str| string(text, nil()).force().fields[0].data();
+        assert_eq!(show_char(&char_of("'"), STRING), "'\\''");
+        assert_eq!(show_char(&char_of("\""), STRING), "'\"'");
+        assert_eq!(show_char(&char_of("\u{e9}"), STRING), "'\\233'");
+        assert_eq!(show_int(-3, 11), "(-3)");
+        assert_eq!(show_int(-3, 6), "-3");
+        assert_eq!(
+            show_string(&string_argument("λ x", STRING), STRING),
+            "\"\\955 x\""
+        );
+    }
 
     #[test]
     fn string_comparison_is_unsigned_and_stops_at_the_first_difference() {

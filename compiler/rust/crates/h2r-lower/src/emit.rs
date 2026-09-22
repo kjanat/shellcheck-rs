@@ -339,12 +339,17 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         entry_types.push(arg);
         entry_result = res;
     }
-    if !scalar(world, entry_result) || entry_types.iter().any(|t| !scalar(world, t)) {
-        return Err(
-            "CLI adapter requires Int#/Int inputs and output; algebraic values may be internal"
-                .into(),
-        );
-    }
+    let inputs = entry_types
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| argument(world, ty, i))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut shows = Shows::default();
+    let rendered = if scalar(world, entry_result) {
+        None
+    } else {
+        Some(show_function(world, entry_result, &mut shows)?)
+    };
     // Refuse cycles involving a value, even through a function. Only function
     // recursion is supported here, not productive recursive thunk graphs.
     for (index, leaf) in leaves.iter().enumerate() {
@@ -362,7 +367,19 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             }
         }
     }
-    let mut out = String::from(
+    // rustc counts nested instantiations of one generic against `recursion_limit`, default 128.
+    let shim_sites = 2 * leaves.len()
+        + leaves
+            .iter()
+            .flat_map(|leaf| &leaf.function.blocks)
+            .map(|block| block.instructions.len())
+            .sum::<usize>();
+    let mut out = if shim_sites > 128 {
+        format!("#![recursion_limit = \"{shim_sites}\"]\n")
+    } else {
+        String::new()
+    };
+    out.push_str(
         "// Generated from source-verified scalar NIR. CLI I/O is an adapter.\n#[cfg(not(target_pointer_width = \"64\"))]\ncompile_error!(\"Int# backend requires a 64-bit target\");\n",
     );
     let has_boxed = leaves.iter().any(|leaf| {
@@ -981,18 +998,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         }
     }
     let arity = entry_types.len();
-    let args = entry_types
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            if boxed::is_int(p) {
-                format!("HInt::ready(args[{i}])")
-            } else {
-                format!("args[{i}]")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
+    let args = inputs.join(", ");
     if direct_arity == arity {
         writeln!(out, "#[allow(unused_imports)]\nuse f_0 as h2r_entry;").unwrap();
     } else {
@@ -1021,11 +1027,138 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         )
         .unwrap();
     }
-    let force = if boxed::is_int(entry_result) {
-        ".force()"
-    } else {
-        ""
+    let result = match &rendered {
+        Some(show) => format!(
+            "{show}(&HField::{}(h2r_entry({args})), 0)",
+            field_kind(world, entry_result).0
+        ),
+        None if boxed::is_int(entry_result) => format!("h2r_entry({args}).force()"),
+        None => format!("h2r_entry({args})"),
     };
-    writeln!(out, "fn main() {{\n    let args: Vec<i64> = std::env::args().skip(1).map(|s| s.parse().expect(\"expected signed 64-bit integer\")).collect();\n    assert_eq!(args.len(), {arity}, \"wrong argument count\");\n    println!(\"{{}}\", h2r_entry({args}){force});\n}}").unwrap();
+    for function in &shows.functions {
+        out.push_str(function);
+    }
+    writeln!(out, "fn main() {{\n    let raw: Vec<String> = std::env::args().skip(1).collect();\n    assert_eq!(raw.len(), {arity}, \"wrong argument count\");\n    println!(\"{{}}\", {result});\n}}").unwrap();
     Ok(out)
+}
+
+/// One command-line argument, read at the type the entry takes it at.
+fn argument(world: &World<'_>, ty: &Ty, index: usize) -> Result<String, String> {
+    let parsed = format!("raw[{index}].parse::<i64>().expect(\"expected signed 64-bit integer\")");
+    let ty = represented(world, ty);
+    if unboxed(&ty) && !is_char(&ty) {
+        Ok(parsed)
+    } else if boxed::is_int(&ty) {
+        Ok(format!("HInt::ready({parsed})"))
+    } else if ty.list_elem().is_some_and(Ty::is_char) {
+        Ok(format!(
+            "h2r_rt::string_argument(&raw[{index}], {})",
+            string_names(world)?
+        ))
+    } else {
+        Err(format!(
+            "CLI adapter reads Int#, Int and String arguments, not {}",
+            ty.render()
+        ))
+    }
+}
+
+fn string_names(world: &World<'_>) -> Result<String, String> {
+    let (nil, cons, character) = data::string_layouts(world)?;
+    Ok(format!(
+        "HStringNames {{ cons: {:?}, nil: {:?}, character: {:?} }}",
+        cons.name, nil.name, character.name
+    ))
+}
+
+/// The `show` functions a result needs, one per type, named by position.
+#[derive(Default)]
+struct Shows {
+    named: std::collections::BTreeMap<String, String>,
+    functions: Vec<String>,
+}
+
+/// The name of a generated `fn(&HField, u8) -> String` that renders a value
+/// of `ty` as GHC's `show` does for `Int`, `Char`, `String`, lists, tuples and
+/// derived `Show` over positional constructors.
+fn show_function(world: &World<'_>, ty: &Ty, shows: &mut Shows) -> Result<String, String> {
+    let ty = represented(world, ty);
+    let key = ty.render();
+    if let Some(name) = shows.named.get(&key) {
+        return Ok(name.clone());
+    }
+    let name = format!("show_{}", shows.named.len());
+    shows.named.insert(key.clone(), name.clone());
+    let body = if boxed::is_int(&ty) {
+        "h2r_rt::show_int(value.int().force(), precedence)".to_string()
+    } else if ty.is_char() {
+        format!("h2r_rt::show_char(&value.data(), {})", string_names(world)?)
+    } else if ty.list_elem().is_some_and(Ty::is_char) {
+        format!(
+            "h2r_rt::show_string(&value.data(), {})",
+            string_names(world)?
+        )
+    } else if let Some(element) = ty.list_elem() {
+        let (nil, _) = data::list_layouts(world, element)?;
+        let item = show_function(world, element, shows)?;
+        format!(
+            "{{ let _ = precedence; let mut out = String::from(\"[\"); let mut cell = value.data(); loop {{ let node = cell.force(); if node.constructor == {:?} {{ break; }} if out.len() > 1 {{ out.push(','); }} out.push_str(&{item}(&node.fields[0], 0)); cell = node.fields[1].data(); }} out.push(']'); out }}",
+            nil.name
+        )
+    } else if data::carrier(world, &ty) == Some(data::Carrier::Data) {
+        let family = data::family(world, &ty)?;
+        let tuple = matches!(&ty, Ty::Con { tycon, .. } if tycon.occ.starts_with("(,"));
+        let mut arms = String::new();
+        for constructor in &family {
+            let occ = constructor
+                .name
+                .rsplit('$')
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let mut fields = Vec::new();
+            for (index, field) in constructor.fields.iter().enumerate() {
+                if !data::lifted(world, field) {
+                    return Err(format!(
+                        "CLI adapter cannot show the unlifted field of {occ}"
+                    ));
+                }
+                let show = show_function(world, field, shows)?;
+                fields.push(format!(
+                    "{show}(&node.fields[{index}], {})",
+                    if tuple { 0 } else { 11 }
+                ));
+            }
+            let text = if tuple {
+                format!(
+                    "format!(\"({})\", {})",
+                    vec!["{}"; fields.len()].join(","),
+                    fields.join(", ")
+                )
+            } else if fields.is_empty() {
+                format!("{occ:?}.to_string()")
+            } else if occ.starts_with(|c: char| c.is_ascii_uppercase()) {
+                format!(
+                    "{{ let text = format!(\"{} {}\", {}); if precedence >= 11 {{ format!(\"({{text}})\") }} else {{ text }} }}",
+                    occ.replace('{', "{{").replace('}', "}}"),
+                    vec!["{}"; fields.len()].join(" "),
+                    fields.join(", ")
+                )
+            } else {
+                return Err(format!(
+                    "CLI adapter cannot show the infix constructor {occ}"
+                ));
+            };
+            write!(arms, "{:?} => {text}, ", constructor.name).unwrap();
+        }
+        format!(
+            "{{ let _ = precedence; let node = value.data().force(); match node.constructor {{ {arms}other => panic!(\"show: {{other}} is not in this family\") }} }}"
+        )
+    } else {
+        return Err(format!("CLI adapter cannot show a value of type {key}"));
+    };
+    shows.functions.push(format!(
+        "#[allow(dead_code)]\nfn {name}(value: &HField, precedence: u8) -> String {{ {body} }}\n"
+    ));
+    Ok(name)
 }
