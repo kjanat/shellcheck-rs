@@ -328,6 +328,7 @@ fn differ(
             occ: fixture.occ,
             mode,
             arguments: arguments.to_vec(),
+            expected_exit: fixture.expected_exit,
         };
         let actual = differential::invoke(artifacts.binary(mode), &numbers, timeout)?;
         differences.extend(differential::compare(&case, &expected, &actual));

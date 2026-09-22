@@ -191,6 +191,82 @@ mod tests {
         assert_eq!(output.stderr.len(), 100000);
         assert_eq!(output.code, Some(7));
     }
+
+    #[test]
+    fn explicit_failure_case_compares_real_process_output() {
+        let oracle = shell("printf 'message\\n' >&2; exit 1", Duration::from_secs(2)).unwrap();
+        let candidate = shell("printf 'message\\n' >&2; exit 1", Duration::from_secs(2)).unwrap();
+        let mut case = Case {
+            occ: "expectedFailure",
+            mode: Mode::Optimized,
+            arguments: vec![],
+            expected_exit: 1,
+        };
+        assert!(compare(&case, &oracle, &candidate).is_empty());
+        case.expected_exit = 0;
+        assert!(!compare(&case, &oracle, &candidate).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod comparison_tests {
+    use super::*;
+
+    fn case(mode: Mode, expected_exit: i32) -> Case {
+        Case {
+            occ: "failure",
+            mode,
+            arguments: vec![42],
+            expected_exit,
+        }
+    }
+
+    fn outcome(code: Option<i32>) -> Outcome {
+        Outcome {
+            stdout: vec![],
+            stderr: b"exact error\n".to_vec(),
+            code,
+        }
+    }
+
+    #[test]
+    fn expected_failure_still_requires_exact_streams_and_status() {
+        for mode in Mode::ALL {
+            let case = case(mode, 1);
+            let oracle = outcome(Some(1));
+            assert!(compare(&case, &oracle, &oracle).is_empty());
+            for change in 0..5 {
+                let mut candidate = oracle.clone();
+                match change {
+                    0 => candidate.stdout.push(b'x'),
+                    1 => candidate.stderr.push(b'x'),
+                    2 => candidate.code = Some(0),
+                    3 => candidate.code = Some(2),
+                    _ => candidate.code = None,
+                }
+                assert!(
+                    !compare(&case, &oracle, &candidate).is_empty(),
+                    "mutation {change}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn matching_wrong_outcomes_cannot_satisfy_a_fixture() {
+        for mode in Mode::ALL {
+            for required in [0, 1] {
+                for actual in [None, Some(2), Some(124)] {
+                    let output = outcome(actual);
+                    assert!(!compare(&case(mode, required), &output, &output).is_empty());
+                }
+            }
+            let success = outcome(Some(0));
+            assert!(!compare(&case(mode, 1), &success, &success).is_empty());
+            let failure = outcome(Some(1));
+            assert!(!compare(&case(mode, 0), &failure, &failure).is_empty());
+        }
+    }
 }
 
 /// One differential case: the same entry, the same arguments, two programs.
@@ -199,6 +275,7 @@ pub struct Case {
     pub occ: &'static str,
     pub mode: Mode,
     pub arguments: Vec<i64>,
+    pub expected_exit: i32,
 }
 
 impl Case {
@@ -235,11 +312,12 @@ pub fn compare(case: &Case, oracle: &Outcome, candidate: &Outcome) -> Vec<String
             candidate.code
         ));
     }
-    if oracle.code != Some(0) {
+    if oracle.code != Some(case.expected_exit) {
         differences.push(format!(
-            "{}: the oracle itself did not succeed ({:?})",
+            "{}: oracle exit {:?} does not match required exit {}",
             case.label(),
-            oracle.code
+            oracle.code,
+            case.expected_exit
         ));
     }
     differences

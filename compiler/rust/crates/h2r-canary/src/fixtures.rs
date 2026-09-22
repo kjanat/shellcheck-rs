@@ -252,6 +252,9 @@ pub struct Fixture {
     /// The occurrence name in `compiler/canary/Canary.hs`.
     pub occ: &'static str,
     pub inputs: Inputs,
+    /// Required exit code, independent of oracle/candidate agreement.
+    /// Expected failures must opt in to their exact code; signals never pass.
+    pub expected_exit: i32,
     /// Which profiles this entry is compiled and run in. Not every shape
     /// survives into both dumps, and an entry whose subject only exists in one
     /// of them is skipped in the other rather than failing there.
@@ -263,6 +266,7 @@ const fn run(occ: &'static str, inputs: Inputs) -> Fixture {
     Fixture {
         occ,
         inputs,
+        expected_exit: 0,
         when: When::Both,
         evidence: &[],
     }
@@ -272,6 +276,7 @@ const fn prove(occ: &'static str, inputs: Inputs, evidence: &'static [Check]) ->
     Fixture {
         occ,
         inputs,
+        expected_exit: 0,
         when: When::Both,
         evidence,
     }
@@ -287,6 +292,7 @@ const fn prove_in(
     Fixture {
         occ,
         inputs,
+        expected_exit: 0,
         when: When::Only(profile),
         evidence,
     }
