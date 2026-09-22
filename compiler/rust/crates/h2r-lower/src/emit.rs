@@ -281,6 +281,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 | Operation::ChrChar(_)
                 | Operation::UnpackString(_)
                 | Operation::AppendList { .. }
+                | Operation::ListPredicate(_)
                 | Operation::RaiseError { .. }
                 | Operation::EmptyCase { .. }
                 | Operation::DelayBlock { .. }
@@ -682,6 +683,22 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                         value(*right),
                         cons.name,
                         nil.name
+                    ),
+                    Operation::ListPredicate(predicate) => format!(
+                        "h2r_rt::{}({}, {}, h2r_rt::Equality::{:?}, HStringNames {{ cons: {:?}, nil: {:?}, character: {:?} }}, h2r_rt::Truth {{ false_: {:?}, true_: {:?} }})",
+                        match predicate.predicate {
+                            crate::nir::Predicate::EqString => "equal_lists",
+                            crate::nir::Predicate::Elem => "elem_list",
+                            crate::nir::Predicate::IsPrefixOf => "is_prefix_of",
+                        },
+                        value(predicate.left),
+                        value(predicate.right),
+                        predicate.equality,
+                        predicate.cons.name,
+                        predicate.nil.name,
+                        predicate.character.name,
+                        predicate.false_.name,
+                        predicate.true_.name
                     ),
                     Operation::UnpackString(unpack) => {
                         let bytes: String = unpack

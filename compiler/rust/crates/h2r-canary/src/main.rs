@@ -356,6 +356,11 @@ fn error_probes(modules: &[Module], oracle: &Path, timeout: std::time::Duration)
     if let Err(error) = error_evidence(modules) {
         failures.push(error);
     }
+    for entry in ["stringEqual", "elemChar", "prefixOf"] {
+        if let Err(error) = predicate_evidence(modules, entry) {
+            failures.push(format!("{entry}: {error}"));
+        }
+    }
     let mut compiled = std::collections::BTreeSet::new();
     let Some(program_name) = oracle.file_name().and_then(|name| name.to_str()) else {
         return vec!["oracle path lacks a UTF-8 program name".into()];
@@ -457,6 +462,52 @@ fn error_evidence(modules: &[Module]) -> Result<(), String> {
         }
         if verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &forged).is_ok() {
             return Err(format!("error verifier accepted mutation {mutation}"));
+        }
+    }
+    Ok(())
+}
+
+fn predicate_evidence(modules: &[Module], entry: &str) -> Result<(), String> {
+    use h2r_lower::nir::{
+        Operation, Predicate, Rule, external::Equality, verify::verify_leaf_in_world,
+    };
+    let binding = evidence::resolve(modules, entry)?;
+    let leaf = lower_leaf_in_world(modules, binding.module, binding.binder, FnId(0))
+        .map_err(|e| e.reason)?;
+    verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &leaf)?;
+    for mutation in 0..5 {
+        let mut forged = leaf.clone();
+        let instruction = forged
+            .function
+            .blocks
+            .iter_mut()
+            .flat_map(|b| &mut b.instructions)
+            .find(|i| matches!(i.operation, Operation::ListPredicate(_)))
+            .ok_or("no list predicate in the entry's own leaf")?;
+        let Operation::ListPredicate(predicate) = &mut instruction.operation else {
+            unreachable!()
+        };
+        match mutation {
+            0 => {
+                predicate.equality = match predicate.equality {
+                    Equality::Char => Equality::String,
+                    Equality::String => Equality::Char,
+                }
+            }
+            1 => {
+                predicate.predicate = match predicate.predicate {
+                    Predicate::Elem => Predicate::IsPrefixOf,
+                    Predicate::EqString | Predicate::IsPrefixOf => Predicate::Elem,
+                }
+            }
+            2 => std::mem::swap(&mut predicate.left, &mut predicate.right),
+            3 => std::mem::swap(&mut predicate.false_, &mut predicate.true_),
+            _ => instruction.origin.rule = Rule::AppendList,
+        }
+        if verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &forged).is_ok() {
+            return Err(format!(
+                "list predicate verifier accepted mutation {mutation}"
+            ));
         }
     }
     Ok(())

@@ -454,6 +454,121 @@ pub fn append_list(left: Data, right: Data, names: ListNames) -> Data {
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Equality {
+    Char,
+    String,
+}
+
+#[derive(Clone, Copy)]
+pub struct Truth {
+    pub false_: &'static str,
+    pub true_: &'static str,
+}
+
+impl Truth {
+    fn of(self, value: bool) -> Node {
+        Node {
+            constructor: if value { self.true_ } else { self.false_ },
+            fields: Vec::new(),
+        }
+    }
+}
+
+fn character(value: &Data, names: StringNames) -> i64 {
+    let node = value.force();
+    assert_eq!(node.constructor, names.character);
+    node.fields[0].char_code()
+}
+
+fn equal(left: &Data, right: &Data, equality: Equality, names: StringNames) -> bool {
+    match equality {
+        Equality::Char => {
+            let left = character(left, names);
+            left == character(right, names)
+        }
+        Equality::String => lists_equal(left.clone(), right.clone(), Equality::Char, names),
+    }
+}
+
+fn lists_equal(mut left: Data, mut right: Data, element: Equality, names: StringNames) -> bool {
+    loop {
+        let l = left.force();
+        let r = right.force();
+        match (l.constructor == names.nil, r.constructor == names.nil) {
+            (true, true) => return true,
+            (false, false) => {
+                if !equal(&l.fields[0].data(), &r.fields[0].data(), element, names) {
+                    return false;
+                }
+                left = l.fields[1].data();
+                right = r.fields[1].data();
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// `GHC.Base.eqString` and `Eq [a]`'s `==`: both spines forced in step, left first.
+pub fn equal_lists(
+    left: Data,
+    right: Data,
+    element: Equality,
+    names: StringNames,
+    truth: Truth,
+) -> Data {
+    Data::defer(move || truth.of(lists_equal(left, right, element, names)))
+}
+
+/// `GHC.List.elem`: `x == y` with the needle on the left, stopping at the first match.
+pub fn elem_list(
+    needle: Data,
+    mut list: Data,
+    equality: Equality,
+    names: StringNames,
+    truth: Truth,
+) -> Data {
+    Data::defer(move || {
+        loop {
+            let cell = list.force();
+            if cell.constructor == names.nil {
+                return truth.of(false);
+            }
+            if equal(&needle, &cell.fields[0].data(), equality, names) {
+                return truth.of(true);
+            }
+            list = cell.fields[1].data();
+        }
+    })
+}
+
+/// `Data.OldList.isPrefixOf`: the list is not forced once the prefix runs out.
+pub fn is_prefix_of(
+    mut prefix: Data,
+    mut list: Data,
+    equality: Equality,
+    names: StringNames,
+    truth: Truth,
+) -> Data {
+    Data::defer(move || {
+        loop {
+            let p = prefix.force();
+            if p.constructor == names.nil {
+                return truth.of(true);
+            }
+            let l = list.force();
+            if l.constructor == names.nil {
+                return truth.of(false);
+            }
+            if !equal(&p.fields[0].data(), &l.fields[0].data(), equality, names) {
+                return truth.of(false);
+            }
+            prefix = p.fields[1].data();
+            list = l.fields[1].data();
+        }
+    })
+}
+
 #[cfg(test)]
 mod append_tests {
     use super::*;
@@ -532,6 +647,98 @@ mod append_tests {
         assert_eq!(error_message(message.clone(), NAMES), "λ".as_bytes());
         assert_eq!(error_message(message, NAMES), "λ".as_bytes());
         assert_eq!(forced.get(), 1);
+    }
+
+    fn untouchable() -> Data {
+        Data::defer(|| panic!("a lazily passed value was forced"))
+    }
+
+    fn string(text: &str, tail: Data) -> Data {
+        text.chars().rev().fold(tail, |tail, c| {
+            Data::ready(
+                ":",
+                vec![
+                    Field::Data(Data::ready("C#", vec![Field::Char(c as i64)])),
+                    Field::Data(tail),
+                ],
+            )
+        })
+    }
+
+    fn holds(value: Data) -> bool {
+        match value.force().constructor {
+            "True" => true,
+            "False" => false,
+            other => panic!("not a Bool: {other}"),
+        }
+    }
+
+    const STRING: StringNames = StringNames {
+        cons: ":",
+        nil: "[]",
+        character: "C#",
+    };
+    const TRUTH: Truth = Truth {
+        false_: "False",
+        true_: "True",
+    };
+
+    #[test]
+    fn list_predicates_stop_where_the_library_definitions_stop() {
+        let nil = || Data::ready("[]", vec![]);
+        assert!(!holds(equal_lists(
+            string("λa", untouchable()),
+            string("λb", untouchable()),
+            Equality::Char,
+            STRING,
+            TRUTH
+        )));
+        assert!(holds(equal_lists(
+            string("", nil()),
+            string("", nil()),
+            Equality::Char,
+            STRING,
+            TRUTH
+        )));
+        assert!(holds(elem_list(
+            string("🐚", nil()).force().fields[0].data(),
+            string("a🐚", untouchable()),
+            Equality::Char,
+            STRING,
+            TRUTH
+        )));
+        assert!(!holds(elem_list(
+            untouchable(),
+            nil(),
+            Equality::Char,
+            STRING,
+            TRUTH
+        )));
+        assert!(holds(is_prefix_of(
+            nil(),
+            untouchable(),
+            Equality::Char,
+            STRING,
+            TRUTH
+        )));
+        assert!(!holds(is_prefix_of(
+            string("ab", untouchable()),
+            string("ac", untouchable()),
+            Equality::Char,
+            STRING,
+            TRUTH
+        )));
+        let words = Data::ready(
+            ":",
+            vec![Field::Data(string("ab", nil())), Field::Data(untouchable())],
+        );
+        assert!(holds(elem_list(
+            string("ab", nil()),
+            words,
+            Equality::String,
+            STRING,
+            TRUTH
+        )));
     }
 
     #[test]

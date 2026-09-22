@@ -351,6 +351,28 @@ pub fn list_layouts(world: &World<'_>, element: &Ty) -> Result<(Constructor, Con
     Ok((nil, cons))
 }
 
+pub fn bool_ty() -> Ty {
+    Ty::Con {
+        tycon: h2r_core_ir::TyConId {
+            name: "$ghc-prim$GHC.Types$Bool".into(),
+            occ: "Bool".into(),
+            unique: String::new(),
+        },
+        args: vec![],
+    }
+}
+
+/// `False` and `True`, read out of the loaded world.
+pub fn bool_layouts(world: &World<'_>) -> Result<(Constructor, Constructor), String> {
+    let ty = bool_ty();
+    let false_ = layout(world, "$ghc-prim$GHC.Types$False", &ty)?;
+    let true_ = layout(world, "$ghc-prim$GHC.Types$True", &ty)?;
+    if !false_.fields.is_empty() || !true_.fields.is_empty() {
+        return Err("the loaded world's Bool layout is not the expected one".into());
+    }
+    Ok((false_, true_))
+}
+
 /// The constructor evidence a `[Char]` is built from: nil, cons and `C#`. Read
 /// out of the loaded world like any other layout, so the shape of a list cell
 /// is never assumed by the code that fills one.

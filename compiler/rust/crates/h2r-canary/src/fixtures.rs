@@ -13,6 +13,8 @@
 //! into one literal there, so the appending unpacker is reachable only through
 //! a tail it cannot fold.
 
+use h2r_lower::nir::{Predicate, external::Equality};
+
 /// Which Core profile a check applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
@@ -70,6 +72,7 @@ pub enum Op {
     /// family, which `unpackCString#` alone never reaches.
     UnpackStringOnto,
     AppendList,
+    ListPredicate(Predicate, Equality),
 }
 
 impl Op {
@@ -92,6 +95,14 @@ impl Op {
             Op::UnpackString => "unpack-string",
             Op::UnpackStringOnto => "unpack-string onto a tail",
             Op::AppendList => "append-list",
+            Op::ListPredicate(Predicate::EqString, Equality::Char) => "eqString",
+            Op::ListPredicate(Predicate::EqString, Equality::String) => "eqString over Eq [Char]",
+            Op::ListPredicate(Predicate::Elem, Equality::Char) => "elem via $fEqChar",
+            Op::ListPredicate(Predicate::Elem, Equality::String) => "elem via Eq [Char]",
+            Op::ListPredicate(Predicate::IsPrefixOf, Equality::Char) => "isPrefixOf via $fEqChar",
+            Op::ListPredicate(Predicate::IsPrefixOf, Equality::String) => {
+                "isPrefixOf via Eq [Char]"
+            }
         }
     }
 }
@@ -185,6 +196,10 @@ const fn op(kind: Op) -> Check {
 /// An operation the specialized closure must contain in both profiles. GHC
 /// floats constant lists and their literals out to their own top-level
 /// bindings, so these are not always in the binding that names the fixture.
+const EQ_STRING: Op = Op::ListPredicate(Predicate::EqString, Equality::Char);
+const ELEM_CHAR: Op = Op::ListPredicate(Predicate::Elem, Equality::Char);
+const PREFIX_CHAR: Op = Op::ListPredicate(Predicate::IsPrefixOf, Equality::Char);
+
 const fn anywhere(kind: Op) -> Check {
     both(Evidence::ClosureOperation(kind))
 }
@@ -338,6 +353,11 @@ pub const REFUSALS: &[Refusal] = &[
         because: Some("recursive value dependency closure is not supported"),
     },
     Refusal {
+        entry: Entry::Occurrence("elemString"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("an Eq dictionary this backend does not implement"),
+    },
+    Refusal {
         entry: Entry::Occurrence("errorUnusedArgument"),
         when: When::Only(Profile::Optimized),
         because: Some("unimplemented non-returning call"),
@@ -374,6 +394,16 @@ pub const ERROR_PROBES: &[(&str, i64, Option<&[u8]>)] = &[
     ("errorBranch", 0, Some("computed: λ 🐚".as_bytes())),
     ("errorBranch", 1, None),
     ("errorBranch", -1, None),
+    ("eqSpineOrder", 0, Some(b"left spine")),
+    ("eqRightSpine", 0, Some(b"right spine")),
+    ("eqElementOrder", 0, Some(b"left char")),
+    ("elemSpineFirst", 0, Some(b"spine")),
+    ("elemNeedleOrder", 0, Some(b"needle")),
+    ("elemNeedleUnused", 0, None),
+    ("elemNeedleUnused", 1, Some(b"needle")),
+    ("prefixOrder", 0, Some(b"prefix spine")),
+    ("prefixListOrder", 0, Some(b"list spine")),
+    ("prefixElementOrder", 0, Some(b"prefix char")),
 ];
 
 /// Every fixture, in the order the report prints them.
@@ -714,6 +744,27 @@ pub const FIXTURES: &[Fixture] = &[
     prove("textSlice", Inputs::Binary, &[anywhere(Op::Construct)]),
     prove("textZip", Inputs::Binary, &[anywhere(Op::UnpackString)]),
     prove("textCompare", Inputs::Binary, &[anywhere(Op::UnpackString)]),
+    prove("stringEqual", Inputs::Binary, &[anywhere(EQ_STRING)]),
+    prove_in(
+        Profile::Optimized,
+        "stringEqualRule",
+        Inputs::Binary,
+        &[anywhere(EQ_STRING)],
+    ),
+    prove("stringEqualLazy", Inputs::Binary, &[anywhere(EQ_STRING)]),
+    prove("elemChar", Inputs::Binary, &[anywhere(ELEM_CHAR)]),
+    prove_in(
+        Profile::Optimized,
+        "elemString",
+        Inputs::Binary,
+        &[anywhere(Op::ListPredicate(
+            Predicate::Elem,
+            Equality::String,
+        ))],
+    ),
+    prove("elemLazy", Inputs::Binary, &[anywhere(ELEM_CHAR)]),
+    prove("prefixOf", Inputs::Binary, &[anywhere(PREFIX_CHAR)]),
+    prove("prefixLazy", Inputs::Binary, &[anywhere(PREFIX_CHAR)]),
     // Unboxed tuples: GHC's multi-value return. No box, no tag, no
     // allocation, and a `case` that binds components and branches nowhere.
     prove(

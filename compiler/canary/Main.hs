@@ -28,7 +28,9 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   tupleRoundTrip, tupleSwap, tupleSolo, tupleWide, tupleBoxed, tupleNested,
   tupleLazyComponent, tupleUnusedComponent,
   textWords, textLines, textFind, textReverse, textFilter, textMap,
-  textSlice, textZip, textCompare, textUnicodeWords)
+  textSlice, textZip, textCompare, textUnicodeWords,
+  stringEqual, stringEqualRule, stringEqualLazy, elemChar, elemString, elemLazy, prefixOf, prefixLazy,
+  eqSpineOrder, eqRightSpine, eqElementOrder, elemSpineFirst, elemNeedleOrder, elemNeedleUnused, prefixOrder, prefixListOrder, prefixElementOrder)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -220,6 +222,40 @@ main = do
       (I# x, I# y) -> print (I# (textCompare x y))
     ["textUnicodeWords", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (textUnicodeWords x y))
+    ["stringEqual", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringEqual x y))
+    ["stringEqualRule", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringEqualRule x y))
+    ["stringEqualLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (stringEqualLazy x y))
+    ["elemChar", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (elemChar x y))
+    ["elemString", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (elemString x y))
+    ["elemLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (elemLazy x y))
+    ["prefixOf", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (prefixOf x y))
+    ["prefixLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (prefixLazy x y))
+    ["eqSpineOrder", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (eqSpineOrder x y)
+    ["eqRightSpine", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (eqRightSpine x y)
+    ["eqElementOrder", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (eqElementOrder x y)
+    ["elemSpineFirst", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (elemSpineFirst x y)
+    ["elemNeedleOrder", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (elemNeedleOrder x y)
+    ["elemNeedleUnused", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (elemNeedleUnused x y)
+    ["prefixOrder", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (prefixOrder x y)
+    ["prefixListOrder", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (prefixListOrder x y)
+    ["prefixElementOrder", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (prefixElementOrder x y)
     ["errorPlain", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (errorPlain x y)
     ["errorNestedMessage", a, b] -> case (read a, read b) of

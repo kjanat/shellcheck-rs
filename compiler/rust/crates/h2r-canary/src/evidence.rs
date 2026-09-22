@@ -290,6 +290,11 @@ fn matches(operation: &Operation, op: Op) -> bool {
             Operation::UnpackString(unpack) if onto_a_tail(unpack)
         ),
         Op::AppendList => matches!(operation, Operation::AppendList { .. }),
+        Op::ListPredicate(predicate, equality) => matches!(
+            operation,
+            Operation::ListPredicate(found)
+                if found.predicate == predicate && found.equality == equality
+        ),
     }
 }
 

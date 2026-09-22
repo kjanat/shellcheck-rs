@@ -27,11 +27,16 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   tupleLazyComponent, tupleUnusedComponent,
   textWords, textLines, textFind, textReverse, textFilter, textMap,
   textSlice, textZip, textCompare, textUnicodeWords,
-  newtypeRoundTrip, newtypeField, newtypeFunction, stringAppendShared) where
+  newtypeRoundTrip, newtypeField, newtypeFunction, stringAppendShared,
+  stringEqual, stringEqualRule, stringEqualLazy, elemChar, elemString, elemLazy, prefixOf, prefixLazy,
+  eqSpineOrder, eqRightSpine, eqElementOrder, elemSpineFirst, elemNeedleOrder, elemNeedleUnused, prefixOrder, prefixListOrder, prefixElementOrder) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#),
   Char(C#), Char#, ord#, chr#, eqChar#, neChar#, ltChar#, leChar#, gtChar#, geChar#)
 import Helpers (first, crossPoly, crossApply, Sized(..), Described(..), Small(..))
+import GHC.Base (eqString)
+import qualified GHC.List as List
+import Data.List (isPrefixOf)
 
 --------------------------------------------------------------------------------
 -- Polymorphism: one function used at several types, across modules, as a
@@ -954,6 +959,109 @@ compareChars (a : as) bs = case bs of
 {-# NOINLINE textCompare #-}
 textCompare :: Int# -> Int# -> Int#
 textCompare _ _ = compareChars "apple" "apricot"
+
+--------------------------------------------------------------------------------
+-- Library list predicates, called directly so both profiles reach the library bindings.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE truth #-}
+truth :: Bool -> Int#
+truth True = 1#
+truth False = 0#
+
+{-# NOINLINE predicateText #-}
+predicateText :: [Char]
+predicateText = "ab\233\955\128026z"
+
+{-# NOINLINE charOf #-}
+charOf :: Int# -> Char
+charOf x = case dropChars x predicateText of
+  c : _ -> c
+  [] -> 'q'
+
+{-# NOINLINE stringEqual #-}
+stringEqual :: Int# -> Int# -> Int#
+stringEqual x y = truth (eqString (takeChars x predicateText) (takeChars y predicateText))
+
+-- `==` at String, which GHC's own RULE rewrites to `eqString` when optimising.
+{-# NOINLINE stringEqualRule #-}
+stringEqualRule :: Int# -> Int# -> Int#
+stringEqualRule x _ = truth (takeChars x predicateText == "ab\233")
+
+{-# NOINLINE stringEqualLazy #-}
+stringEqualLazy :: Int# -> Int# -> Int#
+stringEqualLazy x _ =
+  truth (eqString (charOf x : errorWithoutStackTrace "left tail") ('#' : errorWithoutStackTrace "right tail"))
+
+{-# NOINLINE elemChar #-}
+elemChar :: Int# -> Int# -> Int#
+elemChar x y = truth (List.elem (charOf x) (takeChars y predicateText))
+
+{-# NOINLINE elemString #-}
+elemString :: Int# -> Int# -> Int#
+elemString x _ = truth (List.elem (takeChars x predicateText) stringChoices)
+
+{-# NOINLINE stringChoices #-}
+stringChoices :: [[Char]]
+stringChoices = ["", "ab", "ab\233\955", predicateText]
+
+{-# NOINLINE elemLazy #-}
+elemLazy :: Int# -> Int# -> Int#
+elemLazy x _ = truth (List.elem (charOf (x <# 1#)) ('a' : 'b' : errorWithoutStackTrace "elem tail"))
+
+{-# NOINLINE prefixOf #-}
+prefixOf :: Int# -> Int# -> Int#
+prefixOf x y = truth (isPrefixOf (takeChars x predicateText) (takeChars y predicateText))
+
+{-# NOINLINE prefixLazy #-}
+prefixLazy :: Int# -> Int# -> Int#
+prefixLazy x _ =
+  truth (isPrefixOf (takeChars x "") (errorWithoutStackTrace "unused list"))
+    +# truth (isPrefixOf ('a' : charOf x : []) ('a' : '#' : errorWithoutStackTrace "unused rest"))
+
+{-# NOINLINE answer #-}
+answer :: Bool -> Int# -> Int
+answer b y = case b of
+  True -> I# y
+  False -> I# (0# -# y)
+
+{-# NOINLINE eqSpineOrder #-}
+eqSpineOrder :: Int# -> Int# -> Int
+eqSpineOrder _ y = answer (eqString (errorWithoutStackTrace "left spine") (errorWithoutStackTrace "right spine")) y
+
+{-# NOINLINE eqRightSpine #-}
+eqRightSpine :: Int# -> Int# -> Int
+eqRightSpine x y = answer (eqString (takeChars x "") (errorWithoutStackTrace "right spine")) y
+
+{-# NOINLINE eqElementOrder #-}
+eqElementOrder :: Int# -> Int# -> Int
+eqElementOrder _ y = answer (eqString [errorWithoutStackTrace "left char"] [errorWithoutStackTrace "right char"]) y
+
+{-# NOINLINE elemSpineFirst #-}
+elemSpineFirst :: Int# -> Int# -> Int
+elemSpineFirst _ y = answer (List.elem (errorWithoutStackTrace "needle" :: Char) (errorWithoutStackTrace "spine")) y
+
+{-# NOINLINE elemNeedleOrder #-}
+elemNeedleOrder :: Int# -> Int# -> Int
+elemNeedleOrder _ y = answer (List.elem (errorWithoutStackTrace "needle" :: Char) [errorWithoutStackTrace "element"]) y
+
+{-# NOINLINE elemNeedleUnused #-}
+elemNeedleUnused :: Int# -> Int# -> Int
+elemNeedleUnused x y = case List.elem (errorWithoutStackTrace "needle" :: Char) (takeChars x predicateText) of
+  False -> I# y
+  True -> I# (0# -# y)
+
+{-# NOINLINE prefixOrder #-}
+prefixOrder :: Int# -> Int# -> Int
+prefixOrder _ y = answer (isPrefixOf (errorWithoutStackTrace "prefix spine" :: [Char]) (errorWithoutStackTrace "list spine")) y
+
+{-# NOINLINE prefixListOrder #-}
+prefixListOrder :: Int# -> Int# -> Int
+prefixListOrder _ y = answer (isPrefixOf "a" (errorWithoutStackTrace "list spine")) y
+
+{-# NOINLINE prefixElementOrder #-}
+prefixElementOrder :: Int# -> Int# -> Int
+prefixElementOrder _ y = answer (isPrefixOf [errorWithoutStackTrace "prefix char" :: Char] [errorWithoutStackTrace "list char"]) y
 
 --------------------------------------------------------------------------------
 -- Unboxed tuples.

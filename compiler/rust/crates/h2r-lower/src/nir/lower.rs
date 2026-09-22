@@ -494,7 +494,9 @@ fn external_spine(
         return None;
     }
     let entry = external::resolve(module, head)?;
-    if types.len() != entry.type_arity() || values.len() != entry.value_arity() {
+    if types.len() != entry.type_arity()
+        || values.len() != entry.dictionary_arity() + entry.value_arity()
+    {
         return None;
     }
     types.iter().all(linkage::closed_type).then_some(())?;
@@ -1227,9 +1229,30 @@ fn lower_value(
             }
             let (nil, cons) = data::list_layouts(&world, &element)
                 .map_err(|reason| fail(Some(current), &reason))?;
+            let (dictionaries, argument_sources) =
+                argument_sources.split_at(entry.dictionary_arity());
+            let equality = match (entry, dictionaries) {
+                (external::External::EqString, []) => Some(external::Equality::Char),
+                (external::External::Elem | external::External::IsPrefixOf, [dictionary]) => Some(
+                    external::equality(module, *dictionary, &element).ok_or_else(|| {
+                        named(
+                            module,
+                            *dictionary,
+                            fail(
+                                Some(*dictionary),
+                                "an Eq dictionary this backend does not implement",
+                            ),
+                        )
+                    })?,
+                ),
+                (external::External::Append | external::External::ErrorWithoutStackTrace, []) => {
+                    None
+                }
+                _ => return Err(fail(Some(current), "external call dictionary mismatch")),
+            };
             let mut remaining = &signature;
             let mut arguments = Vec::new();
-            for source in argument_sources {
+            for &source in argument_sources {
                 let Ty::Fun { arg, res, .. } = remaining else {
                     return Err(fail(Some(current), "external call lacks a value arrow"));
                 };
@@ -1257,20 +1280,43 @@ fn lower_value(
                     id: value,
                     ty: ty.clone(),
                 },
-                operation: match entry {
-                    external::External::Append => Operation::AppendList {
+                operation: match (entry, entry.predicate(), equality) {
+                    (external::External::Append, None, None) => Operation::AppendList {
                         left: arguments[0],
                         right: arguments[1],
                         nil,
                         cons,
                     },
-                    external::External::ErrorWithoutStackTrace => Operation::RaiseError {
-                        message: arguments[0],
-                    },
+                    (external::External::ErrorWithoutStackTrace, None, None) => {
+                        Operation::RaiseError {
+                            message: arguments[0],
+                        }
+                    }
+                    (_, Some(predicate), Some(equality)) => {
+                        let (_, _, character) = data::string_layouts(&world)
+                            .map_err(|reason| fail(Some(current), &reason))?;
+                        let (false_, true_) = data::bool_layouts(&world)
+                            .map_err(|reason| fail(Some(current), &reason))?;
+                        Operation::ListPredicate(Box::new(ListPredicate {
+                            predicate,
+                            equality,
+                            left: arguments[0],
+                            right: arguments[1],
+                            nil,
+                            cons,
+                            character,
+                            false_,
+                            true_,
+                        }))
+                    }
+                    _ => return Err(fail(Some(current), "external call dictionary mismatch")),
                 },
                 origin: origin(match entry {
                     external::External::Append => Rule::AppendList,
                     external::External::ErrorWithoutStackTrace => Rule::RaiseError,
+                    external::External::EqString
+                    | external::External::Elem
+                    | external::External::IsPrefixOf => Rule::ListPredicate,
                 }),
             });
             value

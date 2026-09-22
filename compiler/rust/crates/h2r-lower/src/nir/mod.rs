@@ -123,6 +123,7 @@ pub enum Rule {
     ChrChar,
     UnpackString,
     AppendList,
+    ListPredicate,
     RaiseError,
     EmptyCase,
     /// A call GHC's demand analysis proved never returns.
@@ -245,6 +246,7 @@ pub enum Operation {
         nil: data::Constructor,
         cons: data::Constructor,
     },
+    ListPredicate(Box<ListPredicate>),
     Literal(Lit),
     /// Evaluate a stack-free exception's String when this computation is entered.
     RaiseError {
@@ -358,6 +360,27 @@ pub struct UnpackString {
     pub cons: data::Constructor,
     /// `C#`, which wraps each decoded code point.
     pub character: data::Constructor,
+}
+
+/// `eqString`, `elem` or `isPrefixOf`, with the `==` its dictionary supplies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListPredicate {
+    pub predicate: Predicate,
+    pub equality: external::Equality,
+    pub left: ValueId,
+    pub right: ValueId,
+    pub nil: data::Constructor,
+    pub cons: data::Constructor,
+    pub character: data::Constructor,
+    pub false_: data::Constructor,
+    pub true_: data::Constructor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Predicate {
+    EqString,
+    Elem,
+    IsPrefixOf,
 }
 
 /// A code-point comparison of two Char#.

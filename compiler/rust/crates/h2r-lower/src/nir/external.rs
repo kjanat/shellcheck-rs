@@ -30,20 +30,54 @@ pub enum External {
     Append,
     /// The uncaught, stack-free error boundary; its message is a lazy String.
     ErrorWithoutStackTrace,
+    /// `GHC.Base.eqString :: String -> String -> Bool`.
+    EqString,
+    /// `GHC.List.elem :: forall a. Eq a => a -> [a] -> Bool`.
+    Elem,
+    /// `Data.OldList.isPrefixOf :: forall a. Eq a => [a] -> [a] -> Bool`.
+    IsPrefixOf,
+}
+
+/// The `==` a call's `Eq` dictionary supplies, read from the dictionary itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Equality {
+    /// `GHC.Classes.eqChar`, from `$fEqChar`.
+    Char,
+    /// `Eq [a]`'s `==` over `eqChar`, from the `Eq [Char]` specialisation of `$fEqList`.
+    String,
 }
 
 impl External {
     /// How many type arguments precede the value arguments.
     pub fn type_arity(self) -> usize {
         match self {
-            External::Append => 1,
+            External::Append | External::Elem | External::IsPrefixOf => 1,
             External::ErrorWithoutStackTrace => 2,
+            External::EqString => 0,
         }
     }
 
+    pub fn predicate(self) -> Option<super::Predicate> {
+        match self {
+            External::EqString => Some(super::Predicate::EqString),
+            External::Elem => Some(super::Predicate::Elem),
+            External::IsPrefixOf => Some(super::Predicate::IsPrefixOf),
+            External::Append | External::ErrorWithoutStackTrace => None,
+        }
+    }
+
+    /// How many dictionary arguments follow the type arguments.
+    pub fn dictionary_arity(self) -> usize {
+        match self {
+            External::Elem | External::IsPrefixOf => 1,
+            External::Append | External::ErrorWithoutStackTrace | External::EqString => 0,
+        }
+    }
+
+    /// How many runtime values follow the dictionaries.
     pub fn value_arity(self) -> usize {
         match self {
-            External::Append => 2,
+            External::Append | External::EqString | External::Elem | External::IsPrefixOf => 2,
             External::ErrorWithoutStackTrace => 1,
         }
     }
@@ -76,6 +110,18 @@ impl External {
                 let list = list_of(type_arguments[0].clone());
                 Some(arrow(list.clone(), arrow(list.clone(), list)))
             }
+            External::EqString => {
+                let string = super::strings::string_ty();
+                Some(arrow(string.clone(), arrow(string, super::data::bool_ty())))
+            }
+            External::Elem => Some(arrow(
+                type_arguments[0].clone(),
+                arrow(list_of(type_arguments[0].clone()), super::data::bool_ty()),
+            )),
+            External::IsPrefixOf => {
+                let list = list_of(type_arguments[0].clone());
+                Some(arrow(list.clone(), arrow(list, super::data::bool_ty())))
+            }
         }
     }
 
@@ -83,9 +129,32 @@ impl External {
     /// layouts out of the world.
     pub fn element(self, type_arguments: &[Ty]) -> Option<Ty> {
         match self {
-            External::Append => type_arguments.first().cloned(),
-            External::ErrorWithoutStackTrace => super::strings::string_ty().list_elem().cloned(),
+            External::Append | External::Elem | External::IsPrefixOf => {
+                type_arguments.first().cloned()
+            }
+            External::ErrorWithoutStackTrace | External::EqString => {
+                Some(super::strings::char_ty())
+            }
         }
+    }
+}
+
+/// `Eq [Char]` and `Eq [[Char]]` both specialise `$fEqList`, so the element type decides.
+pub fn equality(module: &Module, dictionary: ExprId, element: &Ty) -> Option<Equality> {
+    let Expr::Var { name, .. } = module.expr(dictionary) else {
+        return None;
+    };
+    if module.reference(dictionary) != Some(h2r_core_ir::Ref::Global) {
+        return None;
+    }
+    match name.as_str() {
+        "$ghc-prim$GHC.Classes$$fEqChar" if element.is_char() => Some(Equality::Char),
+        "$ghc-prim$GHC.Classes$$fEqList_$s$fEqList1"
+            if element.list_elem().is_some_and(Ty::is_char) =>
+        {
+            Some(Equality::String)
+        }
+        _ => None,
     }
 }
 
@@ -129,6 +198,9 @@ pub fn resolve(module: &Module, head: ExprId) -> Option<External> {
     match name.as_str() {
         "$base$GHC.Base$++" => Some(External::Append),
         "$base$GHC.Err$errorWithoutStackTrace" => Some(External::ErrorWithoutStackTrace),
+        "$base$GHC.Base$eqString" => Some(External::EqString),
+        "$base$GHC.List$elem" => Some(External::Elem),
+        "$base$Data.OldList$isPrefixOf" => Some(External::IsPrefixOf),
         _ => None,
     }
 }

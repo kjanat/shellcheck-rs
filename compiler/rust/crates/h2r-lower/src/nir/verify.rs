@@ -635,6 +635,18 @@ fn verify_value(
             return Err("source external call requires closed structured types".into());
         }
         let (nil, cons) = data::list_layouts(&world, &element)?;
+        let (dictionaries, argument_sources) = argument_sources.split_at(entry.dictionary_arity());
+        let equality = match (entry.predicate(), dictionaries) {
+            (Some(Predicate::EqString), []) => Some(external::Equality::Char),
+            (Some(Predicate::Elem | Predicate::IsPrefixOf), [dictionary]) => Some(
+                external::equality(module, *dictionary, &element)
+                    .ok_or("source Eq dictionary is not an implemented instance")?,
+            ),
+            (None, []) => None,
+            _ => return Err("source external call dictionary mismatch".into()),
+        };
+        let (_, _, character) = data::string_layouts(&world)?;
+        let (false_, true_) = data::bool_layouts(&world)?;
         let instruction = block.instructions.last().ok_or("missing external call")?;
         let (operands, rule) = match (&instruction.operation, entry) {
             (
@@ -651,6 +663,16 @@ fn verify_value(
             (Operation::RaiseError { message }, external::External::ErrorWithoutStackTrace) => {
                 (vec![*message], Rule::RaiseError)
             }
+            (Operation::ListPredicate(predicate), _)
+                if entry.predicate() == Some(predicate.predicate)
+                    && Some(predicate.equality) == equality
+                    && predicate.nil == nil
+                    && predicate.cons == cons
+                    && (&predicate.character, &predicate.false_, &predicate.true_)
+                        == (&character, &false_, &true_) =>
+            {
+                (vec![predicate.left, predicate.right], Rule::ListPredicate)
+            }
             _ => return Err("source external call was not lowered as one".into()),
         };
         if instruction.origin.source != Source::Expr(expr)
@@ -664,7 +686,11 @@ fn verify_value(
         let limit = block.instructions.len() - 1;
         let mut remaining = &signature;
         let mut consumed = 0;
-        let mut counts = (type_arguments.len(), entry.value_arity(), 1);
+        let mut counts = (
+            type_arguments.len(),
+            dictionaries.len() + entry.value_arity(),
+            1,
+        );
         for (position, source) in argument_sources.iter().enumerate() {
             let Ty::Fun { arg, res, .. } = remaining else {
                 return Err("source external call signature lacks an arrow".into());
@@ -1930,7 +1956,9 @@ fn external_spine(
         return None;
     }
     let entry = external::resolve(module, head)?;
-    if types.len() != entry.type_arity() || values.len() != entry.value_arity() {
+    if types.len() != entry.type_arity()
+        || values.len() != entry.dictionary_arity() + entry.value_arity()
+    {
         return None;
     }
     types.iter().all(linkage::closed_type).then_some(())?;
@@ -2865,6 +2893,41 @@ pub fn verify(function: &Function) -> Result<(), String> {
                             .any(|v| !available.get(v).is_some_and(|ty| ty.alpha_eq(list)))
                     {
                         return Err("append operands and cells must be the same list".into());
+                    }
+                }
+                Operation::ListPredicate(ref predicate) => {
+                    let element = match predicate.equality {
+                        external::Equality::Char => strings::char_ty(),
+                        external::Equality::String => strings::string_ty(),
+                    };
+                    let list = Ty::Con {
+                        tycon: h2r_core_ir::TyConId {
+                            name: h2r_core_ir::LIST_TYCON.into(),
+                            occ: "List".into(),
+                            unique: String::new(),
+                        },
+                        args: vec![element.clone()],
+                    };
+                    let left = match predicate.predicate {
+                        Predicate::Elem => &element,
+                        Predicate::EqString | Predicate::IsPrefixOf => &list,
+                    };
+                    if (predicate.predicate == Predicate::EqString
+                        && predicate.equality != external::Equality::Char)
+                        || !instruction.result.ty.alpha_eq(&data::bool_ty())
+                        || !available
+                            .get(&predicate.left)
+                            .is_some_and(|ty| ty.alpha_eq(left))
+                        || !available
+                            .get(&predicate.right)
+                            .is_some_and(|ty| ty.alpha_eq(&list))
+                        || !predicate.nil.result.alpha_eq(&list)
+                        || !predicate.cons.result.alpha_eq(&list)
+                        || !predicate.character.result.alpha_eq(&strings::char_ty())
+                        || !predicate.false_.result.alpha_eq(&data::bool_ty())
+                        || !predicate.true_.result.alpha_eq(&data::bool_ty())
+                    {
+                        return Err("list predicate operands, equality and layouts disagree".into());
                     }
                 }
                 Operation::UnpackString(ref unpack) => {
