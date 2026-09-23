@@ -528,6 +528,17 @@ fn nir_links_imports_by_stable_name_and_keeps_source_origins() {
         (attempt.live, attempt.lowered.len(), attempt.refused.len()),
         (2, 2, 0)
     );
+    let program_only =
+        crate::nir::program::lower_program_owners(&modules, |module| module == 0).unwrap();
+    assert_eq!(
+        (
+            program_only.live,
+            program_only.library,
+            program_only.lowered.len()
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(program_only.lowered[0].function.module, 0);
     assert!(lower_leaf_in_world(&modules, 99, owner, FnId(0)).is_err());
     assert!(verify_leaf_in_world(&modules, 99, owner, FnId(0), &leaf).is_err());
 }

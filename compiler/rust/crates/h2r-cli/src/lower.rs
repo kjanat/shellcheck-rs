@@ -6,12 +6,12 @@
 //! are: every later sub-milestone prints into the same report.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use h2r_analysis::dictflow::{self, DictFlow, Outcome};
 use h2r_analysis::higher::{Higher, Slot, Verdict as HigherVerdict};
-use h2r_core_ir::{BinderId, ExprId, Module, load_dir};
+use h2r_core_ir::{BinderId, ExprId, Module, load_dirs};
 use h2r_lower::reachability::{
     DeadReason, LinkError, LiveSet, NodeId, RULES, TRUSTED, enclosing_top_pair, root_name,
     top_pair_binders,
@@ -20,16 +20,16 @@ use h2r_lower::verify::{Audit, verify};
 
 /// Lower only an explicitly selected live leaf. No successful result here
 /// implies that the rest of the program has been lowered.
-pub fn nir(dir: &Path, name: &str) -> Result<()> {
-    let modules = load_dir(dir)?;
-    print!("{}", nir_report(&modules, name)?);
+pub fn nir(dir: &Path, with: &[PathBuf], name: &str) -> Result<()> {
+    let dumps = load_dirs(dir, with)?;
+    print!("{}", nir_report(&dumps.modules, name)?);
     Ok(())
 }
 
 /// Print all outcomes before returning failure for an incomplete lowering pass.
-pub fn nir_program(dir: &Path) -> Result<()> {
-    let modules = load_dir(dir)?;
-    let (report, refused) = nir_program_report(&modules)?;
+pub fn nir_program(dir: &Path, with: &[PathBuf]) -> Result<()> {
+    let dumps = load_dirs(dir, with)?;
+    let (report, refused) = nir_program_report(&dumps.modules, &|m| !dumps.is_library(m))?;
     print!("{report}");
     if refused != 0 {
         bail!("NIR lowering incomplete: {refused} live bindings refused");
@@ -46,9 +46,9 @@ pub fn nir_program(dir: &Path) -> Result<()> {
 /// Refusals are recorded rather than fatal, so the report is the whole picture
 /// of what the roots reach. The instances a refused one would itself have
 /// required stay unknown, which makes every count a lower bound.
-pub fn nir_specialize(dir: &Path, name: Option<&str>) -> Result<()> {
-    let modules = load_dir(dir)?;
-    let (report, refused) = nir_specialize_report(&modules, name)?;
+pub fn nir_specialize(dir: &Path, with: &[PathBuf], name: Option<&str>) -> Result<()> {
+    let dumps = load_dirs(dir, with)?;
+    let (report, refused) = nir_specialize_report(&dumps.modules, &|m| !dumps.is_library(m), name)?;
     print!("{report}");
     if refused != 0 {
         bail!("specialization incomplete: {refused} instances refused");
@@ -59,20 +59,24 @@ pub fn nir_specialize(dir: &Path, name: Option<&str>) -> Result<()> {
 /// Every refusal the whole-program survey attributes to `subject`, grouped by
 /// the shape of the call at its site, so the next implementation is written
 /// against the forms the program actually uses.
-pub fn nir_sites(dir: &Path, subject: &str) -> Result<()> {
-    let modules = load_dir(dir)?;
-    print!("{}", nir_sites_report(&modules, subject)?);
+pub fn nir_sites(dir: &Path, with: &[PathBuf], subjects: &[String]) -> Result<()> {
+    let dumps = load_dirs(dir, with)?;
+    print!(
+        "{}",
+        nir_sites_report(&dumps.modules, &|m| !dumps.is_library(m), subjects)?
+    );
     Ok(())
 }
 
 /// Every live binding a Haskell caller can name, with its type and whether a
 /// standalone Rust entry can be emitted for it: the candidates for testing
 /// ShellCheck's own Core against the GHC-built library.
-pub fn nir_entries(dir: &Path) -> Result<()> {
+pub fn nir_entries(dir: &Path, with: &[PathBuf]) -> Result<()> {
     use std::fmt::Write;
 
-    let modules = load_dir(dir)?;
-    let live = audited_live_set(&modules)?;
+    let dumps = load_dirs(dir, with)?;
+    let modules = &dumps.modules;
+    let live = audited_live_set(modules)?;
     let mut emitted = Vec::new();
     let mut refused: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for binding in &live.live {
@@ -87,7 +91,7 @@ pub fn nir_entries(dir: &Path) -> Result<()> {
             binder.name,
             module.binder_ty(key.binder).render()
         );
-        match h2r_lower::emit::emit_entry(&modules, &binder.name) {
+        match h2r_lower::emit::emit_entry(modules, &binder.name) {
             Ok(_) => emitted.push(line),
             Err(reason) => {
                 let reason = reason
@@ -140,7 +144,11 @@ fn audited_live_set(modules: &[Module]) -> Result<LiveSet> {
     Ok(live)
 }
 
-fn nir_sites_report(modules: &[Module], subject: &str) -> Result<String> {
+/// Which modules' live bindings are roots: the program's own. A library
+/// binding is needed only at the instantiations the program asks for.
+type Owns<'a> = &'a dyn Fn(usize) -> bool;
+
+fn nir_sites_report(modules: &[Module], owns: Owns<'_>, subjects: &[String]) -> Result<String> {
     use h2r_core_ir::{Edge, Expr};
     use h2r_lower::nir::specialize;
     use std::fmt::Write;
@@ -149,80 +157,83 @@ fn nir_sites_report(modules: &[Module], subject: &str) -> Result<String> {
     let roots: Vec<_> = live
         .live
         .iter()
-        .map(|binding| {
-            let key = live.node(binding.node).key;
-            specialize::Instance::whole(key.module as usize, key.binder)
-        })
+        .map(|binding| live.node(binding.node).key)
+        .filter(|key| owns(key.module as usize))
+        .map(|key| specialize::Instance::whole(key.module as usize, key.binder))
         .collect();
     let program = specialize::survey(modules, &roots);
-    let mut groups: BTreeMap<(String, String, String), Vec<String>> = BTreeMap::new();
-    for error in &program.refused {
-        if error.detail.as_deref() != Some(subject) {
-            continue;
-        }
-        let module = &modules[error.instance.module];
-        let instance = format!(
-            "{} at {}",
-            module.binder(error.instance.binder).occ,
-            type_arguments(&error.instance)
-        );
-        let Some(site) = error.source else {
+    let mut out = String::new();
+    for subject in subjects {
+        let subject = subject.as_str();
+        let mut groups: BTreeMap<(String, String, String), Vec<String>> = BTreeMap::new();
+        for error in &program.refused {
+            if error.detail.as_deref() != Some(subject) {
+                continue;
+            }
+            let module = &modules[error.instance.module];
+            let instance = format!(
+                "{} at {}",
+                module.binder(error.instance.binder).occ,
+                type_arguments(&error.instance)
+            );
+            let Some(site) = error.source else {
+                groups
+                    .entry((
+                        refusal_reason(error).to_string(),
+                        "no source site".into(),
+                        String::new(),
+                    ))
+                    .or_default()
+                    .push(instance);
+                continue;
+            };
+            let root = module.spine_root(site);
+            let (head, arguments) = module.spine(root);
+            let mut shape = match module.expr(head) {
+                Expr::Var { occ, .. } => occ.clone(),
+                other => format!("<{}>", expression_kind(other)),
+            };
+            for argument in arguments {
+                let argument = module.strip(argument);
+                shape.push(' ');
+                shape.push_str(&match module.expr(argument) {
+                    Expr::Type { ty, .. } => format!("@{{{}}}", module.ty(*ty).render()),
+                    Expr::Var { name, .. } => match module.resolve(argument) {
+                        Some(binder) => format!("(local :: {})", module.binder_ty(binder).render()),
+                        None => name.clone(),
+                    },
+                    Expr::App { .. } => match module.expr(module.spine(argument).0) {
+                        Expr::Var { occ, .. } => format!("({occ} ..)"),
+                        _ => "(application)".into(),
+                    },
+                    other => format!("<{}>", expression_kind(other)),
+                });
+            }
+            let context = match (module.parent[root as usize], &module.edge[root as usize]) {
+                (Some(parent), Edge::CaseScrut) => match module.expr(parent) {
+                    Expr::Case { binder, .. } => {
+                        format!("case scrutinee :: {}", module.binder_ty(*binder).render())
+                    }
+                    _ => "case scrutinee".into(),
+                },
+                (None, _) => "a top-level right-hand side".into(),
+                (Some(_), edge) => format!("{edge:?}"),
+            };
             groups
-                .entry((
-                    refusal_reason(error).to_string(),
-                    "no source site".into(),
-                    String::new(),
-                ))
+                .entry((refusal_reason(error).to_string(), shape, context))
                 .or_default()
                 .push(instance);
-            continue;
-        };
-        let root = module.spine_root(site);
-        let (head, arguments) = module.spine(root);
-        let mut shape = match module.expr(head) {
-            Expr::Var { occ, .. } => occ.clone(),
-            other => format!("<{}>", expression_kind(other)),
-        };
-        for argument in arguments {
-            let argument = module.strip(argument);
-            shape.push(' ');
-            shape.push_str(&match module.expr(argument) {
-                Expr::Type { ty, .. } => format!("@{{{}}}", module.ty(*ty).render()),
-                Expr::Var { name, .. } => match module.resolve(argument) {
-                    Some(binder) => format!("(local :: {})", module.binder_ty(binder).render()),
-                    None => name.clone(),
-                },
-                Expr::App { .. } => match module.expr(module.spine(argument).0) {
-                    Expr::Var { occ, .. } => format!("({occ} ..)"),
-                    _ => "(application)".into(),
-                },
-                other => format!("<{}>", expression_kind(other)),
-            });
         }
-        let context = match (module.parent[root as usize], &module.edge[root as usize]) {
-            (Some(parent), Edge::CaseScrut) => match module.expr(parent) {
-                Expr::Case { binder, .. } => {
-                    format!("case scrutinee :: {}", module.binder_ty(*binder).render())
-                }
-                _ => "case scrutinee".into(),
-            },
-            (None, _) => "a top-level right-hand side".into(),
-            (Some(_), edge) => format!("{edge:?}"),
-        };
-        groups
-            .entry((refusal_reason(error).to_string(), shape, context))
-            .or_default()
-            .push(instance);
-    }
-    let total: usize = groups.values().map(Vec::len).sum();
-    let mut out = format!("Sites refused about {subject}: {total}\n");
-    let mut ranked: Vec<_> = groups.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
-    for ((reason, shape, context), instances) in ranked {
-        writeln!(out, "{:6}  {shape}", instances.len()).unwrap();
-        writeln!(out, "        in {context}; {reason}").unwrap();
-        for instance in instances {
-            writeln!(out, "        - {instance}").unwrap();
+        let total: usize = groups.values().map(Vec::len).sum();
+        writeln!(out, "Sites refused about {subject}: {total}").unwrap();
+        let mut ranked: Vec<_> = groups.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+        for ((reason, shape, context), instances) in ranked {
+            writeln!(out, "{:6}  {shape}", instances.len()).unwrap();
+            writeln!(out, "        in {context}; {reason}").unwrap();
+            for instance in instances {
+                writeln!(out, "        - {instance}").unwrap();
+            }
         }
     }
     Ok(out)
@@ -244,7 +255,11 @@ fn expression_kind(expr: &h2r_core_ir::Expr) -> &'static str {
     }
 }
 
-fn nir_specialize_report(modules: &[Module], name: Option<&str>) -> Result<(String, usize)> {
+fn nir_specialize_report(
+    modules: &[Module],
+    owns: Owns<'_>,
+    name: Option<&str>,
+) -> Result<(String, usize)> {
     use h2r_lower::nir::{pretty::format_leaf, specialize};
     use std::fmt::Write;
 
@@ -274,10 +289,9 @@ fn nir_specialize_report(modules: &[Module], name: Option<&str>) -> Result<(Stri
             let roots: Vec<_> = live
                 .live
                 .iter()
-                .map(|binding| {
-                    let key = live.node(binding.node).key;
-                    specialize::Instance::whole(key.module as usize, key.binder)
-                })
+                .map(|binding| live.node(binding.node).key)
+                .filter(|key| owns(key.module as usize))
+                .map(|key| specialize::Instance::whole(key.module as usize, key.binder))
                 .collect();
             let heading = format!(
                 "NIR specialization roots: {} live bindings\nScope: the instances a \
@@ -537,11 +551,11 @@ fn external_demand(program: &h2r_lower::nir::specialize::Specialization) -> Stri
     out
 }
 
-fn nir_program_report(modules: &[Module]) -> Result<(String, usize)> {
-    use h2r_lower::nir::{pretty::format_leaf, program::lower_program};
+fn nir_program_report(modules: &[Module], owns: Owns<'_>) -> Result<(String, usize)> {
+    use h2r_lower::nir::{pretty::format_leaf, program::lower_program_owners};
     use std::fmt::Write;
 
-    let attempt = lower_program(modules).map_err(anyhow::Error::msg)?;
+    let attempt = lower_program_owners(modules, owns).map_err(anyhow::Error::msg)?;
     let mut out = format!(
         "NIR program attempt (leaf subset; no executable output)\nLive owners: {} = {} lowered + {} refused; {} dead skipped\n",
         attempt.live,
@@ -549,6 +563,14 @@ fn nir_program_report(modules: &[Module]) -> Result<(String, usize)> {
         attempt.refused.len(),
         attempt.dead,
     );
+    if attempt.library != 0 {
+        writeln!(
+            out,
+            "Live library bindings: {}, lowered only as the instances the program requests",
+            attempt.library
+        )
+        .unwrap();
+    }
     for leaf in &attempt.lowered {
         let function = &leaf.function;
         writeln!(
@@ -632,6 +654,7 @@ const TOP_IMPORTS: usize = 20;
 #[allow(clippy::too_many_arguments)]
 pub fn lower(
     dir: &Path,
+    with: &[PathBuf],
     reachability: bool,
     json: bool,
     rules: bool,
@@ -649,7 +672,8 @@ pub fn lower(
              --rules prints the reachability rule table."
         );
     }
-    let modules = load_dir(dir)?;
+    let dumps = load_dirs(dir, with)?;
+    let modules = dumps.modules;
     let selected: Vec<&Module> = modules.iter().collect();
     let live = match LiveSet::of_modules(selected.iter().copied()) {
         Ok(l) => l,
@@ -1427,11 +1451,11 @@ mod nir_tests {
                 .collect::<Vec<_>>(),
             vec![FnId(0), FnId(1)]
         );
-        let (report, refusals) = nir_program_report(&modules).unwrap();
+        let (report, refusals) = nir_program_report(&modules, &|_| true).unwrap();
         assert_eq!(refusals, 0);
         assert!(report.contains("2 = 2 lowered + 0 refused; 1 dead skipped"));
         assert!(report.contains("no executable output"));
-        assert_eq!(report, nir_program_report(&modules).unwrap().0);
+        assert_eq!(report, nir_program_report(&modules, &|_| true).unwrap().0);
     }
 
     #[test]
@@ -1451,7 +1475,7 @@ mod nir_tests {
             (0, owner, Some(rhs))
         );
         assert!(refusal.reason.contains("type or coercion"));
-        let (report, refusals) = nir_program_report(&modules).unwrap();
+        let (report, refusals) = nir_program_report(&modules, &|_| true).unwrap();
         assert_eq!(refusals, 1);
         assert!(report.contains("2 = 1 lowered + 1 refused"));
         assert!(report.contains("LOWERED"));
@@ -1522,18 +1546,18 @@ mod nir_tests {
         let owner = m.top[0].pairs[0].binder;
         m.binders[owner as usize].name = "$u$Main$notMain".into();
         assert!(
-            nir_specialize_report(&[m], None)
+            nir_specialize_report(&[m], &|_| true, None)
                 .unwrap_err()
                 .to_string()
                 .contains("no root")
         );
         assert!(
-            nir_specialize_report(&[fixture_with_link(true)], None)
+            nir_specialize_report(&[fixture_with_link(true)], &|_| true, None)
                 .unwrap_err()
                 .to_string()
                 .contains("A5-IN-WORLD-MISSING")
         );
-        let (report, refused) = nir_specialize_report(&[fixture()], None).unwrap();
+        let (report, refused) = nir_specialize_report(&[fixture()], &|_| true, None).unwrap();
         assert_eq!(refused, 0);
         assert!(report.contains("NIR specialization roots: 2 live bindings"));
     }

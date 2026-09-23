@@ -119,6 +119,8 @@ pub enum Rule {
     /// resolved to that instance's method.
     ResolveMethod,
     CharCompare,
+    WordCompare,
+    IntToWord,
     OrdChar,
     ChrChar,
     UnpackString,
@@ -129,6 +131,8 @@ pub enum Rule {
     DataToTag,
     TagToEnum,
     PointerEquality,
+    /// `GHC.Magic.lazy`: its argument, moved.
+    MagicLazy,
     RaiseError,
     EmptyCase,
     /// A call GHC's demand analysis proved never returns.
@@ -232,6 +236,13 @@ pub enum Operation {
         op: CharCompare,
         arguments: Vec<ValueId>,
     },
+    /// Strict unsigned comparison of two Word#; the result is Int# 0 or 1.
+    WordCompare {
+        op: CharCompare,
+        arguments: Vec<ValueId>,
+    },
+    /// `int2Word#`: the same machine word, read as unsigned.
+    IntToWord(ValueId),
     /// `ord#`: the code point of a Char#, as an Int#.
     OrdChar(ValueId),
     /// `chr#`: an Int# read as a code point. Unchecked and non-narrowing, as
@@ -254,6 +265,8 @@ pub enum Operation {
     ListPredicate(Box<ListPredicate>),
     ListFunction(Box<ListFunction>),
     CompareStrings(Box<CompareStrings>),
+    /// `GHC.Err.error`: an uncaught `ErrorCall` whose location is the rendered call stack.
+    RaiseCallStackError(Box<CallStackError>),
     /// Force a value and return its constructor's position in the family, from zero.
     DataToTag {
         value: ValueId,
@@ -398,6 +411,23 @@ pub struct ListPredicate {
     pub true_: data::Constructor,
 }
 
+/// `error`'s message and call stack, and the layouts that render the stack.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallStackError {
+    pub message: ValueId,
+    /// The `IP "callStack" CallStack` argument, a `CallStack` once the newtype is peeled.
+    pub stack: ValueId,
+    pub layouts: CallStackLayouts,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallStackLayouts {
+    pub empty: data::Constructor,
+    pub push: data::Constructor,
+    pub freeze: data::Constructor,
+    pub location: data::Constructor,
+}
+
 /// A `base` list function at closed types, with the cells it reads and builds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ListFunction {
@@ -486,6 +516,10 @@ pub enum IntBinary {
     LessEqual,
     Greater,
     GreaterEqual,
+    /// `uncheckedIShiftL#`, masking the count to the word as x86-64's `shl` does.
+    ShiftLeft,
+    /// `uncheckedIShiftRA#`, masking the count to the word as x86-64's `sar` does.
+    ShiftRightArithmetic,
 }
 
 #[derive(Debug, Clone)]

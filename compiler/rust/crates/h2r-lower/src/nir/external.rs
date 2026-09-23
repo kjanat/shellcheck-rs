@@ -31,6 +31,9 @@ pub enum External {
     Append,
     /// The uncaught, stack-free error boundary; its message is a lazy String.
     ErrorWithoutStackTrace,
+    /// `GHC.Err.error :: forall r (a :: TYPE r). (?callStack :: CallStack) => [Char] -> a`,
+    /// whose implicit call stack is an `IP "callStack" CallStack` argument.
+    Error,
     /// `GHC.Base.eqString :: String -> String -> Bool`.
     EqString,
     /// `GHC.List.elem :: forall a. Eq a => a -> [a] -> Bool`.
@@ -62,6 +65,8 @@ pub enum External {
     /// `GHC.Base.++_$s++ :: forall a. a -> [a] -> [a] -> [a]`, which base's rule
     /// `SC:++0` makes `(x : xs) ++ ys`.
     ConsAppend,
+    /// `GHC.Magic.lazy :: forall a. a -> a`, the identity once CorePrep has run.
+    Lazy,
 }
 
 /// The `==` a call's `Eq` dictionary supplies, read from the dictionary itself.
@@ -88,8 +93,9 @@ impl External {
             | External::Reverse
             | External::ReverseOnto
             | External::Length
-            | External::ConsAppend => 1,
-            External::ErrorWithoutStackTrace | External::Map => 2,
+            | External::ConsAppend
+            | External::Lazy => 1,
+            External::ErrorWithoutStackTrace | External::Error | External::Map => 2,
             External::PointerEquality => 4,
             External::EqString | External::CompareString => 0,
         }
@@ -102,6 +108,7 @@ impl External {
             External::IsPrefixOf => Some(super::Predicate::IsPrefixOf),
             External::Append
             | External::ErrorWithoutStackTrace
+            | External::Error
             | External::CompareString
             | External::DataToTag
             | External::PointerEquality
@@ -113,7 +120,8 @@ impl External {
             | External::Reverse
             | External::ReverseOnto
             | External::Length
-            | External::ConsAppend => None,
+            | External::ConsAppend
+            | External::Lazy => None,
         }
     }
 
@@ -129,13 +137,15 @@ impl External {
             External::ConsAppend => Some(super::ListOp::ConsAppend),
             External::Append
             | External::ErrorWithoutStackTrace
+            | External::Error
             | External::EqString
             | External::Elem
             | External::IsPrefixOf
             | External::CompareString
             | External::DataToTag
             | External::PointerEquality
-            | External::TagToEnum => None,
+            | External::TagToEnum
+            | External::Lazy => None,
         }
     }
 
@@ -145,6 +155,7 @@ impl External {
             External::Elem | External::IsPrefixOf => 1,
             External::Append
             | External::ErrorWithoutStackTrace
+            | External::Error
             | External::EqString
             | External::CompareString
             | External::DataToTag
@@ -157,7 +168,8 @@ impl External {
             | External::Reverse
             | External::ReverseOnto
             | External::Length
-            | External::ConsAppend => 0,
+            | External::ConsAppend
+            | External::Lazy => 0,
         }
     }
 
@@ -170,6 +182,7 @@ impl External {
             | External::IsPrefixOf
             | External::CompareString
             | External::PointerEquality
+            | External::Error
             | External::Map
             | External::Filter
             | External::TakeWhile
@@ -179,7 +192,8 @@ impl External {
             External::ErrorWithoutStackTrace
             | External::DataToTag
             | External::TagToEnum
-            | External::Reverse => 1,
+            | External::Reverse
+            | External::Lazy => 1,
             External::ConsAppend => 3,
         }
     }
@@ -194,18 +208,17 @@ impl External {
         match self {
             External::ErrorWithoutStackTrace => {
                 // This backend currently carries lifted error results only.
-                let Ty::Con { tycon, args } = &type_arguments[0] else {
-                    return None;
-                };
-                if tycon.name != "$ghc-prim$GHC.Types$BoxedRep"
-                    || args.len() != 1
-                    || !matches!(&args[0], Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Types$Lifted" && args.is_empty())
-                {
-                    return None;
-                }
+                lifted_rep(&type_arguments[0]).then_some(())?;
                 Some(arrow(
                     super::strings::string_ty(),
                     type_arguments[1].clone(),
+                ))
+            }
+            External::Error => {
+                lifted_rep(&type_arguments[0]).then_some(())?;
+                Some(arrow(
+                    implicit_call_stack_ty(),
+                    arrow(super::strings::string_ty(), type_arguments[1].clone()),
                 ))
             }
             External::Append => {
@@ -281,6 +294,7 @@ impl External {
                     arrow(list.clone(), arrow(list.clone(), list)),
                 ))
             }
+            External::Lazy => Some(arrow(type_arguments[0].clone(), type_arguments[0].clone())),
         }
     }
 
@@ -299,10 +313,14 @@ impl External {
             | External::ReverseOnto
             | External::Length
             | External::ConsAppend => type_arguments.first().cloned(),
-            External::ErrorWithoutStackTrace | External::EqString | External::CompareString => {
-                Some(super::strings::char_ty())
-            }
-            External::DataToTag | External::PointerEquality | External::TagToEnum => None,
+            External::ErrorWithoutStackTrace
+            | External::Error
+            | External::EqString
+            | External::CompareString => Some(super::strings::char_ty()),
+            External::DataToTag
+            | External::PointerEquality
+            | External::TagToEnum
+            | External::Lazy => None,
         }
     }
 }
@@ -324,6 +342,45 @@ pub fn equality(module: &Module, dictionary: ExprId, element: &Ty) -> Option<Equ
         }
         _ => None,
     }
+}
+
+fn lifted_rep(rep: &Ty) -> bool {
+    matches!(rep, Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Types$BoxedRep"
+        && matches!(args.as_slice(), [Ty::Con { tycon, args }]
+            if tycon.name == "$ghc-prim$GHC.Types$Lifted" && args.is_empty()))
+}
+
+fn con(name: &str, args: Vec<Ty>) -> Ty {
+    Ty::Con {
+        tycon: TyConId {
+            name: name.into(),
+            occ: name.rsplit('$').next().unwrap_or(name).into(),
+            unique: String::new(),
+        },
+        args,
+    }
+}
+
+pub fn call_stack_ty() -> Ty {
+    con("$base$GHC.Stack.Types$CallStack", vec![])
+}
+
+pub fn src_loc_ty() -> Ty {
+    con("$base$GHC.Stack.Types$SrcLoc", vec![])
+}
+
+/// `?callStack :: CallStack`, the dictionary of the `IP "callStack"` class.
+pub fn implicit_call_stack_ty() -> Ty {
+    con(
+        "$ghc-prim$GHC.Classes$IP",
+        vec![
+            Ty::Lit {
+                kind: "str".into(),
+                text: "callStack".into(),
+            },
+            call_stack_ty(),
+        ],
+    )
 }
 
 pub fn list_of(element: Ty) -> Ty {
@@ -367,6 +424,7 @@ pub fn resolve(module: &Module, head: ExprId) -> Option<External> {
     let entry = match name.as_str() {
         "$base$GHC.Base$++" => Some(External::Append),
         "$base$GHC.Err$errorWithoutStackTrace" => Some(External::ErrorWithoutStackTrace),
+        "$base$GHC.Err$error" => Some(External::Error),
         "$base$GHC.Base$eqString" => Some(External::EqString),
         "$base$GHC.List$elem" => Some(External::Elem),
         "$base$Data.OldList$isPrefixOf" => Some(External::IsPrefixOf),
@@ -382,6 +440,7 @@ pub fn resolve(module: &Module, head: ExprId) -> Option<External> {
         "$base$GHC.List$reverse1" => Some(External::ReverseOnto),
         "$base$GHC.List$$wlenAcc" => Some(External::Length),
         "$base$GHC.Base$++_$s++" => Some(External::ConsAppend),
+        "$ghc-prim$GHC.Magic$lazy" => Some(External::Lazy),
         _ => None,
     }?;
     let primop = matches!(

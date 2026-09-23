@@ -30,6 +30,7 @@ stack.yaml.lock
 # h2r compiler
 compiler/build/
 compiler/core-json/
+compiler/library-json/
 target/
 compiler/h2r-plugin/dist-newstyle/
 compiler/matrix/

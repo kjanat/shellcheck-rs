@@ -177,6 +177,15 @@ fn function_directly(world: &World<'_>, ty: &Ty) -> bool {
         if closed_type(ty) && supported(world, arg) && supported(world, res))
 }
 
+/// Whether two values of these types can be compared as heap objects: both
+/// held in one shared carrier, a boxed `Int` or algebraic data.
+pub fn same_heap_carrier(world: &World<'_>, left: &Ty, right: &Ty) -> bool {
+    matches!(
+        (carrier(world, left), carrier(world, right)),
+        (Some(Carrier::Int), Some(Carrier::Int)) | (Some(Carrier::Data), Some(Carrier::Data))
+    )
+}
+
 pub fn supported(world: &World<'_>, ty: &Ty) -> bool {
     carrier(world, ty).is_some()
 }
@@ -411,6 +420,35 @@ pub fn string_layouts(
         return Err("the loaded world's Char layout is not the expected one".into());
     }
     Ok((nil, cons, wrapper))
+}
+
+/// `EmptyCallStack`, `PushCallStack` and `FreezeCallStack`, and `SrcLoc`,
+/// read out of the loaded world with their field types checked.
+pub fn call_stack_layouts(world: &World<'_>) -> Result<super::CallStackLayouts, String> {
+    let stack = super::external::call_stack_ty();
+    let location = super::external::src_loc_ty();
+    let string = super::strings::string_ty();
+    let empty = layout(world, "$base$GHC.Stack.Types$EmptyCallStack", &stack)?;
+    let push = layout(world, "$base$GHC.Stack.Types$PushCallStack", &stack)?;
+    let freeze = layout(world, "$base$GHC.Stack.Types$FreezeCallStack", &stack)?;
+    let at = layout(world, "$base$GHC.Stack.Types$SrcLoc", &location)?;
+    let int = |ty: &Ty| boxed::is_int(ty);
+    if !empty.fields.is_empty()
+        || !matches!(push.fields.as_slice(), [f, l, s]
+            if f.alpha_eq(&string) && l.alpha_eq(&location) && s.alpha_eq(&stack))
+        || !matches!(freeze.fields.as_slice(), [s] if s.alpha_eq(&stack))
+        || at.fields.len() != 7
+        || !at.fields[..3].iter().all(|f| f.alpha_eq(&string))
+        || !at.fields[3..].iter().all(int)
+    {
+        return Err("the loaded world's CallStack layout is not base's".into());
+    }
+    Ok(super::CallStackLayouts {
+        empty,
+        push,
+        freeze,
+        location: at,
+    })
 }
 
 /// Resolve only unbound global worker occurrences. A local shadow never gains

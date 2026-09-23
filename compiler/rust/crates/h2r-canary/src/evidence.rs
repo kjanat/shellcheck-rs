@@ -26,10 +26,13 @@ pub struct Binding {
 /// GHC decides on its own whether a top-level binding's name ends up external,
 /// so the occurrence is what a fixture can name and the stable name is what it
 /// resolves to.
+/// Fixtures are the canary program's own bindings, unit `main`; the libraries
+/// loaded beside it define names of their own.
 pub fn resolve(modules: &[Module], occ: &str) -> Result<Binding, String> {
     let found: Vec<Binding> = modules
         .iter()
         .enumerate()
+        .filter(|(_, loaded)| loaded.unit == "main")
         .flat_map(|(module, loaded)| {
             loaded
                 .top
@@ -265,6 +268,7 @@ fn carries(rule: Rule, kind: RuleKind) -> bool {
         RuleKind::EraseCast => rule == Rule::EraseCast,
         RuleKind::ResolveMethod => rule == Rule::ResolveMethod,
         RuleKind::Diverge => rule == Rule::Diverge,
+        RuleKind::MagicLazy => rule == Rule::MagicLazy,
     }
 }
 
@@ -284,6 +288,9 @@ fn matches(operation: &Operation, op: Op) -> bool {
         Op::OrdChar => matches!(operation, Operation::OrdChar(_)),
         Op::ChrChar => matches!(operation, Operation::ChrChar(_)),
         Op::CharCompare => matches!(operation, Operation::CharCompare { .. }),
+        Op::Int(op) => matches!(operation, Operation::IntBinary { op: found, .. } if *found == op),
+        Op::WordCompare => matches!(operation, Operation::WordCompare { .. }),
+        Op::RaiseCallStackError => matches!(operation, Operation::RaiseCallStackError(_)),
         Op::UnpackString => matches!(operation, Operation::UnpackString(_)),
         Op::UnpackStringOnto => matches!(
             operation,

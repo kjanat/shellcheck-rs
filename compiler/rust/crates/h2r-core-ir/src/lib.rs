@@ -10,7 +10,7 @@
 pub mod pretty;
 pub mod raw;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -1293,6 +1293,37 @@ pub fn load_dir(dir: &Path) -> Result<Vec<Module>> {
     }
     modules.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(modules)
+}
+
+/// A program's modules and the library modules loaded beside it.
+pub struct Dumps {
+    pub modules: Vec<Module>,
+    /// Names of the modules that came from a library directory.
+    pub libraries: BTreeSet<String>,
+}
+
+impl Dumps {
+    pub fn is_library(&self, module: usize) -> bool {
+        self.libraries.contains(&self.modules[module].name)
+    }
+}
+
+/// Load a program's dumps together with the dumps of libraries compiled
+/// beside it, as one world. A module name two directories both define is an
+/// error: modules are told apart by name.
+pub fn load_dirs(dir: &Path, with: &[PathBuf]) -> Result<Dumps> {
+    let mut modules = load_dir(dir)?;
+    let mut libraries = BTreeSet::new();
+    for library in with {
+        let loaded = load_dir(library)?;
+        libraries.extend(loaded.iter().map(|module| module.name.clone()));
+        modules.extend(loaded);
+    }
+    modules.sort_by(|a, b| a.name.cmp(&b.name));
+    if let Some(pair) = modules.windows(2).find(|pair| pair[0].name == pair[1].name) {
+        bail!("module {} is defined by more than one dump", pair[0].name);
+    }
+    Ok(Dumps { modules, libraries })
 }
 
 /// Run `f` on a thread with a large stack.

@@ -13,7 +13,7 @@
 //! into one literal there, so the appending unpacker is reachable only through
 //! a tail it cannot fold.
 
-use h2r_lower::nir::{ListOp, Predicate, external::Equality};
+use h2r_lower::nir::{IntBinary, ListOp, Predicate, external::Equality};
 
 /// Which Core profile a check applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +67,9 @@ pub enum Op {
     OrdChar,
     ChrChar,
     CharCompare,
+    Int(IntBinary),
+    WordCompare,
+    RaiseCallStackError,
     UnpackString,
     /// An unpacked literal appended to something: the `unpackAppendCString#`
     /// family, which `unpackCString#` alone never reaches.
@@ -97,6 +100,11 @@ impl Op {
             Op::OrdChar => "ord-char",
             Op::ChrChar => "chr-char",
             Op::CharCompare => "char-compare",
+            Op::Int(IntBinary::ShiftLeft) => "uncheckedIShiftL#",
+            Op::Int(IntBinary::ShiftRightArithmetic) => "uncheckedIShiftRA#",
+            Op::Int(_) => "Int# arithmetic",
+            Op::WordCompare => "Word# comparison",
+            Op::RaiseCallStackError => "error with a call stack",
             Op::UnpackString => "unpack-string",
             Op::UnpackStringOnto => "unpack-string onto a tail",
             Op::AppendList => "append-list",
@@ -132,6 +140,7 @@ pub enum RuleKind {
     EraseCast,
     ResolveMethod,
     Diverge,
+    MagicLazy,
 }
 
 impl RuleKind {
@@ -142,6 +151,7 @@ impl RuleKind {
             RuleKind::EraseCast => "EraseCast",
             RuleKind::ResolveMethod => "ResolveMethod",
             RuleKind::Diverge => "Diverge",
+            RuleKind::MagicLazy => "MagicLazy",
         }
     }
 }
@@ -415,17 +425,42 @@ pub const REFUSALS: &[Refusal] = &[
         because: Some("imported binding is outside the loaded world"),
     },
     Refusal {
+        entry: Entry::Occurrence("mapLookup"),
+        when: When::Both,
+        because: Some("imported binding is outside the loaded world"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("mapUnion"),
+        when: When::Both,
+        because: Some("imported binding is outside the loaded world"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("errorCall"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("imported binding is outside the loaded world"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("errorCallComputed"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("imported binding is outside the loaded world"),
+    },
+    Refusal {
         entry: Entry::Occurrence("errorUnusedArgument"),
-        when: When::Only(Profile::Optimized),
-        because: Some("unimplemented non-returning call"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("imported binding is outside the loaded world"),
     },
     Refusal {
         entry: Entry::Occurrence("errorUnusedLet"),
-        when: When::Only(Profile::Optimized),
-        because: Some("unimplemented non-returning call"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("imported binding is outside the loaded world"),
     },
     Refusal {
         entry: Entry::Occurrence("errorUnusedShared"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("imported binding is outside the loaded world"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("undefinedUnused"),
         when: When::Only(Profile::Optimized),
         because: Some("unimplemented non-returning call"),
     },
@@ -438,6 +473,9 @@ pub struct Probe {
     pub input: i64,
     pub message: Option<&'static [u8]>,
     pub when: When,
+    /// The message is followed by a call stack, whose source locations are
+    /// this compilation's and are read from the oracle's own output.
+    pub located: bool,
 }
 
 const fn probe(entry: &'static str, input: i64, message: Option<&'static [u8]>) -> Probe {
@@ -446,6 +484,7 @@ const fn probe(entry: &'static str, input: i64, message: Option<&'static [u8]>) 
         input,
         message,
         when: When::Both,
+        located: false,
     }
 }
 
@@ -455,6 +494,22 @@ const fn optimized_probe(entry: &'static str, input: i64, message: &'static [u8]
         input,
         message: Some(message),
         when: When::Only(Profile::Optimized),
+        located: false,
+    }
+}
+
+const fn located_probe(
+    when: When,
+    entry: &'static str,
+    input: i64,
+    message: &'static [u8],
+) -> Probe {
+    Probe {
+        entry,
+        input,
+        message: Some(message),
+        when,
+        located: true,
     }
 }
 
@@ -500,6 +555,25 @@ pub const ERROR_PROBES: &[Probe] = &[
     optimized_probe("lengthTail", 0, b"list tail"),
     probe("consAppendRight", 0, Some(b"list spine")),
     probe("consAppendRight", 2, Some(b"list spine")),
+    located_probe(
+        When::Only(Profile::Optimized),
+        "errorCall",
+        0,
+        b"canary error",
+    ),
+    located_probe(
+        When::Only(Profile::Optimized),
+        "errorCallComputed",
+        2,
+        b"mab",
+    ),
+    located_probe(When::Only(Profile::Optimized), "errorCallComputed", 0, b"m"),
+    located_probe(
+        When::Only(Profile::Optimized),
+        "setFindMin",
+        5,
+        b"Set.findMin: empty set has no minimal element",
+    ),
 ];
 
 /// One exported ShellCheck binding, the argument lists it is run with, and
@@ -1022,6 +1096,54 @@ pub const FIXTURES: &[Fixture] = &[
     ),
     prove("consAppend", Inputs::Binary, CONS_APPEND),
     prove("consAppendLazy", Inputs::Binary, CONS_APPEND),
+    prove(
+        "shifts",
+        Inputs::Binary,
+        &[
+            anywhere(Op::Int(IntBinary::ShiftLeft)),
+            anywhere(Op::Int(IntBinary::ShiftRightArithmetic)),
+        ],
+    ),
+    prove("wordOrder", Inputs::Binary, &[anywhere(Op::WordCompare)]),
+    prove(
+        "magicLazy",
+        Inputs::Binary,
+        &[both(Evidence::Rule(RuleKind::MagicLazy))],
+    ),
+    // `-O0` keeps the pattern-match failure join, which takes `(##)`.
+    prove(
+        "voidJoin",
+        Inputs::Binary,
+        &[unoptimized(Evidence::ClosureOperation(
+            Op::MakeUnboxedTuple,
+        ))],
+    ),
+    // containers, compiled from source into the world. `-O0` reaches `Ord Int`
+    // through ghc-prim's dictionary, which the world does not contain yet.
+    prove_in(
+        Profile::Optimized,
+        "setSize",
+        Inputs::Binary,
+        &[anywhere(Op::PointerEquality)],
+    ),
+    prove_in(
+        Profile::Optimized,
+        "setMember",
+        Inputs::Binary,
+        &[anywhere(Op::PointerEquality)],
+    ),
+    prove_in(
+        Profile::Optimized,
+        "setOrder",
+        Inputs::Binary,
+        &[anywhere(Op::PointerEquality)],
+    ),
+    prove_in(
+        Profile::Optimized,
+        "mapStrings",
+        Inputs::Binary,
+        &[anywhere(Op::CompareStrings)],
+    ),
     prove("tagColour", Inputs::Binary, &[anywhere(Op::DataToTag)]),
     prove("tagMaybe", Inputs::Binary, &[anywhere(Op::DataToTag)]),
     prove_in(
@@ -1097,31 +1219,32 @@ pub const FIXTURES: &[Fixture] = &[
         Inputs::Binary,
         &[op(Op::UnboxedTupleField)],
     ),
-    // Non-returning computations, bound and never demanded. Retain their
-    // analysis evidence, but require emission refusal above: demand metadata
-    // alone cannot justify an executable implementation of these calls.
-    //
-    // GHC writes a binding's demand signature into its interface file only
-    // when it is compiled with optimisation on, and the unoptimised read does
-    // not slurp it: in the `-O0` dump `error` carries an empty signature and
-    // `diverges` is false. The evidence for a dead end therefore exists only
-    // in the optimised dump, and these entries are skipped in the other rather
-    // than refused there.
+    // `error`, bound and never demanded: the call is built and never raised.
+    // `-O0` builds the call stack with base's `pushCallStack`, refused above.
     prove_in(
         Profile::Optimized,
         "errorUnusedArgument",
-        Inputs::EvidenceOnly,
-        &[both(Evidence::ClosureRule(RuleKind::Diverge))],
+        Inputs::Binary,
+        &[anywhere(Op::RaiseCallStackError)],
     ),
     prove_in(
         Profile::Optimized,
         "errorUnusedLet",
-        Inputs::EvidenceOnly,
-        &[both(Evidence::ClosureRule(RuleKind::Diverge))],
+        Inputs::Binary,
+        &[anywhere(Op::RaiseCallStackError)],
     ),
     prove_in(
         Profile::Optimized,
         "errorUnusedShared",
+        Inputs::Binary,
+        &[anywhere(Op::RaiseCallStackError)],
+    ),
+    // `undefined` has no implementation, only GHC's demand evidence that it
+    // never returns, which is analysis and not behaviour: emission is refused
+    // above. GHC writes that evidence into the interface only under `-O1`.
+    prove_in(
+        Profile::Optimized,
+        "undefinedUnused",
         Inputs::EvidenceOnly,
         &[both(Evidence::ClosureRule(RuleKind::Diverge))],
     ),

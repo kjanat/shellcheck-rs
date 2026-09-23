@@ -618,7 +618,11 @@ fn verify_value(
         let signature = entry
             .signature(&type_arguments)
             .ok_or("source external call type arguments mismatch")?;
-        if entry == external::External::ErrorWithoutStackTrace && !data::lifted(&world, ty) {
+        if matches!(
+            entry,
+            external::External::ErrorWithoutStackTrace | external::External::Error
+        ) && !data::lifted(&world, ty)
+        {
             return Err("stack-free error requires a lifted result".into());
         }
         let mut result = &signature;
@@ -695,14 +699,18 @@ fn verify_value(
                 (vec![*tag], Rule::TagToEnum)
             }
             (Operation::PointerEquality { left, right }, external::External::PointerEquality)
-                if type_arguments[2..]
-                    .iter()
-                    .all(|ty| data::carrier(&world, ty) == Some(data::Carrier::Data)) =>
+                if data::same_heap_carrier(&world, &type_arguments[2], &type_arguments[3]) =>
             {
                 (vec![*left, *right], Rule::PointerEquality)
             }
             (Operation::RaiseError { message }, external::External::ErrorWithoutStackTrace) => {
                 (vec![*message], Rule::RaiseError)
+            }
+            (Operation::Move(value), external::External::Lazy) => (vec![*value], Rule::MagicLazy),
+            (Operation::RaiseCallStackError(error), external::External::Error)
+                if data::call_stack_layouts(&world).as_ref() == Ok(&error.layouts) =>
+            {
+                (vec![error.stack, error.message], Rule::RaiseError)
             }
             (Operation::CompareStrings(compare), external::External::CompareString)
                 if same_lists(&compare.nil, &compare.cons)
@@ -1027,6 +1035,8 @@ fn verify_value(
                         if module
                             .resolve(*source)
                             .is_some_and(|b| context.functions.contains_key(&b))
+                            || data::unboxed_tuple_worker(&world, module_index, *source, arg)?
+                                .is_some()
                             || data::resolve(&world, module_index, *source, arg)?.is_some()
                         {
                             let instruction = block
@@ -1142,8 +1152,14 @@ fn verify_value(
                     (primitive::Prim::Char(expected), Operation::CharCompare { op, arguments }) => {
                         *op == expected && arguments == &values
                     }
+                    (primitive::Prim::Word(expected), Operation::WordCompare { op, arguments }) => {
+                        *op == expected && arguments == &values
+                    }
                     (primitive::Prim::Ord, Operation::OrdChar(value))
-                    | (primitive::Prim::Chr, Operation::ChrChar(value)) => values == [*value],
+                    | (primitive::Prim::Chr, Operation::ChrChar(value))
+                    | (primitive::Prim::IntToWord, Operation::IntToWord(value)) => {
+                        values == [*value]
+                    }
                     _ => false,
                 };
                 if !agrees {
@@ -2127,6 +2143,8 @@ fn expected_primitive_rule(prim: primitive::Prim) -> Rule {
         primitive::Prim::Char(_) => Rule::CharCompare,
         primitive::Prim::Ord => Rule::OrdChar,
         primitive::Prim::Chr => Rule::ChrChar,
+        primitive::Prim::Word(_) => Rule::WordCompare,
+        primitive::Prim::IntToWord => Rule::IntToWord,
     }
 }
 
@@ -2899,13 +2917,29 @@ pub fn verify(function: &Function) -> Result<(), String> {
                         );
                     }
                 }
-                Operation::OrdChar(value) | Operation::ChrChar(value) => {
-                    let (operand, result) =
-                        if matches!(instruction.operation, Operation::OrdChar(_)) {
-                            (primitive::char_ty(), primitive::int_ty())
-                        } else {
-                            (primitive::int_ty(), primitive::char_ty())
-                        };
+                Operation::WordCompare { ref arguments, .. } => {
+                    let word = primitive::word_ty();
+                    if arguments.len() != 2
+                        || !instruction.result.ty.alpha_eq(&primitive::int_ty())
+                        || arguments
+                            .iter()
+                            .any(|v| !available.get(v).is_some_and(|ty| ty.alpha_eq(&word)))
+                    {
+                        return Err(
+                            "a Word# comparison requires two available Word# operands and an \
+                             Int# result"
+                                .into(),
+                        );
+                    }
+                }
+                Operation::OrdChar(value)
+                | Operation::ChrChar(value)
+                | Operation::IntToWord(value) => {
+                    let (operand, result) = match instruction.operation {
+                        Operation::OrdChar(_) => (primitive::char_ty(), primitive::int_ty()),
+                        Operation::ChrChar(_) => (primitive::int_ty(), primitive::char_ty()),
+                        _ => (primitive::int_ty(), primitive::word_ty()),
+                    };
                     if !available
                         .get(&value)
                         .is_some_and(|ty| ty.alpha_eq(&operand))
@@ -2927,6 +2961,17 @@ pub fn verify(function: &Function) -> Result<(), String> {
                         .is_some_and(|ty| ty.alpha_eq(&strings::string_ty()))
                     {
                         return Err("error message must be an available String".into());
+                    }
+                }
+                Operation::RaiseCallStackError(ref error) => {
+                    if !available
+                        .get(&error.message)
+                        .is_some_and(|ty| ty.alpha_eq(&strings::string_ty()))
+                        || !available
+                            .get(&error.stack)
+                            .is_some_and(|ty| ty.alpha_eq(&external::implicit_call_stack_ty()))
+                    {
+                        return Err("error needs an available String message and ?callStack".into());
                     }
                 }
                 Operation::EmptyCase { scrutinee } => {

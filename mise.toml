@@ -55,26 +55,28 @@ run         = "cargo test --workspace"
 
 [tasks."lower:leaf"]
 description = "Lower and verify one live function"
+depends     = ["extract:libraries"]
 usage       = '''
 arg "[dir]" default="compiler/core-json" help="Core dump directory"
 flag "--fn <name>" required=#true help="Stable function name (quote names containing $)"
 '''
 run         = '''
-cargo locked-release --bin h2r -- lower --nir "${usage_dir?}" --fn "${usage_fn?}"
+cargo locked-release --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers --fn "${usage_fn?}"
 '''
 
 [tasks."lower:program"]
 description = "Attempt verified NIR for all live bindings; fails on refusals"
+depends     = ["extract:libraries"]
 usage       = '''
 arg "[dir]" default="compiler/core-json" help="Core dump directory"
 '''
 run         = '''
-cargo locked-release --bin h2r -- lower --nir "${usage_dir?}"
+cargo locked-release --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers
 '''
 
 [tasks."lower:coverage"]
 description = "Refresh canonical Core and capture verified NIR coverage"
-depends     = ["extract"]
+depends     = ["extract", "extract:libraries"]
 run         = '''
 set -eu
 cargo locked-build --bin h2r
@@ -84,7 +86,7 @@ for dump in compiler/core-json/*.core.json; do
   jq -e '.format == 6 and (.constructors | type == "array")' "$dump" >/dev/null
 done
 status=0
-target/release/h2r lower compiler/core-json --nir >"$out/nir.txt" 2>"$out/nir.stderr" || status=$?
+target/release/h2r lower compiler/core-json --with compiler/library-json/containers --nir >"$out/nir.txt" 2>"$out/nir.stderr" || status=$?
 if [ "$status" -ne 0 ]; then
   if [ "$status" -ne 1 ] || ! grep -Eq '^Error: NIR lowering incomplete: [0-9]+ live bindings refused$' "$out/nir.stderr"; then
     cat "$out/nir.stderr" >&2
@@ -92,12 +94,13 @@ if [ "$status" -ne 0 ]; then
   fi
 fi
 grep -E '^Live owners: [0-9]+ = [0-9]+ lowered \+ [0-9]+ refused; [0-9]+ dead skipped$' "$out/nir.txt"
-sha256sum target/release/h2r compiler/core-json/*.core.json >"$out/inputs.sha256"
+sha256sum target/release/h2r compiler/core-json/*.core.json compiler/library-json/containers/*.core.json >"$out/inputs.sha256"
 (cd "$out" && sha256sum nir.txt nir.stderr >outputs.sha256)
 '''
 
 [tasks."lower:specialize"]
 description = "Survey the instances the live set needs, and rank the blockers"
+depends     = ["extract:libraries"]
 usage       = '''
 arg "[dir]" default="compiler/core-json" help="Core dump directory"
 flag "--fn <name>" help="Specialize from one root and print each instance's NIR"
@@ -110,7 +113,7 @@ mkdir -p "$out"
 set --
 [ -z "${usage_fn:-}" ] || set -- --fn "${usage_fn}"
 status=0
-target/release/h2r lower "${usage_dir?}" --nir --specialize "$@" \
+target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --nir --specialize "$@" \
   >"$out/specialize.txt" 2>"$out/specialize.stderr" || status=$?
 if [ "$status" -ne 0 ]; then
   if [ "$status" -ne 1 ] || ! grep -Eq '^Error: specialization incomplete: [0-9]+ instances refused$' "$out/specialize.stderr"; then
@@ -119,7 +122,7 @@ if [ "$status" -ne 0 ]; then
   fi
 fi
 grep -E '^(Instances|Specialized):' "$out/specialize.txt"
-sha256sum target/release/h2r "${usage_dir?}"/*.core.json >"$out/specialize.inputs.sha256"
+sha256sum target/release/h2r "${usage_dir?}"/*.core.json compiler/library-json/containers/*.core.json >"$out/specialize.inputs.sha256"
 (cd "$out" && sha256sum specialize.txt specialize.stderr >specialize.sha256)
 '''
 
@@ -148,7 +151,7 @@ done
 
 [tasks.canary]
 description = "Emit Rust from real Core, compile it, and compare with Haskell"
-depends     = ["canary:extract", "canary:library"]
+depends     = ["canary:extract", "canary:library", "extract:libraries"]
 usage       = '''
 flag "--timeout-seconds <seconds>" default="10" help="Positive per-invocation time limit for oracle and generated binaries"
 '''
@@ -212,6 +215,10 @@ alias             = "x"
 description       = "Extract canonical -O1 format-6 Core into compiler/core-json"
 env.H2R_BUILD_DIR = "{{ config_root }}/compiler/build/canonical"
 file              = "compiler/extract.sh"
+
+[tasks."extract:libraries"]
+description = "Extract the Core of the installed libraries the program links into compiler/library-json"
+run         = "compiler/extract-library.sh containers"
 
 [tasks.matrix]
 description = "Extract the GHC optimization matrix; optional profile names are forwarded"
@@ -391,6 +398,7 @@ run         = [
 
 [tasks."lower:sites"]
 description = "Group every survey refusal about one binding or type by its call shape"
+depends     = ["extract:libraries"]
 usage       = '''
 arg "<subject>" help="Stable name or type head, as the survey report prints it"
 arg "[dir]" default="compiler/core-json" help="Core dump directory"
@@ -398,7 +406,7 @@ arg "[dir]" default="compiler/core-json" help="Core dump directory"
 run         = '''
 set -eu
 cargo locked-build --bin h2r
-target/release/h2r lower "${usage_dir?}" --nir --specialize --sites "${usage_subject?}"
+target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --nir --specialize --sites "${usage_subject?}"
 '''
 
 [tasks."canary:library"]
@@ -413,11 +421,12 @@ cp "$(cabal list-bin --builddir=../../build/shellcheck-oracle/cabal shellcheck-o
 
 [tasks."lower:entries"]
 description = "List every live exported binding with its type and whether a Rust entry emits for it"
+depends     = ["extract:libraries"]
 usage       = '''
 arg "[dir]" default="compiler/core-json" help="Core dump directory"
 '''
 run         = '''
 set -eu
 cargo locked-build --bin h2r
-target/release/h2r lower "${usage_dir?}" --nir --entries
+target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --nir --entries
 '''

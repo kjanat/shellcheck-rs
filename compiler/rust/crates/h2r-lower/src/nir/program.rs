@@ -14,6 +14,9 @@ use super::{
 pub struct ProgramAttempt {
     pub live: usize,
     pub dead: usize,
+    /// Live library bindings, which are needed only at the instantiations
+    /// the program's own code asks for, so no owner is lowered for them.
+    pub library: usize,
     pub lowered: Vec<LoweredLeaf>,
     pub refused: Vec<LowerError>,
 }
@@ -21,6 +24,14 @@ pub struct ProgramAttempt {
 /// Construct and audit reachability from the same immutable source used for
 /// lowering. Callers cannot supply a stale or unaudited live set.
 pub fn lower_program(modules: &[Module]) -> Result<ProgramAttempt, String> {
+    lower_program_owners(modules, |_| true)
+}
+
+/// As [`lower_program`], with owners only in the modules `owns` accepts.
+pub fn lower_program_owners(
+    modules: &[Module],
+    owns: impl Fn(usize) -> bool,
+) -> Result<ProgramAttempt, String> {
     let selected: Vec<_> = modules.iter().collect();
     let live = LiveSet::of_modules(selected.iter().copied())
         .map_err(|error| format!("the live graph has no root: {error}"))?;
@@ -37,8 +48,9 @@ pub fn lower_program(modules: &[Module]) -> Result<ProgramAttempt, String> {
         ));
     }
     let mut attempt = ProgramAttempt {
-        live: live.live.len(),
+        live: 0,
         dead: live.dead.len(),
+        library: 0,
         lowered: Vec::new(),
         refused: Vec::new(),
     };
@@ -49,12 +61,19 @@ pub fn lower_program(modules: &[Module]) -> Result<ProgramAttempt, String> {
             continue;
         }
         let index = binding.key.module as usize;
+        if !owns(index) {
+            attempt.library += 1;
+            continue;
+        }
+        attempt.live += 1;
         match lower_leaf_in_world(modules, index, binding.key.binder, FnId(node as u32)) {
             Ok(leaf) => attempt.lowered.push(leaf),
             Err(error) => attempt.refused.push(error),
         }
     }
-    if attempt.lowered.len() + attempt.refused.len() != attempt.live {
+    if attempt.lowered.len() + attempt.refused.len() != attempt.live
+        || attempt.live + attempt.library != live.live.len()
+    {
         return Err("NIR live-owner accounting mismatch".into());
     }
     Ok(attempt)

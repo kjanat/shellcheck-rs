@@ -37,7 +37,13 @@ fn represented(world: &World<'_>, ty: &Ty) -> Ty {
 /// carrier, which is why `field_kind` reads the type rather than the carrier.
 fn unboxed(ty: &Ty) -> bool {
     matches!(ty, Ty::Con { tycon, args } if args.is_empty()
-        && (tycon.name == "$ghc-prim$GHC.Prim$Int#" || tycon.name == "$ghc-prim$GHC.Prim$Char#"))
+        && (tycon.name == "$ghc-prim$GHC.Prim$Int#"
+            || tycon.name == "$ghc-prim$GHC.Prim$Char#"
+            || tycon.name == "$ghc-prim$GHC.Prim$Word#"))
+}
+
+fn is_word(ty: &Ty) -> bool {
+    matches!(ty, Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Prim$Word#" && args.is_empty())
 }
 
 fn is_char(ty: &Ty) -> bool {
@@ -174,6 +180,13 @@ fn scalar_literal(world: &World<'_>, ty: &Ty, lit: &h2r_core_ir::Lit) -> Result<
         char::from_u32(codepoint).ok_or("Char# literal is not a Unicode code point")?;
         return Ok(i64::from(codepoint));
     }
+    if is_word(&represented(world, ty)) {
+        return u64::try_from(lit.number("Word")?)
+            .map(u64::cast_signed)
+            .map_err(|error| {
+                format!("Word# literal does not fit an unsigned 64-bit word: {error}")
+            });
+    }
     i64::try_from(lit.number("Int")?)
         .map_err(|error| format!("Int# literal does not fit a signed 64-bit word: {error}"))
 }
@@ -278,6 +291,8 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 | Operation::BoxInt(_)
                 | Operation::UnboxInt(_)
                 | Operation::CharCompare { .. }
+                | Operation::WordCompare { .. }
+                | Operation::IntToWord(_)
                 | Operation::OrdChar(_)
                 | Operation::ChrChar(_)
                 | Operation::UnpackString(_)
@@ -289,6 +304,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                 | Operation::TagToEnum { .. }
                 | Operation::PointerEquality { .. }
                 | Operation::RaiseError { .. }
+                | Operation::RaiseCallStackError(_)
                 | Operation::EmptyCase { .. }
                 | Operation::DelayBlock { .. }
                 | Operation::MakeUnboxedTuple { .. }
@@ -684,6 +700,21 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             character.name
                         )
                     }
+                    Operation::RaiseCallStackError(error) => {
+                        let (nil, cons, character) = data::string_layouts(world)?;
+                        format!(
+                            "h2r_rt::raise_call_stack_error({}, {}, HStringNames {{ nil: {:?}, cons: {:?}, character: {:?} }}, h2r_rt::CallStackNames {{ empty: {:?}, push: {:?}, freeze: {:?}, location: {:?} }})",
+                            value(error.message),
+                            value(error.stack),
+                            nil.name,
+                            cons.name,
+                            character.name,
+                            error.layouts.empty.name,
+                            error.layouts.push.name,
+                            error.layouts.freeze.name,
+                            error.layouts.location.name
+                        )
+                    }
                     Operation::EmptyCase { scrutinee } => {
                         let force = if data::lifted(world, value_ty(*scrutinee)) {
                             ".force()"
@@ -868,8 +899,11 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                     Operation::UnboxInt(v) => format!("v{}.force()", v.0),
                     // Char# and Int# share the carrier, so a code-point
                     // conversion moves the word and changes only the type.
-                    Operation::OrdChar(v) | Operation::ChrChar(v) => format!("v{}", v.0),
-                    Operation::CharCompare { op, arguments } => {
+                    Operation::OrdChar(v) | Operation::ChrChar(v) | Operation::IntToWord(v) => {
+                        format!("v{}", v.0)
+                    }
+                    Operation::CharCompare { op, arguments }
+                    | Operation::WordCompare { op, arguments } => {
                         let left = arguments[0].0;
                         let right = arguments[1].0;
                         let comparison = match op {
@@ -919,6 +953,12 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
                             IntBinary::LessEqual => format!("i64::from(v{left} <= v{right})"),
                             IntBinary::Greater => format!("i64::from(v{left} > v{right})"),
                             IntBinary::GreaterEqual => format!("i64::from(v{left} >= v{right})"),
+                            IntBinary::ShiftLeft => {
+                                format!("v{left}.wrapping_shl(v{right} as u32)")
+                            }
+                            IntBinary::ShiftRightArithmetic => {
+                                format!("v{left}.wrapping_shr(v{right} as u32)")
+                            }
                         }
                     }
                     Operation::Literal(lit) => {

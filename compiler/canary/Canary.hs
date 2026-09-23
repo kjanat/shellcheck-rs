@@ -38,11 +38,17 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   filterChars, filterLazy, takeWhileChars, takeWhileLazy, dropWhileChars, dropWhileLazy,
   reverseChars, reverseLazy, lengthChars, lengthLazy, consAppend, consAppendLazy,
   mapSpine, mapFunctionForced, filterPredicate, takeWhileElement, dropWhileSpine,
-  reverseTail, lengthTail, consAppendRight) where
+  reverseTail, lengthTail, consAppendRight,
+  shifts, wordOrder, magicLazy, voidJoin,
+  setSize, setMember, setOrder, mapLookup, mapStrings, mapUnion,
+  errorCall, errorCallComputed, setFindMin, undefinedUnused) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#),
   Char(C#), Char#, ord#, chr#, eqChar#, neChar#, ltChar#, leChar#, gtChar#, geChar#,
-  dataToTag#, reallyUnsafePtrEquality#)
+  dataToTag#, reallyUnsafePtrEquality#, uncheckedIShiftL#, uncheckedIShiftRA#,
+  int2Word#, leWord#, lazy)
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import Helpers (first, crossPoly, crossApply, Sized(..), Described(..), Small(..))
 import GHC.Base (eqString)
 import qualified GHC.List as List
@@ -829,6 +835,12 @@ errorUnusedShared x y =
        I# a -> case boxedIgnore (I# y) z of
          I# b -> a +# b
 
+-- `undefined` ignored: GHC's demand evidence says it never returns, and no more.
+{-# NOINLINE undefinedUnused #-}
+undefinedUnused :: Int# -> Int# -> Int#
+undefinedUnused x _ = case boxedIgnore (I# x) undefined of
+  I# n -> n
+
 --------------------------------------------------------------------------------
 -- Text-processing programs.
 --
@@ -1261,6 +1273,108 @@ lengthTail _ _ = List.length tailError
 {-# NOINLINE consAppendRight #-}
 consAppendRight :: Int# -> Int# -> Int
 consAppendRight x _ = I# (countChars ((charOf x : takeChars x predicateText) ++ spineError) 0#)
+
+--------------------------------------------------------------------------------
+-- Word primops, shifts and GHC.Magic.lazy, which containers' own code uses.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE shifts #-}
+shifts :: Int# -> Int# -> Int#
+shifts x y = case y <# 0# of
+  1# -> uncheckedIShiftRA# x 1#
+  _ -> case y ==# 0# of
+    1# -> uncheckedIShiftL# x 0#
+    _ -> uncheckedIShiftL# x 1# +# uncheckedIShiftRA# x 63#
+
+{-# NOINLINE wordOrder #-}
+wordOrder :: Int# -> Int# -> Int#
+wordOrder x y = leWord# (int2Word# x) (int2Word# y) *# 2# +# leWord# (int2Word# x) 100##
+
+{-# NOINLINE magicLazy #-}
+magicLazy :: Int# -> Int# -> Int#
+magicLazy x y = case lazy (I# x) of
+  I# n -> n -# y
+
+-- Overlapping equations share a failure continuation, a join point GHC passes `(##)`.
+{-# NOINLINE fallThrough #-}
+fallThrough :: Choice -> Int#
+fallThrough (Two (I# 0#) (I# b)) = b
+fallThrough (One (I# 1#)) = 7#
+fallThrough (Two (I# a) (I# 1#)) = a
+fallThrough _ = 3#
+
+{-# NOINLINE choiceOf #-}
+choiceOf :: Int# -> Int# -> Choice
+choiceOf x y = case x <# 0# of
+  1# -> One (I# y)
+  _ -> Two (I# x) (I# y)
+
+{-# NOINLINE voidJoin #-}
+voidJoin :: Int# -> Int# -> Int#
+voidJoin x y = fallThrough (choiceOf x y)
+
+--------------------------------------------------------------------------------
+-- containers, compiled from its own source into the world beside this module.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE setSize #-}
+setSize :: Int# -> Int# -> Int
+setSize x y = Set.size (Set.fromList [I# x, I# y, I# x, 3, I# (x +# y), I# (y -# x)])
+
+{-# NOINLINE setMember #-}
+setMember :: Int# -> Int# -> Int#
+setMember x y = case Set.member (I# y) (Set.fromList [I# x, 0, 1, 42, I# (x *# 2#)]) of
+  True -> 1#
+  False -> 0#
+
+{-# NOINLINE setOrder #-}
+setOrder :: Int# -> Int# -> Int
+setOrder x y = weighted (Set.toAscList (Set.insert (I# y) (Set.fromList [I# x, 5, -5, I# (x -# 1#)]))) 1
+
+{-# NOINLINE weighted #-}
+weighted :: [Int] -> Int -> Int
+weighted [] _ = 0
+weighted (I# v : vs) (I# w) = case weighted vs (I# (w +# 1#)) of
+  I# rest -> I# (v *# w +# rest)
+
+{-# NOINLINE mapLookup #-}
+mapLookup :: Int# -> Int# -> Int
+mapLookup x y =
+  case Map.lookup (I# x) (Map.insertWith (+) (I# y) 10 (Map.fromList [(I# x, 1), (I# y, 2), (0, 3)])) of
+    Just v -> v
+    Nothing -> -1
+
+{-# NOINLINE mapStrings #-}
+mapStrings :: Int# -> Int# -> Int
+mapStrings x y =
+  Map.findWithDefault (I# y) (takeChars x predicateText)
+    (Map.fromList [("", 1), ("ab", 2), ("ab\233", 3), (predicateText, 4), ("z", 5)])
+
+{-# NOINLINE mapUnion #-}
+mapUnion :: Int# -> Int# -> Int
+mapUnion x y = Map.foldr (+) 0 (Map.unionWith (-) (Map.fromList [(I# x, 100), (1, 7)]) (Map.fromList [(I# y, 3), (1, 2)]))
+
+--------------------------------------------------------------------------------
+-- error, whose uncaught message ends in the call stack GHC built at its call site.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE errorCall #-}
+errorCall :: Int# -> Int# -> Int
+errorCall x _ = case x of
+  0# -> error "canary error"
+  _ -> I# x
+
+{-# NOINLINE errorCallComputed #-}
+errorCallComputed :: Int# -> Int# -> Int
+errorCallComputed x _ = error ('m' : takeChars x predicateText)
+
+{-# NOINLINE setFindMin #-}
+setFindMin :: Int# -> Int# -> Int
+setFindMin x _ = Set.findMin (Set.filter above (Set.fromList [1, 2, 3]))
+  where
+    above (I# v) = case v ># x of
+      1# -> True
+      _ -> False
 
 --------------------------------------------------------------------------------
 -- Constructor tags and pointer equality.

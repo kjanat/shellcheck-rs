@@ -580,6 +580,8 @@ fn primitive_operation(prim: primitive::Prim, arguments: Vec<ValueId>) -> Operat
         primitive::Prim::Char(op) => Operation::CharCompare { op, arguments },
         primitive::Prim::Ord => Operation::OrdChar(arguments[0]),
         primitive::Prim::Chr => Operation::ChrChar(arguments[0]),
+        primitive::Prim::Word(op) => Operation::WordCompare { op, arguments },
+        primitive::Prim::IntToWord => Operation::IntToWord(arguments[0]),
     }
 }
 
@@ -589,6 +591,8 @@ fn primitive_rule(prim: primitive::Prim) -> Rule {
         primitive::Prim::Char(_) => Rule::CharCompare,
         primitive::Prim::Ord => Rule::OrdChar,
         primitive::Prim::Chr => Rule::ChrChar,
+        primitive::Prim::Word(_) => Rule::WordCompare,
+        primitive::Prim::IntToWord => Rule::IntToWord,
     }
 }
 
@@ -1212,7 +1216,11 @@ fn lower_value(
             let signature = entry
                 .signature(&type_arguments)
                 .ok_or_else(|| fail(Some(current), "external call type arguments mismatch"))?;
-            if entry == external::External::ErrorWithoutStackTrace && !data::lifted(&world, ty) {
+            if matches!(
+                entry,
+                external::External::ErrorWithoutStackTrace | external::External::Error
+            ) && !data::lifted(&world, ty)
+            {
                 return Err(fail(
                     Some(current),
                     "stack-free error requires a lifted result",
@@ -1257,6 +1265,7 @@ fn lower_value(
                 (
                     external::External::Append
                     | external::External::ErrorWithoutStackTrace
+                    | external::External::Error
                     | external::External::CompareString
                     | external::External::DataToTag
                     | external::External::PointerEquality
@@ -1268,7 +1277,8 @@ fn lower_value(
                     | external::External::Reverse
                     | external::External::ReverseOnto
                     | external::External::Length
-                    | external::External::ConsAppend,
+                    | external::External::ConsAppend
+                    | external::External::Lazy,
                     [],
                 ) => None,
                 _ => return Err(fail(Some(current), "external call dictionary mismatch")),
@@ -1337,6 +1347,16 @@ fn lower_value(
                 operation: match list_function {
                     Some(list) => Operation::ListFunction(Box::new(list)),
                     None => match (entry, entry.predicate(), equality) {
+                        (external::External::Lazy, None, None) => Operation::Move(arguments[0]),
+                    (external::External::Error, None, None) => {
+                        let layouts = data::call_stack_layouts(&world)
+                            .map_err(|reason| fail(Some(current), &reason))?;
+                        Operation::RaiseCallStackError(Box::new(CallStackError {
+                            message: arguments[1],
+                            stack: arguments[0],
+                            layouts,
+                        }))
+                    }
                         (external::External::Append, None, None) => {
                             let (nil, cons) = list_layouts()?;
                             Operation::AppendList {
@@ -1392,15 +1412,16 @@ fn lower_value(
                             }
                         }
                         (external::External::PointerEquality, None, None) => {
-                            if let Some(ty) = type_arguments[2..]
-                                .iter()
-                                .find(|ty| data::carrier(&world, ty) != Some(data::Carrier::Data))
-                            {
+                            if !data::same_heap_carrier(
+                                &world,
+                                &type_arguments[2],
+                                &type_arguments[3],
+                            ) {
                                 return Err(fail(
                                     Some(current),
-                                    "pointer equality requires algebraic data carriers",
+                                    "pointer equality requires one boxed Int or algebraic data carrier",
                                 )
-                                .about(type_head(ty)));
+                                .about(type_head(&type_arguments[2])));
                             }
                             Operation::PointerEquality {
                                 left: arguments[0],
@@ -1452,7 +1473,9 @@ fn lower_value(
                 },
                 origin: origin(match entry {
                     external::External::Append => Rule::AppendList,
-                    external::External::ErrorWithoutStackTrace => Rule::RaiseError,
+                    external::External::ErrorWithoutStackTrace | external::External::Error => {
+                        Rule::RaiseError
+                    }
                     external::External::EqString
                     | external::External::Elem
                     | external::External::IsPrefixOf => Rule::ListPredicate,
@@ -1468,6 +1491,7 @@ fn lower_value(
                     | external::External::ReverseOnto
                     | external::External::Length
                     | external::External::ConsAppend => Rule::ListFunction,
+                    external::External::Lazy => Rule::MagicLazy,
                 }),
             });
             value
@@ -1684,6 +1708,9 @@ fn lower_value(
                         if module
                             .resolve(source)
                             .is_some_and(|b| context.functions.contains_key(&b))
+                            || data::unboxed_tuple_worker(&world, module_index, source, arg)
+                                .map_err(|e| fail(Some(source), &e))?
+                                .is_some()
                             || data::resolve(&world, module_index, source, arg)
                                 .map_err(|e| fail(Some(source), &e))?
                                 .is_some()

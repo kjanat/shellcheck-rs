@@ -97,6 +97,10 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                     format!("char-{op:?} {arguments:?}")
                 }
                 Operation::OrdChar(value) => format!("ord-char v{}", value.0),
+                Operation::WordCompare { op, arguments } => {
+                    format!("word-{op:?} {arguments:?}")
+                }
+                Operation::IntToWord(value) => format!("int-to-word v{}", value.0),
                 Operation::ChrChar(value) => format!("chr-char v{}", value.0),
                 Operation::AppendList { left, right, .. } => {
                     format!("append-list v{} v{}", left.0, right.0)
@@ -128,6 +132,10 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                     format!("compare-strings v{} v{}", compare.left.0, compare.right.0)
                 }
                 Operation::RaiseError { message } => format!("raise-error v{}", message.0),
+                Operation::RaiseCallStackError(error) => format!(
+                    "raise-error v{} with call stack v{}",
+                    error.message.0, error.stack.0
+                ),
                 Operation::EmptyCase { scrutinee } => format!("empty-case v{}", scrutinee.0),
                 Operation::UnpackString(unpack) => format!(
                     "unpack-string {:?} {} bytes{}",

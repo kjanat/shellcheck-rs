@@ -391,10 +391,81 @@ pub fn error_message(mut message: Data, names: StringNames) -> Vec<u8> {
 }
 
 /// The generated CLI's uncaught `errorWithoutStackTrace` boundary. Exception
-/// catching and GHC call stacks are not implemented by this adapter.
+/// catching is not implemented by this adapter.
 pub fn raise_error(message: Data, names: StringNames) -> ! {
+    report_error(&error_message(message, names))
+}
+
+/// The names of base's `CallStack` and `SrcLoc` constructors.
+#[derive(Clone, Copy)]
+pub struct CallStackNames {
+    pub empty: &'static str,
+    pub push: &'static str,
+    pub freeze: &'static str,
+    pub location: &'static str,
+}
+
+/// The next `PushCallStack` frame, through any `FreezeCallStack`.
+fn next_frame(mut stack: Data, names: CallStackNames) -> Option<Node> {
+    loop {
+        let node = stack.force();
+        if node.constructor == names.push {
+            return Some(node);
+        }
+        if node.constructor == names.empty {
+            return None;
+        }
+        assert_eq!(node.constructor, names.freeze);
+        stack = node.fields[0].data();
+    }
+}
+
+/// The uncaught `error` boundary: base 4.18's `ErrorCallWithLocation`, shown
+/// as its message, then `prettyCallStack` when the stack has a frame. The
+/// stack is forced to its first frame before the message, as `showsPrec`'s
+/// match on an empty location forces it.
+pub fn raise_call_stack_error(
+    message: Data,
+    stack: Data,
+    strings: StringNames,
+    names: CallStackNames,
+) -> ! {
+    report_error(&call_stack_error_message(message, stack, strings, names))
+}
+
+fn call_stack_error_message(
+    message: Data,
+    stack: Data,
+    strings: StringNames,
+    names: CallStackNames,
+) -> Vec<u8> {
+    let mut frame = next_frame(stack, names);
+    let mut text = error_message(message, strings);
+    if frame.is_some() {
+        text.extend_from_slice(b"\nCallStack (from HasCallStack):");
+    }
+    while let Some(node) = frame {
+        text.extend_from_slice(b"\n  ");
+        text.extend(error_message(node.fields[0].data(), strings));
+        text.extend_from_slice(b", called at ");
+        let location = node.fields[1].data().force();
+        assert_eq!(location.constructor, names.location);
+        text.extend(error_message(location.fields[2].data(), strings));
+        text.push(b':');
+        text.extend(location.fields[3].int().force().to_string().bytes());
+        text.push(b':');
+        text.extend(location.fields[4].int().force().to_string().bytes());
+        text.extend_from_slice(b" in ");
+        text.extend(error_message(location.fields[0].data(), strings));
+        text.push(b':');
+        text.extend(error_message(location.fields[1].data(), strings));
+        frame = next_frame(node.fields[2].data(), names);
+    }
+    text
+}
+
+fn report_error(message: &[u8]) -> ! {
     use std::io::Write;
-    let message = error_message(message, names);
     // Match the oracle: a NUL truncates output, not evaluation of the
     // message's remaining tail.
     let message = message
@@ -979,6 +1050,86 @@ mod append_tests {
 
     fn untouchable() -> Data {
         Data::defer(|| panic!("a lazily passed value was forced"))
+    }
+
+    const STACK: CallStackNames = CallStackNames {
+        empty: "EmptyCallStack",
+        push: "PushCallStack",
+        freeze: "FreezeCallStack",
+        location: "SrcLoc",
+    };
+
+    fn located(file: &str, line: i64, column: i64) -> Data {
+        let nil = || Data::ready("[]", vec![]);
+        Data::ready(
+            STACK.location,
+            vec![
+                Field::Data(string("pkg-1", nil())),
+                Field::Data(string("M.N", nil())),
+                Field::Data(string(file, nil())),
+                Field::Int(Int::ready(line)),
+                Field::Int(Int::ready(column)),
+                Field::Int(Int::defer(|| panic!("the end line was forced"))),
+                Field::Int(Int::defer(|| panic!("the end column was forced"))),
+            ],
+        )
+    }
+
+    fn pushed(function: &str, location: Data, rest: Data) -> Data {
+        Data::ready(
+            STACK.push,
+            vec![
+                Field::Data(string(function, Data::ready("[]", vec![]))),
+                Field::Data(location),
+                Field::Data(rest),
+            ],
+        )
+    }
+
+    #[test]
+    fn error_messages_render_the_call_stack_as_base_shows_it() {
+        let nil = || Data::ready("[]", vec![]);
+        let empty = || Data::ready(STACK.empty, vec![]);
+        let stack = Data::ready(
+            STACK.freeze,
+            vec![Field::Data(pushed(
+                "error",
+                located("src/M.hs", 12, 5),
+                pushed("helper", located("src/N.hs", -3, 0), empty()),
+            ))],
+        );
+        assert_eq!(
+            call_stack_error_message(string("boom", nil()), stack, STRING, STACK),
+            b"boom\nCallStack (from HasCallStack):\n  error, called at src/M.hs:12:5 in pkg-1:M.N\n  helper, called at src/N.hs:-3:0 in pkg-1:M.N"
+        );
+        assert_eq!(
+            call_stack_error_message(string("plain", nil()), empty(), STRING, STACK),
+            b"plain"
+        );
+        let frozen_empty = Data::ready(STACK.freeze, vec![Field::Data(empty())]);
+        assert_eq!(
+            call_stack_error_message(string("", nil()), frozen_empty, STRING, STACK),
+            b""
+        );
+    }
+
+    #[test]
+    fn the_stack_is_forced_before_the_message() {
+        let stack = Data::defer(|| panic!("stack forced first"));
+        let message = Data::defer(|| panic!("message forced first"));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            call_stack_error_message(message, stack, STRING, STACK)
+        }));
+        let payload = outcome.expect_err("both panic");
+        assert_eq!(panic_text(&*payload), "stack forced first");
+    }
+
+    fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+        payload
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_default()
     }
 
     fn positive(calls: Rc<std::cell::Cell<u32>>) -> Closure {

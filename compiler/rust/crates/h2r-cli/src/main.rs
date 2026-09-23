@@ -353,6 +353,10 @@ enum Command {
     /// result beside it.
     Lower {
         dir: PathBuf,
+        /// Also load the dumps of a library compiled with the plugin, so its
+        /// bindings are part of the world. Repeatable.
+        #[arg(long = "with", value_name = "DIR")]
+        with: Vec<PathBuf>,
         /// The M3a question: which top-level bindings can `Main.main`
         /// reach?
         #[arg(long)]
@@ -373,7 +377,8 @@ enum Command {
         /// With --specialize: group every refusal about this stable name or
         /// type head by the shape of the call at its site.
         #[arg(long, requires = "specialize", conflicts_with = "fn_name")]
-        sites: Option<String>,
+        #[arg(num_args = 1..)]
+        sites: Vec<String>,
         /// List every live exported binding with its type and whether a
         /// standalone Rust entry can be emitted for it.
         #[arg(long, requires = "nir", conflicts_with_all = ["fn_name", "specialize"])]
@@ -589,6 +594,7 @@ fn main() -> Result<()> {
         Command::M24 { dir, json } => m24_report(&dir, json),
         Command::Lower {
             dir,
+            with,
             reachability,
             nir,
             fn_name,
@@ -602,18 +608,25 @@ fn main() -> Result<()> {
             m24_link,
         } => {
             if nir && entries {
-                lower::nir_entries(&dir)
+                lower::nir_entries(&dir, &with)
             } else if nir {
                 match (specialize, fn_name.as_deref()) {
-                    (true, _) if let Some(subject) = sites.as_deref() => {
-                        lower::nir_sites(&dir, subject)
-                    }
-                    (true, name) => lower::nir_specialize(&dir, name),
-                    (false, Some(name)) => lower::nir(&dir, name),
-                    (false, None) => lower::nir_program(&dir),
+                    (true, _) if !sites.is_empty() => lower::nir_sites(&dir, &with, &sites),
+                    (true, name) => lower::nir_specialize(&dir, &with, name),
+                    (false, Some(name)) => lower::nir(&dir, &with, name),
+                    (false, None) => lower::nir_program(&dir, &with),
                 }
             } else {
-                lower::lower(&dir, reachability, json, rules, explain, link, m24_link)
+                lower::lower(
+                    &dir,
+                    &with,
+                    reachability,
+                    json,
+                    rules,
+                    explain,
+                    link,
+                    m24_link,
+                )
             }
         }
         Command::Parsec {

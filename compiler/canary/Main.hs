@@ -39,7 +39,10 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   filterChars, filterLazy, takeWhileChars, takeWhileLazy, dropWhileChars, dropWhileLazy,
   reverseChars, reverseLazy, lengthChars, lengthLazy, consAppend, consAppendLazy,
   mapSpine, mapFunctionForced, filterPredicate, takeWhileElement, dropWhileSpine,
-  reverseTail, lengthTail, consAppendRight)
+  reverseTail, lengthTail, consAppendRight,
+  shifts, wordOrder, magicLazy, voidJoin,
+  setSize, setMember, setOrder, mapLookup, mapStrings, mapUnion,
+  errorCall, errorCallComputed, setFindMin, undefinedUnused)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -369,4 +372,30 @@ main = do
       (I# x, I# y) -> print (consAppendRight x y)
     ["newtypeMonad", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (newtypeMonad x y))
+    ["shifts", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (shifts x y))
+    ["wordOrder", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (wordOrder x y))
+    ["magicLazy", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (magicLazy x y))
+    ["voidJoin", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (voidJoin x y))
+    ["setMember", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (setMember x y))
+    ["setSize", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (setSize x y)
+    ["setOrder", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (setOrder x y)
+    ["mapLookup", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (mapLookup x y)
+    ["mapStrings", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (mapStrings x y)
+    ["mapUnion", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (mapUnion x y)
+    ["errorCall", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorCall x y)
+    ["errorCallComputed", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (errorCallComputed x y)
+    ["setFindMin", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (setFindMin x y)
     _ -> fail "expected a canary entry and its integer arguments"

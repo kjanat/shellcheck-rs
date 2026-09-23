@@ -14,6 +14,7 @@ use super::{CharCompare, IntBinary};
 
 pub(super) const INT: &str = "$ghc-prim$GHC.Prim$Int#";
 pub(super) const CHAR: &str = "$ghc-prim$GHC.Prim$Char#";
+pub(super) const WORD: &str = "$ghc-prim$GHC.Prim$Word#";
 
 fn con(name: &str, occ: &str) -> Ty {
     Ty::Con {
@@ -42,6 +43,14 @@ pub(super) fn char_ty() -> Ty {
     con(CHAR, "Char#")
 }
 
+pub(super) fn word_ty() -> Ty {
+    con(WORD, "Word#")
+}
+
+pub(super) fn is_word(ty: &Ty) -> bool {
+    matches!(ty, Ty::Con { tycon, args } if tycon.name == WORD && args.is_empty())
+}
+
 pub(super) fn is_int(ty: &Ty) -> bool {
     matches!(ty, Ty::Con { tycon, args } if tycon.name == INT && args.is_empty())
 }
@@ -54,7 +63,14 @@ pub(super) fn is_char(ty: &Ty) -> bool {
 /// Unicode code point, which is why it shares the carrier but not the
 /// operations: nothing here adds two characters.
 pub(super) fn is_scalar(ty: &Ty) -> bool {
-    is_int(ty) || is_char(ty)
+    is_int(ty) || is_char(ty) || is_word(ty)
+}
+
+/// The bits of a `Word#` literal, which the word carrier holds as an `i64`.
+pub(super) fn word_literal(lit: &h2r_core_ir::Lit) -> Result<i64, String> {
+    u64::try_from(lit.number("Word")?)
+        .map(u64::cast_signed)
+        .map_err(|error| format!("Word# literal does not fit an unsigned 64-bit word: {error}"))
 }
 
 /// The value of an `Int#` literal, read from the dump's exact value and its
@@ -79,6 +95,8 @@ pub(super) fn scalar_literal(ty: &Ty, lit: &h2r_core_ir::Lit) -> Result<i64, Str
         int_literal(lit)
     } else if is_char(ty) {
         Ok(i64::from(char_literal(lit)?))
+    } else if is_word(ty) {
+        word_literal(lit)
     } else {
         Err("literal requires an unboxed scalar carrier".into())
     }
@@ -95,13 +113,17 @@ pub(super) enum Prim {
     Ord,
     /// `chr# :: Int# -> Char#`. Unchecked, exactly as GHC's is.
     Chr,
+    /// `Word# -> Word# -> Int#`, unsigned.
+    Word(CharCompare),
+    /// `int2Word# :: Int# -> Word#`.
+    IntToWord,
 }
 
 impl Prim {
     pub(super) fn arity(self) -> u32 {
         match self {
-            Prim::Int(_) | Prim::Char(_) => 2,
-            Prim::Ord | Prim::Chr => 1,
+            Prim::Int(_) | Prim::Char(_) | Prim::Word(_) => 2,
+            Prim::Ord | Prim::Chr | Prim::IntToWord => 1,
         }
     }
 
@@ -111,6 +133,8 @@ impl Prim {
             Prim::Char(_) => arrow(char_ty(), arrow(char_ty(), int_ty())),
             Prim::Ord => arrow(char_ty(), int_ty()),
             Prim::Chr => arrow(int_ty(), char_ty()),
+            Prim::Word(_) => arrow(word_ty(), arrow(word_ty(), int_ty())),
+            Prim::IntToWord => arrow(int_ty(), word_ty()),
         }
     }
 }
@@ -142,6 +166,10 @@ pub(super) fn resolve(module: &Module, head: ExprId) -> Option<Prim> {
         "$ghc-prim$GHC.Prim$geChar#" => Prim::Char(CharCompare::GreaterEqual),
         "$ghc-prim$GHC.Prim$ord#" => Prim::Ord,
         "$ghc-prim$GHC.Prim$chr#" => Prim::Chr,
+        "$ghc-prim$GHC.Prim$uncheckedIShiftL#" => Prim::Int(IntBinary::ShiftLeft),
+        "$ghc-prim$GHC.Prim$uncheckedIShiftRA#" => Prim::Int(IntBinary::ShiftRightArithmetic),
+        "$ghc-prim$GHC.Prim$leWord#" => Prim::Word(CharCompare::LessEqual),
+        "$ghc-prim$GHC.Prim$int2Word#" => Prim::IntToWord,
         _ => return None,
     };
     (info.arity == prim.arity()).then_some(prim)

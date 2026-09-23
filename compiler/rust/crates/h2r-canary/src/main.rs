@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Result, bail};
 use clap::Parser;
-use h2r_core_ir::{Module, load_dir, with_big_stack};
+use h2r_core_ir::{Module, load_dirs, with_big_stack};
 use h2r_lower::emit::emit_entry;
 use h2r_lower::nir::FnId;
 use h2r_lower::nir::lower::lower_leaf_in_world;
@@ -68,6 +68,9 @@ struct Cli {
     /// Skip the ShellCheck library suite.
     #[arg(long)]
     no_library: bool,
+    /// Library dumps loaded beside every program's own, from `extract:libraries`.
+    #[arg(long = "with", value_name = "DIR", default_values = ["compiler/library-json/containers"])]
+    with: Vec<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -143,7 +146,7 @@ fn run(cli: Cli) -> Result<()> {
 /// than from a guess about it.
 fn explain(cli: &Cli, profile: Profile, occ: &str) -> Result<()> {
     let core = profile_dir(cli, profile).join("core");
-    let modules = load_dir(&core)?;
+    let modules = load_dirs(&core, &cli.with)?.modules;
     let binding = evidence::resolve(&modules, occ).map_err(anyhow::Error::msg)?;
     println!("=== {} {} ({})", profile.name(), occ, binding.name);
     match lower_leaf_in_world(&modules, binding.module, binding.binder, FnId(0)) {
@@ -213,7 +216,7 @@ fn profile_run(cli: &Cli, profile: Profile, jobs: usize) -> Result<Report> {
             oracle.display()
         );
     }
-    let modules = load_dir(&core)?;
+    let modules = load_dirs(&core, &cli.with)?.modules;
 
     let mut failures = Vec::new();
     let mut checks = 0usize;
@@ -376,7 +379,7 @@ fn library_run(cli: &Cli, jobs: usize) -> Result<Report> {
             cli.library_oracle.display()
         );
     }
-    let modules = load_dir(&cli.library_core)?;
+    let modules = load_dirs(&cli.library_core, &cli.with)?.modules;
     let out = cli
         .library_oracle
         .parent()
@@ -500,6 +503,9 @@ fn error_probes(
     if let Err(error) = error_evidence(modules) {
         failures.push(error);
     }
+    if let Err(error) = call_stack_error_evidence(modules) {
+        failures.push(format!("errorCall: {error}"));
+    }
     for entry in ["stringEqual", "elemChar", "prefixOf"] {
         if let Err(error) = predicate_evidence(modules, entry) {
             failures.push(format!("{entry}: {error}"));
@@ -531,10 +537,39 @@ fn error_probes(
         entry,
         input,
         message,
+        located,
         ..
     } in probes
     {
         let arguments = vec![entry.to_string(), input.to_string(), "42".into()];
+        let oracle_run = differential::invoke(oracle, &arguments, timeout);
+        let suffix = if located {
+            let lead = [
+                format!("{program_name}: ").as_bytes(),
+                message.unwrap_or_default(),
+            ]
+            .concat();
+            match oracle_run
+                .as_ref()
+                .ok()
+                .and_then(|run| run.stderr.strip_prefix(lead.as_slice()))
+            {
+                Some(rest)
+                    if rest.starts_with(b"\nCallStack (from HasCallStack):\n  ")
+                        && rest.ends_with(b"\n") =>
+                {
+                    rest.to_vec()
+                }
+                _ => {
+                    failures.push(format!(
+                        "{entry}: the oracle printed no call stack after its message: {oracle_run:?}"
+                    ));
+                    continue;
+                }
+            }
+        } else {
+            b"\n".to_vec()
+        };
         let expected_for = |name: &str| differential::Outcome {
             stdout: if message.is_some() {
                 vec![]
@@ -545,14 +580,14 @@ fn error_probes(
                 .map(|m| {
                     let mut bytes = format!("{name}: ").into_bytes();
                     bytes.extend_from_slice(m);
-                    bytes.push(b'\n');
+                    bytes.extend_from_slice(&suffix);
                     bytes
                 })
                 .unwrap_or_default(),
             code: Some(if message.is_some() { 1 } else { 0 }),
         };
         let expected = expected_for(program_name);
-        match differential::invoke(oracle, &arguments, timeout) {
+        match oracle_run {
             Ok(actual) if actual == expected => {}
             Ok(actual) => failures.push(format!(
                 "{entry}: error oracle contract differs: expected {expected:?}, got {actual:?}"
@@ -627,6 +662,57 @@ fn error_evidence(modules: &[Module]) -> Result<(), String> {
             1 => instruction.operation = Operation::Move(message),
             2 => instruction.origin.rule = Rule::Literal,
             _ => instruction.result.ty = h2r_lower::nir::strings::string_ty(),
+        }
+        if verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &forged).is_ok() {
+            return Err(format!("error verifier accepted mutation {mutation}"));
+        }
+    }
+    Ok(())
+}
+
+fn call_stack_error_evidence(modules: &[Module]) -> Result<(), String> {
+    use h2r_lower::nir::specialize::{Instance, survey};
+    use h2r_lower::nir::{Operation, Rule, verify::verify_leaf_in_world};
+    let root = evidence::resolve(modules, "errorCall")?;
+    let closure = survey(modules, &[Instance::whole(root.module, root.binder)]);
+    let (module, binder) = closure
+        .instances
+        .iter()
+        .zip(&closure.lowered)
+        .find_map(|(instance, leaf)| {
+            let raises = leaf.as_ref()?.function.blocks.iter().any(|b| {
+                b.instructions
+                    .iter()
+                    .any(|i| matches!(i.operation, Operation::RaiseCallStackError(_)))
+            });
+            (raises && instance.type_arguments.is_empty() && instance.dictionaries.is_empty())
+                .then_some((instance.module, instance.binder))
+        })
+        .ok_or("no instance errorCall needs raises an error with a call stack")?;
+    let binding = evidence::Binding {
+        module,
+        binder,
+        name: modules[module].binder(binder).name.clone(),
+    };
+    let leaf = lower_leaf_in_world(modules, binding.module, binding.binder, FnId(0))
+        .map_err(|e| e.reason)?;
+    verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &leaf)?;
+    for mutation in 0..3 {
+        let mut forged = leaf.clone();
+        let instruction = forged
+            .function
+            .blocks
+            .iter_mut()
+            .flat_map(|b| &mut b.instructions)
+            .find(|i| matches!(i.operation, Operation::RaiseCallStackError(_)))
+            .ok_or("no error call in the entry's own leaf")?;
+        let Operation::RaiseCallStackError(error) = &mut instruction.operation else {
+            unreachable!()
+        };
+        match mutation {
+            0 => std::mem::swap(&mut error.message, &mut error.stack),
+            1 => std::mem::swap(&mut error.layouts.push, &mut error.layouts.empty),
+            _ => instruction.origin.rule = Rule::ListFunction,
         }
         if verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &forged).is_ok() {
             return Err(format!("error verifier accepted mutation {mutation}"));
