@@ -27,7 +27,7 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   tupleLazyComponent, tupleUnusedComponent,
   textWords, textLines, textFind, textReverse, textFilter, textMap,
   textSlice, textZip, textCompare, textUnicodeWords,
-  newtypeRoundTrip, newtypeField, newtypeFunction, stringAppendShared,
+  newtypeRoundTrip, newtypeField, newtypeFunction, newtypeMonad, stringAppendShared,
   stringEqual, stringEqualRule, stringEqualLazy, elemChar, elemString, elemLazy, prefixOf, prefixLazy,
   eqSpineOrder, eqRightSpine, eqElementOrder, elemSpineFirst, elemNeedleOrder, elemNeedleUnused, prefixOrder, prefixListOrder, prefixElementOrder,
   compareStrings, compareLazy, compareUnsigned,
@@ -1407,6 +1407,7 @@ tupleUnusedComponent x y = case splitInt x y of (# a, _ #) -> a
 newtype Tag = Tag Int
 newtype Wrapped a = Wrapped a
 newtype Apply = Apply (Int -> Int)
+newtype Logged m a = Logged (m (a, Int))
 
 {-# NOINLINE untag #-}
 untag :: Tag -> Int
@@ -1441,6 +1442,23 @@ newtypeField x y = case untag (unwrapTag (Wrapped (Tag (I# x)))) of
 newtypeFunction :: Int# -> Int# -> Int#
 newtypeFunction x y = case runApply (Apply (boxedSum (I# y))) (I# x) of
   I# n -> n
+
+{-# NOINLINE runLogged #-}
+runLogged :: Logged m a -> m (a, Int)
+runLogged (Logged x) = x
+
+-- `runLogged` at `m := Maybe` instantiates `m (a, Int)` to `Maybe (Int, Int)`.
+{-# NOINLINE newtypeMonad #-}
+newtypeMonad :: Int# -> Int# -> Int#
+newtypeMonad x y = case runLogged (logged x y) of
+  Just (I# a, I# b) -> a -# b
+  Nothing -> 0#
+
+{-# NOINLINE logged #-}
+logged :: Int# -> Int# -> Logged Maybe Int
+logged x y = case x <# y of
+  1# -> Logged (Just (I# x, I# y))
+  _ -> Logged Nothing
 
 {-# NOINLINE runApply #-}
 runApply :: Apply -> Int -> Int

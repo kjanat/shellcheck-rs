@@ -944,6 +944,14 @@ pub const FIXTURES: &[Fixture] = &[
     ),
     run("newtypeField", Inputs::Binary),
     prove("newtypeFunction", Inputs::Binary, &[op(Op::Apply)]),
+    prove(
+        "newtypeMonad",
+        Inputs::Binary,
+        &[both(Evidence::SpecializedOn {
+            type_arguments: 2,
+            dictionaries: 0,
+        })],
+    ),
     // Text-processing programs: whole algorithms over `[Char]`, not single
     // operations. Each walks a literal end to end and builds new cells as it
     // goes, so a defect in the string machinery is a wrong answer here rather

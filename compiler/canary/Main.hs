@@ -20,7 +20,7 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   stringLength, stringIndex, stringEmpty, stringUnicode, stringUnicodeIndex,
   stringNulByte, stringAppend, stringShared, stringUnused, stringLazyHead,
   stringHighLatin1, stringCount,
-  newtypeRoundTrip, newtypeField, newtypeFunction, stringAppendShared,
+  newtypeRoundTrip, newtypeField, newtypeFunction, newtypeMonad, stringAppendShared,
   errorUnusedArgument, errorUnusedLet, errorUnusedShared, errorPlain,
   errorEmpty, errorUnicode, errorMultiline, errorUnboxed,
   errorComputed, errorBranch, errorLazyArgument, errorLazyShared, errorLazyField,
@@ -367,4 +367,6 @@ main = do
       (I# x, I# y) -> print (lengthTail x y)
     ["consAppendRight", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (consAppendRight x y)
+    ["newtypeMonad", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (newtypeMonad x y))
     _ -> fail "expected a canary entry and its integer arguments"

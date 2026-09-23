@@ -78,6 +78,42 @@ pub fn substitute_capture_safe(ty: &mut Ty, unique: &str, replacement: &Ty) {
         freshen(ty, &captured, &mut used);
     }
     substitute_one(ty, unique, replacement);
+    while fold_constructor_applications(ty) {}
+}
+
+/// GHC's `mkAppTy` keeps a constructor application's arguments on the
+/// constructor, so `m (a, w)` at `m := Identity` is `Identity (a, w)`.
+fn fold_constructor_applications(ty: &mut Ty) -> bool {
+    let mut folded = false;
+    let mut work = vec![ty];
+    while let Some(node) = work.pop() {
+        if let Ty::App { fun, arg } = node
+            && let Ty::Con { tycon, args } = fun.as_mut()
+        {
+            let mut args = std::mem::take(args);
+            args.push(std::mem::replace(
+                arg.as_mut(),
+                Ty::Opaque {
+                    pretty: String::new(),
+                },
+            ));
+            *node = Ty::Con {
+                tycon: tycon.clone(),
+                args,
+            };
+            folded = true;
+        }
+        match node {
+            Ty::Var(_) | Ty::Lit { .. } | Ty::Opaque { .. } => {}
+            Ty::Con { args, .. } => work.extend(args.iter_mut()),
+            Ty::App { fun, arg } => work.extend([fun.as_mut(), arg.as_mut()]),
+            Ty::Fun { mult, arg, res } => {
+                work.extend([mult.as_mut(), arg.as_mut(), res.as_mut()]);
+            }
+            Ty::ForAll { body, .. } => work.push(body.as_mut()),
+        }
+    }
+    folded
 }
 
 /// Replace every free occurrence of `unique`. A quantifier that rebinds it
@@ -357,6 +393,30 @@ mod tests {
             body: Box::new(arrow(Ty::Var(tv("b")), Ty::Var(tv("b")))),
         };
         assert!(!ty.alpha_eq(&captured));
+    }
+
+    #[test]
+    fn a_substituted_constructor_takes_its_applied_arguments() {
+        let app = |fun: Ty, arg: Ty| Ty::App {
+            fun: Box::new(fun),
+            arg: Box::new(arg),
+        };
+        let pair = con("(,)", vec![con("()", vec![]), con("W", vec![])]);
+        let mut writer = arrow(
+            app(Ty::Var(tv("m")), pair.clone()),
+            app(app(Ty::Var(tv("m")), con("A", vec![])), con("B", vec![])),
+        );
+        substitute_capture_safe(&mut writer, "m", &con("Identity", vec![]));
+        assert_eq!(
+            writer,
+            arrow(
+                con("Identity", vec![pair]),
+                con("Identity", vec![con("A", vec![]), con("B", vec![])]),
+            )
+        );
+        let mut variable = app(Ty::Var(tv("m")), con("A", vec![]));
+        substitute_capture_safe(&mut variable, "m", &Ty::Var(tv("n")));
+        assert_eq!(variable, app(Ty::Var(tv("n")), con("A", vec![])));
     }
 
     #[test]
