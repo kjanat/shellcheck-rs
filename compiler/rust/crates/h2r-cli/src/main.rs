@@ -31,6 +31,9 @@ enum Command {
     /// Emit standalone Rust for a supported pure Int#/Int entry and all its dependencies.
     EmitRust {
         dir: PathBuf,
+        /// Also load the dumps of a library compiled with the plugin. Repeatable.
+        #[arg(long = "with", value_name = "DIR")]
+        with: Vec<PathBuf>,
         #[arg(long)]
         entry: String,
         #[arg(long)]
@@ -383,6 +386,9 @@ enum Command {
         /// standalone Rust entry can be emitted for it.
         #[arg(long, requires = "nir", conflicts_with_all = ["fn_name", "specialize"])]
         entries: bool,
+        /// Emit every survey instance whose whole dependency closure emits, as one program.
+        #[arg(long, value_name = "FILE", requires = "nir", conflicts_with_all = ["fn_name", "specialize", "entries"])]
+        emit_program: Option<PathBuf>,
         /// Emit the live set, the verifier's audit and the rules as JSON.
         #[arg(long)]
         json: bool,
@@ -408,6 +414,9 @@ enum Command {
         /// run, so it is off by default.
         #[arg(long)]
         m24_link: bool,
+        /// List every name live code references that no in-world binding defines.
+        #[arg(long, requires = "reachability", conflicts_with_all = ["json", "explain", "link", "m24_link"])]
+        boundary: bool,
     },
     /// The residual-laziness census: why does each local binding still exist?
     Laziness {
@@ -430,8 +439,13 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     with_big_stack(move || match cli.command {
-        Command::EmitRust { dir, entry, output } => {
-            let modules = load_dir(&dir)?;
+        Command::EmitRust {
+            dir,
+            with,
+            entry,
+            output,
+        } => {
+            let modules = h2r_core_ir::load_dirs(&dir, &with)?.modules;
             let source =
                 h2r_lower::emit::emit_entry(&modules, &entry).map_err(anyhow::Error::msg)?;
             std::fs::write(output, source)?;
@@ -601,13 +615,19 @@ fn main() -> Result<()> {
             specialize,
             sites,
             entries,
+            emit_program,
             json,
             rules,
             explain,
             link,
             m24_link,
+            boundary,
         } => {
-            if nir && entries {
+            if boundary {
+                lower::boundary(&dir, &with)
+            } else if let Some(output) = emit_program {
+                lower::nir_emit_program(&dir, &with, &output)
+            } else if nir && entries {
                 lower::nir_entries(&dir, &with)
             } else if nir {
                 match (specialize, fn_name.as_deref()) {

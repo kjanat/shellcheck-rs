@@ -600,6 +600,7 @@ pub struct LiveSet {
     pub edges: Vec<EdgeRef>,
     /// External stable name → how often live and dead code reference it.
     pub imports: BTreeMap<String, ImportUse>,
+    pub foreign: BTreeMap<String, ImportUse>,
     pub in_world_missing: Vec<Missing>,
     /// M2.4c's zero-reference set, recomputed with its own predicate. The
     /// subset gate crosses it with `dead`.
@@ -936,7 +937,7 @@ impl<'m> Build<'m> {
         let mut non_bindings: BTreeMap<&str, (bool, u32)> = BTreeMap::new();
         // A13: a Ref::Global occurrence whose own stable name is internal.
         // Expected empty, counted rather than assumed.
-        let mut internal_globals: BTreeMap<&str, u64> = BTreeMap::new();
+        let mut internal_at: Vec<BTreeMap<&str, u32>> = vec![BTreeMap::new(); n];
 
         for (ni, node) in self.nodes.iter().enumerate() {
             let m = self.modules[node.key.module as usize];
@@ -958,7 +959,7 @@ impl<'m> Build<'m> {
                     }
                     Some(Ref::Global) => {
                         if !is_external_name(name) {
-                            *internal_globals.entry(name.as_str()).or_insert(0) += 1;
+                            *internal_at[ni].entry(name.as_str()).or_insert(0) += 1;
                         }
                         match self.by_name.get(name.as_str()) {
                             // A3
@@ -1139,8 +1140,22 @@ impl<'m> Build<'m> {
         );
         accounting.external_names_defined = self.external_names_defined;
         accounting.external_name_collisions = 0; // Build::new refuses otherwise.
-        accounting.global_internal_names = internal_globals.len();
-        accounting.global_internal_occurrences = internal_globals.values().sum();
+        let mut foreign: BTreeMap<String, ImportUse> = BTreeMap::new();
+        for (i, at) in internal_at.iter().enumerate() {
+            for (&name, &count) in at {
+                let entry = foreign.entry(name.to_string()).or_default();
+                if witness[i].is_some() {
+                    entry.from_live += count;
+                } else {
+                    entry.from_dead += count;
+                }
+            }
+        }
+        accounting.global_internal_names = foreign.len();
+        accounting.global_internal_occurrences = foreign
+            .values()
+            .map(|use_| u64::from(use_.from_live) + u64::from(use_.from_dead))
+            .sum();
         accounting.unique_collisions = self
             .modules
             .iter()
@@ -1154,6 +1169,7 @@ impl<'m> Build<'m> {
             dead,
             edges,
             imports,
+            foreign,
             in_world_missing,
             zero_reference: zero_nodes,
             accounting,

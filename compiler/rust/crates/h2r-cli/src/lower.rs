@@ -125,6 +125,201 @@ pub fn nir_entries(dir: &Path, with: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
+pub fn nir_emit_program(dir: &Path, with: &[PathBuf], output: &Path) -> Result<()> {
+    use h2r_lower::emit::RootOutcome;
+    use h2r_lower::nir::specialize;
+    use std::fmt::Write;
+
+    let dumps = load_dirs(dir, with)?;
+    let modules = &dumps.modules;
+    let live = audited_live_set(modules)?;
+    let roots: Vec<_> = live
+        .live
+        .iter()
+        .map(|binding| live.node(binding.node).key)
+        .filter(|key| !dumps.is_library(key.module as usize))
+        .map(|key| specialize::Instance::whole(key.module as usize, key.binder))
+        .collect();
+    let program = h2r_lower::emit::emit_program(modules, &roots).map_err(anyhow::Error::msg)?;
+    std::fs::write(output, &program.source)?;
+    let mut out = format!(
+        "Roots: {} live program bindings, {} of them emitted\n\
+         Instances: {} reached, {} lowered, {} emit on their own, {} emitted with their whole closure\n\
+         Recursive values left out: {}\n\
+         Source: {} bytes, {} lines\n\
+         Lowered instances whose own code does not emit, by reason:\n",
+        roots.len(),
+        program
+            .roots
+            .iter()
+            .filter(|outcome| **outcome == RootOutcome::Emitted)
+            .count(),
+        program.instances,
+        program.lowered,
+        program.emittable,
+        program.emitted,
+        program.recursive_values,
+        program.source.len(),
+        program.source.lines().count(),
+    );
+    for (reason, count) in rank_counts(program.refusals) {
+        writeln!(out, "{count:8}  {reason}").unwrap();
+    }
+    let mut causes: BTreeMap<String, usize> = BTreeMap::new();
+    for outcome in &program.roots {
+        let cause = match outcome {
+            RootOutcome::Emitted => continue,
+            RootOutcome::NotLowered => "the root itself does not lower".to_string(),
+            RootOutcome::Refused(reason) => reason.clone(),
+            RootOutcome::DependencyRefused => "a dependency does not emit".to_string(),
+        };
+        *causes.entry(cause).or_insert(0) += 1;
+    }
+    writeln!(out, "Roots not emitted, by cause:").unwrap();
+    for (cause, count) in rank_counts(causes) {
+        writeln!(out, "{count:8}  {cause}").unwrap();
+    }
+    let mut by_module: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for (root, outcome) in roots.iter().zip(&program.roots) {
+        let entry = by_module
+            .entry(modules[root.module].name.as_str())
+            .or_default();
+        entry.1 += 1;
+        if *outcome == RootOutcome::Emitted {
+            entry.0 += 1;
+        }
+    }
+    writeln!(out, "Roots emitted, by module:").unwrap();
+    for (module, (emitted, total)) in by_module {
+        writeln!(out, "{emitted:8} of {total:<6} {module}").unwrap();
+    }
+    print!("{out}");
+    Ok(())
+}
+
+/// GHC gives a foreign call's Id an internal name and no entry in the id table.
+pub fn boundary(dir: &Path, with: &[PathBuf]) -> Result<()> {
+    use h2r_core_ir::split_stable_name;
+    use std::fmt::Write;
+
+    let dumps = load_dirs(dir, with)?;
+    let modules = &dumps.modules;
+    let live = audited_live_set(modules)?;
+    let details = |name: &str| {
+        modules
+            .iter()
+            .find_map(|module| module.ids.get(name))
+            .map_or("", |info| info.details.as_str())
+    };
+    let mut primops: BTreeMap<&str, u32> = BTreeMap::new();
+    let mut constructors = (0usize, 0u32);
+    let mut bindings: BTreeMap<(&str, &str), BTreeMap<&str, u32>> = BTreeMap::new();
+    for (name, use_) in &live.imports {
+        if use_.from_live == 0 || live.foreign.contains_key(name) {
+            continue;
+        }
+        let kind = details(name);
+        if kind.contains("PrimOp") {
+            primops.insert(name, use_.from_live);
+        } else if kind.contains("DataCon") {
+            constructors.0 += 1;
+            constructors.1 += use_.from_live;
+        } else {
+            let (unit, module) = split_stable_name(name).map_or(("", ""), |(u, m, _)| (u, m));
+            bindings
+                .entry((unit, module))
+                .or_default()
+                .insert(name, use_.from_live);
+        }
+    }
+    let foreign: Vec<(String, u32)> = live
+        .foreign
+        .iter()
+        .filter(|(_, use_)| use_.from_live != 0)
+        .map(|(name, use_)| {
+            (
+                name.split_whitespace().collect::<Vec<_>>().join(" "),
+                use_.from_live,
+            )
+        })
+        .collect();
+    let mut out = format!(
+        "Out-of-world names referenced from live code\n\
+         Primops: {} names over {} occurrences\n",
+        primops.len(),
+        primops.values().sum::<u32>()
+    );
+    for (name, count) in rank_counts(primops) {
+        writeln!(out, "{count:8}  {name}").unwrap();
+    }
+    writeln!(
+        out,
+        "Foreign calls: {} names over {} occurrences",
+        foreign.len(),
+        foreign.iter().map(|(_, count)| count).sum::<u32>()
+    )
+    .unwrap();
+    for (name, count) in rank_counts(foreign.into_iter().collect()) {
+        writeln!(out, "{count:8}  {name}").unwrap();
+    }
+    writeln!(
+        out,
+        "Bindings: {} names in {} modules over {} occurrences",
+        bindings.values().map(BTreeMap::len).sum::<usize>(),
+        bindings.len(),
+        bindings.values().flat_map(BTreeMap::values).sum::<u32>()
+    )
+    .unwrap();
+    for ((unit, module), names) in &bindings {
+        writeln!(
+            out,
+            "  {unit}:{module}: {} names over {} occurrences",
+            names.len(),
+            names.values().sum::<u32>()
+        )
+        .unwrap();
+        for (name, count) in rank_counts(names.clone()) {
+            writeln!(out, "{count:8}  {name}").unwrap();
+        }
+    }
+    writeln!(
+        out,
+        "Constructors: {} names over {} occurrences",
+        constructors.0, constructors.1
+    )
+    .unwrap();
+    let mut called: BTreeMap<&str, BTreeMap<&str, u32>> = BTreeMap::new();
+    for edge in &live.edges {
+        let (from, to) = (live.node(edge.from), live.node(edge.to));
+        if !live.is_live(edge.from)
+            || dumps.is_library(from.key.module as usize)
+            || !dumps.is_library(to.key.module as usize)
+        {
+            continue;
+        }
+        *called
+            .entry(to.module_name.as_str())
+            .or_default()
+            .entry(to.name.as_str())
+            .or_insert(0) += edge.occurrences;
+    }
+    writeln!(
+        out,
+        "Library bindings live program code names directly: {} in {} modules",
+        called.values().map(BTreeMap::len).sum::<usize>(),
+        called.len()
+    )
+    .unwrap();
+    for (module, names) in called {
+        writeln!(out, "  {module}: {} names", names.len()).unwrap();
+        for (name, count) in rank_counts(names) {
+            writeln!(out, "{count:8}  {name}").unwrap();
+        }
+    }
+    print!("{out}");
+    Ok(())
+}
+
 /// The live set every NIR path roots from: complete in-world linkage, and no
 /// disagreement with the independent verifier.
 fn audited_live_set(modules: &[Module]) -> Result<LiveSet> {
@@ -459,7 +654,7 @@ fn rank_reasons(errors: &[&h2r_lower::nir::specialize::SpecializeError]) -> Stri
 }
 
 /// Most demanded first, ties broken by the key so a report is reproducible.
-fn rank_counts<K: Ord>(counts: BTreeMap<K, usize>) -> Vec<(K, usize)> {
+fn rank_counts<K: Ord, V: Ord>(counts: BTreeMap<K, V>) -> Vec<(K, V)> {
     let mut ranked: Vec<_> = counts.into_iter().collect();
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     ranked

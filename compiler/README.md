@@ -121,9 +121,9 @@ Disabling the simplifier in the second profile is deliberate: even ordinary `-O0
 
 `compiler/canary/boxed_checks.rs` compiles against the actual generated Rust in both profiles. Its twenty semantic tests use deferred/instrumented inputs to check unused arguments and constructor fields, unselected/nested/default branches, delayed calls, shared inputs, strict constructor fields, CAF cell identity, nested/shared lazy bindings, recursive captures, reused closures and lazy function producers. The embedded runtime's ten tests also execute in each of the twenty generated modules (**220 test executions per profile**). The directly forced `lazyStrictUse` example is already desugared to a case, so its test checks forcing rather than requiring a surviving let.
 
-Generated Rust, binaries and Core dumps live under `compiler/build/canary/`. The task is rerunnable and regenerates dumps even if Cabal considers its build up to date. No wrapper scripts or temporary worktrees are needed. `mise run canary:explain <entry>` prints one entry's verified NIR, the instances it needs and what its emission produced, for either profile. `h2r emit-rust <dump-dir> --entry '<external-stable-name>' --output program.rs` exposes the emitter independently; a refused entry leaves an existing output file untouched.
+Generated Rust, binaries and Core dumps live under `compiler/build/canary/`. The task is rerunnable and regenerates dumps even if Cabal considers its build up to date. No wrapper scripts or temporary worktrees are needed. `mise run canary:explain <entry>` prints one entry's verified NIR, the instances it needs and what its emission produced, for either profile. `h2r emit-rust <dump-dir> [--with <library-dir>]... --entry '<external-stable-name>' --output program.rs` exposes the emitter independently; a refused entry leaves an existing output file untouched.
 
-This is a **pure backend**, not ShellCheck code generation: functions over `Int#`, boxed `Int`, supported algebraic values and function values are emitted only with source-verified NIR and a complete dependency closure. Direct self/mutual recursion, local functions/join points, escaping closures and partial application are supported. `LocalScope` records definitions and body regions; `CallLocal` passes explicit captures and arguments. `MakeClosure` retains code and lexical captures; `Apply` checks argument/result types independently against structured function types. Anonymous lambdas, returned functions and function-valued fields use the same shared lazy carrier. Partial application retains arguments without forcing them; overapplication enters the returned function. Source verification checks lexical visibility, signatures, definition identity, capture order and complete source accounting. Scalar direct tail calls and Int# switches use a dispatcher loop; indirect calls, non-tail calls and lifted-result recursion still use the native stack. A polymorphic function is emitted once per instance — the type arguments and dictionaries it is used at — and a class method resolves to its instance where that instance is proven unique; a dictionary that is not proven unique keeps its runtime dispatch, and an unbounded instance chain is refused with the chain that produced it. The target must be 64-bit. GADTs/existentials, newtype casts, unlifted datatypes, unsupported field carriers, recursive value/thunk graphs, ordinary unlifted lets, partial constructor/primitive workers and Haskell `IO` remain unsupported. Integer command-line parsing and printing are explicit test adapters, not translated Haskell `main`; algebraic and function values are internal, not CLI inputs/outputs. The CLI adapter also accepts function aliases and function-producing entries whose full signature takes and returns only Int#/Int. Unsupported entries fail without replacing already-generated code. M3 as a whole remains open.
+This is a **pure backend**, not ShellCheck code generation: functions over `Int#`, boxed `Int`, supported algebraic values and function values are emitted only with source-verified NIR and a complete dependency closure. Direct self/mutual recursion, local functions/join points, escaping closures and partial application are supported. `LocalScope` records definitions and body regions; `CallLocal` passes explicit captures and arguments. `MakeClosure` retains code and lexical captures; `Apply` checks argument/result types independently against structured function types. Anonymous lambdas, returned functions and function-valued fields use the same shared lazy carrier. Partial application retains arguments without forcing them; overapplication enters the returned function. Source verification checks lexical visibility, signatures, definition identity, capture order and complete source accounting. Blocks with an unlifted result run in a dispatcher loop, and a lifted tail call returns an indirection that forcing follows in a loop. Non-tail calls and nested forcing use the native stack, which may grow to 80% of physical memory as GHC's does. See [Running against GHC](#running-against-ghc). A polymorphic function is emitted once per instance — the type arguments and dictionaries it is used at — and a class method resolves to its instance where that instance is proven unique; a dictionary that is not proven unique keeps its runtime dispatch, and an unbounded instance chain is refused with the chain that produced it. The target must be 64-bit. GADTs/existentials, newtype casts, unlifted datatypes, unsupported field carriers, recursive value/thunk graphs, ordinary unlifted lets, partial constructor/primitive workers and Haskell `IO` remain unsupported. Integer command-line parsing and printing are explicit test adapters, not translated Haskell `main`; algebraic and function values are internal, not CLI inputs/outputs. The CLI adapter also accepts function aliases and function-producing entries whose full signature takes and returns only Int#/Int. Unsupported entries fail without replacing already-generated code. M3 as a whole remains open.
 
 Recursion fixtures cover self/mutual calls, non-tail tree recursion, list traversal, captured local loops, join points and lazy local arguments. Scalar tail loops run one million iterations in both Rust build modes. Both Core profiles require `LocalScope` and `CallLocal` in the local-loop NIR. Higher-order fixtures cover captured lambdas, top/local partial application, returned functions, function-valued branches/fields, escaping recursive closures, overapplication and eta-reduced entry aliases. After closure support, canonical NIR coverage is **5,395 / 9,795 live bindings**, with 4,400 refusals and 3,957 dead bindings skipped (+57 lowered); `mise run lower:coverage` reuses the unchanged constructor-bearing dumps. Specialization fixtures cover one function at several types, cross-module instantiation, a polymorphic higher-order argument, recursive specialization, a nested type argument, two instances of one class, a default method, a superclass field read, a cross-module class, a parameterized instance and a method used as a value. After specialization the same per-owner measure reads 5,402 / 4,393 / 3,957, and `mise run lower:specialize` reports the instance survey the milestone actually moves. Character and string fixtures cover the code-point round trip at the boundaries, all six `Char#` comparisons, a `Char#` switch, a character in a constructor field, empty, ASCII, non-ASCII and embedded-NUL literals, indexing inside and past the end, appended literals, a shared literal CAF and an undemanded traversal; after them the per-owner measure reads **7,936 / 1,859 / 3,957**.
 
@@ -5288,6 +5288,114 @@ A method field that is a cast lambda, as `$fMonadStateT`'s `return` is, has no t
 ### Results
 
 Canonical NIR coverage per owner: **9,124 lowered / 671 refused** over the 9,795 live program owners, against 9,000 / 795 with `containers` alone, and 2,143 library bindings are live. The instance survey: **11,107 = 10,166 lowered + 941 refused**, 577 at a closed signature and 364 at an open one. 1,022 instances are specialized at type or dictionary arguments, 243 of them on a dictionary, against 363 and 15. The survey reaches further than it did, and its refusals rose with its lowered instances: 115 are instance chains past the per-owner budget, and 98 are selectors reached with a method's own type arguments. The external boundary falls from 305 refusals over 92 bindings in 36 modules to 231 over 46 in 15. The canary passes **29,256 differential cases**.
+
+## Risk assessment
+
+Four questions decide whether this pipeline ends in a working `shellcheck` binary. Can rustc build the whole program? How does the emitted code run against GHC's? What does `IO` need? Do the libraries still outside the world lower? Each was measured on the canonical `-O1` dump with `containers`, `transformers`, `mtl` and `base` in the world, on 2026-09-23. Artifacts go to `compiler/build/risk/` and `compiler/build/canary/bench/`.
+
+| question          | measured                                                                                                                                                                                         |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| whole program     | 79.8% of the live bindings that carry code emit with their whole closure, as 15.3 MiB of Rust. rustc builds it at opt-level 0 in 43 s and 5.3 GiB, and needs more than 6 GiB at opt-level 2.     |
+| against GHC       | Every bench entry runs to the largest size tried with no stack limit raised. Tail loops run in constant memory. At n = 10⁷, non-tail recursion takes 31.9× GHC's time and 31.2× its peak memory. |
+| `IO`              | The program names about 25 of `base`'s IO bindings. 664 live `base` bindings, 79 foreign calls and the IO primops sit beneath them.                                                              |
+| outside the world | `parsec` builds from source with identical interfaces and moves no survey total. Six packages from the cabal store stay outside.                                                                 |
+
+### Linkage with `base` loaded
+
+With `base` in the world, 199 names over 658 `Ref::Global` occurrences carry an internal stable name, and the reachability report fails `A13-GLOBAL-EXTERNAL`. All 199 are foreign calls, such as `$_in${__ffi_static_ccall_unsafe base:close :: Int32# -> State# RealWorld -> (# State# RealWorld, Int32# #)}`. GHC gives an `FCallId` an internal name, and the dump's id table has no entry for one, so its `IdDetails` are not recorded. Every in-world reference links. `h2r lower --reachability --boundary` lists the foreign calls with the rest of the boundary.
+
+### Building the whole program
+
+`mise run lower:emit-program` (`h2r lower --nir --emit-program <file>`) surveys the live program and keeps the largest set of instances that is closed under its dependencies and whose own code emits. It writes that set as one Rust program, in modules of 64 instances, whose `main` takes the address of every function so rustc compiles each one. The task then builds it at opt-level 0 and 2 under a 6 GiB memory cap.
+
+|                                               |                                      |
+| --------------------------------------------- | -----------------------------------: |
+| live program bindings, each a survey root     |                                9,795 |
+| … whose instance emits with its whole closure |                                5,735 |
+| instances the survey reaches                  |                               11,107 |
+| … lowered                                     |                               10,166 |
+| … whose own code emits                        |                                7,434 |
+| … emitted, with every dependency              |                                6,660 |
+| generated Rust                                | 15.3 MiB, 195,936 lines, 105 modules |
+| `h2r` itself                                  |                       381 s, 2.0 GiB |
+
+The 4,060 roots that do not emit, by cause:
+
+| cause                                                  | roots |
+| ------------------------------------------------------ | ----: |
+| the root is a floated string literal, typed `Addr#`    | 2,604 |
+| a dependency does not emit                             |   717 |
+| the root itself does not lower                         |   671 |
+| a non-returning call to `patError`                     |    33 |
+| a non-returning call to `ShellCheck.ASTLib.arguments1` |    24 |
+| `[]` without a carrier                                 |     6 |
+| a non-returning call to `$fEqMaybe1`                   |     3 |
+| a polymorphic instance                                 |     2 |
+
+The first row costs no emitted code. `strings::address_literal` reads a floated literal's bytes at compile time where an unpacker consumes it, so no emitted function depends on the `Addr#` binding, which is a survey root only because every live binding is one. Of the other 7,191 roots, 5,735 emit with their whole closure (79.8%). By module, counting the literals: `ShellCheck.Parser` 851 of 1,487, `ShellCheck.Analytics` 1,522 of 2,646, `ShellCheck.Checks.Commands` 658 of 1,184, `Main` 230 of 409, and the JSON formatters 7 of 92.
+
+rustc builds it at opt-level 0. At opt-level 2 it needs more than the 6 GiB cap, with one module, with 105, and with codegen limited to two jobserver slots.
+
+| build                                 | wall | peak memory | result            |
+| ------------------------------------- | ---: | ----------: | ----------------- |
+| type checking only, `--emit=metadata` | 27 s |     2.5 GiB | 98% of one core   |
+| opt-level 0, one module               | 61 s |     4.9 GiB | a 99.2 MiB binary |
+| opt-level 0, 105 modules              | 43 s |     5.3 GiB | a 101 MiB binary  |
+| opt-level 2, one module               | 51 s |     > 6 GiB | killed at the cap |
+| opt-level 2, 105 modules              | 58 s |     > 6 GiB | killed at the cap |
+| opt-level 2, 105 modules, `make -j2`  | 58 s |     > 6 GiB | killed at the cap |
+
+The opt-level 0 builds report no errors. rustc warns about 2,893 block helpers the dispatcher leaves unused and 96 unreachable expressions.
+
+### Running against GHC
+
+`mise run canary:bench` compiles the entries of `compiler/canary/Bench.hs` from the canary's `-O1 -fno-worker-wrapper` dump, and times each against the GHC-built oracle at growing sizes, with peak resident memory from GNU time. All outputs agree with GHC's.
+
+| entry        | what it does                                  |
+| ------------ | --------------------------------------------- |
+| `benchSet`   | `Set.insert` of n pseudo-random `Int`s        |
+| `benchText`  | build, `map` and scan an n-character `String` |
+| `benchDeep`  | non-tail recursion n deep over a list         |
+| `benchCps`   | n tail calls through a continuation argument  |
+| `benchChain` | forcing a chain of n thunks                   |
+| `benchLoop`  | a tail loop n long returning a boxed `Int`    |
+
+Every entry runs to n = 10⁷, and `benchSet` to 10⁶, the largest sizes tried, with no stack limit raised. The table gives time and peak memory as multiples of GHC's. `canary:bench` stops at n = 10⁶, and the n = 10⁷ column comes from the same binaries run by hand under the 6 GiB cap. GHC's times below 0.05 s are mostly process start-up.
+
+| entry        |      n = 10⁵ |       n = 10⁶ |       n = 10⁷ |
+| ------------ | -----------: | ------------: | ------------: |
+| `benchSet`   | 16.5× / 6.6× |  10.9× / 9.5× |               |
+| `benchText`  |  3.0× / 0.3× |  16.0× / 0.2× |  29.0× / 0.3× |
+| `benchDeep`  |  7.5× / 4.6× | 24.5× / 20.9× | 31.9× / 31.2× |
+| `benchCps`   |  1.0× / 0.4× |   7.2× / 0.4× |  45.5× / 0.4× |
+| `benchChain` |  2.9× / 1.3× |   3.6× / 2.8× |   3.2× / 2.9× |
+| `benchLoop`  |  0.7× / 0.3× |   4.7× / 0.2× |  20.0× / 0.3× |
+
+`benchText`, `benchCps` and `benchLoop` peak at 2.7 MiB or less at every size. At n = 10⁷ `benchDeep` peaks at 5.2 GiB and GHC at 171 MiB, and `benchChain` at 1.8 GiB and GHC at 632 MiB.
+
+The emitted code bounds its stack in three ways:
+
+- **Unlifted results.** A block whose result is `Int#` or an unboxed tuple runs in a dispatcher loop, one loop per result carrier. A direct tail call, an `Int#` switch and a tail `case` on data return the next block as a loop state. A saturated tail call through a closure whose code is an `Int#` block enters the loop as well. `benchText`'s scan and `benchCps`'s continuation run this way.
+- **Lifted results.** A top-level function, a CAF and a delayed block return a thunk. So do a tail call through a closure and a tail transfer to a block that can reach its caller again. When the thunk's code ends in another call, it returns that call's thunk as an indirection. `force` follows a chain of indirections in a loop and writes the value into every link that is still shared. `benchLoop` runs this way.
+- **Nested evaluation.** A non-tail call, and forcing a thunk inside another thunk's code, use the native stack, as they use GHC's. `benchDeep`, `benchChain` and `benchSet`'s accumulated `Set.insert`, a delayed argument in the canary's `-fno-worker-wrapper` Core, nest this way. The program runs on a thread whose stack may grow to 80% of physical memory, GHC's default maximum stack size.
+
+`Data::force` also clones the node's field vector each time a value is inspected, and constructors are matched by comparing their stable-name strings.
+
+### `IO`
+
+`h2r lower --reachability --boundary` lists every name live code references that the world does not define. With `base` loaded, `Main.main` reaches:
+
+- **133 primops** over 5,120 occurrences. Beside the arithmetic ones they include mutable variables (`newMutVar#`, `readMutVar#`, `writeMutVar#`), `MVar#`s, exceptions and masking (`catch#`, `raiseIO#`, `maskAsyncExceptions#`), threads (`yield#`, `myThreadId#`, `killThread#`), raw memory (`plusAddr#`, `readWord8OffAddr#`, `writeWideCharOffAddr#`), arrays and byte arrays, weak and stable pointers, `touch#` and `keepAlive#`.
+- **79 foreign calls** over 138 occurrences: `open`, `read`, `write`, `close`, `lseek`, `fstat`, `ftruncate`, `fcntl`, `dup`, terminal settings, signal masks, `iconv`, the locale, `getenv`, the program's arguments, file locks, `malloc` and `memcpy`, and the MD5 behind `Typeable`'s fingerprints.
+- **664 live bindings in `base`'s IO modules.** The handle layer has 258, text encodings 183, IO exceptions 70 and the event manager 44, and `Foreign`, `System.Posix.Internals`, `System.Environment` and `System.Exit` the other 109. Behind exceptions sit 208 live bindings of `Data.Typeable.Internal` and `GHC.Fingerprint`, and 82 of `GHC.Exception`, `GHC.Exception.Type` and `Control.Exception.Base`.
+
+The program itself names few of them. The same report lists the library bindings live program code calls directly, and the IO ones are `stdin`, `stdout`, `stderr`, `hPutStr`, `hGetContents`, `hPutBuf`, `openFile`, `openBinaryFile`, `hSetBinaryMode`, `hIsSeekable`, `hGetEcho`, `wantReadableHandle`, `getForeignEncoding`, `withCString`, `allocaBytesAligned`, `getArgs`, `getEnv`, `exitWith`, `exitFailure` and `modifyIOError`, with `IOException`'s `Exception` instance and `sameTypeRep` for `catch`. Beyond `base` it calls 7 bindings of `directory` and 5 of `bytestring`. `IO` can be supplied either at that surface, as typed runtime adapters, or at the bottom, by translating `base`'s handle layer and implementing the primops and foreign calls beneath it.
+
+### Libraries still outside the world
+
+`compiler/extract-library.sh parsec` builds `parsec` 3.1.16.1 from source under its installed unit id, and all 25 interfaces match the installed ones. Loaded as a fifth library, it leaves the survey at 11,107 = 10,166 lowered + 941 refused. Its 12 external refusals were all at open signatures, and they become in-world refusals of ShellCheck's parser code: 10 more `type arguments must precede value arguments` and 7 more `instance reference needs closed structured type arguments`, while 5 `a let binds a value whose type has no carrier` go. The closed-signature blockers do not change. ShellCheck's parser is generic in its base monad, `type SCParser m v = ParsecT String UserState (SCBase m) v`, so the survey roots its bindings at signatures over `m`, where the `Monad m` dictionary is a parameter.
+
+`regex-tdfa`, `regex-base`, `aeson`, `fgl`, `Diff` and `vector` come from the cabal store under hashed unit ids, and the script builds only packages `ghc-pkg` finds in the global database.
 
 ## Remaining runtime and external dependencies
 

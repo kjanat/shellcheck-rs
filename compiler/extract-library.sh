@@ -37,6 +37,12 @@ case "$package" in
 		flags=(-O2 -XHaskell2010)
 		unit=base
 		;;
+	parsec)
+		hadrian_path=libraries/parsec
+		source_dirs=(src)
+		include_dirs=()
+		flags=(-O2 -XHaskell2010)
+		;;
 	*)
 		echo "extract-library.sh: no source layout recorded for $package" >&2
 		exit 1

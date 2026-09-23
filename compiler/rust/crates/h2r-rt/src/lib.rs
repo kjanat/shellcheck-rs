@@ -5,6 +5,7 @@
 //! is emitted as a plain Rust value; what is left over -- bindings that may or
 //! may not be demanded, and genuinely cyclic values -- lands here.
 
+use std::any::Any;
 use std::cell::{OnceCell, RefCell};
 use std::fmt;
 use std::rc::Rc;
@@ -12,12 +13,23 @@ use std::rc::Rc;
 /// A call-by-need binding: evaluated at most once, shared by every use.
 pub struct Lazy<T> {
     value: OnceCell<T>,
-    init: RefCell<Option<Box<dyn FnOnce() -> T>>>,
+    init: RefCell<Option<Code<T>>>,
+}
+
+type Code<T> = Box<dyn FnOnce() -> Thunk<T>>;
+
+pub enum Thunk<T> {
+    Value(T),
+    Indirect(Rc<Lazy<T>>),
 }
 
 impl<T> Lazy<T> {
     /// Defer `f` until the value is first demanded.
     pub fn new(f: impl FnOnce() -> T + 'static) -> Self {
+        Self::step(move || Thunk::Value(f()))
+    }
+
+    pub fn step(f: impl FnOnce() -> Thunk<T> + 'static) -> Self {
         Lazy {
             value: OnceCell::new(),
             init: RefCell::new(Some(Box::new(f))),
@@ -32,6 +44,22 @@ impl<T> Lazy<T> {
         }
     }
 
+    /// Whether the binding has already been forced.
+    pub fn is_evaluated(&self) -> bool {
+        self.value.get().is_some()
+    }
+
+    fn enter(&self) -> Thunk<T> {
+        let f = self
+            .init
+            .borrow_mut()
+            .take()
+            .expect("h2r-rt: re-entrant force (<<loop>>)");
+        f()
+    }
+}
+
+impl<T: Clone> Lazy<T> {
     /// Force to WHNF, memoising the result.
     ///
     /// Panics on re-entrant forcing, which is this runtime's `<<loop>>`.
@@ -39,18 +67,39 @@ impl<T> Lazy<T> {
         if let Some(v) = self.value.get() {
             return v;
         }
-        let f = self
-            .init
-            .borrow_mut()
-            .take()
-            .expect("h2r-rt: re-entrant force (<<loop>>)");
-        self.value.get_or_init(f)
+        let value = match self.enter() {
+            Thunk::Value(value) => value,
+            Thunk::Indirect(next) => chase(next),
+        };
+        self.value.get_or_init(|| value)
     }
+}
 
-    /// Whether the binding has already been forced.
-    pub fn is_evaluated(&self) -> bool {
-        self.value.get().is_some()
+#[inline(never)]
+fn chase<T: Clone>(first: Rc<Lazy<T>>) -> T {
+    let mut pending = Vec::new();
+    let mut current = first;
+    let value = loop {
+        if let Some(value) = current.value.get() {
+            break value.clone();
+        }
+        match current.enter() {
+            Thunk::Value(value) => {
+                pending.push(current);
+                break value;
+            }
+            Thunk::Indirect(next) => {
+                if Rc::strong_count(&current) > 1 {
+                    pending.push(current);
+                }
+                current = next;
+            }
+        }
+    };
+    for cell in pending {
+        cell.value.get_or_init(|| value.clone());
     }
+    value
 }
 
 impl<T: fmt::Debug> fmt::Debug for Lazy<T> {
@@ -76,6 +125,9 @@ pub struct Int(Shared<i64>);
 impl Int {
     pub fn defer(f: impl FnOnce() -> i64 + 'static) -> Self {
         Self(shared(f))
+    }
+    pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
+        Self(Rc::new(Lazy::step(move || Thunk::Indirect(f().0))))
     }
     pub fn ready(value: i64) -> Self {
         Self(Rc::new(Lazy::ready(value)))
@@ -169,7 +221,15 @@ pub struct Closure(Shared<ClosureCode>);
 pub struct ClosureCode {
     arity: usize,
     code: Rc<dyn Fn(Vec<Field>) -> Field>,
+    enter: Option<Entry>,
     supplied: Vec<Field>,
+}
+
+type Entry = Rc<dyn Fn(Vec<Field>) -> Box<dyn Any>>;
+
+pub enum Tail {
+    Value(Field),
+    Enter(Box<dyn Any>),
 }
 
 impl Closure {
@@ -178,11 +238,39 @@ impl Closure {
         Self(Rc::new(Lazy::ready(ClosureCode {
             arity,
             code: Rc::new(code),
+            enter: None,
+            supplied: Vec::new(),
+        })))
+    }
+    pub fn entering(
+        arity: usize,
+        code: impl Fn(Vec<Field>) -> Field + 'static,
+        enter: impl Fn(Vec<Field>) -> Box<dyn Any> + 'static,
+    ) -> Self {
+        assert!(arity > 0);
+        Self(Rc::new(Lazy::ready(ClosureCode {
+            arity,
+            code: Rc::new(code),
+            enter: Some(Rc::new(enter)),
             supplied: Vec::new(),
         })))
     }
     pub fn defer(init: impl FnOnce() -> ClosureCode + 'static) -> Self {
         Self(shared(init))
+    }
+    pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
+        Self(Rc::new(Lazy::step(move || Thunk::Indirect(f().0))))
+    }
+    pub fn apply_tail(&self, arguments: Vec<Field>) -> Tail {
+        let function = self.force();
+        if let Some(enter) = &function.enter
+            && function.supplied.len() + arguments.len() == function.arity
+        {
+            let mut supplied = function.supplied.clone();
+            supplied.extend(arguments);
+            return Tail::Enter(enter(supplied));
+        }
+        Tail::Value(self.apply(arguments))
     }
     pub fn force(&self) -> ClosureCode {
         self.0.force().clone()
@@ -266,6 +354,9 @@ mod closure_tests {
 impl Data {
     pub fn defer(f: impl FnOnce() -> Node + 'static) -> Self {
         Self(shared(f))
+    }
+    pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
+        Self(Rc::new(Lazy::step(move || Thunk::Indirect(f().0))))
     }
     pub fn ready(constructor: &'static str, fields: Vec<Field>) -> Self {
         Self(Rc::new(Lazy::ready(Node {
@@ -509,20 +600,20 @@ pub struct ListNames {
 /// the left list is copied only when the corresponding result cell is
 /// demanded. The right list is reached, not copied: its cells are shared.
 pub fn append_list(left: Data, right: Data, names: ListNames) -> Data {
-    Data::defer(move || {
+    Data(Rc::new(Lazy::step(move || {
         let node = left.force();
         if node.constructor == names.nil {
-            return right.force();
+            return Thunk::Indirect(right.0);
         }
         let tail = node.fields[1].data();
-        Node {
+        Thunk::Value(Node {
             constructor: names.cons,
             fields: vec![
                 node.fields[0].clone(),
                 Field::Data(append_list(tail, right, names)),
             ],
-        }
-    })
+        })
+    })))
 }
 
 /// The carrier of a list element that is computed on demand.
@@ -536,9 +627,9 @@ pub enum Lifted {
 impl Lifted {
     fn defer(self, compute: impl FnOnce() -> Field + 'static) -> Field {
         match self {
-            Self::Int => Field::Int(Int::defer(move || compute().int().force())),
-            Self::Data => Field::Data(Data::defer(move || compute().data().force())),
-            Self::Closure => Field::Closure(Closure::defer(move || compute().closure().force())),
+            Self::Int => Field::Int(Int::defer_to(move || compute().int())),
+            Self::Data => Field::Data(Data::defer_to(move || compute().data())),
+            Self::Closure => Field::Closure(Closure::defer_to(move || compute().closure())),
         }
     }
 }
@@ -1662,6 +1753,76 @@ mod tests {
         let b = Rc::clone(&a);
         assert_eq!(a.force().len(), 3);
         assert!(b.is_evaluated());
+    }
+
+    fn countdown(n: u32, entered: Rc<Cell<u32>>) -> Data {
+        if n == 0 {
+            return Data::ready("Nil", vec![]);
+        }
+        Data::defer_to(move || {
+            entered.set(entered.get() + 1);
+            countdown(n - 1, entered)
+        })
+    }
+
+    #[test]
+    fn a_million_indirections_force_in_constant_stack() {
+        let entered = Rc::new(Cell::new(0));
+        let chain = countdown(1_000_000, entered.clone());
+        assert_eq!(chain.force().constructor, "Nil");
+        assert_eq!(entered.get(), 1_000_000);
+        assert_eq!(chain.force().constructor, "Nil");
+        assert_eq!(entered.get(), 1_000_000);
+    }
+
+    #[test]
+    fn a_shared_link_in_a_chain_is_memoised() {
+        let entered = Rc::new(Cell::new(0));
+        let middle = countdown(3, entered.clone());
+        let held = middle.clone();
+        let top = Data::defer_to(move || middle);
+        assert_eq!(top.force().constructor, "Nil");
+        assert!(held.is_evaluated());
+        assert_eq!(held.force().constructor, "Nil");
+        assert_eq!(entered.get(), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "<<loop>>")]
+    fn an_indirection_to_itself_is_a_loop() {
+        let cell: Rc<RefCell<Option<Data>>> = Rc::new(RefCell::new(None));
+        let reference = cell.clone();
+        let this = Data::defer_to(move || reference.borrow().clone().expect("tied"));
+        *cell.borrow_mut() = Some(this.clone());
+        this.force();
+    }
+
+    #[test]
+    fn a_saturated_tail_call_enters_and_a_partial_one_applies() {
+        let function = Closure::entering(
+            2,
+            |a| Field::Int64(a[0].int64() + a[1].int64()),
+            |a| Box::new(a[0].int64() * 100 + a[1].int64()),
+        );
+        match function.apply_tail(vec![Field::Int64(4), Field::Int64(2)]) {
+            Tail::Enter(state) => assert_eq!(*state.downcast::<i64>().expect("i64"), 402),
+            Tail::Value(_) => panic!("a saturated call with an entry was applied"),
+        }
+        let partial = function.apply(vec![Field::Int64(4)]).closure();
+        match partial.apply_tail(vec![Field::Int64(2)]) {
+            Tail::Enter(state) => assert_eq!(*state.downcast::<i64>().expect("i64"), 402),
+            Tail::Value(_) => panic!("a partial application lost its entry"),
+        }
+        match function.apply_tail(vec![Field::Int64(4)]) {
+            Tail::Value(value) => {
+                assert_eq!(value.closure().apply(vec![Field::Int64(2)]).int64(), 6)
+            }
+            Tail::Enter(_) => panic!("an unsaturated call entered"),
+        }
+        match Closure::ready(1, |a| a[0].clone()).apply_tail(vec![Field::Int64(7)]) {
+            Tail::Value(value) => assert_eq!(value.int64(), 7),
+            Tail::Enter(_) => panic!("a closure without an entry entered"),
+        }
     }
 
     #[test]

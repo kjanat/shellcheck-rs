@@ -23,6 +23,7 @@ use h2r_lower::nir::lower::lower_leaf_in_world;
 use h2r_lower::nir::pretty::format_leaf;
 use h2r_lower::nir::specialize::{Instance, survey};
 
+mod bench;
 mod differential;
 mod evidence;
 mod fixtures;
@@ -47,6 +48,9 @@ struct Cli {
     /// The `--test` harness that reads the emitted boxed entries.
     #[arg(long, default_value = "compiler/canary/boxed_checks.rs")]
     boxed_checks: PathBuf,
+    /// The optimized profile's `--test` harness for tail calls a million deep.
+    #[arg(long, default_value = "compiler/canary/stack_checks.rs")]
+    stack_checks: PathBuf,
     /// Run one profile instead of both.
     #[arg(long, default_value = "both", value_parser = ["both", "optimized", "unoptimized"])]
     profile: String,
@@ -59,6 +63,9 @@ struct Cli {
     /// Print one entry's NIR and the instances it needs, and run nothing.
     #[arg(long, value_name = "OCCURRENCE")]
     explain: Option<String>,
+    /// Time the entries of `Bench.hs` against the oracle at growing sizes, and run nothing else.
+    #[arg(long, conflicts_with = "explain")]
+    bench: bool,
     /// The canonical ShellCheck Core the library suite emits from.
     #[arg(long, default_value = "compiler/core-json")]
     library_core: PathBuf,
@@ -97,6 +104,22 @@ fn run(cli: Cli) -> Result<()> {
         "unoptimized" => vec![Profile::Unoptimized],
         other => bail!("unknown profile {other:?}"),
     };
+
+    if cli.bench {
+        let out = profile_dir(&cli, Profile::Optimized);
+        let modules = load_dirs(&out.join("core"), &cli.with)?.modules;
+        let lines = bench::run(
+            &modules,
+            &out.join("oracle"),
+            &out.join("bench"),
+            std::time::Duration::from_secs(cli.timeout_seconds),
+        )
+        .map_err(anyhow::Error::msg)?;
+        for line in lines {
+            println!("{line}");
+        }
+        return Ok(());
+    }
 
     if let Some(occ) = cli.explain.as_deref() {
         for profile in profiles {
@@ -324,6 +347,15 @@ fn profile_run(cli: &Cli, profile: Profile, jobs: usize) -> Result<Report> {
         &out.join("boxed-checks"),
         out.canonicalize()?.as_path(),
     ) {
+        failures.push(error);
+    }
+    if profile == Profile::Optimized
+        && let Err(error) = differential::boxed_checks(
+            &cli.stack_checks,
+            &out.join("stack-checks"),
+            out.canonicalize()?.as_path(),
+        )
+    {
         failures.push(error);
     }
 

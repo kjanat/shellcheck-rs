@@ -890,7 +890,7 @@ fn empty_case_reads_a_local_cafs_own_demand_evidence() {
     verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
     let error = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap_err();
     assert!(
-        error.contains("supported scalar/algebraic carriers"),
+        error.contains("emission requires a carrier for $u$M$T"),
         "{error}"
     );
     modules[0].binders[bottom as usize]
@@ -2131,7 +2131,7 @@ fn closures_partial_application_and_indirect_calls_are_source_verified() {
     assert!(
         crate::emit::emit_entry(&modules, &sn("Main", "main"))
             .unwrap()
-            .contains("HClosure::ready(2")
+            .contains("HClosure::entering(2")
     );
     for mutation in 0..6 {
         let mut bad = leaf.clone();
@@ -3365,7 +3365,7 @@ fn data_constructors_and_cases_close_source_accounting_and_renumber() {
         );
         let rust = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
         assert!(rust.contains("HData::ready"));
-        assert!(rust.contains("match node.constructor"));
+        assert!(rust.contains("let constructor = node.constructor; match constructor"));
         check_scalar_renumbering(modules);
     }
 }

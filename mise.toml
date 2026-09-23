@@ -409,6 +409,38 @@ cargo locked-build --bin h2r
 target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --specialize --sites "${usage_subject?}"
 '''
 
+[tasks."lower:emit-program"]
+description = "Emit every survey instance whose closure emits as one program, and time rustc on it"
+depends     = ["extract:libraries"]
+usage       = '''
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+'''
+run         = '''
+set -eu
+cargo locked-build --bin h2r
+out="$PWD/compiler/build/risk"
+mkdir -p "$out"
+target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --emit-program "$out/program.rs" | tee "$out/emit-program.txt"
+for level in 0 2; do
+  status=0
+  systemd-run --user --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 \
+    /usr/bin/time -f "%e s, %M KiB peak" -o "$out/rustc-O$level.time" \
+    rustc --edition=2024 -C opt-level=$level "$out/program.rs" -o "$out/program-O$level" \
+    >"$out/rustc-O$level.log" 2>&1 || status=$?
+  echo "opt-level $level: exit $status, $(cat "$out/rustc-O$level.time")"
+done
+'''
+
+[tasks."canary:bench"]
+description = "Time the Bench.hs entries against the GHC oracle at growing sizes"
+depends     = ["canary:extract", "extract:libraries"]
+usage       = '''
+flag "--timeout-seconds <seconds>" default="60" help="Per-invocation time limit"
+'''
+run         = '''
+cargo rr --bin h2r-canary -- --bench --timeout-seconds "${usage_timeout_seconds?}"
+'''
+
 [tasks."canary:library"]
 description = "Build the GHC driver that calls ShellCheck's own functions for the library suite"
 depends     = ["extract"]

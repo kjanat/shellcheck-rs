@@ -44,6 +44,7 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   setSize, setMember, setOrder, mapLookup, mapStrings, mapUnion,
   errorCall, errorCallComputed, setFindMin, undefinedUnused,
   stateCollect, stateNumber, writerCollect, stateClass, rwsRecord, identityWalk)
+import Bench (benchSet, benchText, benchDeep, benchCps, benchChain, benchLoop)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -411,4 +412,16 @@ main = do
       (I# x, I# y) -> print (rwsRecord x y)
     ["identityWalk", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (identityWalk x y)
+    ["benchSet", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (benchSet x y)
+    ["benchText", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (benchText x y))
+    ["benchDeep", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (benchDeep x y)
+    ["benchCps", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (benchCps x y))
+    ["benchChain", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (benchChain x y)
+    ["benchLoop", a, b] -> case read a of
+      I# x -> print (benchLoop x (read b))
     _ -> fail "expected a canary entry and its integer arguments"

@@ -5,7 +5,7 @@ build-type: Simple
 
 executable h2r-canary
   main-is: Main.hs
-  other-modules: Canary, Helpers
+  other-modules: Bench, Canary, Helpers
   build-depends: base >= 4.18 && < 4.19, containers, transformers, mtl, h2r-plugin
   default-language: Haskell2010
   ghc-options: -O1 -fno-worker-wrapper

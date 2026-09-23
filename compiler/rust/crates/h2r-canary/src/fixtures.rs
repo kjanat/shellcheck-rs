@@ -279,6 +279,8 @@ pub enum Inputs {
     Recursive,
     /// Small depths against a fixed second argument.
     Tree,
+    /// These depths against a fixed second argument.
+    Deep(&'static [i64]),
     /// Never compiled or run: the entry exists to be lowered, not entered.
     EvidenceOnly,
 }
@@ -304,6 +306,7 @@ impl Inputs {
                 .chain(std::iter::once(vec![DEEP.0, DEEP.1]))
                 .collect(),
             Inputs::Tree => TREE.iter().map(|x| vec![*x, TREE_SECOND]).collect(),
+            Inputs::Deep(depths) => depths.iter().map(|x| vec![*x, STACK_SECOND]).collect(),
         }
     }
 }
@@ -419,6 +422,11 @@ pub const REFUSALS: &[Refusal] = &[
     },
     Refusal {
         entry: Entry::Occurrence("mapUnion"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("imported binding is outside the loaded world"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("benchSet"),
         when: When::Only(Profile::Unoptimized),
         because: Some("imported binding is outside the loaded world"),
     },
@@ -1165,6 +1173,12 @@ pub const FIXTURES: &[Fixture] = &[
         Inputs::Binary,
         &[optimized(Evidence::InstancesComplete)],
     ),
+    run("benchText", Inputs::Deep(STACK)),
+    run("benchCps", Inputs::Deep(STACK)),
+    run("benchDeep", Inputs::Deep(STACK)),
+    run("benchChain", Inputs::Deep(STACK)),
+    run("benchLoop", Inputs::Deep(STACK)),
+    prove_in(Profile::Optimized, "benchSet", Inputs::Deep(STACK_SET), &[]),
     prove("tagColour", Inputs::Binary, &[anywhere(Op::DataToTag)]),
     prove("tagMaybe", Inputs::Binary, &[anywhere(Op::DataToTag)]),
     prove_in(
@@ -1293,3 +1307,7 @@ pub const TREE_SECOND: i64 = 23;
 
 /// Deep enough that a scalar tail call growing a native stack would be seen.
 pub const DEEP: (i64, i64) = (1_000_000, 1);
+
+pub const STACK: &[i64] = &[0, 1, 1_000, 200_000];
+pub const STACK_SET: &[i64] = &[0, 1, 1_000, 50_000];
+pub const STACK_SECOND: i64 = 3;
