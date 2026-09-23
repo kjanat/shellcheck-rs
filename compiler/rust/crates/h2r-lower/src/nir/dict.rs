@@ -97,8 +97,9 @@ fn probe_target(world: &World<'_>, module_index: usize, head: ExprId) -> Option<
     top_target(world, module_index, head).ok().flatten()
 }
 
-/// Split an application spine, refusing an interleaved one. Returns the head,
-/// the type arguments and the value arguments, all in source order.
+/// Split an application spine. Returns the head, the type arguments and the
+/// value arguments, each in source order; a dictionary may sit between two
+/// type arguments, and the target's lambdas say which comes first.
 pub(super) fn spine(
     module: &Module,
     mut current: ExprId,
@@ -111,8 +112,7 @@ pub(super) fn spine(
             Expr::App { fun, arg } => {
                 match module.expr(*arg) {
                     Expr::Type { ty, .. } => types.push(module.ty(*ty).clone()),
-                    _ if types.is_empty() => values.push(*arg),
-                    _ => return Err("interleaved type and value arguments".into()),
+                    _ => values.push(*arg),
                 }
                 current = *fun;
             }
@@ -268,14 +268,35 @@ pub(super) fn producer(
 /// The type one instance reference has, from its target's own signature.
 pub(super) fn reference_type(world: &World<'_>, reference: &DictionaryRef) -> Result<Ty, String> {
     let signature = world.at(reference.module)?.binder_ty(reference.binder);
-    let mut ty = instantiate::apply(signature, &reference.type_arguments)?;
-    for _ in &reference.dictionaries {
-        let Ty::Fun { res, .. } = ty else {
-            return Err(
-                "instance reference supplies more dictionaries than its target takes".into(),
-            );
+    instantiate_arguments(
+        signature,
+        &reference.type_arguments,
+        reference.dictionaries.len(),
+    )
+}
+
+/// Instantiate each quantifier and strip each dictionary arrow in the order
+/// the type states them.
+fn instantiate_arguments(signature: &Ty, types: &[Ty], dictionaries: usize) -> Result<Ty, String> {
+    let mut types = types;
+    let mut dictionaries = dictionaries;
+    let mut ty = signature.clone();
+    while !types.is_empty() || dictionaries > 0 {
+        ty = match (ty, types) {
+            (ty @ Ty::ForAll { .. }, [argument, rest @ ..]) => {
+                types = rest;
+                instantiate::apply(&ty, std::slice::from_ref(argument))?
+            }
+            (Ty::Fun { res, .. }, _) if dictionaries > 0 => {
+                dictionaries -= 1;
+                *res
+            }
+            _ => {
+                return Err(
+                    "instance reference supplies more arguments than its target takes".into(),
+                );
+            }
         };
-        ty = *res;
     }
     Ok(ty)
 }
@@ -439,6 +460,13 @@ pub(super) fn resolve_dictionary(
     resolve_dictionary(world, &inner, current, depth + 1)
 }
 
+/// One argument of an application spine, in source order.
+#[derive(Debug, Clone)]
+pub(super) enum SpineArg {
+    Type(Ty),
+    Value(ExprId),
+}
+
 /// One resolved call target: which instance the spine's head denotes, what it
 /// still expects at runtime, and which source arguments the instance key
 /// absorbed.
@@ -454,6 +482,9 @@ pub(super) struct CallTarget {
     pub erased: Vec<ExprId>,
     /// The head was a class method selector whose dictionary was proven unique.
     pub method: bool,
+    /// The method is its instance reference cast to the method's type, so the
+    /// call applies the reference as a closure at that type.
+    pub cast: bool,
 }
 
 /// Resolve an application spine's head to one instance, absorbing the leading
@@ -464,15 +495,32 @@ pub(super) fn call_target(
     world: &World<'_>,
     scope: &Scope<'_>,
     head: ExprId,
-    type_arguments: &[Ty],
-    argument_sources: &[ExprId],
+    arguments: &[SpineArg],
 ) -> Result<Option<CallTarget>, String> {
-    if let Some((_, _, method)) = selector(world, scope.module, head)?
-        && let [dictionary_source, rest @ ..] = argument_sources
+    let leading_types = arguments
+        .iter()
+        .take_while(|argument| matches!(argument, SpineArg::Type(_)))
+        .count();
+    if let Some((_, _, selector)) = selector(world, scope.module, head)?
+        && let [SpineArg::Value(dictionary_source), rest @ ..] = &arguments[leading_types..]
         && let Some(dictionary) = resolve_dictionary(world, scope, *dictionary_source, 0)?
-        && let Some(target) = field(world, &dictionary, &method, 0)?
+        && let Some(Method { reference, cast }) = method(world, &dictionary, &selector)?
     {
-        let mut resolved = absorb(world, scope, target, rest)?;
+        let (types, dictionaries) = (reference.type_arguments.len(), reference.dictionaries.len());
+        let mut resolved = absorb(world, scope, reference, rest)?;
+        if let Some(cast) = cast {
+            let to = instantiate_arguments(
+                &cast,
+                &resolved.reference.type_arguments[types..],
+                resolved.reference.dictionaries.len() - dictionaries,
+            )?;
+            let carrier = super::data::carrier(world, &to);
+            if carrier.is_none() || super::data::carrier(world, &resolved.signature) != carrier {
+                return Err("a method's cast must not change the carrier".into());
+            }
+            resolved.signature = to;
+            resolved.cast = true;
+        }
         resolved.erased.insert(0, *dictionary_source);
         resolved.method = true;
         return Ok(Some(resolved));
@@ -483,40 +531,54 @@ pub(super) fn call_target(
     let reference = DictionaryRef {
         module: target_module,
         binder,
-        type_arguments: type_arguments.to_vec(),
+        type_arguments: Vec::new(),
         dictionaries: Vec::new(),
     };
-    absorb(world, scope, reference, argument_sources).map(Some)
+    absorb(world, scope, reference, arguments).map(Some)
 }
 
-/// Absorb the leading argument sources that are proven-unique dictionaries into
-/// the instance key. The first argument that is not stops the absorption, so a
-/// dictionary that arrives later stays exactly where the source put it.
+/// Absorb the leading type arguments and proven-unique dictionaries into the
+/// instance key, in source order. The first value that is not a dictionary
+/// stops the absorption, so a dictionary that arrives later stays exactly where
+/// the source put it, and no type argument may follow it.
 fn absorb(
     world: &World<'_>,
     scope: &Scope<'_>,
     mut reference: DictionaryRef,
-    argument_sources: &[ExprId],
+    arguments: &[SpineArg],
 ) -> Result<CallTarget, String> {
     let mut erased = Vec::new();
-    let mut rest = argument_sources;
-    while let [source, tail @ ..] = rest {
-        let Some(dictionary) = resolve_dictionary(world, scope, *source, 0)? else {
-            break;
-        };
-        reference.dictionaries.push(dictionary);
-        erased.push(*source);
+    let mut rest = arguments;
+    while let [argument, tail @ ..] = rest {
+        match argument {
+            SpineArg::Type(ty) => reference.type_arguments.push(ty.clone()),
+            SpineArg::Value(source) => {
+                let Some(dictionary) = resolve_dictionary(world, scope, *source, 0)? else {
+                    break;
+                };
+                reference.dictionaries.push(dictionary);
+                erased.push(*source);
+            }
+        }
         rest = tail;
     }
+    let arguments = rest
+        .iter()
+        .map(|argument| match argument {
+            SpineArg::Value(source) => Ok(*source),
+            SpineArg::Type(_) => Err("type arguments must precede value arguments".to_string()),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let signature = reference_type(world, &reference)?;
     let arity = residual_arity(world, &reference)?;
     Ok(CallTarget {
         reference,
         signature,
         arity,
-        arguments: rest.to_vec(),
+        arguments,
         erased,
         method: false,
+        cast: false,
     })
 }
 
@@ -530,44 +592,108 @@ pub(super) fn field(
     if depth > DEPTH_BUDGET {
         return Ok(None);
     }
-    let Some(producer) = producer(world, dictionary.module, dictionary.binder)? else {
+    let Some(field) = FieldScope::read(world, dictionary, method)? else {
         return Ok(None);
     };
-    if producer.constructor != method.constructor || producer.fields.len() != method.fields {
-        return Err("dictionary layout disagrees with the selector's class".into());
-    }
-    if producer.type_params.len() != dictionary.type_arguments.len()
-        || producer.dictionary_params.len() != dictionary.dictionaries.len()
-    {
-        return Err("dictionary instantiation differs from its producer's binders".into());
-    }
-    let module = world.at(producer.module)?;
-    let mut types = Substitution::default();
-    for (binder, argument) in producer.type_params.iter().zip(&dictionary.type_arguments) {
-        let source = module.binder(*binder);
-        types.bind(
-            h2r_core_ir::TyVarId {
-                name: source.name.clone(),
-                occ: source.occ.clone(),
-                unique: source.unique.clone(),
-            },
-            argument.clone(),
-        )?;
-    }
-    let dictionaries: BTreeMap<_, _> = producer
-        .dictionary_params
-        .iter()
-        .copied()
-        .zip(dictionary.dictionaries.iter().cloned())
-        .collect();
-    let inner = Scope {
-        module: producer.module,
-        types: &types,
-        dictionaries: &dictionaries,
+    resolve_reference(world, &field.scope(), field.selected, depth + 1)
+}
+
+/// A class method as its dictionary holds it: an instance reference, and the
+/// type a cast around that reference gives the field.
+pub(super) struct Method {
+    pub reference: DictionaryRef,
+    pub cast: Option<Ty>,
+}
+
+/// Read one method of a known dictionary. GHC writes an eta-reduced method
+/// whose result is a newtype as its implementation cast to the method's type.
+pub(super) fn method(
+    world: &World<'_>,
+    dictionary: &DictionaryRef,
+    selector: &Selector,
+) -> Result<Option<Method>, String> {
+    let Some(mut field) = FieldScope::read(world, dictionary, selector)? else {
+        return Ok(None);
     };
-    let selected = *producer
-        .fields
-        .get(method.field)
-        .ok_or("selector field index is outside the dictionary's layout")?;
-    resolve_reference(world, &inner, selected, depth + 1)
+    let source = world.at(field.module)?;
+    while let Expr::Tick(body) = source.expr(field.selected) {
+        field.selected = *body;
+    }
+    let cast = match source.expr(field.selected) {
+        Expr::Cast {
+            expr, to: Some(to), ..
+        } => {
+            field.selected = *expr;
+            Some(field.types.apply(source.ty(*to)).into_owned())
+        }
+        Expr::Cast { .. } => return Ok(None),
+        _ => None,
+    };
+    Ok(resolve_reference(world, &field.scope(), field.selected, 1)?
+        .map(|reference| Method { reference, cast }))
+}
+
+/// The producer's scope at one dictionary, and the field a selector names.
+struct FieldScope {
+    types: Substitution,
+    dictionaries: BTreeMap<BinderId, DictionaryRef>,
+    module: usize,
+    selected: ExprId,
+}
+
+impl FieldScope {
+    fn read(
+        world: &World<'_>,
+        dictionary: &DictionaryRef,
+        method: &Selector,
+    ) -> Result<Option<FieldScope>, String> {
+        let Some(producer) = producer(world, dictionary.module, dictionary.binder)? else {
+            return Ok(None);
+        };
+        if producer.constructor != method.constructor || producer.fields.len() != method.fields {
+            return Err("dictionary layout disagrees with the selector's class".into());
+        }
+        if producer.type_params.len() != dictionary.type_arguments.len()
+            || producer.dictionary_params.len() != dictionary.dictionaries.len()
+        {
+            return Err("dictionary instantiation differs from its producer's binders".into());
+        }
+        let module = world.at(producer.module)?;
+        let mut types = Substitution::default();
+        for (binder, argument) in producer.type_params.iter().zip(&dictionary.type_arguments) {
+            let source = module.binder(*binder);
+            types.bind(
+                h2r_core_ir::TyVarId {
+                    name: source.name.clone(),
+                    occ: source.occ.clone(),
+                    unique: source.unique.clone(),
+                },
+                argument.clone(),
+            )?;
+        }
+        let dictionaries = producer
+            .dictionary_params
+            .iter()
+            .copied()
+            .zip(dictionary.dictionaries.iter().cloned())
+            .collect();
+        let selected = *producer
+            .fields
+            .get(method.field)
+            .ok_or("selector field index is outside the dictionary's layout")?;
+        Ok(Some(FieldScope {
+            types,
+            dictionaries,
+            module: producer.module,
+            selected,
+        }))
+    }
+
+    fn scope(&self) -> Scope<'_> {
+        Scope {
+            module: self.module,
+            types: &self.types,
+            dictionaries: &self.dictionaries,
+        }
+    }
 }

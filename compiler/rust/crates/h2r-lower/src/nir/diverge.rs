@@ -20,7 +20,7 @@
 //! needs, and `IdInfo.arity` — which for an imported Id records what this
 //! compilation inferred rather than what the function is — states neither.
 
-use h2r_core_ir::{Expr, ExprId, Module};
+use h2r_core_ir::{Expr, ExprId, Module, Ty};
 
 /// A call GHC's demand analysis proved is a dead end.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +51,31 @@ pub fn resolve(module: &Module, head: ExprId) -> Option<Divergent> {
     Some(Divergent {
         name: name.clone(),
         arity: info.dmd_sig.args.len(),
+    })
+}
+
+/// How many quantifiers the loaded world's own definition of a dead end binds,
+/// or `None` when no loaded module defines it.
+///
+/// GHC calls its wired-in `patError` at `forall (r :: RuntimeRep) (a :: TYPE r)`, and `base` defines it at `forall a`.
+pub fn defined_quantifiers<'a>(
+    world: impl IntoIterator<Item = &'a Module>,
+    divergent: &Divergent,
+) -> Option<usize> {
+    world.into_iter().find_map(|loaded| {
+        loaded
+            .top
+            .iter()
+            .flat_map(|group| &group.pairs)
+            .find(|pair| loaded.binder(pair.binder).name == divergent.name)
+            .map(|pair| {
+                std::iter::successors(Some(loaded.binder_ty(pair.binder)), |ty| match ty {
+                    Ty::ForAll { body, .. } => Some(body),
+                    _ => None,
+                })
+                .count()
+                    - 1
+            })
     })
 }
 

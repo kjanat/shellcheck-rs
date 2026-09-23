@@ -42,7 +42,8 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   reverseTail, lengthTail, consAppendRight,
   shifts, wordOrder, magicLazy, voidJoin,
   setSize, setMember, setOrder, mapLookup, mapStrings, mapUnion,
-  errorCall, errorCallComputed, setFindMin, undefinedUnused)
+  errorCall, errorCallComputed, setFindMin, undefinedUnused,
+  stateCollect, stateNumber, writerCollect, stateClass, rwsRecord, identityWalk)
 import GHC.Exts (Int(I#))
 import System.Environment (getArgs)
 
@@ -398,4 +399,16 @@ main = do
       (I# x, I# y) -> print (errorCallComputed x y)
     ["setFindMin", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (setFindMin x y)
+    ["stateCollect", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (stateCollect x y)
+    ["stateNumber", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (stateNumber x y)
+    ["writerCollect", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (writerCollect x y)
+    ["stateClass", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (stateClass x y)
+    ["rwsRecord", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (rwsRecord x y)
+    ["identityWalk", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (identityWalk x y)
     _ -> fail "expected a canary entry and its integer arguments"

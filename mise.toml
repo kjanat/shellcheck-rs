@@ -61,7 +61,7 @@ arg "[dir]" default="compiler/core-json" help="Core dump directory"
 flag "--fn <name>" required=#true help="Stable function name (quote names containing $)"
 '''
 run         = '''
-cargo locked-release --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers --fn "${usage_fn?}"
+cargo locked-release --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --fn "${usage_fn?}"
 '''
 
 [tasks."lower:program"]
@@ -71,7 +71,7 @@ usage       = '''
 arg "[dir]" default="compiler/core-json" help="Core dump directory"
 '''
 run         = '''
-cargo locked-release --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers
+cargo locked-release --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base
 '''
 
 [tasks."lower:coverage"]
@@ -86,7 +86,7 @@ for dump in compiler/core-json/*.core.json; do
   jq -e '.format == 6 and (.constructors | type == "array")' "$dump" >/dev/null
 done
 status=0
-target/release/h2r lower compiler/core-json --with compiler/library-json/containers --nir >"$out/nir.txt" 2>"$out/nir.stderr" || status=$?
+target/release/h2r lower compiler/core-json --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir >"$out/nir.txt" 2>"$out/nir.stderr" || status=$?
 if [ "$status" -ne 0 ]; then
   if [ "$status" -ne 1 ] || ! grep -Eq '^Error: NIR lowering incomplete: [0-9]+ live bindings refused$' "$out/nir.stderr"; then
     cat "$out/nir.stderr" >&2
@@ -94,7 +94,7 @@ if [ "$status" -ne 0 ]; then
   fi
 fi
 grep -E '^Live owners: [0-9]+ = [0-9]+ lowered \+ [0-9]+ refused; [0-9]+ dead skipped$' "$out/nir.txt"
-sha256sum target/release/h2r compiler/core-json/*.core.json compiler/library-json/containers/*.core.json >"$out/inputs.sha256"
+sha256sum target/release/h2r compiler/core-json/*.core.json compiler/library-json/containers/*.core.json compiler/library-json/transformers/*.core.json compiler/library-json/mtl/*.core.json compiler/library-json/base/*.core.json >"$out/inputs.sha256"
 (cd "$out" && sha256sum nir.txt nir.stderr >outputs.sha256)
 '''
 
@@ -113,7 +113,7 @@ mkdir -p "$out"
 set --
 [ -z "${usage_fn:-}" ] || set -- --fn "${usage_fn}"
 status=0
-target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --nir --specialize "$@" \
+target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --specialize "$@" \
   >"$out/specialize.txt" 2>"$out/specialize.stderr" || status=$?
 if [ "$status" -ne 0 ]; then
   if [ "$status" -ne 1 ] || ! grep -Eq '^Error: specialization incomplete: [0-9]+ instances refused$' "$out/specialize.stderr"; then
@@ -122,7 +122,7 @@ if [ "$status" -ne 0 ]; then
   fi
 fi
 grep -E '^(Instances|Specialized):' "$out/specialize.txt"
-sha256sum target/release/h2r "${usage_dir?}"/*.core.json compiler/library-json/containers/*.core.json >"$out/specialize.inputs.sha256"
+sha256sum target/release/h2r "${usage_dir?}"/*.core.json compiler/library-json/containers/*.core.json compiler/library-json/transformers/*.core.json compiler/library-json/mtl/*.core.json compiler/library-json/base/*.core.json >"$out/specialize.inputs.sha256"
 (cd "$out" && sha256sum specialize.txt specialize.stderr >specialize.sha256)
 '''
 
@@ -218,7 +218,7 @@ file              = "compiler/extract.sh"
 
 [tasks."extract:libraries"]
 description = "Extract the Core of the installed libraries the program links into compiler/library-json"
-run         = "compiler/extract-library.sh containers"
+run         = "for package in containers transformers mtl base; do compiler/extract-library.sh \"$package\"; done"
 
 [tasks.matrix]
 description = "Extract the GHC optimization matrix; optional profile names are forwarded"
@@ -406,7 +406,7 @@ arg "[dir]" default="compiler/core-json" help="Core dump directory"
 run         = '''
 set -eu
 cargo locked-build --bin h2r
-target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --nir --specialize --sites "${usage_subject?}"
+target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --specialize --sites "${usage_subject?}"
 '''
 
 [tasks."canary:library"]
@@ -428,5 +428,5 @@ arg "[dir]" default="compiler/core-json" help="Core dump directory"
 run         = '''
 set -eu
 cargo locked-build --bin h2r
-target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --nir --entries
+target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --entries
 '''

@@ -5032,6 +5032,130 @@ fn nir_specialization_world() -> Vec<Module> {
     modules
 }
 
+fn nir_interleaved_world() -> Vec<Module> {
+    use h2r_core_ir::{Ty, TyVarId};
+    let lib = vec![
+        (
+            binder(&sn("Lib", "later"), "later", "later"),
+            tylam("a", lam("ld", tylam("b", lam("lx", lvar("lx"))))),
+        ),
+        (
+            binder(&sn("Lib", "dictT"), "dictT", "dictT"),
+            app(
+                app(
+                    app(gvar(&sn("Types", "C:C"), "C:C"), type_arg(0, "T")),
+                    gvar(&sn("Lib", "tm1"), "tm1"),
+                ),
+                gvar(&sn("Lib", "tm2"), "tm2"),
+            ),
+        ),
+        (
+            binder(&sn("Lib", "tm1"), "tm1", "tm1"),
+            lam("t1", lvar("t1")),
+        ),
+        (
+            binder(&sn("Lib", "tm2"), "tm2", "tm2"),
+            lam("t2", lvar("t2")),
+        ),
+    ];
+    let main = vec![(
+        binder(&sn("Main", "useLater"), "useLater", "useLater"),
+        lam(
+            "yl",
+            app(
+                app(
+                    app(
+                        app(gvar(&sn("Lib", "later"), "later"), type_arg(0, "T")),
+                        gvar(&sn("Lib", "dictT"), "dictT"),
+                    ),
+                    type_arg(1, "U"),
+                ),
+                lvar("yl"),
+            ),
+        ),
+    )];
+    let mut modules = vec![
+        module("Main", main, json!({})),
+        module("Lib", lib, json!({})),
+    ];
+    let mut types = specialization_types();
+    let variable = |name: &str| TyVarId {
+        name: format!("$_in${name}"),
+        occ: name.into(),
+        unique: name.into(),
+    };
+    let arrow = |arg: Ty, res: Ty| Ty::Fun {
+        mult: Box::new(types[0].clone()),
+        arg: Box::new(arg),
+        res: Box::new(res),
+    };
+    let b = Ty::Var(variable("b"));
+    let later = Ty::ForAll {
+        binder: variable("a"),
+        body: Box::new(arrow(
+            types[7].clone(),
+            Ty::ForAll {
+                binder: variable("b"),
+                body: Box::new(arrow(b.clone(), b.clone())),
+            },
+        )),
+    };
+    types.push(later);
+    types.push(b);
+    for m in &mut modules {
+        m.types = types.clone();
+        m.constructors = vec![
+            class_constructor(),
+            nullary_constructor("T", 0),
+            nullary_constructor("U", 1),
+        ];
+    }
+    for (occ, ty, arity) in [
+        ("later", 13, 2),
+        ("dictT", 8, 0),
+        ("tm1", 2, 1),
+        ("tm2", 2, 1),
+        ("useLater", 3, 1),
+        ("ld", 7, 0),
+        ("lx", 14, 0),
+        ("t1", 0, 0),
+        ("t2", 0, 0),
+        ("yl", 1, 0),
+    ] {
+        set_binder(&mut modules, occ, ty, arity, "");
+    }
+    set_binder(&mut modules, "dictT", 8, 0, "[DFunId]");
+    modules
+}
+
+#[test]
+fn specialization_absorbs_a_dictionary_between_type_arguments() {
+    use crate::nir::specialize::{Instance, specialize};
+    let modules = nir_interleaved_world();
+    let root = Instance::whole(0, owner_of(&modules, 0, "useLater"));
+    let program = specialize(&modules, &[root]).unwrap();
+    assert!(program.refused.is_empty());
+    let later = owner_of(&modules, 1, "later");
+    let dict_t = owner_of(&modules, 1, "dictT");
+    let (index, instance) = program
+        .instances
+        .iter()
+        .enumerate()
+        .find(|(_, instance)| instance.module == 1 && instance.binder == later)
+        .expect("later is specialized");
+    assert_eq!(
+        instance.type_arguments,
+        vec![modules[1].types[0].clone(), modules[1].types[1].clone()]
+    );
+    assert_eq!(instance.dictionaries.len(), 1);
+    assert_eq!(instance.dictionaries[0].binder, dict_t);
+    let leaf = program.leaf(index).expect("lowered");
+    assert_eq!(leaf.type_instantiations.len(), 2);
+    assert_eq!(leaf.dictionary_parameters.len(), 1);
+    assert_eq!(leaf.function.blocks[0].params.len(), 1);
+    assert_eq!(leaf.function.blocks[0].params[0].ty, modules[1].types[1]);
+}
+
 fn class_case(
     scrut: Value,
     case_binder: &str,

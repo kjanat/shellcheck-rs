@@ -333,49 +333,69 @@ pub(super) fn bind_type_arguments(
     type_arguments: &[Ty],
 ) -> Result<(Substitution, Ty), String> {
     let mut subst = Substitution::default();
-    let mut signature = module.binder_ty(owner).clone();
+    let signature = module.binder_ty(owner).clone();
     if type_arguments.is_empty() {
         return Ok((subst, signature));
     }
-    let mut current = rhs;
-    for argument in type_arguments {
-        if !linkage::closed_type(argument) {
-            return Err("specialization requires closed structured type arguments".into());
-        }
-        while let Expr::Tick(body) = module.expr(current) {
-            current = *body;
-        }
-        let Expr::Lam { binder, body } = module.expr(current) else {
-            return Err("instance has more type arguments than the owner binds".into());
-        };
-        let source = module.binder(*binder);
-        if source.kind != BinderKind::Tyvar {
-            return Err("instance type argument meets a value lambda".into());
-        }
-        let Ty::ForAll {
-            binder: quantifier,
-            body: result,
-        } = signature
-        else {
-            return Err("specialized type lambda needs a forall type".into());
-        };
-        let mut instantiated = *result;
-        super::subst::substitute_capture_safe(&mut instantiated, &quantifier.unique, argument);
-        signature = instantiated;
-        subst.bind(
-            TyVarId {
-                name: source.name.clone(),
-                occ: source.occ.clone(),
-                unique: source.unique.clone(),
-            },
-            argument.clone(),
-        )?;
-        current = *body;
-    }
+    let signature = bind_lambdas(module, rhs, signature, type_arguments, &mut subst)?;
     if !linkage::closed_type(&signature) {
         return Err("specialized signature is not closed".into());
     }
     Ok((subst, signature))
+}
+
+/// Instantiate each type lambda's quantifier in lambda order. A value lambda
+/// between two type lambdas keeps its arrow, and the quantifiers after it are
+/// instantiated inside its result.
+fn bind_lambdas(
+    module: &Module,
+    mut current: ExprId,
+    signature: Ty,
+    type_arguments: &[Ty],
+    subst: &mut Substitution,
+) -> Result<Ty, String> {
+    let [argument, rest @ ..] = type_arguments else {
+        return Ok(signature);
+    };
+    if !linkage::closed_type(argument) {
+        return Err("specialization requires closed structured type arguments".into());
+    }
+    while let Expr::Tick(body) = module.expr(current) {
+        current = *body;
+    }
+    let Expr::Lam { binder, body } = module.expr(current) else {
+        return Err("instance has more type arguments than the owner binds".into());
+    };
+    let source = module.binder(*binder);
+    if source.kind != BinderKind::Tyvar {
+        let Ty::Fun { mult, arg, res } = signature else {
+            return Err("value lambda needs a function type".into());
+        };
+        let res = bind_lambdas(module, *body, *res, type_arguments, subst)?;
+        return Ok(Ty::Fun {
+            mult,
+            arg,
+            res: Box::new(res),
+        });
+    }
+    let Ty::ForAll {
+        binder: quantifier,
+        body: result,
+    } = signature
+    else {
+        return Err("specialized type lambda needs a forall type".into());
+    };
+    let mut instantiated = *result;
+    super::subst::substitute_capture_safe(&mut instantiated, &quantifier.unique, argument);
+    subst.bind(
+        TyVarId {
+            name: source.name.clone(),
+            occ: source.occ.clone(),
+            unique: source.unique.clone(),
+        },
+        argument.clone(),
+    )?;
+    bind_lambdas(module, *body, instantiated, rest, subst)
 }
 
 struct BodyContext<'a> {
@@ -505,10 +525,11 @@ fn external_spine(
 
 /// A saturated call to a binding GHC proved never returns.
 ///
-/// Direct calls must be outside the loaded world. Inside an empty case, a
-/// lexical top-level binding's own demand signature can also establish that
-/// the scrutinee never returns. Neither proof establishes runtime behavior:
-/// the resulting terminator is analysis-only and cannot be emitted.
+/// Direct calls must be outside the loaded world, or pass more type arguments
+/// than the world's definition binds. Inside an empty case, any divergent
+/// global qualifies, and so does a lexical top-level binding's own demand
+/// signature. Neither proof establishes runtime behavior: the resulting
+/// terminator is analysis-only and cannot be emitted.
 fn divergent_spine(
     context: &BodyContext<'_>,
     current: ExprId,
@@ -532,14 +553,17 @@ fn divergent_spine(
         head = *scrut;
     }
     let mut values = 0usize;
+    let mut types = 0usize;
     while let Expr::App { fun, arg } = module.expr(head) {
-        if !matches!(module.expr(*arg), Expr::Type { .. }) {
+        if matches!(module.expr(*arg), Expr::Type { .. }) {
+            types += 1;
+        } else {
             values += 1;
         }
         head = *fun;
     }
-    if current != head
-        && matches!(module.expr(current), Expr::Case { .. })
+    let empty_case = current != head && matches!(module.expr(current), Expr::Case { .. });
+    if empty_case
         && let Some(binder) = module.resolve(head)
         && matches!(module.binding(binder).site, BindSite::Top)
     {
@@ -562,14 +586,11 @@ fn divergent_spine(
     if values < divergent.arity {
         return None;
     }
-    let defined_here = context.world().iter().any(|(_, loaded)| {
-        loaded
-            .top
-            .iter()
-            .flat_map(|group| &group.pairs)
-            .any(|pair| loaded.binder(pair.binder).name == divergent.name)
-    });
-    (!defined_here).then_some(divergent)
+    match diverge::defined_quantifiers(context.world().iter().map(|(_, loaded)| loaded), &divergent)
+    {
+        Some(bound) if !empty_case && types <= bound => None,
+        _ => Some(divergent),
+    }
 }
 
 /// The one operation a resolved primop denotes. Its carriers were already
@@ -851,22 +872,19 @@ fn lower_value(
     let mut head = current;
     let mut sources = Vec::new();
     let mut types = Vec::new();
+    let mut interleaved = false;
     while let Expr::App { fun, arg } = module.expr(head) {
         if let Expr::Type { ty, .. } = module.expr(*arg) {
             types.push(view.ty(*ty).clone());
         } else {
-            if !types.is_empty() {
-                return Err(fail(
-                    Some(current),
-                    "type arguments must precede value arguments",
-                ));
-            }
+            interleaved |= !types.is_empty();
             sources.push(*arg);
         }
         head = *fun;
     }
-    if let Some(fields) = data::unboxed_tuple_worker(&world, module_index, head, ty)
-        .map_err(|e| fail(Some(current), &e).about(type_head(ty)))?
+    if !interleaved
+        && let Some(fields) = data::unboxed_tuple_worker(&world, module_index, head, ty)
+            .map_err(|e| fail(Some(current), &e).about(type_head(ty)))?
     {
         sources.reverse();
         types.reverse();
@@ -909,8 +927,9 @@ fn lower_value(
         });
         return Ok(value);
     }
-    if let Some(constructor) = data::resolve(&world, module_index, head, ty)
-        .map_err(|e| fail(Some(current), &e).about(type_head(ty)))?
+    if !interleaved
+        && let Some(constructor) = data::resolve(&world, module_index, head, ty)
+            .map_err(|e| fail(Some(current), &e).about(type_head(ty)))?
     {
         sources.reverse();
         types.reverse();
@@ -1498,27 +1517,34 @@ fn lower_value(
         }
         Expr::App { arg, .. } if !matches!(module.expr(*arg), Expr::Type { .. }) => {
             let mut head = current;
-            let mut argument_sources = Vec::new();
-            let mut type_arguments = Vec::new();
+            let mut spine = Vec::new();
             while let Expr::App { fun, arg } = module.expr(head) {
-                if let Expr::Type { ty, .. } = module.expr(*arg) {
-                    type_arguments.push(view.ty(*ty).clone());
-                    head = *fun;
-                    continue;
-                }
-                // Traversal is right-to-left: after reaching type arguments,
-                // another value argument would mean an interleaved spine.
-                if !type_arguments.is_empty() {
-                    return Err(fail(
-                        Some(head),
-                        "type arguments must precede value arguments",
-                    ));
-                }
-                argument_sources.push(*arg);
+                spine.push(match module.expr(*arg) {
+                    Expr::Type { ty, .. } => dict::SpineArg::Type(view.ty(*ty).clone()),
+                    _ => dict::SpineArg::Value(*arg),
+                });
                 head = *fun;
             }
-            argument_sources.reverse();
-            type_arguments.reverse();
+            spine.reverse();
+            let leading = spine
+                .iter()
+                .take_while(|argument| matches!(argument, dict::SpineArg::Type(_)))
+                .count();
+            let type_arguments: Vec<Ty> = spine[..leading]
+                .iter()
+                .filter_map(|argument| match argument {
+                    dict::SpineArg::Type(ty) => Some(ty.clone()),
+                    dict::SpineArg::Value(_) => None,
+                })
+                .collect();
+            let argument_sources: Vec<ExprId> = spine[leading..]
+                .iter()
+                .filter_map(|argument| match argument {
+                    dict::SpineArg::Value(source) => Some(*source),
+                    dict::SpineArg::Type(_) => None,
+                })
+                .collect();
+            let interleaved = leading + argument_sources.len() != spine.len();
             let primitive = primitive::resolve(module, head);
             let constructor = boxed::resolves(module, head);
             let local = module
@@ -1545,24 +1571,24 @@ fn lower_value(
                 || local.is_some()
                 || indirect.is_some()
             {
+                if interleaved {
+                    return Err(fail(
+                        Some(head),
+                        "type arguments must precede value arguments",
+                    ));
+                }
                 None
             } else {
                 Some(
-                    dict::call_target(
-                        &context.world(),
-                        &context.scope(),
-                        head,
-                        &type_arguments,
-                        &argument_sources,
-                    )
-                    .map_err(|reason| named(module, head, fail(Some(head), &reason)))?
-                    .ok_or_else(|| {
-                        named(
-                            module,
-                            head,
-                            fail(Some(head), "application requires a top-level binding"),
-                        )
-                    })?,
+                    dict::call_target(&context.world(), &context.scope(), head, &spine)
+                        .map_err(|reason| named(module, head, fail(Some(head), &reason)))?
+                        .ok_or_else(|| {
+                            named(
+                                module,
+                                head,
+                                fail(Some(head), "application requires a top-level binding"),
+                            )
+                        })?,
                 )
             };
             let head_ty = cast_head.as_ref().unwrap_or_else(|| {
@@ -1606,6 +1632,7 @@ fn lower_value(
             };
             let apply = cast_head.is_some()
                 || indirect.is_some()
+                || target.as_ref().is_some_and(|resolved| resolved.cast)
                 || arity != Some(argument_sources.len() as u32);
             if apply {
                 // Four different things end up here, and saying which one is

@@ -37,15 +37,11 @@
 -- Usage:
 --
 -- > ghc -fplugin=H2R.CorePlugin -fplugin-opt=H2R.CorePlugin:outdir=core-json ...
---
--- @unit=<id>@ names the home unit @<id>@ in the dump.  GHC cannot compile a
--- home unit whose id is one the loaded plugin itself depends on.
 module H2R.CorePlugin (plugin) where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson
 import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as BL
 import Data.List (foldl', intercalate, stripPrefix)
 import qualified Data.Map.Strict as M
@@ -53,7 +49,6 @@ import Data.Bits (shiftR, xor, (.&.))
 import qualified Data.ByteString as BS
 import Data.Char (ord)
 import qualified Data.Set as S
-import qualified Data.Text as T
 import Data.Maybe (fromMaybe, isJust)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>), (<.>))
@@ -86,35 +81,16 @@ plugin = defaultPlugin
 -- | Run last, so we see Core as it would be handed to CorePrep/STG.
 install :: [CommandLineOption] -> [CoreToDo] -> CoreM [CoreToDo]
 install opts todos =
-    return $ todos ++ [CoreDoPluginPass "H2RDumpCore"
-                         (dumpPass (fromMaybe "core-json" (lookupOpt "outdir=" opts))
-                                   (lookupOpt "unit=" opts))]
+    return $ todos ++ [CoreDoPluginPass "H2RDumpCore" (dumpPass (optOutDir opts))]
 
-lookupOpt :: String -> [CommandLineOption] -> Maybe String
-lookupOpt prefix opts =
-    case [rest | o <- opts, Just rest <- [stripPrefix prefix o]] of
-        (x:_) -> Just x
-        []    -> Nothing
-
--- | Rewrite every stable name of one unit to another's, and the string
--- literal GHC writes the unit id as, in @SrcLoc@ and @$trModule@.
-renameUnit :: String -> String -> Value -> Value
-renameUnit from to = go
+optOutDir :: [CommandLineOption] -> FilePath
+optOutDir opts =
+    fromMaybe "core-json" $ lookupOpt "outdir="
   where
-    fromT = T.pack ("$" ++ from ++ "$")
-    toT   = T.pack ("$" ++ to ++ "$")
-    rename s = maybe s (T.append toT) (T.stripPrefix fromT s)
-    hex = T.pack . hexBytes . BS.pack . map (fromIntegral . ord)
-    unitLiteral o = KM.lookup "kind" o == Just (String "string")
-        && KM.lookup "bytes" o == Just (String (hex from))
-    go (String s) = String (rename s)
-    go (Object o)
-        | unitLiteral o = Object (KM.insert "bytes" (String (hex to))
-                                    (KM.insert "pretty" (String (T.pack (show to ++ "#"))) o))
-        | otherwise = Object (KM.fromList [ (Key.fromText (rename (Key.toText k)), go v)
-                                          | (k, v) <- KM.toList o ])
-    go (Array a)  = Array (fmap go a)
-    go v          = v
+    lookupOpt prefix =
+        case [rest | o <- opts, Just rest <- [stripPrefix prefix o]] of
+            (x:_) -> Just x
+            []    -> Nothing
 
 -- | Serialise the module's Core with __CoreTidy's structure, names and
 -- finalised @IdInfo@, and the pre-tidy facts CoreTidy discards joined back
@@ -268,16 +244,14 @@ renameUnit from to = go
 -- wanted — the dump becomes the program GHC itself hands to codegen, so a
 -- class-op selector or a constructor wrapper another module refers to is a
 -- real top-level binding of this one.
-dumpPass :: FilePath -> Maybe String -> ModGuts -> CoreM ModGuts
-dumpPass outDir unitAs guts = do
+dumpPass :: FilePath -> ModGuts -> CoreM ModGuts
+dumpPass outDir guts = do
     dflags   <- getDynFlags
     hscEnv   <- getHscEnv
     tidyOpts <- liftIO (initTidyOpts hscEnv)
     (cgGuts, _details) <- liftIO (tidyProgram tidyOpts guts)
     let modName   = moduleNameString (moduleName (mg_module guts))
-        homeUnit  = unitString (moduleUnit (mg_module guts))
-        unitStr   = fromMaybe homeUnit unitAs
-        retarget  = maybe id (renameUnit homeUnit) unitAs
+        unitStr   = unitString (moduleUnit (mg_module guts))
         exportSet = availsToNameSet (mg_exports guts)
         preBinds  = mg_binds guts
         sptOn     = isJust (opt_static_ptr_opts tidyOpts)
@@ -290,7 +264,7 @@ dumpPass outDir unitAs guts = do
     liftIO $ do
         createDirectoryIfMissing True outDir
         BL.writeFile (outDir </> modName <.> "core.json")
-                     (encode (retarget (moduleJ dflags modName unitStr exportSet slots)))
+                     (encode (moduleJ dflags modName unitStr exportSet slots))
         -- Explicit UTF-8: the compiler's locale need not be one, and the
         -- log carries GHC's own pretty-printed output.
         withFile (outDir </> modName <.> "tidy-align" <.> "txt") WriteMode $ \h ->

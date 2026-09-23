@@ -832,23 +832,34 @@ fn verify_value(
     }
     match module.expr(expr) {
         Expr::App { arg, .. } if !matches!(module.expr(*arg), Expr::Type { .. }) => {
-            let mut source_args = Vec::new();
-            let mut source_types = Vec::new();
+            let mut spine = Vec::new();
             let mut head = expr;
             while let Expr::App { fun, arg } = module.expr(head) {
-                if let Expr::Type { ty, .. } = module.expr(*arg) {
-                    source_types.push(view.ty(*ty).clone());
-                    head = *fun;
-                    continue;
-                }
-                if !source_types.is_empty() {
-                    return Err("source call interleaves type and value arguments".into());
-                }
-                source_args.push(*arg);
+                spine.push(match module.expr(*arg) {
+                    Expr::Type { ty, .. } => dict::SpineArg::Type(view.ty(*ty).clone()),
+                    _ => dict::SpineArg::Value(*arg),
+                });
                 head = *fun;
             }
-            source_args.reverse();
-            source_types.reverse();
+            spine.reverse();
+            let source_types: Vec<Ty> = spine
+                .iter()
+                .filter_map(|argument| match argument {
+                    dict::SpineArg::Type(ty) => Some(ty.clone()),
+                    dict::SpineArg::Value(_) => None,
+                })
+                .collect();
+            let source_args: Vec<ExprId> = spine
+                .iter()
+                .filter_map(|argument| match argument {
+                    dict::SpineArg::Value(source) => Some(*source),
+                    dict::SpineArg::Type(_) => None,
+                })
+                .collect();
+            let interleaved = spine
+                .iter()
+                .skip_while(|argument| matches!(argument, dict::SpineArg::Type(_)))
+                .any(|argument| matches!(argument, dict::SpineArg::Type(_)));
             value_applications = source_args.len();
             type_applications = source_types.len();
             let primitive = primitive::resolve(module, head);
@@ -874,17 +885,14 @@ fn verify_value(
                 || local.is_some()
                 || indirect.is_some()
             {
+                if interleaved {
+                    return Err("source call interleaves type and value arguments".into());
+                }
                 None
             } else {
                 Some(
-                    dict::call_target(
-                        &context.world(),
-                        &context.scope(),
-                        head,
-                        &source_types,
-                        &source_args,
-                    )?
-                    .ok_or("source application requires a top-level binding")?,
+                    dict::call_target(&context.world(), &context.scope(), head, &spine)?
+                        .ok_or("source application requires a top-level binding")?,
                 )
             };
             // The dictionary arguments the instance key absorbed are still
@@ -931,6 +939,7 @@ fn verify_value(
             };
             let apply = cast_head.is_some()
                 || indirect.is_some()
+                || target.as_ref().is_some_and(|resolved| resolved.cast)
                 || arity != Some(source_args.len() as u32);
             if apply
                 && (primitive.is_some()
@@ -2068,13 +2077,17 @@ fn divergent_spine(
         head = *scrut;
     }
     let mut values = 0usize;
+    let mut types = 0usize;
     while let Expr::App { fun, arg } = module.expr(head) {
-        if !matches!(module.expr(*arg), Expr::Type { .. }) {
+        if matches!(module.expr(*arg), Expr::Type { .. }) {
+            types += 1;
+        } else {
             values += 1;
         }
         head = *fun;
     }
-    if matches!(module.expr(current), Expr::Case { .. })
+    let empty_case = matches!(module.expr(current), Expr::Case { .. });
+    if empty_case
         && let Some(binder) = module.resolve(head)
         && matches!(module.binding(binder).site, h2r_core_ir::BindSite::Top)
     {
@@ -2095,14 +2108,11 @@ fn divergent_spine(
     if values < divergent.arity {
         return None;
     }
-    let defined_here = context.world().iter().any(|(_, loaded)| {
-        loaded
-            .top
-            .iter()
-            .flat_map(|group| &group.pairs)
-            .any(|pair| loaded.binder(pair.binder).name == divergent.name)
-    });
-    (!defined_here).then_some(divergent)
+    match diverge::defined_quantifiers(context.world().iter().map(|(_, loaded)| loaded), &divergent)
+    {
+        Some(bound) if !empty_case && types <= bound => None,
+        _ => Some(divergent),
+    }
 }
 
 /// The same spine the builder recognises, re-derived from the source alone.
@@ -2199,7 +2209,7 @@ fn verify_unboxed_tuple(
         match module.expr(*arg) {
             Expr::Type { ty, .. } => types.push(view.ty(*ty).clone()),
             _ if types.is_empty() => args.push(*arg),
-            _ => return Err("interleaved source unboxed tuple spine".into()),
+            _ => return Ok(None),
         }
         head = *fun;
     }
@@ -2290,7 +2300,7 @@ fn verify_constructor(
         match module.expr(*arg) {
             Expr::Type { ty, .. } => types.push(view.ty(*ty).clone()),
             _ if types.is_empty() => args.push(*arg),
-            _ => return Err("interleaved source constructor spine".into()),
+            _ => return Ok(None),
         }
         head = *fun;
     }

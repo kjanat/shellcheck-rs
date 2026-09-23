@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnboxedTuples #-}
 module Canary (forward, constant, add, subtractInt, multiply, composed, chained, shared,
@@ -41,7 +42,8 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   reverseTail, lengthTail, consAppendRight,
   shifts, wordOrder, magicLazy, voidJoin,
   setSize, setMember, setOrder, mapLookup, mapStrings, mapUnion,
-  errorCall, errorCallComputed, setFindMin, undefinedUnused) where
+  errorCall, errorCallComputed, setFindMin, undefinedUnused,
+  stateCollect, stateNumber, writerCollect, stateClass, rwsRecord, patternFail, identityWalk) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#),
   Char(C#), Char#, ord#, chr#, eqChar#, neChar#, ltChar#, leChar#, gtChar#, geChar#,
@@ -49,6 +51,13 @@ import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#
   int2Word#, leWord#, lazy)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+import Data.Functor.Identity (Identity (..))
+import qualified Control.Monad.Trans.State as State
+import qualified Control.Monad.Trans.Writer as Writer
+import qualified Control.Monad.Trans.RWS as RWS
+import qualified Control.Monad.State.Class as MonadState
+import qualified Control.Monad.Reader.Class as MonadReader
+import qualified Control.Monad.Writer.Class as MonadWriter
 import Helpers (first, crossPoly, crossApply, Sized(..), Described(..), Small(..))
 import GHC.Base (eqString)
 import qualified GHC.List as List
@@ -841,6 +850,11 @@ undefinedUnused :: Int# -> Int# -> Int#
 undefinedUnused x _ = case boxedIgnore (I# x) undefined of
   I# n -> n
 
+{-# NOINLINE patternFail #-}
+patternFail :: Int# -> Int# -> Int
+patternFail x _ = case x of
+  0# -> 1
+
 --------------------------------------------------------------------------------
 -- Text-processing programs.
 --
@@ -1353,6 +1367,68 @@ mapStrings x y =
 {-# NOINLINE mapUnion #-}
 mapUnion :: Int# -> Int# -> Int
 mapUnion x y = Map.foldr (+) 0 (Map.unionWith (-) (Map.fromList [(I# x, 100), (1, 7)]) (Map.fromList [(I# y, 3), (1, 2)]))
+
+--------------------------------------------------------------------------------
+-- transformers and mtl, compiled from their own source into the world beside
+-- this module. OPAQUE keeps GHC from specialising a monad's dictionary away.
+--------------------------------------------------------------------------------
+
+{-# OPAQUE stepEach #-}
+stepEach :: Monad m => (Int -> m ()) -> [Int] -> m ()
+stepEach _ [] = return ()
+stepEach f (v : vs) = f v >> stepEach f vs
+
+{-# OPAQUE stepsA #-}
+stepsA :: Applicative m => (Int -> m Int) -> [Int] -> m [Int]
+stepsA _ [] = pure []
+stepsA f (v : vs) = (:) <$> f v <*> stepsA f vs
+
+{-# NOINLINE inputs #-}
+inputs :: Int# -> Int# -> [Int]
+inputs x y = [I# x, I# y, 7, I# (x -# y)]
+
+{-# NOINLINE stateCollect #-}
+stateCollect :: Int# -> Int# -> Int
+stateCollect x y = weighted (State.execState (stepEach (\v -> State.modify (v :)) (inputs x y)) []) 1
+
+{-# NOINLINE stateNumber #-}
+stateNumber :: Int# -> Int# -> Int
+stateNumber x y = weighted (State.evalState (stepsA number (inputs x y)) (I# y)) 1
+  where
+    number (I# v) = State.state (\(I# n) -> (I# (v *# n), I# (n +# 1#)))
+
+{-# NOINLINE writerCollect #-}
+writerCollect :: Int# -> Int# -> Int
+writerCollect x y = weighted (Writer.execWriter (stepEach (\v -> Writer.tell [v, v]) (inputs x y))) 1
+
+{-# NOINLINE identityWalk #-}
+identityWalk :: Int# -> Int# -> Int
+identityWalk x y = weighted (runIdentity (stepsA double (inputs x y))) 1
+  where
+    double (I# v) = Identity (I# (v *# 2#))
+
+{-# OPAQUE push #-}
+push :: MonadState.MonadState [Int] m => Int -> m ()
+push v = MonadState.modify (v :)
+
+{-# NOINLINE stateClass #-}
+stateClass :: Int# -> Int# -> Int
+stateClass x y = weighted (State.execState (stepEach push (inputs x y)) []) 1
+
+{-# OPAQUE record #-}
+record :: (MonadReader.MonadReader Int m, MonadWriter.MonadWriter [Int] m, MonadState.MonadState Int m)
+  => Int -> m ()
+record (I# v) = do
+  I# r <- MonadReader.ask
+  I# s <- MonadState.get
+  MonadWriter.tell [I# (v *# r +# s)]
+  MonadState.put (I# (s +# 1#))
+
+{-# NOINLINE rwsRecord #-}
+rwsRecord :: Int# -> Int# -> Int
+rwsRecord x y = case RWS.runRWS (stepEach record (inputs x y)) (I# y) (I# x) of
+  (_, I# s, w) -> case weighted w 1 of
+    I# total -> I# (total +# s)
 
 --------------------------------------------------------------------------------
 -- error, whose uncaught message ends in the call stack GHC built at its call site.

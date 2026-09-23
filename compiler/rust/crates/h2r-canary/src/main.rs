@@ -69,7 +69,16 @@ struct Cli {
     #[arg(long)]
     no_library: bool,
     /// Library dumps loaded beside every program's own, from `extract:libraries`.
-    #[arg(long = "with", value_name = "DIR", default_values = ["compiler/library-json/containers"])]
+    #[arg(
+        long = "with",
+        value_name = "DIR",
+        default_values = [
+            "compiler/library-json/containers",
+            "compiler/library-json/transformers",
+            "compiler/library-json/mtl",
+            "compiler/library-json/base",
+        ]
+    )]
     with: Vec<PathBuf>,
 }
 

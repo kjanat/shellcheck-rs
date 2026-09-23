@@ -412,57 +412,61 @@ pub const REFUSALS: &[Refusal] = &[
         when: When::Only(Profile::Unoptimized),
         because: Some("an Eq dictionary this backend does not implement"),
     },
-    // `-O0` calls `GHC.List.length` itself, which ShellCheck never reaches;
-    // `-O1` inlines it to the `$wlenAcc` worker these entries exist for.
-    Refusal {
-        entry: Entry::Occurrence("lengthChars"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("lengthLazy"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
-    },
     Refusal {
         entry: Entry::Occurrence("mapLookup"),
-        when: When::Both,
+        when: When::Only(Profile::Unoptimized),
         because: Some("imported binding is outside the loaded world"),
     },
     Refusal {
         entry: Entry::Occurrence("mapUnion"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("imported binding is outside the loaded world"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("patternFail"),
         when: When::Both,
-        because: Some("imported binding is outside the loaded world"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("errorCall"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("errorCallComputed"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("errorUnusedArgument"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("errorUnusedLet"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("errorUnusedShared"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
+        because: Some("unimplemented non-returning call"),
     },
     Refusal {
         entry: Entry::Occurrence("undefinedUnused"),
+        when: When::Both,
+        because: Some("imported binding is outside the loaded world"),
+    },
+    // `$fMonadStateT`'s `return` field is a cast lambda.
+    Refusal {
+        entry: Entry::Occurrence("stateCollect"),
+        when: When::Both,
+        because: Some("instance has more type arguments than the owner binds"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("stateNumber"),
+        when: When::Both,
+        because: Some("instance has more type arguments than the owner binds"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("writerCollect"),
         when: When::Only(Profile::Optimized),
-        because: Some("unimplemented non-returning call"),
+        because: Some("reference is neither a parameter nor a top-level binding"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("writerCollect"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("instance has more type arguments than the owner binds"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("stateClass"),
+        when: When::Both,
+        because: Some("instance has more type arguments than the owner binds"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("rwsRecord"),
+        when: When::Both,
+        because: Some("type arguments must precede value arguments"),
+    },
+    Refusal {
+        entry: Entry::Occurrence("identityWalk"),
+        when: When::Only(Profile::Unoptimized),
+        because: Some("value applications are not lowered yet"),
     },
 ];
 
@@ -552,22 +556,12 @@ pub const ERROR_PROBES: &[Probe] = &[
     probe("takeWhileElement", 0, Some(b"list element")),
     probe("dropWhileSpine", 0, Some(b"list spine")),
     probe("reverseTail", 0, Some(b"list tail")),
-    optimized_probe("lengthTail", 0, b"list tail"),
+    probe("lengthTail", 0, Some(b"list tail")),
     probe("consAppendRight", 0, Some(b"list spine")),
     probe("consAppendRight", 2, Some(b"list spine")),
-    located_probe(
-        When::Only(Profile::Optimized),
-        "errorCall",
-        0,
-        b"canary error",
-    ),
-    located_probe(
-        When::Only(Profile::Optimized),
-        "errorCallComputed",
-        2,
-        b"mab",
-    ),
-    located_probe(When::Only(Profile::Optimized), "errorCallComputed", 0, b"m"),
+    located_probe(When::Both, "errorCall", 0, b"canary error"),
+    located_probe(When::Both, "errorCallComputed", 2, b"mab"),
+    located_probe(When::Both, "errorCallComputed", 0, b"m"),
     located_probe(
         When::Only(Profile::Optimized),
         "setFindMin",
@@ -1082,17 +1076,19 @@ pub const FIXTURES: &[Fixture] = &[
     // by base's `SC:++0`; `-O0` calls `reverse` and `(++)` themselves.
     prove("reverseChars", Inputs::Binary, REVERSE),
     prove("reverseLazy", Inputs::Binary, REVERSE),
-    prove_in(
-        Profile::Optimized,
+    prove(
         "lengthChars",
         Inputs::Binary,
-        &[anywhere(Op::ListFunction(ListOp::Length))],
+        &[optimized(Evidence::ClosureOperation(Op::ListFunction(
+            ListOp::Length,
+        )))],
     ),
-    prove_in(
-        Profile::Optimized,
+    prove(
         "lengthLazy",
         Inputs::Binary,
-        &[anywhere(Op::ListFunction(ListOp::Length))],
+        &[optimized(Evidence::ClosureOperation(Op::ListFunction(
+            ListOp::Length,
+        )))],
     ),
     prove("consAppend", Inputs::Binary, CONS_APPEND),
     prove("consAppendLazy", Inputs::Binary, CONS_APPEND),
@@ -1143,6 +1139,31 @@ pub const FIXTURES: &[Fixture] = &[
         "mapStrings",
         Inputs::Binary,
         &[anywhere(Op::CompareStrings)],
+    ),
+    // `Identity`'s `Functor` and `Applicative` methods are casts of top-level bindings.
+    prove_in(
+        Profile::Optimized,
+        "identityWalk",
+        Inputs::Binary,
+        &[
+            optimized(Evidence::SpecializedOn {
+                type_arguments: 1,
+                dictionaries: 1,
+            }),
+            optimized(Evidence::InstancesComplete),
+        ],
+    ),
+    prove_in(
+        Profile::Optimized,
+        "mapLookup",
+        Inputs::Binary,
+        &[optimized(Evidence::InstancesComplete)],
+    ),
+    prove_in(
+        Profile::Optimized,
+        "mapUnion",
+        Inputs::Binary,
+        &[optimized(Evidence::InstancesComplete)],
     ),
     prove("tagColour", Inputs::Binary, &[anywhere(Op::DataToTag)]),
     prove("tagMaybe", Inputs::Binary, &[anywhere(Op::DataToTag)]),
@@ -1220,31 +1241,24 @@ pub const FIXTURES: &[Fixture] = &[
         &[op(Op::UnboxedTupleField)],
     ),
     // `error`, bound and never demanded: the call is built and never raised.
-    // `-O0` builds the call stack with base's `pushCallStack`, refused above.
-    prove_in(
-        Profile::Optimized,
+    prove(
         "errorUnusedArgument",
         Inputs::Binary,
         &[anywhere(Op::RaiseCallStackError)],
     ),
-    prove_in(
-        Profile::Optimized,
+    prove(
         "errorUnusedLet",
         Inputs::Binary,
         &[anywhere(Op::RaiseCallStackError)],
     ),
-    prove_in(
-        Profile::Optimized,
+    prove(
         "errorUnusedShared",
         Inputs::Binary,
         &[anywhere(Op::RaiseCallStackError)],
     ),
-    // `undefined` has no implementation, only GHC's demand evidence that it
-    // never returns, which is analysis and not behaviour: emission is refused
-    // above. GHC writes that evidence into the interface only under `-O1`.
-    prove_in(
-        Profile::Optimized,
-        "undefinedUnused",
+    // GHC calls its wired-in `patError` at more type arguments than base's definition binds.
+    prove(
+        "patternFail",
         Inputs::EvidenceOnly,
         &[both(Evidence::ClosureRule(RuleKind::Diverge))],
     ),
