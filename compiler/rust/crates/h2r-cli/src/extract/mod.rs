@@ -155,6 +155,7 @@ pub fn world() -> (PathBuf, Vec<PathBuf>) {
         "regex-tdfa",
         "fgl",
         "array",
+        "Diff",
     ];
     let mut with: Vec<PathBuf> = libraries
         .iter()

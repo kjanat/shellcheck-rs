@@ -117,9 +117,11 @@ pub struct Lazy<T, C: ?Sized = dyn Code<T>> {
     code: C,
 }
 
+pub type Deferred<T> = Box<dyn FnOnce() -> Thunk<T>>;
+
 pub trait Code<T> {
     fn enter(&self) -> Option<Thunk<T>>;
-    fn fill(&self, code: Box<dyn FnOnce() -> Thunk<T>>) -> bool;
+    fn fill(&self, code: Deferred<T>) -> bool;
 }
 
 struct Once<F>(Cell<Option<F>>);
@@ -128,18 +130,18 @@ impl<T, F: FnOnce() -> Thunk<T>> Code<T> for Once<F> {
     fn enter(&self) -> Option<Thunk<T>> {
         self.0.take().map(|f| f())
     }
-    fn fill(&self, _: Box<dyn FnOnce() -> Thunk<T>>) -> bool {
+    fn fill(&self, _: Deferred<T>) -> bool {
         false
     }
 }
 
-struct Pending<T>(Cell<Option<Box<dyn FnOnce() -> Thunk<T>>>>);
+struct Pending<T>(Cell<Option<Deferred<T>>>);
 
 impl<T> Code<T> for Pending<T> {
     fn enter(&self) -> Option<Thunk<T>> {
         self.0.take().map(|f| f())
     }
-    fn fill(&self, code: Box<dyn FnOnce() -> Thunk<T>>) -> bool {
+    fn fill(&self, code: Deferred<T>) -> bool {
         self.0.replace(Some(code)).is_none()
     }
 }
@@ -868,7 +870,8 @@ fn unpack_at(
             Field::Data(Data::defer(move || {
                 unpack_at(bytes, next, encoding, names, tail)
             })),
-        ].into(),
+        ]
+        .into(),
     }
 }
 
@@ -1052,7 +1055,8 @@ pub fn append_list(left: Data, right: Data, names: ListNames) -> Data {
             fields: [
                 node.fields[0].clone(),
                 Field::Data(append_list(tail, right, names)),
-            ].into(),
+            ]
+            .into(),
         })
     })))
 }
@@ -1110,7 +1114,8 @@ pub fn map_list(
                     input,
                     output,
                 )),
-            ].into(),
+            ]
+            .into(),
         }
     })
 }
@@ -1132,7 +1137,8 @@ pub fn filter_list(predicate: Closure, list: Data, names: ListNames, truth: Trut
                     fields: [
                         head,
                         Field::Data(filter_list(predicate, tail, names, truth)),
-                    ].into(),
+                    ]
+                    .into(),
                 };
             }
             list = tail;
@@ -1156,7 +1162,8 @@ pub fn take_while(predicate: Closure, list: Data, names: ListNames, truth: Truth
             fields: [
                 head,
                 Field::Data(take_while(predicate, cell.fields[1].data(), names, truth)),
-            ].into(),
+            ]
+            .into(),
         }
     })
 }
@@ -1525,6 +1532,77 @@ pub fn string_argument(text: &str, names: StringNames) -> Data {
                 ],
             )
         })
+}
+
+pub fn string_value(value: &Data, names: StringNames) -> String {
+    characters(value, names)
+        .into_iter()
+        .map(|code| {
+            u32::try_from(code)
+                .ok()
+                .and_then(char::from_u32)
+                .expect("a String crossing to Rust holds Unicode scalar values")
+        })
+        .collect()
+}
+
+pub fn list_argument(elements: Vec<Field>, names: ListNames) -> Data {
+    elements
+        .into_iter()
+        .rev()
+        .fold(Data::ready(names.nil, []), |tail, head| {
+            Data::ready(names.cons, [head, Field::Data(tail)])
+        })
+}
+
+pub fn list_fields(list: &Data, names: ListNames) -> Vec<Field> {
+    let mut elements = Vec::new();
+    let mut cell = list.clone();
+    loop {
+        let node = cell.force();
+        if node.constructor == names.nil {
+            return elements;
+        }
+        assert_eq!(node.constructor, names.cons);
+        elements.push(node.fields[0].clone());
+        cell = node.fields[1].data();
+    }
+}
+
+pub fn on_program_stack<R: Send + 'static>(run: impl FnOnce() -> R + Send + 'static) -> R {
+    let memory = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("MemTotal:"))
+                .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
+        })
+        .map_or(1 << 30, |kib| kib / 5 * 4 * 1024);
+    let run = std::sync::Arc::new(std::sync::Mutex::new(Some(run)));
+    let mut size = memory;
+    loop {
+        let task = run.clone();
+        let started = std::thread::Builder::new()
+            .stack_size(usize::try_from(size).unwrap_or(usize::MAX))
+            .spawn(move || {
+                let run = task
+                    .lock()
+                    .expect("program lock")
+                    .take()
+                    .expect("program runs once");
+                run()
+            });
+        match started {
+            Ok(thread) => {
+                return match thread.join() {
+                    Ok(value) => value,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                };
+            }
+            Err(_) if size > 64 << 20 => size /= 2,
+            Err(error) => panic!("cannot start the program's thread: {error}"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1900,6 +1978,22 @@ mod append_tests {
     }
 
     #[test]
+    fn values_cross_between_rust_and_haskell_unchanged() {
+        let names = ListNames {
+            cons: STRING.cons,
+            nil: STRING.nil,
+        };
+        let text = "a\tλ🐚";
+        assert_eq!(string_value(&string_argument(text, STRING), STRING), text);
+        assert_eq!(string_value(&Data::ready(STRING.nil, []), STRING), "");
+        let list = list_argument(vec![Field::Int64(3), Field::Int64(-1)], names);
+        let read: Vec<i64> = list_fields(&list, names).iter().map(Field::int64).collect();
+        assert_eq!(read, [3, -1]);
+        assert!(list_fields(&list_argument(Vec::new(), names), names).is_empty());
+        assert_eq!(on_program_stack(|| 6 * 7), 42);
+    }
+
+    #[test]
     fn put_lines_writes_each_string_and_counts_them() {
         let cons = |head: &str, tail: Data| {
             Data::ready(
@@ -1910,10 +2004,7 @@ mod append_tests {
                 ],
             )
         };
-        let list = cons(
-            "a.sh:1:1: note: x",
-            cons("λ", Data::ready(STRING.nil, [])),
-        );
+        let list = cons("a.sh:1:1: note: x", cons("λ", Data::ready(STRING.nil, [])));
         let mut out = Vec::new();
         assert_eq!(put_lines(list, STRING, &mut out), 2);
         assert_eq!(String::from_utf8(out).unwrap(), "a.sh:1:1: note: x\nλ\n");

@@ -88,6 +88,39 @@ pub fn boxed_checks(source: &Path, binary: &Path, canary_dir: &Path) -> Result<(
     ))
 }
 
+/// Compile the `--test` harness that calls a typed API crate, and run it.
+pub fn api_checks(source: &Path, binary: &Path, crates: &Path) -> Result<(), String> {
+    let compiled = Command::new("rustc")
+        .arg("--edition=2024")
+        .arg("--test")
+        .arg("-L")
+        .arg(format!("all={}", crates.display()))
+        .arg(source)
+        .arg("-o")
+        .arg(binary)
+        .output()
+        .map_err(|error| format!("running rustc: {error}"))?;
+    if !compiled.status.success() {
+        return Err(format!(
+            "rustc rejected {}:\n{}",
+            source.display(),
+            String::from_utf8_lossy(&compiled.stderr)
+        ));
+    }
+    let ran = Command::new(binary)
+        .output()
+        .map_err(|error| format!("running {}: {error}", binary.display()))?;
+    if ran.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} failed:\n{}{}",
+        binary.display(),
+        String::from_utf8_lossy(&ran.stdout),
+        String::from_utf8_lossy(&ran.stderr)
+    ))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
     pub stdout: Vec<u8>,

@@ -1,0 +1,9 @@
+cabal-version: 2.4
+name: h2r-entry
+version: 0.1.0.0
+build-type: Simple
+
+library
+  exposed-modules: ShellCheckEntry
+  build-depends: base >= 4.18 && < 4.19, array, containers, Diff, ShellCheck
+  default-language: Haskell2010

@@ -555,6 +555,7 @@ struct Prepared<'a> {
     specialization: &'a specialize::Specialization,
     leaves: &'a BTreeMap<usize, &'a LoweredLeaf>,
     edges: &'a BTreeMap<usize, BTreeSet<usize>>,
+    roots: usize,
     adapter: String,
 }
 
@@ -562,35 +563,52 @@ struct Prepared<'a> {
 pub enum Driver {
     Print,
     Lint,
+    Api,
 }
 
 fn prepare<R>(
     modules: &[Module],
-    entry: &str,
+    entries: &[&str],
     driver: Driver,
     emit: impl FnOnce(Prepared<'_>) -> Result<R, String>,
 ) -> Result<R, String> {
-    if !h2r_core_ir::is_external_name(entry) {
-        return Err("Rust emission requires an external stable entry name".into());
+    if entries.is_empty() || (driver != Driver::Api && entries.len() > 1) {
+        return Err("a program runs one entry, and only a typed API takes several".into());
     }
-    let matches: Vec<_> = modules
-        .iter()
-        .enumerate()
-        .flat_map(|(m, module)| {
-            module
-                .top
-                .iter()
-                .flat_map(|group| &group.pairs)
-                .filter(move |pair| module.binder(pair.binder).name == entry)
-                .map(move |pair| (m, pair.binder))
-        })
-        .collect();
-    let [(root_module, root_binder)] = matches.as_slice() else {
-        return Err(format!("entry matched {} definitions", matches.len()));
-    };
+    let mut roots = Vec::new();
+    for &entry in entries {
+        if !h2r_core_ir::is_external_name(entry) {
+            return Err("Rust emission requires an external stable entry name".into());
+        }
+        let matches: Vec<_> = modules
+            .iter()
+            .enumerate()
+            .flat_map(|(m, module)| {
+                module
+                    .top
+                    .iter()
+                    .flat_map(|group| &group.pairs)
+                    .filter(move |pair| module.binder(pair.binder).name == entry)
+                    .map(move |pair| (m, pair.binder))
+            })
+            .collect();
+        let [(root_module, root_binder)] = matches.as_slice() else {
+            return Err(format!(
+                "entry {entry} matched {} definitions",
+                matches.len()
+            ));
+        };
+        let root = Instance::whole(*root_module, *root_binder);
+        if roots.contains(&root) {
+            return Err(format!("entry {entry} is named twice"));
+        }
+        roots.push(root);
+    }
     let specialization =
-        specialize::specialize(modules, &[Instance::whole(*root_module, *root_binder)])
-            .map_err(|error| error.to_string())?;
+        specialize::specialize(modules, &roots).map_err(|error| error.to_string())?;
+    if specialization.instances[..roots.len()] != roots[..] {
+        return Err("the specialization did not number the entries first".into());
+    }
     let catalog = crate::nir::Catalog::of(modules);
     let evidence = crate::nir::World::cataloged(modules, 0, &catalog)?;
     let world = &evidence;
@@ -634,22 +652,76 @@ fn prepare<R>(
             .collect::<Vec<_>>()
             .join("\n"));
     }
-    let entry_function = &leaves[&0].function;
-    let direct_arity = entry_function.blocks[0].params.len();
-    let mut entry_types: Vec<_> = entry_function.blocks[0]
-        .params
-        .iter()
-        .map(|p| &*p.ty)
-        .collect();
-    let mut entry_result = &entry_function.result_ty;
-    while let Ty::Fun { arg, res, .. } = entry_result {
-        entry_types.push(arg);
-        entry_result = res;
-    }
     let mut adapter = String::new();
-    let arity = entry_types.len();
-    if direct_arity == arity {
-        writeln!(adapter, "#[allow(unused_imports)]\nuse f_0 as h2r_entry;").unwrap();
+    for (index, &entry) in entries.iter().enumerate() {
+        let name = match driver {
+            Driver::Api => format!("h2r_entry_{index}"),
+            Driver::Print | Driver::Lint => "h2r_entry".to_string(),
+        };
+        let entry_function = &leaves[&index].function;
+        let direct_arity = entry_function.blocks[0].params.len();
+        let mut entry_types: Vec<_> = entry_function.blocks[0]
+            .params
+            .iter()
+            .map(|p| &*p.ty)
+            .collect();
+        let mut entry_result = &entry_function.result_ty;
+        while let Ty::Fun { arg, res, .. } = entry_result {
+            entry_types.push(arg);
+            entry_result = res;
+        }
+        entry_adapter(
+            world,
+            index,
+            &name,
+            direct_arity,
+            &entry_types,
+            entry_result,
+            &mut adapter,
+        );
+        match driver {
+            Driver::Print => print_main(world, &mut adapter, &entry_types, entry_result)?,
+            Driver::Lint => lint_main(world, &mut adapter, &entry_types, entry_result)?,
+            Driver::Api => {
+                api_function(
+                    world,
+                    &mut adapter,
+                    entry,
+                    &name,
+                    &entry_types,
+                    entry_result,
+                )?;
+            }
+        }
+    }
+    if driver == Driver::Api {
+        writeln!(adapter, "pub use h2r_rt::on_program_stack;").unwrap();
+    }
+    emit(Prepared {
+        world,
+        specialization: &specialization,
+        leaves: &leaves,
+        edges: &edges,
+        roots: entries.len(),
+        adapter,
+    })
+}
+
+fn entry_adapter(
+    world: &World<'_>,
+    index: usize,
+    name: &str,
+    direct_arity: usize,
+    entry_types: &[&Ty],
+    entry_result: &Ty,
+    adapter: &mut String,
+) {
+    if direct_arity == entry_types.len() {
+        writeln!(
+            adapter,
+            "#[allow(unused_imports)]\nuse f_{index} as {name};"
+        )
+        .unwrap();
     } else {
         let params = entry_types
             .iter()
@@ -670,28 +742,16 @@ fn prepare<R>(
             .join(", ");
         writeln!(
             adapter,
-            "fn h2r_entry({params}) -> {} {{ {} }}",
+            "fn {name}({params}) -> {} {{ {} }}",
             carrier(world, entry_result),
             unpack(
                 world,
                 entry_result,
-                &format!("f_0({direct}).apply(vec![{extra}])")
+                &format!("f_{index}({direct}).apply(vec![{extra}])")
             )
         )
         .unwrap();
     }
-    match driver {
-        Driver::Print => print_main(world, &mut adapter, &entry_types, entry_result)?,
-        Driver::Lint => lint_main(world, &mut adapter, &entry_types, entry_result)?,
-    }
-    adapter.push_str(PROGRAM_STACK);
-    emit(Prepared {
-        world,
-        specialization: &specialization,
-        leaves: &leaves,
-        edges: &edges,
-        adapter,
-    })
 }
 
 fn print_main(
@@ -722,7 +782,7 @@ fn print_main(
     for function in &shows.functions {
         adapter.push_str(function);
     }
-    writeln!(adapter, "fn main() {{\n    let raw: Vec<String> = std::env::args().skip(1).collect();\n    assert_eq!(raw.len(), {arity}, \"wrong argument count\");\n    h2r_on_program_stack(move || println!(\"{{}}\", {result}));\n}}").unwrap();
+    writeln!(adapter, "fn main() {{\n    let raw: Vec<String> = std::env::args().skip(1).collect();\n    assert_eq!(raw.len(), {arity}, \"wrong argument count\");\n    h2r_rt::on_program_stack(move || println!(\"{{}}\", {result}));\n}}").unwrap();
     Ok(())
 }
 
@@ -750,7 +810,7 @@ fn lint_main(
     }}
     let status = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
     let shared = status.clone();
-    h2r_on_program_stack(move || {{
+    h2r_rt::on_program_stack(move || {{
         let mut out = std::io::BufWriter::new(std::io::stdout().lock());
         for path in paths {{
             match std::fs::read(&path) {{
@@ -778,7 +838,7 @@ fn lint_main(
 }
 
 pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
-    prepare(modules, entry, Driver::Print, |prepared| {
+    prepare(modules, &[entry], Driver::Print, |prepared| {
         let mut out = functions(
             prepared.world,
             prepared.specialization,
@@ -807,11 +867,11 @@ const RUNTIME_ALIASES: &str = "#[allow(unused_imports)]\nuse h2r_rt::Int as HInt
 
 pub fn emit_entry_split(
     modules: &[Module],
-    entry: &str,
+    entries: &[&str],
     budget: usize,
     driver: Driver,
 ) -> Result<SplitProgram, String> {
-    prepare(modules, entry, driver, |prepared| {
+    prepare(modules, entries, driver, |prepared| {
         let world = prepared.world;
         let has_boxed = has_boxed(world, prepared.leaves);
         let mut code = BTreeMap::new();
@@ -880,18 +940,22 @@ pub fn emit_entry_split(
                 dependencies: dependencies.into_iter().map(name).collect(),
             });
         }
-        let entry_crate = name(crate_of[&0]);
+        let entry_crates: BTreeSet<String> = (0..prepared.roots)
+            .map(|index| name(crate_of[&index]))
+            .collect();
         let mut main = String::from(
             "#[cfg(not(target_pointer_width = \"64\"))]\ncompile_error!(\"Int# backend requires a 64-bit target\");\n",
         );
         main.push_str(RUNTIME_ALIASES);
-        writeln!(main, "use {entry_crate}::*;").unwrap();
+        for entry_crate in &entry_crates {
+            writeln!(main, "use {entry_crate}::*;").unwrap();
+        }
         main.push_str(&prepared.adapter);
         Ok(SplitProgram {
             runtime: include_str!("../../h2r-rt/src/lib.rs").to_string(),
             crates,
             main,
-            main_dependencies: vec![entry_crate],
+            main_dependencies: entry_crates.into_iter().collect(),
         })
     })
 }
@@ -970,38 +1034,6 @@ fn components(edges: &BTreeMap<usize, BTreeSet<usize>>) -> Vec<Vec<usize>> {
 const PROGRAM_CHUNK: usize = 64;
 
 // GHC's default maximum stack is 80% of physical memory.
-const PROGRAM_STACK: &str = r#"fn h2r_on_program_stack(run: impl FnOnce() + Send + 'static) {
-    let memory = std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|text| {
-            text.lines()
-                .find_map(|line| line.strip_prefix("MemTotal:"))
-                .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
-        })
-        .map_or(1 << 30, |kib| kib / 5 * 4 * 1024);
-    let run = std::sync::Arc::new(std::sync::Mutex::new(Some(run)));
-    let mut size = memory;
-    loop {
-        let task = run.clone();
-        let started = std::thread::Builder::new()
-            .stack_size(usize::try_from(size).unwrap_or(usize::MAX))
-            .spawn(move || {
-                let run = task.lock().expect("program lock").take().expect("program runs once");
-                run()
-            });
-        match started {
-            Ok(thread) => {
-                if let Err(panic) = thread.join() {
-                    std::panic::resume_unwind(panic);
-                }
-                return;
-            }
-            Err(_) if size > 64 << 20 => size /= 2,
-            Err(error) => panic!("cannot start the program's thread: {error}"),
-        }
-    }
-}
-"#;
 
 pub struct Program {
     pub source: String,
@@ -2226,6 +2258,294 @@ pub(crate) fn big_nat_limbs(lit: &h2r_core_ir::Lit) -> Result<Vec<u64>, String> 
         }
     }
     Ok(limbs)
+}
+
+enum Shape {
+    Int,
+    Bool {
+        false_: String,
+        true_: String,
+    },
+    String,
+    List(Ty),
+    Maybe {
+        nothing: String,
+        just: String,
+        element: Ty,
+    },
+    Either {
+        left: (String, Ty),
+        right: (String, Ty),
+    },
+    Tuple {
+        constructor: String,
+        fields: Vec<Ty>,
+    },
+    Function {
+        arguments: Vec<Ty>,
+        result: Ty,
+    },
+}
+
+fn shape(world: &World<'_>, ty: &Ty) -> Result<Shape, String> {
+    let ty = represented(world, ty);
+    if boxed::is_int(&ty) {
+        return Ok(Shape::Int);
+    }
+    if let Ty::Fun { .. } = ty {
+        let mut arguments = Vec::new();
+        let mut result = ty;
+        while let Ty::Fun { arg, res, .. } = result {
+            arguments.push(*arg);
+            result = represented(world, &res);
+        }
+        return Ok(Shape::Function { arguments, result });
+    }
+    if let Some(element) = ty.list_elem() {
+        return Ok(if element.is_char() {
+            Shape::String
+        } else {
+            Shape::List(element.clone())
+        });
+    }
+    let refuse = || {
+        format!(
+            "a typed API carries Int, Bool, String, lists, Maybe, Either, tuples and functions, not {}",
+            ty.render()
+        )
+    };
+    let Ty::Con { tycon, .. } = &ty else {
+        return Err(refuse());
+    };
+    let mut family = data::family(world, &ty)?;
+    family.sort_by_key(|constructor| constructor.tag);
+    match (tycon.name.as_str(), family.as_mut_slice()) {
+        ("$ghc-prim$GHC.Types$Bool", [false_, true_]) => Ok(Shape::Bool {
+            false_: false_.name.clone(),
+            true_: true_.name.clone(),
+        }),
+        ("$base$GHC.Maybe$Maybe", [nothing, just]) if just.fields.len() == 1 => Ok(Shape::Maybe {
+            nothing: nothing.name.clone(),
+            just: just.name.clone(),
+            element: just.fields.remove(0),
+        }),
+        ("$base$Data.Either$Either", [left, right])
+            if left.fields.len() == 1 && right.fields.len() == 1 =>
+        {
+            Ok(Shape::Either {
+                left: (left.name.clone(), left.fields.remove(0)),
+                right: (right.name.clone(), right.fields.remove(0)),
+            })
+        }
+        (_, [tuple]) if tycon.occ.starts_with("(,") => Ok(Shape::Tuple {
+            constructor: tuple.name.clone(),
+            fields: std::mem::take(&mut tuple.fields),
+        }),
+        _ => Err(refuse()),
+    }
+}
+
+fn list_names(world: &World<'_>, element: &Ty) -> Result<String, String> {
+    let (nil, cons) = data::list_layouts(world, element)?;
+    Ok(format!(
+        "HListNames {{ cons: {:?}, nil: {:?} }}",
+        cons.name, nil.name
+    ))
+}
+
+fn rust_type(world: &World<'_>, ty: &Ty) -> Result<String, String> {
+    Ok(match shape(world, ty)? {
+        Shape::Int => "i64".into(),
+        Shape::Bool { .. } => "bool".into(),
+        Shape::String => "String".into(),
+        Shape::List(element) => format!("Vec<{}>", rust_type(world, &element)?),
+        Shape::Maybe { element, .. } => format!("Option<{}>", rust_type(world, &element)?),
+        Shape::Either { left, right } => format!(
+            "Result<{}, {}>",
+            rust_type(world, &right.1)?,
+            rust_type(world, &left.1)?
+        ),
+        Shape::Function { arguments, result } => format!(
+            "std::rc::Rc<dyn Fn({}) -> {}>",
+            arguments
+                .iter()
+                .map(|argument| rust_type(world, argument))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", "),
+            rust_type(world, &result)?
+        ),
+        Shape::Tuple { fields, .. } => format!(
+            "({})",
+            fields
+                .iter()
+                .map(|field| rust_type(world, field))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ")
+        ),
+    })
+}
+
+fn into_field(world: &World<'_>, ty: &Ty, value: &str) -> Result<String, String> {
+    Ok(match shape(world, ty)? {
+        Shape::Int => format!("HField::Int(HInt::ready({value}))"),
+        Shape::Bool { false_, true_ } => {
+            format!(
+                "HField::Data(HData::ready(if {value} {{ {true_:?} }} else {{ {false_:?} }}, []))"
+            )
+        }
+        Shape::String => format!(
+            "HField::Data(h2r_rt::string_argument(&{value}, {}))",
+            string_names(world)?
+        ),
+        Shape::List(element) => format!(
+            "HField::Data(h2r_rt::list_argument({value}.into_iter().map(|e| {}).collect(), {}))",
+            into_field(world, &element, "e")?,
+            list_names(world, &element)?
+        ),
+        Shape::Maybe {
+            nothing,
+            just,
+            element,
+        } => format!(
+            "HField::Data(match {value} {{ Some(e) => HData::ready({just:?}, [{}]), None => HData::ready({nothing:?}, []) }})",
+            into_field(world, &element, "e")?
+        ),
+        Shape::Either { left, right } => format!(
+            "HField::Data(match {value} {{ Ok(e) => HData::ready({:?}, [{}]), Err(e) => HData::ready({:?}, [{}]) }})",
+            right.0,
+            into_field(world, &right.1, "e")?,
+            left.0,
+            into_field(world, &left.1, "e")?
+        ),
+        Shape::Function { arguments, result } => {
+            let read = arguments
+                .iter()
+                .enumerate()
+                .map(|(index, argument)| from_field(world, argument, &format!("a[{index}]")))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ");
+            format!(
+                "HField::Closure({{ let f = {value}; HClosure::ready({}, move |a| {{ let r = f({read}); {} }}) }})",
+                arguments.len(),
+                into_field(world, &result, "r")?
+            )
+        }
+        Shape::Tuple {
+            constructor,
+            fields,
+        } => {
+            let components = fields
+                .iter()
+                .enumerate()
+                .map(|(index, field)| into_field(world, field, &format!("t.{index}")))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ");
+            let collection = if fields.len() <= 3 { "" } else { "vec!" };
+            format!(
+                "HField::Data({{ let t = {value}; HData::ready({constructor:?}, {collection}[{components}]) }})"
+            )
+        }
+    })
+}
+
+fn from_field(world: &World<'_>, ty: &Ty, field: &str) -> Result<String, String> {
+    Ok(match shape(world, ty)? {
+        Shape::Int => format!("{field}.int().force()"),
+        Shape::Bool { true_, .. } => {
+            format!("{{ let d = {field}.data(); d.force().constructor == {true_:?} }}")
+        }
+        Shape::String => format!(
+            "h2r_rt::string_value(&{field}.data(), {})",
+            string_names(world)?
+        ),
+        Shape::List(element) => format!(
+            "h2r_rt::list_fields(&{field}.data(), {}).into_iter().map(|e| {}).collect::<Vec<_>>()",
+            list_names(world, &element)?,
+            from_field(world, &element, "e")?
+        ),
+        Shape::Maybe { just, element, .. } => format!(
+            "{{ let d = {field}.data(); let n = d.force(); if n.constructor == {just:?} {{ Some({}) }} else {{ None }} }}",
+            from_field(world, &element, "n.fields[0]")?
+        ),
+        Shape::Either { left, right } => format!(
+            "{{ let d = {field}.data(); let n = d.force(); if n.constructor == {:?} {{ Ok({}) }} else {{ Err({}) }} }}",
+            right.0,
+            from_field(world, &right.1, "n.fields[0]")?,
+            from_field(world, &left.1, "n.fields[0]")?
+        ),
+        Shape::Function { .. } => {
+            return Err(
+                "a typed API passes Rust functions into Haskell and returns no Haskell function"
+                    .into(),
+            );
+        }
+        Shape::Tuple { fields, .. } => {
+            let components = fields
+                .iter()
+                .enumerate()
+                .map(|(index, field)| from_field(world, field, &format!("n.fields[{index}]")))
+                .collect::<Result<Vec<_>, _>>()?;
+            let components = match components.as_slice() {
+                [one] => format!("{one},"),
+                many => many.join(", "),
+            };
+            format!("{{ let d = {field}.data(); let n = d.force(); ({components}) }}")
+        }
+    })
+}
+
+fn api_function(
+    world: &World<'_>,
+    adapter: &mut String,
+    entry: &str,
+    adapter_name: &str,
+    entry_types: &[&Ty],
+    entry_result: &Ty,
+) -> Result<(), String> {
+    let occ = entry.rsplit('$').next().unwrap_or_default();
+    if !occ.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
+        || !occ.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(format!(
+            "a typed API names its function after the entry, and {occ:?} is not a Rust identifier"
+        ));
+    }
+    let name: String = occ
+        .chars()
+        .flat_map(|c| {
+            let separator = c.is_ascii_uppercase().then_some('_');
+            separator
+                .into_iter()
+                .chain(std::iter::once(c.to_ascii_lowercase()))
+        })
+        .collect();
+    let parameters = entry_types
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| Ok(format!("a{index}: {}", rust_type(world, ty)?)))
+        .collect::<Result<Vec<_>, String>>()?
+        .join(", ");
+    let arguments = entry_types
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            Ok(unpack(
+                world,
+                ty,
+                &format!("({})", into_field(world, ty, &format!("a{index}"))?),
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?
+        .join(", ");
+    let result = pack(world, entry_result, &format!("{adapter_name}({arguments})"));
+    writeln!(
+        adapter,
+        "pub fn {name}({parameters}) -> {} {{\n    let r = {result};\n    {}\n}}",
+        rust_type(world, entry_result)?,
+        from_field(world, entry_result, "r")?
+    )
+    .unwrap();
+    Ok(())
 }
 
 fn string_names(world: &World<'_>) -> Result<String, String> {

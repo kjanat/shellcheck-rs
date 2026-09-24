@@ -13,7 +13,6 @@ use h2r_analysis::laziness::{Census, Class, Fate, Origin, TopClass};
 use h2r_analysis::shape::{ArgShape, Position};
 use h2r_core_ir::{BinderKind, Expr, Module, load_dir, with_big_stack};
 
-mod build;
 mod extract;
 mod lower;
 mod m23;
@@ -40,7 +39,7 @@ enum Command {
         #[arg(
             long,
             conflicts_with_all = ["dir", "with"],
-            help = "Load the ShellCheck world: the program, its eleven libraries and the entry module"
+            help = "Load the ShellCheck world: the program, its twelve libraries and the entry module"
         )]
         world: bool,
         #[arg(long)]
@@ -58,11 +57,12 @@ enum Command {
         #[arg(
             long,
             conflicts_with_all = ["dir", "with"],
-            help = "Load the ShellCheck world: the program, its eleven libraries and the entry module"
+            help = "Load the ShellCheck world: the program, its twelve libraries and the entry module"
         )]
         world: bool,
-        #[arg(long)]
-        entry: String,
+        /// The binding to compile. Repeatable with `--api`, one Rust function each.
+        #[arg(long, required = true)]
+        entry: Vec<String>,
         #[arg(long)]
         out: PathBuf,
         /// Source bytes one crate may hold before the next one starts; a larger component gets a crate to itself.
@@ -71,8 +71,11 @@ enum Command {
         #[arg(long, default_value = "1")]
         opt_level: String,
         /// Build a linter: the entry is `FilePath -> String -> [String]`, applied to each path argument and its file.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "api")]
         lint: bool,
+        /// Build DIR/libh2r_entry.rlib: a Rust function named after the entry, over Rust types, instead of a program.
+        #[arg(long)]
+        api: bool,
     },
     /// Compile the crates build-rust emitted into DIR, in the order its manifest lists them.
     CompileRust {
@@ -419,7 +422,7 @@ enum Command {
         #[arg(
             long,
             conflicts_with_all = ["dir", "with"],
-            help = "Load the ShellCheck world: the program, its eleven libraries and the entry module"
+            help = "Load the ShellCheck world: the program, its twelve libraries and the entry module"
         )]
         world: bool,
         /// The M3a question: which top-level bindings can `Main.main`
@@ -540,15 +543,20 @@ fn main() -> Result<()> {
             budget,
             opt_level,
             lint,
+            api,
         } => {
             let (dir, with) = loaded(dir, with, world);
             let modules = h2r_core_ir::load_dirs(&dir, &with)?.modules;
             let driver = if lint {
                 h2r_lower::emit::Driver::Lint
+            } else if api {
+                h2r_lower::emit::Driver::Api
             } else {
                 h2r_lower::emit::Driver::Print
             };
-            build::emit(&modules, &entry, &out, budget, driver)?;
+            let entries: Vec<&str> = entry.iter().map(String::as_str).collect();
+            h2r_lower::build::emit(&modules, &entries, &out, budget, driver)
+                .map_err(anyhow::Error::msg)?;
             drop(modules);
             let error = std::os::unix::process::CommandExt::exec(
                 std::process::Command::new(std::env::current_exe()?)
@@ -559,7 +567,9 @@ fn main() -> Result<()> {
             );
             Err(error.into())
         }
-        Command::CompileRust { out, opt_level } => build::compile(&out, &opt_level),
+        Command::CompileRust { out, opt_level } => h2r_lower::build::compile(&out, &opt_level)
+            .map(drop)
+            .map_err(anyhow::Error::msg),
         Command::Extract { command } => extract::run(command),
         Command::Stats { dir, per_module } => stats(&dir, per_module),
         Command::Binders { dir, module } => binders(&dir, &module),

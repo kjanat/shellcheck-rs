@@ -52,6 +52,9 @@ struct Cli {
     /// The optimized profile's `--test` harness for tail calls a million deep.
     #[arg(long, default_value = "compiler/canary/stack_checks.rs")]
     stack_checks: PathBuf,
+    /// The `--test` harness that calls `apiRoundTrip` through its typed Rust API.
+    #[arg(long, default_value = "compiler/canary/api_checks.rs")]
+    api_checks: PathBuf,
     /// Run one profile instead of both.
     #[arg(long, default_value = "both", value_parser = ["both", "optimized", "unoptimized"])]
     profile: String,
@@ -82,6 +85,15 @@ struct Cli {
     /// With `--lint`: lint the files this file lists, one path per line, instead of the snippets.
     #[arg(long, requires = "lint")]
     paths: Option<PathBuf>,
+    /// An argument the `--shellcheck` binary takes before each input. Repeatable.
+    #[arg(long, requires = "shellcheck", allow_hyphen_values = true)]
+    program_arg: Vec<String>,
+    /// With `--lint`: run this program on the same arguments as the oracle, instead of the library oracle's entry.
+    #[arg(long, value_name = "PROGRAM", requires = "lint")]
+    oracle_program: Option<PathBuf>,
+    /// How many inputs each `--shellcheck` invocation takes.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
+    batch: u64,
     /// The canonical ShellCheck Core the library suite emits from.
     #[arg(long, default_value = "compiler/core-json")]
     library_core: PathBuf,
@@ -170,6 +182,11 @@ fn run(cli: Cli) -> Result<()> {
         );
     }
 
+    match api_run(&cli) {
+        Ok(()) => println!("api: apiRoundTrip crosses Rust and Haskell types unchanged"),
+        Err(error) => failures.push(format!("api: {error}")),
+    }
+
     if !cli.no_library {
         let report = library_run(&cli, jobs)?;
         println!(
@@ -193,6 +210,25 @@ fn run(cli: Cli) -> Result<()> {
     }
     println!("{cases} differential cases passed (stdout, stderr, exit status).");
     Ok(())
+}
+
+fn api_run(cli: &Cli) -> Result<(), String> {
+    let optimized = profile_dir(cli, Profile::Optimized);
+    let out = optimized.join("api");
+    let modules = load_dirs(&optimized.join("core"), &cli.with)
+        .map_err(|error| error.to_string())?
+        .modules;
+    let binding = evidence::resolve(&modules, "apiRoundTrip")?;
+    h2r_lower::build::emit(
+        &modules,
+        &[binding.name.as_str()],
+        &out,
+        4_000_000,
+        h2r_lower::emit::Driver::Api,
+    )?;
+    drop(modules);
+    h2r_lower::build::compile(&out, "0")?;
+    differential::api_checks(&cli.api_checks, &out.join("api-checks"), &out)
 }
 
 fn shellcheck_corpus(cli: &Cli, program: &Path, jobs: usize) -> Result<()> {
@@ -232,21 +268,30 @@ fn shellcheck_corpus(cli: &Cli, program: &Path, jobs: usize) -> Result<()> {
     } else {
         snippets.clone()
     };
-    let compared = parallel(&inputs, jobs, |input| {
-        let expected = differential::invoke(
-            &cli.library_oracle,
-            &[cli.entry.clone(), input.clone()],
-            timeout,
-        )?;
-        let actual = differential::invoke(program, std::slice::from_ref(input), timeout)?;
+    let batches: Vec<Vec<String>> = inputs
+        .chunks(usize::try_from(cli.batch)?)
+        .map(<[String]>::to_vec)
+        .collect();
+    let compared = parallel(&batches, jobs, |batch| {
+        let mut arguments = cli.program_arg.clone();
+        arguments.extend(batch.iter().cloned());
+        let expected = match &cli.oracle_program {
+            Some(oracle) => differential::invoke(oracle, &arguments, timeout)?,
+            None => {
+                let mut oracle_arguments = vec![cli.entry.clone()];
+                oracle_arguments.extend(batch.iter().cloned());
+                differential::invoke(&cli.library_oracle, &oracle_arguments, timeout)?
+            }
+        };
+        let actual = differential::invoke(program, &arguments, timeout)?;
         let case = Case {
             occ: &cli.entry,
             mode: Mode::Optimized,
-            arguments: vec![input.clone()],
-            expected_exit: if cli.lint && !expected.stdout.is_empty() {
-                1
-            } else {
-                0
+            arguments: arguments.clone(),
+            expected_exit: match (&cli.oracle_program, expected.code) {
+                (Some(_), Some(code)) => code,
+                _ if cli.lint && !expected.stdout.is_empty() => 1,
+                _ => 0,
             },
         };
         Ok::<_, String>((

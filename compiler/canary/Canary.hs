@@ -43,7 +43,8 @@ module Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   shifts, wordOrder, magicLazy, voidJoin,
   setSize, setMember, setOrder, mapLookup, mapStrings, mapUnion,
   errorCall, errorCallComputed, setFindMin, undefinedUnused,
-  stateCollect, stateNumber, writerCollect, stateClass, rwsRecord, patternFail, identityWalk) where
+  stateCollect, stateNumber, writerCollect, stateClass, rwsRecord, patternFail, identityWalk,
+  apiRoundTrip) where
 
 import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#),
   Char(C#), Char#, ord#, chr#, eqChar#, neChar#, ltChar#, leChar#, gtChar#, geChar#,
@@ -1653,3 +1654,18 @@ logged x y = case x <# y of
 {-# NOINLINE runApply #-}
 runApply :: Apply -> Int -> Int
 runApply (Apply f) = f
+
+--------------------------------------------------------------------------------
+-- A typed Rust API over one entry: every shape it marshals, in both directions.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE apiRoundTrip #-}
+apiRoundTrip
+  :: Bool -> [Int] -> Maybe String -> (String, [(Int, Bool)]) -> (String -> Either String Int)
+  -> (Int, Maybe [String], Bool, [Either String Int])
+apiRoundTrip flag numbers label (name, pairs) measure =
+  ( sum numbers + length name + sum [n | (n, True) <- pairs]
+  , fmap (\l -> [l, reverse l, name]) label
+  , flag /= null pairs
+  , map measure (maybe [] pure label ++ [name])
+  )

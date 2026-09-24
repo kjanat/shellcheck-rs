@@ -149,6 +149,13 @@ pub const LAYOUTS: &[Layout] = &[
         flags: &["-O", "-XHaskell98"],
         ..BOOT
     },
+    Layout {
+        package: "Diff",
+        store: true,
+        source_dirs: &["src"],
+        flags: &["-O", "-XHaskell2010", "-funbox-strict-fields"],
+        ..BOOT
+    },
 ];
 
 impl Layout {

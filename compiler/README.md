@@ -5167,7 +5167,7 @@ lenAcc (_:ys) n = lenAcc ys (n+1)
 
 Three of the names are GHC's. `reverse1` is `reverse`'s local `rev`, and `reverse`'s unfolding is `reverse1 l []`. `$wlenAcc :: [a] -> Int# -> Int#` is `lenAcc`'s worker, and its addition wraps. Its `IdInfo` says `[StrictWorker([!])]`, and the table requires exactly that. `++_$s++ :: a -> [a] -> [a] -> [a]` is SpecConstr's specialisation of `(++)`, and base's own rule defines it:
 
-```
+```haskell
 "SC:++0" forall sc sc1. ++ (sc : sc1) = ++_$s++ sc sc1
 ```
 
@@ -5415,7 +5415,7 @@ Every count is a lower bound. A refused instance never revealed its own requirem
 
 The survey roots every live binding at its own signature. For a binding quantified over a type, that asks for code over a free type variable, and a free type variable has no carrier. The report now counts these separately from the blockers:
 
-```
+```text
 Refused: 941 = 577 at a closed signature + 364 at an open signature
 Open signatures: 364 refused instances of 364 bindings quantified over types they were not given; 111 of those bindings were also requested at closed types
 ```
