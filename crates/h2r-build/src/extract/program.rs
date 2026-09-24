@@ -2,15 +2,15 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Instant, SystemTime};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
-use clap::Args;
 
 use super::{
-    Tools, dump_checksums, dumps, extractor_sources, remove_dir, repo_root, sha256_file,
-    sha256_hex, sha256sum_line, top_level, unchanged,
+    Tools, dump_checksums, dumps, extractor_sources, remove_dir, sha256_file, sha256_hex,
+    sha256sum_line, top_level, unchanged,
 };
+use crate::Checkout;
 
 const SOURCE_ITEMS: [&str; 9] = [
     "src",
@@ -42,60 +42,52 @@ pub const PROFILES: [(&str, &str); 6] = [
     ),
 ];
 
-#[derive(Args)]
 pub struct Options {
-    #[arg(
-        long,
-        default_value = "-O1",
-        allow_hyphen_values = true,
-        help = "GHC optimisation flags for the ShellCheck package"
-    )]
     pub opt: String,
-    #[arg(long, help = "Scratch build tree (default compiler/build)")]
     pub build_dir: Option<PathBuf>,
-    #[arg(long, help = "Where the dumps go (default compiler/core-json)")]
     pub core_dir: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "Copy the built binary, cabal's build plan and a provenance record here"
-    )]
     pub keep_dir: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "Concurrent build jobs (default the number of available CPUs)"
-    )]
     pub jobs: Option<usize>,
-    #[arg(long, help = "A historical commit for the sources and the plugin")]
     pub source_ref: Option<String>,
-    #[arg(
-        long,
-        help = "An existing cabal plan whose dependency versions are pinned"
-    )]
     pub plan: Option<PathBuf>,
 }
 
-impl Options {
-    pub fn absolute(self) -> Result<Options> {
-        Ok(Options {
-            build_dir: super::absolute(self.build_dir)?,
-            core_dir: super::absolute(self.core_dir)?,
-            keep_dir: super::absolute(self.keep_dir)?,
-            plan: super::absolute(self.plan)?,
-            ..self
-        })
+impl Default for Options {
+    fn default() -> Options {
+        Options {
+            opt: "-O1".to_string(),
+            build_dir: None,
+            core_dir: None,
+            keep_dir: None,
+            jobs: None,
+            source_ref: None,
+            plan: None,
+        }
     }
 }
 
-pub fn extract(tools: &Tools, options: &Options) -> Result<()> {
-    let repo = repo_root();
+pub fn inputs(checkout: &Checkout) -> Vec<PathBuf> {
+    SOURCE_ITEMS
+        .iter()
+        .map(|item| checkout.root().join(item))
+        .chain([
+            checkout.plugin().join("src"),
+            checkout.plugin().join("h2r-plugin.cabal"),
+            checkout.entry_source(),
+        ])
+        .collect()
+}
+
+pub fn extract(tools: &Tools, checkout: &Checkout, options: &Options) -> Result<()> {
+    let repo = checkout.root().to_path_buf();
     let build = options
         .build_dir
         .clone()
-        .unwrap_or_else(|| repo.join("compiler/build"));
+        .unwrap_or_else(|| checkout.build().join("canonical"));
     let out = options
         .core_dir
         .clone()
-        .unwrap_or_else(|| repo.join("compiler/core-json"));
+        .unwrap_or_else(|| checkout.core_json());
     let keep = options.keep_dir.clone();
     let git = |args: &[&str]| tools.output(tools.command("git").arg("-C").arg(&repo).args(args));
     let source_ref = match &options.source_ref {
@@ -446,16 +438,40 @@ fn utc_now() -> String {
     )
 }
 
-pub fn entry(tools: &Tools, store_db: Option<PathBuf>) -> Result<()> {
-    let repo = repo_root();
-    let build = repo.join("compiler/build/entry");
-    let out = build.join("core-json");
+pub fn entry(tools: &Tools, checkout: &Checkout, store_db: Option<PathBuf>) -> Result<()> {
+    let build = checkout.build().join("entry");
+    let out = checkout.entry_json();
     let work = build.join("work");
+    let source = checkout.entry_source();
     let store_db = tools.store_db(store_db)?;
-    let shellcheck_db = repo
-        .join("compiler/build/canonical/dist-newstyle/packagedb")
+    let shellcheck_db = checkout
+        .build()
+        .join("canonical/dist-newstyle/packagedb")
         .join(format!("ghc-{}", tools.ghc_version));
-    let plugin = tools.plugin(&repo.join("compiler/build/libraries"))?;
+    let program = checkout.core_json().join("inputs.sha256");
+    let mut fingerprint = format!(
+        "{}\n{}\n{}\n",
+        tools.ghc_version,
+        store_db.display(),
+        shellcheck_db.display()
+    );
+    fingerprint.push_str(
+        &fs::read_to_string(&program).with_context(|| format!("reading {}", program.display()))?,
+    );
+    for file in
+        std::iter::once(source.clone()).chain(super::files_under(&checkout.plugin().join("src"))?)
+    {
+        let shown = file.strip_prefix(checkout.root())?.display().to_string();
+        fingerprint.push_str(&sha256sum_line(&file, &shown)?);
+    }
+    fingerprint.push_str(&extractor_sources());
+    let fingerprint = sha256_hex(fingerprint.as_bytes());
+    if unchanged(&out, &fingerprint)? {
+        println!("==> entry unchanged: {}", out.display());
+        return Ok(());
+    }
+
+    let plugin = tools.plugin(checkout, &checkout.build().join("libraries"))?;
     remove_dir(&out)?;
     remove_dir(&work)?;
     fs::create_dir_all(&out)?;
@@ -482,18 +498,20 @@ pub fn entry(tools: &Tools, store_db: Option<PathBuf>) -> Result<()> {
             .arg(&work)
             .arg("-hidir")
             .arg(&work)
-            .arg(repo.join("compiler/entry/ShellCheckEntry.hs")),
+            .arg(&source),
     )?;
     println!(
         "==> wrote {} module dumps to {}",
         dumps(&out)?.len(),
         out.display()
     );
+    fs::write(out.join("outputs.sha256"), dump_checksums(&out)?)?;
+    fs::write(out.join("inputs.sha256"), format!("{fingerprint}\n"))?;
     Ok(())
 }
 
-pub fn canary(tools: &Tools) -> Result<()> {
-    let repo = repo_root();
+pub fn canary(tools: &Tools, checkout: &Checkout) -> Result<()> {
+    let repo = checkout.root().to_path_buf();
     let source = repo.join("compiler/canary");
     let build = repo.join("compiler/build/canary");
     let builddir = format!("--builddir={}", build.join("cabal").display());
@@ -556,8 +574,8 @@ pub fn canary(tools: &Tools) -> Result<()> {
     Ok(())
 }
 
-pub fn oracle(tools: &Tools) -> Result<()> {
-    let repo = repo_root();
+pub fn oracle(tools: &Tools, checkout: &Checkout) -> Result<()> {
+    let repo = checkout.root().to_path_buf();
     let source = repo.join("compiler/canary/shellcheck");
     let build = repo.join("compiler/build/shellcheck-oracle");
     let builddir = format!("--builddir={}", build.join("cabal").display());
@@ -576,78 +594,5 @@ pub fn oracle(tools: &Tools) -> Result<()> {
     fs::copy(built.trim(), &oracle)
         .with_context(|| format!("copying {} to {}", built.trim(), oracle.display()))?;
     println!("==> wrote {}", oracle.display());
-    Ok(())
-}
-
-pub fn matrix(selected: &[String]) -> Result<()> {
-    let repo = repo_root();
-    let matrix = repo.join("compiler/matrix");
-    let selected: Vec<String> = if selected.is_empty() {
-        PROFILES.iter().map(|(name, _)| name.to_string()).collect()
-    } else {
-        selected.to_vec()
-    };
-    let executable = std::env::current_exe()?;
-    for profile in &selected {
-        let Some((_, flags)) = PROFILES.iter().find(|(name, _)| name == profile) else {
-            bail!("unknown profile {profile}");
-        };
-        let dir = matrix.join(profile);
-        fs::create_dir_all(&dir)?;
-        fs::write(dir.join("flags"), format!("{flags}\n"))?;
-        println!("==> profile {profile}: {flags}");
-        let start = Instant::now();
-        let log = dir.join("extract.log.next");
-        let file = fs::File::create(&log)?;
-        let status = std::process::Command::new(&executable)
-            .args(["extract", "program", "--opt", flags])
-            .arg("--build-dir")
-            .arg(dir.join("build"))
-            .arg("--core-dir")
-            .arg(dir.join("core-json"))
-            .arg("--keep-dir")
-            .arg(&dir)
-            .stdout(file.try_clone()?)
-            .stderr(file)
-            .status()?;
-        if !status.success() {
-            fs::rename(&log, dir.join("extract.log"))?;
-            bail!(
-                "    extraction failed; see {}",
-                dir.join("extract.log").display()
-            );
-        }
-        let text = fs::read_to_string(&log)?;
-        if text
-            .lines()
-            .any(|line| line.starts_with("==> extraction unchanged:"))
-        {
-            print!("{text}");
-            fs::remove_file(&log)?;
-            continue;
-        }
-        fs::rename(&log, dir.join("extract.log"))?;
-        let seconds = start.elapsed().as_secs();
-        fs::write(dir.join("time"), format!("{seconds}\n"))?;
-        let size = std::process::Command::new("du")
-            .arg("-sh")
-            .arg(dir.join("core-json"))
-            .output()?;
-        let size = String::from_utf8(size.stdout)?;
-        println!(
-            "    done in {seconds}s, {} of Core",
-            size.split('\t').next().unwrap_or("").trim()
-        );
-    }
-    println!();
-    println!("==> module sets");
-    for profile in &selected {
-        let modules = fs::read(matrix.join(profile).join("modules"))?;
-        println!(
-            "    {profile}: {} modules, list sha {}",
-            modules.iter().filter(|byte| **byte == b'\n').count(),
-            &sha256_hex(&modules)[..12]
-        );
-    }
     Ok(())
 }

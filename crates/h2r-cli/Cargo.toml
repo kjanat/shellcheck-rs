@@ -10,13 +10,14 @@ name = "h2r"
 path = "src/main.rs"
 
 [dependencies]
-anyhow.workspace       = true
-clap.workspace         = true
 h2r-analysis.workspace = true
+h2r-build.workspace    = true
 h2r-core-ir.workspace  = true
 h2r-lower.workspace    = true
-serde_json.workspace   = true
-sha2.workspace         = true
+
+anyhow.workspace     = true
+clap.workspace       = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

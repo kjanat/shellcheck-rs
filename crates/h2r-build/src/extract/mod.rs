@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
-use clap::Subcommand;
 use sha2::{Digest, Sha256};
+
+use crate::Checkout;
 
 mod interfaces;
 mod library;
@@ -14,164 +15,50 @@ mod paths;
 mod program;
 
 pub use interfaces::compare as compare_interfaces;
+pub use library::{LAYOUTS, extract as library};
+pub use paths::module as paths_module;
+pub use program::{
+    Options as ProgramOptions, PROFILES, canary, entry, extract as program, inputs, oracle,
+};
 
 const SOURCES: [(&str, &str); 5] = [
     (
-        "compiler/rust/crates/h2r-cli/src/extract/mod.rs",
+        "crates/h2r-build/src/extract/mod.rs",
         include_str!("mod.rs"),
     ),
     (
-        "compiler/rust/crates/h2r-cli/src/extract/library.rs",
+        "crates/h2r-build/src/extract/library.rs",
         include_str!("library.rs"),
     ),
     (
-        "compiler/rust/crates/h2r-cli/src/extract/interfaces.rs",
+        "crates/h2r-build/src/extract/interfaces.rs",
         include_str!("interfaces.rs"),
     ),
     (
-        "compiler/rust/crates/h2r-cli/src/extract/paths.rs",
+        "crates/h2r-build/src/extract/paths.rs",
         include_str!("paths.rs"),
     ),
     (
-        "compiler/rust/crates/h2r-cli/src/extract/program.rs",
+        "crates/h2r-build/src/extract/program.rs",
         include_str!("program.rs"),
     ),
 ];
 
-#[derive(Subcommand)]
-pub enum Extract {
-    #[command(
-        about = "Compile one installed library from source with the plugin into compiler/library-json/<package>"
-    )]
-    Library {
-        package: String,
-        #[arg(
-            long,
-            help = "Where the dumps go (default compiler/library-json/<package>)"
-        )]
-        out: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "The cabal store package db (default ~/.local/state/cabal/store/ghc-<version>/package.db)"
-        )]
-        store_db: Option<PathBuf>,
-    },
-    #[command(
-        about = "Compile compiler/entry/ShellCheckEntry.hs with the plugin into compiler/build/entry/core-json"
-    )]
-    Entry {
-        #[arg(
-            long,
-            help = "The cabal store package db (default ~/.local/state/cabal/store/ghc-<version>/package.db)"
-        )]
-        store_db: Option<PathBuf>,
-    },
-    #[command(about = "Build the ShellCheck program with the plugin and collect its Core dumps")]
-    Program(program::Options),
-    #[command(
-        about = "Build the canary oracle and write its Core dumps into compiler/build/canary, at -O1 and at -O0 under unoptimized/"
-    )]
-    Canary,
-    #[command(
-        about = "Build the GHC driver that calls ShellCheck's own functions into compiler/build/shellcheck-oracle/oracle"
-    )]
-    Oracle,
-    #[command(
-        about = "Extract the program under each GHC optimisation profile into compiler/matrix/<profile>"
-    )]
-    Matrix {
-        #[arg(help = "Profiles to extract (default all)")]
-        profiles: Vec<String>,
-    },
-    #[command(
-        about = "Compare every installed interface with its rebuilt counterpart after normalisation"
-    )]
-    Interfaces {
-        installed: PathBuf,
-        rebuilt: PathBuf,
-        #[arg(help = "Interface paths, relative to the installed directory, declared to differ")]
-        declared: Vec<String>,
-    },
-    #[command(about = "Print the Paths_ module cabal generates for an installed library")]
-    PathsModule {
-        module: String,
-        prefix: String,
-        version: String,
-    },
-}
-
-pub fn run(command: Extract) -> Result<()> {
-    match command {
-        Extract::Library {
-            package,
-            out,
-            store_db,
-        } => library::extract(
-            &Tools::new()?,
-            &package,
-            absolute(out)?,
-            absolute(store_db)?,
-        ),
-        Extract::Entry { store_db } => program::entry(&Tools::new()?, absolute(store_db)?),
-        Extract::Program(options) => program::extract(&Tools::new()?, &options.absolute()?),
-        Extract::Canary => program::canary(&Tools::new()?),
-        Extract::Oracle => program::oracle(&Tools::new()?),
-        Extract::Matrix { profiles } => program::matrix(&profiles),
-        Extract::Interfaces {
-            installed,
-            rebuilt,
-            declared,
-        } => compare_interfaces(&Tools::new()?, &installed, &rebuilt, &declared),
-        Extract::PathsModule {
-            module,
-            prefix,
-            version,
-        } => {
-            print!("{}", paths::module(&module, &prefix, &version));
-            Ok(())
-        }
+pub fn world(tools: &Tools, checkout: &Checkout) -> Result<()> {
+    program(tools, checkout, &ProgramOptions::default())?;
+    for layout in LAYOUTS {
+        library(tools, checkout, layout.package, None, None)?;
     }
+    entry(tools, checkout, None)
 }
 
-pub fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(4)
-        .expect("the crate sits four levels below the repository root")
-        .to_path_buf()
-}
-
-pub fn world() -> (PathBuf, Vec<PathBuf>) {
-    let root = repo_root();
-    let libraries = [
-        "containers",
-        "transformers",
-        "mtl",
-        "base",
-        "parsec",
-        "ghc-prim",
-        "ghc-bignum",
-        "regex-base",
-        "regex-tdfa",
-        "fgl",
-        "array",
-        "Diff",
-    ];
-    let mut with: Vec<PathBuf> = libraries
-        .iter()
-        .map(|library| root.join("compiler/library-json").join(library))
-        .collect();
-    with.push(root.join("compiler/build/entry/core-json"));
-    (root.join("compiler/core-json"), with)
-}
-
-pub(crate) struct Tools {
+pub struct Tools {
     path: Option<OsString>,
     pub ghc_version: String,
 }
 
 impl Tools {
-    fn new() -> Result<Tools> {
+    pub fn new() -> Result<Tools> {
         let mut tools = Tools {
             path: ghcup_path(),
             ghc_version: String::new(),
@@ -223,11 +110,11 @@ impl Tools {
         }
     }
 
-    pub fn plugin(&self, build: &Path) -> Result<Plugin> {
+    pub(crate) fn plugin(&self, checkout: &Checkout, build: &Path) -> Result<Plugin> {
         println!("==> building the h2r plugin");
         self.run(
             self.command("cabal")
-                .current_dir(repo_root().join("compiler/canary"))
+                .current_dir(checkout.root().join("compiler/canary"))
                 .arg("build")
                 .arg("--offline")
                 .arg(format!("--builddir={}", build.join("cabal").display()))
@@ -296,20 +183,13 @@ fn describe(command: &Command) -> String {
         .join(" ")
 }
 
-fn absolute(path: Option<PathBuf>) -> Result<Option<PathBuf>> {
-    path.map(|path| {
-        std::path::absolute(&path).with_context(|| format!("resolving {}", path.display()))
-    })
-    .transpose()
-}
-
 pub(crate) fn home() -> Result<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is not set")
 }
 
-pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .fold(String::with_capacity(64), |mut hex, byte| {

@@ -510,11 +510,15 @@ enum Command {
     },
 }
 
-fn loaded(dir: Option<PathBuf>, with: Vec<PathBuf>, world: bool) -> (PathBuf, Vec<PathBuf>) {
-    match dir {
+fn loaded(
+    dir: Option<PathBuf>,
+    with: Vec<PathBuf>,
+    world: bool,
+) -> Result<(PathBuf, Vec<PathBuf>)> {
+    Ok(match dir {
         Some(dir) if !world => (dir, with),
-        _ => extract::world(),
-    }
+        _ => h2r_build::Checkout::locate()?.world(),
+    })
 }
 
 fn main() -> Result<()> {
@@ -527,7 +531,7 @@ fn main() -> Result<()> {
             entry,
             output,
         } => {
-            let (dir, with) = loaded(dir, with, world);
+            let (dir, with) = loaded(dir, with, world)?;
             let modules = h2r_core_ir::load_dirs(&dir, &with)?.modules;
             let source =
                 h2r_lower::emit::emit_entry(&modules, &entry).map_err(anyhow::Error::msg)?;
@@ -545,7 +549,7 @@ fn main() -> Result<()> {
             lint,
             api,
         } => {
-            let (dir, with) = loaded(dir, with, world);
+            let (dir, with) = loaded(dir, with, world)?;
             let modules = h2r_core_ir::load_dirs(&dir, &with)?.modules;
             let driver = if lint {
                 h2r_lower::emit::Driver::Lint
@@ -567,9 +571,11 @@ fn main() -> Result<()> {
             );
             Err(error.into())
         }
-        Command::CompileRust { out, opt_level } => h2r_lower::build::compile(&out, &opt_level)
-            .map(drop)
-            .map_err(anyhow::Error::msg),
+        Command::CompileRust { out, opt_level } => {
+            h2r_lower::build::compile(&out, &opt_level, &h2r_lower::build::Rustc::default())
+                .map(drop)
+                .map_err(anyhow::Error::msg)
+        }
         Command::Extract { command } => extract::run(command),
         Command::Stats { dir, per_module } => stats(&dir, per_module),
         Command::Binders { dir, module } => binders(&dir, &module),
@@ -748,7 +754,7 @@ fn main() -> Result<()> {
             m24_link,
             boundary,
         } => {
-            let (dir, with) = loaded(dir, with, world);
+            let (dir, with) = loaded(dir, with, world)?;
             if boundary {
                 lower::boundary(&dir, &with)
             } else if let Some(output) = emit_program {

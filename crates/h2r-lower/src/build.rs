@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -8,6 +9,22 @@ use h2r_core_ir::Module;
 use crate::emit::{Driver, emit_entry_split};
 
 const MANIFEST: &str = "crates.txt";
+
+pub struct Rustc {
+    pub wrapper: Option<OsString>,
+    pub program: OsString,
+    pub target: Option<String>,
+}
+
+impl Default for Rustc {
+    fn default() -> Rustc {
+        Rustc {
+            wrapper: None,
+            program: OsString::from("rustc"),
+            target: None,
+        }
+    }
+}
 
 fn at(path: &Path) -> impl Fn(std::io::Error) -> String + '_ {
     move |error| format!("{}: {error}", path.display())
@@ -50,7 +67,7 @@ pub fn emit(
     fs::write(&path, manifest).map_err(at(&path))
 }
 
-pub fn compile(out: &Path, opt_level: &str) -> Result<PathBuf, String> {
+pub fn compile(out: &Path, opt_level: &str, rustc: &Rustc) -> Result<PathBuf, String> {
     let path = out.join(MANIFEST);
     let manifest = fs::read_to_string(&path).map_err(at(&path))?;
     let mut built = None;
@@ -61,7 +78,7 @@ pub fn compile(out: &Path, opt_level: &str) -> Result<PathBuf, String> {
         };
         let dependencies: Vec<&str> = words.collect();
         let level = if name == "h2r_rt" { "3" } else { opt_level };
-        rustc(out, name, kind, &dependencies, level)?;
+        compile_crate(out, name, kind, &dependencies, level, rustc)?;
         built = Some(out.join(if kind == "bin" {
             name.to_string()
         } else {
@@ -73,15 +90,26 @@ pub fn compile(out: &Path, opt_level: &str) -> Result<PathBuf, String> {
     Ok(built)
 }
 
-fn rustc(
+fn compile_crate(
     out: &Path,
     name: &str,
     kind: &str,
     dependencies: &[&str],
     opt_level: &str,
+    rustc: &Rustc,
 ) -> Result<(), String> {
     let source = out.join(format!("{name}.rs"));
-    let mut command = Command::new("rustc");
+    let mut command = match &rustc.wrapper {
+        Some(wrapper) => {
+            let mut command = Command::new(wrapper);
+            command.arg(&rustc.program);
+            command
+        }
+        None => Command::new(&rustc.program),
+    };
+    if let Some(target) = &rustc.target {
+        command.args(["--target", target]);
+    }
     command
         .arg("--edition=2024")
         .args(["--crate-type", kind, "--crate-name", name])

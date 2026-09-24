@@ -5,8 +5,9 @@ use anyhow::{Context, Result, bail};
 
 use super::{
     Tools, compare_interfaces, dump_checksums, dumps, extractor_sources, paths, remove_dir,
-    repo_root, sha256_hex, sha256sum_line, unchanged,
+    sha256_hex, sha256sum_line, unchanged,
 };
+use crate::Checkout;
 
 pub struct Layout {
     pub package: &'static str,
@@ -47,11 +48,6 @@ pub const LAYOUTS: &[Layout] = &[
     Layout {
         package: "transformers",
         hadrian_path: "libraries/transformers",
-        ..BOOT
-    },
-    Layout {
-        package: "array",
-        hadrian_path: "libraries/array",
         ..BOOT
     },
     Layout {
@@ -150,6 +146,11 @@ pub const LAYOUTS: &[Layout] = &[
         ..BOOT
     },
     Layout {
+        package: "array",
+        hadrian_path: "libraries/array",
+        ..BOOT
+    },
+    Layout {
         package: "Diff",
         store: true,
         source_dirs: &["src"],
@@ -213,6 +214,7 @@ fn modules(listing: &str) -> Vec<String> {
 
 pub fn extract(
     tools: &Tools,
+    checkout: &Checkout,
     package: &str,
     out: Option<PathBuf>,
     store_db: Option<PathBuf>,
@@ -220,9 +222,9 @@ pub fn extract(
     let Some(layout) = LAYOUTS.iter().find(|layout| layout.package == package) else {
         bail!("no source layout recorded for {package}");
     };
-    let repo = repo_root();
-    let build = repo.join("compiler/build/libraries");
-    let out = out.unwrap_or_else(|| repo.join("compiler/library-json").join(package));
+    let repo = checkout.root().to_path_buf();
+    let build = checkout.build().join("libraries");
+    let out = out.unwrap_or_else(|| checkout.library_json(package));
     let store_db = tools.store_db(store_db)?;
     let installed_package = Package {
         tools,
@@ -262,7 +264,7 @@ pub fn extract(
         .collect();
     let source = build.join(format!("{package}-{version}"));
 
-    let plugin_sources = repo.join("compiler/h2r-plugin/src");
+    let plugin_sources = checkout.plugin().join("src");
     let mut fingerprint = String::new();
     for line in std::iter::once(unit.as_str())
         .chain([layout.hadrian_path, layout.ghc_tree.unwrap_or("")])
@@ -301,7 +303,7 @@ pub fn extract(
         }
     }
 
-    let plugin = tools.plugin(&build)?;
+    let plugin = tools.plugin(checkout, &build)?;
     let work = build.join(format!("{package}-{version}-h2r"));
     let staged = build.join(format!("{package}-{version}-root"));
     remove_dir(&out)?;

@@ -61,7 +61,7 @@ arg "[dir]" default="compiler/core-json" help="Core dump directory"
 flag "--fn <name>" required=#true help="Stable function name (quote names containing $)"
 '''
 run         = '''
-cargo locked-release --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --fn "${usage_fn?}"
+cargo locked-release -p h2r-cli --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --fn "${usage_fn?}"
 '''
 
 [tasks."lower:program"]
@@ -71,7 +71,7 @@ usage       = '''
 arg "[dir]" default="compiler/core-json" help="Core dump directory"
 '''
 run         = '''
-cargo locked-release --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base
+cargo locked-release -p h2r-cli --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base
 '''
 
 [tasks."lower:coverage"]
@@ -79,7 +79,7 @@ description = "Refresh canonical Core and capture verified NIR coverage"
 depends     = ["extract", "extract:libraries"]
 run         = '''
 set -eu
-cargo locked-build --bin h2r
+cargo locked-build -p h2r-cli --bin h2r
 out="$PWD/compiler/build/coverage"
 mkdir -p "$out"
 for dump in compiler/core-json/*.core.json; do
@@ -107,7 +107,7 @@ flag "--fn <name>" help="Specialize from one root and print each instance's NIR"
 '''
 run         = '''
 set -eu
-cargo locked-build --bin h2r
+cargo locked-build -p h2r-cli --bin h2r
 out="$PWD/compiler/build/coverage"
 mkdir -p "$out"
 set --
@@ -133,7 +133,7 @@ run         = "cabal build all"
 
 [tasks."canary:extract"]
 description = "Build the small Haskell oracle and regenerate its Core dumps"
-run         = "cargo locked-release --bin h2r -- extract canary"
+run         = "cargo locked-release -p h2r-cli --bin h2r -- extract canary"
 
 [tasks.canary]
 description = "Emit Rust from real Core, compile it, and compare with Haskell"
@@ -142,7 +142,7 @@ usage       = '''
 flag "--timeout-seconds <seconds>" default="10" help="Positive per-invocation time limit for oracle and generated binaries"
 '''
 run         = '''
-cargo rr --bin h2r-canary -- --timeout-seconds "${usage_timeout_seconds?}"
+cargo rr -p h2r-canary --bin h2r-canary -- --timeout-seconds "${usage_timeout_seconds?}"
 '''
 
 [tasks."canary:explain"]
@@ -154,7 +154,7 @@ flag "--profile <profile>" default="both" help="Which Core dump to read" {
 }
 '''
 run         = '''
-cargo rr --bin h2r-canary -- --explain "${usage_entry?}" --profile "${usage_profile?}"
+cargo rr -p h2r-canary --bin h2r-canary -- --explain "${usage_entry?}" --profile "${usage_profile?}"
 '''
 
 [tasks.check]
@@ -199,20 +199,20 @@ file        = "scripts/hls.sh"
 [tasks.extract]
 alias       = "x"
 description = "Extract canonical -O1 format-6 Core into compiler/core-json"
-run         = "cargo locked-release --bin h2r -- extract program --build-dir {{ config_root }}/compiler/build/canonical"
+run         = "cargo locked-release -p h2r-cli --bin h2r -- extract program --build-dir {{ config_root }}/compiler/build/canonical"
 
 [tasks."extract:libraries"]
 description = "Extract the Core of the installed libraries the program links into compiler/library-json"
-run         = "for package in containers transformers mtl base; do cargo locked-release --bin h2r -- extract library \"$package\"; done"
+run         = "for package in containers transformers mtl base; do cargo locked-release -p h2r-cli --bin h2r -- extract library \"$package\"; done"
 
 [tasks.matrix]
 description = "Extract the GHC optimization matrix; optional profile names are forwarded"
-run         = "cargo locked-release --bin h2r -- extract matrix"
+run         = "cargo locked-release -p h2r-cli --bin h2r -- extract matrix"
 
 [tasks."baseline:historical"]
 description = "Reconstruct canonical format-5 Core at the corrected M2.4 checkpoint"
 run         = """
-cargo locked-release --bin h2r -- extract program \
+cargo locked-release -p h2r-cli --bin h2r -- extract program \
   --source-ref aa5b7f3763ea6c95dc0412ac2bbae6fddee6c487 \
   --build-dir {{ config_root }}/compiler/matrix/format5/build \
   --core-dir {{ config_root }}/compiler/matrix/format5/core-json \
@@ -233,7 +233,7 @@ run         = [
 description = "Capture and verify analysis reports for the seven existing dumps"
 run         = '''
 set -eu
-cargo locked-build --bin h2r
+cargo locked-build -p h2r-cli --bin h2r
 bin="$PWD/target/release/h2r"
 for profile in canonical A B C D E F; do
   dir="$PWD/compiler/matrix/$profile/core-json"
@@ -392,7 +392,7 @@ arg "[dir]" default="compiler/core-json" help="Core dump directory"
 '''
 run         = '''
 set -eu
-cargo locked-build --bin h2r
+cargo locked-build -p h2r-cli --bin h2r
 target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --specialize --sites "${usage_subject?}"
 '''
 
@@ -404,7 +404,7 @@ arg "[dir]" default="compiler/core-json" help="Core dump directory"
 '''
 run         = '''
 set -eu
-cargo locked-build --bin h2r
+cargo locked-build -p h2r-cli --bin h2r
 out="$PWD/compiler/build/risk"
 mkdir -p "$out"
 target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --emit-program "$out/program.rs" | tee "$out/emit-program.txt"
@@ -425,13 +425,13 @@ usage       = '''
 flag "--timeout-seconds <seconds>" default="60" help="Per-invocation time limit"
 '''
 run         = '''
-cargo rr --bin h2r-canary -- --bench --timeout-seconds "${usage_timeout_seconds?}"
+cargo rr -p h2r-canary --bin h2r-canary -- --bench --timeout-seconds "${usage_timeout_seconds?}"
 '''
 
 [tasks."canary:library"]
 description = "Build the GHC driver that calls ShellCheck's own functions for the library suite"
 depends     = ["extract"]
-run         = "cargo locked-release --bin h2r -- extract oracle"
+run         = "cargo locked-release -p h2r-cli --bin h2r -- extract oracle"
 
 [tasks."lower:entries"]
 description = "List every live exported binding with its type and whether a Rust entry emits for it"
@@ -441,6 +441,6 @@ arg "[dir]" default="compiler/core-json" help="Core dump directory"
 '''
 run         = '''
 set -eu
-cargo locked-build --bin h2r
+cargo locked-build -p h2r-cli --bin h2r
 target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --entries
 '''

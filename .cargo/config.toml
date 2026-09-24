@@ -1,8 +1,9 @@
 #:schema https://www.schemastore.org/cargo-config.json
 
 [alias]
-h2r            = "rr --bin h2r --"
+h2r            = "rr -p h2r-cli --bin h2r --"
 lint           = "clippy --workspace --all-targets -- -D warnings"
+lint-fast      = "clippy --workspace --exclude rshellcheck --all-targets -- -D warnings"
 locked-build   = "build --release --locked"
-locked-release = "run --release --locked"
+locked-release = "rr --locked"
 rr             = "run --release"

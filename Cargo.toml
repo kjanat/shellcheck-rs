@@ -1,19 +1,23 @@
 [workspace]
-resolver = "3"
-members  = ["compiler/rust/crates/*"]
+resolver        = "3"
+members         = ["crates/*"]
+default-members = ["crates/rshellcheck"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-only"
+license = "MIT"
 
 [workspace.dependencies]
 anyhow       = "1"
 clap         = { version = "4", features = ["derive"] }
-h2r-analysis = { path = "compiler/rust/crates/h2r-analysis" }
-h2r-core-ir  = { path = "compiler/rust/crates/h2r-core-ir" }
-h2r-lower    = { path = "compiler/rust/crates/h2r-lower" }
-h2r-rt       = { path = "compiler/rust/crates/h2r-rt" }
+h2r-analysis = { path = "crates/h2r-analysis" }
+h2r-build    = { path = "crates/h2r-build" }
+h2r-core-ir  = { path = "crates/h2r-core-ir" }
+h2r-lower    = { path = "crates/h2r-lower" }
+h2r-rt       = { path = "crates/h2r-rt" }
+libc         = "0.2"
+mimalloc     = "0.1"
 serde        = { version = "1", features = ["derive"] }
 serde_json   = { version = "1", features = ["unbounded_depth"] }
 sha2         = "0.10"
@@ -24,3 +28,9 @@ let_underscore_must_use            = "warn"
 map_err_ignore                     = "warn"
 match_wildcard_for_single_variants = "warn"
 unused_result_ok                   = "warn"
+
+[profile.dev.build-override]
+opt-level = 3
+
+[profile.release.build-override]
+opt-level = 3

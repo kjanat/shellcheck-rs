@@ -1,0 +1,17 @@
+[package]
+name              = "rshellcheck"
+version.workspace = true
+edition.workspace = true
+license           = "GPL-3.0-only"
+publish           = false
+
+[dependencies]
+clap.workspace     = true
+libc.workspace     = true
+mimalloc.workspace = true
+
+[build-dependencies]
+h2r-build.workspace = true
+
+[lints]
+workspace = true

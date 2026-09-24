@@ -1,0 +1,17 @@
+[package]
+name              = "h2r-build"
+version.workspace = true
+edition.workspace = true
+description       = "Extracts the ShellCheck world with the plugin and compiles it to Rust crates"
+license.workspace = true
+
+[dependencies]
+h2r-core-ir.workspace = true
+h2r-lower.workspace   = true
+
+anyhow.workspace     = true
+serde_json.workspace = true
+sha2.workspace       = true
+
+[lints]
+workspace = true

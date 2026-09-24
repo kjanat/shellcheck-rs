@@ -164,7 +164,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn subprocess_exit_and_timeout_are_observed() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../compiler/conformance");
+        let root = crate::checkout()
+            .expect("the ShellCheck checkout")
+            .join("compiler/conformance");
         fs::create_dir_all(&root).unwrap();
         let dir = root.join(format!("test-{}", std::process::id()));
         fs::create_dir(&dir).unwrap();
