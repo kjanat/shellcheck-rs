@@ -829,7 +829,7 @@ impl Census {
         // has one: level 4, and a cross-check on the table.
         let dict_ty = self.dict_ty(world, mi, dict);
         if let Some(tc) = dict_ty.as_ref().and_then(|t| t.tycon()) {
-            site.class = Some(tc.name.clone());
+            site.class = Some(tc.name.to_string());
             rules.push(K2_DICT_TYPE);
         }
         let Some((spec, field, rule)) = spec else {
@@ -1820,7 +1820,7 @@ fn reason_head(r: &str) -> String {
 pub(crate) fn class_ty(t: &Ty) -> Option<String> {
     let tc = t.tycon()?;
     class_of_tycon(&tc.name)?;
-    Some(tc.name.clone())
+    Some(tc.name.to_string())
 }
 
 #[derive(Debug, Default, Serialize)]

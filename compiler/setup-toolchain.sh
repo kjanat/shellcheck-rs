@@ -38,4 +38,4 @@ echo "cabal $(cabal --version | head -1)"
 echo "cargo $(cargo --version)"
 echo
 echo "Next: cabal build && cabal test    # baseline ShellCheck"
-echo "      ./compiler/extract.sh        # Core JSON"
+echo "      cargo run --release --bin h2r -- extract program   # Core JSON"

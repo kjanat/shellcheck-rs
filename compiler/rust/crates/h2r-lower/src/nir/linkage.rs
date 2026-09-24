@@ -1,11 +1,23 @@
 //! Source linkage and cross-module type evidence, shared by builder and checker.
 //! Neither routine inspects candidate NIR.
 
-use h2r_core_ir::{BinderId, Module, Ty, is_external_name};
+use h2r_core_ir::{BinderId, Ty, is_external_name};
 
-pub(super) fn imported_top(modules: &[Module], name: &str) -> Result<(usize, BinderId), String> {
+use super::World;
+
+pub(super) fn imported_top(world: &World<'_>, name: &str) -> Result<(usize, BinderId), String> {
     if !is_external_name(name) {
         return Err("import reference lacks an external stable name".into());
+    }
+    let modules = world
+        .modules
+        .ok_or("import evidence requires a loaded world")?;
+    if let Some(catalog) = world.catalog {
+        return match catalog.top(name) {
+            Some(Some(found)) => Ok(found),
+            Some(None) => Err("ambiguous imported top-level binding".into()),
+            None => Err("imported binding is outside the loaded world".into()),
+        };
     }
     let mut found = None;
     for (index, module) in modules.iter().enumerate() {

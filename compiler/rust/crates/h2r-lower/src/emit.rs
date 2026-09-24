@@ -13,8 +13,8 @@ use std::fmt::Write;
 use h2r_core_ir::{Module, Ty};
 
 use crate::nir::{
-    Block, CharCompare, DictionaryRef, Exit, Function, IntBinary, ListOp, Operation, World, boxed,
-    data,
+    Block, CharCompare, DictionaryRef, Exit, Function, IntBinary, ListOp, Machine, Operation,
+    World, boxed, data,
     lower::LoweredLeaf,
     specialize::{self, Instance},
 };
@@ -40,7 +40,14 @@ fn unboxed(ty: &Ty) -> bool {
     matches!(ty, Ty::Con { tycon, args } if args.is_empty()
         && (tycon.name == "$ghc-prim$GHC.Prim$Int#"
             || tycon.name == "$ghc-prim$GHC.Prim$Char#"
-            || tycon.name == "$ghc-prim$GHC.Prim$Word#"))
+            || tycon.name == "$ghc-prim$GHC.Prim$Word#"
+            || tycon.name == "$ghc-prim$GHC.Prim$Word8#")
+        || matches!(ty, Ty::Con { tycon, args } if args.len() == 1
+            && tycon.name == "$ghc-prim$GHC.Prim$State#"))
+}
+
+fn is_addr(ty: &Ty) -> bool {
+    matches!(ty, Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Prim$Addr#" && args.is_empty())
 }
 
 fn is_word(ty: &Ty) -> bool {
@@ -59,10 +66,30 @@ fn is_char(ty: &Ty) -> bool {
 /// so its Rust type is built from its components' and nests as they do.
 fn carrier(world: &World<'_>, ty: &Ty) -> String {
     let ty = represented(world, ty);
-    if boxed::is_int(&ty) {
+    if let Ty::ForAll { .. } = ty {
+        return carrier(world, &data::erase_quantifiers(&ty));
+    }
+    if data::is_erased(&ty) {
+        "HField".into()
+    } else if boxed::is_int(&ty) {
         "HInt".into()
     } else if unboxed(&ty) {
         "i64".into()
+    } else if is_addr(&ty) {
+        "HAddr".into()
+    } else if matches!(&ty, Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Prim$MutVar#" && args.len() == 3)
+    {
+        "HMutVar".into()
+    } else if matches!(&ty, Ty::Con { tycon, args }
+        if (tycon.name == "$ghc-prim$GHC.Prim$ByteArray#" && args.is_empty())
+            || (tycon.name == "$ghc-prim$GHC.Prim$MutableByteArray#" && args.len() == 1))
+    {
+        "HBytes".into()
+    } else if matches!(&ty, Ty::Con { tycon, args }
+        if (tycon.name == "$ghc-prim$GHC.Prim$Array#" && args.len() == 2)
+            || (tycon.name == "$ghc-prim$GHC.Prim$MutableArray#" && args.len() == 3))
+    {
+        "HArray".into()
     } else if matches!(ty, Ty::Fun { .. }) {
         "HClosure".into()
     } else if let Ok(Some(fields)) = data::unboxed_tuple_fields(world, &ty) {
@@ -91,6 +118,11 @@ fn carrier_agrees(world: &World<'_>, ty: &Ty) -> bool {
         Some(data::Carrier::Function) => carrier(world, ty) == "HClosure",
         Some(data::Carrier::Data) => carrier(world, ty) == "HData",
         Some(data::Carrier::Tuple) => carrier(world, ty).starts_with('('),
+        Some(data::Carrier::Address) => carrier(world, ty) == "HAddr",
+        Some(data::Carrier::MutVar) => carrier(world, ty) == "HMutVar",
+        Some(data::Carrier::Bytes) => carrier(world, ty) == "HBytes",
+        Some(data::Carrier::Array) => carrier(world, ty) == "HArray",
+        Some(data::Carrier::Dynamic) => carrier(world, ty) == "HField",
         None => true,
     }
 }
@@ -103,8 +135,46 @@ fn field_kind(world: &World<'_>, ty: &Ty) -> (&'static str, &'static str) {
         "i64" => ("Int64", "int64"),
         "HInt" => ("Int", "int"),
         "HClosure" => ("Closure", "closure"),
+        "HMutVar" => ("MutVar", "mut_var"),
+        "HBytes" => ("Bytes", "bytes"),
+        "HArray" => ("Array", "array"),
+        "HAddr" => ("Addr", "addr"),
+        "HField" => ("Dynamic", "dynamic"),
         _ => ("Data", "data"),
     }
+}
+
+fn pack(world: &World<'_>, ty: &Ty, value: &str) -> String {
+    if let Ok(Some(components)) = data::unboxed_tuple_fields(world, &represented(world, ty)) {
+        let fields: Vec<String> = components
+            .iter()
+            .enumerate()
+            .map(|(n, component)| pack(world, component, &format!("t.{n}")))
+            .collect();
+        return format!(
+            "{{ let t = {value}; HField::Tuple(std::rc::Rc::new(vec![{}])) }}",
+            fields.join(", ")
+        );
+    }
+    match field_kind(world, ty).0 {
+        "Dynamic" => value.to_string(),
+        kind => format!("HField::{kind}({value})"),
+    }
+}
+
+fn unpack(world: &World<'_>, ty: &Ty, field: &str) -> String {
+    if let Ok(Some(components)) = data::unboxed_tuple_fields(world, &represented(world, ty)) {
+        let reads: Vec<String> = components
+            .iter()
+            .enumerate()
+            .map(|(n, component)| unpack(world, component, &format!("t[{n}]")))
+            .collect();
+        return match reads.as_slice() {
+            [one] => format!("{{ let t = {field}.tuple(); ({one},) }}"),
+            many => format!("{{ let t = {field}.tuple(); ({}) }}", many.join(", ")),
+        };
+    }
+    format!("{field}.{}()", field_kind(world, ty).1)
 }
 
 fn closure(
@@ -112,9 +182,10 @@ fn closure(
     target: &str,
     entry: Option<&str>,
     captures: &[String],
-    signature: &Ty,
-    arity: usize,
+    parameters: &[&Ty],
+    result: &Ty,
 ) -> Result<String, String> {
+    let arity = parameters.len();
     if arity == 0 {
         return Err("closure has no value parameters".into());
     }
@@ -124,15 +195,11 @@ fn closure(
         .map(|(n, v)| format!("let c{n} = {v}; let e{n} = c{n}.clone();"))
         .collect::<Vec<_>>()
         .join(" ");
-    let mut args = Vec::new();
-    let mut result = signature;
-    for n in 0..arity {
-        let Ty::Fun { arg, res, .. } = result else {
-            return Err("closure code arity exceeds signature".into());
-        };
-        args.push(format!("a[{n}].{}()", field_kind(world, arg).1));
-        result = res;
-    }
+    let args: Vec<String> = parameters
+        .iter()
+        .enumerate()
+        .map(|(n, parameter)| unpack(world, parameter, &format!("a[{n}]")))
+        .collect();
     let with = |prefix: char| {
         (0..captures.len())
             .map(|n| format!("{prefix}{n}.clone()"))
@@ -141,17 +208,20 @@ fn closure(
             .join(", ")
     };
     let code = format!(
-        "move |a| HField::{}({target}({}))",
-        field_kind(world, result).0,
-        with('c')
+        "move |a| {}",
+        pack(world, result, &format!("{target}({})", with('c')))
     );
     Ok(match entry {
         Some(state) => format!(
-            "{{ {bindings} HClosure::entering({arity}, {code}, move |a| Box::new({state}({})) as Box<dyn std::any::Any>) }}",
+            "{{ {bindings} HClosure::entering({arity}, {code}, move |a| {state}({})) }}",
             with('e')
         ),
         None => format!("{{ {bindings} HClosure::ready({arity}, {code}) }}"),
     })
+}
+
+fn step_to(callee: &str, args: &str) -> String {
+    format!("h2r_rt::Step::Next(Box::new(move || {callee}({args})))")
 }
 
 fn match_data(
@@ -172,9 +242,16 @@ fn match_data(
         .chain(arms.iter().filter(|a| a.constructor.is_none()))
     {
         let mut args = captures.to_vec();
+        let mut fields = String::new();
         let pattern = if let Some(c) = &arm.constructor {
             for (i, t) in c.fields.iter().enumerate() {
-                args.push(format!("node.fields[{i}].{}()", field_kind(world, t).1));
+                write!(
+                    fields,
+                    "let f{i} = node.fields[{i}].{}(); ",
+                    field_kind(world, t).1
+                )
+                .unwrap();
+                args.push(format!("f{i}"));
             }
             format!("{:?}", c.name)
         } else {
@@ -182,7 +259,7 @@ fn match_data(
         };
         write!(
             code,
-            " {pattern} => {},",
+            " {pattern} => {{ {fields}{} }},",
             enter(arm.target, args.join(", "))
         )
         .unwrap();
@@ -281,6 +358,12 @@ fn scalar_literal(world: &World<'_>, ty: &Ty, lit: &h2r_core_ir::Lit) -> Result<
         char::from_u32(codepoint).ok_or("Char# literal is not a Unicode code point")?;
         return Ok(i64::from(codepoint));
     }
+    if matches!(represented(world, ty), Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Prim$Word8#" && args.is_empty())
+    {
+        return u8::try_from(lit.number("Word8")?)
+            .map(i64::from)
+            .map_err(|error| format!("Word8# literal does not fit an unsigned byte: {error}"));
+    }
     if is_word(&represented(world, ty)) {
         return u64::try_from(lit.number("Word")?)
             .map(u64::cast_signed)
@@ -345,7 +428,7 @@ fn dependencies(
                 .blocks
                 .iter()
                 .flat_map(|b| &b.params)
-                .map(|p| &p.ty),
+                .map(|p| &*p.ty),
         )
         .find(|ty| !supported(ty))
     {
@@ -376,7 +459,16 @@ fn dependencies(
             | Operation::UnboxInt(_)
             | Operation::CharCompare { .. }
             | Operation::WordCompare { .. }
+            | Operation::WordBinary { .. }
             | Operation::IntToWord(_)
+            | Operation::WordToInt(_)
+            | Operation::NegateInt(_)
+            | Operation::IndexCharAddr { .. }
+            | Operation::PlusAddr { .. }
+            | Operation::AddrLiteral(_)
+            | Operation::PendingCell
+            | Operation::FillCell { .. }
+            | Operation::Machine { .. }
             | Operation::OrdChar(_)
             | Operation::ChrChar(_)
             | Operation::UnpackString(_)
@@ -398,9 +490,15 @@ fn dependencies(
             | Operation::LocalScope { .. }
             | Operation::MakeClosure { .. }
             | Operation::Apply { .. } => {}
+            Operation::Literal(lit) if carrier(world, &instruction.result.ty) == "HBytes" => {
+                big_nat_limbs(lit)?;
+            }
             Operation::Literal(lit) => {
                 if carrier(world, &instruction.result.ty) != "i64" {
-                    return Err("boxed Int requires constructor evidence, not a literal".into());
+                    return Err(format!(
+                        "a literal of type {} has no scalar carrier",
+                        instruction.result.ty.render()
+                    ));
                 }
                 scalar_literal(world, &instruction.result.ty, lit)?;
             }
@@ -422,9 +520,7 @@ fn dependencies(
                     &reference_of(*module, *binder, type_arguments, dictionaries),
                 )?);
             }
-            Operation::Force(_) => {
-                return Err("unsupported operation in scalar Rust backend".into());
-            }
+            Operation::Force(_) => {}
         }
     }
     Ok(dependencies)
@@ -445,37 +541,35 @@ fn uncarried<'a>(world: &World<'_>, ty: &'a Ty) -> &'a Ty {
 
 fn label(ty: &Ty) -> String {
     match ty {
-        Ty::Con { tycon, .. } => tycon.name.clone(),
+        Ty::Con { tycon, .. } => tycon.name.to_string(),
         Ty::Var(_) => "a type variable".into(),
         Ty::ForAll { .. } => "a polymorphic type".into(),
         other => other.render(),
     }
 }
 
-fn recursive_value(
-    leaves: &BTreeMap<usize, &LoweredLeaf>,
-    edges: &BTreeMap<usize, BTreeSet<usize>>,
-    index: usize,
-) -> bool {
-    if !leaves[&index].function.blocks[0].params.is_empty() {
-        return false;
-    }
-    let mut seen = BTreeSet::new();
-    let mut pending: Vec<_> = edges[&index].iter().copied().collect();
-    while let Some(next) = pending.pop() {
-        if next == index {
-            return true;
-        }
-        if seen.insert(next) {
-            pending.extend(edges[&next].iter().copied());
-        }
-    }
-    false
-}
-
 /// Select one exact external entry and lower every required instance. No
 /// source is returned until the entire closure has passed lowering and checks.
-pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
+struct Prepared<'a> {
+    world: &'a World<'a>,
+    specialization: &'a specialize::Specialization,
+    leaves: &'a BTreeMap<usize, &'a LoweredLeaf>,
+    edges: &'a BTreeMap<usize, BTreeSet<usize>>,
+    adapter: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Driver {
+    Print,
+    Lint,
+}
+
+fn prepare<R>(
+    modules: &[Module],
+    entry: &str,
+    driver: Driver,
+    emit: impl FnOnce(Prepared<'_>) -> Result<R, String>,
+) -> Result<R, String> {
     if !h2r_core_ir::is_external_name(entry) {
         return Err("Rust emission requires an external stable entry name".into());
     }
@@ -497,7 +591,8 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
     let specialization =
         specialize::specialize(modules, &[Instance::whole(*root_module, *root_binder)])
             .map_err(|error| error.to_string())?;
-    let evidence = crate::nir::World::of(modules, 0)?;
+    let catalog = crate::nir::Catalog::of(modules);
+    let evidence = crate::nir::World::cataloged(modules, 0, &catalog)?;
     let world = &evidence;
     let leaves: BTreeMap<usize, &LoweredLeaf> = specialization
         .lowered
@@ -509,45 +604,52 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
         .enumerate()
         .collect();
     let mut edges = BTreeMap::new();
+    let mut refusals: BTreeMap<String, (usize, String)> = BTreeMap::new();
     for (&index, leaf) in &leaves {
-        edges.insert(index, dependencies(world, &specialization, index, leaf)?);
+        match dependencies(world, &specialization, index, leaf) {
+            Ok(dependencies) => {
+                edges.insert(index, dependencies);
+            }
+            Err(reason) => {
+                let instance = &specialization.instances[index];
+                let refusal = refusals.entry(reason).or_insert_with(|| {
+                    (
+                        0,
+                        modules[instance.module]
+                            .binder(instance.binder)
+                            .name
+                            .clone(),
+                    )
+                });
+                refusal.0 += 1;
+            }
+        }
+    }
+    if !refusals.is_empty() {
+        return Err(refusals
+            .iter()
+            .map(|(reason, (count, example))| {
+                format!("{count} instances, e.g. {example}: {reason}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"));
     }
     let entry_function = &leaves[&0].function;
     let direct_arity = entry_function.blocks[0].params.len();
     let mut entry_types: Vec<_> = entry_function.blocks[0]
         .params
         .iter()
-        .map(|p| &p.ty)
+        .map(|p| &*p.ty)
         .collect();
     let mut entry_result = &entry_function.result_ty;
     while let Ty::Fun { arg, res, .. } = entry_result {
         entry_types.push(arg);
         entry_result = res;
     }
-    let inputs = entry_types
-        .iter()
-        .enumerate()
-        .map(|(i, ty)| argument(world, ty, i))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut shows = Shows::default();
-    let rendered = if scalar(world, entry_result) {
-        None
-    } else {
-        Some(show_function(world, entry_result, &mut shows)?)
-    };
-    // Refuse cycles involving a value, even through a function. Only function
-    // recursion is supported here, not productive recursive thunk graphs.
-    if leaves
-        .keys()
-        .any(|&index| recursive_value(&leaves, &edges, index))
-    {
-        return Err("recursive value dependency closure is not supported".into());
-    }
-    let mut out = functions(world, &specialization, &leaves, None)?;
+    let mut adapter = String::new();
     let arity = entry_types.len();
-    let args = inputs.join(", ");
     if direct_arity == arity {
-        writeln!(out, "#[allow(unused_imports)]\nuse f_0 as h2r_entry;").unwrap();
+        writeln!(adapter, "#[allow(unused_imports)]\nuse f_0 as h2r_entry;").unwrap();
     } else {
         let params = entry_types
             .iter()
@@ -563,31 +665,306 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             .iter()
             .enumerate()
             .skip(direct_arity)
-            .map(|(n, t)| format!("HField::{}(a{n})", field_kind(world, t).0))
+            .map(|(n, t)| pack(world, t, &format!("a{n}")))
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(
-            out,
-            "fn h2r_entry({params}) -> {} {{ f_0({direct}).apply(vec![{extra}]).{}() }}",
+            adapter,
+            "fn h2r_entry({params}) -> {} {{ {} }}",
             carrier(world, entry_result),
-            field_kind(world, entry_result).1
+            unpack(
+                world,
+                entry_result,
+                &format!("f_0({direct}).apply(vec![{extra}])")
+            )
         )
         .unwrap();
     }
-    let result = match &rendered {
-        Some(show) => format!(
-            "{show}(&HField::{}(h2r_entry({args})), 0)",
-            field_kind(world, entry_result).0
-        ),
-        None if boxed::is_int(entry_result) => format!("h2r_entry({args}).force()"),
-        None => format!("h2r_entry({args})"),
+    match driver {
+        Driver::Print => print_main(world, &mut adapter, &entry_types, entry_result)?,
+        Driver::Lint => lint_main(world, &mut adapter, &entry_types, entry_result)?,
+    }
+    adapter.push_str(PROGRAM_STACK);
+    emit(Prepared {
+        world,
+        specialization: &specialization,
+        leaves: &leaves,
+        edges: &edges,
+        adapter,
+    })
+}
+
+fn print_main(
+    world: &World<'_>,
+    adapter: &mut String,
+    entry_types: &[&Ty],
+    entry_result: &Ty,
+) -> Result<(), String> {
+    let arity = entry_types.len();
+    let args = entry_types
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| argument(world, ty, i))
+        .collect::<Result<Vec<_>, _>>()?
+        .join(", ");
+    let mut shows = Shows::default();
+    let result = if !scalar(world, entry_result) {
+        let show = show_function(world, entry_result, &mut shows)?;
+        format!(
+            "{show}(&{}, 0)",
+            pack(world, entry_result, &format!("h2r_entry({args})"))
+        )
+    } else if boxed::is_int(entry_result) {
+        format!("h2r_entry({args}).force()")
+    } else {
+        format!("h2r_entry({args})")
     };
     for function in &shows.functions {
-        out.push_str(function);
+        adapter.push_str(function);
     }
-    writeln!(out, "fn main() {{\n    let raw: Vec<String> = std::env::args().skip(1).collect();\n    assert_eq!(raw.len(), {arity}, \"wrong argument count\");\n    h2r_on_program_stack(move || println!(\"{{}}\", {result}));\n}}").unwrap();
-    out.push_str(PROGRAM_STACK);
-    Ok(out)
+    writeln!(adapter, "fn main() {{\n    let raw: Vec<String> = std::env::args().skip(1).collect();\n    assert_eq!(raw.len(), {arity}, \"wrong argument count\");\n    h2r_on_program_stack(move || println!(\"{{}}\", {result}));\n}}").unwrap();
+    Ok(())
+}
+
+fn lint_main(
+    world: &World<'_>,
+    adapter: &mut String,
+    entry_types: &[&Ty],
+    entry_result: &Ty,
+) -> Result<(), String> {
+    let text = |ty: &Ty| represented(world, ty).list_elem().is_some_and(Ty::is_char);
+    let lines = represented(world, entry_result)
+        .list_elem()
+        .is_some_and(&text);
+    if !(entry_types.len() == 2 && entry_types.iter().all(|ty| text(ty)) && lines) {
+        return Err("a lint entry takes a path and the file's text and returns lines".into());
+    }
+    let names = string_names(world)?;
+    writeln!(
+        adapter,
+        r#"fn main() {{
+    let paths: Vec<String> = std::env::args().skip(1).collect();
+    if paths.is_empty() {{
+        eprintln!("No files specified.");
+        std::process::exit(3);
+    }}
+    let status = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    let shared = status.clone();
+    h2r_on_program_stack(move || {{
+        let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+        for path in paths {{
+            match std::fs::read(&path) {{
+                Ok(bytes) => {{
+                    let text: String = bytes.iter().map(|&byte| char::from(byte)).collect();
+                    let report = h2r_entry(h2r_rt::string_argument(&path, {names}), h2r_rt::string_argument(&text, {names}));
+                    if h2r_rt::put_lines(report, {names}, &mut out) > 0 {{
+                        shared.fetch_max(1, std::sync::atomic::Ordering::Relaxed);
+                    }}
+                }}
+                Err(error) => {{
+                    std::io::Write::flush(&mut out).expect("writing to stdout");
+                    eprintln!("{{path}}: {{error}}");
+                    shared.fetch_max(2, std::sync::atomic::Ordering::Relaxed);
+                }}
+            }}
+        }}
+        std::io::Write::flush(&mut out).expect("writing to stdout");
+    }});
+    std::process::exit(status.load(std::sync::atomic::Ordering::Relaxed));
+}}"#
+    )
+    .unwrap();
+    Ok(())
+}
+
+pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
+    prepare(modules, entry, Driver::Print, |prepared| {
+        let mut out = functions(
+            prepared.world,
+            prepared.specialization,
+            prepared.leaves,
+            None,
+        )?;
+        out.push_str(&prepared.adapter);
+        Ok(out)
+    })
+}
+
+pub struct CrateSource {
+    pub name: String,
+    pub source: String,
+    pub dependencies: Vec<String>,
+}
+
+pub struct SplitProgram {
+    pub runtime: String,
+    pub crates: Vec<CrateSource>,
+    pub main: String,
+    pub main_dependencies: Vec<String>,
+}
+
+const RUNTIME_ALIASES: &str = "#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField, Closure as HClosure};\n#[allow(unused_imports)]\nuse h2r_rt::{Encoding as HEncoding, ListNames as HListNames, StringNames as HStringNames};\n#[allow(unused_imports)]\nuse h2r_rt::Addr as HAddr;\n#[allow(unused_imports)]\nuse h2r_rt::{Array as HArray, Bytes as HBytes, MutVar as HMutVar};\n";
+
+pub fn emit_entry_split(
+    modules: &[Module],
+    entry: &str,
+    budget: usize,
+    driver: Driver,
+) -> Result<SplitProgram, String> {
+    prepare(modules, entry, driver, |prepared| {
+        let world = prepared.world;
+        let has_boxed = has_boxed(world, prepared.leaves);
+        let mut code = BTreeMap::new();
+        for (&index, leaf) in prepared.leaves {
+            code.insert(
+                index,
+                leaf_code(
+                    world,
+                    prepared.specialization,
+                    prepared.leaves,
+                    index,
+                    leaf,
+                    "pub ",
+                    has_boxed,
+                )?,
+            );
+        }
+        let mut crate_of: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut members: Vec<Vec<usize>> = Vec::new();
+        let mut size = 0;
+        for component in components(prepared.edges) {
+            let bytes: usize = component.iter().map(|index| code[index].len()).sum();
+            if members.is_empty() || (size > 0 && size + bytes > budget) {
+                members.push(Vec::new());
+                size = 0;
+            }
+            let current = members.len() - 1;
+            for &index in &component {
+                crate_of.insert(index, current);
+            }
+            members[current].extend(component);
+            size += bytes;
+        }
+        let name = |number: usize| format!("h2r_c{number}");
+        let mut crates = Vec::new();
+        for (number, indices) in members.iter().enumerate() {
+            let dependencies: BTreeSet<usize> = indices
+                .iter()
+                .flat_map(|index| &prepared.edges[index])
+                .map(|target| crate_of[target])
+                .filter(|&other| other != number)
+                .collect();
+            let sites = 2 * indices.len()
+                + indices
+                    .iter()
+                    .flat_map(|index| &prepared.leaves[index].function.blocks)
+                    .map(|block| block.instructions.len())
+                    .sum::<usize>();
+            let mut source = if sites > 128 {
+                format!("#![recursion_limit = \"{sites}\"]\n")
+            } else {
+                String::new()
+            };
+            source.push_str(RUNTIME_ALIASES);
+            for dependency in &dependencies {
+                writeln!(source, "use {}::*;", name(*dependency)).unwrap();
+            }
+            let mut ordered = indices.clone();
+            ordered.sort_unstable();
+            for index in ordered {
+                source.push_str(&code[&index]);
+            }
+            crates.push(CrateSource {
+                name: name(number),
+                source,
+                dependencies: dependencies.into_iter().map(name).collect(),
+            });
+        }
+        let entry_crate = name(crate_of[&0]);
+        let mut main = String::from(
+            "#[cfg(not(target_pointer_width = \"64\"))]\ncompile_error!(\"Int# backend requires a 64-bit target\");\n",
+        );
+        main.push_str(RUNTIME_ALIASES);
+        writeln!(main, "use {entry_crate}::*;").unwrap();
+        main.push_str(&prepared.adapter);
+        Ok(SplitProgram {
+            runtime: include_str!("../../h2r-rt/src/lib.rs").to_string(),
+            crates,
+            main,
+            main_dependencies: vec![entry_crate],
+        })
+    })
+}
+
+fn components(edges: &BTreeMap<usize, BTreeSet<usize>>) -> Vec<Vec<usize>> {
+    let mut order: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut low: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut stack: Vec<usize> = Vec::new();
+    let mut on_stack: BTreeSet<usize> = BTreeSet::new();
+    let mut found = Vec::new();
+    for &root in edges.keys() {
+        if order.contains_key(&root) {
+            continue;
+        }
+        let mut work: Vec<(usize, Vec<usize>)> = Vec::new();
+        let visit = |node: usize,
+                     order: &mut BTreeMap<usize, usize>,
+                     low: &mut BTreeMap<usize, usize>,
+                     stack: &mut Vec<usize>,
+                     on_stack: &mut BTreeSet<usize>,
+                     work: &mut Vec<(usize, Vec<usize>)>| {
+            let next = order.len();
+            order.insert(node, next);
+            low.insert(node, next);
+            stack.push(node);
+            on_stack.insert(node);
+            work.push((node, edges[&node].iter().rev().copied().collect()));
+        };
+        visit(
+            root,
+            &mut order,
+            &mut low,
+            &mut stack,
+            &mut on_stack,
+            &mut work,
+        );
+        while let Some((node, pending)) = work.last_mut() {
+            let node = *node;
+            if let Some(target) = pending.pop() {
+                if !order.contains_key(&target) {
+                    visit(
+                        target,
+                        &mut order,
+                        &mut low,
+                        &mut stack,
+                        &mut on_stack,
+                        &mut work,
+                    );
+                } else if on_stack.contains(&target) {
+                    let reached = order[&target].min(low[&node]);
+                    low.insert(node, reached);
+                }
+                continue;
+            }
+            work.pop();
+            if let Some((parent, _)) = work.last() {
+                let reached = low[&node].min(low[parent]);
+                low.insert(*parent, reached);
+            }
+            if low[&node] == order[&node] {
+                let mut component = Vec::new();
+                while let Some(member) = stack.pop() {
+                    on_stack.remove(&member);
+                    component.push(member);
+                    if member == node {
+                        break;
+                    }
+                }
+                found.push(component);
+            }
+        }
+    }
+    found
 }
 
 const PROGRAM_CHUNK: usize = 64;
@@ -632,7 +1009,6 @@ pub struct Program {
     pub lowered: usize,
     pub emittable: usize,
     pub emitted: usize,
-    pub recursive_values: usize,
     pub roots: Vec<RootOutcome>,
     pub refusals: BTreeMap<String, usize>,
 }
@@ -647,7 +1023,8 @@ pub enum RootOutcome {
 
 pub fn emit_program(modules: &[Module], roots: &[Instance]) -> Result<Program, String> {
     let specialization = specialize::survey(modules, roots);
-    let evidence = crate::nir::World::of(modules, 0)?;
+    let catalog = crate::nir::Catalog::of(modules);
+    let evidence = crate::nir::World::cataloged(modules, 0, &catalog)?;
     let world = &evidence;
     let mut edges = BTreeMap::new();
     let mut refusals = BTreeMap::new();
@@ -674,44 +1051,16 @@ pub fn emit_program(modules: &[Module], roots: &[Instance]) -> Result<Program, S
     }
     let emittable = edges.len();
     let mut members: BTreeSet<usize> = edges.keys().copied().collect();
-    let mut recursive_values = 0;
     loop {
-        loop {
-            let open: Vec<usize> = members
-                .iter()
-                .copied()
-                .filter(|index| !edges[index].iter().all(|d| members.contains(d)))
-                .collect();
-            if open.is_empty() {
-                break;
-            }
-            for index in open {
-                members.remove(&index);
-            }
-        }
-        let leaves: BTreeMap<usize, &LoweredLeaf> = members
-            .iter()
-            .map(|&index| {
-                (
-                    index,
-                    specialization.lowered[index].as_ref().expect("lowered"),
-                )
-            })
-            .collect();
-        let closed: BTreeMap<usize, BTreeSet<usize>> = members
-            .iter()
-            .map(|&index| (index, edges[&index].clone()))
-            .collect();
-        let cyclic: Vec<usize> = members
+        let open: Vec<usize> = members
             .iter()
             .copied()
-            .filter(|&index| recursive_value(&leaves, &closed, index))
+            .filter(|index| !edges[index].iter().all(|d| members.contains(d)))
             .collect();
-        if cyclic.is_empty() {
+        if open.is_empty() {
             break;
         }
-        recursive_values += cyclic.len();
-        for index in cyclic {
+        for index in open {
             members.remove(&index);
         }
     }
@@ -762,7 +1111,6 @@ pub fn emit_program(modules: &[Module], roots: &[Instance]) -> Result<Program, S
         lowered: specialization.lowered_count(),
         emittable,
         emitted: members.len(),
-        recursive_values,
         roots: outcomes,
         refusals,
     })
@@ -791,88 +1139,11 @@ fn functions(
     out.push_str(
         "// Generated from source-verified scalar NIR. CLI I/O is an adapter.\n#[cfg(not(target_pointer_width = \"64\"))]\ncompile_error!(\"Int# backend requires a 64-bit target\");\n",
     );
-    let has_boxed = leaves.values().any(|leaf| {
-        carrier(world, &leaf.function.result_ty) != "i64"
-            || leaf.function.blocks.iter().any(|b| {
-                b.params
-                    .iter()
-                    .chain(b.instructions.iter().map(|i| &i.result))
-                    .any(|v| carrier(world, &v.ty) != "i64")
-            })
-    });
-    if has_boxed {
-        out.push_str("\n#[allow(dead_code)]\nmod h2r_rt {\n");
-        out.push_str(include_str!("../../h2r-rt/src/lib.rs"));
-        out.push_str("\n}\n#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField, Closure as HClosure};\n#[allow(unused_imports)]\nuse h2r_rt::{Encoding as HEncoding, ListNames as HListNames, StringNames as HStringNames};\n");
-    }
-    let unlifted = |function: &Function, block: &Block| {
-        let ty = block_result(function, block);
-        (!data::lifted(world, ty)).then(|| carrier(world, ty))
-    };
-    let mut suffixes: BTreeMap<String, String> = BTreeMap::new();
-    for leaf in leaves.values() {
-        for block in &leaf.function.blocks {
-            if let Some(result) = unlifted(&leaf.function, block) {
-                let next = suffixes.len();
-                suffixes.entry(result.clone()).or_insert_with(|| {
-                    if result == "i64" {
-                        String::new()
-                    } else {
-                        format!("_{next}")
-                    }
-                });
-            }
-        }
-    }
-    let dispatcher = |function: &Function, block: &Block| {
-        unlifted(function, block).map(|result| suffixes[&result].as_str())
-    };
-    for (result, suffix) in &suffixes {
-        let mut states = String::new();
-        let mut dispatch = String::new();
-        for (&index, leaf) in leaves {
-            for block in &leaf.function.blocks {
-                if dispatcher(&leaf.function, block) != Some(suffix.as_str()) {
-                    continue;
-                }
-                let types = block
-                    .params
-                    .iter()
-                    .map(|p| carrier(world, &p.ty))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let args = block
-                    .params
-                    .iter()
-                    .map(|p| format!("v{}", p.id.0))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                writeln!(states, "B_{index}_{}({types}),", block.id.0).unwrap();
-                writeln!(
-                    dispatch,
-                    "HState{suffix}::B_{index}_{}({args}) => s_{index}_{}({args}),",
-                    block.id.0, block.id.0
-                )
-                .unwrap();
-            }
-        }
-        let applies = suffix.is_empty() && has_boxed;
-        writeln!(
-            out,
-            "#[allow(non_camel_case_types)]\nenum HState{suffix} {{\n{states}}}\nenum HStep{suffix} {{ Done({result}), Next(HState{suffix}){} }}\nfn h_run{suffix}(mut state: HState{suffix}) -> {result} {{ loop {{ let step = match state {{\n{dispatch}}}; match step {{ HStep{suffix}::Done(value) => return value, HStep{suffix}::Next(next) => state = next{} }} }} }}",
-            if applies {
-                ", Apply(HClosure, Vec<HField>, fn(&HField) -> i64)"
-            } else {
-                ""
-            },
-            if applies {
-                ", HStep::Apply(function, arguments, read) => match function.apply_tail(arguments) { h2r_rt::Tail::Enter(next) => state = *next.downcast::<HState>().expect(\"a closure entry is a dispatcher state\"), h2r_rt::Tail::Value(value) => return read(&value) }"
-            } else {
-                ""
-            }
-        )
-        .unwrap();
-    }
+    let has_boxed = has_boxed(world, leaves);
+    out.push_str("\n#[allow(dead_code)]\nmod h2r_rt {\n");
+    out.push_str(include_str!("../../h2r-rt/src/lib.rs"));
+    out.push_str("\n}\n");
+    out.push_str(RUNTIME_ALIASES);
     for (position, (&index, leaf)) in leaves.iter().enumerate() {
         if let Some(size) = chunk
             && position % size == 0
@@ -883,6 +1154,52 @@ fn functions(
             writeln!(out, "mod h_chunk_{chunks} {{\nuse super::*;").unwrap();
             chunks += 1;
         }
+        out.push_str(&leaf_code(
+            world,
+            specialization,
+            leaves,
+            index,
+            leaf,
+            vis,
+            has_boxed,
+        )?);
+    }
+    if chunks != 0 {
+        out.push_str("}\n");
+    }
+    for chunk in 0..chunks {
+        writeln!(out, "use h_chunk_{chunk}::*;").unwrap();
+    }
+    Ok(out)
+}
+
+fn has_boxed(world: &World<'_>, leaves: &BTreeMap<usize, &LoweredLeaf>) -> bool {
+    leaves.values().any(|leaf| {
+        carrier(world, &leaf.function.result_ty) != "i64"
+            || leaf.function.blocks.iter().any(|b| {
+                b.params
+                    .iter()
+                    .chain(b.instructions.iter().map(|i| &i.result))
+                    .any(|v| carrier(world, &v.ty) != "i64")
+            })
+    })
+}
+
+fn leaf_code(
+    world: &World<'_>,
+    specialization: &specialize::Specialization,
+    leaves: &BTreeMap<usize, &LoweredLeaf>,
+    index: usize,
+    leaf: &LoweredLeaf,
+    vis: &str,
+    has_boxed: bool,
+) -> Result<String, String> {
+    let mut out = String::new();
+    let unlifted = |function: &Function, block: &Block| {
+        let ty = block_result(function, block);
+        (!data::lifted(world, ty)).then(|| carrier(world, ty))
+    };
+    {
         let block = &leaf.function.blocks[0];
         let parameters = block
             .params
@@ -898,31 +1215,37 @@ fn functions(
             .collect();
         for block in &leaf.function.blocks {
             let result = carrier(world, block_result(&leaf.function, block));
-            let suffix = dispatcher(&leaf.function, block);
-            let looping =
-                |target: crate::nir::BlockId| suffix.is_none() && reaches(&graph, target, block.id);
+            let stepped = unlifted(&leaf.function, block);
+            let looping = |target: crate::nir::BlockId| {
+                stepped.is_none() && reaches(&graph, target, block.id)
+            };
             let block_parameters = block
                 .params
                 .iter()
                 .map(|p| format!("v{}: {}", p.id.0, carrier(world, &p.ty)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            if let Some(suffix) = suffix {
+            if stepped.is_some() {
                 let args = block
                     .params
                     .iter()
                     .map(|p| format!("v{}", p.id.0))
                     .collect::<Vec<_>>()
                     .join(", ");
-                writeln!(out, "{vis}fn b_{index}_{}({block_parameters}) -> {result} {{ h_run{suffix}(HState{suffix}::B_{index}_{}({args})) }}", block.id.0, block.id.0).unwrap();
+                writeln!(
+                    out,
+                    "{vis}fn b_{index}_{}({block_parameters}) -> {result} {{ s_{index}_{}({args}).run() }}",
+                    block.id.0, block.id.0
+                )
+                .unwrap();
             }
             writeln!(
                 out,
                 "    #[allow(unused_variables)]\n    {vis}fn {}_{index}_{}({block_parameters}) -> {} {{",
-                if suffix.is_some() { "s" } else { "b" },
+                if stepped.is_some() { "s" } else { "b" },
                 block.id.0,
-                match suffix {
-                    Some(suffix) => format!("HStep{suffix}"),
+                match stepped {
+                    Some(_) => format!("h2r_rt::Step<{result}>"),
                     None => result.clone(),
                 }
             )
@@ -936,16 +1259,20 @@ fn functions(
                     .expect("verified operand")
                     .ty
             };
+            let last = last_uses(block);
+            let at = std::cell::Cell::new(0);
+            let moves = |id: crate::nir::ValueId| last.get(&id) == Some(&(at.get(), true));
             let value = |id: crate::nir::ValueId| {
                 let ty = value_ty(id);
-                if carrier(world, ty) != "i64" {
-                    format!("v{}.clone()", id.0)
-                } else {
+                if carrier(world, ty) == "i64" || moves(id) {
                     format!("v{}", id.0)
+                } else {
+                    format!("v{}.clone()", id.0)
                 }
             };
             let mut tail_transfer = false;
             for (position, instruction) in block.instructions.iter().enumerate() {
+                at.set(position);
                 if position + 1 == block.instructions.len()
                     && matches!(block.terminator.exit, Exit::Return(v) if v == instruction.result.id)
                 {
@@ -974,13 +1301,7 @@ fn functions(
                         |callee: &crate::nir::ValueId, arguments: &[crate::nir::ValueId]| {
                             let args = arguments
                                 .iter()
-                                .map(|v| {
-                                    format!(
-                                        "HField::{}({})",
-                                        field_kind(world, value_ty(*v)).0,
-                                        value(*v)
-                                    )
-                                })
+                                .map(|v| pack(world, value_ty(*v), &value(*v)))
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             (
@@ -989,8 +1310,8 @@ fn functions(
                                 field_kind(world, &instruction.result.ty).1,
                             )
                         };
-                    let code = match (suffix, destination, &instruction.operation) {
-                        (Some(suffix), Some((target_index, target, arguments)), _) => {
+                    let code = match (stepped.as_deref(), destination, &instruction.operation) {
+                        (Some(_), Some((target_index, target, arguments)), _) => {
                             let target_block = leaves[&target_index]
                                 .function
                                 .blocks
@@ -1005,10 +1326,7 @@ fn functions(
                                 .map(|v| value(*v))
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            Some(format!(
-                                "HStep{suffix}::Next(HState{suffix}::B_{target_index}_{}({args}))",
-                                target.0
-                            ))
+                            Some(step_to(&format!("s_{target_index}_{}", target.0), &args))
                         }
                         (None, Some((target_index, target, arguments)), _)
                             if target_index == index && looping(target) =>
@@ -1031,7 +1349,7 @@ fn functions(
                                 arguments,
                                 arms,
                             },
-                        ) if suffix.is_some() || arms.iter().any(|arm| looping(arm.target)) => {
+                        ) if stepped.is_some() || arms.iter().any(|arm| looping(arm.target)) => {
                             let captures = arguments
                                 .iter()
                                 .map(|v| value(*v))
@@ -1042,11 +1360,8 @@ fn functions(
                                 *scrutinee,
                                 &captures,
                                 arms,
-                                |target, args| match suffix {
-                                    Some(suffix) => format!(
-                                        "HStep{suffix}::Next(HState{suffix}::B_{index}_{}({args}))",
-                                        target.0
-                                    ),
+                                |target, args| match stepped {
+                                    Some(_) => step_to(&format!("s_{index}_{}", target.0), &args),
                                     None if looping(target) => format!(
                                         "{result}::defer_to(move || b_{index}_{}({args}))",
                                         target.0
@@ -1055,10 +1370,10 @@ fn functions(
                                 },
                             ))
                         }
-                        (Some(""), _, Operation::Apply { callee, arguments }) if has_boxed => {
+                        (Some("i64"), _, Operation::Apply { callee, arguments }) if has_boxed => {
                             let (callee, args, read) = applied(callee, arguments);
                             Some(format!(
-                                "HStep::Apply({callee}, vec![{args}], HField::{read})"
+                                "h2r_rt::Step::Next(Box::new(move || match {callee}.apply_tail(vec![{args}]) {{ h2r_rt::Tail::Enter(step) => step, h2r_rt::Tail::Value(value) => h2r_rt::Step::Done(value.{read}()) }}))"
                             ))
                         }
                         (None, _, Operation::Apply { callee, arguments }) => {
@@ -1086,12 +1401,16 @@ fn functions(
                         closure(
                             world,
                             &format!("b_{index}_{}", target.0),
-                            (dispatcher(&leaf.function, target_block) == Some("") && has_boxed)
-                                .then(|| format!("HState::B_{index}_{}", target.0))
+                            (unlifted(&leaf.function, target_block).as_deref() == Some("i64")
+                                && has_boxed)
+                                .then(|| format!("s_{index}_{}", target.0))
                                 .as_deref(),
                             &arguments.iter().map(|v| value(*v)).collect::<Vec<_>>(),
-                            &instruction.result.ty,
-                            target_block.params.len() - arguments.len(),
+                            &target_block.params[arguments.len()..]
+                                .iter()
+                                .map(|p| &*p.ty)
+                                .collect::<Vec<_>>(),
+                            block_result(&leaf.function, target_block),
                         )?
                     }
                     Operation::Apply { callee, arguments } => {
@@ -1105,14 +1424,14 @@ fn functions(
                                     .find(|p| p.id == *v)
                                     .expect("verified argument")
                                     .ty;
-                                format!("HField::{}({})", field_kind(world, ty).0, value(*v))
+                                pack(world, ty, &value(*v))
                             })
                             .collect::<Vec<_>>()
                             .join(", ");
-                        format!(
-                            "v{}.apply(vec![{args}]).{}()",
-                            callee.0,
-                            field_kind(world, &instruction.result.ty).1
+                        unpack(
+                            world,
+                            &instruction.result.ty,
+                            &format!("v{}.apply(vec![{args}])", callee.0),
                         )
                     }
                     Operation::Construct {
@@ -1122,9 +1441,7 @@ fn functions(
                         let fields = arguments
                             .iter()
                             .zip(&constructor.fields)
-                            .map(|(v, t)| {
-                                format!("HField::{}({})", field_kind(world, t).0, value(*v))
-                            })
+                            .map(|(v, t)| pack(world, t, &value(*v)))
                             .collect::<Vec<_>>()
                             .join(", ");
                         let strict = constructor
@@ -1135,8 +1452,9 @@ fn functions(
                             .map(|(i, _)| format!("fields[{i}].force();"))
                             .collect::<Vec<_>>()
                             .join(" ");
+                        let collection = if arguments.len() <= 3 { "" } else { "vec!" };
                         format!(
-                            "{{ let fields = vec![{fields}]; {strict} HData::ready({:?}, fields) }}",
+                            "{{ let fields = {collection}[{fields}]; {strict} HData::ready({:?}, fields) }}",
                             constructor.name
                         )
                     }
@@ -1164,7 +1482,11 @@ fn functions(
                         }
                     }
                     Operation::UnboxedTupleField { tuple, index } => {
-                        format!("{}.{index}", value(*tuple))
+                        if moves(*tuple) {
+                            format!("v{}.{index}", tuple.0)
+                        } else {
+                            format!("v{}.{index}.clone()", tuple.0)
+                        }
                     }
                     Operation::DelayBlock { target, arguments } => {
                         let captures = arguments
@@ -1240,7 +1562,7 @@ fn functions(
                             .map(|c| format!("{:?} => {}, ", c.name, i64::from(c.tag) - 1))
                             .collect();
                         format!(
-                            "{{ let node = {}.force(); match node.constructor {{ {arms}other => panic!(\"dataToTag#: {{other}} is not in the family\") }} }}",
+                            "{{ let scrutinee = {}; let node = scrutinee.force(); match node.constructor {{ {arms}other => panic!(\"dataToTag#: {{other}} is not in the family\") }} }}",
                             value(*operand)
                         )
                     }
@@ -1249,7 +1571,7 @@ fn functions(
                             .iter()
                             .map(|c| {
                                 format!(
-                                    "{} => HData::ready({:?}, vec![]), ",
+                                    "{} => HData::ready({:?}, []), ",
                                     i64::from(c.tag) - 1,
                                     c.name
                                 )
@@ -1316,7 +1638,7 @@ fn functions(
                                 let (nil, cons) =
                                     list.mapped.as_ref().ok_or("map without its result cells")?;
                                 let element = match field_kind(world, &cons.fields[0]).0 {
-                                    kind @ ("Int" | "Data" | "Closure") => kind,
+                                    kind @ ("Int" | "Data" | "Closure" | "Dynamic") => kind,
                                     other => {
                                         return Err(format!(
                                             "map's element carrier {other} is not lifted"
@@ -1356,9 +1678,8 @@ fn functions(
                                 format!("h2r_rt::length_from({}, {}, {input})", a[0], a[1])
                             }
                             ListOp::ConsAppend => format!(
-                                "h2r_rt::cons_append(HField::{}({}), {}, {}, {input})",
-                                field_kind(world, value_ty(list.arguments[0])).0,
-                                a[0],
+                                "h2r_rt::cons_append({}, {}, {}, {input})",
+                                pack(world, value_ty(list.arguments[0]), &a[0]),
                                 a[1],
                                 a[2]
                             ),
@@ -1392,8 +1713,197 @@ fn functions(
                     Operation::UnboxInt(v) => format!("v{}.force()", v.0),
                     // Char# and Int# share the carrier, so a code-point
                     // conversion moves the word and changes only the type.
-                    Operation::OrdChar(v) | Operation::ChrChar(v) | Operation::IntToWord(v) => {
+                    Operation::OrdChar(v)
+                    | Operation::ChrChar(v)
+                    | Operation::IntToWord(v)
+                    | Operation::WordToInt(v) => {
                         format!("v{}", v.0)
+                    }
+                    Operation::NegateInt(v) => format!("v{}.wrapping_neg()", v.0),
+                    Operation::Machine {
+                        op,
+                        type_arguments,
+                        arguments,
+                    } => {
+                        let a: Vec<String> = arguments.iter().map(|v| value(*v)).collect();
+                        let element = |index: usize| field_kind(world, &type_arguments[index]);
+                        let unsigned = |i: usize| format!("({} as u64)", a[i]);
+                        let wide = |i: usize| format!("({} as u64 as u128)", a[i]);
+                        match op {
+                            Machine::XorWord | Machine::XorInt => format!("{} ^ {}", a[0], a[1]),
+                            Machine::OrWord => format!("{} | {}", a[0], a[1]),
+                            Machine::NotWord | Machine::NotInt => format!("!{}", a[0]),
+                            Machine::QuotRemInt => {
+                                format!(
+                                    "({0}.wrapping_div({1}), {0}.wrapping_rem({1}))",
+                                    a[0], a[1]
+                                )
+                            }
+                            Machine::Word8ToWord => a[0].clone(),
+                            Machine::WordToWord8 => format!("{} & 0xff", a[0]),
+                            Machine::IndexWord8Addr => format!("{}.index_word8({})", a[0], a[1]),
+                            Machine::ShiftLeftWord => {
+                                format!("{}.wrapping_shl({} as u32)", a[0], a[1])
+                            }
+                            Machine::ShiftRightWord | Machine::ShiftRightLogicalInt => {
+                                format!("{}.wrapping_shr({} as u32) as i64", unsigned(0), a[1])
+                            }
+                            Machine::PlusWord => format!("{}.wrapping_add({})", a[0], a[1]),
+                            Machine::TimesWord => format!("{}.wrapping_mul({})", a[0], a[1]),
+                            Machine::QuotWord => {
+                                format!("({} / {}) as i64", unsigned(0), unsigned(1))
+                            }
+                            Machine::RemWord => {
+                                format!("({} % {}) as i64", unsigned(0), unsigned(1))
+                            }
+                            Machine::QuotRemWord => format!(
+                                "(({0} / {1}) as i64, ({0} % {1}) as i64)",
+                                unsigned(0),
+                                unsigned(1)
+                            ),
+                            Machine::QuotRemWord2 => format!(
+                                "{{ let n = ({} << 64) | {}; let d = {} as u64 as u128; ((n / d) as u64 as i64, (n % d) as u64 as i64) }}",
+                                wide(0),
+                                wide(1),
+                                a[2]
+                            ),
+                            Machine::PlusWord2 | Machine::TimesWord2 => format!(
+                                "{{ let n = {} {} {}; ((n >> 64) as u64 as i64, n as u64 as i64) }}",
+                                wide(0),
+                                if *op == Machine::PlusWord2 { "+" } else { "*" },
+                                wide(1)
+                            ),
+                            Machine::AddWordC | Machine::SubWordC => format!(
+                                "{{ let (n, c) = {}.{}({} as u64); (n as i64, i64::from(c)) }}",
+                                unsigned(0),
+                                if *op == Machine::AddWordC {
+                                    "overflowing_add"
+                                } else {
+                                    "overflowing_sub"
+                                },
+                                a[1]
+                            ),
+                            Machine::AddIntC | Machine::SubIntC => format!(
+                                "{{ let (n, c) = {}.{}({}); (n, i64::from(c)) }}",
+                                a[0],
+                                if *op == Machine::AddIntC {
+                                    "overflowing_add"
+                                } else {
+                                    "overflowing_sub"
+                                },
+                                a[1]
+                            ),
+                            Machine::MulIntMayOflo => {
+                                format!("i64::from({}.checked_mul({}).is_none())", a[0], a[1])
+                            }
+                            Machine::TimesInt2 => format!(
+                                "{{ let n = ({} as i128) * ({} as i128); let (high, low) = ((n >> 64) as i64, n as i64); (i64::from(high != low >> 63), high, low) }}",
+                                a[0], a[1]
+                            ),
+                            Machine::Clz => format!("i64::from({}.leading_zeros())", unsigned(0)),
+                            Machine::Ctz => format!("i64::from({}.trailing_zeros())", unsigned(0)),
+                            Machine::PopCnt => format!("i64::from({}.count_ones())", unsigned(0)),
+                            Machine::NewMutVar => format!(
+                                "({}, HMutVar::new({}))",
+                                a[1],
+                                pack(world, &type_arguments[1], &a[0])
+                            ),
+                            Machine::ReadMutVar => {
+                                format!("({}, {}.read().{}())", a[1], a[0], element(2).1)
+                            }
+                            Machine::WriteMutVar => format!(
+                                "{{ {}.write({}); {} }}",
+                                a[0],
+                                pack(world, &type_arguments[2], &a[1]),
+                                a[2]
+                            ),
+                            Machine::Raise => "h2r_rt::raise_exception()".into(),
+                            Machine::RaiseDivZero => {
+                                "h2r_rt::raise_arithmetic(\"divide by zero\")".into()
+                            }
+                            Machine::RaiseUnderflow => {
+                                "h2r_rt::raise_arithmetic(\"arithmetic underflow\")".into()
+                            }
+                            Machine::RaiseOverflow => {
+                                "h2r_rt::raise_arithmetic(\"arithmetic overflow\")".into()
+                            }
+                            Machine::AbsentError => format!("h2r_rt::absent_error({})", a[0]),
+                            Machine::NoDuplicate => a[0].clone(),
+                            Machine::Memcpy => format!(
+                                "{{ HBytes::copy(&{}, 0, &{}, 0, {}); ({}, HAddr::literal(b\"\")) }}",
+                                a[1], a[0], a[2], a[3]
+                            ),
+                            Machine::RealWorld => "0".into(),
+                            Machine::NewByteArray => format!("({}, HBytes::new({}))", a[1], a[0]),
+                            Machine::ReadWordArray | Machine::ReadIntArray => {
+                                format!("({}, {}.index_word({}))", a[2], a[0], a[1])
+                            }
+                            Machine::WriteWordArray | Machine::WriteIntArray => {
+                                format!("{{ {}.write_word({}, {}); {} }}", a[0], a[1], a[2], a[3])
+                            }
+                            Machine::IndexWordArray | Machine::IndexIntArray => {
+                                format!("{}.index_word({})", a[0], a[1])
+                            }
+                            Machine::SizeofByteArray => format!("{}.size()", a[0]),
+                            Machine::GetSizeofMutableByteArray => {
+                                format!("({}, {}.size())", a[1], a[0])
+                            }
+                            Machine::ShrinkMutableByteArray => {
+                                format!("{{ {}.shrink({}); {} }}", a[0], a[1], a[2])
+                            }
+                            Machine::UnsafeFreezeByteArray => format!("({}, {})", a[1], a[0]),
+                            Machine::CopyByteArray | Machine::CopyMutableByteArray => format!(
+                                "{{ HBytes::copy(&{}, {}, &{}, {}, {}); {} }}",
+                                a[0], a[1], a[2], a[3], a[4], a[5]
+                            ),
+                            Machine::SetByteArray => {
+                                format!(
+                                    "{{ {}.set({}, {}, {}); {} }}",
+                                    a[0], a[1], a[2], a[3], a[4]
+                                )
+                            }
+                            Machine::NewArray => format!(
+                                "({}, HArray::new({}, {}))",
+                                a[2],
+                                a[0],
+                                pack(world, &type_arguments[1], &a[1])
+                            ),
+                            Machine::ReadArray => {
+                                format!("({}, {}.read({}).{}())", a[2], a[0], a[1], element(2).1)
+                            }
+                            Machine::WriteArray => format!(
+                                "{{ {}.write({}, {}); {} }}",
+                                a[0],
+                                a[1],
+                                pack(world, &type_arguments[2], &a[2]),
+                                a[3]
+                            ),
+                            Machine::IndexArray => {
+                                format!("({}.read({}).{}(),)", a[0], a[1], element(1).1)
+                            }
+                            Machine::UnsafeFreezeArray | Machine::UnsafeThawArray => {
+                                format!("({}, {})", a[1], a[0])
+                            }
+                        }
+                    }
+                    Operation::IndexCharAddr { arguments } => {
+                        format!("v{}.index_char(v{})", arguments[0].0, arguments[1].0)
+                    }
+                    Operation::PlusAddr { arguments } => {
+                        format!("v{}.plus(v{})", arguments[0].0, arguments[1].0)
+                    }
+                    Operation::AddrLiteral(bytes) => {
+                        let bytes: String =
+                            bytes.iter().map(|byte| format!("\\x{byte:02x}")).collect();
+                        format!("HAddr::literal(b\"{bytes}\\x00\")")
+                    }
+                    Operation::WordBinary { op, arguments } => {
+                        let (left, right) = (arguments[0].0, arguments[1].0);
+                        match op {
+                            IntBinary::Subtract => format!("v{left}.wrapping_sub(v{right})"),
+                            IntBinary::And => format!("v{left} & v{right}"),
+                            _ => return Err(format!("unsupported Word# operation {op:?}")),
+                        }
                     }
                     Operation::CharCompare { op, arguments }
                     | Operation::WordCompare { op, arguments } => {
@@ -1432,7 +1942,33 @@ fn functions(
                             .join(", ");
                         format!("b_{index}_{}({args})", target.0)
                     }
-                    Operation::Move(v) => value(*v),
+                    Operation::Move(v) => {
+                        let from = carrier(world, value_ty(*v));
+                        let to = carrier(world, &instruction.result.ty);
+                        if from == to {
+                            value(*v)
+                        } else if to == "HField" {
+                            pack(world, value_ty(*v), &value(*v))
+                        } else if from == "HField" {
+                            format!(
+                                "{}.{}()",
+                                value(*v),
+                                field_kind(world, &instruction.result.ty).1
+                            )
+                        } else {
+                            return Err(format!("a move changes its carrier from {from} to {to}"));
+                        }
+                    }
+                    Operation::PendingCell => {
+                        format!("{}::pending()", carrier(world, &instruction.result.ty))
+                    }
+                    Operation::FillCell {
+                        cell,
+                        value: filled,
+                    } => format!(
+                        "{{ v{}.fill(v{}.clone()); v{}.clone() }}",
+                        cell.0, filled.0, cell.0
+                    ),
                     Operation::IntBinary { op, arguments } => {
                         let left = arguments[0].0;
                         let right = arguments[1].0;
@@ -1452,7 +1988,20 @@ fn functions(
                             IntBinary::ShiftRightArithmetic => {
                                 format!("v{left}.wrapping_shr(v{right} as u32)")
                             }
+                            IntBinary::And => format!("v{left} & v{right}"),
+                            IntBinary::Or => format!("v{left} | v{right}"),
+                            IntBinary::Quot => format!("v{left}.wrapping_div(v{right})"),
+                            IntBinary::Rem => format!("v{left}.wrapping_rem(v{right})"),
                         }
+                    }
+                    Operation::Literal(lit)
+                        if carrier(world, &instruction.result.ty) == "HBytes" =>
+                    {
+                        let limbs: Vec<String> = big_nat_limbs(lit)?
+                            .iter()
+                            .map(|limb| format!("{limb:#x}"))
+                            .collect();
+                        format!("HBytes::from_words(&[{}])", limbs.join(", "))
                     }
                     Operation::Literal(lit) => {
                         format!("{}i64", scalar_literal(world, &instruction.result.ty, lit)?)
@@ -1468,19 +2017,23 @@ fn functions(
                             &reference_of(*module, *binder, type_arguments, dictionaries),
                         )?;
                         let callee = &leaves[&target].function;
-                        let arity = callee.blocks[0].params.len();
-                        if arity == 0 {
+                        if callee.blocks[0].params.is_empty() {
                             format!("f_{target}()")
                         } else {
                             closure(
                                 world,
                                 &format!("f_{target}"),
-                                (dispatcher(callee, &callee.blocks[0]) == Some("") && has_boxed)
-                                    .then(|| format!("HState::B_{target}_{}", callee.entry.0))
+                                (unlifted(callee, &callee.blocks[0]).as_deref() == Some("i64")
+                                    && has_boxed)
+                                    .then(|| format!("s_{target}_{}", callee.entry.0))
                                     .as_deref(),
                                 &[],
-                                &instruction.result.ty,
-                                arity,
+                                &callee.blocks[0]
+                                    .params
+                                    .iter()
+                                    .map(|p| &*p.ty)
+                                    .collect::<Vec<_>>(),
+                                &callee.result_ty,
                             )?
                         }
                     }
@@ -1495,8 +2048,21 @@ fn functions(
                             specialization,
                             &reference_of(*module, *binder, type_arguments, dictionaries),
                         )?;
-                        if leaves[&target].function.blocks[0].params.len() != arguments.len() {
-                            return Err("emitted target parameter count disagrees with call".into());
+                        let takes = leaves[&target].function.blocks[0].params.len();
+                        if takes != arguments.len() {
+                            let name = |index: usize| {
+                                let instance = &specialization.instances[index];
+                                world.at(instance.module).map_or_else(
+                                    |_| format!("instance {index}"),
+                                    |module| module.binder(instance.binder).name.clone(),
+                                )
+                            };
+                            return Err(format!(
+                                "emitted target parameter count disagrees with call: {} calls {} with {} arguments, it takes {takes}",
+                                name(index),
+                                name(target),
+                                arguments.len()
+                            ));
                         }
                         let args = arguments
                             .iter()
@@ -1505,10 +2071,13 @@ fn functions(
                             .join(", ");
                         format!("f_{target}({args})")
                     }
-                    Operation::Force(_) => {
-                        return Err("unsupported operation in scalar Rust backend".into());
-                    }
+                    Operation::Force(v) => format!("{{ v{0}.force(); v{0}.clone() }}", v.0),
                 };
+                if diverges(&instruction.operation) {
+                    writeln!(out, "    {expression}").unwrap();
+                    tail_transfer = true;
+                    break;
+                }
                 writeln!(
                     out,
                     "    let v{}: {} = {expression};",
@@ -1517,6 +2086,7 @@ fn functions(
                 )
                 .unwrap();
             }
+            at.set(block.instructions.len());
             let call = |target: &crate::nir::BlockId, args: &[crate::nir::ValueId]| {
                 format!(
                     "b_{index}_{}({})",
@@ -1527,28 +2097,28 @@ fn functions(
                         .join(", ")
                 )
             };
-            let transfer = |target: &crate::nir::BlockId, args: &[crate::nir::ValueId]| match suffix
-            {
-                Some(suffix) => format!(
-                    "HStep{suffix}::Next(HState{suffix}::B_{index}_{}({}))",
-                    target.0,
-                    args.iter()
-                        .map(|v| value(*v))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                None if looping(*target) => {
-                    format!("{result}::defer_to(move || {})", call(target, args))
-                }
-                None => call(target, args),
-            };
+            let transfer =
+                |target: &crate::nir::BlockId, args: &[crate::nir::ValueId]| match stepped {
+                    Some(_) => step_to(
+                        &format!("s_{index}_{}", target.0),
+                        &args
+                            .iter()
+                            .map(|v| value(*v))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                    None if looping(*target) => {
+                        format!("{result}::defer_to(move || {})", call(target, args))
+                    }
+                    None => call(target, args),
+                };
             if !tail_transfer {
                 match &block.terminator.exit {
                     Exit::Return(v) => writeln!(
                         out,
                         "    {}",
-                        match suffix {
-                            Some(suffix) => format!("HStep{suffix}::Done({})", value(*v)),
+                        match stepped {
+                            Some(_) => format!("h2r_rt::Step::Done({})", value(*v)),
                             None => value(*v),
                         }
                     )
@@ -1608,12 +2178,6 @@ fn functions(
             writeln!(out, "    b_{index}_{}({args})\n}}", leaf.function.entry.0).unwrap();
         }
     }
-    if chunks != 0 {
-        out.push_str("}\n");
-    }
-    for chunk in 0..chunks {
-        writeln!(out, "use h_chunk_{chunk}::*;").unwrap();
-    }
     Ok(out)
 }
 
@@ -1638,6 +2202,32 @@ fn argument(world: &World<'_>, ty: &Ty, index: usize) -> Result<String, String> 
     }
 }
 
+// ghc-bignum's native BigNat# is its little-endian limbs with no leading zero limb.
+pub(crate) fn big_nat_limbs(lit: &h2r_core_ir::Lit) -> Result<Vec<u64>, String> {
+    let (Some("BigNat"), Some(decimal)) = (lit.num_type.as_deref(), lit.value.as_deref()) else {
+        return Err(format!(
+            "a ByteArray# literal must be a BigNat, not {}",
+            lit.pretty
+        ));
+    };
+    let mut limbs: Vec<u64> = Vec::new();
+    for digit in decimal.bytes() {
+        if !digit.is_ascii_digit() {
+            return Err(format!("a BigNat literal is decimal, not {decimal:?}"));
+        }
+        let mut carry = u128::from(digit - b'0');
+        for limb in &mut limbs {
+            let next = u128::from(*limb) * 10 + carry;
+            *limb = next as u64;
+            carry = next >> 64;
+        }
+        if carry != 0 {
+            limbs.push(carry as u64);
+        }
+    }
+    Ok(limbs)
+}
+
 fn string_names(world: &World<'_>) -> Result<String, String> {
     let (nil, cons, character) = data::string_layouts(world)?;
     Ok(format!(
@@ -1651,6 +2241,119 @@ fn string_names(world: &World<'_>) -> Result<String, String> {
 struct Shows {
     named: std::collections::BTreeMap<String, String>,
     functions: Vec<String>,
+}
+
+fn operands(operation: &Operation) -> Vec<(crate::nir::ValueId, bool)> {
+    let moved = |values: &[crate::nir::ValueId]| values.iter().map(|v| (*v, true)).collect();
+    let read = |values: &[crate::nir::ValueId]| values.iter().map(|v| (*v, false)).collect();
+    match operation {
+        Operation::MakeClosure { arguments, .. }
+        | Operation::LocalScope { arguments, .. }
+        | Operation::CallLocal { arguments, .. }
+        | Operation::Construct { arguments, .. }
+        | Operation::MakeUnboxedTuple { arguments }
+        | Operation::DelayBlock { arguments, .. }
+        | Operation::EvaluateBlock { arguments, .. }
+        | Operation::CallTop { arguments, .. } => moved(arguments),
+        Operation::UnboxedTupleField { tuple: v, .. } | Operation::Move(v) => moved(&[*v]),
+        Operation::AppendList { left, right, .. } => moved(&[*left, *right]),
+        Operation::Apply { callee, arguments } => {
+            let mut uses: Vec<_> = moved(arguments);
+            uses.push((*callee, false));
+            uses
+        }
+        Operation::MatchData {
+            scrutinee,
+            arguments,
+            ..
+        } => {
+            let mut uses: Vec<_> = moved(arguments);
+            uses.push((*scrutinee, false));
+            uses
+        }
+        Operation::IntBinary { arguments, .. }
+        | Operation::CharCompare { arguments, .. }
+        | Operation::WordCompare { arguments, .. }
+        | Operation::WordBinary { arguments, .. }
+        | Operation::IndexCharAddr { arguments }
+        | Operation::PlusAddr { arguments }
+        | Operation::Machine { arguments, .. } => read(arguments),
+        Operation::BoxInt(v)
+        | Operation::UnboxInt(v)
+        | Operation::IntToWord(v)
+        | Operation::WordToInt(v)
+        | Operation::NegateInt(v)
+        | Operation::OrdChar(v)
+        | Operation::ChrChar(v)
+        | Operation::Force(v)
+        | Operation::DataToTag { value: v, .. }
+        | Operation::TagToEnum { tag: v, .. }
+        | Operation::RaiseError { message: v }
+        | Operation::EmptyCase { scrutinee: v } => read(&[*v]),
+        Operation::FillCell { cell, value } => read(&[*cell, *value]),
+        Operation::PointerEquality { left, right } => read(&[*left, *right]),
+        Operation::UnpackString(unpack) => read(unpack.tail.as_slice()),
+        Operation::ListPredicate(predicate) => read(&[predicate.left, predicate.right]),
+        Operation::ListFunction(function) => read(&function.arguments),
+        Operation::CompareStrings(compare) => read(&[compare.left, compare.right]),
+        Operation::RaiseCallStackError(error) => read(&[error.message, error.stack]),
+        Operation::AddrLiteral(_)
+        | Operation::PendingCell
+        | Operation::Literal(_)
+        | Operation::TopReference { .. } => Vec::new(),
+    }
+}
+
+fn last_uses(block: &Block) -> BTreeMap<crate::nir::ValueId, (usize, bool)> {
+    let mut last: BTreeMap<crate::nir::ValueId, (usize, bool)> = BTreeMap::new();
+    let mut record = |position: usize, id: crate::nir::ValueId, moved: bool| match last.get_mut(&id)
+    {
+        Some(entry) if entry.0 == position => entry.1 = false,
+        _ => {
+            last.insert(id, (position, moved));
+        }
+    };
+    for (position, instruction) in block.instructions.iter().enumerate() {
+        for (id, moved) in operands(&instruction.operation) {
+            record(position, id, moved);
+        }
+    }
+    let end = block.instructions.len();
+    match &block.terminator.exit {
+        Exit::Return(v) => record(end, *v, true),
+        Exit::Jump { args, .. } => {
+            for v in args {
+                record(end, *v, true);
+            }
+        }
+        Exit::IntSwitch {
+            scrutinee, args, ..
+        } => {
+            record(end, *scrutinee, false);
+            for v in args {
+                record(end, *v, true);
+            }
+        }
+        Exit::Diverge { .. } => {}
+    }
+    last
+}
+
+fn diverges(operation: &Operation) -> bool {
+    matches!(
+        operation,
+        Operation::RaiseError { .. }
+            | Operation::RaiseCallStackError(_)
+            | Operation::EmptyCase { .. }
+            | Operation::Machine {
+                op: Machine::Raise
+                    | Machine::RaiseDivZero
+                    | Machine::RaiseUnderflow
+                    | Machine::RaiseOverflow
+                    | Machine::AbsentError,
+                ..
+            }
+    )
 }
 
 /// The name of a generated `fn(&HField, u8) -> String` that renders a value
@@ -1667,10 +2370,13 @@ fn show_function(world: &World<'_>, ty: &Ty, shows: &mut Shows) -> Result<String
     let body = if boxed::is_int(&ty) {
         "h2r_rt::show_int(value.int().force(), precedence)".to_string()
     } else if ty.is_char() {
-        format!("h2r_rt::show_char(&value.data(), {})", string_names(world)?)
+        format!(
+            "{{ let _ = precedence; h2r_rt::show_char(&value.data(), {}) }}",
+            string_names(world)?
+        )
     } else if ty.list_elem().is_some_and(Ty::is_char) {
         format!(
-            "h2r_rt::show_string(&value.data(), {})",
+            "{{ let _ = precedence; h2r_rt::show_string(&value.data(), {}) }}",
             string_names(world)?
         )
     } else if let Some(element) = ty.list_elem() {
@@ -1727,7 +2433,7 @@ fn show_function(world: &World<'_>, ty: &Ty, shows: &mut Shows) -> Result<String
             write!(arms, "{:?} => {text}, ", constructor.name).unwrap();
         }
         format!(
-            "{{ let _ = precedence; let node = value.data().force(); match node.constructor {{ {arms}other => panic!(\"show: {{other}} is not in this family\") }} }}"
+            "{{ let _ = precedence; let data = value.data(); let node = data.force(); match node.constructor {{ {arms}other => panic!(\"show: {{other}} is not in this family\") }} }}"
         )
     } else {
         return Err(format!("CLI adapter cannot show a value of type {key}"));

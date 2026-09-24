@@ -9,7 +9,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use h2r_core_ir::{Ty, TyVarId};
+use h2r_core_ir::{Name, Ty, TyVarId};
 
 /// An ordered type-variable substitution. Order is the source binding order,
 /// which is what an instance key records; lookup is by type-variable unique,
@@ -137,7 +137,7 @@ fn substitute_one(ty: &mut Ty, unique: &str, replacement: &Ty) {
 
 /// Rename every quantifier whose variable is in `avoid`, so a later
 /// substitution cannot move a free variable under a binder that captures it.
-fn freshen(ty: &mut Ty, avoid: &BTreeSet<String>, used: &mut BTreeSet<String>) {
+fn freshen(ty: &mut Ty, avoid: &BTreeSet<Name>, used: &mut BTreeSet<Name>) {
     let mut work = vec![ty];
     while let Some(node) = work.pop() {
         match node {
@@ -167,10 +167,10 @@ fn freshen(ty: &mut Ty, avoid: &BTreeSet<String>, used: &mut BTreeSet<String>) {
     }
 }
 
-fn fresh_unique(used: &mut BTreeSet<String>) -> String {
+fn fresh_unique(used: &mut BTreeSet<Name>) -> Name {
     let mut n = used.len();
     loop {
-        let candidate = format!("h2rSpec{n}");
+        let candidate = Name::from(format!("h2rSpec{n}"));
         if used.insert(candidate.clone()) {
             return candidate;
         }
@@ -179,7 +179,7 @@ fn fresh_unique(used: &mut BTreeSet<String>) -> String {
 }
 
 /// Every type-variable unique that occurs free.
-pub fn free_uniques(ty: &Ty) -> BTreeSet<String> {
+pub fn free_uniques(ty: &Ty) -> BTreeSet<Name> {
     let mut free = BTreeSet::new();
     let mut bound: Vec<&str> = Vec::new();
     let mut work = vec![(ty, 0usize)];
@@ -211,7 +211,7 @@ pub fn free_uniques(ty: &Ty) -> BTreeSet<String> {
 }
 
 /// Every type-variable unique mentioned, bound or free.
-fn all_uniques(ty: &Ty) -> BTreeSet<String> {
+fn all_uniques(ty: &Ty) -> BTreeSet<Name> {
     let mut seen = BTreeSet::new();
     let mut work = vec![ty];
     while let Some(node) = work.pop() {
@@ -345,7 +345,7 @@ mod tests {
 
     fn tv(unique: &str) -> TyVarId {
         TyVarId {
-            name: format!("$_in${unique}"),
+            name: format!("$_in${unique}").into(),
             occ: unique.into(),
             unique: unique.into(),
         }
@@ -523,16 +523,16 @@ mod tests {
             binder: tv("a"),
             body: Box::new(arrow(Ty::Var(tv("a")), Ty::Var(tv("b")))),
         };
-        assert_eq!(free_uniques(&ty), BTreeSet::from(["b".to_string()]));
+        assert_eq!(free_uniques(&ty), BTreeSet::from([Name::from("b")]));
         assert_eq!(
             all_uniques(&ty),
-            BTreeSet::from(["a".to_string(), "b".to_string()])
+            BTreeSet::from([Name::from("a"), Name::from("b")])
         );
         // A binder in one branch does not scope over its sibling.
         let siblings = con("Pair", vec![ty, Ty::Var(tv("a"))]);
         assert_eq!(
             free_uniques(&siblings),
-            BTreeSet::from(["a".to_string(), "b".to_string()])
+            BTreeSet::from([Name::from("a"), Name::from("b")])
         );
     }
 }

@@ -46,9 +46,20 @@ pub fn nir_program(dir: &Path, with: &[PathBuf]) -> Result<()> {
 /// Refusals are recorded rather than fatal, so the report is the whole picture
 /// of what the roots reach. The instances a refused one would itself have
 /// required stay unknown, which makes every count a lower bound.
-pub fn nir_specialize(dir: &Path, with: &[PathBuf], name: Option<&str>) -> Result<()> {
+pub enum Root<'a> {
+    Every,
+    Whole(&'a str),
+    At {
+        name: &'a str,
+        types: &'a [String],
+        dictionaries: &'a [String],
+    },
+}
+
+pub fn nir_specialize(dir: &Path, with: &[PathBuf], root: Root<'_>, progress: bool) -> Result<()> {
     let dumps = load_dirs(dir, with)?;
-    let (report, refused) = nir_specialize_report(&dumps.modules, &|m| !dumps.is_library(m), name)?;
+    let (report, refused) =
+        nir_specialize_report(&dumps.modules, &|m| !dumps.is_library(m), &root, progress)?;
     print!("{report}");
     if refused != 0 {
         bail!("specialization incomplete: {refused} instances refused");
@@ -145,7 +156,6 @@ pub fn nir_emit_program(dir: &Path, with: &[PathBuf], output: &Path) -> Result<(
     let mut out = format!(
         "Roots: {} live program bindings, {} of them emitted\n\
          Instances: {} reached, {} lowered, {} emit on their own, {} emitted with their whole closure\n\
-         Recursive values left out: {}\n\
          Source: {} bytes, {} lines\n\
          Lowered instances whose own code does not emit, by reason:\n",
         roots.len(),
@@ -158,7 +168,6 @@ pub fn nir_emit_program(dir: &Path, with: &[PathBuf], output: &Path) -> Result<(
         program.lowered,
         program.emittable,
         program.emitted,
-        program.recursive_values,
         program.source.len(),
         program.source.lines().count(),
     );
@@ -453,34 +462,51 @@ fn expression_kind(expr: &h2r_core_ir::Expr) -> &'static str {
 fn nir_specialize_report(
     modules: &[Module],
     owns: Owns<'_>,
-    name: Option<&str>,
+    root: &Root<'_>,
+    progress: bool,
 ) -> Result<(String, usize)> {
     use h2r_lower::nir::{pretty::format_leaf, specialize};
     use std::fmt::Write;
 
     let live = audited_live_set(modules)?;
-    let (roots, heading) = match name {
-        Some(name) => {
-            let matches = live.by_name(name);
-            let [node] = matches.as_slice() else {
-                bail!(
-                    "specialization needs one exact stable root name; {name:?} matched {} bindings",
-                    matches.len()
-                );
+    let (roots, heading) = match *root {
+        Root::Whole(name) | Root::At { name, .. } => {
+            let (module, binder) = one_binding(&live, name)?;
+            let instance = match *root {
+                Root::At {
+                    types,
+                    dictionaries,
+                    ..
+                } => specialize::Instance {
+                    module,
+                    binder,
+                    type_arguments: types
+                        .iter()
+                        .map(|text| Tokens::of(text).whole(Tokens::ty))
+                        .collect::<Result<_>>()?,
+                    dictionaries: dictionaries
+                        .iter()
+                        .map(|text| Tokens::of(text).whole(|t| t.dictionary(&live)))
+                        .collect::<Result<_>>()?,
+                },
+                _ => specialize::Instance::whole(module, binder),
             };
-            if !live.is_live(*node) {
-                bail!("selected binding {name:?} is not reachable from Main.main");
+            if let Root::At { .. } = root
+                && let Ok((leaf, Err(error))) = h2r_lower::nir::lower::lower_leaf_unverified(
+                    modules,
+                    None,
+                    instance.module,
+                    instance.binder,
+                    h2r_lower::nir::FnId(0),
+                    &instance.type_arguments,
+                    &instance.dictionaries,
+                )
+            {
+                print!("UNVERIFIED {}\n{}", error.reason, format_leaf(&leaf));
             }
-            let binding = live.node(*node);
-            (
-                vec![specialize::Instance::whole(
-                    binding.key.module as usize,
-                    binding.key.binder,
-                )],
-                format!("NIR specialization root: {name}"),
-            )
+            (vec![instance], format!("NIR specialization root: {name}"))
         }
-        None => {
+        Root::Every => {
             let roots: Vec<_> = live
                 .live
                 .iter()
@@ -497,7 +523,23 @@ fn nir_specialize_report(
             (roots, heading)
         }
     };
-    let program = specialize::survey(modules, &roots);
+    let program = if progress {
+        specialize::survey_observed(modules, &roots, &mut |step| {
+            eprintln!(
+                "progress: {} lowered, {} interned, {} pending, {} resident, at {} {}",
+                step.lowered,
+                step.interned,
+                step.pending,
+                resident(),
+                modules[step.instance.module]
+                    .binder(step.instance.binder)
+                    .name,
+                type_arguments(step.instance),
+            );
+        })
+    } else {
+        specialize::survey(modules, &roots)
+    };
     let owners = program.instances_per_owner();
     let specialized = program
         .instances
@@ -511,33 +553,59 @@ fn nir_specialize_report(
         .count();
     let lowered = program.lowered_count();
     let refused = program.refused.len();
+    let (values, distinct) = (0..program.instances.len())
+        .filter_map(|index| program.leaf(index))
+        .flat_map(|leaf| &leaf.function.blocks)
+        .flat_map(|block| {
+            block
+                .params
+                .iter()
+                .chain(block.instructions.iter().map(|i| &i.result))
+        })
+        .fold((0usize, BTreeMap::new()), |(count, mut distinct), value| {
+            distinct
+                .entry(std::sync::Arc::as_ptr(&value.ty))
+                .or_insert_with(|| ty_bytes(&value.ty));
+            (count + 1, distinct)
+        });
+    let distinct_types = distinct.len();
+    let value_type_bytes: usize = distinct.values().sum();
     let mut out = format!(
-        "{heading}\nInstances: {} = {lowered} lowered + {refused} refused, over {} owners\nSpecialized: {specialized} at type or dictionary arguments, of which {dictionaries} carry a dictionary\n",
+        "{heading}\nInstances: {} = {lowered} lowered + {refused} refused, over {} owners\nSpecialized: {specialized} at type or dictionary arguments, of which {dictionaries} carry a dictionary\nRetained NIR: {values} values over {distinct_types} shared types of {value_type_bytes} bytes\n",
         lowered + refused,
         owners.len(),
     );
-    if name.is_some() {
+    if !matches!(root, Root::Every) {
+        let mut stream = std::io::BufWriter::new(std::io::stdout().lock());
+        std::io::Write::write_all(&mut stream, out.as_bytes())?;
+        out.clear();
         for (index, instance) in program.instances.iter().enumerate() {
             let Some(leaf) = program.leaf(index) else {
                 continue;
             };
-            writeln!(
-                out,
-                "INSTANCE {index} {:?} at {}, {} dictionaries",
-                modules[instance.module].binder(instance.binder).name,
-                type_arguments(instance),
-                instance.dictionaries.len(),
-            )
-            .unwrap();
-            out.push_str(&format_leaf(leaf));
+            std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "INSTANCE {index} {:?} in {} {} at {}, {} dictionaries\n{}",
+                    modules[instance.module].binder(instance.binder).name,
+                    modules[instance.module].unit,
+                    modules[instance.module].name,
+                    type_arguments(instance),
+                    instance.dictionaries.len(),
+                    format_leaf(leaf),
+                )
+                .as_bytes(),
+            )?;
         }
+        std::io::Write::flush(&mut stream)?;
         for error in &program.refused {
             writeln!(
                 out,
-                "REFUSED {:?}: {}{} [required through {}]",
+                "REFUSED {:?} at {}: {}{} [required through {}]{}",
                 modules[error.instance.module]
                     .binder(error.instance.binder)
                     .name,
+                type_arguments(&error.instance),
                 error.reason,
                 error
                     .detail
@@ -550,6 +618,9 @@ fn nir_specialize_report(
                     .map(|step| modules[step.module].binder(step.binder).name.clone())
                     .collect::<Vec<_>>()
                     .join(" -> "),
+                reproduction(modules, &error.instance)
+                    .map(|flags| format!(" [reproduce with {flags}]"))
+                    .unwrap_or_default(),
             )
             .unwrap();
         }
@@ -610,6 +681,200 @@ fn nir_specialize_report(
         }
     }
     Ok((out, refused))
+}
+
+fn one_binding(live: &LiveSet, name: &str) -> Result<(usize, BinderId)> {
+    let matches = live.by_name(name);
+    let [node] = matches.as_slice() else {
+        bail!(
+            "specialization needs one exact stable root name; {name:?} matched {} bindings",
+            matches.len()
+        );
+    };
+    let key = live.node(*node).key;
+    Ok((key.module as usize, key.binder))
+}
+
+struct Tokens {
+    items: Vec<String>,
+    next: usize,
+}
+
+impl Tokens {
+    fn of(text: &str) -> Tokens {
+        let mut items = Vec::new();
+        let mut current = String::new();
+        for c in text.chars() {
+            if matches!(c, '{' | '}' | ';') || c.is_whitespace() {
+                if !current.is_empty() {
+                    items.push(std::mem::take(&mut current));
+                }
+                if !c.is_whitespace() {
+                    items.push(c.to_string());
+                }
+            } else {
+                current.push(c);
+            }
+        }
+        if !current.is_empty() {
+            items.push(current);
+        }
+        Tokens { items, next: 0 }
+    }
+
+    fn whole<T>(mut self, parse: impl FnOnce(&mut Tokens) -> Result<T>) -> Result<T> {
+        let parsed = parse(&mut self)?;
+        if let Some(rest) = self.items.get(self.next) {
+            bail!("unexpected {rest:?} after a complete argument");
+        }
+        Ok(parsed)
+    }
+
+    fn peek(&self) -> Option<&str> {
+        self.items.get(self.next).map(String::as_str)
+    }
+
+    fn take(&mut self) -> Result<String> {
+        let token = self
+            .items
+            .get(self.next)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("an argument ends early"))?;
+        self.next += 1;
+        Ok(token)
+    }
+
+    fn name(&mut self) -> Result<String> {
+        let token = self.take()?;
+        if matches!(token.as_str(), "{" | "}" | ";") {
+            bail!("expected a stable name, found {token:?}");
+        }
+        Ok(token)
+    }
+
+    fn close(&mut self) -> Result<()> {
+        match self.take()?.as_str() {
+            "}" => Ok(()),
+            other => bail!("expected }}, found {other:?}"),
+        }
+    }
+
+    fn ty(&mut self) -> Result<h2r_core_ir::Ty> {
+        let (name, args) = if self.peek() == Some("{") {
+            self.next += 1;
+            let name = self.name()?;
+            let mut args = Vec::new();
+            while self.peek() != Some("}") {
+                args.push(self.ty()?);
+            }
+            self.close()?;
+            (name, args)
+        } else {
+            (self.name()?, Vec::new())
+        };
+        let occ = name.rsplit('$').next().unwrap_or_default().to_string();
+        Ok(h2r_core_ir::Ty::Con {
+            tycon: h2r_core_ir::TyConId {
+                name: name.into(),
+                occ: occ.into(),
+                unique: Default::default(),
+            },
+            args,
+        })
+    }
+
+    fn dictionary(&mut self, live: &LiveSet) -> Result<h2r_lower::nir::DictionaryRef> {
+        let (name, type_arguments, dictionaries) = if self.peek() == Some("{") {
+            self.next += 1;
+            let name = self.name()?;
+            let mut types = Vec::new();
+            while !matches!(self.peek(), Some("}" | ";")) {
+                types.push(self.ty()?);
+            }
+            let mut dictionaries = Vec::new();
+            if self.peek() == Some(";") {
+                self.next += 1;
+                while self.peek() != Some("}") {
+                    dictionaries.push(self.dictionary(live)?);
+                }
+            }
+            self.close()?;
+            (name, types, dictionaries)
+        } else {
+            (self.name()?, Vec::new(), Vec::new())
+        };
+        let (module, binder) = one_binding(live, &name)?;
+        Ok(h2r_lower::nir::DictionaryRef {
+            module,
+            binder,
+            type_arguments,
+            dictionaries,
+        })
+    }
+}
+
+fn stable_type(ty: &h2r_core_ir::Ty) -> Option<String> {
+    let h2r_core_ir::Ty::Con { tycon, args } = ty else {
+        return None;
+    };
+    if args.is_empty() {
+        return Some(tycon.name.to_string());
+    }
+    let args = args.iter().map(stable_type).collect::<Option<Vec<_>>>()?;
+    Some(format!("{{{} {}}}", tycon.name, args.join(" ")))
+}
+
+fn stable_dictionary(
+    modules: &[Module],
+    reference: &h2r_lower::nir::DictionaryRef,
+) -> Option<String> {
+    let name = &modules[reference.module].binder(reference.binder).name;
+    if reference.type_arguments.is_empty() && reference.dictionaries.is_empty() {
+        return Some(name.clone());
+    }
+    let types = reference
+        .type_arguments
+        .iter()
+        .map(stable_type)
+        .collect::<Option<Vec<_>>>()?;
+    let dictionaries = reference
+        .dictionaries
+        .iter()
+        .map(|d| stable_dictionary(modules, d))
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!(
+        "{{{name} {} ; {}}}",
+        types.join(" "),
+        dictionaries.join(" ")
+    ))
+}
+
+fn reproduction(
+    modules: &[Module],
+    instance: &h2r_lower::nir::specialize::Instance,
+) -> Option<String> {
+    let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+    let mut flags = format!(
+        "--fn {}",
+        quote(&modules[instance.module].binder(instance.binder).name)
+    );
+    let types = instance
+        .type_arguments
+        .iter()
+        .map(|ty| stable_type(ty).map(|text| quote(&text)))
+        .collect::<Option<Vec<_>>>()?;
+    let dictionaries = instance
+        .dictionaries
+        .iter()
+        .map(|d| stable_dictionary(modules, d).map(|text| quote(&text)))
+        .collect::<Option<Vec<_>>>()?;
+    if !types.is_empty() {
+        flags.push_str(&format!(" --at {}", types.join(" ")));
+    }
+    if !dictionaries.is_empty() {
+        flags.push_str(&format!(" --dictionaries {}", dictionaries.join(" ")));
+    }
+    Some(flags)
 }
 
 fn type_arguments(instance: &h2r_lower::nir::specialize::Instance) -> String {
@@ -821,12 +1086,13 @@ fn nir_report(modules: &[Module], name: &str) -> Result<String> {
     let accounting = verify_leaf_in_world(modules, module_index, owner, id, &lowered)
         .map_err(|error| anyhow::anyhow!("NIR source verification failed: {error}"))?;
     Ok(format!(
-        "NIR leaf: {name}\nScope: one reachable function; not whole-program lowering\nVerified source nodes: {} = {} parameters + {} type parameters + {} value + {} erased ticks + {} type applications + {} type arguments + {} value applications + {} value arguments\n{}",
+        "NIR leaf: {name}\nScope: one reachable function; not whole-program lowering\nVerified source nodes: {} = {} parameters + {} type parameters + {} value + {} erased ticks + {} erased casts + {} type applications + {} type arguments + {} value applications + {} value arguments\n{}",
         accounting.source_nodes,
         accounting.parameter_nodes,
         accounting.type_parameter_nodes,
         accounting.value_nodes,
         accounting.erased_ticks,
+        accounting.erased_casts,
         accounting.type_application_nodes,
         accounting.type_argument_nodes,
         accounting.value_application_nodes,
@@ -1078,11 +1344,14 @@ fn print_report(modules: &[&Module], live: &LiveSet, audit: &Audit) {
     println!(
         "    a global occurrence naming an in-world module that GHC's own flags explain \n\
          \x20   without a top-level binding is not a hole: {} data-constructor name(s) over {} \n\
-         \x20   occurrences and {} class-op selector(s) over {} occurrences.",
+         \x20   occurrences, {} class-op selector(s) over {} occurrences and {} wired-in Id(s) \n\
+         \x20   with no source binding over {} occurrences.",
         a.in_world_non_bindings.data_con_names,
         a.in_world_non_bindings.data_con_occurrences,
         a.in_world_non_bindings.class_op_names,
-        a.in_world_non_bindings.class_op_occurrences
+        a.in_world_non_bindings.class_op_occurrences,
+        a.in_world_non_bindings.wired_in_names,
+        a.in_world_non_bindings.wired_in_occurrences
     );
     if a.in_world_missing == 0 {
         println!("    0 names remain: the closed world links every other in-world reference.");
@@ -1580,11 +1849,58 @@ fn print_m24_link(modules: &[&Module], live: &LiveSet) {
     println!("        …a constructor field, with no one binding to be in {b_field:>4}");
 }
 
+fn ty_bytes(ty: &h2r_core_ir::Ty) -> usize {
+    use h2r_core_ir::Ty;
+    let names = |parts: [&str; 3]| parts.iter().map(|part| part.len()).sum::<usize>();
+    std::mem::size_of::<Ty>()
+        + match ty {
+            Ty::Var(var) => names([&var.name, &var.occ, &var.unique]),
+            Ty::Con { tycon, args } => {
+                names([&tycon.name, &tycon.occ, &tycon.unique])
+                    + args.iter().map(ty_bytes).sum::<usize>()
+            }
+            Ty::App { fun, arg } => ty_bytes(fun) + ty_bytes(arg),
+            Ty::Fun { mult, arg, res } => ty_bytes(mult) + ty_bytes(arg) + ty_bytes(res),
+            Ty::ForAll { binder, body } => {
+                names([&binder.name, &binder.occ, &binder.unique]) + ty_bytes(body)
+            }
+            Ty::Lit { kind, text } => kind.len() + text.len(),
+            Ty::Opaque { pretty } => pretty.len(),
+        }
+}
+
+fn resident() -> String {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("VmRSS:"))
+                .map(|value| value.trim().to_string())
+        })
+        .unwrap_or_else(|| "unknown".into())
+}
+
 #[cfg(test)]
 mod nir_tests {
     use super::*;
     use h2r_core_ir::raw;
     use serde_json::{Value, json};
+
+    #[test]
+    fn a_reproduced_root_type_reads_back_as_printed() {
+        for text in [
+            "$base$Data.Functor.Identity$Identity",
+            "{$ghc-prim$GHC.Types$List {$base$Data.Maybe$Maybe $ghc-prim$GHC.Types$Int}}",
+            "{$ghc-prim$GHC.Tuple.Prim$(,) $ghc-prim$GHC.Types$[] $a$B$T'}",
+        ] {
+            let ty = Tokens::of(text).whole(Tokens::ty).unwrap();
+            assert_eq!(stable_type(&ty).as_deref(), Some(text));
+        }
+        for broken in ["{$a$B$T", "$a$B$T }", "{ }", "$a$B$T $a$B$U"] {
+            assert!(Tokens::of(broken).whole(Tokens::ty).is_err(), "{broken}");
+        }
+    }
 
     fn binder(name: &str) -> Value {
         json!({
@@ -1741,18 +2057,19 @@ mod nir_tests {
         let owner = m.top[0].pairs[0].binder;
         m.binders[owner as usize].name = "$u$Main$notMain".into();
         assert!(
-            nir_specialize_report(&[m], &|_| true, None)
+            nir_specialize_report(&[m], &|_| true, &Root::Every, false)
                 .unwrap_err()
                 .to_string()
                 .contains("no root")
         );
         assert!(
-            nir_specialize_report(&[fixture_with_link(true)], &|_| true, None)
+            nir_specialize_report(&[fixture_with_link(true)], &|_| true, &Root::Every, false)
                 .unwrap_err()
                 .to_string()
                 .contains("A5-IN-WORLD-MISSING")
         );
-        let (report, refused) = nir_specialize_report(&[fixture()], &|_| true, None).unwrap();
+        let (report, refused) =
+            nir_specialize_report(&[fixture()], &|_| true, &Root::Every, false).unwrap();
         assert_eq!(refused, 0);
         assert!(report.contains("NIR specialization roots: 2 live bindings"));
     }

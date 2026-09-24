@@ -5,43 +5,185 @@
 //! is emitted as a plain Rust value; what is left over -- bindings that may or
 //! may not be demanded, and genuinely cyclic values -- lands here.
 
-use std::any::Any;
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt;
 use std::rc::Rc;
 
-/// A call-by-need binding: evaluated at most once, shared by every use.
-pub struct Lazy<T> {
-    value: OnceCell<T>,
-    init: RefCell<Option<Code<T>>>,
+#[derive(Debug, Clone, Copy)]
+pub struct Addr {
+    bytes: &'static [u8],
+    offset: usize,
 }
 
-type Code<T> = Box<dyn FnOnce() -> Thunk<T>>;
+impl Addr {
+    pub fn literal(bytes: &'static [u8]) -> Self {
+        Addr { bytes, offset: 0 }
+    }
+
+    pub fn index_char(self, index: i64) -> i64 {
+        self.index_word8(index)
+    }
+
+    pub fn index_word8(self, index: i64) -> i64 {
+        let at = self
+            .offset
+            .checked_add_signed(index as isize)
+            .expect("h2r-rt: an address offset left the address space");
+        i64::from(self.bytes[at])
+    }
+
+    pub fn plus(self, delta: i64) -> Self {
+        Addr {
+            bytes: self.bytes,
+            offset: self
+                .offset
+                .checked_add_signed(delta as isize)
+                .expect("h2r-rt: an address offset left the address space"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Bytes(Rc<RefCell<Vec<u8>>>);
+
+impl Bytes {
+    pub fn new(size: i64) -> Self {
+        let size = usize::try_from(size).expect("h2r-rt: a byte array of negative size");
+        Bytes(Rc::new(RefCell::new(vec![0; size])))
+    }
+
+    pub fn from_words(words: &[u64]) -> Self {
+        Bytes(Rc::new(RefCell::new(
+            words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        )))
+    }
+
+    pub fn size(&self) -> i64 {
+        self.0.borrow().len() as i64
+    }
+
+    fn span(offset: i64, count: usize) -> std::ops::Range<usize> {
+        let start = usize::try_from(offset).expect("h2r-rt: a negative byte array offset");
+        start..start + count
+    }
+
+    pub fn index_word(&self, index: i64) -> i64 {
+        let bytes = self.0.borrow();
+        let word = &bytes[Self::span(index * 8, 8)];
+        i64::from_ne_bytes(word.try_into().expect("h2r-rt: a word is eight bytes"))
+    }
+
+    pub fn write_word(&self, index: i64, word: i64) {
+        self.0.borrow_mut()[Self::span(index * 8, 8)].copy_from_slice(&word.to_ne_bytes());
+    }
+
+    pub fn index_word8(&self, index: i64) -> i64 {
+        i64::from(self.0.borrow()[Self::span(index, 1)][0])
+    }
+
+    pub fn write_word8(&self, index: i64, byte: i64) {
+        self.0.borrow_mut()[Self::span(index, 1)][0] = byte as u8;
+    }
+
+    pub fn shrink(&self, size: i64) {
+        let size = usize::try_from(size).expect("h2r-rt: a byte array of negative size");
+        let mut bytes = self.0.borrow_mut();
+        assert!(
+            size <= bytes.len(),
+            "h2r-rt: a byte array shrunk past its size"
+        );
+        bytes.truncate(size);
+    }
+
+    pub fn set(&self, offset: i64, count: i64, byte: i64) {
+        let count = usize::try_from(count).expect("h2r-rt: a negative byte count");
+        self.0.borrow_mut()[Self::span(offset, count)].fill(byte as u8);
+    }
+
+    pub fn copy(source: &Bytes, from: i64, target: &Bytes, to: i64, count: i64) {
+        let count = usize::try_from(count).expect("h2r-rt: a negative byte count");
+        let (from, to) = (Self::span(from, count), Self::span(to, count));
+        if Rc::ptr_eq(&source.0, &target.0) {
+            source.0.borrow_mut().copy_within(from, to.start);
+        } else {
+            target.0.borrow_mut()[to].copy_from_slice(&source.0.borrow()[from]);
+        }
+    }
+}
+
+/// A call-by-need binding: evaluated at most once, shared by every use.
+pub struct Lazy<T, C: ?Sized = dyn Code<T>> {
+    value: OnceCell<T>,
+    code: C,
+}
+
+pub trait Code<T> {
+    fn enter(&self) -> Option<Thunk<T>>;
+    fn fill(&self, code: Box<dyn FnOnce() -> Thunk<T>>) -> bool;
+}
+
+struct Once<F>(Cell<Option<F>>);
+
+impl<T, F: FnOnce() -> Thunk<T>> Code<T> for Once<F> {
+    fn enter(&self) -> Option<Thunk<T>> {
+        self.0.take().map(|f| f())
+    }
+    fn fill(&self, _: Box<dyn FnOnce() -> Thunk<T>>) -> bool {
+        false
+    }
+}
+
+struct Pending<T>(Cell<Option<Box<dyn FnOnce() -> Thunk<T>>>>);
+
+impl<T> Code<T> for Pending<T> {
+    fn enter(&self) -> Option<Thunk<T>> {
+        self.0.take().map(|f| f())
+    }
+    fn fill(&self, code: Box<dyn FnOnce() -> Thunk<T>>) -> bool {
+        self.0.replace(Some(code)).is_none()
+    }
+}
 
 pub enum Thunk<T> {
     Value(T),
     Indirect(Rc<Lazy<T>>),
 }
 
-impl<T> Lazy<T> {
+impl<T: 'static> Lazy<T> {
     /// Defer `f` until the value is first demanded.
-    pub fn new(f: impl FnOnce() -> T + 'static) -> Self {
+    pub fn new(f: impl FnOnce() -> T + 'static) -> Lazy<T, impl Code<T> + 'static> {
         Self::step(move || Thunk::Value(f()))
     }
 
-    pub fn step(f: impl FnOnce() -> Thunk<T> + 'static) -> Self {
+    pub fn step(f: impl FnOnce() -> Thunk<T> + 'static) -> Lazy<T, impl Code<T> + 'static> {
         Lazy {
             value: OnceCell::new(),
-            init: RefCell::new(Some(Box::new(f))),
+            code: Once(Cell::new(Some(f))),
+        }
+    }
+
+    pub fn pending() -> Lazy<T, impl Code<T> + 'static> {
+        Lazy {
+            value: OnceCell::new(),
+            code: Pending(Cell::new(None)),
         }
     }
 
     /// An already-evaluated binding; the common case after strictness analysis.
-    pub fn ready(value: T) -> Self {
+    pub fn ready(value: T) -> Lazy<T, impl Code<T> + 'static> {
         Lazy {
             value: OnceCell::from(value),
-            init: RefCell::new(None),
+            code: Once(Cell::new(None::<fn() -> Thunk<T>>)),
         }
+    }
+}
+
+impl<T, C: Code<T> + ?Sized> Lazy<T, C> {
+    pub fn fill(&self, f: impl FnOnce() -> Thunk<T> + 'static) {
+        assert!(
+            self.value.get().is_none() && self.code.fill(Box::new(f)),
+            "h2r-rt: a recursive binding filled twice"
+        );
     }
 
     /// Whether the binding has already been forced.
@@ -50,16 +192,13 @@ impl<T> Lazy<T> {
     }
 
     fn enter(&self) -> Thunk<T> {
-        let f = self
-            .init
-            .borrow_mut()
-            .take()
-            .expect("h2r-rt: re-entrant force (<<loop>>)");
-        f()
+        self.code
+            .enter()
+            .expect("h2r-rt: re-entrant force (<<loop>>)")
     }
 }
 
-impl<T: Clone> Lazy<T> {
+impl<T: Clone, C: Code<T> + ?Sized> Lazy<T, C> {
     /// Force to WHNF, memoising the result.
     ///
     /// Panics on re-entrant forcing, which is this runtime's `<<loop>>`.
@@ -102,7 +241,7 @@ fn chase<T: Clone>(first: Rc<Lazy<T>>) -> T {
     value
 }
 
-impl<T: fmt::Debug> fmt::Debug for Lazy<T> {
+impl<T: fmt::Debug, C: ?Sized> fmt::Debug for Lazy<T, C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.value.get() {
             Some(v) => write!(f, "Lazy({v:?})"),
@@ -114,7 +253,7 @@ impl<T: fmt::Debug> fmt::Debug for Lazy<T> {
 /// A thunk shared across several owners, for recursive or graph-shaped values.
 pub type Shared<T> = Rc<Lazy<T>>;
 
-pub fn shared<T>(f: impl FnOnce() -> T + 'static) -> Shared<T> {
+pub fn shared<T: 'static>(f: impl FnOnce() -> T + 'static) -> Shared<T> {
     Rc::new(Lazy::new(f))
 }
 
@@ -128,6 +267,12 @@ impl Int {
     }
     pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
         Self(Rc::new(Lazy::step(move || Thunk::Indirect(f().0))))
+    }
+    pub fn pending() -> Self {
+        Self(Rc::new(Lazy::pending()))
+    }
+    pub fn fill(&self, value: Self) {
+        self.0.fill(move || Thunk::Indirect(value.0));
     }
     pub fn ready(value: i64) -> Self {
         Self(Rc::new(Lazy::ready(value)))
@@ -151,7 +296,75 @@ pub struct Data(Shared<Node>);
 #[derive(Clone)]
 pub struct Node {
     pub constructor: &'static str,
-    pub fields: Vec<Field>,
+    pub fields: Fields,
+}
+
+#[derive(Clone)]
+pub enum Fields {
+    Zero,
+    One([Field; 1]),
+    Two([Field; 2]),
+    Three([Field; 3]),
+    Many(Vec<Field>),
+}
+
+impl std::ops::Deref for Fields {
+    type Target = [Field];
+    fn deref(&self) -> &[Field] {
+        match self {
+            Fields::Zero => &[],
+            Fields::One(fields) => fields,
+            Fields::Two(fields) => fields,
+            Fields::Three(fields) => fields,
+            Fields::Many(fields) => fields,
+        }
+    }
+}
+
+impl From<[Field; 0]> for Fields {
+    fn from(_: [Field; 0]) -> Self {
+        Fields::Zero
+    }
+}
+
+impl From<[Field; 1]> for Fields {
+    fn from(fields: [Field; 1]) -> Self {
+        Fields::One(fields)
+    }
+}
+
+impl From<[Field; 2]> for Fields {
+    fn from(fields: [Field; 2]) -> Self {
+        Fields::Two(fields)
+    }
+}
+
+impl From<[Field; 3]> for Fields {
+    fn from(fields: [Field; 3]) -> Self {
+        Fields::Three(fields)
+    }
+}
+
+impl From<Vec<Field>> for Fields {
+    fn from(fields: Vec<Field>) -> Self {
+        let fields = match <[Field; 1]>::try_from(fields) {
+            Ok(one) => return Fields::One(one),
+            Err(fields) => fields,
+        };
+        let fields = match <[Field; 2]>::try_from(fields) {
+            Ok(two) => return Fields::Two(two),
+            Err(fields) => fields,
+        };
+        let fields = match <[Field; 3]>::try_from(fields) {
+            Ok(three) => return Fields::Three(three),
+            Err(fields) => fields,
+        };
+        if fields.is_empty() {
+            Fields::Zero
+        } else {
+            Fields::Many(fields)
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -163,12 +376,43 @@ pub enum Field {
     Int(Int),
     Data(Data),
     Closure(Closure),
+    MutVar(MutVar),
+    Bytes(Bytes),
+    Array(Array),
+    Deferred(Shared<Field>),
+    Tuple(Rc<Vec<Field>>),
+    Addr(Addr),
+}
+
+fn deferred(value: Field) -> Thunk<Field> {
+    match value {
+        Field::Deferred(next) => Thunk::Indirect(next),
+        value => Thunk::Value(value),
+    }
 }
 
 impl Field {
+    pub fn defer_to(f: impl FnOnce() -> Field + 'static) -> Self {
+        Self::Deferred(Rc::new(Lazy::step(move || deferred(f()))))
+    }
+    pub fn pending() -> Self {
+        Self::Deferred(Rc::new(Lazy::pending()))
+    }
+    pub fn fill(&self, value: Field) {
+        match self {
+            Self::Deferred(cell) => cell.fill(move || deferred(value)),
+            _ => panic!("h2r-rt: a filled binding must be pending"),
+        }
+    }
     pub fn force(&self) {
         match self {
-            Self::Int64(_) | Self::Char(_) => {}
+            Self::Int64(_)
+            | Self::Char(_)
+            | Self::MutVar(_)
+            | Self::Bytes(_)
+            | Self::Array(_)
+            | Self::Tuple(_)
+            | Self::Addr(_) => {}
             Self::Int(v) => {
                 v.force();
             }
@@ -178,7 +422,11 @@ impl Field {
             Self::Closure(v) => {
                 v.force();
             }
+            Self::Deferred(cell) => cell.force().force(),
         }
+    }
+    pub fn dynamic(&self) -> Field {
+        self.clone()
     }
     pub fn int64(&self) -> i64 {
         match self {
@@ -195,21 +443,135 @@ impl Field {
     pub fn int(&self) -> Int {
         match self {
             Self::Int(v) => v.clone(),
+            Self::Deferred(cell) => match cell.value.get() {
+                Some(value) => value.int(),
+                None => {
+                    let cell = cell.clone();
+                    Int::defer_to(move || cell.force().int())
+                }
+            },
             _ => panic!("invalid Int field"),
         }
     }
     pub fn data(&self) -> Data {
         match self {
             Self::Data(v) => v.clone(),
+            Self::Deferred(cell) => match cell.value.get() {
+                Some(value) => value.data(),
+                None => {
+                    let cell = cell.clone();
+                    Data::defer_to(move || cell.force().data())
+                }
+            },
             _ => panic!("invalid data field"),
         }
     }
     pub fn closure(&self) -> Closure {
         match self {
             Self::Closure(v) => v.clone(),
+            Self::Deferred(cell) => match cell.value.get() {
+                Some(value) => value.closure(),
+                None => {
+                    let cell = cell.clone();
+                    Closure::defer_to(move || cell.force().closure())
+                }
+            },
             _ => panic!("invalid function carrier"),
         }
     }
+    pub fn mut_var(&self) -> MutVar {
+        match self {
+            Self::MutVar(v) => v.clone(),
+            _ => panic!("invalid MutVar# field"),
+        }
+    }
+    pub fn bytes(&self) -> Bytes {
+        match self {
+            Self::Bytes(v) => v.clone(),
+            _ => panic!("invalid byte array field"),
+        }
+    }
+    pub fn addr(&self) -> Addr {
+        match self {
+            Self::Addr(v) => *v,
+            _ => panic!("invalid Addr# field"),
+        }
+    }
+    pub fn tuple(&self) -> Rc<Vec<Field>> {
+        match self {
+            Self::Tuple(v) => v.clone(),
+            _ => panic!("invalid unboxed tuple"),
+        }
+    }
+    pub fn array(&self) -> Array {
+        match self {
+            Self::Array(v) => v.clone(),
+            _ => panic!("invalid array field"),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Array(Rc<RefCell<Vec<Field>>>);
+
+impl Array {
+    pub fn new(size: i64, fill: Field) -> Self {
+        let size = usize::try_from(size).expect("h2r-rt: an array of negative size");
+        Array(Rc::new(RefCell::new(vec![fill; size])))
+    }
+
+    fn slot(index: i64) -> usize {
+        usize::try_from(index).expect("h2r-rt: a negative array index")
+    }
+
+    pub fn read(&self, index: i64) -> Field {
+        self.0.borrow()[Self::slot(index)].clone()
+    }
+
+    pub fn write(&self, index: i64, value: Field) {
+        self.0.borrow_mut()[Self::slot(index)] = value;
+    }
+
+    pub fn size(&self) -> i64 {
+        self.0.borrow().len() as i64
+    }
+}
+
+#[derive(Clone)]
+pub struct MutVar(Rc<RefCell<Field>>);
+
+impl MutVar {
+    pub fn new(value: Field) -> Self {
+        MutVar(Rc::new(RefCell::new(value)))
+    }
+
+    pub fn read(&self) -> Field {
+        self.0.borrow().clone()
+    }
+
+    pub fn write(&self, value: Field) {
+        *self.0.borrow_mut() = value;
+    }
+}
+
+pub fn raise_arithmetic(message: &str) -> ! {
+    report_error(message.as_bytes())
+}
+
+pub fn raise_exception() -> ! {
+    panic!("h2r-rt: an uncaught Haskell exception")
+}
+
+pub fn absent_error(message: Addr) -> ! {
+    let text: Vec<u8> = (0..)
+        .map(|index| message.index_word8(index) as u8)
+        .take_while(|byte| *byte != 0)
+        .collect();
+    eprintln!(
+        "internal error: Oops!  Entered absent arg {}",
+        String::from_utf8_lossy(&text)
+    );
+    std::process::abort()
 }
 
 /// A shared lazy function value. Partial application retains arguments without
@@ -225,11 +587,28 @@ pub struct ClosureCode {
     supplied: Vec<Field>,
 }
 
-type Entry = Rc<dyn Fn(Vec<Field>) -> Box<dyn Any>>;
+type Entry = Rc<dyn Fn(Vec<Field>) -> Step<i64>>;
 
 pub enum Tail {
     Value(Field),
-    Enter(Box<dyn Any>),
+    Enter(Step<i64>),
+}
+
+pub enum Step<R> {
+    Done(R),
+    Next(Box<dyn FnOnce() -> Step<R>>),
+}
+
+impl<R> Step<R> {
+    pub fn run(self) -> R {
+        let mut step = self;
+        loop {
+            match step {
+                Step::Done(value) => return value,
+                Step::Next(next) => step = next(),
+            }
+        }
+    }
 }
 
 impl Closure {
@@ -245,7 +624,7 @@ impl Closure {
     pub fn entering(
         arity: usize,
         code: impl Fn(Vec<Field>) -> Field + 'static,
-        enter: impl Fn(Vec<Field>) -> Box<dyn Any> + 'static,
+        enter: impl Fn(Vec<Field>) -> Step<i64> + 'static,
     ) -> Self {
         assert!(arity > 0);
         Self(Rc::new(Lazy::ready(ClosureCode {
@@ -261,35 +640,58 @@ impl Closure {
     pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
         Self(Rc::new(Lazy::step(move || Thunk::Indirect(f().0))))
     }
+    pub fn pending() -> Self {
+        Self(Rc::new(Lazy::pending()))
+    }
+    pub fn fill(&self, value: Self) {
+        self.0.fill(move || Thunk::Indirect(value.0));
+    }
     pub fn apply_tail(&self, arguments: Vec<Field>) -> Tail {
         let function = self.force();
         if let Some(enter) = &function.enter
             && function.supplied.len() + arguments.len() == function.arity
         {
-            let mut supplied = function.supplied.clone();
+            let mut supplied = Vec::with_capacity(function.arity);
+            supplied.extend(function.supplied.iter().cloned());
             supplied.extend(arguments);
             return Tail::Enter(enter(supplied));
         }
         Tail::Value(self.apply(arguments))
     }
-    pub fn force(&self) -> ClosureCode {
-        self.0.force().clone()
+    pub fn force(&self) -> &ClosureCode {
+        self.0.force()
     }
     pub fn is_evaluated(&self) -> bool {
         self.0.is_evaluated()
     }
     pub fn apply(&self, arguments: Vec<Field>) -> Field {
-        let mut result = Field::Closure(self.clone());
-        for argument in arguments {
-            let mut function = result.closure().force();
-            function.supplied.push(argument);
-            result = if function.supplied.len() == function.arity {
-                (function.code)(function.supplied)
-            } else {
-                Field::Closure(Self(Rc::new(Lazy::ready(function))))
-            };
+        let mut arguments = arguments.into_iter();
+        let mut current = self.clone();
+        loop {
+            let function = current.force();
+            let missing = function.arity - function.supplied.len();
+            if arguments.len() < missing {
+                if arguments.len() == 0 {
+                    return Field::Closure(current);
+                }
+                let mut supplied = function.supplied.clone();
+                supplied.extend(arguments);
+                return Field::Closure(Self(Rc::new(Lazy::ready(ClosureCode {
+                    arity: function.arity,
+                    code: function.code.clone(),
+                    enter: function.enter.clone(),
+                    supplied,
+                }))));
+            }
+            let mut supplied = Vec::with_capacity(function.arity);
+            supplied.extend(function.supplied.iter().cloned());
+            supplied.extend(arguments.by_ref().take(missing));
+            let result = (function.code)(supplied);
+            if arguments.len() == 0 {
+                return result;
+            }
+            current = result.closure();
         }
-        result
     }
 }
 
@@ -342,12 +744,43 @@ mod closure_tests {
         let count = n.clone();
         let f = Closure::defer(move || {
             count.set(count.get() + 1);
-            Closure::ready(1, |args| args[0].clone()).force()
+            Closure::ready(1, |args| args[0].clone()).force().clone()
         });
         assert!(!f.is_evaluated());
         assert_eq!(f.clone().apply(vec![Field::Int64(1)]).int64(), 1);
         assert_eq!(f.apply(vec![Field::Int64(2)]).int64(), 2);
         assert_eq!(n.get(), 1);
+    }
+
+    #[test]
+    fn a_deferred_dynamic_value_is_shared_and_read_lazily_at_its_carrier() {
+        let n = Rc::new(std::cell::Cell::new(0));
+        let count = n.clone();
+        let value = Field::defer_to(move || {
+            count.set(count.get() + 1);
+            Field::Int(Int::ready(7))
+        });
+        let read = value.int();
+        assert_eq!(n.get(), 0);
+        assert_eq!(read.force(), 7);
+        assert_eq!(value.int().force(), 7);
+        assert_eq!(n.get(), 1);
+    }
+
+    #[test]
+    fn a_pending_dynamic_value_ties_a_knot() {
+        let knot = Field::pending();
+        let tail = knot.clone();
+        knot.fill(Field::Data(Data::defer(move || Node {
+            constructor: ":",
+            fields: [Field::Int64(1), tail].into(),
+        })));
+        let knotted = knot.data();
+        let first = knotted.force();
+        let rest = first.fields[1].data();
+        let second = rest.force();
+        assert_eq!(second.fields[0].int64(), 1);
+        assert!(first.fields[1].data().shares_with(&knot.data()));
     }
 }
 
@@ -358,14 +791,20 @@ impl Data {
     pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
         Self(Rc::new(Lazy::step(move || Thunk::Indirect(f().0))))
     }
-    pub fn ready(constructor: &'static str, fields: Vec<Field>) -> Self {
+    pub fn pending() -> Self {
+        Self(Rc::new(Lazy::pending()))
+    }
+    pub fn fill(&self, value: Self) {
+        self.0.fill(move || Thunk::Indirect(value.0));
+    }
+    pub fn ready(constructor: &'static str, fields: impl Into<Fields>) -> Self {
         Self(Rc::new(Lazy::ready(Node {
             constructor,
-            fields,
+            fields: fields.into(),
         })))
     }
-    pub fn force(&self) -> Node {
-        self.0.force().clone()
+    pub fn force(&self) -> &Node {
+        self.0.force()
     }
     pub fn is_evaluated(&self) -> bool {
         self.0.is_evaluated()
@@ -419,17 +858,17 @@ fn unpack_at(
     tail: Data,
 ) -> Node {
     if at >= bytes.len() || bytes[at] == 0 {
-        return tail.force();
+        return tail.force().clone();
     }
     let (codepoint, next) = code_point(bytes, at, encoding);
     Node {
         constructor: names.cons,
-        fields: vec![
-            Field::Data(Data::ready(names.character, vec![Field::Char(codepoint)])),
+        fields: [
+            Field::Data(Data::ready(names.character, [Field::Char(codepoint)])),
             Field::Data(Data::defer(move || {
                 unpack_at(bytes, next, encoding, names, tail)
             })),
-        ],
+        ].into(),
     }
 }
 
@@ -497,11 +936,11 @@ pub struct CallStackNames {
 }
 
 /// The next `PushCallStack` frame, through any `FreezeCallStack`.
-fn next_frame(mut stack: Data, names: CallStackNames) -> Option<Node> {
+fn next_frame(mut stack: Data, names: CallStackNames) -> Option<Data> {
     loop {
         let node = stack.force();
         if node.constructor == names.push {
-            return Some(node);
+            return Some(stack);
         }
         if node.constructor == names.empty {
             return None;
@@ -535,11 +974,13 @@ fn call_stack_error_message(
     if frame.is_some() {
         text.extend_from_slice(b"\nCallStack (from HasCallStack):");
     }
-    while let Some(node) = frame {
+    while let Some(pushed) = frame {
+        let node = pushed.force();
         text.extend_from_slice(b"\n  ");
         text.extend(error_message(node.fields[0].data(), strings));
         text.extend_from_slice(b", called at ");
-        let location = node.fields[1].data().force();
+        let located = node.fields[1].data();
+        let location = located.force();
         assert_eq!(location.constructor, names.location);
         text.extend(error_message(location.fields[2].data(), strings));
         text.push(b':');
@@ -608,10 +1049,10 @@ pub fn append_list(left: Data, right: Data, names: ListNames) -> Data {
         let tail = node.fields[1].data();
         Thunk::Value(Node {
             constructor: names.cons,
-            fields: vec![
+            fields: [
                 node.fields[0].clone(),
                 Field::Data(append_list(tail, right, names)),
-            ],
+            ].into(),
         })
     })))
 }
@@ -622,6 +1063,7 @@ pub enum Lifted {
     Int,
     Data,
     Closure,
+    Dynamic,
 }
 
 impl Lifted {
@@ -630,6 +1072,7 @@ impl Lifted {
             Self::Int => Field::Int(Int::defer_to(move || compute().int())),
             Self::Data => Field::Data(Data::defer_to(move || compute().data())),
             Self::Closure => Field::Closure(Closure::defer_to(move || compute().closure())),
+            Self::Dynamic => Field::defer_to(compute),
         }
     }
 }
@@ -637,7 +1080,7 @@ impl Lifted {
 fn nil(names: ListNames) -> Node {
     Node {
         constructor: names.nil,
-        fields: Vec::new(),
+        fields: Fields::Zero,
     }
 }
 
@@ -658,7 +1101,7 @@ pub fn map_list(
         let applied = function.clone();
         Node {
             constructor: output.cons,
-            fields: vec![
+            fields: [
                 element.defer(move || applied.apply(vec![head])),
                 Field::Data(map_list(
                     function,
@@ -667,7 +1110,7 @@ pub fn map_list(
                     input,
                     output,
                 )),
-            ],
+            ].into(),
         }
     })
 }
@@ -686,10 +1129,10 @@ pub fn filter_list(predicate: Closure, list: Data, names: ListNames, truth: Trut
             if truth.test(&predicate.apply(vec![head.clone()])) {
                 return Node {
                     constructor: names.cons,
-                    fields: vec![
+                    fields: [
                         head,
                         Field::Data(filter_list(predicate, tail, names, truth)),
-                    ],
+                    ].into(),
                 };
             }
             list = tail;
@@ -710,24 +1153,24 @@ pub fn take_while(predicate: Closure, list: Data, names: ListNames, truth: Truth
         }
         Node {
             constructor: names.cons,
-            fields: vec![
+            fields: [
                 head,
                 Field::Data(take_while(predicate, cell.fields[1].data(), names, truth)),
-            ],
+            ].into(),
         }
     })
 }
 
 /// `GHC.List.dropWhile`: the first cell whose element fails the predicate, itself.
 pub fn drop_while(predicate: Closure, list: Data, names: ListNames, truth: Truth) -> Data {
-    Data::defer(move || {
+    Data::defer_to(move || {
         let mut list = list;
         loop {
             let cell = list.force();
             if cell.constructor == names.nil
                 || !truth.test(&predicate.apply(vec![cell.fields[0].clone()]))
             {
-                return cell;
+                return list;
             }
             list = cell.fields[1].data();
         }
@@ -736,17 +1179,17 @@ pub fn drop_while(predicate: Closure, list: Data, names: ListNames, truth: Truth
 
 /// `GHC.List.reverse1`, `reverse`'s `rev`: the list's elements pushed onto the accumulator.
 pub fn reverse_onto(list: Data, accumulator: Data, names: ListNames) -> Data {
-    Data::defer(move || {
+    Data::defer_to(move || {
         let mut list = list;
         let mut accumulator = accumulator;
         loop {
             let cell = list.force();
             if cell.constructor == names.nil {
-                return accumulator.force();
+                return accumulator;
             }
             accumulator = Data::ready(
                 names.cons,
-                vec![cell.fields[0].clone(), Field::Data(accumulator)],
+                [cell.fields[0].clone(), Field::Data(accumulator)],
             );
             list = cell.fields[1].data();
         }
@@ -776,7 +1219,7 @@ pub fn length_from(list: Data, count: i64, names: ListNames) -> i64 {
 pub fn cons_append(head: Field, tail: Data, right: Data, names: ListNames) -> Data {
     Data::ready(
         names.cons,
-        vec![head, Field::Data(append_list(tail, right, names))],
+        [head, Field::Data(append_list(tail, right, names))],
     )
 }
 
@@ -796,11 +1239,12 @@ impl Truth {
     fn of(self, value: bool) -> Node {
         Node {
             constructor: if value { self.true_ } else { self.false_ },
-            fields: Vec::new(),
+            fields: Fields::Zero,
         }
     }
     fn test(self, value: &Field) -> bool {
-        let node = value.data().force();
+        let data = value.data();
+        let node = data.force();
         if node.constructor == self.true_ {
             true
         } else if node.constructor == self.false_ {
@@ -947,7 +1391,7 @@ pub fn compare_lists(
                 Ordering::Equal => order.eq,
                 Ordering::Greater => order.gt,
             },
-            fields: Vec::new(),
+            fields: Fields::Zero,
         }
     })
 }
@@ -1005,6 +1449,30 @@ fn characters(value: &Data, names: StringNames) -> Vec<i64> {
     }
 }
 
+pub fn put_lines(list: Data, names: StringNames, out: &mut impl std::io::Write) -> usize {
+    let mut count = 0;
+    let mut cell = list;
+    loop {
+        let node = cell.force();
+        if node.constructor == names.nil {
+            return count;
+        }
+        let mut line: String = characters(&node.fields[0].data(), names)
+            .into_iter()
+            .map(|code| {
+                u32::try_from(code)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .expect("a printed Char is a Unicode scalar value")
+            })
+            .collect();
+        line.push('\n');
+        out.write_all(line.as_bytes()).expect("writing to stdout");
+        count += 1;
+        cell = node.fields[1].data();
+    }
+}
+
 /// `show` at `String`: `showLitString` between double quotes.
 pub fn show_string(value: &Data, names: StringNames) -> String {
     let codes = characters(value, names);
@@ -1045,13 +1513,13 @@ pub fn show_int(value: i64, precedence: u8) -> String {
 pub fn string_argument(text: &str, names: StringNames) -> Data {
     text.chars()
         .rev()
-        .fold(Data::ready(names.nil, vec![]), |tail, c| {
+        .fold(Data::ready(names.nil, []), |tail, c| {
             Data::ready(
                 names.cons,
-                vec![
+                [
                     Field::Data(Data::ready(
                         names.character,
-                        vec![Field::Char(i64::from(u32::from(c)))],
+                        [Field::Char(i64::from(u32::from(c)))],
                     )),
                     Field::Data(tail),
                 ],
@@ -1072,8 +1540,8 @@ mod append_tests {
         values
             .iter()
             .rev()
-            .fold(Data::ready(NAMES.nil, vec![]), |tail, value| {
-                Data::ready(NAMES.cons, vec![Field::Int64(*value), Field::Data(tail)])
+            .fold(Data::ready(NAMES.nil, []), |tail, value| {
+                Data::ready(NAMES.cons, [Field::Int64(*value), Field::Data(tail)])
             })
     }
 
@@ -1123,14 +1591,14 @@ mod append_tests {
             count.set(count.get() + 1);
             Node {
                 constructor: NAMES.character,
-                fields: vec![Field::Char(0x3bb)],
+                fields: [Field::Char(0x3bb)].into(),
             }
         });
         let message = Data::ready(
             NAMES.cons,
-            vec![
+            [
                 Field::Data(character),
-                Field::Data(Data::ready(NAMES.nil, vec![])),
+                Field::Data(Data::ready(NAMES.nil, [])),
             ],
         );
         assert_eq!(forced.get(), 0);
@@ -1151,7 +1619,7 @@ mod append_tests {
     };
 
     fn located(file: &str, line: i64, column: i64) -> Data {
-        let nil = || Data::ready("[]", vec![]);
+        let nil = || Data::ready("[]", []);
         Data::ready(
             STACK.location,
             vec![
@@ -1169,8 +1637,8 @@ mod append_tests {
     fn pushed(function: &str, location: Data, rest: Data) -> Data {
         Data::ready(
             STACK.push,
-            vec![
-                Field::Data(string(function, Data::ready("[]", vec![]))),
+            [
+                Field::Data(string(function, Data::ready("[]", []))),
                 Field::Data(location),
                 Field::Data(rest),
             ],
@@ -1179,11 +1647,11 @@ mod append_tests {
 
     #[test]
     fn error_messages_render_the_call_stack_as_base_shows_it() {
-        let nil = || Data::ready("[]", vec![]);
-        let empty = || Data::ready(STACK.empty, vec![]);
+        let nil = || Data::ready("[]", []);
+        let empty = || Data::ready(STACK.empty, []);
         let stack = Data::ready(
             STACK.freeze,
-            vec![Field::Data(pushed(
+            [Field::Data(pushed(
                 "error",
                 located("src/M.hs", 12, 5),
                 pushed("helper", located("src/N.hs", -3, 0), empty()),
@@ -1197,7 +1665,7 @@ mod append_tests {
             call_stack_error_message(string("plain", nil()), empty(), STRING, STACK),
             b"plain"
         );
-        let frozen_empty = Data::ready(STACK.freeze, vec![Field::Data(empty())]);
+        let frozen_empty = Data::ready(STACK.freeze, [Field::Data(empty())]);
         assert_eq!(
             call_stack_error_message(string("", nil()), frozen_empty, STRING, STACK),
             b""
@@ -1228,14 +1696,14 @@ mod append_tests {
             calls.set(calls.get() + 1);
             Field::Data(Data::ready(
                 if a[0].int64() > 0 { "True" } else { "False" },
-                vec![],
+                [],
             ))
         })
     }
 
     fn cells(values: &[i64], tail: Data) -> Data {
         values.iter().rev().fold(tail, |tail, value| {
-            Data::ready(NAMES.cons, vec![Field::Int64(*value), Field::Data(tail)])
+            Data::ready(NAMES.cons, [Field::Int64(*value), Field::Data(tail)])
         })
     }
 
@@ -1256,7 +1724,8 @@ mod append_tests {
         );
         let first = mapped.force();
         assert_eq!(calls.get(), 0);
-        let second = first.fields[1].data().force();
+        let rest = first.fields[1].data();
+        let second = rest.force();
         assert_eq!(second.fields[0].int().force(), 4);
         assert_eq!(second.fields[0].int().force(), 4);
         assert_eq!(calls.get(), 1);
@@ -1285,7 +1754,8 @@ mod append_tests {
         let first = kept.force();
         assert_eq!(first.fields[0].int64(), 3);
         assert_eq!(calls.get(), 3);
-        let second = first.fields[1].data().force();
+        let rest = first.fields[1].data();
+        let second = rest.force();
         assert_eq!(second.fields[0].int64(), 5);
         assert_eq!(calls.get(), 5);
         assert_eq!(
@@ -1338,7 +1808,7 @@ mod append_tests {
         let element = Field::Int(Int::defer(|| panic!("reverse forced an element")));
         let list = Data::ready(
             NAMES.cons,
-            vec![element, Field::Data(cells(&[2, 3], ints(&[])))],
+            [element, Field::Data(cells(&[2, 3], ints(&[])))],
         );
         let reversed = reverse_list(list, NAMES);
         let node = reversed.force();
@@ -1353,7 +1823,7 @@ mod append_tests {
     #[test]
     fn length_counts_the_spine_onto_its_start_and_wraps() {
         let element = Field::Int(Int::defer(|| panic!("length forced an element")));
-        let list = Data::ready(NAMES.cons, vec![element, Field::Data(ints(&[5]))]);
+        let list = Data::ready(NAMES.cons, [element, Field::Data(ints(&[5]))]);
         assert_eq!(length_from(list, 10, NAMES), 12);
         assert_eq!(length_from(ints(&[]), -4, NAMES), -4);
         assert_eq!(length_from(ints(&[1, 2]), i64::MAX, NAMES), i64::MIN + 1);
@@ -1377,8 +1847,8 @@ mod append_tests {
         text.chars().rev().fold(tail, |tail, c| {
             Data::ready(
                 ":",
-                vec![
-                    Field::Data(Data::ready("C#", vec![Field::Char(c as i64)])),
+                [
+                    Field::Data(Data::ready("C#", [Field::Char(c as i64)])),
                     Field::Data(tail),
                 ],
             )
@@ -1405,7 +1875,7 @@ mod append_tests {
 
     #[test]
     fn strings_and_characters_show_as_ghc_shows_them() {
-        let nil = || Data::ready("[]", vec![]);
+        let nil = || Data::ready("[]", []);
         for (text, shown) in [
             ("", "\"\""),
             ("a\"b\\c", "\"a\\\"b\\\\c\""),
@@ -1430,13 +1900,39 @@ mod append_tests {
     }
 
     #[test]
+    fn put_lines_writes_each_string_and_counts_them() {
+        let cons = |head: &str, tail: Data| {
+            Data::ready(
+                STRING.cons,
+                [
+                    Field::Data(string_argument(head, STRING)),
+                    Field::Data(tail),
+                ],
+            )
+        };
+        let list = cons(
+            "a.sh:1:1: note: x",
+            cons("λ", Data::ready(STRING.nil, [])),
+        );
+        let mut out = Vec::new();
+        assert_eq!(put_lines(list, STRING, &mut out), 2);
+        assert_eq!(String::from_utf8(out).unwrap(), "a.sh:1:1: note: x\nλ\n");
+        let mut empty = Vec::new();
+        assert_eq!(
+            put_lines(Data::ready(STRING.nil, []), STRING, &mut empty),
+            0
+        );
+        assert!(empty.is_empty());
+    }
+
+    #[test]
     fn string_comparison_is_unsigned_and_stops_at_the_first_difference() {
         const ORDER: Orderings = Orderings {
             lt: "LT",
             eq: "EQ",
             gt: "GT",
         };
-        let nil = || Data::ready("[]", vec![]);
+        let nil = || Data::ready("[]", []);
         let order = |left, right| {
             compare_lists(left, right, STRING, ORDER)
                 .force()
@@ -1444,8 +1940,8 @@ mod append_tests {
         };
         let negative = Data::ready(
             ":",
-            vec![
-                Field::Data(Data::ready("C#", vec![Field::Char(-1)])),
+            [
+                Field::Data(Data::ready("C#", [Field::Char(-1)])),
                 Field::Data(nil()),
             ],
         );
@@ -1460,7 +1956,7 @@ mod append_tests {
 
     #[test]
     fn list_predicates_stop_where_the_library_definitions_stop() {
-        let nil = || Data::ready("[]", vec![]);
+        let nil = || Data::ready("[]", []);
         assert!(!holds(equal_lists(
             string("λa", untouchable()),
             string("λb", untouchable()),
@@ -1505,7 +2001,7 @@ mod append_tests {
         )));
         let words = Data::ready(
             ":",
-            vec![Field::Data(string("ab", nil())), Field::Data(untouchable())],
+            [Field::Data(string("ab", nil())), Field::Data(untouchable())],
         );
         assert!(holds(elem_list(
             string("ab", nil()),
@@ -1528,12 +2024,12 @@ mod append_tests {
             (0xd800, &b""[..]),
             (0x110000, &b"\xf4\x90\x80\x80"[..]),
         ] {
-            let character = Data::ready(names.character, vec![Field::Char(code)]);
+            let character = Data::ready(names.character, [Field::Char(code)]);
             let message = Data::ready(
                 names.cons,
-                vec![
+                [
                     Field::Data(character),
-                    Field::Data(Data::ready(names.nil, vec![])),
+                    Field::Data(Data::ready(names.nil, [])),
                 ],
             );
             assert_eq!(error_message(message, names), expected);
@@ -1567,7 +2063,7 @@ mod append_tests {
         let counter = forced.clone();
         let right = Data::defer(move || {
             counter.set(counter.get() + 1);
-            ints(&[9]).force()
+            ints(&[9]).force().clone()
         });
         let joined = append_list(ints(&[1]), right.clone(), NAMES);
         let first = joined.force();
@@ -1576,7 +2072,8 @@ mod append_tests {
         assert_eq!(first.fields[0].int64(), 1);
         // Reaching the end enters the right list once, and its cells are the
         // ones it already had rather than copies.
-        let rest = first.fields[1].data().force();
+        let tail = first.fields[1].data();
+        let rest = tail.force();
         assert_eq!(rest.fields[0].int64(), 9);
         assert_eq!(forced.get(), 1);
         assert!(right.is_evaluated());
@@ -1587,12 +2084,12 @@ mod append_tests {
         let element = Int::defer(|| panic!("append forced an element"));
         let left = Data::ready(
             NAMES.cons,
-            vec![
+            [
                 Field::Int(element.clone()),
-                Field::Data(Data::ready(NAMES.nil, vec![])),
+                Field::Data(Data::ready(NAMES.nil, [])),
             ],
         );
-        let joined = append_list(left, Data::ready(NAMES.nil, vec![]), NAMES);
+        let joined = append_list(left, Data::ready(NAMES.nil, []), NAMES);
         let node = joined.force();
         assert!(node.fields[0].int().shares_with(&element));
         assert!(!element.is_evaluated());
@@ -1601,7 +2098,7 @@ mod append_tests {
 
 /// A string literal as a lazy `[Char]` ending in `[]`.
 pub fn unpack_literal(bytes: &'static [u8], encoding: Encoding, names: StringNames) -> Data {
-    unpack_string(bytes, encoding, names, Data::ready(names.nil, vec![]))
+    unpack_string(bytes, encoding, names, Data::ready(names.nil, []))
 }
 
 #[cfg(test)]
@@ -1694,7 +2191,7 @@ mod tests {
         let retained = field.clone();
         let data = Data::defer(move || Node {
             constructor: "Pair",
-            fields: vec![Field::Int(field)],
+            fields: [Field::Int(field)].into(),
         });
         let copy = data.clone();
         assert!(data.shares_with(&copy));
@@ -1708,8 +2205,8 @@ mod tests {
 
     #[test]
     fn recursive_datatype_carriers_hold_finite_nested_values() {
-        let tail = Data::ready("Nil", vec![]);
-        let list = Data::ready("Cons", vec![Field::Int64(42), Field::Data(tail.clone())]);
+        let tail = Data::ready("Nil", []);
+        let list = Data::ready("Cons", [Field::Int64(42), Field::Data(tail.clone())]);
         let node = list.force();
         assert_eq!(node.fields[0].int64(), 42);
         assert!(node.fields[1].data().shares_with(&tail));
@@ -1757,7 +2254,7 @@ mod tests {
 
     fn countdown(n: u32, entered: Rc<Cell<u32>>) -> Data {
         if n == 0 {
-            return Data::ready("Nil", vec![]);
+            return Data::ready("Nil", []);
         }
         Data::defer_to(move || {
             entered.set(entered.get() + 1);
@@ -1802,15 +2299,18 @@ mod tests {
         let function = Closure::entering(
             2,
             |a| Field::Int64(a[0].int64() + a[1].int64()),
-            |a| Box::new(a[0].int64() * 100 + a[1].int64()),
+            |a| {
+                let (x, y) = (a[0].int64(), a[1].int64());
+                Step::Next(Box::new(move || Step::Done(x * 100 + y)))
+            },
         );
         match function.apply_tail(vec![Field::Int64(4), Field::Int64(2)]) {
-            Tail::Enter(state) => assert_eq!(*state.downcast::<i64>().expect("i64"), 402),
+            Tail::Enter(step) => assert_eq!(step.run(), 402),
             Tail::Value(_) => panic!("a saturated call with an entry was applied"),
         }
         let partial = function.apply(vec![Field::Int64(4)]).closure();
         match partial.apply_tail(vec![Field::Int64(2)]) {
-            Tail::Enter(state) => assert_eq!(*state.downcast::<i64>().expect("i64"), 402),
+            Tail::Enter(step) => assert_eq!(step.run(), 402),
             Tail::Value(_) => panic!("a partial application lost its entry"),
         }
         match function.apply_tail(vec![Field::Int64(4)]) {

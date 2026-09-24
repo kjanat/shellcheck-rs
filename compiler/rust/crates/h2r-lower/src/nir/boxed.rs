@@ -42,7 +42,7 @@ pub(super) fn signature() -> Ty {
             tycon: TyConId {
                 name: INT.into(),
                 occ: "Int".into(),
-                unique: String::new(),
+                unique: Default::default(),
             },
             args: vec![],
         }),

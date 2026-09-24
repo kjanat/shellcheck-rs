@@ -648,6 +648,7 @@ data AlignFacts = AlignFacts
     , afUnique       :: !Int   -- ^ aligned pairs with a unique fingerprint
     , afTied         :: !Int   -- ^ aligned pairs whose fingerprint is shared
     , afTiedVacuous  :: !Int   -- ^ …of which every tied candidate joins the same
+    , afTiedRanked   :: !Int   -- ^ …of which the rest the merge paired in rank order
     , afTrimmedNames :: [String]
     , afImplicitDesc :: [String]
     , afErrs         :: [String]
@@ -663,9 +664,10 @@ alignFacts dflags sptOn preBinds slots mergeErrs = AlignFacts
     , afSptPossible  = sptOn
     , afBindersOut   = sum [length (bindersOf (slotTidy s)) | s <- slots, isEmitted s]
     , afBindersTrim  = sum [length (bindersOf b) | b <- trimmed]
-    , afUnique       = length [() | (_, k, _) <- ties, k == 1]
-    , afTied         = length [() | (_, k, _) <- ties, k /= 1]
-    , afTiedVacuous  = length [() | (_, k, True) <- ties, k /= 1]
+    , afUnique       = length [() | (_, k, _, _) <- ties, k == 1]
+    , afTied         = length [() | (_, k, _, _) <- ties, k /= 1]
+    , afTiedVacuous  = length [() | (_, k, True, _) <- ties, k /= 1]
+    , afTiedRanked   = length [() | (_, k, False, True) <- ties, k /= 1]
     , afTrimmedNames = map bindLabel trimmed
     , afImplicitDesc = [ bindLabel b ++ "   " ++ sdoc dflags (ppr (map idDetails (bindersOf b)))
                        | Implicit b <- slots ]
@@ -688,12 +690,30 @@ alignFacts dflags sptOn preBinds slots mergeErrs = AlignFacts
     tidyColOf :: M.Map String Colour
     tidyColOf = M.fromList (zip (map bindLabel tidyBinds) tidyCol)
 
-    ties :: [(String, Int, Bool)]
-    ties = [ (lbl, length cands, vacuous cands)
+    ties :: [(String, Int, Bool, Bool)]
+    ties = [ (lbl, length cands, vacuous cands, maybe False ranked colour)
            | Aligned _ t <- slots
            , let lbl = bindLabel t
-           , let cands = maybe [] (\c -> M.findWithDefault [] c fpIndex)
-                                  (M.lookup lbl tidyColOf) ]
+           , let colour = M.lookup lbl tidyColOf
+           , let cands = maybe [] (\c -> M.findWithDefault [] c fpIndex) colour ]
+
+    -- CoreTidy keeps the order of the groups it does not trim.
+    bindKey :: CoreBind -> [Word64]
+    bindKey = map ukey . bindersOf
+
+    trimmedKeys = S.fromList (map bindKey trimmed)
+
+    keptByColour :: M.Map Colour [[Word64]]
+    keptByColour = M.fromListWith (flip (++))
+        [ (c, [bindKey b]) | (c, b) <- zip preCol preBinds
+                           , not (bindKey b `S.member` trimmedKeys) ]
+
+    pairedByColour :: M.Map Colour [[Word64]]
+    pairedByColour = M.fromListWith (flip (++))
+        [ (c, [bindKey p]) | Aligned p t <- slots
+                           , Just c <- [M.lookup (bindLabel t) tidyColOf] ]
+
+    ranked c = M.lookup c pairedByColour == M.lookup c keptByColour
 
     vacuous cands = case map (payload dflags) cands of
         []     -> False
@@ -702,9 +722,9 @@ alignFacts dflags sptOn preBinds slots mergeErrs = AlignFacts
     tieErrs =
         [ "ambiguous alignment: " ++ show k ++ " pre-tidy bindings share the \
           \fingerprint of " ++ lbl ++ ", and they do not carry the same joined facts"
-        | (lbl, k, vac) <- ties, k /= 1, not vac ]
+        | (lbl, k, vac, rank) <- ties, k /= 1, not vac, not rank ]
         ++ [ "no pre-tidy binding has the fingerprint of aligned binding " ++ lbl
-           | (lbl, 0, _) <- ties ]
+           | (lbl, 0, _, _) <- ties ]
 
     -- (c): a trimmed group never has an exported binder (Iface/Tidy.hs:1046).
     exportedTrimmed =
@@ -769,7 +789,8 @@ summary f =
                        ++ show (afBindersTrim f) ++ " trimmed; "
                        ++ show (afUnique f) ++ " uniquely fingerprinted, "
                        ++ show (afTied f) ++ " tied ("
-                       ++ show (afTiedVacuous f) ++ " vacuously)"
+                       ++ show (afTiedVacuous f) ++ " vacuously, "
+                       ++ show (afTiedRanked f) ++ " by rank)"
 
 -- | The per-module alignment log.
 report :: String -> NameSet -> AlignFacts -> [Slot] -> String
@@ -790,6 +811,9 @@ report modName exportSet f slots = unlines $
     , "  indistinguishable                    " ++ show (afTied f)
     , "    ...of which every tied candidate carries the same joined facts,"
     , "    so the tie cannot change a byte  " ++ show (afTiedVacuous f)
+    , "    ...and of the rest, paired with the pre-tidy binding of the same"
+    , "    rank among the untrimmed bindings of that fingerprint"
+    , "                                       " ++ show (afTiedRanked f)
     , "  pre-tidy groups  = aligned + trimmed = " ++ show (afAligned f + afTrimmed f)
     , "  tidied groups    = aligned + implicit + spt = "
         ++ show (afAligned f + afImplicit f + afSpt f)

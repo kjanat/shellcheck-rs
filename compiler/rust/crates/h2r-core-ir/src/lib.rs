@@ -7,8 +7,11 @@
 //! path queries (is this occurrence under a lambda? in which case branch?)
 //! are cheap.
 
+pub mod name;
 pub mod pretty;
 pub mod raw;
+
+pub use name::Name;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -41,7 +44,7 @@ pub const CHAR_TYCON: &str = "$ghc-prim$GHC.Types$Char";
 /// and `FilePath` both arrive here as `Con List [Con Char []]`. The
 /// unexpanded rendering is kept next to every use of a type
 /// ([`Binder::ty_pretty`], [`Expr::Type`]`::pretty`) for diagnostics.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Ty {
     Var(TyVarId),
     Con {
@@ -163,7 +166,7 @@ impl Ty {
 
     fn render_at(&self, context: Precedence) -> String {
         let (text, precedence) = match self {
-            Ty::Var(var) => (var.occ.clone(), Precedence::Atom),
+            Ty::Var(var) => (var.occ.to_string(), Precedence::Atom),
             Ty::Con { tycon, args } if tycon.name == LIST_TYCON && args.len() == 1 => {
                 (format!("[{}]", args[0].render()), Precedence::Atom)
             }
@@ -176,9 +179,9 @@ impl Ty {
                 let fields: Vec<_> = args.iter().map(Ty::render).collect();
                 (format!("({})", fields.join(", ")), Precedence::Atom)
             }
-            Ty::Con { tycon, args } if args.is_empty() => (tycon.occ.clone(), Precedence::Atom),
+            Ty::Con { tycon, args } if args.is_empty() => (tycon.occ.to_string(), Precedence::Atom),
             Ty::Con { tycon, args } => {
-                let mut text = tycon.occ.clone();
+                let mut text = tycon.occ.to_string();
                 for arg in args {
                     text.push(' ');
                     text.push_str(&arg.render_at(Precedence::Argument));
@@ -230,6 +233,9 @@ impl Ty {
     /// type — the textual `alpha_normalise` M2.1 uses on rendered types is
     /// the thing this exists to replace.
     pub fn alpha_eq(&self, other: &Ty) -> bool {
+        if std::ptr::eq(self, other) {
+            return true;
+        }
         // Pairs still to compare, plus the bound-variable correspondence in
         // force at each, as a depth into `bound`.
         let mut work: Vec<(&Ty, &Ty, usize)> = vec![(self, other, 0)];
@@ -956,7 +962,7 @@ impl Module {
             bail!(
                 "module {} has dump format {}, and only {:?} load: re-extract \
                  with the current plugin (`. ~/.ghcup/env; \
-                 ./compiler/extract.sh`), which emits format {}. Format 5 is \
+                 h2r extract program`), which emits format {}. Format 5 is \
                  the pre-CoreTidy program, format 6 the post-CoreTidy one; \
                  both key the id table by stable name and carry structured \
                  types, and neither is guessed at.",
@@ -1240,9 +1246,9 @@ fn build_types(raw: &[raw::RawTy]) -> Result<Vec<Ty>> {
         };
         out.push(match t {
             raw::RawTy::TyVar { name, occ, unique } => Ty::Var(TyVarId {
-                name: name.clone(),
-                occ: occ.clone(),
-                unique: unique.clone(),
+                name: name.into(),
+                occ: occ.into(),
+                unique: unique.into(),
             }),
             raw::RawTy::TyConApp { tycon, args } => Ty::Con {
                 tycon: tycon.clone(),
@@ -1658,7 +1664,7 @@ mod tests {
         raw.format = 4;
         let err = Module::from_raw(raw).unwrap_err().to_string();
         assert!(err.contains("dump format 4"), "{err}");
-        assert!(err.contains("extract.sh"), "{err}");
+        assert!(err.contains("h2r extract program"), "{err}");
     }
 
     //--------------------------------------------------------------------------
@@ -1668,9 +1674,9 @@ mod tests {
     fn con(name: &str, args: Vec<Ty>) -> Ty {
         Ty::Con {
             tycon: TyConId {
-                name: name.to_string(),
-                occ: name.rsplit('$').next().unwrap().to_string(),
-                unique: name.to_string(),
+                name: name.into(),
+                occ: name.rsplit('$').next().unwrap().into(),
+                unique: name.into(),
             },
             args,
         }
@@ -1678,9 +1684,9 @@ mod tests {
 
     fn tv(u: &str) -> TyVarId {
         TyVarId {
-            name: format!("$_in${u}"),
-            occ: u.to_string(),
-            unique: u.to_string(),
+            name: format!("$_in${u}").into(),
+            occ: u.into(),
+            unique: u.into(),
         }
     }
 

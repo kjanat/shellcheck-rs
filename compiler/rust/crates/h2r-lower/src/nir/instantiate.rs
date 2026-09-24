@@ -1,16 +1,15 @@
 //! Closed type instantiation. Source-spine recognition lives in the builder and
 //! verifier separately; only source linkage and type substitution are shared.
 
-use h2r_core_ir::{BindSite, BinderId, Expr, ExprId, Module, Ref, Ty};
+use h2r_core_ir::{BindSite, BinderId, Expr, ExprId, Ref, Ty};
 
-use super::linkage;
+use super::{World, linkage};
 
 pub(super) fn target<'a>(
-    module: &'a Module,
-    module_index: usize,
-    modules: Option<&'a [Module]>,
+    world: &World<'a>,
     head: ExprId,
 ) -> Result<(usize, BinderId, &'a Ty), String> {
+    let (module, module_index) = (world.module, world.index);
     let Expr::Var { name, .. } = module.expr(head) else {
         return Err("application requires a top-level variable head".into());
     };
@@ -19,8 +18,10 @@ pub(super) fn target<'a>(
             Ok((module_index, binder, module.binder_ty(binder)))
         }
         Some(Ref::Global) => {
-            let modules = modules.ok_or("application import requires a loaded world")?;
-            let (index, binder) = linkage::imported_top(modules, name)?;
+            let modules = world
+                .modules
+                .ok_or("application import requires a loaded world")?;
+            let (index, binder) = linkage::imported_top(world, name)?;
             Ok((index, binder, modules[index].binder_ty(binder)))
         }
         _ => Err("application requires a top-level binding".into()),

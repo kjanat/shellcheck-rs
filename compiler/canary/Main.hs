@@ -19,7 +19,7 @@ import Canary (forward, constant, add, subtractInt, multiply, composed, chained,
   charRoundTrip, charOrder, charSwitch, charField,
   stringLength, stringIndex, stringEmpty, stringUnicode, stringUnicodeIndex,
   stringNulByte, stringAppend, stringShared, stringUnused, stringLazyHead,
-  stringHighLatin1, stringCount,
+  stringHighLatin1, stringCount, recursiveValueUse,
   newtypeRoundTrip, newtypeField, newtypeFunction, newtypeMonad, stringAppendShared,
   errorUnusedArgument, errorUnusedLet, errorUnusedShared, errorPlain,
   errorEmpty, errorUnicode, errorMultiline, errorUnboxed,
@@ -186,6 +186,8 @@ main = do
       (I# x, I# y) -> print (I# (stringHighLatin1 x y))
     ["stringCount", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (stringCount x y))
+    ["recursiveValueUse", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (recursiveValueUse x y))
     ["newtypeRoundTrip", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (I# (newtypeRoundTrip x y))
     ["newtypeField", a, b] -> case (read a, read b) of
@@ -400,6 +402,8 @@ main = do
       (I# x, I# y) -> print (errorCallComputed x y)
     ["setFindMin", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (setFindMin x y)
+    ["undefinedUnused", a, b] -> case (read a, read b) of
+      (I# x, I# y) -> print (I# (undefinedUnused x y))
     ["stateCollect", a, b] -> case (read a, read b) of
       (I# x, I# y) -> print (stateCollect x y)
     ["stateNumber", a, b] -> case (read a, read b) of

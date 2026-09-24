@@ -55,7 +55,7 @@ fn con(name: &str, occ: &str, args: Vec<Ty>) -> Ty {
         tycon: TyConId {
             name: name.into(),
             occ: occ.into(),
-            unique: String::new(),
+            unique: Default::default(),
         },
         args,
     }
@@ -202,7 +202,7 @@ pub fn address_literal<'a>(
             let Expr::Var { name, .. } = module.expr(source) else {
                 return None;
             };
-            super::linkage::imported_top(world.modules?, name).ok()?
+            super::linkage::imported_top(world, name).ok()?
         }
         _ => return None,
     };

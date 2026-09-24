@@ -24,6 +24,7 @@ use h2r_lower::nir::pretty::format_leaf;
 use h2r_lower::nir::specialize::{Instance, survey};
 
 mod bench;
+mod corpus;
 mod differential;
 mod evidence;
 mod fixtures;
@@ -66,6 +67,21 @@ struct Cli {
     /// Time the entries of `Bench.hs` against the oracle at growing sizes, and run nothing else.
     #[arg(long, conflicts_with = "explain")]
     bench: bool,
+    /// Compare this built ShellCheck entry binary with the library oracle on every `prop_` snippet, and run nothing else.
+    #[arg(long, value_name = "PROGRAM", conflicts_with_all = ["explain", "bench"])]
+    shellcheck: Option<PathBuf>,
+    /// The oracle entry the `--shellcheck` binary was built from.
+    #[arg(long, default_value = "parseMessages")]
+    entry: String,
+    /// Where the `--shellcheck` snippets are read from.
+    #[arg(long, default_value = "src/ShellCheck")]
+    corpus: PathBuf,
+    /// The `--shellcheck` binary is a linter: write each snippet to a file and lint that file.
+    #[arg(long, requires = "shellcheck")]
+    lint: bool,
+    /// With `--lint`: lint the files this file lists, one path per line, instead of the snippets.
+    #[arg(long, requires = "lint")]
+    paths: Option<PathBuf>,
     /// The canonical ShellCheck Core the library suite emits from.
     #[arg(long, default_value = "compiler/core-json")]
     library_core: PathBuf,
@@ -84,6 +100,8 @@ struct Cli {
             "compiler/library-json/transformers",
             "compiler/library-json/mtl",
             "compiler/library-json/base",
+            "compiler/library-json/ghc-prim",
+            "compiler/library-json/ghc-bignum",
         ]
     )]
     with: Vec<PathBuf>,
@@ -119,6 +137,10 @@ fn run(cli: Cli) -> Result<()> {
             println!("{line}");
         }
         return Ok(());
+    }
+
+    if let Some(program) = &cli.shellcheck {
+        return shellcheck_corpus(&cli, program, jobs);
     }
 
     if let Some(occ) = cli.explain.as_deref() {
@@ -170,6 +192,92 @@ fn run(cli: Cli) -> Result<()> {
         bail!("{} canary checks failed", failures.len());
     }
     println!("{cases} differential cases passed (stdout, stderr, exit status).");
+    Ok(())
+}
+
+fn shellcheck_corpus(cli: &Cli, program: &Path, jobs: usize) -> Result<()> {
+    let snippets: Vec<String> = match &cli.paths {
+        Some(list) => std::fs::read_to_string(list)?
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect(),
+        None => corpus::snippets(&cli.corpus)
+            .map_err(anyhow::Error::msg)?
+            .into_iter()
+            .collect(),
+    };
+    let timeout = std::time::Duration::from_secs(cli.timeout_seconds);
+    let inputs: Vec<String> = if cli.paths.is_some() {
+        snippets.clone()
+    } else if cli.lint {
+        let dir = program.parent().map_or_else(
+            || PathBuf::from("lint-corpus"),
+            |dir| dir.join("lint-corpus"),
+        );
+        std::fs::create_dir_all(&dir)?;
+        let extensions = ["sh", "bash", "ksh", "dash", "bats", "envrc", "txt"];
+        snippets
+            .iter()
+            .enumerate()
+            .map(|(index, snippet)| {
+                let path = dir.join(format!(
+                    "{index:04}.{}",
+                    extensions[index % extensions.len()]
+                ));
+                std::fs::write(&path, snippet)?;
+                Ok(path.to_string_lossy().into_owned())
+            })
+            .collect::<std::io::Result<_>>()?
+    } else {
+        snippets.clone()
+    };
+    let compared = parallel(&inputs, jobs, |input| {
+        let expected = differential::invoke(
+            &cli.library_oracle,
+            &[cli.entry.clone(), input.clone()],
+            timeout,
+        )?;
+        let actual = differential::invoke(program, std::slice::from_ref(input), timeout)?;
+        let case = Case {
+            occ: &cli.entry,
+            mode: Mode::Optimized,
+            arguments: vec![input.clone()],
+            expected_exit: if cli.lint && !expected.stdout.is_empty() {
+                1
+            } else {
+                0
+            },
+        };
+        Ok::<_, String>((
+            differential::compare(&case, &expected, &actual),
+            expected.stdout,
+        ))
+    });
+    let mut failures = Vec::new();
+    let mut outputs = std::collections::BTreeSet::new();
+    for outcome in compared {
+        match outcome {
+            Ok((differences, stdout)) => {
+                failures.extend(differences);
+                outputs.insert(stdout);
+            }
+            Err(error) => failures.push(error),
+        }
+    }
+    for failure in &failures {
+        eprintln!("{failure}");
+    }
+    println!(
+        "{}: {} inputs, {} distinct oracle outputs, {} differences",
+        cli.entry,
+        snippets.len(),
+        outputs.len(),
+        failures.len()
+    );
+    if !failures.is_empty() {
+        bail!("{} corpus checks failed", failures.len());
+    }
     Ok(())
 }
 
@@ -702,7 +810,10 @@ fn error_evidence(modules: &[Module]) -> Result<(), String> {
             }
             1 => instruction.operation = Operation::Move(message),
             2 => instruction.origin.rule = Rule::Literal,
-            _ => instruction.result.ty = h2r_lower::nir::strings::string_ty(),
+            _ => {
+                instruction.result.ty =
+                    h2r_lower::nir::shared(&h2r_lower::nir::strings::string_ty())
+            }
         }
         if verify_leaf_in_world(modules, binding.module, binding.binder, FnId(0), &forged).is_ok() {
             return Err(format!("error verifier accepted mutation {mutation}"));

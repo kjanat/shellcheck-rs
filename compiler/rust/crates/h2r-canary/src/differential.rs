@@ -216,7 +216,7 @@ mod tests {
 mod comparison_tests {
     use super::*;
 
-    fn case(mode: Mode, expected_exit: i32) -> Case {
+    fn case(mode: Mode, expected_exit: i32) -> Case<'static> {
         Case {
             occ: "failure",
             mode,
@@ -275,14 +275,14 @@ mod comparison_tests {
 
 /// One differential case: the same entry, the same arguments, two programs.
 #[derive(Debug, Clone)]
-pub struct Case {
-    pub occ: &'static str,
+pub struct Case<'a> {
+    pub occ: &'a str,
     pub mode: Mode,
     pub arguments: Vec<String>,
     pub expected_exit: i32,
 }
 
-impl Case {
+impl Case<'_> {
     pub fn label(&self) -> String {
         format!(
             "{}{} {}",
@@ -294,7 +294,7 @@ impl Case {
 }
 
 /// What differed, in the words of the thing that differed.
-pub fn compare(case: &Case, oracle: &Outcome, candidate: &Outcome) -> Vec<String> {
+pub fn compare(case: &Case<'_>, oracle: &Outcome, candidate: &Outcome) -> Vec<String> {
     let mut differences = Vec::new();
     if oracle.stdout != candidate.stdout {
         differences.push(format!(

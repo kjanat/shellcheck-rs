@@ -13,6 +13,8 @@ use h2r_analysis::laziness::{Census, Class, Fate, Origin, TopClass};
 use h2r_analysis::shape::{ArgShape, Position};
 use h2r_core_ir::{BinderKind, Expr, Module, load_dir, with_big_stack};
 
+mod build;
+mod extract;
 mod lower;
 mod m23;
 mod m24;
@@ -30,14 +32,60 @@ struct Cli {
 enum Command {
     /// Emit standalone Rust for a supported pure Int#/Int entry and all its dependencies.
     EmitRust {
-        dir: PathBuf,
+        #[arg(required_unless_present = "world")]
+        dir: Option<PathBuf>,
         /// Also load the dumps of a library compiled with the plugin. Repeatable.
         #[arg(long = "with", value_name = "DIR")]
         with: Vec<PathBuf>,
+        #[arg(
+            long,
+            conflicts_with_all = ["dir", "with"],
+            help = "Load the ShellCheck world: the program, its eleven libraries and the entry module"
+        )]
+        world: bool,
         #[arg(long)]
         entry: String,
         #[arg(long)]
         output: PathBuf,
+    },
+    /// Emit an entry as one crate per group of strongly connected instances and compile it with rustc into DIR/program.
+    BuildRust {
+        #[arg(required_unless_present = "world")]
+        dir: Option<PathBuf>,
+        /// Also load the dumps of a library compiled with the plugin. Repeatable.
+        #[arg(long = "with", value_name = "DIR")]
+        with: Vec<PathBuf>,
+        #[arg(
+            long,
+            conflicts_with_all = ["dir", "with"],
+            help = "Load the ShellCheck world: the program, its eleven libraries and the entry module"
+        )]
+        world: bool,
+        #[arg(long)]
+        entry: String,
+        #[arg(long)]
+        out: PathBuf,
+        /// Source bytes one crate may hold before the next one starts; a larger component gets a crate to itself.
+        #[arg(long, default_value_t = 4_000_000)]
+        budget: usize,
+        #[arg(long, default_value = "1")]
+        opt_level: String,
+        /// Build a linter: the entry is `FilePath -> String -> [String]`, applied to each path argument and its file.
+        #[arg(long)]
+        lint: bool,
+    },
+    /// Compile the crates build-rust emitted into DIR, in the order its manifest lists them.
+    CompileRust {
+        out: PathBuf,
+        #[arg(long, default_value = "1")]
+        opt_level: String,
+    },
+    #[command(
+        about = "Extract GHC Core with the h2r plugin: libraries, the entry module, the program and the optimisation matrix"
+    )]
+    Extract {
+        #[command(subcommand)]
+        command: extract::Extract,
     },
     /// Summarise the Core dumps in a directory.
     Stats {
@@ -52,6 +100,13 @@ enum Command {
         dir: PathBuf,
         /// Module name, e.g. ShellCheck.Parser
         module: String,
+    },
+    /// Print the type of every binder and type argument in the Core subtree at a node id.
+    Types {
+        dir: PathBuf,
+        module: String,
+        /// Node id; omit to print every top-level binding.
+        node: Option<u32>,
     },
     /// Print the Core subtree at a node id (as reported by `laziness --explain`).
     Show {
@@ -355,11 +410,18 @@ enum Command {
     /// named reason for every dead one, and the independent verifier's
     /// result beside it.
     Lower {
-        dir: PathBuf,
+        #[arg(required_unless_present = "world")]
+        dir: Option<PathBuf>,
         /// Also load the dumps of a library compiled with the plugin, so its
         /// bindings are part of the world. Repeatable.
         #[arg(long = "with", value_name = "DIR")]
         with: Vec<PathBuf>,
+        #[arg(
+            long,
+            conflicts_with_all = ["dir", "with"],
+            help = "Load the ShellCheck world: the program, its eleven libraries and the entry module"
+        )]
+        world: bool,
         /// The M3a question: which top-level bindings can `Main.main`
         /// reach?
         #[arg(long)]
@@ -377,6 +439,15 @@ enum Command {
         /// instance survey.
         #[arg(long, requires = "nir")]
         specialize: bool,
+        /// With --specialize: report the worklist and resident memory on stderr as instances lower.
+        #[arg(long, requires = "specialize")]
+        progress: bool,
+        /// With --specialize and --fn: the root instance's type arguments, each a stable type-constructor name or `{NAME ARG...}`.
+        #[arg(long, requires_all = ["specialize", "fn_name"], num_args = 1..)]
+        at: Vec<String>,
+        /// With --specialize and --fn: the root instance's dictionaries, each a stable binding name or `{NAME TYPE... ; DICTIONARY...}`.
+        #[arg(long, requires_all = ["specialize", "fn_name"], num_args = 1..)]
+        dictionaries: Vec<String>,
         /// With --specialize: group every refusal about this stable name or
         /// type head by the shape of the call at its site.
         #[arg(long, requires = "specialize", conflicts_with = "fn_name")]
@@ -436,23 +507,63 @@ enum Command {
     },
 }
 
+fn loaded(dir: Option<PathBuf>, with: Vec<PathBuf>, world: bool) -> (PathBuf, Vec<PathBuf>) {
+    match dir {
+        Some(dir) if !world => (dir, with),
+        _ => extract::world(),
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     with_big_stack(move || match cli.command {
         Command::EmitRust {
             dir,
             with,
+            world,
             entry,
             output,
         } => {
+            let (dir, with) = loaded(dir, with, world);
             let modules = h2r_core_ir::load_dirs(&dir, &with)?.modules;
             let source =
                 h2r_lower::emit::emit_entry(&modules, &entry).map_err(anyhow::Error::msg)?;
             std::fs::write(output, source)?;
             Ok(())
         }
+        Command::BuildRust {
+            dir,
+            with,
+            world,
+            entry,
+            out,
+            budget,
+            opt_level,
+            lint,
+        } => {
+            let (dir, with) = loaded(dir, with, world);
+            let modules = h2r_core_ir::load_dirs(&dir, &with)?.modules;
+            let driver = if lint {
+                h2r_lower::emit::Driver::Lint
+            } else {
+                h2r_lower::emit::Driver::Print
+            };
+            build::emit(&modules, &entry, &out, budget, driver)?;
+            drop(modules);
+            let error = std::os::unix::process::CommandExt::exec(
+                std::process::Command::new(std::env::current_exe()?)
+                    .arg("compile-rust")
+                    .arg(&out)
+                    .arg("--opt-level")
+                    .arg(&opt_level),
+            );
+            Err(error.into())
+        }
+        Command::CompileRust { out, opt_level } => build::compile(&out, &opt_level),
+        Command::Extract { command } => extract::run(command),
         Command::Stats { dir, per_module } => stats(&dir, per_module),
         Command::Binders { dir, module } => binders(&dir, &module),
+        Command::Types { dir, module, node } => types(&dir, &module, node),
         Command::Compare { dirs } => compare(&dirs),
         Command::Show {
             dir,
@@ -609,10 +720,14 @@ fn main() -> Result<()> {
         Command::Lower {
             dir,
             with,
+            world,
             reachability,
             nir,
             fn_name,
             specialize,
+            progress,
+            at,
+            dictionaries,
             sites,
             entries,
             emit_program,
@@ -623,6 +738,7 @@ fn main() -> Result<()> {
             m24_link,
             boundary,
         } => {
+            let (dir, with) = loaded(dir, with, world);
             if boundary {
                 lower::boundary(&dir, &with)
             } else if let Some(output) = emit_program {
@@ -632,7 +748,20 @@ fn main() -> Result<()> {
             } else if nir {
                 match (specialize, fn_name.as_deref()) {
                     (true, _) if !sites.is_empty() => lower::nir_sites(&dir, &with, &sites),
-                    (true, name) => lower::nir_specialize(&dir, &with, name),
+                    (true, name) => {
+                        let root = match name {
+                            None => lower::Root::Every,
+                            Some(name) if at.is_empty() && dictionaries.is_empty() => {
+                                lower::Root::Whole(name)
+                            }
+                            Some(name) => lower::Root::At {
+                                name,
+                                types: &at,
+                                dictionaries: &dictionaries,
+                            },
+                        };
+                        lower::nir_specialize(&dir, &with, root, progress)
+                    }
                     (false, Some(name)) => lower::nir(&dir, &with, name),
                     (false, None) => lower::nir_program(&dir, &with),
                 }
@@ -826,6 +955,61 @@ fn find_module<'a>(modules: &'a [Module], name: &str) -> Result<&'a Module> {
     })
 }
 
+fn types(dir: &Path, module: &str, node: Option<u32>) -> Result<()> {
+    let modules = load_dir(dir)?;
+    let m = find_module(&modules, module)?;
+    let binder = |id: h2r_core_ir::BinderId| {
+        let b = m.binder(id);
+        format!("{} :: {}", b.occ, m.binder_ty(id).render())
+    };
+    let roots: Vec<u32> = match node {
+        Some(node) => vec![node],
+        None => m
+            .top
+            .iter()
+            .flat_map(|bind| &bind.pairs)
+            .map(|pair| pair.rhs)
+            .collect(),
+    };
+    for id in roots.into_iter().flat_map(|root| m.preorder(root)) {
+        match m.expr(id) {
+            Expr::Lam { binder: b, .. } => println!("#{id} lambda {}", binder(*b)),
+            Expr::Let { bind, .. } => {
+                for pair in &bind.pairs {
+                    println!("#{id} let {}", binder(pair.binder));
+                }
+            }
+            Expr::Case {
+                binder: b, alts, ..
+            } => {
+                println!("#{id} case {}", binder(*b));
+                for alt in alts {
+                    for field in &alt.binders {
+                        println!("#{id}   field {}", binder(*field));
+                    }
+                }
+            }
+            Expr::Type { ty, .. } => println!("#{id} @{}", m.ty(*ty).render()),
+            Expr::Cast {
+                from: Some(from),
+                to: Some(to),
+                ..
+            } => println!(
+                "#{id} cast {} ~> {}",
+                m.ty(*from).render(),
+                m.ty(*to).render()
+            ),
+            Expr::Var { name, .. } => {
+                if let Some(info) = m.id_info(id) {
+                    println!("#{id} global {name} {} arity={}", info.details, info.arity);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn binders(dir: &Path, module: &str) -> Result<()> {
     let modules = load_dir(dir)?;
     let m = find_module(&modules, module)?;
@@ -841,7 +1025,7 @@ fn binders(dir: &Path, module: &str) -> Result<()> {
                 nonempty(b.dmd_sig.as_ref().map(|s| s.pretty.as_str())),
                 nonempty(b.cpr_sig.as_deref()),
             );
-            println!("        :: {}", b.ty);
+            println!("        :: {}", m.binder_ty(pair.binder).render());
         }
     }
     Ok(())

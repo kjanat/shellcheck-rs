@@ -267,7 +267,6 @@ fn carries(rule: Rule, kind: RuleKind) -> bool {
         RuleKind::StrictBinding => rule == Rule::StrictBinding,
         RuleKind::EraseCast => rule == Rule::EraseCast,
         RuleKind::ResolveMethod => rule == Rule::ResolveMethod,
-        RuleKind::Diverge => rule == Rule::Diverge,
         RuleKind::MagicLazy => rule == Rule::MagicLazy,
     }
 }

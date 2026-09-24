@@ -7,6 +7,10 @@
 //! are no implicit captures. IDs are function-local except for `FnId`, which
 //! will be allocated by the program lowering driver.
 
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
 use h2r_core_ir::{BinderId, ExprId, Lit, Module, Ty, TyVarId};
 
 /// The modules one pass may read. Constructor layouts, imported bindings and
@@ -19,6 +23,54 @@ pub struct World<'a> {
     pub module: &'a Module,
     pub index: usize,
     pub modules: Option<&'a [Module]>,
+    pub catalog: Option<&'a Catalog>,
+}
+
+pub struct Catalog {
+    tops: HashMap<String, Option<(usize, BinderId)>>,
+    families: HashMap<String, Vec<(usize, usize)>>,
+    declaring: RefCell<HashMap<String, Result<Option<usize>, String>>>,
+}
+
+impl Catalog {
+    pub fn of(modules: &[Module]) -> Catalog {
+        let mut tops: HashMap<String, Option<(usize, BinderId)>> = HashMap::new();
+        let mut families: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+        for (index, module) in modules.iter().enumerate() {
+            for pair in module.top.iter().flat_map(|group| &group.pairs) {
+                tops.entry(module.binder(pair.binder).name.clone())
+                    .and_modify(|found| *found = None)
+                    .or_insert(Some((index, pair.binder)));
+            }
+            for (position, constructor) in module.constructors.iter().enumerate() {
+                families
+                    .entry(constructor.family.clone())
+                    .or_default()
+                    .push((index, position));
+            }
+        }
+        Catalog {
+            tops,
+            families,
+            declaring: RefCell::default(),
+        }
+    }
+
+    pub(crate) fn top(&self, name: &str) -> Option<Option<(usize, BinderId)>> {
+        self.tops.get(name).copied()
+    }
+
+    pub(crate) fn family(&self, name: &str) -> &[(usize, usize)] {
+        self.families.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    pub(crate) fn declaring(&self, name: &str) -> Option<Result<Option<usize>, String>> {
+        self.declaring.borrow().get(name).cloned()
+    }
+
+    pub(crate) fn declare(&self, name: &str, module: Result<Option<usize>, String>) {
+        self.declaring.borrow_mut().insert(name.to_string(), module);
+    }
 }
 
 impl<'a> World<'a> {
@@ -29,6 +81,18 @@ impl<'a> World<'a> {
                 .ok_or("module index is outside the loaded world")?,
             index,
             modules: Some(modules),
+            catalog: None,
+        })
+    }
+
+    pub fn cataloged(
+        modules: &'a [Module],
+        index: usize,
+        catalog: &'a Catalog,
+    ) -> Result<World<'a>, String> {
+        Ok(World {
+            catalog: Some(catalog),
+            ..World::of(modules, index)?
         })
     }
 
@@ -120,7 +184,18 @@ pub enum Rule {
     ResolveMethod,
     CharCompare,
     WordCompare,
+    WordBinary,
     IntToWord,
+    WordToInt,
+    NegateInt,
+    IndexCharAddr,
+    PlusAddr,
+    AddrLiteral,
+    RecursiveCell,
+    FillCell,
+    Machine,
+    RunRW,
+    InstantiateValue,
     OrdChar,
     ChrChar,
     UnpackString,
@@ -151,7 +226,23 @@ pub struct Origin {
 #[derive(Debug, Clone)]
 pub struct Value {
     pub id: ValueId,
-    pub ty: Ty,
+    pub ty: Arc<Ty>,
+}
+
+thread_local! {
+    static SHARED: RefCell<HashSet<Arc<Ty>>> = RefCell::new(HashSet::new());
+}
+
+pub fn shared(ty: &Ty) -> Arc<Ty> {
+    SHARED.with(|shared| {
+        let mut shared = shared.borrow_mut();
+        if let Some(existing) = shared.get(ty) {
+            return existing.clone();
+        }
+        let interned = Arc::new(ty.clone());
+        shared.insert(interned.clone());
+        interned
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +334,29 @@ pub enum Operation {
     },
     /// `int2Word#`: the same machine word, read as unsigned.
     IntToWord(ValueId),
+    WordBinary {
+        op: IntBinary,
+        arguments: Vec<ValueId>,
+    },
+    WordToInt(ValueId),
+    NegateInt(ValueId),
+    IndexCharAddr {
+        arguments: Vec<ValueId>,
+    },
+    PlusAddr {
+        arguments: Vec<ValueId>,
+    },
+    AddrLiteral(Vec<u8>),
+    PendingCell,
+    FillCell {
+        cell: ValueId,
+        value: ValueId,
+    },
+    Machine {
+        op: Machine,
+        type_arguments: Vec<Ty>,
+        arguments: Vec<ValueId>,
+    },
     /// `ord#`: the code point of a Char#, as an Int#.
     OrdChar(ValueId),
     /// `chr#`: an Int# read as a code point. Unchecked and non-narrowing, as
@@ -506,6 +620,70 @@ pub enum CharCompare {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Machine {
+    XorWord,
+    OrWord,
+    NotWord,
+    NotInt,
+    XorInt,
+    QuotRemInt,
+    Word8ToWord,
+    WordToWord8,
+    IndexWord8Addr,
+    ShiftLeftWord,
+    ShiftRightWord,
+    ShiftRightLogicalInt,
+    PlusWord,
+    TimesWord,
+    QuotWord,
+    RemWord,
+    QuotRemWord,
+    QuotRemWord2,
+    PlusWord2,
+    TimesWord2,
+    AddWordC,
+    SubWordC,
+    AddIntC,
+    SubIntC,
+    MulIntMayOflo,
+    TimesInt2,
+    Clz,
+    Ctz,
+    PopCnt,
+    NewMutVar,
+    ReadMutVar,
+    WriteMutVar,
+    Raise,
+    RaiseDivZero,
+    RaiseUnderflow,
+    RaiseOverflow,
+    AbsentError,
+    NoDuplicate,
+    Memcpy,
+    RealWorld,
+    NewByteArray,
+    ReadWordArray,
+    WriteWordArray,
+    IndexWordArray,
+    ReadIntArray,
+    WriteIntArray,
+    IndexIntArray,
+    SizeofByteArray,
+    GetSizeofMutableByteArray,
+    ShrinkMutableByteArray,
+    UnsafeFreezeByteArray,
+    CopyByteArray,
+    CopyMutableByteArray,
+    SetByteArray,
+    NewArray,
+    ReadArray,
+    WriteArray,
+    IndexArray,
+    UnsafeFreezeArray,
+    UnsafeThawArray,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntBinary {
     Add,
     Subtract,
@@ -520,6 +698,10 @@ pub enum IntBinary {
     ShiftLeft,
     /// `uncheckedIShiftRA#`, masking the count to the word as x86-64's `sar` does.
     ShiftRightArithmetic,
+    And,
+    Or,
+    Quot,
+    Rem,
 }
 
 #[derive(Debug, Clone)]

@@ -206,21 +206,14 @@ impl External {
             return None;
         }
         match self {
-            External::ErrorWithoutStackTrace => {
-                // This backend currently carries lifted error results only.
-                lifted_rep(&type_arguments[0]).then_some(())?;
-                Some(arrow(
-                    super::strings::string_ty(),
-                    type_arguments[1].clone(),
-                ))
-            }
-            External::Error => {
-                lifted_rep(&type_arguments[0]).then_some(())?;
-                Some(arrow(
-                    implicit_call_stack_ty(),
-                    arrow(super::strings::string_ty(), type_arguments[1].clone()),
-                ))
-            }
+            External::ErrorWithoutStackTrace => Some(arrow(
+                super::strings::string_ty(),
+                type_arguments[1].clone(),
+            )),
+            External::Error => Some(arrow(
+                implicit_call_stack_ty(),
+                arrow(super::strings::string_ty(), type_arguments[1].clone()),
+            )),
             External::Append => {
                 let list = list_of(type_arguments[0].clone());
                 Some(arrow(list.clone(), arrow(list.clone(), list)))
@@ -344,18 +337,12 @@ pub fn equality(module: &Module, dictionary: ExprId, element: &Ty) -> Option<Equ
     }
 }
 
-fn lifted_rep(rep: &Ty) -> bool {
-    matches!(rep, Ty::Con { tycon, args } if tycon.name == "$ghc-prim$GHC.Types$BoxedRep"
-        && matches!(args.as_slice(), [Ty::Con { tycon, args }]
-            if tycon.name == "$ghc-prim$GHC.Types$Lifted" && args.is_empty()))
-}
-
 fn con(name: &str, args: Vec<Ty>) -> Ty {
     Ty::Con {
         tycon: TyConId {
             name: name.into(),
             occ: name.rsplit('$').next().unwrap_or(name).into(),
-            unique: String::new(),
+            unique: Default::default(),
         },
         args,
     }
@@ -388,7 +375,7 @@ pub fn list_of(element: Ty) -> Ty {
         tycon: TyConId {
             name: h2r_core_ir::LIST_TYCON.into(),
             occ: "List".into(),
-            unique: String::new(),
+            unique: Default::default(),
         },
         args: vec![element],
     }
@@ -400,7 +387,7 @@ fn arrow(arg: Ty, res: Ty) -> Ty {
             tycon: TyConId {
                 name: "$ghc-prim$GHC.Types$Many".into(),
                 occ: "Many".into(),
-                unique: String::new(),
+                unique: Default::default(),
             },
             args: vec![],
         }),
@@ -501,7 +488,7 @@ mod tests {
             tycon: TyConId {
                 name: "$ghc-prim$GHC.Types$Int".into(),
                 occ: "Int".into(),
-                unique: String::new(),
+                unique: Default::default(),
             },
             args: vec![],
         };
@@ -522,8 +509,8 @@ mod tests {
         let con = |name: &str| Ty::Con {
             tycon: TyConId {
                 name: name.into(),
-                occ: String::new(),
-                unique: String::new(),
+                occ: Default::default(),
+                unique: Default::default(),
             },
             args: vec![],
         };
@@ -583,12 +570,12 @@ mod tests {
     }
 
     #[test]
-    fn stack_free_errors_require_lifted_rep_and_preserve_function_results() {
+    fn stack_free_errors_take_any_representation_and_preserve_function_results() {
         let con = |name: &str, args| Ty::Con {
             tycon: TyConId {
                 name: name.into(),
-                occ: String::new(),
-                unique: String::new(),
+                occ: Default::default(),
+                unique: Default::default(),
             },
             args,
         };
@@ -606,10 +593,10 @@ mod tests {
             Some(arrow(super::super::strings::string_ty(), result.clone()))
         );
         assert!(entry.signature(&[rep]).is_none());
-        assert!(
-            entry
-                .signature(&[con("$ghc-prim$GHC.Types$IntRep", vec![]), result])
-                .is_none()
+        let int = con("$ghc-prim$GHC.Prim$Int#", vec![]);
+        assert_eq!(
+            entry.signature(&[con("$ghc-prim$GHC.Types$IntRep", vec![]), int.clone()]),
+            Some(arrow(super::super::strings::string_ty(), int))
         );
         assert_eq!(entry.value_arity(), 1);
     }

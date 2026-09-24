@@ -153,23 +153,115 @@ pub fn is_data(world: &World<'_>, ty: &Ty) -> bool {
 fn is_data_directly(world: &World<'_>, ty: &Ty) -> bool {
     !boxed::is_int(ty)
         && closed_type(ty)
-        && matches!(ty, Ty::Con { tycon, .. } if world.iter().any(|(_, module)| {
-            module
-                .constructors
-                .iter()
-                .any(|c| c.family == tycon.name && c.boxed_record())
-        }))
+        && matches!(ty, Ty::Con { tycon, .. } if family_tables(world, &tycon.name)
+            .iter()
+            .any(|(_, _, here)| here.iter().any(|c| c.boxed_record())))
+}
+
+fn family_tables<'a>(
+    world: &World<'a>,
+    family: &str,
+) -> Vec<(usize, &'a Module, Vec<&'a ConstructorInfo>)> {
+    let mut tables: Vec<(usize, &'a Module, Vec<&'a ConstructorInfo>)> = Vec::new();
+    if let (Some(catalog), Some(modules)) = (world.catalog, world.modules) {
+        for &(index, position) in catalog.family(family) {
+            let module = &modules[index];
+            match tables.last_mut() {
+                Some((last, _, here)) if *last == index => {
+                    here.push(&module.constructors[position])
+                }
+                _ => tables.push((index, module, vec![&module.constructors[position]])),
+            }
+        }
+        return tables;
+    }
+    for (index, module) in world.iter() {
+        let here: Vec<&ConstructorInfo> = module
+            .constructors
+            .iter()
+            .filter(|c| c.family == family)
+            .collect();
+        if !here.is_empty() {
+            tables.push((index, module, here));
+        }
+    }
+    tables
 }
 
 pub fn lifted(world: &World<'_>, ty: &Ty) -> bool {
     matches!(
         carrier(world, ty),
-        Some(Carrier::Int | Carrier::Data | Carrier::Function)
+        Some(Carrier::Int | Carrier::Data | Carrier::Function | Carrier::Dynamic)
     )
 }
 
+pub const ERASED: &str = "$h2r$H2R.Erased$Erased";
+
+pub fn erased_ty() -> Ty {
+    Ty::Con {
+        tycon: h2r_core_ir::TyConId {
+            name: ERASED.into(),
+            occ: "Erased".into(),
+            unique: Default::default(),
+        },
+        args: vec![],
+    }
+}
+
+pub fn is_erased(ty: &Ty) -> bool {
+    match ty {
+        Ty::Con { tycon, .. } => tycon.name == ERASED,
+        Ty::App { fun, .. } => is_erased(fun),
+        _ => false,
+    }
+}
+
+pub fn erase_free(mut ty: Ty) -> Ty {
+    for unique in super::subst::free_uniques(&ty) {
+        super::subst::substitute_capture_safe(&mut ty, &unique, &erased_ty());
+    }
+    ty
+}
+
+pub fn erase_quantifiers(ty: &Ty) -> Ty {
+    let mut current = ty.clone();
+    while let Ty::ForAll { binder, body } = current {
+        let mut body = *body;
+        super::subst::substitute_capture_safe(&mut body, &binder.unique, &erased_ty());
+        current = body;
+    }
+    current
+}
+
+pub fn same_representation(world: &World<'_>, left: &Ty, right: &Ty) -> bool {
+    if left.alpha_eq(right) {
+        return true;
+    }
+    if matches!(left, Ty::ForAll { .. }) || matches!(right, Ty::ForAll { .. }) {
+        return same_representation(world, &erase_quantifiers(left), &erase_quantifiers(right));
+    }
+    if let (
+        Ty::Fun {
+            arg: la, res: lr, ..
+        },
+        Ty::Fun {
+            arg: ra, res: rr, ..
+        },
+    ) = (left, right)
+    {
+        return same_representation(world, la, ra) && same_representation(world, lr, rr);
+    }
+    let (Some(l), Some(r)) = (represented(world, left), represented(world, right)) else {
+        return false;
+    };
+    if l.alpha_eq(left) && r.alpha_eq(right) {
+        return false;
+    }
+    same_representation(world, &l, &r)
+}
+
 pub fn function(world: &World<'_>, ty: &Ty) -> bool {
-    represented(world, ty).is_some_and(|ty| function_directly(world, &ty))
+    represented(world, ty).is_some_and(|ty| function_directly(world, &erase_quantifiers(&ty)))
 }
 
 fn function_directly(world: &World<'_>, ty: &Ty) -> bool {
@@ -212,10 +304,21 @@ pub enum Carrier {
     /// are is read from the type with [`unboxed_tuple_fields`] rather than
     /// carried here.
     Tuple,
+    Address,
+    MutVar,
+    Bytes,
+    Array,
+    Dynamic,
 }
 
 pub fn carrier(world: &World<'_>, ty: &Ty) -> Option<Carrier> {
     let ty = represented(world, ty)?;
+    if let Ty::ForAll { .. } = ty {
+        return carrier(world, &erase_quantifiers(&ty));
+    }
+    if is_erased(&ty) {
+        return Some(Carrier::Dynamic);
+    }
     if primitive::is_scalar(&ty) {
         Some(Carrier::Scalar)
     } else if boxed::is_int(&ty) {
@@ -226,6 +329,14 @@ pub fn carrier(world: &World<'_>, ty: &Ty) -> Option<Carrier> {
         Some(Carrier::Data)
     } else if unboxed_tuple_carried(world, &ty) {
         Some(Carrier::Tuple)
+    } else if primitive::is_addr(&ty) {
+        Some(Carrier::Address)
+    } else if primitive::is_mut_var(&ty) && lifted(world, &ty.args()[2]) {
+        Some(Carrier::MutVar)
+    } else if primitive::is_bytes(&ty) {
+        Some(Carrier::Bytes)
+    } else if primitive::array_element(&ty).is_some_and(|element| lifted(world, element)) {
+        Some(Carrier::Array)
     } else {
         None
     }
@@ -243,27 +354,29 @@ fn unboxed_tuple_carried(world: &World<'_>, ty: &Ty) -> bool {
 /// module's entries checked to agree. A constructor that two modules describe
 /// differently is an error, not a first-wins pick.
 fn declaring<'a>(world: &World<'a>, family: &str) -> Result<Option<&'a Module>, String> {
-    let mut chosen: Option<&Module> = None;
-    for (_, module) in world.iter() {
-        let here: Vec<&ConstructorInfo> = module
-            .constructors
-            .iter()
-            .filter(|c| c.family == family)
-            .collect();
-        if here.is_empty() {
-            continue;
-        }
-        let Some(first) = chosen else {
-            chosen = Some(module);
-            continue;
+    if let (Some(catalog), Some(modules)) = (world.catalog, world.modules) {
+        let chosen = match catalog.declaring(family) {
+            Some(chosen) => chosen,
+            None => {
+                let chosen = agreeing(world, family);
+                catalog.declare(family, chosen.clone());
+                chosen
+            }
         };
-        let there: Vec<&ConstructorInfo> = first
-            .constructors
-            .iter()
-            .filter(|c| c.family == family)
-            .collect();
+        return chosen.map(|index| index.map(|index| &modules[index]));
+    }
+    agreeing(world, family)
+        .map(|index| index.map(|index| world.at(index).expect("a readable module")))
+}
+
+fn agreeing(world: &World<'_>, family: &str) -> Result<Option<usize>, String> {
+    let tables = family_tables(world, family);
+    let Some((chosen, first, there)) = tables.first() else {
+        return Ok(None);
+    };
+    for (_, module, here) in &tables[1..] {
         if here.len() != there.len()
-            || here.iter().zip(&there).any(|(a, b)| {
+            || here.iter().zip(there.iter()).any(|(a, b)| {
                 (
                     &a.name,
                     a.tag,
@@ -288,7 +401,7 @@ fn declaring<'a>(world: &World<'a>, family: &str) -> Result<Option<&'a Module>, 
             return Err("modules disagree about a constructor family's layout".into());
         }
     }
-    Ok(chosen)
+    Ok(Some(*chosen))
 }
 
 pub fn layout(world: &World<'_>, name: &str, ty: &Ty) -> Result<Constructor, String> {
@@ -344,7 +457,7 @@ pub fn list_layouts(world: &World<'_>, element: &Ty) -> Result<(Constructor, Con
         tycon: h2r_core_ir::TyConId {
             name: h2r_core_ir::LIST_TYCON.into(),
             occ: "List".into(),
-            unique: String::new(),
+            unique: Default::default(),
         },
         args: vec![element.clone()],
     };
@@ -365,7 +478,7 @@ pub fn bool_ty() -> Ty {
         tycon: h2r_core_ir::TyConId {
             name: "$ghc-prim$GHC.Types$Bool".into(),
             occ: "Bool".into(),
-            unique: String::new(),
+            unique: Default::default(),
         },
         args: vec![],
     }
@@ -376,7 +489,7 @@ pub fn ordering_ty() -> Ty {
         tycon: h2r_core_ir::TyConId {
             name: "$ghc-prim$GHC.Types$Ordering".into(),
             occ: "Ordering".into(),
-            unique: String::new(),
+            unique: Default::default(),
         },
         args: vec![],
     }

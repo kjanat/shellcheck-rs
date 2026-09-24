@@ -347,7 +347,7 @@ fn nir_source_verifier_rejects_forged_types_and_unsupported_source() {
         text: "42".into(),
     };
     candidate.function.result_ty = forged.clone();
-    candidate.function.blocks[0].params[0].ty = forged;
+    candidate.function.blocks[0].params[0].ty = crate::nir::shared(&forged);
     verify(&candidate.function).unwrap();
     assert!(verify_leaf(&m, 0, owner, FnId(0), &candidate).is_err());
     let original = lower_leaf(&m, 0, owner, FnId(0)).unwrap();
@@ -1027,7 +1027,8 @@ fn nir_imports_require_closed_structured_types_in_both_modules() {
         );
         let mut forged = leaf.clone();
         forged.function.result_ty = modules[0].types[0].clone();
-        forged.function.blocks[0].instructions[0].result.ty = modules[0].types[0].clone();
+        forged.function.blocks[0].instructions[0].result.ty =
+            crate::nir::shared(&modules[0].types[0]);
         assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &forged).is_err());
     }
     let mut modules = nir_import_world();
@@ -1052,7 +1053,7 @@ fn nir_imports_accept_closed_alpha_renamed_foralls() {
         let var = TyVarId {
             name: "a".into(),
             occ: "a".into(),
-            unique: format!("a{index}"),
+            unique: format!("a{index}").into(),
         };
         module.types[0] = Ty::ForAll {
             binder: var.clone(),
@@ -1112,7 +1113,7 @@ fn nir_type_application_world(imported: bool) -> Vec<Module> {
     }
     let con = |name: &str, args| Ty::Con {
         tycon: TyConId {
-            name: sn("Types", name),
+            name: sn("Types", name).into(),
             occ: name.into(),
             unique: name.into(),
         },
@@ -1173,7 +1174,7 @@ fn nir_type_applications_preserve_order_and_account_for_source_nodes() {
         };
         assert_eq!(*module, usize::from(imported));
         assert_eq!(arguments, &modules[0].types[..2]);
-        assert_eq!(instruction.result.ty, modules[0].types[3]);
+        assert_eq!(*instruction.result.ty, modules[0].types[3]);
         let accounting = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
         assert_eq!(
             (
@@ -1256,6 +1257,10 @@ fn nir_type_applications_refuse_value_arguments_open_types_and_wrong_results() {
 }
 
 fn nir_call_world(imported: bool) -> Vec<Module> {
+    nir_call_world_to(imported, lam("a", lam("b", lvar("a"))))
+}
+
+fn nir_call_world_to(imported: bool, target_rhs: Value) -> Vec<Module> {
     use h2r_core_ir::Ty;
     let head = if imported {
         gvar(&sn("Lib", "target"), "target")
@@ -1272,7 +1277,7 @@ fn nir_call_world(imported: bool) -> Vec<Module> {
             "target",
             "target",
         ),
-        lam("a", lam("b", lvar("a"))),
+        target_rhs,
     );
     let mut modules = if imported {
         vec![
@@ -1410,7 +1415,10 @@ fn nir_direct_calls_reject_extra_forcing_and_computed_arguments() {
                     binder(&sn("Main", "main"), "main", "main"),
                     lam("x", app(app(lvar("f"), argument), lvar("x"))),
                 ),
-                (binder(&sn("Main", "f"), "f", "f"), lit()),
+                (
+                    binder(&sn("Main", "f"), "f", "f"),
+                    lam("a", lam("b", lvar("a"))),
+                ),
             ],
             json!({}),
         );
@@ -1447,23 +1455,31 @@ fn nir_direct_calls_require_exact_known_arity_and_closed_types() {
         FnId, lower::lower_leaf_in_world, pretty::format_leaf, verify::verify_leaf_in_world,
     };
     use h2r_core_ir::Ty;
+    let original_world = nir_call_world(true);
+    let owner = original_world[0].top[0].pairs[0].binder;
+    let original = lower_leaf_in_world(&original_world, 0, owner, FnId(0)).unwrap();
     for arity in [None, Some(0), Some(1), Some(3)] {
         let mut modules = nir_call_world(true);
-        let owner = modules[0].top[0].pairs[0].binder;
         let target = modules[1].top[0].pairs[0].binder;
-        let original = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
         modules[1].binders[target as usize].arity = arity;
-        // A forged arity either refuses outright or makes the call indirect,
-        // which is a different leaf. What must never happen is the original
-        // leaf still standing, and the verifier below is what says so.
-        let relowered = lower_leaf_in_world(&modules, 0, owner, FnId(0));
-        assert!(
-            match &relowered {
-                Err(_) => true,
-                Ok(leaf) => format_leaf(leaf) != format_leaf(&original),
-            },
-            "arity {arity:?} changed nothing"
+        let relowered = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        assert_eq!(
+            format_leaf(&relowered),
+            format_leaf(&original),
+            "arity {arity:?}"
         );
+    }
+    for target_rhs in [
+        lit(),
+        lam("a", lvar("a")),
+        lam("a", lam("b", lam("c", lvar("a")))),
+    ] {
+        let modules = nir_call_world_to(true, target_rhs);
+        let relowered = lower_leaf_in_world(&modules, 0, owner, FnId(0));
+        assert!(match &relowered {
+            Err(_) => true,
+            Ok(leaf) => format_leaf(leaf) != format_leaf(&original),
+        });
         assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &original).is_err());
     }
     let mut modules = nir_call_world(true);
@@ -1545,7 +1561,7 @@ fn nir_mixed_call_world(interleaved: bool) -> Vec<Module> {
     let Ty::Con { tycon, .. } = &mut u else {
         panic!()
     };
-    tycon.name = sn("M", "U");
+    tycon.name = sn("M", "U").into();
     modules[0].types.push(u);
     for expr in &mut modules[0].exprs {
         if let Expr::Type { ty, pretty } = expr
@@ -1682,7 +1698,7 @@ fn nir_mixed_calls_refuse_interleaved_and_open_type_arguments() {
         lower_leaf_in_world(&bad, 0, owner, FnId(0))
             .unwrap_err()
             .reason
-            .contains("must precede")
+            .contains("applies a value where its target quantifies a type")
     );
     assert!(verify_leaf_in_world(&bad, 0, owner, FnId(0), &leaf).is_err());
     let mut modules = modules;
@@ -1739,7 +1755,7 @@ fn nir_call_literals_have_typed_values_and_complete_accounting() {
         assert!(
             matches!(&instructions[0].operation, Operation::Literal(lit) if lit.number("Int") == Ok(10))
         );
-        assert_eq!(instructions[0].result.ty, modules[0].types[0]);
+        assert_eq!(*instructions[0].result.ty, modules[0].types[0]);
         let Operation::CallTop { arguments, .. } = &instructions.last().unwrap().operation else {
             panic!()
         };
@@ -1790,10 +1806,10 @@ fn nir_call_literal_verifier_rejects_payload_origin_order_and_extra_forcing() {
                 arguments.reverse();
             }
             6 => {
-                instructions[0].result.ty = h2r_core_ir::Ty::Lit {
+                instructions[0].result.ty = crate::nir::shared(&h2r_core_ir::Ty::Lit {
                     kind: "Nat".into(),
                     text: "42".into(),
-                }
+                })
             }
             _ => {
                 let mut extra = instructions[0].clone();
@@ -1921,10 +1937,10 @@ fn nir_top_argument_verifier_rejects_target_origin_type_and_forcing_changes() {
             }
             2 => instruction.origin.rule = Rule::Literal,
             3 => {
-                instruction.result.ty = h2r_core_ir::Ty::Lit {
+                instruction.result.ty = crate::nir::shared(&h2r_core_ir::Ty::Lit {
                     kind: "Nat".into(),
                     text: "42".into(),
-                }
+                })
             }
             _ => instruction.operation = Operation::Force(ValueId(0)),
         }
@@ -1982,6 +1998,7 @@ fn scalar_emission_is_deterministic_and_includes_dependencies() {
         source,
         crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap()
     );
+    let source = generated(&source);
     assert_eq!(source.matches("fn f_").count(), 2);
     assert!(source.contains("10i64"));
     assert!(source.contains("-> i64"));
@@ -2046,10 +2063,10 @@ fn scalar_emission_accepts_recursive_functions() {
     let owner = modules[0].top[0].pairs[0].binder;
     modules[0].binders[owner as usize].name = sn("Lib", "target");
     modules[0].binders[owner as usize].arity = Some(2);
-    let source = crate::emit::emit_entry(&modules, &sn("Lib", "target")).unwrap();
+    let source = generated(&crate::emit::emit_entry(&modules, &sn("Lib", "target")).unwrap());
     // Instance 0 is the entry, and the self-call transfers back to its entry
     // block rather than growing the native stack.
-    assert!(source.contains("HStep::Next(HState::B_0_0("));
+    assert!(source.contains("h2r_rt::Step::Next(Box::new(move || s_0_0("));
 }
 
 fn local_function_world(recursive: bool) -> Vec<Module> {
@@ -2079,25 +2096,220 @@ fn local_function_world(recursive: bool) -> Vec<Module> {
 }
 
 fn closure_world() -> Vec<Module> {
+    closure_world_applying(app(lvar("p"), lvar("y")))
+}
+
+fn polymorphic_local_world(second_type: u32) -> Vec<Module> {
+    use h2r_core_ir::{Ty, TyVarId};
+    let mut f = binder("$_in$f", "f", "f");
+    f["arity"] = json!(2);
+    let call = |value: Value, ty: u32, argument: Value| {
+        app(app(app(lvar("f"), value), type_arg(ty, "t")), argument)
+    };
+    let primop = |symbol: &str, argument: Value| {
+        app(
+            gvar(&format!("$ghc-prim$GHC.Prim${symbol}"), symbol),
+            argument,
+        )
+    };
+    let inner = if second_type == 0 {
+        call(lvar("y"), 0, lvar("x"))
+    } else {
+        primop(
+            "word2Int#",
+            call(lvar("y"), second_type, primop("int2Word#", lvar("x"))),
+        )
+    };
+    let body = json!({"node":"Let","bind":{"rec":false,"pairs":[{"binder":f,
+        "rhs":lam("v",tylam("a",lam("k",lvar("k")))),
+        "whnf":true,"cheap":true,"trivial":false,"okForSpec":true}]},
+        "body":call(lvar("x"), 0, inner)});
+    let mut modules = scalar_expression_world(body);
+    for symbol in ["int2Word#", "word2Int#"] {
+        let name = format!("$ghc-prim$GHC.Prim${symbol}");
+        modules[0].ids.insert(
+            name.clone(),
+            serde_json::from_value(json!({
+                "name": name, "occ": symbol, "arity": 1, "details": "[PrimOp]",
+                "isJoinPoint": false, "dataCon": null,
+                "dmdSig": {"args": [], "diverges": false, "pretty": ""}
+            }))
+            .unwrap(),
+        );
+    }
+    let int = modules[0].types[0].clone();
+    let a = Ty::Var(TyVarId {
+        name: "$_in$a".into(),
+        occ: "a".into(),
+        unique: "a".into(),
+    });
+    let arrow = |arg: Ty, res: Ty| Ty::Fun {
+        mult: Box::new(int.clone()),
+        arg: Box::new(arg),
+        res: Box::new(res),
+    };
+    let signature = arrow(
+        int.clone(),
+        Ty::ForAll {
+            binder: TyVarId {
+                name: "$_in$a".into(),
+                occ: "a".into(),
+                unique: "a".into(),
+            },
+            body: Box::new(arrow(a.clone(), a.clone())),
+        },
+    );
+    let mut word = int.clone();
+    if let Ty::Con { tycon, .. } = &mut word {
+        tycon.name = "$ghc-prim$GHC.Prim$Word#".into();
+    }
+    modules[0].types.extend([a, signature, word]);
+    for (occ, ty) in [("f", 3), ("v", 0), ("k", 2)] {
+        for b in &mut modules[0].binders {
+            if b.occ == occ {
+                b.ty = ty;
+            }
+        }
+    }
+    modules
+}
+
+#[test]
+fn a_polymorphic_local_function_lowers_once_per_instantiation() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    for (second_type, instantiations) in [(0, 1), (4, 2)] {
+        let modules = polymorphic_local_world(second_type);
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let accounting = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert_eq!(
+            accounting.source_nodes,
+            modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
+        );
+        let instructions: Vec<_> = leaf
+            .function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.instructions)
+            .collect();
+        let definitions: Vec<_> = instructions
+            .iter()
+            .filter_map(|i| match &i.operation {
+                Operation::LocalScope { definitions, .. } => Some(definitions),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(definitions.len(), instantiations);
+        let targets: std::collections::BTreeSet<_> = instructions
+            .iter()
+            .filter_map(|i| match i.operation {
+                Operation::CallLocal { target, .. } => Some(target),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(targets.len(), instantiations);
+        assert!(
+            targets
+                .iter()
+                .all(|target| definitions.iter().any(|d| d.target == *target))
+        );
+        crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+    }
+}
+
+fn partially_applied_local_world() -> Vec<Module> {
+    use h2r_core_ir::{Ty, TyVarId};
+    let pair = |binder: Value, rhs: Value| json!({"binder":binder,"rhs":rhs,"whnf":true,"cheap":true,"trivial":false,"okForSpec":true});
+    let mut f = binder("$_in$f", "f", "f");
+    f["arity"] = json!(2);
+    let g = binder("$_in$g", "g", "g");
+    let body = json!({"node":"Let","bind":{"rec":false,"pairs":[pair(f,
+        tylam("a", lam("v", tylam("b", lam("k", lvar("k"))))))]},
+        "body":{"node":"Let","bind":{"rec":false,"pairs":[pair(g,
+            app(app(lvar("f"), type_arg(0, "Int#")), lvar("x")))]},
+            "body":app(app(lvar("g"), type_arg(0, "Int#")), lvar("y"))}});
+    let mut modules = scalar_expression_world(body);
+    let int = modules[0].types[0].clone();
+    let var = |occ: &str| TyVarId {
+        name: format!("$_in${occ}").as_str().into(),
+        occ: occ.into(),
+        unique: occ.into(),
+    };
+    let arrow = |arg: Ty, res: Ty| Ty::Fun {
+        mult: Box::new(int.clone()),
+        arg: Box::new(arg),
+        res: Box::new(res),
+    };
+    let identity = Ty::ForAll {
+        binder: var("b"),
+        body: Box::new(arrow(Ty::Var(var("b")), Ty::Var(var("b")))),
+    };
+    let signature = Ty::ForAll {
+        binder: var("a"),
+        body: Box::new(arrow(Ty::Var(var("a")), identity.clone())),
+    };
+    modules[0]
+        .types
+        .extend([Ty::Var(var("a")), Ty::Var(var("b")), identity, signature]);
+    for (occ, ty) in [("f", 5), ("v", 2), ("k", 3), ("g", 4)] {
+        for b in &mut modules[0].binders {
+            if b.occ == occ {
+                b.ty = ty;
+            }
+        }
+    }
+    modules
+}
+
+#[test]
+fn a_partially_applied_local_function_closes_over_its_instance() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let modules = partially_applied_local_world();
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    let accounting = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+    assert_eq!(
+        accounting.source_nodes,
+        modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
+    );
+    let closure = leaf
+        .function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.instructions)
+        .find(|i| matches!(i.operation, Operation::MakeClosure { .. }))
+        .expect("the partial application closes over the instance");
+    assert_eq!(closure.result.ty.render(), "Int# -> forall b. b -> b");
+    crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+}
+
+fn closure_world_applying(use_of_p: Value) -> Vec<Module> {
     let mut f = binder("$_in$f", "f", "f");
     f["ty"] = json!(1);
     f["arity"] = json!(2);
     let p = binder("$_in$p", "p", "p");
     let pair = |binder, rhs| json!({"binder":binder,"rhs":rhs,"whnf":true,"cheap":true,"trivial":false,"okForSpec":true});
-    let body = json!({"node":"Let","bind":{"rec":false,"pairs":[pair(f,lam("a",lam("b",int_op("+#", lvar("a"), lvar("b")))))]},"body":{
-        "node":"Let","bind":{"rec":false,"pairs":[pair(p,app(lvar("f"),lvar("x")))]},"body":app(lvar("p"),lvar("y"))
+    let sum = int_op(
+        "+#",
+        int_op("+#", lvar("a"), lvar("b")),
+        int_op("-#", lvar("x"), lvar("y")),
+    );
+    let body = json!({"node":"Let","bind":{"rec":false,"pairs":[pair(f,lam("a",lam("b",sum)))]},"body":{
+        "node":"Let","bind":{"rec":false,"pairs":[pair(p,app(lvar("f"),lvar("x")))]},"body":use_of_p
     }});
     let mut modules = scalar_expression_world(body);
     let h2r_core_ir::Ty::Fun { res, .. } = modules[0].types[1].clone() else {
         panic!()
     };
     modules[0].types.push(*res);
-    let p = modules[0]
+    for p in modules[0]
         .binders
         .iter_mut()
-        .find(|b| b.unique == "p")
-        .unwrap();
-    p.ty = 2;
+        .filter(|b| b.unique == "p" || b.unique == "forced")
+    {
+        p.ty = 2;
+    }
     modules
 }
 
@@ -2166,9 +2378,9 @@ fn closures_partial_application_and_indirect_calls_are_source_verified() {
                 3 => *callee = arguments[0],
                 4 => arguments.clear(),
                 _ => {
-                    i.result.ty = h2r_core_ir::Ty::Opaque {
+                    i.result.ty = crate::nir::shared(&h2r_core_ir::Ty::Opaque {
                         pretty: "bad result".into(),
-                    }
+                    })
                 }
             }
         }
@@ -2191,8 +2403,8 @@ fn local_functions_and_join_loops_have_verified_captures() {
             accounting.source_nodes,
             modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
         );
-        let source = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
-        assert!(source.contains("HStep::Next"));
+        let source = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
+        assert!(source.contains("h2r_rt::Step::Next"));
     }
 }
 
@@ -2200,7 +2412,10 @@ fn local_functions_and_join_loops_have_verified_captures() {
 fn anonymous_returned_lambda_is_source_verified_and_tamper_checked() {
     use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
     let p = binder("$_in$p", "p", "p");
-    let lambda = lam("z", int_op("+#", lvar("x"), lvar("z")));
+    let lambda = lam(
+        "z",
+        int_op("+#", int_op("+#", lvar("x"), lvar("z")), lvar("y")),
+    );
     let body = json!({"node":"Let","bind":{"rec":false,"pairs":[{"binder":p,"rhs":int_case(lvar("x"),"s",lambda,vec![]),"whnf":false,"cheap":false,"trivial":false,"okForSpec":false}]},"body":app(lvar("p"),lvar("y"))});
     let mut modules = scalar_expression_world(body);
     let h2r_core_ir::Ty::Fun { res, .. } = modules[0].types[1].clone() else {
@@ -2279,7 +2494,7 @@ fn function_alias_entry_uses_the_returned_closure() {
     modules[0].types = types;
     let owner = modules[0].top[0].pairs[0].binder;
     modules[0].binders[owner as usize].ty = 1;
-    let source = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+    let source = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
     assert!(source.contains("fn h2r_entry(a0: i64, a1: i64)"));
     assert!(source.contains(".apply(vec![HField::Int64(a0), HField::Int64(a1)])"));
 }
@@ -2334,7 +2549,7 @@ fn local_function_verifier_rejects_capture_target_and_definition_corruption() {
 }
 
 #[test]
-fn recursive_values_and_escaping_local_functions_are_refused() {
+fn an_unlifted_value_recurses_as_a_function_and_escaping_local_functions_are_refused() {
     use crate::nir::{FnId, lower::lower_leaf_in_world};
     let mut m = module(
         "Main",
@@ -2347,8 +2562,8 @@ fn recursive_values_and_escaping_local_functions_are_refused() {
     m.types = scalar_emission_world()[0].types.clone();
     assert!(
         crate::emit::emit_entry(&[m], &sn("Main", "cycle"))
-            .unwrap_err()
-            .contains("recursive value")
+            .unwrap()
+            .contains("fn f_0() -> i64")
     );
     for mutation in 0..3 {
         let mut modules = local_function_world(true);
@@ -2465,7 +2680,7 @@ fn scalar_composition_verifies_nested_calls_and_strict_case_chains() {
             accounting.source_nodes,
             modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
         );
-        let emitted = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        let emitted = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
         assert!(emitted.contains("fn f_"));
         for index in 0..leaf.function.blocks[0].instructions.len() {
             for mutation in 0..4 {
@@ -2733,7 +2948,7 @@ fn boxed_int_construction_cases_and_captures_are_source_verified() {
             counts.source_nodes,
             modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
         );
-        let rust = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        let rust = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
         assert!(rust.contains("use h2r_rt::Int as HInt"));
         check_scalar_renumbering(modules);
     }
@@ -2795,7 +3010,7 @@ fn boxed_case_verifier_rejects_removed_forcing_and_wrong_fields() {
             0 => instruction.operation = Operation::Move(crate::nir::ValueId(1)),
             1 => instruction.operation = Operation::BoxInt(crate::nir::ValueId(1)),
             2 => instruction.origin.rule = Rule::StrictPosition,
-            3 => instruction.result.ty = modules[0].types[2].clone(),
+            3 => instruction.result.ty = crate::nir::shared(&modules[0].types[2]),
             _ => {
                 bad.function.blocks[0].instructions.remove(0);
             }
@@ -2914,7 +3129,11 @@ fn lazy_let_verifier_rejects_eagerness_recapture_cycles_and_wrong_identity() {
     let modules = boxed_world(
         lazy_let(
             "z",
-            box_int(lvar("y")),
+            unbox_int(
+                lvar("x"),
+                box_int(int_op("+#", lvar("field"), lvar("y"))),
+                true,
+            ),
             unbox_int(lvar("z"), lvar("field"), false),
         ),
         true,
@@ -2922,6 +3141,7 @@ fn lazy_let_verifier_rejects_eagerness_recapture_cycles_and_wrong_identity() {
     );
     let owner = modules[0].top[0].pairs[0].binder;
     let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
     for mutation in 0..9 {
         let mut bad = leaf.clone();
         let block = &mut bad.function.blocks[0];
@@ -2948,7 +3168,7 @@ fn lazy_let_verifier_rejects_eagerness_recapture_cycles_and_wrong_identity() {
             7 => {
                 block.instructions.remove(1);
             }
-            _ => block.instructions[0].result.ty = modules[0].types[0].clone(),
+            _ => block.instructions[0].result.ty = crate::nir::shared(&modules[0].types[0]),
         }
         assert!(
             verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
@@ -2958,16 +3178,67 @@ fn lazy_let_verifier_rejects_eagerness_recapture_cycles_and_wrong_identity() {
 }
 
 #[test]
-fn lazy_lets_refuse_recursive_join_unlifted_and_out_of_scope_bindings() {
+fn a_recursive_value_group_fills_its_cells_before_the_body() {
+    use crate::nir::{
+        FnId, Operation, Rule, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    let mut body = lazy_let(
+        "z",
+        box_int(lvar("y")),
+        unbox_int(lvar("z"), lvar("field"), false),
+    );
+    body["bind"]["rec"] = json!(true);
+    let modules = boxed_world(body, true, false);
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+    let instructions = &leaf.function.blocks[0].instructions;
+    assert!(matches!(
+        instructions
+            .iter()
+            .map(|i| &i.operation)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [
+            Operation::PendingCell,
+            Operation::DelayBlock { .. },
+            Operation::FillCell { .. },
+            ..
+        ]
+    ));
+    for mutation in 0..3 {
+        let mut bad = leaf.clone();
+        let instructions = &mut bad.function.blocks[0].instructions;
+        match mutation {
+            0 => {
+                instructions.remove(2);
+            }
+            1 => {
+                let delayed = instructions[1].result.id;
+                instructions[2].operation = Operation::FillCell {
+                    cell: delayed,
+                    value: delayed,
+                };
+            }
+            _ => instructions[0].origin.rule = Rule::LazyBinding,
+        }
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn lazy_lets_refuse_join_unlifted_and_out_of_scope_bindings() {
     use crate::nir::{FnId, lower::lower_leaf_in_world};
-    for mutation in 0..6 {
+    for mutation in 1..6 {
         let mut body = lazy_let(
             "z",
             box_int(lvar("y")),
             unbox_int(lvar("z"), lvar("field"), false),
         );
         match mutation {
-            0 => body["bind"]["rec"] = json!(true),
             1 => {
                 body["bind"]["pairs"][0]["binder"]["isJoinPoint"] = json!(true);
                 body["bind"]["pairs"][0]["binder"]["arity"] = json!(1);
@@ -3043,12 +3314,16 @@ fn thunk_source_verification_rejects_well_typed_capture_swaps_and_eager_lets() {
         lower::lower_leaf_in_world,
         verify::{verify, verify_leaf_in_world},
     };
+    let mut inner = unbox_int(
+        lvar("y"),
+        box_int(int_op("+#", lvar("field"), lvar("field_y"))),
+        true,
+    );
+    inner["binder"] = binder("$_in$boxed_y", "boxed_y", "boxed_y");
+    inner["binder"]["ty"] = json!(2);
+    inner["alts"][0]["binders"] = json!([binder("$_in$field_y", "field_y", "field_y")]);
     let mut modules = boxed_world(
-        lazy_let(
-            "z",
-            unbox_int(lvar("x"), box_int(lvar("field")), true),
-            lvar("z"),
-        ),
+        lazy_let("z", unbox_int(lvar("x"), inner, true), lvar("z")),
         true,
         true,
     );
@@ -3129,7 +3404,7 @@ fn scalar_regions_compose_operands_scrutinees_and_strict_scopes() {
         crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
     }
     let modules = scalar_expression_world(region_expression());
-    let rust = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+    let rust = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
     assert_eq!(
         rust.matches("wrapping_mul").count(),
         1,
@@ -3229,7 +3504,7 @@ fn scalar_switches_have_explicit_environments_and_complete_source_accounting() {
         arms.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
         [-1, 0, i64::MIN, i64::MAX]
     );
-    let rust = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+    let rust = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
     assert_eq!(rust.matches("match v").count(), 2);
     assert!(rust.contains("-9223372036854775808i64 =>"));
     assert!(rust.contains("9223372036854775807i64 =>"));
@@ -3320,7 +3595,7 @@ fn data_world(body: Value) -> Vec<Module> {
     let m = &mut modules[0];
     let ty = Ty::Con {
         tycon: h2r_core_ir::TyConId {
-            name: sn("Main", "Choice"),
+            name: sn("Main", "Choice").into(),
             occ: "Choice".into(),
             unique: "choice".into(),
         },
@@ -3363,7 +3638,7 @@ fn data_constructors_and_cases_close_source_accounting_and_renumber() {
             accounting.source_nodes,
             modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
         );
-        let rust = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        let rust = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
         assert!(rust.contains("HData::ready"));
         assert!(rust.contains("let constructor = node.constructor; match constructor"));
         check_scalar_renumbering(modules);
@@ -3569,9 +3844,7 @@ fn data_patterns_require_correct_fields_unique_tags_and_exhaustiveness() {
     for mutation in 0..6 {
         let mut body = data_case(data_construct("Empty", vec![]), false);
         match mutation {
-            0 => {
-                body["alts"].as_array_mut().unwrap().pop();
-            }
+            0 => body["alts"] = json!([]),
             1 => body["alts"][1]["con"]["tag"] = json!(1),
             2 => body["alts"][1]["binders"][0]["ty"] = json!(2),
             3 => body["alts"][1]["binders"] = json!([]),
@@ -3583,6 +3856,47 @@ fn data_patterns_require_correct_fields_unique_tags_and_exhaustiveness() {
             lower_leaf_in_world(&modules, 0, modules[0].top[0].pairs[0].binder, FnId(0)).is_err(),
             "mutation {mutation}"
         );
+    }
+}
+
+#[test]
+fn a_lifted_strict_case_forces_and_a_partial_match_lowers() {
+    use crate::nir::{
+        FnId, Operation, Rule, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    let mut forced = strict_case(lvar("p"), "forced", app(lvar("forced"), lvar("y")));
+    forced["binder"]["ty"] = json!(2);
+    let mut partial = data_case(data_construct("Pair", vec![lvar("x"), lvar("y")]), false);
+    partial["alts"] = json!([partial["alts"][1].clone()]);
+    for (modules, rule) in [
+        (closure_world_applying(forced), Rule::StrictPosition),
+        (data_world(partial), Rule::MatchData),
+    ] {
+        let owner = modules[0].top[0].pairs[0].binder;
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        let accounting = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        assert_eq!(
+            accounting.source_nodes,
+            modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
+        );
+        let instructions = || leaf.function.blocks.iter().flat_map(|b| &b.instructions);
+        assert!(instructions().any(|i| i.origin.rule == rule));
+        crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        if rule == Rule::StrictPosition {
+            let mut bad = leaf.clone();
+            let instruction = bad
+                .function
+                .blocks
+                .iter_mut()
+                .flat_map(|b| &mut b.instructions)
+                .find(|i| matches!(i.operation, Operation::Force(_)))
+                .unwrap();
+            let Operation::Force(value) = instruction.operation else {
+                unreachable!()
+            };
+            instruction.operation = Operation::Move(value);
+            assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err());
+        }
     }
 }
 
@@ -3726,7 +4040,7 @@ fn all_int_comparisons_preserve_operator_and_int_result() {
         assert_eq!(*op, expected);
         arguments.swap(0, 1);
         assert!(verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).is_err());
-        let rust = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        let rust = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
         assert!(rust.contains("i64::from(") && rust.contains(rust_op));
     }
 }
@@ -3762,6 +4076,10 @@ fn int_arithmetic_is_source_verified_and_emits_wrapping_operations() {
         ("+#", IntBinary::Add, "wrapping_add"),
         ("-#", IntBinary::Subtract, "wrapping_sub"),
         ("*#", IntBinary::Multiply, "wrapping_mul"),
+        ("quotInt#", IntBinary::Quot, "wrapping_div"),
+        ("remInt#", IntBinary::Rem, "wrapping_rem"),
+        ("andI#", IntBinary::And, " & "),
+        ("orI#", IntBinary::Or, " | "),
     ] {
         let modules = primitive_emission_world(symbol);
         let owner = modules[0].top[0].pairs[0].binder;
@@ -3772,7 +4090,7 @@ fn int_arithmetic_is_source_verified_and_emits_wrapping_operations() {
         );
         let counts = verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
         assert_eq!(counts.value_application_nodes, 2);
-        let emitted = crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap();
+        let emitted = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
         assert!(emitted.contains(method));
         assert_eq!(emitted.matches("fn f_").count(), 1);
         for mutation in 0..7 {
@@ -3796,7 +4114,7 @@ fn int_arithmetic_is_source_verified_and_emits_wrapping_operations() {
                 3 => arguments[0] = crate::nir::ValueId(999),
                 4 => instruction.origin.rule = crate::nir::Rule::CallTop,
                 5 => instruction.origin.source = crate::nir::Source::Binder(owner),
-                _ => instruction.result.ty = modules[0].types[1].clone(),
+                _ => instruction.result.ty = crate::nir::shared(&modules[0].types[1]),
             }
             assert!(
                 verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
@@ -3807,9 +4125,63 @@ fn int_arithmetic_is_source_verified_and_emits_wrapping_operations() {
 }
 
 #[test]
+fn a_primop_with_two_results_fills_the_unboxed_tuple_it_returns() {
+    use crate::nir::{
+        FnId, Machine, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    let mut modules = unboxed_tuple_world();
+    let name = "$ghc-prim$GHC.Prim$quotRemInt#";
+    for expr in &mut modules[0].exprs {
+        if let h2r_core_ir::Expr::Var { name: target, .. } = expr
+            && *target == "$u$M$Pair#"
+        {
+            *target = name.into();
+        }
+    }
+    modules[0].ids.insert(
+        name.into(),
+        serde_json::from_value(json!({
+            "name": name, "occ": "quotRemInt#", "arity": 2, "details": "[PrimOp]",
+            "isJoinPoint": false, "dataCon": null,
+            "dmdSig": {"args": [], "diverges": false, "pretty": ""}
+        }))
+        .unwrap(),
+    );
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+    let emitted = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
+    assert!(emitted.contains(".wrapping_div(") && emitted.contains(".wrapping_rem("));
+    for mutation in 0..3 {
+        let mut bad = leaf.clone();
+        let instruction = bad
+            .function
+            .blocks
+            .iter_mut()
+            .flat_map(|b| &mut b.instructions)
+            .find(|i| matches!(i.operation, Operation::Machine { .. }))
+            .unwrap();
+        let Operation::Machine { op, arguments, .. } = &mut instruction.operation else {
+            unreachable!()
+        };
+        match mutation {
+            0 => *op = Machine::NotInt,
+            1 => arguments.swap(0, 1),
+            _ => instruction.origin.rule = crate::nir::Rule::IntBinary,
+        }
+        assert!(
+            verify_leaf_in_world(&modules, 0, owner, FnId(0), &bad).is_err(),
+            "mutation {mutation}"
+        );
+    }
+    modules[0].constructors[0].rep_arity = 3;
+    assert!(lower_leaf_in_world(&modules, 0, owner, FnId(0)).is_err());
+}
+
+#[test]
 fn int_arithmetic_refuses_unknown_names_metadata_types_and_arity() {
     use crate::nir::{FnId, lower::lower_leaf_in_world};
-    for symbol in ["quotInt#", "plusWord#", "notARealPrimOp#"] {
+    for symbol in ["fetchAddIntArray#", "casIntArray#", "notARealPrimOp#"] {
         assert!(
             crate::emit::emit_entry(&primitive_emission_world(symbol), &sn("Main", "main"))
                 .is_err()
@@ -4074,6 +4446,10 @@ fn int_lit(value: i64) -> Value {
 }
 
 /// The stable name of a top-level binding of `module`.
+fn generated(source: &str) -> String {
+    source.replacen(include_str!("../../h2r-rt/src/lib.rs"), "", 1)
+}
+
 fn sn(module: &str, occ: &str) -> String {
     format!("${UNIT}${module}${occ}")
 }
@@ -4699,7 +5075,7 @@ fn specialization_types() -> Vec<h2r_core_ir::Ty> {
     use h2r_core_ir::{Ty, TyConId, TyVarId};
     let con = |name: &str, args| Ty::Con {
         tycon: TyConId {
-            name: sn("Types", name),
+            name: sn("Types", name).into(),
             occ: name.into(),
             unique: name.into(),
         },
@@ -4799,6 +5175,8 @@ fn class_constructor() -> raw::ConstructorInfo {
 /// ```text
 /// Lib.poly     = /\a \px. px                       forall a. a -> a
 /// Lib.grow     = /\a \gx. grow @(L a) gx           forall a. a -> a
+/// Lib.grow2    = /\a \hx. grow3 @(L a) hx          forall a. T -> T
+/// Lib.grow3    = /\a \ix. grow2 @(L a) ix          forall a. T -> T
 /// Lib.method   = /\a \mv. case mv of C:C f1 f2 -> f1   (a class-op selector)
 /// Lib.dictT    = C:C @T tm1 tm2                    C T
 /// Lib.dictU    = C:C @U um1 um2                    C U
@@ -4810,6 +5188,7 @@ fn class_constructor() -> raw::ConstructorInfo {
 /// Main.useDict = \yd. viaDict @T dictT yd          T -> T
 /// Main.useOpen = \od \oy. method @T od oy          C T -> T -> T
 /// Main.useGrow = \yg. grow @T yg                   T -> T
+/// Main.useGrow2 = \yh. grow2 @T yh                 T -> T
 /// ```
 fn nir_specialization_world() -> Vec<Module> {
     let selector = class_case(
@@ -4834,6 +5213,32 @@ fn nir_specialization_world() -> Vec<Module> {
                     app(
                         app(gvar(&sn("Lib", "grow"), "grow"), type_arg(12, "L a")),
                         lvar("gx"),
+                    ),
+                ),
+            ),
+        ),
+        (
+            binder(&sn("Lib", "grow2"), "grow2", "grow2"),
+            tylam(
+                "a",
+                lam(
+                    "hx",
+                    app(
+                        app(gvar(&sn("Lib", "grow3"), "grow3"), type_arg(12, "L a")),
+                        lvar("hx"),
+                    ),
+                ),
+            ),
+        ),
+        (
+            binder(&sn("Lib", "grow3"), "grow3", "grow3"),
+            tylam(
+                "a",
+                lam(
+                    "ix",
+                    app(
+                        app(gvar(&sn("Lib", "grow2"), "grow2"), type_arg(12, "L a")),
+                        lvar("ix"),
                     ),
                 ),
             ),
@@ -4869,6 +5274,26 @@ fn nir_specialization_world() -> Vec<Module> {
         (
             binder(&sn("Lib", "tm2"), "tm2", "tm2"),
             lam("t2", lvar("t2")),
+        ),
+        (
+            binder(&sn("Lib", "caseDict"), "caseDict", "caseDict"),
+            tylam(
+                "a",
+                lam(
+                    "cd",
+                    lam(
+                        "cx",
+                        class_case(
+                            lvar("cd"),
+                            "kw",
+                            &sn("Types", "C:C"),
+                            vec!["k1", "k2"],
+                            app(lvar("k2"), lvar("cx")),
+                            4,
+                        ),
+                    ),
+                ),
+            ),
         ),
         (
             binder(&sn("Lib", "um1"), "um1", "um1"),
@@ -4943,12 +5368,35 @@ fn nir_specialization_world() -> Vec<Module> {
             ),
         ),
         (
+            binder(&sn("Main", "useCase"), "useCase", "useCase"),
+            lam(
+                "yc",
+                app(
+                    app(
+                        app(gvar(&sn("Lib", "caseDict"), "caseDict"), type_arg(0, "T")),
+                        gvar(&sn("Lib", "dictT"), "dictT"),
+                    ),
+                    lvar("yc"),
+                ),
+            ),
+        ),
+        (
             binder(&sn("Main", "useGrow"), "useGrow", "useGrow"),
             lam(
                 "yg",
                 app(
                     app(gvar(&sn("Lib", "grow"), "grow"), type_arg(0, "T")),
                     lvar("yg"),
+                ),
+            ),
+        ),
+        (
+            binder(&sn("Main", "useGrow2"), "useGrow2", "useGrow2"),
+            lam(
+                "yh",
+                app(
+                    app(gvar(&sn("Lib", "grow2"), "grow2"), type_arg(0, "T")),
+                    lvar("yh"),
                 ),
             ),
         ),
@@ -4969,6 +5417,12 @@ fn nir_specialization_world() -> Vec<Module> {
     for (occ, ty, arity) in [
         ("poly", 6, 1),
         ("grow", 14, 1),
+        ("grow2", 14, 1),
+        ("grow3", 14, 1),
+        ("useGrow2", 2, 1),
+        ("hx", 0, 0),
+        ("ix", 0, 0),
+        ("yh", 0, 0),
         ("method", 10, 1),
         ("viaDict", 10, 2),
         ("dictT", 8, 0),
@@ -4981,6 +5435,14 @@ fn nir_specialization_world() -> Vec<Module> {
         ("useU", 3, 1),
         ("useDict", 2, 1),
         ("useGrow", 2, 1),
+        ("useCase", 2, 1),
+        ("caseDict", 10, 2),
+        ("cd", 7, 0),
+        ("cx", 4, 0),
+        ("kw", 7, 0),
+        ("k1", 5, 0),
+        ("k2", 5, 0),
+        ("yc", 0, 0),
         // Lambda binders: the signature decides the parameter type, but the
         // binder's own type must agree with it.
         ("px", 4, 0),
@@ -5033,12 +5495,27 @@ fn nir_specialization_world() -> Vec<Module> {
 }
 
 fn nir_interleaved_world() -> Vec<Module> {
+    nir_interleaving_world(false)
+}
+
+fn nir_interleaving_world(late: bool) -> Vec<Module> {
     use h2r_core_ir::{Ty, TyVarId};
+    let later = if late {
+        tylam("a", lam("ld", lam("lz", tylam("b", lam("lx", lvar("lx"))))))
+    } else {
+        tylam("a", lam("ld", tylam("b", lam("lx", lvar("lx")))))
+    };
+    let dictionary = app(
+        app(gvar(&sn("Lib", "later"), "later"), type_arg(0, "T")),
+        gvar(&sn("Lib", "dictT"), "dictT"),
+    );
+    let before_u = if late {
+        app(dictionary, gvar(&sn("Types", "MkT"), "MkT"))
+    } else {
+        dictionary
+    };
     let lib = vec![
-        (
-            binder(&sn("Lib", "later"), "later", "later"),
-            tylam("a", lam("ld", tylam("b", lam("lx", lvar("lx"))))),
-        ),
+        (binder(&sn("Lib", "later"), "later", "later"), later),
         (
             binder(&sn("Lib", "dictT"), "dictT", "dictT"),
             app(
@@ -5060,19 +5537,7 @@ fn nir_interleaved_world() -> Vec<Module> {
     ];
     let main = vec![(
         binder(&sn("Main", "useLater"), "useLater", "useLater"),
-        lam(
-            "yl",
-            app(
-                app(
-                    app(
-                        app(gvar(&sn("Lib", "later"), "later"), type_arg(0, "T")),
-                        gvar(&sn("Lib", "dictT"), "dictT"),
-                    ),
-                    type_arg(1, "U"),
-                ),
-                lvar("yl"),
-            ),
-        ),
+        lam("yl", app(app(before_u, type_arg(1, "U")), lvar("yl"))),
     )];
     let mut modules = vec![
         module("Main", main, json!({})),
@@ -5080,7 +5545,7 @@ fn nir_interleaved_world() -> Vec<Module> {
     ];
     let mut types = specialization_types();
     let variable = |name: &str| TyVarId {
-        name: format!("$_in${name}"),
+        name: format!("$_in${name}").into(),
         occ: name.into(),
         unique: name.into(),
     };
@@ -5090,13 +5555,18 @@ fn nir_interleaved_world() -> Vec<Module> {
         res: Box::new(res),
     };
     let b = Ty::Var(variable("b"));
+    let polymorphic = Ty::ForAll {
+        binder: variable("b"),
+        body: Box::new(arrow(b.clone(), b.clone())),
+    };
     let later = Ty::ForAll {
         binder: variable("a"),
         body: Box::new(arrow(
             types[7].clone(),
-            Ty::ForAll {
-                binder: variable("b"),
-                body: Box::new(arrow(b.clone(), b.clone())),
+            if late {
+                arrow(types[4].clone(), polymorphic)
+            } else {
+                polymorphic
             },
         )),
     };
@@ -5111,7 +5581,7 @@ fn nir_interleaved_world() -> Vec<Module> {
         ];
     }
     for (occ, ty, arity) in [
-        ("later", 13, 2),
+        ("later", 13, if late { 3 } else { 2 }),
         ("dictT", 8, 0),
         ("tm1", 2, 1),
         ("tm2", 2, 1),
@@ -5123,6 +5593,9 @@ fn nir_interleaved_world() -> Vec<Module> {
         ("yl", 1, 0),
     ] {
         set_binder(&mut modules, occ, ty, arity, "");
+    }
+    if late {
+        set_binder(&mut modules, "lz", 4, 0, "");
     }
     set_binder(&mut modules, "dictT", 8, 0, "[DFunId]");
     modules
@@ -5153,7 +5626,47 @@ fn specialization_absorbs_a_dictionary_between_type_arguments() {
     assert_eq!(leaf.type_instantiations.len(), 2);
     assert_eq!(leaf.dictionary_parameters.len(), 1);
     assert_eq!(leaf.function.blocks[0].params.len(), 1);
-    assert_eq!(leaf.function.blocks[0].params[0].ty, modules[1].types[1]);
+    assert_eq!(*leaf.function.blocks[0].params[0].ty, modules[1].types[1]);
+}
+
+#[test]
+fn specialization_takes_a_type_argument_after_a_runtime_argument() {
+    use crate::nir::specialize::{Instance, specialize};
+    use crate::nir::{Operation, Rule};
+    let modules = nir_interleaving_world(true);
+    let root = Instance::whole(0, owner_of(&modules, 0, "useLater"));
+    let program = specialize(&modules, &[root]).unwrap();
+    assert!(program.refused.is_empty());
+    let later = owner_of(&modules, 1, "later");
+    let (index, instance) = program
+        .instances
+        .iter()
+        .enumerate()
+        .find(|(_, instance)| instance.module == 1 && instance.binder == later)
+        .expect("later is specialized");
+    assert_eq!(
+        instance.type_arguments,
+        vec![modules[1].types[0].clone(), modules[1].types[1].clone()]
+    );
+    assert_eq!(instance.dictionaries.len(), 1);
+    let leaf = program.leaf(index).expect("lowered");
+    let params: Vec<_> = leaf.function.blocks[0]
+        .params
+        .iter()
+        .map(|p| &*p.ty)
+        .collect();
+    assert_eq!(params, [&modules[1].types[0], &modules[1].types[1]]);
+    let caller = program.leaf(0).expect("lowered");
+    let call = caller.function.blocks[0]
+        .instructions
+        .iter()
+        .find(|i| matches!(i.operation, Operation::CallTop { .. }))
+        .expect("one direct call");
+    assert_eq!(call.origin.rule, Rule::CallTop);
+    assert!(
+        matches!(&call.operation, Operation::CallTop { type_arguments, arguments, .. }
+        if type_arguments.len() == 2 && arguments.len() == 2)
+    );
 }
 
 fn class_case(
@@ -5215,7 +5728,7 @@ fn specialization_lowers_one_binding_at_each_type_it_is_used_at() {
         if instance.binder == poly && instance.module == 1 {
             assert_eq!(leaf.function.type_arguments.len(), 1);
             assert_eq!(
-                leaf.function.blocks[0].params[0].ty,
+                *leaf.function.blocks[0].params[0].ty,
                 instance.type_arguments[0]
             );
             assert_eq!(leaf.type_instantiations.len(), 1);
@@ -5232,7 +5745,7 @@ fn specialization_lowers_one_binding_at_each_type_it_is_used_at() {
 fn specialization_refuses_an_unbounded_instance_chain() {
     use crate::nir::specialize::{Instance, OWNER_BUDGET, specialize, survey};
     let modules = nir_specialization_world();
-    let root = Instance::whole(0, owner_of(&modules, 0, "useGrow"));
+    let root = Instance::whole(0, owner_of(&modules, 0, "useGrow2"));
     let error = specialize(&modules, std::slice::from_ref(&root)).unwrap_err();
     assert!(
         error.reason.contains("does not terminate"),
@@ -5247,13 +5760,55 @@ fn specialization_refuses_an_unbounded_instance_chain() {
     assert!(recorded.instances.len() <= OWNER_BUDGET + 2);
 }
 
+#[test]
+fn specialization_erases_a_direct_polymorphic_recursion() {
+    use crate::nir::specialize::{Instance, specialize};
+    use crate::nir::{DictionaryRef, Operation};
+    let modules = nir_specialization_world();
+    let root = Instance::whole(0, owner_of(&modules, 0, "useGrow"));
+    let program = specialize(&modules, std::slice::from_ref(&root)).unwrap();
+    let grow = owner_of(&modules, 1, "grow");
+    let instances: Vec<_> = program
+        .instances
+        .iter()
+        .enumerate()
+        .filter(|(_, instance)| instance.module == 1 && instance.binder == grow)
+        .collect();
+    assert_eq!(instances.len(), 2);
+    let (erased, instance) = instances[1];
+    assert!(crate::nir::data::is_erased(&instance.type_arguments[0]));
+    let leaf = program.leaf(erased).expect("lowered");
+    let call = leaf
+        .function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.instructions)
+        .find_map(|i| match &i.operation {
+            Operation::CallTop {
+                module,
+                binder,
+                type_arguments,
+                dictionaries,
+                ..
+            } => Some(DictionaryRef {
+                module: *module,
+                binder: *binder,
+                type_arguments: type_arguments.clone(),
+                dictionaries: dictionaries.clone(),
+            }),
+            _ => None,
+        })
+        .expect("the recursive call");
+    assert_eq!(program.resolve(&call), Some(erased));
+}
+
 /// A budget refusal is recorded before its instance is interned, so a survey
 /// considered its lowered count plus its refusals, not `instances.len()`.
 #[test]
 fn specialization_counts_a_budget_refusal_outside_the_interned_instances() {
     use crate::nir::specialize::{Instance, survey};
     let modules = nir_specialization_world();
-    let root = Instance::whole(0, owner_of(&modules, 0, "useGrow"));
+    let root = Instance::whole(0, owner_of(&modules, 0, "useGrow2"));
     let recorded = survey(&modules, &[root]);
     let budget = recorded
         .refused
@@ -5307,6 +5862,50 @@ fn specialization_resolves_a_class_method_to_its_instance() {
     assert!(
         matches!(&call.operation, Operation::CallTop { binder, dictionaries, .. }
             if *binder == tm1 && dictionaries.is_empty())
+    );
+}
+
+#[test]
+fn specialization_selects_the_fields_of_a_known_dictionary_case() {
+    use crate::nir::specialize::{Instance, specialize};
+    use crate::nir::{Operation, Rule};
+    let modules = nir_specialization_world();
+    let root = Instance::whole(0, owner_of(&modules, 0, "useCase"));
+    let program = specialize(&modules, &[root]).unwrap();
+    assert!(program.refused.is_empty());
+    let case_dict = owner_of(&modules, 1, "caseDict");
+    let index = program
+        .instances
+        .iter()
+        .position(|i| i.module == 1 && i.binder == case_dict)
+        .expect("the dictionary-matching function is specialized");
+    let leaf = program.leaf(index).expect("lowered");
+    let instructions: Vec<_> = leaf
+        .function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.instructions)
+        .collect();
+    assert!(
+        !instructions
+            .iter()
+            .any(|i| matches!(i.operation, Operation::MatchData { .. })),
+        "a known dictionary is never matched at run time"
+    );
+    let tm2 = owner_of(&modules, 1, "tm2");
+    assert!(
+        instructions
+            .iter()
+            .any(|i| i.origin.rule == Rule::ResolveMethod
+                && matches!(&i.operation, Operation::CallTop { binder, .. } if *binder == tm2))
+    );
+    let dict_t = owner_of(&modules, 1, "dictT");
+    assert!(
+        !program
+            .instances
+            .iter()
+            .any(|i| i.module == 1 && i.binder == dict_t),
+        "a known dictionary is never built"
     );
 }
 
@@ -5396,7 +5995,7 @@ fn verifier_rejects_a_wrong_substitution() {
         let mut candidate = original.clone();
         match corruption {
             0 => candidate.function.type_arguments = vec![u.clone()],
-            1 => candidate.function.blocks[0].params[0].ty = u.clone(),
+            1 => candidate.function.blocks[0].params[0].ty = crate::nir::shared(&u),
             2 => candidate.function.result_ty = u.clone(),
             _ => candidate.type_instantiations[0].2 = u.clone(),
         }
@@ -5512,4 +6111,26 @@ fn verifier_rejects_a_wrong_dictionary_target() {
             "dictionary corruption {corruption} survived verification"
         );
     }
+}
+
+#[test]
+fn a_big_nat_literal_is_its_little_endian_limbs() {
+    let big_nat = |value: &str| h2r_core_ir::Lit {
+        kind: "number".into(),
+        pretty: value.into(),
+        codepoint: None,
+        bytes: None,
+        value: Some(value.into()),
+        num_type: Some("BigNat".into()),
+    };
+    assert_eq!(
+        crate::emit::big_nat_limbs(&big_nat("1000000000000000000000000000000000000")),
+        Ok(vec![0xb34b_9f10_0000_0000, 0x00c0_97ce_7bc9_0715])
+    );
+    assert_eq!(
+        crate::emit::big_nat_limbs(&big_nat("18446744073709551616")),
+        Ok(vec![0, 1])
+    );
+    assert_eq!(crate::emit::big_nat_limbs(&big_nat("0")), Ok(vec![]));
+    assert!(crate::emit::big_nat_limbs(&h2r_core_ir::Lit::int(7)).is_err());
 }

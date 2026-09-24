@@ -15,12 +15,12 @@ use std::collections::BTreeMap;
 
 use h2r_core_ir::{BinderId, Module, Ty};
 
-use super::lower::{LoweredLeaf, lower_leaf_specialized};
+use super::lower::{LoweredLeaf, lower_leaf_unverified, type_lambda_counts};
 use super::subst::{type_depth, type_list_key};
 use super::{DictionaryRef, FnId, Operation, same_dictionaries, same_types};
 
 /// How many instances one owner may have before specialization refuses.
-pub const OWNER_BUDGET: usize = 64;
+pub const OWNER_BUDGET: usize = 1024;
 
 /// How deeply an instance's type arguments may nest.
 pub const TYPE_DEPTH_BUDGET: usize = 24;
@@ -201,6 +201,22 @@ pub fn survey(modules: &[Module], roots: &[Instance]) -> Specialization {
         .expect("recording mode never returns a refusal")
 }
 
+pub struct Progress<'a> {
+    pub lowered: usize,
+    pub interned: usize,
+    pub pending: usize,
+    pub instance: &'a Instance,
+}
+
+pub fn survey_observed(
+    modules: &[Module],
+    roots: &[Instance],
+    observe: &mut dyn FnMut(&Progress<'_>),
+) -> Specialization {
+    specialize_observed(modules, roots, OnRefusal::Record, observe)
+        .expect("recording mode never returns a refusal")
+}
+
 /// Lower every instance the roots reach. Each is lowered exactly once, and an
 /// instance already interned is reused, so a recursive cycle terminates.
 pub fn specialize_with(
@@ -208,7 +224,18 @@ pub fn specialize_with(
     roots: &[Instance],
     on_refusal: OnRefusal,
 ) -> Result<Specialization, Box<SpecializeError>> {
+    specialize_observed(modules, roots, on_refusal, &mut |_| {})
+}
+
+fn specialize_observed(
+    modules: &[Module],
+    roots: &[Instance],
+    on_refusal: OnRefusal,
+    observe: &mut dyn FnMut(&Progress<'_>),
+) -> Result<Specialization, Box<SpecializeError>> {
     let mut worklist = Worklist::default();
+    let catalog = super::Catalog::of(modules);
+    let mut lowered = 0;
     for root in roots {
         if let Err(error) = worklist.intern(root.clone(), None)
             && let Some(error) = worklist.refuse(*error, on_refusal)
@@ -218,14 +245,24 @@ pub fn specialize_with(
     }
     while let Some(id) = worklist.pending.pop() {
         let instance = worklist.instances[id].clone();
-        let leaf = match lower_leaf_specialized(
+        observe(&Progress {
+            lowered,
+            interned: worklist.instances.len(),
+            pending: worklist.pending.len(),
+            instance: &instance,
+        });
+        lowered += 1;
+        let leaf = match lower_leaf_unverified(
             modules,
+            Some(&catalog),
             instance.module,
             instance.binder,
             FnId(id as u32),
             &instance.type_arguments,
             &instance.dictionaries,
-        ) {
+        )
+        .and_then(|(leaf, verified)| verified.map(|()| leaf))
+        {
             Ok(leaf) => leaf,
             Err(error) => {
                 let refusal = SpecializeError {
@@ -273,10 +310,19 @@ pub fn specialize_with(
             .collect();
         worklist.lowered[id] = Some(leaf);
         for instance in required {
-            if let Err(error) = worklist.intern(instance, Some(id))
-                && let Some(error) = worklist.refuse(*error, on_refusal)
-            {
-                return Err(error);
+            let requested = instance.key();
+            let instance = complete(modules, instance);
+            let instance =
+                erased_recursion(modules, &instance, &worklist.instances[id]).unwrap_or(instance);
+            match worklist.intern(instance, Some(id)) {
+                Ok(completed) => {
+                    worklist.index.entry(requested).or_insert(completed);
+                }
+                Err(error) => {
+                    if let Some(error) = worklist.refuse(*error, on_refusal) {
+                        return Err(error);
+                    }
+                }
             }
         }
     }
@@ -286,6 +332,104 @@ pub fn specialize_with(
         refused: worklist.refused,
         index: worklist.index,
     })
+}
+
+fn complete(modules: &[Module], mut instance: Instance) -> Instance {
+    let Some(module) = modules.get(instance.module) else {
+        return instance;
+    };
+    let Some(pair) = module
+        .top
+        .iter()
+        .flat_map(|b| &b.pairs)
+        .find(|pair| pair.binder == instance.binder)
+    else {
+        return instance;
+    };
+    let (leading, _) = type_lambda_counts(module, pair.rhs, instance.binder);
+    if instance.type_arguments.len() < leading {
+        instance
+            .type_arguments
+            .resize(leading, super::data::erased_ty());
+    }
+    instance
+}
+
+fn erased_recursion(
+    modules: &[Module],
+    instance: &Instance,
+    caller: &Instance,
+) -> Option<Instance> {
+    if (caller.module, caller.binder) != (instance.module, instance.binder)
+        || !instance.dictionaries.is_empty()
+        || !caller.dictionaries.is_empty()
+        || instance.depth() <= caller.depth()
+    {
+        return None;
+    }
+    if instance.type_arguments.len() != caller.type_arguments.len() {
+        return None;
+    }
+    let erased = Instance {
+        type_arguments: instance
+            .type_arguments
+            .iter()
+            .zip(&caller.type_arguments)
+            .map(|(requested, current)| {
+                if type_depth(requested) > type_depth(current) {
+                    super::data::erased_ty()
+                } else {
+                    requested.clone()
+                }
+            })
+            .collect(),
+        ..instance.clone()
+    };
+    let world = super::World::of(modules, instance.module).ok()?;
+    let reference = |instance: &Instance| {
+        super::dict::reference_type(
+            &world,
+            &DictionaryRef {
+                module: instance.module,
+                binder: instance.binder,
+                type_arguments: instance.type_arguments.clone(),
+                dictionaries: Vec::new(),
+            },
+        )
+        .ok()
+    };
+    same_carriers(&world, &reference(instance)?, &reference(&erased)?).then_some(erased)
+}
+
+fn same_carriers(world: &super::World<'_>, left: &Ty, right: &Ty) -> bool {
+    use super::data::{Carrier, carrier, erase_quantifiers, unboxed_tuple_fields};
+    let (left, right) = (erase_quantifiers(left), erase_quantifiers(right));
+    if let (
+        Ty::Fun {
+            arg: la, res: lr, ..
+        },
+        Ty::Fun {
+            arg: ra, res: rr, ..
+        },
+    ) = (&left, &right)
+    {
+        return same_carriers(world, la, ra) && same_carriers(world, lr, rr);
+    }
+    match (carrier(world, &left), carrier(world, &right)) {
+        (Some(Carrier::Tuple), Some(Carrier::Tuple)) => {
+            match (
+                unboxed_tuple_fields(world, &left),
+                unboxed_tuple_fields(world, &right),
+            ) {
+                (Ok(Some(l)), Ok(Some(r))) => {
+                    l.len() == r.len() && l.iter().zip(&r).all(|(l, r)| same_carriers(world, l, r))
+                }
+                _ => false,
+            }
+        }
+        (Some(l), Some(r)) => l == r,
+        _ => false,
+    }
 }
 
 #[derive(Default)]
@@ -362,7 +506,7 @@ impl Worklist {
         *owner += 1;
         if *owner > OWNER_BUDGET {
             return Err(fail(
-                "one binding needed more instances than the per-owner budget; this instance chain does not terminate",
+                "one binding needed more instances than the per-owner budget",
                 self,
             ));
         }

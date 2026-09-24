@@ -34,6 +34,64 @@ pub(super) struct Scope<'a> {
     pub module: usize,
     pub types: &'a Substitution,
     pub dictionaries: &'a BTreeMap<BinderId, DictionaryRef>,
+    pub fields: &'a BTreeMap<BinderId, (DictionaryRef, Selector)>,
+}
+
+pub(super) static NO_FIELDS: BTreeMap<BinderId, (DictionaryRef, Selector)> = BTreeMap::new();
+
+pub(super) struct KnownCase {
+    pub dictionary: DictionaryRef,
+    pub fields: Vec<(BinderId, Selector)>,
+}
+
+pub(super) fn known_case(
+    world: &World<'_>,
+    scope: &Scope<'_>,
+    scrut: ExprId,
+    alts: &[h2r_core_ir::Alt],
+) -> Result<Option<KnownCase>, String> {
+    let [alt] = alts else {
+        return Ok(None);
+    };
+    let h2r_core_ir::AltCon::DataAlt { name, .. } = &alt.con else {
+        return Ok(None);
+    };
+    let Some(dictionary) = resolve_dictionary(world, scope, scrut, 0)? else {
+        return Ok(None);
+    };
+    let Some(producer) = producer(world, dictionary.module, dictionary.binder)? else {
+        return Ok(None);
+    };
+    if producer.constructor != *name || producer.fields.len() != alt.binders.len() {
+        return Err("a known dictionary is matched against another constructor".into());
+    }
+    let fields: Vec<(BinderId, Selector)> = alt
+        .binders
+        .iter()
+        .enumerate()
+        .map(|(field, binder)| {
+            (
+                *binder,
+                Selector {
+                    constructor: name.clone(),
+                    field,
+                    fields: alt.binders.len(),
+                },
+            )
+        })
+        .collect();
+    let module = world.at(scope.module)?;
+    for (binder, selector) in &fields {
+        if module.occurrences(*binder).is_empty() {
+            continue;
+        }
+        if method(world, &dictionary, selector, &[])?.is_none()
+            && field(world, &dictionary, selector, 1)?.is_none()
+        {
+            return Ok(None);
+        }
+    }
+    Ok(Some(KnownCase { dictionary, fields }))
 }
 
 /// One class method selector, as its own body establishes it.
@@ -80,12 +138,7 @@ pub(super) fn top_target(
         Some(Ref::Local(binder)) if matches!(module.binding(binder).site, BindSite::Top) => {
             Ok(Some((module_index, binder)))
         }
-        Some(Ref::Global) => {
-            let modules = world
-                .modules
-                .ok_or("import evidence requires a loaded world")?;
-            linkage::imported_top(modules, name).map(Some)
-        }
+        Some(Ref::Global) => linkage::imported_top(world, name).map(Some),
         _ => Ok(None),
     }
 }
@@ -229,6 +282,9 @@ pub(super) fn producer(
             _ => break,
         }
     }
+    while let Expr::Let { body, .. } | Expr::Tick(body) = module.expr(current) {
+        current = *body;
+    }
     // The constructor's type arguments are the class's, derived from the
     // instance head; they need not be the dictionary's own binders.
     let Ok((head, _, fields)) = spine(module, current) else {
@@ -277,7 +333,11 @@ pub(super) fn reference_type(world: &World<'_>, reference: &DictionaryRef) -> Re
 
 /// Instantiate each quantifier and strip each dictionary arrow in the order
 /// the type states them.
-fn instantiate_arguments(signature: &Ty, types: &[Ty], dictionaries: usize) -> Result<Ty, String> {
+pub(super) fn instantiate_arguments(
+    signature: &Ty,
+    types: &[Ty],
+    dictionaries: usize,
+) -> Result<Ty, String> {
     let mut types = types;
     let mut dictionaries = dictionaries;
     let mut ty = signature.clone();
@@ -301,17 +361,21 @@ fn instantiate_arguments(signature: &Ty, types: &[Ty], dictionaries: usize) -> R
     Ok(ty)
 }
 
-/// How many runtime parameters one instance still takes: GHC's arity for the
-/// target, less the dictionary lambdas the instance key already consumed.
+/// How many runtime parameters one instance still takes: the leading value
+/// lambdas its lowering binds, or GHC's arity for a target outside the world,
+/// less the dictionary lambdas the instance key already consumed.
 pub(super) fn residual_arity(
     world: &World<'_>,
     reference: &DictionaryRef,
 ) -> Result<usize, String> {
-    let arity = world
-        .at(reference.module)?
-        .binder(reference.binder)
-        .arity
-        .ok_or("instance target has no arity")? as usize;
+    let module = world.at(reference.module)?;
+    let arity = match module.binding(reference.binder).rhs {
+        Some(rhs) => super::lower::manifest_arity(module, rhs, reference.binder),
+        None => module
+            .binder(reference.binder)
+            .arity
+            .ok_or("instance target has no arity")? as usize,
+    };
     arity
         .checked_sub(reference.dictionaries.len())
         .ok_or_else(|| "instance consumes more dictionaries than its target's arity".into())
@@ -389,7 +453,16 @@ pub(super) fn resolve_dictionary(
     // A superclass is a field of a dictionary, reached through its selector.
     // The field it names is only a dictionary if it is one: an ordinary
     // method read the same way is not, and must not be absorbed as one.
+    let known_field = module
+        .resolve(head)
+        .and_then(|binder| scope.fields.get(&binder));
     let resolved = match selector(world, scope.module, head)? {
+        _ if let Some((dictionary, method)) = known_field => {
+            if !values.is_empty() {
+                return Ok(None);
+            }
+            field(world, dictionary, method, depth + 1)?
+        }
         Some((_, _, method)) if values.len() == 1 => {
             match resolve_dictionary(world, scope, values[0], depth + 1)? {
                 Some(dictionary) => field(world, &dictionary, &method, depth + 1)?,
@@ -430,9 +503,9 @@ pub(super) fn resolve_dictionary(
                     };
                     types.bind(
                         h2r_core_ir::TyVarId {
-                            name: bound.name.clone(),
-                            occ: bound.occ.clone(),
-                            unique: bound.unique.clone(),
+                            name: bound.name.as_str().into(),
+                            occ: bound.occ.as_str().into(),
+                            unique: bound.unique.as_str().into(),
                         },
                         argument.clone(),
                     )?;
@@ -456,6 +529,7 @@ pub(super) fn resolve_dictionary(
         module: reference.module,
         types: &types,
         dictionaries: &dictionaries,
+        fields: &NO_FIELDS,
     };
     resolve_dictionary(world, &inner, current, depth + 1)
 }
@@ -501,32 +575,58 @@ pub(super) fn call_target(
         .iter()
         .take_while(|argument| matches!(argument, SpineArg::Type(_)))
         .count();
+    if let Some(binder) = world.at(scope.module)?.resolve(head)
+        && let Some((dictionary, selector)) = scope.fields.get(&binder)
+    {
+        let Method {
+            reference,
+            cast,
+            consumed,
+        } = method(world, dictionary, selector, &leading(arguments))?
+            .ok_or("a known dictionary's field is not a method this backend resolves")?;
+        let mut resolved = absorb(
+            world,
+            scope,
+            reference,
+            &arguments[consumed..],
+            cast.as_ref(),
+        )?;
+        resolved.method = true;
+        return Ok(Some(resolved));
+    }
     if let Some((_, _, selector)) = selector(world, scope.module, head)?
         && let [SpineArg::Value(dictionary_source), rest @ ..] = &arguments[leading_types..]
         && let Some(dictionary) = resolve_dictionary(world, scope, *dictionary_source, 0)?
-        && let Some(Method { reference, cast }) = method(world, &dictionary, &selector)?
+        && let Some(Method {
+            reference,
+            cast,
+            consumed,
+        }) = method(world, &dictionary, &selector, &leading(rest))?
     {
-        let (types, dictionaries) = (reference.type_arguments.len(), reference.dictionaries.len());
-        let mut resolved = absorb(world, scope, reference, rest)?;
-        if let Some(cast) = cast {
-            let to = instantiate_arguments(
-                &cast,
-                &resolved.reference.type_arguments[types..],
-                resolved.reference.dictionaries.len() - dictionaries,
-            )?;
-            let carrier = super::data::carrier(world, &to);
-            if carrier.is_none() || super::data::carrier(world, &resolved.signature) != carrier {
-                return Err("a method's cast must not change the carrier".into());
-            }
-            resolved.signature = to;
-            resolved.cast = true;
-        }
+        let mut resolved = absorb(world, scope, reference, &rest[consumed..], cast.as_ref())?;
         resolved.erased.insert(0, *dictionary_source);
         resolved.method = true;
         return Ok(Some(resolved));
     }
-    let Some((target_module, binder)) = top_target(world, scope.module, head)? else {
+    let Some(target) = top_target(world, scope.module, head)? else {
         return Ok(None);
+    };
+    let (target_module, binder) = through_aliases(world, target)?;
+    let owner = world.at(target_module)?;
+    let quantifiers = std::iter::successors(Some(owner.binder_ty(binder)), |ty| match ty {
+        Ty::ForAll { body, .. } => Some(body),
+        _ => None,
+    })
+    .count()
+        - 1;
+    let first = match arguments.first() {
+        Some(SpineArg::Type(ty)) => Some(ty),
+        _ => None,
+    };
+    let skip = if quantifiers < leading_types {
+        wired_representation(&owner.binder(binder).name, first)
+    } else {
+        0
     };
     let reference = DictionaryRef {
         module: target_module,
@@ -534,7 +634,64 @@ pub(super) fn call_target(
         type_arguments: Vec::new(),
         dictionaries: Vec::new(),
     };
-    absorb(world, scope, reference, arguments).map(Some)
+    absorb(world, scope, reference, &arguments[skip..], None).map(Some)
+}
+
+// GHC.Core.Make.mkRuntimeErrorId wires these in at `forall (r :: RuntimeRep) (a :: TYPE r). Addr# -> a` while base defines them at `forall a. Addr# -> a`.
+pub(super) fn wired_representation(name: &str, first: Option<&Ty>) -> usize {
+    let runtime_error = matches!(
+        name,
+        "$base$Control.Exception.Base$patError"
+            | "$base$Control.Exception.Base$recSelError"
+            | "$base$Control.Exception.Base$recConError"
+            | "$base$Control.Exception.Base$nonExhaustiveGuardsError"
+            | "$base$Control.Exception.Base$noMethodBindingError"
+            | "$base$Control.Exception.Base$typeError"
+    );
+    let lifted = first.is_some_and(|ty| {
+        matches!(ty, Ty::Con { tycon, args }
+            if tycon.name == "$ghc-prim$GHC.Types$BoxedRep"
+                && matches!(args.as_slice(), [Ty::Con { tycon, args }]
+                    if tycon.name == "$ghc-prim$GHC.Types$Lifted" && args.is_empty()))
+    });
+    usize::from(runtime_error && lifted)
+}
+
+fn leading(arguments: &[SpineArg]) -> Vec<Ty> {
+    arguments
+        .iter()
+        .map_while(|argument| match argument {
+            SpineArg::Type(ty) => Some(ty.clone()),
+            SpineArg::Value(_) => None,
+        })
+        .collect()
+}
+
+fn through_aliases(
+    world: &World<'_>,
+    mut target: (usize, BinderId),
+) -> Result<(usize, BinderId), String> {
+    for _ in 0..DEPTH_BUDGET {
+        let module = world.at(target.0)?;
+        let Some(mut body) = module.binding(target.1).rhs else {
+            return Ok(target);
+        };
+        while let Expr::Tick(inner) = module.expr(body) {
+            body = *inner;
+        }
+        let Some(next) = probe_target(world, target.0, body) else {
+            return Ok(target);
+        };
+        if !world
+            .at(next.0)?
+            .binder_ty(next.1)
+            .alpha_eq(module.binder_ty(target.1))
+        {
+            return Ok(target);
+        }
+        target = next;
+    }
+    Ok(target)
 }
 
 /// Absorb the leading type arguments and proven-unique dictionaries into the
@@ -546,30 +703,74 @@ fn absorb(
     scope: &Scope<'_>,
     mut reference: DictionaryRef,
     arguments: &[SpineArg],
+    cast: Option<&Ty>,
 ) -> Result<CallTarget, String> {
+    let (types, dictionaries) = (reference.type_arguments.len(), reference.dictionaries.len());
+    let mut signature = reference_type(world, &reference)?;
     let mut erased = Vec::new();
     let mut rest = arguments;
     while let [argument, tail @ ..] = rest {
         match argument {
-            SpineArg::Type(ty) => reference.type_arguments.push(ty.clone()),
+            SpineArg::Type(ty) => {
+                if !binds_type(world, &reference)? {
+                    break;
+                }
+                signature = instantiate_arguments(&signature, std::slice::from_ref(ty), 0)?;
+                reference.type_arguments.push(ty.clone());
+            }
             SpineArg::Value(source) => {
                 let Some(dictionary) = resolve_dictionary(world, scope, *source, 0)? else {
                     break;
                 };
+                signature = instantiate_arguments(&signature, &[], 1)?;
                 reference.dictionaries.push(dictionary);
                 erased.push(*source);
             }
         }
         rest = tail;
     }
-    let arguments = rest
-        .iter()
-        .map(|argument| match argument {
-            SpineArg::Value(source) => Ok(*source),
-            SpineArg::Type(_) => Err("type arguments must precede value arguments".to_string()),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let signature = reference_type(world, &reference)?;
+    if let Some(cast) = cast {
+        let to = instantiate_arguments(
+            cast,
+            &reference.type_arguments[types..],
+            reference.dictionaries.len() - dictionaries,
+        )?;
+        let carrier = super::data::carrier(world, &to);
+        if carrier.is_none() || super::data::carrier(world, &signature) != carrier {
+            return Err("a method's cast must not change the carrier".into());
+        }
+        signature = to;
+    }
+    let mut arguments = Vec::new();
+    let mut arrows = Vec::new();
+    for argument in rest {
+        match argument {
+            SpineArg::Value(source) => {
+                let Ty::Fun { mult, arg, res } = signature else {
+                    return Err(
+                        "the spine applies a value where its target quantifies a type".into(),
+                    );
+                };
+                arrows.push((mult, arg));
+                signature = *res;
+                arguments.push(*source);
+            }
+            SpineArg::Type(ty) => {
+                signature = instantiate_arguments(&signature, std::slice::from_ref(ty), 0)?;
+                if binds_type(world, &reference)? {
+                    reference.type_arguments.push(ty.clone());
+                }
+            }
+        }
+    }
+    let signature = arrows
+        .into_iter()
+        .rev()
+        .fold(signature, |res, (mult, arg)| Ty::Fun {
+            mult,
+            arg,
+            res: Box::new(res),
+        });
     let arity = residual_arity(world, &reference)?;
     Ok(CallTarget {
         reference,
@@ -578,8 +779,61 @@ fn absorb(
         arguments,
         erased,
         method: false,
-        cast: false,
+        cast: cast.is_some(),
     })
+}
+
+fn binds_type(world: &World<'_>, reference: &DictionaryRef) -> Result<bool, String> {
+    let module = world.at(reference.module)?;
+    let Some(rhs) = module.binding(reference.binder).rhs else {
+        return Ok(true);
+    };
+    let (_, total) = super::lower::type_lambda_counts(module, rhs, reference.binder);
+    Ok(reference.type_arguments.len() < total)
+}
+
+pub(super) fn constructor_method(
+    world: &World<'_>,
+    scope: &Scope<'_>,
+    head: ExprId,
+    arguments: &[SpineArg],
+    ty: &Ty,
+) -> Result<Option<(super::data::Constructor, ExprId)>, String> {
+    let leading = arguments
+        .iter()
+        .take_while(|argument| matches!(argument, SpineArg::Type(_)))
+        .count();
+    let Some((_, _, selector)) = selector(world, scope.module, head)? else {
+        return Ok(None);
+    };
+    let [SpineArg::Value(dictionary_source)] = &arguments[leading..] else {
+        return Ok(None);
+    };
+    let Some(dictionary) = resolve_dictionary(world, scope, *dictionary_source, 0)? else {
+        return Ok(None);
+    };
+    let Some(field) = FieldScope::read(world, &dictionary, &selector)? else {
+        return Ok(None);
+    };
+    let source = world.at(field.module)?;
+    let (worker, types, values) = spine(source, field.selected)?;
+    if !values.is_empty() {
+        return Ok(None);
+    }
+    let Some(constructor) = super::data::resolve(world, field.module, worker, ty)? else {
+        return Ok(None);
+    };
+    let Ty::Con { args, .. } = ty else {
+        return Ok(None);
+    };
+    let applied: Vec<Ty> = types
+        .iter()
+        .map(|argument| field.types.apply(argument).into_owned())
+        .collect();
+    if !constructor.fields.is_empty() || !super::same_types(&applied, args) {
+        return Err("a constructor method's type differs from its call".into());
+    }
+    Ok(Some((constructor, *dictionary_source)))
 }
 
 /// Read one field of a known dictionary, in the producer's own scope.
@@ -603,6 +857,7 @@ pub(super) fn field(
 pub(super) struct Method {
     pub reference: DictionaryRef,
     pub cast: Option<Ty>,
+    pub consumed: usize,
 }
 
 /// Read one method of a known dictionary. GHC writes an eta-reduced method
@@ -611,14 +866,36 @@ pub(super) fn method(
     world: &World<'_>,
     dictionary: &DictionaryRef,
     selector: &Selector,
+    types: &[Ty],
 ) -> Result<Option<Method>, String> {
     let Some(mut field) = FieldScope::read(world, dictionary, selector)? else {
         return Ok(None);
     };
     let source = world.at(field.module)?;
-    while let Expr::Tick(body) = source.expr(field.selected) {
-        field.selected = *body;
+    let mut abstractions = 0;
+    loop {
+        match source.expr(field.selected) {
+            Expr::Tick(body) => field.selected = *body,
+            Expr::Lam { binder, body } if source.binder(*binder).kind == BinderKind::Tyvar => {
+                let bound = source.binder(*binder);
+                field.types.bind(
+                    h2r_core_ir::TyVarId {
+                        name: bound.name.as_str().into(),
+                        occ: bound.occ.as_str().into(),
+                        unique: bound.unique.as_str().into(),
+                    },
+                    types
+                        .get(abstractions)
+                        .cloned()
+                        .unwrap_or_else(super::data::erased_ty),
+                )?;
+                abstractions += 1;
+                field.selected = *body;
+            }
+            _ => break,
+        }
     }
+    let consumed = abstractions.min(types.len());
     let cast = match source.expr(field.selected) {
         Expr::Cast {
             expr, to: Some(to), ..
@@ -629,8 +906,28 @@ pub(super) fn method(
         Expr::Cast { .. } => return Ok(None),
         _ => None,
     };
-    Ok(resolve_reference(world, &field.scope(), field.selected, 1)?
-        .map(|reference| Method { reference, cast }))
+    let Some(mut reference) = resolve_reference(world, &field.scope(), field.selected, 1)? else {
+        return Ok(None);
+    };
+    let owner = world.at(reference.module)?;
+    let bound = owner
+        .binding(reference.binder)
+        .rhs
+        .map_or(reference.type_arguments.len(), |rhs| {
+            super::lower::type_lambda_counts(owner, rhs, reference.binder).1
+        });
+    let cast = if reference.type_arguments.len() > bound {
+        let late = reference.type_arguments.split_off(bound);
+        let instantiated = instantiate_arguments(&reference_type(world, &reference)?, &late, 0)?;
+        Some(cast.unwrap_or(instantiated))
+    } else {
+        cast
+    };
+    Ok(Some(Method {
+        reference,
+        cast,
+        consumed,
+    }))
 }
 
 /// The producer's scope at one dictionary, and the field a selector names.
@@ -664,9 +961,9 @@ impl FieldScope {
             let source = module.binder(*binder);
             types.bind(
                 h2r_core_ir::TyVarId {
-                    name: source.name.clone(),
-                    occ: source.occ.clone(),
-                    unique: source.unique.clone(),
+                    name: source.name.as_str().into(),
+                    occ: source.occ.as_str().into(),
+                    unique: source.unique.as_str().into(),
                 },
                 argument.clone(),
             )?;
@@ -694,6 +991,7 @@ impl FieldScope {
             module: self.module,
             types: &self.types,
             dictionaries: &self.dictionaries,
+            fields: &NO_FIELDS,
         }
     }
 }

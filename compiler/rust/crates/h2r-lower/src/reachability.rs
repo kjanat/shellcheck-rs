@@ -256,7 +256,11 @@ pub const TRUSTED: &[&str] = &[
     "the root name: $<Main's unit>$Main$main",
     "the IR's resolver: Module::resolve, Module::binding, Module::occurrences (h2r-core-ir)",
     "GHC's own flags: isClassOp and the data-constructor record in the id table",
+    "GHC's wired-in Ids with no source binding: WIRED_IN_WITHOUT_SOURCE",
 ];
+
+/// GHC 9.6 defines these Ids only in `GHC.Types.Id.Make`, in a module whose source binds nothing by that name.
+pub const WIRED_IN_WITHOUT_SOURCE: &[&str] = &["$ghc-prim$GHC.Magic$nospec"];
 
 //------------------------------------------------------------------------------
 // Nodes
@@ -395,6 +399,8 @@ pub struct InWorldNonBindings {
     pub data_con_occurrences: u32,
     pub class_op_names: u32,
     pub class_op_occurrences: u32,
+    pub wired_in_names: u32,
+    pub wired_in_occurrences: u32,
 }
 
 /// What the [`A5_IN_WORLD_MISSING`] names could cost, bounded under
@@ -934,7 +940,7 @@ impl<'m> Build<'m> {
         // be split live/dead once the closure is known.
         let mut imports_at: Vec<BTreeMap<&str, u32>> = vec![BTreeMap::new(); n];
         let mut missing: BTreeMap<&str, MissingAcc> = BTreeMap::new();
-        let mut non_bindings: BTreeMap<&str, (bool, u32)> = BTreeMap::new();
+        let mut non_bindings: BTreeMap<&str, (NonBinding, u32)> = BTreeMap::new();
         // A13: a Ref::Global occurrence whose own stable name is internal.
         // Expected empty, counted rather than assumed.
         let mut internal_at: Vec<BTreeMap<&str, u32>> = vec![BTreeMap::new(); n];
@@ -966,8 +972,8 @@ impl<'m> Build<'m> {
                             Some(&to) => *out[ni].entry((to, A3_EDGE_GLOBAL)).or_insert(0) += 1,
                             None => match self.classify_global(m, e, name) {
                                 Global::Import(k) => *imports_at[ni].entry(k).or_insert(0) += 1,
-                                Global::NonBinding { key, data_con } => {
-                                    let slot = non_bindings.entry(key).or_insert((data_con, 0));
+                                Global::NonBinding { key, kind } => {
+                                    let slot = non_bindings.entry(key).or_insert((kind, 0));
                                     slot.1 += 1;
                                 }
                                 Global::Missing { module } => {
@@ -1196,13 +1202,19 @@ impl<'m> Build<'m> {
         if info.is_some_and(|i| i.data_con.is_some()) {
             return Global::NonBinding {
                 key: name,
-                data_con: true,
+                kind: NonBinding::DataCon,
             };
         }
         if info.is_some_and(|i| i.is_class_op) {
             return Global::NonBinding {
                 key: name,
-                data_con: false,
+                kind: NonBinding::ClassOp,
+            };
+        }
+        if WIRED_IN_WITHOUT_SOURCE.contains(&name) {
+            return Global::NonBinding {
+                key: name,
+                kind: NonBinding::WiredIn,
             };
         }
         Global::Missing { module }
@@ -1216,7 +1228,7 @@ impl<'m> Build<'m> {
         edges: &[EdgeRef],
         imports: &BTreeMap<String, ImportUse>,
         missing: &[Missing],
-        non_bindings: &BTreeMap<&str, (bool, u32)>,
+        non_bindings: &BTreeMap<&str, (NonBinding, u32)>,
         zero: &[NodeId],
         would_become_live: &[NodeId],
     ) -> Accounting {
@@ -1263,14 +1275,21 @@ impl<'m> Build<'m> {
                 }
             }
         }
-        for (is_data_con, count) in non_bindings.values() {
-            if *is_data_con {
-                a.in_world_non_bindings.data_con_names += 1;
-                a.in_world_non_bindings.data_con_occurrences += count;
-            } else {
-                a.in_world_non_bindings.class_op_names += 1;
-                a.in_world_non_bindings.class_op_occurrences += count;
-            }
+        for (kind, count) in non_bindings.values() {
+            let totals = &mut a.in_world_non_bindings;
+            let (names, occurrences) = match kind {
+                NonBinding::DataCon => {
+                    (&mut totals.data_con_names, &mut totals.data_con_occurrences)
+                }
+                NonBinding::ClassOp => {
+                    (&mut totals.class_op_names, &mut totals.class_op_occurrences)
+                }
+                NonBinding::WiredIn => {
+                    (&mut totals.wired_in_names, &mut totals.wired_in_occurrences)
+                }
+            };
+            *names += 1;
+            *occurrences += count;
         }
         let mut cands: BTreeSet<NodeId> = BTreeSet::new();
         for m in missing {
@@ -1330,9 +1349,16 @@ enum Global<'m> {
     Import(&'m str),
     /// A name inside the world that GHC's own flags explain without a
     /// top-level binding.
-    NonBinding { key: &'m str, data_con: bool },
+    NonBinding { key: &'m str, kind: NonBinding },
     /// A name inside the world that nothing explains: a hole.
     Missing { module: &'m str },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NonBinding {
+    DataCon,
+    ClassOp,
+    WiredIn,
 }
 
 /// [`A6_LIVE_CLOSURE`] and [`A9_WITNESS`] in one pass: breadth-first from

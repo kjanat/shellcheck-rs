@@ -44,6 +44,8 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+use crate::Name;
+
 /// The format the current plugin emits.
 pub const FORMAT: u32 = 6;
 
@@ -159,21 +161,21 @@ impl ConstructorInfo {
 
 /// A type constructor's identity: its stable name. The unique is a
 /// diagnostic and nothing keys by it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct TyConId {
-    pub name: String,
-    pub occ: String,
-    pub unique: String,
+    pub name: Name,
+    pub occ: Name,
+    pub unique: Name,
 }
 
 /// A type variable, as dumped. Type-variable *names* are internal, so they
 /// are not identities either; alpha-equivalence is structural
 /// ([`crate::Ty::alpha_eq`]).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct TyVarId {
-    pub name: String,
-    pub occ: String,
-    pub unique: String,
+    pub name: Name,
+    pub occ: Name,
+    pub unique: Name,
 }
 
 /// One entry of the type table, with its children as indices.

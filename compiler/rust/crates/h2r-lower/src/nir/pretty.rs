@@ -5,15 +5,20 @@ use std::fmt::Write;
 use super::{DictionaryRef, Exit, Operation, lower::LoweredLeaf};
 
 /// Instance evidence, printed as the compile-time identity it is.
+fn types(types: &[h2r_core_ir::Ty]) -> String {
+    let rendered: Vec<_> = types.iter().map(h2r_core_ir::Ty::render).collect();
+    format!("[{}]", rendered.join(", "))
+}
+
 fn dictionary_list(dictionaries: &[DictionaryRef]) -> String {
     let entries: Vec<_> = dictionaries
         .iter()
         .map(|d| {
             format!(
-                "module {} binder {} types {:?} dicts {}",
+                "module {} binder {} types {} dicts {}",
                 d.module,
                 d.binder,
-                d.type_arguments,
+                types(&d.type_arguments),
                 dictionary_list(&d.dictionaries)
             )
         })
@@ -24,14 +29,17 @@ fn dictionary_list(dictionaries: &[DictionaryRef]) -> String {
 pub fn format_leaf(leaf: &LoweredLeaf) -> String {
     let f = &leaf.function;
     let mut out = format!(
-        "fn f{} [module {}, binder {}] -> {:?}\n",
-        f.id.0, f.module, f.owner, f.result_ty
+        "fn f{} [module {}, binder {}] -> {}\n",
+        f.id.0,
+        f.module,
+        f.owner,
+        f.result_ty.render()
     );
     for param in &f.type_params {
         writeln!(out, "  type param {} [{}]", param.occ, param.unique).unwrap();
     }
     for argument in &f.type_arguments {
-        writeln!(out, "  specialized at {argument:?}").unwrap();
+        writeln!(out, "  specialized at {}", argument.render()).unwrap();
     }
     if !f.dictionaries.is_empty() {
         writeln!(out, "  dictionaries {}", dictionary_list(&f.dictionaries)).unwrap();
@@ -45,7 +53,7 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
         )
         .unwrap();
         for param in &block.params {
-            writeln!(out, "    param v{}: {:?}", param.id.0, param.ty).unwrap();
+            writeln!(out, "    param v{}: {}", param.id.0, param.ty.render()).unwrap();
         }
         for instruction in &block.instructions {
             let operation = match &instruction.operation {
@@ -60,7 +68,17 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                     target,
                     arguments,
                 } => format!(
-                    "local-scope {definitions:?} body b{} {arguments:?}",
+                    "local-scope [{}] body b{} {arguments:?}",
+                    definitions
+                        .iter()
+                        .map(|d| format!(
+                            "binder {} b{} : {}",
+                            d.binder,
+                            d.target.0,
+                            d.result_ty.render()
+                        ))
+                        .collect::<Vec<_>>()
+                        .join("; "),
                     target.0
                 ),
                 Operation::CallLocal { target, arguments } => {
@@ -101,6 +119,24 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                     format!("word-{op:?} {arguments:?}")
                 }
                 Operation::IntToWord(value) => format!("int-to-word v{}", value.0),
+                Operation::NegateInt(value) => format!("negate-int v{}", value.0),
+                Operation::IndexCharAddr { arguments } => format!("index-char {arguments:?}"),
+                Operation::PlusAddr { arguments } => format!("plus-addr {arguments:?}"),
+                Operation::AddrLiteral(bytes) => format!("addr-literal {} bytes", bytes.len()),
+                Operation::PendingCell => "pending-cell".into(),
+                Operation::Machine { op, arguments, .. } => format!(
+                    "{op:?} {}",
+                    arguments
+                        .iter()
+                        .map(|v| format!("v{}", v.0))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
+                Operation::FillCell { cell, value } => {
+                    format!("fill v{} with v{}", cell.0, value.0)
+                }
+                Operation::WordBinary { op, arguments } => format!("word-{op:?} {arguments:?}"),
+                Operation::WordToInt(value) => format!("word-to-int v{}", value.0),
                 Operation::ChrChar(value) => format!("chr-char v{}", value.0),
                 Operation::AppendList { left, right, .. } => {
                     format!("append-list v{} v{}", left.0, right.0)
@@ -159,7 +195,8 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                     dictionaries,
                 } => {
                     format!(
-                        "top-ref module {module} binder {binder} types {type_arguments:?} dicts {}",
+                        "top-ref module {module} binder {binder} types {} dicts {}",
+                        types(type_arguments),
                         dictionary_list(dictionaries)
                     )
                 }
@@ -171,17 +208,18 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
                     arguments,
                 } => {
                     format!(
-                        "call-top module {module} binder {binder} types {type_arguments:?} dicts {} args {arguments:?}",
+                        "call-top module {module} binder {binder} types {} dicts {} args {arguments:?}",
+                        types(type_arguments),
                         dictionary_list(dictionaries)
                     )
                 }
             };
             writeln!(
                 out,
-                "    v{} = {} : {:?}  [{:?}, {:?}]",
+                "    v{} = {} : {}  [{:?}, {:?}]",
                 instruction.result.id.0,
                 operation,
-                instruction.result.ty,
+                instruction.result.ty.render(),
                 instruction.origin.source,
                 instruction.origin.rule
             )
@@ -224,7 +262,8 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
     for (expr, binder, argument) in &leaf.type_instantiations {
         writeln!(
             out,
-            "  instantiated type lambda Expr({expr}) -> Binder({binder}) = {argument:?}"
+            "  instantiated type lambda Expr({expr}) -> Binder({binder}) = {}",
+            argument.render()
         )
         .unwrap();
     }
@@ -238,6 +277,9 @@ pub fn format_leaf(leaf: &LoweredLeaf) -> String {
     }
     for expr in &leaf.erased_ticks {
         writeln!(out, "  erased tick Expr({expr})").unwrap();
+    }
+    if let Some(expr) = leaf.erased_cast {
+        writeln!(out, "  erased cast Expr({expr})").unwrap();
     }
     out
 }

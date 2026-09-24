@@ -139,7 +139,6 @@ pub enum RuleKind {
     StrictBinding,
     EraseCast,
     ResolveMethod,
-    Diverge,
     MagicLazy,
 }
 
@@ -150,7 +149,6 @@ impl RuleKind {
             RuleKind::StrictBinding => "StrictBinding",
             RuleKind::EraseCast => "EraseCast",
             RuleKind::ResolveMethod => "ResolveMethod",
-            RuleKind::Diverge => "Diverge",
             RuleKind::MagicLazy => "MagicLazy",
         }
     }
@@ -389,92 +387,10 @@ pub const REFUSALS: &[Refusal] = &[
         when: When::Both,
         because: None,
     },
-    // A value defined in terms of itself is refused for its dependency cycle.
-    Refusal {
-        entry: Entry::Occurrence("recursiveValue"),
-        when: When::Both,
-        because: Some("recursive value dependency closure is not supported"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("recursiveValueUse"),
-        when: When::Both,
-        because: Some("recursive value dependency closure is not supported"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("colourEqual"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("colourCompare"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("elemString"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("an Eq dictionary this backend does not implement"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("mapLookup"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("mapUnion"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
-    },
     Refusal {
         entry: Entry::Occurrence("benchSet"),
         when: When::Only(Profile::Unoptimized),
-        because: Some("imported binding is outside the loaded world"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("patternFail"),
-        when: When::Both,
-        because: Some("unimplemented non-returning call"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("undefinedUnused"),
-        when: When::Both,
-        because: Some("imported binding is outside the loaded world"),
-    },
-    // `$fMonadStateT`'s `return` field is a cast lambda.
-    Refusal {
-        entry: Entry::Occurrence("stateCollect"),
-        when: When::Both,
         because: Some("instance has more type arguments than the owner binds"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("stateNumber"),
-        when: When::Both,
-        because: Some("instance has more type arguments than the owner binds"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("writerCollect"),
-        when: When::Only(Profile::Optimized),
-        because: Some("reference is neither a parameter nor a top-level binding"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("writerCollect"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("instance has more type arguments than the owner binds"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("stateClass"),
-        when: When::Both,
-        because: Some("instance has more type arguments than the owner binds"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("rwsRecord"),
-        when: When::Both,
-        because: Some("type arguments must precede value arguments"),
-    },
-    Refusal {
-        entry: Entry::Occurrence("identityWalk"),
-        when: When::Only(Profile::Unoptimized),
-        because: Some("value applications are not lowered yet"),
     },
 ];
 
@@ -985,6 +901,11 @@ pub const FIXTURES: &[Fixture] = &[
     run("stringCount", Inputs::Binary),
     run("stringHighLatin1", Inputs::Binary),
     run("stringNulByte", Inputs::Binary),
+    run("recursiveValueUse", Inputs::Deep(&[0, 1, 7, 100_000])),
+    run("undefinedUnused", Inputs::Binary),
+    run("stateCollect", Inputs::Binary),
+    run("stateClass", Inputs::Binary),
+    run("rwsRecord", Inputs::Binary),
     // At `-O1` GHC folds two adjacent literals into one, so `stringAppend`
     // covers the folded form and `stringAppendShared`, whose tail cannot be
     // folded in, is what reaches the appending unpacker.
@@ -1057,14 +978,13 @@ pub const FIXTURES: &[Fixture] = &[
     ),
     prove("stringEqualLazy", Inputs::Binary, &[anywhere(EQ_STRING)]),
     prove("elemChar", Inputs::Binary, &[anywhere(ELEM_CHAR)]),
-    prove_in(
-        Profile::Optimized,
+    prove(
         "elemString",
         Inputs::Binary,
-        &[anywhere(Op::ListPredicate(
+        &[optimized(Evidence::ClosureOperation(Op::ListPredicate(
             Predicate::Elem,
             Equality::String,
-        ))],
+        )))],
     ),
     prove("elemLazy", Inputs::Binary, &[anywhere(ELEM_CHAR)]),
     prove("prefixOf", Inputs::Binary, &[anywhere(PREFIX_CHAR)]),
@@ -1149,8 +1069,7 @@ pub const FIXTURES: &[Fixture] = &[
         &[anywhere(Op::CompareStrings)],
     ),
     // `Identity`'s `Functor` and `Applicative` methods are casts of top-level bindings.
-    prove_in(
-        Profile::Optimized,
+    prove(
         "identityWalk",
         Inputs::Binary,
         &[
@@ -1161,14 +1080,31 @@ pub const FIXTURES: &[Fixture] = &[
             optimized(Evidence::InstancesComplete),
         ],
     ),
-    prove_in(
-        Profile::Optimized,
+    prove(
+        "writerCollect",
+        Inputs::Binary,
+        &[
+            both(Evidence::ClosureRule(RuleKind::ResolveMethod)),
+            both(Evidence::InstancesComplete),
+        ],
+    ),
+    prove(
+        "stateNumber",
+        Inputs::Binary,
+        &[
+            optimized(Evidence::SpecializedOn {
+                type_arguments: 1,
+                dictionaries: 1,
+            }),
+            optimized(Evidence::InstancesComplete),
+        ],
+    ),
+    prove(
         "mapLookup",
         Inputs::Binary,
         &[optimized(Evidence::InstancesComplete)],
     ),
-    prove_in(
-        Profile::Optimized,
+    prove(
         "mapUnion",
         Inputs::Binary,
         &[optimized(Evidence::InstancesComplete)],
@@ -1181,17 +1117,18 @@ pub const FIXTURES: &[Fixture] = &[
     prove_in(Profile::Optimized, "benchSet", Inputs::Deep(STACK_SET), &[]),
     prove("tagColour", Inputs::Binary, &[anywhere(Op::DataToTag)]),
     prove("tagMaybe", Inputs::Binary, &[anywhere(Op::DataToTag)]),
-    prove_in(
-        Profile::Optimized,
+    prove(
         "colourEqual",
         Inputs::Binary,
-        &[anywhere(Op::DataToTag), anywhere(Op::TagToEnum)],
+        &[
+            optimized(Evidence::ClosureOperation(Op::DataToTag)),
+            optimized(Evidence::ClosureOperation(Op::TagToEnum)),
+        ],
     ),
-    prove_in(
-        Profile::Optimized,
+    prove(
         "colourCompare",
         Inputs::Binary,
-        &[anywhere(Op::DataToTag)],
+        &[optimized(Evidence::ClosureOperation(Op::DataToTag))],
     ),
     prove(
         "pointerChoice",
@@ -1274,7 +1211,13 @@ pub const FIXTURES: &[Fixture] = &[
     prove(
         "patternFail",
         Inputs::EvidenceOnly,
-        &[both(Evidence::ClosureRule(RuleKind::Diverge))],
+        &[
+            both(Evidence::InstancesComplete),
+            both(Evidence::InstancesOf {
+                occ: "patError",
+                count: 1,
+            }),
+        ],
     ),
     // Bindings that are not entry points: they exist so the shapes they
     // contain are lowered and checked.

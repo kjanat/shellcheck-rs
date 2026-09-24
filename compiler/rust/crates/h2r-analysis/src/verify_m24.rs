@@ -520,7 +520,7 @@ fn class_spec_of_tycon(name: &str) -> Option<&'static ClassSpec> {
 fn class_of_ty(t: &Ty) -> Option<String> {
     let tc = t.tycon()?;
     class_spec_of_tycon(&tc.name)?;
-    Some(tc.name.clone())
+    Some(tc.name.to_string())
 }
 
 /// The class whose dictionary constructor this stable name is.

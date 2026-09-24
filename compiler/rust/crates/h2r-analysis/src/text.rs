@@ -964,7 +964,7 @@ fn structured_element(f: &ListFlow) -> StructuredElem {
             // The verdict is the `TyCon` above; this only names it.
             best = StructuredElem::Other(rendered.unwrap_or_else(|| {
                 ty.tycon()
-                    .map(|t| t.occ.clone())
+                    .map(|t| t.occ.to_string())
                     .unwrap_or_else(|| "?".to_string())
             }));
         }

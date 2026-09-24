@@ -22,6 +22,7 @@ pub struct LeafAccounting {
     pub value_application_nodes: usize,
     pub value_argument_nodes: usize,
     pub erased_ticks: usize,
+    pub erased_casts: usize,
 }
 
 /// Independently check the complete supported source subtree. Never rerun the
@@ -35,7 +36,17 @@ pub fn verify_leaf(
     id: FnId,
     lowered: &lower::LoweredLeaf,
 ) -> Result<LeafAccounting, String> {
-    verify_leaf_impl(module, module_index, owner, id, lowered, None, &[], &[])
+    verify_leaf_impl(
+        module,
+        module_index,
+        owner,
+        id,
+        lowered,
+        None,
+        None,
+        &[],
+        &[],
+    )
 }
 
 /// Verify against the source world, resolving imports from source names rather
@@ -63,6 +74,29 @@ pub fn verify_leaf_specialized(
     type_arguments: &[Ty],
     dictionaries: &[DictionaryRef],
 ) -> Result<LeafAccounting, String> {
+    verify_leaf_cataloged(
+        modules,
+        None,
+        module_index,
+        owner,
+        id,
+        lowered,
+        type_arguments,
+        dictionaries,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn verify_leaf_cataloged(
+    modules: &[h2r_core_ir::Module],
+    catalog: Option<&super::Catalog>,
+    module_index: usize,
+    owner: BinderId,
+    id: FnId,
+    lowered: &lower::LoweredLeaf,
+    type_arguments: &[Ty],
+    dictionaries: &[DictionaryRef],
+) -> Result<LeafAccounting, String> {
     let module = modules
         .get(module_index)
         .ok_or("module index is outside the loaded world")?;
@@ -73,6 +107,7 @@ pub fn verify_leaf_specialized(
         id,
         lowered,
         Some(modules),
+        catalog,
         type_arguments,
         dictionaries,
     )
@@ -86,6 +121,7 @@ fn verify_leaf_impl(
     id: FnId,
     lowered: &lower::LoweredLeaf,
     modules: Option<&[h2r_core_ir::Module]>,
+    catalog: Option<&super::Catalog>,
     type_arguments: &[Ty],
     dictionaries: &[DictionaryRef],
 ) -> Result<LeafAccounting, String> {
@@ -119,7 +155,11 @@ fn verify_leaf_impl(
         .iter()
         .find(|b| b.id == function.entry)
         .ok_or("missing entry")?;
-    let (subst, signature) = lower::bind_type_arguments(module, pair.rhs, owner, type_arguments)?;
+    let extended = lower::leaf_type_arguments(module, pair.rhs, owner, type_arguments);
+    let requested = type_arguments;
+    let type_arguments = extended.as_slice();
+    let (subst, signature, cast) =
+        lower::bind_type_arguments(module, pair.rhs, owner, type_arguments)?;
     let view = TypeView::specialized(module, &subst);
     let mut ty = &signature;
     let mut params = Vec::new();
@@ -131,9 +171,11 @@ fn verify_leaf_impl(
         module,
         index: module_index,
         modules,
+        catalog,
     };
     let mut type_scope: Vec<(TyVarId, TyVarId)> = Vec::new();
     let mut ticks = Vec::new();
+    let mut erased_cast = None;
     let mut leaf = None;
     let mut source_nodes = 0;
     let mut source = module.preorder(pair.rhs);
@@ -141,6 +183,7 @@ fn verify_leaf_impl(
         source_nodes += 1;
         match module.expr(expr) {
             Expr::Tick(_) => ticks.push(expr),
+            Expr::Cast { .. } if cast == Some(expr) && leaf.is_none() => erased_cast = Some(expr),
             Expr::Lam { binder, .. } => {
                 let source = module.binder(*binder);
                 if source.kind == BinderKind::Tyvar {
@@ -167,9 +210,9 @@ fn verify_leaf_impl(
                     type_scope.push((
                         signature.clone(),
                         TyVarId {
-                            name: source.name.clone(),
-                            occ: source.occ.clone(),
-                            unique: source.unique.clone(),
+                            name: source.name.as_str().into(),
+                            occ: source.occ.as_str().into(),
+                            unique: source.unique.as_str().into(),
                         },
                     ));
                     type_params.push((expr, *binder));
@@ -267,6 +310,18 @@ fn verify_leaf_impl(
     if ticks != lowered.erased_ticks {
         return Err("erased tick provenance mismatch".into());
     }
+    if erased_cast != lowered.erased_cast {
+        return Err("erased cast provenance mismatch".into());
+    }
+    if erased_cast.is_some() {
+        lower::leaf_cast_preserves_representation(
+            &world,
+            pair.rhs,
+            owner,
+            requested,
+            dictionaries.len(),
+        )?;
+    }
     if !ty.alpha_eq(&function.result_ty) {
         return Err("leaf result type differs from source".into());
     }
@@ -277,10 +332,12 @@ fn verify_leaf_impl(
         view: &view,
         module_index,
         modules,
+        catalog,
         params: &params,
         type_scope: &type_scope,
         subst: &subst,
         dictionary_scope: &dictionary_scope,
+        field_scope: &dict::NO_FIELDS,
         function,
         visited: &visited,
         functions: &BTreeMap::new(),
@@ -302,6 +359,7 @@ fn verify_leaf_impl(
         value_application_nodes: value_applications,
         value_argument_nodes: value_applications,
         erased_ticks: ticks.len(),
+        erased_casts: usize::from(erased_cast.is_some()),
     };
     // Counts source nodes, not NIR instructions: a literal's instruction and
     // return share a source node; lambda nodes become entry parameters.
@@ -316,10 +374,80 @@ fn verify_leaf_impl(
             + accounting.value_application_nodes
             + accounting.value_argument_nodes
             + accounting.erased_ticks
+            + accounting.erased_casts
     {
         return Err("leaf source accounting does not close".into());
     }
     Ok(accounting)
+}
+
+fn captured(
+    context: &ValueContext<'_>,
+    functions: &super::lower::LocalFunctions,
+    roots: &[ExprId],
+) -> Vec<(ExprId, BinderId, ValueId)> {
+    let free = super::lower::free_in(context.module, functions, roots);
+    let mut captured: Vec<_> = context
+        .params
+        .iter()
+        .copied()
+        .filter(|(_, binder, _)| free.contains(binder))
+        .collect();
+    captured.sort_by_key(|(_, binder, _)| *binder);
+    captured
+}
+
+fn verify_local_closure(
+    params: &[(ExprId, BinderId, ValueId)],
+    function: &super::lower::LocalFunction,
+    instructions: &[Instruction],
+    source: ExprId,
+    ty: &Ty,
+    returned: ValueId,
+) -> Result<(), String> {
+    let arguments = function
+        .captures
+        .iter()
+        .map(|b| {
+            params
+                .iter()
+                .find(|(_, binder, _)| binder == b)
+                .map(|(_, _, v)| *v)
+                .ok_or("missing local closure capture")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let [instruction] = instructions else {
+        return Err("a local closure requires one instruction".into());
+    };
+    let agrees = match &instruction.operation {
+        Operation::CallLocal {
+            target,
+            arguments: args,
+        } => {
+            function.arity == 0
+                && instruction.origin.rule == Rule::CallLocal
+                && *target == function.target
+                && *args == arguments
+        }
+        Operation::MakeClosure {
+            target,
+            arguments: args,
+        } => {
+            function.arity != 0
+                && instruction.origin.rule == Rule::MakeClosure
+                && *target == function.target
+                && *args == arguments
+        }
+        _ => false,
+    };
+    if !agrees
+        || instruction.result.id != returned
+        || !instruction.result.ty.alpha_eq(ty)
+        || instruction.origin.source != Source::Expr(source)
+    {
+        return Err("a local closure differs from source".into());
+    }
+    Ok(())
 }
 
 struct ValueContext<'a> {
@@ -329,11 +457,13 @@ struct ValueContext<'a> {
     view: &'a TypeView<'a>,
     module_index: usize,
     modules: Option<&'a [h2r_core_ir::Module]>,
+    catalog: Option<&'a super::Catalog>,
     params: &'a [(ExprId, BinderId, ValueId)],
     type_scope: &'a [(TyVarId, TyVarId)],
     subst: &'a super::subst::Substitution,
     dictionary_scope: &'a BTreeMap<BinderId, DictionaryRef>,
-    functions: &'a BTreeMap<BinderId, (BlockId, Vec<BinderId>, usize)>,
+    field_scope: &'a BTreeMap<BinderId, (DictionaryRef, dict::Selector)>,
+    functions: &'a super::lower::LocalFunctions,
 }
 
 impl<'a> ValueContext<'a> {
@@ -342,6 +472,7 @@ impl<'a> ValueContext<'a> {
             module: self.module,
             index: self.module_index,
             modules: self.modules,
+            catalog: self.catalog,
         }
     }
 
@@ -350,6 +481,7 @@ impl<'a> ValueContext<'a> {
             module: self.module_index,
             types: self.subst,
             dictionaries: self.dictionary_scope,
+            fields: self.field_scope,
         }
     }
 }
@@ -542,8 +674,7 @@ fn verify_value(
             .iter()
             .find(|b| b.id == *target)
             .ok_or("missing scalar region")?;
-        let mut captured = context.params.to_vec();
-        captured.sort_by_key(|(_, binder, _)| *binder);
+        let captured = captured(context, context.functions, &[expr]);
         if arguments
             != &captured
                 .iter()
@@ -599,6 +730,32 @@ fn verify_value(
     if matches!(module.expr(expr), Expr::Lam { .. }) {
         return verify_lambda(context, block, expr, ty, returned);
     }
+    if let Expr::Case {
+        scrut,
+        binder,
+        ty: result_ty,
+        alts,
+        ..
+    } = module.expr(expr)
+        && let Some(known) = dict::known_case(&world, &context.scope(), *scrut, alts)?
+    {
+        if !view.ty(*result_ty).alpha_eq(ty) {
+            return Err("known dictionary case result differs from source".into());
+        }
+        let mut dictionaries = context.dictionary_scope.clone();
+        dictionaries.insert(*binder, known.dictionary.clone());
+        let mut fields = context.field_scope.clone();
+        for (field, selector) in known.fields {
+            fields.insert(field, (known.dictionary.clone(), selector));
+        }
+        let nested = ValueContext {
+            dictionary_scope: &dictionaries,
+            field_scope: &fields,
+            ..*context
+        };
+        let (bt, bv, bn) = verify_value(&nested, block, alts[0].rhs, ty, returned)?;
+        return Ok((bt, bv, 1 + module.preorder(*scrut).count() + bn));
+    }
     if let Expr::Case { binder, .. } = module.expr(expr)
         && data::unboxed_tuple_constructor(&world, view.binder_ty(*binder))?.is_some()
     {
@@ -618,13 +775,6 @@ fn verify_value(
         let signature = entry
             .signature(&type_arguments)
             .ok_or("source external call type arguments mismatch")?;
-        if matches!(
-            entry,
-            external::External::ErrorWithoutStackTrace | external::External::Error
-        ) && !data::lifted(&world, ty)
-        {
-            return Err("stack-free error requires a lifted result".into());
-        }
         let mut result = &signature;
         for _ in 0..entry.value_arity() {
             let Ty::Fun { res, .. } = result else {
@@ -831,7 +981,7 @@ fn verify_value(
         return Ok((0, unpacker.arity() as usize, 1));
     }
     match module.expr(expr) {
-        Expr::App { arg, .. } if !matches!(module.expr(*arg), Expr::Type { .. }) => {
+        Expr::App { .. } if super::lower::applies_value(module, expr) => {
             let mut spine = Vec::new();
             let mut head = expr;
             while let Expr::App { fun, arg } = module.expr(head) {
@@ -862,17 +1012,78 @@ fn verify_value(
                 .any(|argument| matches!(argument, dict::SpineArg::Type(_)));
             value_applications = source_args.len();
             type_applications = source_types.len();
+            if let Some((raised, types, thrown)) = super::lower::raise(module, head, &spine) {
+                let [instruction] = block.instructions.as_slice() else {
+                    return Err("raise# is one instruction".into());
+                };
+                if !matches!(&instruction.operation, Operation::Machine { op, type_arguments, arguments }
+                    if *op == raised && same_types(type_arguments, &types) && arguments.is_empty())
+                    || instruction.origin.source != Source::Expr(expr)
+                    || instruction.origin.rule != Rule::Machine
+                    || instruction.result.id != returned
+                    || !instruction.result.ty.alpha_eq(ty)
+                    || !types.last().is_some_and(|result| result.alpha_eq(ty))
+                {
+                    return Err("raise# differs from source".into());
+                }
+                return Ok((
+                    type_applications,
+                    value_applications,
+                    module.preorder(thrown).count(),
+                ));
+            }
+            if let Some((lambda, state, body)) = super::lower::run_rw(module, view, head, &spine) {
+                let token = block
+                    .instructions
+                    .first()
+                    .ok_or("runRW# lacks its state token")?;
+                if !matches!(&token.operation, Operation::Machine { op: Machine::RealWorld, type_arguments, arguments }
+                    if type_arguments.is_empty() && arguments.is_empty())
+                    || token.origin.source != Source::Expr(expr)
+                    || token.origin.rule != Rule::RunRW
+                    || !token.result.ty.alpha_eq(view.binder_ty(state))
+                {
+                    return Err("runRW#'s state token differs from source".into());
+                }
+                let mut suffix = block.clone();
+                suffix.instructions = block.instructions[1..].to_vec();
+                suffix.params.push(token.result.clone());
+                let mut extended = params.to_vec();
+                extended.push((lambda, state, token.result.id));
+                let nested = ValueContext {
+                    params: &extended,
+                    ..*context
+                };
+                let (bt, bv, bn) = verify_value(&nested, &suffix, body, ty, returned)?;
+                return Ok((type_applications + bt, value_applications + bv, 1 + bn));
+            }
+            if let Some((constructor, dictionary)) =
+                dict::constructor_method(&world, &context.scope(), head, &spine, ty)?
+            {
+                let [instruction] = block.instructions.as_slice() else {
+                    return Err("a constructor method is one construction".into());
+                };
+                if !matches!(&instruction.operation, Operation::Construct { constructor: built, arguments }
+                    if *built == constructor && arguments.is_empty())
+                    || instruction.origin.source != Source::Expr(expr)
+                    || instruction.origin.rule != Rule::ResolveMethod
+                    || instruction.result.id != returned
+                    || !instruction.result.ty.alpha_eq(ty)
+                {
+                    return Err("constructor method differs from source".into());
+                }
+                value_nodes += module.preorder(dictionary).count() - 1;
+                return Ok((type_applications, value_applications, value_nodes));
+            }
             let primitive = primitive::resolve(module, head);
             let constructor = boxed::resolves(module, head);
-            let local = module
-                .resolve(head)
-                .and_then(|b| context.functions.get(&b).map(|f| (b, f)));
+            let local = super::lower::local_function(module, view, context.functions, head)?;
             let indirect = module
                 .resolve(head)
                 .filter(|b| params.iter().any(|(_, binder, _)| binder == b));
             let primitive_ty = match primitive {
                 _ if constructor => boxed::signature(),
-                Some(prim) => prim.signature(),
+                Some(prim) => prim.signature_at(&context.world(), &source_types, ty)?,
                 None => primitive::signature(),
             };
             let cast_head = match module.expr(head) {
@@ -885,7 +1096,7 @@ fn verify_value(
                 || local.is_some()
                 || indirect.is_some()
             {
-                if interleaved {
+                if interleaved && (primitive.is_some() || constructor) {
                     return Err("source call interleaves type and value arguments".into());
                 }
                 None
@@ -917,7 +1128,8 @@ fn verify_value(
             });
             let instantiated = match &target {
                 Some(resolved) => resolved.signature.clone(),
-                None => instantiate::apply(head_ty, &source_types)?,
+                None if primitive.is_some() => primitive_ty.clone(),
+                None => super::lower::positional(head_ty, &spine)?,
             };
             let mut signature = &instantiated;
             let source_args = match &target {
@@ -934,7 +1146,7 @@ fn verify_value(
                             |resolved| Some(resolved.arity as u32),
                         )
                     },
-                    |(_, (_, _, arity))| Some(*arity as u32),
+                    |(_, function)| Some(function.arity as u32),
                 )
             };
             let apply = cast_head.is_some()
@@ -944,7 +1156,9 @@ fn verify_value(
             if apply
                 && (primitive.is_some()
                     || constructor
-                    || (target.is_none() && !source_types.is_empty())
+                    || (target.is_none()
+                        && !source_types.is_empty()
+                        && data::carrier(&world, head_ty) != data::carrier(&world, &instantiated))
                     || !data::function(&world, head_ty))
             {
                 return Err(
@@ -1023,13 +1237,8 @@ fn verify_value(
                             .instructions
                             .get(argument_instructions)
                             .ok_or("missing call literal")?;
-                        let Operation::Literal(actual) = &instruction.operation else {
-                            return Err("call literal was not lowered as a literal".into());
-                        };
-                        if actual.kind != expected.kind
-                            || actual.pretty != expected.pretty
+                        if !literal_agrees(instruction, expected, arg)
                             || instruction.origin.source != Source::Expr(*source)
-                            || instruction.origin.rule != Rule::Literal
                             || !instruction.result.ty.alpha_eq(arg)
                         {
                             return Err("call literal differs from source".into());
@@ -1067,9 +1276,29 @@ fn verify_value(
                                 return Err("source call parameter type mismatch".into());
                             }
                             value.id
+                        } else if let Some(reference) = module
+                            .resolve(*source)
+                            .and_then(|binder| context.dictionary_scope.get(&binder))
+                        {
+                            if !arg.alpha_eq(&dict::reference_type(&world, reference)?) {
+                                return Err("source dictionary argument type mismatch".into());
+                            }
+                            let instruction = block
+                                .instructions
+                                .get(argument_instructions)
+                                .ok_or("missing dictionary call argument")?;
+                            verify_reference(instruction, reference)?;
+                            if instruction.origin.source != Source::Expr(*source)
+                                || instruction.origin.rule != Rule::ResolveInstance
+                                || !instruction.result.ty.alpha_eq(arg)
+                            {
+                                return Err("dictionary call argument differs from source".into());
+                            }
+                            argument_instructions += 1;
+                            instruction.result.id
                         } else {
                             let (argument_module, argument_binder, argument_ty) =
-                                instantiate::target(module, module_index, modules, *source)?;
+                                instantiate::target(&world, *source)?;
                             if !linkage::closed_type(argument_ty) || !arg.alpha_eq(argument_ty) {
                                 return Err("source top-level argument type mismatch".into());
                             }
@@ -1125,7 +1354,40 @@ fn verify_value(
                         }
                         (0, 0, 1)
                     }
-                    None => verify_value(context, &prefix, head, head_ty, *callee)?,
+                    None if let Some((_, function)) = local => {
+                        verify_local_closure(
+                            params,
+                            function,
+                            &prefix.instructions,
+                            head,
+                            &instantiated,
+                            *callee,
+                        )?;
+                        (0, 0, 1)
+                    }
+                    None if source_types.is_empty() => {
+                        verify_value(context, &prefix, head, head_ty, *callee)?
+                    }
+                    None => {
+                        let Some((instantiation, rest)) = prefix.instructions.split_last() else {
+                            return Err("an instantiated callee lacks its instantiation".into());
+                        };
+                        let Operation::Move(polymorphic) = instantiation.operation else {
+                            return Err("an instantiated callee is not moved".into());
+                        };
+                        if instantiation.origin.source != Source::Expr(head)
+                            || instantiation.origin.rule != Rule::InstantiateValue
+                            || instantiation.result.id != *callee
+                            || !instantiation.result.ty.alpha_eq(&instantiated)
+                            || data::carrier(&world, head_ty)
+                                != data::carrier(&world, &instantiated)
+                        {
+                            return Err("callee instantiation differs from source".into());
+                        }
+                        let mut head_block = prefix.clone();
+                        head_block.instructions = rest.to_vec();
+                        verify_value(context, &head_block, head, head_ty, polymorphic)?
+                    }
                 };
                 if arguments != &values
                     || instruction.origin.source != Source::Expr(expr)
@@ -1166,8 +1428,28 @@ fn verify_value(
                     }
                     (primitive::Prim::Ord, Operation::OrdChar(value))
                     | (primitive::Prim::Chr, Operation::ChrChar(value))
-                    | (primitive::Prim::IntToWord, Operation::IntToWord(value)) => {
-                        values == [*value]
+                    | (primitive::Prim::IntToWord, Operation::IntToWord(value))
+                    | (primitive::Prim::WordToInt, Operation::WordToInt(value))
+                    | (primitive::Prim::Negate, Operation::NegateInt(value)) => values == [*value],
+                    (
+                        primitive::Prim::WordBinary(expected),
+                        Operation::WordBinary { op, arguments },
+                    ) => *op == expected && arguments == &values,
+                    (primitive::Prim::IndexChar, Operation::IndexCharAddr { arguments })
+                    | (primitive::Prim::PlusAddr, Operation::PlusAddr { arguments }) => {
+                        arguments == &values
+                    }
+                    (
+                        primitive::Prim::Machine(expected),
+                        Operation::Machine {
+                            op,
+                            type_arguments,
+                            arguments,
+                        },
+                    ) => {
+                        *op == expected
+                            && same_types(type_arguments, &source_types)
+                            && arguments == &values
                     }
                     _ => false,
                 };
@@ -1175,8 +1457,10 @@ fn verify_value(
                     return Err("primitive operation or arguments differ from source".into());
                 }
                 expected_primitive_rule(expected)
-            } else if let Some((_, (expected, captures, _))) = local {
-                let mut arguments = captures
+            } else if let Some((_, function)) = local {
+                let expected = &function.target;
+                let mut arguments = function
+                    .captures
                     .iter()
                     .map(|b| {
                         params
@@ -1188,7 +1472,6 @@ fn verify_value(
                     .collect::<Result<Vec<_>, _>>()?;
                 arguments.extend(values);
                 if !matches!(&instruction.operation, Operation::CallLocal { target, arguments: actual } if target == expected && actual == &arguments)
-                    || !source_types.is_empty()
                 {
                     return Err("local call target or captures differ from source".into());
                 }
@@ -1259,8 +1542,46 @@ fn verify_value(
                 })
                 .collect();
             type_applications = arguments.len();
-            let (target_module, target_binder, head_ty) =
-                instantiate::target(module, module_index, modules, head)?;
+            if let Some((binder, function)) =
+                super::lower::local_function(module, view, context.functions, head)?
+            {
+                let spine: Vec<_> = arguments
+                    .iter()
+                    .cloned()
+                    .map(dict::SpineArg::Type)
+                    .collect();
+                let expected = lower::positional(view.binder_ty(binder), &spine)?;
+                if !source_type_matches(ty, &expected, type_scope) {
+                    return Err("local type application result differs from source".into());
+                }
+                verify_local_closure(params, function, &block.instructions, expr, ty, returned)?;
+                return Ok((type_applications, 0, 1));
+            }
+            if let Some(binder) = module.resolve(head)
+                && let Some((_, _, polymorphic)) =
+                    params.iter().find(|(_, source, _)| *source == binder)
+            {
+                let expected = instantiate::apply(view.binder_ty(binder), &arguments)?;
+                if !source_type_matches(ty, &expected, type_scope)
+                    || data::carrier(&world, ty) != data::carrier(&world, view.binder_ty(binder))
+                    || !data::supported(&world, ty)
+                {
+                    return Err("a source local value's instantiation changes its type".into());
+                }
+                let [instruction] = block.instructions.as_slice() else {
+                    return Err("a local value's instantiation requires one instruction".into());
+                };
+                if !matches!(instruction.operation, Operation::Move(moved) if moved == *polymorphic)
+                    || instruction.origin.rule != Rule::InstantiateValue
+                    || instruction.origin.source != Source::Expr(expr)
+                    || instruction.result.id != returned
+                    || !instruction.result.ty.alpha_eq(ty)
+                {
+                    return Err("a local value's instantiation differs from source".into());
+                }
+                return Ok((type_applications, 0, 1));
+            }
+            let (target_module, target_binder, head_ty) = instantiate::target(&world, head)?;
             let expected = instantiate::apply(head_ty, &arguments)?;
             if !linkage::closed_type(ty) || !expected.alpha_eq(ty) {
                 return Err("source type application result mismatch".into());
@@ -1335,15 +1656,10 @@ fn verify_value(
                 return Err("literal leaf must have exactly one instruction".into());
             }
             let instruction = &block.instructions[0];
-            let Operation::Literal(literal) = &instruction.operation else {
-                return Err("source literal was not lowered as a literal".into());
-            };
-            if literal.kind != source.kind || literal.pretty != source.pretty {
+            if !literal_agrees(instruction, source, ty) {
                 return Err("literal payload differs from source".into());
             }
-            if instruction.origin.source != Source::Expr(expr)
-                || instruction.origin.rule != Rule::Literal
-            {
+            if instruction.origin.source != Source::Expr(expr) {
                 return Err("literal origin mismatch".into());
             }
             if instruction.result.id != returned || !instruction.result.ty.alpha_eq(ty) {
@@ -1352,7 +1668,7 @@ fn verify_value(
         }
         Expr::Var { name, .. } if module.reference(expr) == Some(h2r_core_ir::Ref::Global) => {
             let modules = modules.ok_or("import source requires a loaded world")?;
-            let (target_module, target_binder) = linkage::imported_top(modules, name)?;
+            let (target_module, target_binder) = linkage::imported_top(&world, name)?;
             let target_ty = modules[target_module].binder_ty(target_binder);
             if !linkage::closed_type(ty)
                 || !linkage::closed_type(target_ty)
@@ -1383,7 +1699,47 @@ fn verify_value(
             if !source_type_matches(ty, view.binder_ty(binder), type_scope) {
                 return Err("returned reference type differs from source".into());
             }
-            if let Some((target, captures, 0)) = context.functions.get(&binder) {
+            if let Some(reference) = context.dictionary_scope.get(&binder) {
+                if !dict::reference_type(&world, reference)?.alpha_eq(ty) {
+                    return Err("source dictionary reference type mismatch".into());
+                }
+                let [instruction] = block.instructions.as_slice() else {
+                    return Err("a dictionary reference requires one instruction".into());
+                };
+                verify_reference(instruction, reference)?;
+                if instruction.origin.source != Source::Expr(expr)
+                    || instruction.origin.rule != Rule::ResolveInstance
+                    || instruction.result.id != returned
+                    || !instruction.result.ty.alpha_eq(ty)
+                {
+                    return Err("dictionary reference differs from source".into());
+                }
+                return Ok((0, 0, 1));
+            }
+            if context.field_scope.contains_key(&binder) {
+                let resolved = dict::call_target(&world, &context.scope(), expr, &[])?
+                    .ok_or("a source dictionary field has no method")?;
+                if !resolved.arguments.is_empty() || !resolved.signature.alpha_eq(ty) {
+                    return Err("source method reference type mismatch".into());
+                }
+                let [instruction] = block.instructions.as_slice() else {
+                    return Err("a method reference requires one instruction".into());
+                };
+                verify_reference(instruction, &resolved.reference)?;
+                if instruction.origin.source != Source::Expr(expr)
+                    || instruction.origin.rule != Rule::ResolveMethod
+                    || instruction.result.id != returned
+                    || !instruction.result.ty.alpha_eq(ty)
+                {
+                    return Err("method reference differs from source".into());
+                }
+                return Ok((0, 0, 1));
+            }
+            let local = super::lower::local_function(module, view, context.functions, expr)?;
+            if let Some((_, function)) = local
+                && function.arity == 0
+            {
+                let (target, captures) = (&function.target, &function.captures);
                 let arguments = captures
                     .iter()
                     .map(|b| {
@@ -1407,28 +1763,8 @@ fn verify_value(
                 }
                 return Ok((0, 0, 1));
             }
-            if let Some((target, captures, _)) = context.functions.get(&binder) {
-                let arguments = captures
-                    .iter()
-                    .map(|b| {
-                        params
-                            .iter()
-                            .find(|(_, binder, _)| binder == b)
-                            .map(|(_, _, v)| *v)
-                            .ok_or("missing local closure capture")
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let [instruction] = block.instructions.as_slice() else {
-                    return Err("local closure requires one instruction".into());
-                };
-                if !matches!(&instruction.operation, Operation::MakeClosure { target: actual, arguments: args } if actual == target && args == &arguments)
-                    || instruction.result.id != returned
-                    || !instruction.result.ty.alpha_eq(ty)
-                    || instruction.origin.source != Source::Expr(expr)
-                    || instruction.origin.rule != Rule::MakeClosure
-                {
-                    return Err("local closure differs from source".into());
-                }
+            if let Some((_, function)) = local {
+                verify_local_closure(params, function, &block.instructions, expr, ty, returned)?;
                 return Ok((0, 0, 1));
             }
             let param = params.iter().find(|(_, source, _)| *source == binder);
@@ -1470,13 +1806,15 @@ fn verify_value(
         }
         Expr::Let { bind, body } => {
             if !bind.pairs.is_empty()
-                && bind.pairs.iter().all(|p| {
-                    matches!(module.expr(p.rhs), Expr::Lam { .. })
-                        || (module.binder(p.binder).is_join_point == Some(true)
-                            && module.binder(p.binder).arity == Some(0))
-                })
+                && bind
+                    .pairs
+                    .iter()
+                    .all(|pair| super::lower::function_pair(module, pair.binder, pair.rhs))
             {
                 return verify_local_scope(context, block, expr, ty, returned);
+            }
+            if bind.recursive {
+                return verify_recursive_group(context, block, expr, ty, returned);
             }
             let [pair] = bind.pairs.as_slice() else {
                 return Err("source lazy let requires one binding".into());
@@ -1635,9 +1973,10 @@ fn verify_value(
             let [alt] = alts.as_slice() else {
                 return Err("source strict case must have one alternative".into());
             };
+            let forced = data::lifted(&world, view.binder_ty(*binder));
             if !matches!(alt.con, h2r_core_ir::AltCon::Default)
                 || !alt.binders.is_empty()
-                || !primitive::is_scalar(view.binder_ty(*binder))
+                || !data::supported(&world, view.binder_ty(*binder))
                 || !data::supported(&world, ty)
                 || !view.ty(*result_ty).alpha_eq(ty)
             {
@@ -1651,8 +1990,14 @@ fn verify_value(
                 })
                 .ok_or("missing strict case binding")?;
             let binding = &block.instructions[split];
-            let Operation::Move(scrutinee) = binding.operation else {
-                return Err("strict case binding must preserve the evaluated scrutinee".into());
+            let scrutinee = match binding.operation {
+                Operation::Force(scrutinee) if forced => scrutinee,
+                Operation::Move(scrutinee) if !forced => scrutinee,
+                _ => {
+                    return Err(
+                        "strict case binding must evaluate the scrutinee its type requires".into(),
+                    );
+                }
             };
             if !binding.result.ty.alpha_eq(view.binder_ty(*binder)) {
                 return Err("strict case binder type mismatch".into());
@@ -1691,6 +2036,14 @@ fn verify_lambda(
     returned: ValueId,
 ) -> Result<(usize, usize, usize), String> {
     use h2r_core_ir::{BinderKind, Expr};
+    if !matches!(
+        context
+            .module
+            .expr(super::lower::under_type_lambdas(context.module, expr).0),
+        Expr::Lam { .. }
+    ) {
+        return verify_type_abstraction(context, block, expr, ty, returned);
+    }
     if !data::function(&context.world(), ty) {
         return Err("unsupported closure signature".into());
     }
@@ -1707,8 +2060,7 @@ fn verify_lambda(
     {
         return Err("lambda provenance mismatch".into());
     }
-    let mut captured = context.params.to_vec();
-    captured.sort_by_key(|(_, b, _)| *b);
+    let captured = captured(context, context.functions, &[expr]);
     if *arguments != captured.iter().map(|(_, _, v)| *v).collect::<Vec<_>>() {
         return Err("lambda capture mismatch".into());
     }
@@ -1719,22 +2071,36 @@ fn verify_lambda(
         .find(|b| b.id == *target)
         .ok_or("missing lambda body")?;
     let mut bindings: Vec<_> = captured.iter().map(|(e, b, _)| (*e, *b)).collect();
+    let local_subst = super::lower::erased_lambdas(context.module, context.subst, expr)?;
+    let local_view = local_subst
+        .as_ref()
+        .map(|subst| TypeView::specialized(context.module, subst));
+    let view = local_view.as_ref().unwrap_or(context.view);
     let mut rhs = expr;
-    let mut result = ty;
+    let mut result = ty.clone();
     let mut lambdas = 0;
     while let Expr::Lam { binder, body } = context.module.expr(rhs) {
+        if context.module.binder(*binder).kind == BinderKind::Tyvar {
+            if !matches!(result, Ty::ForAll { .. }) {
+                return Err("lambda type binder lacks a quantifier".into());
+            }
+            result = instantiate::apply(&result, &[data::erased_ty()])?;
+            lambdas += 1;
+            rhs = *body;
+            continue;
+        }
         let Ty::Fun { arg, res, .. } = result else {
             return Err("lambda arrow mismatch".into());
         };
         if context.module.binder(*binder).kind != BinderKind::Id
-            || !arg.alpha_eq(context.view.binder_ty(*binder))
+            || !arg.alpha_eq(view.binder_ty(*binder))
         {
             return Err("lambda argument mismatch".into());
         }
         bindings.push((rhs, *binder));
         lambdas += 1;
         rhs = *body;
-        result = res;
+        result = *res;
     }
     if bindings.len() != target_block.params.len() {
         return Err("lambda parameter count mismatch".into());
@@ -1746,10 +2112,60 @@ fn verify_lambda(
         .collect();
     let nested = ValueContext {
         params: &params,
+        view,
+        subst: local_subst.as_ref().unwrap_or(context.subst),
         ..*context
     };
-    let (nt, nv, nn) = verify_tail(&nested, context.function, *target, rhs, result)?;
+    let (nt, nv, nn) = verify_tail(&nested, context.function, *target, rhs, &result)?;
     Ok((nt, nv, nn + lambdas))
+}
+
+fn verify_type_abstraction(
+    context: &ValueContext<'_>,
+    block: &Block,
+    expr: ExprId,
+    ty: &Ty,
+    returned: ValueId,
+) -> Result<(usize, usize, usize), String> {
+    let world = context.world();
+    let (inner, abstractions) = super::lower::under_type_lambdas(context.module, expr);
+    let mut result = ty.clone();
+    for _ in 0..abstractions {
+        if !matches!(result, Ty::ForAll { .. }) {
+            return Err("a source type abstraction lacks a quantifier".into());
+        }
+        result = instantiate::apply(&result, &[data::erased_ty()])?;
+    }
+    if data::carrier(&world, &result) != data::carrier(&world, ty) || !data::supported(&world, ty) {
+        return Err("a source type abstraction's erasure changes its carrier".into());
+    }
+    let instruction = block
+        .instructions
+        .last()
+        .ok_or("missing type abstraction erasure")?;
+    let Operation::Move(erased) = instruction.operation else {
+        return Err("a type abstraction must preserve its value".into());
+    };
+    if instruction.origin.source != Source::Expr(expr)
+        || instruction.origin.rule != Rule::InstantiateValue
+        || instruction.result.id != returned
+        || !instruction.result.ty.alpha_eq(ty)
+    {
+        return Err("type abstraction erasure differs from source".into());
+    }
+    let local_subst = super::lower::erased_lambdas(context.module, context.subst, expr)?;
+    let local_view = local_subst
+        .as_ref()
+        .map(|subst| TypeView::specialized(context.module, subst));
+    let nested = ValueContext {
+        view: local_view.as_ref().unwrap_or(context.view),
+        subst: local_subst.as_ref().unwrap_or(context.subst),
+        ..*context
+    };
+    let mut prefix = block.clone();
+    prefix.instructions.pop();
+    let (nt, nv, nn) = verify_value(&nested, &prefix, inner, &result, erased)?;
+    Ok((nt, nv, nn + abstractions))
 }
 
 fn verify_local_scope(
@@ -1781,42 +2197,81 @@ fn verify_local_scope(
         || instruction.origin.rule != Rule::LocalScope
         || instruction.result.id != returned
         || !instruction.result.ty.alpha_eq(ty)
-        || definitions.len() != bind.pairs.len()
     {
         return Err("local scope provenance mismatch".into());
     }
-    let mut captured = context.params.to_vec();
-    captured.sort_by_key(|(_, b, _)| *b);
-    if *arguments != captured.iter().map(|(_, _, v)| *v).collect::<Vec<_>>() {
-        return Err("local scope captures differ from source".into());
-    }
-    let capture_types = captured
-        .iter()
-        .map(|(_, _, v)| {
-            block
-                .params
-                .iter()
-                .find(|p| p.id == *v)
-                .map(|p| &p.ty)
-                .ok_or("missing captured value")
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let capture_types = |captured: &[(ExprId, BinderId, ValueId)]| {
+        captured
+            .iter()
+            .map(|(_, _, v)| {
+                block
+                    .params
+                    .iter()
+                    .find(|p| p.id == *v)
+                    .map(|p| &*p.ty)
+                    .ok_or("missing captured value")
+            })
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let rhs: Vec<_> = bind.pairs.iter().map(|pair| pair.rhs).collect();
+    let group_captured = captured(context, context.functions, &rhs);
+    let group_types = capture_types(&group_captured)?;
     let mut functions = context.functions.clone();
+    let mut group = super::lower::LocalFunctions::new();
     let mut bodies = Vec::new();
     let mut counts = (0, 0, 1);
-    for (pair, definition) in bind.pairs.iter().zip(definitions) {
+    let instances = super::lower::local_instances(module, context.subst, bind)?;
+    let variants: Vec<_> = bind
+        .pairs
+        .iter()
+        .zip(instances)
+        .flat_map(|(pair, instances)| {
+            let variants: Vec<Option<super::lower::LocalInstance>> = match instances {
+                None => vec![None],
+                Some(instances) => instances.into_iter().map(Some).collect(),
+            };
+            variants
+                .into_iter()
+                .enumerate()
+                .map(move |(index, instance)| (pair, instance, index == 0))
+        })
+        .collect();
+    if definitions.len() != variants.len() {
+        return Err("local definitions differ from the instantiated pairs".into());
+    }
+    for ((pair, instance, first), definition) in variants.into_iter().zip(definitions) {
         if pair.binder != definition.binder {
             return Err("local definition identity mismatch".into());
         }
+        let type_lambdas = instance.as_ref().map_or(0, |instance| {
+            instance.shape.iter().filter(|(_, ty)| *ty).count()
+        });
+        let (types, shape) = instance.as_ref().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |instance| (instance.types.clone(), instance.shape.clone()),
+        );
+        let (local_view, local_subst, signature) = match instance {
+            Some(instance) => (
+                Some(TypeView::specialized(module, &instance.subst)),
+                Some(instance.subst),
+                instance.ty,
+            ),
+            None => (None, None, view.binder_ty(pair.binder).clone()),
+        };
+        let parameter_view = local_view.as_ref().unwrap_or(view);
         let mut rhs = pair.rhs;
-        let mut result = view.binder_ty(pair.binder);
+        let mut result = &signature;
         let mut lambdas = Vec::new();
         while let Expr::Lam { binder, body } = module.expr(rhs) {
+            if type_lambdas > 0 && module.binder(*binder).kind == BinderKind::Tyvar {
+                rhs = *body;
+                continue;
+            }
             let Ty::Fun { arg, res, .. } = result else {
                 return Err("local lambda lacks value arrow".into());
             };
             if module.binder(*binder).kind != BinderKind::Id
-                || !arg.alpha_eq(view.binder_ty(*binder))
+                || !arg.alpha_eq(parameter_view.binder_ty(*binder))
                 || !data::supported(&world, arg)
             {
                 return Err("invalid local lambda parameter".into());
@@ -1828,34 +2283,42 @@ fn verify_local_scope(
         if (lambdas.is_empty()
             && !(module.binder(pair.binder).is_join_point == Some(true)
                 && module.binder(pair.binder).arity == Some(0)))
-            || !linkage::closed_type(view.binder_ty(pair.binder))
+            || !linkage::closed_type(&signature)
             || !data::supported(&world, result)
             || !result.alpha_eq(&definition.result_ty)
         {
             return Err("local definition signature mismatch".into());
         }
-        functions.insert(
-            pair.binder,
-            (
-                definition.target,
-                captured.iter().map(|(_, b, _)| *b).collect(),
-                lambdas.len(),
-            ),
-        );
-        counts.2 += lambdas.len();
-        bodies.push((rhs, lambdas));
+        group
+            .entry(pair.binder)
+            .or_default()
+            .push(super::lower::LocalFunction {
+                types,
+                shape,
+                target: definition.target,
+                captures: group_captured.iter().map(|(_, b, _)| *b).collect(),
+                arity: lambdas.len(),
+            });
+        if first {
+            counts.2 += lambdas.len() + type_lambdas;
+        }
+        bodies.push((rhs, lambdas, local_view, local_subst, first));
     }
-    for (definition, (rhs, lambdas)) in definitions.iter().zip(bodies) {
+    functions.extend(group);
+    for (definition, (rhs, lambdas, local_view, local_subst, first)) in
+        definitions.iter().zip(bodies)
+    {
+        let local_view = local_view.as_ref().unwrap_or(view);
         let target_block = context
             .function
             .blocks
             .iter()
             .find(|b| b.id == definition.target)
             .ok_or("missing local definition block")?;
-        let expected_types: Vec<_> = capture_types
+        let expected_types: Vec<_> = group_types
             .iter()
             .copied()
-            .chain(lambdas.iter().map(|(_, b)| view.binder_ty(*b)))
+            .chain(lambdas.iter().map(|(_, b)| local_view.binder_ty(*b)))
             .collect();
         if target_block.params.len() != expected_types.len()
             || target_block
@@ -1866,7 +2329,7 @@ fn verify_local_scope(
         {
             return Err("local definition parameter layout mismatch".into());
         }
-        let params: Vec<_> = captured
+        let params: Vec<_> = group_captured
             .iter()
             .map(|(e, b, _)| (*e, *b))
             .chain(lambdas)
@@ -1875,6 +2338,8 @@ fn verify_local_scope(
             .collect();
         let nested = ValueContext {
             params: &params,
+            view: local_view,
+            subst: local_subst.as_ref().unwrap_or(context.subst),
             functions: if bind.recursive {
                 &functions
             } else {
@@ -1889,10 +2354,17 @@ fn verify_local_scope(
             rhs,
             &definition.result_ty,
         )?;
-        counts.0 += nt;
-        counts.1 += nv;
-        counts.2 += nn;
+        if first {
+            counts.0 += nt;
+            counts.1 += nv;
+            counts.2 += nn;
+        }
     }
+    let captured = captured(context, &functions, &[*body]);
+    if *arguments != captured.iter().map(|(_, _, v)| *v).collect::<Vec<_>>() {
+        return Err("local scope captures differ from source".into());
+    }
+    let body_types = capture_types(&captured)?;
     let target_block = context
         .function
         .blocks
@@ -1903,7 +2375,7 @@ fn verify_local_scope(
         || target_block
             .params
             .iter()
-            .zip(&capture_types)
+            .zip(&body_types)
             .any(|(p, t)| !p.ty.alpha_eq(t))
     {
         return Err("local body capture layout mismatch".into());
@@ -2018,6 +2490,79 @@ fn verify_lazy_argument(
     Ok((nt, nv, nn - 1, end + 1))
 }
 
+fn verify_recursive_group(
+    context: &ValueContext<'_>,
+    block: &Block,
+    expr: ExprId,
+    ty: &Ty,
+    returned: ValueId,
+) -> Result<(usize, usize, usize), String> {
+    use h2r_core_ir::Expr;
+    let module = context.module;
+    let world = context.world();
+    let Expr::Let { bind, body } = module.expr(expr) else {
+        return Err("a recursive group is a let".into());
+    };
+    let count = bind.pairs.len();
+    if block.instructions.len() < 3 * count {
+        return Err("a recursive group lacks its cells".into());
+    }
+    let (cells, rest) = block.instructions.split_at(count);
+    let (fills, tail) = rest.split_at(2 * count);
+    let mut params = context.params.to_vec();
+    for (pair, cell) in bind.pairs.iter().zip(cells) {
+        let binding_ty = context.view.binder_ty(pair.binder);
+        if module.binder(pair.binder).is_join_point == Some(true)
+            || matches!(module.expr(pair.rhs), Expr::Var { .. })
+            || !data::lifted(&world, binding_ty)
+        {
+            return Err("unsupported recursive binding".into());
+        }
+        if !matches!(cell.operation, Operation::PendingCell)
+            || cell.origin.source != Source::Expr(expr)
+            || cell.origin.rule != Rule::RecursiveCell
+            || !cell.result.ty.alpha_eq(binding_ty)
+        {
+            return Err("recursive cell differs from source".into());
+        }
+        params.push((expr, pair.binder, cell.result.id));
+    }
+    let extended = ValueContext {
+        params: &params,
+        ..*context
+    };
+    let (mut types, mut values, mut nodes) = (0, 0, 1);
+    for ((pair, cell), filling) in bind.pairs.iter().zip(cells).zip(fills.chunks(2)) {
+        let binding_ty = context.view.binder_ty(pair.binder);
+        let [delay, fill] = filling else {
+            return Err("recursive cell is not filled".into());
+        };
+        let filled = matches!(fill.operation,
+            Operation::FillCell { cell: target, value }
+                if target == cell.result.id && value == delay.result.id);
+        if !filled
+            || fill.origin.source != Source::Expr(expr)
+            || fill.origin.rule != Rule::FillCell
+            || !fill.result.ty.alpha_eq(binding_ty)
+        {
+            return Err("recursive fill differs from source".into());
+        }
+        let mut single = block.clone();
+        single.instructions = vec![delay.clone()];
+        let (t, v, n) = verify_value(&extended, &single, pair.rhs, binding_ty, delay.result.id)?;
+        types += t;
+        values += v;
+        nodes += n;
+    }
+    let mut suffix = block.clone();
+    suffix.instructions = tail.to_vec();
+    suffix
+        .params
+        .extend(cells.iter().map(|cell| cell.result.clone()));
+    let (t, v, n) = verify_value(&extended, &suffix, *body, ty, returned)?;
+    Ok((types + t, values + v, nodes + n))
+}
+
 /// The same external spine the builder recognises, re-derived from the source.
 fn external_spine(
     context: &ValueContext<'_>,
@@ -2048,6 +2593,9 @@ fn external_spine(
         return None;
     }
     types.iter().all(linkage::closed_type).then_some(())?;
+    if entry.dictionary_arity() == 1 {
+        external::equality(module, values[0], &entry.element(&types)?)?;
+    }
     Some((entry, types, values))
 }
 
@@ -2155,6 +2703,31 @@ fn expected_primitive_rule(prim: primitive::Prim) -> Rule {
         primitive::Prim::Chr => Rule::ChrChar,
         primitive::Prim::Word(_) => Rule::WordCompare,
         primitive::Prim::IntToWord => Rule::IntToWord,
+        primitive::Prim::Negate => Rule::NegateInt,
+        primitive::Prim::WordBinary(_) => Rule::WordBinary,
+        primitive::Prim::WordToInt => Rule::WordToInt,
+        primitive::Prim::IndexChar => Rule::IndexCharAddr,
+        primitive::Prim::PlusAddr => Rule::PlusAddr,
+        primitive::Prim::Machine(_) => Rule::Machine,
+    }
+}
+
+fn literal_agrees(instruction: &Instruction, source: &h2r_core_ir::Lit, ty: &Ty) -> bool {
+    match &instruction.operation {
+        Operation::Literal(literal) => {
+            !primitive::is_addr(ty)
+                && instruction.origin.rule == Rule::Literal
+                && literal.kind == source.kind
+                && literal.pretty == source.pretty
+        }
+        Operation::AddrLiteral(bytes) => {
+            primitive::is_addr(ty)
+                && instruction.origin.rule == Rule::AddrLiteral
+                && source
+                    .string_bytes()
+                    .is_ok_and(|expected| &expected == bytes)
+        }
+        _ => false,
     }
 }
 
@@ -2560,9 +3133,10 @@ fn verify_data_case(
         *scrutinee,
     )?;
     nn += 1;
-    let family = data::family(&world, view.binder_ty(*binder))?;
-    let mut captured = context.params.to_vec();
-    captured.sort_by_key(|(_, b, _)| *b);
+    let represented = data::represented(&world, view.binder_ty(*binder))
+        .ok_or("a case scrutinee's newtype chain does not end")?;
+    let family = data::family(&world, &represented)?;
+    let captured = captured(context, context.functions, &[expr]);
     if *arguments != captured.iter().map(|(_, _, v)| *v).collect::<Vec<_>>() {
         return Err("case captures differ from lexical scope".into());
     }
@@ -2630,9 +3204,6 @@ fn verify_data_case(
         nv += av;
         nn += an;
     }
-    if !default && seen.len() != family.len() {
-        return Err("non-exhaustive source algebraic case".into());
-    }
     Ok((nt, nv, nn))
 }
 
@@ -2662,6 +3233,7 @@ pub fn verify(function: &Function) -> Result<(), String> {
     // function's result type. Ordinary control-flow successors inherit it.
     let mut return_types: BTreeMap<BlockId, &Ty> = BTreeMap::new();
     let mut pending_types = vec![(function.entry, &function.result_ty)];
+    let mut closure_results = Vec::new();
     for block in &function.blocks {
         for instruction in &block.instructions {
             if let Operation::MakeClosure { target, arguments } = &instruction.operation {
@@ -2672,27 +3244,36 @@ pub fn verify(function: &Function) -> Result<(), String> {
                     .checked_sub(arguments.len())
                     .filter(|n| *n > 0)
                     .ok_or("closure requires value parameters")?;
-                let mut result = &instruction.result.ty;
+                let mut result = (*instruction.result.ty).clone();
                 for _ in 0..count {
-                    let Ty::Fun { res, .. } = result else {
+                    let Ty::Fun { res, .. } = data::erase_quantifiers(&result) else {
                         return Err("closure arity exceeds function type".into());
                     };
-                    result = res;
+                    result = *res;
                 }
-                pending_types.push((*target, result));
+                closure_results.push((*target, result));
             }
+        }
+    }
+    pending_types.extend(
+        closure_results
+            .iter()
+            .map(|(target, result)| (*target, result)),
+    );
+    for block in &function.blocks {
+        for instruction in &block.instructions {
             if let Operation::LocalScope { definitions, .. } = &instruction.operation {
                 pending_types.extend(definitions.iter().map(|d| (d.target, &d.result_ty)));
             }
             if let Operation::MatchData { arms, .. } = &instruction.operation {
-                pending_types.extend(arms.iter().map(|a| (a.target, &instruction.result.ty)));
+                pending_types.extend(arms.iter().map(|a| (a.target, &*instruction.result.ty)));
             }
             if let Operation::EvaluateBlock { target, .. }
             | Operation::DelayBlock { target, .. }
             | Operation::CallLocal { target, .. }
             | Operation::LocalScope { target, .. } = instruction.operation
             {
-                pending_types.push((target, &instruction.result.ty));
+                pending_types.push((target, &*instruction.result.ty));
             }
         }
     }
@@ -2721,7 +3302,7 @@ pub fn verify(function: &Function) -> Result<(), String> {
         }
     }
     for block in &function.blocks {
-        let mut available: BTreeMap<_, _> = block.params.iter().map(|v| (v.id, &v.ty)).collect();
+        let mut available: BTreeMap<_, _> = block.params.iter().map(|v| (v.id, &*v.ty)).collect();
         for instruction in &block.instructions {
             if instruction.origin.module != function.module {
                 return Err("instruction origin belongs to another module".into());
@@ -2742,15 +3323,20 @@ pub fn verify(function: &Function) -> Result<(), String> {
                             return Err("closure capture type mismatch".into());
                         }
                     }
-                    let mut signature = &instruction.result.ty;
+                    let mut signature = data::erase_quantifiers(&instruction.result.ty);
                     for param in &target_block.params[arguments.len()..] {
                         let Ty::Fun { arg, res, .. } = signature else {
                             return Err("closure signature lacks arrow".into());
                         };
                         if !arg.alpha_eq(&param.ty) {
-                            return Err("closure parameter type mismatch".into());
+                            return Err(format!(
+                                "closure parameter type mismatch at {:?}: {} against {}",
+                                instruction.origin.source,
+                                param.ty.render(),
+                                arg.render()
+                            ));
                         }
-                        signature = res;
+                        signature = data::erase_quantifiers(&res);
                     }
                 }
                 Operation::Apply {
@@ -2855,7 +3441,10 @@ pub fn verify(function: &Function) -> Result<(), String> {
                     ref arguments,
                 } => {
                     if primitive::is_int(&instruction.result.ty)
-                        || !matches!(instruction.result.ty, Ty::Con { .. } | Ty::Fun { .. })
+                        || !matches!(
+                            *instruction.result.ty,
+                            Ty::Con { .. } | Ty::Fun { .. } | Ty::ForAll { .. }
+                        )
                         || !linkage::closed_type(&instruction.result.ty)
                     {
                         return Err("delayed region requires a boxed Int result".into());
@@ -2888,14 +3477,29 @@ pub fn verify(function: &Function) -> Result<(), String> {
                     ref arguments,
                     ..
                 } => {
-                    if !matches!(instruction.result.ty, Ty::Con { .. } | Ty::Fun { .. })
-                        || !linkage::closed_type(&instruction.result.ty)
+                    if !matches!(
+                        *instruction.result.ty,
+                        Ty::Con { .. } | Ty::Fun { .. } | Ty::ForAll { .. }
+                    ) || !linkage::closed_type(&instruction.result.ty)
                     {
                         return Err("region evaluation requires an Int# or Int result".into());
                     }
                     verify_edge(&blocks, &available, target, arguments)?;
                 }
-                Operation::Literal(_) | Operation::TopReference { .. } => {}
+                Operation::Literal(_) | Operation::TopReference { .. } | Operation::PendingCell => {
+                }
+                Operation::FillCell { cell, value } => {
+                    let typed = |v| {
+                        available
+                            .get(&v)
+                            .is_some_and(|ty| ty.alpha_eq(&instruction.result.ty))
+                    };
+                    if !typed(cell) || !typed(value) {
+                        return Err(
+                            "a fill requires an available cell and value of its type".into()
+                        );
+                    }
+                }
                 Operation::Move(value) | Operation::Force(value) => {
                     if !available.contains_key(&value) {
                         return Err(format!("unavailable operand {value:?}"));
@@ -2942,12 +3546,78 @@ pub fn verify(function: &Function) -> Result<(), String> {
                         );
                     }
                 }
+                Operation::IndexCharAddr { ref arguments }
+                | Operation::PlusAddr { ref arguments } => {
+                    let result = match instruction.operation {
+                        Operation::IndexCharAddr { .. } => primitive::char_ty(),
+                        _ => primitive::addr_ty(),
+                    };
+                    let operands = [primitive::addr_ty(), primitive::int_ty()];
+                    if arguments.len() != 2
+                        || !instruction.result.ty.alpha_eq(&result)
+                        || arguments.iter().zip(&operands).any(|(v, expected)| {
+                            !available.get(v).is_some_and(|ty| ty.alpha_eq(expected))
+                        })
+                    {
+                        return Err(
+                            "an Addr# operation requires an available Addr# and Int# operand"
+                                .into(),
+                        );
+                    }
+                }
+                Operation::Machine {
+                    op,
+                    ref type_arguments,
+                    ref arguments,
+                } => {
+                    let (Some(operands), Some(results)) =
+                        (op.operands(type_arguments), op.results(type_arguments))
+                    else {
+                        return Err("a primop with other type arguments than it quantifies".into());
+                    };
+                    if arguments.len() != operands.len()
+                        || arguments.iter().zip(&operands).any(|(v, expected)| {
+                            !available.get(v).is_some_and(|ty| ty.alpha_eq(expected))
+                        })
+                        || matches!(results.as_slice(), [result]
+                            if !op.returns_tuple(type_arguments)
+                                && !instruction.result.ty.alpha_eq(result))
+                    {
+                        return Err(
+                            "a primop requires available operands and results of its types".into(),
+                        );
+                    }
+                }
+                Operation::AddrLiteral(_) => {
+                    if !instruction.result.ty.alpha_eq(&primitive::addr_ty()) {
+                        return Err("an address literal is an Addr#".into());
+                    }
+                }
+                Operation::WordBinary { ref arguments, .. } => {
+                    let word = primitive::word_ty();
+                    if arguments.len() != 2
+                        || !instruction.result.ty.alpha_eq(&word)
+                        || arguments
+                            .iter()
+                            .any(|v| !available.get(v).is_some_and(|ty| ty.alpha_eq(&word)))
+                    {
+                        return Err(
+                            "Word# arithmetic requires two available Word# operands and a \
+                             Word# result"
+                                .into(),
+                        );
+                    }
+                }
                 Operation::OrdChar(value)
                 | Operation::ChrChar(value)
-                | Operation::IntToWord(value) => {
+                | Operation::IntToWord(value)
+                | Operation::WordToInt(value)
+                | Operation::NegateInt(value) => {
                     let (operand, result) = match instruction.operation {
                         Operation::OrdChar(_) => (primitive::char_ty(), primitive::int_ty()),
                         Operation::ChrChar(_) => (primitive::int_ty(), primitive::char_ty()),
+                        Operation::NegateInt(_) => (primitive::int_ty(), primitive::int_ty()),
+                        Operation::WordToInt(_) => (primitive::word_ty(), primitive::int_ty()),
                         _ => (primitive::int_ty(), primitive::word_ty()),
                     };
                     if !available
@@ -3020,7 +3690,7 @@ pub fn verify(function: &Function) -> Result<(), String> {
                         tycon: h2r_core_ir::TyConId {
                             name: h2r_core_ir::LIST_TYCON.into(),
                             occ: "List".into(),
-                            unique: String::new(),
+                            unique: Default::default(),
                         },
                         args: vec![element.clone()],
                     };
@@ -3171,7 +3841,7 @@ pub fn verify(function: &Function) -> Result<(), String> {
                     strings::decode(&unpack.bytes, unpack.encoding)?;
                 }
             }
-            available.insert(instruction.result.id, &instruction.result.ty);
+            available.insert(instruction.result.id, &*instruction.result.ty);
         }
         if block.terminator.origin.module != function.module {
             return Err("terminator origin belongs to another module".into());
@@ -3181,8 +3851,14 @@ pub fn verify(function: &Function) -> Result<(), String> {
                 let ty = available
                     .get(value)
                     .ok_or_else(|| format!("unavailable return {value:?}"))?;
-                if !ty.alpha_eq(return_types.get(&block.id).ok_or("unreachable block")?) {
-                    return Err("return type mismatch".into());
+                let expected = return_types.get(&block.id).ok_or("unreachable block")?;
+                if !ty.alpha_eq(expected) {
+                    return Err(format!(
+                        "return type mismatch at {:?}: {} against {}",
+                        block.terminator.origin.source,
+                        ty.render(),
+                        expected.render()
+                    ));
                 }
             }
             // A dead end produces no value, so its declared type is the only
@@ -3301,7 +3977,10 @@ mod tests {
             entry: BlockId(0),
             blocks: vec![Block {
                 id: BlockId(0),
-                params: vec![Value { id: ValueId(0), ty }],
+                params: vec![Value {
+                    id: ValueId(0),
+                    ty: crate::nir::shared(&ty),
+                }],
                 instructions: vec![],
                 terminator: Terminator {
                     exit: Exit::Return(ValueId(0)),
@@ -3339,12 +4018,12 @@ mod tests {
         let origin = f.blocks[0].terminator.origin.clone();
         f.blocks[0].params.push(Value {
             id: ValueId(1),
-            ty: (*int).clone(),
+            ty: crate::nir::shared(&int),
         });
         f.blocks[0].instructions.push(Instruction {
             result: Value {
                 id: ValueId(2),
-                ty: (*int).clone(),
+                ty: crate::nir::shared(&int),
             },
             operation: Operation::EvaluateBlock {
                 target: BlockId(1),
@@ -3359,7 +4038,7 @@ mod tests {
             id: BlockId(1),
             params: vec![Value {
                 id: ValueId(3),
-                ty: *int,
+                ty: crate::nir::shared(&int),
             }],
             instructions: vec![],
             terminator: Terminator {
@@ -3369,7 +4048,7 @@ mod tests {
         });
         verify(&f).unwrap();
         let mut bad = f.clone();
-        bad.blocks[1].params[0].ty = f.result_ty.clone();
+        bad.blocks[1].params[0].ty = crate::nir::shared(&f.result_ty);
         assert!(verify(&bad).is_err());
         let mut bad = f.clone();
         bad.blocks[0].terminator.exit = Exit::Jump {
@@ -3377,7 +4056,7 @@ mod tests {
             args: vec![ValueId(1)],
         };
         assert_eq!(verify(&bad).unwrap_err(), "conflicting region return types");
-        f.blocks[0].instructions[0].result.ty = f.result_ty.clone();
+        f.blocks[0].instructions[0].result.ty = crate::nir::shared(&f.result_ty);
         assert!(verify(&f).is_err());
     }
 
@@ -3433,7 +4112,7 @@ mod tests {
         f.blocks[0].instructions.push(Instruction {
             result: Value {
                 id: ValueId(1),
-                ty: f.result_ty.clone(),
+                ty: crate::nir::shared(&f.result_ty),
             },
             operation: Operation::Force(ValueId(0)),
             origin: Origin {
@@ -3472,10 +4151,10 @@ mod tests {
         f.blocks[0].instructions.push(Instruction {
             result: Value {
                 id: ValueId(1),
-                ty: Ty::Lit {
+                ty: crate::nir::shared(&Ty::Lit {
                     kind: "Nat".into(),
                     text: "2".into(),
-                },
+                }),
             },
             operation: Operation::Move(ValueId(0)),
             origin: Origin {
