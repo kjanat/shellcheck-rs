@@ -227,7 +227,7 @@ fn api_run(cli: &Cli) -> Result<(), String> {
         h2r_lower::emit::Driver::Api,
     )?;
     drop(modules);
-    h2r_lower::build::compile(&out, "0", &h2r_lower::build::Rustc::default())?;
+    h2r_lower::build::compile(&out, &h2r_lower::build::Rustc::new("0"))?;
     differential::api_checks(&cli.api_checks, &out.join("api-checks"), &out)
 }
 

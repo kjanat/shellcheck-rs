@@ -10,6 +10,7 @@
 
 pub mod build;
 pub mod emit;
+pub mod graph;
 pub mod nir;
 pub mod reachability;
 pub mod verify;

@@ -1200,6 +1200,7 @@ fn lower_value(
             // constructor field does.
             let value = if data::lifted(&world, field)
                 && !matches!(module.expr(source), Expr::Var { .. })
+                && !constructed(context, source, field)
             {
                 lower_region(context, source, field, locals, instructions, blocks, true)?
             } else if matches!(module.expr(source), Expr::Case { .. } | Expr::Let { .. }) {
@@ -1242,6 +1243,7 @@ fn lower_value(
         for (source, field) in sources.into_iter().zip(&constructor.fields) {
             let value = if data::lifted(&world, field)
                 && !matches!(module.expr(source), Expr::Var { .. })
+                && !constructed(context, source, field)
             {
                 lower_region(context, source, field, locals, instructions, blocks, true)?
             } else if matches!(module.expr(source), Expr::Case { .. } | Expr::Let { .. }) {
@@ -1514,6 +1516,9 @@ fn lower_value(
                 .map(|source| {
                     let list = strings::string_ty();
                     match module.expr(source) {
+                        Expr::App { .. } if constructed(context, source, &list) => {
+                            lower_value(context, source, &list, locals, instructions, blocks)
+                        }
                         Expr::App { .. } | Expr::Case { .. } | Expr::Let { .. } => {
                             lower_region(context, source, &list, locals, instructions, blocks, true)
                         }
@@ -1619,7 +1624,7 @@ fn lower_value(
                     | Expr::Let { .. }
                     | Expr::Lam { .. }
                     | Expr::Cast { .. }
-                        if data::lifted(&world, arg) =>
+                        if data::lifted(&world, arg) && !constructed(context, source, arg) =>
                     {
                         lower_region(context, source, arg, locals, instructions, blocks, true)?
                     }
@@ -2082,6 +2087,11 @@ fn lower_value(
                     Expr::Case { .. } | Expr::Let { .. } if strict_carried(arg) => {
                         lower_region(context, source, arg, locals, instructions, blocks, false)?
                     }
+                    Expr::App { .. } | Expr::Lam { .. } | Expr::Cast { .. }
+                        if constructed(context, source, arg) =>
+                    {
+                        lower_value(context, source, arg, locals, instructions, blocks)?
+                    }
                     Expr::App { .. }
                     | Expr::Case { .. }
                     | Expr::Let { .. }
@@ -2472,6 +2482,9 @@ fn lower_value(
                 _ if !delayed
                     && !matches!(module.expr(pair.rhs), Expr::Case { .. } | Expr::Let { .. }) =>
                 {
+                    lower_value(context, pair.rhs, binding_ty, locals, instructions, blocks)?
+                }
+                _ if delayed && constructed(context, pair.rhs, binding_ty) => {
                     lower_value(context, pair.rhs, binding_ty, locals, instructions, blocks)?
                 }
                 _ => lower_region(
@@ -3742,6 +3755,72 @@ fn lower_recursive_group(
         };
     }
     result
+}
+
+fn constructed(context: &BodyContext<'_>, source: ExprId, ty: &Ty) -> bool {
+    builds(context, source, ty, false)
+}
+
+fn builds(context: &BodyContext<'_>, source: ExprId, ty: &Ty, forced: bool) -> bool {
+    let module = context.module;
+    let world = context.world();
+    match module.expr(source) {
+        Expr::Var { .. } => !forced,
+        Expr::Lit(_) => !data::lifted(&world, ty),
+        Expr::Lam { .. } => {
+            data::function(&world, ty)
+                && matches!(
+                    module.expr(under_type_lambdas(module, source).0),
+                    Expr::Lam { .. }
+                )
+        }
+        Expr::Cast {
+            expr,
+            from: Some(from),
+            to: Some(_),
+            role: Some(_),
+        } => {
+            let from = context.view.ty(*from);
+            data::carrier(&world, from).is_some()
+                && data::carrier(&world, from) == data::carrier(&world, ty)
+                && builds(context, *expr, from, forced)
+        }
+        Expr::App { .. } => {
+            let mut head = source;
+            let mut types = Vec::new();
+            let mut values = Vec::new();
+            while let Expr::App { fun, arg } = module.expr(head) {
+                if let Expr::Type { ty, .. } = module.expr(*arg) {
+                    types.push(context.view.ty(*ty).clone());
+                } else if types.is_empty() {
+                    values.push(*arg);
+                } else {
+                    return false;
+                }
+                head = *fun;
+            }
+            let Ok(Some(constructor)) = data::resolve(&world, context.module_index, head, ty)
+            else {
+                return false;
+            };
+            types.reverse();
+            values.reverse();
+            let Ty::Con { args, .. } = ty else {
+                return false;
+            };
+            types.len() == args.len()
+                && types.iter().zip(args).all(|(a, b)| a.alpha_eq(b))
+                && values.len() == constructor.fields.len()
+                && values
+                    .iter()
+                    .zip(&constructor.fields)
+                    .zip(&constructor.strict)
+                    .all(|((&value, field), &strict)| {
+                        builds(context, value, field, strict && data::lifted(&world, field))
+                    })
+        }
+        _ => false,
+    }
 }
 
 fn lower_region(

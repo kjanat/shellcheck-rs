@@ -1,6 +1,5 @@
 mod checkout;
 pub mod extract;
-mod script;
+pub mod layer;
 
 pub use checkout::Checkout;
-pub use script::build_script;

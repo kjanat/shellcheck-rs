@@ -14,6 +14,7 @@ use h2r_analysis::shape::{ArgShape, Position};
 use h2r_core_ir::{BinderKind, Expr, Module, load_dir, with_big_stack};
 
 mod extract;
+mod graph;
 mod lower;
 mod m23;
 mod m24;
@@ -76,6 +77,23 @@ enum Command {
         /// Build DIR/libh2r_entry.rlib: a Rust function named after the entry, over Rust types, instead of a program.
         #[arg(long)]
         api: bool,
+    },
+    /// Normalize the module graph of the Core dumps, and of the specialized instances of each ENTRY.
+    ModuleGraph {
+        #[arg(required_unless_present = "world")]
+        dir: Option<PathBuf>,
+        /// Also load the dumps of a library compiled with the plugin. Repeatable.
+        #[arg(long = "with", value_name = "DIR")]
+        with: Vec<PathBuf>,
+        #[arg(
+            long,
+            conflicts_with_all = ["dir", "with"],
+            help = "Load the ShellCheck world: the program, its twelve libraries and the entry module"
+        )]
+        world: bool,
+        /// A binding whose specialized instances induce the second graph. Repeatable.
+        #[arg(long)]
+        entry: Vec<String>,
     },
     /// Compile the crates build-rust emitted into DIR, in the order its manifest lists them.
     CompileRust {
@@ -510,15 +528,11 @@ enum Command {
     },
 }
 
-fn loaded(
-    dir: Option<PathBuf>,
-    with: Vec<PathBuf>,
-    world: bool,
-) -> Result<(PathBuf, Vec<PathBuf>)> {
-    Ok(match dir {
+fn loaded(dir: Option<PathBuf>, with: Vec<PathBuf>, world: bool) -> (PathBuf, Vec<PathBuf>) {
+    match dir {
         Some(dir) if !world => (dir, with),
-        _ => h2r_build::Checkout::locate()?.world(),
-    })
+        _ => extract::world(),
+    }
 }
 
 fn main() -> Result<()> {
@@ -531,7 +545,7 @@ fn main() -> Result<()> {
             entry,
             output,
         } => {
-            let (dir, with) = loaded(dir, with, world)?;
+            let (dir, with) = loaded(dir, with, world);
             let modules = h2r_core_ir::load_dirs(&dir, &with)?.modules;
             let source =
                 h2r_lower::emit::emit_entry(&modules, &entry).map_err(anyhow::Error::msg)?;
@@ -549,7 +563,7 @@ fn main() -> Result<()> {
             lint,
             api,
         } => {
-            let (dir, with) = loaded(dir, with, world)?;
+            let (dir, with) = loaded(dir, with, world);
             let modules = h2r_core_ir::load_dirs(&dir, &with)?.modules;
             let driver = if lint {
                 h2r_lower::emit::Driver::Lint
@@ -571,8 +585,44 @@ fn main() -> Result<()> {
             );
             Err(error.into())
         }
+        Command::ModuleGraph {
+            dir,
+            with,
+            world,
+            entry,
+        } => {
+            let (dir, with) = loaded(dir, with, world);
+            let modules = h2r_core_ir::load_dirs(&dir, &with)?.modules;
+            let references = h2r_lower::graph::Graph::of_references(&modules);
+            graph::report("Core references", &references, None);
+            if !entry.is_empty() {
+                let entries: Vec<&str> = entry.iter().map(String::as_str).collect();
+                let instances =
+                    h2r_lower::emit::instances(&modules, &entries).map_err(anyhow::Error::msg)?;
+                let names = h2r_lower::graph::Graph::names(&modules);
+                let (owned, members) = instances.by_owner(names.clone());
+                graph::report("Instances in their owner's module", &owned, Some(&members));
+                graph::added(&references, &owned);
+                let normal = references.normalize();
+                let placement = match instances.place(&normal) {
+                    Ok(placement) => placement,
+                    Err(unplaced) => {
+                        graph::unplaced(&unplaced, &instances, &normal, &names);
+                        anyhow::bail!("an instance has no module that reaches all its callees");
+                    }
+                };
+                let (placed, members) = instances.by_placement(normal.names(&names), &placement);
+                graph::report(
+                    "Instances placed in the lowest module that reaches their callees",
+                    &placed,
+                    Some(&members),
+                );
+                graph::largest(&placed, &members, &instances, &normal, &placement);
+            }
+            Ok(())
+        }
         Command::CompileRust { out, opt_level } => {
-            h2r_lower::build::compile(&out, &opt_level, &h2r_lower::build::Rustc::default())
+            h2r_lower::build::compile(&out, &h2r_lower::build::Rustc::new(&opt_level))
                 .map(drop)
                 .map_err(anyhow::Error::msg)
         }
@@ -754,7 +804,7 @@ fn main() -> Result<()> {
             m24_link,
             boundary,
         } => {
-            let (dir, with) = loaded(dir, with, world)?;
+            let (dir, with) = loaded(dir, with, world);
             if boundary {
                 lower::boundary(&dir, &with)
             } else if let Some(output) = emit_program {

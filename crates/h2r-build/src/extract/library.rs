@@ -216,15 +216,17 @@ pub fn extract(
     tools: &Tools,
     checkout: &Checkout,
     package: &str,
-    out: Option<PathBuf>,
+    out: &Path,
+    build: &Path,
     store_db: Option<PathBuf>,
+    jobs: Option<usize>,
 ) -> Result<()> {
     let Some(layout) = LAYOUTS.iter().find(|layout| layout.package == package) else {
         bail!("no source layout recorded for {package}");
     };
     let repo = checkout.root().to_path_buf();
-    let build = checkout.build().join("libraries");
-    let out = out.unwrap_or_else(|| checkout.library_json(package));
+    let build = build.to_path_buf();
+    let out = out.to_path_buf();
     let store_db = tools.store_db(store_db)?;
     let installed_package = Package {
         tools,
@@ -395,7 +397,9 @@ pub fn extract(
         tools
             .command("ghc")
             .current_dir(&root)
-            .args(["--make", "-j", "-no-link", "-this-unit-id", &unit])
+            .arg("--make")
+            .arg(jobs.map_or_else(|| "-j".to_string(), |jobs| format!("-j{jobs}")))
+            .args(["-no-link", "-this-unit-id", &unit])
             .args(&package_flags)
             .args(layout.flags)
             .args(&search)

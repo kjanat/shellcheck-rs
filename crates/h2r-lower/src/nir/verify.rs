@@ -1215,6 +1215,7 @@ fn verify_value(
                             .ok_or("missing computed Int# argument")?;
                         let result = block.instructions[end].result.id;
                         if data::lifted(&world, arg)
+                            && !builds_without_evaluating(context, *source, arg)
                             && !matches!(
                                 block.instructions[end].operation,
                                 Operation::DelayBlock { .. }
@@ -1874,6 +1875,7 @@ fn verify_value(
                 && !prefix.instructions.last().is_some_and(|i| {
                     if delayed {
                         matches!(i.operation, Operation::DelayBlock { .. })
+                            || builds_without_evaluating(context, pair.rhs, binding_ty)
                     } else {
                         matches!(
                             i.operation,
@@ -2416,6 +2418,80 @@ fn verify_reference(instruction: &Instruction, expected: &DictionaryRef) -> Resu
     Ok(())
 }
 
+fn builds_without_evaluating(context: &ValueContext<'_>, source: ExprId, ty: &Ty) -> bool {
+    evaluates_nothing(context, source, ty, false)
+}
+
+fn evaluates_nothing(context: &ValueContext<'_>, source: ExprId, ty: &Ty, demanded: bool) -> bool {
+    use h2r_core_ir::{BinderKind, Expr};
+    let module = context.module;
+    let world = context.world();
+    match module.expr(source) {
+        Expr::Var { .. } => !demanded,
+        Expr::Lit(_) => !data::lifted(&world, ty),
+        Expr::Lam { .. } => {
+            let mut body = source;
+            while let Expr::Lam {
+                binder,
+                body: inner,
+            } = module.expr(body)
+                && module.binder(*binder).kind == BinderKind::Tyvar
+            {
+                body = *inner;
+            }
+            data::function(&world, ty)
+                && matches!(module.expr(body), Expr::Lam { binder, .. }
+                    if module.binder(*binder).kind == BinderKind::Id)
+        }
+        Expr::Cast {
+            expr,
+            from: Some(from),
+            to: Some(_),
+            role: Some(_),
+        } => {
+            let source_ty = context.view.ty(*from);
+            let carrier = data::carrier(&world, source_ty);
+            carrier.is_some()
+                && carrier == data::carrier(&world, ty)
+                && evaluates_nothing(context, *expr, source_ty, demanded)
+        }
+        Expr::App { .. } => {
+            let mut head = source;
+            let mut types = Vec::new();
+            let mut fields = Vec::new();
+            while let Expr::App { fun, arg } = module.expr(head) {
+                match module.expr(*arg) {
+                    Expr::Type { ty, .. } => types.push(context.view.ty(*ty).clone()),
+                    _ if types.is_empty() => fields.push(*arg),
+                    _ => return false,
+                }
+                head = *fun;
+            }
+            let Ok(Some(constructor)) = data::resolve(&world, context.module_index, head, ty)
+            else {
+                return false;
+            };
+            let Ty::Con { args, .. } = ty else {
+                return false;
+            };
+            types.reverse();
+            fields.reverse();
+            if types.len() != args.len()
+                || !types.iter().zip(args).all(|(a, b)| a.alpha_eq(b))
+                || fields.len() != constructor.fields.len()
+            {
+                return false;
+            }
+            fields.iter().enumerate().all(|(position, &field)| {
+                let field_ty = &constructor.fields[position];
+                let forced = constructor.strict[position] && data::lifted(&world, field_ty);
+                evaluates_nothing(context, field, field_ty, forced)
+            })
+        }
+        _ => false,
+    }
+}
+
 /// Verify one argument that is passed without being forced: the instructions
 /// that produced it, or — when it produced none — the parameter it names.
 ///
@@ -2474,6 +2550,7 @@ fn verify_lazy_argument(
     };
     if computed
         && data::lifted(&context.world(), ty)
+        && !builds_without_evaluating(context, source, ty)
         && !matches!(
             block.instructions[end].operation,
             Operation::DelayBlock { .. }
@@ -2836,6 +2913,7 @@ fn verify_unboxed_tuple(
         argument.instructions = block.instructions[offset..end].to_vec();
         if data::lifted(&world, field)
             && !matches!(module.expr(*source), Expr::Var { .. })
+            && !builds_without_evaluating(context, *source, field)
             && !argument
                 .instructions
                 .last()
@@ -2932,6 +3010,7 @@ fn verify_constructor(
         argument.instructions = block.instructions[offset..end].to_vec();
         if data::lifted(&world, field)
             && !matches!(module.expr(*source), Expr::Var { .. })
+            && !builds_without_evaluating(context, *source, field)
             && !argument
                 .instructions
                 .last()

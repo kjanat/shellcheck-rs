@@ -259,6 +259,83 @@ pub fn shared<T: 'static>(f: impl FnOnce() -> T + 'static) -> Shared<T> {
     Rc::new(Lazy::new(f))
 }
 
+pub trait Suspend: Sized + 'static {
+    fn suspend(f: impl FnOnce() -> Self + 'static) -> Self;
+}
+
+impl Suspend for Int {
+    fn suspend(f: impl FnOnce() -> Self + 'static) -> Self {
+        Self::defer_to(f)
+    }
+}
+
+impl Suspend for Data {
+    fn suspend(f: impl FnOnce() -> Self + 'static) -> Self {
+        Self::defer_to(f)
+    }
+}
+
+impl Suspend for Closure {
+    fn suspend(f: impl FnOnce() -> Self + 'static) -> Self {
+        Self::defer_to(f)
+    }
+}
+
+impl Suspend for Field {
+    fn suspend(f: impl FnOnce() -> Self + 'static) -> Self {
+        Self::defer_to(f)
+    }
+}
+
+macro_rules! suspensions {
+    ($($delay:ident $step:ident($($argument:ident: $ty:ident),*);)*) => {$(
+        pub fn $delay<T: Suspend, $($ty: 'static),*>(
+            entry: fn($($ty),*) -> T,
+            ($($argument,)*): ($($ty,)*),
+        ) -> T {
+            T::suspend(move || entry($($argument),*))
+        }
+
+        pub fn $step<R: 'static, $($ty: 'static),*>(
+            entry: fn($($ty),*) -> Step<R>,
+            ($($argument,)*): ($($ty,)*),
+        ) -> Step<R> {
+            Step::Next(Box::new(move || entry($($argument),*)))
+        }
+    )*};
+}
+
+suspensions! {
+    delay0 step0();
+    delay1 step1(a: A);
+    delay2 step2(a: A, b: B);
+    delay3 step3(a: A, b: B, c: C);
+    delay4 step4(a: A, b: B, c: C, d: D);
+    delay5 step5(a: A, b: B, c: C, d: D, e: E);
+    delay6 step6(a: A, b: B, c: C, d: D, e: E, f: F);
+    delay7 step7(a: A, b: B, c: C, d: D, e: E, f: F, g: G);
+    delay8 step8(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H);
+    delay9 step9(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I);
+    delay10 step10(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J);
+    delay11 step11(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K);
+    delay12 step12(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L);
+    delay13 step13(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M);
+    delay14 step14(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N);
+    delay15 step15(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N, o: O);
+    delay16 step16(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N, o: O, p: P);
+}
+
+pub fn apply_later<T: Suspend>(callee: Closure, arguments: Vec<Field>, read: fn(&Field) -> T) -> T {
+    T::suspend(move || read(&callee.apply(arguments)))
+}
+
+pub fn apply_step(callee: Closure, arguments: Vec<Field>, read: fn(&Field) -> i64) -> Step<i64> {
+    Step::Next(Box::new(move || match callee.apply_tail(arguments) {
+        Tail::Enter(step) => step,
+        Tail::Value(value) => Step::Done(read(&value)),
+    }))
+}
+
 /// A shared, call-by-need boxed machine Int. Its I# field is unlifted.
 #[derive(Clone)]
 pub struct Int(Shared<i64>);
@@ -635,6 +712,23 @@ impl Closure {
             enter: Some(Rc::new(enter)),
             supplied: Vec::new(),
         })))
+    }
+    pub fn bind<C: 'static>(arity: usize, code: fn(&C, Vec<Field>) -> Field, captures: C) -> Self {
+        Self::ready(arity, move |arguments| code(&captures, arguments))
+    }
+    pub fn bind_entering<C: 'static>(
+        arity: usize,
+        code: fn(&C, Vec<Field>) -> Field,
+        enter: fn(&C, Vec<Field>) -> Step<i64>,
+        captures: C,
+    ) -> Self {
+        let captures = Rc::new(captures);
+        let entered = captures.clone();
+        Self::entering(
+            arity,
+            move |arguments| code(&captures, arguments),
+            move |arguments| enter(&entered, arguments),
+        )
     }
     pub fn defer(init: impl FnOnce() -> ClosureCode + 'static) -> Self {
         Self(shared(init))

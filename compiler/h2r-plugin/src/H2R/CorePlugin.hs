@@ -21,7 +21,7 @@
 -- every lambda, case and alternative binder.  See 'dumpPass' and the
 -- alignment section below.
 --
--- Dump format 5 (see @compiler/rust/crates/h2r-core-ir/src/raw.rs@):
+-- Dump format 5 (see @crates/h2r-core-ir/src/raw.rs@):
 --
 --   * The id table is keyed by /stable name/ (@$unit$Module$occ@) and holds
 --     only global Ids with /external/ names.  Locals are resolved lexically

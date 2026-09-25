@@ -1,11 +1,12 @@
+use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use h2r_build::Checkout;
-use h2r_build::extract::{self, PROFILES, ProgramOptions, Tools, sha256_hex};
+use h2r_build::extract::{self, LAYOUTS, PROFILES, ProgramOptions, Tools, sha256_hex};
 
 #[derive(Subcommand)]
 pub enum Extract {
@@ -26,7 +27,7 @@ pub enum Extract {
         store_db: Option<PathBuf>,
     },
     #[command(
-        about = "Compile crates/rshellcheck/entry/ShellCheckEntry.hs with the plugin into compiler/build/entry/core-json"
+        about = "Compile crates/hs-entry/ShellCheckEntry.hs with the plugin into compiler/build/entry/core-json"
     )]
     Entry {
         #[arg(
@@ -37,10 +38,6 @@ pub enum Extract {
     },
     #[command(about = "Build the ShellCheck program with the plugin and collect its Core dumps")]
     Program(Program),
-    #[command(
-        about = "Extract everything rshellcheck compiles: the program, its twelve libraries and the entry module"
-    )]
-    World,
     #[command(
         about = "Build the canary oracle and write its Core dumps into compiler/build/canary, at -O1 and at -O0 under unoptimized/"
     )]
@@ -106,44 +103,69 @@ pub struct Program {
 }
 
 impl Program {
-    fn options(self) -> Result<ProgramOptions> {
+    fn options(self, checkout: &Checkout) -> Result<ProgramOptions> {
         Ok(ProgramOptions {
             opt: self.opt,
-            build_dir: absolute(self.build_dir)?,
-            core_dir: absolute(self.core_dir)?,
+            build_dir: absolute(self.build_dir)?.unwrap_or_else(|| canonical(checkout)),
+            core_dir: absolute(self.core_dir)?
+                .unwrap_or_else(|| checkout.root().join("compiler/core-json")),
             keep_dir: absolute(self.keep_dir)?,
             jobs: self.jobs,
             source_ref: self.source_ref,
-            plan: absolute(self.plan)?,
+            constraints: self.plan.as_deref().map(constraints).transpose()?,
         })
     }
 }
 
+pub fn world() -> (PathBuf, Vec<PathBuf>) {
+    let root = Checkout::locate().root().to_path_buf();
+    let with = LAYOUTS
+        .iter()
+        .map(|layout| root.join("compiler/library-json").join(layout.package))
+        .chain([root.join("compiler/build/entry/core-json")])
+        .collect();
+    (root.join("compiler/core-json"), with)
+}
+
+fn canonical(checkout: &Checkout) -> PathBuf {
+    checkout.root().join("compiler/build/canonical")
+}
+
 pub fn run(command: Extract) -> Result<()> {
-    let checkout = Checkout::locate()?;
+    let checkout = Checkout::locate();
+    let build = checkout.root().join("compiler/build");
     match command {
         Extract::Library {
             package,
             out,
             store_db,
-        } => locked(&checkout, |tools| {
-            extract::library(
-                tools,
+        } => extract::library(
+            &Tools::new()?,
+            &checkout,
+            &package,
+            &absolute(out)?
+                .unwrap_or_else(|| checkout.root().join("compiler/library-json").join(&package)),
+            &build.join("libraries"),
+            absolute(store_db)?,
+            None,
+        ),
+        Extract::Entry { store_db } => {
+            let tools = Tools::new()?;
+            let shellcheck_db = extract::package_db(&tools, &canonical(&checkout));
+            extract::entry(
+                &tools,
                 &checkout,
-                &package,
-                absolute(out)?,
+                &build.join("entry/core-json"),
+                &build.join("entry"),
+                &shellcheck_db,
                 absolute(store_db)?,
             )
-        }),
-        Extract::Entry { store_db } => locked(&checkout, |tools| {
-            extract::entry(tools, &checkout, absolute(store_db)?)
-        }),
-        Extract::Program(program) => locked(&checkout, |tools| {
-            extract::program(tools, &checkout, &program.options()?)
-        }),
-        Extract::World => locked(&checkout, |tools| extract::world(tools, &checkout)),
-        Extract::Canary => locked(&checkout, |tools| extract::canary(tools, &checkout)),
-        Extract::Oracle => locked(&checkout, |tools| extract::oracle(tools, &checkout)),
+        }
+        Extract::Program(program) => {
+            extract::program(&Tools::new()?, &checkout, &program.options(&checkout)?)
+        }
+        Extract::Canary => extract::canary(&Tools::new()?, &checkout),
+        Extract::Oracle => extract::oracle(&Tools::new()?, &checkout),
         Extract::Matrix { profiles } => matrix(&checkout, &profiles),
         Extract::Interfaces {
             installed,
@@ -161,9 +183,25 @@ pub fn run(command: Extract) -> Result<()> {
     }
 }
 
-fn locked(checkout: &Checkout, run: impl FnOnce(&Tools) -> Result<()>) -> Result<()> {
-    let _lock = checkout.lock()?;
-    run(&Tools::new()?)
+fn constraints(plan: &Path) -> Result<String> {
+    let plan: serde_json::Value = serde_json::from_slice(
+        &fs::read(plan).with_context(|| format!("reading {}", plan.display()))?,
+    )?;
+    let pinned: BTreeSet<String> = plan["install-plan"]
+        .as_array()
+        .context("a cabal plan has an install-plan")?
+        .iter()
+        .filter_map(|unit| {
+            let name = unit["pkg-name"].as_str()?;
+            let version = unit["pkg-version"].as_str()?;
+            (name != "ShellCheck" && name != "h2r-plugin")
+                .then(|| format!("any.{name} == {version}"))
+        })
+        .collect();
+    Ok(format!(
+        "constraints: {}\n",
+        pinned.into_iter().collect::<Vec<_>>().join(",\n  ")
+    ))
 }
 
 fn absolute(path: Option<PathBuf>) -> Result<Option<PathBuf>> {

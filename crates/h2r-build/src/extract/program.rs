@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -44,26 +43,12 @@ pub const PROFILES: [(&str, &str); 6] = [
 
 pub struct Options {
     pub opt: String,
-    pub build_dir: Option<PathBuf>,
-    pub core_dir: Option<PathBuf>,
+    pub build_dir: PathBuf,
+    pub core_dir: PathBuf,
     pub keep_dir: Option<PathBuf>,
     pub jobs: Option<usize>,
     pub source_ref: Option<String>,
-    pub plan: Option<PathBuf>,
-}
-
-impl Default for Options {
-    fn default() -> Options {
-        Options {
-            opt: "-O1".to_string(),
-            build_dir: None,
-            core_dir: None,
-            keep_dir: None,
-            jobs: None,
-            source_ref: None,
-            plan: None,
-        }
-    }
+    pub constraints: Option<String>,
 }
 
 pub fn inputs(checkout: &Checkout) -> Vec<PathBuf> {
@@ -73,21 +58,20 @@ pub fn inputs(checkout: &Checkout) -> Vec<PathBuf> {
         .chain([
             checkout.plugin().join("src"),
             checkout.plugin().join("h2r-plugin.cabal"),
-            checkout.entry_source(),
         ])
         .collect()
 }
 
+pub fn package_db(tools: &Tools, build: &Path) -> PathBuf {
+    build
+        .join("dist-newstyle/packagedb")
+        .join(format!("ghc-{}", tools.ghc_version))
+}
+
 pub fn extract(tools: &Tools, checkout: &Checkout, options: &Options) -> Result<()> {
     let repo = checkout.root().to_path_buf();
-    let build = options
-        .build_dir
-        .clone()
-        .unwrap_or_else(|| checkout.build().join("canonical"));
-    let out = options
-        .core_dir
-        .clone()
-        .unwrap_or_else(|| checkout.core_json());
+    let build = options.build_dir.clone();
+    let out = options.core_dir.clone();
     let keep = options.keep_dir.clone();
     let git = |args: &[&str]| tools.output(tools.command("git").arg("-C").arg(&repo).args(args));
     let source_ref = match &options.source_ref {
@@ -122,8 +106,11 @@ pub fn extract(tools: &Tools, checkout: &Checkout, options: &Options) -> Result<
         fingerprint.push_str(&line);
         fingerprint.push('\n');
     }
-    if let Some(plan) = &options.plan {
-        fingerprint.push_str(&sha256sum_line(plan, &plan.display().to_string())?);
+    if let Some(constraints) = &options.constraints {
+        fingerprint.push_str(&format!(
+            "{}  constraints\n",
+            sha256_hex(constraints.as_bytes())
+        ));
     }
     match &source_ref {
         Some(reference) => {
@@ -235,8 +222,8 @@ pub fn extract(tools: &Tools, checkout: &Checkout, options: &Options) -> Result<
                 out.display()
             ),
         )?;
-        if let Some(plan) = &options.plan {
-            fs::write(build.join("cabal.project.local"), constraints(plan)?)?;
+        if let Some(constraints) = &options.constraints {
+            fs::write(build.join("cabal.project.local"), constraints)?;
         }
         fs::write(build.join("inputs.sha256"), format!("{fingerprint}\n"))?;
     }
@@ -391,25 +378,6 @@ fn untar(tools: &Tools, repo: &Path, reference: &str, items: &[&str], into: &Pat
     Ok(())
 }
 
-fn constraints(plan: &Path) -> Result<String> {
-    let plan: serde_json::Value = serde_json::from_slice(&fs::read(plan)?)?;
-    let pinned: BTreeSet<String> = plan["install-plan"]
-        .as_array()
-        .context("a cabal plan has an install-plan")?
-        .iter()
-        .filter_map(|unit| {
-            let name = unit["pkg-name"].as_str()?;
-            let version = unit["pkg-version"].as_str()?;
-            (name != "ShellCheck" && name != "h2r-plugin")
-                .then(|| format!("any.{name} == {version}"))
-        })
-        .collect();
-    Ok(format!(
-        "constraints: {}\n",
-        pinned.into_iter().collect::<Vec<_>>().join(",\n  ")
-    ))
-}
-
 fn utc_now() -> String {
     let seconds = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -438,26 +406,27 @@ fn utc_now() -> String {
     )
 }
 
-pub fn entry(tools: &Tools, checkout: &Checkout, store_db: Option<PathBuf>) -> Result<()> {
-    let build = checkout.build().join("entry");
-    let out = checkout.entry_json();
+pub fn entry(
+    tools: &Tools,
+    checkout: &Checkout,
+    out: &Path,
+    build: &Path,
+    shellcheck_db: &Path,
+    store_db: Option<PathBuf>,
+) -> Result<()> {
+    let out = out.to_path_buf();
     let work = build.join("work");
     let source = checkout.entry_source();
     let store_db = tools.store_db(store_db)?;
-    let shellcheck_db = checkout
-        .build()
-        .join("canonical/dist-newstyle/packagedb")
-        .join(format!("ghc-{}", tools.ghc_version));
-    let program = checkout.core_json().join("inputs.sha256");
     let mut fingerprint = format!(
         "{}\n{}\n{}\n",
         tools.ghc_version,
         store_db.display(),
         shellcheck_db.display()
     );
-    fingerprint.push_str(
-        &fs::read_to_string(&program).with_context(|| format!("reading {}", program.display()))?,
-    );
+    for file in super::files_under(shellcheck_db)? {
+        fingerprint.push_str(&sha256sum_line(&file, &file.display().to_string())?);
+    }
     for file in
         std::iter::once(source.clone()).chain(super::files_under(&checkout.plugin().join("src"))?)
     {
@@ -471,7 +440,7 @@ pub fn entry(tools: &Tools, checkout: &Checkout, store_db: Option<PathBuf>) -> R
         return Ok(());
     }
 
-    let plugin = tools.plugin(checkout, &checkout.build().join("libraries"))?;
+    let plugin = tools.plugin(checkout, build)?;
     remove_dir(&out)?;
     remove_dir(&work)?;
     fs::create_dir_all(&out)?;
@@ -490,7 +459,7 @@ pub fn entry(tools: &Tools, checkout: &Checkout, store_db: Option<PathBuf>) -> R
             .arg("-package-db")
             .arg(&store_db)
             .arg("-package-db")
-            .arg(&shellcheck_db)
+            .arg(shellcheck_db)
             .args(["-package", "ShellCheck"])
             .arg(plugin.flag(&out))
             .arg("-fplugin-trustworthy")

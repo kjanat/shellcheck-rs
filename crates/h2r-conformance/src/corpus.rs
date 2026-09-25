@@ -526,14 +526,12 @@ mod tests {
     // and three modules live under `Checks/` rather than beside the rest.
     #[test]
     fn every_entry_carries_a_path_that_exists() {
-        let Some(repo) = crate::checkout() else {
-            println!(
-                "skipped: no ShellCheck checkout around {}",
-                env!("CARGO_MANIFEST_DIR")
-            );
-            return;
-        };
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let src = repo.join("src/ShellCheck");
+        if !src.is_dir() {
+            println!("skipped: no {} in this checkout", src.display());
+            return;
+        }
         let entries = extract(&src).expect("extract");
         let mut checked = 0;
         for e in &entries {

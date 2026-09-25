@@ -1059,17 +1059,21 @@ impl Module {
     pub fn load(path: &Path) -> Result<Self> {
         let bytes =
             std::fs::read(path).with_context(|| format!("reading Core dump {}", path.display()))?;
-        let mut de = serde_json::Deserializer::from_slice(&bytes);
+        Self::parse(&path.display().to_string(), &bytes)
+    }
+
+    pub fn parse(name: &str, bytes: &[u8]) -> Result<Self> {
+        let mut de = serde_json::Deserializer::from_slice(bytes);
         // Real Core nests far past serde_json's default limit of 128. The
         // deserialiser is still recursive, hence `with_big_stack`; it is the
         // only recursion left in the pipeline.
         de.disable_recursion_limit();
         let raw = raw::RawModule::deserialize(&mut de)
-            .with_context(|| format!("parsing Core dump {}", path.display()))?;
+            .with_context(|| format!("parsing Core dump {name}"))?;
         let module = Self::from_raw(raw)?;
         module
             .check_type_references()
-            .with_context(|| format!("reading Core dump {}", path.display()))?;
+            .with_context(|| format!("reading Core dump {name}"))?;
         Ok(module)
     }
 }
@@ -1312,6 +1316,20 @@ impl Dumps {
     pub fn is_library(&self, module: usize) -> bool {
         self.libraries.contains(&self.modules[module].name)
     }
+}
+
+pub fn parse_dumps<'a>(
+    dumps: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+) -> Result<Vec<Module>> {
+    let mut modules = dumps
+        .into_iter()
+        .map(|(name, bytes)| Module::parse(name, bytes))
+        .collect::<Result<Vec<Module>>>()?;
+    modules.sort_by(|a, b| a.name.cmp(&b.name));
+    if let Some(pair) = modules.windows(2).find(|pair| pair[0].name == pair[1].name) {
+        bail!("module {} is defined by more than one dump", pair[0].name);
+    }
+    Ok(modules)
 }
 
 /// Load a program's dumps together with the dumps of libraries compiled

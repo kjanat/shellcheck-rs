@@ -19,6 +19,7 @@ pub use library::{LAYOUTS, extract as library};
 pub use paths::module as paths_module;
 pub use program::{
     Options as ProgramOptions, PROFILES, canary, entry, extract as program, inputs, oracle,
+    package_db,
 };
 
 const SOURCES: [(&str, &str); 5] = [
@@ -43,14 +44,6 @@ const SOURCES: [(&str, &str); 5] = [
         include_str!("program.rs"),
     ),
 ];
-
-pub fn world(tools: &Tools, checkout: &Checkout) -> Result<()> {
-    program(tools, checkout, &ProgramOptions::default())?;
-    for layout in LAYOUTS {
-        library(tools, checkout, layout.package, None, None)?;
-    }
-    entry(tools, checkout, None)
-}
 
 pub struct Tools {
     path: Option<OsString>,
@@ -114,7 +107,7 @@ impl Tools {
         println!("==> building the h2r plugin");
         self.run(
             self.command("cabal")
-                .current_dir(checkout.root().join("compiler/canary"))
+                .current_dir(checkout.plugin_project())
                 .arg("build")
                 .arg("--offline")
                 .arg(format!("--builddir={}", build.join("cabal").display()))

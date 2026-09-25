@@ -6,12 +6,10 @@ license           = "GPL-3.0-only"
 publish           = false
 
 [dependencies]
-clap.workspace     = true
-libc.workspace     = true
-mimalloc.workspace = true
-
-[build-dependencies]
-h2r-build.workspace = true
+clap.workspace            = true
+libc.workspace            = true
+mimalloc.workspace        = true
+shellcheck-core.workspace = true
 
 [lints]
 workspace = true

@@ -1,5 +1,3 @@
-extern crate h2r_entry;
-
 mod report;
 mod sources;
 
@@ -141,8 +139,10 @@ fn main() -> ExitCode {
             Ok(cli) => cli,
             Err(error) => {
                 let usage = error.use_stderr();
-                let _ = error.print();
-                return ExitCode::from(if usage { 3 } else { 0 });
+                return match error.print() {
+                    Ok(()) => ExitCode::from(if usage { 3 } else { 0 }),
+                    Err(_) => ExitCode::FAILURE,
+                };
             }
         };
     let (included, excluded) = match (codes(&cli.include), codes(&cli.exclude)) {
@@ -152,7 +152,7 @@ fn main() -> ExitCode {
             return ExitCode::from(3);
         }
     };
-    ExitCode::from(h2r_entry::on_program_stack(move || {
+    ExitCode::from(shellcheck_core::on_program_stack(move || {
         if cli.version {
             print_version();
             0
@@ -167,13 +167,13 @@ fn main() -> ExitCode {
 
 fn print_version() {
     println!("ShellCheck - shell script analysis tool");
-    println!("version: {}", h2r_entry::version());
+    println!("version: {}", shellcheck_core::version());
     println!("license: GNU General Public License, version 3");
     println!("website: https://www.shellcheck.net");
 }
 
 fn print_optional() {
-    for (name, description, example, fix) in h2r_entry::optional() {
+    for (name, description, example, fix) in shellcheck_core::optional() {
         println!("name:    {name}");
         println!("desc:    {description}");
         println!("example: {example}");
@@ -217,9 +217,14 @@ fn file_list(path: &str) -> Result<Vec<String>, String> {
     } else {
         let bytes = std::fs::read(path)
             .map_err(|error| IoFailure::new(path, "openFile", &error).to_string())?;
-        String::from_utf8(bytes).map_err(|_| {
-            format!("{path}: hGetContents: invalid argument (invalid byte sequence)")
-        })?
+        match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(_) => {
+                return Err(format!(
+                    "{path}: hGetContents: invalid argument (invalid byte sequence)"
+                ));
+            }
+        }
     };
     Ok(text
         .lines()
@@ -321,7 +326,7 @@ impl Checker<'_> {
         };
         let finder = self.sources.clone();
         let reader = self.sources.clone();
-        let (groups, diffs) = h2r_entry::lint(
+        let (groups, diffs) = shellcheck_core::lint(
             cli.check_sourced,
             cli.norc,
             self.excluded.clone(),

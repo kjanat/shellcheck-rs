@@ -177,11 +177,18 @@ fn unpack(world: &World<'_>, ty: &Ty, field: &str) -> String {
     format!("{field}.{}()", field_kind(world, ty).1)
 }
 
+struct Shims {
+    leaf: usize,
+    count: usize,
+    code: String,
+}
+
 fn closure(
     world: &World<'_>,
+    shims: &mut Shims,
     target: &str,
     entry: Option<&str>,
-    captures: &[String],
+    captures: &[(String, String)],
     parameters: &[&Ty],
     result: &Ty,
 ) -> Result<String, String> {
@@ -189,39 +196,81 @@ fn closure(
     if arity == 0 {
         return Err("closure has no value parameters".into());
     }
-    let bindings = captures
+    let shim = format!("{}_{}", shims.leaf, shims.count);
+    shims.count += 1;
+    let pattern: String = (0..captures.len()).map(|n| format!("c{n}, ")).collect();
+    let types: String = captures
         .iter()
-        .enumerate()
-        .map(|(n, v)| format!("let c{n} = {v}; let e{n} = c{n}.clone();"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let args: Vec<String> = parameters
-        .iter()
-        .enumerate()
-        .map(|(n, parameter)| unpack(world, parameter, &format!("a[{n}]")))
+        .map(|(_, carrier)| format!("{carrier}, "))
         .collect();
-    let with = |prefix: char| {
-        (0..captures.len())
-            .map(|n| format!("{prefix}{n}.clone()"))
-            .chain(args.iter().cloned())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let code = format!(
-        "move |a| {}",
-        pack(world, result, &format!("{target}({})", with('c')))
-    );
+    let values: String = captures
+        .iter()
+        .map(|(value, _)| format!("{value}, "))
+        .collect();
+    let call = (0..captures.len())
+        .map(|n| format!("c{n}.clone()"))
+        .chain(
+            parameters
+                .iter()
+                .enumerate()
+                .map(|(n, parameter)| unpack(world, parameter, &format!("a[{n}]"))),
+        )
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        shims.code,
+        "fn k_{shim}(({pattern}): &({types}), a: Vec<HField>) -> HField {{ {} }}",
+        pack(world, result, &format!("{target}({call})"))
+    )
+    .unwrap();
     Ok(match entry {
-        Some(state) => format!(
-            "{{ {bindings} HClosure::entering({arity}, {code}, move |a| {state}({})) }}",
-            with('e')
-        ),
-        None => format!("{{ {bindings} HClosure::ready({arity}, {code}) }}"),
+        Some(state) => {
+            writeln!(
+                shims.code,
+                "fn j_{shim}(({pattern}): &({types}), a: Vec<HField>) -> h2r_rt::Step<i64> {{ {state}({call}) }}"
+            )
+            .unwrap();
+            format!("HClosure::bind_entering({arity}, k_{shim}, j_{shim}, ({values}))")
+        }
+        None => format!("HClosure::bind({arity}, k_{shim}, ({values}))"),
     })
 }
 
-fn step_to(callee: &str, args: &str) -> String {
-    format!("h2r_rt::Step::Next(Box::new(move || {callee}({args})))")
+fn step_to(callee: &str, args: &[String]) -> String {
+    if args.len() > DELAYS {
+        return format!(
+            "h2r_rt::Step::Next(Box::new(move || {callee}({})))",
+            args.join(", ")
+        );
+    }
+    let captures: String = args.iter().map(|a| format!("{a}, ")).collect();
+    format!("h2r_rt::step{}({callee}, ({captures}))", args.len())
+}
+
+pub(crate) const DELAYS: usize = 16;
+
+fn names(code: &str, identifier: &str) -> bool {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    code.match_indices(identifier).any(|(at, _)| {
+        !code[..at].ends_with(word) && !code[at + identifier.len()..].starts_with(word)
+    })
+}
+
+fn delayed(carrier: &str, entry: &str, arguments: &[String]) -> String {
+    if arguments.len() > DELAYS {
+        let captures: String = arguments
+            .iter()
+            .enumerate()
+            .map(|(n, a)| format!("let c{n} = {a}; "))
+            .collect();
+        let names: Vec<String> = (0..arguments.len()).map(|n| format!("c{n}")).collect();
+        return format!(
+            "{{ {captures}{carrier}::defer_to(move || {entry}({})) }}",
+            names.join(", ")
+        );
+    }
+    let captures: String = arguments.iter().map(|a| format!("{a}, ")).collect();
+    format!("h2r_rt::delay{}({entry}, ({captures}))", arguments.len())
 }
 
 fn match_data(
@@ -229,7 +278,7 @@ fn match_data(
     scrutinee: crate::nir::ValueId,
     captures: &[String],
     arms: &[crate::nir::DataArm],
-    enter: impl Fn(crate::nir::BlockId, String) -> String,
+    enter: impl Fn(crate::nir::BlockId, &[String]) -> String,
 ) -> String {
     let mut code = format!(
         "{{ let node = v{}.force(); let constructor = node.constructor; match constructor {{",
@@ -260,7 +309,7 @@ fn match_data(
         write!(
             code,
             " {pattern} => {{ {fields}{} }},",
-            enter(arm.target, args.join(", "))
+            enter(arm.target, &args)
         )
         .unwrap();
     }
@@ -850,6 +899,54 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
     })
 }
 
+pub fn emit_library(modules: &[Module], entries: &[&str]) -> Result<String, String> {
+    prepare(modules, entries, Driver::Api, |prepared| {
+        let has_boxed = has_boxed(prepared.world, prepared.leaves);
+        let mut out = String::from(
+            "#[cfg(not(target_pointer_width = \"64\"))]\ncompile_error!(\"Int# backend requires a 64-bit target\");\n",
+        );
+        out.push_str(RUNTIME_ALIASES);
+        for (&index, leaf) in prepared.leaves {
+            out.push_str(&leaf_code(
+                prepared.world,
+                prepared.specialization,
+                prepared.leaves,
+                index,
+                leaf,
+                "",
+                has_boxed,
+            )?);
+        }
+        out.push_str(&prepared.adapter);
+        Ok(out)
+    })
+}
+
+pub fn instances(modules: &[Module], entries: &[&str]) -> Result<crate::graph::Instances, String> {
+    prepare(modules, entries, Driver::Api, |prepared| {
+        Ok(crate::graph::Instances {
+            names: prepared
+                .specialization
+                .instances
+                .iter()
+                .map(|instance| {
+                    modules[instance.module]
+                        .binder(instance.binder)
+                        .name
+                        .clone()
+                })
+                .collect(),
+            owner: prepared
+                .specialization
+                .instances
+                .iter()
+                .map(|instance| instance.module)
+                .collect(),
+            edges: prepared.edges.clone(),
+        })
+    })
+}
+
 pub struct CrateSource {
     pub name: String,
     pub source: String,
@@ -892,7 +989,7 @@ pub fn emit_entry_split(
         let mut crate_of: BTreeMap<usize, usize> = BTreeMap::new();
         let mut members: Vec<Vec<usize>> = Vec::new();
         let mut size = 0;
-        for component in components(prepared.edges) {
+        for component in crate::graph::components(prepared.edges) {
             let bytes: usize = component.iter().map(|index| code[index].len()).sum();
             if members.is_empty() || (size > 0 && size + bytes > budget) {
                 members.push(Vec::new());
@@ -958,77 +1055,6 @@ pub fn emit_entry_split(
             main_dependencies: entry_crates.into_iter().collect(),
         })
     })
-}
-
-fn components(edges: &BTreeMap<usize, BTreeSet<usize>>) -> Vec<Vec<usize>> {
-    let mut order: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut low: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut stack: Vec<usize> = Vec::new();
-    let mut on_stack: BTreeSet<usize> = BTreeSet::new();
-    let mut found = Vec::new();
-    for &root in edges.keys() {
-        if order.contains_key(&root) {
-            continue;
-        }
-        let mut work: Vec<(usize, Vec<usize>)> = Vec::new();
-        let visit = |node: usize,
-                     order: &mut BTreeMap<usize, usize>,
-                     low: &mut BTreeMap<usize, usize>,
-                     stack: &mut Vec<usize>,
-                     on_stack: &mut BTreeSet<usize>,
-                     work: &mut Vec<(usize, Vec<usize>)>| {
-            let next = order.len();
-            order.insert(node, next);
-            low.insert(node, next);
-            stack.push(node);
-            on_stack.insert(node);
-            work.push((node, edges[&node].iter().rev().copied().collect()));
-        };
-        visit(
-            root,
-            &mut order,
-            &mut low,
-            &mut stack,
-            &mut on_stack,
-            &mut work,
-        );
-        while let Some((node, pending)) = work.last_mut() {
-            let node = *node;
-            if let Some(target) = pending.pop() {
-                if !order.contains_key(&target) {
-                    visit(
-                        target,
-                        &mut order,
-                        &mut low,
-                        &mut stack,
-                        &mut on_stack,
-                        &mut work,
-                    );
-                } else if on_stack.contains(&target) {
-                    let reached = order[&target].min(low[&node]);
-                    low.insert(node, reached);
-                }
-                continue;
-            }
-            work.pop();
-            if let Some((parent, _)) = work.last() {
-                let reached = low[&node].min(low[parent]);
-                low.insert(*parent, reached);
-            }
-            if low[&node] == order[&node] {
-                let mut component = Vec::new();
-                while let Some(member) = stack.pop() {
-                    on_stack.remove(&member);
-                    component.push(member);
-                    if member == node {
-                        break;
-                    }
-                }
-                found.push(component);
-            }
-        }
-    }
-    found
 }
 
 const PROGRAM_CHUNK: usize = 64;
@@ -1227,6 +1253,12 @@ fn leaf_code(
     has_boxed: bool,
 ) -> Result<String, String> {
     let mut out = String::new();
+    let mut wrappers = Vec::new();
+    let mut shims = Shims {
+        leaf: index,
+        count: 0,
+        code: String::new(),
+    };
     let unlifted = |function: &Function, block: &Block| {
         let ty = block_result(function, block);
         (!data::lifted(world, ty)).then(|| carrier(world, ty))
@@ -1264,12 +1296,13 @@ fn leaf_code(
                     .map(|p| format!("v{}", p.id.0))
                     .collect::<Vec<_>>()
                     .join(", ");
-                writeln!(
-                    out,
-                    "{vis}fn b_{index}_{}({block_parameters}) -> {result} {{ s_{index}_{}({args}).run() }}",
-                    block.id.0, block.id.0
-                )
-                .unwrap();
+                wrappers.push((
+                    format!("b_{index}_{}", block.id.0),
+                    format!(
+                        "{vis}fn b_{index}_{}({block_parameters}) -> {result} {{ s_{index}_{}({args}).run() }}\n",
+                        block.id.0, block.id.0
+                    ),
+                ));
             }
             writeln!(
                 out,
@@ -1353,25 +1386,14 @@ fn leaf_code(
                             if target_block.params.len() != arguments.len() {
                                 return Err("tail transfer argument count mismatch".into());
                             }
-                            let args = arguments
-                                .iter()
-                                .map(|v| value(*v))
-                                .collect::<Vec<_>>()
-                                .join(", ");
+                            let args = arguments.iter().map(|v| value(*v)).collect::<Vec<_>>();
                             Some(step_to(&format!("s_{target_index}_{}", target.0), &args))
                         }
                         (None, Some((target_index, target, arguments)), _)
                             if target_index == index && looping(target) =>
                         {
-                            let args = arguments
-                                .iter()
-                                .map(|v| value(*v))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            Some(format!(
-                                "{result}::defer_to(move || b_{index}_{}({args}))",
-                                target.0
-                            ))
+                            let args = arguments.iter().map(|v| value(*v)).collect::<Vec<_>>();
+                            Some(delayed(&result, &format!("b_{index}_{}", target.0), &args))
                         }
                         (
                             _,
@@ -1393,25 +1415,24 @@ fn leaf_code(
                                 &captures,
                                 arms,
                                 |target, args| match stepped {
-                                    Some(_) => step_to(&format!("s_{index}_{}", target.0), &args),
-                                    None if looping(target) => format!(
-                                        "{result}::defer_to(move || b_{index}_{}({args}))",
-                                        target.0
-                                    ),
-                                    None => format!("b_{index}_{}({args})", target.0),
+                                    Some(_) => step_to(&format!("s_{index}_{}", target.0), args),
+                                    None if looping(target) => {
+                                        delayed(&result, &format!("b_{index}_{}", target.0), args)
+                                    }
+                                    None => format!("b_{index}_{}({})", target.0, args.join(", ")),
                                 },
                             ))
                         }
                         (Some("i64"), _, Operation::Apply { callee, arguments }) if has_boxed => {
                             let (callee, args, read) = applied(callee, arguments);
                             Some(format!(
-                                "h2r_rt::Step::Next(Box::new(move || match {callee}.apply_tail(vec![{args}]) {{ h2r_rt::Tail::Enter(step) => step, h2r_rt::Tail::Value(value) => h2r_rt::Step::Done(value.{read}()) }}))"
+                                "h2r_rt::apply_step({callee}, vec![{args}], HField::{read})"
                             ))
                         }
                         (None, _, Operation::Apply { callee, arguments }) => {
                             let (callee, args, read) = applied(callee, arguments);
                             Some(format!(
-                                "{result}::defer_to(move || {callee}.apply(vec![{args}]).{read}())"
+                                "h2r_rt::apply_later({callee}, vec![{args}], HField::{read})"
                             ))
                         }
                         _ => None,
@@ -1432,12 +1453,17 @@ fn leaf_code(
                             .expect("verified closure target");
                         closure(
                             world,
+                            &mut shims,
                             &format!("b_{index}_{}", target.0),
                             (unlifted(&leaf.function, target_block).as_deref() == Some("i64")
                                 && has_boxed)
                                 .then(|| format!("s_{index}_{}", target.0))
                                 .as_deref(),
-                            &arguments.iter().map(|v| value(*v)).collect::<Vec<_>>(),
+                            &arguments
+                                .iter()
+                                .zip(&target_block.params)
+                                .map(|(v, p)| (value(*v), carrier(world, &p.ty)))
+                                .collect::<Vec<_>>(),
                             &target_block.params[arguments.len()..]
                                 .iter()
                                 .map(|p| &*p.ty)
@@ -1501,7 +1527,7 @@ fn leaf_code(
                             .chain(std::iter::once(value(*scrutinee)))
                             .collect::<Vec<_>>();
                         match_data(world, *scrutinee, &captures, arms, |target, args| {
-                            format!("b_{index}_{}({args})", target.0)
+                            format!("b_{index}_{}({})", target.0, args.join(", "))
                         })
                     }
                     // No allocation and no tag: a Rust tuple is exactly what
@@ -1520,23 +1546,11 @@ fn leaf_code(
                             format!("v{}.{index}.clone()", tuple.0)
                         }
                     }
-                    Operation::DelayBlock { target, arguments } => {
-                        let captures = arguments
-                            .iter()
-                            .enumerate()
-                            .map(|(n, v)| format!("let c{n} = {};", value(*v)))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let args = (0..arguments.len())
-                            .map(|n| format!("c{n}"))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        format!(
-                            "{{ {captures} {}::defer_to(move || b_{index}_{}({args})) }}",
-                            carrier(world, &instruction.result.ty),
-                            target.0
-                        )
-                    }
+                    Operation::DelayBlock { target, arguments } => delayed(
+                        &carrier(world, &instruction.result.ty),
+                        &format!("b_{index}_{}", target.0),
+                        &arguments.iter().map(|v| value(*v)).collect::<Vec<_>>(),
+                    ),
                     Operation::RaiseError { message } => {
                         let (nil, cons, character) = data::string_layouts(world)?;
                         format!(
@@ -2054,6 +2068,7 @@ fn leaf_code(
                         } else {
                             closure(
                                 world,
+                                &mut shims,
                                 &format!("f_{target}"),
                                 (unlifted(callee, &callee.blocks[0]).as_deref() == Some("i64")
                                     && has_boxed)
@@ -2133,15 +2148,13 @@ fn leaf_code(
                 |target: &crate::nir::BlockId, args: &[crate::nir::ValueId]| match stepped {
                     Some(_) => step_to(
                         &format!("s_{index}_{}", target.0),
-                        &args
-                            .iter()
-                            .map(|v| value(*v))
-                            .collect::<Vec<_>>()
-                            .join(", "),
+                        &args.iter().map(|v| value(*v)).collect::<Vec<_>>(),
                     ),
-                    None if looping(*target) => {
-                        format!("{result}::defer_to(move || {})", call(target, args))
-                    }
+                    None if looping(*target) => delayed(
+                        &result,
+                        &format!("b_{index}_{}", target.0),
+                        &args.iter().map(|v| value(*v)).collect::<Vec<_>>(),
+                    ),
                     None => call(target, args),
                 };
             if !tail_transfer {
@@ -2197,12 +2210,25 @@ fn leaf_code(
         if data::lifted(world, &leaf.function.result_ty) {
             let result_carrier = carrier(world, &leaf.function.result_ty);
             if block.params.is_empty() {
-                writeln!(out, "    std::thread_local! {{ static VALUE: {result_carrier} = {result_carrier}::defer_to(|| b_{index}_{}()); }}\n    VALUE.with(Clone::clone)\n}}", leaf.function.entry.0).unwrap();
+                writeln!(
+                    out,
+                    "    std::thread_local! {{ static VALUE: {result_carrier} = {}; }}\n    VALUE.with(Clone::clone)\n}}",
+                    delayed(&result_carrier, &format!("b_{index}_{}", leaf.function.entry.0), &[])
+                )
+                .unwrap();
             } else {
                 writeln!(
                     out,
-                    "    {result_carrier}::defer_to(move || b_{index}_{}({args}))\n}}",
-                    leaf.function.entry.0
+                    "    {}\n}}",
+                    delayed(
+                        &result_carrier,
+                        &format!("b_{index}_{}", leaf.function.entry.0),
+                        &leaf.function.blocks[0]
+                            .params
+                            .iter()
+                            .map(|p| format!("v{}", p.id.0))
+                            .collect::<Vec<_>>(),
+                    )
                 )
                 .unwrap();
             }
@@ -2210,6 +2236,13 @@ fn leaf_code(
             writeln!(out, "    b_{index}_{}({args})\n}}", leaf.function.entry.0).unwrap();
         }
     }
+    out.push_str(&shims.code);
+    let entered: Vec<String> = wrappers
+        .into_iter()
+        .filter(|(name, _)| names(&out, name))
+        .map(|(_, code)| code)
+        .collect();
+    out.extend(entered);
     Ok(out)
 }
 

@@ -9,6 +9,7 @@ license.workspace = true
 h2r-analysis.workspace = true
 h2r-core-ir.workspace  = true
 serde.workspace        = true
+sha2.workspace         = true
 
 [dev-dependencies]
 serde_json.workspace = true

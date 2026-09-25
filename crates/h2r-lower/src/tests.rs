@@ -2066,7 +2066,27 @@ fn scalar_emission_accepts_recursive_functions() {
     let source = generated(&crate::emit::emit_entry(&modules, &sn("Lib", "target")).unwrap());
     // Instance 0 is the entry, and the self-call transfers back to its entry
     // block rather than growing the native stack.
-    assert!(source.contains("h2r_rt::Step::Next(Box::new(move || s_0_0("));
+    assert!(source.contains("h2r_rt::step2(s_0_0, ("));
+    assert_every_block_is_entered(&source);
+}
+
+fn assert_every_block_is_entered(source: &str) {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut uses: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for (at, _) in source.match_indices("b_") {
+        let name: String = source[at..].chars().take_while(|&c| word(c)).collect();
+        let numbered = name[2..]
+            .split('_')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
+        if !source[..at].ends_with(word) && numbered && name[2..].contains('_') {
+            *uses.entry(name).or_default() += 1;
+        }
+    }
+    for (name, count) in &uses {
+        let defined = source.contains(&format!("fn {name}("));
+        assert!(defined, "{name} is entered and never defined");
+        assert!(*count > 1, "{name} is defined and never entered");
+    }
 }
 
 fn local_function_world(recursive: bool) -> Vec<Module> {
@@ -2340,11 +2360,9 @@ fn closures_partial_application_and_indirect_calls_are_source_verified() {
             .count(),
         2
     );
-    assert!(
-        crate::emit::emit_entry(&modules, &sn("Main", "main"))
-            .unwrap()
-            .contains("HClosure::entering(2")
-    );
+    let source = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
+    assert!(source.contains("HClosure::bind_entering(2, k_"));
+    assert_every_block_is_entered(&source);
     for mutation in 0..6 {
         let mut bad = leaf.clone();
         if mutation < 3 {
@@ -2404,7 +2422,8 @@ fn local_functions_and_join_loops_have_verified_captures() {
             modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
         );
         let source = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
-        assert!(source.contains("h2r_rt::Step::Next"));
+        assert!(source.contains("h2r_rt::step"));
+        assert_every_block_is_entered(&source);
     }
 }
 
@@ -3676,8 +3695,10 @@ fn data_layout_evidence_is_mandatory_and_complete() {
 }
 
 #[test]
-fn data_lets_preserve_shared_aliases_and_delayed_construction() {
-    use crate::nir::{FnId, Operation, Rule, lower::lower_leaf_in_world};
+fn data_lets_preserve_shared_aliases_and_construct_in_place() {
+    use crate::nir::{
+        FnId, Operation, Rule, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
     let mut body = lazy_let(
         "z",
         data_construct("Pair", vec![lvar("x"), lvar("y")]),
@@ -3687,23 +3708,118 @@ fn data_lets_preserve_shared_aliases_and_delayed_construction() {
     let modules = data_world(body);
     let owner = modules[0].top[0].pairs[0].binder;
     let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
-    assert!(
-        leaf.function
-            .blocks
-            .iter()
-            .flat_map(|b| &b.instructions)
-            .any(|i| matches!(i.operation, Operation::DelayBlock { .. }))
-    );
+    verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+    let operations = || leaf.function.blocks.iter().flat_map(|b| &b.instructions);
+    assert!(!operations().any(|i| matches!(i.operation, Operation::DelayBlock { .. })));
+    assert!(operations().any(|i| matches!(i.operation, Operation::Construct { .. })));
     assert_eq!(
-        leaf.function
-            .blocks
-            .iter()
-            .flat_map(|b| &b.instructions)
+        operations()
             .filter(|i| i.origin.rule == Rule::LazyBinding)
             .count(),
         1
     );
     check_scalar_renumbering(modules);
+}
+
+#[test]
+fn the_runtime_delays_every_arity_the_emitter_writes() {
+    let runtime = include_str!("../../h2r-rt/src/lib.rs");
+    for arity in 0..=crate::emit::DELAYS {
+        assert!(
+            runtime.contains(&format!("    delay{arity} step{arity}(")),
+            "arity {arity}"
+        );
+    }
+    assert!(!runtime.contains(&format!("    delay{} ", crate::emit::DELAYS + 1)));
+}
+
+#[test]
+fn a_strict_lifted_field_keeps_its_construction_delayed() {
+    use crate::nir::{
+        FnId, Operation, Source, lower::lower_leaf_in_world, verify::verify_leaf_in_world,
+    };
+    use h2r_core_ir::Ty;
+    for strict in [false, true] {
+        let mut body = lazy_let(
+            "w",
+            box_int(lvar("y")),
+            lazy_let(
+                "z",
+                data_construct("Pair", vec![lvar("w"), lvar("w")]),
+                lvar("y"),
+            ),
+        );
+        body["body"]["bind"]["pairs"][0]["binder"]["ty"] = json!(3);
+        let mut modules = data_world(body);
+        let m = &mut modules[0];
+        let (boxed, choice) = (m.types[2].clone(), m.types[3].clone());
+        m.types.push(Ty::Fun {
+            mult: Box::new(boxed.clone()),
+            arg: Box::new(boxed.clone()),
+            res: Box::new(Ty::Fun {
+                mult: Box::new(boxed.clone()),
+                arg: Box::new(boxed),
+                res: Box::new(choice),
+            }),
+        });
+        m.constructors[1].signature = u32::try_from(m.types.len() - 1).unwrap();
+        m.constructors[1].strict = vec![strict; 2];
+        let owner = m.top[0].pairs[0].binder;
+        let pair = modules[0]
+            .exprs
+            .iter()
+            .position(|e| matches!(e, h2r_core_ir::Expr::Let { .. }))
+            .and_then(|outer| match &modules[0].exprs[outer] {
+                h2r_core_ir::Expr::Let { body, .. } => match modules[0].expr(*body) {
+                    h2r_core_ir::Expr::Let { bind, .. } => Some(bind.pairs[0].rhs),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap();
+        let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+        verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+        let built = leaf
+            .function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.instructions)
+            .find(|i| i.origin.source == Source::Expr(pair))
+            .unwrap();
+        assert_eq!(
+            matches!(built.operation, Operation::DelayBlock { .. }),
+            strict,
+            "strict {strict}"
+        );
+    }
+}
+
+#[test]
+fn a_lambda_argument_is_a_closure_and_needs_no_thunk() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let body = app(
+        gvar(&sn("Helper", "consume"), "consume"),
+        lam("a", lam("b", lvar("a"))),
+    );
+    let mut modules = scalar_expression_world(body);
+    let function_ty = modules[0].types[1].clone();
+    let int_ty = modules[0].types[0].clone();
+    let target = modules[1].top[0].pairs[0].binder;
+    modules[1].binders[target as usize].name = sn("Helper", "consume");
+    modules[1].binders[target as usize].arity = Some(1);
+    let index = u32::try_from(modules[1].types.len()).unwrap();
+    modules[1].types.push(h2r_core_ir::Ty::Fun {
+        mult: Box::new(int_ty.clone()),
+        arg: Box::new(function_ty),
+        res: Box::new(int_ty),
+    });
+    modules[1].binders[target as usize].ty = index;
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+    let operations = || leaf.function.blocks.iter().flat_map(|b| &b.instructions);
+    assert!(!operations().any(|i| matches!(i.operation, Operation::DelayBlock { .. })));
+    assert!(operations().any(|i| matches!(i.operation, Operation::MakeClosure { .. })));
 }
 
 #[test]
