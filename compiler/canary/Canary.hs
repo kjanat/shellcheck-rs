@@ -1,0 +1,1671 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE UnboxedTuples #-}
+module Canary (forward, constant, add, subtractInt, multiply, composed, chained, shared,
+  eqInt, neInt, ltInt, leInt, gtInt, geInt, minimumInt, selectInt, nestedBranch,
+  operandBranches, scrutineeBranch, sharedBranch, branchCall,
+  makeBox, boxedSum, boxedIgnore, boxedChoose, boxedRoundTrip, boxedShared,
+  boxedStrictIgnore, boxedCaf,
+  lazyArgument, lazyLet, lazyNested, lazyUnused, lazyBranch, lazyStrictUse,
+  dataChoice, dataPair, dataNested, dataDefault, dataLazy, dataStrict,
+  dataMaybe, dataList, dataCaseBinder,
+  recursiveSum, mutualRecursion, localLoop, localMutual, localJoin, recursiveList,
+  recursiveTree, localLazy,
+  higherOrder, partialTop, localClosure, returnedClosure, closureBranch, functionField,
+  closureUnused, escapingRecursive, overApplied,
+  polyTwoTypes, polyCrossModule, polyHigherOrder, polyRecursive, polyNested,
+  classTwoInstances, classDefaultMethod, classSuperclass, classCrossModule,
+  classParameterized, classMethodValue,
+  charRoundTrip, charOrder, charSwitch, charField,
+  stringLength, stringIndex, stringEmpty, stringUnicode, stringUnicodeIndex,
+  stringNulByte, stringAppend, stringShared, stringUnused, stringLazyHead,
+  stringHighLatin1, stringCount, recursiveValue, recursiveValueUse,
+  errorUnusedArgument, errorUnusedLet, errorUnusedShared, errorPlain,
+  errorEmpty, errorUnicode, errorMultiline, errorUnboxed,
+  errorComputed, errorBranch, errorLazyArgument, errorLazyShared, errorLazyField,
+  errorNestedMessage, errorNul, errorNulNested, errorChar,
+  tupleRoundTrip, tupleSwap, tupleSolo, tupleWide, tupleBoxed, tupleNested,
+  tupleLazyComponent, tupleUnusedComponent,
+  textWords, textLines, textFind, textReverse, textFilter, textMap,
+  textSlice, textZip, textCompare, textUnicodeWords,
+  newtypeRoundTrip, newtypeField, newtypeFunction, newtypeMonad, stringAppendShared,
+  stringEqual, stringEqualRule, stringEqualLazy, elemChar, elemString, elemLazy, prefixOf, prefixLazy,
+  eqSpineOrder, eqRightSpine, eqElementOrder, elemSpineFirst, elemNeedleOrder, elemNeedleUnused, prefixOrder, prefixListOrder, prefixElementOrder,
+  compareStrings, compareLazy, compareUnsigned,
+  compareSpineOrder, compareRightSpine, compareElementOrder,
+  tagColour, tagMaybe, colourEqual, colourCompare, pointerChoice,
+  tagForced,
+  mapChars, mapInts, mapFunctions, mapLazy, mapUnapplied,
+  filterChars, filterLazy, takeWhileChars, takeWhileLazy, dropWhileChars, dropWhileLazy,
+  reverseChars, reverseLazy, lengthChars, lengthLazy, consAppend, consAppendLazy,
+  mapSpine, mapFunctionForced, filterPredicate, takeWhileElement, dropWhileSpine,
+  reverseTail, lengthTail, consAppendRight,
+  shifts, wordOrder, magicLazy, voidJoin,
+  setSize, setMember, setOrder, mapLookup, mapStrings, mapUnion,
+  errorCall, errorCallComputed, setFindMin, undefinedUnused,
+  stateCollect, stateNumber, writerCollect, stateClass, rwsRecord, patternFail, identityWalk,
+  apiRoundTrip) where
+
+import GHC.Exts (Int(I#), Int#, (+#), (-#), (*#), (==#), (/=#), (<#), (<=#), (>#), (>=#),
+  Char(C#), Char#, ord#, chr#, eqChar#, neChar#, ltChar#, leChar#, gtChar#, geChar#,
+  dataToTag#, reallyUnsafePtrEquality#, uncheckedIShiftL#, uncheckedIShiftRA#,
+  int2Word#, leWord#, lazy)
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
+import Data.Functor.Identity (Identity (..))
+import qualified Control.Monad.Trans.State as State
+import qualified Control.Monad.Trans.Writer as Writer
+import qualified Control.Monad.Trans.RWS as RWS
+import qualified Control.Monad.State.Class as MonadState
+import qualified Control.Monad.Reader.Class as MonadReader
+import qualified Control.Monad.Writer.Class as MonadWriter
+import Helpers (first, crossPoly, crossApply, Sized(..), Described(..), Small(..))
+import GHC.Base (eqString)
+import qualified GHC.List as List
+import Data.List (isPrefixOf)
+
+--------------------------------------------------------------------------------
+-- Polymorphism: one function used at several types, across modules, as a
+-- higher-order argument, and recursively.
+--------------------------------------------------------------------------------
+
+data Wrap = Wrap Int
+data Pair a = Pair a a
+
+{-# NOINLINE polyIdentity #-}
+polyIdentity :: a -> a
+polyIdentity x = x
+
+{-# NOINLINE unwrap #-}
+unwrap :: Wrap -> Int
+unwrap (Wrap n) = n
+
+-- The same binding at `Int` and at `Wrap`: two instances, one source.
+{-# NOINLINE polyTwoTypes #-}
+polyTwoTypes :: Int -> Int -> Int
+polyTwoTypes x y = boxedSum (polyIdentity x) (unwrap (polyIdentity (Wrap y)))
+
+-- `crossPoly` is defined in Helpers and instantiated here, at two types.
+{-# NOINLINE polyCrossModule #-}
+polyCrossModule :: Int -> Int -> Int
+polyCrossModule x y = boxedSum (crossPoly (Wrap x) y) (crossPoly y x)
+
+{-# NOINLINE bumpWrap #-}
+bumpWrap :: Wrap -> Wrap
+bumpWrap (Wrap n) = boxedSucc n `seq` Wrap (boxedSucc n)
+
+{-# NOINLINE boxedSucc #-}
+boxedSucc :: Int -> Int
+boxedSucc (I# n) = I# (n +# 1#)
+
+-- A polymorphic function taking a function argument, at two element types.
+{-# NOINLINE polyHigherOrder #-}
+polyHigherOrder :: Int -> Int -> Int
+polyHigherOrder x y =
+  boxedSum (crossApply boxedSucc x) (unwrap (crossApply bumpWrap (Wrap y)))
+
+{-# NOINLINE polyCount #-}
+polyCount :: [a] -> Int -> Int
+polyCount [] acc = acc
+polyCount (_:rest) acc = polyCount rest (boxedSucc acc)
+
+-- Recursive specialization: the self-call reuses the instance it is inside.
+{-# NOINLINE polyRecursive #-}
+polyRecursive :: Int -> Int -> Int
+polyRecursive x y =
+  boxedSum (polyCount [x, y, x] (I# 0#)) (polyCount [Wrap x, Wrap y] y)
+
+{-# NOINLINE firstOfPair #-}
+firstOfPair :: Pair a -> a
+firstOfPair (Pair a _) = a
+
+-- A nested instance: the type argument is itself a constructor application.
+{-# NOINLINE polyNested #-}
+polyNested :: Int -> Int -> Int
+polyNested x y =
+  boxedSum (firstOfPair (Pair x y)) (firstOfPair (firstOfPair (Pair (Pair y x) (Pair x y))))
+
+--------------------------------------------------------------------------------
+-- Typeclasses: distinct instances, a default method, a superclass path, a
+-- parameterized instance and a method used as a value.
+--------------------------------------------------------------------------------
+
+data Large = Large Int
+
+instance Sized Large where
+  size (Large n) = mulInt n (I# 3#)
+  label _ = I# 5#
+
+instance Described Large where
+  describeIt v = mulInt (size v) (I# 7#)
+
+instance Sized a => Sized (Pair a) where
+  size p = boxedSum (size (firstOfPair p)) (label (firstOfPair p))
+
+instance Described a => Described (Pair a)
+
+{-# NOINLINE mulInt #-}
+mulInt :: Int -> Int -> Int
+mulInt (I# a) (I# b) = I# (a *# b)
+
+-- Two instances of one class, each with its own method bodies.
+{-# NOINLINE classTwoInstances #-}
+classTwoInstances :: Int -> Int -> Int
+classTwoInstances x y = boxedSum (size (Small x)) (size (Large y))
+
+-- `Small` takes `Described`'s default `describeIt`; `Large` overrides it.
+{-# NOINLINE classDefaultMethod #-}
+classDefaultMethod :: Int -> Int -> Int
+classDefaultMethod x y = boxedSum (describeIt (Small x)) (describeIt (Large y))
+
+-- The default `weigh` reaches `size` through the superclass field of the
+-- `Described` dictionary rather than through its own class.
+{-# NOINLINE classSuperclass #-}
+classSuperclass :: Int -> Int -> Int
+classSuperclass x y = boxedSum (weigh (Small x)) (weigh (Large y))
+
+-- `label` is a default method of a class declared in another module.
+{-# NOINLINE classCrossModule #-}
+classCrossModule :: Int -> Int -> Int
+classCrossModule x y = boxedSum (label (Small x)) (label (Large y))
+
+-- `Sized (Pair a)` is a dictionary built from another dictionary.
+{-# NOINLINE classParameterized #-}
+classParameterized :: Int -> Int -> Int
+classParameterized x y =
+  boxedSum (size (Pair (Small x) (Small y))) (describeIt (Pair (Large y) (Large x)))
+
+{-# NOINLINE applySized #-}
+applySized :: (Large -> Int) -> Int -> Int
+applySized f n = f (Large n)
+
+-- A class method passed as a value: the spine is absorbed into one instance
+-- reference, and the call becomes an ordinary indirect application.
+{-# NOINLINE classMethodValue #-}
+classMethodValue :: Int -> Int -> Int
+classMethodValue x y = boxedSum (applySized size x) (applySized describeIt y)
+
+{-# NOINLINE overApplied #-}
+overApplied :: Int -> Int -> Int
+overApplied x y = chooseFunction x y
+
+{-# NOINLINE ignoreFunction #-}
+ignoreFunction :: (Int -> Int) -> Int -> Int
+ignoreFunction _ y = y
+
+{-# NOINLINE closureUnused #-}
+closureUnused :: Int -> Int -> Int
+closureUnused x y = ignoreFunction (makeAdder x) y
+
+{-# NOINLINE escapingRecursive #-}
+escapingRecursive :: Int -> Int -> Int
+escapingRecursive x y =
+  let {-# NOINLINE go #-}
+      go :: Int -> Int
+      go (I# n) = case n <=# 0# of
+        0# -> go (I# (n -# 1#))
+        _ -> boxedSum x y
+  in applyInt go (I# 7#)
+
+{-# NOINLINE applyInt #-}
+applyInt :: (Int -> Int) -> Int -> Int
+applyInt f x = f x
+
+{-# NOINLINE applyTwice #-}
+applyTwice :: (Int -> Int) -> Int -> Int
+applyTwice f x = f (f x)
+
+{-# NOINLINE higherOrder #-}
+higherOrder :: Int -> Int -> Int
+higherOrder x y = applyTwice (\z -> boxedSum x z) y
+
+{-# NOINLINE partialTop #-}
+partialTop :: Int -> Int -> Int
+partialTop x y = applyInt (boxedSum x) y
+
+{-# NOINLINE localClosure #-}
+localClosure :: Int -> Int -> Int
+localClosure x y =
+  let {-# NOINLINE addCaptured #-}
+      addCaptured z = boxedSum x z
+  in applyTwice addCaptured y
+
+{-# NOINLINE makeAdder #-}
+makeAdder :: Int -> (Int -> Int)
+makeAdder x = case x of I# n -> \y -> boxedSum (I# n) y
+
+{-# NOINLINE returnedClosure #-}
+returnedClosure :: Int -> Int -> Int
+returnedClosure x y = applyInt (makeAdder x) y
+
+{-# NOINLINE chooseFunction #-}
+chooseFunction :: Int -> (Int -> Int)
+chooseFunction (I# n) = case n of
+  0# -> \y -> y
+  _ -> \y -> boxedSum (I# n) y
+
+{-# NOINLINE closureBranch #-}
+closureBranch :: Int -> Int -> Int
+closureBranch x y = applyInt (chooseFunction x) y
+
+data FunctionBox = FunctionBox (Int -> Int)
+
+{-# NOINLINE useFunctionBox #-}
+useFunctionBox :: FunctionBox -> Int -> Int
+useFunctionBox (FunctionBox f) x = f x
+
+{-# NOINLINE functionField #-}
+functionField :: Int -> Int -> Int
+functionField x y = useFunctionBox (FunctionBox (boxedSum x)) y
+
+{-# NOINLINE recursiveTree #-}
+recursiveTree :: Int# -> Int# -> Int#
+recursiveTree n x = case n <=# 0# of
+  0# -> recursiveTree (n -# 1#) x +# recursiveTree (n -# 1#) x
+  _ -> x
+
+{-# NOINLINE localLazy #-}
+localLazy :: Int -> Int -> Int
+localLazy x y =
+  let {-# NOINLINE go #-}
+      go :: Int -> Int -> Int
+      go (I# n) unused = case n <=# 0# of
+        0# -> go (I# (n -# 1#)) unused
+        _ -> x
+  in go (I# 7#) y
+
+{-# NOINLINE recursiveSum #-}
+recursiveSum :: Int# -> Int# -> Int#
+recursiveSum n acc = case n <=# 0# of
+  0# -> recursiveSum (n -# 1#) (acc +# n)
+  _ -> acc
+
+{-# NOINLINE mutualRecursion #-}
+mutualRecursion :: Int# -> Int# -> Int#
+mutualRecursion n acc = case n <=# 0# of
+  0# -> mutualOther (n -# 1#) (acc +# 2#)
+  _ -> acc
+
+{-# NOINLINE mutualOther #-}
+mutualOther :: Int# -> Int# -> Int#
+mutualOther n acc = case n <=# 0# of
+  0# -> mutualRecursion (n -# 1#) (acc -# 1#)
+  _ -> acc
+
+{-# NOINLINE localLoop #-}
+localLoop :: Int# -> Int# -> Int#
+localLoop n step =
+  let go i acc = case i <=# 0# of
+        0# -> go (i -# 1#) (acc +# step)
+        _ -> acc
+  in go n 0#
+
+{-# NOINLINE localMutual #-}
+localMutual :: Int# -> Int# -> Int#
+localMutual n step =
+  let evenGo i = case i <=# 0# of
+        0# -> oddGo (i -# 1#)
+        _ -> step
+      oddGo i = case i <=# 0# of
+        0# -> evenGo (i -# 1#)
+        _ -> step +# 1#
+  in evenGo n
+
+{-# NOINLINE localJoin #-}
+localJoin :: Int# -> Int# -> Int#
+localJoin n x =
+  let {-# NOINLINE finish #-}
+      finish y = (y +# x) *# (y -# x)
+  in case n of
+    0# -> finish (x +# 1#)
+    _ -> finish (x -# 2#)
+
+{-# NOINLINE listSum #-}
+listSum :: [Int] -> Int
+listSum [] = I# 0#
+listSum (x:xs) = boxedSum x (listSum xs)
+
+{-# NOINLINE recursiveList #-}
+recursiveList :: Int -> Int -> Int
+recursiveList x y = listSum [x, y, x]
+
+data Choice = Empty | One Int | Two Int Int
+data Nested = Nested Choice Choice
+data StrictPair = StrictPair !Int Int
+
+{-# NOINLINE chooseData #-}
+chooseData :: Int -> Int -> Choice
+chooseData x@(I# n) y = case n of
+  0# -> Empty
+  1# -> One y
+  _ -> Two x y
+
+{-# NOINLINE readData #-}
+readData :: Choice -> Int
+readData c = case c of
+  Empty -> I# 17#
+  One x -> x
+  Two x y -> boxedSum x y
+
+{-# NOINLINE dataChoice #-}
+dataChoice :: Int -> Int -> Int
+dataChoice x y = readData (chooseData x y)
+
+{-# NOINLINE firstPair #-}
+firstPair :: Choice -> Int
+firstPair (Two x _) = x
+firstPair _ = I# 0#
+
+{-# NOINLINE dataPair #-}
+dataPair :: Int -> Int -> Int
+dataPair x y = firstPair (Two x y)
+
+{-# NOINLINE readNested #-}
+readNested :: Nested -> Int
+readNested (Nested a b) = case a of
+  Empty -> readData b
+  One x -> x
+  Two x _ -> x
+
+{-# NOINLINE dataNested #-}
+dataNested :: Int -> Int -> Int
+dataNested x y = readNested (Nested (chooseData x y) (One y))
+
+{-# NOINLINE dataDefault #-}
+dataDefault :: Int -> Int -> Int
+dataDefault x y = firstPair (chooseData x y)
+
+{-# NOINLINE dataLazy #-}
+dataLazy :: Int -> Int -> Int
+dataLazy x y = firstPair (Two x (boxedSum y y))
+
+{-# NOINLINE readStrict #-}
+readStrict :: StrictPair -> Int
+readStrict (StrictPair _ y) = y
+
+{-# NOINLINE dataStrict #-}
+dataStrict :: Int -> Int -> Int
+dataStrict x y = readStrict (StrictPair x y)
+
+{-# NOINLINE readMaybe #-}
+readMaybe :: Maybe Int -> Int
+readMaybe Nothing = I# 0#
+readMaybe (Just x) = x
+
+{-# NOINLINE dataMaybe #-}
+dataMaybe :: Int -> Int -> Int
+dataMaybe x y = boxedSum (readMaybe (Just x)) (readMaybe Nothing)
+
+{-# NOINLINE listFirst #-}
+listFirst :: [Int] -> Int
+listFirst [] = I# 0#
+listFirst (x:_) = x
+
+{-# NOINLINE dataList #-}
+dataList :: Int -> Int -> Int
+dataList x y = listFirst [x, y]
+
+{-# NOINLINE inspectAgain #-}
+inspectAgain :: Choice -> Int
+inspectAgain c = case c of
+  Empty -> I# 0#
+  other -> readData other
+
+{-# NOINLINE dataCaseBinder #-}
+dataCaseBinder :: Int -> Int -> Int
+dataCaseBinder x y = inspectAgain (chooseData x y)
+
+{-# NOINLINE forward #-}
+forward :: Int# -> Int# -> Int#
+forward x y = first y x
+
+{-# NOINLINE constant #-}
+constant :: Int# -> Int#
+constant x = first 42# x
+
+{-# NOINLINE add #-}
+add :: Int# -> Int# -> Int#
+add x y = x +# y
+
+{-# NOINLINE subtractInt #-}
+subtractInt :: Int# -> Int# -> Int#
+subtractInt x y = x -# y
+
+{-# NOINLINE multiply #-}
+multiply :: Int# -> Int# -> Int#
+multiply x y = x *# y
+
+{-# NOINLINE composed #-}
+composed :: Int# -> Int# -> Int#
+composed x y = (x +# y) *# (x -# y)
+
+{-# NOINLINE chained #-}
+chained :: Int# -> Int# -> Int#
+chained x y = first (add x y) (subtractInt x y) *# y
+
+{-# NOINLINE shared #-}
+shared :: Int# -> Int# -> Int#
+shared x y = case add x y of
+  z -> first (z *# y) z -# z
+
+{-# NOINLINE eqInt #-}
+eqInt :: Int# -> Int# -> Int#
+eqInt x y = x ==# y
+
+{-# NOINLINE neInt #-}
+neInt :: Int# -> Int# -> Int#
+neInt x y = x /=# y
+
+{-# NOINLINE ltInt #-}
+ltInt :: Int# -> Int# -> Int#
+ltInt x y = x <# y
+
+{-# NOINLINE leInt #-}
+leInt :: Int# -> Int# -> Int#
+leInt x y = x <=# y
+
+{-# NOINLINE gtInt #-}
+gtInt :: Int# -> Int# -> Int#
+gtInt x y = x ># y
+
+{-# NOINLINE geInt #-}
+geInt :: Int# -> Int# -> Int#
+geInt x y = x >=# y
+
+{-# NOINLINE minimumInt #-}
+minimumInt :: Int# -> Int# -> Int#
+minimumInt x y = case x <# y of
+  0# -> y
+  _ -> x
+
+{-# NOINLINE selectInt #-}
+selectInt :: Int# -> Int# -> Int#
+selectInt x y = case x of
+  -9223372036854775808# -> y -# 1#
+  -1# -> y *# 2#
+  0# -> add y 7#
+  1# -> subtractInt y 3#
+  9223372036854775807# -> y +# 1#
+  other -> first other y
+
+{-# NOINLINE nestedBranch #-}
+nestedBranch :: Int# -> Int# -> Int#
+nestedBranch x y = case add x y of
+  z -> case z <# x of
+    0# -> case y ==# 0# of
+      0# -> multiply z y
+      _ -> subtractInt z 1#
+    _ -> case x of
+      0# -> first y z
+      _ -> add z x
+
+{-# NOINLINE operandBranches #-}
+operandBranches :: Int# -> Int# -> Int#
+operandBranches x y =
+  (case x of { 0# -> y; a -> a +# y }) *#
+  (case y of { 1# -> x; b -> b -# x })
+
+{-# NOINLINE scrutineeBranch #-}
+scrutineeBranch :: Int# -> Int# -> Int#
+scrutineeBranch x y = case (case x of { 0# -> y; a -> a -# y }) of
+  0# -> add x y
+  1# -> multiply x y
+  z -> subtractInt z x
+
+{-# NOINLINE sharedBranch #-}
+sharedBranch :: Int# -> Int# -> Int#
+sharedBranch x y = case add x y of
+  z -> z +# (case z <# x of { 0# -> z *# y; _ -> z -# x })
+
+{-# NOINLINE branchCall #-}
+branchCall :: Int# -> Int# -> Int#
+branchCall x y = first
+  (case x of { 0# -> y; a -> a +# y })
+  (case y of { 0# -> x; b -> b -# x })
+
+{-# NOINLINE makeBox #-}
+makeBox :: Int# -> Int# -> Int
+makeBox x y = I# (x +# y)
+
+{-# NOINLINE boxedSum #-}
+boxedSum :: Int -> Int -> Int
+boxedSum (I# x) (I# y) = I# (x +# y)
+
+{-# NOINLINE boxedIgnore #-}
+boxedIgnore :: Int -> Int -> Int
+boxedIgnore x _ = x
+
+{-# NOINLINE boxedChoose #-}
+boxedChoose :: Int -> Int -> Int
+boxedChoose x y = case x of
+  I# n -> case n of { 0# -> y; _ -> x }
+
+{-# NOINLINE boxedRoundTrip #-}
+boxedRoundTrip :: Int# -> Int# -> Int#
+boxedRoundTrip x y = case makeBox x y of I# z -> z
+
+{-# NOINLINE boxedCaf #-}
+boxedCaf :: Int
+boxedCaf = I# 42#
+
+{-# NOINLINE boxedShared #-}
+boxedShared :: Int# -> Int# -> Int#
+boxedShared x y = case boxedIgnore boxedCaf boxedCaf of I# z -> z +# x +# y
+
+{-# NOINLINE boxedStrictIgnore #-}
+boxedStrictIgnore :: Int -> Int -> Int
+boxedStrictIgnore x y = case x of I# _ -> y
+
+{-# NOINLINE lazyArgument #-}
+lazyArgument :: Int -> Int -> Int
+lazyArgument x y = boxedIgnore x (boxedSum y y)
+
+{-# NOINLINE lazyLet #-}
+lazyLet :: Int -> Int -> Int
+lazyLet x y = let z = boxedSum x y in boxedSum z z
+
+{-# NOINLINE lazyNested #-}
+lazyNested :: Int -> Int -> Int
+lazyNested x y =
+  let a = boxedSum x y
+      b = boxedSum a x
+  in boxedSum b a
+
+{-# NOINLINE lazyUnused #-}
+lazyUnused :: Int -> Int -> Int
+lazyUnused x y = let z = boxedSum y y in boxedIgnore x z
+
+{-# NOINLINE lazyBranch #-}
+lazyBranch :: Int -> Int -> Int
+lazyBranch x y = boxedIgnore x (case y of I# n -> I# (n +# 1#))
+
+{-# NOINLINE lazyStrictUse #-}
+lazyStrictUse :: Int -> Int -> Int
+lazyStrictUse x y = let z = boxedSum x y in case z of I# n -> I# (n +# n)
+
+--------------------------------------------------------------------------------
+-- Characters and string literals.
+--
+-- Every entry takes and returns Int#, so the existing integer CLI adapter can
+-- drive it, but the work in between is Char# arithmetic and a [Char] built by
+-- GHC.CString's unpackers. The traversals are written here rather than taken
+-- from base, so what is compared against GHC is translated Haskell.
+--------------------------------------------------------------------------------
+
+-- chr# then ord# is the identity on a code point, including the boundaries.
+{-# NOINLINE charRoundTrip #-}
+charRoundTrip :: Int# -> Int# -> Int#
+charRoundTrip x _ = ord# (chr# x)
+
+-- All six Char# comparisons at once, packed into one Int#. Each returns 0 or 1,
+-- so the result is a bit field and one wrong operator changes it.
+{-# NOINLINE charOrder #-}
+charOrder :: Int# -> Int# -> Int#
+charOrder x y = case chr# x of
+  a -> case chr# y of
+    b -> (a `eqChar#` b)
+      +# ((a `neChar#` b) *# 2#)
+      +# ((a `ltChar#` b) *# 4#)
+      +# ((a `leChar#` b) *# 8#)
+      +# ((a `gtChar#` b) *# 16#)
+      +# ((a `geChar#` b) *# 32#)
+
+-- A switch whose scrutinee is a Char#, with literal alternatives.
+{-# NOINLINE charSwitch #-}
+charSwitch :: Int# -> Int# -> Int#
+charSwitch x _ = case chr# x of
+  'a'# -> 1#
+  'z'# -> 26#
+  '\n'# -> 100#
+  _ -> 0#
+
+-- A Char# inside a boxed Char, matched back out.
+{-# NOINLINE charField #-}
+charField :: Int# -> Int# -> Int#
+charField x y = case C# (chr# x) of
+  C# c -> case C# (chr# y) of
+    C# d -> ord# c +# ord# d
+
+{-# NOINLINE countChars #-}
+countChars :: [Char] -> Int# -> Int#
+countChars [] n = n
+countChars (_ : cs) n = countChars cs (n +# 1#)
+
+{-# NOINLINE sumChars #-}
+sumChars :: [Char] -> Int# -> Int#
+sumChars [] n = n
+sumChars (C# c : cs) n = sumChars cs (n +# ord# c)
+
+{-# NOINLINE indexChars #-}
+indexChars :: [Char] -> Int# -> Int#
+indexChars [] _ = -1#
+indexChars (C# c : cs) n = case n ==# 0# of
+  1# -> ord# c
+  _ -> indexChars cs (n -# 1#)
+
+-- Length of an ASCII literal: unpackCString# walked to its end.
+{-# NOINLINE stringLength #-}
+stringLength :: Int# -> Int# -> Int#
+stringLength _ _ = countChars "shellcheck" 0#
+
+-- Indexing past the end returns -1, so out-of-range is exercised too.
+{-# NOINLINE stringIndex #-}
+stringIndex :: Int# -> Int# -> Int#
+stringIndex x _ = indexChars "shellcheck" x
+
+-- The empty literal: no cell at all.
+{-# NOINLINE stringEmpty #-}
+stringEmpty :: Int# -> Int# -> Int#
+stringEmpty _ _ = countChars "" 0#
+
+-- Non-ASCII, so GHC emits unpackCStringUtf8# with modified UTF-8 bytes.
+-- Two, three and four byte sequences, and a combining mark.
+{-# NOINLINE stringUnicode #-}
+stringUnicode :: Int# -> Int# -> Int#
+stringUnicode _ _ = countChars "héllo wörld \955 \8364 \119070 e\769" 0#
+
+{-# NOINLINE stringUnicodeIndex #-}
+stringUnicodeIndex :: Int# -> Int# -> Int#
+stringUnicodeIndex x _ = indexChars "héllo wörld \955 \8364 \119070 e\769" x
+
+-- A NUL inside a literal, which GHC encodes as the overlong C0 80.
+{-# NOINLINE stringNulByte #-}
+stringNulByte :: Int# -> Int# -> Int#
+stringNulByte x _ = indexChars "a\0\&b\0\&c" x
+
+-- The top of Latin-1, which is still two UTF-8 bytes.
+{-# NOINLINE stringHighLatin1 #-}
+stringHighLatin1 :: Int# -> Int# -> Int#
+stringHighLatin1 x _ = indexChars "\255\254\128\127" x
+
+-- Two literals joined. At -O1 GHC folds this to one literal, so what it
+-- covers is the folded form; `stringAppendShared` is the one that reaches
+-- the appending unpacker.
+{-# NOINLINE stringAppend #-}
+stringAppend :: Int# -> Int# -> Int#
+stringAppend x _ = indexChars ("shell" ++ "check") x
+
+-- A literal appended to something GHC cannot fold into it. This is the shape
+-- that becomes `unpackAppendCString#` at -O1 and `++` at -O0, and without it
+-- the appending unpackers have no differential coverage at all.
+{-# NOINLINE stringAppendShared #-}
+stringAppendShared :: Int# -> Int# -> Int#
+stringAppendShared x _ = indexChars ("say " ++ greeting) x
+
+-- One literal read twice: the CAF must be shared, not rebuilt.
+{-# NOINLINE stringShared #-}
+stringShared :: Int# -> Int# -> Int#
+stringShared x y = indexChars greeting x +# indexChars greeting y
+
+{-# NOINLINE greeting #-}
+greeting :: [Char]
+greeting = "hello, world"
+
+-- A traversal that is bound and never demanded. Walking the literal here
+-- would be observable only as wasted work, so the check is that the lazy
+-- argument still reaches `boxedIgnore` unforced.
+{-# NOINLINE stringUnused #-}
+stringUnused :: Int# -> Int# -> Int#
+stringUnused x _ = case boxedIgnore (I# x) (I# (sumChars "never demanded" 0#)) of
+  I# n -> n
+
+-- Only the first character is demanded, so only it may be decoded.
+{-# NOINLINE stringLazyHead #-}
+stringLazyHead :: Int# -> Int# -> Int#
+stringLazyHead _ _ = indexChars "abcdefghijklmnopqrstuvwxyz" 0#
+
+-- The sum of every code point: the whole spine and every character.
+{-# NOINLINE stringCount #-}
+stringCount :: Int# -> Int# -> Int#
+stringCount _ _ = sumChars "héllo wörld" 0#
+
+-- A value defined in terms of itself. Its cells are a cycle, not a tree, and
+-- this backend has no way to tie that knot: `Lazy::force` panics on re-entry
+-- rather than looping. Emission must refuse it, which is what the canary
+-- checks — a wrong answer here would be a miscompile, not a missing feature.
+-- As an entry it is refused for its type; reached from one, for its cycle.
+{-# NOINLINE recursiveValue #-}
+recursiveValue :: [Char]
+recursiveValue = 'x' : recursiveValue
+
+{-# NOINLINE recursiveValueUse #-}
+recursiveValueUse :: Int# -> Int# -> Int#
+recursiveValueUse x _ = indexChars recursiveValue x
+
+--------------------------------------------------------------------------------
+-- Computations that would stop the program, never demanded.
+--
+-- `error` and its family are the bindings GHC's demand analysis marks as dead
+-- ends: the call does not return. A thunk holding one is still an ordinary
+-- value as long as nothing forces it, and these check exactly that — if the
+-- backend evaluated a lazy binding eagerly, every one of them would abort
+-- instead of answering, in every profile and at every input.
+--
+-- The errorUnused fixtures never force their errors. The forced probes
+-- below compare GHC's output with generated executables.
+--------------------------------------------------------------------------------
+
+-- Forced errorWithoutStackTrace messages, including a computed String.
+{-# NOINLINE errorPlain #-}
+errorPlain :: Int# -> Int# -> Int
+errorPlain _ _ = errorWithoutStackTrace "canary failure"
+
+{-# NOINLINE errorUnboxed #-}
+errorUnboxed :: Int# -> Int# -> Int#
+errorUnboxed _ _ = case (errorWithoutStackTrace "canary failure" :: Int) of I# n -> n
+
+{-# NOINLINE errorEmpty #-}
+errorEmpty :: Int# -> Int# -> Int
+errorEmpty _ _ = errorWithoutStackTrace ""
+
+{-# NOINLINE errorUnicode #-}
+errorUnicode :: Int# -> Int# -> Int
+errorUnicode _ _ = errorWithoutStackTrace "fout: λ 🐚"
+
+{-# NOINLINE errorMultiline #-}
+errorMultiline :: Int# -> Int# -> Int
+errorMultiline _ _ = errorWithoutStackTrace "first\nsecond\n"
+
+{-# NOINLINE errorNul #-}
+errorNul :: Int# -> Int# -> Int
+errorNul _ _ = errorWithoutStackTrace "a\0b"
+
+{-# NOINLINE errorChar #-}
+errorChar :: Int# -> Int# -> Int
+errorChar x _ = errorWithoutStackTrace (C# (chr# x) : "tail")
+
+{-# NOINLINE errorNulNested #-}
+errorNulNested :: Int# -> Int# -> Int
+errorNulNested _ _ = errorWithoutStackTrace ("a\0" ++ errorWithoutStackTrace "inner after NUL")
+
+{-# NOINLINE errorNestedMessage #-}
+errorNestedMessage :: Int# -> Int# -> Int
+errorNestedMessage _ _ = errorWithoutStackTrace ("outer: " ++ errorWithoutStackTrace "inner")
+
+{-# NOINLINE messagePart #-}
+messagePart :: Int# -> String
+messagePart x = case x ==# 0# of
+  1# -> "computed: "
+  _ -> "other: "
+
+{-# NOINLINE errorComputed #-}
+errorComputed :: Int# -> Int# -> Int
+errorComputed x _ = errorWithoutStackTrace (messagePart x ++ "λ 🐚")
+
+{-# NOINLINE errorBranch #-}
+errorBranch :: Int# -> Int# -> Int
+errorBranch x y = case x ==# 0# of
+  1# -> errorWithoutStackTrace (messagePart x ++ "λ 🐚")
+  _ -> I# y
+
+{-# NOINLINE errorLazyArgument #-}
+errorLazyArgument :: Int# -> Int# -> Int#
+errorLazyArgument x _ = case boxedIgnore (I# x) (errorWithoutStackTrace "unused argument") of
+  I# n -> n
+
+{-# NOINLINE errorLazyShared #-}
+errorLazyShared :: Int# -> Int# -> Int#
+errorLazyShared x y =
+  let z = errorWithoutStackTrace "unused shared" :: Int
+  in case boxedIgnore (I# x) z of
+       I# a -> case boxedIgnore (I# y) z of
+         I# b -> a +# b
+
+{-# NOINLINE errorLazyField #-}
+errorLazyField :: Int# -> Int# -> Int#
+errorLazyField x _ = case firstErrorPair (ErrorPair (I# x) (errorWithoutStackTrace "unused field")) of
+  I# n -> n
+
+data ErrorPair = ErrorPair Int Int
+
+{-# NOINLINE firstErrorPair #-}
+firstErrorPair :: ErrorPair -> Int
+firstErrorPair (ErrorPair a _) = a
+
+-- A failing argument passed to a function that ignores it.
+{-# NOINLINE errorUnusedArgument #-}
+errorUnusedArgument :: Int# -> Int# -> Int#
+errorUnusedArgument x _ = case boxedIgnore (I# x) (error "never demanded") of
+  I# n -> n
+
+-- A failing computation bound by `let` and never demanded.
+{-# NOINLINE errorUnusedLet #-}
+errorUnusedLet :: Int# -> Int# -> Int#
+errorUnusedLet x _ =
+  let z = error "never demanded" :: Int
+  in case boxedIgnore (I# x) z of I# n -> n
+
+-- One failing thunk read twice, and ignored twice: sharing a dead end must
+-- not force it either.
+{-# NOINLINE errorUnusedShared #-}
+errorUnusedShared :: Int# -> Int# -> Int#
+errorUnusedShared x y =
+  let z = error "never demanded" :: Int
+  in case boxedIgnore (I# x) z of
+       I# a -> case boxedIgnore (I# y) z of
+         I# b -> a +# b
+
+-- `undefined` ignored: GHC's demand evidence says it never returns, and no more.
+{-# NOINLINE undefinedUnused #-}
+undefinedUnused :: Int# -> Int# -> Int#
+undefinedUnused x _ = case boxedIgnore (I# x) undefined of
+  I# n -> n
+
+{-# NOINLINE patternFail #-}
+patternFail :: Int# -> Int# -> Int
+patternFail x _ = case x of
+  0# -> 1
+
+--------------------------------------------------------------------------------
+-- Text-processing programs.
+--
+-- Whole algorithms rather than single operations: splitting, searching,
+-- reversing, filtering, mapping, slicing, zipping and comparing. Each is
+-- ordinary Haskell over `[Char]`, translated from its own Core — none of it is
+-- a Rust implementation of the same idea wearing a Haskell name.
+--
+-- Together they walk literals end to end, build new lists cell by cell,
+-- compare code points, and carry `Char#` through `ord#`/`chr#` arithmetic, so
+-- a defect in the string machinery shows up as a wrong answer rather than as a
+-- refusal.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE countFields #-}
+countFields :: Char# -> [Char] -> Int# -> Int#
+countFields _ [] n = n +# 1#
+countFields sep (C# c : cs) n = case eqChar# c sep of
+  1# -> countFields sep cs (n +# 1#)
+  _ -> countFields sep cs n
+
+{-# NOINLINE textWords #-}
+textWords :: Int# -> Int# -> Int#
+textWords _ _ = countFields ' '# "the quick brown fox jumps over the lazy dog" 0#
+
+{-# NOINLINE textLines #-}
+textLines :: Int# -> Int# -> Int#
+textLines _ _ = countFields '\n'# "one\ntwo\nthree\n" 0#
+
+{-# NOINLINE textUnicodeWords #-}
+textUnicodeWords :: Int# -> Int# -> Int#
+textUnicodeWords _ _ = countFields ' '# "h\233llo w\246rld \955 \8364 \119070" 0#
+
+{-# NOINLINE startsWith #-}
+-- Matching two lists at once is not visibly exhaustive to GHC, which then
+-- inserts a `patError` call. These are written so it does not have to: every
+-- case below covers its scrutinee, so the algorithm is the subject rather than
+-- GHC's incomplete-pattern machinery.
+startsWith :: [Char] -> [Char] -> Int#
+startsWith [] _ = 1#
+startsWith (p : ps) haystack = case haystack of
+  [] -> 0#
+  (c : cs) -> case p of
+    C# pc -> case c of
+      C# cc -> case eqChar# pc cc of
+        1# -> startsWith ps cs
+        _ -> 0#
+
+{-# NOINLINE indexOf #-}
+indexOf :: [Char] -> [Char] -> Int# -> Int#
+indexOf _ [] _ = -1#
+indexOf needle haystack@(_ : cs) n = case startsWith needle haystack of
+  1# -> n
+  _ -> indexOf needle cs (n +# 1#)
+
+{-# NOINLINE textFind #-}
+textFind :: Int# -> Int# -> Int#
+textFind _ _ = indexOf "brown" "the quick brown fox" 0#
+
+{-# NOINLINE revOnto #-}
+revOnto :: [Char] -> [Char] -> [Char]
+revOnto [] acc = acc
+revOnto (c : cs) acc = revOnto cs (c : acc)
+
+{-# NOINLINE textReverse #-}
+textReverse :: Int# -> Int# -> Int#
+textReverse x _ = indexChars (revOnto "shellcheck" []) x
+
+{-# NOINLINE keepBelow #-}
+keepBelow :: Char# -> [Char] -> [Char]
+keepBelow _ [] = []
+keepBelow limit (C# c : cs) = case ltChar# c limit of
+  1# -> C# c : keepBelow limit cs
+  _ -> keepBelow limit cs
+
+{-# NOINLINE textFilter #-}
+textFilter :: Int# -> Int# -> Int#
+textFilter _ _ = sumChars (keepBelow 'm'# "the quick brown fox") 0#
+
+{-# NOINLINE shiftChars #-}
+shiftChars :: Int# -> [Char] -> [Char]
+shiftChars _ [] = []
+shiftChars d (C# c : cs) = C# (chr# (ord# c +# d)) : shiftChars d cs
+
+{-# NOINLINE textMap #-}
+textMap :: Int# -> Int# -> Int#
+textMap _ _ = sumChars (shiftChars 1# "abcxyz") 0#
+
+{-# NOINLINE takeChars #-}
+takeChars :: Int# -> [Char] -> [Char]
+takeChars n cs = case n <=# 0# of
+  1# -> []
+  _ -> case cs of
+    [] -> []
+    (c : rest) -> c : takeChars (n -# 1#) rest
+
+{-# NOINLINE dropChars #-}
+dropChars :: Int# -> [Char] -> [Char]
+dropChars n cs = case n <=# 0# of
+  1# -> cs
+  _ -> case cs of
+    [] -> []
+    (_ : rest) -> dropChars (n -# 1#) rest
+
+-- The one that reads both inputs: every boundary pair slices differently.
+{-# NOINLINE textSlice #-}
+textSlice :: Int# -> Int# -> Int#
+textSlice x y = sumChars (takeChars y (dropChars x "abcdefghijklmnopqrstuvwxyz")) 0#
+
+{-# NOINLINE zipSum #-}
+zipSum :: [Char] -> [Char] -> Int# -> Int#
+zipSum [] _ n = n
+zipSum (a : as) bs n = case bs of
+  [] -> n
+  (b : rest) -> case a of
+    C# ac -> case b of
+      C# bc -> zipSum as rest (n +# ord# ac *# ord# bc)
+
+{-# NOINLINE textZip #-}
+textZip :: Int# -> Int# -> Int#
+textZip _ _ = zipSum "hello" "world!" 0#
+
+{-# NOINLINE compareChars #-}
+compareChars :: [Char] -> [Char] -> Int#
+compareChars [] bs = case bs of
+  [] -> 0#
+  (_ : _) -> -1#
+compareChars (a : as) bs = case bs of
+  [] -> 1#
+  (b : rest) -> case a of
+    C# ac -> case b of
+      C# bc -> case ltChar# ac bc of
+        1# -> -1#
+        _ -> case gtChar# ac bc of
+          1# -> 1#
+          _ -> compareChars as rest
+
+{-# NOINLINE textCompare #-}
+textCompare :: Int# -> Int# -> Int#
+textCompare _ _ = compareChars "apple" "apricot"
+
+--------------------------------------------------------------------------------
+-- Library list predicates, called directly so both profiles reach the library bindings.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE truth #-}
+truth :: Bool -> Int#
+truth True = 1#
+truth False = 0#
+
+{-# NOINLINE predicateText #-}
+predicateText :: [Char]
+predicateText = "ab\233\955\128026z"
+
+{-# NOINLINE charOf #-}
+charOf :: Int# -> Char
+charOf x = case dropChars x predicateText of
+  c : _ -> c
+  [] -> 'q'
+
+{-# NOINLINE stringEqual #-}
+stringEqual :: Int# -> Int# -> Int#
+stringEqual x y = truth (eqString (takeChars x predicateText) (takeChars y predicateText))
+
+-- `==` at String, which GHC's own RULE rewrites to `eqString` when optimising.
+{-# NOINLINE stringEqualRule #-}
+stringEqualRule :: Int# -> Int# -> Int#
+stringEqualRule x _ = truth (takeChars x predicateText == "ab\233")
+
+{-# NOINLINE stringEqualLazy #-}
+stringEqualLazy :: Int# -> Int# -> Int#
+stringEqualLazy x _ =
+  truth (eqString (charOf x : errorWithoutStackTrace "left tail") ('#' : errorWithoutStackTrace "right tail"))
+
+{-# NOINLINE elemChar #-}
+elemChar :: Int# -> Int# -> Int#
+elemChar x y = truth (List.elem (charOf x) (takeChars y predicateText))
+
+{-# NOINLINE elemString #-}
+elemString :: Int# -> Int# -> Int#
+elemString x _ = truth (List.elem (takeChars x predicateText) stringChoices)
+
+{-# NOINLINE stringChoices #-}
+stringChoices :: [[Char]]
+stringChoices = ["", "ab", "ab\233\955", predicateText]
+
+{-# NOINLINE elemLazy #-}
+elemLazy :: Int# -> Int# -> Int#
+elemLazy x _ = truth (List.elem (charOf (x <# 1#)) ('a' : 'b' : errorWithoutStackTrace "elem tail"))
+
+{-# NOINLINE prefixOf #-}
+prefixOf :: Int# -> Int# -> Int#
+prefixOf x y = truth (isPrefixOf (takeChars x predicateText) (takeChars y predicateText))
+
+{-# NOINLINE prefixLazy #-}
+prefixLazy :: Int# -> Int# -> Int#
+prefixLazy x _ =
+  truth (isPrefixOf (takeChars x "") (errorWithoutStackTrace "unused list"))
+    +# truth (isPrefixOf ('a' : charOf x : []) ('a' : '#' : errorWithoutStackTrace "unused rest"))
+
+{-# NOINLINE answer #-}
+answer :: Bool -> Int# -> Int
+answer b y = case b of
+  True -> I# y
+  False -> I# (0# -# y)
+
+{-# NOINLINE eqSpineOrder #-}
+eqSpineOrder :: Int# -> Int# -> Int
+eqSpineOrder _ y = answer (eqString (errorWithoutStackTrace "left spine") (errorWithoutStackTrace "right spine")) y
+
+{-# NOINLINE eqRightSpine #-}
+eqRightSpine :: Int# -> Int# -> Int
+eqRightSpine x y = answer (eqString (takeChars x "") (errorWithoutStackTrace "right spine")) y
+
+{-# NOINLINE eqElementOrder #-}
+eqElementOrder :: Int# -> Int# -> Int
+eqElementOrder _ y = answer (eqString [errorWithoutStackTrace "left char"] [errorWithoutStackTrace "right char"]) y
+
+{-# NOINLINE elemSpineFirst #-}
+elemSpineFirst :: Int# -> Int# -> Int
+elemSpineFirst _ y = answer (List.elem (errorWithoutStackTrace "needle" :: Char) (errorWithoutStackTrace "spine")) y
+
+{-# NOINLINE elemNeedleOrder #-}
+elemNeedleOrder :: Int# -> Int# -> Int
+elemNeedleOrder _ y = answer (List.elem (errorWithoutStackTrace "needle" :: Char) [errorWithoutStackTrace "element"]) y
+
+{-# NOINLINE elemNeedleUnused #-}
+elemNeedleUnused :: Int# -> Int# -> Int
+elemNeedleUnused x y = case List.elem (errorWithoutStackTrace "needle" :: Char) (takeChars x predicateText) of
+  False -> I# y
+  True -> I# (0# -# y)
+
+{-# NOINLINE prefixOrder #-}
+prefixOrder :: Int# -> Int# -> Int
+prefixOrder _ y = answer (isPrefixOf (errorWithoutStackTrace "prefix spine" :: [Char]) (errorWithoutStackTrace "list spine")) y
+
+{-# NOINLINE prefixListOrder #-}
+prefixListOrder :: Int# -> Int# -> Int
+prefixListOrder _ y = answer (isPrefixOf "a" (errorWithoutStackTrace "list spine")) y
+
+{-# NOINLINE prefixElementOrder #-}
+prefixElementOrder :: Int# -> Int# -> Int
+prefixElementOrder _ y = answer (isPrefixOf [errorWithoutStackTrace "prefix char" :: Char] [errorWithoutStackTrace "list char"]) y
+
+{-# NOINLINE ordering #-}
+ordering :: Ordering -> Int#
+ordering LT = -1#
+ordering EQ = 0#
+ordering GT = 1#
+
+{-# NOINLINE compareStrings #-}
+compareStrings :: Int# -> Int# -> Int#
+compareStrings x y = ordering (compare (takeChars x predicateText) (takeChars y predicateText))
+
+{-# NOINLINE compareLazy #-}
+compareLazy :: Int# -> Int# -> Int#
+compareLazy x _ =
+  ordering (compare (charOf x : errorWithoutStackTrace "left tail") ('#' : errorWithoutStackTrace "right tail"))
+
+-- GHC orders `Char#` as an unsigned word, so a negative `chr#` sorts last.
+{-# NOINLINE compareUnsigned #-}
+compareUnsigned :: Int# -> Int# -> Int#
+compareUnsigned x y = ordering (compare [C# (chr# x)] [C# (chr# y)])
+
+{-# NOINLINE compareSpineOrder #-}
+compareSpineOrder :: Int# -> Int# -> Int
+compareSpineOrder _ y = case compare (errorWithoutStackTrace "left spine" :: String) (errorWithoutStackTrace "right spine") of
+  EQ -> I# y
+  _ -> I# (0# -# y)
+
+{-# NOINLINE compareRightSpine #-}
+compareRightSpine :: Int# -> Int# -> Int
+compareRightSpine x y = case compare (takeChars x "") (errorWithoutStackTrace "right spine") of
+  EQ -> I# y
+  _ -> I# (0# -# y)
+
+{-# NOINLINE compareElementOrder #-}
+compareElementOrder :: Int# -> Int# -> Int
+compareElementOrder _ y = case compare [errorWithoutStackTrace "left char" :: Char] [errorWithoutStackTrace "right char"] of
+  EQ -> I# y
+  _ -> I# (0# -# y)
+
+--------------------------------------------------------------------------------
+-- Library list functions: map, filter, takeWhile, dropWhile, reverse, length,
+-- and base's SpecConstr specialisation of `(x : xs) ++ ys`.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE bump #-}
+bump :: Int# -> Char -> Char
+bump d (C# c) = C# (chr# (ord# c +# d))
+
+{-# NOINLINE below #-}
+below :: Int# -> Char -> Bool
+below limit (C# c) = case ord# c <# limit of
+  1# -> True
+  _ -> False
+
+{-# NOINLINE scaleChar #-}
+scaleChar :: Int# -> Char -> Int
+scaleChar d (C# c) = I# (ord# c *# d)
+
+{-# NOINLINE adder #-}
+adder :: Char -> Int -> Int
+adder (C# c) (I# n) = I# (n +# ord# c)
+
+{-# NOINLINE applyEach #-}
+applyEach :: [Int -> Int] -> Int -> Int
+applyEach [] n = n
+applyEach (f : fs) n = applyEach fs (f n)
+
+{-# NOINLINE lazyLetters #-}
+lazyLetters :: [Char]
+lazyLetters = 'a' : 'z' : errorWithoutStackTrace "lazy letters"
+
+{-# NOINLINE unforcedChars #-}
+unforcedChars :: [Char]
+unforcedChars = [errorWithoutStackTrace "first char", errorWithoutStackTrace "second char"]
+
+{-# NOINLINE spineError #-}
+spineError :: [Char]
+spineError = errorWithoutStackTrace "list spine"
+
+{-# NOINLINE elementError #-}
+elementError :: [Char]
+elementError = [errorWithoutStackTrace "list element"]
+
+{-# NOINLINE tailError #-}
+tailError :: [Char]
+tailError = 'a' : errorWithoutStackTrace "list tail"
+
+{-# NOINLINE mapChars #-}
+mapChars :: Int# -> Int# -> Int#
+mapChars x y = indexChars (map (bump y) (takeChars x predicateText)) (x -# 1#)
+
+{-# NOINLINE mapInts #-}
+mapInts :: Int# -> Int# -> Int
+mapInts x y = listSum (map (scaleChar y) (takeChars x predicateText))
+
+{-# NOINLINE mapFunctions #-}
+mapFunctions :: Int# -> Int# -> Int
+mapFunctions x y = applyEach (map adder (takeChars x predicateText)) (I# y)
+
+{-# NOINLINE mapLazy #-}
+mapLazy :: Int# -> Int# -> Int#
+mapLazy _ y = indexChars (map (bump y) lazyLetters) 0#
+
+{-# NOINLINE mapUnapplied #-}
+mapUnapplied :: Int# -> Int# -> Int#
+mapUnapplied x y = countChars (map (errorWithoutStackTrace "map function") (takeChars x predicateText)) y
+
+{-# NOINLINE filterChars #-}
+filterChars :: Int# -> Int# -> Int#
+filterChars x y = indexChars (filter (below (y *# 50#)) (takeChars x predicateText)) 1#
+
+{-# NOINLINE filterLazy #-}
+filterLazy :: Int# -> Int# -> Int#
+filterLazy _ y = indexChars (filter (below 98#) lazyLetters) 0# +# y
+
+{-# NOINLINE takeWhileChars #-}
+takeWhileChars :: Int# -> Int# -> Int#
+takeWhileChars x y = sumChars (takeWhile (below (y *# 50#)) (takeChars x predicateText)) 0#
+
+{-# NOINLINE takeWhileLazy #-}
+takeWhileLazy :: Int# -> Int# -> Int#
+takeWhileLazy _ y = countChars (takeWhile (below 98#) lazyLetters) y
+
+{-# NOINLINE dropWhileChars #-}
+dropWhileChars :: Int# -> Int# -> Int#
+dropWhileChars x y = indexChars (dropWhile (below (y *# 50#)) (takeChars x predicateText)) 0#
+
+{-# NOINLINE dropWhileLazy #-}
+dropWhileLazy :: Int# -> Int# -> Int#
+dropWhileLazy _ y = indexChars (dropWhile (below 98#) lazyLetters) 0# +# y
+
+{-# NOINLINE reverseChars #-}
+reverseChars :: Int# -> Int# -> Int#
+reverseChars x y = indexChars (List.reverse (takeChars x predicateText)) y
+
+{-# NOINLINE reverseLazy #-}
+reverseLazy :: Int# -> Int# -> Int#
+reverseLazy x _ = countChars (List.reverse unforcedChars) x
+
+{-# NOINLINE lengthChars #-}
+lengthChars :: Int# -> Int# -> Int#
+lengthChars x y = case List.length (takeChars x predicateText) of
+  I# n -> n +# y
+
+{-# NOINLINE lengthLazy #-}
+lengthLazy :: Int# -> Int# -> Int#
+lengthLazy x _ = case List.length unforcedChars of
+  I# n -> n +# x
+
+{-# NOINLINE consAppend #-}
+consAppend :: Int# -> Int# -> Int#
+consAppend x y = indexChars ((charOf x : takeChars x predicateText) ++ predicateText) y
+
+{-# NOINLINE consAppendLazy #-}
+consAppendLazy :: Int# -> Int# -> Int#
+consAppendLazy x _ =
+  indexChars ((charOf x : errorWithoutStackTrace "left rest") ++ errorWithoutStackTrace "right list") 0#
+
+{-# NOINLINE mapSpine #-}
+mapSpine :: Int# -> Int# -> Int
+mapSpine _ y = I# (countChars (map (bump y) spineError) 0#)
+
+{-# NOINLINE mapFunctionForced #-}
+mapFunctionForced :: Int# -> Int# -> Int
+mapFunctionForced _ _ = I# (indexChars (map (errorWithoutStackTrace "map function") lazyLetters) 0#)
+
+{-# NOINLINE filterPredicate #-}
+filterPredicate :: Int# -> Int# -> Int
+filterPredicate _ _ = I# (countChars (filter (errorWithoutStackTrace "filter predicate") lazyLetters) 0#)
+
+{-# NOINLINE takeWhileElement #-}
+takeWhileElement :: Int# -> Int# -> Int
+takeWhileElement _ _ = I# (countChars (takeWhile (below 98#) elementError) 0#)
+
+{-# NOINLINE dropWhileSpine #-}
+dropWhileSpine :: Int# -> Int# -> Int
+dropWhileSpine _ _ = I# (countChars (dropWhile (below 98#) spineError) 0#)
+
+{-# NOINLINE reverseTail #-}
+reverseTail :: Int# -> Int# -> Int
+reverseTail _ _ = I# (countChars (List.reverse tailError) 0#)
+
+{-# NOINLINE lengthTail #-}
+lengthTail :: Int# -> Int# -> Int
+lengthTail _ _ = List.length tailError
+
+{-# NOINLINE consAppendRight #-}
+consAppendRight :: Int# -> Int# -> Int
+consAppendRight x _ = I# (countChars ((charOf x : takeChars x predicateText) ++ spineError) 0#)
+
+--------------------------------------------------------------------------------
+-- Word primops, shifts and GHC.Magic.lazy, which containers' own code uses.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE shifts #-}
+shifts :: Int# -> Int# -> Int#
+shifts x y = case y <# 0# of
+  1# -> uncheckedIShiftRA# x 1#
+  _ -> case y ==# 0# of
+    1# -> uncheckedIShiftL# x 0#
+    _ -> uncheckedIShiftL# x 1# +# uncheckedIShiftRA# x 63#
+
+{-# NOINLINE wordOrder #-}
+wordOrder :: Int# -> Int# -> Int#
+wordOrder x y = leWord# (int2Word# x) (int2Word# y) *# 2# +# leWord# (int2Word# x) 100##
+
+{-# NOINLINE magicLazy #-}
+magicLazy :: Int# -> Int# -> Int#
+magicLazy x y = case lazy (I# x) of
+  I# n -> n -# y
+
+-- Overlapping equations share a failure continuation, a join point GHC passes `(##)`.
+{-# NOINLINE fallThrough #-}
+fallThrough :: Choice -> Int#
+fallThrough (Two (I# 0#) (I# b)) = b
+fallThrough (One (I# 1#)) = 7#
+fallThrough (Two (I# a) (I# 1#)) = a
+fallThrough _ = 3#
+
+{-# NOINLINE choiceOf #-}
+choiceOf :: Int# -> Int# -> Choice
+choiceOf x y = case x <# 0# of
+  1# -> One (I# y)
+  _ -> Two (I# x) (I# y)
+
+{-# NOINLINE voidJoin #-}
+voidJoin :: Int# -> Int# -> Int#
+voidJoin x y = fallThrough (choiceOf x y)
+
+--------------------------------------------------------------------------------
+-- containers, compiled from its own source into the world beside this module.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE setSize #-}
+setSize :: Int# -> Int# -> Int
+setSize x y = Set.size (Set.fromList [I# x, I# y, I# x, 3, I# (x +# y), I# (y -# x)])
+
+{-# NOINLINE setMember #-}
+setMember :: Int# -> Int# -> Int#
+setMember x y = case Set.member (I# y) (Set.fromList [I# x, 0, 1, 42, I# (x *# 2#)]) of
+  True -> 1#
+  False -> 0#
+
+{-# NOINLINE setOrder #-}
+setOrder :: Int# -> Int# -> Int
+setOrder x y = weighted (Set.toAscList (Set.insert (I# y) (Set.fromList [I# x, 5, -5, I# (x -# 1#)]))) 1
+
+{-# NOINLINE weighted #-}
+weighted :: [Int] -> Int -> Int
+weighted [] _ = 0
+weighted (I# v : vs) (I# w) = case weighted vs (I# (w +# 1#)) of
+  I# rest -> I# (v *# w +# rest)
+
+{-# NOINLINE mapLookup #-}
+mapLookup :: Int# -> Int# -> Int
+mapLookup x y =
+  case Map.lookup (I# x) (Map.insertWith (+) (I# y) 10 (Map.fromList [(I# x, 1), (I# y, 2), (0, 3)])) of
+    Just v -> v
+    Nothing -> -1
+
+{-# NOINLINE mapStrings #-}
+mapStrings :: Int# -> Int# -> Int
+mapStrings x y =
+  Map.findWithDefault (I# y) (takeChars x predicateText)
+    (Map.fromList [("", 1), ("ab", 2), ("ab\233", 3), (predicateText, 4), ("z", 5)])
+
+{-# NOINLINE mapUnion #-}
+mapUnion :: Int# -> Int# -> Int
+mapUnion x y = Map.foldr (+) 0 (Map.unionWith (-) (Map.fromList [(I# x, 100), (1, 7)]) (Map.fromList [(I# y, 3), (1, 2)]))
+
+--------------------------------------------------------------------------------
+-- transformers and mtl, compiled from their own source into the world beside
+-- this module. OPAQUE keeps GHC from specialising a monad's dictionary away.
+--------------------------------------------------------------------------------
+
+{-# OPAQUE stepEach #-}
+stepEach :: Monad m => (Int -> m ()) -> [Int] -> m ()
+stepEach _ [] = return ()
+stepEach f (v : vs) = f v >> stepEach f vs
+
+{-# OPAQUE stepsA #-}
+stepsA :: Applicative m => (Int -> m Int) -> [Int] -> m [Int]
+stepsA _ [] = pure []
+stepsA f (v : vs) = (:) <$> f v <*> stepsA f vs
+
+{-# NOINLINE inputs #-}
+inputs :: Int# -> Int# -> [Int]
+inputs x y = [I# x, I# y, 7, I# (x -# y)]
+
+{-# NOINLINE stateCollect #-}
+stateCollect :: Int# -> Int# -> Int
+stateCollect x y = weighted (State.execState (stepEach (\v -> State.modify (v :)) (inputs x y)) []) 1
+
+{-# NOINLINE stateNumber #-}
+stateNumber :: Int# -> Int# -> Int
+stateNumber x y = weighted (State.evalState (stepsA number (inputs x y)) (I# y)) 1
+  where
+    number (I# v) = State.state (\(I# n) -> (I# (v *# n), I# (n +# 1#)))
+
+{-# NOINLINE writerCollect #-}
+writerCollect :: Int# -> Int# -> Int
+writerCollect x y = weighted (Writer.execWriter (stepEach (\v -> Writer.tell [v, v]) (inputs x y))) 1
+
+{-# NOINLINE identityWalk #-}
+identityWalk :: Int# -> Int# -> Int
+identityWalk x y = weighted (runIdentity (stepsA double (inputs x y))) 1
+  where
+    double (I# v) = Identity (I# (v *# 2#))
+
+{-# OPAQUE push #-}
+push :: MonadState.MonadState [Int] m => Int -> m ()
+push v = MonadState.modify (v :)
+
+{-# NOINLINE stateClass #-}
+stateClass :: Int# -> Int# -> Int
+stateClass x y = weighted (State.execState (stepEach push (inputs x y)) []) 1
+
+{-# OPAQUE record #-}
+record :: (MonadReader.MonadReader Int m, MonadWriter.MonadWriter [Int] m, MonadState.MonadState Int m)
+  => Int -> m ()
+record (I# v) = do
+  I# r <- MonadReader.ask
+  I# s <- MonadState.get
+  MonadWriter.tell [I# (v *# r +# s)]
+  MonadState.put (I# (s +# 1#))
+
+{-# NOINLINE rwsRecord #-}
+rwsRecord :: Int# -> Int# -> Int
+rwsRecord x y = case RWS.runRWS (stepEach record (inputs x y)) (I# y) (I# x) of
+  (_, I# s, w) -> case weighted w 1 of
+    I# total -> I# (total +# s)
+
+--------------------------------------------------------------------------------
+-- error, whose uncaught message ends in the call stack GHC built at its call site.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE errorCall #-}
+errorCall :: Int# -> Int# -> Int
+errorCall x _ = case x of
+  0# -> error "canary error"
+  _ -> I# x
+
+{-# NOINLINE errorCallComputed #-}
+errorCallComputed :: Int# -> Int# -> Int
+errorCallComputed x _ = error ('m' : takeChars x predicateText)
+
+{-# NOINLINE setFindMin #-}
+setFindMin :: Int# -> Int# -> Int
+setFindMin x _ = Set.findMin (Set.filter above (Set.fromList [1, 2, 3]))
+  where
+    above (I# v) = case v ># x of
+      1# -> True
+      _ -> False
+
+--------------------------------------------------------------------------------
+-- Constructor tags and pointer equality.
+--------------------------------------------------------------------------------
+
+data Colour = Red | Green | Blue deriving (Eq, Ord)
+
+{-# NOINLINE colourOf #-}
+colourOf :: Int# -> Colour
+colourOf x = case x <# 0# of
+  1# -> Red
+  _ -> case x ==# 0# of
+    1# -> Green
+    _ -> Blue
+
+{-# NOINLINE tagColour #-}
+tagColour :: Int# -> Int# -> Int#
+tagColour x _ = dataToTag# (colourOf x)
+
+{-# NOINLINE maybeOf #-}
+maybeOf :: Int# -> Maybe Int
+maybeOf x = case x <# 0# of
+  1# -> Nothing
+  _ -> Just (I# x)
+
+{-# NOINLINE tagMaybe #-}
+tagMaybe :: Int# -> Int# -> Int#
+tagMaybe x _ = dataToTag# (maybeOf x)
+
+{-# NOINLINE colourEqual #-}
+colourEqual :: Int# -> Int# -> Int#
+colourEqual x y = truth (colourOf x == colourOf y)
+
+{-# NOINLINE colourCompare #-}
+colourCompare :: Int# -> Int# -> Int#
+colourCompare x y = ordering (compare (colourOf x) (colourOf y))
+
+{-# NOINLINE tagForced #-}
+tagForced :: Int# -> Int# -> Int
+tagForced _ y = case dataToTag# (errorWithoutStackTrace "tagged" :: Colour) of
+  0# -> I# y
+  _ -> I# (0# -# y)
+
+{-# NOINLINE pairTotal #-}
+pairTotal :: Pair Int -> Int#
+pairTotal (Pair (I# a) (I# b)) = a +# b
+
+-- GHC permits false negatives here, so both choices are equal values.
+{-# NOINLINE pointerChoice #-}
+pointerChoice :: Int# -> Int# -> Int#
+pointerChoice x y =
+  let a = Pair (I# x) (I# y)
+      b = Pair (I# x) (I# y)
+  in pairTotal (case reallyUnsafePtrEquality# a b of
+       1# -> a
+       _ -> b)
+       +# pairTotal (case reallyUnsafePtrEquality# a a of
+         1# -> a
+         _ -> b)
+
+--------------------------------------------------------------------------------
+-- Unboxed tuples.
+--
+-- GHC's multi-value return. There is no box, no tag and no allocation: the
+-- tuple *is* its components, side by side, and the type system guarantees one
+-- is never bound lazily or stored in a lifted field. A `case` on one binds the
+-- components and branches nowhere, because the family has one constructor.
+--
+-- A lifted component is still a lifted value, though, and `tupleLazyComponent`
+-- is the one that says so: putting a thunk in an unboxed tuple must not force
+-- it.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE splitInt #-}
+splitInt :: Int# -> Int# -> (# Int#, Int# #)
+splitInt x y = (# x +# y, x -# y #)
+
+{-# NOINLINE tupleRoundTrip #-}
+tupleRoundTrip :: Int# -> Int# -> Int#
+tupleRoundTrip x y = case splitInt x y of (# a, b #) -> a *# b
+
+{-# NOINLINE tupleSwap #-}
+tupleSwap :: Int# -> Int# -> Int#
+tupleSwap x y = case splitInt x y of
+  (# a, b #) -> case splitInt b a of
+    (# c, d #) -> c -# d
+
+{-# NOINLINE soloOf #-}
+soloOf :: Int# -> (# Int# #)
+soloOf x = (# x *# 3# #)
+
+{-# NOINLINE tupleSolo #-}
+tupleSolo :: Int# -> Int# -> Int#
+tupleSolo x _ = case soloOf x of (# a #) -> a
+
+{-# NOINLINE tripleOf #-}
+tripleOf :: Int# -> Int# -> (# Int#, Int#, Int# #)
+tripleOf x y = (# x, y, x *# y #)
+
+{-# NOINLINE tupleWide #-}
+tupleWide :: Int# -> Int# -> Int#
+tupleWide x y = case tripleOf x y of (# a, b, c #) -> a +# b +# c
+
+-- A lifted component: the tuple holds a boxed `Int` without forcing it.
+{-# NOINLINE pairBoxed #-}
+pairBoxed :: Int -> Int -> (# Int, Int #)
+pairBoxed a b = (# a, b #)
+
+{-# NOINLINE tupleBoxed #-}
+tupleBoxed :: Int# -> Int# -> Int#
+tupleBoxed x y = case pairBoxed (I# x) (I# y) of
+  (# a, b #) -> case a of I# p -> case b of I# q -> p +# q
+
+-- An unboxed tuple inside an unboxed tuple: the components nest, and so does
+-- the Rust type built for them.
+{-# NOINLINE nestOf #-}
+nestOf :: Int# -> Int# -> (# (# Int#, Int# #), Int# #)
+nestOf x y = (# (# x, y #), x +# y #)
+
+{-# NOINLINE tupleNested #-}
+tupleNested :: Int# -> Int# -> Int#
+tupleNested x y = case nestOf x y of
+  (# inner, s #) -> case inner of (# a, b #) -> a *# b +# s
+
+-- A thunk in a component that is never demanded. Storing it must not force it.
+{-# NOINLINE tupleLazyComponent #-}
+tupleLazyComponent :: Int# -> Int# -> Int#
+tupleLazyComponent x _ = case pairBoxed (I# x) (boxedSum (I# x) (I# x)) of
+  (# a, _ #) -> case a of I# p -> p
+
+-- A component the body never names at all.
+{-# NOINLINE tupleUnusedComponent #-}
+tupleUnusedComponent :: Int# -> Int# -> Int#
+tupleUnusedComponent x y = case splitInt x y of (# a, _ #) -> a
+
+--------------------------------------------------------------------------------
+-- Newtypes.
+--
+-- A newtype has no runtime existence, so GHC turns every wrap and unwrap into
+-- a cast rather than a constructor. Erasing one is sound exactly because both
+-- sides are carried the same way, and these check that the value survives it.
+--------------------------------------------------------------------------------
+
+newtype Tag = Tag Int
+newtype Wrapped a = Wrapped a
+newtype Apply = Apply (Int -> Int)
+newtype Logged m a = Logged (m (a, Int))
+
+{-# NOINLINE untag #-}
+untag :: Tag -> Int
+untag (Tag n) = n
+
+-- Wrapped and unwrapped again: two casts and no allocation between them.
+{-# NOINLINE newtypeRoundTrip #-}
+newtypeRoundTrip :: Int# -> Int# -> Int#
+newtypeRoundTrip x y = case untag (Tag (I# x)) of
+  I# n -> case untag (Tag (I# y)) of
+    I# m -> n +# m
+
+-- A newtype wrapping a newtype, and a parameterised one at two arguments.
+-- The unwrappers are top-level and monomorphic: a polymorphic local function
+-- is a different question, and this one is about the carriers.
+{-# NOINLINE unwrapTag #-}
+unwrapTag :: Wrapped Tag -> Tag
+unwrapTag (Wrapped a) = a
+
+{-# NOINLINE unwrapInt #-}
+unwrapInt :: Wrapped Int -> Int
+unwrapInt (Wrapped a) = a
+
+{-# NOINLINE newtypeField #-}
+newtypeField :: Int# -> Int# -> Int#
+newtypeField x y = case untag (unwrapTag (Wrapped (Tag (I# x)))) of
+  I# n -> case unwrapInt (Wrapped (I# y)) of
+    I# m -> n +# m
+
+-- A newtype over a function: the carrier is the closure it wraps.
+{-# NOINLINE newtypeFunction #-}
+newtypeFunction :: Int# -> Int# -> Int#
+newtypeFunction x y = case runApply (Apply (boxedSum (I# y))) (I# x) of
+  I# n -> n
+
+{-# NOINLINE runLogged #-}
+runLogged :: Logged m a -> m (a, Int)
+runLogged (Logged x) = x
+
+-- `runLogged` at `m := Maybe` instantiates `m (a, Int)` to `Maybe (Int, Int)`.
+{-# NOINLINE newtypeMonad #-}
+newtypeMonad :: Int# -> Int# -> Int#
+newtypeMonad x y = case runLogged (logged x y) of
+  Just (I# a, I# b) -> a -# b
+  Nothing -> 0#
+
+{-# NOINLINE logged #-}
+logged :: Int# -> Int# -> Logged Maybe Int
+logged x y = case x <# y of
+  1# -> Logged (Just (I# x, I# y))
+  _ -> Logged Nothing
+
+{-# NOINLINE runApply #-}
+runApply :: Apply -> Int -> Int
+runApply (Apply f) = f
+
+--------------------------------------------------------------------------------
+-- A typed Rust API over one entry: every shape it marshals, in both directions.
+--------------------------------------------------------------------------------
+
+{-# NOINLINE apiRoundTrip #-}
+apiRoundTrip
+  :: Bool -> [Int] -> Maybe String -> (String, [(Int, Bool)]) -> (String -> Either String Int)
+  -> (Int, Maybe [String], Bool, [Either String Int])
+apiRoundTrip flag numbers label (name, pairs) measure =
+  ( sum numbers + length name + sum [n | (n, True) <- pairs]
+  , fmap (\l -> [l, reverse l, name]) label
+  , flag /= null pairs
+  , map measure (maybe [] pure label ++ [name])
+  )

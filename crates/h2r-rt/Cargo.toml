@@ -1,0 +1,11 @@
+[package]
+name              = "h2r-rt"
+version.workspace = true
+edition.workspace = true
+description       = "Runtime support for Haskell code compiled to Rust: residual laziness only"
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

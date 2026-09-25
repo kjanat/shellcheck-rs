@@ -1,0 +1,70 @@
+[workspace]
+resolver        = "3"
+members         = ["crates/*"]
+default-members = ["crates/rshellcheck"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+h2r-analysis    = { path = "crates/h2r-analysis" }
+h2r-build       = { path = "crates/h2r-build" }
+h2r-core-ir     = { path = "crates/h2r-core-ir" }
+h2r-lower       = { path = "crates/h2r-lower" }
+h2r-rt          = { path = "crates/h2r-rt" }
+hs-entry        = { path = "crates/hs-entry" }
+hs-libraries    = { path = "crates/hs-libraries" }
+hs-shellcheck   = { path = "crates/hs-shellcheck" }
+shellcheck-core = { path = "crates/shellcheck-core" }
+
+anyhow     = "1"
+clap       = { version = "4", features = ["derive"] }
+libc       = "0.2"
+mimalloc   = "0.1"
+serde      = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["unbounded_depth"] }
+sha2       = "0.10"
+walkdir    = "2"
+
+[workspace.lints.clippy]
+let_underscore_must_use            = "warn"
+map_err_ignore                     = "warn"
+match_wildcard_for_single_variants = "warn"
+unused_result_ok                   = "warn"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.h2r-analysis]
+opt-level = 3
+
+[profile.dev.package.h2r-core-ir]
+opt-level = 3
+
+[profile.dev.package.h2r-lower]
+opt-level = 3
+
+[profile.dev.package.hs-entry]
+debug = false
+
+[profile.dev.package.hs-libraries]
+debug = false
+
+[profile.dev.package.hs-shellcheck]
+debug = false
+
+[profile.dev.package.shellcheck-core]
+debug = false
+
+# Cargo's default strips build-dependency debuginfo only when no normal dependency shares the crate.
+[profile.dev.build-override]
+debug = true
+
+[profile.release.package.shellcheck-core]
+opt-level = 1
+
+[profile.release.build-override]
+opt-level     = 3
+codegen-units = 16

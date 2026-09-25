@@ -22,7 +22,15 @@ stack.yaml.lock
 /parts/
 /prime/
 *.snap
-/dist-newstyle/
+dist-newstyle/
 
 ### misc ###
 /shellcheck.1
+
+# h2r compiler
+compiler/build/
+compiler/core-json/
+compiler/library-json/
+target/
+compiler/matrix/
+compiler/conformance/

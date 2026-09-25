@@ -1,0 +1,436 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+# Project toolchain, managed by mise (https://mise.jdx.dev).
+#
+# H2R is a mixed Haskell/Rust compiler pipeline:
+# - GHC 9.6.7 is the frontend and the format-6 Core dump contract.
+# - Cabal builds the ShellCheck oracle and h2r-plugin.
+# - Rust builds the analyses, lowering passes, runtime, and CLI.
+#
+# Fuzzy tool versions are resolved through mise.lock. GHC is pinned exactly:
+# the post-CoreTidy alignment and IdInfo join are proved against GHC 9.6.7.
+
+min_version = "2026.9.7"
+
+[tools]
+cabal  = { version = "latest" }
+dprint = { version = "latest" }
+# hls = {version = "latest"}
+ghc    = { version = "9.6.7" }
+ghcup  = { version = "latest", postinstall = "mise run hls-install" }
+rust   = { version = "latest", components = ["rustfmt", "clippy"] }
+tombi  = { version = "latest" }
+
+[tool_alias]
+ghc = "mise-ghcup:ghc"
+
+[plugins]
+"vfox-backend:mise-ghcup" = "https://github.com/wasp-lang/mise-ghcup.git"
+
+[settings]
+experimental = true
+lockfile     = true
+
+# -----------------------------------------------------------------------------
+# Source checks
+# -----------------------------------------------------------------------------
+
+[tasks.fmt]
+alias       = "f"
+description = "Format with dprint"
+run         = "dprint fmt"
+
+[tasks.lint]
+alias       = "l"
+description = "Lint Rust and TOML"
+run         = [
+  "cargo lint",
+  "tombi lint --error-on-warnings",
+  "dprint check",
+]
+
+[tasks.test]
+alias       = "t"
+description = "Run the H2R Rust workspace tests"
+run         = "cargo test --workspace"
+
+[tasks."lower:leaf"]
+description = "Lower and verify one live function"
+usage       = '''
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+flag "--fn <name>" required=#true help="Stable function name (quote names containing $)"
+'''
+run         = '''
+cargo locked-release -p h2r-cli --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --fn "${usage_fn?}"
+'''
+
+[tasks."lower:program"]
+description = "Attempt verified NIR for all live bindings; fails on refusals"
+usage       = '''
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+'''
+run         = '''
+cargo locked-release -p h2r-cli --bin h2r -- lower --nir "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base
+'''
+
+[tasks."lower:coverage"]
+description = "Refresh canonical Core and capture verified NIR coverage"
+run         = '''
+set -eu
+cargo locked-build -p h2r-cli --bin h2r
+out="$PWD/compiler/build/coverage"
+mkdir -p "$out"
+for dump in compiler/core-json/*.core.json; do
+  jq -e '.format == 6 and (.constructors | type == "array")' "$dump" >/dev/null
+done
+status=0
+target/release/h2r lower compiler/core-json --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir >"$out/nir.txt" 2>"$out/nir.stderr" || status=$?
+if [ "$status" -ne 0 ]; then
+  if [ "$status" -ne 1 ] || ! grep -Eq '^Error: NIR lowering incomplete: [0-9]+ live bindings refused$' "$out/nir.stderr"; then
+    cat "$out/nir.stderr" >&2
+    exit "$status"
+  fi
+fi
+grep -E '^Live owners: [0-9]+ = [0-9]+ lowered \+ [0-9]+ refused; [0-9]+ dead skipped$' "$out/nir.txt"
+sha256sum target/release/h2r compiler/core-json/*.core.json compiler/library-json/containers/*.core.json compiler/library-json/transformers/*.core.json compiler/library-json/mtl/*.core.json compiler/library-json/base/*.core.json >"$out/inputs.sha256"
+(cd "$out" && sha256sum nir.txt nir.stderr >outputs.sha256)
+'''
+
+[tasks."lower:specialize"]
+description = "Survey the instances the live set needs, and rank the blockers"
+usage       = '''
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+flag "--fn <name>" help="Specialize from one root and print each instance's NIR"
+'''
+run         = '''
+set -eu
+cargo locked-build -p h2r-cli --bin h2r
+out="$PWD/compiler/build/coverage"
+mkdir -p "$out"
+set --
+[ -z "${usage_fn:-}" ] || set -- --fn "${usage_fn}"
+status=0
+target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --specialize "$@" \
+  >"$out/specialize.txt" 2>"$out/specialize.stderr" || status=$?
+if [ "$status" -ne 0 ]; then
+  if [ "$status" -ne 1 ] || ! grep -Eq '^Error: specialization incomplete: [0-9]+ instances refused$' "$out/specialize.stderr"; then
+    cat "$out/specialize.stderr" >&2
+    exit "$status"
+  fi
+fi
+grep -E '^(Instances|Specialized):' "$out/specialize.txt"
+sha256sum target/release/h2r "${usage_dir?}"/*.core.json compiler/library-json/containers/*.core.json compiler/library-json/transformers/*.core.json compiler/library-json/mtl/*.core.json compiler/library-json/base/*.core.json >"$out/specialize.inputs.sha256"
+(cd "$out" && sha256sum specialize.txt specialize.stderr >specialize.sha256)
+'''
+
+[tasks.plugin]
+description = "Build the GHC Core-dump plugin"
+dir         = "{{ config_root }}/compiler/h2r-plugin"
+run         = "cabal build all"
+
+[tasks."canary:extract"]
+description = "Build the small Haskell oracle and regenerate its Core dumps"
+run         = "cargo locked-release -p h2r-cli --bin h2r -- extract canary"
+
+[tasks.canary]
+description = "Emit Rust from real Core, compile it, and compare with Haskell"
+usage       = '''
+flag "--timeout-seconds <seconds>" default="10" help="Positive per-invocation time limit for oracle and generated binaries"
+'''
+run         = '''
+cargo rr -p h2r-canary --bin h2r-canary -- --timeout-seconds "${usage_timeout_seconds?}"
+'''
+
+[tasks."canary:explain"]
+description = "Print one canary entry's NIR, the instances it needs, and its emission"
+usage       = '''
+arg "<entry>" help="Occurrence name from compiler/canary/Canary.hs"
+flag "--profile <profile>" default="both" help="Which Core dump to read" {
+  choices "both" "optimized" "unoptimized"
+}
+'''
+run         = '''
+cargo rr -p h2r-canary --bin h2r-canary -- --explain "${usage_entry?}" --profile "${usage_profile?}"
+'''
+
+[tasks.check]
+alias       = "c"
+description = "H2R source gate: format, lint, tests, and plugin build"
+run         = [
+  "cargo fmt --all -- --check",
+  "cargo lint",
+  "cargo test --workspace",
+  "mise run plugin",
+]
+
+# -----------------------------------------------------------------------------
+# Haskell oracle
+# -----------------------------------------------------------------------------
+
+[tasks.oracle]
+description = "Build and test upstream ShellCheck with the canonical GHC"
+run         = "cabal test"
+
+[tasks."conformance:corpus"]
+description = "Report extracted upstream properties and coverage gaps"
+run         = "cargo run --release -p h2r-conformance -- corpus"
+
+[tasks.conformance]
+description = "Compare --candidate with the Haskell oracle on upstream properties"
+run         = "cargo run --release -p h2r-conformance -- gate"
+
+[tasks."conformance:fuzz"]
+description = "Seeded differential fuzzing of --candidate against the Haskell oracle"
+run         = "cargo run --release -p h2r-conformance -- fuzz"
+
+[tasks.hls-install]
+confirm     = "Do you want to install the hls language server"
+description = "install hls in non-ci environments"
+file        = "scripts/hls.sh"
+
+# -----------------------------------------------------------------------------
+# Core extraction
+# -----------------------------------------------------------------------------
+
+[tasks.extract]
+alias       = "x"
+description = "Extract canonical -O1 format-6 Core into compiler/core-json"
+run         = "cargo locked-release -p h2r-cli --bin h2r -- extract program --build-dir {{ config_root }}/compiler/build/canonical"
+
+[tasks."extract:libraries"]
+description = "Extract the Core of the installed libraries the program links into compiler/library-json"
+run         = "for package in containers transformers mtl base; do cargo locked-release -p h2r-cli --bin h2r -- extract library \"$package\"; done"
+
+[tasks.matrix]
+description = "Extract the GHC optimization matrix; optional profile names are forwarded"
+run         = "cargo locked-release -p h2r-cli --bin h2r -- extract matrix"
+
+[tasks."baseline:historical"]
+description = "Reconstruct canonical format-5 Core at the corrected M2.4 checkpoint"
+run         = """
+cargo locked-release -p h2r-cli --bin h2r -- extract program \
+  --source-ref aa5b7f3763ea6c95dc0412ac2bbae6fddee6c487 \
+  --build-dir {{ config_root }}/compiler/matrix/format5/build \
+  --core-dir {{ config_root }}/compiler/matrix/format5/core-json \
+  --keep-dir {{ config_root }}/compiler/matrix/format5 \
+  --plan {{ config_root }}/compiler/matrix/A/plan.json \
+  --opt=-O1
+"""
+
+[tasks.baseline]
+description = "Extract and verify the canonical dump and all six optimization profiles"
+run         = [
+  { task = "extract" },
+  { task = "matrix" },
+  { task = "baseline:reports" },
+]
+
+[tasks."baseline:reports"]
+description = "Capture and verify analysis reports for the seven existing dumps"
+run         = '''
+set -eu
+cargo locked-build -p h2r-cli --bin h2r
+bin="$PWD/target/release/h2r"
+for profile in canonical A B C D E F; do
+  dir="$PWD/compiler/matrix/$profile/core-json"
+  [ "$profile" != canonical ] || dir="$PWD/compiler/core-json"
+  out="$PWD/compiler/matrix/$profile/reports"
+  test -f "$dir/Main.core.json"
+  mkdir -p "$out"
+  fingerprint=$({ sha256sum "$bin" mise.toml; find "$dir" -name '*.core.json' -type f -print0 | sort -z | xargs -0 sha256sum; } | sha256sum)
+  if [ -f "$out/inputs.sha256" ] && [ "$(cat "$out/inputs.sha256")" = "$fingerprint" ] &&
+      (cd "$out" && sha256sum --check --status reports.sha256); then
+    echo "$profile: verified reports unchanged"
+    continue
+  fi
+  "$bin" stats "$dir" --per-module >"$out/stats.txt"
+  for command in laziness parsec tuples fields lists text classops dictflow higher verify-rep verify-m24 m24; do
+    "$bin" "$command" "$dir" >"$out/$command.txt"
+    "$bin" "$command" "$dir" --json >"$out/$command.json"
+  done
+  "$bin" tuples "$dir" --verify >"$out/verify-tuples.txt"
+  "$bin" tuples "$dir" --boundaries >"$out/boundaries.txt"
+  "$bin" lower "$dir" --reachability --m24-link >"$out/reachability.txt"
+  "$bin" lower "$dir" --reachability --json >"$out/reachability.json"
+  grep -Eq '^dump format +6 ' "$out/stats.txt"
+  grep -Eq '^modules +28$' "$out/stats.txt"
+  for report in verify-tuples verify-rep verify-m24; do
+    grep -Eq '^ +DISAGREEMENTS.* +0$' "$out/$report.txt"
+  done
+  grep -Fq 'A5-IN-WORLD-MISSING 0: the dead set is unconditional' "$out/reachability.txt"
+  grep -Eq '^ +0 disagreements over [0-9]+ claims:' "$out/reachability.txt"
+  (cd "$out" && sha256sum -- *.txt *.json >reports.sha256)
+  printf '%s\n' "$fingerprint" >"$out/inputs.sha256"
+  echo "$profile: reports captured and verification passed"
+done
+'''
+
+[tasks."baseline:historical-reports"]
+description = "Verify and capture the reconstructed canonical format-5 baseline"
+run         = '''
+set -eu
+bin="$PWD/target/release/h2r"
+dir="$PWD/compiler/matrix/format5/core-json"
+out="$PWD/compiler/matrix/format5/reports"
+test -x "$bin"
+test -f "$dir/Main.core.json"
+mkdir -p "$out"
+fingerprint=$({ sha256sum "$bin"; find "$dir" -name '*.core.json' -type f -print0 | sort -z | xargs -0 sha256sum; } | sha256sum)
+if [ -f "$out/inputs.sha256" ] && [ "$(cat "$out/inputs.sha256")" = "$fingerprint" ] &&
+    (cd "$out" && sha256sum --check --status reports.sha256); then
+  echo "format5: verified reports unchanged"
+  exit 0
+fi
+"$bin" stats "$dir" --per-module >"$out/stats.txt"
+for command in laziness higher dictflow; do
+  "$bin" "$command" "$dir" --explain >"$out/$command.txt"
+  "$bin" "$command" "$dir" --explain --json >"$out/$command.json"
+done
+for command in m24 verify-m24; do
+  "$bin" "$command" "$dir" >"$out/$command.txt"
+  "$bin" "$command" "$dir" --json >"$out/$command.json"
+done
+"$bin" lower "$dir" --reachability --json >"$out/reachability.json"
+grep -Eq '^dump format +5 ' "$out/stats.txt"
+grep -Eq '^modules +28$' "$out/stats.txt"
+grep -Eq '^ +DISAGREEMENTS.* +0$' "$out/verify-m24.txt"
+(cd "$out" && sha256sum -- *.txt *.json >reports.sha256)
+printf '%s\n' "$fingerprint" >"$out/inputs.sha256"
+echo "format5: reports captured and verification passed"
+'''
+
+[tasks."baseline:explain"]
+description = "Capture reusable gate-8 explanations from existing dumps (default: canonical)"
+usage       = '''
+arg "[profiles]" var=#true default="canonical" help="Existing dump profiles to explain" {
+  choices "canonical" "A" "B" "C" "D" "E" "F"
+}
+'''
+run         = '''
+set -eu
+bin="$PWD/target/release/h2r"
+test -x "$bin"
+# Usage supplies a shell-escaped list, restricted to the choices above.
+eval "set -- ${usage_profiles?}"
+for profile in "$@"; do
+  case "$profile" in canonical|A|B|C|D|E|F) ;; *) echo "Unknown profile: $profile" >&2; exit 1 ;; esac
+  dir="$PWD/compiler/matrix/$profile/core-json"
+  [ "$profile" != canonical ] || dir="$PWD/compiler/core-json"
+  test -f "$dir/Main.core.json"
+  out="$PWD/compiler/matrix/$profile/explain"
+  mkdir -p "$out"
+  fingerprint=$({ sha256sum "$bin"; find "$dir" -name '*.core.json' -type f -print0 | sort -z | xargs -0 sha256sum; } | sha256sum)
+  for command in dictflow higher higher-plans parsec traverse-reachability path-link; do
+    report="$command.txt"
+    [ "$command" != higher-plans ] || report="$command.json"
+    if [ -f "$out/$command.inputs" ] && [ "$(cat "$out/$command.inputs")" = "$fingerprint" ] &&
+        (cd "$out" && sha256sum --check --status "$command.sha256"); then
+      echo "$profile: $command explanation unchanged"
+      continue
+    fi
+    if [ "$command" = higher-plans ]; then
+      "$bin" higher "$dir" --explain --json >"$out/$report"
+    elif [ "$command" = path-link ]; then
+      "$bin" lower "$dir" --reachability --link '$ShellCheck-0.11.0-inplace$ShellCheck.ASTLib$$wgetPath' >"$out/$report"
+    elif [ "$command" = traverse-reachability ]; then
+      "$bin" lower "$dir" --reachability --explain '$ShellCheck-0.11.0-inplace$ShellCheck.AST$$fTraversableInnerToken_$ctraverse' >"$out/$report"
+    else
+      "$bin" "$command" "$dir" --explain >"$out/$report"
+    fi
+    (cd "$out" && sha256sum "$report" >"$command.sha256")
+    printf '%s\n' "$fingerprint" >"$out/$command.inputs"
+    echo "$profile: $command explanation captured"
+  done
+done
+'''
+
+# Examples:
+#   mise run matrix C
+#   mise run matrix A B C
+
+# -----------------------------------------------------------------------------
+# H2R CLI and proof gates
+# -----------------------------------------------------------------------------
+
+[tasks.h2r]
+alias       = "h"
+description = "Run the H2R CLI; arguments are forwarded after `--`"
+run         = "cargo h2r"
+
+# Examples:
+#   mise run h2r stats ../core-json
+#   mise run h2r laziness ../core-json
+#   mise run h2r lower ../core-json --reachability
+
+[tasks.proofs]
+alias       = "p"
+description = "Run the independent proof verifiers on the canonical dump"
+run         = [
+  "cargo h2r tuples compiler/core-json --verify",
+  "cargo h2r verify-rep compiler/core-json",
+  "cargo h2r verify-m24 compiler/core-json",
+  "cargo h2r lower compiler/core-json --reachability",
+]
+
+[tasks.full]
+description = "Run source checks and the upstream ShellCheck oracle"
+run         = [
+  { task = "check" },
+  { task = "oracle" },
+]
+
+[tasks."lower:sites"]
+description = "Group every survey refusal about one binding or type by its call shape"
+usage       = '''
+arg "<subject>" help="Stable name or type head, as the survey report prints it"
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+'''
+run         = '''
+set -eu
+cargo locked-build -p h2r-cli --bin h2r
+target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --specialize --sites "${usage_subject?}"
+'''
+
+[tasks."lower:emit-program"]
+description = "Emit every survey instance whose closure emits as one program, and time rustc on it"
+usage       = '''
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+'''
+run         = '''
+set -eu
+cargo locked-build -p h2r-cli --bin h2r
+out="$PWD/compiler/build/risk"
+mkdir -p "$out"
+target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --emit-program "$out/program.rs" | tee "$out/emit-program.txt"
+for level in 0 2; do
+  status=0
+  systemd-run --user --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 \
+    /usr/bin/time -f "%e s, %M KiB peak" -o "$out/rustc-O$level.time" \
+    rustc --edition=2024 -C opt-level=$level "$out/program.rs" -o "$out/program-O$level" \
+    >"$out/rustc-O$level.log" 2>&1 || status=$?
+  echo "opt-level $level: exit $status, $(cat "$out/rustc-O$level.time")"
+done
+'''
+
+[tasks."canary:bench"]
+description = "Time the Bench.hs entries against the GHC oracle at growing sizes"
+usage       = '''
+flag "--timeout-seconds <seconds>" default="60" help="Per-invocation time limit"
+'''
+run         = '''
+cargo rr -p h2r-canary --bin h2r-canary -- --bench --timeout-seconds "${usage_timeout_seconds?}"
+'''
+
+[tasks."canary:library"]
+description = "Build the GHC driver that calls ShellCheck's own functions for the library suite"
+run         = "cargo locked-release -p h2r-cli --bin h2r -- extract oracle"
+
+[tasks."lower:entries"]
+description = "List every live exported binding with its type and whether a Rust entry emits for it"
+usage       = '''
+arg "[dir]" default="compiler/core-json" help="Core dump directory"
+'''
+run         = '''
+set -eu
+cargo locked-build -p h2r-cli --bin h2r
+target/release/h2r lower "${usage_dir?}" --with compiler/library-json/containers --with compiler/library-json/transformers --with compiler/library-json/mtl --with compiler/library-json/base --nir --entries
+'''

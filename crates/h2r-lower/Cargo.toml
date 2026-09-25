@@ -1,0 +1,18 @@
+[package]
+name              = "h2r-lower"
+version.workspace = true
+edition.workspace = true
+description       = "Lowering: the reachable program, and the IR it becomes"
+license.workspace = true
+
+[dependencies]
+h2r-analysis.workspace = true
+h2r-core-ir.workspace  = true
+serde.workspace        = true
+sha2.workspace         = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

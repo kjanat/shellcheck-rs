@@ -1,0 +1,13 @@
+[package]
+name              = "h2r-build"
+version.workspace = true
+edition.workspace = true
+description       = "Compiles Haskell with GHC and the h2r plugin and collects its Core"
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+sha2.workspace   = true
+
+[lints]
+workspace = true
