@@ -199,7 +199,7 @@ def fmt_x(v: float) -> str:
 
 def verdict(cmp: dict, flags_a: list[str], flags_b: list[str]) -> tuple[str, str]:
     lo, hi = cmp["speedup_mean_ci"]
-    blocked = [f for f in flags_a + flags_b if f.startswith(("not comparable", "excluded"))]
+    blocked = [f for f in flags_a + flags_b if f.startswith(("not comparable", "excluded", "timed once"))]
     if blocked:
         return "n/a", blocked[0]
     if cmp["mwu_p_adj"] < ALPHA and (lo > 1 or hi < 1):
@@ -240,7 +240,9 @@ def main() -> None:
             e = samples[s][n]
             p = pre[s][n]
             fl = []
-            if p["status"] != "ok":
+            if p["status"] == "slow":
+                fl.append(f"timed once: {p['reason']}")
+            elif p["status"] != "ok":
                 fl.append(f"excluded: {p['reason']}")
             elif p.get("parity") == "differs":
                 fl.append(f"not comparable: output differs from {baseline} ({p.get('diff_lines', '?')} lines)")
@@ -392,7 +394,13 @@ def render(run, results, names, baseline, others, desc, flags, pairs, plots) -> 
             p = next((p for p in pairs if p["scenario"] == s and p["candidate"] == o and p["reference"] == baseline), None)
             if p is None:
                 st = run["precheck"][s][o]
-                cells.append(f"excluded ({st['reason']})" if st["status"] != "ok" else "—")
+                b = desc[s][baseline]
+                if st["status"] == "slow" and b:
+                    cells.append(f"≈{b['mean'] / st['wall_s']:.3f}× (single run: {fmt_time(st['wall_s'])}, over budget)")
+                elif st["status"] == "slow":
+                    cells.append(f"single run: {fmt_time(st['wall_s'])} (over budget)")
+                else:
+                    cells.append(f"excluded ({st['reason']})" if st["status"] != "ok" else "—")
                 continue
             lo, hi = p["speedup_mean_ci"]
             cell = f"{fmt_x(p['speedup_mean'])} [{lo:.2f}, {hi:.2f}]"
@@ -419,7 +427,10 @@ def render(run, results, names, baseline, others, desc, flags, pairs, plots) -> 
             d, st = desc[s][n], run["precheck"][s][n]
             parity = {"baseline": "baseline", "identical": "identical ✓", "differs": f"**differs** ({st.get('diff_lines', '?')} lines)", "unknown": "unknown"}.get(st.get("parity"), "")
             if not d:
-                w(f"| {n} | 0 | excluded: {st['reason']} | | | | | {st['peak_rss_bytes'] / 2**20:.0f} MiB | {parity} | |")
+                if st["status"] == "slow":
+                    w(f"| {n} | 1 | {fmt_time(st['wall_s'])} (single pre-check run, not in the rounds) | | | | | {st['peak_rss_bytes'] / 2**20:.0f} MiB | {parity} | over the {run['config'].get('max_run_s', 0):g} s per-run budget |")
+                else:
+                    w(f"| {n} | 0 | excluded: {st['reason']} | | | | | {st['peak_rss_bytes'] / 2**20:.0f} MiB | {parity} | |")
                 continue
             w(f"| {n} | {d['n']} | {fmt_time(d['mean'])} {fmt_ci(*d['ci_mean'])} | {fmt_time(d['median'])} {fmt_ci(*d['ci_median'])} "
               f"| {fmt_time(d['sd'])} ({d['cv'] * 100:.1f} %) | {fmt_time(d['min'])} | {fmt_time(d['p95'])} | {d['peak_rss_median'] / 2**20:.0f} MiB "
@@ -456,6 +467,8 @@ def render(run, results, names, baseline, others, desc, flags, pairs, plots) -> 
       "Hedges' g is the standardised mean difference. A significant p with a negligible δ is a real but tiny difference.")
     w(f"- **Pre-check.** Before timing, each candidate ran each scenario once under a {cfg['max_rss_gib']:g} GiB peak-RSS cap and a {cfg['timeout_s']:g} s timeout. "
       "A crash, hang or blown cap excludes it from that scenario. Output is compared with the baseline's (JSON compared structurally); a difference does not exclude, but it does void the comparison: a faster program computing something else is not a faster ShellCheck.")
+    w(f"- **Budget.** A candidate whose pre-check run took longer than {cfg.get('max_run_s', 0):g} s is not sampled in the rounds (fifty runs of a minute each is not a benchmark, it is a wait); "
+      "that single run is reported instead, marked as such, and the ratio next to it is a rough single-run figure with no interval. Raise `--max-run-seconds` for a dedicated slow run.")
     w("- **Peak RSS** is hyperfine's per-run maximum resident set size (median over runs).")
     w("")
     w(f"Raw samples: `{results.name}/run.json`; every number here: `summary.json`; per-round hyperfine exports: `raw/`; pre-check outputs and diffs: `precheck/`.")

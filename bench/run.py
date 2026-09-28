@@ -208,7 +208,7 @@ def canonical(fmt: str, data: bytes) -> bytes:
     return data
 
 
-def precheck(candidates, baseline, scenarios, corpus: Path, out: Path, timeout: float, max_rss: int, pin) -> dict:
+def precheck(candidates, baseline, scenarios, corpus: Path, out: Path, timeout: float, max_rss: int, pin, max_run: float) -> dict:
     results: dict[str, dict[str, dict]] = {}
     for sname, sc in scenarios.items():
         results[sname] = {}
@@ -231,6 +231,11 @@ def precheck(candidates, baseline, scenarios, corpus: Path, out: Path, timeout: 
             elif r["exit"] not in (0, 1):
                 r["status"] = "failed"
                 r["reason"] = f"exit code {r['exit']}"
+            elif r["wall_s"] > max_run:
+                # Correct but too slow to sample dozens of times inside the budget:
+                # keep this one measurement, skip the rounds.
+                r["status"] = "slow"
+                r["reason"] = f"one run took {r['wall_s']:.1f}s, over the {max_run:g}s per-run budget; timed once only"
             else:
                 r["status"] = "ok"
                 r["reason"] = None
@@ -244,7 +249,7 @@ def precheck(candidates, baseline, scenarios, corpus: Path, out: Path, timeout: 
             if c["name"] == baseline:
                 r["parity"] = "baseline"
                 continue
-            if base["status"] != "ok" or r["status"] != "ok":
+            if base["status"] not in ("ok", "slow") or r["status"] not in ("ok", "slow"):
                 r["parity"] = "unknown"
                 continue
             mine = canonical(sc["format"], (pdir / f"{c['name']}.stdout").read_bytes())
@@ -304,6 +309,7 @@ def main() -> None:
     ap.add_argument("--pin", default=None, help="CPU to pin every benchmarked process to (taskset)")
     ap.add_argument("--max-rss-gib", type=float, default=4.0, help="pre-check memory cap")
     ap.add_argument("--timeout", type=float, default=600.0, help="pre-check wall-clock cap per run, seconds")
+    ap.add_argument("--max-run-seconds", type=float, default=15.0, help="a candidate whose pre-check run takes longer is timed once only, not in the rounds")
     ap.add_argument("--hyperfine", default=shutil.which("hyperfine") or "hyperfine")
     args = ap.parse_args()
 
@@ -335,7 +341,7 @@ def main() -> None:
     if env.get("loadavg_at_start") and env["loadavg_at_start"][0] > 1.0:
         warn(f"1-minute load average is {env['loadavg_at_start'][0]:.2f}; something else is using this machine")
 
-    checks = precheck(candidates, baseline, scenarios, args.corpus, out, args.timeout, int(args.max_rss_gib * 2**30), args.pin)
+    checks = precheck(candidates, baseline, scenarios, args.corpus, out, args.timeout, int(args.max_rss_gib * 2**30), args.pin, args.max_run_seconds)
 
     rng = random.Random(args.seed)
     samples: dict[str, dict[str, dict]] = {
@@ -384,7 +390,7 @@ def main() -> None:
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "config": {
             "rounds": args.rounds, "runs": args.runs, "warmup": args.warmup, "seed": args.seed,
-            "pin": args.pin, "max_rss_gib": args.max_rss_gib, "timeout_s": args.timeout,
+            "pin": args.pin, "max_rss_gib": args.max_rss_gib, "timeout_s": args.timeout, "max_run_s": args.max_run_seconds,
             "hyperfine_flags": ["-N", "--ignore-failure", "--output", "null"],
         },
         "environment": env,

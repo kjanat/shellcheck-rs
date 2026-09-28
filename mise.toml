@@ -67,6 +67,7 @@ flag "--warmup <n>" default="3" help="Untimed warm-up runs per candidate per rou
 flag "--scenarios <list>" default="" help="Comma-separated scenario names (default: all in bench/scenarios.toml)"
 flag "--candidates <list>" default="" help="Comma-separated candidate names (default: all built)"
 flag "--pin <cpu>" default="" help="Pin the benchmarked processes to one CPU with taskset"
+flag "--max-run-seconds <s>" default="15" help="A candidate whose pre-check run takes longer is timed once only, not in the rounds"
 flag "--out <dir>" default="" help="Results directory (default: .bench/results/<timestamp>)"
 '''
 run         = '''
@@ -75,6 +76,7 @@ uv run bench/run.py \
   ${usage_scenarios:+--scenarios "$usage_scenarios"} \
   ${usage_candidates:+--candidates "$usage_candidates"} \
   ${usage_pin:+--pin "$usage_pin"} \
+  --max-run-seconds "${usage_max_run_seconds?}" \
   ${usage_out:+--out "$usage_out"}
 '''
 

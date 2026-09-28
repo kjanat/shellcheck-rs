@@ -31,7 +31,7 @@ Step by step:
 mise run bench:candidates          # what each candidate resolves to, its cache key, built or not
 mise run bench:build [name...]     # build/fetch; a candidate whose manifest key matches is skipped
 mise run bench:corpus              # deterministic corpus -> .bench/corpus (seeded, checksummed)
-mise run bench:run --rounds 5 --runs 10 --warmup 3 [--scenarios small,large] [--candidates upstream,h2r] [--pin 2]
+mise run bench:run --rounds 5 --runs 10 --warmup 3 [--scenarios small,large] [--candidates upstream,h2r] [--pin 2] [--max-run-seconds 15]
 mise run bench:analyze [results-dir]   # report.md, summary.json, plots/ next to run.json
 mise run bench:clean
 ```
@@ -50,10 +50,12 @@ Numbers from different machines or different runs are never mixed; CI caches
 **Pre-check before timing** (`bench/run.py`). Each candidate runs each
 scenario once under a peak-RSS watchdog (4 GiB default) and a timeout. A
 crash, hang or blown cap excludes it from that scenario, and the report says
-why. Its stdout and exit code are compared with the baseline's (JSON formats
-structurally). A difference does not exclude it, but voids the comparison in
-the report: a faster program that computes something else is not a faster
-ShellCheck.
+why. A candidate that is correct but takes longer than the per-run budget
+(`--max-run-seconds`, 15 s default) is not sampled fifty times either; that
+single run is reported, clearly marked, without an interval. Its stdout and
+exit code are compared with the baseline's (JSON formats structurally). A
+difference does not exclude it, but voids the comparison in the report: a
+faster program that computes something else is not a faster ShellCheck.
 
 **Interleaved, shuffled rounds.** hyperfine runs all runs of one command
 before the next, so a slow drift of the machine (thermal state, page cache,

@@ -114,7 +114,8 @@ ensure_source() {
         mkdir -p "$BENCH/src"
         git -C "$ROOT" worktree add -q --detach "$dir" "$sha"
     fi
-    [ -z "$(git -C "$dir" status --porcelain)" ] || die "$dir has local modifications; refusing to benchmark a dirty tree"
+    # (mise install rewrites a branch's mise.lock with platform checksums; that is bookkeeping, not a source change.)
+    [ -z "$(git -C "$dir" status --porcelain -- . ':!mise.lock')" ] || die "$dir has local modifications; refusing to benchmark a dirty tree"
 }
 
 # --- building ---------------------------------------------------------------

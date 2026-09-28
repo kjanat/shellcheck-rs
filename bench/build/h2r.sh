@@ -28,10 +28,15 @@ fi
 
 mise trust -q
 mise install
+# mise install adds platform checksums to the lockfile; keep the checkout pristine.
+git checkout -q -- mise.lock 2>/dev/null || true
 # cabal needs the Hackage index once to plan ShellCheck's dependencies.
 if ! ls "${XDG_CACHE_HOME:-$HOME/.cache}"/cabal/packages/*/01-index.tar* >/dev/null 2>&1; then
     mise exec -- cabal update
 fi
+# The layer build scripts compile the Core-dump plugin with `cabal --offline`,
+# so its dependencies (aeson & co.) have to be in the cabal store already.
+(cd compiler/canary && mise exec -- cabal build --only-dependencies h2r-plugin)
 mise exec -- cargo build --release --locked -p rshellcheck
 install -m 755 "$BENCH_TARGET/release/rshellcheck" "$BENCH_OUT/shellcheck"
 {
