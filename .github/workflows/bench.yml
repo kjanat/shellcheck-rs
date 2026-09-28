@@ -29,6 +29,7 @@ on:
     branches: [bench]
     paths:
       - bench/**
+      - "!bench/results/**" # archived reports do not need re-measuring
       - mise.toml
       - mise.lock
       - .github/workflows/bench.yml
