@@ -1,0 +1,90 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+# Benchmark harness for comparing ShellCheck implementations.
+#
+# This branch (`bench`) carries only the harness; the things it measures live
+# elsewhere: koalaman's GitHub release (installed here through mise's aqua
+# backend as `shellcheck`), and the `rust-port` and `h2r-compiler` branches of
+# this repository, which are checked out and built into .bench/. See
+# bench/README.md for the design and bench/candidates.toml for the list.
+#
+# Exact tool versions are pinned in mise.lock (`mise up` bumps them).
+
+min_version = "2026.1.0"
+
+[tools]
+hyperfine  = "latest" # the timer
+python     = "3.13"   # for uv's scripts
+rust       = "latest" # builds the rust-port candidate (h2r pins its own toolchain in its worktree)
+shellcheck = "latest" # the upstream candidate: koalaman/shellcheck's latest GitHub release
+uv         = "latest" # runs bench/*.py with their inline dependencies
+
+[settings]
+lockfile = true
+
+[env]
+BENCH_ROOT = "{{ config_root }}/.bench"
+UV_LINK_MODE = "copy"
+
+# -----------------------------------------------------------------------------
+# One-shot
+# -----------------------------------------------------------------------------
+
+[tasks.bench]
+description = "Build every candidate, generate the corpus, run the benchmark and write the report"
+depends     = ["bench:build", "bench:corpus"]
+run         = [
+  { task = "bench:run" },
+  { task = "bench:analyze" },
+]
+
+# -----------------------------------------------------------------------------
+# Steps
+# -----------------------------------------------------------------------------
+
+[tasks."bench:candidates"]
+description = "Resolve each candidate to the exact version or commit that would be built, and its cache key"
+run         = "bench/build.sh resolve"
+
+[tasks."bench:build"]
+description = "Build the candidates into .bench/bin/<name>/ (skips a candidate whose manifest already matches)"
+usage       = '''
+arg "[candidates]" var=#true help="Candidate names from bench/candidates.toml (default: all)"
+'''
+run         = 'bench/build.sh build ${usage_candidates:-}'
+
+[tasks."bench:corpus"]
+description = "Generate the deterministic shell-script corpus into .bench/corpus/"
+sources     = ["bench/corpus.py"]
+outputs     = [".bench/corpus/corpus.json"]
+run         = "uv run bench/corpus.py --out .bench/corpus"
+
+[tasks."bench:run"]
+description = "Time every candidate on every scenario with hyperfine, in shuffled interleaved rounds"
+usage       = '''
+flag "--rounds <n>" default="5" help="Interleaved rounds; each round runs every candidate in a fresh random order"
+flag "--runs <n>" default="10" help="Timed runs per candidate per round (total samples = rounds x runs)"
+flag "--warmup <n>" default="3" help="Untimed warm-up runs per candidate per round"
+flag "--scenarios <list>" default="" help="Comma-separated scenario names (default: all in bench/scenarios.toml)"
+flag "--candidates <list>" default="" help="Comma-separated candidate names (default: all built)"
+flag "--pin <cpu>" default="" help="Pin the benchmarked processes to one CPU with taskset"
+flag "--out <dir>" default="" help="Results directory (default: .bench/results/<timestamp>)"
+'''
+run         = '''
+uv run bench/run.py \
+  --rounds "${usage_rounds?}" --runs "${usage_runs?}" --warmup "${usage_warmup?}" \
+  ${usage_scenarios:+--scenarios "$usage_scenarios"} \
+  ${usage_candidates:+--candidates "$usage_candidates"} \
+  ${usage_pin:+--pin "$usage_pin"} \
+  ${usage_out:+--out "$usage_out"}
+'''
+
+[tasks."bench:analyze"]
+description = "Compute the statistics for a results directory and write report.md, summary.json and plots"
+usage       = '''
+arg "[results]" default="" help="Results directory (default: the newest under .bench/results/)"
+'''
+run         = 'uv run bench/analyze.py ${usage_results:+"$usage_results"}'
+
+[tasks."bench:clean"]
+description = "Remove built candidates, worktrees, corpus and results"
+run         = "bench/build.sh clean"

@@ -26,3 +26,7 @@ stack.yaml.lock
 
 ### misc ###
 /shellcheck.1
+
+### bench ###
+/.bench/
+__pycache__/
