@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["numpy>=1.26", "scipy>=1.11", "matplotlib>=3.8"]
+# dependencies = ["numpy>=1.26", "scipy>=1.11", "matplotlib>=3.10"]
 # ///
 """Turn a run.json from bench/run.py into statistics, a Markdown report and plots.
 
@@ -23,9 +23,10 @@ excludes 1. Everything else is "no significant difference" at this sample
 size, and the interval says how much could hide there.
 
 Quality flags per candidate x scenario: CV above 10 %, more than 5 % Tukey
-outliers, a Kruskal-Wallis test across rounds with p < 0.01 (the machine
-drifted while measuring), fewer than 20 samples, output differing from the
-baseline (not comparable), or excluded by the pre-check.
+outliers, drift across rounds (Kruskal-Wallis p < 0.01 and the round medians
+more than 5 % apart: the machine changed while measuring), fewer than 20
+samples, output differing from the baseline (not comparable), or excluded by
+the pre-check.
 
     analyze.py [results-dir]      (default: newest under .bench/results)
 Writes report.md, summary.json and plots/<scenario>.png next to run.json.
@@ -55,6 +56,7 @@ RESAMPLES = 10_000
 CV_LIMIT = 0.10
 OUTLIER_LIMIT = 0.05
 DRIFT_P = 0.01
+DRIFT_SPREAD = 0.05  # round medians must also differ by more than this to be worth a flag
 MIN_N = 20
 
 
@@ -164,14 +166,18 @@ def holm(pvalues: list[float]) -> list[float]:
     return adjusted
 
 
-def drift_p(rounds: list[dict]) -> float | None:
+def drift(rounds: list[dict]) -> tuple[float | None, float]:
+    """Kruskal-Wallis p across rounds and the spread of the round medians
+    (max - min, relative to the overall median)."""
     groups = [np.asarray(r["times"], float) for r in rounds if len(r["times"]) >= 2]
-    if len(groups) < 2 or all(np.ptp(np.concatenate(groups)) == 0 for _ in [0]):
-        return None
+    if len(groups) < 2 or np.ptp(np.concatenate(groups)) == 0:
+        return None, 0.0
+    medians = [float(np.median(g)) for g in groups]
+    spread = (max(medians) - min(medians)) / float(np.median(np.concatenate(groups)))
     try:
-        return float(stats.kruskal(*groups).pvalue)
+        return float(stats.kruskal(*groups).pvalue), spread
     except ValueError:
-        return None
+        return None, spread
 
 
 # --- report -------------------------------------------------------------------
@@ -204,7 +210,7 @@ def verdict(cmp: dict, flags_a: list[str], flags_b: list[str]) -> tuple[str, str
         return "n/a", blocked[0]
     if cmp["mwu_p_adj"] < ALPHA and (lo > 1 or hi < 1):
         if cmp["speedup_mean"] > 1:
-            return "faster", f"{(cmp['speedup_mean'] - 1) * 100:.0f}% less time"
+            return "faster", f"{(1 - 1 / cmp['speedup_mean']) * 100:.0f}% less time"
         return "slower", f"{(1 / cmp['speedup_mean'] - 1) * 100:.0f}% more time"
     return "no significant difference", f"speed-up interval {lo:.2f}×–{hi:.2f}× includes 1"
 
@@ -250,13 +256,13 @@ def main() -> None:
                 d = describe(e["times"], rng)
                 d["peak_rss_median"] = float(np.median(e["memory_bytes"])) if e["memory_bytes"] else p["peak_rss_bytes"]
                 d["exit_codes"] = sorted(set(e["exit_codes"]))
-                d["drift_p"] = drift_p(e["rounds"])
+                d["drift_p"], d["drift_spread"] = drift(e["rounds"])
                 if d["cv"] > CV_LIMIT:
                     fl.append(f"noisy: CV {d['cv'] * 100:.1f}%")
                 if d["outlier_frac"] > OUTLIER_LIMIT:
                     fl.append(f"{d['outliers']} outliers ({d['outlier_frac'] * 100:.0f}%)")
-                if d["drift_p"] is not None and d["drift_p"] < DRIFT_P:
-                    fl.append(f"drift between rounds (Kruskal-Wallis p={fmt_p(d['drift_p'])})")
+                if d["drift_p"] is not None and d["drift_p"] < DRIFT_P and d["drift_spread"] > DRIFT_SPREAD:
+                    fl.append(f"drift between rounds: round medians spread {d['drift_spread'] * 100:.0f}% (Kruskal-Wallis p={fmt_p(d['drift_p'])})")
                 if d["n"] < MIN_N:
                     fl.append(f"only {d['n']} samples")
             else:
@@ -324,7 +330,7 @@ def make_plots(results: Path, run: dict, names: list[str], desc) -> dict[str, st
         ys = []
         for i, (n, e) in enumerate(data):
             t = np.asarray(e["times"]) * 1000
-            ax.boxplot(t, positions=[i], vert=False, widths=0.5, showfliers=False, medianprops={"color": "black"})
+            ax.boxplot(t, positions=[i], orientation="horizontal", widths=0.5, showfliers=False, medianprops={"color": "black"})
             rounds = np.concatenate([[r["round"]] * len(r["times"]) for r in e["rounds"]])
             jitter = (np.random.default_rng(i).random(len(t)) - 0.5) * 0.3
             sc = ax.scatter(t, i + jitter, c=rounds, cmap="viridis", s=12, alpha=0.7, zorder=3)
@@ -457,7 +463,7 @@ def render(run, results, names, baseline, others, desc, flags, pairs, plots) -> 
     w("## How to read this")
     w("")
     w(f"- **Design.** Every candidate runs the identical argument list on the identical files from the same directory. "
-      f"Order is re-shuffled each round so slow machine drift is shared out; the per-round data is kept and a Kruskal-Wallis test across rounds flags drift. "
+      f"Order is re-shuffled each round so slow machine drift is shared out; the per-round data is kept and a Kruskal-Wallis test across rounds (with the round medians more than {DRIFT_SPREAD * 100:.0f} % apart) flags drift. "
       f"hyperfine `-N` launches the process directly, so no shell start-up is inside the measurement; `--output null` discards stdout the same way for everyone.")
     w(f"- **Intervals** are bias-corrected accelerated (BCa) bootstrap intervals from {RESAMPLES:,} resamples for means and medians, "
       f"and percentile-bootstrap intervals for the ratios (the two samples are resampled independently). If a speed-up interval includes 1, the data does not distinguish the two.")
