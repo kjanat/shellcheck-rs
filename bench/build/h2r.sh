@@ -15,6 +15,14 @@ export CARGO_TARGET_DIR=$BENCH_TARGET
 # unless CI is set; a benchmark build never wants an editor server.
 export CI=${CI:-1}
 export MISE_YES=1
+# The branch's build scripts put ~/.ghcup/bin *in front of* PATH whenever that
+# directory exists and is not on PATH yet (GitHub runners ship one with a
+# recent GHC), which would shadow the GHC 9.6.7 that mise provides. Putting it
+# at the very end of PATH satisfies that check while mise's toolchain, which
+# `mise exec` prepends, keeps winning.
+if [ -d "$HOME/.ghcup/bin" ]; then
+    export PATH="$PATH:$HOME/.ghcup/bin"
+fi
 
 # GHC links against the system GMP; fail early with a useful message instead
 # of deep inside cabal. (compiler/setup-toolchain.sh on that branch lists the
