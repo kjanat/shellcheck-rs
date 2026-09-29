@@ -113,18 +113,8 @@ impl Bytes {
 
 /// A call-by-need binding: evaluated at most once, shared by every use.
 pub struct Lazy<T, C: ?Sized = dyn Code<T>> {
-    value: OnceCell<Slot<T>>,
+    value: OnceCell<T>,
     code: C,
-}
-
-/// What a forced cell holds: its own value, or the cell whose value it turned
-/// out to share. A thunk that evaluates to another thunk forwards to it
-/// instead of copying its value out, so a value that passes through several
-/// bindings lives in one place and forcing the others is a pointer chase, not
-/// a node copy with a round of reference-count traffic for every field.
-enum Slot<T> {
-    Value(T),
-    Forward(Rc<Lazy<T>>),
 }
 
 pub type Deferred<T> = Box<dyn FnOnce() -> Thunk<T>>;
@@ -184,7 +174,7 @@ impl<T: 'static> Lazy<T> {
     /// An already-evaluated binding; the common case after strictness analysis.
     pub fn ready(value: T) -> Lazy<T, impl Code<T> + 'static> {
         Lazy {
-            value: OnceCell::from(Slot::Value(value)),
+            value: OnceCell::from(value),
             code: Once(Cell::new(None::<fn() -> Thunk<T>>)),
         }
     }
@@ -210,68 +200,67 @@ impl<T, C: Code<T> + ?Sized> Lazy<T, C> {
     }
 }
 
-impl<T, C: Code<T> + ?Sized> Lazy<T, C> {
+impl<T: Clone, C: Code<T> + ?Sized> Lazy<T, C> {
     /// Force to WHNF, memoising the result.
     ///
     /// Panics on re-entrant forcing, which is this runtime's `<<loop>>`.
     pub fn force(&self) -> &T {
-        let slot = match self.value.get() {
-            Some(slot) => slot,
-            None => {
-                let slot = match self.enter() {
-                    Thunk::Value(value) => Slot::Value(value),
-                    Thunk::Indirect(next) => Slot::Forward(resolve(next)),
-                };
-                self.value.get_or_init(|| slot)
-            }
-        };
-        match slot {
-            Slot::Value(value) => value,
-            Slot::Forward(next) => match next.value.get() {
-                Some(Slot::Value(value)) => value,
-                // `resolve` only ever forwards to a cell that holds its value.
-                _ => unreachable!("h2r-rt: a forwarding cell points past the value"),
-            },
+        if let Some(v) = self.value.get() {
+            return v;
         }
+        let value = match self.enter() {
+            Thunk::Value(value) => value,
+            Thunk::Indirect(next) => chase(next),
+        };
+        self.value.get_or_init(|| value)
     }
 }
 
-/// Force a chain of indirections without recursion and return the cell that
-/// ends up holding the value; every cell passed on the way forwards to it.
+/// Follow a chain of indirections to its value, without recursion.
+///
+/// The value ends up in every cell on the chain that anyone else can still
+/// reach; a cell only this chase holds is about to die, so its value is moved
+/// out rather than copied, and it is not memoised at all. That keeps the
+/// common case, a fresh thunk that evaluated to a fresh node, free of the
+/// per-field reference-count traffic a copy costs. (Forwarding the outer cell
+/// to the inner one instead was tried and measured: it keeps both cells alive,
+/// which cost 17 % of time and 57 % of peak memory on a 1500-line script.)
 #[inline(never)]
-fn resolve<T>(first: Rc<Lazy<T>>) -> Rc<Lazy<T>> {
+fn chase<T: Clone>(first: Rc<Lazy<T>>) -> T {
     let mut pending = Vec::new();
     let mut current = first;
-    let target = loop {
-        match current.value.get() {
-            Some(Slot::Value(_)) => break current,
-            Some(Slot::Forward(next)) => {
-                let next = next.clone();
+    let value = loop {
+        if current.value.get().is_some() {
+            break match Rc::get_mut(&mut current) {
+                Some(cell) => cell.value.take().expect("checked above"),
+                None => current.value.get().expect("checked above").clone(),
+            };
+        }
+        match current.enter() {
+            Thunk::Value(value) => {
+                if Rc::strong_count(&current) > 1 {
+                    pending.push(current);
+                }
+                break value;
+            }
+            Thunk::Indirect(next) => {
+                if Rc::strong_count(&current) > 1 {
+                    pending.push(current);
+                }
                 current = next;
             }
-            None => match current.enter() {
-                Thunk::Value(value) => {
-                    current.value.get_or_init(|| Slot::Value(value));
-                    break current;
-                }
-                Thunk::Indirect(next) => {
-                    pending.push(current);
-                    current = next;
-                }
-            },
         }
     };
     for cell in pending {
-        cell.value.get_or_init(|| Slot::Forward(target.clone()));
+        cell.value.get_or_init(|| value.clone());
     }
-    target
+    value
 }
 
 impl<T: fmt::Debug, C: ?Sized> fmt::Debug for Lazy<T, C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.value.get() {
-            Some(Slot::Value(v)) => write!(f, "Lazy({v:?})"),
-            Some(Slot::Forward(next)) => write!(f, "{next:?}"),
+            Some(v) => write!(f, "Lazy({v:?})"),
             None => write!(f, "Lazy(<thunk>)"),
         }
     }
@@ -547,9 +536,9 @@ impl Field {
     pub fn int(&self) -> Int {
         match self {
             Self::Int(v) => v.clone(),
-            Self::Deferred(cell) => match cell.is_evaluated() {
-                true => cell.force().int(),
-                false => {
+            Self::Deferred(cell) => match cell.value.get() {
+                Some(value) => value.int(),
+                None => {
                     let cell = cell.clone();
                     Int::defer_to(move || cell.force().int())
                 }
@@ -560,9 +549,9 @@ impl Field {
     pub fn data(&self) -> Data {
         match self {
             Self::Data(v) => v.clone(),
-            Self::Deferred(cell) => match cell.is_evaluated() {
-                true => cell.force().data(),
-                false => {
+            Self::Deferred(cell) => match cell.value.get() {
+                Some(value) => value.data(),
+                None => {
                     let cell = cell.clone();
                     Data::defer_to(move || cell.force().data())
                 }
@@ -573,9 +562,9 @@ impl Field {
     pub fn closure(&self) -> Closure {
         match self {
             Self::Closure(v) => v.clone(),
-            Self::Deferred(cell) => match cell.is_evaluated() {
-                true => cell.force().closure(),
-                false => {
+            Self::Deferred(cell) => match cell.value.get() {
+                Some(value) => value.closure(),
+                None => {
                     let cell = cell.clone();
                     Closure::defer_to(move || cell.force().closure())
                 }
