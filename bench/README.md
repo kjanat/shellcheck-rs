@@ -48,7 +48,7 @@ Numbers from different machines or different runs are never mixed; CI caches
 *binaries*, not measurements.
 
 **Pre-check before timing** (`bench/run.py`). Each candidate runs each
-scenario once under a peak-RSS watchdog (4 GiB default) and a timeout. A
+scenario once under a peak-RSS watchdog (physical RAM minus 1 GiB by default) and a timeout. A
 crash, hang or blown cap excludes it from that scenario, and the report says
 why. A candidate that is correct but takes longer than the per-run budget
 (`--max-run-seconds`, 15 s default) is not sampled fifty times either; that

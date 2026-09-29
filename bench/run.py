@@ -307,7 +307,7 @@ def main() -> None:
     ap.add_argument("--scenarios", default="", help="comma-separated subset")
     ap.add_argument("--candidates", default="", help="comma-separated subset")
     ap.add_argument("--pin", default=None, help="CPU to pin every benchmarked process to (taskset)")
-    ap.add_argument("--max-rss-gib", type=float, default=4.0, help="pre-check memory cap")
+    ap.add_argument("--max-rss-gib", type=float, default=None, help="pre-check memory cap (default: physical RAM minus 1 GiB, so a runaway run fails instead of the machine)")
     ap.add_argument("--timeout", type=float, default=600.0, help="pre-check wall-clock cap per run, seconds")
     ap.add_argument("--max-run-seconds", type=float, default=15.0, help="a candidate whose pre-check run takes longer is timed once only, not in the rounds")
     ap.add_argument("--hyperfine", default=shutil.which("hyperfine") or "hyperfine")
@@ -319,6 +319,15 @@ def main() -> None:
         warn(f"only {args.rounds * args.runs} samples per candidate; confidence intervals will be wide")
     if args.pin is not None and not shutil.which("taskset"):
         sys.exit("bench: --pin needs taskset (util-linux)")
+
+    if args.max_rss_gib is None:
+        total = 0
+        try:
+            with open("/proc/meminfo") as f:
+                total = next(int(l.split()[1]) * 1024 for l in f if l.startswith("MemTotal"))
+        except (OSError, StopIteration):
+            pass
+        args.max_rss_gib = max(1.0, total / 2**30 - 1) if total else 4.0
 
     corpus_manifest = args.corpus / "corpus.json"
     if not corpus_manifest.exists():

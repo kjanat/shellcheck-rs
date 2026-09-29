@@ -471,7 +471,7 @@ def render(run, results, names, baseline, others, desc, flags, pairs, plots) -> 
       "Both are Holm-adjusted across every comparison in this report, so with many scenarios the family-wise false-positive rate stays at 5 %.")
     w("- **Effect size.** Cliff's δ is the probability a random run of the first is slower than a random run of the second, minus the reverse (±1 = complete separation); "
       "Hedges' g is the standardised mean difference. A significant p with a negligible δ is a real but tiny difference.")
-    w(f"- **Pre-check.** Before timing, each candidate ran each scenario once under a {cfg['max_rss_gib']:g} GiB peak-RSS cap and a {cfg['timeout_s']:g} s timeout. "
+    w(f"- **Pre-check.** Before timing, each candidate ran each scenario once under a {cfg['max_rss_gib']:.1f} GiB peak-RSS cap (physical RAM minus 1 GiB unless overridden) and a {cfg['timeout_s']:g} s timeout. "
       "A crash, hang or blown cap excludes it from that scenario. Output is compared with the baseline's (JSON compared structurally); a difference does not exclude, but it does void the comparison: a faster program computing something else is not a faster ShellCheck.")
     w(f"- **Budget.** A candidate whose pre-check run took longer than {cfg.get('max_run_s', 0):g} s is not sampled in the rounds (fifty runs of a minute each is not a benchmark, it is a wait); "
       "that single run is reported instead, marked as such, and the ratio next to it is a rough single-run figure with no interval. Raise `--max-run-seconds` for a dedicated slow run.")
