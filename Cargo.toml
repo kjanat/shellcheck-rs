@@ -63,7 +63,7 @@ debug = false
 debug = true
 
 [profile.release.package.shellcheck-core]
-opt-level = 1
+opt-level = 3
 
 [profile.release.build-override]
 opt-level     = 3
