@@ -113,8 +113,18 @@ impl Bytes {
 
 /// A call-by-need binding: evaluated at most once, shared by every use.
 pub struct Lazy<T, C: ?Sized = dyn Code<T>> {
-    value: OnceCell<T>,
+    value: OnceCell<Slot<T>>,
     code: C,
+}
+
+/// What a forced cell holds: its own value, or the cell whose value it turned
+/// out to share. A thunk that evaluates to another thunk forwards to it
+/// instead of copying its value out, so a value that passes through several
+/// bindings lives in one place and forcing the others is a pointer chase, not
+/// a node copy with a round of reference-count traffic for every field.
+enum Slot<T> {
+    Value(T),
+    Forward(Rc<Lazy<T>>),
 }
 
 pub type Deferred<T> = Box<dyn FnOnce() -> Thunk<T>>;
@@ -174,7 +184,7 @@ impl<T: 'static> Lazy<T> {
     /// An already-evaluated binding; the common case after strictness analysis.
     pub fn ready(value: T) -> Lazy<T, impl Code<T> + 'static> {
         Lazy {
-            value: OnceCell::from(value),
+            value: OnceCell::from(Slot::Value(value)),
             code: Once(Cell::new(None::<fn() -> Thunk<T>>)),
         }
     }
@@ -200,53 +210,68 @@ impl<T, C: Code<T> + ?Sized> Lazy<T, C> {
     }
 }
 
-impl<T: Clone, C: Code<T> + ?Sized> Lazy<T, C> {
+impl<T, C: Code<T> + ?Sized> Lazy<T, C> {
     /// Force to WHNF, memoising the result.
     ///
     /// Panics on re-entrant forcing, which is this runtime's `<<loop>>`.
     pub fn force(&self) -> &T {
-        if let Some(v) = self.value.get() {
-            return v;
-        }
-        let value = match self.enter() {
-            Thunk::Value(value) => value,
-            Thunk::Indirect(next) => chase(next),
+        let slot = match self.value.get() {
+            Some(slot) => slot,
+            None => {
+                let slot = match self.enter() {
+                    Thunk::Value(value) => Slot::Value(value),
+                    Thunk::Indirect(next) => Slot::Forward(resolve(next)),
+                };
+                self.value.get_or_init(|| slot)
+            }
         };
-        self.value.get_or_init(|| value)
+        match slot {
+            Slot::Value(value) => value,
+            Slot::Forward(next) => match next.value.get() {
+                Some(Slot::Value(value)) => value,
+                // `resolve` only ever forwards to a cell that holds its value.
+                _ => unreachable!("h2r-rt: a forwarding cell points past the value"),
+            },
+        }
     }
 }
 
+/// Force a chain of indirections without recursion and return the cell that
+/// ends up holding the value; every cell passed on the way forwards to it.
 #[inline(never)]
-fn chase<T: Clone>(first: Rc<Lazy<T>>) -> T {
+fn resolve<T>(first: Rc<Lazy<T>>) -> Rc<Lazy<T>> {
     let mut pending = Vec::new();
     let mut current = first;
-    let value = loop {
-        if let Some(value) = current.value.get() {
-            break value.clone();
-        }
-        match current.enter() {
-            Thunk::Value(value) => {
-                pending.push(current);
-                break value;
-            }
-            Thunk::Indirect(next) => {
-                if Rc::strong_count(&current) > 1 {
-                    pending.push(current);
-                }
+    let target = loop {
+        match current.value.get() {
+            Some(Slot::Value(_)) => break current,
+            Some(Slot::Forward(next)) => {
+                let next = next.clone();
                 current = next;
             }
+            None => match current.enter() {
+                Thunk::Value(value) => {
+                    current.value.get_or_init(|| Slot::Value(value));
+                    break current;
+                }
+                Thunk::Indirect(next) => {
+                    pending.push(current);
+                    current = next;
+                }
+            },
         }
     };
     for cell in pending {
-        cell.value.get_or_init(|| value.clone());
+        cell.value.get_or_init(|| Slot::Forward(target.clone()));
     }
-    value
+    target
 }
 
 impl<T: fmt::Debug, C: ?Sized> fmt::Debug for Lazy<T, C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.value.get() {
-            Some(v) => write!(f, "Lazy({v:?})"),
+            Some(Slot::Value(v)) => write!(f, "Lazy({v:?})"),
+            Some(Slot::Forward(next)) => write!(f, "{next:?}"),
             None => write!(f, "Lazy(<thunk>)"),
         }
     }
@@ -522,9 +547,9 @@ impl Field {
     pub fn int(&self) -> Int {
         match self {
             Self::Int(v) => v.clone(),
-            Self::Deferred(cell) => match cell.value.get() {
-                Some(value) => value.int(),
-                None => {
+            Self::Deferred(cell) => match cell.is_evaluated() {
+                true => cell.force().int(),
+                false => {
                     let cell = cell.clone();
                     Int::defer_to(move || cell.force().int())
                 }
@@ -535,9 +560,9 @@ impl Field {
     pub fn data(&self) -> Data {
         match self {
             Self::Data(v) => v.clone(),
-            Self::Deferred(cell) => match cell.value.get() {
-                Some(value) => value.data(),
-                None => {
+            Self::Deferred(cell) => match cell.is_evaluated() {
+                true => cell.force().data(),
+                false => {
                     let cell = cell.clone();
                     Data::defer_to(move || cell.force().data())
                 }
@@ -548,9 +573,9 @@ impl Field {
     pub fn closure(&self) -> Closure {
         match self {
             Self::Closure(v) => v.clone(),
-            Self::Deferred(cell) => match cell.value.get() {
-                Some(value) => value.closure(),
-                None => {
+            Self::Deferred(cell) => match cell.is_evaluated() {
+                true => cell.force().closure(),
+                false => {
                     let cell = cell.clone();
                     Closure::defer_to(move || cell.force().closure())
                 }
@@ -747,6 +772,9 @@ impl Closure {
         if let Some(enter) = &function.enter
             && function.supplied.len() + arguments.len() == function.arity
         {
+            if function.supplied.is_empty() {
+                return Tail::Enter(enter(arguments));
+            }
             let mut supplied = Vec::with_capacity(function.arity);
             supplied.extend(function.supplied.iter().cloned());
             supplied.extend(arguments);
@@ -760,14 +788,13 @@ impl Closure {
     pub fn is_evaluated(&self) -> bool {
         self.0.is_evaluated()
     }
-    pub fn apply(&self, arguments: Vec<Field>) -> Field {
-        let mut arguments = arguments.into_iter();
+    pub fn apply(&self, mut arguments: Vec<Field>) -> Field {
         let mut current = self.clone();
         loop {
             let function = current.force();
             let missing = function.arity - function.supplied.len();
             if arguments.len() < missing {
-                if arguments.len() == 0 {
+                if arguments.is_empty() {
                     return Field::Closure(current);
                 }
                 let mut supplied = function.supplied.clone();
@@ -779,11 +806,16 @@ impl Closure {
                     supplied,
                 }))));
             }
+            // The common case, a known-arity call of a closure nobody partially
+            // applied, hands the caller's vector straight to the code.
+            if function.supplied.is_empty() && arguments.len() == missing {
+                return (function.code)(arguments);
+            }
             let mut supplied = Vec::with_capacity(function.arity);
             supplied.extend(function.supplied.iter().cloned());
-            supplied.extend(arguments.by_ref().take(missing));
+            supplied.extend(arguments.drain(..missing));
             let result = (function.code)(supplied);
-            if arguments.len() == 0 {
+            if arguments.is_empty() {
                 return result;
             }
             current = result.closure();
