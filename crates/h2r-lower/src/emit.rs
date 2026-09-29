@@ -575,6 +575,33 @@ fn dependencies(
     Ok(dependencies)
 }
 
+/// Instance to recursive group: the strongly connected component of the
+/// instance reference graph it belongs to. A tail call between two different
+/// groups cannot be an iteration of a loop, so it may run the callee's entry
+/// block directly; a call within a group keeps returning a thunk, which is the
+/// trampoline that runs mutual recursion in constant stack.
+fn groups(edges: &BTreeMap<usize, BTreeSet<usize>>) -> BTreeMap<usize, usize> {
+    let mut groups = BTreeMap::new();
+    for (number, component) in crate::graph::components(edges).into_iter().enumerate() {
+        for index in component {
+            groups.insert(index, number);
+        }
+    }
+    groups
+}
+
+fn groups_of(
+    world: &World<'_>,
+    specialization: &specialize::Specialization,
+    leaves: &BTreeMap<usize, &LoweredLeaf>,
+) -> Result<BTreeMap<usize, usize>, String> {
+    let mut edges = BTreeMap::new();
+    for (&index, leaf) in leaves {
+        edges.insert(index, dependencies(world, specialization, index, leaf)?);
+    }
+    Ok(groups(&edges))
+}
+
 fn uncarried<'a>(world: &World<'_>, ty: &'a Ty) -> &'a Ty {
     let parts: Vec<&Ty> = match ty {
         Ty::Fun { arg, res, .. } => vec![arg, res],
@@ -902,6 +929,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
 pub fn emit_library(modules: &[Module], entries: &[&str]) -> Result<String, String> {
     prepare(modules, entries, Driver::Api, |prepared| {
         let has_boxed = has_boxed(prepared.world, prepared.leaves);
+        let groups = groups(prepared.edges);
         let mut out = String::from(
             "#[cfg(not(target_pointer_width = \"64\"))]\ncompile_error!(\"Int# backend requires a 64-bit target\");\n",
         );
@@ -911,6 +939,7 @@ pub fn emit_library(modules: &[Module], entries: &[&str]) -> Result<String, Stri
                 prepared.world,
                 prepared.specialization,
                 prepared.leaves,
+                &groups,
                 index,
                 leaf,
                 "",
@@ -971,6 +1000,7 @@ pub fn emit_entry_split(
     prepare(modules, entries, driver, |prepared| {
         let world = prepared.world;
         let has_boxed = has_boxed(world, prepared.leaves);
+        let groups = groups(prepared.edges);
         let mut code = BTreeMap::new();
         for (&index, leaf) in prepared.leaves {
             code.insert(
@@ -979,6 +1009,7 @@ pub fn emit_entry_split(
                     world,
                     prepared.specialization,
                     prepared.leaves,
+                    &groups,
                     index,
                     leaf,
                     "pub ",
@@ -1198,6 +1229,7 @@ fn functions(
         "// Generated from source-verified scalar NIR. CLI I/O is an adapter.\n#[cfg(not(target_pointer_width = \"64\"))]\ncompile_error!(\"Int# backend requires a 64-bit target\");\n",
     );
     let has_boxed = has_boxed(world, leaves);
+    let groups = groups_of(world, specialization, leaves)?;
     out.push_str("\n#[allow(dead_code)]\nmod h2r_rt {\n");
     out.push_str(include_str!("../../h2r-rt/src/lib.rs"));
     out.push_str("\n}\n");
@@ -1216,6 +1248,7 @@ fn functions(
             world,
             specialization,
             leaves,
+            &groups,
             index,
             leaf,
             vis,
@@ -1247,6 +1280,7 @@ fn leaf_code(
     world: &World<'_>,
     specialization: &specialize::Specialization,
     leaves: &BTreeMap<usize, &LoweredLeaf>,
+    groups: &BTreeMap<usize, usize>,
     index: usize,
     leaf: &LoweredLeaf,
     vis: &str,
@@ -1394,6 +1428,29 @@ fn leaf_code(
                         {
                             let args = arguments.iter().map(|v| value(*v)).collect::<Vec<_>>();
                             Some(delayed(&result, &format!("b_{index}_{}", target.0), &args))
+                        }
+                        // A tail call to a function outside this one's recursive
+                        // group runs its entry block directly: the thunk that
+                        // `f_` would return only ever gets resolved by whoever is
+                        // forcing this block, so it buys an allocation and an
+                        // indirection and nothing else. Within a group the thunk
+                        // stays: it is the trampoline that keeps loops in constant
+                        // stack. A call with no arguments stays too, so a CAF keeps
+                        // its single shared cell.
+                        (None, Some((target_index, target, arguments)), Operation::CallTop { .. })
+                            if target_index != index
+                                && !arguments.is_empty()
+                                && matches!(
+                                    (groups.get(&index), groups.get(&target_index)),
+                                    (Some(mine), Some(theirs)) if mine != theirs
+                                ) =>
+                        {
+                            let args = arguments
+                                .iter()
+                                .map(|v| value(*v))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            Some(format!("b_{target_index}_{}({args})", target.0))
                         }
                         (
                             _,
