@@ -381,6 +381,13 @@ arg "<scripts>" var=#true help="Shell scripts to check"
 """
 run         = 'scripts/perf-ab.sh "${usage_baseline?}" "${usage_candidate?}" ${usage_scripts?}'
 
+[tasks."rt:instrs"]
+description = "Deterministic callgrind instruction counts (Ir/op) for the h2r-rt hot paths, no compiled-ShellCheck rebuild"
+usage       = """
+arg "[scenarios]" var=#true help="Scenarios to run (default: all), e.g. apply cons"
+"""
+run         = "scripts/rt-instrs.sh ${usage_scenarios:-}"
+
 [tasks.full]
 description = "Run source checks and the upstream ShellCheck oracle"
 run         = [

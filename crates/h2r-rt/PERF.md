@@ -98,6 +98,30 @@ cargo run --release -p h2r-conformance -- gate \
 
 Steps 1–3 are the loop for a work package. Steps 4–7 happen once per package, by whoever integrates, and never overlap with each other.
 
+### Microbench (`scripts/rt-instrs.sh`)
+
+A deterministic instruction-count number for the runtime's hot paths in about 10 seconds, instead of the 25-minute rebuild. `crates/h2r-rt/examples/ops.rs` runs one scenario `n` times using only the public API; the script runs it under callgrind with `n = 0` and with `n`, and prints `(Ir_n - Ir_0) / n`, the instructions per operation. Callgrind counts do not depend on machine load, so repeated runs agree exactly (two runs on `e8e6be9` matched to the last digit in every scenario; the limit is 0.1 %). Needs `valgrind`; builds with `cargo build --release -p h2r-rt --example ops` and respects `CARGO_TARGET_DIR`.
+
+```sh
+scripts/rt-instrs.sh                  # all scenarios
+scripts/rt-instrs.sh apply cons       # some of them
+mise run rt:instrs                    # same, through mise
+```
+
+Each scenario stands for one bucket of the profile above. `Ir/op` includes the loop's own overhead and the drop of what the operation made, but not process start-up or the scenario's one-time setup (the `n = 0` run cancels those). It is the runtime built as a library at `opt-level 3`, so inlining into emitted code is not modelled: use it to rank changes, then confirm on the compiled program (step 4 onward), as invariant 8 says.
+
+| scenario        | what one operation is                                              |         n | Ir/op |
+| --------------- | ------------------------------------------------------------------ | --------: | ----: |
+| `thunk-chain`   | one indirection in a chain forced once (`chase`, constant stack)   |   100 000 |   251 |
+| `thunk-each`    | `delay1` thunk returning `Int`, created and forced                 |   100 000 |   445 |
+| `apply`         | `Closure::bind` (one capture) and a saturated `apply`              |   100 000 |   545 |
+| `apply-partial` | `bind`, `apply` to one of two arguments, `apply` to the other      |   100 000 | 1 418 |
+| `cons`          | one `Data::ready(":", ..)` cell built, then the list dropped       |    10 000 |   413 |
+| `match`         | `force` and a five-arm `match` on the constructor name, as emitted | 1 000 000 |    43 |
+| `deferred-data` | `Field::data()` on an evaluated `Field::Deferred`                  | 1 000 000 |    55 |
+
+Baseline measured on `e8e6be9` (the head before WP9), rustc 1.98.1 release profile, valgrind 3.22.0, x86-64. Re-measure before and after your change and quote both lines in the hand-back. `cons` keeps `n` at 10 000 because dropping a list is recursive (invariant 6); do not raise it past what the 8 MiB main-thread stack takes.
+
 ## Work packages
 
 Each has a spec, an acceptance list, and no emitter change unless stated. Do them in order; each is independently landable.
