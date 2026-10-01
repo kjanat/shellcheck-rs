@@ -40,21 +40,22 @@ The gap to GHC is ~19×. GHC wins on exactly these things: a bump allocator, a g
 
 ### Landed
 
-| package                                                | commit               | small (150 lines) | medium (1500 lines) | peak RSS medium |
-| ------------------------------------------------------ | -------------------- | ----------------- | ------------------- | --------------- |
-| chase move-out, apply fast path, direct tail calls     | `6199812`            | −4 %              | −8 %                | =               |
-| WP1 thin cells                                         | `f11d5f6`            | −16 % (±9)        | −12 % (±4)          | 1355 → 1252 MiB |
-| WP3 one-allocation closures + WP2 Field 16 bytes       | `ddccda5`, `13871e9` | −17 % (±14)       | −14 % (±3)          | 1252 → 861 MiB  |
-| WP7 direct call when forced next + WP6 Args (reverted) | `9749e67`, `a2de2f8` | −5 % (±12)        | +2 % … +7 % (±5)    | =               |
-| WP7 alone (WP6 reverted)                               | `fa6ee0b`            | −2 % (±11)        | −2 % (±3)           | =               |
-| WP8 plain `mi_malloc` for ≤16-byte alignment           | `9985548`            | −3 % (±14)        | −8 % (±3)           | 861 → 779 MiB   |
-| WP4 constructor tags                                   | `640db5a`            | = (±16)           | = (±8)              | 779 → 769 MiB   |
+| package                                                     | commit               | small (150 lines) | medium (1500 lines) | peak RSS medium |
+| ----------------------------------------------------------- | -------------------- | ----------------- | ------------------- | --------------- |
+| chase move-out, apply fast path, direct tail calls          | `6199812`            | −4 %              | −8 %                | =               |
+| WP1 thin cells                                              | `f11d5f6`            | −16 % (±9)        | −12 % (±4)          | 1355 → 1252 MiB |
+| WP3 one-allocation closures + WP2 Field 16 bytes            | `ddccda5`, `13871e9` | −17 % (±14)       | −14 % (±3)          | 1252 → 861 MiB  |
+| WP7 direct call when forced next + WP6 Args (reverted)      | `9749e67`, `a2de2f8` | −5 % (±12)        | +2 % … +7 % (±5)    | =               |
+| WP7 alone (WP6 reverted)                                    | `fa6ee0b`            | −2 % (±11)        | −2 % (±3)           | =               |
+| WP8 plain `mi_malloc` for ≤16-byte alignment                | `9985548`            | −3 % (±14)        | −8 % (±3)           | 861 → 779 MiB   |
+| WP4 constructor tags                                        | `640db5a`            | = (±16)           | = (±8)              | 779 → 769 MiB   |
+| WP11 thunk path + WP12 constructor cell (microbench-driven) | `13eaa30`, `e1e5d55` | −16 % (±13)       | −10 % (±4)          | =               |
 
 (Each row against the binary before it, same machine, hyperfine -N, 10 runs; output byte-identical to the GHC oracle on the conformance gate.)
 
 The WP6+WP7 row is a wash in wall time but **+4.2 % instructions** (5.34 G → 5.57 G, callgrind, same script). The allocator shrank by 0.19 G, yet the `Args` small-vector added about 0.44 G: `Args::push` 113 M and `From<[Field; N]>` 78 M as out-of-line calls, `take_front`/`into_vec`/`Vec::extend(Args::IntoIter)` 82 M, and `memcpy` up 78 M from moving a 72-byte `Args` by value through `apply`, the vtable `call` slot and the `k_` shims (a `Vec` is 24 bytes). WP6 was reverted in `fa6ee0b`; WP7 stays (it is roughly neutral in instructions and does not raise any count).
 
-WP7 alone: 5.34 G → 5.26 G instructions (−1.5 %). WP8: 5.26 G → **4.71 G (−10.5 %)**; the `mi_theap_malloc_aligned`/`_generic`/`_overalloc` entries are gone and the allocator is now `mi_free` 8.5 %, `_mi_theap_malloc_zero` 7.6 %, `mi_malloc` 2.7 %, `_mi_malloc_generic` 0.9 %: about 19.6 % of the run, down from 26 %. WP4 (`640db5a`): 4.71 G → **4.57 G (−2.8 %)**; the constructor-name `memcmp` is gone, `Node` is 56 bytes, and the microbench `match` row went 43 → 32 Ir/op.
+WP7 alone: 5.34 G → 5.26 G instructions (−1.5 %). WP8: 5.26 G → **4.71 G (−10.5 %)**; the `mi_theap_malloc_aligned`/`_generic`/`_overalloc` entries are gone and the allocator is now `mi_free` 8.5 %, `_mi_theap_malloc_zero` 7.6 %, `mi_malloc` 2.7 %, `_mi_malloc_generic` 0.9 %: about 19.6 % of the run, down from 26 %. WP4 (`640db5a`): 4.71 G → **4.57 G (−2.8 %)**; the constructor-name `memcmp` is gone, `Node` is 56 bytes, and the microbench `match` row went 43 → 32 Ir/op. WP11 + WP12 (`e1e5d55`): 4.57 G → **3.99 G (−12.8 %)**, the first packages driven entirely by the microbench (thunk-each 270 → 225, thunk-chain 161 → 110, cons 168 → 123 Ir/op under mimalloc): `chase<Node>` 4.2 → 2.5 %, `force` 3.2 → 2.1 %, the `OnceCell` drop glue entries are gone, allocator share 19.6 → 22 % of a smaller total. Cumulative since the first profile: 7.58 G → 3.99 G, −47 %, output byte-identical at every step.
 
 ### Profile after WP1–WP3 (`e156aea`, same 150-line script)
 
