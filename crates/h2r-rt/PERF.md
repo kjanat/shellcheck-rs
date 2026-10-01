@@ -75,8 +75,15 @@ primitive and pins them. Every improvement lowers a number there.
 ```sh
 # 1. seconds: unit tests, allocation budgets, layout pins
 cargo test -p h2r-rt
-# 2. a minute: unsafe code must be clean under Miri (nightly has the component)
-cargo +nightly miri test -p h2r-rt
+# 2. two minutes: unsafe code must be clean under Miri (nightly has the component).
+#    One test opens a file (hence no isolation); the knot test
+#    `a_pending_dynamic_value_ties_a_knot` builds a reference cycle on purpose,
+#    so its two allocations leak by design. Run with leaks ignored; the
+#    million-indirection test is too slow interpreted, run it natively.
+MIRIFLAGS='-Zmiri-disable-isolation -Zmiri-ignore-leaks' \
+  cargo +nightly miri test -p h2r-rt -- --skip a_million_indirections
+#    If you added unsafe code, also run once WITHOUT -Zmiri-ignore-leaks: the
+#    only leaks allowed are the two from that knot test.
 # 3. a minute and a half: the emitter's tests, if the emitter changed
 cargo test -p h2r-lower
 # 4. ~25 min: rebuild the compiled ShellCheck (run alone; never concurrently with tests)
