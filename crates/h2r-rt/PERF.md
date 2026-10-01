@@ -222,6 +222,37 @@ Unsafe: the file's `unsafe` is now in five places (the vtable casts, the free of
 
 `cons` costs 168 Ir/op under mimalloc (412 was a glibc number) to build one `Data::ready(":", [c, rest])` and drop it later. A ready cell should be one allocation written once: look at `Shared::ready_with`, `Fields::from([Field; 2])`, the `Evaluated` tail and the free path (`Block<Node, Evaluated>::free` is 0.6 % of the program on its own), and at `drop_glue::<OnceCell<Node>>` (3.6 % of the program). Acceptance: `cons` ≤ 125 Ir/op (mimalloc), `Node` stays ≤ 64 bytes and the alloc pins hold, Miri clean, `cargo test -p h2r-rt`.
 
+**As built.** `cons` 168 → **123** Ir/op (≤ 125 reached), measured with `scripts/rt-instrs.sh` on `3995f92` and on the final tree, mimalloc, same machine; nothing else got worse:
+
+| scenario        | before (`3995f92`) | after |
+| --------------- | -----------------: | ----: |
+| `thunk-chain`   |                123 |   110 |
+| `thunk-each`    |                225 |   225 |
+| `apply`         |                355 |   352 |
+| `apply-partial` |                956 |   948 |
+| `cons`          |                168 |   123 |
+| `match`         |                 26 |    26 |
+| `deferred-data` |                 49 |    47 |
+
+Profile first (`cons`, per cell, before): `drop_glue::<Option<Node>>` 45, the Rust side of `main` (build the 72-byte block on the stack, copy it to the heap) 30, `drop_glue::<Field>` 18, `Block::free` 10, mimalloc 22 (`mi_free`) + 27 (`mi_malloc`, `_mi_theap_malloc_zero`). The free path was 73 of the 168 and is where the instructions went; the allocator (about 50) is not ours.
+
+What each change was and bought (`cons` unless noted, each measured in turn on the tree before it):
+
+- **`Fields` drops itself** (`impl Drop for Fields`; the inline arrays and the vector are `ManuallyDrop`). The compiler's glue for `Option<Node>` was a 7-register prologue, a jump table and a loop with an unwinding cleanup per array; the hand-written drop drops the fields one after another and skips the call into `Field`'s glue for the two payloads that own nothing (`Int64`, `Char`: a string is nearly all of these). 168 → 154. A field whose drop panics now leaks the later ones instead of dropping them during the unwind: memory only, and nothing in the runtime drops a panicking value.
+- **`Block::free` tests the slot and drops the `T` inside**, not `drop_in_place::<Slot<T>>` behind a second `is_some` (the `Option<T>` glue was an out-of-line call for the `Some` too). 154 → 152 on `cons`, and **123 → 111 on `thunk-chain`**, where the last node of the chain is freed through it.
+- **The vector of `Many` out of line and cold** (`ManuallyDrop<Vec<Field>>`, `drop_many`): its drop loop was inlined into every node's glue and cost the 4-field case nothing but a call. 151 → 140.
+- **The `Data` arm of `drop_field` inline** (`Shared`'s `Drop`: decrement, and the vtable `free` on zero) instead of a call into `Field`'s glue and its jump table. 140 → 135.
+- **`Shared::alloc` allocates, then writes** (`std::alloc::alloc` and `ptr::write` of the fields) instead of `Box::new(Block { .. })`, which assembled the 72-byte block on the stack and copied it. The block is still written from the stack copy of its `Node`; see below. 135 → 133, `thunk-chain` 111 → 109, `apply-partial` 954 → 948.
+- **`Fields::drop` handles `Zero` and `Two` inline and sends the rest out of line** (`drop_other`), so the match is two compares and not a jump table. 133 → 131.
+- **A head that owns nothing leaves the tail as a tail call.** `Two` with an `Int64`/`Char` first field (every `:` of a string) drops its second field as the last thing the function does, so `drop_glue::<Node>` has no stack frame on that path (no pushes, a jump into the next `free`); a head that may own something goes through `drop_two` out of line. 131 → **123**. It also inlined the now-small glue into `Block::free`, which made the optimiser assemble the empty slot of a thunk on the stack and copy it (`thunk-chain` 109 → 118); writing the block's header, slot and code **field by field** (`alloc_block`, `alloc`, `alloc_empty`) fixed that: `thunk-chain` 118 → 110.
+- **`deferred_data` out of line** (`Field::data` on a field that is still a thunk). The earlier `alloc` change made `data()` carry the allocation's registers and frame on its hot (already evaluated) path: `deferred-data` 49 → 51. Moving the thunk-making branch into an `#[inline(never)]` function gave 47, better than before.
+
+Tried and not kept (each measured, each reverted): building the `Node` **after** the allocation so that it is written once into the heap, by a closure (`ready_from`), by `settle`, and by writing through a pointer to the slot (`Data::ready` with a `vacant_ready`), each with and without destructuring `From<[Field; N]>`: `cons` 143, 146, 158, 138 and 139 against 133 at the time. rustc builds the `Fields` enum from the array by value through two or three stack copies that LLVM does not fold (they copy the enum's padding word as part of a 36-byte move that is not aligned with the array's own stores), and every shape that put the allocation first only added copies; the single 56-byte copy from the stack that remains costs about 10 Ir of the 123 and is the part of "written once" this package did not get. A loop over the fields as a slice instead of the match (+2), putting `Two` first in an `if let` (0), and specialising `Block<Node, _>::free` with `TypeId` to inline the node's drop into it (0 on the microbench, and code bloat in every `Block<Node, Once<closure>>` instantiation, of which a program has thousands): not kept.
+
+Latent bug found on the way, fixed before it landed: the first version of `impl Drop for Fields` dropped the `Many` vector and then left it to the compiler's glue as well; a `fields_drop_tests` module (arities 0 to 6, every kind of `Field`, a long list) pins that each field is dropped exactly once.
+
+Invariants: 6 (drop is recursive) is unchanged in depth: per cell it is the same chain of calls (`Shared::drop`, the vtable `free`, the node's glue), the glue's frame went from seven saved registers to none on the `:` path, and a list of 5 000 cells drops in the test. `tests/alloc.rs` counts are the same (`:` cell 72 bytes, 1 allocation; thunk to ready node 2; `bind + apply` 2; partial 5) and `tests/layout.rs` still reads `Node` 56, `Field` 16, `Data` 8. `Fields` is still the same enum with the same variant names and `Deref<Target = [Field]>`, but its payloads are now `ManuallyDrop<..>`: the emitter only writes `node.fields[i]` and `HData::ready(&C_n, [..])`, never a `Fields` variant, so `emit.rs` is unchanged (`cargo test -p h2r-lower` passes, and the runtime pasted as one source file compiles). Unsafe: `cell.rs` has one more place (the field-by-field write of a fresh block, with a `SAFETY` comment) and `Fields::drop` and its helpers in `lib.rs` (documented there). Miri: clean with `-Zmiri-ignore-leaks`, and without it the only leaks are the two of `a_pending_dynamic_value_ties_a_knot` (`cargo +nightly miri test -p h2r-rt`, 58 unit tests, `alloc` 10, `layout` 1). Not timed on the compiled program (the integrator's rebuild).
+
 For WP10–WP12 the integrator rebuilds once with all three, gates, and times; the microbench is the fast loop and its numbers are the acceptance.
 
 ### WP5 Strings as a packed intrinsic

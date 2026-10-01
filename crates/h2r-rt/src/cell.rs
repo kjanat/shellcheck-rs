@@ -22,10 +22,12 @@
 //! Code<T>>>` with the trait object's vtable moved from a fat pointer into the
 //! allocation, and the unused weak count dropped.
 //!
-//! All of the `unsafe` in this crate is in this file, in five places: the
+//! All of the `unsafe` for cells is in this file, in six places: the
 //! cast from `Header<T>` back to `Block<T, C>` in the vtable functions, the
-//! free of a block, the shared reference to the header, `take_unique`, and the
-//! value `Slot` (the one place that writes the memoised value).
+//! allocation of a block (written field by field), the free of a block, the
+//! shared reference to the header, `take_unique`, and the value `Slot` (the
+//! one place that writes the memoised value). `Fields::drop` in `lib.rs` is
+//! the one other, and does not touch a cell.
 
 use std::cell::{Cell, OnceCell, UnsafeCell};
 use std::fmt;
@@ -344,16 +346,15 @@ impl<T: 'static, C: Code<T> + 'static> Block<T, C> {
 
     unsafe fn free(header: NonNull<Header<T>>) {
         let block = header.cast::<Block<T, C>>().as_ptr();
-        // SAFETY: the allocation was made by `Box::new(Block<T, C>)`, the
-        // count has reached zero so this is the last pointer, and the layout
-        // given back is exactly the one `Box` allocated with. Each field is
+        // SAFETY: the allocation was made by `alloc_block` with the layout of
+        // a `Block<T, C>`, the count has reached zero so this is the last
+        // pointer, and the layout given back is that same one. Each field is
         // dropped once, in place, before the memory goes. The value is tested
         // here, in line, because most cells that die never memoised one (a
         // thunk that `chase` moved through) and the drop glue of `Option<T>`
         // is an out-of-line call even for `None`.
         unsafe {
-            let value = &mut (*block).header.value;
-            if value.get().is_some() {
+            if let Some(value) = (*block).header.value.0.get_mut() {
                 std::ptr::drop_in_place(value);
             }
             std::ptr::drop_in_place(&raw mut (*block).code);
@@ -376,23 +377,70 @@ pub fn shared<T: 'static>(f: impl FnOnce() -> T + 'static) -> Shared<T> {
 }
 
 impl<T: 'static> Shared<T> {
-    fn alloc<C: Code<T> + 'static>(value: Option<T>, code: C) -> Self {
-        let block = Box::new(Block {
-            header: Header {
-                strong: Cell::new(1),
-                vtable: NonNull::from(if C::shares() {
-                    Block::<T, C>::SHARING
-                } else {
-                    Block::<T, C>::VTABLE
-                }),
-                value: Slot(UnsafeCell::new(value)),
-            },
-            code,
-        });
+    /// Allocate a block and write everything but the value slot, which the
+    /// caller must write (see `alloc` and `alloc_empty`) before the block is
+    /// used.
+    ///
+    /// The fields are written one by one rather than as a `Block` value, which
+    /// the optimiser sometimes assembles on the stack and copies.
+    #[inline(always)]
+    fn alloc_block<C: Code<T> + 'static>(code: C) -> NonNull<Block<T, C>> {
+        let layout = std::alloc::Layout::new::<Block<T, C>>();
+        // SAFETY: the layout has a non-zero size (the header is not empty).
+        let block = unsafe { std::alloc::alloc(layout) }.cast::<Block<T, C>>();
+        let Some(block) = NonNull::new(block) else {
+            std::alloc::handle_alloc_error(layout)
+        };
+        let vtable = if C::shares() {
+            Block::<T, C>::SHARING
+        } else {
+            Block::<T, C>::VTABLE
+        };
+        // SAFETY: `block` is a fresh allocation of the layout of a
+        // `Block<T, C>`, so it is valid and aligned for these writes, each
+        // field is written once, and nothing else refers to it. `free` gives
+        // the same layout back.
+        unsafe {
+            let block = block.as_ptr();
+            (&raw mut (*block).header.strong).write(Cell::new(1));
+            (&raw mut (*block).header.vtable).write(NonNull::from(vtable));
+            (&raw mut (*block).code).write(code);
+        }
+        block
+    }
+
+    /// The handle for a block whose every field has been written.
+    ///
+    /// # Safety
+    /// All of `block`'s fields are initialised, including the value slot.
+    #[inline(always)]
+    unsafe fn handle<C>(block: NonNull<Block<T, C>>) -> Self {
         Shared {
-            // Derived from the whole `Block`, so it may later be cast back.
-            ptr: NonNull::from(Box::leak(block)).cast(),
+            // Derived from the whole allocation, so it may later be cast back.
+            ptr: block.cast(),
             owns: PhantomData,
+        }
+    }
+
+    /// A cell holding `value`.
+    #[inline(always)]
+    fn alloc<C: Code<T> + 'static>(value: T, code: C) -> Self {
+        let block = Self::alloc_block(code);
+        // SAFETY: the slot is the one field `alloc_block` left unwritten.
+        unsafe {
+            (&raw mut (*block.as_ptr()).header.value).write(Slot(UnsafeCell::new(Some(value))));
+            Self::handle(block)
+        }
+    }
+
+    /// A cell with no value yet.
+    #[inline(always)]
+    fn alloc_empty<C: Code<T> + 'static>(code: C) -> Self {
+        let block = Self::alloc_block(code);
+        // SAFETY: the slot is the one field `alloc_block` left unwritten.
+        unsafe {
+            (&raw mut (*block.as_ptr()).header.value).write(Slot(UnsafeCell::new(None)));
+            Self::handle(block)
         }
     }
 
@@ -402,24 +450,24 @@ impl<T: 'static> Shared<T> {
     }
 
     pub fn step(f: impl FnOnce() -> Thunk<T> + 'static) -> Self {
-        Self::alloc(None, Once(Cell::new(Some(f))))
+        Self::alloc_empty(Once(Cell::new(Some(f))))
     }
 
     /// An empty cell, filled later by [`Shared::fill`] to tie a knot.
     pub fn pending() -> Self {
-        Self::alloc(None, Pending(Cell::new(None)))
+        Self::alloc_empty(Pending(Cell::new(None)))
     }
 
     /// An already-evaluated cell; its code is zero bytes.
     pub fn ready(value: T) -> Self {
-        Self::alloc(Some(value), Evaluated)
+        Self::alloc(value, Evaluated)
     }
 
     /// An already-evaluated cell whose code tail is `code`, kept for
     /// [`Shared::call`]. The value says how to use the tail; the cell is never
     /// entered, so `code.enter` is unreachable.
     pub fn ready_with<C: Code<T> + 'static>(value: T, code: C) -> Self {
-        Self::alloc(Some(value), code)
+        Self::alloc(value, code)
     }
 
     pub fn fill(&self, f: impl FnOnce() -> Thunk<T> + 'static) {

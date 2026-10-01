@@ -6,6 +6,7 @@
 //! may not be demanded, and genuinely cyclic values -- lands here.
 
 use std::cell::RefCell;
+use std::mem::ManuallyDrop;
 use std::rc::Rc;
 
 /// The program's address literals, written by the emitter as one static table
@@ -292,13 +293,103 @@ pub struct Node {
     pub fields: Fields,
 }
 
+/// The fields of a constructor, inline up to three. The arrays and the vector are
+/// `ManuallyDrop` because `Fields` drops them itself (see its `Drop`).
 #[derive(Clone)]
 pub enum Fields {
     Zero,
-    One([Field; 1]),
-    Two([Field; 2]),
-    Three([Field; 3]),
-    Many(Vec<Field>),
+    One(ManuallyDrop<[Field; 1]>),
+    Two(ManuallyDrop<[Field; 2]>),
+    Three(ManuallyDrop<[Field; 3]>),
+    Many(ManuallyDrop<Vec<Field>>),
+}
+
+/// Drop one field without the call into its drop glue for the three common
+/// payloads: the two that own nothing (a character list is mostly these) and
+/// a constructor cell (its count is decremented here, and the free is the
+/// vtable call `Shared`'s `Drop` makes).
+///
+/// # Safety
+/// `field` is valid, and is not used again.
+#[inline(always)]
+unsafe fn drop_field(field: &mut Field) {
+    match field {
+        Field::Int64(_) | Field::Char(_) => {}
+        // SAFETY: by the contract.
+        Field::Data(data) => unsafe { std::ptr::drop_in_place(data) },
+        // SAFETY: by the contract.
+        _ => unsafe { std::ptr::drop_in_place(field) },
+    }
+}
+
+/// The cases that are not a tail-less node or a head and a tail, kept out of
+/// line so those two stay small (and a match with two arms is a compare, not
+/// a jump table).
+///
+/// # Safety
+/// As [`drop_field`]: the fields are dropped, so they must not be used again.
+#[inline(never)]
+unsafe fn drop_other(fields: &mut Fields) {
+    // SAFETY: by the contract.
+    unsafe {
+        match fields {
+            Fields::Zero | Fields::Two(_) => {}
+            Fields::One(fields) => {
+                let [a] = &mut **fields;
+                drop_field(a);
+            }
+            Fields::Three(fields) => {
+                let [a, b, c] = &mut **fields;
+                drop_field(a);
+                drop_field(b);
+                drop_field(c);
+            }
+            Fields::Many(fields) => ManuallyDrop::drop(fields),
+        }
+    }
+}
+
+/// Both fields of a node, when the first may own something.
+///
+/// # Safety
+/// As [`drop_field`].
+#[inline(never)]
+unsafe fn drop_two(a: &mut Field, b: &mut Field) {
+    // SAFETY: by the contract.
+    unsafe {
+        drop_field(a);
+        drop_field(b);
+    }
+}
+
+impl Drop for Fields {
+    /// What the derived glue did, without its loops: each field is dropped
+    /// once, in order, and a field whose drop panics leaks the later ones
+    /// (the glue would drop them while unwinding). Lists drop recursively
+    /// through here exactly as before.
+    #[inline]
+    fn drop(&mut self) {
+        // SAFETY: `self` is being dropped, so no field is used again, and the
+        // arrays and the vector are `ManuallyDrop`, so nothing else drops them.
+        unsafe {
+            match self {
+                Fields::Zero => {}
+                Fields::Two(fields) => {
+                    let [a, b] = &mut **fields;
+                    // A head that owns nothing (a character) leaves only the
+                    // tail, dropped as the last thing this function does: no
+                    // stack frame, and the recursion down a list is a chain of
+                    // jumps from one free to the next.
+                    if matches!(a, Field::Int64(_) | Field::Char(_)) {
+                        drop_field(b);
+                    } else {
+                        drop_two(a, b);
+                    }
+                }
+                _ => drop_other(self),
+            }
+        }
+    }
 }
 
 impl std::ops::Deref for Fields {
@@ -306,9 +397,9 @@ impl std::ops::Deref for Fields {
     fn deref(&self) -> &[Field] {
         match self {
             Fields::Zero => &[],
-            Fields::One(fields) => fields,
-            Fields::Two(fields) => fields,
-            Fields::Three(fields) => fields,
+            Fields::One(fields) => &**fields,
+            Fields::Two(fields) => &**fields,
+            Fields::Three(fields) => &**fields,
             Fields::Many(fields) => fields,
         }
     }
@@ -321,41 +412,44 @@ impl From<[Field; 0]> for Fields {
 }
 
 impl From<[Field; 1]> for Fields {
-    fn from(fields: [Field; 1]) -> Self {
-        Fields::One(fields)
+    #[inline(always)]
+    fn from([a]: [Field; 1]) -> Self {
+        Fields::One(ManuallyDrop::new([a]))
     }
 }
 
 impl From<[Field; 2]> for Fields {
-    fn from(fields: [Field; 2]) -> Self {
-        Fields::Two(fields)
+    #[inline(always)]
+    fn from([a, b]: [Field; 2]) -> Self {
+        Fields::Two(ManuallyDrop::new([a, b]))
     }
 }
 
 impl From<[Field; 3]> for Fields {
-    fn from(fields: [Field; 3]) -> Self {
-        Fields::Three(fields)
+    #[inline(always)]
+    fn from([a, b, c]: [Field; 3]) -> Self {
+        Fields::Three(ManuallyDrop::new([a, b, c]))
     }
 }
 
 impl From<Vec<Field>> for Fields {
     fn from(fields: Vec<Field>) -> Self {
         let fields = match <[Field; 1]>::try_from(fields) {
-            Ok(one) => return Fields::One(one),
+            Ok(one) => return Fields::One(ManuallyDrop::new(one)),
             Err(fields) => fields,
         };
         let fields = match <[Field; 2]>::try_from(fields) {
-            Ok(two) => return Fields::Two(two),
+            Ok(two) => return Fields::Two(ManuallyDrop::new(two)),
             Err(fields) => fields,
         };
         let fields = match <[Field; 3]>::try_from(fields) {
-            Ok(three) => return Fields::Three(three),
+            Ok(three) => return Fields::Three(ManuallyDrop::new(three)),
             Err(fields) => fields,
         };
         if fields.is_empty() {
             Fields::Zero
         } else {
-            Fields::Many(fields)
+            Fields::Many(ManuallyDrop::new(fields))
         }
     }
 }
@@ -375,6 +469,15 @@ pub enum Field {
     Deferred(Shared<Field>),
     Tuple(Rc<Vec<Field>>),
     Addr(Addr),
+}
+
+/// The data of a field that is still a thunk: a thunk of its own. Out of line
+/// so that the common `Field::data` (an evaluated field) does not carry the
+/// allocation's registers and stack frame.
+#[inline(never)]
+fn deferred_data(cell: &Shared<Field>) -> Data {
+    let cell = cell.clone();
+    Data::defer_to(move || cell.force().data())
 }
 
 fn deferred(value: Field) -> Thunk<Field> {
@@ -451,10 +554,7 @@ impl Field {
             Self::Data(v) => v.clone(),
             Self::Deferred(cell) => match cell.get() {
                 Some(value) => value.data(),
-                None => {
-                    let cell = cell.clone();
-                    Data::defer_to(move || cell.force().data())
-                }
+                None => deferred_data(cell),
             },
             _ => panic!("invalid data field"),
         }
@@ -2770,5 +2870,99 @@ mod tests {
         assert_eq!(calls.get(), 1);
         assert!(value.is_evaluated());
         assert!(Int::ready(7).is_evaluated());
+    }
+}
+
+#[cfg(test)]
+mod fields_drop_tests {
+    use super::*;
+
+    fn leaf() -> Data {
+        Data::ready(fixtures::c("Nil"), [])
+    }
+
+    /// Fields of one owner each, `n` of them, all counting on `leaf`.
+    fn owners(leaf: &Data, n: usize) -> Vec<Field> {
+        (0..n).map(|_| Field::Data(leaf.clone())).collect()
+    }
+
+    #[test]
+    fn dropping_a_node_drops_every_field_once_for_every_arity() {
+        for n in 0..=6 {
+            let leaf = leaf();
+            let node = Data::ready(fixtures::c("Cons"), owners(&leaf, n));
+            assert_eq!(node.force().fields.len(), n);
+            assert_eq!(leaf.0.strong_count(), 1 + n, "{n} fields held");
+            drop(node);
+            assert_eq!(leaf.0.strong_count(), 1, "{n} fields dropped");
+        }
+    }
+
+    #[test]
+    fn a_head_that_owns_nothing_leaves_the_tail_to_be_dropped() {
+        let leaf = leaf();
+        for head in [Field::Int64(1), Field::Char(97)] {
+            let node = Data::ready(fixtures::c(":"), [head, Field::Data(leaf.clone())]);
+            assert_eq!(leaf.0.strong_count(), 2);
+            drop(node);
+            assert_eq!(leaf.0.strong_count(), 1);
+        }
+    }
+
+    #[test]
+    fn a_head_that_owns_something_is_dropped_with_the_tail_in_either_position() {
+        let leaf = leaf();
+        let int = Int::ready(5);
+        let node = Data::ready(
+            fixtures::c("Pair"),
+            [Field::Int(int.clone()), Field::Data(leaf.clone())],
+        );
+        assert_eq!((leaf.0.strong_count(), int.0.strong_count()), (2, 2));
+        drop(node);
+        assert_eq!((leaf.0.strong_count(), int.0.strong_count()), (1, 1));
+        let node = Data::ready(
+            fixtures::c("Pair"),
+            [Field::Data(leaf.clone()), Field::Int(int.clone())],
+        );
+        assert_eq!((leaf.0.strong_count(), int.0.strong_count()), (2, 2));
+        drop(node);
+        assert_eq!((leaf.0.strong_count(), int.0.strong_count()), (1, 1));
+    }
+
+    #[test]
+    fn every_kind_of_field_is_released_in_one_two_three_and_many_field_nodes() {
+        let leaf = leaf();
+        let int = Int::ready(5);
+        let deferred = Field::defer_to(|| Field::Int64(3));
+        let closure = Closure::ready(1, |arguments| arguments[0].clone());
+        let kinds = |k: usize| match k {
+            0 => Field::Data(leaf.clone()),
+            1 => Field::Int(int.clone()),
+            2 => deferred.clone(),
+            3 => Field::Closure(closure.clone()),
+            4 => Field::Int64(7),
+            _ => Field::Char(8),
+        };
+        for n in 1..=5 {
+            for first in 0..6 {
+                let fields: Vec<Field> = (0..n).map(|i| kinds((first + i) % 6)).collect();
+                drop(Data::ready(fixtures::c("Cons"), fields));
+            }
+        }
+        assert_eq!(leaf.0.strong_count(), 1);
+        assert_eq!(int.0.strong_count(), 1);
+        let Field::Deferred(cell) = &deferred else {
+            unreachable!()
+        };
+        assert_eq!(cell.strong_count(), 1);
+    }
+
+    #[test]
+    fn a_long_list_still_drops() {
+        let mut list = leaf();
+        for c in 0..5_000 {
+            list = Data::ready(fixtures::c(":"), [Field::Char(c), Field::Data(list)]);
+        }
+        drop(list);
     }
 }
