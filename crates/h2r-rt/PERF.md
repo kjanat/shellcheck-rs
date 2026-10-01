@@ -290,6 +290,10 @@ Invariants: 6 (drop is recursive) is unchanged in depth: per cell it is the same
 
 For WP10–WP12 the integrator rebuilds once with all three, gates, and times; the microbench is the fast loop and its numbers are the acceptance.
 
+### WP13 Allocation census by emitter site
+
+After WP1–WP12 the allocator is ~22 % of a 3.99 G run and every allocation is small and cheap (~20 instructions per malloc/free pair); what is left is the *count*. The old table (76 M allocations: `delayN` 17.8 M, `bind` 7.5 M, `apply_later` 5.5 M, `apply` 2.4 M, `Data::ready` 2.6 M) came from callgrind call counts and does not say *which emitter sites* make the thunks or how many are forced at all. Build the census: a `stats` cargo feature on `h2r-rt` with per-kind counters (`delayN` by N, `apply_later`, `bind`, `bind_entering`, partial applications, `Data::ready` by arity, `Field::defer_to`, and for every thunk whether it was forced, moved out unique, shared, or dropped unforced), printed at exit when the feature is on; plus an emitter-side static census (`h2r-lower`: how many `DelayBlock` sites by origin rule and by what they wrap: a call, a `case`, a `let`, a lazy argument of an external, an `f_` wrapper) written as a table to stderr under an env var. Acceptance: feature off changes nothing (microbench rows identical, `cargo test -p h2r-rt`); feature on prints the table; the integrator rebuilds once with the feature, runs the 150-line and 1500-line scripts, and pastes both tables here. The next packages are chosen from them: the kind with the largest "created but dropped unforced" count is the first target (a thunk nobody forces should not be allocated: the emitter can often prove the demand, or the runtime can defer the allocation), then the largest "forced exactly once by its creator" kind (a candidate for evaluating in place instead of allocating).
+
 ### WP5 Strings as a packed intrinsic
 
 The big one; needs a census first: how many `:` nodes come from `unpack_string`/`append_list`/generated `Data::ready(":")`. Add counters behind a `stats` feature, rebuild, run on the corpus, then design.
