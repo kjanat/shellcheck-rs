@@ -33,8 +33,8 @@ The gap to GHC is ~19×. GHC wins on exactly these things: a bump allocator, a g
 | --------------------------------- | ----: | ----------------------------------------------------------------------------------------------------- |
 | `Data`, `Int`, `Closure`          |     8 | `Shared<T>`: one thin pointer to one allocation (WP1, `f11d5f6`)                                      |
 | `Field`                           |    16 | tag + largest payload; every payload is 8 bytes (`Addr` is a `u32` literal index + `u32` offset, WP2) |
-| `Node`                            |    64 | `&'static str` constructor (16) + `Fields` (3 inline `Field`s + tag)                                  |
-| one `String` character (`:` cell) |    80 | 16-byte header + `Node`; a ready cell's code tail is zero-sized                                       |
+| `Node`                            |    56 | `&'static Constructor` (8: name + `u32` tag) + `Fields` (3 inline `Field`s + tag)                     |
+| one `String` character (`:` cell) |    72 | 16-byte header + `Node`; a ready cell's code tail is zero-sized                                       |
 
 `cargo test -p h2r-rt --test alloc` prints the allocation counts per primitive and pins them. Every improvement lowers a number there.
 
@@ -48,12 +48,13 @@ The gap to GHC is ~19×. GHC wins on exactly these things: a bump allocator, a g
 | WP7 direct call when forced next + WP6 Args (reverted) | `9749e67`, `a2de2f8` | −5 % (±12)        | +2 % … +7 % (±5)    | =               |
 | WP7 alone (WP6 reverted)                               | `fa6ee0b`            | −2 % (±11)        | −2 % (±3)           | =               |
 | WP8 plain `mi_malloc` for ≤16-byte alignment           | `9985548`            | −3 % (±14)        | −8 % (±3)           | 861 → 779 MiB   |
+| WP4 constructor tags                                   | `640db5a`            | = (±16)           | = (±8)              | 779 → 769 MiB   |
 
 (Each row against the binary before it, same machine, hyperfine -N, 10 runs; output byte-identical to the GHC oracle on the conformance gate.)
 
 The WP6+WP7 row is a wash in wall time but **+4.2 % instructions** (5.34 G → 5.57 G, callgrind, same script). The allocator shrank by 0.19 G, yet the `Args` small-vector added about 0.44 G: `Args::push` 113 M and `From<[Field; N]>` 78 M as out-of-line calls, `take_front`/`into_vec`/`Vec::extend(Args::IntoIter)` 82 M, and `memcpy` up 78 M from moving a 72-byte `Args` by value through `apply`, the vtable `call` slot and the `k_` shims (a `Vec` is 24 bytes). WP6 was reverted in `fa6ee0b`; WP7 stays (it is roughly neutral in instructions and does not raise any count).
 
-WP7 alone: 5.34 G → 5.26 G instructions (−1.5 %). WP8: 5.26 G → **4.71 G (−10.5 %)**; the `mi_theap_malloc_aligned`/`_generic`/`_overalloc` entries are gone and the allocator is now `mi_free` 8.5 %, `_mi_theap_malloc_zero` 7.6 %, `mi_malloc` 2.7 %, `_mi_malloc_generic` 0.9 %: about 19.6 % of the run, down from 26 %.
+WP7 alone: 5.34 G → 5.26 G instructions (−1.5 %). WP8: 5.26 G → **4.71 G (−10.5 %)**; the `mi_theap_malloc_aligned`/`_generic`/`_overalloc` entries are gone and the allocator is now `mi_free` 8.5 %, `_mi_theap_malloc_zero` 7.6 %, `mi_malloc` 2.7 %, `_mi_malloc_generic` 0.9 %: about 19.6 % of the run, down from 26 %. WP4 (`640db5a`): 4.71 G → **4.57 G (−2.8 %)**; the constructor-name `memcmp` is gone, `Node` is 56 bytes, and the microbench `match` row went 43 → 32 Ir/op.
 
 ### Profile after WP1–WP3 (`e156aea`, same 150-line script)
 
