@@ -8,7 +8,7 @@
 //!   +-------------------------------+
 //!   | strong: Cell<usize>           |  \
 //!   | vtable: &'static VTable<T>    |   > Header<T>: everything that does
-//!   | value:  OnceCell<T>           |  /  not depend on the code type C
+//!   | value:  Slot<T>               |  /  not depend on the code type C
 //!   +-------------------------------+
 //!   | code:   C                     |  the concrete code object, any size
 //!   +-------------------------------+
@@ -22,13 +22,15 @@
 //! Code<T>>>` with the trait object's vtable moved from a fat pointer into the
 //! allocation, and the unused weak count dropped.
 //!
-//! All of the `unsafe` in this crate is in this file, in four places: the
+//! All of the `unsafe` in this crate is in this file, in five places: the
 //! cast from `Header<T>` back to `Block<T, C>` in the vtable functions, the
-//! free of a block, the shared reference to the header, and `take_unique`.
+//! free of a block, the shared reference to the header, `take_unique`, and the
+//! value `Slot` (the one place that writes the memoised value).
 
-use std::cell::{Cell, OnceCell};
+use std::cell::{Cell, OnceCell, UnsafeCell};
 use std::fmt;
 use std::marker::PhantomData;
+use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 
 use super::{Field, Step};
@@ -195,7 +197,44 @@ struct Header<T> {
     /// Points at a promoted `'static` constant (`Block::VTABLE`); a raw
     /// pointer rather than `&'static` so `T` needs no `'static` bound here.
     vtable: NonNull<VTable<T>>,
-    value: OnceCell<T>,
+    value: Slot<T>,
+}
+
+/// The memoised value of a cell: a `OnceCell<T>` with the one operation the
+/// force path needs, [`Slot::settle`], which looks at the state once.
+/// (`OnceCell::get_or_init` checks, calls an out-of-line cold function, and
+/// checks again before it stores.) Same layout as `OnceCell<T>`.
+struct Slot<T>(UnsafeCell<Option<T>>);
+
+impl<T> Slot<T> {
+    #[inline(always)]
+    fn get(&self) -> Option<&T> {
+        // SAFETY: the option is written only by `settle` (while it is `None`,
+        // so no reference into it exists) and by `take` (which needs `&mut`);
+        // a shared reference to its contents is therefore never invalidated
+        // while the slot is borrowed.
+        unsafe { (*self.0.get()).as_ref() }
+    }
+
+    /// Store `value` unless the slot is already filled (the first value wins,
+    /// as in `OnceCell::get_or_init`), and return what the slot holds.
+    #[inline(always)]
+    fn settle(&self, value: T) -> &T {
+        let slot = self.0.get();
+        // SAFETY: `slot` is valid. If it is `Some` we only read it. If it is
+        // `None`, nothing borrows from it (`get` hands out references only
+        // to a `Some`), so writing the value in place is unobserved.
+        unsafe {
+            if (*slot).is_none() {
+                slot.write(Some(value));
+            }
+            (*slot).as_ref().unwrap_unchecked()
+        }
+    }
+
+    fn take(&mut self) -> Option<T> {
+        self.0.get_mut().take()
+    }
 }
 
 /// A header followed by its concrete code. `repr(C)` pins the header at
@@ -205,6 +244,17 @@ struct Header<T> {
 struct Block<T, C> {
     header: Header<T>,
     code: C,
+}
+
+/// What entering a cell's code produced. A value is not carried in this enum
+/// (a `Thunk<Node>` is 64 bytes and every hop would copy it): the vtable
+/// function writes it through the pointer the caller passed.
+enum Entered<T> {
+    /// The code is running or has run: a `<<loop>>`.
+    Looping,
+    /// The value was written to the `out` slot.
+    Value,
+    Indirect(Shared<T>),
 }
 
 /// The vtable function behind [`Code::share`].
@@ -217,7 +267,7 @@ type Share<T> = unsafe fn(NonNull<Header<T>>) -> T;
 /// this vtable was built for, and (for `free`) no other `Shared` to the block
 /// remains.
 struct VTable<T> {
-    enter: unsafe fn(NonNull<Header<T>>) -> Option<Thunk<T>>,
+    enter: unsafe fn(NonNull<Header<T>>, *mut T) -> Entered<T>,
     fill: unsafe fn(NonNull<Header<T>>, Deferred<T>) -> bool,
     call: unsafe fn(NonNull<Header<T>>, Vec<Field>) -> Field,
     call_enter: unsafe fn(NonNull<Header<T>>, Vec<Field>) -> Step<i64>,
@@ -252,9 +302,19 @@ impl<T: 'static, C: Code<T> + 'static> Block<T, C> {
         unsafe { &(*header.cast::<Block<T, C>>().as_ptr()).code }
     }
 
-    unsafe fn enter(header: NonNull<Header<T>>) -> Option<Thunk<T>> {
+    /// # Safety
+    /// The vtable contract, and `out` is valid for writing a `T`.
+    unsafe fn enter(header: NonNull<Header<T>>, out: *mut T) -> Entered<T> {
         // SAFETY: the contract of the vtable.
-        unsafe { Self::code(header) }.enter()
+        match unsafe { Self::code(header) }.enter() {
+            None => Entered::Looping,
+            Some(Thunk::Value(value)) => {
+                // SAFETY: `out` is valid for writes, by the contract.
+                unsafe { out.write(value) };
+                Entered::Value
+            }
+            Some(Thunk::Indirect(next)) => Entered::Indirect(next),
+        }
     }
 
     unsafe fn fill(header: NonNull<Header<T>>, code: Deferred<T>) -> bool {
@@ -283,11 +343,22 @@ impl<T: 'static, C: Code<T> + 'static> Block<T, C> {
     }
 
     unsafe fn free(header: NonNull<Header<T>>) {
+        let block = header.cast::<Block<T, C>>().as_ptr();
         // SAFETY: the allocation was made by `Box::new(Block<T, C>)`, the
         // count has reached zero so this is the last pointer, and the layout
-        // `Box` frees with is exactly the one it allocated with. Dropping the
-        // box runs the destructors of the header's value and of the code.
-        drop(unsafe { Box::from_raw(header.cast::<Block<T, C>>().as_ptr()) });
+        // given back is exactly the one `Box` allocated with. Each field is
+        // dropped once, in place, before the memory goes. The value is tested
+        // here, in line, because most cells that die never memoised one (a
+        // thunk that `chase` moved through) and the drop glue of `Option<T>`
+        // is an out-of-line call even for `None`.
+        unsafe {
+            let value = &mut (*block).header.value;
+            if value.get().is_some() {
+                std::ptr::drop_in_place(value);
+            }
+            std::ptr::drop_in_place(&raw mut (*block).code);
+            std::alloc::dealloc(block.cast(), std::alloc::Layout::new::<Block<T, C>>());
+        }
     }
 }
 
@@ -305,7 +376,7 @@ pub fn shared<T: 'static>(f: impl FnOnce() -> T + 'static) -> Shared<T> {
 }
 
 impl<T: 'static> Shared<T> {
-    fn alloc<C: Code<T> + 'static>(value: OnceCell<T>, code: C) -> Self {
+    fn alloc<C: Code<T> + 'static>(value: Option<T>, code: C) -> Self {
         let block = Box::new(Block {
             header: Header {
                 strong: Cell::new(1),
@@ -314,7 +385,7 @@ impl<T: 'static> Shared<T> {
                 } else {
                     Block::<T, C>::VTABLE
                 }),
-                value,
+                value: Slot(UnsafeCell::new(value)),
             },
             code,
         });
@@ -331,24 +402,24 @@ impl<T: 'static> Shared<T> {
     }
 
     pub fn step(f: impl FnOnce() -> Thunk<T> + 'static) -> Self {
-        Self::alloc(OnceCell::new(), Once(Cell::new(Some(f))))
+        Self::alloc(None, Once(Cell::new(Some(f))))
     }
 
     /// An empty cell, filled later by [`Shared::fill`] to tie a knot.
     pub fn pending() -> Self {
-        Self::alloc(OnceCell::new(), Pending(Cell::new(None)))
+        Self::alloc(None, Pending(Cell::new(None)))
     }
 
     /// An already-evaluated cell; its code is zero bytes.
     pub fn ready(value: T) -> Self {
-        Self::alloc(OnceCell::from(value), Evaluated)
+        Self::alloc(Some(value), Evaluated)
     }
 
     /// An already-evaluated cell whose code tail is `code`, kept for
     /// [`Shared::call`]. The value says how to use the tail; the cell is never
     /// entered, so `code.enter` is unreachable.
     pub fn ready_with<C: Code<T> + 'static>(value: T, code: C) -> Self {
-        Self::alloc(OnceCell::from(value), code)
+        Self::alloc(Some(value), code)
     }
 
     pub fn fill(&self, f: impl FnOnce() -> Thunk<T> + 'static) {
@@ -371,11 +442,15 @@ impl<T> Header<T> {
 }
 
 impl<T> Shared<T> {
-    /// Run the code. `None` means it is running or has run: a `<<loop>>`.
-    fn enter(&self) -> Thunk<T> {
-        // SAFETY: as in `fill`.
-        unsafe { (self.header().vtable().enter)(self.ptr) }
-            .expect("h2r-rt: re-entrant force (<<loop>>)")
+    /// Run the code. A value comes back in `out`, initialised exactly when
+    /// the result is [`Entered::Value`]. Panics on a `<<loop>>`.
+    #[inline(always)]
+    fn enter(&self, out: &mut MaybeUninit<T>) -> Entered<T> {
+        // SAFETY: as in `fill`; `out` is valid for writing a `T`.
+        match unsafe { (self.header().vtable().enter)(self.ptr, out.as_mut_ptr()) } {
+            Entered::Looping => panic!("h2r-rt: re-entrant force (<<loop>>)"),
+            entered => entered,
+        }
     }
 
     /// Call this cell's code tail as a function body (see [`Code::call`]).
@@ -440,15 +515,29 @@ impl<T: Clone + 'static> Shared<T> {
     /// Force to WHNF, memoising the result.
     ///
     /// Panics on re-entrant forcing, which is this runtime's `<<loop>>`.
+    #[inline]
     pub fn force(&self) -> &T {
-        if let Some(v) = self.get() {
-            return v;
+        match self.get() {
+            Some(v) => v,
+            None => self.force_slow(),
         }
-        let value = match self.enter() {
-            Thunk::Value(value) => value,
-            Thunk::Indirect(next) => chase(next),
+    }
+
+    /// Run the code of a cell that has no value yet and memoise the result.
+    #[inline(never)]
+    fn force_slow(&self) -> &T {
+        let mut out = MaybeUninit::uninit();
+        let value = match self.enter(&mut out) {
+            // SAFETY: `Value` means the code wrote `out`.
+            Entered::Value => unsafe { out.assume_init() },
+            // The common indirection is a fresh, already-evaluated cell (a
+            // thunk whose body ended in a constructor): take its value here,
+            // and keep the loop for chains.
+            Entered::Indirect(next) if next.is_evaluated() => take_evaluated(next),
+            Entered::Indirect(next) => chase(next),
+            Entered::Looping => unreachable!("`enter` panics instead"),
         };
-        self.header().value.get_or_init(|| value)
+        self.header().value.settle(value)
     }
 }
 
@@ -491,6 +580,25 @@ impl<T: fmt::Debug> fmt::Debug for Shared<T> {
     }
 }
 
+/// The value of an evaluated cell: moved out if nothing else holds the cell,
+/// handed over by reference for a closure's cell, copied otherwise.
+#[inline(always)]
+fn value_of_evaluated<T: Clone + 'static>(cell: &mut Shared<T>) -> T {
+    match cell.share() {
+        Some(value) => value,
+        None => match cell.take_unique() {
+            Some(value) => value,
+            None => cell.get().expect("evaluated").clone(),
+        },
+    }
+}
+
+/// [`value_of_evaluated`] for a handle that is not used again.
+#[inline(always)]
+fn take_evaluated<T: Clone + 'static>(mut cell: Shared<T>) -> T {
+    value_of_evaluated(&mut cell)
+}
+
 /// Follow a chain of indirections to its value, without recursion.
 ///
 /// The value ends up in every cell on the chain that anyone else can still
@@ -506,31 +614,31 @@ fn chase<T: Clone + 'static>(first: Shared<T>) -> T {
     let mut current = first;
     let value = loop {
         if current.is_evaluated() {
-            break match current.share() {
-                Some(value) => value,
-                None => match current.take_unique() {
-                    Some(value) => value,
-                    None => current.get().expect("checked above").clone(),
-                },
-            };
+            // `current` is dropped after the memoising loop below, as before.
+            break value_of_evaluated(&mut current);
         }
-        match current.enter() {
-            Thunk::Value(value) => {
+        let mut out = MaybeUninit::uninit();
+        match current.enter(&mut out) {
+            Entered::Value => {
                 if current.strong_count() > 1 {
                     pending.push(current);
                 }
-                break value;
+                // SAFETY: `Value` means the code wrote `out`.
+                break unsafe { out.assume_init() };
             }
-            Thunk::Indirect(next) => {
+            Entered::Indirect(next) => {
                 if current.strong_count() > 1 {
                     pending.push(current);
                 }
                 current = next;
             }
+            Entered::Looping => unreachable!("`enter` panics instead"),
         }
     };
-    for cell in pending {
-        cell.header().value.get_or_init(|| value.clone());
+    if !pending.is_empty() {
+        for cell in pending {
+            cell.header().value.settle(value.clone());
+        }
     }
     value
 }

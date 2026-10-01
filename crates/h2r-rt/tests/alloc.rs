@@ -104,6 +104,67 @@ fn thunk_to_ready_node_is_two_allocations() {
     );
 }
 
+/// One link of a chain of `n` indirections ending in a ready node.
+fn chain(n: u32) -> Data {
+    if n == 0 {
+        Data::ready(constructor("C"), [Field::Int64(1)])
+    } else {
+        Data::defer_to(move || chain(n - 1))
+    }
+}
+
+/// `chase` keeps the cells it passes through in a `Vec` only for those that
+/// someone else still holds. An unshared chain must not allocate it: the cost
+/// of forcing is exactly one cell per link plus the final node.
+#[test]
+fn an_unshared_chain_allocates_one_cell_per_link_and_no_bookkeeping() {
+    let (allocations, _) = measure(1000, || {
+        let head = chain(8);
+        SINK.with(|s| s.set(s.get() + head.force().fields.len() as i64));
+    });
+    eprintln!("chain of 8 thunks -> ready node: {allocations} allocations");
+    assert!(
+        allocations <= 9,
+        "a chain of 8 thunks made {allocations} allocations"
+    );
+}
+
+/// A cell in the middle of a chain that something else holds does need the
+/// `Vec` (its value is memoised for its other holder): one more allocation
+/// than the cells themselves, and the other holder sees the value afterwards.
+#[test]
+fn a_shared_cell_in_a_chain_costs_exactly_the_bookkeeping_vector() {
+    let (allocations, _) = measure(1000, || {
+        let middle = chain(4);
+        let held = middle.clone();
+        let head = Data::defer_to(move || middle);
+        SINK.with(|s| s.set(s.get() + head.force().fields.len() as i64));
+        assert!(held.is_evaluated());
+    });
+    eprintln!("head -> shared chain of 4: {allocations} allocations");
+    // head, four links and the node, plus the vector.
+    assert!(
+        allocations <= 7,
+        "a shared chain made {allocations} allocations"
+    );
+}
+
+#[test]
+fn a_delayed_int_is_two_allocations() {
+    fn incremented(a: i64) -> Int {
+        Int::ready(a + 1)
+    }
+    let (allocations, _) = measure(1000, || {
+        let thunk: Int = h2r_rt::delay1(incremented, (std::hint::black_box(1),));
+        SINK.with(|s| s.set(s.get() + thunk.force()));
+    });
+    eprintln!("delay1 thunk -> ready int: {allocations} allocations");
+    assert!(
+        allocations <= 2,
+        "a delayed int made {allocations} allocations"
+    );
+}
+
 #[test]
 fn bind_and_saturated_apply_budget() {
     let (allocations, _) = measure(1000, || {
