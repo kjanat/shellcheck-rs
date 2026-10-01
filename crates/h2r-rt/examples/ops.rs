@@ -5,7 +5,9 @@
 //! instruction count is deterministic: `scripts/rt-instrs.sh` runs each
 //! scenario with `n = 0` and with `n` and divides the difference, which
 //! cancels process start-up and setup. Only the public `h2r_rt` API is used,
-//! and each scenario stands for one bucket of the profile in `PERF.md`.
+//! and each scenario stands for one bucket of the profile in `PERF.md`. Each
+//! scenario is its own `#[inline(never)]` function, so the code generated for
+//! one cannot change the count of another.
 //!
 //! Run by hand: `cargo run --release -p h2r-rt --example ops -- apply 1000`
 
@@ -74,6 +76,7 @@ fn incremented(a: i64) -> Int {
 
 /// Profile bucket: lazy machinery, `chase` and `Shared::force`. A chain of `n`
 /// indirections is forced once; the stack stays constant.
+#[inline(never)]
 fn thunk_chain(n: u64) -> i64 {
     let head = countdown(n);
     head.force().constructor.name.len() as i64
@@ -81,6 +84,7 @@ fn thunk_chain(n: u64) -> i64 {
 
 /// Profile bucket: `delayN` thunks (17.8 M in the profile): allocation,
 /// forcing and drop glue of a one-capture thunk.
+#[inline(never)]
 fn thunk_each(n: u64) -> i64 {
     let mut sum = 0;
     for i in 0..n as i64 {
@@ -92,6 +96,7 @@ fn thunk_each(n: u64) -> i64 {
 
 /// Profile bucket: `Closure::bind` plus a saturated `Closure::apply` with its
 /// argument vector.
+#[inline(never)]
 fn apply(n: u64) -> i64 {
     let mut sum = 0;
     for i in 0..n as i64 {
@@ -103,6 +108,7 @@ fn apply(n: u64) -> i64 {
 
 /// Profile bucket: partial application, the `Partial` cell and the merged
 /// argument vector.
+#[inline(never)]
 fn apply_partial(n: u64) -> i64 {
     let mut sum = 0;
     for i in 0..n as i64 {
@@ -116,6 +122,7 @@ fn apply_partial(n: u64) -> i64 {
 /// Profile bucket: `Data::ready` (2.6 M constructors) and the recursive drop
 /// glue of a list. `n` cons cells are built and dropped; keep `n` modest, the
 /// drop recurses.
+#[inline(never)]
 fn cons(n: u64) -> i64 {
     let mut list = Data::ready(&NIL, []);
     for c in 0..n as i64 {
@@ -128,6 +135,7 @@ fn cons(n: u64) -> i64 {
 /// Profile bucket: pattern-match dispatch. Forces a node and switches on its
 /// constructor tag exactly as `emit.rs` does (`let node = v.force();
 /// match node.constructor.tag { .. }`); before WP4 this compared names.
+#[inline(never)]
 fn matches(n: u64) -> i64 {
     let nodes: Vec<Data> = FAMILY.iter().map(|c| Data::ready(c, [])).collect();
     let mut sum = 0;
@@ -154,6 +162,7 @@ fn matches(n: u64) -> i64 {
 
 /// Profile bucket: `Field::data` (3.2 % of the profile) on an evaluated
 /// `Field::Deferred`, the shape of a lazily built constructor field.
+#[inline(never)]
 fn deferred_data(n: u64) -> i64 {
     let field = Field::defer_to(|| Field::Data(Data::ready(&LEAF, [Field::Int64(7)])));
     field.force();

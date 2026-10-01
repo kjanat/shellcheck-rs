@@ -524,6 +524,7 @@ impl Field {
     pub fn dynamic(&self) -> Field {
         self.clone()
     }
+    #[inline]
     pub fn int64(&self) -> i64 {
         match self {
             Self::Int64(v) => *v,
@@ -559,9 +560,18 @@ impl Field {
             _ => panic!("invalid data field"),
         }
     }
+    #[inline]
     pub fn closure(&self) -> Closure {
         match self {
             Self::Closure(v) => v.clone(),
+            _ => self.closure_other(),
+        }
+    }
+    /// A `closure` that is not a closure cell: a field that is still a thunk,
+    /// or a miscompile. Out of line, so the common case stays small.
+    #[inline(never)]
+    fn closure_other(&self) -> Closure {
+        match self {
             Self::Deferred(cell) => match cell.get() {
                 Some(value) => value.closure(),
                 None => {
@@ -679,47 +689,91 @@ pub fn absent_error(message: Addr) -> ! {
 #[derive(Clone)]
 pub struct Closure(Shared<ClosureCode>);
 
+/// What a closure cell's value says about calling it. Opaque: [`Closure::force`]
+/// hands it out so a caller can tell the cell has been evaluated.
 #[derive(Clone)]
-pub struct ClosureCode {
-    arity: u32,
-    /// Whether the code tail also has an entry that continues as a tail call.
-    entry: bool,
-    kind: Kind,
+pub struct ClosureCode(ManuallyDrop<Kind>);
+
+impl Drop for ClosureCode {
+    /// Most closures are `Inline` and own nothing, so the test is in line and
+    /// only a partial application or a forward calls out.
+    #[inline(always)]
+    fn drop(&mut self) {
+        if !matches!(*self.0, Kind::Inline { .. }) {
+            drop_kind(&mut self.0);
+        }
+    }
 }
 
+/// Drop what a partial application or a forward owns, field by field with
+/// [`drop_field`] (a supplied argument is mostly an integer or a cell).
+#[inline(never)]
+fn drop_kind(kind: &mut ManuallyDrop<Kind>) {
+    match &mut **kind {
+        Kind::Inline { .. } => {}
+        Kind::Partial {
+            parent, supplied, ..
+        } => {
+            let len = supplied.len();
+            let fields = supplied.as_mut_ptr();
+            // SAFETY: called once, from `ClosureCode::drop`, which is the last
+            // use, so nothing reads the fields again. The length is zeroed
+            // first, so the vector's own drop only frees the buffer; each
+            // field is in bounds and dropped once.
+            unsafe {
+                supplied.set_len(0);
+                for index in 0..len {
+                    drop_field(&mut *fields.add(index));
+                }
+                std::ptr::drop_in_place(supplied);
+                std::ptr::drop_in_place(parent);
+            }
+        }
+        // SAFETY: as above; `target` is dropped once.
+        Kind::Forward(target) => unsafe { std::ptr::drop_in_place(target) },
+    }
+}
+
+/// `repr(u8)` gives the enum a plain one-byte discriminant at offset 0, so a
+/// match is one compare; the default layout hides it in the capacity of
+/// `supplied`, which costs about ten instructions to decode on every call and
+/// every drop. The fields are in the order that keeps the whole at 40 bytes
+/// (tag, `entry` and `arity` share the first eight).
 #[derive(Clone)]
+#[repr(u8)]
 enum Kind {
     /// The function body is this cell's own code tail ([`Shared::call`]).
-    Inline,
+    /// `entry` is whether the tail also has an entry that continues as a tail
+    /// call.
+    Inline { entry: bool, arity: u32 },
     /// `parent` is an `Inline` cell (never another partial application or a
     /// forward: those are flattened when this one is made); `supplied` are the
-    /// arguments already given, fewer than the arity.
+    /// arguments already given, fewer than the arity. `arity` and `entry` are
+    /// the parent's.
     Partial {
+        entry: bool,
+        arity: u32,
         parent: Closure,
         supplied: Vec<Field>,
     },
     /// The value of a thunk cell that evaluated to the closure `target`, a
-    /// cell whose own value is `Inline` or `Partial`, never a `Forward`. Its
-    /// `arity` and `entry` are unused; [`Closure::resolve`] follows the link.
+    /// cell whose own value is `Inline` or `Partial`, never a `Forward`.
+    /// [`Closure::resolve`] follows the link.
     Forward(Closure),
 }
 
 impl ClosureCode {
+    #[inline(always)]
     fn inline(arity: usize, entry: bool) -> Self {
         assert!(arity > 0);
-        Self {
-            arity: u32::try_from(arity).expect("h2r-rt: a function of absurd arity"),
+        Self(ManuallyDrop::new(Kind::Inline {
             entry,
-            kind: Kind::Inline,
-        }
+            arity: u32::try_from(arity).expect("h2r-rt: a function of absurd arity"),
+        }))
     }
 
     fn forward(target: Closure) -> Self {
-        Self {
-            arity: 0,
-            entry: false,
-            kind: Kind::Forward(target),
-        }
+        Self(ManuallyDrop::new(Kind::Forward(target)))
     }
 }
 
@@ -880,32 +934,53 @@ impl Closure {
     /// there is at most one link to follow.
     fn resolve(&self) -> (&Closure, &ClosureCode) {
         let code = self.0.force();
-        match &code.kind {
+        match &*code.0 {
             Kind::Forward(target) => (target, target.0.force()),
             _ => (self, code),
         }
     }
     /// The cell with the code to call, the arguments already supplied to it,
-    /// and the code of the closure applied (its arity, whether it has an entry).
-    fn split(&self) -> (&Closure, &[Field], &ClosureCode) {
-        let (resolved, code) = self.resolve();
-        match &code.kind {
-            Kind::Inline => (resolved, &[], code),
-            Kind::Partial { parent, supplied } => (parent, supplied, code),
-            Kind::Forward(_) => unreachable!("resolve follows forwards"),
+    /// the arity of the closure applied and whether it has an entry.
+    fn split(&self) -> (&Closure, &[Field], usize, bool) {
+        Self::decode(self, self.0.force())
+    }
+    /// [`Closure::split`] for a closure whose cell has been forced to `code`.
+    #[inline(always)]
+    fn decode<'a>(
+        this: &'a Closure,
+        code: &'a ClosureCode,
+    ) -> (&'a Closure, &'a [Field], usize, bool) {
+        match &*code.0 {
+            Kind::Inline { entry, arity } => (this, &[], *arity as usize, *entry),
+            Kind::Partial {
+                entry,
+                arity,
+                parent,
+                supplied,
+            } => (parent, supplied, *arity as usize, *entry),
+            Kind::Forward(target) => match &*target.0.force().0 {
+                Kind::Inline { entry, arity } => (target, &[], *arity as usize, *entry),
+                Kind::Partial {
+                    entry,
+                    arity,
+                    parent,
+                    supplied,
+                } => (parent, supplied, *arity as usize, *entry),
+                Kind::Forward(_) => unreachable!("a forward is never a forward's target"),
+            },
         }
     }
     pub fn apply_tail(&self, arguments: Vec<Field>) -> Tail {
-        let (parent, supplied, code) = self.split();
-        let arity = code.arity as usize;
-        if code.entry && supplied.len() + arguments.len() == arity {
+        let (parent, supplied, arity, entry) = self.split();
+        if entry && supplied.len() + arguments.len() == arity {
             if supplied.is_empty() {
                 return Tail::Enter(parent.0.call_enter(arguments));
             }
-            let mut all = Vec::with_capacity(arity);
-            all.extend(supplied.iter().cloned());
-            all.extend(arguments);
-            return Tail::Enter(parent.0.call_enter(all));
+            return Tail::Enter(
+                parent
+                    .0
+                    .call_enter(Self::joined(supplied, arguments, arity)),
+            );
         }
         Tail::Value(self.apply(arguments))
     }
@@ -915,48 +990,136 @@ impl Closure {
     pub fn is_evaluated(&self) -> bool {
         self.0.is_evaluated()
     }
-    pub fn apply(&self, mut arguments: Vec<Field>) -> Field {
+    #[inline]
+    pub fn apply(&self, arguments: Vec<Field>) -> Field {
+        // The common call: a closure with its own code, given exactly its
+        // arity. Nothing else (a thunk that turned out to be a closure, a
+        // partial application, too few or too many arguments) is decided here.
+        // A thunk is forced by this test and again, now a load, by the general
+        // case; the code runs once either way.
+        let code = self.0.force();
+        match &*code.0 {
+            Kind::Inline { arity, .. } if arguments.len() == *arity as usize => {
+                self.0.call(arguments)
+            }
+            _ => self.apply_general(code, arguments),
+        }
+    }
+    /// Everything but the common call.
+    #[inline(never)]
+    fn apply_general(&self, code: &ClosureCode, arguments: Vec<Field>) -> Field {
+        let (parent, supplied, arity, entry) = Self::decode(self, code);
+        let missing = arity - supplied.len();
+        if arguments.len() == missing {
+            // Saturating exactly, from a thunk or a partial application.
+            return Self::call_with(parent, supplied, arity, arguments);
+        }
+        if arguments.len() < missing {
+            if arguments.is_empty() {
+                return Field::Closure(self.clone());
+            }
+            return Field::Closure(Self::partial(parent, supplied, arity, entry, arguments));
+        }
+        self.apply_over(arguments)
+    }
+    /// `supplied`, cloned, followed by `arguments`, moved, in a vector with room
+    /// for `capacity` fields (at least as many as there are). Callers pass the
+    /// arity, which is a `u32`, so the allocation needs no overflow check.
+    #[inline(always)]
+    fn joined(supplied: &[Field], mut arguments: Vec<Field>, capacity: usize) -> Vec<Field> {
+        let count = supplied.len();
+        let moved = arguments.len();
+        assert!(count + moved <= capacity);
+        let mut all: Vec<Field> = Vec::with_capacity(capacity);
+        let base = all.as_mut_ptr();
+        // SAFETY: `all` has room for `count + moved` fields and is empty, so
+        // each write is in bounds and into uninitialised memory; `arguments`
+        // gives up its fields (its length is zeroed, so they are dropped once,
+        // by `all`) and its own buffer is a different allocation. The length
+        // is set last: a panic in a clone (there is none: `Field::clone` only
+        // counts) would leak, not double-drop.
+        unsafe {
+            for (index, field) in supplied.iter().enumerate() {
+                base.add(index).write(field.clone());
+            }
+            if moved == 1 {
+                // The usual last argument of a partial application: a copy
+                // of one field, not a call to `memcpy`.
+                base.add(count).write(arguments.as_ptr().read());
+            } else {
+                std::ptr::copy_nonoverlapping(arguments.as_ptr(), base.add(count), moved);
+            }
+            arguments.set_len(0);
+            all.set_len(count + moved);
+        }
+        all
+    }
+    /// Call `parent`'s code with `supplied` followed by exactly the arguments
+    /// that are missing.
+    #[inline(always)]
+    fn call_with(
+        parent: &Closure,
+        supplied: &[Field],
+        arity: usize,
+        arguments: Vec<Field>,
+    ) -> Field {
+        if supplied.is_empty() {
+            return parent.0.call(arguments);
+        }
+        parent.0.call(Self::joined(supplied, arguments, arity))
+    }
+    /// A partial application of `parent`: `supplied` and then `arguments`,
+    /// together fewer than the arity.
+    #[inline(always)]
+    fn partial(
+        parent: &Closure,
+        supplied: &[Field],
+        arity: usize,
+        entry: bool,
+        arguments: Vec<Field>,
+    ) -> Closure {
+        // The first arguments of a closure nobody applied yet become its
+        // `supplied` as they are, vector and all.
+        let supplied = if supplied.is_empty() {
+            arguments
+        } else {
+            let total = supplied.len() + arguments.len();
+            Self::joined(supplied, arguments, total)
+        };
+        Self(Shared::ready_with(
+            ClosureCode(ManuallyDrop::new(Kind::Partial {
+                entry,
+                arity: arity as u32,
+                parent: parent.clone(),
+                supplied,
+            })),
+            cell::Evaluated,
+        ))
+    }
+    /// More arguments than the closure takes: call it with the first ones and
+    /// apply the result to the rest, until none are left.
+    #[inline(never)]
+    fn apply_over(&self, mut arguments: Vec<Field>) -> Field {
         let mut held;
         let mut current = self;
         loop {
-            let (parent, supplied, code) = current.split();
-            let arity = code.arity as usize;
+            let (parent, supplied, arity, entry) = current.split();
             let missing = arity - supplied.len();
             if arguments.len() < missing {
                 if arguments.is_empty() {
                     return Field::Closure(current.clone());
                 }
-                // The first arguments of a closure nobody applied yet become
-                // its `supplied` as they are, vector and all.
-                let supplied = if supplied.is_empty() {
-                    arguments
-                } else {
-                    let mut all = Vec::with_capacity(supplied.len() + arguments.len());
-                    all.extend(supplied.iter().cloned());
-                    all.extend(arguments);
-                    all
-                };
-                return Field::Closure(Self(Shared::ready_with(
-                    ClosureCode {
-                        arity: code.arity,
-                        entry: code.entry,
-                        kind: Kind::Partial {
-                            parent: parent.clone(),
-                            supplied,
-                        },
-                    },
-                    cell::Evaluated,
-                )));
+                return Field::Closure(Self::partial(parent, supplied, arity, entry, arguments));
             }
-            // The common case, a known-arity call of a closure nobody partially
-            // applied, hands the caller's vector straight to the code.
-            if supplied.is_empty() && arguments.len() == missing {
-                return parent.0.call(arguments);
-            }
-            let mut all = Vec::with_capacity(arity);
-            all.extend(supplied.iter().cloned());
-            all.extend(arguments.drain(..missing));
-            let result = parent.0.call(all);
+            let result = if arguments.len() == missing {
+                let last = std::mem::take(&mut arguments);
+                Self::call_with(parent, supplied, arity, last)
+            } else {
+                let mut all = Vec::with_capacity(arity);
+                all.extend_from_slice(supplied);
+                all.extend(arguments.drain(..missing));
+                parent.0.call(all)
+            };
             if arguments.is_empty() {
                 return result;
             }
@@ -1165,6 +1328,77 @@ mod closure_tests {
         });
         assert_eq!(deferred.apply(vec![Field::Int64(1)]).int64(), 42);
         assert_eq!(deferred.apply(vec![Field::Int64(2)]).int64(), 43);
+    }
+
+    #[test]
+    fn a_partial_application_holds_each_supplied_argument_once() {
+        // `Field::Tuple` is a reference-counted field: its count says how many
+        // holders there are, so a field cloned or dropped twice shows.
+        let held = Rc::new(vec![Field::Int64(1)]);
+        let function = Closure::bind(
+            4,
+            |(): &(), a| {
+                assert_eq!(a.len(), 4);
+                Field::Int64(a[1].int64() * 100 + a[2].int64() * 10 + a[3].int64())
+            },
+            (),
+        );
+        let one = function.apply(vec![Field::Tuple(held.clone())]).closure();
+        assert_eq!(Rc::strong_count(&held), 2);
+        // Supplied arguments are cloned into the next partial application.
+        let two = one.apply(vec![Field::Int64(2)]).closure();
+        assert_eq!(Rc::strong_count(&held), 3);
+        let three = two.apply(vec![Field::Int64(3)]).closure();
+        assert_eq!(Rc::strong_count(&held), 4);
+        drop(one);
+        assert_eq!(Rc::strong_count(&held), 3);
+        // Saturating clones them into the call's vector, which the callee drops.
+        assert_eq!(three.apply(vec![Field::Int64(4)]).int64(), 234);
+        assert_eq!(Rc::strong_count(&held), 3);
+        assert_eq!(
+            two.apply(vec![Field::Int64(5), Field::Int64(6)]).int64(),
+            256
+        );
+        assert_eq!(Rc::strong_count(&held), 3);
+        drop(three);
+        drop(two);
+        assert_eq!(Rc::strong_count(&held), 1);
+    }
+
+    #[test]
+    fn too_many_arguments_for_a_partial_application_apply_the_result_to_the_rest() {
+        let function = Closure::bind(
+            2,
+            |(): &(), a| {
+                let first = a[0].int64() * 10 + a[1].int64();
+                Field::Closure(Closure::ready(2, move |b| {
+                    Field::Int64(first * 100 + b[0].int64() * 10 + b[1].int64())
+                }))
+            },
+            (),
+        );
+        let partial = function.apply(vec![Field::Int64(1)]).closure();
+        // Over-applied by one: the call is made with `[1, 2]` and the closure
+        // it returns, one argument short, is the result.
+        let short = partial
+            .apply(vec![Field::Int64(2), Field::Int64(3)])
+            .closure();
+        assert_eq!(short.apply(vec![Field::Int64(4)]).int64(), 1_234);
+        // Over-applied by two: both calls are made.
+        assert_eq!(
+            partial
+                .apply(vec![Field::Int64(2), Field::Int64(3), Field::Int64(4)])
+                .int64(),
+            1_234
+        );
+        // And from the closure itself, with nothing supplied yet.
+        let all = vec![
+            Field::Int64(5),
+            Field::Int64(6),
+            Field::Int64(7),
+            Field::Int64(8),
+        ];
+        assert_eq!(function.apply(all).int64(), 5_678);
     }
 
     #[test]
