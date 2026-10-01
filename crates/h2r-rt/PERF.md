@@ -110,15 +110,17 @@ mise run rt:instrs                    # same, through mise
 
 Each scenario stands for one bucket of the profile above. `Ir/op` includes the loop's own overhead and the drop of what the operation made, but not process start-up or the scenario's one-time setup (the `n = 0` run cancels those). It is the runtime built as a library at `opt-level 3`, so inlining into emitted code is not modelled: use it to rank changes, then confirm on the compiled program (step 4 onward), as invariant 8 says.
 
-| scenario        | what one operation is                                              |         n | Ir/op |
-| --------------- | ------------------------------------------------------------------ | --------: | ----: |
-| `thunk-chain`   | one indirection in a chain forced once (`chase`, constant stack)   |   100 000 |   251 |
-| `thunk-each`    | `delay1` thunk returning `Int`, created and forced                 |   100 000 |   445 |
-| `apply`         | `Closure::bind` (one capture) and a saturated `apply`              |   100 000 |   545 |
-| `apply-partial` | `bind`, `apply` to one of two arguments, `apply` to the other      |   100 000 | 1 418 |
-| `cons`          | one `Data::ready(":", ..)` cell built, then the list dropped       |    10 000 |   413 |
-| `match`         | `force` and a five-arm `match` on the constructor name, as emitted | 1 000 000 |    43 |
-| `deferred-data` | `Field::data()` on an evaluated `Field::Deferred`                  | 1 000 000 |    55 |
+| scenario        | what one operation is                                             |         n | Ir/op |
+| --------------- | ----------------------------------------------------------------- | --------: | ----: |
+| `thunk-chain`   | one indirection in a chain forced once (`chase`, constant stack)  |   100 000 |   251 |
+| `thunk-each`    | `delay1` thunk returning `Int`, created and forced                |   100 000 |   445 |
+| `apply`         | `Closure::bind` (one capture) and a saturated `apply`             |   100 000 |   545 |
+| `apply-partial` | `bind`, `apply` to one of two arguments, `apply` to the other     |   100 000 | 1 418 |
+| `cons`          | one `Data::ready(":", ..)` cell built, then the list dropped      |    10 000 |   413 |
+| `match`         | `force` and a five-arm `match` on the constructor tag, as emitted | 1 000 000 |    32 |
+| `deferred-data` | `Field::data()` on an evaluated `Field::Deferred`                 | 1 000 000 |    55 |
+
+(`match` was 43 Ir/op on `e8e6be9`, when matches compared constructor names; WP4 (`640db5a`) made them switch on the tag. `cons` moved 413 → 412. The other rows did not move.)
 
 Baseline measured on `e8e6be9` (the head before WP9), rustc 1.98.1 release profile, valgrind 3.22.0, x86-64. Re-measure before and after your change and quote both lines in the hand-back. `cons` keeps `n` at 10 000 because dropping a list is recursive (invariant 6); do not raise it past what the 8 MiB main-thread stack takes.
 
