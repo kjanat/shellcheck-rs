@@ -371,6 +371,15 @@ run         = [
   "cargo h2r lower compiler/core-json --reachability",
 ]
 
+[tasks."perf:ab"]
+description = "Parity against the GHC oracle, then hyperfine and peak RSS: baseline binary vs candidate binary on the given scripts"
+usage       = """
+arg "<baseline>" help="Previous rshellcheck binary"
+arg "<candidate>" help="New rshellcheck binary (e.g. target/release/rshellcheck)"
+arg "<scripts>" var=#true help="Shell scripts to check"
+"""
+run         = 'scripts/perf-ab.sh "${usage_baseline?}" "${usage_candidate?}" ${usage_scripts?}'
+
 [tasks.full]
 description = "Run source checks and the upstream ShellCheck oracle"
 run         = [
