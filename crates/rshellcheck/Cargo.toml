@@ -8,7 +8,7 @@ publish           = false
 [dependencies]
 clap.workspace            = true
 libc.workspace            = true
-mimalloc.workspace        = true
+libmimalloc-sys.workspace = true
 shellcheck-core.workspace = true
 
 [lints]

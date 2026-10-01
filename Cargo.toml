@@ -19,14 +19,14 @@ hs-libraries    = { path = "crates/hs-libraries" }
 hs-shellcheck   = { path = "crates/hs-shellcheck" }
 shellcheck-core = { path = "crates/shellcheck-core" }
 
-anyhow     = "1"
-clap       = { version = "4", features = ["derive"] }
-libc       = "0.2"
-mimalloc   = "0.1"
-serde      = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["unbounded_depth"] }
-sha2       = "0.10"
-walkdir    = "2"
+anyhow          = "1"
+clap            = { version = "4", features = ["derive"] }
+libc            = "0.2"
+libmimalloc-sys = "0.1"
+serde           = { version = "1", features = ["derive"] }
+serde_json      = { version = "1", features = ["unbounded_depth"] }
+sha2            = "0.10"
+walkdir         = "2"
 
 [workspace.lints.clippy]
 let_underscore_must_use            = "warn"
