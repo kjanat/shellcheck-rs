@@ -29,14 +29,23 @@ The gap to GHC is ~19×. GHC wins on exactly these things: a bump allocator, a g
 
 ## Representation today (`cargo test -p h2r-rt --test layout` prints it)
 
-| type                              | bytes | why                                                                            |
-| --------------------------------- | ----: | ------------------------------------------------------------------------------ |
-| `Data`, `Int`, `Closure`          |    16 | `Rc<Lazy<T, dyn Code<T>>>` is a *fat* pointer: the code tail is a trait object |
-| `Field`                           |    32 | tag + largest payload (16-byte cell, or the 24-byte `Addr`)                    |
-| `Node`                            |   112 | `&'static str` constructor (16) + `Fields` (3 inline `Field`s + tag)           |
-| one `String` character (`:` cell) |   136 | `Rc` header + `Lazy<Node>` + code tail                                         |
+| type                              | bytes | why                                                                      |
+| --------------------------------- | ----: | ------------------------------------------------------------------------ |
+| `Data`, `Int`, `Closure`          |     8 | `Shared<T>`: one thin pointer to one allocation (WP1, `f11d5f6`)         |
+| `Field`                           |    32 | tag + largest payload: the 24-byte `Addr { &'static [u8], usize }` (WP2) |
+| `Node`                            |   112 | `&'static str` constructor (16) + `Fields` (3 inline `Field`s + tag)     |
+| one `String` character (`:` cell) |   128 | 16-byte header + `Node`; a ready cell's code tail is zero-sized          |
 
 `cargo test -p h2r-rt --test alloc` prints the allocation counts per primitive and pins them. Every improvement lowers a number there.
+
+### Landed
+
+| package                                            | commit    | small (150 lines) | medium (1500 lines) | peak RSS medium |
+| -------------------------------------------------- | --------- | ----------------- | ------------------- | --------------- |
+| chase move-out, apply fast path, direct tail calls | `6199812` | −4 %              | −8 %                | =               |
+| WP1 thin cells                                     | `f11d5f6` | −16 % (±9)        | −12 % (±4)          | 1355 → 1252 MiB |
+
+(Each row against the binary before it, same machine, hyperfine -N, 10 runs; output byte-identical to the GHC oracle on the conformance gate.)
 
 ## Invariants you must keep
 
