@@ -13,7 +13,20 @@ use std::cell::Cell;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use h2r_rt::{Closure, Data, Field, Int, Step};
+use h2r_rt::{Closure, Constructor, Data, Field, Int, Step};
+
+/// The constructors these tests build; the tags only have to differ.
+fn constructor(name: &str) -> &'static Constructor {
+    static C: Constructor = Constructor { name: "C", tag: 0 };
+    static NIL: Constructor = Constructor { name: "[]", tag: 1 };
+    static CONS: Constructor = Constructor { name: ":", tag: 2 };
+    match name {
+        "C" => &C,
+        "[]" => &NIL,
+        ":" => &CONS,
+        other => panic!("no constructor {other}"),
+    }
+}
 
 struct Counting;
 
@@ -72,7 +85,7 @@ fn k_add2((captured,): &(i64,), arguments: Vec<Field>) -> Field {
 #[test]
 fn ready_constructor_is_one_allocation() {
     let (allocations, _) = measure(1000, || {
-        let node = Data::ready("C", [Field::Int64(1), Field::Char(2)]);
+        let node = Data::ready(constructor("C"), [Field::Int64(1), Field::Char(2)]);
         SINK.with(|s| s.set(s.get() + node.force().fields.len() as i64));
     });
     assert_eq!(allocations, 1, "a ready two-field node is one cell");
@@ -81,7 +94,7 @@ fn ready_constructor_is_one_allocation() {
 #[test]
 fn thunk_to_ready_node_is_two_allocations() {
     let (allocations, _) = measure(1000, || {
-        let node = Data::defer_to(|| Data::ready("C", [Field::Int64(1)]));
+        let node = Data::defer_to(|| Data::ready(constructor("C"), [Field::Int64(1)]));
         SINK.with(|s| s.set(s.get() + node.force().fields.len() as i64));
     });
     eprintln!("thunk -> ready node: {allocations} allocations");
@@ -152,15 +165,15 @@ fn ready_int_is_one_allocation() {
 #[test]
 fn cons_list_is_one_allocation_per_cell() {
     let (allocations, bytes) = measure(100, || {
-        let mut list = Data::ready("[]", []);
+        let mut list = Data::ready(constructor("[]"), []);
         for c in 0..100 {
-            list = Data::ready(":", [Field::Char(c), Field::Data(list)]);
+            list = Data::ready(constructor(":"), [Field::Char(c), Field::Data(list)]);
         }
         let mut walked = 0;
         let mut cur = list;
         loop {
             let node = cur.force();
-            if node.constructor == "[]" {
+            if node.constructor.name == "[]" {
                 break;
             }
             walked += node.fields[0].char_code();

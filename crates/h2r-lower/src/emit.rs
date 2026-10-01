@@ -217,6 +217,83 @@ impl Literals {
     }
 }
 
+/// Every constructor name a program mentions, numbered in first-use order.
+/// Pattern matches switch on the `u32` and the runtime compares it, so one name
+/// must get one tag in every generated crate: they all share the instance of
+/// this that `prepare` (or `emit_program`) makes. A crate cannot name another
+/// crate's static, so each writes the statics it uses (`table`) with the shared
+/// numbers; the runtime never compares addresses.
+#[derive(Default)]
+pub(crate) struct Constructors {
+    index: RefCell<BTreeMap<String, u32>>,
+    order: RefCell<Vec<String>>,
+}
+
+impl Constructors {
+    pub(crate) fn tag(&self, name: &str) -> u32 {
+        let mut index = self.index.borrow_mut();
+        let mut order = self.order.borrow_mut();
+        let next = u32::try_from(order.len()).expect("more than 2^32 constructors");
+        *index.entry(name.to_string()).or_insert_with(|| {
+            order.push(name.to_string());
+            next
+        })
+    }
+
+    /// The Rust expression for the `&'static HConstructor` of `name`.
+    pub(crate) fn reference(&self, name: &str) -> String {
+        format!("&C_{}", self.tag(name))
+    }
+
+    fn list_names(&self, cons: &str, nil: &str) -> String {
+        format!(
+            "HListNames {{ cons: {}, nil: {} }}",
+            self.reference(cons),
+            self.reference(nil)
+        )
+    }
+
+    fn string_names(&self, cons: &str, nil: &str, character: &str) -> String {
+        format!(
+            "HStringNames {{ cons: {}, nil: {}, character: {} }}",
+            self.reference(cons),
+            self.reference(nil),
+            self.reference(character)
+        )
+    }
+
+    /// The statics of the constructors `generated` refers to, for the crate
+    /// (or program) that `generated` is the source of.
+    pub(crate) fn table(&self, generated: &str) -> String {
+        let order = self.order.borrow();
+        let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        let mut used = BTreeSet::new();
+        for (at, _) in generated.match_indices("C_") {
+            if generated[..at].ends_with(word) {
+                continue;
+            }
+            let digits = generated[at + 2..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .count();
+            let (number, after) = generated[at + 2..].split_at(digits);
+            if digits > 0 && !after.starts_with(word) {
+                used.extend(number.parse::<usize>().ok().filter(|n| *n < order.len()));
+            }
+        }
+        let mut out = String::new();
+        for tag in used {
+            writeln!(
+                out,
+                "static C_{tag}: HConstructor = HConstructor {{ name: {:?}, tag: {tag} }};",
+                order[tag]
+            )
+            .unwrap();
+        }
+        out
+    }
+}
+
 /// The statement every emitted entry function starts with.
 const INSTALL_LITERALS: &str = "h2r_rt::install_literals(&LITERALS);";
 
@@ -318,13 +395,14 @@ fn delayed(carrier: &str, entry: &str, arguments: &[String]) -> String {
 
 fn match_data(
     world: &World<'_>,
+    constructors: &Constructors,
     scrutinee: crate::nir::ValueId,
     captures: &[String],
     arms: &[crate::nir::DataArm],
     enter: impl Fn(crate::nir::BlockId, &[String]) -> String,
 ) -> String {
     let mut code = format!(
-        "{{ let node = v{}.force(); let constructor = node.constructor; match constructor {{",
+        "{{ let node = v{}.force(); match node.constructor.tag {{",
         scrutinee.0
     );
     // DEFAULT may be first in Core; Rust's wildcard must be last.
@@ -345,7 +423,7 @@ fn match_data(
                 .unwrap();
                 args.push(format!("f{i}"));
             }
-            format!("{:?}", c.name)
+            constructors.tag(&c.name).to_string()
         } else {
             "_".into()
         };
@@ -692,6 +770,7 @@ struct Prepared<'a> {
     edges: &'a BTreeMap<usize, BTreeSet<usize>>,
     roots: usize,
     adapter: String,
+    constructors: &'a Constructors,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -787,6 +866,7 @@ fn prepare<R>(
             .collect::<Vec<_>>()
             .join("\n"));
     }
+    let constructors = Constructors::default();
     let mut adapter = String::new();
     for (index, &entry) in entries.iter().enumerate() {
         let name = match driver {
@@ -815,11 +895,24 @@ fn prepare<R>(
             &mut adapter,
         );
         match driver {
-            Driver::Print => print_main(world, &mut adapter, &entry_types, entry_result)?,
-            Driver::Lint => lint_main(world, &mut adapter, &entry_types, entry_result)?,
+            Driver::Print => print_main(
+                world,
+                &constructors,
+                &mut adapter,
+                &entry_types,
+                entry_result,
+            )?,
+            Driver::Lint => lint_main(
+                world,
+                &constructors,
+                &mut adapter,
+                &entry_types,
+                entry_result,
+            )?,
             Driver::Api => {
                 api_function(
                     world,
+                    &constructors,
                     &mut adapter,
                     entry,
                     &name,
@@ -839,6 +932,7 @@ fn prepare<R>(
         edges: &edges,
         roots: entries.len(),
         adapter,
+        constructors: &constructors,
     })
 }
 
@@ -891,6 +985,7 @@ fn entry_adapter(
 
 fn print_main(
     world: &World<'_>,
+    constructors: &Constructors,
     adapter: &mut String,
     entry_types: &[&Ty],
     entry_result: &Ty,
@@ -899,12 +994,12 @@ fn print_main(
     let args = entry_types
         .iter()
         .enumerate()
-        .map(|(i, ty)| argument(world, ty, i))
+        .map(|(i, ty)| argument(world, constructors, ty, i))
         .collect::<Result<Vec<_>, _>>()?
         .join(", ");
     let mut shows = Shows::default();
     let result = if !scalar(world, entry_result) {
-        let show = show_function(world, entry_result, &mut shows)?;
+        let show = show_function(world, constructors, entry_result, &mut shows)?;
         format!(
             "{show}(&{}, 0)",
             pack(world, entry_result, &format!("h2r_entry({args})"))
@@ -923,6 +1018,7 @@ fn print_main(
 
 fn lint_main(
     world: &World<'_>,
+    constructors: &Constructors,
     adapter: &mut String,
     entry_types: &[&Ty],
     entry_result: &Ty,
@@ -934,7 +1030,7 @@ fn lint_main(
     if !(entry_types.len() == 2 && entry_types.iter().all(|ty| text(ty)) && lines) {
         return Err("a lint entry takes a path and the file's text and returns lines".into());
     }
-    let names = string_names(world)?;
+    let names = string_names(world, constructors)?;
     writeln!(
         adapter,
         r#"fn main() {{
@@ -980,8 +1076,10 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
             prepared.specialization,
             prepared.leaves,
             None,
+            prepared.constructors,
         )?;
         out.push_str(&prepared.adapter);
+        out.push_str(&prepared.constructors.table(&out));
         Ok(out)
     })
 }
@@ -1006,10 +1104,12 @@ pub fn emit_library(modules: &[Module], entries: &[&str]) -> Result<String, Stri
                 "",
                 has_boxed,
                 &literals,
+                prepared.constructors,
             )?);
         }
         out.push_str(&literals.table());
         out.push_str(&prepared.adapter);
+        out.push_str(&prepared.constructors.table(&out));
         Ok(out)
     })
 }
@@ -1066,7 +1166,7 @@ pub(crate) fn runtime_source() -> String {
     )
 }
 
-const RUNTIME_ALIASES: &str = "#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField, Closure as HClosure};\n#[allow(unused_imports)]\nuse h2r_rt::{Encoding as HEncoding, ListNames as HListNames, StringNames as HStringNames};\n#[allow(unused_imports)]\nuse h2r_rt::Addr as HAddr;\n#[allow(unused_imports)]\nuse h2r_rt::{Array as HArray, Bytes as HBytes, MutVar as HMutVar};\n";
+const RUNTIME_ALIASES: &str = "#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField, Closure as HClosure, Constructor as HConstructor};\n#[allow(unused_imports)]\nuse h2r_rt::{Encoding as HEncoding, ListNames as HListNames, StringNames as HStringNames};\n#[allow(unused_imports)]\nuse h2r_rt::Addr as HAddr;\n#[allow(unused_imports)]\nuse h2r_rt::{Array as HArray, Bytes as HBytes, MutVar as HMutVar};\n";
 
 pub fn emit_entry_split(
     modules: &[Module],
@@ -1093,6 +1193,7 @@ pub fn emit_entry_split(
                     "pub ",
                     has_boxed,
                     &literals,
+                    prepared.constructors,
                 )?,
             );
         }
@@ -1141,6 +1242,7 @@ pub fn emit_entry_split(
             for index in ordered {
                 source.push_str(&code[&index]);
             }
+            source.push_str(&prepared.constructors.table(&source));
             crates.push(CrateSource {
                 name: name(number),
                 source,
@@ -1160,6 +1262,7 @@ pub fn emit_entry_split(
         // The one table of address literals every crate indexes into.
         main.push_str(&literals.table());
         main.push_str(&prepared.adapter);
+        main.push_str(&prepared.constructors.table(&main));
         Ok(SplitProgram {
             runtime: runtime_source(),
             crates,
@@ -1243,7 +1346,14 @@ pub fn emit_program(modules: &[Module], roots: &[Instance]) -> Result<Program, S
             )
         })
         .collect();
-    let mut source = functions(world, &specialization, &leaves, Some(PROGRAM_CHUNK))?;
+    let constructors = Constructors::default();
+    let mut source = functions(
+        world,
+        &specialization,
+        &leaves,
+        Some(PROGRAM_CHUNK),
+        &constructors,
+    )?;
     let addresses: Vec<String> = members
         .iter()
         .map(|index| format!("f_{index} as *const ()"))
@@ -1254,6 +1364,7 @@ pub fn emit_program(modules: &[Module], roots: &[Instance]) -> Result<Program, S
         addresses.join(", ")
     )
     .unwrap();
+    source.push_str(&constructors.table(&source));
     let outcomes = roots
         .iter()
         .map(|root| {
@@ -1291,6 +1402,7 @@ fn functions(
     specialization: &specialize::Specialization,
     leaves: &BTreeMap<usize, &LoweredLeaf>,
     chunk: Option<usize>,
+    constructors: &Constructors,
 ) -> Result<String, String> {
     let vis = if chunk.is_some() { "pub(crate) " } else { "" };
     let mut chunks = 0;
@@ -1336,6 +1448,7 @@ fn functions(
             vis,
             has_boxed,
             &literals,
+            constructors,
         )?);
     }
     if chunks != 0 {
@@ -1371,6 +1484,7 @@ fn leaf_code(
     vis: &str,
     has_boxed: bool,
     literals: &Literals,
+    constructors: &Constructors,
 ) -> Result<String, String> {
     let mut out = String::new();
     let mut wrappers = Vec::new();
@@ -1557,6 +1671,7 @@ fn leaf_code(
                                 .collect::<Vec<_>>();
                             Some(match_data(
                                 world,
+                                constructors,
                                 *scrutinee,
                                 &captures,
                                 arms,
@@ -1658,8 +1773,8 @@ fn leaf_code(
                             .join(" ");
                         let collection = if arguments.len() <= 3 { "" } else { "vec!" };
                         format!(
-                            "{{ let fields = {collection}[{fields}]; {strict} HData::ready({:?}, fields) }}",
-                            constructor.name
+                            "{{ let fields = {collection}[{fields}]; {strict} HData::ready({}, fields) }}",
+                            constructors.reference(&constructor.name)
                         )
                     }
                     Operation::MatchData {
@@ -1672,9 +1787,14 @@ fn leaf_code(
                             .map(|v| value(*v))
                             .chain(std::iter::once(value(*scrutinee)))
                             .collect::<Vec<_>>();
-                        match_data(world, *scrutinee, &captures, arms, |target, args| {
-                            format!("b_{index}_{}({})", target.0, args.join(", "))
-                        })
+                        match_data(
+                            world,
+                            constructors,
+                            *scrutinee,
+                            &captures,
+                            arms,
+                            |target, args| format!("b_{index}_{}({})", target.0, args.join(", ")),
+                        )
                     }
                     // No allocation and no tag: a Rust tuple is exactly what
                     // GHC's unboxed tuple is.
@@ -1700,26 +1820,22 @@ fn leaf_code(
                     Operation::RaiseError { message } => {
                         let (nil, cons, character) = data::string_layouts(world)?;
                         format!(
-                            "h2r_rt::raise_error({}, HStringNames {{ nil: {:?}, cons: {:?}, character: {:?} }})",
+                            "h2r_rt::raise_error({}, {})",
                             value(*message),
-                            nil.name,
-                            cons.name,
-                            character.name
+                            constructors.string_names(&cons.name, &nil.name, &character.name)
                         )
                     }
                     Operation::RaiseCallStackError(error) => {
                         let (nil, cons, character) = data::string_layouts(world)?;
                         format!(
-                            "h2r_rt::raise_call_stack_error({}, {}, HStringNames {{ nil: {:?}, cons: {:?}, character: {:?} }}, h2r_rt::CallStackNames {{ empty: {:?}, push: {:?}, freeze: {:?}, location: {:?} }})",
+                            "h2r_rt::raise_call_stack_error({}, {}, {}, h2r_rt::CallStackNames {{ empty: {}, push: {}, freeze: {}, location: {} }})",
                             value(error.message),
                             value(error.stack),
-                            nil.name,
-                            cons.name,
-                            character.name,
-                            error.layouts.empty.name,
-                            error.layouts.push.name,
-                            error.layouts.freeze.name,
-                            error.layouts.location.name
+                            constructors.string_names(&cons.name, &nil.name, &character.name),
+                            constructors.reference(&error.layouts.empty.name),
+                            constructors.reference(&error.layouts.push.name),
+                            constructors.reference(&error.layouts.freeze.name),
+                            constructors.reference(&error.layouts.location.name)
                         )
                     }
                     Operation::EmptyCase { scrutinee } => {
@@ -1739,33 +1855,41 @@ fn leaf_code(
                         nil,
                         cons,
                     } => format!(
-                        "h2r_rt::append_list({}, {}, HListNames {{ cons: {:?}, nil: {:?} }})",
+                        "h2r_rt::append_list({}, {}, {})",
                         value(*left),
                         value(*right),
-                        cons.name,
-                        nil.name
+                        constructors.list_names(&cons.name, &nil.name)
                     ),
                     Operation::DataToTag {
                         value: operand,
-                        constructors,
+                        constructors: family,
                     } => {
-                        let arms: String = constructors
-                            .iter()
-                            .map(|c| format!("{:?} => {}, ", c.name, i64::from(c.tag) - 1))
-                            .collect();
-                        format!(
-                            "{{ let scrutinee = {}; let node = scrutinee.force(); match node.constructor {{ {arms}other => panic!(\"dataToTag#: {{other}} is not in the family\") }} }}",
-                            value(*operand)
-                        )
-                    }
-                    Operation::TagToEnum { tag, constructors } => {
-                        let arms: String = constructors
+                        let arms: String = family
                             .iter()
                             .map(|c| {
                                 format!(
-                                    "{} => HData::ready({:?}, []), ",
+                                    "{} => {}, ",
+                                    constructors.tag(&c.name),
+                                    i64::from(c.tag) - 1
+                                )
+                            })
+                            .collect();
+                        format!(
+                            "{{ let scrutinee = {}; let node = scrutinee.force(); match node.constructor.tag {{ {arms}_ => panic!(\"dataToTag#: {{}} is not in the family\", node.constructor) }} }}",
+                            value(*operand)
+                        )
+                    }
+                    Operation::TagToEnum {
+                        tag,
+                        constructors: family,
+                    } => {
+                        let arms: String = family
+                            .iter()
+                            .map(|c| {
+                                format!(
+                                    "{} => HData::ready({}, []), ",
                                     i64::from(c.tag) - 1,
-                                    c.name
+                                    constructors.reference(&c.name)
                                 )
                             })
                             .collect();
@@ -1780,18 +1904,20 @@ fn leaf_code(
                         value(*right)
                     ),
                     Operation::CompareStrings(compare) => format!(
-                        "h2r_rt::compare_lists({}, {}, HStringNames {{ cons: {:?}, nil: {:?}, character: {:?} }}, h2r_rt::Orderings {{ lt: {:?}, eq: {:?}, gt: {:?} }})",
+                        "h2r_rt::compare_lists({}, {}, {}, h2r_rt::Orderings {{ lt: {}, eq: {}, gt: {} }})",
                         value(compare.left),
                         value(compare.right),
-                        compare.cons.name,
-                        compare.nil.name,
-                        compare.character.name,
-                        compare.lt.name,
-                        compare.eq.name,
-                        compare.gt.name
+                        constructors.string_names(
+                            &compare.cons.name,
+                            &compare.nil.name,
+                            &compare.character.name
+                        ),
+                        constructors.reference(&compare.lt.name),
+                        constructors.reference(&compare.eq.name),
+                        constructors.reference(&compare.gt.name)
                     ),
                     Operation::ListPredicate(predicate) => format!(
-                        "h2r_rt::{}({}, {}, h2r_rt::Equality::{:?}, HStringNames {{ cons: {:?}, nil: {:?}, character: {:?} }}, h2r_rt::Truth {{ false_: {:?}, true_: {:?} }})",
+                        "h2r_rt::{}({}, {}, h2r_rt::Equality::{:?}, {}, h2r_rt::Truth {{ false_: {}, true_: {} }})",
                         match predicate.predicate {
                             crate::nir::Predicate::EqString => "equal_lists",
                             crate::nir::Predicate::Elem => "elem_list",
@@ -1800,18 +1926,17 @@ fn leaf_code(
                         value(predicate.left),
                         value(predicate.right),
                         predicate.equality,
-                        predicate.cons.name,
-                        predicate.nil.name,
-                        predicate.character.name,
-                        predicate.false_.name,
-                        predicate.true_.name
+                        constructors.string_names(
+                            &predicate.cons.name,
+                            &predicate.nil.name,
+                            &predicate.character.name
+                        ),
+                        constructors.reference(&predicate.false_.name),
+                        constructors.reference(&predicate.true_.name)
                     ),
                     Operation::ListFunction(list) => {
                         let names = |nil: &data::Constructor, cons: &data::Constructor| {
-                            format!(
-                                "HListNames {{ cons: {:?}, nil: {:?} }}",
-                                cons.name, nil.name
-                            )
+                            constructors.list_names(&cons.name, &nil.name)
                         };
                         let input = names(&list.nil, &list.cons);
                         let truth = list
@@ -1819,8 +1944,9 @@ fn leaf_code(
                             .as_ref()
                             .map(|(false_, true_)| {
                                 format!(
-                                    "h2r_rt::Truth {{ false_: {:?}, true_: {:?} }}",
-                                    false_.name, true_.name
+                                    "h2r_rt::Truth {{ false_: {}, true_: {} }}",
+                                    constructors.reference(&false_.name),
+                                    constructors.reference(&true_.name)
                                 )
                             })
                             .ok_or("a list function without a predicate's Bool");
@@ -1883,9 +2009,10 @@ fn leaf_code(
                             .iter()
                             .map(|byte| format!("\\x{byte:02x}"))
                             .collect();
-                        let names = format!(
-                            "HStringNames {{ cons: {:?}, nil: {:?}, character: {:?} }}",
-                            unpack.cons.name, unpack.nil.name, unpack.character.name
+                        let names = constructors.string_names(
+                            &unpack.cons.name,
+                            &unpack.nil.name,
+                            &unpack.character.name,
                         );
                         let encoding = match unpack.encoding {
                             crate::nir::strings::Encoding::Latin1 => "Latin1",
@@ -2412,7 +2539,12 @@ fn leaf_code(
 }
 
 /// One command-line argument, read at the type the entry takes it at.
-fn argument(world: &World<'_>, ty: &Ty, index: usize) -> Result<String, String> {
+fn argument(
+    world: &World<'_>,
+    constructors: &Constructors,
+    ty: &Ty,
+    index: usize,
+) -> Result<String, String> {
     let parsed = format!("raw[{index}].parse::<i64>().expect(\"expected signed 64-bit integer\")");
     let ty = represented(world, ty);
     if unboxed(&ty) && !is_char(&ty) {
@@ -2422,7 +2554,7 @@ fn argument(world: &World<'_>, ty: &Ty, index: usize) -> Result<String, String> 
     } else if ty.list_elem().is_some_and(Ty::is_char) {
         Ok(format!(
             "h2r_rt::string_argument(&raw[{index}], {})",
-            string_names(world)?
+            string_names(world, constructors)?
         ))
     } else {
         Err(format!(
@@ -2543,12 +2675,13 @@ fn shape(world: &World<'_>, ty: &Ty) -> Result<Shape, String> {
     }
 }
 
-fn list_names(world: &World<'_>, element: &Ty) -> Result<String, String> {
+fn list_names(
+    world: &World<'_>,
+    constructors: &Constructors,
+    element: &Ty,
+) -> Result<String, String> {
     let (nil, cons) = data::list_layouts(world, element)?;
-    Ok(format!(
-        "HListNames {{ cons: {:?}, nil: {:?} }}",
-        cons.name, nil.name
-    ))
+    Ok(constructors.list_names(&cons.name, &nil.name))
 }
 
 fn rust_type(world: &World<'_>, ty: &Ty) -> Result<String, String> {
@@ -2583,49 +2716,60 @@ fn rust_type(world: &World<'_>, ty: &Ty) -> Result<String, String> {
     })
 }
 
-fn into_field(world: &World<'_>, ty: &Ty, value: &str) -> Result<String, String> {
+fn into_field(
+    world: &World<'_>,
+    constructors: &Constructors,
+    ty: &Ty,
+    value: &str,
+) -> Result<String, String> {
     Ok(match shape(world, ty)? {
         Shape::Int => format!("HField::Int(HInt::ready({value}))"),
         Shape::Bool { false_, true_ } => {
             format!(
-                "HField::Data(HData::ready(if {value} {{ {true_:?} }} else {{ {false_:?} }}, []))"
+                "HField::Data(HData::ready(if {value} {{ {} }} else {{ {} }}, []))",
+                constructors.reference(&true_),
+                constructors.reference(&false_)
             )
         }
         Shape::String => format!(
             "HField::Data(h2r_rt::string_argument(&{value}, {}))",
-            string_names(world)?
+            string_names(world, constructors)?
         ),
         Shape::List(element) => format!(
             "HField::Data(h2r_rt::list_argument({value}.into_iter().map(|e| {}).collect(), {}))",
-            into_field(world, &element, "e")?,
-            list_names(world, &element)?
+            into_field(world, constructors, &element, "e")?,
+            list_names(world, constructors, &element)?
         ),
         Shape::Maybe {
             nothing,
             just,
             element,
         } => format!(
-            "HField::Data(match {value} {{ Some(e) => HData::ready({just:?}, [{}]), None => HData::ready({nothing:?}, []) }})",
-            into_field(world, &element, "e")?
+            "HField::Data(match {value} {{ Some(e) => HData::ready({}, [{}]), None => HData::ready({}, []) }})",
+            constructors.reference(&just),
+            into_field(world, constructors, &element, "e")?,
+            constructors.reference(&nothing)
         ),
         Shape::Either { left, right } => format!(
-            "HField::Data(match {value} {{ Ok(e) => HData::ready({:?}, [{}]), Err(e) => HData::ready({:?}, [{}]) }})",
-            right.0,
-            into_field(world, &right.1, "e")?,
-            left.0,
-            into_field(world, &left.1, "e")?
+            "HField::Data(match {value} {{ Ok(e) => HData::ready({}, [{}]), Err(e) => HData::ready({}, [{}]) }})",
+            constructors.reference(&right.0),
+            into_field(world, constructors, &right.1, "e")?,
+            constructors.reference(&left.0),
+            into_field(world, constructors, &left.1, "e")?
         ),
         Shape::Function { arguments, result } => {
             let read = arguments
                 .iter()
                 .enumerate()
-                .map(|(index, argument)| from_field(world, argument, &format!("a[{index}]")))
+                .map(|(index, argument)| {
+                    from_field(world, constructors, argument, &format!("a[{index}]"))
+                })
                 .collect::<Result<Vec<_>, _>>()?
                 .join(", ");
             format!(
                 "HField::Closure({{ let f = {value}; HClosure::ready({}, move |a| {{ let r = f({read}); {} }}) }})",
                 arguments.len(),
-                into_field(world, &result, "r")?
+                into_field(world, constructors, &result, "r")?
             )
         }
         Shape::Tuple {
@@ -2635,41 +2779,51 @@ fn into_field(world: &World<'_>, ty: &Ty, value: &str) -> Result<String, String>
             let components = fields
                 .iter()
                 .enumerate()
-                .map(|(index, field)| into_field(world, field, &format!("t.{index}")))
+                .map(|(index, field)| into_field(world, constructors, field, &format!("t.{index}")))
                 .collect::<Result<Vec<_>, _>>()?
                 .join(", ");
             let collection = if fields.len() <= 3 { "" } else { "vec!" };
             format!(
-                "HField::Data({{ let t = {value}; HData::ready({constructor:?}, {collection}[{components}]) }})"
+                "HField::Data({{ let t = {value}; HData::ready({}, {collection}[{components}]) }})",
+                constructors.reference(&constructor)
             )
         }
     })
 }
 
-fn from_field(world: &World<'_>, ty: &Ty, field: &str) -> Result<String, String> {
+fn from_field(
+    world: &World<'_>,
+    constructors: &Constructors,
+    ty: &Ty,
+    field: &str,
+) -> Result<String, String> {
     Ok(match shape(world, ty)? {
         Shape::Int => format!("{field}.int().force()"),
         Shape::Bool { true_, .. } => {
-            format!("{{ let d = {field}.data(); d.force().constructor == {true_:?} }}")
+            format!(
+                "{{ let d = {field}.data(); d.force().constructor.tag == {} }}",
+                constructors.tag(&true_)
+            )
         }
         Shape::String => format!(
             "h2r_rt::string_value(&{field}.data(), {})",
-            string_names(world)?
+            string_names(world, constructors)?
         ),
         Shape::List(element) => format!(
             "h2r_rt::list_fields(&{field}.data(), {}).into_iter().map(|e| {}).collect::<Vec<_>>()",
-            list_names(world, &element)?,
-            from_field(world, &element, "e")?
+            list_names(world, constructors, &element)?,
+            from_field(world, constructors, &element, "e")?
         ),
         Shape::Maybe { just, element, .. } => format!(
-            "{{ let d = {field}.data(); let n = d.force(); if n.constructor == {just:?} {{ Some({}) }} else {{ None }} }}",
-            from_field(world, &element, "n.fields[0]")?
+            "{{ let d = {field}.data(); let n = d.force(); if n.constructor.tag == {} {{ Some({}) }} else {{ None }} }}",
+            constructors.tag(&just),
+            from_field(world, constructors, &element, "n.fields[0]")?
         ),
         Shape::Either { left, right } => format!(
-            "{{ let d = {field}.data(); let n = d.force(); if n.constructor == {:?} {{ Ok({}) }} else {{ Err({}) }} }}",
-            right.0,
-            from_field(world, &right.1, "n.fields[0]")?,
-            from_field(world, &left.1, "n.fields[0]")?
+            "{{ let d = {field}.data(); let n = d.force(); if n.constructor.tag == {} {{ Ok({}) }} else {{ Err({}) }} }}",
+            constructors.tag(&right.0),
+            from_field(world, constructors, &right.1, "n.fields[0]")?,
+            from_field(world, constructors, &left.1, "n.fields[0]")?
         ),
         Shape::Function { .. } => {
             return Err(
@@ -2681,7 +2835,9 @@ fn from_field(world: &World<'_>, ty: &Ty, field: &str) -> Result<String, String>
             let components = fields
                 .iter()
                 .enumerate()
-                .map(|(index, field)| from_field(world, field, &format!("n.fields[{index}]")))
+                .map(|(index, field)| {
+                    from_field(world, constructors, field, &format!("n.fields[{index}]"))
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let components = match components.as_slice() {
                 [one] => format!("{one},"),
@@ -2694,6 +2850,7 @@ fn from_field(world: &World<'_>, ty: &Ty, field: &str) -> Result<String, String>
 
 fn api_function(
     world: &World<'_>,
+    constructors: &Constructors,
     adapter: &mut String,
     entry: &str,
     adapter_name: &str,
@@ -2730,7 +2887,10 @@ fn api_function(
             Ok(unpack(
                 world,
                 ty,
-                &format!("({})", into_field(world, ty, &format!("a{index}"))?),
+                &format!(
+                    "({})",
+                    into_field(world, constructors, ty, &format!("a{index}"))?
+                ),
             ))
         })
         .collect::<Result<Vec<_>, String>>()?
@@ -2740,18 +2900,15 @@ fn api_function(
         adapter,
         "pub fn {name}({parameters}) -> {} {{\n    {INSTALL_LITERALS}\n    let r = {result};\n    {}\n}}",
         rust_type(world, entry_result)?,
-        from_field(world, entry_result, "r")?
+        from_field(world, constructors, entry_result, "r")?
     )
     .unwrap();
     Ok(())
 }
 
-fn string_names(world: &World<'_>) -> Result<String, String> {
+fn string_names(world: &World<'_>, constructors: &Constructors) -> Result<String, String> {
     let (nil, cons, character) = data::string_layouts(world)?;
-    Ok(format!(
-        "HStringNames {{ cons: {:?}, nil: {:?}, character: {:?} }}",
-        cons.name, nil.name, character.name
-    ))
+    Ok(constructors.string_names(&cons.name, &nil.name, &character.name))
 }
 
 /// The `show` functions a result needs, one per type, named by position.
@@ -2877,7 +3034,12 @@ fn diverges(operation: &Operation) -> bool {
 /// The name of a generated `fn(&HField, u8) -> String` that renders a value
 /// of `ty` as GHC's `show` does for `Int`, `Char`, `String`, lists, tuples and
 /// derived `Show` over positional constructors.
-fn show_function(world: &World<'_>, ty: &Ty, shows: &mut Shows) -> Result<String, String> {
+fn show_function(
+    world: &World<'_>,
+    constructors: &Constructors,
+    ty: &Ty,
+    shows: &mut Shows,
+) -> Result<String, String> {
     let ty = represented(world, ty);
     let key = ty.render();
     if let Some(name) = shows.named.get(&key) {
@@ -2890,19 +3052,19 @@ fn show_function(world: &World<'_>, ty: &Ty, shows: &mut Shows) -> Result<String
     } else if ty.is_char() {
         format!(
             "{{ let _ = precedence; h2r_rt::show_char(&value.data(), {}) }}",
-            string_names(world)?
+            string_names(world, constructors)?
         )
     } else if ty.list_elem().is_some_and(Ty::is_char) {
         format!(
             "{{ let _ = precedence; h2r_rt::show_string(&value.data(), {}) }}",
-            string_names(world)?
+            string_names(world, constructors)?
         )
     } else if let Some(element) = ty.list_elem() {
         let (nil, _) = data::list_layouts(world, element)?;
-        let item = show_function(world, element, shows)?;
+        let item = show_function(world, constructors, element, shows)?;
         format!(
-            "{{ let _ = precedence; let mut out = String::from(\"[\"); let mut cell = value.data(); loop {{ let node = cell.force(); if node.constructor == {:?} {{ break; }} if out.len() > 1 {{ out.push(','); }} out.push_str(&{item}(&node.fields[0], 0)); cell = node.fields[1].data(); }} out.push(']'); out }}",
-            nil.name
+            "{{ let _ = precedence; let mut out = String::from(\"[\"); let mut cell = value.data(); loop {{ let node = cell.force(); if node.constructor.tag == {} {{ break; }} if out.len() > 1 {{ out.push(','); }} out.push_str(&{item}(&node.fields[0], 0)); cell = node.fields[1].data(); }} out.push(']'); out }}",
+            constructors.tag(&nil.name)
         )
     } else if data::carrier(world, &ty) == Some(data::Carrier::Data) {
         let family = data::family(world, &ty)?;
@@ -2922,7 +3084,7 @@ fn show_function(world: &World<'_>, ty: &Ty, shows: &mut Shows) -> Result<String
                         "CLI adapter cannot show the unlifted field of {occ}"
                     ));
                 }
-                let show = show_function(world, field, shows)?;
+                let show = show_function(world, constructors, field, shows)?;
                 fields.push(format!(
                     "{show}(&node.fields[{index}], {})",
                     if tuple { 0 } else { 11 }
@@ -2948,10 +3110,10 @@ fn show_function(world: &World<'_>, ty: &Ty, shows: &mut Shows) -> Result<String
                     "CLI adapter cannot show the infix constructor {occ}"
                 ));
             };
-            write!(arms, "{:?} => {text}, ", constructor.name).unwrap();
+            write!(arms, "{} => {text}, ", constructors.tag(&constructor.name)).unwrap();
         }
         format!(
-            "{{ let _ = precedence; let data = value.data(); let node = data.force(); match node.constructor {{ {arms}other => panic!(\"show: {{other}} is not in this family\") }} }}"
+            "{{ let _ = precedence; let data = value.data(); let node = data.force(); match node.constructor.tag {{ {arms}_ => panic!(\"show: {{}} is not in this family\", node.constructor) }} }}"
         )
     } else {
         return Err(format!("CLI adapter cannot show a value of type {key}"));

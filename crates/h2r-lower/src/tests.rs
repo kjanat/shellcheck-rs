@@ -3659,7 +3659,7 @@ fn data_constructors_and_cases_close_source_accounting_and_renumber() {
         );
         let rust = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
         assert!(rust.contains("HData::ready"));
-        assert!(rust.contains("let constructor = node.constructor; match constructor"));
+        assert!(rust.contains("match node.constructor.tag {"));
         check_scalar_renumbering(modules);
     }
 }
@@ -4391,6 +4391,150 @@ fn the_split_program_has_one_table_in_its_entry_crate() {
         assert!(!member.source.contains("static LITERALS"));
         assert!(!member.source.contains("HAddr::literal(b"));
         assert!(member.source.contains("HAddr::literal("));
+    }
+}
+
+/// `Main.main` and `Lib.target` each build and match `Pair`, so two functions
+/// (two crates, when split) name the same constructor.
+fn constructor_sharing_world() -> Vec<Module> {
+    let case = || data_case(data_construct("Pair", vec![lvar("x"), lvar("y")]), false);
+    let target = || {
+        app(
+            app(gvar(&sn("Lib", "target"), "target"), lvar("x")),
+            lvar("y"),
+        )
+    };
+    let mut modules = data_world(int_op("+#", target(), case()));
+    let mut lib = module(
+        "Lib",
+        vec![(
+            binder(&sn("Lib", "target"), "target", "target"),
+            lam("x", lam("y", case())),
+        )],
+        json!({}),
+    );
+    lib.types = modules[0].types.clone();
+    let owner = lib.top[0].pairs[0].binder;
+    lib.binders[owner as usize].ty = 1;
+    lib.binders[owner as usize].arity = Some(2);
+    for symbol in ["+#", "-#"] {
+        lib.ids
+            .extend(primitive_emission_world(symbol)[0].ids.clone());
+    }
+    modules[1] = lib;
+    modules
+}
+
+/// The tag a crate gives `name` in its constructor statics, if it has one.
+fn tag_of(source: &str, name: &str) -> Option<u32> {
+    let key = format!("name: {:?}, tag: ", sn("Main", name));
+    let rest = &source[source.find(&key)? + key.len()..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    Some(digits.parse().unwrap())
+}
+
+#[test]
+fn a_match_switches_on_the_tag_and_never_compares_names() {
+    let modules = constructor_sharing_world();
+    let source = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
+    let pair = tag_of(&source, "Pair").expect("Pair has a static");
+    assert_ne!(Some(pair), tag_of(&source, "Empty"));
+    // The match scrutinises the integer and has an integer arm; no arm is a name.
+    assert!(source.contains("match node.constructor.tag {"));
+    assert!(source.contains(&format!(" {pair} => {{ let f0 = node.fields[0]")));
+    assert!(!source.contains("let constructor = node.constructor"));
+    assert!(!source.contains(&format!("{:?} =>", sn("Main", "Pair"))));
+    // The catch-all stays.
+    assert!(source.contains("_ => panic!(\"invalid constructor family\")"));
+}
+
+#[test]
+fn constructors_are_built_from_their_static_and_the_table_is_written_once() {
+    let modules = constructor_sharing_world();
+    let source = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
+    let pair = tag_of(&source, "Pair").unwrap();
+    // Two functions build `Pair` and match it; one static serves both.
+    assert_eq!(
+        source
+            .matches(&format!(
+                "static C_{pair}: HConstructor = HConstructor {{ name: {:?}, tag: {pair} }};",
+                sn("Main", "Pair")
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        source.matches(&format!("HData::ready(&C_{pair}, ")).count(),
+        2
+    );
+    assert_eq!(
+        source.matches("static C_").count(),
+        1 + usize::from(tag_of(&source, "Empty").is_some())
+    );
+    // No site names a constructor by a string any more.
+    assert!(!source.contains(&format!("HData::ready({:?}", sn("Main", "Pair"))));
+}
+
+#[test]
+fn every_crate_of_a_split_program_gives_one_name_the_same_tag() {
+    let modules = constructor_sharing_world();
+    // A budget of zero puts each function in a crate of its own.
+    let split = crate::emit::emit_entry_split(
+        &modules,
+        &[&sn("Main", "main")],
+        0,
+        crate::emit::Driver::Print,
+    )
+    .unwrap();
+    assert_eq!(split.crates.len(), 2);
+    let tags: Vec<Option<u32>> = split
+        .crates
+        .iter()
+        .map(|member| tag_of(&member.source, "Pair"))
+        .collect();
+    assert!(tags[0].is_some(), "{}", split.crates[0].source);
+    assert_eq!(tags[0], tags[1]);
+    let pair = tags[0].unwrap();
+    for member in &split.crates {
+        // Each crate writes the one static it uses, privately, and builds from it.
+        assert_eq!(
+            member.source.matches(&format!("static C_{pair}:")).count(),
+            1
+        );
+        assert!(!member.source.contains(&format!("pub static C_{pair}")));
+        assert!(member.source.contains(&format!("HData::ready(&C_{pair}, ")));
+        assert!(member.source.contains("match node.constructor.tag {"));
+    }
+    // The entry crate's adapter names no constructor, so it carries no statics.
+    assert!(!split.main.contains("static C_"));
+}
+
+#[test]
+fn the_constructor_numbering_is_shared_and_dense() {
+    let constructors = crate::emit::Constructors::default();
+    assert_eq!(constructors.tag("Just"), 0);
+    assert_eq!(constructors.tag("Nothing"), 1);
+    assert_eq!(constructors.tag("Just"), 0);
+    assert_eq!(constructors.reference("Nothing"), "&C_1");
+    // A crate gets statics for what it mentions and for nothing else.
+    let table = constructors.table("let x = HData::ready(&C_1, []); let C_10 = 1; AC_0");
+    assert_eq!(
+        table,
+        "static C_1: HConstructor = HConstructor { name: \"Nothing\", tag: 1 };\n"
+    );
+}
+
+#[test]
+fn the_runtime_text_never_spells_a_constructor_static() {
+    // `Constructors::table` scans whole programs, runtime included.
+    let runtime = crate::emit::runtime_source();
+    for (at, _) in runtime.match_indices("C_") {
+        let before = runtime[..at].chars().next_back();
+        let after = runtime[at + 2..].chars().next();
+        assert!(
+            before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+                || !after.is_some_and(|c| c.is_ascii_digit())
+        );
     }
 }
 

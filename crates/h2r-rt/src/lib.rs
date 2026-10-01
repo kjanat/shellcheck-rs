@@ -255,9 +255,40 @@ impl Int {
 #[derive(Clone)]
 pub struct Data(Shared<Node>);
 
+/// A data constructor as the generated code knows it: its name, for
+/// diagnostics and `show`, and one `u32` the emitter numbers per name across
+/// the whole program, which is all that pattern matches and the runtime's own
+/// checks compare. The runtime is compiled into every generated crate, so a
+/// constructor reached through two crates is two statics; the tag, never the
+/// address, is what identifies it.
+pub struct Constructor {
+    pub name: &'static str,
+    pub tag: u32,
+}
+
+impl PartialEq for Constructor {
+    fn eq(&self, other: &Self) -> bool {
+        self.tag == other.tag
+    }
+}
+
+impl Eq for Constructor {}
+
+impl std::fmt::Debug for Constructor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name)
+    }
+}
+
+impl std::fmt::Display for Constructor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name)
+    }
+}
+
 #[derive(Clone)]
 pub struct Node {
-    pub constructor: &'static str,
+    pub constructor: &'static Constructor,
     pub fields: Fields,
 }
 
@@ -835,6 +866,62 @@ impl Closure {
     }
 }
 
+/// The constructors the unit tests build values from. The emitter numbers the
+/// real ones; these tags only have to differ.
+#[cfg(test)]
+mod fixtures {
+    use super::Constructor;
+
+    macro_rules! fixtures {
+        ($($id:ident $name:literal $tag:literal),* $(,)?) => {
+            $(pub const $id: &Constructor = &Constructor { name: $name, tag: $tag };)*
+            /// The fixture called `name`.
+            pub fn c(name: &str) -> &'static Constructor {
+                match name {
+                    $($name => $id,)*
+                    other => panic!("no fixture constructor {other}"),
+                }
+            }
+        };
+    }
+
+    fixtures! {
+        CONS ":" 1, NIL "[]" 2, CHAR "C#" 3, TRUE "True" 4, FALSE "False" 5,
+        LT "LT" 6, EQ "EQ" 7, GT "GT" 8,
+        EMPTY_STACK "EmptyCallStack" 9, PUSH_STACK "PushCallStack" 10,
+        FREEZE_STACK "FreezeCallStack" 11, SRC_LOC "SrcLoc" 12,
+        PAIR "Pair" 13, LIST_NIL "Nil" 14, LIST_CONS "Cons" 15,
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+
+    #[test]
+    fn constructors_are_the_same_when_their_tags_are_the_same() {
+        // Two crates each carry their own static for one constructor.
+        static IN_ONE: Constructor = Constructor {
+            name: "Just",
+            tag: 7,
+        };
+        static IN_ANOTHER: Constructor = Constructor {
+            name: "Just",
+            tag: 7,
+        };
+        static OTHER: Constructor = Constructor {
+            name: "Nothing",
+            tag: 8,
+        };
+        assert!(!std::ptr::eq(&IN_ONE, &IN_ANOTHER));
+        assert_eq!(&IN_ONE, &IN_ANOTHER);
+        assert_ne!(&IN_ONE, &OTHER);
+        assert_eq!(format!("{IN_ONE} {IN_ONE:?}"), "Just Just");
+        let node = Data::ready(&IN_ONE, []);
+        assert_eq!(node.force().constructor, &IN_ANOTHER);
+    }
+}
+
 #[cfg(test)]
 mod closure_tests {
     use super::*;
@@ -1017,7 +1104,7 @@ mod closure_tests {
         let knot = Field::pending();
         let tail = knot.clone();
         knot.fill(Field::Data(Data::defer(move || Node {
-            constructor: ":",
+            constructor: fixtures::c(":"),
             fields: [Field::Int64(1), tail].into(),
         })));
         let knotted = knot.data();
@@ -1042,7 +1129,7 @@ impl Data {
     pub fn fill(&self, value: Self) {
         self.0.fill(move || Thunk::Indirect(value.0));
     }
-    pub fn ready(constructor: &'static str, fields: impl Into<Fields>) -> Self {
+    pub fn ready(constructor: &'static Constructor, fields: impl Into<Fields>) -> Self {
         Self(Shared::ready(Node {
             constructor,
             fields: fields.into(),
@@ -1122,9 +1209,9 @@ fn unpack_at(
 /// come from the compiler's own layout evidence, not from this crate.
 #[derive(Clone, Copy)]
 pub struct StringNames {
-    pub cons: &'static str,
-    pub nil: &'static str,
-    pub character: &'static str,
+    pub cons: &'static Constructor,
+    pub nil: &'static Constructor,
+    pub character: &'static Constructor,
 }
 
 /// Render a finite Haskell String without forcing anything beyond its spine
@@ -1175,10 +1262,10 @@ pub fn raise_error(message: Data, names: StringNames) -> ! {
 /// The names of base's `CallStack` and `SrcLoc` constructors.
 #[derive(Clone, Copy)]
 pub struct CallStackNames {
-    pub empty: &'static str,
-    pub push: &'static str,
-    pub freeze: &'static str,
-    pub location: &'static str,
+    pub empty: &'static Constructor,
+    pub push: &'static Constructor,
+    pub freeze: &'static Constructor,
+    pub location: &'static Constructor,
 }
 
 /// The next `PushCallStack` frame, through any `FreezeCallStack`.
@@ -1276,8 +1363,8 @@ pub fn unpack_string(
 /// The names of a list's two cells, from the compiler's layout evidence.
 #[derive(Clone, Copy)]
 pub struct ListNames {
-    pub cons: &'static str,
-    pub nil: &'static str,
+    pub cons: &'static Constructor,
+    pub nil: &'static Constructor,
 }
 
 /// `GHC.Base.(++)`: the left spine copied onto the right one, lazily.
@@ -1481,8 +1568,8 @@ pub enum Equality {
 
 #[derive(Clone, Copy)]
 pub struct Truth {
-    pub false_: &'static str,
-    pub true_: &'static str,
+    pub false_: &'static Constructor,
+    pub true_: &'static Constructor,
 }
 
 impl Truth {
@@ -1601,9 +1688,9 @@ pub fn is_prefix_of(
 
 #[derive(Clone, Copy)]
 pub struct Orderings {
-    pub lt: &'static str,
-    pub eq: &'static str,
-    pub gt: &'static str,
+    pub lt: &'static Constructor,
+    pub eq: &'static Constructor,
+    pub gt: &'static Constructor,
 }
 
 /// `Ord [a]`'s `compare` over `Ord Char`'s default `compare`, which orders `Char#` as an unsigned word.
@@ -1853,8 +1940,8 @@ mod append_tests {
     use super::*;
 
     const NAMES: ListNames = ListNames {
-        cons: ":",
-        nil: "[]",
+        cons: fixtures::CONS,
+        nil: fixtures::NIL,
     };
 
     fn ints(values: &[i64]) -> Data {
@@ -1882,9 +1969,9 @@ mod append_tests {
     #[test]
     fn error_messages_preserve_empty_unicode_nul_and_newlines() {
         const NAMES: StringNames = StringNames {
-            cons: ":",
-            nil: "[]",
-            character: "C#",
+            cons: fixtures::CONS,
+            nil: fixtures::NIL,
+            character: fixtures::CHAR,
         };
         for (bytes, expected) in [
             (&b"\0"[..], ""),
@@ -1901,9 +1988,9 @@ mod append_tests {
     #[test]
     fn error_messages_force_computed_spines_and_characters_once() {
         const NAMES: StringNames = StringNames {
-            cons: ":",
-            nil: "[]",
-            character: "C#",
+            cons: fixtures::CONS,
+            nil: fixtures::NIL,
+            character: fixtures::CHAR,
         };
         use std::cell::Cell;
         let forced = Rc::new(Cell::new(0));
@@ -1933,14 +2020,14 @@ mod append_tests {
     }
 
     const STACK: CallStackNames = CallStackNames {
-        empty: "EmptyCallStack",
-        push: "PushCallStack",
-        freeze: "FreezeCallStack",
-        location: "SrcLoc",
+        empty: fixtures::EMPTY_STACK,
+        push: fixtures::PUSH_STACK,
+        freeze: fixtures::FREEZE_STACK,
+        location: fixtures::SRC_LOC,
     };
 
     fn located(file: &str, line: i64, column: i64) -> Data {
-        let nil = || Data::ready("[]", []);
+        let nil = || Data::ready(fixtures::c("[]"), []);
         Data::ready(
             STACK.location,
             vec![
@@ -1959,7 +2046,7 @@ mod append_tests {
         Data::ready(
             STACK.push,
             [
-                Field::Data(string(function, Data::ready("[]", []))),
+                Field::Data(string(function, Data::ready(fixtures::c("[]"), []))),
                 Field::Data(location),
                 Field::Data(rest),
             ],
@@ -1968,7 +2055,7 @@ mod append_tests {
 
     #[test]
     fn error_messages_render_the_call_stack_as_base_shows_it() {
-        let nil = || Data::ready("[]", []);
+        let nil = || Data::ready(fixtures::c("[]"), []);
         let empty = || Data::ready(STACK.empty, []);
         let stack = Data::ready(
             STACK.freeze,
@@ -2016,7 +2103,11 @@ mod append_tests {
         Closure::ready(1, move |a| {
             calls.set(calls.get() + 1);
             Field::Data(Data::ready(
-                if a[0].int64() > 0 { "True" } else { "False" },
+                if a[0].int64() > 0 {
+                    fixtures::TRUE
+                } else {
+                    fixtures::FALSE
+                },
                 [],
             ))
         })
@@ -2167,9 +2258,9 @@ mod append_tests {
     fn string(text: &str, tail: Data) -> Data {
         text.chars().rev().fold(tail, |tail, c| {
             Data::ready(
-                ":",
+                fixtures::c(":"),
                 [
-                    Field::Data(Data::ready("C#", [Field::Char(c as i64)])),
+                    Field::Data(Data::ready(fixtures::c("C#"), [Field::Char(c as i64)])),
                     Field::Data(tail),
                 ],
             )
@@ -2177,7 +2268,7 @@ mod append_tests {
     }
 
     fn holds(value: Data) -> bool {
-        match value.force().constructor {
+        match value.force().constructor.name {
             "True" => true,
             "False" => false,
             other => panic!("not a Bool: {other}"),
@@ -2185,18 +2276,18 @@ mod append_tests {
     }
 
     const STRING: StringNames = StringNames {
-        cons: ":",
-        nil: "[]",
-        character: "C#",
+        cons: fixtures::CONS,
+        nil: fixtures::NIL,
+        character: fixtures::CHAR,
     };
     const TRUTH: Truth = Truth {
-        false_: "False",
-        true_: "True",
+        false_: fixtures::FALSE,
+        true_: fixtures::TRUE,
     };
 
     #[test]
     fn strings_and_characters_show_as_ghc_shows_them() {
-        let nil = || Data::ready("[]", []);
+        let nil = || Data::ready(fixtures::c("[]"), []);
         for (text, shown) in [
             ("", "\"\""),
             ("a\"b\\c", "\"a\\\"b\\\\c\""),
@@ -2262,20 +2353,21 @@ mod append_tests {
     #[test]
     fn string_comparison_is_unsigned_and_stops_at_the_first_difference() {
         const ORDER: Orderings = Orderings {
-            lt: "LT",
-            eq: "EQ",
-            gt: "GT",
+            lt: fixtures::LT,
+            eq: fixtures::EQ,
+            gt: fixtures::GT,
         };
-        let nil = || Data::ready("[]", []);
+        let nil = || Data::ready(fixtures::c("[]"), []);
         let order = |left, right| {
             compare_lists(left, right, STRING, ORDER)
                 .force()
                 .constructor
+                .name
         };
         let negative = Data::ready(
-            ":",
+            fixtures::c(":"),
             [
-                Field::Data(Data::ready("C#", [Field::Char(-1)])),
+                Field::Data(Data::ready(fixtures::c("C#"), [Field::Char(-1)])),
                 Field::Data(nil()),
             ],
         );
@@ -2290,7 +2382,7 @@ mod append_tests {
 
     #[test]
     fn list_predicates_stop_where_the_library_definitions_stop() {
-        let nil = || Data::ready("[]", []);
+        let nil = || Data::ready(fixtures::c("[]"), []);
         assert!(!holds(equal_lists(
             string("λa", untouchable()),
             string("λb", untouchable()),
@@ -2334,7 +2426,7 @@ mod append_tests {
             TRUTH
         )));
         let words = Data::ready(
-            ":",
+            fixtures::c(":"),
             [Field::Data(string("ab", nil())), Field::Data(untouchable())],
         );
         assert!(holds(elem_list(
@@ -2349,9 +2441,9 @@ mod append_tests {
     #[test]
     fn error_diagnostics_match_unchecked_ghc_encoding_and_drop_surrogates() {
         let names = StringNames {
-            cons: ":",
-            nil: "[]",
-            character: "C#",
+            cons: fixtures::CONS,
+            nil: fixtures::NIL,
+            character: fixtures::CHAR,
         };
         for (code, expected) in [
             (-1, &b"\xef\xbf\xbf\xbf"[..]),
@@ -2440,9 +2532,9 @@ mod string_tests {
     use super::*;
 
     const NAMES: StringNames = StringNames {
-        cons: ":",
-        nil: "[]",
-        character: "C#",
+        cons: fixtures::CONS,
+        nil: fixtures::NIL,
+        character: fixtures::CHAR,
     };
 
     fn collect(list: &Data) -> Vec<i64> {
@@ -2524,14 +2616,14 @@ mod tests {
         let field = Int::defer(|| panic!("tag inspection forced a lazy field"));
         let retained = field.clone();
         let data = Data::defer(move || Node {
-            constructor: "Pair",
+            constructor: fixtures::c("Pair"),
             fields: [Field::Int(field)].into(),
         });
         let copy = data.clone();
         assert!(data.shares_with(&copy));
         assert!(!copy.is_evaluated());
         let node = copy.force();
-        assert_eq!(node.constructor, "Pair");
+        assert_eq!(node.constructor.name, "Pair");
         assert!(data.is_evaluated());
         assert!(!retained.is_evaluated());
         assert!(node.fields[0].int().shares_with(&retained));
@@ -2539,12 +2631,15 @@ mod tests {
 
     #[test]
     fn recursive_datatype_carriers_hold_finite_nested_values() {
-        let tail = Data::ready("Nil", []);
-        let list = Data::ready("Cons", [Field::Int64(42), Field::Data(tail.clone())]);
+        let tail = Data::ready(fixtures::c("Nil"), []);
+        let list = Data::ready(
+            fixtures::c("Cons"),
+            [Field::Int64(42), Field::Data(tail.clone())],
+        );
         let node = list.force();
         assert_eq!(node.fields[0].int64(), 42);
         assert!(node.fields[1].data().shares_with(&tail));
-        assert_eq!(node.fields[1].data().force().constructor, "Nil");
+        assert_eq!(node.fields[1].data().force().constructor.name, "Nil");
     }
 
     #[test]
@@ -2588,7 +2683,7 @@ mod tests {
 
     fn countdown(n: u32, entered: Rc<Cell<u32>>) -> Data {
         if n == 0 {
-            return Data::ready("Nil", []);
+            return Data::ready(fixtures::c("Nil"), []);
         }
         Data::defer_to(move || {
             entered.set(entered.get() + 1);
@@ -2600,9 +2695,9 @@ mod tests {
     fn a_million_indirections_force_in_constant_stack() {
         let entered = Rc::new(Cell::new(0));
         let chain = countdown(1_000_000, entered.clone());
-        assert_eq!(chain.force().constructor, "Nil");
+        assert_eq!(chain.force().constructor.name, "Nil");
         assert_eq!(entered.get(), 1_000_000);
-        assert_eq!(chain.force().constructor, "Nil");
+        assert_eq!(chain.force().constructor.name, "Nil");
         assert_eq!(entered.get(), 1_000_000);
     }
 
@@ -2612,9 +2707,9 @@ mod tests {
         let middle = countdown(3, entered.clone());
         let held = middle.clone();
         let top = Data::defer_to(move || middle);
-        assert_eq!(top.force().constructor, "Nil");
+        assert_eq!(top.force().constructor.name, "Nil");
         assert!(held.is_evaluated());
-        assert_eq!(held.force().constructor, "Nil");
+        assert_eq!(held.force().constructor.name, "Nil");
         assert_eq!(entered.get(), 3);
     }
 

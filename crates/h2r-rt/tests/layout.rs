@@ -17,8 +17,9 @@ fn value_sizes() {
     // Field is bounded by its largest payload (every payload is 8 bytes: Addr is a u32 literal
     // index and a u32 offset) plus a tag.
     assert!(size_of::<Field>() <= 16, "Field is {}", size_of::<Field>());
-    // A node: constructor name (16) + inline fields (3 x Field + tag).
+    // A node: a pointer to its constructor (8) + inline fields (3 x Field + tag).
     assert!(size_of::<Node>() <= 64, "Node is {}", size_of::<Node>());
+    assert_eq!(size_of::<Node>(), 56, "Node is {}", size_of::<Node>());
     eprintln!(
         "Int {} Data {} Closure {} Field {} Node {}",
         size_of::<Int>(),
