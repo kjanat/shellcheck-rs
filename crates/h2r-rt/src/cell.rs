@@ -22,17 +22,16 @@
 //! Code<T>>>` with the trait object's vtable moved from a fat pointer into the
 //! allocation, and the unused weak count dropped.
 //!
-//! The `unsafe` in this crate is in this file, in four places: the
+//! All of the `unsafe` in this crate is in this file, in four places: the
 //! cast from `Header<T>` back to `Block<T, C>` in the vtable functions, the
 //! free of a block, the shared reference to the header, and `take_unique`.
-//! The only other `unsafe` is the inline buffer of `Args`, in `args.rs`.
 
 use std::cell::{Cell, OnceCell};
 use std::fmt;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use super::{Args, Field, Step};
+use super::{Field, Step};
 
 /// A call-by-need binding that lives on the stack or in a field rather than
 /// behind a pointer. [`Shared`] is the heap form the runtime uses.
@@ -51,12 +50,12 @@ pub trait Code<T> {
     /// captures and function pointers, and the closure's value says how to use
     /// them. Only such tails override this; the cell that holds one is created
     /// already evaluated, so `enter` is never reached for it.
-    fn call(&self, _arguments: Args) -> Field {
+    fn call(&self, _arguments: Vec<Field>) -> Field {
         unreachable!("h2r-rt: this cell's code is not a function body")
     }
 
     /// As [`Code::call`], for the entry that continues as a tail call.
-    fn call_enter(&self, _arguments: Args) -> Step<i64> {
+    fn call_enter(&self, _arguments: Vec<Field>) -> Step<i64> {
         unreachable!("h2r-rt: this cell's code has no entry")
     }
 
@@ -220,8 +219,8 @@ type Share<T> = unsafe fn(NonNull<Header<T>>) -> T;
 struct VTable<T> {
     enter: unsafe fn(NonNull<Header<T>>) -> Option<Thunk<T>>,
     fill: unsafe fn(NonNull<Header<T>>, Deferred<T>) -> bool,
-    call: unsafe fn(NonNull<Header<T>>, Args) -> Field,
-    call_enter: unsafe fn(NonNull<Header<T>>, Args) -> Step<i64>,
+    call: unsafe fn(NonNull<Header<T>>, Vec<Field>) -> Field,
+    call_enter: unsafe fn(NonNull<Header<T>>, Vec<Field>) -> Step<i64>,
     /// Present only for code with `Code::shares`.
     share: Option<Share<T>>,
     free: unsafe fn(NonNull<Header<T>>),
@@ -263,12 +262,12 @@ impl<T: 'static, C: Code<T> + 'static> Block<T, C> {
         unsafe { Self::code(header) }.fill(code)
     }
 
-    unsafe fn call(header: NonNull<Header<T>>, arguments: Args) -> Field {
+    unsafe fn call(header: NonNull<Header<T>>, arguments: Vec<Field>) -> Field {
         // SAFETY: the contract of the vtable.
         unsafe { Self::code(header) }.call(arguments)
     }
 
-    unsafe fn call_enter(header: NonNull<Header<T>>, arguments: Args) -> Step<i64> {
+    unsafe fn call_enter(header: NonNull<Header<T>>, arguments: Vec<Field>) -> Step<i64> {
         // SAFETY: the contract of the vtable.
         unsafe { Self::code(header) }.call_enter(arguments)
     }
@@ -380,13 +379,13 @@ impl<T> Shared<T> {
     }
 
     /// Call this cell's code tail as a function body (see [`Code::call`]).
-    pub fn call(&self, arguments: Args) -> Field {
+    pub fn call(&self, arguments: Vec<Field>) -> Field {
         // SAFETY: as in `fill`.
         unsafe { (self.header().vtable().call)(self.ptr, arguments) }
     }
 
     /// Call this cell's code tail as a function entry (see [`Code::call_enter`]).
-    pub fn call_enter(&self, arguments: Args) -> Step<i64> {
+    pub fn call_enter(&self, arguments: Vec<Field>) -> Step<i64> {
         // SAFETY: as in `fill`.
         unsafe { (self.header().vtable().call_enter)(self.ptr, arguments) }
     }

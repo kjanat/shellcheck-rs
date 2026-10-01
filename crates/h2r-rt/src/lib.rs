@@ -136,12 +136,9 @@ impl Bytes {
     }
 }
 
-mod args;
 mod cell;
 
 // Public API of the crate; unused when the runtime is inlined as a private module.
-#[allow(unused_imports)]
-pub use self::args::Args;
 #[allow(unused_imports)]
 pub use self::cell::{Code, Deferred, Lazy, Shared, Thunk, shared};
 
@@ -211,11 +208,11 @@ suspensions! {
     delay16 step16(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N, o: O, p: P);
 }
 
-pub fn apply_later<T: Suspend>(callee: Closure, arguments: Args, read: fn(&Field) -> T) -> T {
+pub fn apply_later<T: Suspend>(callee: Closure, arguments: Vec<Field>, read: fn(&Field) -> T) -> T {
     T::suspend(move || read(&callee.apply(arguments)))
 }
 
-pub fn apply_step(callee: Closure, arguments: Args, read: fn(&Field) -> i64) -> Step<i64> {
+pub fn apply_step(callee: Closure, arguments: Vec<Field>, read: fn(&Field) -> i64) -> Step<i64> {
     Step::Next(Box::new(move || match callee.apply_tail(arguments) {
         Tail::Enter(step) => step,
         Tail::Value(value) => Step::Done(read(&value)),
@@ -568,7 +565,7 @@ enum Kind {
     /// arguments already given, fewer than the arity.
     Partial {
         parent: Closure,
-        supplied: Box<[Field]>,
+        supplied: Vec<Field>,
     },
     /// The value of a thunk cell that evaluated to the closure `target`, a
     /// cell whose own value is `Inline` or `Partial`, never a `Forward`. Its
@@ -597,14 +594,14 @@ impl ClosureCode {
 
 /// The code tail of `Closure::bind`: a known function and its captures.
 struct Bound<C> {
-    code: fn(&C, Args) -> Field,
+    code: fn(&C, Vec<Field>) -> Field,
     captures: C,
 }
 
 /// The code tail of `Closure::bind_entering`.
 struct BoundEntering<C> {
-    code: fn(&C, Args) -> Field,
-    enter: fn(&C, Args) -> Step<i64>,
+    code: fn(&C, Vec<Field>) -> Field,
+    enter: fn(&C, Vec<Field>) -> Step<i64>,
     captures: C,
 }
 
@@ -639,38 +636,38 @@ macro_rules! never_entered {
 
 impl<C: 'static> Code<ClosureCode> for Bound<C> {
     never_entered!();
-    fn call(&self, arguments: Args) -> Field {
+    fn call(&self, arguments: Vec<Field>) -> Field {
         (self.code)(&self.captures, arguments)
     }
 }
 
 impl<C: 'static> Code<ClosureCode> for BoundEntering<C> {
     never_entered!();
-    fn call(&self, arguments: Args) -> Field {
+    fn call(&self, arguments: Vec<Field>) -> Field {
         (self.code)(&self.captures, arguments)
     }
-    fn call_enter(&self, arguments: Args) -> Step<i64> {
+    fn call_enter(&self, arguments: Vec<Field>) -> Step<i64> {
         (self.enter)(&self.captures, arguments)
     }
 }
 
-impl<F: Fn(Args) -> Field + 'static> Code<ClosureCode> for Boxed<F> {
+impl<F: Fn(Vec<Field>) -> Field + 'static> Code<ClosureCode> for Boxed<F> {
     never_entered!();
-    fn call(&self, arguments: Args) -> Field {
+    fn call(&self, arguments: Vec<Field>) -> Field {
         (self.0)(arguments)
     }
 }
 
 impl<F, G> Code<ClosureCode> for BoxedEntering<F, G>
 where
-    F: Fn(Args) -> Field + 'static,
-    G: Fn(Args) -> Step<i64> + 'static,
+    F: Fn(Vec<Field>) -> Field + 'static,
+    G: Fn(Vec<Field>) -> Step<i64> + 'static,
 {
     never_entered!();
-    fn call(&self, arguments: Args) -> Field {
+    fn call(&self, arguments: Vec<Field>) -> Field {
         (self.code)(arguments)
     }
-    fn call_enter(&self, arguments: Args) -> Step<i64> {
+    fn call_enter(&self, arguments: Vec<Field>) -> Step<i64> {
         (self.enter)(arguments)
     }
 }
@@ -698,7 +695,7 @@ impl<R> Step<R> {
 }
 
 impl Closure {
-    pub fn ready(arity: usize, code: impl Fn(Args) -> Field + 'static) -> Self {
+    pub fn ready(arity: usize, code: impl Fn(Vec<Field>) -> Field + 'static) -> Self {
         Self(Shared::ready_with(
             ClosureCode::inline(arity, false),
             Boxed(code),
@@ -706,8 +703,8 @@ impl Closure {
     }
     pub fn entering(
         arity: usize,
-        code: impl Fn(Args) -> Field + 'static,
-        enter: impl Fn(Args) -> Step<i64> + 'static,
+        code: impl Fn(Vec<Field>) -> Field + 'static,
+        enter: impl Fn(Vec<Field>) -> Step<i64> + 'static,
     ) -> Self {
         Self(Shared::ready_with(
             ClosureCode::inline(arity, true),
@@ -715,7 +712,7 @@ impl Closure {
         ))
     }
     /// A known function and its captures: one allocation, the cell.
-    pub fn bind<C: 'static>(arity: usize, code: fn(&C, Args) -> Field, captures: C) -> Self {
+    pub fn bind<C: 'static>(arity: usize, code: fn(&C, Vec<Field>) -> Field, captures: C) -> Self {
         Self(Shared::ready_with(
             ClosureCode::inline(arity, false),
             Bound { code, captures },
@@ -723,8 +720,8 @@ impl Closure {
     }
     pub fn bind_entering<C: 'static>(
         arity: usize,
-        code: fn(&C, Args) -> Field,
-        enter: fn(&C, Args) -> Step<i64>,
+        code: fn(&C, Vec<Field>) -> Field,
+        enter: fn(&C, Vec<Field>) -> Step<i64>,
         captures: C,
     ) -> Self {
         Self(Shared::ready_with(
@@ -763,19 +760,19 @@ impl Closure {
         let (resolved, code) = self.resolve();
         match &code.kind {
             Kind::Inline => (resolved, &[], code),
-            Kind::Partial { parent, supplied } => (parent, &supplied[..], code),
+            Kind::Partial { parent, supplied } => (parent, supplied, code),
             Kind::Forward(_) => unreachable!("resolve follows forwards"),
         }
     }
-    pub fn apply_tail(&self, arguments: Args) -> Tail {
+    pub fn apply_tail(&self, arguments: Vec<Field>) -> Tail {
         let (parent, supplied, code) = self.split();
         let arity = code.arity as usize;
         if code.entry && supplied.len() + arguments.len() == arity {
             if supplied.is_empty() {
                 return Tail::Enter(parent.0.call_enter(arguments));
             }
-            let mut all = Args::with_capacity(arity);
-            all.extend_from_slice(supplied);
+            let mut all = Vec::with_capacity(arity);
+            all.extend(supplied.iter().cloned());
             all.extend(arguments);
             return Tail::Enter(parent.0.call_enter(all));
         }
@@ -787,7 +784,7 @@ impl Closure {
     pub fn is_evaluated(&self) -> bool {
         self.0.is_evaluated()
     }
-    pub fn apply(&self, mut arguments: Args) -> Field {
+    pub fn apply(&self, mut arguments: Vec<Field>) -> Field {
         let mut held;
         let mut current = self;
         loop {
@@ -798,17 +795,15 @@ impl Closure {
                 if arguments.is_empty() {
                     return Field::Closure(current.clone());
                 }
-                // What was supplied so far, and the new arguments, kept as a
-                // slice of exactly their size: the one allocation a partial
-                // application costs besides its cell. (Keeping them inline in
-                // the cell's value would make every closure cell bigger.)
+                // The first arguments of a closure nobody applied yet become
+                // its `supplied` as they are, vector and all.
                 let supplied = if supplied.is_empty() {
-                    arguments.into_boxed_slice()
+                    arguments
                 } else {
-                    let mut all = Args::with_capacity(supplied.len() + arguments.len());
-                    all.extend_from_slice(supplied);
+                    let mut all = Vec::with_capacity(supplied.len() + arguments.len());
+                    all.extend(supplied.iter().cloned());
                     all.extend(arguments);
-                    all.into_boxed_slice()
+                    all
                 };
                 return Field::Closure(Self(Shared::ready_with(
                     ClosureCode {
@@ -823,13 +818,13 @@ impl Closure {
                 )));
             }
             // The common case, a known-arity call of a closure nobody partially
-            // applied, hands the caller's arguments straight to the code.
+            // applied, hands the caller's vector straight to the code.
             if supplied.is_empty() && arguments.len() == missing {
                 return parent.0.call(arguments);
             }
-            let mut all = Args::with_capacity(arity);
-            all.extend_from_slice(supplied);
-            all.extend(arguments.take_front(missing));
+            let mut all = Vec::with_capacity(arity);
+            all.extend(supplied.iter().cloned());
+            all.extend(arguments.drain(..missing));
             let result = parent.0.call(all);
             if arguments.is_empty() {
                 return result;
@@ -858,18 +853,12 @@ mod closure_tests {
             counter.set(counter.get() + 1);
             42
         });
-        let partial = function.apply(Args::from([Field::Int(x)])).closure();
+        let partial = function.apply(vec![Field::Int(x)]).closure();
         assert_eq!(calls.get(), 0);
         assert_eq!(forced.get(), 0);
         for _ in 0..2 {
             let poison = Int::defer(|| panic!("unused argument forced"));
-            assert_eq!(
-                partial
-                    .apply(Args::from([Field::Int(poison)]))
-                    .int()
-                    .force(),
-                42
-            );
+            assert_eq!(partial.apply(vec![Field::Int(poison)]).int().force(), 42);
         }
         assert_eq!(calls.get(), 2);
         assert_eq!(forced.get(), 1);
@@ -884,8 +873,7 @@ mod closure_tests {
             }))
         });
         assert_eq!(
-            f.apply(Args::from([Field::Int64(20), Field::Int64(22)]))
-                .int64(),
+            f.apply(vec![Field::Int64(20), Field::Int64(22)]).int64(),
             42
         );
     }
@@ -899,35 +887,34 @@ mod closure_tests {
             Closure::ready(1, |args| args[0].clone())
         });
         assert!(!f.is_evaluated());
-        assert_eq!(f.clone().apply(Args::from([Field::Int64(1)])).int64(), 1);
-        assert_eq!(f.apply(Args::from([Field::Int64(2)])).int64(), 2);
+        assert_eq!(f.clone().apply(vec![Field::Int64(1)]).int64(), 1);
+        assert_eq!(f.apply(vec![Field::Int64(2)]).int64(), 2);
         assert_eq!(n.get(), 1);
     }
 
-    fn add((captured,): &(i64,), arguments: Args) -> Field {
+    fn add((captured,): &(i64,), arguments: Vec<Field>) -> Field {
         Field::Int64(captured + arguments[0].int64() + arguments[1].int64())
     }
 
     #[test]
     fn a_bound_closure_applies_partially_and_repeatedly_through_its_own_cell() {
         let function = Closure::bind(2, add, (40,));
-        let first = function.apply(Args::from([Field::Int64(1)])).closure();
+        let first = function.apply(vec![Field::Int64(1)]).closure();
         // A partial application of a partial application points at the cell
         // with the code, not at the partial application.
-        let again = first.apply(Args::new()).closure();
-        assert_eq!(again.apply(Args::from([Field::Int64(1)])).int64(), 42);
-        assert_eq!(first.apply(Args::from([Field::Int64(5)])).int64(), 46);
+        let again = first.apply(Vec::new()).closure();
+        assert_eq!(again.apply(vec![Field::Int64(1)]).int64(), 42);
+        assert_eq!(first.apply(vec![Field::Int64(5)]).int64(), 46);
         let wide = Closure::bind(
             3,
             |(): &(), a| Field::Int64(a[0].int64() * 100 + a[1].int64() * 10 + a[2].int64()),
             (),
         );
-        let one = wide.apply(Args::from([Field::Int64(1)])).closure();
-        let two = one.apply(Args::from([Field::Int64(2)])).closure();
-        assert_eq!(two.apply(Args::from([Field::Int64(3)])).int64(), 123);
+        let one = wide.apply(vec![Field::Int64(1)]).closure();
+        let two = one.apply(vec![Field::Int64(2)]).closure();
+        assert_eq!(two.apply(vec![Field::Int64(3)]).int64(), 123);
         assert_eq!(
-            one.apply(Args::from([Field::Int64(4), Field::Int64(5)]))
-                .int64(),
+            one.apply(vec![Field::Int64(4), Field::Int64(5)]).int64(),
             145
         );
     }
@@ -942,14 +929,14 @@ mod closure_tests {
             }
         }
         let function = Closure::bind(2, |_: &Probe, _| Field::Int64(0), Probe(drops.clone()));
-        let partial = function.apply(Args::from([Field::Int64(1)])).closure();
+        let partial = function.apply(vec![Field::Int64(1)]).closure();
         drop(function);
         assert_eq!(
             drops.get(),
             0,
             "the partial application keeps the code alive"
         );
-        assert_eq!(partial.apply(Args::from([Field::Int64(2)])).int64(), 0);
+        assert_eq!(partial.apply(vec![Field::Int64(2)]).int64(), 0);
         drop(partial);
         assert_eq!(drops.get(), 1);
     }
@@ -960,9 +947,7 @@ mod closure_tests {
         let alias = cell.clone();
         cell.fill(Closure::bind(2, add, (40,)));
         assert_eq!(
-            alias
-                .apply(Args::from([Field::Int64(1), Field::Int64(1)]))
-                .int64(),
+            alias.apply(vec![Field::Int64(1), Field::Int64(1)]).int64(),
             42
         );
     }
@@ -979,20 +964,20 @@ mod closure_tests {
             })
         }
         let chain = countdown(1_000_000);
-        assert_eq!(chain.apply(Args::from([Field::Int64(9)])).int64(), 9);
-        assert_eq!(chain.apply(Args::from([Field::Int64(8)])).int64(), 8);
+        assert_eq!(chain.apply(vec![Field::Int64(9)]).int64(), 9);
+        assert_eq!(chain.apply(vec![Field::Int64(8)]).int64(), 8);
     }
 
     #[test]
     fn a_deferred_partial_application_is_shared_not_copied() {
         let function = Closure::bind(2, add, (40,));
-        let partial = function.apply(Args::from([Field::Int64(1)])).closure();
+        let partial = function.apply(vec![Field::Int64(1)]).closure();
         let deferred = Closure::defer_to({
             let partial = partial.clone();
             move || partial
         });
-        assert_eq!(deferred.apply(Args::from([Field::Int64(1)])).int64(), 42);
-        assert_eq!(deferred.apply(Args::from([Field::Int64(2)])).int64(), 43);
+        assert_eq!(deferred.apply(vec![Field::Int64(1)]).int64(), 42);
+        assert_eq!(deferred.apply(vec![Field::Int64(2)]).int64(), 43);
     }
 
     #[test]
@@ -1009,7 +994,7 @@ mod closure_tests {
         let (a, b) = (Closure::pending(), Closure::pending());
         a.fill(b.clone());
         b.fill(a.clone());
-        a.apply(Args::from([Field::Int64(1)]));
+        a.apply(vec![Field::Int64(1)]);
     }
 
     #[test]
@@ -1364,7 +1349,7 @@ pub fn map_list(
         Node {
             constructor: output.cons,
             fields: [
-                element.defer(move || applied.apply(Args::from([head]))),
+                element.defer(move || applied.apply(vec![head])),
                 Field::Data(map_list(
                     function,
                     cell.fields[1].data(),
@@ -1389,7 +1374,7 @@ pub fn filter_list(predicate: Closure, list: Data, names: ListNames, truth: Trut
             }
             let head = cell.fields[0].clone();
             let tail = cell.fields[1].data();
-            if truth.test(&predicate.apply(Args::from([head.clone()]))) {
+            if truth.test(&predicate.apply(vec![head.clone()])) {
                 return Node {
                     constructor: names.cons,
                     fields: [
@@ -1412,7 +1397,7 @@ pub fn take_while(predicate: Closure, list: Data, names: ListNames, truth: Truth
             return nil(names);
         }
         let head = cell.fields[0].clone();
-        if !truth.test(&predicate.apply(Args::from([head.clone()]))) {
+        if !truth.test(&predicate.apply(vec![head.clone()])) {
             return nil(names);
         }
         Node {
@@ -1433,7 +1418,7 @@ pub fn drop_while(predicate: Closure, list: Data, names: ListNames, truth: Truth
         loop {
             let cell = list.force();
             if cell.constructor == names.nil
-                || !truth.test(&predicate.apply(Args::from([cell.fields[0].clone()])))
+                || !truth.test(&predicate.apply(vec![cell.fields[0].clone()]))
             {
                 return list;
             }
@@ -2653,25 +2638,22 @@ mod tests {
                 Step::Next(Box::new(move || Step::Done(x * 100 + y)))
             },
         );
-        match function.apply_tail(Args::from([Field::Int64(4), Field::Int64(2)])) {
+        match function.apply_tail(vec![Field::Int64(4), Field::Int64(2)]) {
             Tail::Enter(step) => assert_eq!(step.run(), 402),
             Tail::Value(_) => panic!("a saturated call with an entry was applied"),
         }
-        let partial = function.apply(Args::from([Field::Int64(4)])).closure();
-        match partial.apply_tail(Args::from([Field::Int64(2)])) {
+        let partial = function.apply(vec![Field::Int64(4)]).closure();
+        match partial.apply_tail(vec![Field::Int64(2)]) {
             Tail::Enter(step) => assert_eq!(step.run(), 402),
             Tail::Value(_) => panic!("a partial application lost its entry"),
         }
-        match function.apply_tail(Args::from([Field::Int64(4)])) {
+        match function.apply_tail(vec![Field::Int64(4)]) {
             Tail::Value(value) => {
-                assert_eq!(
-                    value.closure().apply(Args::from([Field::Int64(2)])).int64(),
-                    6
-                )
+                assert_eq!(value.closure().apply(vec![Field::Int64(2)]).int64(), 6)
             }
             Tail::Enter(_) => panic!("an unsaturated call entered"),
         }
-        match Closure::ready(1, |a| a[0].clone()).apply_tail(Args::from([Field::Int64(7)])) {
+        match Closure::ready(1, |a| a[0].clone()).apply_tail(vec![Field::Int64(7)]) {
             Tail::Value(value) => assert_eq!(value.int64(), 7),
             Tail::Enter(_) => panic!("a closure without an entry entered"),
         }

@@ -2515,7 +2515,7 @@ fn function_alias_entry_uses_the_returned_closure() {
     modules[0].binders[owner as usize].ty = 1;
     let source = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
     assert!(source.contains("fn h2r_entry(a0: i64, a1: i64)"));
-    assert!(source.contains(".apply(HArgs::from([HField::Int64(a0), HField::Int64(a1)]))"));
+    assert!(source.contains(".apply(vec![HField::Int64(a0), HField::Int64(a1)])"));
 }
 
 #[test]

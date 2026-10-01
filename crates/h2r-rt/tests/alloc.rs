@@ -13,7 +13,7 @@ use std::cell::Cell;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use h2r_rt::{Args, Closure, Data, Field, Int, Step};
+use h2r_rt::{Closure, Data, Field, Int, Step};
 
 struct Counting;
 
@@ -57,15 +57,15 @@ fn measure(n: usize, mut f: impl FnMut()) -> (usize, usize) {
 
 thread_local! { static SINK: Cell<i64> = const { Cell::new(0) }; }
 
-fn k_add((captured,): &(i64,), arguments: Args) -> Field {
+fn k_add((captured,): &(i64,), arguments: Vec<Field>) -> Field {
     Field::Int64(captured + arguments[0].int64())
 }
 
-fn j_add((captured,): &(i64,), arguments: Args) -> Step<i64> {
+fn j_add((captured,): &(i64,), arguments: Vec<Field>) -> Step<i64> {
     Step::Done(captured + arguments[0].int64())
 }
 
-fn k_add2((captured,): &(i64,), arguments: Args) -> Field {
+fn k_add2((captured,): &(i64,), arguments: Vec<Field>) -> Field {
     Field::Int64(captured + arguments[0].int64() + arguments[1].int64())
 }
 
@@ -95,14 +95,14 @@ fn thunk_to_ready_node_is_two_allocations() {
 fn bind_and_saturated_apply_budget() {
     let (allocations, _) = measure(1000, || {
         let closure = Closure::bind(1, k_add, (40,));
-        let result = closure.apply(Args::from([Field::Int64(2)]));
+        let result = closure.apply(vec![Field::Int64(2)]);
         SINK.with(|s| s.set(s.get() + result.int64()));
     });
-    // The cell only: captures and function pointer live in its code tail, and
-    // the argument list is inline in `Args`.
+    // The cell (captures and function pointer live in its code tail) and the
+    // caller's argument vector.
     eprintln!("bind + apply: {allocations} allocations");
     assert!(
-        allocations <= 1,
+        allocations <= 2,
         "bind + apply made {allocations} allocations"
     );
 }
@@ -111,14 +111,14 @@ fn bind_and_saturated_apply_budget() {
 fn bind_entering_and_entered_apply_budget() {
     let (allocations, _) = measure(1000, || {
         let closure = Closure::bind_entering(1, k_add, j_add, (40,));
-        match closure.apply_tail(Args::from([Field::Int64(2)])) {
+        match closure.apply_tail(vec![Field::Int64(2)]) {
             h2r_rt::Tail::Enter(step) => SINK.with(|s| s.set(s.get() + step.run())),
             h2r_rt::Tail::Value(_) => panic!("a saturated call with an entry was applied"),
         }
     });
     eprintln!("bind_entering + apply_tail: {allocations} allocations");
     assert!(
-        allocations <= 1,
+        allocations <= 2,
         "bind_entering + apply_tail made {allocations} allocations"
     );
 }
@@ -127,15 +127,15 @@ fn bind_entering_and_entered_apply_budget() {
 fn partial_application_budget() {
     let (allocations, _) = measure(1000, || {
         let closure = Closure::bind(2, k_add2, (40,));
-        let partial = closure.apply(Args::from([Field::Int64(1)])).closure();
-        let result = partial.apply(Args::from([Field::Int64(1)]));
+        let partial = closure.apply(vec![Field::Int64(1)]).closure();
+        let result = partial.apply(vec![Field::Int64(1)]);
         SINK.with(|s| s.set(s.get() + result.int64()));
     });
-    // bind (1) + the partial's `supplied` slice + the partial cell; the argument
-    // lists and the merged one are inline.
+    // bind (1) + first args vec, which becomes the partial's `supplied` + partial
+    // cell + second args vec + merged vec
     eprintln!("partial application: {allocations} allocations");
     assert!(
-        allocations <= 3,
+        allocations <= 5,
         "partial application made {allocations} allocations"
     );
 }

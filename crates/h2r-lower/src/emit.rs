@@ -262,7 +262,7 @@ fn closure(
         .join(", ");
     writeln!(
         shims.code,
-        "fn k_{shim}(({pattern}): &({types}), a: HArgs) -> HField {{ {} }}",
+        "fn k_{shim}(({pattern}): &({types}), a: Vec<HField>) -> HField {{ {} }}",
         pack(world, result, &format!("{target}({call})"))
     )
     .unwrap();
@@ -270,7 +270,7 @@ fn closure(
         Some(state) => {
             writeln!(
                 shims.code,
-                "fn j_{shim}(({pattern}): &({types}), a: HArgs) -> h2r_rt::Step<i64> {{ {state}({call}) }}"
+                "fn j_{shim}(({pattern}): &({types}), a: Vec<HField>) -> h2r_rt::Step<i64> {{ {state}({call}) }}"
             )
             .unwrap();
             format!("HClosure::bind_entering({arity}, k_{shim}, j_{shim}, ({values}))")
@@ -882,7 +882,7 @@ fn entry_adapter(
             unpack(
                 world,
                 entry_result,
-                &format!("f_{index}({direct}).apply(HArgs::from([{extra}]))")
+                &format!("f_{index}({direct}).apply(vec![{extra}])")
             )
         )
         .unwrap();
@@ -1053,30 +1053,20 @@ pub struct SplitProgram {
 }
 
 /// The runtime as the single source file the generated crates compile: `lib.rs`
-/// with its `mod args;` and `mod cell;` declarations replaced by the bodies of
-/// `args.rs` and `cell.rs`, because the generated `h2r_rt` has no file next to
-/// it to load a module from.
+/// with its `mod cell;` declaration replaced by the body of `cell.rs`, because
+/// the generated `h2r_rt` has no file next to it to load a module from.
 pub(crate) fn runtime_source() -> String {
-    include_str!("../../h2r-rt/src/lib.rs")
-        .replacen(
-            "mod args;",
-            &format!(
-                "mod args {{\n{}\n}}",
-                include_str!("../../h2r-rt/src/args.rs")
-            ),
-            1,
-        )
-        .replacen(
-            "mod cell;",
-            &format!(
-                "mod cell {{\n{}\n}}",
-                include_str!("../../h2r-rt/src/cell.rs")
-            ),
-            1,
-        )
+    include_str!("../../h2r-rt/src/lib.rs").replacen(
+        "mod cell;",
+        &format!(
+            "mod cell {{\n{}\n}}",
+            include_str!("../../h2r-rt/src/cell.rs")
+        ),
+        1,
+    )
 }
 
-const RUNTIME_ALIASES: &str = "#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField, Closure as HClosure, Args as HArgs};\n#[allow(unused_imports)]\nuse h2r_rt::{Encoding as HEncoding, ListNames as HListNames, StringNames as HStringNames};\n#[allow(unused_imports)]\nuse h2r_rt::Addr as HAddr;\n#[allow(unused_imports)]\nuse h2r_rt::{Array as HArray, Bytes as HBytes, MutVar as HMutVar};\n";
+const RUNTIME_ALIASES: &str = "#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField, Closure as HClosure};\n#[allow(unused_imports)]\nuse h2r_rt::{Encoding as HEncoding, ListNames as HListNames, StringNames as HStringNames};\n#[allow(unused_imports)]\nuse h2r_rt::Addr as HAddr;\n#[allow(unused_imports)]\nuse h2r_rt::{Array as HArray, Bytes as HBytes, MutVar as HMutVar};\n";
 
 pub fn emit_entry_split(
     modules: &[Module],
@@ -1582,13 +1572,13 @@ fn leaf_code(
                         (Some("i64"), _, Operation::Apply { callee, arguments }) if has_boxed => {
                             let (callee, args, read) = applied(callee, arguments);
                             Some(format!(
-                                "h2r_rt::apply_step({callee}, HArgs::from([{args}]), HField::{read})"
+                                "h2r_rt::apply_step({callee}, vec![{args}], HField::{read})"
                             ))
                         }
                         (None, _, Operation::Apply { callee, arguments }) => {
                             let (callee, args, read) = applied(callee, arguments);
                             Some(format!(
-                                "h2r_rt::apply_later({callee}, HArgs::from([{args}]), HField::{read})"
+                                "h2r_rt::apply_later({callee}, vec![{args}], HField::{read})"
                             ))
                         }
                         _ => None,
@@ -1645,7 +1635,7 @@ fn leaf_code(
                         unpack(
                             world,
                             &instruction.result.ty,
-                            &format!("v{}.apply(HArgs::from([{args}]))", callee.0),
+                            &format!("v{}.apply(vec![{args}])", callee.0),
                         )
                     }
                     Operation::Construct {
