@@ -412,6 +412,22 @@ fn reaches(graph: &Successors, from: crate::nir::BlockId, to: crate::nir::BlockI
     false
 }
 
+/// Whether the instruction after `position` forces the value `position`
+/// produces: a `MatchData` on it, or a `Force` of it. Only the very next
+/// instruction counts, so nothing runs between producing the value and
+/// demanding it.
+pub(crate) fn forced_next(block: &Block, position: usize) -> bool {
+    let value = block.instructions[position].result.id;
+    block
+        .instructions
+        .get(position + 1)
+        .is_some_and(|next| match &next.operation {
+            Operation::MatchData { scrutinee, .. } => *scrutinee == value,
+            Operation::Force(forced) => *forced == value,
+            _ => false,
+        })
+}
+
 // Source correspondence has already established acyclic regions and consistent
 // return types along every successor, independently of block numbering.
 fn block_result<'a>(function: &'a Function, block: &'a Block) -> &'a Ty {
@@ -2250,7 +2266,22 @@ fn leaf_code(
                             .map(|arg| value(*arg))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        format!("f_{target}({args})")
+                        // The very next instruction forces this call's result,
+                        // so the thunk `f_` would return is run right away: run
+                        // the entry block itself and skip the allocation and the
+                        // indirection. The stack shape is the one forcing the
+                        // thunk has, so no recursive-group check is needed, and
+                        // the demand is the next instruction's. A call with no
+                        // arguments stays on `f_` so a CAF keeps its single
+                        // shared cell; an unlifted result is not a thunk.
+                        if forced_next(block, position)
+                            && !arguments.is_empty()
+                            && data::lifted(world, &leaves[&target].function.result_ty)
+                        {
+                            format!("b_{target}_{}({args})", leaves[&target].function.entry.0)
+                        } else {
+                            format!("f_{target}({args})")
+                        }
                     }
                     Operation::Force(v) => format!("{{ v{0}.force(); v{0}.clone() }}", v.0),
                 };

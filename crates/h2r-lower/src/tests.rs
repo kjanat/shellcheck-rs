@@ -3721,6 +3721,145 @@ fn data_lets_preserve_shared_aliases_and_construct_in_place() {
     check_scalar_renumbering(modules);
 }
 
+/// `main x y` and a second top-level `target x y` returning the lifted `Choice`.
+fn data_call_world(body: Value) -> Vec<Module> {
+    use h2r_core_ir::Ty;
+    let mut modules = scalar_expression_world(lvar("x"));
+    let types = modules[0].types.clone();
+    let ids = modules[0].ids.clone();
+    modules[0] = module(
+        "Main",
+        vec![
+            (
+                binder(&sn("Main", "main"), "main", "main"),
+                lam("x", lam("y", body)),
+            ),
+            (
+                binder(&sn("Main", "target"), "target", "target"),
+                lam(
+                    "p",
+                    lam("q", data_construct("Pair", vec![lvar("p"), lvar("q")])),
+                ),
+            ),
+        ],
+        json!({}),
+    );
+    let m = &mut modules[0];
+    m.types = types;
+    m.ids = ids;
+    // Keep the indices `data_world` uses: 2 is a spare, 3 is Choice, 4 the
+    // signature of the constructors and of `target`.
+    let int = m.types[0].clone();
+    m.types.push(int.clone());
+    let choice = Ty::Con {
+        tycon: h2r_core_ir::TyConId {
+            name: sn("Main", "Choice").into(),
+            occ: "Choice".into(),
+            unique: "choice".into(),
+        },
+        args: vec![],
+    };
+    m.types.push(choice.clone());
+    m.types.push(Ty::Fun {
+        mult: Box::new(int.clone()),
+        arg: Box::new(int.clone()),
+        res: Box::new(Ty::Fun {
+            mult: Box::new(int.clone()),
+            arg: Box::new(int),
+            res: Box::new(choice),
+        }),
+    });
+    for (name, tag, signature, arity) in [("Empty", 1, 3, 0), ("Pair", 2, 4, 2)] {
+        m.constructors.push(serde_json::from_value(json!({"name":sn("Main",name),"worker":sn("Main",name),"family":sn("Main","Choice"),"familySize":2,"tag":tag,"signature":signature,"repArity":arity,"strict":vec![false;arity],"vanilla":true})).unwrap());
+    }
+    let pairs: Vec<u32> = m
+        .top
+        .iter()
+        .flat_map(|g| &g.pairs)
+        .map(|p| p.binder)
+        .collect();
+    m.binders[pairs[0] as usize].ty = 1;
+    m.binders[pairs[0] as usize].arity = Some(2);
+    m.binders[pairs[1] as usize].ty = 4;
+    m.binders[pairs[1] as usize].arity = Some(2);
+    modules
+}
+
+fn call_target() -> Value {
+    app(app(lvar("target"), lvar("x")), lvar("y"))
+}
+
+#[test]
+fn a_call_whose_result_is_scrutinised_next_enters_the_block_directly() {
+    use crate::nir::{FnId, lower::lower_leaf_in_world, verify::verify_leaf_in_world};
+    let modules = data_call_world(data_case(call_target(), false));
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    verify_leaf_in_world(&modules, 0, owner, FnId(0), &leaf).unwrap();
+    assert!(crate::emit::forced_next(&leaf.function.blocks[0], 0));
+    let rust = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
+    // Instance 1 is `target`: its entry block is run where the result is
+    // scrutinised, with no thunk from its `f_` wrapper in between.
+    assert!(rust.contains(" = b_1_0(v0, v1);"), "{rust}");
+    assert!(!rust.contains("= f_1("), "{rust}");
+    assert!(
+        rust.contains("fn f_1("),
+        "the wrapper itself is still emitted"
+    );
+    assert_every_block_is_entered(&rust);
+}
+
+#[test]
+fn only_the_very_next_instruction_makes_a_result_forced() {
+    use crate::nir::{FnId, Operation, lower::lower_leaf_in_world};
+    let modules = data_call_world(data_case(call_target(), false));
+    let owner = modules[0].top[0].pairs[0].binder;
+    let leaf = lower_leaf_in_world(&modules, 0, owner, FnId(0)).unwrap();
+    let mut block = leaf.function.blocks[0].clone();
+    assert_eq!(block.instructions.len(), 2);
+    assert!(matches!(
+        block.instructions[0].operation,
+        Operation::CallTop { .. }
+    ));
+    let result = block.instructions[0].result.id;
+    assert!(matches!(
+        &block.instructions[1].operation,
+        Operation::MatchData { scrutinee, .. } if *scrutinee == result
+    ));
+    // A `Force` of the result counts the same as a match on it.
+    block.instructions[1].operation = Operation::Force(result);
+    assert!(crate::emit::forced_next(&block, 0));
+    // Forcing something else does not.
+    block.instructions[1].operation = Operation::Force(crate::nir::ValueId(0));
+    assert!(!crate::emit::forced_next(&block, 0));
+    // Neither does anything between the call and the force: the result is
+    // bound, and whatever runs first is not what demands it.
+    block.instructions[1].operation = Operation::Force(result);
+    let mut between = block.instructions[1].clone();
+    between.operation = Operation::Move(crate::nir::ValueId(0));
+    block.instructions.insert(1, between);
+    assert!(!crate::emit::forced_next(&block, 0));
+    // The last instruction has no successor to force it.
+    assert!(!crate::emit::forced_next(&block, 2));
+}
+
+#[test]
+fn a_call_whose_result_is_not_forced_next_still_goes_through_the_wrapper() {
+    // The result is bound and added to something later: nothing forces it
+    // next (an unlifted result is not a thunk at all), so `f_` stays.
+    let modules = scalar_expression_world(int_op(
+        "+#",
+        app(
+            app(gvar(&sn("Lib", "target"), "target"), lvar("x")),
+            lvar("y"),
+        ),
+        lvar("x"),
+    ));
+    let rust = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
+    assert!(rust.contains(" = f_1(v0, v1);"), "{rust}");
+    assert!(!rust.contains("= b_1_0("), "{rust}");
+}
+
 #[test]
 fn the_runtime_delays_every_arity_the_emitter_writes() {
     let runtime = include_str!("../../h2r-rt/src/lib.rs");
