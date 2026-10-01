@@ -183,6 +183,20 @@ A non-tail `CallTop` whose result is the scrutinee of the very next `MatchData`,
 
 Found from the callgrind call tree, not from the counters: `mi_theap_malloc_zero_aligned_at_generic` was called 3.0 M times and 2.9 M of those went on to `_overalloc`. The `mimalloc` crate routes every Rust allocation through `mi_malloc_aligned`, and mimalloc v3 (what `libmimalloc-sys` 0.1.49 builds by default) takes that function's fast path only when the size class is a power of two, so every 48-, 72- or 80-byte block, which is a cons cell and most thunks, paid about 70 extra instructions and landed in a larger size class. `crates/rshellcheck/src/main.rs` now has a `GlobalAlloc` that calls `mi_malloc`/`mi_zalloc`/`mi_realloc` when the layout's alignment is at most 16 and at most its size (what `malloc` guarantees; mimalloc rounds small size classes to multiples of 16) and the aligned entry points otherwise. Binary crate only, so it needs no compiler rebuild: `cargo build --release -p rshellcheck` relinks in seconds. Lesson for the next person: read the call tree (`callgrind_annotate --tree=both --inclusive=yes`) under the allocator, not only the flat profile.
 
+### WP10 The call path, by the microbench
+
+`apply` costs 545 Ir/op and `apply-partial` 1 418 on `eba422e`: a `bind` (one cell), a `vec![..]` for the argument, the `apply` dispatch, the call, and dropping both. Profile the example itself (`valgrind --tool=callgrind target/release/examples/ops apply 100000` then `callgrind_annotate`) and take out what is not the call: `Shared` header writes that the caller re-does, `split()` re-checking an already evaluated code cell, `Field::closure`/`int64` tag checks on the hot path that could be one match, `Vec` capacity checks, drop glue that runs through `OnceCell` state tests for cells that are known evaluated. Keep `Vec<Field>` as the argument carrier (WP6 shows why). Acceptance: `apply` ≤ 400 Ir/op and `apply-partial` ≤ 1 100 on the microbench, `tests/alloc.rs` budgets not above today's, `cargo test -p h2r-rt`, Miri clean if any `unsafe` moved, `cargo test -p h2r-lower` if an emitted shape changed. Report the before/after microbench table.
+
+### WP11 The thunk path, by the microbench
+
+`thunk-each` costs 445 Ir/op (create a one-capture `delay1`, force it, drop it) and `thunk-chain` 251 per indirection. Per step that is a `Block` allocation and free (about 40 together under mimalloc), the `Once` enter/fill handshake, the `OnceCell` write and the `chase` loop with its `pending` `Vec` (allocated only when a cell is shared, check that it really stays unallocated in the common path), then drop glue through `OnceCell<Node>`/`OnceCell<ClosureCode>`, which is 5 % of the whole program. Same method as WP10: profile the example, remove re-checks. Acceptance: `thunk-each` ≤ 320 and `thunk-chain` ≤ 190 Ir/op, allocation counts unchanged, constant-stack test still passes, Miri clean (this is `cell.rs`, it will involve `unsafe`), `cargo test -p h2r-rt`.
+
+### WP12 Building and dropping a constructor cell, by the microbench
+
+`cons` costs 412 Ir/op to build one `Data::ready(":", [c, rest])` and drop it later. A ready cell should be one allocation written once: look at `Shared::ready_with`, `Fields::from([Field; 2])`, the `Evaluated` tail and the free path (`Block<Node, Evaluated>::free` is 0.6 % of the program on its own), and at `drop_glue::<OnceCell<Node>>` (3.6 % of the program). Acceptance: `cons` ≤ 300 Ir/op, `Node` stays ≤ 64 bytes and the alloc pins hold, Miri clean, `cargo test -p h2r-rt`.
+
+For WP10–WP12 the integrator rebuilds once with all three, gates, and times; the microbench is the fast loop and its numbers are the acceptance.
+
 ### WP5 Strings as a packed intrinsic
 
 The big one; needs a census first: how many `:` nodes come from `unpack_string`/`append_list`/generated `Data::ready(":")`. Add counters behind a `stats` feature, rebuild, run on the corpus, then design.
