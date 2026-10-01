@@ -11,11 +11,40 @@
 
 use std::hint::black_box;
 
-use h2r_rt::{Closure, Data, Field, Int, delay1};
+use h2r_rt::{Closure, Constructor, Data, Field, Int, delay1};
 
+/// Constructors as the emitter writes them: one `static` per name, with a
+/// program-wide tag; matches switch on the tag and names are for diagnostics.
+static NIL: Constructor = Constructor { name: "[]", tag: 0 };
+static CONS: Constructor = Constructor { name: ":", tag: 1 };
+static LEAF: Constructor = Constructor {
+    name: "Leaf",
+    tag: 2,
+};
 /// The five-constructor family of the `match` scenario, as the emitter sees a
-/// sum type: names are `&'static str` and arms compare them.
-const FAMILY: [&str; 5] = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"];
+/// sum type.
+static FAMILY: [Constructor; 5] = [
+    Constructor {
+        name: "Alpha",
+        tag: 3,
+    },
+    Constructor {
+        name: "Beta",
+        tag: 4,
+    },
+    Constructor {
+        name: "Gamma",
+        tag: 5,
+    },
+    Constructor {
+        name: "Delta",
+        tag: 6,
+    },
+    Constructor {
+        name: "Epsilon",
+        tag: 7,
+    },
+];
 
 fn k_add((captured,): &(i64,), arguments: Vec<Field>) -> Field {
     Field::Int64(captured + arguments[0].int64())
@@ -28,7 +57,7 @@ fn k_add2((captured,): &(i64,), arguments: Vec<Field>) -> Field {
 /// One link of the indirection chain: forcing it yields the next link.
 fn countdown(n: u64) -> Data {
     if n == 0 {
-        Data::ready("Nil", [])
+        Data::ready(&NIL, [])
     } else {
         Data::defer_to(move || countdown(n - 1))
     }
@@ -42,7 +71,7 @@ fn incremented(a: i64) -> Int {
 /// indirections is forced once; the stack stays constant.
 fn thunk_chain(n: u64) -> i64 {
     let head = countdown(n);
-    head.force().constructor.len() as i64
+    head.force().constructor.name.len() as i64
 }
 
 /// Profile bucket: `delayN` thunks (17.8 M in the profile): allocation,
@@ -83,19 +112,19 @@ fn apply_partial(n: u64) -> i64 {
 /// glue of a list. `n` cons cells are built and dropped; keep `n` modest, the
 /// drop recurses.
 fn cons(n: u64) -> i64 {
-    let mut list = Data::ready("[]", []);
+    let mut list = Data::ready(&NIL, []);
     for c in 0..n as i64 {
-        list = Data::ready(":", [Field::Char(black_box(c)), Field::Data(list)]);
+        list = Data::ready(&CONS, [Field::Char(black_box(c)), Field::Data(list)]);
     }
     black_box(&list);
     n as i64
 }
 
-/// Profile bucket: constructor-name `memcmp` in pattern matches. Forces a
-/// node and matches its name exactly as `emit.rs` does (`let node = v.force();
-/// let constructor = node.constructor; match constructor { .. }`).
+/// Profile bucket: pattern-match dispatch. Forces a node and switches on its
+/// constructor tag exactly as `emit.rs` does (`let node = v.force();
+/// match node.constructor.tag { .. }`); before WP4 this compared names.
 fn matches(n: u64) -> i64 {
-    let nodes: Vec<Data> = FAMILY.iter().map(|name| Data::ready(name, [])).collect();
+    let nodes: Vec<Data> = FAMILY.iter().map(|c| Data::ready(c, [])).collect();
     let mut sum = 0;
     let mut which = 0;
     for _ in 0..n {
@@ -106,13 +135,12 @@ fn matches(n: u64) -> i64 {
             which + 1
         };
         let node = v.force();
-        let constructor = node.constructor;
-        sum += match constructor {
-            "Alpha" => 1,
-            "Beta" => 2,
-            "Gamma" => 3,
-            "Delta" => 4,
-            "Epsilon" => 5,
+        sum += match node.constructor.tag {
+            3 => 1,
+            4 => 2,
+            5 => 3,
+            6 => 4,
+            7 => 5,
             _ => panic!("invalid constructor family"),
         };
     }
@@ -122,7 +150,7 @@ fn matches(n: u64) -> i64 {
 /// Profile bucket: `Field::data` (3.2 % of the profile) on an evaluated
 /// `Field::Deferred`, the shape of a lazily built constructor field.
 fn deferred_data(n: u64) -> i64 {
-    let field = Field::defer_to(|| Field::Data(Data::ready("Leaf", [Field::Int64(7)])));
+    let field = Field::defer_to(|| Field::Data(Data::ready(&LEAF, [Field::Int64(7)])));
     field.force();
     let mut sum = 0;
     for _ in 0..n {
