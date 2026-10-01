@@ -40,10 +40,11 @@ The gap to GHC is ~19×. GHC wins on exactly these things: a bump allocator, a g
 
 ### Landed
 
-| package                                            | commit    | small (150 lines) | medium (1500 lines) | peak RSS medium |
-| -------------------------------------------------- | --------- | ----------------- | ------------------- | --------------- |
-| chase move-out, apply fast path, direct tail calls | `6199812` | −4 %              | −8 %                | =               |
-| WP1 thin cells                                     | `f11d5f6` | −16 % (±9)        | −12 % (±4)          | 1355 → 1252 MiB |
+| package                                            | commit               | small (150 lines) | medium (1500 lines) | peak RSS medium |
+| -------------------------------------------------- | -------------------- | ----------------- | ------------------- | --------------- |
+| chase move-out, apply fast path, direct tail calls | `6199812`            | −4 %              | −8 %                | =               |
+| WP1 thin cells                                     | `f11d5f6`            | −16 % (±9)        | −12 % (±4)          | 1355 → 1252 MiB |
+| WP3 one-allocation closures + WP2 Field 16 bytes   | `ddccda5`, `13871e9` | −17 % (±14)       | −14 % (±3)          | 1252 → 861 MiB  |
 
 (Each row against the binary before it, same machine, hyperfine -N, 10 runs; output byte-identical to the GHC oracle on the conformance gate.)
 
