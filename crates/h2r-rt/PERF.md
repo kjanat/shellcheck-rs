@@ -48,6 +48,10 @@ The gap to GHC is ~19×. GHC wins on exactly these things: a bump allocator, a g
 
 (Each row against the binary before it, same machine, hyperfine -N, 10 runs; output byte-identical to the GHC oracle on the conformance gate.)
 
+### Profile after WP1–WP3 (`e156aea`, same 150-line script)
+
+5.34 G instructions (was 7.58 G). Allocator ~26 %, drop glue ~8 %, `chase<Node>` 4 %, `Closure::apply` 4.3 %, `Field::data` 3.2 %, `Shared<Node>::force` 2.9 %, constructor-name `memcmp` 1.4 %. Allocation *sizes* are now small; the remaining lever is allocation *count*: the `delayN` thunks (17.8 M) and the `Vec<Field>` built for every unknown call (`apply` 2.4 M + `apply_later` 5.5 M).
+
 ## Invariants you must keep
 
 1. **Demand.** A block function `b_<instance>_<block>` runs only when its result is demanded to WHNF. Block bodies force things; running one early is a semantic change (it can diverge or throw where Haskell would not). The emitter relies on this; the runtime must never call generated code speculatively (`map_list` and friends defer every application).
@@ -130,6 +134,14 @@ Needs WP1. A ready closure's captures and `k_` function pointer live in the cell
 ### WP4 Constructor tags
 
 Emitter assigns a `u32` per constructor name; `Node` gains `tag`, matches switch on it, names stay for diagnostics and the runtime's `*Names` structs. Emitter + runtime. Small win (~1–2 %), enables jump tables.
+
+### WP6 Argument vectors without heap allocation
+
+Every call through a closure builds a `Vec<Field>` (`vec![...]` in the emitted code, `a: Vec<HField>` in the `k_` shims, `Vec<Field>` throughout `apply`/`apply_tail`/`apply_later`/`apply_step`/`Partial`). Replace it with `h2r_rt::Args`, a small-vector with inline capacity 4 (`Field` is 16 bytes, so 64 bytes inline) that spills to a `Vec` beyond that. Emitter: `vec![..]` becomes `h2r_rt::args![..]`, shim parameters become `HArgs`, alias added to `RUNTIME_ALIASES`. Acceptance: `bind + apply` ≤ 1 allocation, partial application ≤ 3, no other count rises, Miri clean (the type will use `MaybeUninit`), all tests.
+
+### WP7 Call the entry block directly when the result is forced next
+
+A non-tail `CallTop` whose result is the scrutinee of the very next `MatchData`, or the operand of the very next `Force`, allocates a thunk that is forced immediately. Emit `b_<target>_<entry>(args)` instead of `f_<target>(args)` for those sites (7 % of call sites statically). Same stack shape as forcing the thunk, so no group check is needed; keep `f_` for zero-argument calls (CAFs). Emitter only; add a test that such a site emits `b_` and an unforced one still emits `f_`.
 
 ### WP5 Strings as a packed intrinsic
 
