@@ -46,10 +46,14 @@ The gap to GHC is ~19×. GHC wins on exactly these things: a bump allocator, a g
 | WP1 thin cells                                         | `f11d5f6`            | −16 % (±9)        | −12 % (±4)          | 1355 → 1252 MiB |
 | WP3 one-allocation closures + WP2 Field 16 bytes       | `ddccda5`, `13871e9` | −17 % (±14)       | −14 % (±3)          | 1252 → 861 MiB  |
 | WP7 direct call when forced next + WP6 Args (reverted) | `9749e67`, `a2de2f8` | −5 % (±12)        | +2 % … +7 % (±5)    | =               |
+| WP7 alone (WP6 reverted)                               | `fa6ee0b`            | −2 % (±11)        | −2 % (±3)           | =               |
+| WP8 plain `mi_malloc` for ≤16-byte alignment           | `9985548`            | −3 % (±14)        | −8 % (±3)           | 861 → 779 MiB   |
 
 (Each row against the binary before it, same machine, hyperfine -N, 10 runs; output byte-identical to the GHC oracle on the conformance gate.)
 
 The WP6+WP7 row is a wash in wall time but **+4.2 % instructions** (5.34 G → 5.57 G, callgrind, same script). The allocator shrank by 0.19 G, yet the `Args` small-vector added about 0.44 G: `Args::push` 113 M and `From<[Field; N]>` 78 M as out-of-line calls, `take_front`/`into_vec`/`Vec::extend(Args::IntoIter)` 82 M, and `memcpy` up 78 M from moving a 72-byte `Args` by value through `apply`, the vtable `call` slot and the `k_` shims (a `Vec` is 24 bytes). WP6 was reverted in `fa6ee0b`; WP7 stays (it is roughly neutral in instructions and does not raise any count).
+
+WP7 alone: 5.34 G → 5.26 G instructions (−1.5 %). WP8: 5.26 G → **4.71 G (−10.5 %)**; the `mi_theap_malloc_aligned`/`_generic`/`_overalloc` entries are gone and the allocator is now `mi_free` 8.5 %, `_mi_theap_malloc_zero` 7.6 %, `mi_malloc` 2.7 %, `_mi_malloc_generic` 0.9 %: about 19.6 % of the run, down from 26 %.
 
 ### Profile after WP1–WP3 (`e156aea`, same 150-line script)
 
@@ -146,6 +150,10 @@ Every call through a closure builds a `Vec<Field>` (`vec![...]` in the emitted c
 ### WP7 Call the entry block directly when the result is forced next
 
 A non-tail `CallTop` whose result is the scrutinee of the very next `MatchData`, or the operand of the very next `Force`, allocates a thunk that is forced immediately. Emit `b_<target>_<entry>(args)` instead of `f_<target>(args)` for those sites (7 % of call sites statically). Same stack shape as forcing the thunk, so no group check is needed; keep `f_` for zero-argument calls (CAFs). Emitter only; add a test that such a site emits `b_` and an unforced one still emits `f_`.
+
+### WP8 Call mimalloc the way C does (landed, `9985548`)
+
+Found from the callgrind call tree, not from the counters: `mi_theap_malloc_zero_aligned_at_generic` was called 3.0 M times and 2.9 M of those went on to `_overalloc`. The `mimalloc` crate routes every Rust allocation through `mi_malloc_aligned`, and mimalloc v3 (what `libmimalloc-sys` 0.1.49 builds by default) takes that function's fast path only when the size class is a power of two, so every 48-, 72- or 80-byte block, which is a cons cell and most thunks, paid about 70 extra instructions and landed in a larger size class. `crates/rshellcheck/src/main.rs` now has a `GlobalAlloc` that calls `mi_malloc`/`mi_zalloc`/`mi_realloc` when the layout's alignment is at most 16 and at most its size (what `malloc` guarantees; mimalloc rounds small size classes to multiples of 16) and the aligned entry points otherwise. Binary crate only, so it needs no compiler rebuild: `cargo build --release -p rshellcheck` relinks in seconds. Lesson for the next person: read the call tree (`callgrind_annotate --tree=both --inclusive=yes`) under the allocator, not only the flat profile.
 
 ### WP5 Strings as a packed intrinsic
 
