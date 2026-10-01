@@ -6,11 +6,15 @@ use h2r_rt::{Closure, Data, Field, Int, Node};
 
 #[test]
 fn value_sizes() {
-    // Shared cells are fat pointers today (Rc<Lazy<T, dyn Code<T>>>): 16 bytes.
-    assert!(size_of::<Int>() <= 16, "Int is {}", size_of::<Int>());
-    assert!(size_of::<Data>() <= 16, "Data is {}", size_of::<Data>());
-    assert!(size_of::<Closure>() <= 16, "Closure is {}", size_of::<Closure>());
-    // Field is bounded by its largest payload (a 16-byte cell or the 24-byte Addr) plus a tag.
+    // Shared cells are thin pointers to one allocation holding count, value and code.
+    assert!(size_of::<Int>() <= 8, "Int is {}", size_of::<Int>());
+    assert!(size_of::<Data>() <= 8, "Data is {}", size_of::<Data>());
+    assert!(
+        size_of::<Closure>() <= 8,
+        "Closure is {}",
+        size_of::<Closure>()
+    );
+    // Field is bounded by its largest payload (the 24-byte Addr; cells are 8) plus a tag.
     assert!(size_of::<Field>() <= 32, "Field is {}", size_of::<Field>());
     // A node: constructor name (16) + inline fields (3 x Field + tag).
     assert!(size_of::<Node>() <= 112, "Node is {}", size_of::<Node>());

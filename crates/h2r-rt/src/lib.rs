@@ -5,8 +5,7 @@
 //! is emitted as a plain Rust value; what is left over -- bindings that may or
 //! may not be demanded, and genuinely cyclic values -- lands here.
 
-use std::cell::{Cell, OnceCell, RefCell};
-use std::fmt;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy)]
@@ -111,167 +110,11 @@ impl Bytes {
     }
 }
 
-/// A call-by-need binding: evaluated at most once, shared by every use.
-pub struct Lazy<T, C: ?Sized = dyn Code<T>> {
-    value: OnceCell<T>,
-    code: C,
-}
+mod cell;
 
-pub type Deferred<T> = Box<dyn FnOnce() -> Thunk<T>>;
-
-pub trait Code<T> {
-    fn enter(&self) -> Option<Thunk<T>>;
-    fn fill(&self, code: Deferred<T>) -> bool;
-}
-
-struct Once<F>(Cell<Option<F>>);
-
-impl<T, F: FnOnce() -> Thunk<T>> Code<T> for Once<F> {
-    fn enter(&self) -> Option<Thunk<T>> {
-        self.0.take().map(|f| f())
-    }
-    fn fill(&self, _: Deferred<T>) -> bool {
-        false
-    }
-}
-
-struct Pending<T>(Cell<Option<Deferred<T>>>);
-
-impl<T> Code<T> for Pending<T> {
-    fn enter(&self) -> Option<Thunk<T>> {
-        self.0.take().map(|f| f())
-    }
-    fn fill(&self, code: Deferred<T>) -> bool {
-        self.0.replace(Some(code)).is_none()
-    }
-}
-
-pub enum Thunk<T> {
-    Value(T),
-    Indirect(Rc<Lazy<T>>),
-}
-
-impl<T: 'static> Lazy<T> {
-    /// Defer `f` until the value is first demanded.
-    pub fn new(f: impl FnOnce() -> T + 'static) -> Lazy<T, impl Code<T> + 'static> {
-        Self::step(move || Thunk::Value(f()))
-    }
-
-    pub fn step(f: impl FnOnce() -> Thunk<T> + 'static) -> Lazy<T, impl Code<T> + 'static> {
-        Lazy {
-            value: OnceCell::new(),
-            code: Once(Cell::new(Some(f))),
-        }
-    }
-
-    pub fn pending() -> Lazy<T, impl Code<T> + 'static> {
-        Lazy {
-            value: OnceCell::new(),
-            code: Pending(Cell::new(None)),
-        }
-    }
-
-    /// An already-evaluated binding; the common case after strictness analysis.
-    pub fn ready(value: T) -> Lazy<T, impl Code<T> + 'static> {
-        Lazy {
-            value: OnceCell::from(value),
-            code: Once(Cell::new(None::<fn() -> Thunk<T>>)),
-        }
-    }
-}
-
-impl<T, C: Code<T> + ?Sized> Lazy<T, C> {
-    pub fn fill(&self, f: impl FnOnce() -> Thunk<T> + 'static) {
-        assert!(
-            self.value.get().is_none() && self.code.fill(Box::new(f)),
-            "h2r-rt: a recursive binding filled twice"
-        );
-    }
-
-    /// Whether the binding has already been forced.
-    pub fn is_evaluated(&self) -> bool {
-        self.value.get().is_some()
-    }
-
-    fn enter(&self) -> Thunk<T> {
-        self.code
-            .enter()
-            .expect("h2r-rt: re-entrant force (<<loop>>)")
-    }
-}
-
-impl<T: Clone, C: Code<T> + ?Sized> Lazy<T, C> {
-    /// Force to WHNF, memoising the result.
-    ///
-    /// Panics on re-entrant forcing, which is this runtime's `<<loop>>`.
-    pub fn force(&self) -> &T {
-        if let Some(v) = self.value.get() {
-            return v;
-        }
-        let value = match self.enter() {
-            Thunk::Value(value) => value,
-            Thunk::Indirect(next) => chase(next),
-        };
-        self.value.get_or_init(|| value)
-    }
-}
-
-/// Follow a chain of indirections to its value, without recursion.
-///
-/// The value ends up in every cell on the chain that anyone else can still
-/// reach; a cell only this chase holds is about to die, so its value is moved
-/// out rather than copied, and it is not memoised at all. That keeps the
-/// common case, a fresh thunk that evaluated to a fresh node, free of the
-/// per-field reference-count traffic a copy costs. (Forwarding the outer cell
-/// to the inner one instead was tried and measured: it keeps both cells alive,
-/// which cost 17 % of time and 57 % of peak memory on a 1500-line script.)
-#[inline(never)]
-fn chase<T: Clone>(first: Rc<Lazy<T>>) -> T {
-    let mut pending = Vec::new();
-    let mut current = first;
-    let value = loop {
-        if current.value.get().is_some() {
-            break match Rc::get_mut(&mut current) {
-                Some(cell) => cell.value.take().expect("checked above"),
-                None => current.value.get().expect("checked above").clone(),
-            };
-        }
-        match current.enter() {
-            Thunk::Value(value) => {
-                if Rc::strong_count(&current) > 1 {
-                    pending.push(current);
-                }
-                break value;
-            }
-            Thunk::Indirect(next) => {
-                if Rc::strong_count(&current) > 1 {
-                    pending.push(current);
-                }
-                current = next;
-            }
-        }
-    };
-    for cell in pending {
-        cell.value.get_or_init(|| value.clone());
-    }
-    value
-}
-
-impl<T: fmt::Debug, C: ?Sized> fmt::Debug for Lazy<T, C> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.value.get() {
-            Some(v) => write!(f, "Lazy({v:?})"),
-            None => write!(f, "Lazy(<thunk>)"),
-        }
-    }
-}
-
-/// A thunk shared across several owners, for recursive or graph-shaped values.
-pub type Shared<T> = Rc<Lazy<T>>;
-
-pub fn shared<T: 'static>(f: impl FnOnce() -> T + 'static) -> Shared<T> {
-    Rc::new(Lazy::new(f))
-}
+// Public API of the crate; unused when the runtime is inlined as a private module.
+#[allow(unused_imports)]
+pub use self::cell::{Code, Deferred, Lazy, Shared, Thunk, shared};
 
 pub trait Suspend: Sized + 'static {
     fn suspend(f: impl FnOnce() -> Self + 'static) -> Self;
@@ -359,16 +202,16 @@ impl Int {
         Self(shared(f))
     }
     pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
-        Self(Rc::new(Lazy::step(move || Thunk::Indirect(f().0))))
+        Self(Shared::step(move || Thunk::Indirect(f().0)))
     }
     pub fn pending() -> Self {
-        Self(Rc::new(Lazy::pending()))
+        Self(Shared::pending())
     }
     pub fn fill(&self, value: Self) {
         self.0.fill(move || Thunk::Indirect(value.0));
     }
     pub fn ready(value: i64) -> Self {
-        Self(Rc::new(Lazy::ready(value)))
+        Self(Shared::ready(value))
     }
     pub fn force(&self) -> i64 {
         *self.0.force()
@@ -377,7 +220,7 @@ impl Int {
         self.0.is_evaluated()
     }
     pub fn shares_with(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
+        Shared::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -486,10 +329,10 @@ fn deferred(value: Field) -> Thunk<Field> {
 
 impl Field {
     pub fn defer_to(f: impl FnOnce() -> Field + 'static) -> Self {
-        Self::Deferred(Rc::new(Lazy::step(move || deferred(f()))))
+        Self::Deferred(Shared::step(move || deferred(f())))
     }
     pub fn pending() -> Self {
-        Self::Deferred(Rc::new(Lazy::pending()))
+        Self::Deferred(Shared::pending())
     }
     pub fn fill(&self, value: Field) {
         match self {
@@ -536,7 +379,7 @@ impl Field {
     pub fn int(&self) -> Int {
         match self {
             Self::Int(v) => v.clone(),
-            Self::Deferred(cell) => match cell.value.get() {
+            Self::Deferred(cell) => match cell.get() {
                 Some(value) => value.int(),
                 None => {
                     let cell = cell.clone();
@@ -549,7 +392,7 @@ impl Field {
     pub fn data(&self) -> Data {
         match self {
             Self::Data(v) => v.clone(),
-            Self::Deferred(cell) => match cell.value.get() {
+            Self::Deferred(cell) => match cell.get() {
                 Some(value) => value.data(),
                 None => {
                     let cell = cell.clone();
@@ -562,7 +405,7 @@ impl Field {
     pub fn closure(&self) -> Closure {
         match self {
             Self::Closure(v) => v.clone(),
-            Self::Deferred(cell) => match cell.value.get() {
+            Self::Deferred(cell) => match cell.get() {
                 Some(value) => value.closure(),
                 None => {
                     let cell = cell.clone();
@@ -707,12 +550,12 @@ impl<R> Step<R> {
 impl Closure {
     pub fn ready(arity: usize, code: impl Fn(Vec<Field>) -> Field + 'static) -> Self {
         assert!(arity > 0);
-        Self(Rc::new(Lazy::ready(ClosureCode {
+        Self(Shared::ready(ClosureCode {
             arity,
             code: Rc::new(code),
             enter: None,
             supplied: Vec::new(),
-        })))
+        }))
     }
     pub fn entering(
         arity: usize,
@@ -720,12 +563,12 @@ impl Closure {
         enter: impl Fn(Vec<Field>) -> Step<i64> + 'static,
     ) -> Self {
         assert!(arity > 0);
-        Self(Rc::new(Lazy::ready(ClosureCode {
+        Self(Shared::ready(ClosureCode {
             arity,
             code: Rc::new(code),
             enter: Some(Rc::new(enter)),
             supplied: Vec::new(),
-        })))
+        }))
     }
     pub fn bind<C: 'static>(arity: usize, code: fn(&C, Vec<Field>) -> Field, captures: C) -> Self {
         Self::ready(arity, move |arguments| code(&captures, arguments))
@@ -748,10 +591,10 @@ impl Closure {
         Self(shared(init))
     }
     pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
-        Self(Rc::new(Lazy::step(move || Thunk::Indirect(f().0))))
+        Self(Shared::step(move || Thunk::Indirect(f().0)))
     }
     pub fn pending() -> Self {
-        Self(Rc::new(Lazy::pending()))
+        Self(Shared::pending())
     }
     pub fn fill(&self, value: Self) {
         self.0.fill(move || Thunk::Indirect(value.0));
@@ -788,12 +631,12 @@ impl Closure {
                 }
                 let mut supplied = function.supplied.clone();
                 supplied.extend(arguments);
-                return Field::Closure(Self(Rc::new(Lazy::ready(ClosureCode {
+                return Field::Closure(Self(Shared::ready(ClosureCode {
                     arity: function.arity,
                     code: function.code.clone(),
                     enter: function.enter.clone(),
                     supplied,
-                }))));
+                })));
             }
             // The common case, a known-arity call of a closure nobody partially
             // applied, hands the caller's vector straight to the code.
@@ -906,19 +749,19 @@ impl Data {
         Self(shared(f))
     }
     pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
-        Self(Rc::new(Lazy::step(move || Thunk::Indirect(f().0))))
+        Self(Shared::step(move || Thunk::Indirect(f().0)))
     }
     pub fn pending() -> Self {
-        Self(Rc::new(Lazy::pending()))
+        Self(Shared::pending())
     }
     pub fn fill(&self, value: Self) {
         self.0.fill(move || Thunk::Indirect(value.0));
     }
     pub fn ready(constructor: &'static str, fields: impl Into<Fields>) -> Self {
-        Self(Rc::new(Lazy::ready(Node {
+        Self(Shared::ready(Node {
             constructor,
             fields: fields.into(),
-        })))
+        }))
     }
     pub fn force(&self) -> &Node {
         self.0.force()
@@ -927,7 +770,7 @@ impl Data {
         self.0.is_evaluated()
     }
     pub fn shares_with(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
+        Shared::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -1159,7 +1002,7 @@ pub struct ListNames {
 /// the left list is copied only when the corresponding result cell is
 /// demanded. The right list is reached, not copied: its cells are shared.
 pub fn append_list(left: Data, right: Data, names: ListNames) -> Data {
-    Data(Rc::new(Lazy::step(move || {
+    Data(Shared::step(move || {
         let node = left.force();
         if node.constructor == names.nil {
             return Thunk::Indirect(right.0);
@@ -1173,7 +1016,7 @@ pub fn append_list(left: Data, right: Data, names: ListNames) -> Data {
             ]
             .into(),
         })
-    })))
+    }))
 }
 
 /// The carrier of a list element that is computed on demand.
@@ -2453,7 +2296,7 @@ mod tests {
     #[test]
     fn shared_thunks_share_the_result() {
         let a = shared(|| vec![1, 2, 3]);
-        let b = Rc::clone(&a);
+        let b = a.clone();
         assert_eq!(a.force().len(), 3);
         assert!(b.is_evaluated());
     }

@@ -10,8 +10,8 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use h2r_rt::{Closure, Data, Field, Int};
 
@@ -41,11 +41,17 @@ static LOCK: Mutex<()> = Mutex::new(());
 fn measure(n: usize, mut f: impl FnMut()) -> (usize, usize) {
     let _serial = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     f(); // warm anything lazily initialised
-    let (a0, b0) = (ALLOCATIONS.load(Ordering::Relaxed), BYTES.load(Ordering::Relaxed));
+    let (a0, b0) = (
+        ALLOCATIONS.load(Ordering::Relaxed),
+        BYTES.load(Ordering::Relaxed),
+    );
     for _ in 0..n {
         f();
     }
-    let (a1, b1) = (ALLOCATIONS.load(Ordering::Relaxed), BYTES.load(Ordering::Relaxed));
+    let (a1, b1) = (
+        ALLOCATIONS.load(Ordering::Relaxed),
+        BYTES.load(Ordering::Relaxed),
+    );
     ((a1 - a0) / n, (b1 - b0) / n)
 }
 
@@ -75,7 +81,10 @@ fn thunk_to_ready_node_is_two_allocations() {
         SINK.with(|s| s.set(s.get() + node.force().fields.len() as i64));
     });
     eprintln!("thunk -> ready node: {allocations} allocations");
-    assert!(allocations <= 2, "thunk -> ready node made {allocations} allocations");
+    assert!(
+        allocations <= 2,
+        "thunk -> ready node made {allocations} allocations"
+    );
 }
 
 #[test]
@@ -88,7 +97,10 @@ fn bind_and_saturated_apply_budget() {
     // Today: the cell, the boxed code (Rc<dyn Fn>) and the argument vector.
     // The code box is the target of the single-allocation-closure work.
     eprintln!("bind + apply: {allocations} allocations");
-    assert!(allocations <= 3, "bind + apply made {allocations} allocations");
+    assert!(
+        allocations <= 3,
+        "bind + apply made {allocations} allocations"
+    );
 }
 
 #[test]
@@ -101,7 +113,10 @@ fn partial_application_budget() {
     });
     // bind (2) + first args vec + partial cell + its supplied vec + second args vec + merged vec
     eprintln!("partial application: {allocations} allocations");
-    assert!(allocations <= 7, "partial application made {allocations} allocations");
+    assert!(
+        allocations <= 7,
+        "partial application made {allocations} allocations"
+    );
 }
 
 #[test]
@@ -134,9 +149,13 @@ fn cons_list_is_one_allocation_per_cell() {
         SINK.with(|s| s.set(s.get() + walked));
     });
     eprintln!("cons list of 100: {allocations} allocations");
-    assert!(allocations <= 101, "one cell per cons plus the nil, got {allocations}");
+    assert!(
+        allocations <= 101,
+        "one cell per cons plus the nil, got {allocations}"
+    );
     // Bytes per character of a String today; the representation work lowers this.
+    // (A ready cell's code is zero bytes: count + vtable + the 112-byte node.)
     let per_cell = bytes / 101;
-    assert!(per_cell <= 136, "a cons cell costs {per_cell} bytes");
+    assert!(per_cell <= 128, "a cons cell costs {per_cell} bytes");
     eprintln!("cons cell: {per_cell} bytes");
 }

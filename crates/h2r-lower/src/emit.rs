@@ -989,6 +989,20 @@ pub struct SplitProgram {
     pub main_dependencies: Vec<String>,
 }
 
+/// The runtime as the single source file the generated crates compile: `lib.rs`
+/// with its `mod cell;` declaration replaced by the body of `cell.rs`, because
+/// the generated `h2r_rt` has no file next to it to load a module from.
+pub(crate) fn runtime_source() -> String {
+    include_str!("../../h2r-rt/src/lib.rs").replacen(
+        "mod cell;",
+        &format!(
+            "mod cell {{\n{}\n}}",
+            include_str!("../../h2r-rt/src/cell.rs")
+        ),
+        1,
+    )
+}
+
 const RUNTIME_ALIASES: &str = "#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField, Closure as HClosure};\n#[allow(unused_imports)]\nuse h2r_rt::{Encoding as HEncoding, ListNames as HListNames, StringNames as HStringNames};\n#[allow(unused_imports)]\nuse h2r_rt::Addr as HAddr;\n#[allow(unused_imports)]\nuse h2r_rt::{Array as HArray, Bytes as HBytes, MutVar as HMutVar};\n";
 
 pub fn emit_entry_split(
@@ -1080,7 +1094,7 @@ pub fn emit_entry_split(
         }
         main.push_str(&prepared.adapter);
         Ok(SplitProgram {
-            runtime: include_str!("../../h2r-rt/src/lib.rs").to_string(),
+            runtime: runtime_source(),
             crates,
             main,
             main_dependencies: entry_crates.into_iter().collect(),
@@ -1231,7 +1245,7 @@ fn functions(
     let has_boxed = has_boxed(world, leaves);
     let groups = groups_of(world, specialization, leaves)?;
     out.push_str("\n#[allow(dead_code)]\nmod h2r_rt {\n");
-    out.push_str(include_str!("../../h2r-rt/src/lib.rs"));
+    out.push_str(&runtime_source());
     out.push_str("\n}\n");
     out.push_str(RUNTIME_ALIASES);
     for (position, (&index, leaf)) in leaves.iter().enumerate() {
@@ -1276,6 +1290,7 @@ fn has_boxed(world: &World<'_>, leaves: &BTreeMap<usize, &LoweredLeaf>) -> bool 
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn leaf_code(
     world: &World<'_>,
     specialization: &specialize::Specialization,
@@ -1437,13 +1452,16 @@ fn leaf_code(
                         // stays: it is the trampoline that keeps loops in constant
                         // stack. A call with no arguments stays too, so a CAF keeps
                         // its single shared cell.
-                        (None, Some((target_index, target, arguments)), Operation::CallTop { .. })
-                            if target_index != index
-                                && !arguments.is_empty()
-                                && matches!(
-                                    (groups.get(&index), groups.get(&target_index)),
-                                    (Some(mine), Some(theirs)) if mine != theirs
-                                ) =>
+                        (
+                            None,
+                            Some((target_index, target, arguments)),
+                            Operation::CallTop { .. },
+                        ) if target_index != index
+                            && !arguments.is_empty()
+                            && matches!(
+                                (groups.get(&index), groups.get(&target_index)),
+                                (Some(mine), Some(theirs)) if mine != theirs
+                            ) =>
                         {
                             let args = arguments
                                 .iter()

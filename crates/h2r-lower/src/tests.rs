@@ -4563,7 +4563,7 @@ fn int_lit(value: i64) -> Value {
 
 /// The stable name of a top-level binding of `module`.
 fn generated(source: &str) -> String {
-    source.replacen(include_str!("../../h2r-rt/src/lib.rs"), "", 1)
+    source.replacen(&crate::emit::runtime_source(), "", 1)
 }
 
 fn sn(module: &str, occ: &str) -> String {
