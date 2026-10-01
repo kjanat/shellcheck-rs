@@ -12,13 +12,14 @@
 min_version = "2026.9.7"
 
 [tools]
-cabal  = { version = "latest" }
-dprint = { version = "latest" }
+cabal     = { version = "latest" }
+dprint    = { version = "latest" }
 # hls = {version = "latest"}
-ghc    = { version = "9.6.7" }
-ghcup  = { version = "latest", postinstall = "mise run hls-install" }
-rust   = { version = "latest", components = ["rustfmt", "clippy"] }
-tombi  = { version = "latest" }
+ghc       = { version = "9.6.7" }
+ghcup     = { version = "latest", postinstall = "mise run hls-install" }
+hyperfine = { version = "latest" }                                        # scripts/perf-ab.sh
+rust      = { version = "latest", components = ["rustfmt", "clippy"] }
+tombi     = { version = "latest" }
 
 [tool_alias]
 ghc = "mise-ghcup:ghc"
