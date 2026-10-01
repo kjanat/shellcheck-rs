@@ -40,13 +40,16 @@ The gap to GHC is ~19×. GHC wins on exactly these things: a bump allocator, a g
 
 ### Landed
 
-| package                                            | commit               | small (150 lines) | medium (1500 lines) | peak RSS medium |
-| -------------------------------------------------- | -------------------- | ----------------- | ------------------- | --------------- |
-| chase move-out, apply fast path, direct tail calls | `6199812`            | −4 %              | −8 %                | =               |
-| WP1 thin cells                                     | `f11d5f6`            | −16 % (±9)        | −12 % (±4)          | 1355 → 1252 MiB |
-| WP3 one-allocation closures + WP2 Field 16 bytes   | `ddccda5`, `13871e9` | −17 % (±14)       | −14 % (±3)          | 1252 → 861 MiB  |
+| package                                                | commit               | small (150 lines) | medium (1500 lines) | peak RSS medium |
+| ------------------------------------------------------ | -------------------- | ----------------- | ------------------- | --------------- |
+| chase move-out, apply fast path, direct tail calls     | `6199812`            | −4 %              | −8 %                | =               |
+| WP1 thin cells                                         | `f11d5f6`            | −16 % (±9)        | −12 % (±4)          | 1355 → 1252 MiB |
+| WP3 one-allocation closures + WP2 Field 16 bytes       | `ddccda5`, `13871e9` | −17 % (±14)       | −14 % (±3)          | 1252 → 861 MiB  |
+| WP7 direct call when forced next + WP6 Args (reverted) | `9749e67`, `a2de2f8` | −5 % (±12)        | +2 % … +7 % (±5)    | =               |
 
 (Each row against the binary before it, same machine, hyperfine -N, 10 runs; output byte-identical to the GHC oracle on the conformance gate.)
+
+The WP6+WP7 row is a wash in wall time but **+4.2 % instructions** (5.34 G → 5.57 G, callgrind, same script). The allocator shrank by 0.19 G, yet the `Args` small-vector added about 0.44 G: `Args::push` 113 M and `From<[Field; N]>` 78 M as out-of-line calls, `take_front`/`into_vec`/`Vec::extend(Args::IntoIter)` 82 M, and `memcpy` up 78 M from moving a 72-byte `Args` by value through `apply`, the vtable `call` slot and the `k_` shims (a `Vec` is 24 bytes). WP6 was reverted in `fa6ee0b`; WP7 stays (it is roughly neutral in instructions and does not raise any count).
 
 ### Profile after WP1–WP3 (`e156aea`, same 150-line script)
 
@@ -61,6 +64,7 @@ The gap to GHC is ~19×. GHC wins on exactly these things: a bump allocator, a g
 5. **Field tags are exact.** `Field::Char` vs `Field::Int64` and the panics in `Field::int()`, `data()`, `closure()` are how miscompiles surface. Keep them.
 6. **Drop is recursive today.** Long lists drop recursively; the program runs on a big stack (`on_program_stack`). Do not make drop deeper.
 7. **Do not retain.** A forwarding/indirection scheme that keeps an extra cell alive per value was tried (`c1d8448`) and cost +57 % peak memory and +17 % time. Values live inline in their cell.
+8. **mimalloc's fast path is cheap: about 60 instructions for a malloc/free pair.** Replacing one small heap allocation with a by-value small-vector was tried (`a2de2f8`, reverted in `fa6ee0b`) and cost +4 % instructions: the copies and the out-of-line push/convert calls outweighed the saved allocation. A representation change must remove *work* (fewer calls, fewer bytes touched), not only a `malloc`; check with callgrind on the compiled program, not only with the allocation counters.
 
 ## Verification loops, cheapest first
 
@@ -135,9 +139,9 @@ Needs WP1. A ready closure's captures and `k_` function pointer live in the cell
 
 Emitter assigns a `u32` per constructor name; `Node` gains `tag`, matches switch on it, names stay for diagnostics and the runtime's `*Names` structs. Emitter + runtime. Small win (~1–2 %), enables jump tables.
 
-### WP6 Argument vectors without heap allocation
+### WP6 Argument vectors without heap allocation (tried, reverted)
 
-Every call through a closure builds a `Vec<Field>` (`vec![...]` in the emitted code, `a: Vec<HField>` in the `k_` shims, `Vec<Field>` throughout `apply`/`apply_tail`/`apply_later`/`apply_step`/`Partial`). Replace it with `h2r_rt::Args`, a small-vector with inline capacity 4 (`Field` is 16 bytes, so 64 bytes inline) that spills to a `Vec` beyond that. Emitter: `vec![..]` becomes `h2r_rt::args![..]`, shim parameters become `HArgs`, alias added to `RUNTIME_ALIASES`. Acceptance: `bind + apply` ≤ 1 allocation, partial application ≤ 3, no other count rises, Miri clean (the type will use `MaybeUninit`), all tests.
+Every call through a closure builds a `Vec<Field>` (`vec![...]` in the emitted code, `a: Vec<HField>` in the `k_` shims, `Vec<Field>` throughout `apply`/`apply_tail`/`apply_later`/`apply_step`/`Partial`). A small-vector `Args` with inline capacity 4 (72 bytes, `Len` niche as the tag, spill to `Vec` on the fifth push, `Box<[Field]>` for a partial application's supplied arguments) was built in `a2de2f8`. The counters did what the spec asked (`bind + apply` 2 → 1 allocation, partial 5 → 3, Miri clean) and the compiled program got **slower by 4.2 % in instructions** (see the Landed table), so it was reverted in `fa6ee0b`. Reasons, from the profile: the 72-byte value is moved through three layers per call, the push/from/take_front helpers were not inlined into the emitted crates (they live in the pasted-in runtime module, where `#[inline]` would have been needed), and `apply` still converted back to a `Vec` in the partial path. If this is picked up again: keep the by-value type at 24 or 32 bytes (inline capacity 1, since `From<[Field; 1]>` was the hot constructor), mark every helper `#[inline]`, remove every `into_vec`, and prove the instruction count on the compiled program before the gate.
 
 ### WP7 Call the entry block directly when the result is forced next
 
