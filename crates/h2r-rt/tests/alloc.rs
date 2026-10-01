@@ -13,7 +13,7 @@ use std::cell::Cell;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use h2r_rt::{Closure, Data, Field, Int};
+use h2r_rt::{Closure, Data, Field, Int, Step};
 
 struct Counting;
 
@@ -61,6 +61,10 @@ fn k_add((captured,): &(i64,), arguments: Vec<Field>) -> Field {
     Field::Int64(captured + arguments[0].int64())
 }
 
+fn j_add((captured,): &(i64,), arguments: Vec<Field>) -> Step<i64> {
+    Step::Done(captured + arguments[0].int64())
+}
+
 fn k_add2((captured,): &(i64,), arguments: Vec<Field>) -> Field {
     Field::Int64(captured + arguments[0].int64() + arguments[1].int64())
 }
@@ -94,12 +98,28 @@ fn bind_and_saturated_apply_budget() {
         let result = closure.apply(vec![Field::Int64(2)]);
         SINK.with(|s| s.set(s.get() + result.int64()));
     });
-    // Today: the cell, the boxed code (Rc<dyn Fn>) and the argument vector.
-    // The code box is the target of the single-allocation-closure work.
+    // The cell (captures and function pointer live in its code tail) and the
+    // caller's argument vector.
     eprintln!("bind + apply: {allocations} allocations");
     assert!(
-        allocations <= 3,
+        allocations <= 2,
         "bind + apply made {allocations} allocations"
+    );
+}
+
+#[test]
+fn bind_entering_and_entered_apply_budget() {
+    let (allocations, _) = measure(1000, || {
+        let closure = Closure::bind_entering(1, k_add, j_add, (40,));
+        match closure.apply_tail(vec![Field::Int64(2)]) {
+            h2r_rt::Tail::Enter(step) => SINK.with(|s| s.set(s.get() + step.run())),
+            h2r_rt::Tail::Value(_) => panic!("a saturated call with an entry was applied"),
+        }
+    });
+    eprintln!("bind_entering + apply_tail: {allocations} allocations");
+    assert!(
+        allocations <= 2,
+        "bind_entering + apply_tail made {allocations} allocations"
     );
 }
 
@@ -111,10 +131,11 @@ fn partial_application_budget() {
         let result = partial.apply(vec![Field::Int64(1)]);
         SINK.with(|s| s.set(s.get() + result.int64()));
     });
-    // bind (2) + first args vec + partial cell + its supplied vec + second args vec + merged vec
+    // bind (1) + first args vec, which becomes the partial's `supplied` + partial
+    // cell + second args vec + merged vec
     eprintln!("partial application: {allocations} allocations");
     assert!(
-        allocations <= 7,
+        allocations <= 5,
         "partial application made {allocations} allocations"
     );
 }

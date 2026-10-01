@@ -20,7 +20,7 @@ Dynamic counts behind the 76 M allocations:
 | source                          |  count |        allocations each |
 | ------------------------------- | -----: | ----------------------: |
 | `delayN` thunks (`f_` wrappers) | 17.8 M |                       1 |
-| `Closure::bind`                 |  7.5 M | 2 (cell + `Rc<dyn Fn>`) |
+| `Closure::bind`                 |  7.5 M |       1 (WP3; was 2)    |
 | `apply_later` thunks            |  5.5 M |  1 + the argument `Vec` |
 | `Closure::apply`                |  2.4 M |        1–2 `Vec<Field>` |
 | `Data::ready` (constructors)    |  2.6 M |                       1 |
@@ -120,9 +120,11 @@ struct Header<T> {
 
 Needs WP1. The remaining 24-byte payload is `Addr { &'static [u8], usize }`. Replace it with an 8-byte handle: a `u32` index into a literal table the emitter writes (`static LITERALS: &[&[u8]]`) plus a `u32` offset. Emitter change: collect literals, emit the table, `HAddr::literal(index)`. Acceptance: `Field` is 16 bytes, `Node` ≤ 72, cons cell ≤ 96 bytes, conformance gate 0 differences.
 
-### WP3 Single-allocation closures
+### WP3 Single-allocation closures (landed in the working tree, not yet timed)
 
 Needs WP1. A ready closure's captures and `k_` function pointer live in the cell's code tail (a `Code<ClosureCode>` impl whose `enter` is unreachable), so `Closure::bind` is one allocation. `ClosureCode.code` becomes an enum: `Inline` (call through the tail), `Partial { parent: Closure }` for partial application. Acceptance: `bind + apply` ≤ 2 allocations, partial ≤ 5, all tests, Miri.
+
+**As built.** `Closure::bind`/`bind_entering` allocate the cell only: the value is `ClosureCode { arity, entry, kind: Inline }` and the code tail is `Bound<Captures> { code, captures }` (plus `enter` for `BoundEntering`), called through two new vtable slots (`Code::call`, `Code::call_enter`, default `unreachable!`) that `Shared::call`/`call_enter` dispatch. `Closure::ready`/`entering` keep any Rust closure, but inline in the tail (`Boxed<F>`), so they no longer allocate a second time either. A partial application is a small ready cell (`Evaluated` tail) with `Kind::Partial { parent, supplied }`, where `parent` is always the cell with the code (partials of partials are flattened) and the first arguments' vector becomes `supplied` as it is. A thunk that turns out to be a closure (`defer_to`, `pending` + `fill`) still chases `Indirect` links; because the value of a code cell refers to the cell itself and cannot be copied into the thunk, `chase` asks the source cell's code (`Code::shares` / `Code::share`, one `Option` check in the vtable) and the thunk gets `Kind::Forward(cell with the code)`. Dropping a closure drops its captures with the cell, once.
 
 ### WP4 Constructor tags
 

@@ -512,18 +512,139 @@ pub fn absent_error(message: Addr) -> ! {
 
 /// A shared lazy function value. Partial application retains arguments without
 /// forcing them; saturation invokes code exactly once per call, not per closure.
+///
+/// A closure made by [`Closure::bind`] is one allocation: the cell holds the
+/// [`ClosureCode`] value (arity and shape) and, as its code tail, the captures
+/// and the function pointers. A partial application is a second, small cell
+/// that points at the cell with the code and holds the arguments supplied so
+/// far. A deferred closure is a thunk cell whose value points at the closure it
+/// turned out to be.
 #[derive(Clone)]
 pub struct Closure(Shared<ClosureCode>);
 
 #[derive(Clone)]
 pub struct ClosureCode {
-    arity: usize,
-    code: Rc<dyn Fn(Vec<Field>) -> Field>,
-    enter: Option<Entry>,
-    supplied: Vec<Field>,
+    arity: u32,
+    /// Whether the code tail also has an entry that continues as a tail call.
+    entry: bool,
+    kind: Kind,
 }
 
-type Entry = Rc<dyn Fn(Vec<Field>) -> Step<i64>>;
+#[derive(Clone)]
+enum Kind {
+    /// The function body is this cell's own code tail ([`Shared::call`]).
+    Inline,
+    /// `parent` is an `Inline` cell (never another partial application or a
+    /// forward: those are flattened when this one is made); `supplied` are the
+    /// arguments already given, fewer than the arity.
+    Partial {
+        parent: Closure,
+        supplied: Vec<Field>,
+    },
+    /// The value of a thunk cell that evaluated to the closure `target`, a
+    /// cell whose own value is `Inline` or `Partial`, never a `Forward`. Its
+    /// `arity` and `entry` are unused; [`Closure::resolve`] follows the link.
+    Forward(Closure),
+}
+
+impl ClosureCode {
+    fn inline(arity: usize, entry: bool) -> Self {
+        assert!(arity > 0);
+        Self {
+            arity: u32::try_from(arity).expect("h2r-rt: a function of absurd arity"),
+            entry,
+            kind: Kind::Inline,
+        }
+    }
+
+    fn forward(target: Closure) -> Self {
+        Self {
+            arity: 0,
+            entry: false,
+            kind: Kind::Forward(target),
+        }
+    }
+}
+
+/// The code tail of `Closure::bind`: a known function and its captures.
+struct Bound<C> {
+    code: fn(&C, Vec<Field>) -> Field,
+    captures: C,
+}
+
+/// The code tail of `Closure::bind_entering`.
+struct BoundEntering<C> {
+    code: fn(&C, Vec<Field>) -> Field,
+    enter: fn(&C, Vec<Field>) -> Step<i64>,
+    captures: C,
+}
+
+/// The code tail of `Closure::ready`: any Rust closure.
+struct Boxed<F>(F);
+
+/// The code tail of `Closure::entering`.
+struct BoxedEntering<F, G> {
+    code: F,
+    enter: G,
+}
+
+/// Closure cells are created evaluated, so nothing ever enters or fills them.
+/// The value of such a cell (`Kind::Inline`) refers to the cell's own tail, so
+/// a cell that evaluates to it gets a `Kind::Forward` to it instead of a copy.
+macro_rules! never_entered {
+    () => {
+        fn shares() -> bool {
+            true
+        }
+        fn share(&self, cell: &Shared<ClosureCode>) -> ClosureCode {
+            ClosureCode::forward(Closure(cell.clone()))
+        }
+        fn enter(&self) -> Option<Thunk<ClosureCode>> {
+            unreachable!("h2r-rt: a closure cell is created evaluated")
+        }
+        fn fill(&self, _: Deferred<ClosureCode>) -> bool {
+            false
+        }
+    };
+}
+
+impl<C: 'static> Code<ClosureCode> for Bound<C> {
+    never_entered!();
+    fn call(&self, arguments: Vec<Field>) -> Field {
+        (self.code)(&self.captures, arguments)
+    }
+}
+
+impl<C: 'static> Code<ClosureCode> for BoundEntering<C> {
+    never_entered!();
+    fn call(&self, arguments: Vec<Field>) -> Field {
+        (self.code)(&self.captures, arguments)
+    }
+    fn call_enter(&self, arguments: Vec<Field>) -> Step<i64> {
+        (self.enter)(&self.captures, arguments)
+    }
+}
+
+impl<F: Fn(Vec<Field>) -> Field + 'static> Code<ClosureCode> for Boxed<F> {
+    never_entered!();
+    fn call(&self, arguments: Vec<Field>) -> Field {
+        (self.0)(arguments)
+    }
+}
+
+impl<F, G> Code<ClosureCode> for BoxedEntering<F, G>
+where
+    F: Fn(Vec<Field>) -> Field + 'static,
+    G: Fn(Vec<Field>) -> Step<i64> + 'static,
+{
+    never_entered!();
+    fn call(&self, arguments: Vec<Field>) -> Field {
+        (self.code)(arguments)
+    }
+    fn call_enter(&self, arguments: Vec<Field>) -> Step<i64> {
+        (self.enter)(arguments)
+    }
+}
 
 pub enum Tail {
     Value(Field),
@@ -549,29 +670,27 @@ impl<R> Step<R> {
 
 impl Closure {
     pub fn ready(arity: usize, code: impl Fn(Vec<Field>) -> Field + 'static) -> Self {
-        assert!(arity > 0);
-        Self(Shared::ready(ClosureCode {
-            arity,
-            code: Rc::new(code),
-            enter: None,
-            supplied: Vec::new(),
-        }))
+        Self(Shared::ready_with(
+            ClosureCode::inline(arity, false),
+            Boxed(code),
+        ))
     }
     pub fn entering(
         arity: usize,
         code: impl Fn(Vec<Field>) -> Field + 'static,
         enter: impl Fn(Vec<Field>) -> Step<i64> + 'static,
     ) -> Self {
-        assert!(arity > 0);
-        Self(Shared::ready(ClosureCode {
-            arity,
-            code: Rc::new(code),
-            enter: Some(Rc::new(enter)),
-            supplied: Vec::new(),
-        }))
+        Self(Shared::ready_with(
+            ClosureCode::inline(arity, true),
+            BoxedEntering { code, enter },
+        ))
     }
+    /// A known function and its captures: one allocation, the cell.
     pub fn bind<C: 'static>(arity: usize, code: fn(&C, Vec<Field>) -> Field, captures: C) -> Self {
-        Self::ready(arity, move |arguments| code(&captures, arguments))
+        Self(Shared::ready_with(
+            ClosureCode::inline(arity, false),
+            Bound { code, captures },
+        ))
     }
     pub fn bind_entering<C: 'static>(
         arity: usize,
@@ -579,16 +698,14 @@ impl Closure {
         enter: fn(&C, Vec<Field>) -> Step<i64>,
         captures: C,
     ) -> Self {
-        let captures = Rc::new(captures);
-        let entered = captures.clone();
-        Self::entering(
-            arity,
-            move |arguments| code(&captures, arguments),
-            move |arguments| enter(&entered, arguments),
-        )
-    }
-    pub fn defer(init: impl FnOnce() -> ClosureCode + 'static) -> Self {
-        Self(shared(init))
+        Self(Shared::ready_with(
+            ClosureCode::inline(arity, true),
+            BoundEntering {
+                code,
+                enter,
+                captures,
+            },
+        ))
     }
     pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
         Self(Shared::step(move || Thunk::Indirect(f().0)))
@@ -599,58 +716,95 @@ impl Closure {
     pub fn fill(&self, value: Self) {
         self.0.fill(move || Thunk::Indirect(value.0));
     }
+    /// Force this closure; if it is a thunk that turned out to be another
+    /// closure, step to that one, which is a cell with the code or a partial
+    /// application of it. `Shared` chases chains of thunks, and what it leaves
+    /// in the thunk is a `Kind::Forward` to the last cell of the chain, so
+    /// there is at most one link to follow.
+    fn resolve(&self) -> (&Closure, &ClosureCode) {
+        let code = self.0.force();
+        match &code.kind {
+            Kind::Forward(target) => (target, target.0.force()),
+            _ => (self, code),
+        }
+    }
+    /// The cell with the code to call, the arguments already supplied to it,
+    /// and the code of the closure applied (its arity, whether it has an entry).
+    fn split(&self) -> (&Closure, &[Field], &ClosureCode) {
+        let (resolved, code) = self.resolve();
+        match &code.kind {
+            Kind::Inline => (resolved, &[], code),
+            Kind::Partial { parent, supplied } => (parent, supplied, code),
+            Kind::Forward(_) => unreachable!("resolve follows forwards"),
+        }
+    }
     pub fn apply_tail(&self, arguments: Vec<Field>) -> Tail {
-        let function = self.force();
-        if let Some(enter) = &function.enter
-            && function.supplied.len() + arguments.len() == function.arity
-        {
-            if function.supplied.is_empty() {
-                return Tail::Enter(enter(arguments));
+        let (parent, supplied, code) = self.split();
+        let arity = code.arity as usize;
+        if code.entry && supplied.len() + arguments.len() == arity {
+            if supplied.is_empty() {
+                return Tail::Enter(parent.0.call_enter(arguments));
             }
-            let mut supplied = Vec::with_capacity(function.arity);
-            supplied.extend(function.supplied.iter().cloned());
-            supplied.extend(arguments);
-            return Tail::Enter(enter(supplied));
+            let mut all = Vec::with_capacity(arity);
+            all.extend(supplied.iter().cloned());
+            all.extend(arguments);
+            return Tail::Enter(parent.0.call_enter(all));
         }
         Tail::Value(self.apply(arguments))
     }
     pub fn force(&self) -> &ClosureCode {
-        self.0.force()
+        self.resolve().1
     }
     pub fn is_evaluated(&self) -> bool {
         self.0.is_evaluated()
     }
     pub fn apply(&self, mut arguments: Vec<Field>) -> Field {
-        let mut current = self.clone();
+        let mut held;
+        let mut current = self;
         loop {
-            let function = current.force();
-            let missing = function.arity - function.supplied.len();
+            let (parent, supplied, code) = current.split();
+            let arity = code.arity as usize;
+            let missing = arity - supplied.len();
             if arguments.len() < missing {
                 if arguments.is_empty() {
-                    return Field::Closure(current);
+                    return Field::Closure(current.clone());
                 }
-                let mut supplied = function.supplied.clone();
-                supplied.extend(arguments);
-                return Field::Closure(Self(Shared::ready(ClosureCode {
-                    arity: function.arity,
-                    code: function.code.clone(),
-                    enter: function.enter.clone(),
-                    supplied,
-                })));
+                // The first arguments of a closure nobody applied yet become
+                // its `supplied` as they are, vector and all.
+                let supplied = if supplied.is_empty() {
+                    arguments
+                } else {
+                    let mut all = Vec::with_capacity(supplied.len() + arguments.len());
+                    all.extend(supplied.iter().cloned());
+                    all.extend(arguments);
+                    all
+                };
+                return Field::Closure(Self(Shared::ready_with(
+                    ClosureCode {
+                        arity: code.arity,
+                        entry: code.entry,
+                        kind: Kind::Partial {
+                            parent: parent.clone(),
+                            supplied,
+                        },
+                    },
+                    cell::Evaluated,
+                )));
             }
             // The common case, a known-arity call of a closure nobody partially
             // applied, hands the caller's vector straight to the code.
-            if function.supplied.is_empty() && arguments.len() == missing {
-                return (function.code)(arguments);
+            if supplied.is_empty() && arguments.len() == missing {
+                return parent.0.call(arguments);
             }
-            let mut supplied = Vec::with_capacity(function.arity);
-            supplied.extend(function.supplied.iter().cloned());
-            supplied.extend(arguments.drain(..missing));
-            let result = (function.code)(supplied);
+            let mut all = Vec::with_capacity(arity);
+            all.extend(supplied.iter().cloned());
+            all.extend(arguments.drain(..missing));
+            let result = parent.0.call(all);
             if arguments.is_empty() {
                 return result;
             }
-            current = result.closure();
+            held = result.closure();
+            current = &held;
         }
     }
 }
@@ -702,14 +856,119 @@ mod closure_tests {
     fn deferred_function_is_shared_without_entering_its_body() {
         let n = Rc::new(std::cell::Cell::new(0));
         let count = n.clone();
-        let f = Closure::defer(move || {
+        let f = Closure::defer_to(move || {
             count.set(count.get() + 1);
-            Closure::ready(1, |args| args[0].clone()).force().clone()
+            Closure::ready(1, |args| args[0].clone())
         });
         assert!(!f.is_evaluated());
         assert_eq!(f.clone().apply(vec![Field::Int64(1)]).int64(), 1);
         assert_eq!(f.apply(vec![Field::Int64(2)]).int64(), 2);
         assert_eq!(n.get(), 1);
+    }
+
+    fn add((captured,): &(i64,), arguments: Vec<Field>) -> Field {
+        Field::Int64(captured + arguments[0].int64() + arguments[1].int64())
+    }
+
+    #[test]
+    fn a_bound_closure_applies_partially_and_repeatedly_through_its_own_cell() {
+        let function = Closure::bind(2, add, (40,));
+        let first = function.apply(vec![Field::Int64(1)]).closure();
+        // A partial application of a partial application points at the cell
+        // with the code, not at the partial application.
+        let again = first.apply(Vec::new()).closure();
+        assert_eq!(again.apply(vec![Field::Int64(1)]).int64(), 42);
+        assert_eq!(first.apply(vec![Field::Int64(5)]).int64(), 46);
+        let wide = Closure::bind(
+            3,
+            |(): &(), a| Field::Int64(a[0].int64() * 100 + a[1].int64() * 10 + a[2].int64()),
+            (),
+        );
+        let one = wide.apply(vec![Field::Int64(1)]).closure();
+        let two = one.apply(vec![Field::Int64(2)]).closure();
+        assert_eq!(two.apply(vec![Field::Int64(3)]).int64(), 123);
+        assert_eq!(
+            one.apply(vec![Field::Int64(4), Field::Int64(5)]).int64(),
+            145
+        );
+    }
+
+    #[test]
+    fn a_bound_closures_captures_are_dropped_with_its_last_owner() {
+        let drops = Rc::new(std::cell::Cell::new(0));
+        struct Probe(Rc<std::cell::Cell<u32>>);
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        let function = Closure::bind(2, |_: &Probe, _| Field::Int64(0), Probe(drops.clone()));
+        let partial = function.apply(vec![Field::Int64(1)]).closure();
+        drop(function);
+        assert_eq!(
+            drops.get(),
+            0,
+            "the partial application keeps the code alive"
+        );
+        assert_eq!(partial.apply(vec![Field::Int64(2)]).int64(), 0);
+        drop(partial);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn a_pending_closure_is_filled_and_applied_through_the_fill() {
+        let cell = Closure::pending();
+        let alias = cell.clone();
+        cell.fill(Closure::bind(2, add, (40,)));
+        assert_eq!(
+            alias.apply(vec![Field::Int64(1), Field::Int64(1)]).int64(),
+            42
+        );
+    }
+
+    #[test]
+    fn a_million_indirections_of_closures_force_in_constant_stack() {
+        fn countdown(n: u32) -> Closure {
+            Closure::defer_to(move || {
+                if n == 0 {
+                    Closure::bind(1, |(): &(), a| a[0].clone(), ())
+                } else {
+                    countdown(n - 1)
+                }
+            })
+        }
+        let chain = countdown(1_000_000);
+        assert_eq!(chain.apply(vec![Field::Int64(9)]).int64(), 9);
+        assert_eq!(chain.apply(vec![Field::Int64(8)]).int64(), 8);
+    }
+
+    #[test]
+    fn a_deferred_partial_application_is_shared_not_copied() {
+        let function = Closure::bind(2, add, (40,));
+        let partial = function.apply(vec![Field::Int64(1)]).closure();
+        let deferred = Closure::defer_to({
+            let partial = partial.clone();
+            move || partial
+        });
+        assert_eq!(deferred.apply(vec![Field::Int64(1)]).int64(), 42);
+        assert_eq!(deferred.apply(vec![Field::Int64(2)]).int64(), 43);
+    }
+
+    #[test]
+    #[should_panic(expected = "<<loop>>")]
+    fn a_closure_that_is_itself_is_a_loop() {
+        let cell = Closure::pending();
+        cell.fill(cell.clone());
+        cell.force();
+    }
+
+    #[test]
+    #[should_panic(expected = "<<loop>>")]
+    fn two_closures_that_are_each_other_are_a_loop() {
+        let (a, b) = (Closure::pending(), Closure::pending());
+        a.fill(b.clone());
+        b.fill(a.clone());
+        a.apply(vec![Field::Int64(1)]);
     }
 
     #[test]

@@ -31,6 +31,8 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
+use super::{Field, Step};
+
 /// A call-by-need binding that lives on the stack or in a field rather than
 /// behind a pointer. [`Shared`] is the heap form the runtime uses.
 pub struct Lazy<T, C: ?Sized = dyn Code<T>> {
@@ -43,6 +45,36 @@ pub type Deferred<T> = Box<dyn FnOnce() -> Thunk<T>>;
 pub trait Code<T> {
     fn enter(&self) -> Option<Thunk<T>>;
     fn fill(&self, code: Deferred<T>) -> bool;
+
+    /// Call the code as a function body. The tail of a closure cell holds its
+    /// captures and function pointers, and the closure's value says how to use
+    /// them. Only such tails override this; the cell that holds one is created
+    /// already evaluated, so `enter` is never reached for it.
+    fn call(&self, _arguments: Vec<Field>) -> Field {
+        unreachable!("h2r-rt: this cell's code is not a function body")
+    }
+
+    /// As [`Code::call`], for the entry that continues as a tail call.
+    fn call_enter(&self, _arguments: Vec<Field>) -> Step<i64> {
+        unreachable!("h2r-rt: this cell's code has no entry")
+    }
+
+    /// Whether the value of an evaluated cell with this code is not a plain
+    /// value: it refers to the cell itself (a closure's value says "my code is
+    /// my tail"), so it cannot be moved or cloned into another cell. Such a
+    /// cell's value is given to others by [`Code::share`] instead.
+    fn shares() -> bool
+    where
+        Self: Sized,
+    {
+        false
+    }
+
+    /// The value another cell gets when it evaluates to this one (see
+    /// `chase`). Called only when `shares()`; `cell` is the cell holding `self`.
+    fn share(&self, _cell: &Shared<T>) -> T {
+        unreachable!("h2r-rt: this cell's code does not share by reference")
+    }
 }
 
 /// The code of a binding that is already evaluated: nothing, and no bytes.
@@ -175,6 +207,9 @@ struct Block<T, C> {
     code: C,
 }
 
+/// The vtable function behind [`Code::share`].
+type Share<T> = unsafe fn(NonNull<Header<T>>) -> T;
+
 /// The operations that need the concrete code type, instantiated per `C`.
 ///
 /// Each takes the pointer a `Shared<T>` holds. Every function is `unsafe`
@@ -184,15 +219,27 @@ struct Block<T, C> {
 struct VTable<T> {
     enter: unsafe fn(NonNull<Header<T>>) -> Option<Thunk<T>>,
     fill: unsafe fn(NonNull<Header<T>>, Deferred<T>) -> bool,
+    call: unsafe fn(NonNull<Header<T>>, Vec<Field>) -> Field,
+    call_enter: unsafe fn(NonNull<Header<T>>, Vec<Field>) -> Step<i64>,
+    /// Present only for code with `Code::shares`.
+    share: Option<Share<T>>,
     free: unsafe fn(NonNull<Header<T>>),
 }
 
 impl<T: 'static, C: Code<T> + 'static> Block<T, C> {
-    const VTABLE: &'static VTable<T> = &VTable {
-        enter: Self::enter,
-        fill: Self::fill,
-        free: Self::free,
-    };
+    const fn table(share: Option<Share<T>>) -> VTable<T> {
+        VTable {
+            enter: Self::enter,
+            fill: Self::fill,
+            call: Self::call,
+            call_enter: Self::call_enter,
+            share,
+            free: Self::free,
+        }
+    }
+
+    const VTABLE: &'static VTable<T> = &Self::table(None);
+    const SHARING: &'static VTable<T> = &Self::table(Some(Self::share));
 
     /// # Safety
     /// `header` points to a live `Block<T, C>` (the vtable contract above).
@@ -213,6 +260,26 @@ impl<T: 'static, C: Code<T> + 'static> Block<T, C> {
     unsafe fn fill(header: NonNull<Header<T>>, code: Deferred<T>) -> bool {
         // SAFETY: the contract of the vtable.
         unsafe { Self::code(header) }.fill(code)
+    }
+
+    unsafe fn call(header: NonNull<Header<T>>, arguments: Vec<Field>) -> Field {
+        // SAFETY: the contract of the vtable.
+        unsafe { Self::code(header) }.call(arguments)
+    }
+
+    unsafe fn call_enter(header: NonNull<Header<T>>, arguments: Vec<Field>) -> Step<i64> {
+        // SAFETY: the contract of the vtable.
+        unsafe { Self::code(header) }.call_enter(arguments)
+    }
+
+    unsafe fn share(header: NonNull<Header<T>>) -> T {
+        // A borrowed handle: it must not decrement the count when it goes.
+        let cell = std::mem::ManuallyDrop::new(Shared {
+            ptr: header,
+            owns: PhantomData,
+        });
+        // SAFETY: the contract of the vtable.
+        unsafe { Self::code(header) }.share(&cell)
     }
 
     unsafe fn free(header: NonNull<Header<T>>) {
@@ -242,7 +309,11 @@ impl<T: 'static> Shared<T> {
         let block = Box::new(Block {
             header: Header {
                 strong: Cell::new(1),
-                vtable: NonNull::from(Block::<T, C>::VTABLE),
+                vtable: NonNull::from(if C::shares() {
+                    Block::<T, C>::SHARING
+                } else {
+                    Block::<T, C>::VTABLE
+                }),
                 value,
             },
             code,
@@ -273,6 +344,13 @@ impl<T: 'static> Shared<T> {
         Self::alloc(OnceCell::from(value), Evaluated)
     }
 
+    /// An already-evaluated cell whose code tail is `code`, kept for
+    /// [`Shared::call`]. The value says how to use the tail; the cell is never
+    /// entered, so `code.enter` is unreachable.
+    pub fn ready_with<C: Code<T> + 'static>(value: T, code: C) -> Self {
+        Self::alloc(OnceCell::from(value), code)
+    }
+
     pub fn fill(&self, f: impl FnOnce() -> Thunk<T> + 'static) {
         assert!(
             self.get().is_none() && {
@@ -298,6 +376,27 @@ impl<T> Shared<T> {
         // SAFETY: as in `fill`.
         unsafe { (self.header().vtable().enter)(self.ptr) }
             .expect("h2r-rt: re-entrant force (<<loop>>)")
+    }
+
+    /// Call this cell's code tail as a function body (see [`Code::call`]).
+    pub fn call(&self, arguments: Vec<Field>) -> Field {
+        // SAFETY: as in `fill`.
+        unsafe { (self.header().vtable().call)(self.ptr, arguments) }
+    }
+
+    /// Call this cell's code tail as a function entry (see [`Code::call_enter`]).
+    pub fn call_enter(&self, arguments: Vec<Field>) -> Step<i64> {
+        // SAFETY: as in `fill`.
+        unsafe { (self.header().vtable().call_enter)(self.ptr, arguments) }
+    }
+
+    /// For code with `Code::shares`, the value to give another cell that
+    /// evaluates to this one; `None` for every other cell.
+    fn share(&self) -> Option<T> {
+        let share = self.header().vtable().share?;
+        // SAFETY: as in `fill`; the vtable has `share` only for code that
+        // asked for it.
+        Some(unsafe { share(self.ptr) })
     }
 
     fn header(&self) -> &Header<T> {
@@ -407,9 +506,12 @@ fn chase<T: Clone + 'static>(first: Shared<T>) -> T {
     let mut current = first;
     let value = loop {
         if current.is_evaluated() {
-            break match current.take_unique() {
+            break match current.share() {
                 Some(value) => value,
-                None => current.get().expect("checked above").clone(),
+                None => match current.take_unique() {
+                    Some(value) => value,
+                    None => current.get().expect("checked above").clone(),
+                },
             };
         }
         match current.enter() {
