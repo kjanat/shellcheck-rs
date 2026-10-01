@@ -175,8 +175,8 @@ fn cons_list_is_one_allocation_per_cell() {
         "one cell per cons plus the nil, got {allocations}"
     );
     // Bytes per character of a String today; the representation work lowers this.
-    // (A ready cell's code is zero bytes: count + vtable + the 112-byte node.)
+    // (A ready cell's code is zero bytes: count + vtable + the 64-byte node.)
     let per_cell = bytes / 101;
-    assert!(per_cell <= 128, "a cons cell costs {per_cell} bytes");
+    assert!(per_cell <= 80, "a cons cell costs {per_cell} bytes");
     eprintln!("cons cell: {per_cell} bytes");
 }

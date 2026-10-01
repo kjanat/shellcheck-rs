@@ -8,15 +8,42 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// The program's address literals, written by the emitter as one static table
+/// and installed before any generated code runs. Global rather than
+/// thread-local: the program runs on a thread of its own (`on_program_stack`).
+static INSTALLED: std::sync::OnceLock<&'static [&'static [u8]]> = std::sync::OnceLock::new();
+
+/// Install the program's address literal table. Installing the same table
+/// again is a no-op; installing a different one is a bug and panics.
+pub fn install_literals(table: &'static [&'static [u8]]) {
+    let installed = *INSTALLED.get_or_init(|| table);
+    assert!(
+        std::ptr::eq(installed, table),
+        "h2r-rt: a second, different address literal table was installed"
+    );
+}
+
+/// An `Addr#`: a literal's index in the installed table and a byte offset into
+/// that literal, eight bytes in all so that a `Field` stays at sixteen.
 #[derive(Debug, Clone, Copy)]
 pub struct Addr {
-    bytes: &'static [u8],
-    offset: usize,
+    literal: u32,
+    offset: u32,
 }
 
 impl Addr {
-    pub fn literal(bytes: &'static [u8]) -> Self {
-        Addr { bytes, offset: 0 }
+    pub fn literal(index: u32) -> Self {
+        Addr {
+            literal: index,
+            offset: 0,
+        }
+    }
+
+    fn position(self, delta: i64) -> u32 {
+        i64::from(self.offset)
+            .checked_add(delta)
+            .and_then(|at| u32::try_from(at).ok())
+            .expect("h2r-rt: an address offset left the address space")
     }
 
     pub fn index_char(self, index: i64) -> i64 {
@@ -24,20 +51,19 @@ impl Addr {
     }
 
     pub fn index_word8(self, index: i64) -> i64 {
-        let at = self
-            .offset
-            .checked_add_signed(index as isize)
-            .expect("h2r-rt: an address offset left the address space");
-        i64::from(self.bytes[at])
+        let table = INSTALLED
+            .get()
+            .expect("h2r-rt: the address literal table was never installed");
+        let bytes = table
+            .get(self.literal as usize)
+            .expect("h2r-rt: an address names a literal outside the table");
+        i64::from(bytes[self.position(index) as usize])
     }
 
     pub fn plus(self, delta: i64) -> Self {
         Addr {
-            bytes: self.bytes,
-            offset: self
-                .offset
-                .checked_add_signed(delta as isize)
-                .expect("h2r-rt: an address offset left the address space"),
+            literal: self.literal,
+            offset: self.position(delta),
         }
     }
 }

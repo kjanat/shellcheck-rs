@@ -4132,6 +4132,129 @@ fn scalar_switches_refuse_incomplete_or_unsafe_source_patterns() {
     assert!(crate::emit::emit_entry(&modules, &sn("Main", "main")).is_err());
 }
 
+/// `main x y = ord# (index "ab"# x) +# ord# (index "ab"# y) +# ord# (index "cd"# x)`:
+/// three address literals, two of them the same bytes.
+fn address_literal_world(boxed: bool) -> Vec<Module> {
+    let string = |text: &str| {
+        let hex: String = text.bytes().map(|b| format!("{b:02x}")).collect();
+        json!({"node": "Lit", "lit": {"kind": "string", "pretty": format!("{text:?}#"), "bytes": hex}})
+    };
+    let primop = |symbol: &str| gvar(&format!("$ghc-prim$GHC.Prim${symbol}"), symbol);
+    let ord_at = |text: &str, at: &str| {
+        app(
+            primop("ord#"),
+            app(app(primop("indexCharOffAddr#"), string(text)), lvar(at)),
+        )
+    };
+    let sum = |x: &str, y: &str| {
+        int_op(
+            "+#",
+            int_op("+#", ord_at("ab", x), ord_at("ab", y)),
+            ord_at("cd", x),
+        )
+    };
+    let mut modules = if boxed {
+        // The typed API takes and returns boxed `Int`s: unbox both, box the sum.
+        let unbox_as = |scrut: Value, field: &str, body: Value| {
+            let mut value = unbox_int(scrut, body, true);
+            value["binder"] = binder(
+                "$_in$intermediate",
+                "intermediate",
+                &format!("case_{field}"),
+            );
+            value["binder"]["ty"] = json!(2);
+            value["alts"][0]["binders"] = json!([binder(&format!("$_in${field}"), field, field)]);
+            value
+        };
+        let body = unbox_as(
+            lvar("x"),
+            "fx",
+            unbox_as(lvar("y"), "fy", box_int(sum("fx", "fy"))),
+        );
+        let mut modules = boxed_world(body, true, true);
+        let m = &mut modules[0];
+        let boxed_ty = m.types[2].clone();
+        if let h2r_core_ir::Ty::Fun { res, .. } = &mut m.types[1]
+            && let h2r_core_ir::Ty::Fun { arg, .. } = res.as_mut()
+        {
+            **arg = boxed_ty;
+        }
+        for binder in &mut m.binders {
+            if binder.unique == "y" {
+                binder.ty = 2;
+            }
+        }
+        modules
+    } else {
+        scalar_expression_world(sum("x", "y"))
+    };
+    for (symbol, arity) in [("ord#", 1), ("indexCharOffAddr#", 2)] {
+        let name = format!("$ghc-prim$GHC.Prim${symbol}");
+        modules[0].ids.insert(
+            name.clone(),
+            serde_json::from_value(json!({
+                "name": name, "occ": symbol, "arity": arity, "details": "[PrimOp]",
+                "isJoinPoint": false, "dataCon": null,
+                "dmdSig": {"args": [], "diverges": false, "pretty": ""}
+            }))
+            .unwrap(),
+        );
+    }
+    modules
+}
+
+#[test]
+fn one_literal_used_twice_is_one_table_entry() {
+    let modules = address_literal_world(false);
+    let source = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
+    // "ab" twice and "cd" once: two entries, each with its trailing NUL.
+    assert_eq!(source.matches("static LITERALS: [&[u8]; 2]").count(), 1);
+    assert_eq!(source.matches("b\"\\x61\\x62\\x00\"").count(), 1);
+    assert_eq!(source.matches("b\"\\x63\\x64\\x00\"").count(), 1);
+    // Three use sites, naming entries 0, 0 and 1; none carries bytes.
+    assert_eq!(source.matches("HAddr::literal(0)").count(), 2);
+    assert_eq!(source.matches("HAddr::literal(1)").count(), 1);
+    assert!(!source.contains("HAddr::literal(b"));
+    // The entry installs the table before anything else runs.
+    let main = source.split("fn main()").nth(1).unwrap();
+    assert!(
+        main.trim_start_matches([' ', '{', '\n'])
+            .starts_with("h2r_rt::install_literals(&LITERALS);")
+    );
+}
+
+#[test]
+fn a_library_installs_its_table_in_every_entry() {
+    let modules = address_literal_world(true);
+    let source = crate::emit::emit_library(&modules, &[&sn("Main", "main")]).unwrap();
+    assert_eq!(source.matches("static LITERALS: [&[u8]; 2]").count(), 1);
+    let entry = source.split("pub fn main(").nth(1).unwrap();
+    assert!(entry.contains("{\n    h2r_rt::install_literals(&LITERALS);\n    let r = "));
+}
+
+#[test]
+fn the_split_program_has_one_table_in_its_entry_crate() {
+    let modules = address_literal_world(true);
+    let split = crate::emit::emit_entry_split(
+        &modules,
+        &[&sn("Main", "main")],
+        usize::MAX,
+        crate::emit::Driver::Api,
+    )
+    .unwrap();
+    assert_eq!(split.main.matches("static LITERALS: [&[u8]; 2]").count(), 1);
+    assert!(
+        split
+            .main
+            .contains("{\n    h2r_rt::install_literals(&LITERALS);")
+    );
+    for member in &split.crates {
+        assert!(!member.source.contains("static LITERALS"));
+        assert!(!member.source.contains("HAddr::literal(b"));
+        assert!(member.source.contains("HAddr::literal("));
+    }
+}
+
 #[test]
 fn all_int_comparisons_preserve_operator_and_int_result() {
     use crate::nir::{

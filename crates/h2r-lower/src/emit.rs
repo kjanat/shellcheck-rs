@@ -7,6 +7,7 @@
 //! program actually needs, named by its instance index. A call site names the
 //! instance it resolved to, so nothing here re-derives a specialization.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
@@ -176,6 +177,48 @@ fn unpack(world: &World<'_>, ty: &Ty, field: &str) -> String {
     }
     format!("{field}.{}()", field_kind(world, ty).1)
 }
+
+/// Every distinct address literal a program emits, numbered in first-use order.
+/// The runtime's `Addr` is a `u32` index into the table this writes, so one
+/// byte string used many times costs one entry.
+#[derive(Default)]
+struct Literals {
+    index: RefCell<BTreeMap<Vec<u8>, u32>>,
+    order: RefCell<Vec<Vec<u8>>>,
+}
+
+impl Literals {
+    /// The Rust expression for an address literal with exactly these bytes
+    /// (a trailing NUL, if the literal has one, is the caller's).
+    fn address(&self, bytes: Vec<u8>) -> String {
+        let mut index = self.index.borrow_mut();
+        let mut order = self.order.borrow_mut();
+        let next = u32::try_from(order.len()).expect("more than 2^32 address literals");
+        let number = *index.entry(bytes).or_insert_with_key(|bytes| {
+            order.push(bytes.clone());
+            next
+        });
+        format!("HAddr::literal({number})")
+    }
+
+    /// The table the program installs into the runtime before anything runs.
+    fn table(&self) -> String {
+        let order = self.order.borrow();
+        let mut out = format!("static LITERALS: [&[u8]; {}] = [\n", order.len());
+        for bytes in order.iter() {
+            out.push_str("    b\"");
+            for byte in bytes {
+                write!(out, "\\x{byte:02x}").unwrap();
+            }
+            out.push_str("\",\n");
+        }
+        out.push_str("];\n");
+        out
+    }
+}
+
+/// The statement every emitted entry function starts with.
+const INSTALL_LITERALS: &str = "h2r_rt::install_literals(&LITERALS);";
 
 struct Shims {
     leaf: usize,
@@ -858,7 +901,7 @@ fn print_main(
     for function in &shows.functions {
         adapter.push_str(function);
     }
-    writeln!(adapter, "fn main() {{\n    let raw: Vec<String> = std::env::args().skip(1).collect();\n    assert_eq!(raw.len(), {arity}, \"wrong argument count\");\n    h2r_rt::on_program_stack(move || println!(\"{{}}\", {result}));\n}}").unwrap();
+    writeln!(adapter, "fn main() {{\n    {INSTALL_LITERALS}\n    let raw: Vec<String> = std::env::args().skip(1).collect();\n    assert_eq!(raw.len(), {arity}, \"wrong argument count\");\n    h2r_rt::on_program_stack(move || println!(\"{{}}\", {result}));\n}}").unwrap();
     Ok(())
 }
 
@@ -879,6 +922,7 @@ fn lint_main(
     writeln!(
         adapter,
         r#"fn main() {{
+    {INSTALL_LITERALS}
     let paths: Vec<String> = std::env::args().skip(1).collect();
     if paths.is_empty() {{
         eprintln!("No files specified.");
@@ -930,6 +974,7 @@ pub fn emit_library(modules: &[Module], entries: &[&str]) -> Result<String, Stri
     prepare(modules, entries, Driver::Api, |prepared| {
         let has_boxed = has_boxed(prepared.world, prepared.leaves);
         let groups = groups(prepared.edges);
+        let literals = Literals::default();
         let mut out = String::from(
             "#[cfg(not(target_pointer_width = \"64\"))]\ncompile_error!(\"Int# backend requires a 64-bit target\");\n",
         );
@@ -944,8 +989,10 @@ pub fn emit_library(modules: &[Module], entries: &[&str]) -> Result<String, Stri
                 leaf,
                 "",
                 has_boxed,
+                &literals,
             )?);
         }
+        out.push_str(&literals.table());
         out.push_str(&prepared.adapter);
         Ok(out)
     })
@@ -1015,6 +1062,7 @@ pub fn emit_entry_split(
         let world = prepared.world;
         let has_boxed = has_boxed(world, prepared.leaves);
         let groups = groups(prepared.edges);
+        let literals = Literals::default();
         let mut code = BTreeMap::new();
         for (&index, leaf) in prepared.leaves {
             code.insert(
@@ -1028,6 +1076,7 @@ pub fn emit_entry_split(
                     leaf,
                     "pub ",
                     has_boxed,
+                    &literals,
                 )?,
             );
         }
@@ -1092,6 +1141,8 @@ pub fn emit_entry_split(
         for entry_crate in &entry_crates {
             writeln!(main, "use {entry_crate}::*;").unwrap();
         }
+        // The one table of address literals every crate indexes into.
+        main.push_str(&literals.table());
         main.push_str(&prepared.adapter);
         Ok(SplitProgram {
             runtime: runtime_source(),
@@ -1183,7 +1234,7 @@ pub fn emit_program(modules: &[Module], roots: &[Instance]) -> Result<Program, S
         .collect();
     writeln!(
         source,
-        "fn main() {{\n    std::hint::black_box([{}]);\n}}",
+        "fn main() {{\n    {INSTALL_LITERALS}\n    std::hint::black_box([{}]);\n}}",
         addresses.join(", ")
     )
     .unwrap();
@@ -1244,6 +1295,7 @@ fn functions(
     );
     let has_boxed = has_boxed(world, leaves);
     let groups = groups_of(world, specialization, leaves)?;
+    let literals = Literals::default();
     out.push_str("\n#[allow(dead_code)]\nmod h2r_rt {\n");
     out.push_str(&runtime_source());
     out.push_str("\n}\n");
@@ -1267,6 +1319,7 @@ fn functions(
             leaf,
             vis,
             has_boxed,
+            &literals,
         )?);
     }
     if chunks != 0 {
@@ -1275,6 +1328,7 @@ fn functions(
     for chunk in 0..chunks {
         writeln!(out, "use h_chunk_{chunk}::*;").unwrap();
     }
+    out.push_str(&literals.table());
     Ok(out)
 }
 
@@ -1300,6 +1354,7 @@ fn leaf_code(
     leaf: &LoweredLeaf,
     vis: &str,
     has_boxed: bool,
+    literals: &Literals,
 ) -> Result<String, String> {
     let mut out = String::new();
     let mut wrappers = Vec::new();
@@ -1951,8 +2006,12 @@ fn leaf_code(
                             Machine::AbsentError => format!("h2r_rt::absent_error({})", a[0]),
                             Machine::NoDuplicate => a[0].clone(),
                             Machine::Memcpy => format!(
-                                "{{ HBytes::copy(&{}, 0, &{}, 0, {}); ({}, HAddr::literal(b\"\")) }}",
-                                a[1], a[0], a[2], a[3]
+                                "{{ HBytes::copy(&{}, 0, &{}, 0, {}); ({}, {}) }}",
+                                a[1],
+                                a[0],
+                                a[2],
+                                a[3],
+                                literals.address(Vec::new())
                             ),
                             Machine::RealWorld => "0".into(),
                             Machine::NewByteArray => format!("({}, HBytes::new({}))", a[1], a[0]),
@@ -2014,9 +2073,9 @@ fn leaf_code(
                         format!("v{}.plus(v{})", arguments[0].0, arguments[1].0)
                     }
                     Operation::AddrLiteral(bytes) => {
-                        let bytes: String =
-                            bytes.iter().map(|byte| format!("\\x{byte:02x}")).collect();
-                        format!("HAddr::literal(b\"{bytes}\\x00\")")
+                        let mut terminated = bytes.to_vec();
+                        terminated.push(0);
+                        literals.address(terminated)
                     }
                     Operation::WordBinary { op, arguments } => {
                         let (left, right) = (arguments[0].0, arguments[1].0);
@@ -2648,7 +2707,7 @@ fn api_function(
     let result = pack(world, entry_result, &format!("{adapter_name}({arguments})"));
     writeln!(
         adapter,
-        "pub fn {name}({parameters}) -> {} {{\n    let r = {result};\n    {}\n}}",
+        "pub fn {name}({parameters}) -> {} {{\n    {INSTALL_LITERALS}\n    let r = {result};\n    {}\n}}",
         rust_type(world, entry_result)?,
         from_field(world, entry_result, "r")?
     )

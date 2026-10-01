@@ -17,24 +17,24 @@ Callgrind on the compiled ShellCheck checking a 150-line script (7.6 G instructi
 
 Dynamic counts behind the 76 M allocations:
 
-| source                          |  count |        allocations each |
-| ------------------------------- | -----: | ----------------------: |
-| `delayN` thunks (`f_` wrappers) | 17.8 M |                       1 |
-| `Closure::bind`                 |  7.5 M |       1 (WP3; was 2)    |
-| `apply_later` thunks            |  5.5 M |  1 + the argument `Vec` |
-| `Closure::apply`                |  2.4 M |        1–2 `Vec<Field>` |
-| `Data::ready` (constructors)    |  2.6 M |                       1 |
+| source                          |  count |       allocations each |
+| ------------------------------- | -----: | ---------------------: |
+| `delayN` thunks (`f_` wrappers) | 17.8 M |                      1 |
+| `Closure::bind`                 |  7.5 M |         1 (WP3; was 2) |
+| `apply_later` thunks            |  5.5 M | 1 + the argument `Vec` |
+| `Closure::apply`                |  2.4 M |       1–2 `Vec<Field>` |
+| `Data::ready` (constructors)    |  2.6 M |                      1 |
 
 The gap to GHC is ~19×. GHC wins on exactly these things: a bump allocator, a generational GC, 24-byte cons cells, pointer tagging. We cannot copy the GC, so the lever is **fewer and smaller allocations**.
 
 ## Representation today (`cargo test -p h2r-rt --test layout` prints it)
 
-| type                              | bytes | why                                                                      |
-| --------------------------------- | ----: | ------------------------------------------------------------------------ |
-| `Data`, `Int`, `Closure`          |     8 | `Shared<T>`: one thin pointer to one allocation (WP1, `f11d5f6`)         |
-| `Field`                           |    32 | tag + largest payload: the 24-byte `Addr { &'static [u8], usize }` (WP2) |
-| `Node`                            |   112 | `&'static str` constructor (16) + `Fields` (3 inline `Field`s + tag)     |
-| one `String` character (`:` cell) |   128 | 16-byte header + `Node`; a ready cell's code tail is zero-sized          |
+| type                              | bytes | why                                                                                                   |
+| --------------------------------- | ----: | ----------------------------------------------------------------------------------------------------- |
+| `Data`, `Int`, `Closure`          |     8 | `Shared<T>`: one thin pointer to one allocation (WP1, `f11d5f6`)                                      |
+| `Field`                           |    16 | tag + largest payload; every payload is 8 bytes (`Addr` is a `u32` literal index + `u32` offset, WP2) |
+| `Node`                            |    64 | `&'static str` constructor (16) + `Fields` (3 inline `Field`s + tag)                                  |
+| one `String` character (`:` cell) |    80 | 16-byte header + `Node`; a ready cell's code tail is zero-sized                                       |
 
 `cargo test -p h2r-rt --test alloc` prints the allocation counts per primitive and pins them. Every improvement lowers a number there.
 
@@ -118,7 +118,7 @@ struct Header<T> {
 
 ### WP2 `Field` to 16 bytes
 
-Needs WP1. The remaining 24-byte payload is `Addr { &'static [u8], usize }`. Replace it with an 8-byte handle: a `u32` index into a literal table the emitter writes (`static LITERALS: &[&[u8]]`) plus a `u32` offset. Emitter change: collect literals, emit the table, `HAddr::literal(index)`. Acceptance: `Field` is 16 bytes, `Node` ≤ 72, cons cell ≤ 96 bytes, conformance gate 0 differences.
+**Landed (numbers above).** The emitter writes one deduplicated `static LITERALS` into the entry crate and every emitted entry function (`main` of the print/lint drivers, each `pub fn` of the typed API, `emit_program`'s `main`) starts with `h2r_rt::install_literals(&LITERALS)`; reading an `Addr` before that panics. Original spec: needs WP1. The remaining 24-byte payload was `Addr { &'static [u8], usize }`. Replace it with an 8-byte handle: a `u32` index into a literal table the emitter writes (`static LITERALS: &[&[u8]]`) plus a `u32` offset. Emitter change: collect literals, emit the table, `HAddr::literal(index)`. Acceptance: `Field` is 16 bytes, `Node` ≤ 72, cons cell ≤ 96 bytes, conformance gate 0 differences.
 
 ### WP3 Single-allocation closures (landed in the working tree, not yet timed)
 

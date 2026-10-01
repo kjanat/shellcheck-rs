@@ -14,10 +14,11 @@ fn value_sizes() {
         "Closure is {}",
         size_of::<Closure>()
     );
-    // Field is bounded by its largest payload (the 24-byte Addr; cells are 8) plus a tag.
-    assert!(size_of::<Field>() <= 32, "Field is {}", size_of::<Field>());
+    // Field is bounded by its largest payload (every payload is 8 bytes: Addr is a u32 literal
+    // index and a u32 offset) plus a tag.
+    assert!(size_of::<Field>() <= 16, "Field is {}", size_of::<Field>());
     // A node: constructor name (16) + inline fields (3 x Field + tag).
-    assert!(size_of::<Node>() <= 112, "Node is {}", size_of::<Node>());
+    assert!(size_of::<Node>() <= 64, "Node is {}", size_of::<Node>());
     eprintln!(
         "Int {} Data {} Closure {} Field {} Node {}",
         size_of::<Int>(),
