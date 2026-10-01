@@ -5,6 +5,10 @@ edition.workspace = true
 description       = "Runtime support for Haskell code compiled to Rust: residual laziness only"
 license.workspace = true
 
+[features]
+# Allocation census counters (WP13), printed to stderr when `on_program_stack` returns.
+stats = []
+
 [dependencies]
 
 [dev-dependencies]

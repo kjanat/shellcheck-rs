@@ -79,6 +79,13 @@ pub trait Code<T> {
     fn share(&self, _cell: &Shared<T>) -> T {
         unreachable!("h2r-rt: this cell's code does not share by reference")
     }
+
+    /// Census only: 1 if this is `Once` code not yet run, 2 if it is `Pending`
+    /// code that was filled and not yet run, else 0.
+    #[cfg(feature = "stats")]
+    fn holds_code(&self) -> u8 {
+        0
+    }
 }
 
 /// The code of a binding that is already evaluated: nothing, and no bytes.
@@ -102,6 +109,13 @@ impl<T, F: FnOnce() -> Thunk<T>> Code<T> for Once<F> {
     fn fill(&self, _: Deferred<T>) -> bool {
         false
     }
+    #[cfg(feature = "stats")]
+    fn holds_code(&self) -> u8 {
+        let code = self.0.take();
+        let held = code.is_some();
+        self.0.set(code);
+        u8::from(held)
+    }
 }
 
 pub struct Pending<T>(Cell<Option<Deferred<T>>>);
@@ -112,6 +126,13 @@ impl<T> Code<T> for Pending<T> {
     }
     fn fill(&self, code: Deferred<T>) -> bool {
         self.0.replace(Some(code)).is_none()
+    }
+    #[cfg(feature = "stats")]
+    fn holds_code(&self) -> u8 {
+        let code = self.0.take();
+        let held = code.is_some();
+        self.0.set(code);
+        2 * u8::from(held)
     }
 }
 
@@ -346,6 +367,14 @@ impl<T: 'static, C: Code<T> + 'static> Block<T, C> {
 
     unsafe fn free(header: NonNull<Header<T>>) {
         let block = header.cast::<Block<T, C>>().as_ptr();
+        // SAFETY: the contract of the vtable: the block is live until the
+        // `dealloc` below, and `holds_code` only reads the code.
+        #[cfg(feature = "stats")]
+        match unsafe { Self::code(header) }.holds_code() {
+            1 => super::stats::bump_kind::<T>(super::stats::DROPPED_UNFORCED),
+            2 => super::stats::bump_kind::<T>(super::stats::DROPPED_PENDING),
+            _ => {}
+        }
         // SAFETY: the allocation was made by `alloc_block` with the layout of
         // a `Block<T, C>`, the count has reached zero so this is the last
         // pointer, and the layout given back is that same one. Each field is
@@ -450,16 +479,22 @@ impl<T: 'static> Shared<T> {
     }
 
     pub fn step(f: impl FnOnce() -> Thunk<T> + 'static) -> Self {
+        #[cfg(feature = "stats")]
+        super::stats::bump_kind::<T>(super::stats::CREATED);
         Self::alloc_empty(Once(Cell::new(Some(f))))
     }
 
     /// An empty cell, filled later by [`Shared::fill`] to tie a knot.
     pub fn pending() -> Self {
+        #[cfg(feature = "stats")]
+        super::stats::bump_kind::<T>(super::stats::PENDING);
         Self::alloc_empty(Pending(Cell::new(None)))
     }
 
     /// An already-evaluated cell; its code is zero bytes.
     pub fn ready(value: T) -> Self {
+        #[cfg(feature = "stats")]
+        super::stats::bump_kind::<T>(super::stats::EVALUATED);
         Self::alloc(value, Evaluated)
     }
 
@@ -467,6 +502,8 @@ impl<T: 'static> Shared<T> {
     /// [`Shared::call`]. The value says how to use the tail; the cell is never
     /// entered, so `code.enter` is unreachable.
     pub fn ready_with<C: Code<T> + 'static>(value: T, code: C) -> Self {
+        #[cfg(feature = "stats")]
+        super::stats::bump_kind::<T>(super::stats::EVALUATED);
         Self::alloc(value, code)
     }
 
@@ -574,6 +611,12 @@ impl<T: Clone + 'static> Shared<T> {
     /// Run the code of a cell that has no value yet and memoise the result.
     #[inline(never)]
     fn force_slow(&self) -> &T {
+        #[cfg(feature = "stats")]
+        super::stats::bump_kind::<T>(if self.strong_count() > 1 {
+            super::stats::FORCED_SHARED
+        } else {
+            super::stats::FORCED_UNIQUE
+        });
         let mut out = MaybeUninit::uninit();
         let value = match self.enter(&mut out) {
             // SAFETY: `Value` means the code wrote `out`.
@@ -635,8 +678,16 @@ fn value_of_evaluated<T: Clone + 'static>(cell: &mut Shared<T>) -> T {
     match cell.share() {
         Some(value) => value,
         None => match cell.take_unique() {
-            Some(value) => value,
-            None => cell.get().expect("evaluated").clone(),
+            Some(value) => {
+                #[cfg(feature = "stats")]
+                super::stats::bump_kind::<T>(super::stats::MOVED_UNIQUE);
+                value
+            }
+            None => {
+                #[cfg(feature = "stats")]
+                super::stats::bump_kind::<T>(super::stats::COPIED);
+                cell.get().expect("evaluated").clone()
+            }
         },
     }
 }
@@ -666,6 +717,12 @@ fn chase<T: Clone + 'static>(first: Shared<T>) -> T {
             break value_of_evaluated(&mut current);
         }
         let mut out = MaybeUninit::uninit();
+        #[cfg(feature = "stats")]
+        super::stats::bump_kind::<T>(if current.strong_count() > 1 {
+            super::stats::CHASED_SHARED
+        } else {
+            super::stats::CHASED_UNIQUE
+        });
         match current.enter(&mut out) {
             Entered::Value => {
                 if current.strong_count() > 1 {

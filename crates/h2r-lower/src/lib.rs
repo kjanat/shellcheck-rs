@@ -9,6 +9,7 @@
 //! every live binding and a named reason for every dead one.
 
 pub mod build;
+mod census;
 pub mod emit;
 pub mod graph;
 pub mod nir;

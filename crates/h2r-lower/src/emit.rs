@@ -13,6 +13,7 @@ use std::fmt::Write;
 
 use h2r_core_ir::{Module, Ty};
 
+use crate::census;
 use crate::nir::{
     Block, CharCompare, DictionaryRef, Exit, Function, IntBinary, ListOp, Machine, Operation,
     World, boxed, data,
@@ -376,7 +377,8 @@ fn names(code: &str, identifier: &str) -> bool {
     })
 }
 
-fn delayed(carrier: &str, entry: &str, arguments: &[String]) -> String {
+fn delayed(carrier: &str, entry: &str, arguments: &[String], site: census::Site) -> String {
+    census::delay(&site, arguments.len());
     if arguments.len() > DELAYS {
         let captures: String = arguments
             .iter()
@@ -786,6 +788,7 @@ fn prepare<R>(
     driver: Driver,
     emit: impl FnOnce(Prepared<'_>) -> Result<R, String>,
 ) -> Result<R, String> {
+    let _census = census::Guard::from_env();
     if entries.is_empty() || (driver != Driver::Api && entries.len() > 1) {
         return Err("a program runs one entry, and only a typed API takes several".into());
     }
@@ -1153,17 +1156,29 @@ pub struct SplitProgram {
 }
 
 /// The runtime as the single source file the generated crates compile: `lib.rs`
-/// with its `mod cell;` declaration replaced by the body of `cell.rs`, because
-/// the generated `h2r_rt` has no file next to it to load a module from.
+/// with its `mod cell;` and `mod stats;` declarations replaced by the bodies of
+/// `cell.rs` and `stats.rs`, because the generated `h2r_rt` has no file next to
+/// it to load a module from. The census counters (`stats`) sit behind
+/// `#[cfg(feature = "stats")]` in that text; `build::Rustc::with_stats` turns
+/// the feature on for the compiled crates.
 pub(crate) fn runtime_source() -> String {
-    include_str!("../../h2r-rt/src/lib.rs").replacen(
-        "mod cell;",
-        &format!(
-            "mod cell {{\n{}\n}}",
-            include_str!("../../h2r-rt/src/cell.rs")
-        ),
-        1,
-    )
+    include_str!("../../h2r-rt/src/lib.rs")
+        .replacen(
+            "mod cell;",
+            &format!(
+                "mod cell {{\n{}\n}}",
+                include_str!("../../h2r-rt/src/cell.rs")
+            ),
+            1,
+        )
+        .replacen(
+            "mod stats;",
+            &format!(
+                "mod stats {{\n{}\n}}",
+                include_str!("../../h2r-rt/src/stats.rs")
+            ),
+            1,
+        )
 }
 
 const RUNTIME_ALIASES: &str = "#[allow(unused_imports)]\nuse h2r_rt::Int as HInt;\n#[allow(unused_imports)]\nuse h2r_rt::{Data as HData, Field as HField, Closure as HClosure, Constructor as HConstructor};\n#[allow(unused_imports)]\nuse h2r_rt::{Encoding as HEncoding, ListNames as HListNames, StringNames as HStringNames};\n#[allow(unused_imports)]\nuse h2r_rt::Addr as HAddr;\n#[allow(unused_imports)]\nuse h2r_rt::{Array as HArray, Bytes as HBytes, MutVar as HMutVar};\n";
@@ -1295,6 +1310,7 @@ pub enum RootOutcome {
 }
 
 pub fn emit_program(modules: &[Module], roots: &[Instance]) -> Result<Program, String> {
+    let _census = census::Guard::from_env();
     let specialization = specialize::survey(modules, roots);
     let catalog = crate::nir::Catalog::of(modules);
     let evidence = crate::nir::World::cataloged(modules, 0, &catalog)?;
@@ -1627,7 +1643,12 @@ fn leaf_code(
                             if target_index == index && looping(target) =>
                         {
                             let args = arguments.iter().map(|v| value(*v)).collect::<Vec<_>>();
-                            Some(delayed(&result, &format!("b_{index}_{}", target.0), &args))
+                            Some(delayed(
+                                &result,
+                                &format!("b_{index}_{}", target.0),
+                                &args,
+                                census::Site::tail("looping tail call", instruction),
+                            ))
                         }
                         // A tail call to a function outside this one's recursive
                         // group runs its entry block directly: the thunk that
@@ -1677,9 +1698,12 @@ fn leaf_code(
                                 arms,
                                 |target, args| match stepped {
                                     Some(_) => step_to(&format!("s_{index}_{}", target.0), args),
-                                    None if looping(target) => {
-                                        delayed(&result, &format!("b_{index}_{}", target.0), args)
-                                    }
+                                    None if looping(target) => delayed(
+                                        &result,
+                                        &format!("b_{index}_{}", target.0),
+                                        args,
+                                        census::Site::tail("looping tail case arm", instruction),
+                                    ),
                                     None => format!("b_{index}_{}({})", target.0, args.join(", ")),
                                 },
                             ))
@@ -1772,6 +1796,7 @@ fn leaf_code(
                             .collect::<Vec<_>>()
                             .join(" ");
                         let collection = if arguments.len() <= 3 { "" } else { "vec!" };
+                        census::ready("Construct", arguments.len());
                         format!(
                             "{{ let fields = {collection}[{fields}]; {strict} HData::ready({}, fields) }}",
                             constructors.reference(&constructor.name)
@@ -1816,6 +1841,7 @@ fn leaf_code(
                         &carrier(world, &instruction.result.ty),
                         &format!("b_{index}_{}", target.0),
                         &arguments.iter().map(|v| value(*v)).collect::<Vec<_>>(),
+                        census::Site::instruction(world, block, position),
                     ),
                     Operation::RaiseError { message } => {
                         let (nil, cons, character) = data::string_layouts(world)?;
@@ -1886,6 +1912,7 @@ fn leaf_code(
                         let arms: String = family
                             .iter()
                             .map(|c| {
+                                census::ready("TagToEnum arm", 0);
                                 format!(
                                     "{} => HData::ready({}, []), ",
                                     i64::from(c.tag) - 1,
@@ -2446,6 +2473,7 @@ fn leaf_code(
                         &result,
                         &format!("b_{index}_{}", target.0),
                         &args.iter().map(|v| value(*v)).collect::<Vec<_>>(),
+                        census::Site::jump(),
                     ),
                     None => call(target, args),
                 };
@@ -2505,7 +2533,12 @@ fn leaf_code(
                 writeln!(
                     out,
                     "    std::thread_local! {{ static VALUE: {result_carrier} = {}; }}\n    VALUE.with(Clone::clone)\n}}",
-                    delayed(&result_carrier, &format!("b_{index}_{}", leaf.function.entry.0), &[])
+                    delayed(
+                        &result_carrier,
+                        &format!("b_{index}_{}", leaf.function.entry.0),
+                        &[],
+                        census::Site::wrapper(true)
+                    )
                 )
                 .unwrap();
             } else {
@@ -2520,6 +2553,7 @@ fn leaf_code(
                             .iter()
                             .map(|p| format!("v{}", p.id.0))
                             .collect::<Vec<_>>(),
+                        census::Site::wrapper(false),
                     )
                 )
                 .unwrap();
@@ -2722,7 +2756,21 @@ fn into_field(
     ty: &Ty,
     value: &str,
 ) -> Result<String, String> {
-    Ok(match shape(world, ty)? {
+    let shape = shape(world, ty)?;
+    match &shape {
+        Shape::Bool { .. } => census::ready("adapter Bool", 0),
+        Shape::Maybe { .. } => {
+            census::ready("adapter Maybe", 1);
+            census::ready("adapter Maybe", 0);
+        }
+        Shape::Either { .. } => {
+            census::ready("adapter Either", 1);
+            census::ready("adapter Either", 1);
+        }
+        Shape::Tuple { fields, .. } => census::ready("adapter tuple", fields.len()),
+        _ => {}
+    }
+    Ok(match shape {
         Shape::Int => format!("HField::Int(HInt::ready({value}))"),
         Shape::Bool { false_, true_ } => {
             format!(
@@ -2918,7 +2966,7 @@ struct Shows {
     functions: Vec<String>,
 }
 
-fn operands(operation: &Operation) -> Vec<(crate::nir::ValueId, bool)> {
+pub(crate) fn operands(operation: &Operation) -> Vec<(crate::nir::ValueId, bool)> {
     let moved = |values: &[crate::nir::ValueId]| values.iter().map(|v| (*v, true)).collect();
     let read = |values: &[crate::nir::ValueId]| values.iter().map(|v| (*v, false)).collect();
     match operation {

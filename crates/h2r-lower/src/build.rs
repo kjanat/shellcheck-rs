@@ -69,6 +69,18 @@ impl Rustc {
         }
     }
 
+    /// Compile the runtime with its allocation census counters (WP13): the
+    /// pasted `h2r_rt` source has `#[cfg(feature = "stats")]` code in it, and
+    /// this sets that cfg on every generated crate. The program then prints
+    /// the census to stderr when `on_program_stack` returns. The flags are
+    /// part of the fingerprint, so this builds into a directory of its own.
+    #[must_use]
+    pub fn with_stats(mut self) -> Rustc {
+        self.flags
+            .extend(["--cfg".to_string(), "feature=\"stats\"".to_string()]);
+        self
+    }
+
     pub fn fingerprint(&self) -> Result<String, String> {
         let version = Command::new(&self.program)
             .arg("-vV")

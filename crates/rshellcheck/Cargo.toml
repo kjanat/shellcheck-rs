@@ -5,6 +5,10 @@ edition.workspace = true
 license           = "GPL-3.0-only"
 publish           = false
 
+[features]
+# The runtime's allocation census (WP13), printed to stderr at exit.
+stats = ["shellcheck-core/stats"]
+
 [dependencies]
 clap.workspace            = true
 h2r-alloc.workspace       = true

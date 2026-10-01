@@ -139,6 +139,9 @@ impl Bytes {
 
 mod cell;
 
+#[cfg(feature = "stats")]
+pub mod stats;
+
 // Public API of the crate; unused when the runtime is inlined as a private module.
 #[allow(unused_imports)]
 pub use self::cell::{Code, Deferred, Lazy, Shared, Thunk, shared};
@@ -172,11 +175,13 @@ impl Suspend for Field {
 }
 
 macro_rules! suspensions {
-    ($($delay:ident $step:ident($($argument:ident: $ty:ident),*);)*) => {$(
+    ($($delay:ident $step:ident $n:literal($($argument:ident: $ty:ident),*);)*) => {$(
         pub fn $delay<T: Suspend, $($ty: 'static),*>(
             entry: fn($($ty),*) -> T,
             ($($argument,)*): ($($ty,)*),
         ) -> T {
+            #[cfg(feature = "stats")]
+            stats::bump(stats::DELAY + $n);
             T::suspend(move || entry($($argument),*))
         }
 
@@ -184,36 +189,42 @@ macro_rules! suspensions {
             entry: fn($($ty),*) -> Step<R>,
             ($($argument,)*): ($($ty,)*),
         ) -> Step<R> {
+            #[cfg(feature = "stats")]
+            stats::bump(stats::STEP + $n);
             Step::Next(Box::new(move || entry($($argument),*)))
         }
     )*};
 }
 
 suspensions! {
-    delay0 step0();
-    delay1 step1(a: A);
-    delay2 step2(a: A, b: B);
-    delay3 step3(a: A, b: B, c: C);
-    delay4 step4(a: A, b: B, c: C, d: D);
-    delay5 step5(a: A, b: B, c: C, d: D, e: E);
-    delay6 step6(a: A, b: B, c: C, d: D, e: E, f: F);
-    delay7 step7(a: A, b: B, c: C, d: D, e: E, f: F, g: G);
-    delay8 step8(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H);
-    delay9 step9(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I);
-    delay10 step10(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J);
-    delay11 step11(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K);
-    delay12 step12(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L);
-    delay13 step13(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M);
-    delay14 step14(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N);
-    delay15 step15(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N, o: O);
-    delay16 step16(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N, o: O, p: P);
+    delay0 step0 0();
+    delay1 step1 1(a: A);
+    delay2 step2 2(a: A, b: B);
+    delay3 step3 3(a: A, b: B, c: C);
+    delay4 step4 4(a: A, b: B, c: C, d: D);
+    delay5 step5 5(a: A, b: B, c: C, d: D, e: E);
+    delay6 step6 6(a: A, b: B, c: C, d: D, e: E, f: F);
+    delay7 step7 7(a: A, b: B, c: C, d: D, e: E, f: F, g: G);
+    delay8 step8 8(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H);
+    delay9 step9 9(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I);
+    delay10 step10 10(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J);
+    delay11 step11 11(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K);
+    delay12 step12 12(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L);
+    delay13 step13 13(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M);
+    delay14 step14 14(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N);
+    delay15 step15 15(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N, o: O);
+    delay16 step16 16(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N, o: O, p: P);
 }
 
 pub fn apply_later<T: Suspend>(callee: Closure, arguments: Vec<Field>, read: fn(&Field) -> T) -> T {
+    #[cfg(feature = "stats")]
+    stats::bump(stats::APPLY_LATER);
     T::suspend(move || read(&callee.apply(arguments)))
 }
 
 pub fn apply_step(callee: Closure, arguments: Vec<Field>, read: fn(&Field) -> i64) -> Step<i64> {
+    #[cfg(feature = "stats")]
+    stats::bump(stats::APPLY_STEP);
     Step::Next(Box::new(move || match callee.apply_tail(arguments) {
         Tail::Enter(step) => step,
         Tail::Value(value) => Step::Done(read(&value)),
@@ -229,6 +240,8 @@ impl Int {
         Self(shared(f))
     }
     pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::DEFER_TO);
         Self(Shared::step(move || Thunk::Indirect(f().0)))
     }
     pub fn pending() -> Self {
@@ -476,6 +489,8 @@ pub enum Field {
 /// allocation's registers and stack frame.
 #[inline(never)]
 fn deferred_data(cell: &Shared<Field>) -> Data {
+    #[cfg(feature = "stats")]
+    stats::bump(stats::DEFERRED_DATA);
     let cell = cell.clone();
     Data::defer_to(move || cell.force().data())
 }
@@ -489,6 +504,8 @@ fn deferred(value: Field) -> Thunk<Field> {
 
 impl Field {
     pub fn defer_to(f: impl FnOnce() -> Field + 'static) -> Self {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::DEFER_TO + 3);
         Self::Deferred(Shared::step(move || deferred(f())))
     }
     pub fn pending() -> Self {
@@ -881,6 +898,8 @@ impl<R> Step<R> {
 
 impl Closure {
     pub fn ready(arity: usize, code: impl Fn(Vec<Field>) -> Field + 'static) -> Self {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::BOXED);
         Self(Shared::ready_with(
             ClosureCode::inline(arity, false),
             Boxed(code),
@@ -891,6 +910,8 @@ impl Closure {
         code: impl Fn(Vec<Field>) -> Field + 'static,
         enter: impl Fn(Vec<Field>) -> Step<i64> + 'static,
     ) -> Self {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::BOXED);
         Self(Shared::ready_with(
             ClosureCode::inline(arity, true),
             BoxedEntering { code, enter },
@@ -898,6 +919,8 @@ impl Closure {
     }
     /// A known function and its captures: one allocation, the cell.
     pub fn bind<C: 'static>(arity: usize, code: fn(&C, Vec<Field>) -> Field, captures: C) -> Self {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::BIND);
         Self(Shared::ready_with(
             ClosureCode::inline(arity, false),
             Bound { code, captures },
@@ -909,6 +932,8 @@ impl Closure {
         enter: fn(&C, Vec<Field>) -> Step<i64>,
         captures: C,
     ) -> Self {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::BIND_ENTERING);
         Self(Shared::ready_with(
             ClosureCode::inline(arity, true),
             BoundEntering {
@@ -919,6 +944,8 @@ impl Closure {
         ))
     }
     pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::DEFER_TO + 2);
         Self(Shared::step(move || Thunk::Indirect(f().0)))
     }
     pub fn pending() -> Self {
@@ -992,6 +1019,8 @@ impl Closure {
     }
     #[inline]
     pub fn apply(&self, arguments: Vec<Field>) -> Field {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::APPLY);
         // The common call: a closure with its own code, given exactly its
         // arity. Nothing else (a thunk that turned out to be a closure, a
         // partial application, too few or too many arguments) is decided here.
@@ -1008,6 +1037,8 @@ impl Closure {
     /// Everything but the common call.
     #[inline(never)]
     fn apply_general(&self, code: &ClosureCode, arguments: Vec<Field>) -> Field {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::APPLY_GENERAL);
         let (parent, supplied, arity, entry) = Self::decode(self, code);
         let missing = arity - supplied.len();
         if arguments.len() == missing {
@@ -1078,6 +1109,8 @@ impl Closure {
         entry: bool,
         arguments: Vec<Field>,
     ) -> Closure {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::PARTIAL);
         // The first arguments of a closure nobody applied yet become its
         // `supplied` as they are, vector and all.
         let supplied = if supplied.is_empty() {
@@ -1100,6 +1133,8 @@ impl Closure {
     /// apply the result to the rest, until none are left.
     #[inline(never)]
     fn apply_over(&self, mut arguments: Vec<Field>) -> Field {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::APPLY_OVER);
         let mut held;
         let mut current = self;
         loop {
@@ -1455,6 +1490,8 @@ impl Data {
         Self(shared(f))
     }
     pub fn defer_to(f: impl FnOnce() -> Self + 'static) -> Self {
+        #[cfg(feature = "stats")]
+        stats::bump(stats::DEFER_TO + 1);
         Self(Shared::step(move || Thunk::Indirect(f().0)))
     }
     pub fn pending() -> Self {
@@ -1464,6 +1501,16 @@ impl Data {
         self.0.fill(move || Thunk::Indirect(value.0));
     }
     pub fn ready(constructor: &'static Constructor, fields: impl Into<Fields>) -> Self {
+        #[cfg(feature = "stats")]
+        {
+            let fields: Fields = fields.into();
+            stats::bump(stats::READY + fields.len().min(4));
+            Self(Shared::ready(Node {
+                constructor,
+                fields,
+            }))
+        }
+        #[cfg(not(feature = "stats"))]
         Self(Shared::ready(Node {
             constructor,
             fields: fields.into(),
@@ -2254,14 +2301,24 @@ pub fn on_program_stack<R: Send + 'static>(run: impl FnOnce() -> R + Send + 'sta
                     .expect("program lock")
                     .take()
                     .expect("program runs once");
+                #[cfg(feature = "stats")]
+                {
+                    let value = run();
+                    stats::flush();
+                    value
+                }
+                #[cfg(not(feature = "stats"))]
                 run()
             });
         match started {
             Ok(thread) => {
-                return match thread.join() {
+                let value = match thread.join() {
                     Ok(value) => value,
                     Err(panic) => std::panic::resume_unwind(panic),
                 };
+                #[cfg(feature = "stats")]
+                stats::print_report();
+                return value;
             }
             Err(_) if size > 64 << 20 => size /= 2,
             Err(error) => panic!("cannot start the program's thread: {error}"),
@@ -3198,5 +3255,164 @@ mod fields_drop_tests {
             list = Data::ready(fixtures::c(":"), [Field::Char(c), Field::Data(list)]);
         }
         drop(list);
+    }
+}
+
+#[cfg(all(test, feature = "stats"))]
+mod stats_tests {
+    use super::*;
+
+    const INT: usize = 0;
+    const DATA: usize = 1;
+
+    fn double(n: i64) -> Int {
+        Int::ready(n * 2)
+    }
+
+    fn through(n: i64) -> Int {
+        delay1(double, (n,))
+    }
+
+    /// The counters of this thread (each test runs on a thread of its own)
+    /// as they stood when the test began.
+    struct Delta(Vec<u64>);
+
+    impl Delta {
+        fn start() -> Self {
+            Self(stats::snapshot())
+        }
+        fn of(&self, index: usize) -> u64 {
+            stats::get(index) - self.0[index]
+        }
+    }
+
+    #[test]
+    fn one_delay1_thunk_counts_as_made_and_forced() {
+        let delta = Delta::start();
+        let thunk = delay1(double, (21,));
+        assert_eq!(delta.of(stats::DELAY + 1), 1);
+        assert_eq!(delta.of(stats::DEFER_TO + INT), 1);
+        assert_eq!(delta.of(stats::CREATED + INT), 1);
+        assert_eq!(thunk.force(), 42);
+        assert_eq!(delta.of(stats::FORCED_UNIQUE + INT), 1);
+        assert_eq!(delta.of(stats::FORCED_SHARED + INT), 0);
+        // The entry made a ready cell, which the force then took the value out of.
+        assert_eq!(delta.of(stats::EVALUATED + INT), 1);
+        assert_eq!(delta.of(stats::MOVED_UNIQUE + INT), 1);
+        drop(thunk);
+        assert_eq!(delta.of(stats::DROPPED_UNFORCED + INT), 0);
+        let others: u64 = (0..17)
+            .filter(|&n| n != 1)
+            .map(|n| delta.of(stats::DELAY + n))
+            .sum();
+        assert_eq!(others, 0);
+        assert_eq!(delta.of(stats::CREATED + DATA), 0);
+    }
+
+    #[test]
+    fn a_thunk_dropped_unforced_is_counted() {
+        let delta = Delta::start();
+        drop(delay1(double, (1,)));
+        assert_eq!(delta.of(stats::CREATED + INT), 1);
+        assert_eq!(delta.of(stats::DROPPED_UNFORCED + INT), 1);
+        assert_eq!(delta.of(stats::FORCED_UNIQUE + INT), 0);
+        let forced = delay1(double, (1,));
+        forced.force();
+        drop(forced);
+        assert_eq!(delta.of(stats::DROPPED_UNFORCED + INT), 1);
+    }
+
+    #[test]
+    fn a_shared_thunk_is_counted_when_first_forced() {
+        let delta = Delta::start();
+        let thunk = delay1(double, (2,));
+        let other = thunk.clone();
+        assert_eq!(thunk.force(), 4);
+        assert_eq!(other.force(), 4);
+        assert_eq!(delta.of(stats::FORCED_SHARED + INT), 1);
+        assert_eq!(delta.of(stats::FORCED_UNIQUE + INT), 0);
+    }
+
+    #[test]
+    fn a_thunk_that_returns_a_thunk_is_chased_unique() {
+        let delta = Delta::start();
+        let outer = delay1(through, (5,));
+        assert_eq!(outer.force(), 10);
+        assert_eq!(delta.of(stats::DELAY + 1), 2);
+        assert_eq!(delta.of(stats::CREATED + INT), 2);
+        assert_eq!(delta.of(stats::FORCED_UNIQUE + INT), 1);
+        assert_eq!(delta.of(stats::CHASED_UNIQUE + INT), 1);
+        assert_eq!(delta.of(stats::CHASED_SHARED + INT), 0);
+    }
+
+    #[test]
+    fn data_ready_is_counted_by_arity() {
+        let delta = Delta::start();
+        let all = (
+            Data::ready(fixtures::c("Nil"), []),
+            Data::ready(fixtures::c("Cons"), [Field::Int64(1)]),
+            Data::ready(fixtures::c("Cons"), [Field::Int64(1), Field::Int64(2)]),
+            Data::ready(fixtures::c("Cons"), vec![Field::Int64(1); 3]),
+            Data::ready(fixtures::c("Cons"), vec![Field::Int64(1); 4]),
+            Data::ready(fixtures::c("Cons"), vec![Field::Int64(1); 6]),
+        );
+        for (arity, count) in [(0, 1), (1, 1), (2, 1), (3, 1), (4, 2)] {
+            assert_eq!(delta.of(stats::READY + arity), count, "arity {arity}");
+        }
+        assert_eq!(delta.of(stats::EVALUATED + DATA), 6);
+        drop(all);
+    }
+
+    #[test]
+    fn closures_are_counted() {
+        fn code(_: &(), arguments: Vec<Field>) -> Field {
+            arguments[0].clone()
+        }
+        let delta = Delta::start();
+        let closure = Closure::bind(2, code, ());
+        assert_eq!(delta.of(stats::BIND), 1);
+        let partial = closure.apply(vec![Field::Int64(1)]);
+        assert_eq!(delta.of(stats::PARTIAL), 1);
+        assert_eq!(delta.of(stats::APPLY_GENERAL), 1);
+        assert_eq!(partial.closure().apply(vec![Field::Int64(2)]).int64(), 1);
+    }
+
+    #[test]
+    fn the_program_thread_flushes_its_counts_into_the_report() {
+        // Runs on a thread of its own, which is gone when this returns: only
+        // the flush at the end of `on_program_stack` carries its counts here.
+        on_program_stack(|| {
+            delay5(
+                |a: i64, _: i64, _: i64, _: i64, _: i64| Int::ready(a),
+                (1, 2, 3, 4, 5),
+            )
+            .force()
+        });
+        assert!(stats::report().contains("delay5"));
+    }
+
+    #[test]
+    fn the_report_renders_a_table() {
+        let delta = Delta::start();
+        let thunk = delay1(through, (1,));
+        thunk.force();
+        drop(delay2(|a: i64, b: i64| Int::ready(a + b), (1, 2)));
+        drop(Data::ready(
+            fixtures::c("Cons"),
+            [Field::Int64(1), Field::Int64(2)],
+        ));
+        assert!(delta.of(stats::CREATED + INT) >= 3);
+        let report = stats::report();
+        println!("{report}");
+        for heading in [
+            "thunks",
+            "fate of those thunks",
+            "delay1",
+            "delay2",
+            "Data::ready by arity",
+            "calls",
+        ] {
+            assert!(report.contains(heading), "{heading}");
+        }
     }
 }

@@ -3865,7 +3865,7 @@ fn the_runtime_delays_every_arity_the_emitter_writes() {
     let runtime = include_str!("../../h2r-rt/src/lib.rs");
     for arity in 0..=crate::emit::DELAYS {
         assert!(
-            runtime.contains(&format!("    delay{arity} step{arity}(")),
+            runtime.contains(&format!("    delay{arity} step{arity} {arity}(")),
             "arity {arity}"
         );
     }
@@ -6655,4 +6655,35 @@ fn a_big_nat_literal_is_its_little_endian_limbs() {
     );
     assert_eq!(crate::emit::big_nat_limbs(&big_nat("0")), Ok(vec![]));
     assert!(crate::emit::big_nat_limbs(&h2r_core_ir::Lit::int(7)).is_err());
+}
+
+#[test]
+fn the_emitter_census_runs_and_names_every_category_it_saw() {
+    let guard = crate::census::Guard::collecting();
+    let delaying = boxed_world(
+        app(
+            app(gvar(&sn("Main", "main"), "main"), box_int(lvar("y"))),
+            lvar("y"),
+        ),
+        true,
+        true,
+    );
+    crate::emit::emit_entry(&delaying, &sn("Main", "main")).unwrap();
+    let calling = data_call_world(data_case(call_target(), false));
+    crate::emit::emit_entry(&calling, &sn("Main", "main")).unwrap();
+    let report = guard.report();
+    println!("{report}");
+    for category in [
+        "delayed() sites by where they are written",
+        "DelayBlock instruction",
+        "f_ wrapper (lifted result)",
+        "DelayBlock / App (call of a global)",
+        "looping tail call / CallTop",
+        "by what uses the thunk first",
+        "by number of captured arguments",
+        "HData::ready sites by arity",
+        "Construct",
+    ] {
+        assert!(report.contains(category), "{category}\n{report}");
+    }
 }

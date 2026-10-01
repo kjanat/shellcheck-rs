@@ -24,7 +24,16 @@ fn main() -> ExitCode {
 
 fn generate() -> Result<()> {
     println!("cargo::rerun-if-changed=build.rs");
-    let rustc = rustc()?;
+    println!("cargo::rerun-if-env-changed=H2R_STATS");
+    println!("cargo::rerun-if-env-changed=H2R_CENSUS");
+    let mut rustc = rustc()?;
+    // WP13: the runtime's allocation census, on with `--features stats` or
+    // `H2R_STATS=1`; `H2R_CENSUS=1` makes the emitter print its site census.
+    if std::env::var_os("CARGO_FEATURE_STATS").is_some()
+        || std::env::var("H2R_STATS").is_ok_and(|value| value == "1")
+    {
+        rustc = rustc.with_stats();
+    }
     let fingerprint = rustc.fingerprint().map_err(anyhow::Error::msg)?;
     let (work, _claim) =
         h2r_build::layer::claim(&format!("shellcheck-core-{}", &fingerprint[..16]))?;
