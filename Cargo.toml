@@ -9,6 +9,7 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
+h2r-alloc       = { path = "crates/h2r-alloc" }
 h2r-analysis    = { path = "crates/h2r-analysis" }
 h2r-build       = { path = "crates/h2r-build" }
 h2r-core-ir     = { path = "crates/h2r-core-ir" }

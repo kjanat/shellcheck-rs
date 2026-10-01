@@ -7,5 +7,8 @@ license.workspace = true
 
 [dependencies]
 
+[dev-dependencies]
+h2r-alloc.workspace = true
+
 [lints]
 workspace = true

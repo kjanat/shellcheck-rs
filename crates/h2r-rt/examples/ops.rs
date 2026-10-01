@@ -11,6 +11,11 @@
 
 use std::hint::black_box;
 
+/// The allocator of the compiled program, so every Ir/op below includes the
+/// allocator cost the real binary pays (see `crates/h2r-alloc`).
+#[global_allocator]
+static ALLOCATOR: h2r_alloc::Allocator = h2r_alloc::Allocator;
+
 use h2r_rt::{Closure, Constructor, Data, Field, Int, delay1};
 
 /// Constructors as the emitter writes them: one `static` per name, with a
