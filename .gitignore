@@ -1,0 +1,7 @@
+/*-session-*.md
+/.claude/
+/.ruff_cache/
+/Roadmap.md
+/compiler/
+/dist-newstyle/
+/target/
