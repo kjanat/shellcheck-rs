@@ -91,6 +91,23 @@ Verification: `cargo test -p shellcheck-rs` 1 517 pass; `conformance gate`: 2 04
 
 What did not help or was a trap: the first version (persistent maps, no shared empty map) already brought cfg to 220 ms but left medium at 373 MiB, because every `new_internal_state()` and every placeholder state allocated four empty tree nodes; sharing the empty map took it to 132 MiB and cfg to ~150 ms. `OrdMap::union` is not left-biased when the left operand is smaller (see above), which is easy to miss because the doc says it is. Not done because the targets are met by a wide margin: `Rc<BTreeSet>` for `s_exit_codes` (it is still cloned per state copy), `Rc<VariableState>` all the way through `read_variable` (lookups still clone the value out), avoiding the `self.cache.get(&node).cloned()` clone in `get_cache`. The analysis result now holds `Rc`s, so `CFGAnalysis`/`ProgramState` are no longer `Send`; nothing in the workspace needs that, but a multi-threaded embedder would have to switch `im_rc` to `im` (Arc).
 
+### Landed (end-to-end, this container, `hyperfine` 10 runs with warmup, GHC 0.11.0 oracle)
+
+| scenario           | before `5d3fe06` | after `cdf4a1c` |  oracle | after vs oracle | after vs before |
+| ------------------ | ---------------: | --------------: | ------: | --------------: | --------------: |
+| startup (`-f gcc`) |           5.9 ms |          3.1 ms | 12.4 ms |            3.9× |            1.9× |
+| small              |          72.8 ms |         23.4 ms |  104 ms |            4.4× |            3.1× |
+| medium             |           2.87 s |          297 ms |  1.58 s |            5.3× |            9.7× |
+| large              |           31.0 s |          1.30 s |  5.75 s |            4.4× |           23.8× |
+| many (120 files)   |           1.92 s |          693 ms |  3.75 s |            5.4× |            2.8× |
+| peak RSS medium    |        1 374 MiB |         131 MiB | 251 MiB |                 |                 |
+| peak RSS large     |        8 731 MiB |         526 MiB | 1.2 GiB |                 |                 |
+
+Both the oracle and the port were measured in the same session, so these ratios are what the bench on CI should show up to its 2.4× faster machine. Parity after WP-R1: `-f gcc` and `-f json1` byte-identical to the oracle on all four corpus scripts, gate 2 048 agree / 0 diverge, fuzz seed 0 ×2000 clean.
+
+- **WP-R1** (`cdf4a1c`): the structural-sharing change above.
+- **WP-R0** (`a8266e6`, correctness, found by CI's seed roulette: `conformance fuzz --seed "$GITHUB_RUN_NUMBER"`, seed 156): a `time` flag word that fails after consuming input commits the parse and fails, as Parsec's `many readFlag` does; `children()`/`children_mut()` of `T_CoProc` yield only the body, as `Inner_T_CoProc (Maybe Token) t` does not traverse the name. Verified: 1 617 tests, gate 2 048 / 0, fuzz seed 156 ×4000 and seed 0 ×2000 clean, clippy/fmt/dprint clean. Recorded in `DIVERGENCES.md` (seed 156 now in the clean list).
+
 ### Candidates after WP-R1 (measure first)
 
 - `params-other` (variable flow, 476 ms on large, growing 4.4× for 2.66× lines) and `checks`/`resolve` (5×): find the quadratic piece in each with `conformance bench` and callgrind once cfg no longer dominates.
