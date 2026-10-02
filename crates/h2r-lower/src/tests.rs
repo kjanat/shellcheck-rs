@@ -3872,7 +3872,9 @@ fn the_runtime_delays_every_arity_the_emitter_writes() {
     let runtime = include_str!("../../h2r-rt/src/lib.rs");
     for arity in 0..=crate::emit::DELAYS {
         assert!(
-            runtime.contains(&format!("    delay{arity} step{arity} {arity}(")),
+            runtime.contains(&format!(
+                "    delay{arity} delay{arity}_at step{arity} {arity}("
+            )),
             "arity {arity}"
         );
     }
@@ -6983,4 +6985,299 @@ fn loops_are_the_cycles_of_tail_transfers() {
         .into_iter()
         .collect()
     );
+}
+
+/// `main x y = let f a b = I# (a +# b +# (x -# y)); p = f x in p y` at the
+/// lifted `Int`: `p` is a closure the block cannot see through, and applying it
+/// is the block's last instruction, so it is a tail application (`apply_later`).
+fn tail_apply_world() -> Vec<Module> {
+    let mut f = binder("$_in$f", "f", "f");
+    f["ty"] = json!(1);
+    f["arity"] = json!(2);
+    let p = binder("$_in$p", "p", "p");
+    let pair = |binder, rhs| {
+        json!({"binder": binder, "rhs": rhs,
+            "whnf": true, "cheap": true, "trivial": false, "okForSpec": true})
+    };
+    let sum = int_op(
+        "+#",
+        int_op("+#", lvar("a"), lvar("b")),
+        int_op("-#", lvar("x"), lvar("y")),
+    );
+    let body = json!({"node": "Let", "bind": {"rec": false, "pairs": [
+        pair(f, lam("a", lam("b", box_int(sum))))]}, "body": {
+        "node": "Let", "bind": {"rec": false, "pairs": [pair(p, app(lvar("f"), lvar("x")))]},
+        "body": app(lvar("p"), lvar("y"))}});
+    let mut modules = boxed_world(body, false, true);
+    let h2r_core_ir::Ty::Fun { res, .. } = modules[0].types[1].clone() else {
+        panic!()
+    };
+    let at = u32::try_from(modules[0].types.len()).unwrap();
+    modules[0].types.push(*res);
+    for binder in modules[0].binders.iter_mut().filter(|b| b.unique == "p") {
+        binder.ty = at;
+    }
+    modules
+}
+
+/// Every crate source of a split program, and its entry crate.
+fn split_sources(modules: &[Module], stats: bool) -> Vec<String> {
+    let split = crate::emit::emit_entry_split_with(
+        modules,
+        &[&sn("Main", "main")],
+        usize::MAX,
+        crate::emit::Driver::Print,
+        stats,
+    )
+    .unwrap();
+    split
+        .crates
+        .into_iter()
+        .map(|member| member.source)
+        .chain(std::iter::once(split.main))
+        .collect()
+}
+
+/// The site ids a source names, in text order: `delayN_at(id, ..)` and
+/// `apply_later_at(id, ..)`, and the `set_site(id)` of a block too wide for
+/// `delayN_at`.
+fn site_ids(source: &str) -> Vec<u32> {
+    let mut ids = Vec::new();
+    for marker in ["_at(", "set_site("] {
+        for (at, _) in source.match_indices(marker) {
+            let before = &source[..at];
+            let named = marker == "set_site("
+                || before.rsplit("h2r_rt::").next().is_some_and(|name| {
+                    name.starts_with("delay") || name.starts_with("apply_later")
+                });
+            let digits: String = source[at + marker.len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if named && !digits.is_empty() {
+                ids.push((at, digits.parse().unwrap()));
+            }
+        }
+    }
+    ids.sort_unstable();
+    ids.into_iter().map(|(_, id)| id).collect()
+}
+
+/// A stats source with the site machinery taken out again: `delayN_at(id, `
+/// and `apply_later_at(id, ` become the plain calls, and the table and its
+/// installation are removed.
+fn without_sites(source: &str) -> String {
+    let mut plain = String::new();
+    let mut rest = source;
+    while let Some(at) = rest.find("_at(") {
+        let (head, tail) = rest.split_at(at);
+        let name = head.rsplit("h2r_rt::").next().unwrap_or("");
+        let digits = tail[4..].chars().take_while(char::is_ascii_digit).count();
+        let wide = name.starts_with("delay") || name.starts_with("apply_later");
+        if wide && digits > 0 && tail[4 + digits..].starts_with(", ") {
+            plain.push_str(head);
+            plain.push('(');
+            rest = &tail[4 + digits + 2..];
+        } else {
+            plain.push_str(head);
+            plain.push_str("_at(");
+            rest = &tail[4..];
+        }
+    }
+    plain.push_str(rest);
+    let plain = plain.replace(" h2r_rt::install_sites(SITES);", "");
+    match plain.find("static SITES: ") {
+        Some(start) => {
+            let end = plain[start..].find("];\n").expect("the table ends") + 3;
+            format!("{}{}", &plain[..start], &plain[start + end..])
+        }
+        None => plain,
+    }
+}
+
+#[test]
+fn the_site_table_is_emitted_and_dense() {
+    for modules in [
+        tail_apply_world(),
+        leaving_loop_world(),
+        join_loop_world(&["ping", "pong"], true),
+    ] {
+        let sources = split_sources(&modules, true);
+        let main = sources.last().unwrap();
+        let rows: Vec<&str> = main
+            .lines()
+            .filter(|line| line.starts_with("    h2r_rt::SiteInfo { krate: "))
+            .collect();
+        assert!(!rows.is_empty(), "{main}");
+        assert_eq!(main.matches("static SITES: &[h2r_rt::SiteInfo]").count(), 1);
+        // Installed next to the literals, before anything runs.
+        assert!(
+            main.contains("h2r_rt::install_literals(&LITERALS); h2r_rt::install_sites(SITES);"),
+            "{main}"
+        );
+        // Every id from 0 to the end of the table is written into the code
+        // exactly once, and nothing else is.
+        let mut ids: Vec<u32> = sources.iter().flat_map(|source| site_ids(source)).collect();
+        ids.sort_unstable();
+        let dense: Vec<u32> = (0..u32::try_from(rows.len()).unwrap()).collect();
+        assert_eq!(ids, dense, "{sources:#?}");
+        // The id is the row: rows carry the instance and the captures, and
+        // the first column names the crate the site landed in.
+        for row in &rows {
+            assert!(row.contains("krate: \"h2r_c0\""), "{row}");
+            assert!(row.contains("function: \"$u$Main$main\""), "{row}");
+            assert!(row.contains("instance: 0"), "{row}");
+        }
+        // No unnumbered thunk is left behind in a stats program.
+        for source in &sources {
+            assert!(!source.contains("h2r_rt::delay2("), "{source}");
+            assert!(!source.contains("h2r_rt::apply_later("), "{source}");
+        }
+    }
+}
+
+#[test]
+fn the_site_table_says_where_each_thunk_is_written() {
+    let sources = split_sources(&tail_apply_world(), true);
+    let main = sources.last().unwrap();
+    // `b_0_2` delays the closure (a `DelayBlock`), applies it as a tail
+    // (`apply_later`); `b_0_3` applies a closure it makes; `f_0` is the
+    // function's own thunk.
+    for expected in [
+        "kind: \"f_ wrapper (lifted result)\", origin: \"function entry\", used_by: \"\", captured: 2",
+        "kind: \"tail apply (apply_later)\", origin: \"Apply\", used_by: \"\", captured: 2",
+        "kind: \"DelayBlock instruction\"",
+    ] {
+        assert!(main.contains(expected), "{expected}\n{main}");
+    }
+    let apply_rows = main.matches("kind: \"tail apply (apply_later)\"").count();
+    let applications: usize = sources
+        .iter()
+        .map(|source| source.matches("h2r_rt::apply_later_at(").count())
+        .sum();
+    assert_eq!(apply_rows, applications);
+    assert_eq!(apply_rows, 2);
+    // A looping tail transfer that stays a thunk is a site of its own kind.
+    let looping = split_sources(&leaving_loop_world(), true);
+    assert!(
+        looping
+            .last()
+            .unwrap()
+            .contains("kind: \"looping tail jump\""),
+        "{}",
+        looping.last().unwrap()
+    );
+}
+
+#[test]
+fn without_stats_the_emitted_text_is_what_it_was() {
+    let world = tail_apply_world();
+    let plain = split_sources(&world, false);
+    for source in &plain {
+        assert!(!source.contains("_at("), "{source}");
+        assert!(!source.contains("SITES"), "{source}");
+        assert!(!source.contains("install_sites"), "{source}");
+    }
+    // The text of `emit_entry_split`, which is what every build had before.
+    let before = crate::emit::emit_entry_split(
+        &world,
+        &[&sn("Main", "main")],
+        usize::MAX,
+        crate::emit::Driver::Print,
+    )
+    .unwrap();
+    let before: Vec<String> = before
+        .crates
+        .into_iter()
+        .map(|member| member.source)
+        .chain(std::iter::once(before.main))
+        .collect();
+    assert_eq!(plain, before);
+    // The functions as they were written before sites existed, verbatim.
+    let functions = generated(&crate::emit::emit_entry(&world, &sn("Main", "main")).unwrap());
+    for expected in [
+        "    let v16: HClosure = h2r_rt::delay2(b_0_3, (v10, v11, ));\n",
+        "    h2r_rt::apply_later(v17, vec![HField::Int64(v11)], HField::int)\n",
+        "    h2r_rt::apply_later(v14, vec![HField::Int64(v12)], HField::closure)\n",
+        "fn f_0(v0: i64, v1: i64) -> HInt {\n    h2r_rt::delay2(b_0_0, (v0, v1, ))\n}\n",
+        "fn main() {\n    h2r_rt::install_literals(&LITERALS);\n    let raw",
+    ] {
+        assert!(functions.contains(expected), "{expected}\n{functions}");
+    }
+    // And the stats text is that text plus the ids and the table, nothing
+    // else: take them out and it is the same program.
+    let stats = split_sources(&world, true);
+    assert_eq!(stats.len(), plain.len());
+    assert_ne!(stats, plain);
+    for (with, without) in stats.iter().zip(&plain) {
+        assert_eq!(&without_sites(with), without);
+    }
+    for modules in [leaving_loop_world(), join_loop_world(&["go"], true)] {
+        for (with, without) in split_sources(&modules, true)
+            .iter()
+            .zip(&split_sources(&modules, false))
+        {
+            assert_eq!(&without_sites(with), without);
+        }
+    }
+}
+
+/// The one test here that compiles what it emits: a stats program is built
+/// against the runtime with the census on and run, and prints, from the table
+/// it installed, the fate of the thunks each site made.
+#[test]
+fn a_stats_program_prints_the_fate_of_the_thunks_of_each_site() {
+    let out = std::env::temp_dir().join(format!("h2r-sites-{}", std::process::id()));
+    if out.exists() {
+        std::fs::remove_dir_all(&out).unwrap();
+    }
+    crate::build::emit_with(
+        &tail_apply_world(),
+        &[&sn("Main", "main")],
+        &out,
+        usize::MAX,
+        crate::emit::Driver::Print,
+        true,
+    )
+    .unwrap();
+    let program = crate::build::compile(&out, &crate::build::Rustc::new("0").with_stats()).unwrap();
+    let run = std::process::Command::new(program)
+        .args(["3", "5"])
+        .output()
+        .unwrap();
+    if out.exists() {
+        std::fs::remove_dir_all(&out).unwrap();
+    }
+    assert!(run.status.success());
+    // (3 + 5) + (3 - 5), as `tail_apply_world` defines it.
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "6");
+    let census = String::from_utf8_lossy(&run.stderr);
+    let table = census
+        .split("thunks by emitter site (WP17a)")
+        .nth(1)
+        .expect("the per-site tables");
+    println!("thunks by emitter site (WP17a){table}");
+    assert!(table.contains("4 sites in the installed table, 4 with a thunk made"));
+    // The two tail applications are chased, the delayed closure and the
+    // function's own thunk are forced, and each row says which site it is.
+    for (site, fate) in [
+        (
+            "b2 | DelayBlock instruction",
+            "1          1          0          0          0          0",
+        ),
+        (
+            "b3 | tail apply (apply_later)",
+            "1          0          0          1          0          0",
+        ),
+        (
+            "b0 | f_ wrapper (lifted result)",
+            "1          1          0          0          0          0",
+        ),
+    ] {
+        let row = table
+            .lines()
+            .find(|line| line.contains(site))
+            .unwrap_or_else(|| panic!("{site}\n{table}"));
+        assert!(row.contains(fate), "{row}");
+    }
 }

@@ -221,6 +221,12 @@ struct Header<T> {
     /// pointer rather than `&'static` so `T` needs no `'static` bound here.
     vtable: NonNull<VTable<T>>,
     value: Slot<T>,
+    /// Census only (`stats`): the emitter site that made this thunk
+    /// (`stats::NO_SITE` for any other cell). Last, so that the fields above
+    /// keep their offsets; it costs one word per cell with the feature on and
+    /// nothing with it off.
+    #[cfg(feature = "stats")]
+    site: Cell<u32>,
 }
 
 /// The memoised value of a cell: a `OnceCell<T>` with the one operation the
@@ -371,7 +377,12 @@ impl<T: 'static, C: Code<T> + 'static> Block<T, C> {
         // `dealloc` below, and `holds_code` only reads the code.
         #[cfg(feature = "stats")]
         match unsafe { Self::code(header) }.holds_code() {
-            1 => super::stats::bump_kind::<T>(super::stats::DROPPED_UNFORCED),
+            1 => {
+                super::stats::bump_kind::<T>(super::stats::DROPPED_UNFORCED);
+                // SAFETY: as above, the header is live until the `dealloc`.
+                let site = unsafe { header.as_ref() }.site.get();
+                super::stats::bump_site(site, super::stats::SITE_UNFORCED);
+            }
             2 => super::stats::bump_kind::<T>(super::stats::DROPPED_PENDING),
             _ => {}
         }
@@ -433,6 +444,8 @@ impl<T: 'static> Shared<T> {
             let block = block.as_ptr();
             (&raw mut (*block).header.strong).write(Cell::new(1));
             (&raw mut (*block).header.vtable).write(NonNull::from(vtable));
+            #[cfg(feature = "stats")]
+            (&raw mut (*block).header.site).write(Cell::new(super::stats::NO_SITE));
             (&raw mut (*block).code).write(code);
         }
         block
@@ -479,9 +492,15 @@ impl<T: 'static> Shared<T> {
     }
 
     pub fn step(f: impl FnOnce() -> Thunk<T> + 'static) -> Self {
+        let cell = Self::alloc_empty(Once(Cell::new(Some(f))));
         #[cfg(feature = "stats")]
-        super::stats::bump_kind::<T>(super::stats::CREATED);
-        Self::alloc_empty(Once(Cell::new(Some(f))))
+        {
+            super::stats::bump_kind::<T>(super::stats::CREATED);
+            let site = super::stats::take_site();
+            cell.header().site.set(site);
+            super::stats::bump_site(site, super::stats::SITE_CREATED);
+        }
+        cell
     }
 
     /// An empty cell, filled later by [`Shared::fill`] to tie a knot.
@@ -612,11 +631,22 @@ impl<T: Clone + 'static> Shared<T> {
     #[inline(never)]
     fn force_slow(&self) -> &T {
         #[cfg(feature = "stats")]
-        super::stats::bump_kind::<T>(if self.strong_count() > 1 {
-            super::stats::FORCED_SHARED
-        } else {
-            super::stats::FORCED_UNIQUE
-        });
+        {
+            let shared = self.strong_count() > 1;
+            super::stats::bump_kind::<T>(if shared {
+                super::stats::FORCED_SHARED
+            } else {
+                super::stats::FORCED_UNIQUE
+            });
+            super::stats::bump_site(
+                self.header().site.get(),
+                if shared {
+                    super::stats::SITE_FORCED_SHARED
+                } else {
+                    super::stats::SITE_FORCED_UNIQUE
+                },
+            );
+        }
         let mut out = MaybeUninit::uninit();
         let value = match self.enter(&mut out) {
             // SAFETY: `Value` means the code wrote `out`.
@@ -718,11 +748,22 @@ fn chase<T: Clone + 'static>(first: Shared<T>) -> T {
         }
         let mut out = MaybeUninit::uninit();
         #[cfg(feature = "stats")]
-        super::stats::bump_kind::<T>(if current.strong_count() > 1 {
-            super::stats::CHASED_SHARED
-        } else {
-            super::stats::CHASED_UNIQUE
-        });
+        {
+            let shared = current.strong_count() > 1;
+            super::stats::bump_kind::<T>(if shared {
+                super::stats::CHASED_SHARED
+            } else {
+                super::stats::CHASED_UNIQUE
+            });
+            super::stats::bump_site(
+                current.header().site.get(),
+                if shared {
+                    super::stats::SITE_CHASED_SHARED
+                } else {
+                    super::stats::SITE_CHASED_UNIQUE
+                },
+            );
+        }
         match current.enter(&mut out) {
             Entered::Value => {
                 if current.strong_count() > 1 {
@@ -832,5 +873,21 @@ mod tests {
         assert!(!alias.is_evaluated());
         assert_eq!(*alias.force(), 9);
         assert!(Shared::ptr_eq(&cell, &alias));
+    }
+
+    /// The census header (`stats`) is one word larger and nothing else about
+    /// it moves; without the feature the header is exactly what the pins in
+    /// `PERF.md` say (a `:` cell is 72 bytes: 16 + the 56-byte `Node`).
+    #[test]
+    fn the_site_in_the_header_exists_only_with_the_census() {
+        let plain = 2 * std::mem::size_of::<usize>() + std::mem::size_of::<Option<i64>>();
+        assert_eq!(plain, 32);
+        let expected = if cfg!(feature = "stats") {
+            plain + std::mem::size_of::<usize>()
+        } else {
+            plain
+        };
+        assert_eq!(std::mem::size_of::<Header<i64>>(), expected);
+        assert_eq!(std::mem::size_of::<Block<i64, Evaluated>>(), expected);
     }
 }

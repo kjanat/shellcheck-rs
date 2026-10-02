@@ -298,6 +298,16 @@ impl Constructors {
 /// The statement every emitted entry function starts with.
 const INSTALL_LITERALS: &str = "h2r_rt::install_literals(&LITERALS);";
 
+/// [`INSTALL_LITERALS`], and for a stats build (WP17a) the table of thunk
+/// sites next to it.
+fn install_statement() -> String {
+    if census::numbering_sites() {
+        format!("{INSTALL_LITERALS} h2r_rt::install_sites(SITES);")
+    } else {
+        INSTALL_LITERALS.to_string()
+    }
+}
+
 struct Shims {
     leaf: usize,
     count: usize,
@@ -377,8 +387,12 @@ fn names(code: &str, identifier: &str) -> bool {
     })
 }
 
+/// A thunk of `entry(arguments)`. In a stats build (WP17a) the site is
+/// numbered and its id goes into the generated call (`delayN_at(id, ..)`); the
+/// text of any other build is what it always was.
 fn delayed(carrier: &str, entry: &str, arguments: &[String], site: census::Site) -> String {
     census::delay(&site, arguments.len());
+    let id = census::number(&site, arguments.len());
     if arguments.len() > DELAYS {
         let captures: String = arguments
             .iter()
@@ -386,13 +400,22 @@ fn delayed(carrier: &str, entry: &str, arguments: &[String], site: census::Site)
             .map(|(n, a)| format!("let c{n} = {a}; "))
             .collect();
         let names: Vec<String> = (0..arguments.len()).map(|n| format!("c{n}")).collect();
+        // No `delayN_at` for this many captures: name the site, and the one
+        // cell `defer_to` makes next takes it.
+        let named = id.map_or_else(String::new, |id| format!("h2r_rt::stats::set_site({id}); "));
         return format!(
-            "{{ {captures}{carrier}::defer_to(move || {entry}({})) }}",
+            "{{ {captures}{named}{carrier}::defer_to(move || {entry}({})) }}",
             names.join(", ")
         );
     }
     let captures: String = arguments.iter().map(|a| format!("{a}, ")).collect();
-    format!("h2r_rt::delay{}({entry}, ({captures}))", arguments.len())
+    match id {
+        Some(id) => format!(
+            "h2r_rt::delay{}_at({id}, {entry}, ({captures}))",
+            arguments.len()
+        ),
+        None => format!("h2r_rt::delay{}({entry}, ({captures}))", arguments.len()),
+    }
 }
 
 fn match_data(
@@ -870,9 +893,11 @@ fn prepare<R>(
     modules: &[Module],
     entries: &[&str],
     driver: Driver,
+    stats: bool,
     emit: impl FnOnce(Prepared<'_>) -> Result<R, String>,
 ) -> Result<R, String> {
     let _census = census::Guard::from_env();
+    let _sites = census::SiteGuard::start(stats);
     if entries.is_empty() || (driver != Driver::Api && entries.len() > 1) {
         return Err("a program runs one entry, and only a typed API takes several".into());
     }
@@ -1099,7 +1124,8 @@ fn print_main(
     for function in &shows.functions {
         adapter.push_str(function);
     }
-    writeln!(adapter, "fn main() {{\n    {INSTALL_LITERALS}\n    let raw: Vec<String> = std::env::args().skip(1).collect();\n    assert_eq!(raw.len(), {arity}, \"wrong argument count\");\n    h2r_rt::on_program_stack(move || println!(\"{{}}\", {result}));\n}}").unwrap();
+    let install = install_statement();
+    writeln!(adapter, "fn main() {{\n    {install}\n    let raw: Vec<String> = std::env::args().skip(1).collect();\n    assert_eq!(raw.len(), {arity}, \"wrong argument count\");\n    h2r_rt::on_program_stack(move || println!(\"{{}}\", {result}));\n}}").unwrap();
     Ok(())
 }
 
@@ -1118,10 +1144,11 @@ fn lint_main(
         return Err("a lint entry takes a path and the file's text and returns lines".into());
     }
     let names = string_names(world, constructors)?;
+    let install = install_statement();
     writeln!(
         adapter,
         r#"fn main() {{
-    {INSTALL_LITERALS}
+    {install}
     let paths: Vec<String> = std::env::args().skip(1).collect();
     if paths.is_empty() {{
         eprintln!("No files specified.");
@@ -1157,7 +1184,7 @@ fn lint_main(
 }
 
 pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
-    prepare(modules, &[entry], Driver::Print, |prepared| {
+    prepare(modules, &[entry], Driver::Print, false, |prepared| {
         let mut out = functions(
             prepared.world,
             prepared.specialization,
@@ -1172,7 +1199,7 @@ pub fn emit_entry(modules: &[Module], entry: &str) -> Result<String, String> {
 }
 
 pub fn emit_library(modules: &[Module], entries: &[&str]) -> Result<String, String> {
-    prepare(modules, entries, Driver::Api, |prepared| {
+    prepare(modules, entries, Driver::Api, false, |prepared| {
         let has_boxed = has_boxed(prepared.world, prepared.leaves);
         let groups = groups(prepared.edges);
         let literals = Literals::default();
@@ -1202,7 +1229,7 @@ pub fn emit_library(modules: &[Module], entries: &[&str]) -> Result<String, Stri
 }
 
 pub fn instances(modules: &[Module], entries: &[&str]) -> Result<crate::graph::Instances, String> {
-    prepare(modules, entries, Driver::Api, |prepared| {
+    prepare(modules, entries, Driver::Api, false, |prepared| {
         Ok(crate::graph::Instances {
             names: prepared
                 .specialization
@@ -1273,7 +1300,23 @@ pub fn emit_entry_split(
     budget: usize,
     driver: Driver,
 ) -> Result<SplitProgram, String> {
-    prepare(modules, entries, driver, |prepared| {
+    emit_entry_split_with(modules, entries, budget, driver, false)
+}
+
+/// [`emit_entry_split`], and with `stats` the program of a build that has the
+/// runtime's census on (WP17a): every thunk-creating site gets an id that the
+/// generated call passes to `delayN_at` / `apply_later_at`, and the entry crate
+/// gets `static SITES` (the id's crate, function, block, kind, origin and
+/// captures) which every entry function installs next to the literals. With
+/// `stats` false the text is exactly that of `emit_entry_split`.
+pub fn emit_entry_split_with(
+    modules: &[Module],
+    entries: &[&str],
+    budget: usize,
+    driver: Driver,
+    stats: bool,
+) -> Result<SplitProgram, String> {
+    prepare(modules, entries, driver, stats, |prepared| {
         let world = prepared.world;
         let has_boxed = has_boxed(world, prepared.leaves);
         let groups = groups(prepared.edges);
@@ -1360,6 +1403,11 @@ pub fn emit_entry_split(
         }
         // The one table of address literals every crate indexes into.
         main.push_str(&literals.table());
+        main.push_str(&census::site_table(|instance| {
+            crate_of
+                .get(&instance)
+                .map_or_else(|| "-".to_string(), |&number| name(number))
+        }));
         main.push_str(&prepared.adapter);
         main.push_str(&prepared.constructors.table(&main));
         Ok(SplitProgram {
@@ -1588,6 +1636,12 @@ fn leaf_code(
 ) -> Result<String, String> {
     let mut out = String::new();
     let mut wrappers = Vec::new();
+    census::enter_function(index, || {
+        world.at(leaf.function.module).map_or_else(
+            |_| String::from("?"),
+            |module| module.binder(leaf.function.owner).name.clone(),
+        )
+    });
     let mut shims = Shims {
         leaf: index,
         count: 0,
@@ -1650,6 +1704,7 @@ fn leaf_code(
         // Per loop: its member blocks' arms, in block order.
         let mut arms: BTreeMap<usize, Vec<(&Block, String)>> = BTreeMap::new();
         for block in &leaf.function.blocks {
+            census::enter_block(block.id);
             let result = carrier(world, block_result(&leaf.function, block));
             let stepped = unlifted(&leaf.function, block);
             let looping = |target: crate::nir::BlockId| {
@@ -1901,9 +1956,15 @@ fn leaf_code(
                         }
                         (None, _, Operation::Apply { callee, arguments }) => {
                             let (callee, args, read) = applied(callee, arguments);
-                            Some(leave(format!(
-                                "h2r_rt::apply_later({callee}, vec![{args}], HField::{read})"
-                            )))
+                            let site = census::Site::apply_later();
+                            Some(leave(match census::number(&site, arguments.len() + 1) {
+                                Some(id) => format!(
+                                    "h2r_rt::apply_later_at({id}, {callee}, vec![{args}], HField::{read})"
+                                ),
+                                None => format!(
+                                    "h2r_rt::apply_later({callee}, vec![{args}], HField::{read})"
+                                ),
+                            }))
                         }
                         _ => None,
                     };
@@ -2812,6 +2873,7 @@ fn leaf_code(
         // cannot be delayed at all — GHC's type system already forbids it, so
         // deferring one would be emitting code for a value that cannot exist.
         if data::lifted(world, &leaf.function.result_ty) {
+            census::enter_block(leaf.function.entry);
             let result_carrier = carrier(world, &leaf.function.result_ty);
             if block.params.is_empty() {
                 writeln!(
@@ -3228,9 +3290,10 @@ fn api_function(
         .collect::<Result<Vec<_>, String>>()?
         .join(", ");
     let result = pack(world, entry_result, &format!("{adapter_name}({arguments})"));
+    let install = install_statement();
     writeln!(
         adapter,
-        "pub fn {name}({parameters}) -> {} {{\n    {INSTALL_LITERALS}\n    let r = {result};\n    {}\n}}",
+        "pub fn {name}({parameters}) -> {} {{\n    {install}\n    let r = {result};\n    {}\n}}",
         rust_type(world, entry_result)?,
         from_field(world, constructors, entry_result, "r")?
     )

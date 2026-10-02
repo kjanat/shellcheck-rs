@@ -11,9 +11,10 @@
 //! generated crates (see `runtime_source` in `h2r-lower`) the same way as
 //! `cell.rs`, so it names nothing outside itself.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// `writeln!` to a `String`, which cannot fail.
 macro_rules! put {
@@ -98,6 +99,129 @@ thread_local! {
 
 static TOTAL: Mutex<[u64; COUNTERS]> = Mutex::new([0; COUNTERS]);
 
+// Per-site attribution (WP17a). A thunk is made at one emitted site; the
+// emitter numbers the sites densely and passes the number to `delayN_at` /
+// `apply_later_at`, which leave it in `CURRENT_SITE` for the one
+// `Shared::step` they cause to read, and the cell keeps it in its header. The
+// fate of the cell (forced, chased, freed unforced) is then counted against
+// the site, not only against the cell's kind.
+
+/// The site of a thunk that no emitted site made: the runtime's own (`map_list`
+/// and friends), `defer`, and the `defer_to` of a block with too many captures.
+pub const NO_SITE: u32 = u32::MAX;
+
+/// What the emitter knows about one thunk-creating site, written into the
+/// entry crate as `static SITES: &[SiteInfo]`, indexed by site id, and handed
+/// to [`install_sites`] at program start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SiteInfo {
+    /// The generated crate that holds the site (`-` for a single-file program).
+    pub krate: &'static str,
+    /// The Haskell binder the function was lowered from.
+    pub function: &'static str,
+    /// The instance number (`f_<instance>`, `b_<instance>_<block>` in the source).
+    pub instance: u32,
+    /// The NIR block the site is in.
+    pub block: u32,
+    /// Where it is written: `DelayBlock` instruction, `f_` wrapper, looping tail ..
+    pub kind: &'static str,
+    /// Which rule and Core form it came from.
+    pub origin: &'static str,
+    /// What first uses a `DelayBlock` thunk (empty for the other kinds).
+    pub used_by: &'static str,
+    /// How many values the thunk captures.
+    pub captured: u32,
+}
+
+static SITE_TABLE: OnceLock<&'static [SiteInfo]> = OnceLock::new();
+
+/// Install the emitter's site table. The first call wins; later ones (every
+/// entry function of a typed API installs it) are ignored.
+pub fn install_sites(sites: &'static [SiteInfo]) {
+    SITE_TABLE.get_or_init(|| sites);
+}
+
+/// The counters kept per site.
+pub const SITE_CREATED: usize = 0;
+pub const SITE_FORCED_UNIQUE: usize = 1;
+pub const SITE_FORCED_SHARED: usize = 2;
+pub const SITE_CHASED_UNIQUE: usize = 3;
+pub const SITE_CHASED_SHARED: usize = 4;
+pub const SITE_UNFORCED: usize = 5;
+const SITE_FIELDS: usize = 6;
+
+type SiteCounts = [u64; SITE_FIELDS];
+
+thread_local! {
+    static CURRENT_SITE: Cell<u32> = const { Cell::new(NO_SITE) };
+    // Slot 0 is `NO_SITE`; site `n` is slot `n + 1`. A thread that is being
+    // torn down no longer has it (`try_with`): a cell freed that late is not
+    // counted.
+    static SITE_LOCAL: RefCell<Vec<SiteCounts>> = const { RefCell::new(Vec::new()) };
+}
+
+static SITE_TOTAL: Mutex<Vec<SiteCounts>> = Mutex::new(Vec::new());
+
+fn slot(site: u32) -> usize {
+    if site == NO_SITE {
+        0
+    } else {
+        site as usize + 1
+    }
+}
+
+/// Name the site of the next thunk this thread makes.
+#[inline]
+pub fn set_site(site: u32) {
+    CURRENT_SITE
+        .try_with(|current| current.set(site))
+        .unwrap_or_default();
+}
+
+/// The site the next thunk is made at, which is then spent.
+#[inline]
+pub fn take_site() -> u32 {
+    CURRENT_SITE
+        .try_with(|current| current.replace(NO_SITE))
+        .unwrap_or(NO_SITE)
+}
+
+/// Add one to counter `field` of `site` (one of the `SITE_*` constants).
+#[inline]
+pub fn bump_site(site: u32, field: usize) {
+    SITE_LOCAL
+        .try_with(|local| {
+            let mut local = local.borrow_mut();
+            let slot = slot(site);
+            if local.len() <= slot {
+                local.resize(slot + 1, [0; SITE_FIELDS]);
+            }
+            local[slot][field] += 1;
+        })
+        .unwrap_or_default();
+}
+
+/// A counter of `site` on the calling thread.
+pub fn site_get(site: u32, field: usize) -> u64 {
+    SITE_LOCAL.with(|local| {
+        local
+            .borrow()
+            .get(slot(site))
+            .map_or(0, |counts| counts[field])
+    })
+}
+
+fn merge(into: &mut Vec<SiteCounts>, from: &[SiteCounts]) {
+    if into.len() < from.len() {
+        into.resize(from.len(), [0; SITE_FIELDS]);
+    }
+    for (sum, counts) in into.iter_mut().zip(from) {
+        for (a, b) in sum.iter_mut().zip(counts) {
+            *a += b;
+        }
+    }
+}
+
 /// Add one to counter `index`.
 #[inline]
 pub fn bump(index: usize) {
@@ -131,6 +255,21 @@ pub fn flush() {
             *sum += count.replace(0);
         }
     });
+    let mut sites = SITE_TOTAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    SITE_LOCAL.with(|local| merge(&mut sites, &local.take()));
+}
+
+/// Per-site counts, process-wide plus the calling thread's own: index 0 is
+/// the thunks no site made, index `n + 1` is site `n`.
+fn site_totals() -> Vec<SiteCounts> {
+    let mut sites = SITE_TOTAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    SITE_LOCAL.with(|local| merge(&mut sites, &local.borrow()));
+    sites
 }
 
 fn totals() -> Vec<u64> {
@@ -148,14 +287,14 @@ pub fn print_report() {
 
 /// The census as a table: process-wide totals plus the calling thread's own.
 pub fn report() -> String {
-    render(&totals())
+    render(&totals(), &site_totals())
 }
 
 fn row(out: &mut String, label: &str, count: u64) {
     put!(out, "  {label:<34}{count:>14}");
 }
 
-fn render(c: &[u64]) -> String {
+fn render(c: &[u64], sites: &[SiteCounts]) -> String {
     let mut out = String::from("h2r-rt allocation census (feature `stats`)\n");
     let sum = |from: usize, len: usize| c[from..from + len].iter().sum::<u64>();
 
@@ -265,7 +404,184 @@ fn render(c: &[u64]) -> String {
     row(&mut out, "  apply_general", c[APPLY_GENERAL]);
     row(&mut out, "  apply_over", c[APPLY_OVER]);
     row(&mut out, "Field::data of a thunk", c[DEFERRED_DATA]);
+    render_sites(&mut out, sites, SITE_TABLE.get().copied().unwrap_or(&[]));
     out
+}
+
+/// One site's row: id, counts, and what the table says about it.
+struct SiteRow<'a> {
+    id: Option<usize>,
+    counts: SiteCounts,
+    info: Option<&'a SiteInfo>,
+}
+
+fn percent(part: u64, whole: u64) -> f64 {
+    if whole == 0 {
+        0.0
+    } else {
+        part as f64 * 100.0 / whole as f64
+    }
+}
+
+fn site_heading(out: &mut String, first: &str) {
+    put!(
+        out,
+        "  {first:>7}{:>11}{:>11}{:>11}{:>11}{:>11}{:>11}{:>8}  where",
+        "created",
+        "forced",
+        "forced shr",
+        "chased",
+        "chased shr",
+        "unforced",
+        "unf %"
+    );
+}
+
+fn site_counts_line(out: &mut String, label: &str, counts: &SiteCounts) {
+    let [
+        created,
+        forced,
+        forced_shared,
+        chased,
+        chased_shared,
+        unforced,
+    ] = *counts;
+    write!(
+        out,
+        "  {label:>7}{created:>11}{forced:>11}{forced_shared:>11}{chased:>11}{chased_shared:>11}{unforced:>11}{:>7.1}%  ",
+        percent(unforced, created)
+    )
+    .expect("writing to a String");
+}
+
+fn site_top(out: &mut String, title: &str, rows: &mut [SiteRow<'_>], by: usize) {
+    const TOP: usize = 40;
+    rows.sort_by(|a, b| {
+        b.counts[by]
+            .cmp(&a.counts[by])
+            .then_with(|| b.counts[SITE_CREATED].cmp(&a.counts[SITE_CREATED]))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    put!(out, "\n{title}");
+    site_heading(out, "site");
+    for row in rows.iter().take(TOP).filter(|row| row.counts[by] != 0) {
+        let label = row.id.map_or("none".to_string(), |id| id.to_string());
+        site_counts_line(out, &label, &row.counts);
+        match row.info {
+            Some(info) => put!(
+                out,
+                "{} {}#{} b{} | {} / {} | used by: {} | {} captured",
+                info.krate,
+                info.function,
+                info.instance,
+                info.block,
+                info.kind,
+                info.origin,
+                if info.used_by.is_empty() {
+                    "-"
+                } else {
+                    info.used_by
+                },
+                info.captured
+            ),
+            None if row.id.is_some() => put!(out, "(no site table installed, or id outside it)"),
+            None => put!(out, "(thunks no emitted site made)"),
+        }
+    }
+}
+
+fn site_rollup<'a>(
+    out: &mut String,
+    title: &str,
+    rows: &[SiteRow<'a>],
+    key: impl Fn(&'a SiteInfo) -> String,
+) {
+    let mut groups: BTreeMap<String, (u64, SiteCounts)> = BTreeMap::new();
+    for row in rows {
+        let name = row.info.map_or_else(|| "(unattributed)".to_string(), &key);
+        let (sites, counts) = groups.entry(name).or_default();
+        *sites += u64::from(row.id.is_some());
+        for (sum, count) in counts.iter_mut().zip(row.counts) {
+            *sum += count;
+        }
+    }
+    let mut groups: Vec<_> = groups
+        .into_iter()
+        .filter(|(_, (sites, counts))| *sites != 0 || counts.iter().any(|&count| count != 0))
+        .collect();
+    groups.sort_by(|a, b| {
+        b.1.1[SITE_UNFORCED]
+            .cmp(&a.1.1[SITE_UNFORCED])
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    put!(out, "\n{title}");
+    site_heading(out, "sites");
+    let mut total: SiteCounts = [0; SITE_FIELDS];
+    let mut all_sites = 0;
+    for (name, (sites, counts)) in &groups {
+        site_counts_line(out, &sites.to_string(), counts);
+        put!(out, "{name}");
+        all_sites += sites;
+        for (sum, count) in total.iter_mut().zip(counts) {
+            *sum += count;
+        }
+    }
+    site_counts_line(out, &all_sites.to_string(), &total);
+    put!(out, "total");
+}
+
+/// The per-site tables: the top 40 sites by unforced and by created count,
+/// and roll-ups by where the site is written, by origin and by use.
+fn render_sites(out: &mut String, counts: &[SiteCounts], table: &'static [SiteInfo]) {
+    out.push_str("\nthunks by emitter site (WP17a)\n");
+    put!(
+        out,
+        "  {} sites in the installed table, {} with a thunk made",
+        table.len(),
+        counts
+            .iter()
+            .skip(1)
+            .filter(|c| c[SITE_CREATED] != 0)
+            .count()
+    );
+    let mut rows: Vec<SiteRow<'_>> = (0..counts.len().max(table.len() + 1))
+        .map(|slot| SiteRow {
+            id: slot.checked_sub(1),
+            counts: counts.get(slot).copied().unwrap_or([0; SITE_FIELDS]),
+            info: slot.checked_sub(1).and_then(|id| table.get(id)),
+        })
+        .collect();
+    site_top(
+        out,
+        "top 40 sites by thunks freed unforced",
+        &mut rows,
+        SITE_UNFORCED,
+    );
+    site_top(
+        out,
+        "top 40 sites by thunks created",
+        &mut rows,
+        SITE_CREATED,
+    );
+    site_rollup(out, "by where written", &rows, |info| info.kind.to_string());
+    site_rollup(
+        out,
+        "by origin: where written / rule / Core form",
+        &rows,
+        |info| format!("{} / {}", info.kind, info.origin),
+    );
+    site_rollup(
+        out,
+        "by what uses a DelayBlock thunk first",
+        &rows,
+        |info| {
+            if info.used_by.is_empty() {
+                format!("({})", info.kind)
+            } else {
+                info.used_by.to_string()
+            }
+        },
+    );
 }
 
 #[cfg(test)]

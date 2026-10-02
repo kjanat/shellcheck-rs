@@ -11,6 +11,14 @@
 //!
 //! Collection lives in a thread-local so the emitter's functions take no extra
 //! parameter; when it is off every hook is one thread-local read.
+//!
+//! The same classification feeds the site table of a stats build (WP17a):
+//! with [`SiteGuard`] on, every `delayed()` site and every tail `apply_later`
+//! gets a dense `u32` id, the emitter writes it into the generated call
+//! (`delayN_at(id, ..)`), and [`site_table`] writes the `static SITES` that maps
+//! each id back to the crate, function and block, the "where written" kind, the
+//! rule / Core form it came from and its captured-argument count, for the
+//! runtime's per-site fate counters to print.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -26,7 +34,7 @@ macro_rules! put {
         writeln!($out, $($arg)*).expect("writing to a String")
     };
 }
-use crate::nir::{Block, Exit, Operation, Source, World};
+use crate::nir::{Block, BlockId, Exit, Operation, Source, World};
 
 /// Where in the emitter a delayed thunk is written, and what it came from.
 /// Built by the constructors below; empty (and free) when no census is on.
@@ -41,7 +49,7 @@ impl Site {
     /// A `DelayBlock` instruction: the rule and Core form it came from, and
     /// what the block does with its result.
     pub(crate) fn instruction(world: &World<'_>, block: &Block, position: usize) -> Site {
-        if !active() {
+        if !wanted() {
             return Site::default();
         }
         let instruction = &block.instructions[position];
@@ -60,7 +68,7 @@ impl Site {
 
     /// The `f_` function of a lifted result: a thunk of the whole body.
     pub(crate) fn wrapper(caf: bool) -> Site {
-        if !active() {
+        if !wanted() {
             return Site::default();
         }
         Site {
@@ -77,7 +85,7 @@ impl Site {
     /// A transfer into a block that loops back to this one, from the
     /// instruction that ended it (a tail call or a tail `case` arm).
     pub(crate) fn tail(kind: &'static str, instruction: &crate::nir::Instruction) -> Site {
-        if !active() {
+        if !wanted() {
             return Site::default();
         }
         Site {
@@ -87,9 +95,21 @@ impl Site {
         }
     }
 
+    /// A tail application of an unknown closure in a lifted block (`apply_later`).
+    pub(crate) fn apply_later() -> Site {
+        if !wanted() {
+            return Site::default();
+        }
+        Site {
+            kind: "tail apply (apply_later)",
+            origin: "Apply".into(),
+            used_by: None,
+        }
+    }
+
     /// A transfer by `Exit::Jump` or `Exit::IntSwitch` into a looping block.
     pub(crate) fn jump() -> Site {
-        if !active() {
+        if !wanted() {
             return Site::default();
         }
         Site {
@@ -201,6 +221,141 @@ thread_local! {
 
 fn active() -> bool {
     CENSUS.with(|census| census.borrow().is_some())
+}
+
+/// Whether anything wants the classification of a site: the census tables or
+/// the site table of a stats build.
+fn wanted() -> bool {
+    active() || SITE_LOG.with(|log| log.borrow().is_some())
+}
+
+/// One thunk-creating site, as the table says it.
+struct SiteRecord {
+    instance: usize,
+    function: String,
+    block: u32,
+    kind: &'static str,
+    origin: String,
+    used_by: &'static str,
+    captured: usize,
+}
+
+/// The sites of one emission, numbered in the order the emitter writes them,
+/// and where the emitter currently is.
+#[derive(Default)]
+struct SiteLog {
+    instance: usize,
+    function: String,
+    block: u32,
+    records: Vec<SiteRecord>,
+}
+
+thread_local! {
+    static SITE_LOG: RefCell<Option<SiteLog>> = const { RefCell::new(None) };
+}
+
+/// Site numbering for the length of one emission (WP17a), on only for a stats
+/// build. Dropping the guard discards the log.
+pub(crate) struct SiteGuard {
+    owner: bool,
+}
+
+impl SiteGuard {
+    pub(crate) fn start(wanted: bool) -> SiteGuard {
+        let owner = wanted
+            && SITE_LOG.with(|log| {
+                let mut log = log.borrow_mut();
+                let free = log.is_none();
+                if free {
+                    *log = Some(SiteLog::default());
+                }
+                free
+            });
+        SiteGuard { owner }
+    }
+}
+
+impl Drop for SiteGuard {
+    fn drop(&mut self) {
+        if self.owner {
+            SITE_LOG.with(|log| log.borrow_mut().take());
+        }
+    }
+}
+
+/// Whether sites are being numbered, so the emitter writes the `_at` forms and
+/// the table.
+pub(crate) fn numbering_sites() -> bool {
+    SITE_LOG.with(|log| log.borrow().is_some())
+}
+
+/// The emitter starts writing instance `instance`, lowered from `function`.
+pub(crate) fn enter_function(instance: usize, function: impl FnOnce() -> String) {
+    SITE_LOG.with(|log| {
+        if let Some(log) = log.borrow_mut().as_mut() {
+            log.instance = instance;
+            log.function = function();
+        }
+    });
+}
+
+/// The emitter starts writing block `block` of the current function.
+pub(crate) fn enter_block(block: BlockId) {
+    SITE_LOG.with(|log| {
+        if let Some(log) = log.borrow_mut().as_mut() {
+            log.block = block.0;
+        }
+    });
+}
+
+/// Number one thunk-creating site capturing `captured` values, if sites are
+/// being numbered.
+pub(crate) fn number(site: &Site, captured: usize) -> Option<u32> {
+    SITE_LOG.with(|log| {
+        let mut log = log.borrow_mut();
+        let log = log.as_mut()?;
+        let id = u32::try_from(log.records.len()).expect("more than 2^32 thunk sites");
+        log.records.push(SiteRecord {
+            instance: log.instance,
+            function: log.function.clone(),
+            block: log.block,
+            kind: site.kind,
+            origin: site.origin.clone(),
+            used_by: site.used_by.unwrap_or(""),
+            captured,
+        });
+        Some(id)
+    })
+}
+
+/// The `static SITES` of the numbered sites, in id order, with the generated
+/// crate each one landed in (`crate_of` maps an instance number to its name).
+/// Empty when sites are not being numbered.
+pub(crate) fn site_table(crate_of: impl Fn(usize) -> String) -> String {
+    SITE_LOG.with(|log| {
+        let log = log.borrow();
+        let Some(log) = log.as_ref() else {
+            return String::new();
+        };
+        let mut out = String::from("static SITES: &[h2r_rt::SiteInfo] = &[\n");
+        for record in &log.records {
+            writeln!(
+                out,
+                "    h2r_rt::SiteInfo {{ krate: {:?}, function: {:?}, instance: {}, block: {}, kind: {:?}, origin: {:?}, used_by: {:?}, captured: {} }},",
+                crate_of(record.instance),
+                record.function,
+                record.instance,
+                record.block,
+                record.kind,
+                record.origin,
+                record.used_by,
+                record.captured
+            )
+            .expect("writing to a String");
+        }
+        out.push_str("];\n");
+        out
+    })
 }
 
 /// Count one `delayed()` site capturing `captured` values.

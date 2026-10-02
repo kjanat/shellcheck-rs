@@ -29,9 +29,10 @@ fn generate() -> Result<()> {
     let mut rustc = rustc()?;
     // WP13: the runtime's allocation census, on with `--features stats` or
     // `H2R_STATS=1`; `H2R_CENSUS=1` makes the emitter print its site census.
-    if std::env::var_os("CARGO_FEATURE_STATS").is_some()
-        || std::env::var("H2R_STATS").is_ok_and(|value| value == "1")
-    {
+    // WP17a: the emitter then numbers its thunk sites and writes their table.
+    let stats = std::env::var_os("CARGO_FEATURE_STATS").is_some()
+        || std::env::var("H2R_STATS").is_ok_and(|value| value == "1");
+    if stats {
         rustc = rustc.with_stats();
     }
     let fingerprint = rustc.fingerprint().map_err(anyhow::Error::msg)?;
@@ -45,7 +46,7 @@ fn generate() -> Result<()> {
                 .flatten()
                 .copied(),
         )?;
-        h2r_lower::build::emit(&modules, &ENTRIES, &emitted, BUDGET, Driver::Api)
+        h2r_lower::build::emit_with(&modules, &ENTRIES, &emitted, BUDGET, Driver::Api, stats)
             .map_err(anyhow::Error::msg)
     })??;
     h2r_lower::build::compile(&work, &rustc).map_err(anyhow::Error::msg)?;

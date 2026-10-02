@@ -142,6 +142,12 @@ mod cell;
 #[cfg(feature = "stats")]
 pub mod stats;
 
+/// Install the emitter's table of thunk-creating sites (WP17a); the generated
+/// entry functions call it next to `install_literals` when emitted with stats.
+#[cfg(feature = "stats")]
+#[allow(unused_imports)]
+pub use self::stats::{SiteInfo, install_sites};
+
 // Public API of the crate; unused when the runtime is inlined as a private module.
 #[allow(unused_imports)]
 pub use self::cell::{Code, Deferred, Lazy, Shared, Thunk, shared};
@@ -175,7 +181,7 @@ impl Suspend for Field {
 }
 
 macro_rules! suspensions {
-    ($($delay:ident $step:ident $n:literal($($argument:ident: $ty:ident),*);)*) => {$(
+    ($($delay:ident $delay_at:ident $step:ident $n:literal($($argument:ident: $ty:ident),*);)*) => {$(
         pub fn $delay<T: Suspend, $($ty: 'static),*>(
             entry: fn($($ty),*) -> T,
             ($($argument,)*): ($($ty,)*),
@@ -183,6 +189,28 @@ macro_rules! suspensions {
             #[cfg(feature = "stats")]
             stats::bump(stats::DELAY + $n);
             T::suspend(move || entry($($argument),*))
+        }
+
+        /// As the function above, made at emitter site `site` (WP17a). Without
+        /// the `stats` feature the site is ignored and this is that function.
+        #[cfg_attr(not(feature = "stats"), inline(always))]
+        pub fn $delay_at<T: Suspend, $($ty: 'static),*>(
+            site: u32,
+            entry: fn($($ty),*) -> T,
+            arguments: ($($ty,)*),
+        ) -> T {
+            #[cfg(feature = "stats")]
+            {
+                stats::set_site(site);
+                let thunk = $delay(entry, arguments);
+                stats::set_site(stats::NO_SITE);
+                thunk
+            }
+            #[cfg(not(feature = "stats"))]
+            {
+                let _ = site;
+                $delay(entry, arguments)
+            }
         }
 
         pub fn $step<R: 'static, $($ty: 'static),*>(
@@ -197,29 +225,52 @@ macro_rules! suspensions {
 }
 
 suspensions! {
-    delay0 step0 0();
-    delay1 step1 1(a: A);
-    delay2 step2 2(a: A, b: B);
-    delay3 step3 3(a: A, b: B, c: C);
-    delay4 step4 4(a: A, b: B, c: C, d: D);
-    delay5 step5 5(a: A, b: B, c: C, d: D, e: E);
-    delay6 step6 6(a: A, b: B, c: C, d: D, e: E, f: F);
-    delay7 step7 7(a: A, b: B, c: C, d: D, e: E, f: F, g: G);
-    delay8 step8 8(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H);
-    delay9 step9 9(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I);
-    delay10 step10 10(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J);
-    delay11 step11 11(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K);
-    delay12 step12 12(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L);
-    delay13 step13 13(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M);
-    delay14 step14 14(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N);
-    delay15 step15 15(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N, o: O);
-    delay16 step16 16(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N, o: O, p: P);
+    delay0 delay0_at step0 0();
+    delay1 delay1_at step1 1(a: A);
+    delay2 delay2_at step2 2(a: A, b: B);
+    delay3 delay3_at step3 3(a: A, b: B, c: C);
+    delay4 delay4_at step4 4(a: A, b: B, c: C, d: D);
+    delay5 delay5_at step5 5(a: A, b: B, c: C, d: D, e: E);
+    delay6 delay6_at step6 6(a: A, b: B, c: C, d: D, e: E, f: F);
+    delay7 delay7_at step7 7(a: A, b: B, c: C, d: D, e: E, f: F, g: G);
+    delay8 delay8_at step8 8(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H);
+    delay9 delay9_at step9 9(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I);
+    delay10 delay10_at step10 10(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J);
+    delay11 delay11_at step11 11(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K);
+    delay12 delay12_at step12 12(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L);
+    delay13 delay13_at step13 13(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M);
+    delay14 delay14_at step14 14(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N);
+    delay15 delay15_at step15 15(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N, o: O);
+    delay16 delay16_at step16 16(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N, o: O, p: P);
 }
 
 pub fn apply_later<T: Suspend>(callee: Closure, arguments: Vec<Field>, read: fn(&Field) -> T) -> T {
     #[cfg(feature = "stats")]
     stats::bump(stats::APPLY_LATER);
     T::suspend(move || read(&callee.apply(arguments)))
+}
+
+/// [`apply_later`] made at emitter site `site` (WP17a); without the `stats`
+/// feature the site is ignored.
+#[cfg_attr(not(feature = "stats"), inline(always))]
+pub fn apply_later_at<T: Suspend>(
+    site: u32,
+    callee: Closure,
+    arguments: Vec<Field>,
+    read: fn(&Field) -> T,
+) -> T {
+    #[cfg(feature = "stats")]
+    {
+        stats::set_site(site);
+        let thunk = apply_later(callee, arguments, read);
+        stats::set_site(stats::NO_SITE);
+        thunk
+    }
+    #[cfg(not(feature = "stats"))]
+    {
+        let _ = site;
+        apply_later(callee, arguments, read)
+    }
 }
 
 pub fn apply_step(callee: Closure, arguments: Vec<Field>, read: fn(&Field) -> i64) -> Step<i64> {
@@ -3414,5 +3465,137 @@ mod stats_tests {
         ] {
             assert!(report.contains(heading), "{heading}");
         }
+    }
+
+    fn site_counts(site: u32) -> [u64; 6] {
+        [
+            stats::SITE_CREATED,
+            stats::SITE_FORCED_UNIQUE,
+            stats::SITE_FORCED_SHARED,
+            stats::SITE_CHASED_UNIQUE,
+            stats::SITE_CHASED_SHARED,
+            stats::SITE_UNFORCED,
+        ]
+        .map(|field| stats::site_get(site, field))
+    }
+
+    #[test]
+    fn a_delay1_at_thunk_dropped_unforced_is_counted_against_its_site() {
+        // [created, forced unique, forced shared, chased unique, chased shared, unforced]
+        let thunk = delay1_at(3, double, (1,));
+        assert_eq!(site_counts(3), [1, 0, 0, 0, 0, 0]);
+        drop(thunk);
+        assert_eq!(site_counts(3), [1, 0, 0, 0, 0, 1]);
+        // Nothing leaked into the neighbours or into the unattributed row.
+        assert_eq!(site_counts(2), [0; 6]);
+        assert_eq!(site_counts(4), [0; 6]);
+        assert_eq!(site_counts(stats::NO_SITE), [0; 6]);
+        // The thread-local is spent by the thunk it was meant for.
+        let unattributed = delay1(double, (1,));
+        assert_eq!(site_counts(stats::NO_SITE)[0], 1);
+        drop(unattributed);
+        assert_eq!(site_counts(stats::NO_SITE)[5], 1);
+    }
+
+    #[test]
+    fn forced_and_chased_thunks_are_counted_against_their_own_sites() {
+        // `through` makes a second thunk (made by plain `delay1`, so
+        // unattributed) that the first, site 10, returns and `chase` runs.
+        let outer = delay1_at(10, through, (5,));
+        let shared = delay1_at(11, double, (2,));
+        let other = shared.clone();
+        assert_eq!(outer.force(), 10);
+        assert_eq!(shared.force(), 4);
+        assert_eq!(other.force(), 4);
+        assert_eq!(site_counts(10), [1, 1, 0, 0, 0, 0]);
+        assert_eq!(site_counts(11), [1, 0, 1, 0, 0, 0]);
+        let unattributed = site_counts(stats::NO_SITE);
+        assert_eq!(unattributed[stats::SITE_CREATED], 1);
+        assert_eq!(unattributed[stats::SITE_CHASED_UNIQUE], 1);
+    }
+
+    #[test]
+    fn apply_later_at_is_attributed_too() {
+        fn code(_: &(), arguments: Vec<Field>) -> Field {
+            arguments[0].clone()
+        }
+        let callee = Closure::bind(1, code, ());
+        let thunk: Int = apply_later_at(12, callee, vec![Field::Int(Int::ready(8))], Field::int);
+        assert_eq!(site_counts(12)[stats::SITE_CREATED], 1);
+        assert_eq!(thunk.force(), 8);
+        assert_eq!(site_counts(12)[stats::SITE_FORCED_UNIQUE], 1);
+    }
+
+    static SITES: [stats::SiteInfo; 3] = [
+        stats::SiteInfo {
+            krate: "h2r_c0",
+            function: "Main.loop",
+            instance: 4,
+            block: 2,
+            kind: "DelayBlock instruction",
+            origin: "DelayBlock / App (call of a global)",
+            used_by: "field of a constructor",
+            captured: 2,
+        },
+        stats::SiteInfo {
+            krate: "h2r_c0",
+            function: "Main.loop",
+            instance: 4,
+            block: 3,
+            kind: "looping tail call",
+            origin: "CallLocal",
+            used_by: "",
+            captured: 3,
+        },
+        stats::SiteInfo {
+            krate: "h2r_c1",
+            function: "Data.List.map",
+            instance: 9,
+            block: 0,
+            kind: "f_ wrapper (lifted result)",
+            origin: "function entry",
+            used_by: "",
+            captured: 1,
+        },
+    ];
+
+    #[test]
+    fn the_report_ranks_sites_with_their_table_rows() {
+        install_sites(&SITES);
+        for _ in 0..5 {
+            drop(delay2_at(0, |a: i64, b: i64| Int::ready(a + b), (1, 2)));
+        }
+        for n in 0..2 {
+            drop(delay1_at(1, double, (n,)));
+        }
+        for n in 0..7 {
+            let thunk = delay1_at(2, double, (n,));
+            assert_eq!(thunk.force(), n * 2);
+        }
+        let report = stats::report();
+        println!("{report}");
+        let unforced = report
+            .split("top 40 sites by thunks freed unforced")
+            .nth(1)
+            .and_then(|rest| rest.split("top 40 sites by thunks created").next())
+            .expect("the unforced table");
+        let first = unforced.lines().nth(2).expect("a first row");
+        assert!(first.contains("Main.loop#4 b2"), "{first}");
+        assert!(unforced.contains("Main.loop#4 b3"));
+        assert!(!unforced.contains("Data.List.map"), "never unforced");
+        let created = report
+            .split("top 40 sites by thunks created")
+            .nth(1)
+            .and_then(|rest| rest.split("by where written").next())
+            .expect("the created table");
+        assert!(
+            created
+                .lines()
+                .nth(2)
+                .expect("row")
+                .contains("Data.List.map#9")
+        );
+        assert!(report.contains("DelayBlock instruction / DelayBlock / App (call of a global)"));
+        assert!(report.contains("field of a constructor"));
     }
 }

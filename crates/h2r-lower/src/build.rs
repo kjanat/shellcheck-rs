@@ -7,7 +7,7 @@ use std::time::Instant;
 use h2r_core_ir::Module;
 use sha2::{Digest, Sha256};
 
-use crate::emit::{Driver, emit_entry_split};
+use crate::emit::{Driver, emit_entry_split_with};
 
 const MANIFEST: &str = "crates.txt";
 
@@ -22,7 +22,22 @@ pub fn emit(
     budget: usize,
     driver: Driver,
 ) -> Result<(), String> {
-    let program = emit_entry_split(modules, entries, budget, driver)?;
+    emit_with(modules, entries, out, budget, driver, false)
+}
+
+/// [`emit`] for a build whose runtime has the `stats` feature on (see
+/// [`Rustc::with_stats`]): the generated calls name their thunk-creating sites
+/// and the entry crate carries the table the census prints them from (WP17a).
+/// With `stats` false this is exactly [`emit`].
+pub fn emit_with(
+    modules: &[Module],
+    entries: &[&str],
+    out: &Path,
+    budget: usize,
+    driver: Driver,
+    stats: bool,
+) -> Result<(), String> {
+    let program = emit_entry_split_with(modules, entries, budget, driver, stats)?;
     fs::create_dir_all(out).map_err(at(out))?;
     let write = |name: &str, source: &str| {
         let path = out.join(format!("{name}.rs"));
