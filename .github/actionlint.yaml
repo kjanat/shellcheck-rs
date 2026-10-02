@@ -10,3 +10,4 @@ policy:
   require-commit-hash: false
   require-job-timeout: { max-minutes: 5 }
   require-permissions: true
+paths: { .github/workflows/wiki.yml: { ignore: ['undefined variable "insert"'] } }
