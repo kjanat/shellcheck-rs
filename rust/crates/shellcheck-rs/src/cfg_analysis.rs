@@ -82,13 +82,70 @@ pub struct VariableState {
 /// is O(1)) and a lookup resolves them by scope precedence, prefix over local
 /// over global, which is what `M.unions [prefix, local, global]` does. The
 /// literal value is censored when it is read out, as `internalToExternal` does.
+///
+/// Each scope map may carry a second layer: the dependency base of the
+/// invocation the node was analysed in (`addDeps`). A node reached by one
+/// invocation only does not materialise `patchState base s`; its scope maps
+/// are `s`'s over the base's, resolved at lookup, so a lookup answers what the
+/// patched state would.
 #[derive(Debug, Clone)]
 pub struct ProgramState {
-    global_values: VMap<VariableState>,
-    local_values: VMap<VariableState>,
-    prefix_values: VMap<VariableState>,
+    global_values: ScopeValues,
+    local_values: ScopeValues,
+    prefix_values: ScopeValues,
     pub exit_codes: BTreeSet<Id>,
     pub state_is_reachable: bool,
+}
+
+/// One scope's variables: a map, optionally over a base map it was patched
+/// onto (`vmPatch base top`, i.e. `M.union top base`, resolved at lookup).
+#[derive(Debug, Clone)]
+struct ScopeValues {
+    top: VMap<VariableState>,
+    base: Option<VMap<VariableState>>,
+}
+
+impl ScopeValues {
+    fn flat(map: &VMap<VariableState>) -> Self {
+        ScopeValues {
+            top: map.clone(),
+            base: None,
+        }
+    }
+
+    /// `vmPatch base diff` without building the union: the same cases as
+    /// [`vm_patch`], with its last one (the left-biased union) left as two
+    /// layers.
+    fn patched(base: &VMap<VariableState>, diff: &VMap<VariableState>) -> Self {
+        if base.version == 0 {
+            return Self::flat(diff);
+        }
+        if diff.version == 0 {
+            return Self::flat(base);
+        }
+        if vm_is_quick_equal(base, diff) {
+            return Self::flat(diff);
+        }
+        ScopeValues {
+            top: diff.clone(),
+            base: Some(base.clone()),
+        }
+    }
+
+    fn lookup(&self, name: &str) -> Option<&VariableState> {
+        self.top
+            .lookup(name)
+            .or_else(|| self.base.as_ref().and_then(|b| b.lookup(name)))
+    }
+
+    /// The entries, base layer first, so that inserting them in order into a
+    /// map leaves the top layer's value for a key in both.
+    fn entries(&self) -> impl Iterator<Item = (&Rc<str>, &Rc<VariableState>)> {
+        self.base
+            .iter()
+            .flat_map(|b| b.iter())
+            .chain(self.top.iter())
+    }
 }
 
 impl ProgramState {
@@ -106,8 +163,8 @@ impl ProgramState {
     /// debugging, the checks look variables up by name.
     pub fn variables_in_scope(&self) -> BTreeMap<String, VariableState> {
         let mut flat: BTreeMap<String, VariableState> = BTreeMap::new();
-        for map in [&self.global_values, &self.local_values, &self.prefix_values] {
-            for (k, v) in map.iter() {
+        for scope in [&self.global_values, &self.local_values, &self.prefix_values] {
+            for (k, v) in scope.entries() {
                 flat.insert(k.to_string(), (**v).clone());
             }
         }
@@ -1738,11 +1795,36 @@ fn internal_to_external(s: &InternalState) -> ProgramState {
     // O(1): the maps are shared, and `ProgramState` resolves them by scope
     // precedence and censors the literal value when a variable is read.
     ProgramState {
-        global_values: s.s_global_values.clone(),
-        local_values: s.s_local_values.clone(),
-        prefix_values: s.s_prefix_values.clone(),
+        global_values: ScopeValues::flat(&s.s_global_values),
+        local_values: ScopeValues::flat(&s.s_local_values),
+        prefix_values: ScopeValues::flat(&s.s_prefix_values),
         exit_codes: s.s_exit_codes.clone().unwrap_or_default(),
         state_is_reachable: s.s_is_reachable.unwrap_or(true),
+    }
+}
+
+/// `internalToExternal (patchState base diff)` in O(1): the same cases as
+/// [`patch_state`], with its last one (a per-map left-biased union) left as
+/// two layers that a lookup resolves. The function targets are not part of
+/// the external state, so they are not patched at all.
+fn patched_to_external(base: &InternalState, diff: &InternalState) -> ProgramState {
+    if diff.version == 0 {
+        return internal_to_external(base);
+    }
+    if base.version == 0 || state_is_quick_equal(base, diff) {
+        return internal_to_external(diff);
+    }
+    ProgramState {
+        global_values: ScopeValues::patched(&base.s_global_values, &diff.s_global_values),
+        local_values: ScopeValues::patched(&base.s_local_values, &diff.s_local_values),
+        prefix_values: ScopeValues::patched(&base.s_prefix_values, &diff.s_prefix_values),
+        exit_codes: diff
+            .s_exit_codes
+            .as_ref()
+            .or(base.s_exit_codes.as_ref())
+            .cloned()
+            .unwrap_or_default(),
+        state_is_reachable: diff.s_is_reachable.or(base.s_is_reachable).unwrap_or(true),
     }
 }
 
@@ -1797,44 +1879,59 @@ pub fn analyze_control_flow(params: &CFGParameters, t: &Token) -> CFGAnalysis {
     };
     ctx.analyze_stragglers(&straggler_input, &uninvoked);
 
-    // Round up all the states from all data flows.
-    // groupByNode ∘ addDeps
+    // Round up all the states from all data flows:
+    // flattenByNode ∘ groupByNode ∘ addDeps, then internalToExternal.
+    //
+    // `addDeps` patches every state of an invocation onto that invocation's
+    // dependency base. A node that occurs in one invocation only needs no
+    // merge, so its patched state goes straight to `internalToExternal`, and
+    // `patched_to_external` leaves the patch as two layers instead of building
+    // the union (O(1) instead of O(|base| log n) per state). Nodes that occur
+    // in several invocations are patched and merged as before, in the same
+    // order, so the version counter sees the same merges.
+    let invocations = std::mem::take(&mut ctx.invocations);
+    let mut occurrences: IdMap<Node, usize> = IdMap::default();
+    for (_, m) in invocations.values() {
+        for node in m.keys() {
+            *occurrences.entry(*node).or_default() += 1;
+        }
+    }
+
+    let mut node_to_data: IdMap<Node, (ProgramState, ProgramState)> = IdMap::default();
     let mut grouped: BTreeMap<Node, Vec<(InternalState, InternalState)>> = BTreeMap::new();
-    let invocations: Vec<(BTreeSet<StateDependency>, StateMap)> =
-        ctx.invocations.values().cloned().collect();
-    for (deps, m) in &invocations {
+    for (deps, m) in invocations.values() {
         let base = deps_to_state(deps);
         for (node, (a, b)) in m {
-            let pa = patch_state(&base, a);
-            let pb = patch_state(&base, b);
-            grouped.entry(*node).or_default().push((pa, pb));
+            if occurrences[node] == 1 {
+                let data = (patched_to_external(&base, a), patched_to_external(&base, b));
+                node_to_data.insert(*node, data);
+            } else {
+                let pa = patch_state(&base, a);
+                let pb = patch_state(&base, b);
+                grouped.entry(*node).or_default().push((pa, pb));
+            }
         }
     }
 
     // flattenByNode: merge all pre/post states per node.
-    let mut invoked_states: StateMap = BTreeMap::new();
     for (node, list) in grouped {
         let pres: Vec<InternalState> = list.iter().map(|x| x.0.clone()).collect();
         let posts: Vec<InternalState> = list.iter().map(|x| x.1.clone()).collect();
         let pre = ctx.merge_states_nonempty(&pres);
         let post = ctx.merge_states_nonempty(&posts);
-        invoked_states.insert(node, (pre, post));
+        node_to_data.insert(
+            node,
+            (internal_to_external(&pre), internal_to_external(&post)),
+        );
     }
 
     // Fill in unreachable states for anything we didn't get to.
     let (mn, mx) = node_range(&cfg.cf_graph);
-    let mut all_states: StateMap = BTreeMap::new();
-    let unreachable = (unreachable_state(), unreachable_state());
+    let unreachable = internal_to_external(&unreachable_state());
     for n in mn..=mx {
-        all_states.insert(n, unreachable.clone());
-    }
-    for (n, v) in invoked_states {
-        all_states.insert(n, v); // invoked wins
-    }
-
-    let mut node_to_data: IdMap<Node, (ProgramState, ProgramState)> = IdMap::default();
-    for (n, (a, b)) in &all_states {
-        node_to_data.insert(*n, (internal_to_external(a), internal_to_external(b)));
+        node_to_data
+            .entry(n)
+            .or_insert_with(|| (unreachable.clone(), unreachable.clone()));
     }
 
     CFGAnalysis {
@@ -2045,5 +2142,87 @@ mod tests {
         assert_eq!(st.space_status("x"), Some(SpaceStatus::SpaceStatusDirty));
         // numeric: Definitely merged with Unknown -> Maybe (>= Maybe).
         assert_eq!(st.variable_may_be_assigned_integer("x"), Some(true));
+    }
+
+    /// Every answer `ProgramState` gives, for the names in `names`.
+    fn answers(st: &ProgramState, names: &[&str]) -> String {
+        let mut out = format!(
+            "reachable={} exit={:?} scope={:?}\n",
+            st.state_is_reachable(),
+            st.exit_codes(),
+            st.variables_in_scope()
+        );
+        for n in names {
+            out.push_str(&format!(
+                "{n}: {:?} {:?} {:?} {:?} {:?} {:?}\n",
+                st.variable_value(n),
+                st.space_status(n),
+                st.numerical_status(n),
+                st.variable_properties(n),
+                st.variable_may_be_declared_integer(n),
+                st.variable_may_be_assigned_integer(n),
+            ));
+        }
+        out
+    }
+
+    #[test]
+    fn layered_patch_answers_like_the_patched_state() {
+        let names = ["a", "b", "c", "d", "e", "missing"];
+        let val = |s: &str| VariableState {
+            variable_value: literal_to_variable_value(s),
+            variable_properties: default_properties(),
+        };
+        let int_props = {
+            let mut p = BTreeSet::new();
+            p.insert(CFVariableProp::CFVPInteger);
+            let mut ps = BTreeSet::new();
+            ps.insert(p);
+            ps
+        };
+        let mut deps = BTreeSet::new();
+        deps.insert(StateDependency::DepState(
+            Scope::GlobalScope,
+            "a".into(),
+            val("1"),
+        ));
+        deps.insert(StateDependency::DepState(
+            Scope::GlobalScope,
+            "b".into(),
+            val("x y"),
+        ));
+        deps.insert(StateDependency::DepState(
+            Scope::LocalScope,
+            "c".into(),
+            val(""),
+        ));
+        deps.insert(StateDependency::DepProperties(
+            Scope::PrefixScope,
+            "d".into(),
+            int_props,
+        ));
+        deps.insert(StateDependency::DepExitCodes([Id(7)].into()));
+        let base = deps_to_state(&deps);
+
+        let diff = insert_global("a", val("a b"), &new_internal_state());
+        let diff = insert_local("b", val("2"), &diff);
+        let diff = insert_global("e", val("3"), &diff);
+        let diff = insert_prefix("c", val("*"), &diff);
+        let unreachable_diff = unreachable_state();
+        let exits_diff = set_exit_code(Id(9), &insert_global("a", val("4"), &diff));
+
+        for (b, d) in [
+            (&base, &diff),
+            (&base, &unreachable_diff),
+            (&base, &exits_diff),
+            (&base, &new_internal_state()),
+            (&new_internal_state(), &diff),
+            (&diff, &base),
+        ] {
+            assert_eq!(
+                answers(&patched_to_external(b, d), &names),
+                answers(&internal_to_external(&patch_state(b, d)), &names),
+            );
+        }
     }
 }
