@@ -25,12 +25,8 @@ jobs:
     timeout-minutes: 5
     permissions: { contents: write }
     environment: { name: wiki, url: "${{ github.server_url }}/${{ github.repository }}/wiki" }
-    env: |- # I hate github actions
-      ${{ fromJSON(format(
-          '{{"src":{0},"dst":{1},{2}}}',
-          toJSON(fromJSON(vars.REPO).path),
-          toJSON(fromJSON(vars.WIKI).path),
-          vars.GIT)) }}
+    env: ${{ fromJSON(vars.GIT) }}
+    defaults: { run: { working-directory: "${{ fromJSON(vars.WIKI).path }}" } }
     steps:
       - name: Checkout the wiki branch
         uses: &A actions/checkout@v7
@@ -41,16 +37,18 @@ jobs:
         with: ${{ fromJSON(vars.WIKI) }}
 
       - name: Replace the wiki's content with the branch's
-        run: rsync --archive --delete --exclude .git --exclude .github "./${src}/" "./${dst}/"
+        working-directory: ${{ github.workspace }}
+        env: ${{fromJSON(format('{{"src":{0},"dst":{1}}}',toJSON(fromJSON(vars.REPO).path),toJSON(fromJSON(vars.WIKI).path)))}}
+        run: rsync --archive --delete
+          --exclude .git --exclude .github
+          "./${src}/" "./${dst}/"
 
       - name: Check for changes
         id: changes
-        working-directory: ${{ env.dst }}
         run: git diff --exit-code
         continue-on-error: true
 
       - name: Commit and push when anything changed
         if: steps.changes.outcome == 'failure'
-        working-directory: ${{ env.dst }}
         env: { m: "Mirror wiki branch at ${{ github.sha }}" }
         run: git commit -am "${m}" && git push
