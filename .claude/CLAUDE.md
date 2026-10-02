@@ -32,19 +32,19 @@ ShellCheck processes shell scripts in three stages:
 
 ### Key source files
 
-| File | Purpose |
-|---|---|
-| `src/ShellCheck/AST.hs` | Token type definitions (the AST node types) |
-| `src/ShellCheck/ASTLib.hs` | Helpers for working with AST nodes (e.g. `getLiteralString`) |
-| `src/ShellCheck/Analytics.hs` | Main analysis: `treeChecks` and `nodeChecks` lists |
-| `src/ShellCheck/AnalyzerLib.hs` | Shared utilities for check authors (`warn`, `err`, `style`, etc.) |
-| `src/ShellCheck/Checks/Commands.hs` | Per-command checks (dispatched by command name) |
-| `src/ShellCheck/Checks/ShellSupport.hs` | Shell-specific checks (dispatched by shell dialect) |
-| `src/ShellCheck/Checks/ControlFlow.hs` | Control-flow / CFG-based checks |
-| `src/ShellCheck/CFG.hs`, `CFGAnalysis.hs` | Control-flow graph construction and analysis |
-| `src/ShellCheck/Parser.hs` | The Parsec-based shell parser |
-| `src/ShellCheck/Interface.hs` | Public API types (`CheckResult`, `PositionedComment`, etc.) |
-| `src/ShellCheck/Debug.hs` | Dev helpers: `stringToAst`, `shellcheckString`, etc. |
+| File                                      | Purpose                                                           |
+| ----------------------------------------- | ----------------------------------------------------------------- |
+| `src/ShellCheck/AST.hs`                   | Token type definitions (the AST node types)                       |
+| `src/ShellCheck/ASTLib.hs`                | Helpers for working with AST nodes (e.g. `getLiteralString`)      |
+| `src/ShellCheck/Analytics.hs`             | Main analysis: `treeChecks` and `nodeChecks` lists                |
+| `src/ShellCheck/AnalyzerLib.hs`           | Shared utilities for check authors (`warn`, `err`, `style`, etc.) |
+| `src/ShellCheck/Checks/Commands.hs`       | Per-command checks (dispatched by command name)                   |
+| `src/ShellCheck/Checks/ShellSupport.hs`   | Shell-specific checks (dispatched by shell dialect)               |
+| `src/ShellCheck/Checks/ControlFlow.hs`    | Control-flow / CFG-based checks                                   |
+| `src/ShellCheck/CFG.hs`, `CFGAnalysis.hs` | Control-flow graph construction and analysis                      |
+| `src/ShellCheck/Parser.hs`                | The Parsec-based shell parser                                     |
+| `src/ShellCheck/Interface.hs`             | Public API types (`CheckResult`, `PositionedComment`, etc.)       |
+| `src/ShellCheck/Debug.hs`                 | Dev helpers: `stringToAst`, `shellcheckString`, etc.              |
 
 ### Adding a check
 

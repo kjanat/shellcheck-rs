@@ -1,0 +1,12 @@
+[package]
+name              = "h2r-alloc"
+version.workspace = true
+edition.workspace = true
+description       = "mimalloc as the global allocator, called the way C calls it"
+license.workspace = true
+
+[dependencies]
+libmimalloc-sys.workspace = true
+
+[lints]
+workspace = true

@@ -1,57 +1,57 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # This script configures, builds and runs tests.
 # It's meant for automatic cross-distro testing.
 
-die() { echo "$*" >&2; exit 1; }
+die() {
+	echo "$*" >&2
+	exit 1
+}
 
-[ -e "ShellCheck.cabal" ] ||
-  die "ShellCheck.cabal not in current dir"
-command -v cabal ||
-  die "cabal is missing"
+[ -e "ShellCheck.cabal" ] \
+	|| die "ShellCheck.cabal not in current dir"
+command -v cabal \
+	|| die "cabal is missing"
 
-cabal update ||
-  die "can't update"
+cabal update \
+	|| die "can't update"
 
-if [ -e "cabal.project.freeze" ]
-then
-  echo "Renaming cabal.project.freeze to .bak to avoid it interferring" >&2
-  mv "cabal.project.freeze" "cabal.project.freeze.bak" || die "Couldn't rename"
+if [ -e "cabal.project.freeze" ]; then
+	echo "Renaming cabal.project.freeze to .bak to avoid it interferring" >&2
+	mv "cabal.project.freeze" "cabal.project.freeze.bak" || die "Couldn't rename"
 fi
 
-if [ -e /etc/arch-release ]
-then
-  # Arch has an unconventional packaging setup
-  flags=(--disable-library-vanilla --enable-shared --enable-executable-dynamic --ghc-options=-dynamic)
+if [ -e /etc/arch-release ]; then
+	# Arch has an unconventional packaging setup
+	flags=(--disable-library-vanilla --enable-shared --enable-executable-dynamic --ghc-options=-dynamic)
 else
-  flags=()
+	flags=()
 fi
 
-cabal install --dependencies-only --enable-tests "${flags[@]}" ||
-  cabal install --dependencies-only "${flags[@]}" ||
-    cabal install --dependencies-only --max-backjumps -1 "${flags[@]}" ||
-      die "can't install dependencies"
-cabal configure --enable-tests "${flags[@]}" ||
-  die "configure failed"
-cabal build ||
-  die "build failed"
-cabal test ||
-  die "test failed"
-cabal haddock ||
-  die "haddock failed"
+cabal install --dependencies-only --enable-tests "${flags[@]}" \
+	|| cabal install --dependencies-only "${flags[@]}" \
+	|| cabal install --dependencies-only --max-backjumps -1 "${flags[@]}" \
+	|| die "can't install dependencies"
+cabal configure --enable-tests "${flags[@]}" \
+	|| die "configure failed"
+cabal build \
+	|| die "build failed"
+cabal test \
+	|| die "test failed"
+cabal haddock \
+	|| die "haddock failed"
 
 sc="$(find . -name shellcheck -type f -perm -111)"
-[ -x "$sc" ] || die "Can't find executable"
+[ -x "${sc}" ] || die "Can't find executable"
 
-"$sc" - << 'EOF' || die "execution failed"
+"${sc}" - <<'EOF' || die "execution failed"
 #!/bin/sh
 echo "Hello World"
 EOF
 
-"$sc" - << 'EOF' && die "negative execution failed"
+"${sc}" - <<'EOF' && die "negative execution failed"
 #!/bin/sh
 echo $1
 EOF
-
 
 echo "Success"
 exit 0

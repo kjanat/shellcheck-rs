@@ -1,0 +1,24 @@
+[package]
+name              = "shellcheck-core"
+version.workspace = true
+edition.workspace = true
+description       = "ShellCheck's checking core, compiled from GHC Core to Rust"
+license.workspace = true
+publish           = false
+
+[build-dependencies]
+anyhow.workspace        = true
+h2r-build.workspace     = true
+h2r-core-ir.workspace   = true
+h2r-lower.workspace     = true
+hs-entry.workspace      = true
+hs-libraries.workspace  = true
+hs-shellcheck.workspace = true
+
+[features]
+# Compile the runtime with its allocation census counters (WP13); the program
+# prints the table to stderr when it ends. `H2R_STATS=1` does the same.
+stats = []
+
+[lints]
+workspace = true

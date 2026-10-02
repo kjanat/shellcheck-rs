@@ -1,0 +1,14 @@
+[package]
+name              = "hs-entry"
+version.workspace = true
+edition.workspace = true
+description       = "Core of the Haskell functions rshellcheck calls, compiled with the h2r plugin"
+license.workspace = true
+publish           = false
+
+[build-dependencies]
+h2r-build.workspace     = true
+hs-shellcheck.workspace = true
+
+[lints]
+workspace = true

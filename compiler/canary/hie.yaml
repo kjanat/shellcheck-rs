@@ -1,0 +1,3 @@
+cradle:
+  cabal:
+    component: "h2r-canary:exe:h2r-canary"

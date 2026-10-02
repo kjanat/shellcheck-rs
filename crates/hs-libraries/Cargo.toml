@@ -1,0 +1,13 @@
+[package]
+name              = "hs-libraries"
+version.workspace = true
+edition.workspace = true
+description       = "Core of the Haskell libraries ShellCheck uses, compiled with the h2r plugin"
+license.workspace = true
+publish           = false
+
+[build-dependencies]
+h2r-build.workspace = true
+
+[lints]
+workspace = true
