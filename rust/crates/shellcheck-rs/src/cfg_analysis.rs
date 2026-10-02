@@ -10,6 +10,7 @@
 //! Public entry point: [`analyze_control_flow`] (Haskell `analyzeControlFlow`).
 #![allow(dead_code)]
 
+use crate::idhash::IdMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
@@ -171,10 +172,10 @@ pub fn variable_may_be_assigned_integer(state: &ProgramState, var: &str) -> Opti
 #[derive(Debug, Clone)]
 pub struct CFGAnalysis {
     pub graph: CFGraph,
-    pub token_to_range: HashMap<Id, (Node, Node)>,
-    pub token_to_nodes: HashMap<Id, BTreeSet<Node>>,
+    pub token_to_range: IdMap<Id, (Node, Node)>,
+    pub token_to_nodes: IdMap<Id, BTreeSet<Node>>,
     pub post_dominators: crate::cfg::PostDominators,
-    pub node_to_data: HashMap<Node, (ProgramState, ProgramState)>,
+    pub node_to_data: IdMap<Node, (ProgramState, ProgramState)>,
 }
 
 impl CFGAnalysis {
@@ -724,23 +725,23 @@ struct Ctx {
     output: InternalState,
     stack: Vec<StackEntry>,
     counter: i64,
-    cache: HashMap<Node, Vec<(BTreeSet<StateDependency>, InternalState)>>,
+    cache: IdMap<Node, Vec<(BTreeSet<StateDependency>, InternalState)>>,
     enable_cache: bool,
     invocations: HashMap<Vec<Node>, (BTreeSet<StateDependency>, StateMap)>,
     // Graph adjacency, derived from CFGraph.
-    labels: HashMap<Node, CFNode>,
-    pred_flow: HashMap<Node, Vec<Node>>,
-    succ_all: HashMap<Node, Vec<Node>>,
+    labels: IdMap<Node, CFNode>,
+    pred_flow: IdMap<Node, Vec<Node>>,
+    succ_all: IdMap<Node, Vec<Node>>,
 }
 
 impl Ctx {
     fn new(graph: &CFGraph) -> Ctx {
-        let mut labels = HashMap::new();
+        let mut labels = IdMap::default();
         for (n, l) in &graph.nodes {
             labels.insert(*n, l.clone());
         }
-        let mut pred_flow: HashMap<Node, Vec<Node>> = HashMap::new();
-        let mut succ_all: HashMap<Node, Vec<Node>> = HashMap::new();
+        let mut pred_flow: IdMap<Node, Vec<Node>> = IdMap::default();
+        let mut succ_all: IdMap<Node, Vec<Node>> = IdMap::default();
         for (from, to, e) in &graph.edges {
             succ_all.entry(*from).or_default().push(*to);
             if *e == CFEdge::CFEFlow {
@@ -753,7 +754,7 @@ impl Ctx {
             output: new_internal_state(),
             stack: Vec::new(),
             counter: 1,
-            cache: HashMap::new(),
+            cache: IdMap::default(),
             enable_cache: true,
             invocations: HashMap::new(),
             labels,
@@ -1831,7 +1832,7 @@ pub fn analyze_control_flow(params: &CFGParameters, t: &Token) -> CFGAnalysis {
         all_states.insert(n, v); // invoked wins
     }
 
-    let mut node_to_data: HashMap<Node, (ProgramState, ProgramState)> = HashMap::new();
+    let mut node_to_data: IdMap<Node, (ProgramState, ProgramState)> = IdMap::default();
     for (n, (a, b)) in &all_states {
         node_to_data.insert(*n, (internal_to_external(a), internal_to_external(b)));
     }

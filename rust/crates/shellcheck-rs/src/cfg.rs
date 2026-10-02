@@ -22,7 +22,8 @@ use crate::ast_lib::get_literal_string;
 use crate::ast_lib::will_split;
 use crate::ast_lib::{get_literal_string_def, oversimplify_concat};
 use crate::data::{FLAGS_FOR_MAPFILE, FLAGS_FOR_READ};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use crate::idhash::{IdMap, IdSet};
+use std::collections::{BTreeSet, HashMap};
 
 use regex::Regex;
 
@@ -168,9 +169,9 @@ pub struct CFGResult {
     /// The graph itself.
     pub cf_graph: CFGraph,
     /// Map from Id to nominal start&end node (normal execution without exits).
-    pub cf_id_to_range: HashMap<Id, (Node, Node)>,
+    pub cf_id_to_range: IdMap<Id, (Node, Node)>,
     /// A set of all nodes belonging to an Id, recursively.
-    pub cf_id_to_nodes: HashMap<Id, BTreeSet<Node>>,
+    pub cf_id_to_nodes: IdMap<Id, BTreeSet<Node>>,
     /// Which nodes post-dominate a given node, queried through
     /// [`PostDominators::contains`].
     pub cf_post_dominators: PostDominators,
@@ -205,19 +206,19 @@ impl CFGraph {
 /// `inlineSubshells` / `safeUpdate` and the dominator computation.
 #[derive(Debug, Clone)]
 struct MutGraph {
-    labels: HashMap<Node, CFNode>,
+    labels: IdMap<Node, CFNode>,
     // successors: succ[from] = [(to, label)]
-    succ: HashMap<Node, Vec<(Node, CFEdge)>>,
+    succ: IdMap<Node, Vec<(Node, CFEdge)>>,
     // predecessors: pred[to] = [(from, label)]
-    pred: HashMap<Node, Vec<(Node, CFEdge)>>,
+    pred: IdMap<Node, Vec<(Node, CFEdge)>>,
 }
 
 impl MutGraph {
     fn from(nodes: &[(Node, CFNode)], edges: &[(Node, Node, CFEdge)]) -> MutGraph {
         let mut g = MutGraph {
-            labels: HashMap::new(),
-            succ: HashMap::new(),
-            pred: HashMap::new(),
+            labels: IdMap::default(),
+            succ: IdMap::default(),
+            pred: IdMap::default(),
         };
         for (n, l) in nodes {
             g.labels.insert(*n, l.clone());
@@ -1624,8 +1625,8 @@ pub fn build_graph(params: CFGParameters, root: &Token) -> CFGResult {
     // renumberTopologically is commented out in CFG.hs; keep the same.
     let (nodes, edges, mapping, association) = remove_unnecessary_structural_nodes(base);
 
-    let id_to_range: HashMap<Id, (Node, Node)> = {
-        let mut m = HashMap::new();
+    let id_to_range: IdMap<Id, (Node, Node)> = {
+        let mut m = IdMap::default();
         for (id, r) in &mapping {
             m.insert(*id, *r); // last write wins, like Data.Map.fromList
         }
@@ -1640,7 +1641,7 @@ pub fn build_graph(params: CFGParameters, root: &Token) -> CFGResult {
 
     let (_, main_exit) = *id_to_range.get(&root.id).expect("root range missing");
 
-    let mut id_to_nodes: HashMap<Id, BTreeSet<Node>> = HashMap::new();
+    let mut id_to_nodes: IdMap<Id, BTreeSet<Node>> = IdMap::default();
     for (id, n) in &association {
         id_to_nodes.entry(*id).or_default().insert(*n);
     }
@@ -1659,11 +1660,11 @@ pub fn build_graph(params: CFGParameters, root: &Token) -> CFGResult {
 // Graph transforms on CFW (renumber / removeUnnecessaryStructuralNodes)
 // ===========================================================================
 
-fn remap_helper(m: &HashMap<Node, Node>, n: Node) -> Node {
+fn remap_helper(m: &IdMap<Node, Node>, n: Node) -> Node {
     *m.get(&n).unwrap_or(&n)
 }
 
-fn remap_effect(m: &HashMap<Node, Node>, e: &IdTagged<CFEffect>) -> IdTagged<CFEffect> {
+fn remap_effect(m: &IdMap<Node, Node>, e: &IdTagged<CFEffect>) -> IdTagged<CFEffect> {
     match &e.value {
         CFEffect::CFDefineFunction(name, fid, start, end) => IdTagged::new(
             e.id,
@@ -1678,7 +1679,7 @@ fn remap_effect(m: &HashMap<Node, Node>, e: &IdTagged<CFEffect>) -> IdTagged<CFE
     }
 }
 
-fn remap_node(m: &HashMap<Node, Node>, (node, label): &(Node, CFNode)) -> (Node, CFNode) {
+fn remap_node(m: &IdMap<Node, Node>, (node, label): &(Node, CFNode)) -> (Node, CFNode) {
     let new_label = match label {
         CFNode::CFApplyEffects(effects) => {
             CFNode::CFApplyEffects(effects.iter().map(|e| remap_effect(m, e)).collect())
@@ -1692,13 +1693,13 @@ fn remap_node(m: &HashMap<Node, Node>, (node, label): &(Node, CFNode)) -> (Node,
 }
 
 fn remap_edge(
-    m: &HashMap<Node, Node>,
+    m: &IdMap<Node, Node>,
     (from, to, label): &(Node, Node, CFEdge),
 ) -> (Node, Node, CFEdge) {
     (remap_helper(m, *from), remap_helper(m, *to), *label)
 }
 
-fn remap_graph(remap: &HashMap<Node, Node>, g: CFW) -> CFW {
+fn remap_graph(remap: &IdMap<Node, Node>, g: CFW) -> CFW {
     let (nodes, edges, mapping, assoc) = g;
     (
         nodes.iter().map(|n| remap_node(remap, n)).collect(),
@@ -1718,15 +1719,14 @@ fn remap_graph(remap: &HashMap<Node, Node>, g: CFW) -> CFW {
 pub fn renumber_graph(g: CFW) -> CFW {
     let mut ids: Vec<Node> = g.0.iter().map(|(n, _)| *n).collect();
     ids.sort_unstable();
-    let renumbering: HashMap<Node, Node> =
-        ids.into_iter().enumerate().map(|(i, n)| (n, i)).collect();
+    let renumbering: IdMap<Node, Node> = ids.into_iter().enumerate().map(|(i, n)| (n, i)).collect();
     remap_graph(&renumbering, g)
 }
 
 /// Renumber the graph in topological order.
 pub fn renumber_topologically(g: CFW) -> CFW {
     let order = topsort(&g.0, &g.1);
-    let renumbering: HashMap<Node, Node> =
+    let renumbering: IdMap<Node, Node> =
         order.into_iter().enumerate().map(|(i, n)| (n, i)).collect();
     remap_graph(&renumbering, g)
 }
@@ -1740,8 +1740,8 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
         edges.iter().copied().filter(is_regular_edge).collect();
 
     // NB: names mirror CFG.hs (swapped in the original).
-    let mut in_degree: HashMap<Node, usize> = HashMap::new();
-    let mut out_degree: HashMap<Node, usize> = HashMap::new();
+    let mut in_degree: IdMap<Node, usize> = IdMap::default();
+    let mut out_degree: IdMap<Node, usize> = IdMap::default();
     for (from, to, _) in &regular_edges {
         *in_degree.entry(*from).or_insert(0) += 1;
         *out_degree.entry(*to).or_insert(0) += 1;
@@ -1750,12 +1750,12 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
         *in_degree.get(&node).unwrap_or(&0) == 1 && *out_degree.get(&node).unwrap_or(&0) == 1
     };
 
-    let structural_nodes: HashSet<Node> = nodes
+    let structural_nodes: IdSet<Node> = nodes
         .iter()
         .filter(|(_, l)| *l == CFNode::CFStructuralNode)
         .map(|(n, _)| *n)
         .collect();
-    let candidate_nodes: HashSet<Node> = structural_nodes
+    let candidate_nodes: IdSet<Node> = structural_nodes
         .iter()
         .copied()
         .filter(|n| is_linear(*n))
@@ -1770,17 +1770,17 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
     // Emulate S.fromList: dedup + sorted order (affects fromList "last wins").
     edges_to_collapse.sort_by_key(|x| (x.0, x.1, x.2));
     edges_to_collapse.dedup();
-    let edges_to_collapse_set: HashSet<(Node, Node, CFEdge)> =
+    let edges_to_collapse_set: IdSet<(Node, Node, CFEdge)> =
         edges_to_collapse.iter().copied().collect();
 
     // remapping = fromList (map orderEdge edgesToCollapse): larger -> smaller.
-    let mut remapping: HashMap<Node, Node> = HashMap::new();
+    let mut remapping: IdMap<Node, Node> = IdMap::default();
     for (a, b, _) in &edges_to_collapse {
         let (k, v) = if a < b { (*b, *a) } else { (*a, *b) };
         remapping.insert(k, v); // last wins, matching sorted fromList
     }
 
-    fn recursive_lookup(map: &HashMap<Node, Node>, mut node: Node) -> Node {
+    fn recursive_lookup(map: &IdMap<Node, Node>, mut node: Node) -> Node {
         while let Some(&x) = map.get(&node) {
             if x == node {
                 break;
@@ -1789,7 +1789,7 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
         }
         node
     }
-    let recursive_remapping: HashMap<Node, Node> = remapping
+    let recursive_remapping: IdMap<Node, Node> = remapping
         .keys()
         .map(|c| (*c, recursive_lookup(&remapping, *c)))
         .collect();
@@ -1817,7 +1817,7 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
 /// DFS forest over nodes in ascending id order, successors in edge order,
 /// reverse of the postorder.
 pub fn topsort(nodes: &[(Node, CFNode)], edges: &[(Node, Node, CFEdge)]) -> Vec<Node> {
-    let mut succ: HashMap<Node, Vec<Node>> = HashMap::new();
+    let mut succ: IdMap<Node, Vec<Node>> = IdMap::default();
     for (n, _) in nodes {
         succ.entry(*n).or_default();
     }
@@ -1827,7 +1827,7 @@ pub fn topsort(nodes: &[(Node, CFNode)], edges: &[(Node, Node, CFEdge)]) -> Vec<
     let mut ids: Vec<Node> = nodes.iter().map(|(n, _)| *n).collect();
     ids.sort_unstable();
 
-    let mut visited: HashSet<Node> = HashSet::new();
+    let mut visited: IdSet<Node> = IdSet::default();
     let mut postorder: Vec<Node> = Vec::new();
 
     // iterative DFS producing postorder
@@ -2032,7 +2032,7 @@ fn dom(g: &MutGraph, root: Node) -> (Vec<Option<Node>>, Vec<bool>) {
     .unwrap_or(0);
 
     // DFS from root over successors, produce postorder (reachable set).
-    let mut visited: HashSet<Node> = HashSet::new();
+    let mut visited: IdSet<Node> = IdSet::default();
     let mut postorder: Vec<Node> = Vec::new();
     if g.labels.contains_key(&root) {
         let mut stack: Vec<(Node, usize)> = vec![(root, 0)];
