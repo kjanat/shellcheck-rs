@@ -474,7 +474,7 @@ fn successors(block: &Block) -> Vec<crate::nir::BlockId> {
     out
 }
 
-type Successors = BTreeMap<crate::nir::BlockId, Vec<crate::nir::BlockId>>;
+pub(crate) type Successors = BTreeMap<crate::nir::BlockId, Vec<crate::nir::BlockId>>;
 
 fn reaches(graph: &Successors, from: crate::nir::BlockId, to: crate::nir::BlockId) -> bool {
     let mut seen = BTreeSet::new();
@@ -490,6 +490,90 @@ fn reaches(graph: &Successors, from: crate::nir::BlockId, to: crate::nir::BlockI
         }
     }
     false
+}
+
+/// The blocks a block hands control to in tail position: the targets of its
+/// exit and, when its last instruction produces the returned value, of that
+/// instruction (a tail call, a tail `case`). A tail call of the function's own
+/// entry counts. This is the graph a loop can run on: a cycle in it is a
+/// loop, while a block that merely delays or calls another is not a transfer.
+fn tail_successors(
+    specialization: &specialize::Specialization,
+    index: usize,
+    function: &Function,
+    block: &Block,
+) -> Result<Vec<crate::nir::BlockId>, String> {
+    let mut out = Vec::new();
+    match &block.terminator.exit {
+        Exit::Jump { target, .. } => out.push(*target),
+        Exit::IntSwitch { arms, default, .. } => {
+            out.extend(arms.iter().map(|(_, target)| *target));
+            out.push(*default);
+        }
+        Exit::Return(_) | Exit::Diverge { .. } => {}
+    }
+    if let (Exit::Return(value), Some(last)) = (&block.terminator.exit, block.instructions.last())
+        && *value == last.result.id
+    {
+        match &last.operation {
+            Operation::CallLocal { target, .. }
+            | Operation::EvaluateBlock { target, .. }
+            | Operation::LocalScope { target, .. } => out.push(*target),
+            Operation::MatchData { arms, .. } => out.extend(arms.iter().map(|arm| arm.target)),
+            Operation::CallTop {
+                module,
+                binder,
+                type_arguments,
+                dictionaries,
+                ..
+            } => {
+                let target = instance_of(
+                    specialization,
+                    &reference_of(*module, *binder, type_arguments, dictionaries),
+                )?;
+                if target == index {
+                    out.push(function.entry);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// The blocks of one function that sit on a cycle of tail transfers, each
+/// with the number of its loop (the smallest block number in it). Blocks in
+/// one loop reach each other through tail transfers only, so running one from
+/// the other's iteration is the same thing the trampoline did.
+pub(crate) fn tail_loops(tails: &Successors) -> BTreeMap<crate::nir::BlockId, usize> {
+    let edges: BTreeMap<usize, BTreeSet<usize>> = tails
+        .iter()
+        .map(|(block, next)| {
+            (
+                block.0 as usize,
+                next.iter().map(|target| target.0 as usize).collect(),
+            )
+        })
+        .collect();
+    let mut loops = BTreeMap::new();
+    for component in crate::graph::components(&edges) {
+        let cyclic = component.len() > 1
+            || component
+                .first()
+                .is_some_and(|member| edges.get(member).is_some_and(|next| next.contains(member)));
+        if !cyclic {
+            continue;
+        }
+        let number = component
+            .iter()
+            .copied()
+            .min()
+            .expect("a component has a member");
+        for member in component {
+            loops.insert(crate::nir::BlockId(member as u32), number);
+        }
+    }
+    loops
 }
 
 /// Whether the instruction after `position` forces the value `position`
@@ -1527,12 +1611,84 @@ fn leaf_code(
             .iter()
             .map(|block| (block.id, successors(block)))
             .collect();
+        // Blocks on a cycle of tail transfers run as one loop (WP14). A loop
+        // whose blocks do not all return the same carrier is left to the
+        // trampoline.
+        let tails: Successors = leaf
+            .function
+            .blocks
+            .iter()
+            .map(|block| {
+                Ok((
+                    block.id,
+                    tail_successors(specialization, index, &leaf.function, block)?,
+                ))
+            })
+            .collect::<Result<_, String>>()?;
+        let mut loops = tail_loops(&tails);
+        let result_of = |id: crate::nir::BlockId| {
+            let block = leaf
+                .function
+                .blocks
+                .iter()
+                .find(|block| block.id == id)
+                .expect("verified target");
+            (
+                carrier(world, block_result(&leaf.function, block)),
+                unlifted(&leaf.function, block).is_some(),
+            )
+        };
+        let mixed: BTreeSet<usize> = loops
+            .iter()
+            .filter(|(id, number)| {
+                let first = crate::nir::BlockId(**number as u32);
+                result_of(**id) != result_of(first)
+            })
+            .map(|(_, number)| *number)
+            .collect();
+        loops.retain(|_, number| !mixed.contains(number));
+        // Per loop: its member blocks' arms, in block order.
+        let mut arms: BTreeMap<usize, Vec<(&Block, String)>> = BTreeMap::new();
         for block in &leaf.function.blocks {
             let result = carrier(world, block_result(&leaf.function, block));
             let stepped = unlifted(&leaf.function, block);
             let looping = |target: crate::nir::BlockId| {
                 stepped.is_none() && reaches(&graph, target, block.id)
             };
+            let group = loops.get(&block.id).copied();
+            let in_group = |target: crate::nir::BlockId| {
+                group.is_some() && loops.get(&target).copied() == group
+            };
+            // The next iteration of this block's loop, entered at `target`.
+            let enter = |kind: &'static str, target: crate::nir::BlockId, args: &[String]| {
+                census::looped(kind, args.len());
+                let group = group.expect("a transfer within a loop");
+                if args.is_empty() {
+                    format!("G{index}_{group}::B{}", target.0)
+                } else {
+                    format!("G{index}_{group}::B{}({})", target.0, args.join(", "))
+                }
+            };
+            // Leaving the loop with a value: what the block would have
+            // evaluated to is now the function's result.
+            let leave = |code: String| {
+                if group.is_some() {
+                    format!("return {code}")
+                } else {
+                    code
+                }
+            };
+            // A transfer from an unlifted block to a block of this function
+            // that cannot get back here is one native call whose `Step` is
+            // returned as it is: it runs where the trampoline would have run
+            // it, and no chain of such calls can be longer than the function
+            // has blocks. Anything else, a call of another function above all,
+            // may be an iteration of a recursion that crosses functions, and
+            // stays a boxed step for the caller's `run`.
+            let direct = |target: crate::nir::BlockId| {
+                stepped.is_some() && !reaches(&graph, target, block.id)
+            };
+            let mut body = String::new();
             let block_parameters = block
                 .params
                 .iter()
@@ -1554,17 +1710,19 @@ fn leaf_code(
                     ),
                 ));
             }
-            writeln!(
-                out,
-                "    #[allow(unused_variables)]\n    {vis}fn {}_{index}_{}({block_parameters}) -> {} {{",
-                if stepped.is_some() { "s" } else { "b" },
-                block.id.0,
-                match stepped {
-                    Some(_) => format!("h2r_rt::Step<{result}>"),
-                    None => result.clone(),
-                }
-            )
-            .unwrap();
+            if group.is_none() {
+                writeln!(
+                    out,
+                    "    #[allow(unused_variables)]\n    {vis}fn {}_{index}_{}({block_parameters}) -> {} {{",
+                    if stepped.is_some() { "s" } else { "b" },
+                    block.id.0,
+                    match stepped {
+                        Some(_) => format!("h2r_rt::Step<{result}>"),
+                        None => result.clone(),
+                    }
+                )
+                .unwrap();
+            }
             let value_ty = |id: crate::nir::ValueId| {
                 &block
                     .params
@@ -1637,18 +1795,31 @@ fn leaf_code(
                                 return Err("tail transfer argument count mismatch".into());
                             }
                             let args = arguments.iter().map(|v| value(*v)).collect::<Vec<_>>();
-                            Some(step_to(&format!("s_{target_index}_{}", target.0), &args))
+                            Some(if target_index == index && in_group(target) {
+                                enter("loop tail call", target, &args)
+                            } else if target_index == index
+                                && !matches!(instruction.operation, Operation::CallTop { .. })
+                                && direct(target)
+                            {
+                                leave(format!("s_{index}_{}({})", target.0, args.join(", ")))
+                            } else {
+                                leave(step_to(&format!("s_{target_index}_{}", target.0), &args))
+                            })
                         }
                         (None, Some((target_index, target, arguments)), _)
-                            if target_index == index && looping(target) =>
+                            if target_index == index && (in_group(target) || looping(target)) =>
                         {
                             let args = arguments.iter().map(|v| value(*v)).collect::<Vec<_>>();
-                            Some(delayed(
-                                &result,
-                                &format!("b_{index}_{}", target.0),
-                                &args,
-                                census::Site::tail("looping tail call", instruction),
-                            ))
+                            Some(if in_group(target) {
+                                enter("loop tail call", target, &args)
+                            } else {
+                                leave(delayed(
+                                    &result,
+                                    &format!("b_{index}_{}", target.0),
+                                    &args,
+                                    census::Site::tail("looping tail call", instruction),
+                                ))
+                            })
                         }
                         // A tail call to a function outside this one's recursive
                         // group runs its entry block directly: the thunk that
@@ -1674,7 +1845,7 @@ fn leaf_code(
                                 .map(|v| value(*v))
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            Some(format!("b_{target_index}_{}({args})", target.0))
+                            Some(leave(format!("b_{target_index}_{}({args})", target.0)))
                         }
                         (
                             _,
@@ -1697,33 +1868,47 @@ fn leaf_code(
                                 &captures,
                                 arms,
                                 |target, args| match stepped {
-                                    Some(_) => step_to(&format!("s_{index}_{}", target.0), args),
-                                    None if looping(target) => delayed(
+                                    _ if in_group(target) => {
+                                        enter("loop tail case arm", target, args)
+                                    }
+                                    Some(_) if direct(target) => leave(format!(
+                                        "s_{index}_{}({})",
+                                        target.0,
+                                        args.join(", ")
+                                    )),
+                                    Some(_) => {
+                                        leave(step_to(&format!("s_{index}_{}", target.0), args))
+                                    }
+                                    None if looping(target) => leave(delayed(
                                         &result,
                                         &format!("b_{index}_{}", target.0),
                                         args,
                                         census::Site::tail("looping tail case arm", instruction),
-                                    ),
-                                    None => format!("b_{index}_{}({})", target.0, args.join(", ")),
+                                    )),
+                                    None => leave(format!(
+                                        "b_{index}_{}({})",
+                                        target.0,
+                                        args.join(", ")
+                                    )),
                                 },
                             ))
                         }
                         (Some("i64"), _, Operation::Apply { callee, arguments }) if has_boxed => {
                             let (callee, args, read) = applied(callee, arguments);
-                            Some(format!(
+                            Some(leave(format!(
                                 "h2r_rt::apply_step({callee}, vec![{args}], HField::{read})"
-                            ))
+                            )))
                         }
                         (None, _, Operation::Apply { callee, arguments }) => {
                             let (callee, args, read) = applied(callee, arguments);
-                            Some(format!(
+                            Some(leave(format!(
                                 "h2r_rt::apply_later({callee}, vec![{args}], HField::{read})"
-                            ))
+                            )))
                         }
                         _ => None,
                     };
                     if let Some(code) = code {
-                        writeln!(out, "    {code}").unwrap();
+                        writeln!(body, "    {code}").unwrap();
                         tail_transfer = true;
                         break;
                     }
@@ -2440,12 +2625,12 @@ fn leaf_code(
                     Operation::Force(v) => format!("{{ v{0}.force(); v{0}.clone() }}", v.0),
                 };
                 if diverges(&instruction.operation) {
-                    writeln!(out, "    {expression}").unwrap();
+                    writeln!(body, "    {}", leave(expression)).unwrap();
                     tail_transfer = true;
                     break;
                 }
                 writeln!(
-                    out,
+                    body,
                     "    let v{}: {} = {expression};",
                     instruction.result.id.0,
                     carrier(world, &instruction.result.ty)
@@ -2463,36 +2648,39 @@ fn leaf_code(
                         .join(", ")
                 )
             };
-            let transfer =
-                |target: &crate::nir::BlockId, args: &[crate::nir::ValueId]| match stepped {
-                    Some(_) => step_to(
-                        &format!("s_{index}_{}", target.0),
-                        &args.iter().map(|v| value(*v)).collect::<Vec<_>>(),
-                    ),
-                    None if looping(*target) => delayed(
+            let transfer = |target: &crate::nir::BlockId, args: &[crate::nir::ValueId]| {
+                let values = args.iter().map(|v| value(*v)).collect::<Vec<_>>();
+                match stepped {
+                    _ if in_group(*target) => enter("loop tail jump", *target, &values),
+                    Some(_) if direct(*target) => {
+                        leave(format!("s_{index}_{}({})", target.0, values.join(", ")))
+                    }
+                    Some(_) => leave(step_to(&format!("s_{index}_{}", target.0), &values)),
+                    None if looping(*target) => leave(delayed(
                         &result,
                         &format!("b_{index}_{}", target.0),
-                        &args.iter().map(|v| value(*v)).collect::<Vec<_>>(),
+                        &values,
                         census::Site::jump(),
-                    ),
-                    None => call(target, args),
-                };
+                    )),
+                    None => leave(call(target, args)),
+                }
+            };
             if !tail_transfer {
                 match &block.terminator.exit {
                     Exit::Return(v) => writeln!(
-                        out,
+                        body,
                         "    {}",
-                        match stepped {
+                        leave(match stepped {
                             Some(_) => format!("h2r_rt::Step::Done({})", value(*v)),
                             None => value(*v),
-                        }
+                        })
                     )
                     .unwrap(),
                     Exit::Diverge { .. } => {
                         return Err("unimplemented non-returning call".into());
                     }
                     Exit::Jump { target, args } => {
-                        writeln!(out, "    {}", transfer(target, args)).unwrap()
+                        writeln!(body, "    {}", transfer(target, args)).unwrap()
                     }
                     Exit::IntSwitch {
                         scrutinee,
@@ -2500,16 +2688,112 @@ fn leaf_code(
                         default,
                         args,
                     } => {
-                        writeln!(out, "    match v{} {{", scrutinee.0).unwrap();
+                        writeln!(body, "    match v{} {{", scrutinee.0).unwrap();
                         for (pattern, target) in arms {
-                            writeln!(out, "        {pattern}i64 => {},", transfer(target, args))
+                            writeln!(body, "        {pattern}i64 => {},", transfer(target, args))
                                 .unwrap();
                         }
-                        writeln!(out, "        _ => {},\n    }}", transfer(default, args)).unwrap();
+                        writeln!(body, "        _ => {},\n    }}", transfer(default, args))
+                            .unwrap();
                     }
                 }
             }
-            writeln!(out, "    }}").unwrap();
+            match group {
+                Some(group) => arms.entry(group).or_default().push((block, body)),
+                None => {
+                    out.push_str(&body);
+                    writeln!(out, "    }}").unwrap();
+                }
+            }
+        }
+        // One function per loop: its blocks are the variants of a state, a
+        // transfer between them assigns the next state, and everything that
+        // leaves returns. `b_`/`s_` of every block stay, as thin entries.
+        for (group, members) in &arms {
+            let state = format!("G{index}_{group}");
+            let first = members[0].0;
+            let result = carrier(world, block_result(&leaf.function, first));
+            let stepped = unlifted(&leaf.function, first).is_some();
+            let returns = if stepped {
+                format!("h2r_rt::Step<{result}>")
+            } else {
+                result.clone()
+            };
+            let fields = |block: &Block| {
+                block
+                    .params
+                    .iter()
+                    .map(|p| carrier(world, &p.ty))
+                    .collect::<Vec<_>>()
+            };
+            let variants = members
+                .iter()
+                .map(|(block, _)| {
+                    if block.params.is_empty() {
+                        format!("    B{},", block.id.0)
+                    } else {
+                        format!("    B{}({}),", block.id.0, fields(block).join(", "))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            writeln!(out, "#[allow(dead_code)]\nenum {state} {{\n{variants}\n}}").unwrap();
+            writeln!(
+                out,
+                "#[allow(unused_variables)]\nfn g_{index}_{group}(mut state: {state}) -> {returns} {{\n    loop {{\n        state = match state {{"
+            )
+            .unwrap();
+            for (block, body) in members {
+                let names = block
+                    .params
+                    .iter()
+                    .map(|p| format!("v{}", p.id.0))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if block.params.is_empty() {
+                    writeln!(out, "            {state}::B{} => {{", block.id.0).unwrap();
+                } else {
+                    writeln!(out, "            {state}::B{}({names}) => {{", block.id.0).unwrap();
+                }
+                out.push_str(body);
+                writeln!(out, "            }}").unwrap();
+            }
+            writeln!(out, "        }};\n    }}\n}}").unwrap();
+            for (block, _) in members {
+                let parameters = block
+                    .params
+                    .iter()
+                    .map(|p| format!("v{}: {}", p.id.0, carrier(world, &p.ty)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let names = block
+                    .params
+                    .iter()
+                    .map(|p| format!("v{}", p.id.0))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let entry = if block.params.is_empty() {
+                    format!("{state}::B{}", block.id.0)
+                } else {
+                    format!("{state}::B{}({names})", block.id.0)
+                };
+                if stepped {
+                    writeln!(
+                        out,
+                        "#[inline]\n{vis}fn s_{index}_{}({parameters}) -> {returns} {{ g_{index}_{group}({entry}) }}",
+                        block.id.0
+                    )
+                    .unwrap();
+                } else {
+                    wrappers.push((
+                        format!("b_{index}_{}", block.id.0),
+                        format!(
+                            "#[inline]\n{vis}fn b_{index}_{}({parameters}) -> {returns} {{ g_{index}_{group}({entry}) }}\n",
+                            block.id.0
+                        ),
+                    ));
+                }
+            }
         }
         writeln!(
             out,

@@ -191,6 +191,7 @@ struct Census {
     by_origin: BTreeMap<String, Tally>,
     by_use: BTreeMap<&'static str, Tally>,
     by_captures: BTreeMap<usize, u64>,
+    looped: BTreeMap<&'static str, Tally>,
     ready: BTreeMap<(&'static str, usize), u64>,
 }
 
@@ -220,6 +221,16 @@ pub(crate) fn delay(site: &Site, captured: usize) {
             census.by_use.entry(used_by).or_default().add(captured);
         }
         *census.by_captures.entry(captured).or_default() += 1;
+    });
+}
+
+/// Count one tail transfer written as the next iteration of a loop (WP14)
+/// instead of a delayed thunk, carrying `captured` values.
+pub(crate) fn looped(kind: &'static str, captured: usize) {
+    CENSUS.with(|census| {
+        if let Some(census) = census.borrow_mut().as_mut() {
+            census.looped.entry(kind).or_default().add(captured);
+        }
     });
 }
 
@@ -332,6 +343,11 @@ fn render(census: &Census) -> String {
             .by_origin
             .iter()
             .map(|(key, tally)| (key.as_str(), tally.sites, tally.captured)),
+    );
+    table(
+        &mut out,
+        "tail transfers written as loop iterations (no thunk)",
+        tally(&census.looped).into_iter(),
     );
     table(
         &mut out,

@@ -2065,8 +2065,11 @@ fn scalar_emission_accepts_recursive_functions() {
     modules[0].binders[owner as usize].arity = Some(2);
     let source = generated(&crate::emit::emit_entry(&modules, &sn("Lib", "target")).unwrap());
     // Instance 0 is the entry, and the self-call transfers back to its entry
-    // block rather than growing the native stack.
-    assert!(source.contains("h2r_rt::step2(s_0_0, ("));
+    // block, as the next iteration of a loop, rather than growing the native
+    // stack or boxing a step.
+    assert!(source.contains("loop {"), "{source}");
+    assert!(source.contains("G0_0::B0(v2, v0)"), "{source}");
+    assert!(!source.contains("h2r_rt::step"), "{source}");
     assert_every_block_is_entered(&source);
 }
 
@@ -2422,7 +2425,11 @@ fn local_functions_and_join_loops_have_verified_captures() {
             modules[0].preorder(modules[0].top[0].pairs[0].rhs).count()
         );
         let source = generated(&crate::emit::emit_entry(&modules, &sn("Main", "main")).unwrap());
-        assert!(source.contains("h2r_rt::step"));
+        // A recursive join point loops; either way the blocks hand over to one
+        // another by calling, and nothing boxes a step.
+        assert_eq!(source.contains("loop {"), recursive, "{source}");
+        assert!(source.contains("s_0_"), "{source}");
+        assert!(!source.contains("h2r_rt::step"), "{source}");
         assert_every_block_is_entered(&source);
     }
 }
@@ -6678,7 +6685,8 @@ fn the_emitter_census_runs_and_names_every_category_it_saw() {
         "DelayBlock instruction",
         "f_ wrapper (lifted result)",
         "DelayBlock / App (call of a global)",
-        "looping tail call / CallTop",
+        "tail transfers written as loop iterations (no thunk)",
+        "loop tail call",
         "by what uses the thunk first",
         "by number of captured arguments",
         "HData::ready sites by arity",
@@ -6686,4 +6694,293 @@ fn the_emitter_census_runs_and_names_every_category_it_saw() {
     ] {
         assert!(report.contains(category), "{category}\n{report}");
     }
+}
+
+/// `main x y :: Int#` through local join points that call one another in turn
+/// (one name makes a self-loop): `f_n i acc = case i of 0# -> acc; _ -> f_n+1 (i - 1) (acc + y)`.
+/// With `boxed_result` the result is the lifted `Int`, so the loop is a chain of
+/// thunks rather than of `Step`s.
+fn join_loop_world(names: &[&str], boxed_result: bool) -> Vec<Module> {
+    let one = json!({"node": "Lit", "lit": int_lit(1)});
+    let pairs: Vec<Value> = names
+        .iter()
+        .enumerate()
+        .map(|(n, name)| {
+            let (i, acc) = (format!("i{n}"), format!("acc{n}"));
+            let next = names[(n + 1) % names.len()];
+            let again = app(
+                app(lvar(next), int_op("-#", lvar(&i), one.clone())),
+                int_op("+#", lvar(&acc), lvar("y")),
+            );
+            let done = if boxed_result {
+                box_int(lvar(&acc))
+            } else {
+                lvar(&acc)
+            };
+            let mut case = int_case(lvar(&i), &format!("s{n}"), again, vec![(0, done)]);
+            if boxed_result {
+                case["ty"] = json!(2);
+            }
+            let mut b = binder(&format!("$_in${name}"), name, name);
+            b["ty"] = json!(1);
+            b["arity"] = json!(2);
+            b["isJoinPoint"] = json!(true);
+            json!({"binder": b, "rhs": lam(&i, lam(&acc, case)),
+                "whnf": true, "cheap": true, "trivial": false, "okForSpec": true})
+        })
+        .collect();
+    let body = json!({"node": "Let", "bind": {"rec": true, "pairs": pairs},
+        "body": app(app(lvar(names[0]), lvar("x")), lvar("y"))});
+    boxed_world(body, false, boxed_result)
+}
+
+/// `go p n = case p of Empty -> I# y; Pair a b -> go (Pair b a) n` at the lifted `Int`:
+/// a tail `case` on a data type whose arm is a block of the loop.
+fn data_case_loop_world() -> Vec<Module> {
+    use h2r_core_ir::Ty;
+    let mut case = data_case(lvar("p"), false);
+    case["ty"] = json!(2);
+    case["alts"][0]["rhs"] = box_int(lvar("y"));
+    case["alts"][1]["rhs"] = app(
+        app(
+            lvar("go"),
+            data_construct("Pair", vec![lvar("b"), lvar("a")]),
+        ),
+        lvar("n"),
+    );
+    let mut b = binder("$_in$go", "go", "go");
+    b["ty"] = json!(5);
+    b["arity"] = json!(2);
+    b["isJoinPoint"] = json!(true);
+    let mut rhs = lam("p", lam("n", case));
+    rhs["binder"]["ty"] = json!(3);
+    let body = json!({"node": "Let", "bind": {"rec": true, "pairs": [{
+        "binder": b, "rhs": rhs,
+        "whnf": true, "cheap": true, "trivial": false, "okForSpec": true}]},
+        "body": app(app(lvar("go"), data_construct("Pair", vec![lvar("x"), lvar("y")])), lvar("x"))});
+    let mut modules = data_world(body);
+    let m = &mut modules[0];
+    let (int, boxed, choice) = (m.types[0].clone(), m.types[2].clone(), m.types[3].clone());
+    if let Ty::Fun { res, .. } = &mut m.types[1]
+        && let Ty::Fun { res, .. } = res.as_mut()
+    {
+        **res = boxed.clone();
+    }
+    m.types.push(Ty::Fun {
+        mult: Box::new(choice.clone()),
+        arg: Box::new(choice),
+        res: Box::new(Ty::Fun {
+            mult: Box::new(int.clone()),
+            arg: Box::new(int),
+            res: Box::new(boxed),
+        }),
+    });
+    modules
+}
+
+/// A loop that is left through a block that reaches back into it only by a
+/// delayed thunk, so the exit is not an iteration:
+/// `go1 i acc = case i of 0# -> go2 acc; _ -> go1 (i - 1) (acc + y)` and
+/// `go2 a = let t = go1 1# a in I# a`, at the lifted `Int`.
+fn leaving_loop_world() -> Vec<Module> {
+    use h2r_core_ir::Ty;
+    let lit = |n: i64| json!({"node": "Lit", "lit": int_lit(n)});
+    let again = app(
+        app(lvar("go1"), int_op("-#", lvar("i"), lit(1))),
+        int_op("+#", lvar("acc"), lvar("y")),
+    );
+    let mut case = int_case(
+        lvar("i"),
+        "s",
+        again,
+        vec![(0, app(lvar("go2"), lvar("acc")))],
+    );
+    case["ty"] = json!(2);
+    let join = |name: &str, ty: u32, arity: u32, rhs: Value| {
+        let mut b = binder(&format!("$_in${name}"), name, name);
+        b["ty"] = json!(ty);
+        b["arity"] = json!(arity);
+        b["isJoinPoint"] = json!(true);
+        json!({"binder": b, "rhs": rhs,
+            "whnf": true, "cheap": true, "trivial": false, "okForSpec": true})
+    };
+    let delayed_call = lazy_let(
+        "t",
+        app(app(lvar("go1"), lit(1)), lvar("a")),
+        box_int(lvar("a")),
+    );
+    let body = json!({"node": "Let", "bind": {"rec": true, "pairs": [
+        join("go1", 1, 2, lam("i", lam("acc", case))),
+        join("go2", 3, 1, lam("a", delayed_call)),
+    ]}, "body": app(app(lvar("go1"), lvar("x")), lvar("y"))});
+    let mut modules = boxed_world(body, false, true);
+    let m = &mut modules[0];
+    assert_eq!(m.types.len(), 3, "the types the fixture defines");
+    let (int, boxed) = (m.types[0].clone(), m.types[2].clone());
+    m.types.push(Ty::Fun {
+        mult: Box::new(int.clone()),
+        arg: Box::new(int),
+        res: Box::new(boxed),
+    });
+    modules
+}
+
+/// The text of the loop function `g_<index>_<group>` and nothing else.
+fn loop_function(source: &str, index: usize) -> String {
+    let start = source
+        .find(&format!("fn g_{index}_"))
+        .unwrap_or_else(|| panic!("no loop function in\n{source}"));
+    let end = source[start..].find("\n}\n").expect("the function ends") + start;
+    source[start..end].to_string()
+}
+
+fn first_loop_state(source: &str) -> String {
+    let at = source.find("enum G0_").expect("a loop state");
+    source[at + "enum ".len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect()
+}
+
+#[test]
+fn blocks_that_tail_call_each_other_run_as_one_loop() {
+    let source = generated(
+        &crate::emit::emit_entry(
+            &join_loop_world(&["ping", "pong"], true),
+            &sn("Main", "main"),
+        )
+        .unwrap(),
+    );
+    // One loop function over both functions' blocks, and a transfer between
+    // blocks is the next state: no thunk is made for any of them.
+    assert_eq!(source.matches("loop {").count(), 1, "{source}");
+    assert_eq!(source.matches("enum G").count(), 1, "{source}");
+    let state = first_loop_state(&source);
+    let looped = loop_function(&source, 0);
+    assert!(looped.contains(&format!("{state}::B")), "{looped}");
+    assert!(looped.contains("state = match state {"), "{looped}");
+    assert!(!looped.contains("delay"), "{looped}");
+    assert!(!looped.contains("step"), "{looped}");
+    // Each member of the loop is still entered through its own `b_` function,
+    // which is a call of the loop with that block's state, and the `f_`
+    // wrapper of the function is what it always was.
+    assert!(
+        source.contains(&format!(
+            "fn b_0_1(v2: i64, v3: i64, v4: i64) -> HInt {{ g_0_1({state}::B1(v2, v3, v4)) }}"
+        )),
+        "{source}"
+    );
+    assert!(
+        source.contains(
+            "fn f_0(v0: i64, v1: i64) -> HInt {\n    h2r_rt::delay2(b_0_0, (v0, v1, ))\n}"
+        ),
+        "{source}"
+    );
+    // The call into the loop from a block outside it is the same direct call.
+    assert!(source.contains("= b_0_1(v35, v34, v35);"), "{source}");
+    assert_every_block_is_entered(&source);
+}
+
+#[test]
+fn a_block_that_tail_calls_itself_runs_as_a_loop() {
+    let source = generated(
+        &crate::emit::emit_entry(&join_loop_world(&["go"], true), &sn("Main", "main")).unwrap(),
+    );
+    assert_eq!(source.matches("loop {").count(), 1, "{source}");
+    let looped = loop_function(&source, 0);
+    assert!(!looped.contains("delay"), "{looped}");
+    assert!(!looped.contains("step"), "{looped}");
+    // The only thunk left is the one `f_` makes for its caller.
+    assert_eq!(source.matches("h2r_rt::delay").count(), 1, "{source}");
+    assert_every_block_is_entered(&source);
+}
+
+#[test]
+fn unlifted_loops_return_their_value_and_box_no_steps() {
+    let source = generated(
+        &crate::emit::emit_entry(
+            &join_loop_world(&["ping", "pong"], false),
+            &sn("Main", "main"),
+        )
+        .unwrap(),
+    );
+    assert_eq!(source.matches("loop {").count(), 1, "{source}");
+    let looped = loop_function(&source, 0);
+    assert!(looped.contains("-> h2r_rt::Step<i64> {"), "{looped}");
+    assert!(looped.contains("return s_0_"), "{looped}");
+    assert!(!looped.contains("h2r_rt::step"), "{looped}");
+    // The blocks hand over to one another by calls of each other's `s_`
+    // function, which for the loop's blocks enters the loop.
+    assert!(source.contains("g_0_1(G0_1::B1("), "{source}");
+    assert!(!source.contains("h2r_rt::step"), "{source}");
+    assert_every_block_is_entered(&source);
+}
+
+#[test]
+fn a_tail_case_arm_that_loops_is_the_next_state() {
+    let source =
+        generated(&crate::emit::emit_entry(&data_case_loop_world(), &sn("Main", "main")).unwrap());
+    let looped = loop_function(&source, 0);
+    // The constructor that loops continues; the one that does not returns.
+    assert!(looped.contains("match node.constructor.tag {"), "{looped}");
+    assert!(looped.contains("=> { return b_0_2("), "{looped}");
+    assert!(looped.contains("G0_1::B3("), "{looped}");
+    assert!(!looped.contains("delay"), "{looped}");
+    assert_every_block_is_entered(&source);
+}
+
+#[test]
+fn a_transfer_out_of_a_loop_is_what_it_was() {
+    let source =
+        generated(&crate::emit::emit_entry(&leaving_loop_world(), &sn("Main", "main")).unwrap());
+    let looped = loop_function(&source, 0);
+    // `go1` loops on itself without a thunk. Leaving it for `go2`, which
+    // reaches `go1` again only through a delayed thunk, is not an iteration:
+    // the exit is returned as the thunk it always was.
+    assert!(looped.contains("G0_1::B3(v2, v3, v4, v3)"), "{looped}");
+    assert!(
+        looped.contains("0i64 => return h2r_rt::delay4(b_0_4, (v2, v3, v4, v3, )),"),
+        "{looped}"
+    );
+    assert_eq!(looped.matches("delay").count(), 1, "{looped}");
+    assert_every_block_is_entered(&source);
+}
+
+#[test]
+fn a_stepped_tail_call_of_another_function_stays_a_boxed_step() {
+    // `target` is another function, and recursion may cross functions, so
+    // only the caller's `run` keeps such a chain in constant stack.
+    let source =
+        generated(&crate::emit::emit_entry(&branching_world(), &sn("Main", "main")).unwrap());
+    assert!(source.contains("h2r_rt::step2(s_1_0, ("), "{source}");
+    assert!(!source.contains("loop {"), "{source}");
+}
+
+#[test]
+fn loops_are_the_cycles_of_tail_transfers() {
+    use crate::nir::BlockId;
+    let graph: crate::emit::Successors = [
+        (BlockId(0), vec![BlockId(1)]),
+        (BlockId(1), vec![BlockId(2), BlockId(4)]),
+        (BlockId(2), vec![BlockId(3)]),
+        (BlockId(3), vec![BlockId(1)]),
+        (BlockId(4), vec![BlockId(4)]),
+        (BlockId(5), vec![]),
+    ]
+    .into_iter()
+    .collect();
+    let loops = crate::emit::tail_loops(&graph);
+    // 1 -> 2 -> 3 -> 1 is a loop numbered by its smallest block; 4 loops on
+    // itself; 0 and 5 are on no cycle.
+    assert_eq!(
+        loops,
+        [
+            (BlockId(1), 1),
+            (BlockId(2), 1),
+            (BlockId(3), 1),
+            (BlockId(4), 4)
+        ]
+        .into_iter()
+        .collect()
+    );
 }
