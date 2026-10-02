@@ -297,6 +297,145 @@ After WP1–WP12 the allocator is ~22 % of a 3.99 G run and every allocation is 
 
 **As built.** Runtime side: `h2r-rt` has a `stats` feature (`src/stats.rs`, off by default; with it off the microbench rows are unchanged: thunk-chain 110, thunk-each 225, apply 234, apply-partial 710, cons 123, match 26, deferred-data 47 Ir/op). The counters are thread-local `Cell<u64>`s; the program thread flushes them into process totals when `on_program_stack` ends, and `on_program_stack` prints the table to stderr after joining it (once per process for `rshellcheck`, which wraps its whole run in one call; the Lint driver's generated `main` does the same). It counts `delayN`/`stepN` by N, `Int/Data/Closure/Field::defer_to`, `apply_later`, `apply_step`, `bind`, `bind_entering`, boxed `Closure::ready/entering`, partial applications, `apply`/`apply_general`/`apply_over`, `Data::ready` by arity (0, 1, 2, 3, 4+), `Field::data` of a thunk, and per cell kind (Int, Data, Closure, Field, other): thunks made (`Shared::step`, every thunk whatever made it), pending cells, evaluated cells, first force of a unique or a shared cell, entered by `chase` (held once: moved through and never memoised, or shared: memoised), freed still holding code (a thunk nobody forced: `unforced`, with its share of those created), and values moved out unique or cloned from an evaluated cell. A thunk is counted by the kind of its cell, not by the emitter site that made it: the join with sites is the static table below. Emitter side: `H2R_CENSUS=1` at emit time makes `h2r-lower` print, to the build script's stderr, tables of `delayed()` sites by where they are written (`DelayBlock` instruction, `f_` wrapper of a lifted result, `f_` wrapper of a CAF, looping tail call, looping tail `case` arm, looping tail jump), by origin (site / rule / Core form: `App` of a global or of a local, `Case`, `Let`, `Var`, ...), by what first uses a `DelayBlock` thunk (argument of a top-level, local or unknown call, constructor field, captured by a closure, lazy argument of an external or primitive, returned, ...), by number of captured arguments, with counts of sites and of captured arguments, and `HData::ready` sites by arity and by origin; sites, not executions. **To turn it on for the compiled program** (do not run it for anything but the census; it is the 25-minute build): `H2R_CENSUS=1 CARGO_INCREMENTAL=0 cargo build --release -p rshellcheck --features stats -vv 2>&1 | tee census-build.log` (the `stats` feature of `rshellcheck` forwards to `shellcheck-core/stats`; `shellcheck-core`'s `build.rs` then compiles the generated crates with `--cfg feature="stats"` through `h2r_lower::build::Rustc::with_stats`, into a build directory of its own because the flags are part of the fingerprint; `H2R_STATS=1` in the environment does the same without the cargo feature, and `build.rs` reruns when either variable changes). The emitter census is in `census-build.log` under the `shellcheck-core` build script (without `-vv`, in `target/release/build/shellcheck-core-*/stderr`); it prints whenever the build script runs (a new feature set or a changed `H2R_CENSUS` reruns it; if cargo says the crate is fresh, `touch crates/shellcheck-core/build.rs`). The runtime census is on stderr of every run of the stats binary: `target/release/rshellcheck script.sh 2> census-run.txt >/dev/null`, for the 150-line and the 1500-line scripts. A normal build (no feature, no variable) is untouched. Unit tests: `cargo test -p h2r-rt --features stats` (one `delay1` thunk made and forced moves exactly `DELAY+1`, `DEFER_TO`, `CREATED`, `FORCED_UNIQUE`, `EVALUATED` and `MOVED_UNIQUE`; unforced, shared and chased cells; `Data::ready` arities; the flush at the end of `on_program_stack`) and the emitter test `the_emitter_census_runs_and_names_every_category_it_saw`. Not run: `cargo build -p rshellcheck` (so `crates/shellcheck-core/build.rs`, which has a few lines more, is untested beyond reading).
 
+**Results (`ef65914`, stats build, 150-line `small.sh` and 1500-line `medium.sh`).** Runtime, small:
+
+```
+fate of those thunks
+  kind           created      forced  forced shr      chased  chased shr    unforced    unf %
+  Int              86932        5750       28064       34620        3914       14069    16.2%
+  Data           4944109      878683      859227     2361321       98995      741966    15.0%
+  Closure        2254980      685988       33621     1338884         900      193621     8.6%
+  Field            21341        2065         609       16182           0        2485    11.6%
+  other                0           0           0           0           0           0     0.0%
+  total          7307362     1572486      921521     3751007      103809      952141
+  forced: first force_slow of a cell held once / by several owners;
+  chased: entered by chase (held once: moved through, never memoised / shared: memoised);
+  unforced: freed still holding its code. forced and chased include forced pending cells.
+```
+
+```
+delayN by number of captured arguments (stepN in the second column)
+  delay0               169298   step0                   29
+  delay1              1938335   step1               111563
+  delay2              1401312   step2               118717
+  delay3               731542   step3               225308
+  delay4               324373   step4               412521
+  delayN total                             5147971
+  stepN total                              2059916
+  Int::defer_to                              86932
+  Data::defer_to                           4639747
+  Closure::defer_to                        2254980
+  Field::defer_to                            21341
+```
+
+```
+Data::ready by arity
+  arity 0                                   878115
+  arity 1                                   140196
+  arity 2                                  1077751
+  arity 3                                   246784
+  arity 4+                                  325455
+  total                                    2668301
+```
+
+```
+calls
+  apply_later                              1837822
+  apply_step                                     0
+  Closure::bind                            2103993
+  Closure::bind_entering                         0
+  Closure::ready/entering (boxed)                2
+  partial applications                      406445
+  Closure::apply                           2408433
+    apply_general                          1212727
+    apply_over                               59286
+  Field::data of a thunk                      5177
+```
+
+Runtime, medium (1500 lines):
+
+```
+fate of those thunks
+  kind           created      forced  forced shr      chased  chased shr    unforced    unf %
+  Int             852349       47214      249853      389457       36300      128995    15.1%
+  Data          51188688    11235560     8997938    23274222      867871     6793917    13.3%
+  Closure       21246215     6460581      321626    12609939        6175     1844348     8.7%
+  Field            75128       19186        6210       27275           0       22457    29.9%
+  other                0           0           0           0           0           0     0.0%
+  total         73362380    17762541     9575627    36300893      910346     8789717
+  forced: first force_slow of a cell held once / by several owners;
+  chased: entered by chase (held once: moved through, never memoised / shared: memoised);
+  unforced: freed still holding its code. forced and chased include forced pending cells.
+```
+
+```
+calls
+  apply_later                             17232146
+  apply_step                                     0
+  Closure::bind                           20814927
+  Closure::bind_entering                         0
+  Closure::ready/entering (boxed)                2
+  partial applications                     3825808
+  Closure::apply                          24430640
+    apply_general                         11384153
+    apply_over                              583430
+  Field::data of a thunk                     48041
+```
+
+Emitter sites (static, whole program):
+
+```
+delayed() sites by where they are written
+     sites   captured     avg  what
+     28333      59840    2.11  DelayBlock instruction
+      6522          0    0.00  f_ wrapper (no parameters: cached CAF)
+      4523      11933    2.64  f_ wrapper (lifted result)
+      3732      17844    4.78  looping tail call
+      2777      24185    8.71  looping tail case arm
+       618       7275   11.77  looping tail jump
+     46505     121077    2.60  total
+
+delayed() sites by origin: site / rule / Core form
+     sites   captured     avg  what
+     11568      22920    1.98  DelayBlock instruction / DelayBlock / App (call of a global)
+     10251      21117    2.06  DelayBlock instruction / DelayBlock / Case
+      6522          0    0.00  f_ wrapper (no parameters: cached CAF) / function entry
+      4523      11933    2.64  f_ wrapper (lifted result) / function entry
+      3619       8843    2.44  DelayBlock instruction / DelayBlock / App (call of a local)
+      2777      24185    8.71  looping tail case arm / MatchData
+      2033      10896    5.36  looping tail call / CallLocal
+      1336       2885    2.16  looping tail call / CallTop
+      1049       2859    2.73  DelayBlock instruction / DelayBlock / Let
+       992       1789    1.80  DelayBlock instruction / DelayBlock / Cast
+       618       7275   11.77  looping tail jump / block exit (Jump / IntSwitch)
+       536       1339    2.50  DelayBlock instruction / DelayBlock / App (other head)
+       318        973    3.06  DelayBlock instruction / DelayBlock / Lam
+       248       2917   11.76  looping tail call / LocalScope
+       115       1146    9.97  looping tail call / EvaluateBlock
+     46505     121077    2.60  total
+
+DelayBlock instructions by what uses the thunk first
+     sites   captured     avg  what
+     10704      22345    2.09  argument of an unknown call
+      6077      14490    2.38  field of a constructor
+      4107       6114    1.49  forced or moved at once
+      3853       8979    2.33  argument of a top-level call
+      2078       4528    2.18  lazy argument of an external or primitive
+       829       1890    2.28  other operation
+       685       1494    2.18  argument of a local call
+     28333      59840    2.11  total
+```
+
+**Reading.** Of 7.3 M thunks in the small run, 3.75 M (51 %) are *chased unique*: a tail call inside a recursive block group returns a `delayN` thunk that `chase` runs at once and never memoises, one allocation per loop iteration; the medium run has 36.3 M of them plus 47.5 M `stepN` boxed closures from the unlifted (`i64`) loops, together about 40 % of every allocation the program makes. 0.95 M thunks (13 %; 8.8 M on medium) are freed unforced. `apply_later` makes 1.8 M / 17.2 M result thunks for unknown calls. These order the next packages: WP14 (loops instead of trampolines), WP15 (direct apply when forced next), then the unforced thunks.
+
+### WP14 Loops instead of trampolines
+
+Today a tail transfer to a block that can reach back to the current one (`looping(target)` in `emit.rs`: `reaches(&graph, target, block.id)`) is emitted as `delayN(b_<target>, args)` for a lifted result and `stepN(s_<target>, args)` (a `Box<dyn FnOnce>` in `Step::Next`) for an unlifted one, and the caller's `chase`/`Step::run` is the trampoline. Replace the trampoline by a loop: for each function, compute the block groups (blocks that reach each other; `groups`/`groups_of` exist for functions, write the same for blocks) and emit each group with more than one member, or a block that reaches itself, as one Rust function `g_<index>_<group>(state: G<index>_<group>) -> <result carrier>` with `enum G<index>_<group> { B<id>(<param carriers>...), ... }` and `loop { state = match state { G::B<id>(v1, v2) => { <block body as today>; <transfer> } ... } }`: a tail transfer (`CallLocal`/`CallTop` to a group block, a `MatchData` arm whose target is in the group, a `Jump`/`IntSwitch` exit into the group) becomes `G::B<target>(args)` and `continue`; a transfer out of the group or a `Return` breaks with the value, exactly the expression emitted today. Keep every `b_<id>`/`s_<id>` as a thin wrapper `fn b_<id>(params) -> R { g_<index>_<group>(G::B<id>(params)) }` so `f_` wrappers, WP7 direct calls and arms in other blocks need no change. Nothing else in the generated shape changes; `delayed()`/`step_to` remain for transfers out of a group. Semantics: a looping tail thunk is created inside a block and returned straight to whoever forces that block, so no third party can hold it; running the target block in the same loop iteration is what `chase` already does (the census shows 3.75 M of them chased unique and never memoised), so demand, sharing and constant stack are preserved; `Step::run` and the `stepN` runtime helpers stay in the runtime for anything that still uses them. Acceptance: `cargo test -p h2r-lower` plus new tests (a two-block mutual recursion emits one `loop` and `G::B` transfers and no `delayN`/`stepN` for in-group transfers; a self-looping single block likewise; a transfer out of the group is unchanged; the `b_` wrappers exist and `f_`/WP7 call sites are unchanged); the canary (see `mise.toml`, `canary:*` tasks) if it runs in under ten minutes; then the integrator's rebuild, gate (0 differences), census (chased unique and `stepN` must fall to near zero) and A/B.
+
+### WP15 Apply the callee directly when the result is forced next
+
+The analogue of WP7 for unknown calls: `(None, _, Operation::Apply { .. })` in `emit.rs` always emits `h2r_rt::apply_later(callee, vec![..], HField::<read>)`, a thunk whose code is `read(&callee.apply(arguments))`. When `forced_next(block, position)` holds (the next instruction is a `MatchData` on this result or a `Force` of it), emit `HField::<read>(&<callee>.apply(vec![..]))` (look at `applied()` for the exact pieces) and no thunk; same stack shape as forcing the thunk one instruction later. Acceptance: `cargo test -p h2r-lower` with a test next to the WP7 ones (a forced-next `Apply` emits `.apply(` and no `apply_later`; an unforced one still emits `apply_later`); the integrator's rebuild, gate and census (`apply_later` count falls).
+
 ### WP5 Strings as a packed intrinsic
 
 The big one; needs a census first: how many `:` nodes come from `unpack_string`/`append_list`/generated `Data::ready(":")`. Add counters behind a `stats` feature, rebuild, run on the corpus, then design.
