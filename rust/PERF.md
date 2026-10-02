@@ -134,11 +134,15 @@ In `analyze_control_flow`, stop materialising `patch_state(&base, a)` for every 
 
 Acceptance: `cargo test -p shellcheck-rs` all pass; gate 0 divergences; fuzz seed 0 ×2000 and seed 156 ×4000 0 divergences; snapshot unchanged; `-f gcc`/`-f json1` byte-identical to the oracle on the four corpus scripts; callgrind on `large.sh` down by ≥ 1.3 G instructions (from 4.53 G); the `conformance bench` cfg phase on large ≤ 350 ms (from 624 ms). Report callgrind totals before/after on medium and large.
 
+**As built** (`32690b5`). `ProgramState`'s three scope maps are `ScopeValues { top: VMap, base: Option<VMap> }`: the node's own map over the invocation's dependency base, resolved at lookup (top, then base), then prefix > local > global as before. `analyze_control_flow` counts how many invocations each node occurs in; a node in exactly one gets `patched_to_external(&base, a)` in O(1), which takes the same cases as `patch_state`/`vm_patch` in the same order (diff version 0 → base; base version 0 or quick-equal → diff; per map an empty or version-equal side collapses to one layer; only the left-biased union stays two layers), so its answers are those of `internal_to_external(&patch_state(&base, a))` by construction. Nodes in two or more invocations take the old path (`patch_state`, then `merge_states_nonempty`, ascending node order), so their states and the merges the version counter sees are unchanged. `deps_to_state` is built once per invocation and shared by O(1) `OrdMap` clones; the invocation map is `mem::take`n out of the `Ctx`; `node_to_data` is filled directly with unreachable placeholders only for nodes nobody reached. A unit test compares every `ProgramState` accessor of the layered state against the materialised patch (overlapping keys in all scopes, exit codes, unreachability, empty sides) and fails if the layer order is flipped. Callgrind large 4.53 G → 2.67 G on its own (−41 %), `patch_state` 1.58 G → 70 M, `drop_glue::<Parameters>` 180 M → 61 M; peak RSS medium 132 → 53 MiB, large 530 → 122 MiB.
+
 ### WP-R3 A hasher for integer keys
 
 Every `HashMap`/`HashSet` keyed by `Node` (`usize`) or `Id` (`i32`) in `cfg.rs` and `cfg_analysis.rs` uses SipHash with a random seed: 8.7 % of all instructions on large, mostly from `remap_graph`/`remove_unnecessary_structural_nodes`/`topsort` (a hash lookup per node per pass) and from `Ctx::process` (`pred_flow`, `succ_all`, `labels`, `cache` lookups per DFA step). Add an in-crate `BuildHasherDefault<IdHasher>` (a multiply-and-xor over the single integer write, no new dependency; `write_usize`/`write_i32` plus a `write` fallback that folds bytes) and `type IdMap<K, V> = HashMap<K, V, IdBuild>` / `IdSet`; use it for every integer-keyed map and set in the two files (24 + 11 `HashMap`, 5 `HashSet`). Iteration order over these maps must not become observable: check each `for` over a hash map in those files and keep any that feeds output or a merge in sorted order as today (several already sort or go through `BTreeMap`). Optionally, where the keys are the dense `0..n` renumbered nodes (`remap_graph`, `renumber_graph`, `topsort`'s `visited`), a `Vec` indexed by node beats any hash.
 
 Acceptance: tests, gate, fuzz seed 0 ×2000, snapshot unchanged; callgrind on large down ≥ 300 M instructions; no `RandomState` map keyed by `Node` or `Id` left in `cfg.rs`/`cfg_analysis.rs`.
+
+**As built** (`9e8fcb1`). `idhash.rs` holds `IdHasher`, a multiply-and-rotate hasher for small integer keys (the finish rotates by 26 bits because hashbrown takes the low bits for the bucket and the top 7 for the tag), `IdBuild = BuildHasherDefault<IdHasher>`, `IdMap<K, V>` and `IdSet<K>`. Every `HashMap`/`HashSet` keyed by `Node` or `Id` in `cfg.rs` and `cfg_analysis.rs` uses them (`cf_id_to_range`/`cf_id_to_nodes`, `MutGraph`'s maps, the remap/renumber helpers, degree and candidate sets in `remove_unnecessary_structural_nodes`, `topsort`'s and the dominator DFS's `visited`, `Ctx::cache`/`labels`/`pred_flow`/`succ_all`, `token_to_*`, `node_to_data`). Every iteration over those maps was checked: each is sorted, reduced with `max`, or feeds another set, so no order reached output. Left on `RandomState` on purpose: `Ctx::invocations`, keyed by `Vec<Node>` and iterated into the merge order (see WP-R5). Callgrind large −382 M (−8.4 %), medium −138 M (−10.8 %); no `hash_one`/`Sip13Rounds` left near the top, hashbrown is 0.7 % of instructions.
 
 ### WP-R4 Dispatch command checks by name once per command
 
@@ -146,9 +150,33 @@ Acceptance: tests, gate, fuzz seed 0 ×2000, snapshot unchanged; callgrind on la
 
 Acceptance: tests, gate, fuzz seed 0 ×2000, snapshot unchanged, byte-identical output on the corpus; `CommandCheck::run`-equivalent cost on large ≤ 20 M instructions.
 
-### Later (measure first)
+**As built** (`8f5525e`). `checks::commands::register` adds one node check, `CommandTable`, owning a `HashMap<&'static str, Vec<CommandCheck>>` keyed by the check's name string; `all_checks()` builds the list in the old registration order. Per node, `route(t)` returns `None` unless the node is a `T_SimpleCommand` with a literal first word, computes that literal once and applies `checkCommand`'s rules (`/path/cmd` → `Basename` only; `builtin x ..` → `Exactly x` on the rewritten command; otherwise `Exactly name` and `Basename name`), then runs that name's checks in registration order, skipping those whose key kind the route does not select. `dispatch` is replaced by `route` plus `CommandName::matches`, shared with the single-check path, so the optional `deprecate-which` check still registers as its own node check and its emission order is unchanged. Two tests: interleaving/route cases, and the table against the 73 checks run separately on 16 scripts. `ForShell` (8 checks per node, ~5.5 M) is a dialect gate, not a name table, and was left alone. Found, not changed: for two checks on one `CommandName` the port runs them in registration order (older first) with `Exactly`/`Basename` interleaved, whereas Haskell's `insertWith composeAnalyzers` runs the later-registered first and all `Exactly` before all `Basename`; it is unobservable because the comment list is sorted, and the gate/fuzz/snapshot agree. Callgrind large −125 M, medium −61 M.
 
-- Parser: `Vec<Context>::clone` 176 M on large (`try_parse`, `sub_parser`, `read_pending_heredocs`): restore the context stack by truncating to its saved length instead of cloning it where the attempt is balanced; `pending_heredocs`/`heredoc_bodies` are cloned per `try_parse` too.
-- `drop_glue::<Parameters>` 180 M: dropping the analysis; falls with WP-R2 (fewer maps built).
-- `build_graph`: `id_to_nodes: HashMap<Id, BTreeSet<Node>>` gets 498 479 inserts; a sorted `Vec<Node>` per id built once (sort + dedup) is cheaper.
-- `caai_get_associative_arrays` walks the tree and inserts into a `BTreeSet<usize>` 33 362 times (104 M): check whether it is called per node.
+### Round 2 landed (end-to-end, this container, `hyperfine` 10 runs, GHC 0.11.0 oracle)
+
+Combined head `32690b5` = WP-R3 + WP-R4 + WP-R2, verified once as a whole: 1 524 tests pass; gate 2 048 agree / 0 diverge; fuzz seed 0 ×2000 and seed 156 ×4000 clean; snapshot 4 026 entries unchanged; `-f gcc` and `-f json1` byte-identical to the oracle on startup, small, medium, large and the 120 `many` scripts; clippy, fmt and dprint clean.
+
+| scenario             | after WP-R1 (`02af506`) | after round 2 (`32690b5`) |  oracle | round 2 vs oracle |
+| -------------------- | ----------------------: | ------------------------: | ------: | ----------------: |
+| startup (`-f gcc`)   |                  3.0 ms |     3.6 ms (σ 1.0; noise) | 13.5 ms |              3.8× |
+| small                |                 26.6 ms |                   17.7 ms |  115 ms |              6.5× |
+| medium               |                  314 ms |                    166 ms |  1.40 s |              8.4× |
+| large                |                  1.32 s |                    475 ms |  6.22 s |             13.1× |
+| many (120 files)     |                  676 ms |                    575 ms |  3.84 s |              6.7× |
+| peak RSS medium      |                 131 MiB |                    53 MiB | 251 MiB |                   |
+| peak RSS large       |                 526 MiB |                   122 MiB | 1.2 GiB |                   |
+| instructions startup |                  3.17 M |                    3.05 M |         |                   |
+| instructions medium  |                 1.277 G |             739 M (−42 %) |         |                   |
+| instructions large   |                 4.535 G |           2.155 G (−52 %) |         |                   |
+
+Per phase after round 2 (`conformance bench --input`): medium total 131 ms = parse 25 / cfg 52 / checks 34; large total 438 ms = parse 100 / cfg 174 / checks 117. The CFG analysis is no longer the single dominant phase; the next round has to work on three fronts at once.
+
+### WP-R5 Deterministic invocation order (correctness first, then measure)
+
+`Ctx::invocations` is a `HashMap<Vec<Node>, (deps, StateMap)>` with `RandomState`, and `analyze_control_flow` iterates it to group the per-node states before `merge_states_nonempty`, so the merge order for nodes that occur in several invocations is per-run random. Haskell's `M.Map` iterates by key (the invocation path, a list of nodes, in lexicographic order). Both round-2 agents flagged it. Switch the map to `BTreeMap<Vec<Node>, _>` so the order is Haskell's; then gate, fuzz (several seeds), snapshot. If anything changes, that is a latent nondeterminism now fixed and the snapshot diff belongs in the commit.
+
+### Later (measure first, after WP-R5)
+
+- Parser (23 % of large now): `Vec<Context>::clone` 176 M (`try_parse`, `sub_parser`, `read_pending_heredocs`): restore the context stack by truncating to its saved length where the attempt is balanced; `pending_heredocs`/`heredoc_bodies` are cloned per `try_parse` too. `read_term_more`/`read_and_or` self costs next.
+- CFG (40 %): `build_graph` 0.67 G, of which `remove_unnecessary_structural_nodes` 0.30 G and 498 479 `BTreeSet<Node>` inserts for `id_to_nodes` (a sorted `Vec<Node>` per id built once is cheaper); `memcmp` on `Rc<str>` keys inside `OrdMap` (9 %).
+- Checks (27 %): `caai_get_associative_arrays` (104 M, walks the tree per call?), `check_pipe_to_nowhere` 46 M, `check_redirect_to_same` 32 M, `check_number_comparisons` 29 M; `ForShell` as one check resolving the shell once.
