@@ -40,6 +40,48 @@ version = "0.57.4"
 backend = "aqua:dprint/dprint"
 specifiers = ["latest"]
 
+[tools.dprint."platforms.linux-arm64"]
+checksum = "sha256:ff961314e7c1ca6a02eaada0e37920a37c668fbc09fd85838c2aced41a4bc0e4"
+url = "https://github.com/dprint/dprint/releases/download/0.57.4/dprint-aarch64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/dprint/dprint/releases/assets/546351169"
+provenance = "github-attestations"
+
+[tools.dprint."platforms.linux-arm64-musl"]
+checksum = "sha256:e1b713806f7f7b94072ba2b069aa19ac28f475dbb1fbc5b672d3030a2ab001ee"
+url = "https://github.com/dprint/dprint/releases/download/0.57.4/dprint-aarch64-unknown-linux-musl.zip"
+url_api = "https://api.github.com/repos/dprint/dprint/releases/assets/546351166"
+provenance = "github-attestations"
+
+[tools.dprint."platforms.linux-x64"]
+checksum = "sha256:1d26357d8bc66898d4ecc7dafca3d2971cfe222ba487228bd2ce5c3b3a309c33"
+url = "https://github.com/dprint/dprint/releases/download/0.57.4/dprint-x86_64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/dprint/dprint/releases/assets/546351175"
+provenance = "github-attestations"
+
+[tools.dprint."platforms.linux-x64-musl"]
+checksum = "sha256:03f3e8002f9d952bf53325fc8853686d2e8808b9e5b652b215600ba147e73a5c"
+url = "https://github.com/dprint/dprint/releases/download/0.57.4/dprint-x86_64-unknown-linux-musl.zip"
+url_api = "https://api.github.com/repos/dprint/dprint/releases/assets/546351170"
+provenance = "github-attestations"
+
+[tools.dprint."platforms.macos-arm64"]
+checksum = "sha256:f9e752812791f258e89ff88a7affd05c793b0db3d929718651eae7df5f19eb2e"
+url = "https://github.com/dprint/dprint/releases/download/0.57.4/dprint-aarch64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/dprint/dprint/releases/assets/546351171"
+provenance = "github-attestations"
+
+[tools.dprint."platforms.macos-x64"]
+checksum = "sha256:8978bd5d9a564ec19472545fb853da9ec468e024e75d39c3a9df9fd5750ecdfd"
+url = "https://github.com/dprint/dprint/releases/download/0.57.4/dprint-x86_64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/dprint/dprint/releases/assets/546351172"
+provenance = "github-attestations"
+
+[tools.dprint."platforms.windows-x64"]
+checksum = "sha256:1038af32fade7a79f9c3a690d9546bb17be13dd7b4568a3684692fdcb0a52a1d"
+url = "https://github.com/dprint/dprint/releases/download/0.57.4/dprint-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/dprint/dprint/releases/assets/546351162"
+provenance = "github-attestations"
+
 [[tools.ghc]]
 version = "9.6.7"
 backend = "mise-ghcup:ghc"
@@ -83,6 +125,36 @@ version = "1.20.0"
 backend = "aqua:sharkdp/hyperfine"
 specifiers = ["latest"]
 
+[tools.hyperfine."platforms.linux-arm64"]
+checksum = "sha256:90875cb1db7a1d797c311174d061728361e58fc70e3b62262a00635ac3b1997c"
+url = "https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine-v1.20.0-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/sharkdp/hyperfine/releases/assets/317832112"
+
+[tools.hyperfine."platforms.linux-x64"]
+checksum = "sha256:63ad53934062118f5b0be11785e0bb1603d4b91667d1921f2fd8df9a8712040a"
+url = "https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine-v1.20.0-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/sharkdp/hyperfine/releases/assets/317831911"
+
+[tools.hyperfine."platforms.linux-x64-musl"]
+checksum = "sha256:3285ec7959285288137043dd81dce0dde056227018a8277532d9a364b4f03c2b"
+url = "https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine-v1.20.0-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/sharkdp/hyperfine/releases/assets/317832008"
+
+[tools.hyperfine."platforms.macos-arm64"]
+checksum = "sha256:f58d0b90993fadfa122a351428c469ce24afef3865f027f0e6e86f0830d088f1"
+url = "https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine-v1.20.0-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/sharkdp/hyperfine/releases/assets/317832526"
+
+[tools.hyperfine."platforms.macos-x64"]
+checksum = "sha256:f58d0b90993fadfa122a351428c469ce24afef3865f027f0e6e86f0830d088f1"
+url = "https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine-v1.20.0-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/sharkdp/hyperfine/releases/assets/317832526"
+
+[tools.hyperfine."platforms.windows-x64"]
+checksum = "sha256:2508c549b049b1d4342d08edc1cb42bfac169082b6e3069431b5bab9822dbb32"
+url = "https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine-v1.20.0-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/sharkdp/hyperfine/releases/assets/317832313"
+
 [[tools.rust]]
 version = "1.98.1"
 backend = "core:rust"
@@ -92,48 +164,48 @@ specifiers = ["latest"]
 components = "clippy,rustfmt"
 
 [[tools.tombi]]
-version = "1.5.4"
+version = "1.5.10"
 backend = "aqua:tombi-toml/tombi"
 specifiers = ["latest"]
 
 [tools.tombi."platforms.linux-arm64"]
-checksum = "sha256:c715b9430b18c37e4f719cb5282e1d3352629dc027a8098d3bd116571f9cf034"
-url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.4/tombi-cli-1.5.4-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/552962827"
+checksum = "sha256:055099d86273cffa12a36460dc43e9c23502313d43892e0f835b919ee6fdf77c"
+url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.10/tombi-cli-1.5.10-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/599243074"
 provenance = "github-attestations"
 
 [tools.tombi."platforms.linux-arm64-musl"]
-checksum = "sha256:c715b9430b18c37e4f719cb5282e1d3352629dc027a8098d3bd116571f9cf034"
-url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.4/tombi-cli-1.5.4-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/552962827"
+checksum = "sha256:055099d86273cffa12a36460dc43e9c23502313d43892e0f835b919ee6fdf77c"
+url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.10/tombi-cli-1.5.10-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/599243074"
 provenance = "github-attestations"
 
 [tools.tombi."platforms.linux-x64"]
-checksum = "sha256:072a1d61e61d9137bcea2754568181370f8f3dcde85bef457c2c07529699ee6e"
-url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.4/tombi-cli-1.5.4-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/552962856"
+checksum = "sha256:53f3a910a673eb05482cc720e3c1bb197b94f43496363394cffe22cab7a12222"
+url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.10/tombi-cli-1.5.10-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/599243139"
 provenance = "github-attestations"
 
 [tools.tombi."platforms.linux-x64-musl"]
-checksum = "sha256:072a1d61e61d9137bcea2754568181370f8f3dcde85bef457c2c07529699ee6e"
-url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.4/tombi-cli-1.5.4-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/552962856"
+checksum = "sha256:53f3a910a673eb05482cc720e3c1bb197b94f43496363394cffe22cab7a12222"
+url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.10/tombi-cli-1.5.10-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/599243139"
 provenance = "github-attestations"
 
 [tools.tombi."platforms.macos-arm64"]
-checksum = "sha256:753a8ad56b658965a6f248438373c96465f991704ef59fe8bc04fcc31a4f4c88"
-url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.4/tombi-cli-1.5.4-aarch64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/552962824"
+checksum = "sha256:3d860107751adc7d14e72d1924425227daecde5ef83be6b1b00ebdf50a81eb08"
+url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.10/tombi-cli-1.5.10-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/599243075"
 provenance = "github-attestations"
 
 [tools.tombi."platforms.macos-x64"]
-checksum = "sha256:a4a79dca35dcaa9bc535eef05ebd164829023977f97ba4e3b88f63468d9d6762"
-url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.4/tombi-cli-1.5.4-x86_64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/552962825"
+checksum = "sha256:ec0e0bfec103ac9136d3ac3a1cfe9e814ad7b52af4dd425a01b2fa0425a8d515"
+url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.10/tombi-cli-1.5.10-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/599243073"
 provenance = "github-attestations"
 
 [tools.tombi."platforms.windows-x64"]
-checksum = "sha256:cf20b34bef7c2ebe2e700af3f49ce501ab37c0339605bb122885bc8f8eec3c47"
-url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.4/tombi-cli-1.5.4-x86_64-pc-windows-msvc.zip"
-url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/552962850"
+checksum = "sha256:769695f5b49048450c6775135ec40b33bf1d50b1d0dbcacded46aade4b526941"
+url = "https://github.com/tombi-toml/tombi/releases/download/v1.5.10/tombi-cli-1.5.10-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/599243132"
 provenance = "github-attestations"
