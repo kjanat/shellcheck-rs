@@ -1537,4 +1537,47 @@ mod keyword_separator_and_failure_tests {
             );
         }
     }
+
+    #[test]
+    fn a_flag_after_time_that_fails_after_consuming_ends_the_parse() {
+        // `many readFlag` cannot recover from a flag that consumed input
+        // (`-` and then an unterminated backtick), so the pipeline is never
+        // attempted at the flag: the only "simple command" frame is `time`'s,
+        // at column 1, not a second one at the flag.
+        let n = notes("time -`");
+        assert!(!parses("time -`"));
+        assert!(
+            n.iter()
+                .any(|(c, _, col, m)| *c == 1009 && *col == 1 && m.contains("simple command")),
+            "{n:?}"
+        );
+        assert!(
+            !n.iter().any(|(c, _, col, _)| *c == 1009 && *col != 1),
+            "{n:?}"
+        );
+        assert!(has("time -`", 1073, 1, 7), "{n:?}");
+        assert!(has("time -`", 1072, 1, 8), "{n:?}");
+        // A flag that merely is not there is still no error: bare `time`, and
+        // a flag followed by the pipeline it times.
+        assert!(parses("time"));
+        assert!(parses("time -p echo hi"));
+    }
+
+    #[test]
+    fn the_name_of_a_coproc_is_not_visited_by_the_analysis() {
+        // The original declares the name as a plain `Token` field, not the
+        // recursive parameter, so its derived `Traversable` never reaches it
+        // and no check looks inside it. The `{` without a space is only a
+        // problem note (SC1054): the parse succeeds and the script is
+        // analysed, but not the name.
+        let script = "coproc $(e *) {.;}";
+        assert!(parses(script));
+        assert!(has(script, 1054, 1, 16));
+        assert!(has(script, 1090, 1, 16));
+        assert!(checked(script, 2148, 1, 1));
+        assert!(!checked(script, 2046, 1, 8));
+        assert!(!checked(script, 2035, 1, 12));
+        // The body is a child, and is still analysed.
+        assert!(checked("coproc foo { echo $x; }", 2086, 1, 19));
+    }
 }

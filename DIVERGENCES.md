@@ -19,7 +19,7 @@ re-runs such a batch one script at a time, so the crash costs that one input and
 nothing else.
 
 A seed covers what it happens to generate, so a clean seed 0 says nothing
-about the next one. The two wide runs this file has tracked are clean too:
+about the next one. The wide runs this file has tracked are clean too:
 
 ```sh
 cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle \
@@ -27,6 +27,9 @@ cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle \
 # fuzz: 4000 inputs checked, 0 distinct divergences
 cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle \
     --seed 148 --iterations 4000
+# fuzz: 4000 inputs checked, 0 distinct divergences
+cargo run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle \
+    --seed 156 --iterations 4000
 # fuzz: 4000 inputs checked, 0 distinct divergences
 ```
 

@@ -1279,9 +1279,22 @@ impl Parser {
             let fm = self.mark();
             self.spacing();
             if self.peek() == Some('-') {
-                if let Ok(w) = self.read_normal_word() {
-                    out.push(w);
-                    continue;
+                let wm = self.mark();
+                match self.read_normal_word() {
+                    Ok(w) => {
+                        out.push(w);
+                        continue;
+                    }
+                    Err(()) => {
+                        // `many readFlag`: a flag that consumed before failing
+                        // (`time -\``) is the parse error; `many` does not
+                        // retry the rest as a pipeline, which would open a
+                        // second "simple command" frame at the flag.
+                        if self.idx != wm.idx {
+                            self.commit();
+                            return Err(());
+                        }
+                    }
                 }
             }
             self.reset(fm);

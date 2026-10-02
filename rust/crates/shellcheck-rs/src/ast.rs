@@ -516,12 +516,11 @@ impl InnerToken {
                 out.extend(body.iter());
             }
             T_Annotation { token, .. } => out.push(token),
-            T_CoProc { name, body } => {
-                if let Some(n) = name {
-                    out.push(n);
-                }
-                out.push(body);
-            }
+            // Haskell declares `Inner_T_CoProc (Maybe Token) t`: the name is a
+            // plain `Token`, not the recursive parameter, so the derived
+            // `Traversable` (and with it `analyze`) never visits it. Checks
+            // therefore see nothing inside `coproc $(cmd) { ..; }`'s name.
+            T_CoProc { body, .. } => out.push(body),
             T_SourceCommand { includer, included } => {
                 out.push(includer);
                 out.push(included);
@@ -697,12 +696,11 @@ impl InnerToken {
                 out.extend(body.iter_mut());
             }
             T_Annotation { token, .. } => out.push(token),
-            T_CoProc { name, body } => {
-                if let Some(n) = name {
-                    out.push(n);
-                }
-                out.push(body);
-            }
+            // Haskell declares `Inner_T_CoProc (Maybe Token) t`: the name is a
+            // plain `Token`, not the recursive parameter, so the derived
+            // `Traversable` (and with it `analyze`) never visits it. Checks
+            // therefore see nothing inside `coproc $(cmd) { ..; }`'s name.
+            T_CoProc { body, .. } => out.push(body),
             T_SourceCommand { includer, included } => {
                 out.push(includer);
                 out.push(included);
