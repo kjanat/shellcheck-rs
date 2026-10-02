@@ -481,6 +481,84 @@ Spec of WP17a. (1) Emitter: every `delayed()` site, and the tail `apply_later` s
 
 What the table lets the next package decide. The unforced top 40 names the functions and blocks that make the thunks nobody forces, and the origin roll-up says whether it is a rule (a `DelayBlock` of a `Case` or of a call of a global, an `f_` wrapper, a looping tail arm) or a Core form, so WP17b targets one emitter rule rather than "never-forced thunks" in general. The `used by` roll-up splits the `DelayBlock` sites into the argument of an unknown call, a constructor field, a lazy argument of an external, and "forced or moved at once": the last, whose first use is a `Force` or `Move`, is a thunk the emitter could in principle have evaluated in place; the first two are demand the emitter cannot prove, and for them a high unforced share at a few sites is a hint to look at the callee's strictness rather than at the site. The forced-unique and forced-shared columns say how much of a site is "created, then forced once by its creator" (evaluate in place) as opposed to shared. The chased columns, per site, finish what WP13 could only say per kind: how many of the 1.8 M / 17 M `apply_later` hops are chased unique (a tail-apply cell that WP16 could avoid), against sites that are memoised and shared. And the by-created ranking says whether the unforced sites are also the busiest: a site with 40 % unforced and 100 k thunks is worth more than one with 100 % unforced and ten.
 
+**Results (`a683676`, stats build, same two scripts).** Thunks by where they are written, small (150 lines):
+
+```
+by where written
+    sites    created     forced forced shr     chased chased shr   unforced   unf %  where
+    28333    3388482     849533     853979     656138     108778     912795   26.9%  DelayBlock instruction
+        0     320899     114371      71310      96695        170      39346   12.3%  (unattributed)
+     4523     960364     299245       7802     653317          0          0    0.0%  f_ wrapper (lifted result)
+     6522       2100          0       1904          0         64          0    0.0%  f_ wrapper (no parameters: cached CAF)
+     2154     176305          0          0     176305          0          0    0.0%  looping tail call
+     1650     102980      30734          0      72246          0          0    0.0%  looping tail case arm
+      227      17902      12898          0       5004          0          0    0.0%  looping tail jump
+    13852    1837822     226295          0    1611527          0          0    0.0%  tail apply (apply_later)
+    57261    6806854    1533076     934995    3271232     109012     952141   14.0%  total
+```
+
+Medium (1500 lines):
+
+```
+by where written
+    sites    created     forced forced shr     chased chased shr   unforced   unf %  where
+    28333   33079815    8455976    9046159    6149604     964523    8433375   25.5%  DelayBlock instruction
+        0    3371808    1575785     593420     851508       1814     356342   10.6%  (unattributed)
+     4523   10984801    4779134      67451    6138216          0          0    0.0%  f_ wrapper (lifted result)
+     6522       2280          0       2055          0         86          0    0.0%  f_ wrapper (no parameters: cached CAF)
+     2154    1945358          0          0    1945358          0          0    0.0%  looping tail call
+     1650    1018165     339072          0     679093          0          0    0.0%  looping tail case arm
+      227     195829     155858          0      39971          0          0    0.0%  looping tail jump
+    13852   17232146    2090100          0   15142046          0          0    0.0%  tail apply (apply_later)
+    57261   67830202   17395925    9709085   30945796     966423    8789717   13.0%  total
+```
+
+Top never-forced sites, small:
+
+```
+top 40 sites by thunks freed unforced
+     site    created     forced forced shr     chased chased shr   unforced   unf %  where
+      125     141728          0          0          0          0     141728  100.0%  h2r_c9 $ShellCheck-0.11.0-inplace$ShellCheck.Analytics$checker_$snodeChecksToTreeCheck#57 b4 | DelayBlock
+    40491      46965          0          0          0          0      46965  100.0%  h2r_c2 $parsec-3.1.16.1$Text.Parsec.Char$$wsatisfy#9740 b2 | DelayBlock instruction / DelayBlock / App (c
+    40489      46965        118          0          0          0      46847   99.7%  h2r_c2 $parsec-3.1.16.1$Text.Parsec.Char$$wsatisfy#9740 b2 | DelayBlock instruction / DelayBlock / App (c
+    40492      46965          0        354          0          0      46611   99.2%  h2r_c2 $parsec-3.1.16.1$Text.Parsec.Char$$wsatisfy#9740 b2 | DelayBlock instruction / DelayBlock / App (c
+    40490      46965          0       2553          0          0      44412   94.6%  h2r_c2 $parsec-3.1.16.1$Text.Parsec.Char$$wsatisfy#9740 b2 | DelayBlock instruction / DelayBlock / App (c
+     none     320899     114371      71310      96695        170      39346   12.3%  (thunks no emitted site made)
+     6077      20107          0          0          0          0      20107  100.0%  h2r_c0 $parsec-3.1.16.1$Text.Parsec.Prim$$wsetExpectErrors#1337 b7 | DelayBlock instruction / DelayBlock 
+     6078      20107          0          0          0          0      20107  100.0%  h2r_c0 $parsec-3.1.16.1$Text.Parsec.Prim$$wsetExpectErrors#1337 b7 | DelayBlock instruction / DelayBlock 
+    40499      29447          0      11112          0          0      18335   62.3%  h2r_c2 $parsec-3.1.16.1$Text.Parsec.Char$$wsatisfy#9740 b14 | DelayBlock instruction / DelayBlock / App (
+    11941      16553          0          0          0          0      16553  100.0%  h2r_c10 $ShellCheck-0.11.0-inplace$ShellCheck.AnalyzerLib$composeAnalyzers#3368 b3 | DelayBlock instructi
+    11942      16553          0          0          0          0      16553  100.0%  h2r_c10 $ShellCheck-0.11.0-inplace$ShellCheck.AnalyzerLib$composeAnalyzers#3368 b3 | DelayBlock instructi
+    11945      16553          0          0          0          0      16553  100.0%  h2r_c10 $ShellCheck-0.11.0-inplace$ShellCheck.AnalyzerLib$composeAnalyzers#3368 b5 | DelayBlock instructi
+```
+
+Medium (same ranking, ×9):
+
+```
+top 40 sites by thunks freed unforced
+     site    created     forced forced shr     chased chased shr   unforced   unf %  where
+      125    1261132          0          0          0          0    1261132  100.0%  h2r_c9 $ShellCheck-0.11.0-inplace$ShellCheck.Analytics$checker_$snodeChecksToTreeCheck#57 b4 | DelayBlock
+    40491     436905          0          0          0          0     436905  100.0%  h2r_c2 $parsec-3.1.16.1$Text.Parsec.Char$$wsatisfy#9740 b2 | DelayBlock instruction / DelayBlock / App (c
+    40489     436905       1993          0          0          0     434912   99.5%  h2r_c2 $parsec-3.1.16.1$Text.Parsec.Char$$wsatisfy#9740 b2 | DelayBlock instruction / DelayBlock / App (c
+    40492     436905          0       3352          0          0     433553   99.2%  h2r_c2 $parsec-3.1.16.1$Text.Parsec.Char$$wsatisfy#9740 b2 | DelayBlock instruction / DelayBlock / App (c
+    40490     436905          0      22372          0          0     414533   94.9%  h2r_c2 $parsec-3.1.16.1$Text.Parsec.Char$$wsatisfy#9740 b2 | DelayBlock instruction / DelayBlock / App (c
+     none    3371808    1575785     593420     851508       1814     356342   10.6%  (thunks no emitted site made)
+     6077     176271          0          0          0          0     176271  100.0%  h2r_c0 $parsec-3.1.16.1$Text.Parsec.Prim$$wsetExpectErrors#1337 b7 | DelayBlock instruction / DelayBlock 
+     6078     176271          0          0          0          0     176271  100.0%  h2r_c0 $parsec-3.1.16.1$Text.Parsec.Prim$$wsetExpectErrors#1337 b7 | DelayBlock instruction / DelayBlock
+```
+
+**Reading.** WP14 did what it promised: the looping tail sites are down from 3.75 M chased hops to 0.25 M on the small script (36 M → 3.2 M on medium). What is left splits into three kinds, and each is worth about 2 % of the run, not more:
+
+- *Never forced* (0.95 M / 8.8 M thunks, 13 %): one site, `nodeChecksToTreeCheck` b4 in Analytics (a `case` thunk per AST node per check, never used), is 15 % of them on its own; the four `satisfy` b2 sites in parsec (the error-message continuations built per consumed character) are another 20 %, `setExpectErrors`, `composeAnalyzers` and the lazy `StateT`/`ReaderT` binds most of the rest. All are lazy *arguments* or constructor *fields* whose body is an `App` or `Case`, so GHC's own demand analysis left them lazy for a reason (they are used on the error path) and the emitter cannot evaluate them eagerly without a safety argument per site. At roughly 70–100 instructions per created-and-dropped thunk this is about 70 M of 3.45 G: ~2 %.
+- *`f_` wrapper thunks chased at once* (0.65 M / 6.1 M): a known function called through a closure: the `k_` shim calls `f_`, which returns a thunk that `apply_later`'s code chases immediately, so every closure application of a known function allocates two cells where one would do. A shim that calls `b_` directly (the `apply_later` cell remains the trampoline, and out-of-group `b_` chains are bounded by the call graph) would remove them: ~65 M instructions, ~2 % (WP18, specified below).
+- *Tail-apply hops* (1.8 M / 17 M, all chased): the CPS trampoline through unknown closures, WP16: needs a non-cell tail value and a change to every block signature, ~3 %.
+
+Everything else is the model itself: 2.7 M constructor cells, 2.1 M closures and 2.4 M argument vectors per small run are what the Core says the program does; GHC pays about 3 instructions to allocate each and nothing to free them, this runtime pays about 20 + 20 plus a refcount per reference. The incremental programme has reached its floor at roughly 2 % per package; the remaining 8× to GHC is representation (unboxed strict fields, packed strings, an arena or a real GC), which is a redesign and not a work package for a cheap agent.
+
+### WP18 Closure shims call the entry block directly
+
+The `k_` shim of a known function (what `Closure::bind` points at) calls `f_<fn>(captures.., args..)` and returns its thunk; the only consumers of a shim's result are `apply` callers, and in the hot path that is `apply_later`'s code, which chases the result at once (the census: 0.65 M of 0.96 M `f_` thunks on the small script are *chased unique*, 6.1 M of 11 M on medium). Emit `b_<fn>_<entry>(..)` in the shim instead, exactly as WP7 does for forced-next calls; the `apply_later` cell stays the trampoline for CPS chains, and a `b_` tail-calling another function's `b_` outside its group is already what the emitter does, bounded by the acyclic group graph. Keep `f_` for shims whose result is stored (none today: a shim result always flows into `apply`'s return). Acceptance: `cargo test -p h2r-lower` plus a test that a shim emits `b_` and no `f_`; rebuild, gate, census (`f_ wrapper` chased-unique falls to near zero), A/B. Expected: ~2 %.
+
 ### WP5 Strings as a packed intrinsic
 
 The big one; needs a census first: how many `:` nodes come from `unpack_string`/`append_list`/generated `Data::ready(":")`. Add counters behind a `stats` feature, rebuild, run on the corpus, then design.
