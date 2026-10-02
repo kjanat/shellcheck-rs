@@ -15,12 +15,21 @@ Design, in the order it happens:
    not a faster ShellCheck.
 
 2. Timing. `rounds` rounds; in each round every scenario is run through one
-   hyperfine invocation (`-N`, no shell) with `runs` timed runs per candidate
-   after `warmup` untimed ones. The candidate order is re-shuffled every
+   hyperfine invocation (`-N`, no shell) *per candidate*, with `runs` timed
+   runs after `warmup` untimed ones. The candidate order is re-shuffled every
    round from a seeded PRNG, so slow drift of the machine (thermal state,
    background load, page cache) spreads over all candidates instead of
    landing on whichever one happened to go last. Rounds are kept apart in
    the output so the analysis can test for that drift.
+
+   Why one hyperfine process per candidate: hyperfine reports memory from
+   getrusage(RUSAGE_CHILDREN).ru_maxrss, which is the maximum over *all*
+   children the hyperfine process has reaped so far, not per command. With
+   several commands in one invocation every later command would report at
+   least the largest peak of the commands before it (a small candidate that
+   ran after a big one inherits the big one's number). A fresh hyperfine
+   process per candidate makes each `memory_usage_byte` the candidate's own.
+   The timing statistics are unaffected: same runs, warm-up, order and flags.
 
 3. Everything (samples, per-run memory, exit codes, the pre-check, the
    environment, the candidate manifests, the corpus checksum) goes into
@@ -278,21 +287,23 @@ def wrap(pin, cmd: list[str]) -> list[str]:
     return ["taskset", "-c", str(pin), *cmd] if pin not in (None, "") else cmd
 
 
-def hyperfine_round(hyperfine: str, corpus: Path, export: Path, warmup: int, runs: int, cmds: list[tuple[str, list[str]]]) -> dict:
+def hyperfine_one(hyperfine: str, corpus: Path, export: Path, warmup: int, runs: int, name: str, cmd: list[str]) -> dict:
+    """One hyperfine process for ONE command, so its `memory_usage_byte` (the
+    cumulative RUSAGE_CHILDREN maximum of that process) belongs to this command
+    alone. Returns the command's entry of hyperfine's JSON export."""
     argv = [
         hyperfine, "-N", "--warmup", str(warmup), "--runs", str(runs),
         "--ignore-failure", "--style", "none", "--output", "null",
         "--export-json", str(export),
+        "-n", name, shlex.join(cmd),
     ]
-    for name, cmd in cmds:
-        argv += ["-n", name, shlex.join(cmd)]
     # hyperfine warns about every non-zero exit (ShellCheck exits 1 on findings); keep
     # its stderr unless it actually fails.
     proc = subprocess.run(argv, cwd=corpus, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     if proc.returncode != 0:
         sys.exit(f"bench: hyperfine failed ({proc.returncode}):\n{proc.stderr}")
     with open(export) as f:
-        return json.load(f)
+        return json.load(f)["results"][0]
 
 
 def main() -> None:
@@ -369,20 +380,19 @@ def main() -> None:
             rng.shuffle(order)
             if not order:
                 continue
-            cmds = [(c["name"], wrap(args.pin, [c["binary"], *sc["args"]])) for c in order]
-            export = out / "raw" / f"round{rnd:02d}-{sname}.json"
-            data = hyperfine_round(args.hyperfine, args.corpus, export, args.warmup, args.runs, cmds)
             summary = []
-            for pos, res in enumerate(data["results"]):
-                name = res["command"]
-                if name not in samples[sname]:
-                    continue
+            for pos, c in enumerate(order):
+                name = c["name"]
+                cmd = wrap(args.pin, [c["binary"], *sc["args"]])
+                export = out / "raw" / f"round{rnd:02d}-{sname}-{name}.json"
+                res = hyperfine_one(args.hyperfine, args.corpus, export, args.warmup, args.runs, name, cmd)
                 entry = samples[sname][name]
                 entry["times"].extend(res["times"])
                 entry["memory_bytes"].extend(res.get("memory_usage_byte", []))
                 entry["exit_codes"].extend(res.get("exit_codes", []))
                 entry["rounds"].append({
                     "round": rnd, "position": pos, "times": res["times"],
+                    "memory_bytes": res.get("memory_usage_byte", []),
                     "user_mean": res.get("user"), "system_mean": res.get("system"),
                 })
                 summary.append(f"{name} {res['mean'] * 1000:8.1f}ms")
@@ -395,12 +405,14 @@ def main() -> None:
             e["n"] = len(e["times"])
 
     run = {
-        "version": 1,
+        "version": 2,
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "config": {
             "rounds": args.rounds, "runs": args.runs, "warmup": args.warmup, "seed": args.seed,
             "pin": args.pin, "max_rss_gib": args.max_rss_gib, "timeout_s": args.timeout, "max_run_s": args.max_run_seconds,
             "hyperfine_flags": ["-N", "--ignore-failure", "--output", "null"],
+            # one hyperfine process per candidate per round: memory_bytes are per candidate
+            "memory_isolated": True,
         },
         "environment": env,
         "baseline": baseline,

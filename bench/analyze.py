@@ -8,7 +8,7 @@
 For every scenario and candidate:
   n, mean, standard deviation, coefficient of variation, median, MAD, min/max,
   5th/95th percentile, 95% bootstrap confidence intervals (BCa, 10 000
-  resamples) for the mean and the median, median peak RSS.
+  resamples) for the mean and the median, peak RSS (per candidate, see below).
 
 For every candidate against the baseline (and every other pair):
   speed-up = baseline mean / candidate mean, with a 95% percentile-bootstrap
@@ -28,7 +28,17 @@ more than 5 % apart: the machine changed while measuring), fewer than 20
 samples, output differing from the baseline (not comparable), or excluded by
 the pre-check.
 
+Peak RSS comes from hyperfine's `memory_usage_byte`, which is the cumulative
+RUSAGE_CHILDREN maximum of the hyperfine process: with several commands in one
+hyperfine invocation each later command reports at least the maximum of every
+command before it. bench/run.py therefore runs one hyperfine process per
+candidate and the numbers are then per candidate (`config.memory_isolated`).
+Results written by the older runner (several commands per process) are repaired
+here: per candidate, the minimum of the per-round medians and the isolated
+pre-check peak (see `peak_rss`).
+
     analyze.py [results-dir]      (default: newest under .bench/results)
+    analyze.py --selftest         (unit test for the peak-RSS logic, no benchmark run)
 Writes report.md, summary.json and plots/<scenario>.png next to run.json.
 """
 
@@ -36,6 +46,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 import warnings
 from datetime import datetime, timezone
@@ -180,6 +191,58 @@ def drift(rounds: list[dict]) -> tuple[float | None, float]:
         return None, spread
 
 
+# --- peak RSS -----------------------------------------------------------------
+
+
+def legacy_round_medians(results: Path | None, scenario: str, name: str) -> list[float]:
+    """Per-round median `memory_usage_byte` of `name`, read from the old-style raw
+    exports raw/roundNN-<scenario>.json (all candidates of a round in one file)."""
+    raw = results / "raw" if results else None
+    if raw is None or not raw.is_dir():
+        return []
+    pat = re.compile(rf"round\d+-{re.escape(scenario)}\.json")
+    out = []
+    for f in sorted(raw.iterdir()):
+        if not pat.fullmatch(f.name):
+            continue
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        for res in data.get("results", []):
+            if res.get("command") == name and res.get("memory_usage_byte"):
+                out.append(float(np.median(res["memory_usage_byte"])))
+    return out
+
+
+def peak_rss(entry: dict, pre: dict, config: dict, results: Path | None = None, scenario: str = "", name: str = "") -> tuple[float, str]:
+    """Peak RSS in bytes for one candidate x scenario, and where the number came from.
+
+    hyperfine's memory_usage_byte is the RUSAGE_CHILDREN maximum of the hyperfine
+    *process*, so it is only per candidate when each candidate had its own process
+    (run.json config.memory_isolated, written by the current bench/run.py).
+
+    Older runs put every candidate of a round into one process; there a candidate's
+    value is >= the true peak of everything that ran before it and is right only
+    when it ran first. The cumulative values are upper bounds of the truth, so the
+    best estimate is the smallest evidence: the minimum over rounds of the per-round
+    median, and the pre-check's peak (one isolated wait4/rusage run), whichever is
+    lower. Without any per-round data the pre-check value is used on its own.
+    """
+    pre_rss = float(pre["peak_rss_bytes"])
+    if config.get("memory_isolated"):
+        mem = entry.get("memory_bytes") or []
+        if mem:
+            return float(np.median(mem)), "per-candidate hyperfine process"
+        return pre_rss, "pre-check (no hyperfine memory data)"
+    per_round = [float(np.median(r["memory_bytes"])) for r in entry.get("rounds", []) if r.get("memory_bytes")]
+    if not per_round:
+        per_round = legacy_round_medians(results, scenario, name)
+    if per_round:
+        return min(per_round + [pre_rss]), "legacy cumulative hyperfine memory: min of pre-check and per-round medians"
+    return pre_rss, "pre-check (legacy run, hyperfine memory is cumulative)"
+
+
 # --- report -------------------------------------------------------------------
 
 
@@ -219,7 +282,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("results", nargs="?", type=Path)
     ap.add_argument("--no-plots", action="store_true")
+    ap.add_argument("--selftest", action="store_true", help="check the peak-RSS logic on synthetic runs and exit")
     args = ap.parse_args()
+    if args.selftest:
+        sys.exit(selftest())
 
     results = args.results
     if results is None:
@@ -254,7 +320,7 @@ def main() -> None:
                 fl.append(f"not comparable: output differs from {baseline} ({p.get('diff_lines', '?')} lines)")
             if e["n"]:
                 d = describe(e["times"], rng)
-                d["peak_rss_median"] = float(np.median(e["memory_bytes"])) if e["memory_bytes"] else p["peak_rss_bytes"]
+                d["peak_rss_median"], d["peak_rss_source"] = peak_rss(e, p, run["config"], results, s, n)
                 d["exit_codes"] = sorted(set(e["exit_codes"]))
                 d["drift_p"], d["drift_spread"] = drift(e["rounds"])
                 if d["cv"] > CV_LIMIT:
@@ -475,11 +541,182 @@ def render(run, results, names, baseline, others, desc, flags, pairs, plots) -> 
       "A crash, hang or blown cap excludes it from that scenario. Output is compared with the baseline's (JSON compared structurally); a difference does not exclude, but it does void the comparison: a faster program computing something else is not a faster ShellCheck.")
     w(f"- **Budget.** A candidate whose pre-check run took longer than {cfg.get('max_run_s', 0):g} s is not sampled in the rounds (fifty runs of a minute each is not a benchmark, it is a wait); "
       "that single run is reported instead, marked as such, and the ratio next to it is a rough single-run figure with no interval. Raise `--max-run-seconds` for a dedicated slow run.")
-    w("- **Peak RSS** is hyperfine's per-run maximum resident set size (median over runs).")
+    if run["config"].get("memory_isolated"):
+        w("- **Peak RSS** is the maximum resident set size of the candidate's own process: every candidate runs under its own hyperfine process in every round, "
+          "and hyperfine's `memory_usage_byte` (the `RUSAGE_CHILDREN` maximum of that process) is taken as the median over runs. "
+          "Excluded and over-budget rows show the isolated pre-check run's peak instead. "
+          "It is a peak of the whole process, not an average, and it includes the warm-up runs of that process.")
+    else:
+        w("- **Peak RSS** (legacy run: all candidates of a round shared one hyperfine process). hyperfine's memory figure is the cumulative `RUSAGE_CHILDREN` maximum, "
+          "so within a round each later candidate reports at least the peak of every earlier one. "
+          "The value shown is therefore the lowest of the isolated pre-check run's peak and the per-round medians; "
+          "it is exact only when the pre-check or some round measured that candidate without a larger one before it, otherwise an upper bound.")
     w("")
     w(f"Raw samples: `{results.name}/run.json`; every number here: `summary.json`; per-round hyperfine exports: `raw/`; pre-check outputs and diffs: `precheck/`.")
     w("")
     return "\n".join(L)
+
+
+# --- self-test ----------------------------------------------------------------
+
+MIB = 2**20
+# What each candidate really peaks at when it runs alone, MiB (the shape of the CI run
+# that exposed the cumulative-maximum problem: upstream small, h2r and rust-port large).
+TRUE_RSS = {"upstream": 220, "h2r": 767, "rust-port": 1374}
+SELFTEST_ORDERS = [
+    ["upstream", "h2r", "rust-port"],
+    ["h2r", "upstream", "rust-port"],
+    ["rust-port", "h2r", "upstream"],
+    ["h2r", "rust-port", "upstream"],
+]
+# Orders in which upstream, the smallest, is never first: every cumulative value it
+# reports is inflated by a larger candidate that ran before it.
+NEVER_FIRST_ORDERS = [
+    ["h2r", "upstream", "rust-port"],
+    ["rust-port", "upstream", "h2r"],
+    ["h2r", "rust-port", "upstream"],
+    ["rust-port", "h2r", "upstream"],
+]
+
+
+def _synthetic_run(isolated: bool, orders: list[list[str]], with_round_memory: bool = True) -> tuple[dict, dict]:
+    """A run.json-shaped dict with one scenario, plus the old-layout raw exports.
+
+    isolated=True: every candidate's memory is its own (current run.py, one hyperfine
+    process per candidate). isolated=False: the old runner, where memory is the running
+    maximum over the commands of the round, in run order."""
+    rng = np.random.default_rng(7)
+    runs = 6
+    names = list(TRUE_RSS)
+    samples = {n: {"times": [], "memory_bytes": [], "exit_codes": [], "rounds": [], "n": 0} for n in names}
+    raw = {}
+    for rnd, order in enumerate(orders, 1):
+        seen = 0
+        results = []
+        for pos, n in enumerate(order):
+            own = TRUE_RSS[n] * MIB
+            seen = max(seen, own)
+            # a few KiB of jitter between runs; hyperfine's own value never decreases
+            mem = [int((own if isolated else seen) + 4096 * k) for k in range(runs)]
+            times = [float(t) for t in 0.1 * (1 + pos * 0.3) + rng.normal(0, 0.002, runs)]
+            e = samples[n]
+            e["times"] += times
+            e["memory_bytes"] += mem
+            e["exit_codes"] += [1] * runs
+            r = {"round": rnd, "position": pos, "times": times, "user_mean": 0.1, "system_mean": 0.0}
+            if with_round_memory:
+                r["memory_bytes"] = mem
+            e["rounds"].append(r)
+            results.append({"command": n, "mean": float(np.mean(times)), "times": times, "memory_usage_byte": mem})
+        raw[f"round{rnd:02d}-medium.json"] = {"results": results}
+    for e in samples.values():
+        e["n"] = len(e["times"])
+    precheck = {
+        # the pre-check ran every candidate alone: exact per-candidate peaks
+        n: {"status": "ok", "reason": None, "peak_rss_bytes": TRUE_RSS[n] * MIB, "wall_s": 0.1, "exit": 1,
+            "parity": "baseline" if n == "upstream" else "identical"}
+        for n in names
+    }
+    run = {
+        "version": 2 if isolated else 1,
+        "created": "2026-01-01T00:00:00+00:00",
+        "config": {"rounds": len(orders), "runs": runs, "warmup": 1, "seed": 1, "pin": None, "max_rss_gib": 8.0, "timeout_s": 60, "max_run_s": 15,
+                   **({"memory_isolated": True} if isolated else {})},
+        "environment": {},
+        "baseline": "upstream",
+        "candidates": [{"name": n, "kind": "release", "pin": "0", "ref": None} for n in names],
+        "corpus": {"dir": "x", "sha256": "0" * 64, "seed": 1, "files": {}},
+        "scenarios": {"medium": {"description": "synthetic", "args": ["a.sh"], "format": "tty"}},
+        "precheck": {"medium": precheck},
+        "samples": {"medium": samples},
+    }
+    return run, raw
+
+
+def selftest() -> int:
+    """Feed synthetic runs with cumulative per-round memory values through the analysis
+    and check that the reported peak RSS of every candidate is its true isolated value."""
+    import contextlib
+    import io
+    import tempfile
+
+    failures: list[str] = []
+
+    def check(label: str, got: dict[str, float]) -> None:
+        for n, v in TRUE_RSS.items():
+            ok = abs(got[n] - v * MIB) < MIB  # per-run jitter is KiB; a MiB off is another candidate's peak
+            print(f"  {'ok  ' if ok else 'FAIL'} {label:52s} {n:10s} {got[n] / MIB:8.1f} MiB (true {v})")
+            if not ok:
+                failures.append(f"{label}: {n} reported {got[n] / MIB:.1f} MiB, true value {v} MiB")
+
+    def rss_of(run: dict, results: Path | None = None) -> dict[str, float]:
+        s = run["samples"]["medium"]
+        p = run["precheck"]["medium"]
+        return {n: peak_rss(s[n], p[n], run["config"], results, "medium", n)[0] for n in TRUE_RSS}
+
+    print("peak RSS on synthetic runs (true isolated peaks: " + ", ".join(f"{n} {v} MiB" for n, v in TRUE_RSS.items()) + ")")
+
+    # 1. Current runner: one hyperfine process per candidate.
+    run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+    check("isolated hyperfine processes", rss_of(run))
+
+    # 2. Old runner, cumulative values, per-round memory in run.json. The per-round
+    # medians alone would give upstream 767 MiB; the pre-check supplies the true value.
+    run, _ = _synthetic_run(False, NEVER_FIRST_ORDERS)
+    cumulative = min(float(np.median(r["memory_bytes"])) for r in run["samples"]["medium"]["upstream"]["rounds"])
+    assert cumulative > 700 * MIB, "synthetic cumulative data should overstate upstream"
+    check("legacy cumulative: per-round memory + pre-check", rss_of(run))
+
+    # 3. Old runner, no per-round memory in run.json, only the old raw/ exports on disk.
+    run, raw = _synthetic_run(False, NEVER_FIRST_ORDERS, with_round_memory=False)
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "raw").mkdir()
+        for fn, data in raw.items():
+            (Path(d) / "raw" / fn).write_text(json.dumps(data))
+        check("legacy cumulative: raw/ exports + pre-check", rss_of(run, Path(d)))
+        # The raw exports alone are right for every candidate that ran first (or behind
+        # smaller ones only) in at least one round: the minimum over rounds. Upstream
+        # never did in NEVER_FIRST_ORDERS, so use the mixed orders for this one.
+        run2, raw2 = _synthetic_run(False, SELFTEST_ORDERS, with_round_memory=False)
+        for fn, data in raw2.items():
+            (Path(d) / "raw" / fn).write_text(json.dumps(data))
+        check("legacy raw/ exports alone, min over rounds", {n: min(legacy_round_medians(Path(d), "medium", n)) for n in TRUE_RSS})
+
+    # 4. Old runner, flat run.json memory only and no raw/: pre-check value.
+    run, _ = _synthetic_run(False, NEVER_FIRST_ORDERS, with_round_memory=False)
+    check("legacy cumulative: no per-round data", rss_of(run))
+
+    # 5. Whole pipeline (main -> summary.json and report.md) on both kinds of run.json.
+    global RESAMPLES
+    saved = RESAMPLES
+    RESAMPLES = 200  # the statistics are not under test here
+    try:
+        for label, run in (("end-to-end, isolated run", _synthetic_run(True, SELFTEST_ORDERS)[0]),
+                           ("end-to-end, legacy run", _synthetic_run(False, NEVER_FIRST_ORDERS)[0])):
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d) / "run.json").write_text(json.dumps(run))
+                argv, sys.argv = sys.argv, ["analyze.py", d, "--no-plots"]
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        main()
+                finally:
+                    sys.argv = argv
+                summary = json.loads((Path(d) / "summary.json").read_text())
+                report = (Path(d) / "report.md").read_text()
+            check(label, {n: summary["descriptives"]["medium"][n]["peak_rss_median"] for n in TRUE_RSS})
+            for n, v in TRUE_RSS.items():
+                row = next(l for l in report.splitlines() if l.startswith(f"| {n} | "))
+                if f"| {v} MiB |" not in row:
+                    failures.append(f"{label}: report row for {n} lacks '{v} MiB': {row}")
+                    print(f"  FAIL {label:52s} {n:10s} report row lacks {v} MiB")
+    finally:
+        RESAMPLES = saved
+
+    if failures:
+        print(f"\nselftest FAILED ({len(failures)}):\n  " + "\n  ".join(failures))
+        return 1
+    print("\nselftest passed")
+    return 0
 
 
 if __name__ == "__main__":

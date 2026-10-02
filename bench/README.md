@@ -65,10 +65,22 @@ from a seeded PRNG, and keeps each round's samples separate so the analysis
 can test for that drift (Kruskal–Wallis across rounds). `-N` means no shell
 in the measurement; `--output null` treats every candidate's stdout the same.
 
+**One hyperfine process per candidate.** hyperfine reports memory from
+`getrusage(RUSAGE_CHILDREN).ru_maxrss`, the maximum over *every* child that
+hyperfine process has reaped so far, not per command. Several commands in one
+invocation would therefore make each later command report at least the peak of
+all earlier ones (a 220 MiB candidate that ran after a 767 MiB one shows 767).
+So within a round the runner starts a separate hyperfine process for each
+candidate (same `-N`, warm-up and run counts, same shuffled order, one export
+`raw/roundNN-<scenario>-<candidate>.json` each) and the peak RSS in the report
+is the candidate's own. Timing is unaffected. `analyze.py` repairs runs made
+by the older one-process-per-round runner: it reports the lower of the
+isolated pre-check peak and the per-round medians, and says so in the report.
+
 **Statistics** (`bench/analyze.py`, numpy + scipy via `uv run`):
 
 - per cell: n, mean, sd, CV, median, MAD, min/max, p5/p95, **95 % BCa
-  bootstrap intervals** (10 000 resamples) for the mean and the median, peak RSS;
+  bootstrap intervals** (10 000 resamples) for the mean and the median, per-candidate peak RSS;
 - per comparison: **speed-up with a 95 % percentile-bootstrap interval**
   (means and medians), **Mann–Whitney U** (primary: timing distributions are
   skewed), **Welch's t-test**, **Cliff's δ** with the usual magnitude labels,
@@ -86,6 +98,14 @@ bash assembled from a fixed set of blocks with seeded identifiers, mostly
 wrapped in functions the way real scripts of that size are, about a third of
 the blocks carrying classic findings. Its checksum is in every `run.json`.
 Scenarios are in `bench/scenarios.toml`.
+
+## Tests
+
+`mise run bench:selftest` (`uv run bench/analyze.py --selftest`) feeds
+synthetic runs with cumulative per-round memory values, and runs with isolated
+ones, through the analysis and checks that the reported peak RSS of every
+candidate equals its true isolated value. It does not need hyperfine or any
+built candidate and takes a few seconds.
 
 ## CI
 

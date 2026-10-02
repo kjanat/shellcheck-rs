@@ -87,6 +87,10 @@ arg "[results]" default="" help="Results directory (default: the newest under .b
 '''
 run         = 'uv run bench/analyze.py ${usage_results:+"$usage_results"}'
 
+[tasks."bench:selftest"]
+description = "Check the analysis (per-candidate peak RSS) on synthetic runs; needs no hyperfine and no built candidates"
+run         = "uv run bench/analyze.py --selftest"
+
 [tasks."bench:clean"]
 description = "Remove built candidates, worktrees, corpus and results"
 run         = "bench/build.sh clean"
