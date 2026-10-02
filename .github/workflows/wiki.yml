@@ -1,10 +1,11 @@
-name: Publish wiki
+name: Wiki
 
-# The `wiki` branch holds the GitHub wiki's pages (the same layout the wiki
-# repository has: Home.md, _Sidebar.md, _Footer.md, the numbered page folders
-# and tools/). Every push to that branch is mirrored into the wiki repository,
-# so the wiki can be edited through ordinary branches, pull requests and
-# sessions that have no access to <repo>.wiki.git.
+# The `wiki` branch holds the GitHub wiki's pages in the wiki repository's own
+# layout: Home.md, _Sidebar.md, _Footer.md, the numbered page folders and
+# tools/. Every push to this branch is mirrored into `<repo>.wiki.git`, so the
+# wiki can be edited through ordinary branches and pull requests, and from
+# sessions that cannot reach the wiki repository directly. The mirror is one
+# way: a page edited in the wiki UI is overwritten by the next push here.
 
 on:
   push:
@@ -14,36 +15,38 @@ on:
 permissions:
   contents: write
 
-concurrency: { group: "${{ github.workflow }}", cancel-in-progress: false }
+concurrency:
+  group: wiki
+  cancel-in-progress: false
 
 jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps: [uses: actions/checkout@v7, uses: kjanat/actionlint@v1]
+
   publish:
-    name: Mirror the wiki branch into the wiki repository
+    name: Mirror into the wiki repository
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the wiki branch
-        uses: actions/checkout@v5
-        with:
-          path: source
+        uses: actions/checkout@v7
+        with: { path: source }
 
       - name: Clone the wiki repository
-        run: |
-          git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki
         env:
           GITHUB_TOKEN: ${{ github.token }}
+        run: git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki
 
       - name: Replace the wiki's content with the branch's
-        run: |
-          rsync --archive --delete \
-            --exclude '.git' --exclude '.github' \
-            source/ wiki/
+        run: rsync --archive --delete --exclude .git --exclude .github source/ wiki/
 
       - name: Commit and push when anything changed
         working-directory: wiki
         run: |
           git add --all
           if git diff --cached --quiet; then
-            echo "wiki already matches ${GITHUB_SHA}"
+            echo "::notice::wiki already matches ${GITHUB_SHA}"
             exit 0
           fi
           git config user.name "github-actions[bot]"
