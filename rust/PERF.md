@@ -64,6 +64,33 @@ Replace `VMap<V>`'s storage with a persistent map (`im-rc`'s `OrdMap<Rc<str>, V>
 
 Acceptance: `cargo test -p shellcheck-rs` all pass; gate 0 divergences; fuzz seed 0 ×2000 and seed 1013 ×2000 0 divergences; snapshot passes; `conformance bench --input medium.sh`: cfg ≤ 250 ms (from 1 586); large: cfg ≤ 1.5 s (from 11 503); peak RSS medium ≤ 300 MiB (from 1 374), large ≤ 1.5 GiB (from 8 731); the `-f gcc`/`-f json1` outputs on all four corpus scripts byte-identical to the oracle. Report the before/after phase tables and the RSS.
 
+Acceptance addition (startup): `valgrind --tool=callgrind` on `.bench/corpus/startup.sh` with `-f gcc` reports at most 8 M instructions (from 31.6 M, 63 % of it `insert_global` called from `create_environment_state`).
+
+**As built.** `cfg_analysis::VMap<V>` stores an `im_rc::OrdMap<Rc<str>, Rc<V>>` (im-rc 15.1, a new dependency of `shellcheck-rs`, so the crate is no longer "std + regex only"). Cloning a state is O(1), an insert copies one root-to-leaf path, and the `VariableState` values with their nested property sets are shared between all states that hold them (values are `Rc` because a path copy clones up to 64 entries; with plain values that would deep-copy them). `version`, `vm_eq` (version, then root pointer, then `OrdMap`'s diff-based equality that skips shared subtrees), ordered iteration and `Ctx::process` are unchanged. What changed besides the storage:
+
+- `ProgramState` no longer holds a flat `variables_in_scope` map. It holds the three scope maps of the `InternalState` (an O(1) clone each, so `internal_to_external` is O(1) per node) and resolves a name by precedence prefix > local > global at lookup, censoring the literal value when `variable_value()` reads it. `variables_in_scope()` still exists as an O(vars) flattening for tests and debugging; the two direct field users (`conditions.rs`, `flow.rs`) call `numerical_status`/`space_status`/`variable_properties` instead. `ProgramState` lost its derived `PartialEq` (nothing used it).
+- `vm_patch` is a left-biased union (`union_left`, written in the crate): `OrdMap::union` in im-rc 15.1 keeps the *other* map's value when the other map is the larger, so it cannot be used for a biased union. It costs O(m log n) in the smaller map's size, which is the diff (or the dependency base) in `patch_state` and in the `grouped` loop.
+- `merge_maps_var`/`merge_maps_func` walk `OrdMap::diff(a, b)` instead of the union of all keys. A key with an equal value on both sides merges to that value (`merge_variable_state(x, x) == x`, set union is idempotent), so skipping it changes nothing, and the reader fallback is called for exactly the keys that exist on one side only, as before. This is what keeps joins O(diff) instead of O(vars).
+- `create_environment_state` builds the global map in one pass (later lists win, as the successive inserts did) with one shared `Rc` per kind of variable; empty maps share one thread-local allocation (`OrdMap::new` allocates a ~2 KB node, and there are four empty maps in most states: that alone was 68 % of the peak heap in the first version); the unreachable placeholder for nodes the analysis never reached is built once and cloned.
+
+Before (`5d3fe06`, this container) and after, `conformance bench --input`, three repeats, the bench is noisy here so ranges are over several runs:
+
+| phase        | medium before |   medium after |  large before |    large after |
+| ------------ | ------------: | -------------: | ------------: | -------------: |
+| parse        |         24 ms |       23–29 ms |         73 ms |     112–131 ms |
+| maps         |          3 ms |         2–4 ms |          8 ms |       12–14 ms |
+| **cfg**      |  **1 570 ms** | **142–220 ms** | **12 610 ms** | **650–840 ms** |
+| params-other |        512 ms |       18–58 ms |      1 635 ms |    42–1 190 ms |
+| checks       |        110 ms |       46–52 ms |        505 ms |     135–178 ms |
+| resolve      |        145 ms |       57–80 ms |             — |         108 ms |
+| total        |      2 364 ms |     278–430 ms |     13 799 ms | 1 060–1 580 ms |
+
+(`params-other` and `resolve` in this tool are measured as differences of totals and jump around by that much between runs; the oracle takes 1.5–2.5 s on medium and 9.9–11.5 s on large in the same runs, so the port is now 4–7× faster in-process.) Peak RSS (`wait4`): small 41 -> 14 MiB, medium 1 375 -> 132 MiB, large 8 735 -> 530 MiB, startup 9 -> 9 MiB. CLI wall time: `startup.sh` median 6.2 -> 3.15 ms, 120 files in one invocation (`corpus/many`) 1 928 -> 777 ms; callgrind on `startup.sh` `-f gcc` 31.66 M -> 3.17 M instructions.
+
+Verification: `cargo test -p shellcheck-rs` 1 517 pass; `conformance gate`: 2 048 agree, 0 diverge; `conformance fuzz` seed 0 and seed 1013, 2 000 inputs each, 0 divergences (seed 0 also reports the known upstream oracle crash in `checkCmd` on `coproc` inside `$(...)`); `cargo conformance-snapshot`: 4 026 entries, 0 changed (no regeneration needed); `-f gcc` and `-f json1` of small, medium, large and startup byte-identical to the oracle (sha256), and the port's json1 output on the 120 `many` scripts identical to both the pre-change port and the oracle.
+
+What did not help or was a trap: the first version (persistent maps, no shared empty map) already brought cfg to 220 ms but left medium at 373 MiB, because every `new_internal_state()` and every placeholder state allocated four empty tree nodes; sharing the empty map took it to 132 MiB and cfg to ~150 ms. `OrdMap::union` is not left-biased when the left operand is smaller (see above), which is easy to miss because the doc says it is. Not done because the targets are met by a wide margin: `Rc<BTreeSet>` for `s_exit_codes` (it is still cloned per state copy), `Rc<VariableState>` all the way through `read_variable` (lookups still clone the value out), avoiding the `self.cache.get(&node).cloned()` clone in `get_cache`. The analysis result now holds `Rc`s, so `CFGAnalysis`/`ProgramState` are no longer `Send`; nothing in the workspace needs that, but a multi-threaded embedder would have to switch `im_rc` to `im` (Arc).
+
 ### Candidates after WP-R1 (measure first)
 
 - `params-other` (variable flow, 476 ms on large, growing 4.4× for 2.66× lines) and `checks`/`resolve` (5×): find the quadratic piece in each with `conformance bench` and callgrind once cfg no longer dominates.

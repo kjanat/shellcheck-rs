@@ -1386,11 +1386,7 @@ fn is_num(params: &Parameters, t: &Token) -> bool {
                 return (|| {
                     let cfga = params.cfg_analysis.as_ref()?;
                     let state = cfga.get_incoming_state(id)?;
-                    let value = state.variables_in_scope.get(&var)?;
-                    Some(
-                        value.variable_value.numerical_status
-                            >= NumericalStatus::NumericalStatusMaybe,
-                    )
+                    Some(state.numerical_status(&var)? >= NumericalStatus::NumericalStatusMaybe)
                 })()
                 .unwrap_or(false);
             }

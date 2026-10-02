@@ -550,13 +550,12 @@ fn compute_is_clean(params: &Parameters, id: Id, name: &str) -> bool {
     (|| {
         let cfga = params.cfg_analysis.as_ref()?;
         let state = cfga.get_incoming_state(id)?;
-        let value = state.variables_in_scope.get(name)?;
         // isCleanState
-        let all_integer = value
-            .variable_properties
+        let all_integer = state
+            .variable_properties(name)?
             .iter()
             .all(|s| s.contains(&CFVariableProp::CFVPInteger));
-        let clean = value.variable_value.space_status == SpaceStatus::SpaceStatusClean;
+        let clean = state.space_status(name)? == SpaceStatus::SpaceStatusClean;
         Some(all_integer || clean)
     })()
     .unwrap_or(false)

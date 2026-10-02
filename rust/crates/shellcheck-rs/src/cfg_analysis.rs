@@ -11,6 +11,10 @@
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
+
+use im_rc::OrdMap;
+use im_rc::ordmap::DiffItem;
 
 use crate::ast::{Id, Token};
 use crate::cfg::{
@@ -71,34 +75,64 @@ pub struct VariableState {
 }
 
 /// The program state we expose externally.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Haskell builds a flat `variablesInScope` map per node (`internalToExternal`);
+/// here the three scope maps are shared with the analysis states (cloning them
+/// is O(1)) and a lookup resolves them by scope precedence, prefix over local
+/// over global, which is what `M.unions [prefix, local, global]` does. The
+/// literal value is censored when it is read out, as `internalToExternal` does.
+#[derive(Debug, Clone)]
 pub struct ProgramState {
-    pub variables_in_scope: BTreeMap<String, VariableState>,
+    global_values: VMap<VariableState>,
+    local_values: VMap<VariableState>,
+    prefix_values: VMap<VariableState>,
     pub exit_codes: BTreeSet<Id>,
     pub state_is_reachable: bool,
 }
 
 impl ProgramState {
-    pub fn variables_in_scope(&self) -> &BTreeMap<String, VariableState> {
-        &self.variables_in_scope
+    /// The state of a variable (prefix, then local, then global scope), with
+    /// the literal value left in; use [`variable_value`](Self::variable_value)
+    /// to read the censored value.
+    fn variable_state(&self, name: &str) -> Option<&VariableState> {
+        self.prefix_values
+            .lookup(name)
+            .or_else(|| self.local_values.lookup(name))
+            .or_else(|| self.global_values.lookup(name))
     }
-    pub fn variable_value(&self, name: &str) -> Option<&VariableValue> {
-        self.variables_in_scope.get(name).map(|s| &s.variable_value)
+
+    /// All variables in scope, flattened. O(variables): for tests and
+    /// debugging, the checks look variables up by name.
+    pub fn variables_in_scope(&self) -> BTreeMap<String, VariableState> {
+        let mut flat: BTreeMap<String, VariableState> = BTreeMap::new();
+        for map in [&self.global_values, &self.local_values, &self.prefix_values] {
+            for (k, v) in map.iter() {
+                flat.insert(k.to_string(), (**v).clone());
+            }
+        }
+        for v in flat.values_mut() {
+            v.variable_value.literal_value = None;
+        }
+        flat
+    }
+    pub fn variable_value(&self, name: &str) -> Option<VariableValue> {
+        self.variable_state(name).map(|s| {
+            // Censor the literal value to avoid introducing dependencies on it.
+            let mut v = s.variable_value.clone();
+            v.literal_value = None;
+            v
+        })
     }
     pub fn space_status(&self, name: &str) -> Option<SpaceStatus> {
-        self.variables_in_scope
-            .get(name)
+        self.variable_state(name)
             .map(|s| s.variable_value.space_status)
     }
     pub fn numerical_status(&self, name: &str) -> Option<NumericalStatus> {
-        self.variables_in_scope
-            .get(name)
+        self.variable_state(name)
             .map(|s| s.variable_value.numerical_status)
     }
     pub fn variable_properties(&self, name: &str) -> Option<&VariableProperties> {
-        self.variables_in_scope
-            .get(name)
-            .map(|s| &s.variable_properties)
+        self.variable_state(name).map(|s| &s.variable_properties)
     }
     pub fn state_is_reachable(&self) -> bool {
         self.state_is_reachable
@@ -109,7 +143,7 @@ impl ProgramState {
 
     /// See if any execution path declares the variable an integer (`declare -i`).
     pub fn variable_may_be_declared_integer(&self, var: &str) -> Option<bool> {
-        let value = self.variables_in_scope.get(var)?;
+        let value = self.variable_state(var)?;
         Some(
             value
                 .variable_properties
@@ -120,7 +154,7 @@ impl ProgramState {
 
     /// See if any execution path suggests the variable may contain an integer.
     pub fn variable_may_be_assigned_integer(&self, var: &str) -> Option<bool> {
-        let value = self.variables_in_scope.get(var)?;
+        let value = self.variable_state(var)?;
         Some(value.variable_value.numerical_status >= NumericalStatus::NumericalStatusMaybe)
     }
 }
@@ -204,28 +238,79 @@ enum StateDependency {
 /// * Version -1 means unknown (presumably changed)
 /// * Version 0 means empty
 /// * Version N means equal to any other map with version N.
-#[derive(Debug, Clone)]
+///
+/// The storage is a persistent ordered map (`Data.Map` in the original) with
+/// reference-counted values: copying a state shares its maps, an insert copies
+/// one path of the tree, and the values (with their nested property sets) are
+/// shared between every state that holds them.
 struct VMap<V> {
     version: i64,
-    storage: BTreeMap<String, V>,
+    storage: OrdMap<Rc<str>, Rc<V>>,
 }
 
-impl<V: Clone> VMap<V> {
+impl<V> Clone for VMap<V> {
+    fn clone(&self) -> Self {
+        VMap {
+            version: self.version,
+            storage: self.storage.clone(),
+        }
+    }
+}
+
+impl<V> std::fmt::Debug for VMap<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "VMap(v{}, {} entries)", self.version, self.storage.len())
+    }
+}
+
+/// Value types whose empty maps share one allocation: `OrdMap::new` allocates
+/// a node of its own, and there are an empty map or two in every state.
+trait EmptyStorage: Sized {
+    fn empty_storage() -> OrdMap<Rc<str>, Rc<Self>>;
+}
+
+macro_rules! shared_empty_storage {
+    ($v:ty) => {
+        impl EmptyStorage for $v {
+            fn empty_storage() -> OrdMap<Rc<str>, Rc<Self>> {
+                thread_local! {
+                    static EMPTY: OrdMap<Rc<str>, Rc<$v>> = OrdMap::new();
+                }
+                EMPTY.with(|e| e.clone())
+            }
+        }
+    };
+}
+shared_empty_storage!(VariableState);
+shared_empty_storage!(FunctionValue);
+
+impl<V: EmptyStorage> VMap<V> {
     fn empty() -> Self {
         VMap {
             version: 0,
-            storage: BTreeMap::new(),
+            storage: V::empty_storage(),
         }
     }
+}
+
+impl<V> VMap<V> {
     fn lookup(&self, k: &str) -> Option<&V> {
-        self.storage.get(k)
+        self.storage.get(k).map(|v| &**v)
+    }
+    fn iter(&self) -> impl Iterator<Item = (&Rc<str>, &Rc<V>)> {
+        self.storage.iter()
     }
     fn insert(&self, k: &str, v: V) -> Self {
-        let mut s = self.storage.clone();
-        s.insert(k.to_string(), v);
         VMap {
             version: -1,
-            storage: s,
+            storage: self.storage.update(Rc::from(k), Rc::new(v)),
+        }
+    }
+    /// A map built in one pass (`M.fromList`).
+    fn from_entries(entries: impl IntoIterator<Item = (Rc<str>, Rc<V>)>) -> Self {
+        VMap {
+            version: -1,
+            storage: entries.into_iter().collect(),
         }
     }
 }
@@ -233,8 +318,31 @@ impl<V: Clone> VMap<V> {
 fn vm_is_quick_equal<V>(a: &VMap<V>, b: &VMap<V>) -> bool {
     a.version >= 0 && b.version >= 0 && a.version == b.version
 }
-fn vm_eq<V: PartialEq>(a: &VMap<V>, b: &VMap<V>) -> bool {
-    vm_is_quick_equal(a, b) || a.storage == b.storage
+fn vm_eq<V: Eq>(a: &VMap<V>, b: &VMap<V>) -> bool {
+    // The slow path compares the trees, skipping every subtree they share.
+    vm_is_quick_equal(a, b) || a.storage.ptr_eq(&b.storage) || a.storage == b.storage
+}
+
+/// `M.union pref other`: the union of two maps, preferring `pref`'s value for
+/// keys in both. Costs O(m log n) for the smaller map's m entries.
+/// (`OrdMap::union` is not usable: it keeps the other map's value when the
+/// other map is the larger.)
+fn union_left<K: Ord + Clone, V: Clone>(pref: &OrdMap<K, V>, other: &OrdMap<K, V>) -> OrdMap<K, V> {
+    if pref.len() <= other.len() {
+        let mut out = other.clone();
+        for (k, v) in pref.iter() {
+            out.insert(k.clone(), v.clone());
+        }
+        out
+    } else {
+        let mut out = pref.clone();
+        for (k, v) in other.iter() {
+            if !pref.contains_key(k) {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+        out
+    }
 }
 
 /// The current state of data flow at a point in the program, possibly a diff.
@@ -502,7 +610,7 @@ fn get_variable_with_scope(s: &InternalState, name: &str) -> Option<(VariableSta
 
 // --- patch / vmPatch ---
 
-fn vm_patch<V: Clone + PartialEq>(base: &VMap<V>, diff: &VMap<V>) -> VMap<V> {
+fn vm_patch<V>(base: &VMap<V>, diff: &VMap<V>) -> VMap<V> {
     if base.version == 0 {
         return diff.clone();
     }
@@ -512,13 +620,10 @@ fn vm_patch<V: Clone + PartialEq>(base: &VMap<V>, diff: &VMap<V>) -> VMap<V> {
     if vm_is_quick_equal(base, diff) {
         return diff.clone();
     }
-    let mut s = base.storage.clone();
-    for (k, v) in &diff.storage {
-        s.insert(k.clone(), v.clone());
-    }
+    // `M.union diff base`, as the diff's values win.
     VMap {
         version: -1,
-        storage: s,
+        storage: union_left(&diff.storage, &base.storage),
     }
 }
 
@@ -566,15 +671,27 @@ fn create_environment_state() -> InternalState {
         variable_properties: default_properties(),
     };
 
+    // One pass instead of an insert (and a copy of the map) per variable.
+    // Later lists win, as the successive inserts did.
+    let unknown = Rc::new(unknown_variable_state());
+    let spaceless = Rc::new(spaceless);
+    let integer = Rc::new(integer);
+    let mut entries: BTreeMap<&str, &Rc<VariableState>> = BTreeMap::new();
     for name in INTERNAL_VARIABLES {
-        state = insert_global(name, unknown_variable_state(), &state);
+        entries.insert(name, &unknown);
     }
     for name in VARIABLES_WITHOUT_SPACES {
-        state = insert_global(name, spaceless.clone(), &state);
+        entries.insert(name, &spaceless);
     }
     for name in SPECIAL_INTEGER_VARIABLES {
-        state = insert_global(name, integer.clone(), &state);
+        entries.insert(name, &integer);
     }
+    state.s_global_values = VMap::from_entries(
+        entries
+            .into_iter()
+            .map(|(k, v)| (Rc::from(k), Rc::clone(v))),
+    );
+    state = modified(state);
     state
 }
 
@@ -1050,28 +1167,32 @@ impl Ctx {
         if vm_is_quick_equal(a, b) {
             return a.clone();
         }
-        let keys: BTreeSet<String> = a.storage.keys().chain(b.storage.keys()).cloned().collect();
-        let mut out = BTreeMap::new();
-        for k in keys {
-            let merged = match (a.storage.get(&k), b.storage.get(&k)) {
-                (Some(x), Some(y)) => merge_variable_state(x, y),
-                (Some(x), None) => {
+        // Merge key by key; a key that has the same value on both sides merges
+        // to that value (the merge is idempotent), so only the keys where the
+        // maps differ need work, and the diff skips the subtrees they share.
+        let mut out = a.storage.clone();
+        for item in a.storage.diff(&b.storage) {
+            match item {
+                // Only in b.
+                DiffItem::Add(k, y) => {
                     let other = match kind {
-                        VReader::Global => self.read_global(&k),
-                        VReader::Variable => self.read_variable(&k),
+                        VReader::Global => self.read_global(k),
+                        VReader::Variable => self.read_variable(k),
                     };
-                    merge_variable_state(x, &other)
+                    out.insert(k.clone(), Rc::new(merge_variable_state(&other, y)));
                 }
-                (None, Some(y)) => {
+                // Only in a.
+                DiffItem::Remove(k, x) => {
                     let other = match kind {
-                        VReader::Global => self.read_global(&k),
-                        VReader::Variable => self.read_variable(&k),
+                        VReader::Global => self.read_global(k),
+                        VReader::Variable => self.read_variable(k),
                     };
-                    merge_variable_state(&other, y)
+                    out.insert(k.clone(), Rc::new(merge_variable_state(x, &other)));
                 }
-                (None, None) => unreachable!(),
-            };
-            out.insert(k, merged);
+                DiffItem::Update { old, new } => {
+                    out.insert(old.0.clone(), Rc::new(merge_variable_state(old.1, new.1)));
+                }
+            }
         }
         VMap {
             version: -1,
@@ -1087,22 +1208,24 @@ impl Ctx {
         if vm_is_quick_equal(a, b) {
             return a.clone();
         }
-        let keys: BTreeSet<String> = a.storage.keys().chain(b.storage.keys()).cloned().collect();
-        let mut out = BTreeMap::new();
-        for k in keys {
-            let merged = match (a.storage.get(&k), b.storage.get(&k)) {
-                (Some(x), Some(y)) => x.union(y).cloned().collect(),
-                (Some(x), None) => {
-                    let other = self.read_function(&k);
-                    x.union(&other).cloned().collect()
+        let mut out = a.storage.clone();
+        for item in a.storage.diff(&b.storage) {
+            match item {
+                DiffItem::Add(k, y) => {
+                    let other = self.read_function(k);
+                    out.insert(k.clone(), Rc::new(other.union(y).cloned().collect()));
                 }
-                (None, Some(y)) => {
-                    let other = self.read_function(&k);
-                    other.union(y).cloned().collect()
+                DiffItem::Remove(k, x) => {
+                    let other = self.read_function(k);
+                    out.insert(k.clone(), Rc::new(x.union(&other).cloned().collect()));
                 }
-                (None, None) => unreachable!(),
-            };
-            out.insert(k, merged);
+                DiffItem::Update { old, new } => {
+                    out.insert(
+                        old.0.clone(),
+                        Rc::new(old.1.union(new.1).cloned().collect()),
+                    );
+                }
+            }
         }
         VMap {
             version: -1,
@@ -1600,8 +1723,8 @@ fn deps_to_state(deps: &BTreeSet<StateDependency>) -> InternalState {
 /// Get all the functions defined in an InternalState (keyed by entry node).
 fn get_function_targets(state: &InternalState) -> BTreeMap<Node, FunctionDefinition> {
     let mut out = BTreeMap::new();
-    for val in state.s_function_targets.storage.values() {
-        for d in val {
+    for (_, val) in state.s_function_targets.iter() {
+        for d in val.iter() {
             if let FunctionDefinition::FunctionDefinition(_, entry, _) = d {
                 out.insert(*entry, d.clone());
             }
@@ -1611,23 +1734,12 @@ fn get_function_targets(state: &InternalState) -> BTreeMap<Node, FunctionDefinit
 }
 
 fn internal_to_external(s: &InternalState) -> ProgramState {
-    // M.unions [prefix, local, global] is left-biased (prefix wins).
-    let mut flat: BTreeMap<String, VariableState> = BTreeMap::new();
-    for (k, v) in &s.s_global_values.storage {
-        flat.insert(k.clone(), v.clone());
-    }
-    for (k, v) in &s.s_local_values.storage {
-        flat.insert(k.clone(), v.clone());
-    }
-    for (k, v) in &s.s_prefix_values.storage {
-        flat.insert(k.clone(), v.clone());
-    }
-    // Censor the literal value to avoid introducing dependencies on it.
-    for v in flat.values_mut() {
-        v.variable_value.literal_value = None;
-    }
+    // O(1): the maps are shared, and `ProgramState` resolves them by scope
+    // precedence and censors the literal value when a variable is read.
     ProgramState {
-        variables_in_scope: flat,
+        global_values: s.s_global_values.clone(),
+        local_values: s.s_local_values.clone(),
+        prefix_values: s.s_prefix_values.clone(),
         exit_codes: s.s_exit_codes.clone().unwrap_or_default(),
         state_is_reachable: s.s_is_reachable.unwrap_or(true),
     }
@@ -1711,8 +1823,9 @@ pub fn analyze_control_flow(params: &CFGParameters, t: &Token) -> CFGAnalysis {
     // Fill in unreachable states for anything we didn't get to.
     let (mn, mx) = node_range(&cfg.cf_graph);
     let mut all_states: StateMap = BTreeMap::new();
+    let unreachable = (unreachable_state(), unreachable_state());
     for n in mn..=mx {
-        all_states.insert(n, (unreachable_state(), unreachable_state()));
+        all_states.insert(n, unreachable.clone());
     }
     for (n, v) in invoked_states {
         all_states.insert(n, v); // invoked wins
@@ -1871,7 +1984,7 @@ mod tests {
     fn local_does_not_leak() {
         // A local variable in a function must not appear in the caller's scope.
         let st = outgoing("f() { local secret=1; }\nf\n");
-        assert!(st.variables_in_scope().get("secret").is_none());
+        assert!(st.variable_value("secret").is_none());
     }
 
     #[test]
