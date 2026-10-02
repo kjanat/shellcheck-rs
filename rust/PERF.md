@@ -108,7 +108,47 @@ Both the oracle and the port were measured in the same session, so these ratios 
 - **WP-R1** (`cdf4a1c`): the structural-sharing change above.
 - **WP-R0** (`a8266e6`, correctness, found by CI's seed roulette: `conformance fuzz --seed "$GITHUB_RUN_NUMBER"`, seed 156): a `time` flag word that fails after consuming input commits the parse and fails, as Parsec's `many readFlag` does; `children()`/`children_mut()` of `T_CoProc` yield only the body, as `Inner_T_CoProc (Maybe Token) t` does not traverse the name. Verified: 1 617 tests, gate 2 048 / 0, fuzz seed 156 ×4000 and seed 0 ×2000 clean, clippy/fmt/dprint clean. Recorded in `DIVERGENCES.md` (seed 156 now in the clean list).
 
-### Candidates after WP-R1 (measure first)
+## Round 2: where the time goes after WP-R1 (measured, `02af506`)
 
-- `params-other` (variable flow, 476 ms on large, growing 4.4× for 2.66× lines) and `checks`/`resolve` (5×): find the quadratic piece in each with `conformance bench` and callgrind once cfg no longer dominates.
-- `startup` 4.2 ms vs the oracle's 3.0 ms on CI: what the CLI does before `check_script` (rc file search, clap, locale).
+`valgrind --tool=callgrind rshellcheck -f gcc .bench/corpus/large.sh`: **4.53 G instructions** (the port's wall time on large is 1.30 s here; the oracle's 5.75 s). Inclusive costs; the recursive frames (`'2`) are not usable in `callgrind_annotate --inclusive`, so the numbers below are from the non-recursive callers:
+
+| where                                                                                   | Ir (large) | share |
+| --------------------------------------------------------------------------------------- | ---------: | ----: |
+| `cfg_analysis::analyze_control_flow`                                                    |     2.77 G |  61 % |
+| ├ `patch_state` called from `analyze_control_flow` itself (the `addDeps` loop, 33 093×) |     1.58 G |  35 % |
+| ├ `cfg::build_graph` (of which `remove_unnecessary_structural_nodes` 0.30 G)            |     0.67 G |  15 % |
+| ├ the DFA (`dataflow`, `run_cached`, `merge_state`, …)                                  |    ~0.25 G |   5 % |
+| └ `flattenByNode` merges, `node_to_data`, drop                                          |    ~0.27 G |   6 % |
+| `parser::parse_script_spec`                                                             |     0.69 G |  15 % |
+| `analytics::analyze_with` (node walk 0.48 G; `CommandCheck::run` 2 435 499× = 0.13 G)   |     0.66 G |  15 % |
+| `drop_glue::<Parameters>`                                                               |     0.18 G |   4 % |
+| `analyzer_lib::stack_analysis` (the `variableFlow`), `build_maps`, the rest             |    ~0.15 G |   3 % |
+
+Self costs that cut across those: `memcmp` 9 % (`Rc<str>` key comparisons inside `OrdMap`), malloc+free 20 %, `OrdMap::insert` 10 %, SipHash on `usize`/`Id` keys (`hash_one::<&usize>` 5.6 % + `Sip13Rounds::write` 3.1 %: `HashMap<Node, _>` and `HashMap<Id, _>` with the default `RandomState` in `cfg.rs`, `cfg_analysis.rs`), `Vec<parser::Context>::clone` 3.9 %, `BTreeSet<Node>::insert` 2.3 % (498 479 inserts in `build_graph` for `id_to_nodes`, and `caai_get_associative_arrays`).
+
+**The 35 %.** `analyze_control_flow` ends with Haskell's `addDeps`: for every invocation, `base = depsToState deps`, and for every node of that invocation `(patchState base pre, patchState base post)`. `patch_state(base, a)` is `union_left(a, base)`: an O(|base| · log n) walk of the dependency base per node (the root invocation's base holds every variable the script reads: hundreds of keys), done twice for each of ~16 500 nodes. Haskell pays the same O(|base| log n) per node with `Data.Map.union`; it is not quadratic, but it is the largest constant left.
+
+### WP-R2 Patch the dependency base lazily
+
+In `analyze_control_flow`, stop materialising `patch_state(&base, a)` for every node. A node that appears in exactly one invocation (almost all of them: every node outside a function body called more than once) needs no merge, so its `ProgramState` can be a two-layer view: the node's own `InternalState` over the invocation's `base`, resolved at lookup. Concretely: give `ProgramState` an optional second layer (`Option<Rc<InternalState>>` or the four maps of the base) and resolve a variable as `a.prefix ?? base.prefix ?? a.local ?? base.local ?? a.global ?? base.global`, which is exactly what `patch_state` then scope precedence computes (per-scope-map left-biased union, then prefix > local > global); `exit_codes` as `a.or(base)`, `state_is_reachable` likewise. Only nodes that appear in two or more invocations go through the existing `patch_state` + `merge_states_nonempty` path, so the result for those is bit-identical to today. `variables_in_scope()` (tests and debugging) flattens both layers. Keep `deps_to_state` and the grouping order; the invariant is the *answers* `ProgramState` gives (`variable_value`, `space_status`, `numerical_status`, `variable_properties`, `exit_codes`, `state_is_reachable`), not the shape.
+
+Acceptance: `cargo test -p shellcheck-rs` all pass; gate 0 divergences; fuzz seed 0 ×2000 and seed 156 ×4000 0 divergences; snapshot unchanged; `-f gcc`/`-f json1` byte-identical to the oracle on the four corpus scripts; callgrind on `large.sh` down by ≥ 1.3 G instructions (from 4.53 G); the `conformance bench` cfg phase on large ≤ 350 ms (from 624 ms). Report callgrind totals before/after on medium and large.
+
+### WP-R3 A hasher for integer keys
+
+Every `HashMap`/`HashSet` keyed by `Node` (`usize`) or `Id` (`i32`) in `cfg.rs` and `cfg_analysis.rs` uses SipHash with a random seed: 8.7 % of all instructions on large, mostly from `remap_graph`/`remove_unnecessary_structural_nodes`/`topsort` (a hash lookup per node per pass) and from `Ctx::process` (`pred_flow`, `succ_all`, `labels`, `cache` lookups per DFA step). Add an in-crate `BuildHasherDefault<IdHasher>` (a multiply-and-xor over the single integer write, no new dependency; `write_usize`/`write_i32` plus a `write` fallback that folds bytes) and `type IdMap<K, V> = HashMap<K, V, IdBuild>` / `IdSet`; use it for every integer-keyed map and set in the two files (24 + 11 `HashMap`, 5 `HashSet`). Iteration order over these maps must not become observable: check each `for` over a hash map in those files and keep any that feeds output or a merge in sorted order as today (several already sort or go through `BTreeMap`). Optionally, where the keys are the dense `0..n` renumbered nodes (`remap_graph`, `renumber_graph`, `topsort`'s `visited`), a `Vec` indexed by node beats any hash.
+
+Acceptance: tests, gate, fuzz seed 0 ×2000, snapshot unchanged; callgrind on large down ≥ 300 M instructions; no `RandomState` map keyed by `Node` or `Id` left in `cfg.rs`/`cfg_analysis.rs`.
+
+### WP-R4 Dispatch command checks by name once per command
+
+`checks::commands::register` adds 73 `CommandCheck`s as separate node checks, so the node walk calls `CommandCheck::run` 73 times per AST node (2.4 M calls on large, 0.13 G), and for every `T_SimpleCommand` it recomputes `get_literal_string` of the command word and `dispatch`'s matching 73 times. Haskell's `Checks.Commands.getChecker` builds one `M.Map CommandName (Token -> Analysis)` with `buildCommandMap` and `checkCommand` looks the command up once. Do the same: `register` adds one node check that owns a `HashMap<CommandName, Vec<CommandBody>>` (plus the `Basename`/`Exactly`/`builtin` dispatch rules from `dispatch`) and runs the bodies for the one or two names a command maps to, in registration order within a name (Haskell's `insertWith composeAnalyzers` runs the *later* registered check first: `composeAnalyzers f g x = f x >> g x` with `f` the new one; find out whether the port already reproduces that order, by reading how two checks on one name emit today, and keep the current observable order, since the gate passes with it). The optional `deprecate-which` check must still join the map when enabled (`OPTIONAL_CHECKS` in `analytics/mod.rs`). `shell_support::register`'s `ForShell` has the same shape at 8 checks per node (15 M); do it too if it is the same mechanism.
+
+Acceptance: tests, gate, fuzz seed 0 ×2000, snapshot unchanged, byte-identical output on the corpus; `CommandCheck::run`-equivalent cost on large ≤ 20 M instructions.
+
+### Later (measure first)
+
+- Parser: `Vec<Context>::clone` 176 M on large (`try_parse`, `sub_parser`, `read_pending_heredocs`): restore the context stack by truncating to its saved length instead of cloning it where the attempt is balanced; `pending_heredocs`/`heredoc_bodies` are cloned per `try_parse` too.
+- `drop_glue::<Parameters>` 180 M: dropping the analysis; falls with WP-R2 (fewer maps built).
+- `build_graph`: `id_to_nodes: HashMap<Id, BTreeSet<Node>>` gets 498 479 inserts; a sorted `Vec<Node>` per id built once (sort + dedup) is cheaper.
+- `caai_get_associative_arrays` walks the tree and inserts into a `BTreeSet<usize>` 33 362 times (104 M): check whether it is called per node.
