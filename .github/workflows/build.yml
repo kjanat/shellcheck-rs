@@ -14,6 +14,8 @@ on:
       - ".prepare_deploy"
       - ".github_deploy"
       - ".multi_arch_docker"
+      - "test/**"
+      - ".github/workflows/build.yml"
 
 concurrency: { group: "build-${{ github.ref }}", cancel-in-progress: true }
 
