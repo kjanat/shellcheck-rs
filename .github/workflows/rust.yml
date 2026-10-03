@@ -26,13 +26,16 @@ jobs:
   lint:
     name: "Format, clippy, workflows"
     runs-on: ubuntu-latest
+    # dprint formats .rs and .toml through `mise exec -- rustfmt|tombi`, so the
+    # toolchain comes from mise.toml. The oracle's GHC and the harness's Python
+    # are the gate job's business and would take minutes to install here.
+    env: { MISE_DISABLE_TOOLS: "ghc,ghcup,cabal,python" }
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with: { components: "rustfmt, clippy" }
+      - name: Install the toolchain (mise)
+        uses: jdx/mise-action@v4
 
       - name: Check formatting
         uses: kjanat/dprint-check@v3
