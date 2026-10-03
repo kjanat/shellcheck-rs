@@ -120,6 +120,8 @@ jobs:
         run: cargo conformance-gate
 
       - name: Differential fuzz
+        env:
+          SEED: "${{ vars.SEED || github.run_number }}"
+          ITERATIONS: "${{ vars.ITERATIONS || 4000 }}"
+          MAX_FINDINGS: "${{ vars.MAX_FINDINGS || '' }}"
         run: cargo conformance-fuzz
-          --seed "${GITHUB_RUN_NUMBER}"
-          --iterations 4000 # --max-findings 50
