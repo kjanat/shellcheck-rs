@@ -634,6 +634,10 @@ impl Parser {
             );
             return self.fail_with("Expected 'fi'");
         }
+        // `g_Fi` is `tryWordToken "fi" .. `thenSkip` spacing`, so the span
+        // extends over the line-whitespace after `fi`, and whatever follows
+        // (a redirect, or a stray word for SC1141) is read from there.
+        self.spacing();
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
@@ -1098,6 +1102,9 @@ impl Parser {
         if self.consume_keyword("esac").is_err() {
             return self.fail_with("Expected 'esac' to close the case statement");
         }
+        // `g_Esac` is a `tryWordToken` too: skip the spacing after it, as `fi`
+        // and `done` do.
+        self.spacing();
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_CaseExpression { word, cases }))
     }

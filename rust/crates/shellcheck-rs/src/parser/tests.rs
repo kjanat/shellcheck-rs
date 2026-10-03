@@ -1534,6 +1534,25 @@ mod keyword_separator_and_failure_tests {
     }
 
     #[test]
+    fn the_spacing_after_fi_and_esac_belongs_to_the_compound_command() {
+        // `g_Fi` and `g_Esac` are word tokens that skip the spacing after
+        // them, so `readCompoundCommand`'s lookahead for stray words starts at
+        // the word, not at the gap: a word there is SC1141, and a backtick
+        // that fails to parse is the compound command's own failure.
+        assert!(has("if t; then t; fi x", 1141, 1, 18));
+        assert!(has("case x in a) t;; esac x", 1141, 1, 23));
+        assert!(!parses("if t; then t; fi `"));
+        assert!(has("if t; then t; fi `", 1073, 1, 18));
+        assert!(has("if t; then t; fi `", 1072, 1, 19));
+        assert!(!parses("case x in a) t;; esac `"));
+        assert!(has("case x in a) t;; esac `", 1073, 1, 23));
+        // Nothing after the keyword is still fine, with or without the gap.
+        assert!(parses("if t; then t; fi"));
+        assert!(parses("if t; then t; fi "));
+        assert!(parses("case x in a) t;; esac "));
+    }
+
+    #[test]
     fn a_flag_after_time_that_fails_after_consuming_ends_the_parse() {
         // `many readFlag` cannot recover from a flag that consumed input
         // (`-` and then an unterminated backtick), so the pipeline is never
