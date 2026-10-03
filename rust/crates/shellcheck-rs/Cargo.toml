@@ -1,0 +1,21 @@
+[package]
+name                   = "shellcheck-rs"
+version                = "0.11.0"
+edition.workspace      = true
+rust-version.workspace = true
+description            = "Rust port of ShellCheck: the reusable parse + analyze core (LSP-friendly, std, regex and im-rc only)."
+license.workspace      = true
+
+[lib]
+name = "shellcheck_rs"
+path = "src/lib.rs"
+
+[dependencies]
+# Persistent maps: the CFG analysis states share structure instead of being cloned per node.
+im-rc.workspace = true
+# Core stays IO-free so an LSP or other tool can embed it cheaply.
+# regex mirrors Haskell's regex-tdfa usage in the parser/analytics.
+regex.workspace = true
+
+[lints]
+workspace = true
