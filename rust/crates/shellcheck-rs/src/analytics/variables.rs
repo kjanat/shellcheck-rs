@@ -206,7 +206,8 @@ pub(super) fn check_array_value_used_as_index(params: &Parameters, _root: &Token
                             array_ref.id(),
                             2303,
                             &format!(
-                                "{name} is an array value, not a key. Use directly or loop over keys instead."
+                                "{} is an array value, not a key. Use directly or loop over keys instead.",
+                                ast_lib::e4m(name)
                             ),
                         );
                     }
@@ -542,7 +543,10 @@ fn bps_check_first(first: &Token, out: &mut Out) {
                     out,
                     first.id(),
                     2296,
-                    &format!("Parameter expansions can't start with {c}. Double check syntax."),
+                    &format!(
+                        "Parameter expansions can't start with {}. Double check syntax.",
+                        ast_lib::e4m(&c.to_string())
+                    ),
                 );
             }
         }
@@ -946,6 +950,15 @@ fn decoded_literal_string(t: &Token) -> Option<String> {
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    /// `e4m` escapes the character that SC2296 quotes.
+    #[test]
+    fn sc2296_escapes_its_character() {
+        assert_eq!(
+            message_of("${\\v}", 2296),
+            "Parameter expansions can't start with \\\\. Double check syntax."
+        );
+    }
 
     #[test]
     fn prop_checkArrayWithoutIndex1() {

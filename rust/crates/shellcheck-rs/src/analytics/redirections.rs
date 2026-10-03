@@ -585,7 +585,8 @@ fn sshd_check_here_doc(r: &Token, out: &mut Out) {
             target.id(),
             2087,
             &format!(
-                "Quote '{delim}' to make here document expansions happen on the server side rather than on the client."
+                "Quote '{}' to make here document expansions happen on the server side rather than on the client.",
+                ast_lib::e4m(delim)
             ),
         );
     }
@@ -1041,6 +1042,15 @@ pub(super) fn check_uuoc(_params: &Parameters, t: &Token, out: &mut Out) {
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    /// `e4m` escapes the delimiter that SC2087 quotes.
+    #[test]
+    fn sc2087_escapes_its_delimiter() {
+        assert_eq!(
+            message_of("ssh host <<E\u{b7}F\necho $x\nE\u{b7}F\n", 2087),
+            "Quote 'E\\xB7F' to make here document expansions happen on the server side rather than on the client."
+        );
+    }
 
     #[test]
     fn prop_checkUuoc1_6() {

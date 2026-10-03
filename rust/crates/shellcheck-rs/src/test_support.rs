@@ -9,6 +9,21 @@ use crate::ast::{Annotation, InnerToken, Token};
 use crate::interface::{Code, DiagnosticCode, Shell};
 use crate::parser::parse_script;
 
+/// The message of the first `code` that the whole pipeline reports on `script`.
+pub fn message_of(script: &str, code: Code) -> String {
+    crate::check_script(&crate::interface::CheckSpec {
+        script: script.to_string(),
+        ..crate::interface::CheckSpec::default()
+    })
+    .comments
+    .into_iter()
+    .find(|c| c.comment.code == code)
+    .map_or_else(
+        || panic!("SC{code} does not fire on {script:?}"),
+        |c| c.comment.message,
+    )
+}
+
 /// The number of an `SC` code; a check never emits any other.
 pub fn sc(code: DiagnosticCode) -> Code {
     code.sc()
