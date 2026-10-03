@@ -38,7 +38,7 @@ use clap::{ArgAction, Parser, ValueEnum};
 use serde_json::Value;
 use shellcheck_cli::formatter::{fixer, json1};
 use shellcheck_cli::options::parse_shell;
-use shellcheck_rs::interface::{CheckSpec, DiagnosticCode};
+use shellcheck_rs::interface::CheckSpec;
 
 // ---------------------------------------------------------------------------
 // Comparison keys
@@ -64,8 +64,8 @@ pub struct CommentKey {
     end_line: i64,
     end_column: i64,
     level: String,
-    /// The SC or RSC code.
-    pub code: DiagnosticCode,
+    /// The SC code.
+    pub code: i64,
     message: String,
     fix: Option<Vec<ReplacementKey>>,
 }
@@ -88,7 +88,7 @@ fn render_keys(keys: &[CommentKey]) -> String {
                 .as_ref()
                 .map_or_else(|| "-".to_string(), |reps| render_fix(reps));
             format!(
-                "{} {} {}:{}-{}:{} {:?} {}",
+                "SC{} {} {}:{}-{}:{} {:?} {}",
                 k.code, k.level, k.line, k.column, k.end_line, k.end_column, k.message, fix
             )
         })
@@ -113,27 +113,6 @@ fn render_fix(reps: &[ReplacementKey]) -> String {
         })
         .collect();
     format!("fix[{}]", inner.join(", "))
-}
-
-/// An SC code as its bare number and an RSC code as its name, as json1
-/// writes them.
-fn code_text(code: DiagnosticCode) -> String {
-    match code {
-        DiagnosticCode::Sc(n) => n.to_string(),
-        DiagnosticCode::Rsc(_) => code.to_string(),
-    }
-}
-
-/// The `code` of a json1 comment: a number is an SC code, `RSC` and digits an
-/// RSC code.
-fn code_of(v: &Value) -> DiagnosticCode {
-    match v.get("code") {
-        Some(Value::String(s)) => s
-            .strip_prefix("RSC")
-            .and_then(|n| n.parse().ok())
-            .map_or(DiagnosticCode::Sc(0), DiagnosticCode::Rsc),
-        _ => DiagnosticCode::Sc(as_i64(v, "code")),
-    }
 }
 
 fn as_i64(v: &Value, field: &str) -> i64 {
@@ -179,7 +158,7 @@ fn key_from_value(v: &Value) -> CommentKey {
         end_line: as_i64(v, "endLine"),
         end_column: as_i64(v, "endColumn"),
         level: as_str(v, "level"),
-        code: code_of(v),
+        code: as_i64(v, "code"),
         message: as_str(v, "message"),
         fix,
     }
@@ -740,7 +719,7 @@ mod tests {
             end_line: 1,
             end_column: 1,
             level: "warning".to_string(),
-            code: DiagnosticCode::Sc(code),
+            code,
             message: msg.to_string(),
             fix: None,
         }

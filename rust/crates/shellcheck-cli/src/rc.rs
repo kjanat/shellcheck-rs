@@ -12,16 +12,10 @@
 //! failure reported as SC1134 (`readConfigFile`'s `Left` branch), which
 //! discards every directive in the file.
 //!
-//! Directives recognised here (`readAnnotationWithoutPrefix` with
-//! `sandboxed = False`):
-//!
-//!   * `disable=SC2086,SC1000-SC2000,all` -> `DisableComment` ranges
-//!   * `enable=check-name,other` -> `EnableComment`s, appended to optional checks
-//!   * `shell=bash` -> `ShellOverride`
-//!   * `extended-analysis=true|false` -> `ExtendedAnalysis`
-//!   * `external-sources=true|false` -> parsed, inert (source resolver not ported)
-//!   * `source=...` / `source-path=...` -> parsed, inert
-//!   * anything else -> SC1107, a note that rc parsing discards, and ignored
+//! The directives are those of `readAnnotationWithoutPrefix` with
+//! `sandboxed = False`, and the parser places them as `readScriptFile` does
+//! (see `RcDirectives`). An unknown key is SC1107, a note that rc parsing
+//! discards.
 //!
 //! Notes raised while parsing an rc file (SC1103, SC1107, SC1125, SC1146, ...)
 //! are dropped upstream too: `readConfig` runs the sub-parser with its own
@@ -33,70 +27,20 @@ use shellcheck_rs::ast::Annotation;
 use shellcheck_rs::editor_config::{
     invalid_root_lines, is_editor_config_root, is_rejection, rejected_root,
 };
-use shellcheck_rs::interface::{
-    CheckSpec, DisableRange, RcDirectives, RcParseProblem, Shell, decode_bytes,
-};
+use shellcheck_rs::interface::{CheckSpec, RcDirectives, RcParseProblem, decode_bytes};
 
-use crate::options::parse_shell;
 use crate::paths::{
     combine, does_file_exist, io_error_message, normalize, take_directory, take_file_name,
     xdg_config_home,
 };
 
-/// The directives of one rc file, reduced to what the checker needs.
-///
-/// Upstream keeps the raw `[Annotation]` and lets the analyzer pick: all
-/// `DisableComment`s and `EnableComment`s apply, while `determineShell` and
-/// `getExtendedAnalysisDirective` take the FIRST `ShellOverride` /
-/// `ExtendedAnalysis` in file order. This mirrors that reduction.
+/// The directives of one rc file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
-    /// Code ranges from `disable=` directives, as endpoints.
-    pub disabled: Vec<DisableRange>,
-    /// Names from `enable=` directives, in order.
-    pub enabled_checks: Vec<String>,
-    /// The first `shell=` override, resolved through `shellForExecutable`.
-    /// `None` when there was none, *or* when the first one is unrecognised: a
-    /// later valid override does not get a turn.
-    pub shell: Option<Shell>,
-    /// The first `extended-analysis=` toggle.
-    pub extended_analysis: Option<bool>,
+    /// `rcAnnotations`, in file order.
+    pub annotations: Vec<Annotation>,
     /// Set when the file could not be parsed; then no directive applies.
     pub parse_problem: Option<RcParseProblem>,
-}
-
-impl Config {
-    /// The reduction described above (`ShellCheck.AnalyzerLib.determineShell`,
-    /// `ASTLib.getExtendedAnalysisDirective`, `Checker`'s
-    /// `getEnableDirectives`).
-    fn from_annotations(annotations: &[Annotation]) -> Self {
-        let mut cfg = Self::default();
-        for a in annotations {
-            match a {
-                Annotation::DisableComment(from, to) => cfg.disabled.push(DisableRange {
-                    from: *from,
-                    to: *to,
-                }),
-                Annotation::EnableComment(name) => cfg.enabled_checks.push(name.clone()),
-                _ => {}
-            }
-        }
-        // `headOrDefault (fromShebang s) [s | ShellOverride s <- annotations]`:
-        // the first override is the candidate, valid or not.
-        cfg.shell = annotations
-            .iter()
-            .find_map(|a| match a {
-                Annotation::ShellOverride(s) => Some(s),
-                _ => None,
-            })
-            .and_then(|s| parse_shell(s));
-        // `listToMaybe [s | ExtendedAnalysis s <- list]`: first wins.
-        cfg.extended_analysis = annotations.iter().find_map(|a| match a {
-            Annotation::ExtendedAnalysis(b) => Some(*b),
-            _ => None,
-        });
-        cfg
-    }
 }
 
 /// Parse the contents of the rc file at `filename` (used only in the SC1134
@@ -107,7 +51,10 @@ impl Config {
 #[must_use]
 pub fn parse_contents(filename: &str, contents: &str) -> Config {
     match read_config_kvs(contents) {
-        Ok(annotations) => Config::from_annotations(&annotations),
+        Ok(annotations) => Config {
+            annotations,
+            parse_problem: None,
+        },
         Err(fail) => Config {
             parse_problem: Some(RcParseProblem {
                 filename: filename.to_string(),
@@ -120,9 +67,7 @@ pub fn parse_contents(filename: &str, contents: &str) -> Config {
     }
 }
 
-/// Apply one rc file's directives to a spec. CLI flags win where they conflict
-/// (`csShellTypeOverride` and `csExtendedAnalysis` are consulted before the
-/// annotations upstream), while `disable`/`enable` always add.
+/// Hand one rc file's annotations to the checker.
 pub fn merge_into(spec: &mut CheckSpec, rc: &Config) {
     let directives = spec
         .rc
@@ -132,16 +77,8 @@ pub fn merge_into(spec: &mut CheckSpec, rc: &Config) {
         return;
     }
     directives
-        .disabled_ranges
-        .extend(rc.disabled.iter().copied());
-    spec.optional_checks
-        .extend(rc.enabled_checks.iter().cloned());
-    if spec.shell_type_override.is_none() {
-        spec.shell_type_override = rc.shell;
-    }
-    if spec.extended_analysis.is_none() {
-        spec.extended_analysis = rc.extended_analysis;
-    }
+        .annotations
+        .extend(rc.annotations.iter().cloned());
 }
 
 /// A parse failure. `message` is the explicit `fail "..."` string of whichever
@@ -883,17 +820,56 @@ fn default_paths() -> Vec<String> {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+    use crate::options::parse_shell;
+    use shellcheck_rs::interface::Shell;
+
+    impl Config {
+        fn disabled(&self) -> Vec<(i64, i64)> {
+            self.annotations
+                .iter()
+                .filter_map(|a| match a {
+                    Annotation::DisableComment(from, to) => Some((*from, *to)),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn enabled_checks(&self) -> Vec<String> {
+            self.annotations
+                .iter()
+                .filter_map(|a| match a {
+                    Annotation::EnableComment(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// `determineShell`: the first override, valid or not.
+        fn shell(&self) -> Option<Shell> {
+            self.annotations
+                .iter()
+                .find_map(|a| match a {
+                    Annotation::ShellOverride(s) => Some(s),
+                    _ => None,
+                })
+                .and_then(|s| parse_shell(s))
+        }
+
+        /// `getExtendedAnalysisDirective`: the first one.
+        fn extended_analysis(&self) -> Option<bool> {
+            self.annotations.iter().find_map(|a| match a {
+                Annotation::ExtendedAnalysis(b) => Some(*b),
+                _ => None,
+            })
+        }
+    }
 
     fn parse(contents: &str) -> Config {
         parse_contents("rc", contents)
     }
 
     fn ranges(contents: &str) -> Vec<(i64, i64)> {
-        parse(contents)
-            .disabled
-            .iter()
-            .map(|r| (r.from, r.to))
-            .collect()
+        parse(contents).disabled()
     }
 
     /// The SC1134 message body the checker would build, or None if the file
@@ -914,7 +890,7 @@ mod tests {
             read_config(&path.display().to_string()).expect("rc file should be readable");
         let config = parse_contents(&name, &contents);
         assert_eq!(
-            config.disabled.iter().map(|r| r.from).collect::<Vec<_>>(),
+            config.disabled().iter().map(|r| r.0).collect::<Vec<_>>(),
             vec![2086]
         );
         assert!(config.parse_problem.is_none());
@@ -976,25 +952,25 @@ mod tests {
         // readConfigKVs is `many readAnnotationWithoutPrefix`, and one
         // annotation is `many1 readKey`: a line may carry several pairs.
         let c = parse("disable=SC2086 shell=sh\n");
-        assert_eq!(c.disabled.len(), 1);
-        assert_eq!(c.disabled[0].from, 2086);
-        assert_eq!(c.shell, Some(Shell::Sh));
+        assert_eq!(c.disabled().len(), 1);
+        assert_eq!(c.disabled()[0].0, 2086);
+        assert_eq!(c.shell(), Some(Shell::Sh));
         assert!(c.parse_problem.is_none());
 
         let c =
             parse("enable=require-variable-braces disable=SC1000-SC2000 extended-analysis=false");
         assert_eq!(
-            c.enabled_checks,
+            c.enabled_checks(),
             vec!["require-variable-braces".to_string()]
         );
-        assert_eq!(c.disabled.len(), 1);
-        assert_eq!(c.extended_analysis, Some(false));
+        assert_eq!(c.disabled().len(), 1);
+        assert_eq!(c.extended_analysis(), Some(false));
     }
 
     #[test]
     fn enable_appends_names() {
         assert_eq!(
-            parse("enable=avoid-nullary-conditions,check-extra-masked-returns").enabled_checks,
+            parse("enable=avoid-nullary-conditions,check-extra-masked-returns").enabled_checks(),
             vec![
                 "avoid-nullary-conditions".to_string(),
                 "check-extra-masked-returns".to_string()
@@ -1002,26 +978,26 @@ mod tests {
         );
         // `sepBy` allows an empty list: `enable=` is not an error.
         let c = parse("enable=\n");
-        assert_eq!(c.enabled_checks, [] as [std::string::String; 0]);
+        assert_eq!(c.enabled_checks(), [] as [std::string::String; 0]);
         assert!(c.parse_problem.is_none());
     }
 
     #[test]
     fn shell_valid_and_invalid() {
-        assert_eq!(parse("shell=bash").shell, Some(Shell::Bash));
-        assert_eq!(parse("shell=sh").shell, Some(Shell::Sh));
+        assert_eq!(parse("shell=bash").shell(), Some(Shell::Bash));
+        assert_eq!(parse("shell=sh").shell(), Some(Shell::Sh));
         // Unknown dialect: SC1103 is discarded and there is no usable override.
-        assert_eq!(parse("shell=zsh").shell, None);
+        assert_eq!(parse("shell=zsh").shell(), None);
         // Aliases route through parse_shell (shellForExecutable).
-        assert_eq!(parse("shell=ksh93").shell, Some(Shell::Ksh));
+        assert_eq!(parse("shell=ksh93").shell(), Some(Shell::Ksh));
     }
 
     #[test]
     fn shell_keeps_first_override_even_if_unknown() {
         // determineShell takes the first ShellOverride and resolves that one, so
         // a valid override after an invalid one never applies.
-        assert_eq!(parse("shell=sh\nshell=bash\n").shell, Some(Shell::Sh));
-        assert_eq!(parse("shell=zsh\nshell=sh\n").shell, None);
+        assert_eq!(parse("shell=sh\nshell=bash\n").shell(), Some(Shell::Sh));
+        assert_eq!(parse("shell=zsh\nshell=sh\n").shell(), None);
     }
 
     #[test]
@@ -1030,7 +1006,7 @@ mod tests {
             ranges("disable='SC2086,SC2181'"),
             vec![(2086, 2087), (2181, 2182)]
         );
-        assert_eq!(parse("shell=\"bash\"").shell, Some(Shell::Bash));
+        assert_eq!(parse("shell=\"bash\"").shell(), Some(Shell::Bash));
         // An unterminated quote is a configuration parse failure.
         assert_eq!(
             problem("shell='bash\""),
@@ -1041,20 +1017,20 @@ mod tests {
     #[test]
     fn extended_analysis_first_wins() {
         assert_eq!(
-            parse("extended-analysis=true").extended_analysis,
+            parse("extended-analysis=true").extended_analysis(),
             Some(true)
         );
         assert_eq!(
-            parse("extended-analysis=false").extended_analysis,
+            parse("extended-analysis=false").extended_analysis(),
             Some(false)
         );
         // getExtendedAnalysisDirective is listToMaybe: the first one wins.
         assert_eq!(
-            parse("extended-analysis=false\nextended-analysis=true\n").extended_analysis,
+            parse("extended-analysis=false\nextended-analysis=true\n").extended_analysis(),
             Some(false)
         );
         // Unrecognised value draws SC1146 (discarded) and no annotation.
-        assert_eq!(parse("extended-analysis=maybe").extended_analysis, None);
+        assert_eq!(parse("extended-analysis=maybe").extended_analysis(), None);
     }
 
     #[test]
@@ -1062,17 +1038,25 @@ mod tests {
         let c = parse("severity=error\ninclude=SC1000\nbogus=stuff\ndisable=SC2148");
         // severity/include/bogus are not rc directives -> SC1107, discarded.
         assert_eq!(
-            c.disabled.iter().map(|r| r.from).collect::<Vec<_>>(),
+            c.disabled().iter().map(|r| r.0).collect::<Vec<_>>(),
             vec![2148]
         );
-        assert_eq!(c.enabled_checks, [] as [std::string::String; 0]);
+        assert_eq!(c.enabled_checks(), [] as [std::string::String; 0]);
         assert!(c.parse_problem.is_none());
     }
 
     #[test]
-    fn inert_directives_parse_without_error() {
+    fn source_directives_are_kept() {
         let c = parse("external-sources=true\nsource-path=/x\nsource=lib.sh");
-        assert_eq!(c, Config::default());
+        assert_eq!(
+            c.annotations,
+            vec![
+                Annotation::ExternalSources(true),
+                Annotation::SourcePath("/x".to_string()),
+                Annotation::SourceOverride("lib.sh".to_string()),
+            ]
+        );
+        assert!(c.parse_problem.is_none());
     }
 
     #[test]
@@ -1084,10 +1068,7 @@ mod tests {
         );
         // ... and it discards the directives that did parse.
         let c = parse("disable=SC2086\noops here\n");
-        assert_eq!(
-            c.disabled,
-            [] as [shellcheck_rs::interface::DisableRange; 0]
-        );
+        assert_eq!(c.disabled(), [] as [(i64, i64); 0]);
         assert_eq!(
             c.parse_problem.map(|p| (p.line, p.suggestion)),
             Some((2, "Expected '=' after directive key.".to_string()))
@@ -1116,7 +1097,7 @@ mod tests {
         // line; the note is discarded for rc files, so nothing is reported.
         let c = parse("disable=SC2086 !!!\n");
         assert!(c.parse_problem.is_none());
-        assert_eq!(c.disabled.len(), 1);
+        assert_eq!(c.disabled().len(), 1);
         // A non-numeric disable element leaves a word behind, which then looks
         // like a key without '='.
         assert_eq!(
@@ -1166,28 +1147,28 @@ mod tests {
     }
 
     #[test]
-    fn merge_into_applies_directives_and_respects_cli() {
+    fn merge_into_hands_over_the_annotations_in_order() {
         let rc = parse("disable=SC2086 enable=foo shell=sh extended-analysis=false");
-        let mut spec = CheckSpec::default();
-        merge_into(&mut spec, &rc);
-        let directives = spec.rc.clone().expect("rc directives");
-        assert_eq!(directives.disabled_ranges.len(), 1);
-        assert!(directives.disabled_ranges[0].contains(2086));
-        assert!(!directives.disabled_ranges[0].contains(2087));
-        assert_eq!(spec.optional_checks, vec!["foo".to_string()]);
-        assert_eq!(spec.shell_type_override, Some(Shell::Sh));
-        assert_eq!(spec.extended_analysis, Some(false));
-        assert!(directives.parse_problem.is_none());
-
-        // CLI flags win for shell and extended-analysis.
         let mut spec = CheckSpec {
             shell_type_override: Some(Shell::Bash),
             extended_analysis: Some(true),
             ..CheckSpec::default()
         };
         merge_into(&mut spec, &rc);
+        let directives = spec.rc.clone().expect("rc directives");
+        assert_eq!(
+            directives.annotations,
+            vec![
+                Annotation::DisableComment(2086, 2087),
+                Annotation::EnableComment("foo".to_string()),
+                Annotation::ShellOverride("sh".to_string()),
+                Annotation::ExtendedAnalysis(false),
+            ]
+        );
+        assert!(directives.parse_problem.is_none());
         assert_eq!(spec.shell_type_override, Some(Shell::Bash));
         assert_eq!(spec.extended_analysis, Some(true));
+        assert_eq!(spec.optional_checks, [] as [String; 0]);
     }
 
     #[test]
@@ -1238,20 +1219,14 @@ mod tests {
     #[test]
     fn prop_editorConfigAppliesKnownShell() {
         let c = with_editor_config("[foo]\nshellcheck.shell=bash\n", "foo");
-        assert_eq!(c.shell, Some(Shell::Bash));
+        assert_eq!(c.shell(), Some(Shell::Bash));
         assert!(c.parse_problem.is_none());
     }
 
     #[test]
     fn prop_editorConfigAppliesDisable() {
         let c = with_editor_config("[foo]\nshellcheck.disable=SC2086\n", "foo");
-        assert_eq!(
-            c.disabled,
-            vec![DisableRange {
-                from: 2086,
-                to: 2087
-            }]
-        );
+        assert_eq!(c.disabled(), vec![(2086, 2087)]);
         assert!(c.parse_problem.is_none());
     }
 
@@ -1357,15 +1332,9 @@ mod tests {
         assert_eq!(name, tree.path("inner/.editorconfig"));
         let c = parse_contents(&name, &blob);
         assert!(c.parse_problem.is_none());
-        assert_eq!(c.shell, Some(Shell::Bash));
-        assert_eq!(
-            c.disabled,
-            vec![DisableRange {
-                from: 2154,
-                to: 2155
-            }]
-        );
-        assert_eq!(c.extended_analysis, Some(false));
+        assert_eq!(c.shell(), Some(Shell::Bash));
+        assert_eq!(c.disabled(), vec![(2154, 2155)]);
+        assert_eq!(c.extended_analysis(), Some(false));
     }
 
     #[test]
@@ -1392,20 +1361,14 @@ mod tests {
         let (name, blob) = editor_config_with(&tree.path("a/x.sh"), None).expect("root");
         assert_eq!(name, tree.path("a/.editorconfig"));
         let c = parse_contents(&name, &blob);
-        assert_eq!(c.shell, Some(Shell::Sh));
-        assert_eq!(
-            c.disabled,
-            [] as [shellcheck_rs::interface::DisableRange; 0]
-        );
+        assert_eq!(c.shell(), Some(Shell::Sh));
+        assert_eq!(c.disabled(), [] as [(i64, i64); 0]);
 
         let (name, blob) = editor_config_with(&tree.path("b/x.sh"), None).expect("rejected");
         assert_eq!(name, tree.path("b/.editorconfig"));
         assert!(!is_rejection(&blob));
         let c = parse_contents(&name, &blob);
-        assert_eq!(
-            c.disabled,
-            [] as [shellcheck_rs::interface::DisableRange; 0]
-        );
+        assert_eq!(c.disabled(), [] as [(i64, i64); 0]);
         let problem = c.parse_problem.expect("SC1134");
         assert_eq!((problem.line, problem.column), (2, 8));
     }
@@ -1431,14 +1394,306 @@ mod tests {
         let mut spec = CheckSpec::default();
         merge_into(&mut spec, &rc);
         let directives = spec.rc.expect("rc directives");
-        assert_eq!(
-            directives.disabled_ranges,
-            [] as [shellcheck_rs::interface::DisableRange; 0]
-        );
+        assert_eq!(directives.annotations, [] as [Annotation; 0]);
         assert_eq!(spec.optional_checks, [] as [std::string::String; 0]);
         let problem = directives.parse_problem.expect("SC1134 problem");
         assert_eq!(problem.filename, "rc");
         assert_eq!(problem.line, 2);
         assert_eq!(problem.suggestion, "Expected '=' after directive key.");
+    }
+
+    type Finder = fn(&str, Option<bool>, &[String], &str) -> String;
+
+    /// `mockedSystemInterface` with `siFindSource` replaced.
+    struct Resolver {
+        files: shellcheck_rs::interface::MockSystem,
+        find: Finder,
+    }
+
+    impl shellcheck_rs::interface::System for Resolver {
+        fn read_file(
+            &self,
+            external_sources: Option<bool>,
+            file: &str,
+        ) -> Result<String, shellcheck_rs::interface::ErrorMessage> {
+            self.files.read_file(external_sources, file)
+        }
+
+        fn find_source(
+            &self,
+            current_script: &str,
+            external_sources: Option<bool>,
+            source_paths: &[String],
+            name: &str,
+        ) -> String {
+            (self.find)(current_script, external_sources, source_paths, name)
+        }
+    }
+
+    /// `checkWithRcIncludesAndSourcePath`. `mockRcFile` is never read when
+    /// `csIgnoreRC` is set, so neither is `rc`.
+    fn check_with_rc_includes(
+        rc: impl FnOnce() -> &'static str,
+        includes: &[(&str, &str)],
+        find: Finder,
+        mut spec: CheckSpec,
+    ) -> Vec<i64> {
+        if !spec.ignore_rc {
+            merge_into(&mut spec, &parse_contents(".shellcheckrc", rc()));
+        }
+        let sys = std::rc::Rc::new(Resolver {
+            files: shellcheck_rs::interface::MockSystem::new(includes),
+            find,
+        });
+        let mut codes: Vec<i64> = shellcheck_rs::checker::check_script_with(sys, &spec)
+            .comments
+            .iter()
+            .map(|c| c.comment.code)
+            .collect();
+        codes.sort_unstable();
+        codes
+    }
+
+    /// `checkWithRc`.
+    fn check_with_rc(rc: impl FnOnce() -> &'static str, spec: CheckSpec) -> Vec<i64> {
+        check_with_rc_includes(rc, &[], |_, _, _, name| name.to_string(), spec)
+    }
+
+    fn script(s: &str) -> CheckSpec {
+        CheckSpec {
+            script: s.to_string(),
+            ..CheckSpec::default()
+        }
+    }
+
+    fn sourcing(s: &str) -> CheckSpec {
+        CheckSpec {
+            filename: "dir/myscript".to_string(),
+            check_sourced: true,
+            ..script(s)
+        }
+    }
+
+    #[test]
+    fn prop_readsRcFile() {
+        assert_eq!(
+            check_with_rc(|| "disable=2086", script("#!/bin/sh\necho $1")),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_canUseNoRC() {
+        let spec = CheckSpec {
+            ignore_rc: true,
+            ..script("#!/bin/sh\necho $1")
+        };
+        assert_eq!(check_with_rc(|| "disable=2086", spec), vec![2086]);
+    }
+
+    #[test]
+    fn prop_NoRCWontLookAtFile() {
+        let spec = CheckSpec {
+            ignore_rc: true,
+            ..script("#!/bin/sh\necho $1")
+        };
+        assert_eq!(check_with_rc(|| panic!("Fail"), spec), vec![2086]);
+    }
+
+    #[test]
+    fn prop_brokenRcGetsWarning() {
+        assert_eq!(
+            check_with_rc(|| "rofl", script("#!/bin/sh\necho $1")),
+            vec![1134, 2086]
+        );
+    }
+
+    #[test]
+    fn prop_canEnableOptionalsWithRc() {
+        assert_eq!(
+            check_with_rc(
+                || "enable=avoid-nullary-conditions",
+                script("#!/bin/sh\n[ \"$1\" ]")
+            ),
+            vec![2244]
+        );
+    }
+
+    #[test]
+    fn prop_rcCanAllowExternalSources() {
+        assert_eq!(
+            check_with_rc_includes(
+                || "external-sources=true",
+                &[("resolved/mylib", "echo $1")],
+                |script, external, _, name| {
+                    assert_eq!(
+                        (script, external, name),
+                        ("dir/myscript", Some(true), "mylib")
+                    );
+                    "resolved/mylib".to_string()
+                },
+                sourcing("#!/bin/bash\nsource mylib"),
+            ),
+            vec![2086]
+        );
+    }
+
+    #[test]
+    fn prop_rcCanDenyExternalSources() {
+        assert_eq!(
+            check_with_rc_includes(
+                || "external-sources=false",
+                &[("resolved/mylib", "echo $1")],
+                |script, external, _, name| {
+                    assert_eq!(
+                        (script, external, name),
+                        ("dir/myscript", Some(false), "mylib")
+                    );
+                    "resolved/mylib".to_string()
+                },
+                sourcing("#!/bin/bash\nsource mylib"),
+            ),
+            vec![2086]
+        );
+    }
+
+    #[test]
+    fn prop_rcCanLeaveExternalSourcesUnspecified() {
+        assert_eq!(
+            check_with_rc_includes(
+                || "",
+                &[("resolved/mylib", "echo $1")],
+                |script, external, _, name| {
+                    assert_eq!((script, external, name), ("dir/myscript", None, "mylib"));
+                    "resolved/mylib".to_string()
+                },
+                sourcing("#!/bin/bash\nsource mylib"),
+            ),
+            vec![2086]
+        );
+    }
+
+    #[test]
+    fn prop_fileCanDisableExternalSources() {
+        assert_eq!(
+            check_with_rc_includes(
+                || "external-sources=true",
+                &[("withExternal", "echo $1"), ("withoutExternal", "_=`foo`")],
+                |script, external, _, name| {
+                    match (script, external, name) {
+                        ("dir/myscript", Some(true), "withExternal")
+                        | ("dir/myscript", Some(false), "withoutExternal") => name.to_string(),
+                        unexpected => panic!("Unexpected {unexpected:?}"),
+                    }
+                },
+                sourcing(
+                    "#!/bin/bash\ntrue\nsource withExternal\n# shellcheck external-sources=false\nsource withoutExternal"
+                ),
+            ),
+            vec![2006, 2086]
+        );
+    }
+
+    #[test]
+    fn prop_fileCannotEnableExternalSources2() {
+        assert_eq!(
+            check_with_rc_includes(
+                || "external-sources=false",
+                &[("foo", "true")],
+                |script, external, _, name| {
+                    assert_eq!(
+                        (script, external, name),
+                        ("dir/myscript", Some(false), "foo")
+                    );
+                    "foo".to_string()
+                },
+                sourcing("#!/bin/bash\n# shellcheck external-sources=true\nsource foo"),
+            ),
+            vec![1144]
+        );
+    }
+
+    #[test]
+    fn prop_rcCanSuppressEarlyProblems1() {
+        assert_eq!(
+            check_with_rc(|| "disable=1071", script("#!/bin/zsh\necho $1")),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_rcCanSuppressEarlyProblems2() {
+        assert_eq!(
+            check_with_rc(|| "disable=1104", script("!/bin/bash\necho 'hello world'")),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_rcCanSuppressDfa() {
+        assert_eq!(
+            check_with_rc(
+                || "extended-analysis=false",
+                script("#!/bin/sh\nexit; foo;")
+            ),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_fileCanSuppressDfa() {
+        assert_eq!(
+            check_with_rc(
+                || "",
+                script("#!/bin/sh\n# shellcheck extended-analysis=false\nexit; foo;")
+            ),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_fileWinsWhenSuppressingDfa1() {
+        assert_eq!(
+            check_with_rc(
+                || "extended-analysis=true",
+                script("#!/bin/sh\n# shellcheck extended-analysis=false\nexit; foo;")
+            ),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_fileWinsWhenSuppressingDfa2() {
+        assert_eq!(
+            check_with_rc(
+                || "extended-analysis=false",
+                script("#!/bin/sh\n# shellcheck extended-analysis=true\nexit; foo;")
+            ),
+            vec![2317]
+        );
+    }
+
+    #[test]
+    fn prop_flagWinsWhenSuppressingDfa1() {
+        let spec = CheckSpec {
+            extended_analysis: Some(true),
+            ..script("#!/bin/sh\n# shellcheck extended-analysis=false\nexit; foo;")
+        };
+        assert_eq!(
+            check_with_rc(|| "extended-analysis=false", spec),
+            vec![2317]
+        );
+    }
+
+    #[test]
+    fn prop_flagWinsWhenSuppressingDfa2() {
+        let spec = CheckSpec {
+            extended_analysis: Some(false),
+            ..script("#!/bin/sh\n# shellcheck extended-analysis=true\nexit; foo;")
+        };
+        assert_eq!(
+            check_with_rc(|| "extended-analysis=true", spec),
+            Vec::<i64>::new()
+        );
     }
 }

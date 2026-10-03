@@ -866,6 +866,7 @@ impl Parser {
     fn read_simple_command_body(&mut self) -> PResult<Token> {
         let prefix = self.read_cmd_prefix();
         self.spacing();
+        self.skip_annotation_and_warn();
         let cmd = self.read_cmd_name()?;
         if prefix.is_empty() && cmd.is_none() {
             return self.fail_with("Expected a command");
@@ -890,6 +891,7 @@ impl Parser {
                 // failure names it twice.
                 self.peek_ahead(|p| {
                     p.spacing();
+                    p.skip_annotation_and_warn();
                     let w = p.read_normal_word()?;
                     Ok(Self::command_literal_name(&w))
                 })
@@ -1350,6 +1352,7 @@ impl Parser {
             self.reset(bm);
         }
         let m = self.mark();
+        self.skip_annotation_and_warn();
         // don't treat keywords as command names in command position handled by caller
         if let Ok(w) = self.read_normal_word() {
             Ok(Some(w))
@@ -1409,6 +1412,7 @@ impl Parser {
                 self.reset(am);
             }
             let m = self.mark();
+            self.skip_annotation_and_warn();
             if let Ok(w) = self.read_normal_word() {
                 out.push(w);
             } else {
@@ -1619,6 +1623,7 @@ impl Parser {
         let start = self.pos();
         let raw = self
             .read_string_for_parser(|p| {
+                p.skip_annotation_and_warn();
                 p.read_normal_word()?;
                 p.spacing();
                 Ok(())
@@ -1673,6 +1678,7 @@ impl Parser {
             // `try readLetExpression` rewinds; `readCmdWord` reads the word
             // for what it is, and a failure that consumed is the command's.
             self.reset(m);
+            self.skip_annotation_and_warn();
             if let Ok(w) = self.read_normal_word() {
                 out.push(w);
             } else {
@@ -2098,6 +2104,14 @@ impl Parser {
     }
 
     pub(super) fn read_io_redirect(&mut self) -> PResult<Token> {
+        let r = self.read_fd_redirect();
+        if r.is_ok() {
+            self.skip_annotation_and_warn();
+        }
+        r
+    }
+
+    fn read_fd_redirect(&mut self) -> PResult<Token> {
         let m = self.mark();
         let start = self.pos();
         let fd = self.read_io_source();
@@ -2763,8 +2777,9 @@ impl Parser {
 
     pub(super) fn read_script_file(&mut self) -> Option<Token> {
         let start = self.pos();
-        // UTF-8 BOM
-        let _ = self.string("\u{FEFF}");
+        let rc_annotations = std::mem::take(&mut self.rc_annotations);
+        self.push_disables(&rc_annotations);
+        let has_bom = self.string("\u{FEFF}").is_ok();
         let shebang = self.read_shebang().unwrap_or_else(|| self.empty_literal());
         self.allspacing();
         // File-wide shellcheck directives after the shebang.
@@ -2773,12 +2788,24 @@ impl Parser {
         // `withAnnotations fileAnnotations` wraps the whole file, so these
         // never go out of scope again.
         self.push_disables(&file_annotations);
+        if has_bom {
+            self.problem_at(
+                start.clone(),
+                start.clone(),
+                Severity::ErrorC,
+                1082,
+                "This file has a UTF-8 BOM. Remove it with: LC_CTYPE=C sed '1s/^...//' < yourscript .",
+            );
+        }
+
+        let annotations: Vec<Annotation> =
+            file_annotations.into_iter().chain(rc_annotations).collect();
 
         // `verifyShebang` (Parser.hs readScriptFile): warn on an unrecognized
         // interpreter, unless a `# shellcheck shell=...` directive overrides the
         // shebang. Emitted at the start of the file, like `parseProblemAt pos`.
         let ignore_shebang = self.shell_flag_specified
-            || file_annotations
+            || annotations
                 .iter()
                 .any(|a| matches!(a, Annotation::ShellOverride(_)));
 
@@ -2787,7 +2814,7 @@ impl Parser {
         // file-wide `shell=` directive, then the shebang. Only one parse
         // decision consults it -- see `empty_negation_ok`.
         if self.shell_hint.is_none() {
-            self.shell_hint = file_annotations.iter().find_map(|a| match a {
+            self.shell_hint = annotations.iter().find_map(|a| match a {
                 Annotation::ShellOverride(s) => crate::data::shell_for_executable(s),
                 _ => None,
             });
@@ -2859,7 +2886,7 @@ impl Parser {
         let root = Token::new(
             ann_id,
             InnerToken::T_Annotation {
-                annotations: file_annotations,
+                annotations,
                 token: script,
             },
         );

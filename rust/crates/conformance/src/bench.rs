@@ -126,6 +126,7 @@ fn time_port(script: &str, filename: &str) -> Result<Split, String> {
         check_sourced: spec.check_sourced,
         shell_flag_specified: false,
         shell_hint: None,
+        rc_annotations: Vec::new(),
         sys: std::rc::Rc::new(shellcheck_rs::interface::NoExternalSources),
     });
     let d_parse = t0.elapsed();

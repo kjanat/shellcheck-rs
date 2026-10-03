@@ -36,13 +36,13 @@ const fn severity_text(sev: Severity) -> &'static str {
     }
 }
 
-fn rank_error(c: &PositionedComment, code: i64) -> (char, Severity, i64) {
-    let rank = if UNINTERESTING.contains(&code) {
+fn rank_error(c: &PositionedComment) -> (char, Severity, i64) {
+    let rank = if UNINTERESTING.contains(&c.comment.code) {
         'Z'
     } else {
         'A'
     };
-    (rank, c.comment.severity, code)
+    (rank, c.comment.severity, c.comment.code)
 }
 
 /// `makeArrow` + `cuteIndent`.
@@ -62,7 +62,7 @@ fn cute_indent(c: &PositionedComment) -> String {
     };
     let indent = " ".repeat(usize::try_from(col - 1).unwrap_or(0));
     format!(
-        "{indent}{arrow} {} ({}): {}",
+        "{indent}{arrow} SC{} ({}): {}",
         c.comment.code,
         severity_text(c.comment.severity),
         c.comment.message
@@ -135,15 +135,12 @@ pub fn render_file(
     wiki: &mut Vec<WikiEntry>,
     out: &mut String,
 ) {
-    // Only an SC code has a wiki page.
     for c in comments {
-        if let Some(code) = c.comment.code.sc() {
-            wiki.push(WikiEntry {
-                ranking: rank_error(c, code),
-                code,
-                message: c.comment.message.clone(),
-            });
-        }
+        wiki.push(WikiEntry {
+            ranking: rank_error(c),
+            code: c.comment.code,
+            message: c.comment.message.clone(),
+        });
     }
 
     let file_lines = hs_lines(contents);

@@ -13,44 +13,8 @@ pub type ErrorMessage = String;
 /// `Code`: the number of a diagnostic, such as 2086 for SC2086.
 pub type Code = i64;
 
-/// A comment's code: one of upstream's `SC` codes, or one of the `RSC` codes
-/// only this port emits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DiagnosticCode {
-    /// `SC` and the number.
-    Sc(Code),
-    /// `RSC` and the number.
-    Rsc(Code),
-}
-
-impl DiagnosticCode {
-    /// The number of an `SC` code.
-    #[must_use]
-    pub const fn sc(self) -> Option<Code> {
-        match self {
-            Self::Sc(n) => Some(n),
-            Self::Rsc(_) => None,
-        }
-    }
-}
-
-impl std::fmt::Display for DiagnosticCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Sc(n) => write!(f, "SC{n}"),
-            Self::Rsc(n) => write!(f, "RSC{n}"),
-        }
-    }
-}
-
-impl PartialEq<Code> for DiagnosticCode {
-    fn eq(&self, other: &Code) -> bool {
-        *self == Self::Sc(*other)
-    }
-}
-
-/// RSC1001: an internal error in the dataflow analysis, which was skipped.
-pub const RSC_DATAFLOW_SKIPPED: DiagnosticCode = DiagnosticCode::Rsc(1001);
+/// The code the CLI reports a [`CheckResult::dataflow_error`] under.
+pub const RSC_DATAFLOW_SKIPPED: &str = "RSC1001";
 
 /// `ShellCheck.Interface.SystemInterface`: everything the parser needs from the
 /// outside world while following `source` statements.
@@ -355,7 +319,7 @@ pub struct Comment {
     /// `cSeverity`.
     pub severity: Severity,
     /// `cCode`.
-    pub code: DiagnosticCode,
+    pub code: Code,
     /// `cMessage`.
     pub message: String,
 }
@@ -365,7 +329,7 @@ impl Default for Comment {
         // newComment
         Self {
             severity: Severity::StyleC,
-            code: DiagnosticCode::Sc(0),
+            code: 0,
             message: String::new(),
         }
     }
@@ -452,29 +416,6 @@ pub enum ColorOption {
 }
 
 /// A half-open range of codes `[from, to)`, as carried by
-/// `Annotation.DisableComment from to`.
-///
-/// `disable=SC2086` is the single-code
-/// range `2086..2087`, `disable=SC1000-SC2000` is `1000..2000`, and
-/// `disable=all` is `0..1000000`. `shouldIgnoreCode` and
-/// `contextItemDisablesCode` compare a code against the endpoints
-/// (`code >= n && code < m`), so an enormous range costs nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DisableRange {
-    /// The first code in the range.
-    pub from: Code,
-    /// The first code past the range.
-    pub to: Code,
-}
-
-impl DisableRange {
-    /// `disabling' (DisableComment n m) = code >= n && code < m`.
-    #[must_use]
-    pub const fn contains(&self, code: Code) -> bool {
-        code >= self.from && code < self.to
-    }
-}
-
 /// A configuration file that failed to parse, as reported by SC1134.
 ///
 /// The Haskell driver reads the rc file inside the parser
@@ -495,21 +436,15 @@ pub struct RcParseProblem {
     pub suggestion: String,
 }
 
-/// What an rc file contributes to a check that the other `CheckSpec` fields
-/// cannot express.
+/// What an rc file contributes to a check.
 ///
-/// Upstream the rc file is read by the parser and its directives become
-/// annotations on the root `T_Annotation`, so `shell`, `extended-analysis` and
-/// `enable` land on the existing spec fields and only these two need a home of
-/// their own.
+/// Upstream `readScriptFile` reads the rc file itself, puts its annotations in
+/// scope around the whole parse, and appends them to the file's own on the
+/// root `T_Annotation`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RcDirectives {
-    /// Code ranges disabled by `disable=` directives.
-    ///
-    /// As `DisableComment` annotations upstream, these suppress a code wherever
-    /// it comes from and regardless of `csIncludedWarnings`. They are kept as
-    /// endpoints, and a range may be arbitrarily wide.
-    pub disabled_ranges: Vec<DisableRange>,
+    /// `rcAnnotations`, in file order.
+    pub annotations: Vec<crate::ast::Annotation>,
     /// Set when the rc file itself could not be parsed; the checker turns it
     /// into the SC1134 comment and no rc directive takes effect.
     pub parse_problem: Option<RcParseProblem>,
@@ -527,9 +462,9 @@ pub struct CheckSpec {
     /// `csIgnoreRC`.
     pub ignore_rc: bool,
     /// `csExcludedWarnings`.
-    pub excluded_warnings: Vec<DiagnosticCode>,
+    pub excluded_warnings: Vec<Code>,
     /// `csIncludedWarnings`.
-    pub included_warnings: Option<Vec<DiagnosticCode>>,
+    pub included_warnings: Option<Vec<Code>>,
     /// `csShellTypeOverride`.
     pub shell_type_override: Option<Shell>,
     /// `csMinSeverity`.
@@ -569,6 +504,9 @@ pub struct CheckResult {
     pub filename: String,
     /// `crComments`.
     pub comments: Vec<PositionedComment>,
+    /// The internal error that stopped the dataflow analysis, where upstream
+    /// dies. The checks that need it did not run, so `comments` is incomplete.
+    pub dataflow_error: Option<crate::cfg::InternalError>,
 }
 
 /// Position span map: token id -> (start, end).

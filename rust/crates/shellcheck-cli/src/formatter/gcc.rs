@@ -20,7 +20,7 @@ fn format_comment(filename: &str, c: &PositionedComment) -> String {
         _ => "note",
     };
     format!(
-        "{}:{}:{}: {}: {} [{}]",
+        "{}:{}:{}: {}: {} [SC{}]",
         filename,
         c.start.line,
         c.start.column,

@@ -40,9 +40,6 @@ use crate::corpus;
 use crate::fuzz::{Rng, generate};
 use crate::oracle::Oracle;
 use crate::{Args, port_keys};
-use shellcheck_rs::interface::DiagnosticCode;
-
-use crate::deviations::FATAL_PARSE_CODES;
 
 /// ShellCheck's dialects, and the interpreter that speaks each one.
 ///
@@ -54,6 +51,9 @@ const DIALECTS: [(&str, &str, &[&str]); 4] = [
     ("ksh", "ksh93", &["-n"]),
     ("busybox", "busybox", &["sh", "-n"]),
 ];
+
+/// The codes that mean "this file does not parse, so nothing was analysed".
+const FATAL: [i64; 3] = [1073, 1009, 1072];
 
 #[derive(Default)]
 struct Tally {
@@ -79,8 +79,8 @@ fn shell_parses(program: &str, args: &[&str], script: &str) -> Option<bool> {
     Some(child.wait().ok()?.success())
 }
 
-fn tool_parses(codes: &[DiagnosticCode]) -> bool {
-    !codes.iter().any(|c| FATAL_PARSE_CODES.contains(c))
+fn tool_parses(codes: &[i64]) -> bool {
+    !codes.iter().any(|c| FATAL.contains(c))
 }
 
 fn note(slot: &mut Option<String>, script: &str) {
@@ -129,16 +129,15 @@ pub fn run(args: &Args) -> Result<bool, String> {
                 let Some(shell_ok) = shell_parses(program, flags, script) else {
                     continue;
                 };
-                let ocodes: Vec<DiagnosticCode> = crate::oracle_keys(ocomments)
+                let ocodes: Vec<i64> = crate::oracle_keys(ocomments)
                     .iter()
                     .map(|k| k.code)
                     .collect();
                 let path = oracle.dir().join(name);
-                let pcodes: Vec<DiagnosticCode> =
-                    port_keys(script, &path.to_string_lossy(), Some(dialect))?
-                        .iter()
-                        .map(|k| k.code)
-                        .collect();
+                let pcodes: Vec<i64> = port_keys(script, &path.to_string_lossy(), Some(dialect))?
+                    .iter()
+                    .map(|k| k.code)
+                    .collect();
 
                 let (oracle_tally, port_tally) = tallies.entry(dialect).or_default();
                 for (tally, codes) in [(oracle_tally, &ocodes), (port_tally, &pcodes)] {

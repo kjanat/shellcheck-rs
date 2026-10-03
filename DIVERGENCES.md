@@ -125,10 +125,13 @@ regex-tdfa's parser does, so this applies only to the globs upstream dies on.
 Where an invariant of the control flow graph or of its dataflow analysis does
 not hold, upstream ends with `ShellCheck internal error, please report: ...`
 and no output. The port drops the dataflow analysis for that file, as
-`--extended-analysis=false` would, runs every other check, and adds RSC1001 at
-the top of the file with the same text. `RSC` codes are the port's own, so none
-can collide with an upstream `SC` code. json1 writes one as the string
-`"RSC1001"`, `-i` and `-e` accept it, and the tty wiki list leaves it out.
+`--extended-analysis=false` would, and runs every other check. The library
+returns the error in `CheckResult::dataflow_error`, apart from the comments, so
+no include, exclude, severity or disable filter can remove it. The CLI prints
+the file's comments, then reports it as it reports an unreadable input:
+`file: RSC1001: ShellCheck internal error, please report: ...` on stderr, or on
+stdout for checkstyle. The run exits 2, and quiet mode exits 1. `RSC` codes are
+the port's own and never appear in a comment.
 
 ## No open entries
 

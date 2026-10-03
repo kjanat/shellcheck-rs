@@ -4,8 +4,8 @@
 //! the Haskell formatter's field set. Key ordering is irrelevant to the
 //! conformance harness (it compares parsed JSON), but values must match exactly.
 
-use serde::{Serialize, Serializer};
-use shellcheck_rs::interface::{DiagnosticCode, InsertionPoint, PositionedComment};
+use serde::Serialize;
+use shellcheck_rs::interface::{InsertionPoint, PositionedComment};
 
 /// The json1 document: `{"comments": [...]}`.
 #[derive(Serialize)]
@@ -31,21 +31,12 @@ pub struct Comment {
     pub end_column: i64,
     /// The severity: `error`, `warning`, `info` or `style`.
     pub level: String,
-    /// An SC code as its number, as upstream writes it, and an RSC code as
-    /// its name.
-    #[serde(serialize_with = "code_json")]
-    pub code: DiagnosticCode,
+    /// The SC code, without the `SC` prefix.
+    pub code: i64,
     /// The message text.
     pub message: String,
     /// The suggested fix, or `null`.
     pub fix: Option<Fix>,
-}
-
-fn code_json<S: Serializer>(code: &DiagnosticCode, s: S) -> Result<S::Ok, S::Error> {
-    match code {
-        DiagnosticCode::Sc(n) => s.serialize_i64(*n),
-        DiagnosticCode::Rsc(_) => s.collect_str(code),
-    }
 }
 
 /// A fix: the replacements that make it.

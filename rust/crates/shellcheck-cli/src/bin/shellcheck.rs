@@ -17,7 +17,10 @@ use shellcheck_cli::formatter::{self, checkstyle, diff, fixer, gcc, json, json1,
 use shellcheck_cli::options::{self, Outcome, RunConfig};
 use shellcheck_cli::paths::{combine, drop_file_name, io_error_message, normalize};
 use shellcheck_cli::rc::{self, ConfigLookup};
-use shellcheck_rs::interface::{CheckSpec, ErrorMessage, PositionedComment, System, decode_bytes};
+use shellcheck_rs::cfg::InternalError;
+use shellcheck_rs::interface::{
+    CheckSpec, ErrorMessage, PositionedComment, RSC_DATAFLOW_SKIPPED, System, decode_bytes,
+};
 
 fn main() -> ExitCode {
     // SHELLCHECK_OPTS is split on whitespace (Haskell `words`) and prepended to
@@ -220,12 +223,60 @@ fn adjust_path(path: &str, scriptdir: &str) -> String {
 /// read error. The contents are not kept: a formatter re-reads whichever file
 /// each comment belongs to, which for a followed `source` is not this input.
 struct Loaded {
+    name: String,
     comments: Vec<PositionedComment>,
+    /// Why the analysis is incomplete, reported as a read failure is.
+    failure: Option<String>,
 }
 
 enum Input {
     Ok(Loaded),
     Err { name: String, message: String },
+}
+
+impl Input {
+    /// The input and the message its format's `onFailure` reports.
+    fn failure(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Ok(l) => l.failure.as_deref().map(|m| (l.name.as_str(), m)),
+            Self::Err { name, message } => Some((name, message)),
+        }
+    }
+
+    fn comments(&self) -> &[PositionedComment] {
+        match self {
+            Self::Ok(l) => &l.comments,
+            Self::Err { .. } => &[],
+        }
+    }
+    /// What makes quiet mode exit 1.
+    fn is_problem(&self) -> bool {
+        self.failure().is_some() || !self.comments().is_empty()
+    }
+}
+
+/// `statusToCode` of the inputs' combined status: a failure is a
+/// `RuntimeException` (2), an `.editorconfig` SC1134 a `SupportFailure` (4),
+/// and any other comment `SomeProblems` (1).
+fn exit_status(loaded: &[Input]) -> u8 {
+    if loaded.iter().any(|i| i.failure().is_some()) {
+        2
+    } else if loaded
+        .iter()
+        .any(|i| i.comments().iter().any(is_editor_config_error))
+    {
+        4
+    } else {
+        u8::from(loaded.iter().any(|i| !i.comments().is_empty()))
+    }
+}
+
+/// `RSC1001`: the message for a check whose dataflow analysis stopped.
+fn dataflow_failure(InternalError(what): InternalError) -> String {
+    format!(
+        "{RSC_DATAFLOW_SKIPPED}: ShellCheck internal error, please report: {what}. \
+         The checks that need dataflow analysis were skipped."
+    )
 }
 
 /// Load one input, reading it through the system interface exactly as `process`
@@ -262,7 +313,9 @@ fn load(
     let sys_dyn = Rc::clone(sys) as Rc<dyn System>;
     let result = shellcheck_rs::checker::check_script_with(sys_dyn, &spec);
     Input::Ok(Loaded {
+        name: name.to_string(),
         comments: result.comments,
+        failure: result.dataflow_error.map(dataflow_failure),
     })
 }
 
@@ -327,10 +380,8 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
     // runtime error (2), matching the oracle.
     if format == "quiet" {
         for i in &inputs {
-            match load(i, &spec_template, config.as_ref(), &sys) {
-                Input::Ok(l) if !l.comments.is_empty() => return ExitCode::from(1),
-                Input::Ok(_) => {}
-                Input::Err { .. } => return ExitCode::from(1),
+            if load(i, &spec_template, config.as_ref(), &sys).is_problem() {
+                return ExitCode::from(1);
             }
         }
         return ExitCode::SUCCESS;
@@ -341,13 +392,7 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
         .map(|i| load(i, &spec_template, config.as_ref(), &sys))
         .collect();
 
-    let any_failure = loaded.iter().any(|i| matches!(i, Input::Err { .. }));
-    let any_comments = loaded
-        .iter()
-        .any(|i| matches!(i, Input::Ok(l) if !l.comments.is_empty()));
-    let any_editor_config_error = loaded
-        .iter()
-        .any(|i| matches!(i, Input::Ok(l) if l.comments.iter().any(is_editor_config_error)));
+    let any_comments = loaded.iter().any(|i| !i.comments().is_empty());
 
     let is_tty = std::io::stdout().is_terminal();
     let use_color = formatter::should_output_color(color, is_tty);
@@ -392,17 +437,7 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
         return ExitCode::from(2);
     }
 
-    // Maps the largest status via `statusToCode`:
-    // RuntimeException (2) > SupportFailure (4) > SomeProblems (1) > NoProblems (0).
-    if any_failure {
-        ExitCode::from(2)
-    } else if any_editor_config_error {
-        ExitCode::from(4)
-    } else if any_comments {
-        ExitCode::from(1)
-    } else {
-        ExitCode::SUCCESS
-    }
+    ExitCode::from(exit_status(&loaded))
 }
 
 /// A json document on its own line.
@@ -429,9 +464,10 @@ fn json1_comments(
                     all = new;
                 }
             }
-            Input::Err { name, message } => {
-                let _ = writeln!(err, "{name}: {message}");
-            }
+            Input::Err { .. } => {}
+        }
+        if let Some((name, message)) = i.failure() {
+            let _ = writeln!(err, "{name}: {message}");
         }
     }
     all
@@ -451,9 +487,10 @@ fn json_comments(loaded: &[Input], err: &mut impl Write) -> Vec<PositionedCommen
                     all = new;
                 }
             }
-            Input::Err { name, message } => {
-                let _ = writeln!(err, "{name}: {message}");
-            }
+            Input::Err { .. } => {}
+        }
+        if let Some((name, message)) = i.failure() {
+            let _ = writeln!(err, "{name}: {message}");
         }
     }
     all
@@ -470,9 +507,10 @@ fn write_gcc(loaded: &[Input], sys: &Rc<IoSystem>, out: &mut impl Write, err: &m
                     let _ = out.write_all(buf.as_bytes());
                 }
             }
-            Input::Err { name, message } => {
-                let _ = writeln!(err, "{}", gcc::render_failure(name, message));
-            }
+            Input::Err { .. } => {}
+        }
+        if let Some((name, message)) = i.failure() {
+            let _ = writeln!(err, "{}", gcc::render_failure(name, message));
         }
     }
 }
@@ -489,10 +527,11 @@ fn write_checkstyle(loaded: &[Input], sys: &Rc<IoSystem>, out: &mut impl Write) 
                     let _ = out.write_all(buf.as_bytes());
                 }
             }
-            Input::Err { name, message } => {
-                // CheckStyle onFailure writes to stdout.
-                let _ = out.write_all(checkstyle::render_failure(name, message).as_bytes());
-            }
+            Input::Err { .. } => {}
+        }
+        if let Some((name, message)) = i.failure() {
+            // CheckStyle onFailure writes to stdout.
+            let _ = out.write_all(checkstyle::render_failure(name, message).as_bytes());
         }
     }
     let _ = out.write_all(checkstyle::FOOTER.as_bytes());
@@ -521,9 +560,10 @@ fn write_diff(
                     }
                 }
             }
-            Input::Err { name, message } => {
-                let _ = writeln!(err, "{}", color_fn(&format!("{name}: {message}")));
-            }
+            Input::Err { .. } => {}
+        }
+        if let Some((name, message)) = i.failure() {
+            let _ = writeln!(err, "{}", color_fn(&format!("{name}: {message}")));
         }
     }
     if any_comments && !reported {
@@ -559,13 +599,14 @@ fn write_tty(
                     let _ = out.write_all(buf.as_bytes());
                 }
             }
-            Input::Err { name, message } => {
-                let _ = writeln!(
-                    err,
-                    "{}",
-                    color_func("error", &format!("{name}: {message}"))
-                );
-            }
+            Input::Err { .. } => {}
+        }
+        if let Some((name, message)) = i.failure() {
+            let _ = writeln!(
+                err,
+                "{}",
+                color_func("error", &format!("{name}: {message}"))
+            );
         }
     }
     let mut wbuf = String::new();
@@ -589,7 +630,7 @@ mod tests {
             end: pos,
             comment: Comment {
                 severity: Severity::InfoC,
-                code: shellcheck_rs::interface::DiagnosticCode::Sc(2086),
+                code: 2086,
                 message: String::new(),
             },
             fix: None,
@@ -736,5 +777,107 @@ mod tests {
             sys.find_source("x.sh", None, &[], "no/such/file"),
             "no/such/file"
         );
+    }
+
+    fn injected() -> Vec<Input> {
+        let failure = Some(dataflow_failure(InternalError("Missing root")));
+        vec![
+            Input::Ok(Loaded {
+                name: "a.sh".to_string(),
+                comments: vec![comment_in("a.sh", 2)],
+                failure: failure.clone(),
+            }),
+            Input::Ok(Loaded {
+                name: "b.sh".to_string(),
+                comments: Vec::new(),
+                failure: None,
+            }),
+            Input::Ok(Loaded {
+                name: "c.sh".to_string(),
+                comments: Vec::new(),
+                failure,
+            }),
+        ]
+    }
+
+    fn no_sources() -> Rc<IoSystem> {
+        Rc::new(IoSystem {
+            inputs: Vec::new(),
+            external_sources: false,
+            source_paths: Vec::new(),
+            cache: RefCell::new(HashMap::new()),
+            original_args: HashMap::new(),
+        })
+    }
+
+    const MESSAGE: &str = "RSC1001: ShellCheck internal error, please report: Missing root. \
+                           The checks that need dataflow analysis were skipped.";
+
+    fn text(bytes: Vec<u8>) -> String {
+        String::from_utf8(bytes).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn an_incomplete_analysis_exits_2_even_with_no_comments_left() {
+        let loaded = injected();
+        assert_eq!(exit_status(&loaded), 2);
+        assert_eq!(exit_status(&loaded[1..]), 2);
+        assert_eq!(exit_status(&loaded[1..2]), 0);
+        assert!(loaded[2].is_problem());
+        assert!(!loaded[1].is_problem());
+    }
+
+    #[test]
+    fn json1_keeps_numeric_codes_and_reports_the_failure_on_stderr() {
+        let (sys, mut err) = (no_sources(), Vec::new());
+        let doc = json1::render(&json1_comments(&injected(), &sys, &mut err))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let value: serde_json::Value = serde_json::from_str(&doc).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(value["comments"][0]["code"], serde_json::json!(2086));
+        assert!(!doc.contains("RSC"), "{doc}");
+        assert_eq!(text(err), format!("a.sh: {MESSAGE}\nc.sh: {MESSAGE}\n"));
+
+        let mut err = Vec::new();
+        let doc =
+            json::render(&json_comments(&injected(), &mut err)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!doc.contains("RSC"), "{doc}");
+        assert_eq!(text(err), format!("a.sh: {MESSAGE}\nc.sh: {MESSAGE}\n"));
+    }
+
+    #[test]
+    fn every_other_format_reports_the_failure_as_it_reports_a_read_failure() {
+        let sys = no_sources();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        write_gcc(&injected(), &sys, &mut out, &mut err);
+        assert_eq!(
+            text(err),
+            format!(
+                "{}\n{}\n",
+                gcc::render_failure("a.sh", MESSAGE),
+                gcc::render_failure("c.sh", MESSAGE)
+            )
+        );
+        assert!(text(out).contains("[SC2086]"));
+
+        let mut out = Vec::new();
+        write_checkstyle(&injected(), &sys, &mut out);
+        let out = text(out);
+        assert!(
+            out.contains(&checkstyle::render_failure("a.sh", MESSAGE)),
+            "{out}"
+        );
+        assert!(
+            out.contains(&checkstyle::render_failure("c.sh", MESSAGE)),
+            "{out}"
+        );
+
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        write_tty(&injected(), &sys, false, 3, &mut out, &mut err);
+        assert_eq!(text(err), format!("a.sh: {MESSAGE}\nc.sh: {MESSAGE}\n"));
+        assert!(text(out).contains("SC2086"));
+
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        write_diff(&injected(), &sys, false, true, &mut out, &mut err);
+        assert!(text(err).starts_with(&format!("a.sh: {MESSAGE}\nc.sh: {MESSAGE}\n")));
     }
 }

@@ -85,25 +85,13 @@ fn record(script: &str) -> Result<Entry, String> {
             let _ = write!(
                 payload,
                 "{}:{}:{}:{}:{}:{}:{}:{:?};",
-                crate::code_text(k.code),
-                k.level,
-                k.line,
-                k.column,
-                k.end_line,
-                k.end_column,
-                k.message,
-                k.fix
+                k.code, k.level, k.line, k.column, k.end_line, k.end_column, k.message, k.fix
             );
             messages.push_str(&k.message);
             // The summary carries code and span, so the common changes (a check
             // that stops firing, a span that moves) are legible in the diff
             // rather than only in the hash.
-            codes.push(format!(
-                "{}@{}:{}",
-                crate::code_text(k.code),
-                k.line,
-                k.column
-            ));
+            codes.push(format!("{}@{}:{}", k.code, k.line, k.column));
         }
     }
     codes.sort_unstable();

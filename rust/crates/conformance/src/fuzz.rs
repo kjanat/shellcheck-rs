@@ -20,7 +20,6 @@ use actions_rs::Annotation;
 use crate::corpus;
 use crate::oracle::Oracle;
 use crate::{Args, CommentKey, keys_match, port_keys, render_keys};
-use shellcheck_rs::interface::DiagnosticCode;
 
 /// A divergence as the search records it: signature, dialect, the input that
 /// produced it, and both sides' answers.
@@ -435,15 +434,15 @@ fn mutate(r: &mut Rng, s: &str, seeds: &[String]) -> String {
 /// How one script's two answers differ, reduced to something groupable so a
 /// single root cause is reported once instead of five hundred times.
 fn signature(port: &[CommentKey], oracle: &[CommentKey], shell: Option<&str>) -> String {
-    let pc: HashSet<DiagnosticCode> = port.iter().map(|k| k.code).collect();
-    let oc: HashSet<DiagnosticCode> = oracle.iter().map(|k| k.code).collect();
-    let mut missing: Vec<DiagnosticCode> = oc.difference(&pc).copied().collect();
-    let mut extra: Vec<DiagnosticCode> = pc.difference(&oc).copied().collect();
+    let pc: HashSet<i64> = port.iter().map(|k| k.code).collect();
+    let oc: HashSet<i64> = oracle.iter().map(|k| k.code).collect();
+    let mut missing: Vec<i64> = oc.difference(&pc).copied().collect();
+    let mut extra: Vec<i64> = pc.difference(&oc).copied().collect();
     missing.sort_unstable();
     extra.sort_unstable();
     if missing.is_empty() && extra.is_empty() {
         // Same codes, different detail: group by which codes' details differ.
-        let mut differing: Vec<DiagnosticCode> = port
+        let mut differing: Vec<i64> = port
             .iter()
             .zip(oracle)
             .filter(|(p, o)| p != o)
@@ -731,7 +730,7 @@ mod tests {
             end_line: 1,
             end_column: 1,
             level: "warning".into(),
-            code: DiagnosticCode::Sc(code),
+            code,
             message: "m".into(),
             fix: None,
         };

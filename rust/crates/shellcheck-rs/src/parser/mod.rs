@@ -344,6 +344,8 @@ pub struct Parser {
     /// Whether the caller passed `--shell`, which like a `shell=` directive
     /// means the shebang no longer decides anything and is not checked.
     shell_flag_specified: bool,
+    /// `rcAnnotations`, which only the top-level `readScriptFile` reads.
+    rc_annotations: Vec<Annotation>,
     /// `Environment.systemInterface`: how a sourced file is resolved and read.
     sys: Rc<dyn System>,
     /// `Environment.checkSourced`: whether diagnostics from inside a sourced
@@ -462,6 +464,7 @@ impl Parser {
         Self {
             shell_hint,
             shell_flag_specified,
+            rc_annotations: Vec::new(),
             sys: Rc::new(NoExternalSources),
             check_sourced: false,
             root_filename: filename.to_string(),
@@ -1446,6 +1449,22 @@ impl Parser {
         Ok(s)
     }
 
+    /// `skipAnnotationAndWarn`: a directive where a word would start is SC1126,
+    /// and the comment is read so that whatever comes next fails on its own.
+    fn skip_annotation_and_warn(&mut self) {
+        if self.at_annotation_prefix() {
+            let pos = self.pos();
+            self.problem_at(
+                pos.clone(),
+                pos,
+                Severity::ErrorC,
+                1126,
+                "Place shellcheck directives before commands, not after.",
+            );
+            let _ = self.read_any_comment();
+        }
+    }
+
     /// Non-consuming lookahead for `#` (spaces) `shellcheck` `<ws>`.
     fn at_annotation_prefix(&self) -> bool {
         let mut i = self.idx;
@@ -1619,6 +1638,8 @@ pub struct ParseSpec {
     pub shell_flag_specified: bool,
     /// The dialect as far as the caller knows it.
     pub shell_hint: Option<Shell>,
+    /// The annotations `readConfigFile` would have read for this script.
+    pub rc_annotations: Vec<Annotation>,
     /// How `source` statements are resolved and read.
     pub sys: Rc<dyn System>,
 }
@@ -1633,6 +1654,7 @@ impl Default for ParseSpec {
             check_sourced: false,
             shell_flag_specified: false,
             shell_hint: None,
+            rc_annotations: Vec::new(),
             sys: Rc::new(NoExternalSources),
         }
     }
@@ -1648,6 +1670,7 @@ pub fn parse_script_spec(spec: &ParseSpec) -> ParseOutput {
         spec.shell_hint,
     );
     p.sys = Rc::clone(&spec.sys);
+    p.rc_annotations.clone_from(&spec.rc_annotations);
     p.check_sourced = spec.check_sourced;
     p.root_filename.clone_from(&spec.filename);
     finish_parse(p)

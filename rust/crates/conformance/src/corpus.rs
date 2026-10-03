@@ -267,7 +267,11 @@ fn extract_text(file: &str, text: &str) -> Vec<Entry> {
             continue;
         };
         let id = joined[..eq].trim().to_string();
-        let body = &joined[eq + 3..];
+        let body = joined[eq + 3..].trim_start();
+        let body = body
+            .strip_prefix("not $ isOk")
+            .map_or_else(|| body.to_string(), |rest| format!("isNotOk{rest}"));
+        let body = body.as_str();
         // The helper is the leading identifier of the body.
         let Some(helper) = HELPERS.iter().find(|h| {
             body.starts_with(**h) && !body[h.len()..].starts_with(|c: char| c.is_alphanumeric())
@@ -587,6 +591,16 @@ mod tests {
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].helper, "verifyTree");
         assert_eq!(e[0].script, "foo() { :; }; sudo foo");
+    }
+
+    #[test]
+    fn negated_is_ok_is_is_not_ok() {
+        let e = extract_text(
+            "Parser.hs",
+            r#"prop_readCondition27 = not $ isOk readConditionCommand "[[ x ]] foo""#,
+        );
+        assert_eq!(e[0].helper, "isNotOk");
+        assert_eq!(e[0].script, "[[ x ]] foo");
     }
 
     #[test]

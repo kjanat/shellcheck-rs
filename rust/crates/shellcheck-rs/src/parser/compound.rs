@@ -928,6 +928,7 @@ impl Parser {
         // takes the spacing after the keyword with it.
         self.consume_keyword("in")?;
         self.spacing();
+        self.skip_annotation_and_warn();
         let mut items = Vec::new();
         // `readCmdWord `reluctantlyTill` (g_Semi <|> linefeed <|> g_Do)`
         loop {
@@ -935,6 +936,7 @@ impl Parser {
                 break;
             }
             let m = self.mark();
+            self.skip_annotation_and_warn();
             if let Ok(w) = self.read_normal_word() {
                 items.push(w);
                 self.spacing();
@@ -1060,6 +1062,8 @@ impl Parser {
         if self.consume_keyword("in").is_err() {
             return self.fail_with("Expected 'in'");
         }
+        self.spacing();
+        self.skip_annotation_and_warn();
         self.allspacing();
         // `many readCaseItem`: an item that failed after consuming input is the
         // case expression's failure, not the end of the list.

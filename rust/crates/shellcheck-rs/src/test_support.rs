@@ -6,7 +6,7 @@
 
 use crate::analyzer_lib::{Check, Out, Parameters, get_path, make_parameters};
 use crate::ast::{Annotation, InnerToken, Token};
-use crate::interface::{Code, DiagnosticCode, Shell};
+use crate::interface::{Code, Shell};
 use crate::parser::parse_script;
 
 /// The message of the first `code` that the whole pipeline reports on `script`.
@@ -22,12 +22,6 @@ pub fn message_of(script: &str, code: Code) -> String {
         || panic!("SC{code} does not fire on {script:?}"),
         |c| c.comment.message,
     )
-}
-
-/// The number of an `SC` code; a check never emits any other.
-pub fn sc(code: DiagnosticCode) -> Code {
-    code.sc()
-        .unwrap_or_else(|| panic!("{code} is not an SC code"))
 }
 
 pub fn params_for(script: &str) -> Parameters {
@@ -62,7 +56,7 @@ fn is_ignored(params: &Parameters, code: Code, id: crate::ast::Id) -> bool {
 /// `runAndGetComments`: run a tree check on the root, then `filterByAnnotation`.
 fn run_and_get_comments(params: &Parameters, f: impl FnOnce(&Parameters, &Token) -> Out) -> Out {
     let mut out = f(params, &params.root);
-    out.retain(|c| !is_ignored(params, sc(c.comment.code), c.id));
+    out.retain(|c| !is_ignored(params, c.comment.code, c.id));
     out
 }
 
@@ -107,7 +101,7 @@ pub fn emits_code(f: impl Check, s: &str, code: i64) -> bool {
 
 /// The distinct codes a node check emits, sorted.
 pub fn codes(f: impl Check, s: &str) -> Vec<i64> {
-    let mut v: Vec<i64> = collect(f, s).iter().map(|c| sc(c.comment.code)).collect();
+    let mut v: Vec<i64> = collect(f, s).iter().map(|c| c.comment.code).collect();
     v.sort_unstable();
     v.dedup();
     v

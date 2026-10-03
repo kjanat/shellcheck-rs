@@ -50,7 +50,7 @@ fn format_comment(c: &PositionedComment) -> String {
         attr("column", &c.start.column.to_string()),
         attr("severity", severity(c.comment.severity)),
         attr("message", &c.comment.message),
-        attr("source", &format!("ShellCheck.{}", c.comment.code)),
+        attr("source", &format!("ShellCheck.SC{}", c.comment.code)),
     )
 }
 

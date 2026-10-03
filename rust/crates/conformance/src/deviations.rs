@@ -19,16 +19,11 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use crate::CommentKey;
-use shellcheck_rs::interface::DiagnosticCode;
 
 /// The codes ShellCheck emits when a script does not parse: SC1073 names the
 /// construct, SC1009 the enclosing one, SC1072 ends the run. Nothing else is
 /// reported, and no analysis happens.
-pub const FATAL_PARSE_CODES: [DiagnosticCode; 3] = [
-    DiagnosticCode::Sc(1073),
-    DiagnosticCode::Sc(1009),
-    DiagnosticCode::Sc(1072),
-];
+const FATAL_PARSE_CODES: [i64; 3] = [1073, 1009, 1072];
 
 pub struct Deviation {
     /// Stable id, quoted in gate/fuzz output and in `PARITY-NOTES.md`.
@@ -86,7 +81,7 @@ fn shell_accepts(script: &str, interpreter: &str) -> Option<bool> {
     Some(child.wait().ok()?.success())
 }
 
-fn codes(keys: &[CommentKey]) -> Vec<DiagnosticCode> {
+fn codes(keys: &[CommentKey]) -> Vec<i64> {
     keys.iter().map(|k| k.code).collect()
 }
 
@@ -105,7 +100,7 @@ pub fn sanctioned(
     let oracle_codes = codes(oracle);
     let port_codes = codes(port);
     let oracle_is_fatal_only = !oracle_codes.is_empty()
-        && oracle_codes.contains(&DiagnosticCode::Sc(1072))
+        && oracle_codes.contains(&1072)
         && oracle_codes.iter().all(|c| FATAL_PARSE_CODES.contains(c));
     let port_parsed = !port_codes.iter().any(|c| FATAL_PARSE_CODES.contains(c));
     if !(oracle_is_fatal_only && port_parsed) {
@@ -130,7 +125,7 @@ mod tests {
             end_line: 1,
             end_column: 1,
             level: "error".to_string(),
-            code: DiagnosticCode::Sc(code),
+            code,
             message: String::new(),
             fix: None,
         }

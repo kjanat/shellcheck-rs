@@ -12,9 +12,7 @@ use crate::ast_lib::is_annotation_ignoring_code;
 use crate::ast_lib::{get_literal_string_def, oversimplify_concat};
 use crate::cfg::{CFGParameters, InternalError};
 use crate::cfg_analysis::{self, CFGAnalysis};
-use crate::interface::{
-    Code, Comment, DiagnosticCode, Fix, PositionMap, Severity, Shell, TokenComment,
-};
+use crate::interface::{Code, Comment, Fix, PositionMap, Severity, Shell, TokenComment};
 use crate::regex_lib::mk_regex;
 use std::collections::BTreeMap;
 
@@ -200,7 +198,7 @@ pub fn make_comment(severity: Severity, id: Id, code: Code, note: &str) -> Token
         id,
         comment: Comment {
             severity,
-            code: DiagnosticCode::Sc(code),
+            code,
             message: note.to_string(),
         },
         fix: None,
@@ -220,7 +218,7 @@ pub fn make_comment_with_fix(
         id,
         comment: Comment {
             severity,
-            code: DiagnosticCode::Sc(code),
+            code,
             message: note.to_string(),
         },
         // "If fix is empty, pretend it wasn't there" -- a check that decides it
@@ -663,7 +661,7 @@ pub fn make_parameters_ext(
             cf_lastpipe: has_lastpipe,
             cf_pipefail: has_pipefail,
         };
-        match cfg_analysis::analyze_control_flow(&cf_params, &root) {
+        match analyze_control_flow(cf_params, &root) {
             Ok(analysis) => (Some(analysis), None),
             Err(e) => (None, Some(e)),
         }
@@ -710,16 +708,27 @@ pub fn get_enable_directives(root: &Token) -> Vec<String> {
     }
 }
 
-/// `getExtendedAnalysisDirective`: the last `extended-analysis=` annotation, if any.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static INJECTED_DATAFLOW_ERROR: std::cell::Cell<Option<InternalError>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn analyze_control_flow(params: CFGParameters, root: &Token) -> Result<CFGAnalysis, InternalError> {
+    #[cfg(test)]
+    if let Some(error) = INJECTED_DATAFLOW_ERROR.with(std::cell::Cell::take) {
+        return Err(error);
+    }
+    cfg_analysis::analyze_control_flow(&params, root)
+}
+
+/// `getExtendedAnalysisDirective`: the first `extended-analysis=` annotation, if any.
 fn get_extended_analysis_directive(root: &Token) -> Option<bool> {
     if let InnerToken::T_Annotation { annotations, .. } = &*root.inner {
-        let mut result = None;
-        for a in annotations {
-            if let Annotation::ExtendedAnalysis(b) = a {
-                result = Some(*b);
-            }
-        }
-        result
+        annotations.iter().find_map(|a| match a {
+            Annotation::ExtendedAnalysis(b) => Some(*b),
+            _ => None,
+        })
     } else {
         None
     }

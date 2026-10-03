@@ -4,10 +4,9 @@
 use crate::analytics;
 use crate::analyzer_lib;
 use crate::ast::Id;
-use crate::cfg::InternalError;
 use crate::interface::{
-    CheckResult, CheckSpec, Comment, DiagnosticCode, NoExternalSources, Position,
-    PositionedComment, RSC_DATAFLOW_SKIPPED, RcParseProblem, Severity, Shell, System, TokenComment,
+    CheckResult, CheckSpec, Code, Comment, NoExternalSources, Position, PositionedComment,
+    RcParseProblem, Severity, Shell, System, TokenComment,
 };
 use crate::parser::{self, ParseNote};
 use std::rc::Rc;
@@ -33,6 +32,11 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
         shell_hint: spec
             .shell_type_override
             .or_else(|| shell_from_filename(&spec.filename)),
+        rc_annotations: spec
+            .rc
+            .as_ref()
+            .map(|rc| rc.annotations.clone())
+            .unwrap_or_default(),
         sys,
     });
 
@@ -48,7 +52,7 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
     }
 
     // Analysis comments (SC2xxx/SC3xxx): resolved from ids via the position map.
-    if let Some(root) = parse.root.clone() {
+    let dataflow_error = if let Some(root) = parse.root.clone() {
         // `asOptionalChecks = getEnableDirectives root ++ csOptionalChecks spec`
         let mut optional = analyzer_lib::get_enable_directives(&root);
         optional.extend(spec.optional_checks.iter().cloned());
@@ -66,10 +70,10 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
             }
             positioned.push(token_to_position(&tc, &parse.positions));
         }
-        if let Some(error) = params.dataflow_error {
-            positioned.push(dataflow_skipped_comment(&spec.filename, error));
-        }
-    }
+        params.dataflow_error
+    } else {
+        None
+    };
 
     // Filter by severity / include / exclude.
     positioned.retain(|pc| should_include(pc, spec));
@@ -83,6 +87,7 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
     CheckResult {
         filename: spec.filename.clone(),
         comments: positioned,
+        dataflow_error,
     }
 }
 
@@ -93,7 +98,7 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
 fn annotation_ignores(
     params: &analyzer_lib::Parameters,
     id: Id,
-    code: DiagnosticCode,
+    code: Code,
     check_sourced: bool,
 ) -> bool {
     use crate::ast::{Annotation, InnerToken};
@@ -108,7 +113,6 @@ fn annotation_ignores(
             if let InnerToken::T_Annotation { annotations, .. } = &*tok.inner {
                 for a in annotations {
                     if let Annotation::DisableComment(from, to) = a
-                        && let Some(code) = code.sc()
                         && code >= *from
                         && code < *to
                     {
@@ -137,37 +141,12 @@ fn rc_problem_comment(problem: &RcParseProblem) -> PositionedComment {
         end: pos,
         comment: Comment {
             severity: Severity::ErrorC,
-            code: DiagnosticCode::Sc(1134),
+            code: 1134,
             message: format!(
                 "Failed to process {}, line {}: {} Fix any mentioned problems and try again.",
                 crate::ast_lib::e4m(&problem.filename),
                 problem.line,
                 problem.suggestion
-            ),
-        },
-        fix: None,
-    }
-}
-
-/// RSC1001 at the top of `filename`: the dataflow analysis stopped on an
-/// internal error and its checks were skipped.
-fn dataflow_skipped_comment(
-    filename: &str,
-    InternalError(what): InternalError,
-) -> PositionedComment {
-    let pos = Position {
-        file: filename.to_string(),
-        line: 1,
-        column: 1,
-    };
-    PositionedComment {
-        start: pos.clone(),
-        end: pos,
-        comment: Comment {
-            severity: Severity::ErrorC,
-            code: RSC_DATAFLOW_SKIPPED,
-            message: format!(
-                "ShellCheck internal error, please report: {what}. The dataflow checks were skipped for this file."
             ),
         },
         fix: None,
@@ -180,7 +159,7 @@ fn note_to_positioned(n: &ParseNote) -> PositionedComment {
         end: n.end.clone(),
         comment: Comment {
             severity: n.severity,
-            code: DiagnosticCode::Sc(n.code),
+            code: n.code,
             message: n.message.clone(),
         },
         fix: None,
@@ -206,15 +185,6 @@ fn should_include(pc: &PositionedComment, spec: &CheckSpec) -> bool {
     if severity > spec.min_severity {
         return false;
     }
-    // rc `disable=` ranges are annotations upstream, so they suppress a code
-    // independently of the include/exclude lists. A code is compared against
-    // the range endpoints (`code >= n && code < m`).
-    if let Some(rc) = &spec.rc
-        && let Some(n) = code.sc()
-        && rc.disabled_ranges.iter().any(|r| r.contains(n))
-    {
-        return false;
-    }
     spec.included_warnings.as_ref().map_or_else(
         || !spec.excluded_warnings.contains(&code),
         |included| included.contains(&code),
@@ -231,7 +201,7 @@ fn nub(v: Vec<PositionedComment>) -> Vec<PositionedComment> {
     out
 }
 
-type OrderKey = (String, i64, i64, Severity, DiagnosticCode, String);
+type OrderKey = (String, i64, i64, Severity, Code, String);
 
 fn order_key(pc: &PositionedComment) -> OrderKey {
     (
@@ -264,8 +234,9 @@ fn shell_from_filename(filename: &str) -> Option<Shell> {
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod source_tests {
-    //! The source-following properties of `ShellCheck.Checker`, which upstream
-    //! runs against `mockedSystemInterface`.
+    //! The properties of `ShellCheck.Checker`, which upstream runs against
+    //! `mockedSystemInterface`. The ones that read an rc file are in
+    //! `shellcheck_cli::rc`, where this port reads it.
     use super::*;
     use crate::interface::{ErrorMessage, MockSystem};
     use std::cell::RefCell;
@@ -275,7 +246,7 @@ mod source_tests {
         let mut codes: Vec<i64> = check_script_with(sys, spec)
             .comments
             .iter()
-            .map(|c| crate::test_support::sc(c.comment.code))
+            .map(|c| c.comment.code)
             .collect();
         codes.sort_unstable();
         codes
@@ -287,7 +258,7 @@ mod source_tests {
             Rc::new(MockSystem::new(includes)),
             &CheckSpec {
                 script: script.to_string(),
-                excluded_warnings: vec![DiagnosticCode::Sc(2148)],
+                excluded_warnings: vec![2148],
                 ..CheckSpec::default()
             },
         )
@@ -299,7 +270,7 @@ mod source_tests {
             Rc::new(MockSystem::new(includes)),
             &CheckSpec {
                 script: script.to_string(),
-                excluded_warnings: vec![DiagnosticCode::Sc(2148)],
+                excluded_warnings: vec![2148],
                 check_sourced: true,
                 ..CheckSpec::default()
             },
@@ -309,6 +280,24 @@ mod source_tests {
     /// `check`: no includes at all, so every source fails to resolve.
     fn check(script: &str) -> Vec<i64> {
         check_with_includes(&[], script)
+    }
+
+    /// `checkWithSpec`.
+    fn check_with_spec(includes: &[(&str, &str)], spec: &CheckSpec) -> Vec<i64> {
+        errors(Rc::new(MockSystem::new(includes)), spec)
+    }
+
+    /// `checkOptionIncludes`.
+    fn check_option_includes(includes: Option<&[i64]>, script: &str) -> Vec<i64> {
+        check_with_spec(
+            &[],
+            &CheckSpec {
+                script: script.to_string(),
+                included_warnings: includes.map(<[i64]>::to_vec),
+                check_sourced: true,
+                ..CheckSpec::default()
+            },
+        )
     }
 
     /// A mock whose `siFindSource` is a caller-supplied function, recording what
@@ -795,40 +784,391 @@ mod source_tests {
         );
         assert_eq!(codes, vec![3046, 3051]);
     }
+
+    #[test]
+    fn prop_findsParseIssue() {
+        assert_eq!(check("echo \"$12\""), vec![1037]);
+    }
+
+    #[test]
+    fn prop_commentDisablesParseIssue1() {
+        assert_eq!(
+            check("#shellcheck disable=SC1037\necho \"$12\""),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_commentDisablesParseIssue2() {
+        assert_eq!(
+            check("#shellcheck disable=SC1037\n#lol\necho \"$12\""),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_findsAnalysisIssue() {
+        assert_eq!(check("echo $1"), vec![2086]);
+    }
+
+    #[test]
+    fn prop_commentDisablesAnalysisIssue1() {
+        assert_eq!(
+            check("#shellcheck disable=SC2086\necho $1"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_commentDisablesAnalysisIssue2() {
+        assert_eq!(
+            check("#shellcheck disable=SC2086\n#lol\necho $1"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_optionDisablesIssue1() {
+        assert_eq!(
+            check_with_spec(
+                &[],
+                &CheckSpec {
+                    script: "echo $1".to_string(),
+                    excluded_warnings: vec![2148, 2086],
+                    ..CheckSpec::default()
+                }
+            ),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_optionDisablesIssue2() {
+        assert_eq!(
+            check_with_spec(
+                &[],
+                &CheckSpec {
+                    script: "echo \"$10\"".to_string(),
+                    excluded_warnings: vec![2148, 1037],
+                    ..CheckSpec::default()
+                }
+            ),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_wontParseBadShell() {
+        assert_eq!(check("#!/usr/bin/python\ntrue $1\n"), vec![1071]);
+    }
+
+    #[test]
+    fn prop_optionDisablesBadShebang() {
+        assert_eq!(
+            check_with_spec(
+                &[],
+                &CheckSpec {
+                    script: "#!/usr/bin/python\ntrue\n".to_string(),
+                    shell_type_override: Some(Shell::Sh),
+                    ..CheckSpec::default()
+                }
+            ),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_annotationDisablesBadShebang() {
+        assert_eq!(
+            check("#!/usr/bin/python\n# shellcheck shell=sh\ntrue\n"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_filewideAnnotationBase() {
+        assert_eq!(check("#!/bin/sh\necho $1"), vec![2086]);
+    }
+
+    #[test]
+    fn prop_filewideAnnotation1() {
+        assert_eq!(
+            check("#!/bin/sh\n# shellcheck disable=2086\necho $1"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_filewideAnnotation2() {
+        assert_eq!(
+            check("#!/bin/sh\n# shellcheck disable=2086\ntrue\necho $1"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_filewideAnnotation3() {
+        assert_eq!(
+            check("#!/bin/sh\n#unrelated\n# shellcheck disable=2086\ntrue\necho $1"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_filewideAnnotation4() {
+        assert_eq!(
+            check("#!/bin/sh\n# shellcheck disable=2086\n#unrelated\ntrue\necho $1"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_filewideAnnotation5() {
+        assert_eq!(
+            check("#!/bin/sh\n\n\n\n#shellcheck disable=2086\ntrue\necho $1"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_filewideAnnotation6() {
+        assert_eq!(
+            check("#shellcheck shell=sh\n#unrelated\n#shellcheck disable=2086\ntrue\necho $1"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_filewideAnnotation7() {
+        assert_eq!(
+            check("#!/bin/sh\n# shellcheck disable=2086\n#unrelated\ntrue\necho $1"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_filewideAnnotationBase2() {
+        assert_eq!(check("true\n[ $? == 0 ] && echo $1"), vec![2086, 2181]);
+    }
+
+    #[test]
+    fn prop_filewideAnnotation8() {
+        assert_eq!(
+            check(
+                "# Disable $? warning\n#shellcheck disable=SC2181\n# Disable quoting warning\n#shellcheck disable=2086\ntrue\n[ $? == 0 ] && echo $1"
+            ),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_spinBug1413() {
+        assert_eq!(
+            check("fun() {\n# shellcheck disable=SC2188\n> /dev/null\n}\n"),
+            Vec::<i64>::new()
+        );
+    }
+
+    fn check_file(filename: &str, script: &str) -> Vec<i64> {
+        check_with_spec(
+            &[],
+            &CheckSpec {
+                filename: filename.to_string(),
+                script: script.to_string(),
+                ..CheckSpec::default()
+            },
+        )
+    }
+
+    #[test]
+    fn prop_deducesTypeFromExtension() {
+        assert_eq!(check_file("file.ksh", "(( 3.14 ))"), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn prop_deducesTypeFromExtension2() {
+        assert_eq!(check_file("file.bash", "(( 3.14 ))"), vec![2079]);
+    }
+
+    #[test]
+    fn prop_deducesTypeFromEnvrcExtension() {
+        assert_eq!(check_file(".envrc", "(( 3.14 ))"), vec![2079]);
+    }
+
+    #[test]
+    fn prop_canDisableShebangWarning() {
+        assert_eq!(
+            check_file("file.sh", "#shellcheck disable=SC2148\nfoo"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_canDisableAllWarnings() {
+        assert_eq!(
+            check_file(
+                "file.sh",
+                "#!/bin/sh\necho $1\n#shellcheck disable=all\necho `echo $1`"
+            ),
+            vec![2086]
+        );
+    }
+
+    #[test]
+    fn prop_canDisableParseErrors() {
+        assert_eq!(
+            check_file("file.sh", "#shellcheck disable=SC1073,SC1072,SC2148\n()"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_shExtensionDoesntMatter() {
+        assert_eq!(check_file("file.sh", "echo 'hello world'"), vec![2148]);
+    }
+
+    #[test]
+    fn prop_canEnableOptionalsWithSpec() {
+        assert_eq!(
+            check_with_spec(
+                &[],
+                &CheckSpec {
+                    filename: "file.sh".to_string(),
+                    script: "#!/bin/sh\n[ \"$1\" ]".to_string(),
+                    optional_checks: vec!["avoid-nullary-conditions".to_string()],
+                    ..CheckSpec::default()
+                }
+            ),
+            vec![2244]
+        );
+    }
+
+    #[test]
+    fn prop_optionIncludes1() {
+        assert_eq!(
+            check_option_includes(Some(&[2080]), "#!/bin/sh\n var='a b'\n echo $var"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn prop_optionIncludes2() {
+        assert_eq!(
+            check_option_includes(Some(&[2086]), "#!/bin/sh\n var='a b'\n echo $var"),
+            vec![2086]
+        );
+    }
+
+    #[test]
+    fn prop_optionIncludes3() {
+        assert_eq!(
+            check_option_includes(None, "#!/bin/sh\n var='a b'\n echo $var"),
+            vec![2086]
+        );
+    }
+
+    #[test]
+    fn prop_optionIncludes4() {
+        assert_eq!(
+            check_option_includes(
+                Some(&[2154]),
+                "#!/bin/sh\n var='a b'\n echo $var\n echo $bar"
+            ),
+            vec![2154]
+        );
+    }
+
+    #[test]
+    fn prop_hereDocsAreParsedWithoutTrailingLinefeed() {
+        assert!(check("cat << eof").contains(&1044));
+    }
+
+    #[test]
+    fn prop_hereDocsWillHaveParsedIndices() {
+        assert_eq!(
+            check("#!/bin/bash\nmy_array=(a b)\ncat <<EOF >> ./test\n $(( 1 + my_array[1] ))\nEOF"),
+            Vec::<i64>::new()
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_dataflow_error_is_rsc1001_at_the_top_of_the_file() {
-        let pc = dataflow_skipped_comment("x.sh", InternalError("Missing root"));
-        assert_eq!(pc.comment.code, RSC_DATAFLOW_SKIPPED);
-        assert_eq!(pc.comment.severity, Severity::ErrorC);
-        assert_eq!(
-            (pc.start.file.as_str(), pc.start.line, pc.start.column),
-            ("x.sh", 1, 1)
-        );
-        assert_eq!(
-            pc.comment.message,
-            "ShellCheck internal error, please report: Missing root. \
-             The dataflow checks were skipped for this file."
-        );
-        let spec = CheckSpec::default();
-        assert!(should_include(&pc, &spec));
-        let only_sc = CheckSpec {
-            included_warnings: Some(vec![DiagnosticCode::Sc(2086)]),
-            ..CheckSpec::default()
-        };
-        assert!(!should_include(&pc, &only_sc));
-        let excluded = CheckSpec {
-            excluded_warnings: vec![RSC_DATAFLOW_SKIPPED],
-            ..CheckSpec::default()
-        };
-        assert!(!should_include(&pc, &excluded));
+    use crate::analyzer_lib::INJECTED_DATAFLOW_ERROR;
+    use crate::cfg::InternalError;
+
+    fn with_dataflow_error(spec: &CheckSpec) -> CheckResult {
+        INJECTED_DATAFLOW_ERROR.with(|e| e.set(Some(InternalError("Missing root"))));
+        let result = check_script(spec);
+        INJECTED_DATAFLOW_ERROR.with(|e| e.set(None));
+        result
     }
-    use crate::interface::{DisableRange, RcDirectives, RcParseProblem};
+
+    #[test]
+    fn a_dataflow_error_survives_every_filter_and_keeps_the_other_comments() {
+        let script = "#!/bin/sh\necho $1\n";
+        let filters = [
+            CheckSpec::default(),
+            CheckSpec {
+                included_warnings: Some(vec![2154]),
+                ..CheckSpec::default()
+            },
+            CheckSpec {
+                excluded_warnings: vec![2086],
+                ..CheckSpec::default()
+            },
+            CheckSpec {
+                min_severity: Severity::ErrorC,
+                ..CheckSpec::default()
+            },
+            CheckSpec {
+                rc: Some(Box::new(RcDirectives {
+                    annotations: vec![Annotation::DisableComment(0, 1_000_000)],
+                    parse_problem: None,
+                })),
+                ..CheckSpec::default()
+            },
+        ];
+        for filter in filters {
+            let spec = CheckSpec {
+                filename: "x.sh".to_string(),
+                script: script.to_string(),
+                ..filter
+            };
+            let result = with_dataflow_error(&spec);
+            assert_eq!(
+                result.dataflow_error,
+                Some(InternalError("Missing root")),
+                "{spec:?}"
+            );
+            assert_eq!(result.comments, check_script(&spec).comments, "{spec:?}");
+        }
+        let unfiltered = with_dataflow_error(&spec("#!/bin/sh\necho $1\n"));
+        assert_eq!(
+            unfiltered
+                .comments
+                .iter()
+                .map(|c| c.comment.code)
+                .collect::<Vec<_>>(),
+            vec![2086]
+        );
+    }
+
+    #[test]
+    fn no_dataflow_analysis_means_no_dataflow_error() {
+        let spec = CheckSpec {
+            extended_analysis: Some(false),
+            ..spec("#!/bin/sh\necho $1\n")
+        };
+        let result = with_dataflow_error(&spec);
+        assert_eq!(result.dataflow_error, None);
+        assert_eq!(check_script(&spec).dataflow_error, None);
+    }
+
+    use crate::ast::Annotation;
+    use crate::interface::{RcDirectives, RcParseProblem};
 
     fn spec(script: &str) -> CheckSpec {
         CheckSpec {
@@ -842,16 +1182,16 @@ mod tests {
         check_script(spec)
             .comments
             .iter()
-            .map(|c| crate::test_support::sc(c.comment.code))
+            .map(|c| c.comment.code)
             .collect()
     }
 
     fn with_ranges(script: &str, ranges: &[(i64, i64)]) -> CheckSpec {
         CheckSpec {
             rc: Some(Box::new(RcDirectives {
-                disabled_ranges: ranges
+                annotations: ranges
                     .iter()
-                    .map(|&(from, to)| DisableRange { from, to })
+                    .map(|&(from, to)| Annotation::DisableComment(from, to))
                     .collect(),
                 parse_problem: None,
             })),
@@ -893,7 +1233,7 @@ mod tests {
     fn rc_disabled_range_outranks_the_include_list() {
         // rc disables are annotations upstream, so --include cannot revive one.
         let mut spec = with_ranges("echo $x\n", &[(2086, 2087)]);
-        spec.included_warnings = Some(vec![DiagnosticCode::Sc(2086), DiagnosticCode::Sc(2154)]);
+        spec.included_warnings = Some(vec![2086, 2154]);
         assert_eq!(codes(&spec), vec![2154]);
     }
 
@@ -901,7 +1241,7 @@ mod tests {
     fn unparsable_rc_becomes_sc1134() {
         let spec = CheckSpec {
             rc: Some(Box::new(RcDirectives {
-                disabled_ranges: Vec::new(),
+                annotations: Vec::new(),
                 parse_problem: Some(RcParseProblem {
                     filename: "/tmp/.shellcheckrc".to_string(),
                     line: 2,
@@ -931,7 +1271,7 @@ mod tests {
         // other comment.
         assert_eq!(codes(&spec), vec![1134, 2148, 2154, 2086]);
         let excluded = CheckSpec {
-            excluded_warnings: vec![DiagnosticCode::Sc(1134)],
+            excluded_warnings: vec![1134],
             ..spec
         };
         assert_eq!(codes(&excluded), vec![2148, 2154, 2086]);
@@ -941,7 +1281,7 @@ mod tests {
     fn an_unparsable_rc_is_reported_even_when_the_script_does_not_parse() {
         let spec = CheckSpec {
             rc: Some(Box::new(RcDirectives {
-                disabled_ranges: Vec::new(),
+                annotations: Vec::new(),
                 parse_problem: Some(RcParseProblem {
                     filename: "rc".to_string(),
                     line: 1,
