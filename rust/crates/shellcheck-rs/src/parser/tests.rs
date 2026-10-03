@@ -1238,6 +1238,34 @@ mod coproc_glob_dollar_tests {
     }
 
     #[test]
+    fn a_script_that_fails_anyway_reports_upstreams_error() {
+        let codes_at = |script: &str| -> Vec<(i64, i64)> {
+            parse_script_with("-", script, true, Some(Shell::Bash))
+                .notes
+                .iter()
+                .map(|n| (n.code, n.start.column))
+                .collect()
+        };
+        assert_eq!(codes_at("!;done"), [(1035, 2), (1072, 2)]);
+        assert_eq!(codes_at("! ;\nif"), [(1072, 3)]);
+        assert!(codes_at("`!;done`").contains(&(1072, 3)));
+        assert!(!codes_at("`!;done`").iter().any(|(c, _)| *c == 1089));
+    }
+
+    #[test]
+    fn sub_parses_know_the_dialect() {
+        let rejects = |shell: Shell, script: &str| {
+            parse_script_with("-", script, true, Some(shell))
+                .notes
+                .iter()
+                .any(|n| n.code == 1072)
+        };
+        assert!(rejects(Shell::Dash, "echo `!;`"));
+        assert!(rejects(Shell::Dash, "echo $(!;)"));
+        assert!(!rejects(Shell::Bash, "echo $(!;)"));
+    }
+
+    #[test]
     fn a_bare_bang_does_not_stop_the_rest_being_analysed() {
         // The point of the deviation: line 3 still gets checked.
         let spec = crate::interface::CheckSpec {
@@ -1278,6 +1306,15 @@ mod keyword_separator_and_failure_tests {
         notes(script)
             .iter()
             .any(|(c, l, col, _)| *c == code && *l == line && *col == column)
+    }
+
+    #[test]
+    fn a_commitment_always_has_an_error_to_report() {
+        let mut p = Parser::new("-", "ab");
+        p.bump();
+        p.commit();
+        let codes: Vec<i64> = p.failure_notes().iter().map(|n| n.code).collect();
+        assert_eq!(codes, [1072]);
     }
 
     /// The whole pipeline, for the codes the analysis rather than the parser
@@ -1593,5 +1630,36 @@ mod keyword_separator_and_failure_tests {
         assert!(!checked(script, 2035, 1, 12));
         // The body is a child, and is still analysed.
         assert!(checked("coproc foo { echo $x; }", 2086, 1, 19));
+    }
+}
+
+#[cfg(test)]
+mod double_escape_tests {
+    use super::*;
+
+    fn double_quoted_literal(script: &str) -> String {
+        let mut p = Parser::new("-", script);
+        let word = p.read_normal_word().expect("a word");
+        let mut out = String::new();
+        word.visit_preorder(&mut |t| {
+            if let InnerToken::T_Literal(s) = &*t.inner {
+                out.push_str(s);
+            }
+        });
+        out
+    }
+
+    #[test]
+    fn a_double_quotable_escape_keeps_only_its_character() {
+        assert_eq!(
+            double_quoted_literal(r#""\$a\"b\\c\`d\x""#),
+            r#"$a"b\c`d\x"#
+        );
+    }
+
+    #[test]
+    fn an_escaped_line_feed_is_nothing() {
+        assert_eq!(double_quoted_literal("\"a\\\nb\""), "ab");
+        assert_eq!(double_quoted_literal("\"a\\\r\nb\""), "ab");
     }
 }

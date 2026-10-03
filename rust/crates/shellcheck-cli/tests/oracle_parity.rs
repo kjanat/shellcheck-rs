@@ -278,6 +278,7 @@ parity! {
         ..script(b"#!/usr/bin/foo\necho $1\n")
     };
     output_write_failure = Case { full_stdout: true, ..script(b"#!/bin/sh\necho $1\n") };
+    output_write_failure_on_a_clean_script = Case { full_stdout: true, ..script(b"#!/bin/sh\ntrue\n") };
     shellcheckrc_two_directives_on_a_line = files(
         &["-f", "json1", "x.sh"],
         &[(".shellcheckrc", b"disable=SC2086 shell=sh\n"), ("x.sh", b"echo $1 $'x'\n")],
@@ -372,6 +373,105 @@ parity! {
         ..script(b"${\\v}")
     };
     heredoc_delimiter_with_a_middle_dot = script("#!/bin/sh\ncat <<E\u{b7}F\nx\nE\u{b7}F\ncat <<\"E\u{b7}F\nx\n".as_bytes());
+    fuzz_seed_6_heredoc_on_a_coproc = Case {
+        args: &["-s", "busybox", "-f", "json1", "-"],
+        ..script(b"coproc <<EOF\n$r\nEOF")
+    };
+    fuzz_seed_171_heredoc_on_a_coproc = Case {
+        args: &["-s", "ksh", "-f", "json1", "-"],
+        ..script(b"coproc <<EOF\n`d`\nEOF")
+    };
+    fuzz_seed_2_carriage_return_after_a_single_quote = Case {
+        args: &["-s", "bash", "-f", "json1", "-"],
+        ..script(b"o '$('\r")
+    };
+    fuzz_seed_2_line_continuation_after_in = script(b"for o\nin\\\n");
+    carriage_return_between_words = script(b"#!/bin/sh\necho a\rb\n");
+    carriage_return_at_the_end = script(b"#!/bin/sh\necho a\r");
+    carriage_return_before_a_blank_line = script(b"#!/bin/sh\necho a\r\r\necho b\n");
+    fuzz_seed_172_function_keyword_before_a_paren = Case {
+        args: &["-s", "busybox", "-f", "json1", "-"],
+        ..script(b"function (")
+    };
+    fuzz_seed_12_word_after_a_subshell = Case {
+        args: &["-s", "sh", "-f", "json1", "-"],
+        ..script(b"(x){,}")
+    };
+    fuzz_seed_13_double_semicolon_after_arithmetic_for = script(b"for((;;i++));;");
+    fuzz_seed_15_backtick_after_a_recovered_arithmetic = script(b"`((+))``");
+    fuzz_seed_17_backtick_after_a_coproc = Case {
+        args: &["-s", "sh", "-f", "json1", "-"],
+        ..script(b"`coproc {`${")
+    };
+    fuzz_seed_20_line_continuation_after_an_assignment = Case {
+        args: &["-s", "dash", "-f", "json1", "-"],
+        ..script(b"o+=\\\nb")
+    };
+    fuzz_seed_24_index_across_a_line = Case {
+        args: &["-s", "dash", "-f", "json1", "-"],
+        ..script(b"${arr[]}\"${arr[\n]}\"\nx=(?())var=($var$())")
+    };
+    fuzz_seed_25_index_across_a_line_in_quotes = Case {
+        args: &["-s", "sh", "-f", "json1", "-"],
+        ..script(b"\"${a[\n]}\"\"\"")
+    };
+    fuzz_seed_26_space_after_a_duplication_operator = Case {
+        args: &["-s", "busybox", "-f", "json1", "-"],
+        ..script(b">&\t2")
+    };
+    fuzz_seed_24_arithmetic_or_nested_subshells = Case {
+        args: &["-s", "busybox", "-f", "json1", "-"],
+        ..script(b"((a=2>))")
+    };
+    fuzz_seed_30_directive_where_a_test_ends = Case {
+        args: &["-s", "sh", "-f", "json1", "-"],
+        ..script(b"[a =b\n#shellcheck")
+    };
+    fuzz_seed_185_array_in_a_coproc_brace_group = Case {
+        args: &["-s", "dash", "-f", "json1", "-"],
+        ..script(b"(coproc { x=('")
+    };
+    unclosed_array_in_a_coproc_brace_group = Case {
+        args: &["-s", "dash", "-f", "json1", "-"],
+        ..script(b"(coproc { x=(a")
+    };
+    fuzz_seed_185_empty_negation_in_a_backtick = Case {
+        args: &["-s", "dash", "-f", "json1", "-"],
+        ..script(b"\"`!;done\n`")
+    };
+    empty_negation_before_a_stray_keyword = Case {
+        args: &["-s", "bash", "-f", "json1", "-"],
+        ..script(b"!;done")
+    };
+    empty_negation_in_a_backtick_before_a_stray_keyword = Case {
+        args: &["-s", "bash", "-f", "json1", "-"],
+        ..script(b"`!;done`")
+    };
+    fuzz_seed_185_unterminated_heredoc_before_esac = Case {
+        args: &["-s", "sh", "-f", "json1", "-"],
+        ..script(b"case ${} in *)<<'h';;esac\nr")
+    };
+    fuzz_seed_188_brace_after_a_test = Case {
+        args: &["-s", "busybox", "-f", "json1", "-"],
+        ..script(b"if[$() ]{")
+    };
+    fuzz_seed_181_line_continuation_ending_a_heredoc_line = script(b"!/h\nt<<EOF\n`d`\\\nEOF");
+    line_continuation_ending_a_double_quoted_string = script(b"#!/bin/bash\necho \"$x\\\n\"\n");
+    fuzz_seed_12000_unclosed_character_class_in_a_glob = script(b"*[[:ii]");
+    directive_after_a_unicode_space = script("#!/bin/sh\necho hi #\u{a0}shellcheck disable=2086\n".as_bytes());
+    duplication_onto_an_fd_variable = script(b"#!/bin/bash\nexec {fd}>/dev/null\necho hi >& {fd}\n");
+    escape_sequences_in_echo = script(b"#!/bin/sh\necho 'a\\\\b' \"\\\\x41\" 'c\\x1' 'd\\'\n");
+    escape_regex_across_lines = script(b"#!/bin/bash\nPS1='\\[\n\\]'\necho \"$PS1\"\n");
+    line_continuation_before_an_assignment_operator = script(b"#!/bin/sh\no\\\n=b\necho \"$o\"\n");
+    subshell_followed_by_a_brace_group_word = script(b"#!/bin/bash\n(x){ y; }\n");
+    subshell_glued_to_a_bracket = script(b"#!/bin/bash\n(x){[\n");
+    arithmetic_for_with_a_newline_before_do = script(b"#!/bin/bash\nfor ((;;))\n\ndo :; done\n");
+    arithmetic_for_with_a_semicolon_and_comment = script(b"#!/bin/bash\nfor ((;;)); # c\ndo :; done\n");
+    function_named_function = script(b"#!/bin/bash\nfunction(){ :; }\n");
+    function_keyword_with_parameters = script(b"#!/bin/bash\nfunction foo (x) { :; }\n");
+    heredoc_inside_a_heredoc_body = script(b"#!/bin/bash\ncat <<A\n$(cat <<B\nx $y\nB\n)\nA\n");
+    heredoc_on_a_named_coproc = script(b"#!/bin/bash\ncoproc foo { cat <<EOF\n$r\nEOF\n}\n");
+    heredoc_in_a_dollar_brace_command = script(b"#!/bin/bash\necho ${ cat <<EOF\n$r\nEOF\n}\n");
     directive_after_a_command = script(b"#!/bin/sh\necho hi # shellcheck disable=SC2086\n");
     directive_after_an_argument = script(b"#!/bin/sh\necho $1 # shellcheck disable=SC2086\n");
     source_directive_after_a_command = script(b"#!/bin/sh\necho $1 # shellcheck source=foo\n");

@@ -428,7 +428,7 @@ fn enclosed_regex() -> &'static regex::Regex {
 
 fn escape_regex() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| mk_regex(r"\\x1[Bb]|\\e|\x1b|\\033"))
+    RE.get_or_init(|| mk_regex("\\\\x1[Bb]|\\\\e|\x1b|\\\\033"))
 }
 
 fn contains_unescaped(s: &str) -> bool {

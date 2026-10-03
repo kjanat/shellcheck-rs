@@ -89,21 +89,22 @@ fn codes(keys: &[CommentKey]) -> Vec<i64> {
 ///
 /// Only one class so far: the oracle rejects the file outright, the port does
 /// not, and the shell being checked agrees with the port that the script parses.
-/// A script no shell accepts is not covered, and neither is any difference that
-/// leaves the oracle's fatal codes in the port's own output.
+/// Whatever else the oracle reported before it gave up, the port must report
+/// too. A script no shell accepts is not covered, and neither is any difference
+/// that leaves the oracle's fatal codes in the port's own output.
 pub fn sanctioned(
     script: &str,
     shell: Option<&str>,
     port: &[CommentKey],
     oracle: &[CommentKey],
 ) -> Option<&'static Deviation> {
-    let oracle_codes = codes(oracle);
     let port_codes = codes(port);
-    let oracle_is_fatal_only = !oracle_codes.is_empty()
-        && oracle_codes.contains(&1072)
-        && oracle_codes.iter().all(|c| FATAL_PARSE_CODES.contains(c));
+    let oracle_rejected = codes(oracle).contains(&1072)
+        && oracle
+            .iter()
+            .all(|k| FATAL_PARSE_CODES.contains(&k.code) || port.contains(k));
     let port_parsed = !port_codes.iter().any(|c| FATAL_PARSE_CODES.contains(c));
-    if !(oracle_is_fatal_only && port_parsed) {
+    if !(oracle_rejected && port_parsed) {
         return None;
     }
     match shell_accepts(script, interpreter(script, shell)) {
@@ -143,6 +144,13 @@ mod tests {
     fn a_script_bash_accepts_and_the_oracle_rejects_is_sanctioned() {
         let oracle = [key(1072)];
         assert!(sanctioned("! # c", Some("bash"), &[], &oracle).is_some());
+    }
+
+    #[test]
+    fn a_problem_both_tools_report_does_not_block_the_sanction() {
+        let oracle = [key(1035), key(1072)];
+        assert!(sanctioned("!;true", Some("bash"), &[key(1035)], &oracle).is_some());
+        assert!(sanctioned("!;true", Some("bash"), &[], &oracle).is_none());
     }
 
     #[test]

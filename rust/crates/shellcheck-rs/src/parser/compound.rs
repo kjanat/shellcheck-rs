@@ -111,8 +111,18 @@ impl Parser {
             self.reset(m);
             return Ok(());
         }
+        // `g_Lbrace` is a `tryWordToken`, so `{,}` is a word and not the keyword.
         if self.peek() == Some('{') {
-            return Ok(());
+            self.warn_keyword_needs_space("{");
+            if self.at_keyword_separator(1) {
+                let m = self.mark();
+                self.bump();
+                self.spacing();
+                let _: PResult<()> = self.fail_recoverable("Unexpected ");
+                self.reset(m);
+                return Ok(());
+            }
+            self.keyword_attempt_failure("{");
         }
         let m = self.mark();
         let notes = self.notes.len();
@@ -247,11 +257,10 @@ impl Parser {
         }
         // `try allspacingOrFail`, which may also have here documents to read:
         // Parsec's state -- the cursor, the notes, the pending documents and
-        // their bodies -- goes back whatever happens; the problems, reported
-        // against the `StateT` underneath, stay.
+        // their bodies -- goes back whatever happens; the problems and the
+        // context stack, in the `StateT` underneath, stay.
         let m = self.mark();
         let notes = self.notes.len();
-        let contexts = self.contexts.clone();
         let committed = self.committed;
         let frozen = self.frozen_contexts.clone();
         let failure = self.failure.clone();
@@ -261,11 +270,13 @@ impl Parser {
             self.bump();
         }
         let read = !self.allspacing().is_empty();
+        if !read {
+            self.record_failure_as("Expected whitespace", true, true);
+        }
         let ok = read && self.committed == committed;
+        self.committed = committed;
         self.reset(m);
         self.notes.truncate(notes);
-        self.contexts = contexts;
-        self.committed = committed;
         self.frozen_contexts = frozen;
         if ok {
             // `lookAhead` succeeded: it replies with an unknown error at its
@@ -441,10 +452,8 @@ impl Parser {
     fn read_arithmetic_delimiter(&mut self, c: char, msg: &str) -> PResult<()> {
         self.char(c)?;
         let start = self.pos();
-        let before = self.idx;
-        self.spacing();
+        let spaced = !self.spacing().is_empty();
         let end = self.pos();
-        let spaced = self.idx != before;
         if self.char(c).is_err() {
             self.problem_at(start.clone(), start, Severity::ErrorC, 1137, msg);
             return self.fail_with("");
@@ -862,10 +871,14 @@ impl Parser {
                     "Missing second ')' to terminate 'for ((;;))' loop condition",
                 )?;
                 p.spacing();
-                // optional sequential separator, then do..done (or brace group)
-                p.allspacing();
-                let _ = p.char(';');
-                p.allspacing();
+                // `optional $ readSequentialSep >> spacing`, where
+                // `readSequentialSep = (g_Semi >> readLineBreak) <|> readNewlineList`.
+                if p.g_semi().is_ok() {
+                    p.line_break();
+                } else {
+                    p.newline_list();
+                }
+                p.spacing();
                 let body = p.read_braced_or_do_group(&kw)?;
                 let id = p.next_id_between(id_span.0, id_span.1);
                 Ok(Token::new(
@@ -1103,11 +1116,11 @@ impl Parser {
     }
 
     fn read_case_item(&mut self) -> PResult<CaseClause> {
-        // `notFollowedBy2 g_Esac`
-        if self.keyword_ahead("esac") {
-            return Err(());
-        }
         self.called("case item", |p| {
+            // `notFollowedBy2 g_Esac`
+            if p.keyword_ahead("esac") {
+                return Err(());
+            }
             if p.at_annotation_prefix() {
                 let pos = p.pos();
                 p.problem_at(
@@ -1337,6 +1350,7 @@ impl Parser {
         // the cursor at the keyword and `readCommand` goes on to read
         // `function` as the ordinary command name it is in a POSIX shell.
         let sm = self.mark();
+        let mut keyword_read = false;
         let signature = self.try_parse(|p| {
             // `try $ string "function" >> whitespace`: a plain string, with no
             // missing-space warning of its own, and the one whitespace
@@ -1344,11 +1358,10 @@ impl Parser {
             // is a function definition whose `{` is missing.
             p.string("function")?;
             p.whitespace()?;
+            keyword_read = true;
             p.spacing();
             let name = p.read_function_name_ext(true)?;
-            let before_spaces = p.idx;
-            p.spacing();
-            let had_spaces = p.idx != before_spaces;
+            let had_spaces = !p.spacing().is_empty();
             // optional ()
             let has_parens = if p.peek() == Some('(') {
                 p.read_function_parens()?;
@@ -1371,10 +1384,13 @@ impl Parser {
         // `readFunctionSignature = readWithFunction <|> readWithoutFunction`,
         // both inside the one `called "function"`: `function(){ :; }` is a
         // function *named* `function`, since the keyword form wants whitespace
-        // after the word.
+        // after the word. Once that whitespace is read, `<|>` has nothing to
+        // try: `function (` is the command `function`.
         let (name, has_parens) = match signature {
             Ok(v) => v,
-            Err(()) if self.idx == sm.idx => return self.read_posix_function_body(),
+            Err(()) if self.idx == sm.idx && !keyword_read => {
+                return self.read_posix_function_body();
+            }
             Err(()) => return Err(()),
         };
         self.allspacing();

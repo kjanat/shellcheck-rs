@@ -333,6 +333,10 @@ impl Parser {
         loop {
             let m = self.mark();
             if self.linefeed_or_carriage_return().is_err() {
+                if self.idx != m.idx {
+                    self.commit();
+                    return;
+                }
                 self.reset(m);
                 break;
             }
@@ -354,10 +358,11 @@ impl Parser {
         } else {
             // `readTerm <|> return []` only recovers a failure that
             // consumed nothing.
-            if self.idx != m.idx {
+            if self.idx == m.idx {
+                self.reset(m);
+            } else {
                 self.commit();
             }
-            self.reset(m);
             Vec::new()
         }
     }
@@ -630,6 +635,7 @@ impl Parser {
             // for every dialect and so throws away the whole file's
             // analysis over a line bash runs. See PARITY-NOTES.md,
             // `upstream-false-parse-error`.
+            self.empty_negation = super::EmptyNegation::Taken;
             let here = self.pos();
             let id = self.next_id_between(here.clone(), here);
             let nothing = Token::new(
@@ -655,7 +661,9 @@ impl Parser {
     /// word, so `!#` is one word and every shell treats it as a command name.
     /// That keeps upstream's reading, and its error.
     fn empty_negation_ok(&self) -> bool {
-        if self.shell_hint.unwrap_or(Shell::Bash) != Shell::Bash {
+        if self.empty_negation == super::EmptyNegation::Refused
+            || self.shell_hint.unwrap_or(Shell::Bash) != Shell::Bash
+        {
             return false;
         }
         match self.peek() {
@@ -1120,6 +1128,7 @@ impl Parser {
             // sourced file's name (`prop_sourcedFileUsesOriginalShellExtension`).
             self.shell_hint,
         );
+        sub.empty_negation = self.empty_negation.for_sub_parse();
         sub.next_id = self.next_id;
         sub.next_serial = self.next_serial;
         sub.contexts.clone_from(&self.contexts);
@@ -1322,10 +1331,11 @@ impl Parser {
             }
             // Only the part up to the `=` is a `try`: past it, a
             // failure is the parse error (`x=((`).
-            if self.idx != m.idx {
+            if self.idx == m.idx {
+                self.reset(m);
+            } else {
                 self.commit();
             }
-            self.reset(m);
             break;
         }
         out
@@ -1840,9 +1850,7 @@ impl Parser {
         // Space after the `=`, or nothing left of the command, means the value
         // is the empty string — and if it was space, that is rarely intended.
         let right_start = self.pos();
-        let before_space = self.idx;
-        self.spacing();
-        let has_right_space = self.idx != before_space;
+        let has_right_space = !self.spacing().is_empty();
         let right_end = self.pos();
         let at_end_of_command = matches!(
             self.peek(),
@@ -1933,9 +1941,7 @@ impl Parser {
         // SC2034 etc. point at the variable name rather than the whole word.
         // `hasLeftSpace <- fmap (not . null) spacing`: space before the `=`
         // is read, and then makes this not an assignment after all.
-        let before_left = self.idx;
-        self.spacing();
-        let has_left_space = self.idx != before_left;
+        let has_left_space = !self.spacing().is_empty();
         let op_start = self.pos();
         let mode = self.read_assignment_op()?;
         if leading_dollar.is_some() || has_left_space {
@@ -2138,24 +2144,9 @@ impl Parser {
         // `readIoFile` takes with `>&`/`<&` as the operator.
         if let Some(opc @ ('<' | '>')) = self.peek()
             && self.peek_at(1) == Some('&')
-            && matches!(self.peek_at(2), Some(c) if c.is_ascii_digit() || c == '-')
+            && let Some((op_end, num)) = self.try_parse_dup_target()
         {
-            self.bump();
-            self.bump(); // &
-            let mut num = String::new();
-            while let Some(c) = self.peek() {
-                if c.is_ascii_digit() {
-                    num.push(c);
-                    self.bump();
-                } else {
-                    break;
-                }
-            }
-            if self.peek() == Some('-') {
-                num.push('-');
-                self.bump();
-            }
-            let opid = self.next_id_between(op_start.clone(), self.pos());
+            let opid = self.next_id_between(op_start.clone(), op_end);
             let op_tok = Token::new(
                 opid,
                 if opc == '<' {
@@ -2204,6 +2195,47 @@ impl Parser {
         r
     }
 
+    /// `readIoDuplicate`'s operator, a `tryToken` that takes the spacing after
+    /// it, then `readIoVariable <|> digitsAndOrDash`, all in one `try`: where
+    /// the operator ends and the target, or nothing read.
+    fn try_parse_dup_target(&mut self) -> Option<(Position, String)> {
+        let m = self.mark();
+        self.bump();
+        self.bump();
+        let op_end = self.pos();
+        self.spacing();
+        if let Some(var) = self.read_io_variable() {
+            return Some((op_end, var));
+        }
+        let mut target = String::new();
+        while let Some(c) = self.peek().filter(char::is_ascii_digit) {
+            target.push(c);
+            self.bump();
+        }
+        if self.peek() == Some('-') {
+            target.push('-');
+            self.bump();
+        }
+        if target.is_empty() {
+            self.reset(m);
+            return None;
+        }
+        Some((op_end, target))
+    }
+
+    /// `readIoVariable = try $ char '{' >> readVariableName >> char '}'`.
+    fn read_io_variable(&mut self) -> Option<String> {
+        let m = self.mark();
+        if self.char('{').is_ok()
+            && let Ok(name) = self.read_variable_name()
+            && self.char('}').is_ok()
+        {
+            return Some(format!("{{{name}}}"));
+        }
+        self.reset(m);
+        None
+    }
+
     /// `readIoSource`: the fd number, `{var}` or `&` in front of a
     /// redirection operator.
     fn read_io_source(&mut self) -> String {
@@ -2221,30 +2253,13 @@ impl Parser {
         // redirection operator (otherwise it's a brace group / word).
         if fd.is_empty() && self.peek() == Some('{') {
             let fdmark = self.mark();
-            self.bump(); // {
-            let mut name = String::new();
-            if let Some(c) = self.peek()
-                && (c == '_' || c.is_ascii_alphabetic())
-            {
-                name.push(c);
-                self.bump();
-                while let Some(c) = self.peek() {
-                    if c == '_' || c.is_ascii_alphanumeric() {
-                        name.push(c);
-                        self.bump();
-                    } else {
-                        break;
-                    }
+            if let Some(var) = self.read_io_variable() {
+                if matches!(self.peek(), Some('<' | '>')) {
+                    fd = var;
+                } else {
+                    self.fail_implicitly();
+                    self.reset(fdmark);
                 }
-            }
-            let ok = !name.is_empty()
-                && self.peek() == Some('}')
-                && matches!(self.peek_at(1), Some('<' | '>'));
-            if ok {
-                self.bump(); // }
-                fd = format!("{{{name}}}");
-            } else {
-                self.reset(fdmark);
             }
         }
         // `&>` / `&>>` combined redirect: `readIoSource` accepts `&` as the

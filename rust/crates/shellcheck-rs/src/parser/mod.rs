@@ -344,6 +344,8 @@ pub struct Parser {
     /// Whether the caller passed `--shell`, which like a `shell=` directive
     /// means the shebang no longer decides anything and is not checked.
     shell_flag_specified: bool,
+    /// What this parse does with a `!` that has nothing to negate.
+    empty_negation: EmptyNegation,
     /// `rcAnnotations`, which only the top-level `readScriptFile` reads.
     rc_annotations: Vec<Annotation>,
     /// `Environment.systemInterface`: how a sourced file is resolved and read.
@@ -355,6 +357,26 @@ pub struct Parser {
     /// stays put while sourced files are read -- `SCRIPTDIR` is relative to it,
     /// not to whichever file the `source` was written in.
     root_filename: String,
+}
+
+/// Whether a `!` with nothing to negate parses, for bash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmptyNegation {
+    /// It may, and no `!` has needed it yet.
+    Allowed,
+    /// It may, and one did.
+    Taken,
+    /// It may not, as upstream has it.
+    Refused,
+}
+
+impl EmptyNegation {
+    const fn for_sub_parse(self) -> Self {
+        match self {
+            Self::Refused => Self::Refused,
+            Self::Allowed | Self::Taken => Self::Allowed,
+        }
+    }
 }
 
 /// One open production, mirroring Haskell's `ContextName pos str`.
@@ -464,6 +486,7 @@ impl Parser {
         Self {
             shell_hint,
             shell_flag_specified,
+            empty_negation: EmptyNegation::Allowed,
             rc_annotations: Vec::new(),
             sys: Rc::new(NoExternalSources),
             check_sourced: false,
@@ -623,11 +646,16 @@ impl Parser {
         body: impl FnOnce(&mut Self) -> PResult<T>,
     ) -> PResult<T> {
         let start_idx = self.idx;
+        let committed = self.committed;
         self.push_ctx(name);
         let serial = self.contexts.last().map_or(0, |c| c.serial);
         self.open_starts.push(start_idx);
         let r = body(self);
         self.open_starts.pop();
+        // `parsecBracket` runs no `after val` once the body has committed.
+        if self.committed && !committed {
+            return r;
+        }
         if r.is_ok() || self.idx == start_idx {
             // `parsecBracket`: `after val` (popContext) runs when the body
             // succeeds, and on the `<|>` branch taken when it failed without
@@ -655,10 +683,6 @@ impl Parser {
         r
     }
 
-    /// Fail the current production outright, Haskell `fail "msg"`. The message
-    /// reaches the user as SC1072 when this turns out to be the deepest
-    /// failure; an empty one is still a deliberate failure, as `fail ""` is in
-    /// the Haskell, and is what ends the parse rather than backtracking out.
     /// `readAmbiguous`: a prefix that two productions both claim. Try the
     /// expected one; then the alternative, whose diagnostics are forgotten if
     /// it fails too (`forgetOnFailure`); and if both fail, run the expected one
@@ -679,18 +703,22 @@ impl Parser {
         // caught rather than propagated: the parse is not over.
         let committed = self.committed;
         let frozen = self.frozen_contexts.clone();
-        if let Ok(t) = expected(self) {
+        if let Ok(t) = expected(self)
+            && self.committed == committed
+        {
             return Ok(t);
         }
+        self.committed = committed;
         self.reset(m);
         self.notes.truncate(notes);
-        self.committed = committed;
         self.frozen_contexts = frozen.clone();
         // Problems and contexts live outside Parsec, so the first attempt's
         // survive: `forgetOnFailure` only rewinds what the *alternative* adds.
         let problems = self.problems.len();
         let contexts = self.contexts.clone();
-        if let Ok(t) = alternative(self) {
+        if let Ok(t) = alternative(self)
+            && self.committed == committed
+        {
             warn(self, pos);
             return Ok(t);
         }
@@ -706,6 +734,10 @@ impl Parser {
         expected(self)
     }
 
+    /// Fail the current production outright, Haskell `fail "msg"`. The message
+    /// reaches the user as SC1072 when this turns out to be the deepest
+    /// failure; an empty one is still a deliberate failure, as `fail ""` is in
+    /// the Haskell, and is what ends the parse rather than backtracking out.
     fn fail_with<T>(&mut self, message: &str) -> PResult<T> {
         self.record_failure(message, true);
         Err(())
@@ -788,6 +820,10 @@ impl Parser {
     /// whatever this parser goes on to push while it unwinds.
     pub(super) fn commit(&mut self) {
         if !self.committed {
+            // A Parsec failure always carries an error, if only an unknown one.
+            if self.failure.is_none() {
+                self.fail_implicitly();
+            }
             self.committed = true;
             self.frozen_contexts = Some(self.contexts.clone());
         }
@@ -806,12 +842,14 @@ impl Parser {
         let frozen = self.frozen_contexts.clone();
         let pending = self.pending_heredocs.clone();
         let bodies = self.heredoc_bodies.clone();
-        if let Ok(v) = f(self) {
+        if let Ok(v) = f(self)
+            && self.committed == committed
+        {
             Ok(v)
         } else {
+            self.committed = committed;
             self.reset(m);
             self.notes.truncate(notes);
-            self.committed = committed;
             self.frozen_contexts = frozen;
             self.pending_heredocs = pending;
             self.heredoc_bodies = bodies;
@@ -1012,7 +1050,13 @@ impl Parser {
     /// carries straight through, so the sub-parse's diagnostics name the
     /// productions that contain it.
     pub(super) fn sub_parser(&self, input: &str, start: &Position) -> Self {
-        let mut sub = Self::new(&self.filename, input);
+        let mut sub = Self::with_shell_flag(
+            &self.filename,
+            input,
+            self.shell_flag_specified,
+            self.shell_hint,
+        );
+        sub.empty_negation = self.empty_negation.for_sub_parse();
         sub.line = start.line;
         sub.col = start.column;
         sub.next_id = self.next_id;
@@ -1029,6 +1073,9 @@ impl Parser {
     pub(super) fn merge_sub(&mut self, sub: Self) {
         self.next_id = sub.next_id;
         self.next_serial = sub.next_serial;
+        if sub.empty_negation == EmptyNegation::Taken {
+            self.empty_negation = EmptyNegation::Taken;
+        }
         for (k, v) in sub.positions {
             self.positions.entry(k).or_insert(v);
         }
@@ -1426,6 +1473,9 @@ impl Parser {
         // Do not consume shellcheck directive lines; leave them for
         // `read_annotation` (mirrors `readComment`'s `unexpecting` guard).
         if self.at_annotation_prefix() {
+            self.fail_after("Unexpected shellcheck annotation", |p| {
+                let _ = p.read_annotation_prefix();
+            });
             return Err(());
         }
         // `readComment = unexpecting "shellcheck annotation" .. >> readAnyComment`:
@@ -1465,26 +1515,26 @@ impl Parser {
         }
     }
 
-    /// Non-consuming lookahead for `#` (spaces) `shellcheck` `<ws>`.
-    fn at_annotation_prefix(&self) -> bool {
-        let mut i = self.idx;
-        if self.input.get(i) != Some(&'#') {
-            return false;
-        }
-        i += 1;
-        while matches!(self.input.get(i), Some(' ' | '\t')) {
-            i += 1;
-        }
-        for ch in "shellcheck".chars() {
-            if self.input.get(i) != Some(&ch) {
-                return false;
-            }
-            i += 1;
-        }
+    /// `readAnnotationPrefix`.
+    pub(super) fn read_annotation_prefix(&mut self) -> PResult<()> {
+        self.char('#')?;
+        while self.line_whitespace().is_ok() {}
+        self.string("shellcheck").map(drop)
+    }
+
+    /// `try . lookAhead $ readAnnotationPrefix`.
+    fn at_annotation_prefix(&mut self) -> bool {
         // `readAnnotationPrefix` stops at "shellcheck": whatever follows,
         // `readComment`'s `unexpecting` refuses the line, so `# shellcheckfoo`
         // is a broken directive rather than a comment.
-        true
+        let saved = self.failure.clone();
+        let notes = self.notes.len();
+        let m = self.mark();
+        let found = self.read_annotation_prefix().is_ok();
+        self.reset(m);
+        self.notes.truncate(notes);
+        self.failure = saved;
+        found
     }
 
     /// `carriageReturn`: a literal CR, which the shell keeps as part of the
@@ -1554,7 +1604,9 @@ impl Parser {
             out.push_str(&self.spacing());
             let m = self.mark();
             if self.linefeed().is_err() {
-                self.reset(m);
+                if !self.committed {
+                    self.reset(m);
+                }
                 break;
             }
             out.push('\n');
@@ -1563,24 +1615,10 @@ impl Parser {
     }
 
     fn line_break(&mut self) {
-        // `readLineBreak = optional readNewlineList`: newlines and spacing,
-        // then the same bad-break check the newline list makes.
-        let mut any = false;
-        loop {
-            self.spacing();
-            let m = self.mark();
-            match self.whitespace() {
-                Ok('\n' | '\r') => any = true,
-                Ok(_) => {}
-                Err(()) => {
-                    self.reset(m);
-                    break;
-                }
-            }
-        }
-        if any {
-            self.check_bad_break();
-        }
+        // `readLineBreak = optional readNewlineList`, after the spacing that
+        // upstream's token parsers take with the token before it.
+        self.spacing();
+        self.newline_list();
     }
 
     /// `checkBadBreak`: after a line break, a line that *starts* with `|`, `||`
@@ -1663,17 +1701,19 @@ impl Default for ParseSpec {
 /// `parseScript`: the full entry point, including source following.
 #[must_use]
 pub fn parse_script_spec(spec: &ParseSpec) -> ParseOutput {
-    let mut p = Parser::with_shell_flag(
-        &spec.filename,
-        &spec.script,
-        spec.shell_flag_specified,
-        spec.shell_hint,
-    );
-    p.sys = Rc::clone(&spec.sys);
-    p.rc_annotations.clone_from(&spec.rc_annotations);
-    p.check_sourced = spec.check_sourced;
-    p.root_filename.clone_from(&spec.filename);
-    finish_parse(p)
+    finish_parse(|| {
+        let mut p = Parser::with_shell_flag(
+            &spec.filename,
+            &spec.script,
+            spec.shell_flag_specified,
+            spec.shell_hint,
+        );
+        p.sys = Rc::clone(&spec.sys);
+        p.rc_annotations.clone_from(&spec.rc_annotations);
+        p.check_sourced = spec.check_sourced;
+        p.root_filename.clone_from(&spec.filename);
+        p
+    })
 }
 
 /// Parse a script, telling the parser whether the caller supplied `--shell`,
@@ -1685,11 +1725,31 @@ pub fn parse_script_with(
     shell_flag_specified: bool,
     shell_hint: Option<Shell>,
 ) -> ParseOutput {
-    let p = Parser::with_shell_flag(filename, script, shell_flag_specified, shell_hint);
-    finish_parse(p)
+    finish_parse(|| Parser::with_shell_flag(filename, script, shell_flag_specified, shell_hint))
 }
 
-fn finish_parse(mut p: Parser) -> ParseOutput {
+/// The codes that say the parse failed or stopped short of the end.
+const STOPPED_PARSE_CODES: [i64; 6] = [1009, 1070, 1072, 1073, 1088, 1089];
+
+/// Parse with the empty negation allowed, and again without it when the script
+/// still does not parse. See PARITY-NOTES.md, `upstream-false-parse-error`.
+fn finish_parse(parser: impl Fn() -> Parser) -> ParseOutput {
+    let mut lenient = parser();
+    let out = parse_to_output(&mut lenient);
+    if lenient.empty_negation == EmptyNegation::Taken
+        && out
+            .notes
+            .iter()
+            .any(|n| STOPPED_PARSE_CODES.contains(&n.code))
+    {
+        let mut strict = parser();
+        strict.empty_negation = EmptyNegation::Refused;
+        return parse_to_output(&mut strict);
+    }
+    out
+}
+
+fn parse_to_output(p: &mut Parser) -> ParseOutput {
     let root = p.read_script_file();
     // A production that failed after consuming input means the script does not
     // parse, even if backtracking found some other way to read the rest of it:
@@ -1697,6 +1757,9 @@ fn finish_parse(mut p: Parser) -> ParseOutput {
     // simply left over at the end is not this — `verifyEof` reports it and the
     // tree survives.
     let committed_failure = p.has_committed_failure();
+    if root.is_none() && p.failure.is_none() {
+        p.fail_implicitly();
+    }
     if root.is_none() || committed_failure {
         // Haskell `parseShell`'s `Left err` branch: prRoot = Nothing, so no
         // analysis runs at all, the buffered parse *notes* are discarded, and
@@ -1734,7 +1797,7 @@ fn finish_parse(mut p: Parser) -> ParseOutput {
     ParseOutput {
         root,
         notes,
-        positions: p.positions,
+        positions: std::mem::take(&mut p.positions),
     }
 }
 
@@ -1832,344 +1895,21 @@ fn unescape_backtick(raw: &str, quoted: bool) -> String {
     out
 }
 
-fn reattach_heredocs(t: Token, bodies: &BTreeMap<Id, Vec<Token>>) -> Token {
-    // Rebuild the tree, filling T_HereDoc bodies by id.
-    let Token { id, inner } = t;
-    let inner = std::rc::Rc::try_unwrap(inner).unwrap_or_else(|shared| (*shared).clone());
-    let new_inner = map_children_inner(inner, bodies, id);
-    Token {
-        id,
-        inner: std::rc::Rc::new(new_inner),
+/// `reattachHereDocs`, bottom up as `doTransform` runs.
+fn reattach_heredocs(mut t: Token, bodies: &BTreeMap<Id, Vec<Token>>) -> Token {
+    reattach_in_place(&mut t, bodies);
+    t
+}
+
+fn reattach_in_place(t: &mut Token, bodies: &BTreeMap<Id, Vec<Token>>) {
+    for child in t.inner_mut().children_mut() {
+        reattach_in_place(child, bodies);
     }
-}
-
-fn reattach_all(ts: Vec<Token>, bodies: &BTreeMap<Id, Vec<Token>>) -> Vec<Token> {
-    ts.into_iter()
-        .map(|t| reattach_heredocs(t, bodies))
-        .collect()
-}
-
-fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: Id) -> InnerToken {
-    use InnerToken::{
-        T_Arithmetic, T_Array, T_Assignment, T_Backticked, T_BatsTest, T_BraceGroup,
-        T_CaseExpression, T_Condition, T_DollarArithmetic, T_DollarBraced, T_DollarBracket,
-        T_DollarDoubleQuoted, T_DollarExpansion, T_DoubleQuoted, T_Extglob, T_ForArithmetic,
-        T_ForIn, T_Function, T_HereDoc, T_HereString, T_IfExpression, T_NormalWord, T_ProcSub,
-        T_SelectIn, T_Subshell, T_UntilExpression, T_WhileExpression, TA_Assignment, TA_Binary,
-        TA_Expansion, TA_Parenthesis, TA_Sequence, TA_Trinary, TA_Unary, TA_Variable, TC_And,
-        TC_Binary, TC_Group, TC_Nullary, TC_Or, TC_Unary,
-    };
-    // Special-case heredoc body fill.
-    if let T_HereDoc {
-        dashed,
-        quoted,
-        delim,
-        ..
-    } = &inner
-        && let Some(body) = bodies.get(&id)
+    let id = t.id();
+    if let InnerToken::T_HereDoc { body, .. } = t.inner_mut()
+        && body.is_empty()
+        && let Some(list) = bodies.get(&id)
     {
-        return T_HereDoc {
-            dashed: *dashed,
-            quoted: *quoted,
-            delim: delim.clone(),
-            body: body
-                .iter()
-                .cloned()
-                .map(|b| reattach_heredocs(b, bodies))
-                .collect(),
-        };
-    }
-    // Generic recursive rebuild.
-    match inner {
-        T_NormalWord(_)
-        | T_DoubleQuoted(_)
-        | T_DollarDoubleQuoted(_)
-        | T_DollarExpansion(_)
-        | T_Backticked(_)
-        | T_Array(_)
-        | T_Extglob { .. }
-        | T_ProcSub { .. }
-        | T_HereString(_)
-        | T_DollarBraced { .. }
-        | T_Assignment { .. } => map_word_children(inner, bodies),
-        T_Condition { .. }
-        | TC_And { .. }
-        | TC_Or { .. }
-        | TC_Binary { .. }
-        | TC_Group { .. }
-        | TC_Nullary { .. }
-        | TC_Unary { .. } => map_condition_children(inner, bodies),
-        T_DollarArithmetic(_)
-        | T_DollarBracket(_)
-        | T_Arithmetic(_)
-        | TA_Binary { .. }
-        | TA_Assignment { .. }
-        | TA_Variable { .. }
-        | TA_Expansion(_)
-        | TA_Sequence(_)
-        | TA_Parenthesis(_)
-        | TA_Trinary { .. }
-        | TA_Unary { .. } => map_arithmetic_children(inner, bodies),
-        T_Subshell(_)
-        | T_BraceGroup(_)
-        | T_IfExpression { .. }
-        | T_WhileExpression { .. }
-        | T_UntilExpression { .. }
-        | T_ForIn { .. }
-        | T_SelectIn { .. }
-        | T_ForArithmetic { .. }
-        | T_CaseExpression { .. }
-        | T_Function { .. }
-        | T_BatsTest { .. } => map_compound_children(inner, bodies),
-        other => map_command_children(other, bodies),
-    }
-}
-
-fn map_word_children(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>) -> InnerToken {
-    use InnerToken::{
-        T_Array, T_Assignment, T_Backticked, T_DollarBraced, T_DollarDoubleQuoted,
-        T_DollarExpansion, T_DoubleQuoted, T_Extglob, T_HereString, T_NormalWord, T_ProcSub,
-    };
-    let r = |t| reattach_heredocs(t, bodies);
-    let rv = |v| reattach_all(v, bodies);
-    match inner {
-        T_NormalWord(l) => T_NormalWord(rv(l)),
-        T_DoubleQuoted(l) => T_DoubleQuoted(rv(l)),
-        T_DollarDoubleQuoted(l) => T_DollarDoubleQuoted(rv(l)),
-        T_DollarExpansion(l) => T_DollarExpansion(rv(l)),
-        T_Backticked(l) => T_Backticked(rv(l)),
-        T_Array(l) => T_Array(rv(l)),
-        T_Extglob { op, list } => T_Extglob { op, list: rv(list) },
-        T_ProcSub { op, list } => T_ProcSub { op, list: rv(list) },
-        T_HereString(t) => T_HereString(r(t)),
-        T_DollarBraced { braced, op } => T_DollarBraced { braced, op: r(op) },
-        T_Assignment {
-            mode,
-            var,
-            indices,
-            value,
-        } => T_Assignment {
-            mode,
-            var,
-            indices: rv(indices),
-            value: r(value),
-        },
-        other => other,
-    }
-}
-
-fn map_condition_children(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>) -> InnerToken {
-    use InnerToken::{T_Condition, TC_And, TC_Binary, TC_Group, TC_Nullary, TC_Or, TC_Unary};
-    let r = |t| reattach_heredocs(t, bodies);
-    match inner {
-        T_Condition { typ, token } => T_Condition {
-            typ,
-            token: r(token),
-        },
-        TC_And { typ, op, lhs, rhs } => TC_And {
-            typ,
-            op,
-            lhs: r(lhs),
-            rhs: r(rhs),
-        },
-        TC_Or { typ, op, lhs, rhs } => TC_Or {
-            typ,
-            op,
-            lhs: r(lhs),
-            rhs: r(rhs),
-        },
-        TC_Binary { typ, op, lhs, rhs } => TC_Binary {
-            typ,
-            op,
-            lhs: r(lhs),
-            rhs: r(rhs),
-        },
-        TC_Group { typ, token } => TC_Group {
-            typ,
-            token: r(token),
-        },
-        TC_Nullary { typ, token } => TC_Nullary {
-            typ,
-            token: r(token),
-        },
-        TC_Unary { typ, op, token } => TC_Unary {
-            typ,
-            op,
-            token: r(token),
-        },
-        other => other,
-    }
-}
-
-fn map_arithmetic_children(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>) -> InnerToken {
-    use InnerToken::{
-        T_Arithmetic, T_DollarArithmetic, T_DollarBracket, TA_Assignment, TA_Binary, TA_Expansion,
-        TA_Parenthesis, TA_Sequence, TA_Trinary, TA_Unary, TA_Variable,
-    };
-    let r = |t| reattach_heredocs(t, bodies);
-    let rv = |v| reattach_all(v, bodies);
-    match inner {
-        T_DollarArithmetic(t) => T_DollarArithmetic(r(t)),
-        T_DollarBracket(t) => T_DollarBracket(r(t)),
-        T_Arithmetic(t) => T_Arithmetic(r(t)),
-        TA_Binary { op, lhs, rhs } => TA_Binary {
-            op,
-            lhs: r(lhs),
-            rhs: r(rhs),
-        },
-        TA_Assignment { op, lhs, rhs } => TA_Assignment {
-            op,
-            lhs: r(lhs),
-            rhs: r(rhs),
-        },
-        TA_Variable { name, indices } => TA_Variable {
-            name,
-            indices: rv(indices),
-        },
-        TA_Expansion(l) => TA_Expansion(rv(l)),
-        TA_Sequence(l) => TA_Sequence(rv(l)),
-        TA_Parenthesis(t) => TA_Parenthesis(r(t)),
-        TA_Trinary { cond, then, els } => TA_Trinary {
-            cond: r(cond),
-            then: r(then),
-            els: r(els),
-        },
-        TA_Unary { op, operand } => TA_Unary {
-            op,
-            operand: r(operand),
-        },
-        other => other,
-    }
-}
-
-fn map_compound_children(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>) -> InnerToken {
-    use InnerToken::{
-        T_BatsTest, T_BraceGroup, T_CaseExpression, T_ForArithmetic, T_ForIn, T_Function,
-        T_IfExpression, T_SelectIn, T_Subshell, T_UntilExpression, T_WhileExpression,
-    };
-    let r = |t| reattach_heredocs(t, bodies);
-    let rv = |v| reattach_all(v, bodies);
-    match inner {
-        T_Subshell(l) => T_Subshell(rv(l)),
-        T_BraceGroup(l) => T_BraceGroup(rv(l)),
-        T_IfExpression { clauses, elses } => T_IfExpression {
-            clauses: clauses.into_iter().map(|(c, b)| (rv(c), rv(b))).collect(),
-            elses: rv(elses),
-        },
-        T_WhileExpression { condition, body } => T_WhileExpression {
-            condition: rv(condition),
-            body: rv(body),
-        },
-        T_UntilExpression { condition, body } => T_UntilExpression {
-            condition: rv(condition),
-            body: rv(body),
-        },
-        T_ForIn { var, items, body } => T_ForIn {
-            var,
-            items: rv(items),
-            body: rv(body),
-        },
-        T_SelectIn { var, items, body } => T_SelectIn {
-            var,
-            items: rv(items),
-            body: rv(body),
-        },
-        T_ForArithmetic {
-            init,
-            cond,
-            step,
-            body,
-        } => T_ForArithmetic {
-            init: r(init),
-            cond: r(cond),
-            step: r(step),
-            body: rv(body),
-        },
-        T_CaseExpression { word, cases } => T_CaseExpression {
-            word: r(word),
-            cases: cases
-                .into_iter()
-                .map(|(t, p, b)| (t, rv(p), rv(b)))
-                .collect(),
-        },
-        T_Function {
-            keyword,
-            parens,
-            name,
-            body,
-        } => T_Function {
-            keyword,
-            parens,
-            name,
-            body: r(body),
-        },
-        T_BatsTest { name, body } => T_BatsTest {
-            name,
-            body: r(body),
-        },
-        other => other,
-    }
-}
-
-fn map_command_children(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>) -> InnerToken {
-    use InnerToken::{
-        T_AndIf, T_Annotation, T_Backgrounded, T_Banged, T_FdRedirect, T_Include, T_IoDuplicate,
-        T_IoFile, T_OrIf, T_Pipeline, T_Redirecting, T_Script, T_SimpleCommand, T_SourceCommand,
-    };
-    let r = |t| reattach_heredocs(t, bodies);
-    let rv = |v| reattach_all(v, bodies);
-    match inner {
-        T_Backgrounded(t) => T_Backgrounded(r(t)),
-        T_Banged(t) => T_Banged(r(t)),
-        T_AndIf { lhs, rhs } => T_AndIf {
-            lhs: r(lhs),
-            rhs: r(rhs),
-        },
-        T_OrIf { lhs, rhs } => T_OrIf {
-            lhs: r(lhs),
-            rhs: r(rhs),
-        },
-        T_Pipeline {
-            separators,
-            commands,
-        } => T_Pipeline {
-            separators: rv(separators),
-            commands: rv(commands),
-        },
-        T_Redirecting { redirs, cmd } => T_Redirecting {
-            redirs: rv(redirs),
-            cmd: r(cmd),
-        },
-        T_SimpleCommand { assignments, words } => T_SimpleCommand {
-            assignments: rv(assignments),
-            words: rv(words),
-        },
-        T_Script { shebang, commands } => T_Script {
-            shebang: r(shebang),
-            commands: rv(commands),
-        },
-        T_Annotation { annotations, token } => T_Annotation {
-            annotations,
-            token: r(token),
-        },
-        T_IoFile { op, file } => T_IoFile {
-            op: r(op),
-            file: r(file),
-        },
-        T_IoDuplicate { op, num } => T_IoDuplicate { op: r(op), num },
-        T_FdRedirect { fd, target } => T_FdRedirect {
-            fd,
-            target: r(target),
-        },
-        // A sourced file has already had its own here documents reattached by
-        // the sub-parse that read it (`readScriptFile` does that per file), but
-        // the `source` command itself is an ordinary command that may carry
-        // one, so both halves are still walked.
-        T_SourceCommand { includer, included } => T_SourceCommand {
-            includer: r(includer),
-            included: r(included),
-        },
-        T_Include(t) => T_Include(r(t)),
-        other => other,
+        body.clone_from(list);
     }
 }

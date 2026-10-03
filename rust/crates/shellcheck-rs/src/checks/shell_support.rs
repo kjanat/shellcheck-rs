@@ -765,33 +765,39 @@ fn bashism_io_file(p: &Parameters, id: Id, file: &Token, out: &mut Out) {
     }
 }
 
+/// `matches` under regex-tdfa's default `multiline`, where `^`, `$`, `.` and
+/// a negated class all stop at a line feed: some line of `s` matches.
+fn on_some_line(s: &[char], re: fn(&[char]) -> bool) -> bool {
+    s.split(|&c| c == '\n').any(re)
+}
+
 fn bashism_dollar_braced(p: &Parameters, id: Id, op: &Token, out: &mut Out) {
     let s = oversimplify_concat(op);
     let cs: Vec<char> = s.chars().collect();
     if !is_busybox(p) {
-        if re_3057(&cs) {
+        if on_some_line(&cs, re_3057) {
             warn_msg(out, p, id, 3057, "string indexing is");
         }
-        if re_3058(&cs) {
+        if on_some_line(&cs, re_3058) {
             warn_msg(out, p, id, 3058, "string operations on $@/$* are");
         }
-        if re_3060(&cs) {
+        if on_some_line(&cs, re_3060) {
             warn_msg(out, p, id, 3060, "string replacement is");
         }
     }
-    if re_3053(&cs) {
+    if on_some_line(&cs, re_3053) {
         warn_msg(out, p, id, 3053, "indirect expansion is");
     }
-    if re_3054(&cs) {
+    if on_some_line(&cs, re_3054) {
         warn_msg(out, p, id, 3054, "array references are");
     }
-    if re_3055(&cs) {
+    if on_some_line(&cs, re_3055) {
         warn_msg(out, p, id, 3055, "array key expansion is");
     }
-    if re_3056(&cs) {
+    if on_some_line(&cs, re_3056) {
         warn_msg(out, p, id, 3056, "name matching prefixes are");
     }
-    if re_3059(&cs) {
+    if on_some_line(&cs, re_3059) {
         warn_msg(out, p, id, 3059, "case modification is");
     }
     let var = get_braced_reference(&s);

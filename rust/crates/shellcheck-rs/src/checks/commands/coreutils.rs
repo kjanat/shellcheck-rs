@@ -749,7 +749,7 @@ fn check_rm_word(token: &Token, important: &[String], out: &mut Out) {
 
 fn echo_escapes_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| mk_regex(r"\\([rntabefv']|[0-7]{1,3}|x[0-9A-Fa-f]{1,2})"))
+    RE.get_or_init(|| mk_regex(r"\\([rntabefv\']|[0-7]{1,3}|x([0-9]|[A-F]|[a-f]){1,2})"))
 }
 
 /// Does the command have short flag `e` (before `--`)?

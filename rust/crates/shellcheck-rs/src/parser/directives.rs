@@ -14,10 +14,11 @@ impl Parser {
                 // `many` stops on a failure that consumed nothing; a
                 // malformed directive has consumed its prefix, and nothing
                 // above can recover from that.
-                if self.idx != m.idx {
+                if self.idx == m.idx {
+                    self.reset(m);
+                } else {
                     self.commit();
                 }
-                self.reset(m);
                 break;
             }
         }
@@ -33,12 +34,7 @@ impl Parser {
     fn read_annotation_body(&mut self) -> PResult<Vec<Annotation>> {
         // `try readAnnotationPrefix`
         let m = self.mark();
-        if self.char('#').is_err() {
-            self.reset(m);
-            return Err(());
-        }
-        while self.line_whitespace().is_ok() {}
-        if self.string("shellcheck").is_err() {
+        if self.read_annotation_prefix().is_err() {
             self.reset(m);
             return Err(());
         }

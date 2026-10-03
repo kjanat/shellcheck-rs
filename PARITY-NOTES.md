@@ -143,7 +143,9 @@ bash, so the rest of the file is analysed —
 
 — and still fails for `sh`, `dash`, `ksh` and `busybox`, where dash's error is
 the correct one. It also still fails for every shape bash itself rejects: `! &`,
-`! ;;`, `! | true`, `! && true`, `( ! )`. This is the port's only dialect-aware
+`! ;;`, `! | true`, `! && true`, `( ! )`. A script that still does not parse
+with the `!` accepted is parsed again without it, so `!;done` gets upstream's
+error at the `!`. This is the port's only dialect-aware
 parse decision; the parser learns the dialect from `--shell`, else a file-wide
 `shell=` directive, else the shebang, else bash.
 
@@ -219,7 +221,7 @@ echo 'x=$(coproc foo)' | shellcheck -
 **You get**
 
 ```
-shellcheck-oracle: src/ShellCheck/Analytics.hs:5246:5-93: Non-exhaustive patterns in function checkCmd
+shellcheck-oracle: src/ShellCheck/Analytics.hs:5270:5-93: Non-exhaustive patterns in function checkCmd
 ```
 
 Nothing else: no diagnostics, no JSON, exit status 1. Every spelling of the same
@@ -242,7 +244,7 @@ In a.sh line 2:
 echo $x
      ^-- SC2154 (warning): x is referenced but not assigned.
 ...
-shellcheck-oracle: src/ShellCheck/Analytics.hs:5246:5-93: Non-exhaustive patterns in function checkCmd
+shellcheck-oracle: src/ShellCheck/Analytics.hs:5270:5-93: Non-exhaustive patterns in function checkCmd
 ```
 
 With `--format=json1` there is no output at all, so an editor integration or a
@@ -267,6 +269,11 @@ the pattern match fails and the process aborts. `coproc` on its own
 (`coproc foo`) is fine; it only crashes inside `$(..)`, `` `..` `` or `${ ..; }`,
 which is where this check looks. Wrapping it in a group (`y=$( { coproc a; } )`)
 also avoids it, because the last element is then the `{ ...; }`.
+
+Two other last elements crash the same way: a `source` or `.` command, which
+parses to `T_SourceCommand` (`x=$(source /dev/null)`, valid bash), and a negated
+command, which parses to `T_Banged` (`x=$(a | ! b)`, which bash rejects and the
+port reports as SC2326).
 
 **Port.** The port does not crash: it reports SC2148 and SC2034 for
 `x=$(coproc foo)` and carries on. That is not a sanctioned deviation — there is

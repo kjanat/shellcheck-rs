@@ -322,17 +322,23 @@ impl Parser {
 
     pub(super) fn read_double_literal_run(&mut self) -> PResult<Token> {
         let start = self.pos();
+        let from = self.idx;
         let mut s = String::new();
         while let Some(c) = self.peek() {
             if c == '\\' {
-                // double-escaped: backslash + one of \"$`, else literal backslash
+                // `readDoubleEscaped`: `(linefeed >> return "") <|> fmap return
+                // doubleQuotable <|> (anyChar >>= \c -> return [bs, c])`.
                 let nxt = self.peek_at(1);
+                if matches!(nxt, Some('\n' | '\r')) {
+                    self.bump();
+                    self.linefeed()?;
+                    continue;
+                }
                 if let Some(n) = nxt
                     && DOUBLE_QUOTABLE.contains(n)
                 {
                     self.bump();
                     self.bump();
-                    s.push('\\');
                     s.push(n);
                     continue;
                 }
@@ -355,7 +361,7 @@ impl Parser {
             self.bump();
             s.push(c);
         }
-        if s.is_empty() {
+        if self.idx == from {
             return Err(());
         }
         let id = self.next_id_between(start, self.pos());
@@ -526,16 +532,19 @@ impl Parser {
             let m = self.mark();
             if self.string("[:").is_ok() {
                 let mut cls = String::new();
-                while let Ok(c) = self.satisfy(|c| c.is_ascii_alphabetic()) {
+                while let Ok(c) = self.satisfy(char::is_alphabetic) {
                     cls.push(c);
                 }
-                if !cls.is_empty() && self.string(":]").is_ok() {
-                    body.push_str("[:");
-                    body.push_str(&cls);
-                    body.push_str(":]");
-                    had = true;
-                    continue;
+                // Only the `[:` is behind a `try` in `predefined`: past it, a
+                // missing name or `:]` fails the whole class.
+                if cls.is_empty() || self.string(":]").is_err() {
+                    return Err(());
                 }
+                body.push_str("[:");
+                body.push_str(&cls);
+                body.push_str(":]");
+                had = true;
+                continue;
             }
             self.reset(m);
             // Faithful port of `readClass`'s inner
@@ -1559,6 +1568,7 @@ impl Parser {
             .clone()
             .unwrap_or_else(|| sub.contexts.clone());
         let failure = sub.failure.clone();
+        let live = sub.contexts.clone();
         self.merge_sub(sub);
         if failed {
             // `tryWithErrors .. <|> return []`: the error and the contexts it
@@ -1566,6 +1576,9 @@ impl Parser {
             self.report_sub_failure(contexts, failure);
             return Vec::new();
         }
+        // `tryWithErrors` puts the old stack back only on failure, so a frame
+        // that a recovered failure inside left behind is still there.
+        self.contexts = live;
         cmds
     }
 }
