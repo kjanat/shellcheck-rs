@@ -15,20 +15,19 @@ pub(super) fn check_sudo_args(cmd: &'static str) -> CommandCheck {
             None => return,
         };
         // find (null . fst) opts  -> first operand
-        if let Some((_, (command_arg, _))) = opts.iter().find(|(name, _)| name.is_empty()) {
-            if let Some(command) = ast_lib::get_literal_string(command_arg) {
-                if SUDO_BUILTINS.contains(&command.as_str()) {
-                    warn(
-                        out,
-                        te.id(),
-                        2232,
-                        &format!(
-                            "Can't use sudo/doas/run0 with builtins like {}. Did you want sudo/doas/run0 sh -c .. instead?",
-                            command
-                        ),
-                    );
-                }
-            }
+        if let Some((_, (command_arg, _))) = opts.iter().find(|(name, _)| name.is_empty())
+            && let Some(command) = ast_lib::get_literal_string(command_arg)
+            && SUDO_BUILTINS.contains(&command.as_str())
+        {
+            warn(
+                out,
+                te.id(),
+                2232,
+                &format!(
+                    "Can't use sudo/doas/run0 with builtins like {}. Did you want sudo/doas/run0 sh -c .. instead?",
+                    command
+                ),
+            );
         }
     })
 }

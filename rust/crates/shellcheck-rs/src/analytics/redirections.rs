@@ -221,24 +221,25 @@ pub(super) fn check_piped_assignment(_params: &Parameters, t: &Token, out: &mut 
     let InnerToken::T_Redirecting { cmd, .. } = &*commands[0].inner else {
         return;
     };
-    if let InnerToken::T_SimpleCommand { assignments, words } = &*cmd.inner {
-        if !assignments.is_empty() && words.is_empty() {
-            warn(
-                out,
-                cmd.id(),
-                2036,
-                "If you wanted to assign the output of the pipeline, use a=$(b | c) .",
-            );
-        }
+    if let InnerToken::T_SimpleCommand { assignments, words } = &*cmd.inner
+        && !assignments.is_empty()
+        && words.is_empty()
+    {
+        warn(
+            out,
+            cmd.id(),
+            2036,
+            "If you wanted to assign the output of the pipeline, use a=$(b | c) .",
+        );
     }
 }
 
 pub(super) fn check_ssh_here_doc(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Redirecting { redirs, cmd: _ } = &*t.inner {
-        if is_command(t, "ssh") {
-            for r in redirs {
-                sshd_check_here_doc(r, out);
-            }
+    if let InnerToken::T_Redirecting { redirs, cmd: _ } = &*t.inner
+        && is_command(t, "ssh")
+    {
+        for r in redirs {
+            sshd_check_here_doc(r, out);
         }
     }
 }
@@ -253,15 +254,14 @@ pub(super) fn check_redirect_to_same(params: &Parameters, t: &Token, out: &mut O
     for cmd in list {
         if let InnerToken::T_Redirecting { redirs, .. } = &*cmd.inner {
             for r in redirs {
-                if let InnerToken::T_FdRedirect { target, .. } = &*r.inner {
-                    if let InnerToken::T_IoFile { op, file } = &*target.inner {
-                        if matches!(
-                            &*op.inner,
-                            InnerToken::T_Greater | InnerToken::T_Less | InnerToken::T_DGREAT
-                        ) {
-                            all_redirs.push(file);
-                        }
-                    }
+                if let InnerToken::T_FdRedirect { target, .. } = &*r.inner
+                    && let InnerToken::T_IoFile { op, file } = &*target.inner
+                    && matches!(
+                        &*op.inner,
+                        InnerToken::T_Greater | InnerToken::T_Less | InnerToken::T_DGREAT
+                    )
+                {
+                    all_redirs.push(file);
                 }
             }
         }
@@ -281,10 +281,10 @@ pub(super) fn check_stderr_pipe(params: &Parameters, t: &Token, out: &mut Out) {
     if params.shell != Shell::Ksh {
         return;
     }
-    if let InnerToken::T_Pipe(s) = &*t.inner {
-        if s == "|&" {
-            err(out, t.id(), 2118, "Ksh does not support |&. Use 2>&1 |.");
-        }
+    if let InnerToken::T_Pipe(s) = &*t.inner
+        && s == "|&"
+    {
+        err(out, t.id(), 2118, "Ksh does not support |&. Use 2>&1 |.");
     }
 }
 
@@ -310,15 +310,15 @@ pub(super) fn check_multiple_appends(_params: &Parameters, t: &Token, out: &mut 
                 j += 1;
             }
             // group is targets[i..j]; checkGroup fires when first is Just and len>=3
-            if let Some((_, id)) = targets[i] {
-                if j - i >= 3 {
-                    style(
-                        out,
-                        id,
-                        2129,
-                        "Consider using { cmd1; cmd2; } >> file instead of individual redirects.",
-                    );
-                }
+            if let Some((_, id)) = targets[i]
+                && j - i >= 3
+            {
+                style(
+                    out,
+                    id,
+                    2129,
+                    "Consider using { cmd1; cmd2; } >> file instead of individual redirects.",
+                );
             }
             i = j;
         }
@@ -350,15 +350,15 @@ pub(super) fn check_should_use_grep_q(_params: &Parameters, t: &Token, out: &mut
 pub(super) fn check_redirected_nowhere(params: &Parameters, token: &Token, out: &mut Out) {
     if let InnerToken::T_Pipeline { commands, .. } = &*token.inner {
         if commands.len() == 1 {
-            if let Some(redir) = rn_get_dangling_redirect(&commands[0]) {
-                if !rn_is_in_expansion(params, token) {
-                    warn(
-                        out,
-                        redir.id(),
-                        2188,
-                        "This redirection doesn't have a command. Move to its command (or use 'true' as no-op).",
-                    );
-                }
+            if let Some(redir) = rn_get_dangling_redirect(&commands[0])
+                && !rn_is_in_expansion(params, token)
+            {
+                warn(
+                    out,
+                    redir.id(),
+                    2188,
+                    "This redirection doesn't have a command. Move to its command (or use 'true' as no-op).",
+                );
             }
         } else {
             for x in commands {
@@ -376,17 +376,17 @@ pub(super) fn check_redirected_nowhere(params: &Parameters, token: &Token, out: 
 }
 
 pub(super) fn check_redirection_to_number(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_IoFile { file, .. } = &*t.inner {
-        if let Some(f) = get_unquoted_literal(file) {
-            if !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()) {
-                warn(
-                    out,
-                    t.id(),
-                    2210,
-                    "This is a file redirection. Was it supposed to be a comparison or fd operation?",
-                );
-            }
-        }
+    if let InnerToken::T_IoFile { file, .. } = &*t.inner
+        && let Some(f) = get_unquoted_literal(file)
+        && !f.is_empty()
+        && f.chars().all(|c| c.is_ascii_digit())
+    {
+        warn(
+            out,
+            t.id(),
+            2210,
+            "This is a file redirection. Was it supposed to be a comparison or fd operation?",
+        );
     }
 }
 
@@ -396,21 +396,19 @@ pub(super) fn check_pipe_to_nowhere(params: &Parameters, t: &Token, out: &mut Ou
 }
 
 pub(super) fn check_redirection_to_command(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_IoFile { file, .. } = &*t.inner {
-        if let InnerToken::T_NormalWord(parts) = &*file.inner {
-            if parts.len() == 1 {
-                if let InnerToken::T_Literal(str) = &*parts[0].inner {
-                    if COMMON_COMMANDS.contains(&str.as_str()) && str != "file" {
-                        warn(
-                            out,
-                            file.id(),
-                            2238,
-                            "Redirecting to/from command name instead of file. Did you want pipes/xargs (or quote to ignore)?",
-                        );
-                    }
-                }
-            }
-        }
+    if let InnerToken::T_IoFile { file, .. } = &*t.inner
+        && let InnerToken::T_NormalWord(parts) = &*file.inner
+        && parts.len() == 1
+        && let InnerToken::T_Literal(str) = &*parts[0].inner
+        && COMMON_COMMANDS.contains(&str.as_str())
+        && str != "file"
+    {
+        warn(
+            out,
+            file.id(),
+            2238,
+            "Redirecting to/from command name instead of file. Did you want pipes/xargs (or quote to ignore)?",
+        );
     }
 }
 
@@ -566,12 +564,11 @@ fn get_target(t: &Token) -> Option<(&Token, Id)> {
         InnerToken::T_Redirecting { redirs, .. } => {
             // file <- mapMaybe getAppend list !!! 0
             for r in redirs {
-                if let InnerToken::T_FdRedirect { target, .. } = &*r.inner {
-                    if let InnerToken::T_IoFile { op, file } = &*target.inner {
-                        if matches!(&*op.inner, InnerToken::T_DGREAT) {
-                            return Some((file, t.id()));
-                        }
-                    }
+                if let InnerToken::T_FdRedirect { target, .. } = &*r.inner
+                    && let InnerToken::T_IoFile { op, file } = &*target.inner
+                    && matches!(&*op.inner, InnerToken::T_DGREAT)
+                {
+                    return Some((file, t.id()));
                 }
             }
             None
@@ -581,36 +578,35 @@ fn get_target(t: &Token) -> Option<(&Token, Id)> {
 }
 
 fn sshd_check_here_doc(r: &Token, out: &mut Out) {
-    if let InnerToken::T_FdRedirect { target, .. } = &*r.inner {
-        if let InnerToken::T_HereDoc {
+    if let InnerToken::T_FdRedirect { target, .. } = &*r.inner
+        && let InnerToken::T_HereDoc {
             quoted,
             delim,
             body,
             ..
         } = &*target.inner
-        {
-            if *quoted == Quoted::Unquoted && !body.iter().all(is_constant) {
-                warn(
-                    out,
-                    target.id(),
-                    2087,
-                    &format!(
-                        "Quote '{}' to make here document expansions happen on the server side rather than on the client.",
-                        delim
-                    ),
-                );
-            }
-        }
+        && *quoted == Quoted::Unquoted
+        && !body.iter().all(is_constant)
+    {
+        warn(
+            out,
+            target.id(),
+            2087,
+            &format!(
+                "Quote '{}' to make here document expansions happen on the server side rather than on the client.",
+                delim
+            ),
+        );
     }
 }
 
 fn rn_get_dangling_redirect(token: &Token) -> Option<&Token> {
-    if let InnerToken::T_Redirecting { redirs, cmd } = &*token.inner {
-        if let InnerToken::T_SimpleCommand { assignments, words } = &*cmd.inner {
-            if assignments.is_empty() && words.is_empty() {
-                return redirs.first();
-            }
-        }
+    if let InnerToken::T_Redirecting { redirs, cmd } = &*token.inner
+        && let InnerToken::T_SimpleCommand { assignments, words } = &*cmd.inner
+        && assignments.is_empty()
+        && words.is_empty()
+    {
+        return redirs.first();
     }
     None
 }
@@ -785,29 +781,27 @@ fn ptn_check_pipe(
     let has_producers = ptn_tree_contains(ptn_may_produce, stage);
 
     // SC2216
-    if let Some(cmd) = get_command(stage) {
-        if let Some(name) = get_command_basename(cmd) {
-            if NON_READING_COMMANDS.contains(&name.as_str())
-                && !has_consumers
-                && input != PipeType::NoPipe
-                && !ptn_command_specific_exception(&name, cmd)
-            {
-                let suggestion = if name == "echo" {
-                    "Did you want 'cat' instead?"
-                } else {
-                    "Wrong command or missing xargs?"
-                };
-                warn(
-                    out,
-                    cmd.id(),
-                    2216,
-                    &format!(
-                        "Piping to '{}', a command that doesn't read stdin. {}",
-                        name, suggestion
-                    ),
-                );
-            }
-        }
+    if let Some(cmd) = get_command(stage)
+        && let Some(name) = get_command_basename(cmd)
+        && NON_READING_COMMANDS.contains(&name.as_str())
+        && !has_consumers
+        && input != PipeType::NoPipe
+        && !ptn_command_specific_exception(&name, cmd)
+    {
+        let suggestion = if name == "echo" {
+            "Did you want 'cat' instead?"
+        } else {
+            "Wrong command or missing xargs?"
+        };
+        warn(
+            out,
+            cmd.id(),
+            2216,
+            &format!(
+                "Piping to '{}', a command that doesn't read stdin. {}",
+                name, suggestion
+            ),
+        );
     }
 
     if let InnerToken::T_Redirecting { redirs, .. } = &*stage.inner {
@@ -830,30 +824,30 @@ fn ptn_check_pipe(
         }
 
         // inputWarning (SC2259)
-        if input != PipeType::NoPipe && !has_consumers {
-            if let Some((_, list)) = fd_map.iter().find(|(k, _)| *k == 0) {
-                if let Some(override_) = list.first() {
-                    err(
-                        out,
-                        ptn_get_op_id(override_),
-                        2259,
-                        "This redirection overrides piped input. To use both, merge or pass filenames.",
-                    );
-                }
-            }
+        if input != PipeType::NoPipe
+            && !has_consumers
+            && let Some((_, list)) = fd_map.iter().find(|(k, _)| *k == 0)
+            && let Some(override_) = list.first()
+        {
+            err(
+                out,
+                ptn_get_op_id(override_),
+                2259,
+                "This redirection overrides piped input. To use both, merge or pass filenames.",
+            );
         }
         // outputWarning (SC2260)
-        if output == PipeType::StdoutPipe && !has_producers {
-            if let Some((_, list)) = fd_map.iter().find(|(k, _)| *k == 1) {
-                if let Some(override_) = list.first() {
-                    err(
-                        out,
-                        ptn_get_op_id(override_),
-                        2260,
-                        "This redirection overrides the output pipe. Use 'tee' to output to both.",
-                    );
-                }
-            }
+        if output == PipeType::StdoutPipe
+            && !has_producers
+            && let Some((_, list)) = fd_map.iter().find(|(k, _)| *k == 1)
+            && let Some(override_) = list.first()
+        {
+            err(
+                out,
+                ptn_get_op_id(override_),
+                2260,
+                "This redirection overrides the output pipe. Use 'tee' to output to both.",
+            );
         }
         // warnAboutDupes (SC2261)
         if emit_dupes {
@@ -877,34 +871,33 @@ fn ptn_check_pipe(
 }
 
 fn ptn_check_redir(_params: &Parameters, cmd: &Token, out: &mut Out) {
-    if let Some(name) = get_command_basename(cmd) {
-        if NON_READING_COMMANDS.contains(&name.as_str())
-            && !ptn_tree_contains(ptn_may_consume, cmd)
-            && !(INTERACTIVE_FLAG_CMDS.contains(&name.as_str()) && ptn_has_interactive_flag(cmd))
-        {
-            let suggestion = if name == "echo" {
-                "Did you want 'cat' instead?"
-            } else {
-                "Bad quoting, wrong command or missing xargs?"
-            };
-            warn(
-                out,
-                cmd.id(),
-                2217,
-                &format!(
-                    "Redirecting to '{}', a command that doesn't read stdin. {}",
-                    name, suggestion
-                ),
-            );
-        }
+    if let Some(name) = get_command_basename(cmd)
+        && NON_READING_COMMANDS.contains(&name.as_str())
+        && !ptn_tree_contains(ptn_may_consume, cmd)
+        && !(INTERACTIVE_FLAG_CMDS.contains(&name.as_str()) && ptn_has_interactive_flag(cmd))
+    {
+        let suggestion = if name == "echo" {
+            "Did you want 'cat' instead?"
+        } else {
+            "Bad quoting, wrong command or missing xargs?"
+        };
+        warn(
+            out,
+            cmd.id(),
+            2217,
+            &format!(
+                "Redirecting to '{}', a command that doesn't read stdin. {}",
+                name, suggestion
+            ),
+        );
     }
 }
 
 fn ewr_check(params: &Parameters, capture_id: Id, pipe: &Token, out: &mut Out) {
-    if let InnerToken::T_Pipeline { commands, .. } = &*pipe.inner {
-        if let Some(last) = commands.last() {
-            ewr_check_cmd(params, capture_id, last, out);
-        }
+    if let InnerToken::T_Pipeline { commands, .. } = &*pipe.inner
+        && let Some(last) = commands.last()
+    {
+        ewr_check_cmd(params, capture_id, last, out);
     }
 }
 
@@ -917,33 +910,31 @@ enum EwrStep {
 fn ewr_walk(t: &Token) -> EwrStep {
     if let InnerToken::T_FdRedirect { fd, target } = &*t.inner {
         // T_FdRedirect _ _ (T_IoDuplicate _ _ "1") -> stop
-        if let InnerToken::T_IoDuplicate { num, .. } = &*target.inner {
-            if num == "1" {
-                return EwrStep::Stop;
-            }
+        if let InnerToken::T_IoDuplicate { num, .. } = &*target.inner
+            && num == "1"
+        {
+            return EwrStep::Stop;
         }
         // T_FdRedirect id "1" (T_IoDuplicate _ _ _) -> stop
-        if fd == "1" {
-            if let InnerToken::T_IoDuplicate { .. } = &*target.inner {
-                return EwrStep::Stop;
-            }
+        if fd == "1"
+            && let InnerToken::T_IoDuplicate { .. } = &*target.inner
+        {
+            return EwrStep::Stop;
         }
         // T_FdRedirect id "" (T_IoDuplicate _ op _) | op in [GREATAND, Greater] -> emit True
-        if fd.is_empty() {
-            if let InnerToken::T_IoDuplicate { op, .. } = &*target.inner {
-                if matches!(&*op.inner, InnerToken::T_GREATAND | InnerToken::T_Greater) {
-                    return EwrStep::Emit(t.id(), true);
-                }
-            }
+        if fd.is_empty()
+            && let InnerToken::T_IoDuplicate { op, .. } = &*target.inner
+            && matches!(&*op.inner, InnerToken::T_GREATAND | InnerToken::T_Greater)
+        {
+            return EwrStep::Emit(t.id(), true);
         }
         // T_FdRedirect id str (T_IoFile _ op file) | str in ["","1"] && op in [DGREAT, Greater]
-        if fd.is_empty() || fd == "1" {
-            if let InnerToken::T_IoFile { op, file } = &*target.inner {
-                if matches!(&*op.inner, InnerToken::T_DGREAT | InnerToken::T_Greater) {
-                    let suggest = ast_lib::get_literal_string(file).as_deref() != Some("/dev/null");
-                    return EwrStep::Emit(t.id(), suggest);
-                }
-            }
+        if (fd.is_empty() || fd == "1")
+            && let InnerToken::T_IoFile { op, file } = &*target.inner
+            && matches!(&*op.inner, InnerToken::T_DGREAT | InnerToken::T_Greater)
+        {
+            let suggest = ast_lib::get_literal_string(file).as_deref() != Some("/dev/null");
+            return EwrStep::Emit(t.id(), suggest);
         }
     }
     EwrStep::Continue

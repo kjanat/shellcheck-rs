@@ -23,10 +23,10 @@ pub(super) fn check_unused_assignments(params: &Parameters, _root: &Token, out: 
     // assignments: Map.fromList (last write per name), only real variable names.
     let mut assignments: BTreeMap<String, Token> = BTreeMap::new();
     for sd in flow {
-        if let StackData::Assignment(_, token, name, _) = sd {
-            if crate::cfg::is_variable_name(name) {
-                assignments.insert(name.clone(), token.clone());
-            }
+        if let StackData::Assignment(_, token, name, _) = sd
+            && crate::cfg::is_variable_name(name)
+        {
+            assignments.insert(name.clone(), token.clone());
         }
     }
 
@@ -160,10 +160,8 @@ fn remove_transparent_commands(t: &Token) -> Token {
         }
         let is_time = matches!(&*n.inner, InnerToken::T_SimpleCommand { words, .. } if !words.is_empty())
             && get_command_basename(n).as_deref() == Some("time");
-        if is_time {
-            if let InnerToken::T_SimpleCommand { words, .. } = n.inner_mut() {
-                words.remove(0);
-            }
+        if is_time && let InnerToken::T_SimpleCommand { words, .. } = n.inner_mut() {
+            words.remove(0);
         }
     }
     let mut copy = t.clone();
@@ -467,10 +465,10 @@ fn guard_regex_match(s: &str) -> bool {
     // optional [ ... ]
     if i < b.len() && b[i] == '[' {
         // greedy up to last ']'
-        if let Some(last) = b.iter().rposition(|c| *c == ']') {
-            if last > i {
-                i = last + 1;
-            }
+        if let Some(last) = b.iter().rposition(|c| *c == ']')
+            && last > i
+        {
+            i = last + 1;
         }
     }
     if i < b.len() && b[i] == ':' {

@@ -31,27 +31,27 @@ pub(super) fn check_subshell_assignment(params: &Parameters, _root: &Token, out:
                 }
             }
             StackData::Reference(_base, read_token, name) => {
-                if !subshell_should_ignore(name) {
-                    if let Some(VarState::Dead(write_token, reason)) = dead.get(name).cloned() {
-                        info(
-                            out,
-                            write_token.id(),
-                            2030,
-                            &format!(
-                                "Modification of {} is local (to subshell caused by {}).",
-                                name, reason
-                            ),
-                        );
-                        info(
-                            out,
-                            read_token.id(),
-                            2031,
-                            &format!(
-                                "{} was modified in a subshell. That change might be lost.",
-                                name
-                            ),
-                        );
-                    }
+                if !subshell_should_ignore(name)
+                    && let Some(VarState::Dead(write_token, reason)) = dead.get(name).cloned()
+                {
+                    info(
+                        out,
+                        write_token.id(),
+                        2030,
+                        &format!(
+                            "Modification of {} is local (to subshell caused by {}).",
+                            name, reason
+                        ),
+                    );
+                    info(
+                        out,
+                        read_token.id(),
+                        2031,
+                        &format!(
+                            "{} was modified in a subshell. That change might be lost.",
+                            name
+                        ),
+                    );
                 }
             }
             StackData::StackScope(Scope::SubshellScope(reason)) => {
@@ -75,23 +75,26 @@ pub(super) fn check_subshell_assignment(params: &Parameters, _root: &Token, out:
 
 pub(super) fn check_array_without_index(params: &Parameters, _root: &Token, out: &mut Out) {
     // doVariableFlowAnalysis readF writeF defaultSet (variableFlow params)
-    let mut arrays: HashSet<String> = ARRAY_VARIABLES.iter().map(|s| s.to_string()).collect();
+    let mut arrays: HashSet<String> = if params.shell == Shell::Bash {
+        ARRAY_VARIABLES.iter().map(|s| s.to_string()).collect()
+    } else {
+        HashSet::new()
+    };
 
     for sd in &params.variable_flow {
         match sd {
             StackData::Reference(_base, place, _name) => {
                 // readF _ (T_DollarBraced id _ token) _
-                if let InnerToken::T_DollarBraced { op, .. } = &*place.inner {
-                    if let Some(name) = ast_lib::get_literal_string(op) {
-                        if arrays.contains(&name) {
-                            warn(
-                                out,
-                                place.id(),
-                                2128,
-                                "Expanding an array without an index only gives the first element.",
-                            );
-                        }
-                    }
+                if let InnerToken::T_DollarBraced { op, .. } = &*place.inner
+                    && let Some(name) = ast_lib::get_literal_string(op)
+                    && arrays.contains(&name)
+                {
+                    warn(
+                        out,
+                        place.id(),
+                        2128,
+                        "Expanding an array without an index only gives the first element.",
+                    );
                 }
             }
             StackData::Assignment(_base, place, name, dt) => {
@@ -101,22 +104,22 @@ pub(super) fn check_array_without_index(params: &Parameters, _root: &Token, out:
                         if matches!(&*place.inner,
                             InnerToken::T_Assignment { indices, .. } if indices.is_empty()) =>
                     {
-                        if arrays.contains(name) {
-                            if let InnerToken::T_Assignment { mode, .. } = &*place.inner {
-                                match mode {
-                                    AssignmentMode::Assign => warn(
-                                        out,
-                                        place.id(),
-                                        2178,
-                                        "Variable was used as an array but is now assigned a string.",
-                                    ),
-                                    AssignmentMode::Append => warn(
-                                        out,
-                                        place.id(),
-                                        2179,
-                                        "Use array+=(\"item\") to append items to an array.",
-                                    ),
-                                }
+                        if arrays.contains(name)
+                            && let InnerToken::T_Assignment { mode, .. } = &*place.inner
+                        {
+                            match mode {
+                                AssignmentMode::Assign => warn(
+                                    out,
+                                    place.id(),
+                                    2178,
+                                    "Variable was used as an array but is now assigned a string.",
+                                ),
+                                AssignmentMode::Append => warn(
+                                    out,
+                                    place.id(),
+                                    2179,
+                                    "Use array+=(\"item\") to append items to an array.",
+                                ),
                             }
                         }
                         // No state change.
@@ -149,14 +152,12 @@ pub(super) fn check_array_assignment_indices(params: &Parameters, root: &Token, 
             value,
             ..
         } = &*t.inner
+            && indices.is_empty()
+            && let InnerToken::T_Array(list) = &*value.inner
         {
-            if indices.is_empty() {
-                if let InnerToken::T_Array(list) = &*value.inner {
-                    let is_assoc = assocs.contains(var);
-                    for el in list {
-                        caai_check_element(params, is_assoc, el, out);
-                    }
-                }
+            let is_assoc = assocs.contains(var);
+            for el in list {
+                caai_check_element(params, is_assoc, el, out);
             }
         }
     });
@@ -183,32 +184,29 @@ pub(super) fn check_array_value_used_as_index(params: &Parameters, _root: &Token
                 }
             }
             StackData::Reference(_base, token, name) => {
-                if let Some((loop_tok, arrays)) = var_map.get(name) {
-                    if let Some((array_ref, array_name)) =
+                if let Some((loop_tok, arrays)) = var_map.get(name)
+                    && let Some((array_ref, array_name)) =
                         avi_get_array_if_used_as_index(params, name, token)
-                    {
-                        if let Some((loop_word, _)) = arrays.iter().find(|(_, n)| *n == array_name)
-                        {
-                            let loop_id = loop_tok.id();
-                            let in_loop = get_path(params, token).iter().any(|x| x.id() == loop_id);
-                            if in_loop {
-                                warn(
-                                    out,
-                                    loop_word.id(),
-                                    2302,
-                                    "This loops over values. To loop over keys, use \"${!array[@]}\".",
-                                );
-                                warn(
-                                    out,
-                                    array_ref.id(),
-                                    2303,
-                                    &format!(
-                                        "{} is an array value, not a key. Use directly or loop over keys instead.",
-                                        name
-                                    ),
-                                );
-                            }
-                        }
+                    && let Some((loop_word, _)) = arrays.iter().find(|(_, n)| *n == array_name)
+                {
+                    let loop_id = loop_tok.id();
+                    let in_loop = get_path(params, token).iter().any(|x| x.id() == loop_id);
+                    if in_loop {
+                        warn(
+                            out,
+                            loop_word.id(),
+                            2302,
+                            "This loops over values. To loop over keys, use \"${!array[@]}\".",
+                        );
+                        warn(
+                            out,
+                            array_ref.id(),
+                            2303,
+                            &format!(
+                                "{} is an array value, not a key. Use directly or loop over keys instead.",
+                                name
+                            ),
+                        );
                     }
                 }
             }
@@ -218,33 +216,32 @@ pub(super) fn check_array_value_used_as_index(params: &Parameters, _root: &Token
 }
 
 pub(super) fn check_commarrays(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Array(l) = &*t.inner {
-        if l.iter().any(|e| commarray_literal(e).contains(',')) {
-            warn(
-                out,
-                t.id(),
-                2054,
-                "Use spaces, not commas, to separate array elements.",
-            );
-        }
+    if let InnerToken::T_Array(l) = &*t.inner
+        && l.iter().any(|e| commarray_literal(e).contains(','))
+    {
+        warn(
+            out,
+            t.id(),
+            2054,
+            "Use spaces, not commas, to separate array elements.",
+        );
     }
 }
 
 pub(super) fn check_bad_parameter_substitution(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
-        if let InnerToken::T_NormalWord(contents) = &*op.inner {
-            if let Some(first) = contents.first() {
-                if bps_is_indirection(contents) {
-                    err(
-                        out,
-                        t.id(),
-                        2082,
-                        "To expand via indirection, use arrays, ${!name} or (for sh only) eval.",
-                    );
-                } else {
-                    bps_check_first(first, out);
-                }
-            }
+    if let InnerToken::T_DollarBraced { op, .. } = &*t.inner
+        && let InnerToken::T_NormalWord(contents) = &*op.inner
+        && let Some(first) = contents.first()
+    {
+        if bps_is_indirection(contents) {
+            err(
+                out,
+                t.id(),
+                2082,
+                "To expand via indirection, use arrays, ${!name} or (for sh only) eval.",
+            );
+        } else {
+            bps_check_first(first, out);
         }
     }
 }
@@ -262,13 +259,13 @@ pub(super) fn check_prefix_assignment_reference(params: &Parameters, t: &Token, 
         let id_path: Vec<Id> = path.iter().map(|x| x.id()).collect();
         // check: walk path until a T_SimpleCommand with vars and non-empty words.
         for node in &path {
-            if let InnerToken::T_SimpleCommand { assignments, words } = &*node.inner {
-                if !words.is_empty() {
-                    for v in assignments {
-                        par_check_var(v, &name, &id_path, t.id(), out);
-                    }
-                    break;
+            if let InnerToken::T_SimpleCommand { assignments, words } = &*node.inner
+                && !words.is_empty()
+            {
+                for v in assignments {
+                    par_check_var(v, &name, &id_path, t.id(), out);
                 }
+                break;
             }
         }
     }
@@ -392,33 +389,32 @@ pub(super) fn check_assign_to_self(_params: &Parameters, t: &Token, out: &mut Ou
             continue;
         }
         let parts = get_word_parts(value);
-        if parts.len() == 1 {
-            if let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner {
-                if ast_lib::get_literal_string(op).as_deref() == Some(name.as_str()) {
-                    info(
-                        out,
-                        var.id(),
-                        2269,
-                        "This variable is assigned to itself, so the assignment does nothing.",
-                    );
-                }
-            }
+        if parts.len() == 1
+            && let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner
+            && ast_lib::get_literal_string(op).as_deref() == Some(name.as_str())
+        {
+            info(
+                out,
+                var.id(),
+                2269,
+                "This variable is assigned to itself, so the assignment does nothing.",
+            );
         }
     }
 }
 
 pub(super) fn check_ps1_assignments(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Assignment { var, value, .. } = &*t.inner {
-        if var == "PS1" {
-            let contents = oversimplify(value).concat();
-            if contains_unescaped(&contents) {
-                info(
-                    out,
-                    value.id(),
-                    2025,
-                    "Make sure all escape sequences are enclosed in \\[..\\] to prevent line wrapping issues",
-                );
-            }
+    if let InnerToken::T_Assignment { var, value, .. } = &*t.inner
+        && var == "PS1"
+    {
+        let contents = oversimplify(value).concat();
+        if contains_unescaped(&contents) {
+            info(
+                out,
+                value.id(),
+                2025,
+                "Make sure all escape sequences are enclosed in \\[..\\] to prevent line wrapping issues",
+            );
         }
     }
 }
@@ -538,18 +534,18 @@ fn bps_name(t: &Token) -> &'static str {
 fn bps_check_first(first: &Token, out: &mut Out) {
     match &*first.inner {
         InnerToken::T_Literal(s) => {
-            if let Some(c) = s.chars().next() {
-                if !(cfg::is_variable_char(c) || cfg::is_special_variable_char(c)) {
-                    err(
-                        out,
-                        first.id(),
-                        2296,
-                        &format!(
-                            "Parameter expansions can't start with {}. Double check syntax.",
-                            c
-                        ),
-                    );
-                }
+            if let Some(c) = s.chars().next()
+                && !(cfg::is_variable_char(c) || cfg::is_special_variable_char(c))
+            {
+                err(
+                    out,
+                    first.id(),
+                    2296,
+                    &format!(
+                        "Parameter expansions can't start with {}. Double check syntax.",
+                        c
+                    ),
+                );
             }
         }
         InnerToken::T_ParamSubSpecialChar(_) => {}
@@ -603,21 +599,23 @@ fn bps_check_first(first: &Token, out: &mut Out) {
 }
 
 fn par_check_var(v: &Token, name: &str, id_path: &[Id], expansion_id: Id, out: &mut Out) {
-    if let InnerToken::T_Assignment { var, indices, .. } = &*v.inner {
-        if indices.is_empty() && var == name && !id_path.contains(&v.id()) {
-            warn(
-                out,
-                v.id(),
-                2097,
-                "This assignment is only seen by the forked process.",
-            );
-            warn(
-                out,
-                expansion_id,
-                2098,
-                "This expansion will not see the mentioned assignment.",
-            );
-        }
+    if let InnerToken::T_Assignment { var, indices, .. } = &*v.inner
+        && indices.is_empty()
+        && var == name
+        && !id_path.contains(&v.id())
+    {
+        warn(
+            out,
+            v.id(),
+            2097,
+            "This assignment is only seen by the forked process.",
+        );
+        warn(
+            out,
+            expansion_id,
+            2098,
+            "This expansion will not see the mentioned assignment.",
+        );
     }
 }
 
@@ -640,10 +638,10 @@ fn caai_get_associative_arrays(root: &Token) -> std::collections::HashSet<String
             for a in args {
                 if let Some(s) = ast_lib::get_literal_string(a) {
                     if s.starts_with("--") {
-                    } else if let Some(chars) = s.strip_prefix('-') {
-                        if chars.contains('A') {
-                            has_a = true;
-                        }
+                    } else if let Some(chars) = s.strip_prefix('-')
+                        && chars.contains('A')
+                    {
+                        has_a = true;
                     }
                 }
             }
@@ -652,10 +650,10 @@ fn caai_get_associative_arrays(root: &Token) -> std::collections::HashSet<String
             }
             for a in args {
                 let lit = ast_lib::get_literal_string(a);
-                if let Some(ref s) = lit {
-                    if s.starts_with('-') {
-                        continue;
-                    }
+                if let Some(ref s) = lit
+                    && s.starts_with('-')
+                {
+                    continue;
                 }
                 // nameAssignments: name before '=' if present.
                 if let Some(s) = &lit {
@@ -732,12 +730,12 @@ fn caai_check_element(params: &Parameters, is_associative: bool, t: &Token, out:
 
 fn avi_get_array_name(t: &Token) -> Option<String> {
     let parts = word_parts(t);
-    if parts.len() == 1 {
-        if let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner {
-            let str = ast_lib::oversimplify_concat(op);
-            if cfg::get_braced_modifier(&str) == "[@]" && !str.starts_with('!') {
-                return Some(cfg::get_braced_reference(&str));
-            }
+    if parts.len() == 1
+        && let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner
+    {
+        let str = ast_lib::oversimplify_concat(op);
+        if cfg::get_braced_modifier(&str) == "[@]" && !str.starts_with('!') {
+            return Some(cfg::get_braced_reference(&str));
         }
     }
     None
@@ -1054,6 +1052,14 @@ mod tests {
         assert!(!tree_emits(
             check_array_without_index,
             "read -rpfoobar r; r=42"
+        ));
+    }
+
+    #[test]
+    fn prop_checkArrayWithoutIndex12() {
+        assert!(!tree_emits(
+            check_array_without_index,
+            "#!/bin/sh\nPIPESTATUS=foo"
         ));
     }
 

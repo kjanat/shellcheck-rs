@@ -11,14 +11,16 @@
 min_version = "2026.7.3"
 
 [tools]
-# rustfmt is needed by dprint (it formats .rs via rustfmt); clippy by `cargo lint`.
-cabal  = "latest"                                                    # Haskell build tool for the oracle (Aqua backend)
-dprint = "latest"                                                    # formatter
-ghc    = "latest"                                                    # GHC 9.x via GHCup; mise's default ghc backend caps at 8.10.7
-ghcup  = "latest"                                                    # GHCup itself, so the compiler is reproducible
-python = "latest"                                                    # conformance harness (rust/harness/*.py)
-rust   = { version = "latest", components = ["rustfmt", "clippy"] }  # Rust port (edition 2024)
-tombi  = "latest"                                                    # TOML toolkit (format/lint)
+cabal  = "latest"  # Haskell build tool for the oracle (Aqua backend)
+dprint = "latest"  # formatter
+ghc    = "latest"  # GHC 9.x via GHCup; mise's default ghc backend caps at 8.10.7
+ghcup  = "latest"  # GHCup itself, so the compiler is reproducible
+python = "latest"  # conformance harness (rust/harness/*.py)
+tombi  = "latest"  # TOML toolkit (format/lint)
+
+[tools.rust]  # Rust port (edition 2024)
+version    = "latest"
+components = ["rustfmt", "clippy", "rust-src"]
 
 [tool_alias]
 ghc = "mise-ghcup:ghc"

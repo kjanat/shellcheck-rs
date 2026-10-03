@@ -36,6 +36,7 @@ pub mod cfg_analysis;
 pub mod checker;
 pub mod checks;
 pub mod data;
+pub mod editor_config;
 pub mod idhash;
 pub mod parser;
 #[cfg(test)]

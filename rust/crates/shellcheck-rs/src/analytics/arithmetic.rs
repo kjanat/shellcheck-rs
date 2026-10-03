@@ -10,26 +10,23 @@ use crate::interface::Shell;
 
 pub(super) fn check_div_before_mult(params: &Parameters, t: &Token, out: &mut Out) {
     // TA_Binary _ "*" (TA_Binary id "/" _ x) y
-    if let InnerToken::TA_Binary { op, lhs, rhs } = &*t.inner {
-        if op == "*" {
-            if let InnerToken::TA_Binary {
-                op: inner_op,
-                lhs: _,
-                rhs: x,
-            } = &*lhs.inner
-            {
-                if inner_op == "/" {
-                    let y = rhs;
-                    if !has_floating_point(params) && x != y {
-                        info(
-                            out,
-                            lhs.id(),
-                            2017,
-                            "Increase precision by replacing a/b*c with a*c/b.",
-                        );
-                    }
-                }
-            }
+    if let InnerToken::TA_Binary { op, lhs, rhs } = &*t.inner
+        && op == "*"
+        && let InnerToken::TA_Binary {
+            op: inner_op,
+            lhs: _,
+            rhs: x,
+        } = &*lhs.inner
+        && inner_op == "/"
+    {
+        let y = rhs;
+        if !has_floating_point(params) && x != y {
+            info(
+                out,
+                lhs.id(),
+                2017,
+                "Increase precision by replacing a/b*c with a*c/b.",
+            );
         }
     }
 }
@@ -77,17 +74,16 @@ pub(super) fn check_arithmetic_deref(params: &Parameters, t: &Token, out: &mut O
 }
 
 pub(super) fn check_arithmetic_bad_octal(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TA_Expansion(_) = &*t.inner {
-        if let Some(str) = full_literal_string(t) {
-            if octal_re_match(&str) {
-                err(
-                    out,
-                    t.id(),
-                    2080,
-                    "Numbers with leading 0 are considered octal.",
-                );
-            }
-        }
+    if let InnerToken::TA_Expansion(_) = &*t.inner
+        && let Some(str) = full_literal_string(t)
+        && octal_re_match(&str)
+    {
+        err(
+            out,
+            t.id(),
+            2080,
+            "Numbers with leading 0 are considered octal.",
+        );
     }
 }
 
@@ -102,15 +98,15 @@ pub(super) fn check_arithmetic_op_command(_params: &Parameters, t: &Token, out: 
     let Some(first_word) = words.first() else {
         return;
     };
-    if let Some(op) = get_glob_or_literal_string(first_word) {
-        if matches!(op.as_str(), "+" | "-" | "*" | "/") {
-            warn(
-                out,
-                first_word.id(),
-                2099,
-                &format!("Use $((..)) for arithmetics, e.g. i=$((i {} 2))", op),
-            );
-        }
+    if let Some(op) = get_glob_or_literal_string(first_word)
+        && matches!(op.as_str(), "+" | "-" | "*" | "/")
+    {
+        warn(
+            out,
+            first_word.id(),
+            2099,
+            &format!("Use $((..)) for arithmetics, e.g. i=$((i {} 2))", op),
+        );
     }
 }
 
@@ -176,31 +172,26 @@ pub(super) fn check_unnecessary_arithmetic_expansion_index(
     out: &mut Out,
 ) {
     // T_Assignment _ mode var [TA_Sequence _ [ TA_Expansion _ [T_DollarArithmetic id _]]] val
-    if let InnerToken::T_Assignment { indices, .. } = &*t.inner {
-        if indices.len() == 1 {
-            if let InnerToken::TA_Sequence(seq) = &*indices[0].inner {
-                if seq.len() == 1 {
-                    if let InnerToken::TA_Expansion(exp) = &*seq[0].inner {
-                        if exp.len() == 1 {
-                            if let InnerToken::T_DollarArithmetic(_) = &*exp[0].inner {
-                                let id = exp[0].id();
-                                let fix = fix_with(vec![
-                                    replace_start(params, id, 3, ""), // Remove "$(("
-                                    replace_end(params, id, 2, ""),   // Remove "))"
-                                ]);
-                                style_with_fix(
-                                    out,
-                                    id,
-                                    2321,
-                                    "Array indices are already arithmetic contexts. Prefer removing the $(( and )).",
-                                    fix,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    if let InnerToken::T_Assignment { indices, .. } = &*t.inner
+        && indices.len() == 1
+        && let InnerToken::TA_Sequence(seq) = &*indices[0].inner
+        && seq.len() == 1
+        && let InnerToken::TA_Expansion(exp) = &*seq[0].inner
+        && exp.len() == 1
+        && let InnerToken::T_DollarArithmetic(_) = &*exp[0].inner
+    {
+        let id = exp[0].id();
+        let fix = fix_with(vec![
+            replace_start(params, id, 3, ""), // Remove "$(("
+            replace_end(params, id, 2, ""),   // Remove "))"
+        ]);
+        style_with_fix(
+            out,
+            id,
+            2321,
+            "Array indices are already arithmetic contexts. Prefer removing the $(( and )).",
+            fix,
+        );
     }
 }
 
@@ -224,19 +215,18 @@ pub(super) fn check_unnecessary_parens(params: &Parameters, t: &Token, out: &mut
             check_leading(params, "(( (x) )) is the same as (( x ))", inner, out);
         }
         InnerToken::TA_Parenthesis(seq) => {
-            if let InnerToken::TA_Sequence(list) = &*seq.inner {
-                if list.len() == 1 {
-                    if let InnerToken::TA_Parenthesis(_) = &*list[0].inner {
-                        let id = list[0].id();
-                        style_with_fix(
-                            out,
-                            id,
-                            2322,
-                            "In arithmetic contexts, ((x)) is the same as (x). Prefer only one layer of parentheses.",
-                            paren_fix(params, id),
-                        );
-                    }
-                }
+            if let InnerToken::TA_Sequence(list) = &*seq.inner
+                && list.len() == 1
+                && let InnerToken::TA_Parenthesis(_) = &*list[0].inner
+            {
+                let id = list[0].id();
+                style_with_fix(
+                    out,
+                    id,
+                    2322,
+                    "In arithmetic contexts, ((x)) is the same as (x). Prefer only one layer of parentheses.",
+                    paren_fix(params, id),
+                );
             }
         }
         _ => {}
@@ -447,19 +437,18 @@ fn warn_2257(id: Id, out: &mut Out) {
 }
 
 fn check_leading(params: &Parameters, str: &str, t: &Token, out: &mut Out) {
-    if let InnerToken::TA_Sequence(list) = &*t.inner {
-        if list.len() == 1 {
-            if let InnerToken::TA_Parenthesis(_) = &*list[0].inner {
-                let id = list[0].id();
-                style_with_fix(
-                    out,
-                    id,
-                    2323,
-                    &format!("{}. Prefer not wrapping in additional parentheses.", str),
-                    paren_fix(params, id),
-                );
-            }
-        }
+    if let InnerToken::TA_Sequence(list) = &*t.inner
+        && list.len() == 1
+        && let InnerToken::TA_Parenthesis(_) = &*list[0].inner
+    {
+        let id = list[0].id();
+        style_with_fix(
+            out,
+            id,
+            2323,
+            &format!("{}. Prefer not wrapping in additional parentheses.", str),
+            paren_fix(params, id),
+        );
     }
 }
 

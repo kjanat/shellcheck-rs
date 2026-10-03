@@ -25,44 +25,40 @@ pub(super) fn check_for_in_quoted(params: &Parameters, t: &Token, out: &mut Out)
     };
 
     // Equation 1: [T_NormalWord [word@(T_DoubleQuoted id list)]]
-    if items.len() == 1 {
-        if let InnerToken::T_NormalWord(nw) = &*items[0].inner {
-            if nw.len() == 1 {
-                if let InnerToken::T_DoubleQuoted(list) = &*nw[0].inner {
-                    let word = &nw[0];
-                    let guard1 = (list.iter().any(will_split) && !may_become_multiple_args(word))
-                        || ast_lib::get_literal_string(word)
-                            .map(|s| would_have_been_glob(&s))
-                            .unwrap_or(false);
-                    if guard1 {
-                        err(
-                            out,
-                            word.id(),
-                            2066,
-                            "Since you double quoted this, it will not word split, and the loop will only run once.",
-                        );
-                        return;
-                    }
-                }
-            }
+    if items.len() == 1
+        && let InnerToken::T_NormalWord(nw) = &*items[0].inner
+        && nw.len() == 1
+        && let InnerToken::T_DoubleQuoted(list) = &*nw[0].inner
+    {
+        let word = &nw[0];
+        let guard1 = (list.iter().any(will_split) && !may_become_multiple_args(word))
+            || ast_lib::get_literal_string(word)
+                .map(|s| would_have_been_glob(&s))
+                .unwrap_or(false);
+        if guard1 {
+            err(
+                out,
+                word.id(),
+                2066,
+                "Since you double quoted this, it will not word split, and the loop will only run once.",
+            );
+            return;
         }
     }
 
     // Equation 2: [T_NormalWord [T_SingleQuoted id _]]
-    if items.len() == 1 {
-        if let InnerToken::T_NormalWord(nw) = &*items[0].inner {
-            if nw.len() == 1 {
-                if let InnerToken::T_SingleQuoted(_) = &*nw[0].inner {
-                    warn(
-                        out,
-                        nw[0].id(),
-                        2041,
-                        "This is a literal string. To run as a command, use $(..) instead of '..' . ",
-                    );
-                    return;
-                }
-            }
-        }
+    if items.len() == 1
+        && let InnerToken::T_NormalWord(nw) = &*items[0].inner
+        && nw.len() == 1
+        && let InnerToken::T_SingleQuoted(_) = &*nw[0].inner
+    {
+        warn(
+            out,
+            nw[0].id(),
+            2041,
+            "This is a literal string. To run as a command, use $(..) instead of '..' . ",
+        );
+        return;
     }
 
     // Equation 3: [single]
@@ -94,18 +90,17 @@ pub(super) fn check_for_in_quoted(params: &Parameters, t: &Token, out: &mut Out)
 
     // Equation 4: multiple (or a single item that fell through) -> SC2258
     for arg in items {
-        if let Some(suffix) = crate::ast_lib::get_trailing_unquoted_literal(arg) {
-            if let Some(string) = ast_lib::get_literal_string(suffix) {
-                if string.ends_with(',') {
-                    warn_with_fix(
-                        out,
-                        arg.id(),
-                        2258,
-                        "The trailing comma is part of the value, not a separator. Delete or quote it.",
-                        fix_with(vec![replace_end(params, suffix.id(), 1, "")]),
-                    );
-                }
-            }
+        if let Some(suffix) = crate::ast_lib::get_trailing_unquoted_literal(arg)
+            && let Some(string) = ast_lib::get_literal_string(suffix)
+            && string.ends_with(',')
+        {
+            warn_with_fix(
+                out,
+                arg.id(),
+                2258,
+                "The trailing comma is part of the value, not a separator. Delete or quote it.",
+                fix_with(vec![replace_end(params, suffix.id(), 1, "")]),
+            );
         }
     }
 }
@@ -133,13 +128,12 @@ pub(super) fn check_for_in_ls(_params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 pub(super) fn check_for_in_cat(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_ForIn { items, .. } = &*t.inner {
-        if items.len() == 1 {
-            if let InnerToken::T_NormalWord(w) = &*items[0].inner {
-                for part in w {
-                    check_for_in_cat_part(part, out);
-                }
-            }
+    if let InnerToken::T_ForIn { items, .. } = &*t.inner
+        && items.len() == 1
+        && let InnerToken::T_NormalWord(w) = &*items[0].inner
+    {
+        for part in w {
+            check_for_in_cat_part(part, out);
         }
     }
 }
@@ -176,15 +170,15 @@ pub(super) fn check_loop_keyword_scope(params: &Parameters, t: &Token, out: &mut
     if path.iter().any(|x| is_loop(x)) {
         // map subshellType (filter (not . isFunction) path); if head is Just -> 2106
         let filtered: Vec<&&Token> = path.iter().filter(|x| !is_function(x)).collect();
-        if let Some(first) = filtered.first() {
-            if let Some(str) = subshell_type(params, first) {
-                warn(
-                    out,
-                    t.id(),
-                    2106,
-                    &format!("This only exits the subshell caused by the {}.", str),
-                );
-            }
+        if let Some(first) = filtered.first()
+            && let Some(str) = subshell_type(params, first)
+        {
+            warn(
+                out,
+                t.id(),
+                2106,
+                &format!("This only exits the subshell caused by the {}.", str),
+            );
         }
     } else {
         match path.first() {
@@ -280,16 +274,16 @@ pub(super) fn check_for_loop_glob_variables(_params: &Parameters, t: &Token, out
         return;
     };
     for word in items {
-        if let InnerToken::T_NormalWord(parts) = &*word.inner {
-            if parts.iter().any(is_glob) {
-                for p in parts.iter().filter(|x| is_quoteable_expansion(x)) {
-                    info(
-                        out,
-                        p.id(),
-                        2231,
-                        "Quote expansions in this for loop glob to prevent wordsplitting, e.g. \"$dir\"/*.txt .",
-                    );
-                }
+        if let InnerToken::T_NormalWord(parts) = &*word.inner
+            && parts.iter().any(is_glob)
+        {
+            for p in parts.iter().filter(|x| is_quoteable_expansion(x)) {
+                info(
+                    out,
+                    p.id(),
+                    2231,
+                    "Quote expansions in this for loop glob to prevent wordsplitting, e.g. \"$dir\"/*.txt .",
+                );
             }
         }
     }
@@ -361,15 +355,14 @@ fn muncher(name: &str) -> Option<(MunchCheck, MunchFix, &'static str)> {
 }
 
 fn is_stdin_read_command(t: &Token) -> bool {
-    if let InnerToken::T_Pipeline { commands, .. } = &*t.inner {
-        if commands.len() == 1 {
-            if let InnerToken::T_Redirecting { redirs, cmd } = &*commands[0].inner {
-                let plaintext = oversimplify(cmd);
-                return plaintext.first().map(|s| s.as_str()) == Some("read")
-                    && !plaintext.iter().any(|s| s == "-u")
-                    && !redirs.iter().any(stdin_redirect);
-            }
-        }
+    if let InnerToken::T_Pipeline { commands, .. } = &*t.inner
+        && commands.len() == 1
+        && let InnerToken::T_Redirecting { redirs, cmd } = &*commands[0].inner
+    {
+        let plaintext = oversimplify(cmd);
+        return plaintext.first().map(|s| s.as_str()) == Some("read")
+            && !plaintext.iter().any(|s| s == "-u")
+            && !redirs.iter().any(stdin_redirect);
     }
     false
 }
@@ -418,31 +411,30 @@ fn check_muncher(params: &Parameters, while_id: Id, t: &Token, out: &mut Out) {
                     }
 
                     // Check the actual command.
-                    if let Some(name) = get_command_basename(cmd) {
-                        if let Some((check, fixkind, flag)) = muncher(&name) {
-                            if !run_munch_check(check, flag, cmd) {
-                                info(
-                                    out,
-                                    while_id,
-                                    2095,
-                                    &format!(
-                                        "{} may swallow stdin, preventing this loop from working properly.",
-                                        name
-                                    ),
-                                );
-                                let fix = build_munch_fix(params, fixkind, flag, cmd);
-                                warn_with_fix(
-                                    out,
-                                    cmd.id(),
-                                    2095,
-                                    &format!(
-                                        "Use {} {} to prevent {} from swallowing stdin.",
-                                        name, flag, name
-                                    ),
-                                    fix,
-                                );
-                            }
-                        }
+                    if let Some(name) = get_command_basename(cmd)
+                        && let Some((check, fixkind, flag)) = muncher(&name)
+                        && !run_munch_check(check, flag, cmd)
+                    {
+                        info(
+                            out,
+                            while_id,
+                            2095,
+                            &format!(
+                                "{} may swallow stdin, preventing this loop from working properly.",
+                                name
+                            ),
+                        );
+                        let fix = build_munch_fix(params, fixkind, flag, cmd);
+                        warn_with_fix(
+                            out,
+                            cmd.id(),
+                            2095,
+                            &format!(
+                                "Use {} {} to prevent {} from swallowing stdin.",
+                                name, flag, name
+                            ),
+                            fix,
+                        );
                     }
                 }
             }
@@ -504,10 +496,10 @@ fn get_words(t: &Token) -> Vec<&Token> {
 /// `getCommandArgv t`: the name+arguments of a command.
 fn get_command_argv(t: &Token) -> Option<Vec<Token>> {
     let cmd = get_command(t)?;
-    if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-        if !words.is_empty() {
-            return Some(words.clone());
-        }
+    if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner
+        && !words.is_empty()
+    {
+        return Some(words.clone());
     }
     None
 }
@@ -547,19 +539,17 @@ fn check_for_in_cat_part(part: &Token, out: &mut Out) {
         InnerToken::T_Backticked(cmds) => Some(cmds),
         _ => None,
     };
-    if let Some(list) = list {
-        if list.len() == 1 {
-            if let InnerToken::T_Pipeline { commands, .. } = &*list[0].inner {
-                if commands.iter().all(is_line_based) {
-                    info(
-                        out,
-                        part.id(),
-                        2013,
-                        "To read lines rather than words, pipe/redirect to a 'while read' loop.",
-                    );
-                }
-            }
-        }
+    if let Some(list) = list
+        && list.len() == 1
+        && let InnerToken::T_Pipeline { commands, .. } = &*list[0].inner
+        && commands.iter().all(is_line_based)
+    {
+        info(
+            out,
+            part.id(),
+            2013,
+            "To read lines rather than words, pipe/redirect to a 'while read' loop.",
+        );
     }
 }
 
@@ -626,16 +616,13 @@ fn loop_variable(t: &Token) -> Option<String> {
         InnerToken::T_ForIn { var, .. } => Some(var.clone()),
         InnerToken::T_ForArithmetic { init, .. } => {
             // TA_Sequence [TA_Assignment "=" (TA_Variable var _) _]
-            if let InnerToken::TA_Sequence(seq) = &*init.inner {
-                if seq.len() == 1 {
-                    if let InnerToken::TA_Assignment { op, lhs, .. } = &*seq[0].inner {
-                        if op == "=" {
-                            if let InnerToken::TA_Variable { name, .. } = &*lhs.inner {
-                                return Some(name.clone());
-                            }
-                        }
-                    }
-                }
+            if let InnerToken::TA_Sequence(seq) = &*init.inner
+                && seq.len() == 1
+                && let InnerToken::TA_Assignment { op, lhs, .. } = &*seq[0].inner
+                && op == "="
+                && let InnerToken::TA_Variable { name, .. } = &*lhs.inner
+            {
+                return Some(name.clone());
             }
             None
         }

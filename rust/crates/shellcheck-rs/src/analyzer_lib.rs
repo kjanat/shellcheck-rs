@@ -611,15 +611,15 @@ fn get_formats(cs: &[char]) -> String {
         }
         if cs.get(1) == Some(&'(') {
             let rest = &cs[2..];
-            if let Some(pos) = rest.iter().position(|&c| c == ')') {
-                if pos + 1 < rest.len() {
-                    let c = rest[pos + 1];
-                    let trailing = &rest[pos + 2..];
-                    let mut out = String::new();
-                    out.push(c);
-                    out.push_str(&get_formats(trailing));
-                    return out;
-                }
+            if let Some(pos) = rest.iter().position(|&c| c == ')')
+                && pos + 1 < rest.len()
+            {
+                let c = rest[pos + 1];
+                let trailing = &rest[pos + 2..];
+                let mut out = String::new();
+                out.push(c);
+                out.push_str(&get_formats(trailing));
+                return out;
             }
             return String::new();
         }
@@ -783,19 +783,15 @@ pub(crate) fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Opt
 }
 
 pub(crate) fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Token) {
-    if let Some(cmd) = get_command(t) {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-            if let Some((w, rest)) = words.split_first() {
-                if let Some(s) = ast_lib::get_literal_string(w) {
-                    if !direct {
-                        if let Some(actual) = get_effective_command_token(&s, rest) {
-                            return (ast_lib::get_literal_string(actual), actual);
-                        }
-                    }
-                    return (Some(s), w);
-                }
-            }
+    if let Some(cmd) = get_command(t)
+        && let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner
+        && let Some((w, rest)) = words.split_first()
+        && let Some(s) = ast_lib::get_literal_string(w)
+    {
+        if !direct && let Some(actual) = get_effective_command_token(&s, rest) {
+            return (ast_lib::get_literal_string(actual), actual);
         }
+        return (Some(s), w);
     }
     (None, t)
 }
@@ -1029,12 +1025,11 @@ pub(crate) fn assignment_is_quoting(params: &Parameters, assign: &Token) -> bool
 }
 
 pub(crate) fn is_assignment_param_to_command(params: &Parameters, assign: &Token) -> bool {
-    if let Some(parent) = params.parent(assign) {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*parent.inner {
-            if !words.is_empty() {
-                return words[1..].iter().any(|w| w.id() == assign.id());
-            }
-        }
+    if let Some(parent) = params.parent(assign)
+        && let InnerToken::T_SimpleCommand { words, .. } = &*parent.inner
+        && !words.is_empty()
+    {
+        return words[1..].iter().any(|w| w.id() == assign.id());
     }
     false
 }
@@ -1299,15 +1294,15 @@ fn get_modified_variables(t: &Token) -> Vec<(Token, Token, String, DataType)> {
             const OPS: &[&str] = &[
                 "=", "*=", "/=", "%=", "+=", "-=", "<<=", ">>=", "&=", "^=", "|=",
             ];
-            if OPS.contains(&op.as_str()) {
-                if let TA_Variable { name, .. } = &*lhs.inner {
-                    return vec![(
-                        t.clone(),
-                        t.clone(),
-                        name.clone(),
-                        DataType::DataString(DataSource::SourceInteger),
-                    )];
-                }
+            if OPS.contains(&op.as_str())
+                && let TA_Variable { name, .. } = &*lhs.inner
+            {
+                return vec![(
+                    t.clone(),
+                    t.clone(),
+                    name.clone(),
+                    DataType::DataString(DataSource::SourceInteger),
+                )];
             }
             vec![]
         }
@@ -1572,15 +1567,15 @@ fn get_mapfile_array(base: &Token, rest: &[Token]) -> Option<(Token, Token, Stri
     };
     let fallback = || -> Option<(Token, Token, String, DataType)> {
         for tok in rest.iter().rev() {
-            if let Some(name) = ast_lib::get_literal_string(tok) {
-                if is_variable_name(&name) {
-                    return Some((
-                        base.clone(),
-                        tok.clone(),
-                        name,
-                        DataType::DataArray(DataSource::SourceExternal),
-                    ));
-                }
+            if let Some(name) = ast_lib::get_literal_string(tok)
+                && is_variable_name(&name)
+            {
+                return Some((
+                    base.clone(),
+                    tok.clone(),
+                    name,
+                    DataType::DataArray(DataSource::SourceExternal),
+                ));
             }
         }
         None
@@ -1842,12 +1837,11 @@ fn get_reference(t: &Token) -> Vec<(Token, Token, String)> {
         InnerToken::T_Assignment { var, .. } => vec![(t.clone(), t.clone(), var.clone())],
         InnerToken::T_NormalWord(parts) => {
             // `T_NormalWord [T_Literal name]` where not "-"-prefixed.
-            if parts.len() == 1 {
-                if let InnerToken::T_Literal(name) = &*parts[0].inner {
-                    if !name.starts_with('-') {
-                        return vec![(t.clone(), t.clone(), name.clone())];
-                    }
-                }
+            if parts.len() == 1
+                && let InnerToken::T_Literal(name) = &*parts[0].inner
+                && !name.starts_with('-')
+            {
+                return vec![(t.clone(), t.clone(), name.clone())];
             }
             vec![]
         }
@@ -2251,18 +2245,18 @@ pub(crate) fn token_is_just_command_output(t: &Token) -> bool {
     fn check(cmds: &[Token]) -> bool {
         cmds.len() == 1 && !ast_lib::is_only_redirection(&cmds[0])
     }
-    if let InnerToken::T_NormalWord(parts) = &*t.inner {
-        if parts.len() == 1 {
-            match &*parts[0].inner {
+    if let InnerToken::T_NormalWord(parts) = &*t.inner
+        && parts.len() == 1
+    {
+        match &*parts[0].inner {
+            InnerToken::T_DollarExpansion(cmds) => return check(cmds),
+            InnerToken::T_Backticked(cmds) => return check(cmds),
+            InnerToken::T_DoubleQuoted(inner) if inner.len() == 1 => match &*inner[0].inner {
                 InnerToken::T_DollarExpansion(cmds) => return check(cmds),
                 InnerToken::T_Backticked(cmds) => return check(cmds),
-                InnerToken::T_DoubleQuoted(inner) if inner.len() == 1 => match &*inner[0].inner {
-                    InnerToken::T_DollarExpansion(cmds) => return check(cmds),
-                    InnerToken::T_Backticked(cmds) => return check(cmds),
-                    _ => {}
-                },
                 _ => {}
-            }
+            },
+            _ => {}
         }
     }
     false

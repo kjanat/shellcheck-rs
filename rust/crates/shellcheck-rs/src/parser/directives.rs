@@ -125,27 +125,27 @@ impl Parser {
     /// failure at the character that ended it, and the key it belongs to has
     /// consumed -- `shell= d` is a broken directive, not a `shell=` and a `d`.
     fn read_directive_word(&mut self) -> PResult<String> {
-        if let Some(q) = self.peek() {
-            if q == '\'' || q == '"' {
+        if let Some(q) = self.peek()
+            && (q == '\'' || q == '"')
+        {
+            self.bump();
+            let mut s = String::new();
+            while let Some(c) = self.peek() {
+                if c == q || c == '\n' {
+                    break;
+                }
+                s.push(c);
                 self.bump();
-                let mut s = String::new();
-                while let Some(c) = self.peek() {
-                    if c == q || c == '\n' {
-                        break;
-                    }
-                    s.push(c);
-                    self.bump();
-                }
-                if s.is_empty() {
-                    // `many1 $ noneOf (c:"\n")` with nothing to take.
-                    self.fail_implicitly();
-                    return Err(());
-                }
-                if self.char(q).is_err() {
-                    return self.fail_with("Missing terminating quote for directive.");
-                }
-                return Ok(s);
             }
+            if s.is_empty() {
+                // `many1 $ noneOf (c:"\n")` with nothing to take.
+                self.fail_implicitly();
+                return Err(());
+            }
+            if self.char(q).is_err() {
+                return self.fail_with("Missing terminating quote for directive.");
+            }
+            return Ok(s);
         }
         let mut s = String::new();
         while let Some(c) = self.peek() {
@@ -301,42 +301,42 @@ impl Parser {
     /// `plainOrQuoted p = quoted p <|> p`: the value may be wrapped in quotes,
     /// in which case `p` runs on what is inside them.
     fn plain_or_quoted<T>(&mut self, p: impl Fn(&mut Self) -> PResult<T>) -> PResult<T> {
-        if let Some(q) = self.peek() {
-            if q == '\'' || q == '"' {
+        if let Some(q) = self.peek()
+            && (q == '\'' || q == '"')
+        {
+            self.bump();
+            let start = self.pos();
+            let mut inner = String::new();
+            while let Some(c) = self.peek() {
+                if c == q || c == '\n' {
+                    break;
+                }
+                inner.push(c);
                 self.bump();
-                let start = self.pos();
-                let mut inner = String::new();
-                while let Some(c) = self.peek() {
-                    if c == q || c == '\n' {
-                        break;
-                    }
-                    inner.push(c);
-                    self.bump();
+            }
+            // Past the opening quote both of these have consumed, so the
+            // `<|>` in `plainOrQuoted` cannot fall back to the unquoted
+            // reading: an unterminated quote is a parse error, which is
+            // what the wiki's SC1072 page describes for an incomplete
+            // directive.
+            if inner.is_empty() {
+                // `many1 $ noneOf (c:"\n")` with nothing to take.
+                self.fail_implicitly();
+                return Err(());
+            }
+            if self.char(q).is_err() {
+                return self.fail_with("Missing terminating quote for directive.");
+            }
+            {
+                let mut sub = self.sub_parser(&inner, &start);
+                let r = p(&mut sub);
+                let (contexts, failure) = (sub.contexts.clone(), sub.failure.clone());
+                self.merge_sub(sub);
+                if r.is_err() {
+                    self.contexts = contexts;
+                    self.failure = failure;
                 }
-                // Past the opening quote both of these have consumed, so the
-                // `<|>` in `plainOrQuoted` cannot fall back to the unquoted
-                // reading: an unterminated quote is a parse error, which is
-                // what the wiki's SC1072 page describes for an incomplete
-                // directive.
-                if inner.is_empty() {
-                    // `many1 $ noneOf (c:"\n")` with nothing to take.
-                    self.fail_implicitly();
-                    return Err(());
-                }
-                if self.char(q).is_err() {
-                    return self.fail_with("Missing terminating quote for directive.");
-                }
-                {
-                    let mut sub = self.sub_parser(&inner, &start);
-                    let r = p(&mut sub);
-                    let (contexts, failure) = (sub.contexts.clone(), sub.failure.clone());
-                    self.merge_sub(sub);
-                    if r.is_err() {
-                        self.contexts = contexts;
-                        self.failure = failure;
-                    }
-                    return r;
-                }
+                return r;
             }
         }
         p(self)

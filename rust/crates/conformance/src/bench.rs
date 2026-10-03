@@ -303,7 +303,8 @@ mod tests {
     fn phase_split_covers_the_pipeline() {
         let s = time_port("echo $foo\nfor i in 1 2; do echo $i; done\n", "-");
         assert!(s.total > Duration::ZERO);
-        assert!(s.parse <= s.total);
+        let phases = s.parse + s.maps + s.cfg + s.params_other + s.checks + s.resolve;
+        assert!(phases >= s.total);
         assert!(s.comments > 0);
     }
 }

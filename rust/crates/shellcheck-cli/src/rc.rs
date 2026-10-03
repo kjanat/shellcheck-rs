@@ -27,14 +27,22 @@
 //! are dropped upstream too: `readConfig` runs the sub-parser with its own
 //! state and keeps only the annotations, so only the fatal SC1134 survives.
 
-use std::path::{Path, PathBuf};
+use std::cell::RefCell;
 
 use shellcheck_rs::ast::Annotation;
+use shellcheck_rs::editor_config::{
+    editor_config_directives, invalid_root_lines, is_editor_config_root, is_rejection,
+    rejected_root,
+};
 use shellcheck_rs::interface::{
     CheckSpec, DisableRange, RcDirectives, RcParseProblem, Shell, decode_bytes,
 };
 
 use crate::options::parse_shell;
+use crate::paths::{
+    combine, does_file_exist, io_error_message, normalize, take_directory, take_file_name,
+    xdg_config_home,
+};
 
 /// The directives of one rc file, reduced to what the checker needs.
 ///
@@ -102,6 +110,7 @@ pub fn parse_contents(filename: &str, contents: &str) -> RcConfig {
             parse_problem: Some(RcParseProblem {
                 filename: filename.to_string(),
                 line: fail.line,
+                column: fail.column,
                 suggestion: fail.suggestion(),
             }),
             ..RcConfig::default()
@@ -139,6 +148,7 @@ pub fn merge_into(spec: &mut CheckSpec, rc: &RcConfig) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Fail {
     line: i64,
+    column: i64,
     message: Option<String>,
 }
 
@@ -185,6 +195,7 @@ fn read_config_kvs(contents: &str) -> Result<Vec<Annotation>, Fail> {
         // and nothing once one has (the `eof` failure no longer merges with it).
         return Err(Fail {
             line: p.line,
+            column: p.column,
             message: if parsed_any {
                 None
             } else {
@@ -195,12 +206,13 @@ fn read_config_kvs(contents: &str) -> Result<Vec<Annotation>, Fail> {
     Ok(out)
 }
 
-/// A character cursor over an rc file, with the line number the parsec error
-/// position would report.
+/// A character cursor over an rc file, with the line and column the parsec
+/// error position would report.
 struct ConfigParser {
     chars: Vec<char>,
     idx: usize,
     line: i64,
+    column: i64,
 }
 
 impl ConfigParser {
@@ -209,6 +221,7 @@ impl ConfigParser {
             chars: contents.chars().collect(),
             idx: 0,
             line: 1,
+            column: 1,
         }
     }
 
@@ -223,8 +236,14 @@ impl ConfigParser {
     fn bump(&mut self) -> Option<char> {
         let c = self.peek()?;
         self.idx += 1;
-        if c == '\n' {
-            self.line += 1;
+        // `updatePosChar`: a tab moves to the next multiple of eight, plus one.
+        match c {
+            '\n' => {
+                self.line += 1;
+                self.column = 1;
+            }
+            '\t' => self.column += 8 - (self.column - 1) % 8,
+            _ => self.column += 1,
         }
         Some(c)
     }
@@ -243,6 +262,7 @@ impl ConfigParser {
     fn fail_with<T>(&self, message: &str) -> Result<T, Fail> {
         Err(Fail {
             line: self.line,
+            column: self.column,
             message: Some(message.to_string()),
         })
     }
@@ -251,6 +271,7 @@ impl ConfigParser {
     fn fail<T>(&self) -> Result<T, Fail> {
         Err(Fail {
             line: self.line,
+            column: self.column,
             message: None,
         })
     }
@@ -483,6 +504,7 @@ impl ConfigParser {
             _ => return p(self),
         };
         self.bump();
+        let (line, column) = (self.line, self.column);
         let mut inner = String::new();
         while matches!(self.peek(), Some(c) if c != quote && c != '\n') {
             inner.push(self.bump().unwrap());
@@ -495,11 +517,12 @@ impl ConfigParser {
         if !self.eat(quote) {
             return self.fail_with("Missing terminating quote for directive.");
         }
-        // `subParse start p str`: the quoted text cannot span lines, so a
-        // failure inside it is reported on this line.
-        let line = self.line;
+        // `subParse start p str`, with `start` taken just after the opening
+        // quote: the quoted text cannot span lines, so a failure inside it is
+        // reported on this line, at its column from there.
         let mut sub = ConfigParser::new(&inner);
         sub.line = line;
+        sub.column = column;
         p(&mut sub)
     }
 
@@ -573,10 +596,16 @@ impl ConfigParser {
                 }
             }
         }
-        // `readAll`: `string "all"`, which consumes what it matched.
+        // `readAll`: `string "all"`, which consumes what it matched but reports
+        // a mismatch at the position where the string began.
+        let (line, column) = (self.line, self.column);
         for expected in "all".chars() {
             if !self.eat(expected) {
-                return self.fail();
+                return Err(Fail {
+                    line,
+                    column,
+                    message: None,
+                });
             }
         }
         Ok(Annotation::DisableComment(0, 1_000_000))
@@ -596,12 +625,18 @@ impl ConfigParser {
     }
 
     /// `readCode = optional (string "SC") >> many1 digit`. Parsec's `string`
-    /// consumes what it matched before failing, so a lone `S` is fatal.
+    /// consumes what it matched before failing, so a lone `S` is fatal, and
+    /// the failure is positioned where the string began.
     fn read_disable_code(&mut self) -> Result<i64, Fail> {
         if self.peek() == Some('S') {
+            let (line, column) = (self.line, self.column);
             self.bump();
             if !self.eat('C') {
-                return self.fail();
+                return Err(Fail {
+                    line,
+                    column,
+                    message: None,
+                });
             }
         }
         let mut s = String::new();
@@ -636,69 +671,202 @@ impl ConfigParser {
     }
 }
 
-/// Read and parse an explicit `--rcfile`. Returns `None` if the file cannot be
-/// read (the caller prints the warning), mirroring `readConfig` returning
-/// `Nothing`. The path is reported verbatim in SC1134, as the oracle does.
-pub fn read_config_file(path: &Path) -> Option<RcConfig> {
-    // `readConfig` goes through `inputFile`, so an rc file is decoded exactly
-    // like a script: bytes, with an ISO-8859-1 fallback for invalid UTF-8.
-    let contents = decode_bytes(&std::fs::read(path).ok()?);
-    Some(parse_contents(&path.display().to_string(), &contents))
+/// A configuration file's name and contents, as `siGetConfig` returns them.
+pub type RawConfig = (String, String);
+
+/// `siGetConfig` of `ioInterface` (`getConfig`): the `.shellcheckrc` that
+/// applies to an input, merged with what its EditorConfig files say about it.
+pub struct ConfigLookup {
+    /// `--rcfile`, which replaces the `.shellcheckrc` search.
+    rcfile: Option<String>,
+    /// `getRcConfig`'s cache: the directory last searched and what was found,
+    /// with `/` standing for the `--rcfile`.
+    cache: RefCell<Option<(String, Option<RawConfig>)>>,
 }
 
-/// Discover the applicable rc config for a single input by walking up from the
-/// input's directory to the filesystem root, then the user config dirs. Uses
-/// the first candidate that exists and is readable (`findConfig`).
-///
-/// For stdin (`-`) the current working directory is used as the starting point
-/// (`getConfig` normalises `-` to the CWD via `canonicalizePath`).
-pub fn discover(input_name: &str) -> Option<RcConfig> {
-    let dir = starting_dir(input_name)?;
-    for candidate in candidate_paths(&dir) {
-        // `findConfig`/`readConfig` select the FIRST candidate that EXISTS
-        // (doesFileExist). A nearer existing-but-unreadable file is still
-        // selected: the oracle reports the read error and uses an empty config,
-        // rather than silently falling through to a parent or user config.
-        if candidate.is_file() {
-            match std::fs::read(&candidate) {
-                Ok(bytes) => {
-                    let contents = decode_bytes(&bytes);
-                    return Some(parse_contents(&candidate.display().to_string(), &contents));
-                }
-                Err(e) => {
-                    eprintln!("{}: {}", candidate.display(), e);
-                    return Some(RcConfig::default());
-                }
-            }
+impl ConfigLookup {
+    pub fn new(rcfile: Option<String>) -> ConfigLookup {
+        ConfigLookup {
+            rcfile,
+            cache: RefCell::new(None),
         }
     }
-    None
+
+    /// `getConfig`, parsed: returns the name and contents of .shellcheckrc for
+    /// the given file, merged with any shellcheck.* directives found in
+    /// applicable EditorConfig files.
+    pub fn get(&self, filename: &str) -> Option<RcConfig> {
+        let rc = self.rc_config(filename);
+        let ec = editor_config(filename);
+        merge_configs(rc, ec).map(|(path, contents)| parse_contents(&path, &contents))
+    }
+
+    /// `getRcConfig`: an explicit `--rcfile` is read once and applied to every
+    /// input; if unreadable, warn once and proceed with no config. Otherwise
+    /// discover the rc config for the input by walking up from its directory
+    /// to the filesystem root, then the user config dirs, and use the first
+    /// candidate that exists (`findConfig`).
+    ///
+    /// For stdin (`-`) the current working directory is the starting point:
+    /// `normalize` makes the name absolute against the CWD, as
+    /// `canonicalizePath` does.
+    fn rc_config(&self, filename: &str) -> Option<RawConfig> {
+        let key = match self.rcfile {
+            Some(_) => "/".to_string(),
+            None => take_directory(&normalize(filename)),
+        };
+        if let Some((cached, result)) = &*self.cache.borrow()
+            && *cached == key
+        {
+            return result.clone();
+        }
+        let result = match &self.rcfile {
+            // We have a specified rcfile. Ignore normal rcfile resolution.
+            Some(file) => {
+                let result = read_config(file);
+                if result.is_none() {
+                    eprintln!("Warning: unable to read --rcfile {file}");
+                }
+                result
+            }
+            // `findConfig`/`readConfig` select the FIRST candidate that EXISTS
+            // (doesFileExist). A nearer existing-but-unreadable file is still
+            // selected: the oracle reports the read error and uses an empty
+            // config, rather than silently falling through to a parent or user
+            // config.
+            None => config_paths(&key).iter().find_map(|p| read_config(p)),
+        };
+        *self.cache.borrow_mut() = Some((key, result.clone()));
+        result
+    }
 }
 
-/// The directory to begin the upward search from for a given input.
-fn starting_dir(input_name: &str) -> Option<PathBuf> {
-    if input_name == "-" {
-        return std::env::current_dir().ok();
+/// `readConfig`: the contents of `file` if it exists. One that exists but
+/// cannot be read is reported and counts as empty. The path is reported
+/// verbatim in SC1134, as the oracle does.
+pub fn read_config(file: &str) -> Option<RawConfig> {
+    if !does_file_exist(file) {
+        return None;
     }
-    // Normalise like `canonicalizePath`, falling back to the given path if it
-    // cannot be canonicalised (e.g. the file does not exist yet).
-    let path = std::fs::canonicalize(input_name).unwrap_or_else(|_| PathBuf::from(input_name));
-    let dir = path.parent().map(|p| p.to_path_buf());
-    match dir {
-        Some(d) if !d.as_os_str().is_empty() => Some(d),
-        // A bare relative filename has no parent component: use the CWD.
-        _ => std::env::current_dir().ok(),
+    // `readConfig` goes through `inputFile`, so an rc file is decoded exactly
+    // like a script: bytes, with an ISO-8859-1 fallback for invalid UTF-8.
+    let contents = match std::fs::read(file) {
+        Ok(bytes) => decode_bytes(&bytes),
+        Err(e) => {
+            eprintln!("{file}: {}", io_error_message(file, &e));
+            String::new()
+        }
+    };
+    Some((file.to_string(), contents))
+}
+
+/// `mergeConfigs`: the `.shellcheckrc` followed by the EditorConfig
+/// directives, under the `.shellcheckrc`'s name, unless the EditorConfig
+/// files were rejected.
+pub fn merge_configs(rc: Option<RawConfig>, ec: Option<RawConfig>) -> Option<RawConfig> {
+    match (rc, ec) {
+        (None, ec) => ec,
+        (rc, None) => rc,
+        (Some(_), Some(ec)) if is_rejection(&ec.1) => Some(ec),
+        (Some((rc_path, rc)), Some((_, ec))) => Some((rc_path, format!("{rc}\n{ec}"))),
     }
 }
 
-/// The ordered list of candidate rc file paths for a starting directory:
+/// `getEditorConfig`: look for .editorconfig files in the target file's
+/// directory and all its parents (as per the EditorConfig spec), plus the
+/// global ${XDG_CONFIG_HOME}/editorconfig.ini default. shellcheck.* keys in
+/// matching sections are turned into directives. The blobs are concatenated
+/// under the name of the first file that contributes one.
+pub fn editor_config(filename: &str) -> Option<RawConfig> {
+    let global = xdg_config_home().map(|dir| combine(&dir, "editorconfig.ini"));
+    editor_config_with(filename, global.as_deref())
+}
+
+/// `getEditorConfig` with the global EditorConfig file at `global`.
+fn editor_config_with(filename: &str, global: Option<&str>) -> Option<RawConfig> {
+    // Resolve the directory (to find .editorconfig files) but keep the leaf
+    // filename as-is so that globs match the symlink name rather than the
+    // resolved target.
+    let dir = normalize(&take_directory(filename));
+    let path = combine(&dir, take_file_name(filename));
+    let mut configs = dir_editor_configs(&dir);
+    configs.extend(global.and_then(read_config));
+    let contributions: Vec<RawConfig> = configs
+        .iter()
+        .filter_map(|config| directives_for(&path, config))
+        .collect();
+    let (first, _) = contributions.first()?;
+    Some((
+        first.clone(),
+        contributions
+            .iter()
+            .map(|(_, blob)| blob.as_str())
+            .collect(),
+    ))
+}
+
+/// `directivesFor`: for each EditorConfig file, report any invalid `root`
+/// declaration (which takes priority) as a rejected config blob, otherwise
+/// yield the matching shellcheck.* directives (invalid directives are reported
+/// by `editorConfigDirectives` as a rejected blob so the .shellcheckrc parser
+/// emits SC1134).
+fn directives_for(path: &str, (file, contents): &RawConfig) -> Option<RawConfig> {
+    let blob = match invalid_root_lines(contents).first() {
+        Some(&line) => rejected_root(line),
+        None => editor_config_directives(contents, &make_relative_to(&take_directory(file), path))?,
+    };
+    Some((file.clone(), blob))
+}
+
+/// `makeRelativeTo`: `path` below `dir`, or its file name when it is not.
+fn make_relative_to(dir: &str, path: &str) -> String {
+    let prefix = if dir.is_empty() || dir.ends_with('/') {
+        dir.to_string()
+    } else {
+        format!("{dir}/")
+    };
+    match path.strip_prefix(&prefix) {
+        Some(rest) => rest.to_string(),
+        None => take_file_name(path).to_string(),
+    }
+}
+
+/// `collectDirConfigs`: the `.editorconfig` files from `dir` upwards, nearest
+/// first, up to the first that declares itself the root.
+fn dir_editor_configs(dir: &str) -> Vec<RawConfig> {
+    let mut configs = Vec::new();
+    let mut dir = dir.to_string();
+    loop {
+        let current = read_config(&combine(&dir, ".editorconfig"));
+        let is_root = current
+            .as_ref()
+            .is_some_and(|(_, contents)| is_editor_config_root(contents));
+        configs.extend(current);
+        let next = take_directory(&dir);
+        if next == dir || is_root {
+            return configs;
+        }
+        dir = next;
+    }
+}
+
+/// `getConfigPaths`: get a list of candidate filenames. This includes
+/// .shellcheckrc in all parent directories, plus the user's home dir and xdg
+/// dir. The dot is optional for Windows and Snap users. In order:
 /// `<dir>/.shellcheckrc` then `<dir>/shellcheckrc` at each level from `dir` up
-/// to the root, followed by the user home and XDG config paths (`defaultPaths`).
-fn candidate_paths(dir: &Path) -> Vec<PathBuf> {
+/// to the root, followed by the user home and XDG config paths
+/// (`defaultPaths`).
+fn config_paths(dir: &str) -> Vec<String> {
     let mut paths = Vec::new();
-    for ancestor in dir.ancestors() {
-        paths.push(ancestor.join(".shellcheckrc"));
-        paths.push(ancestor.join("shellcheckrc"));
+    let mut dir = dir.to_string();
+    loop {
+        paths.push(combine(&dir, ".shellcheckrc"));
+        paths.push(combine(&dir, "shellcheckrc"));
+        let next = take_directory(&dir);
+        if next == dir {
+            break;
+        }
+        dir = next;
     }
     paths.extend(default_paths());
     paths
@@ -707,22 +875,18 @@ fn candidate_paths(dir: &Path) -> Vec<PathBuf> {
 /// `defaultPaths`: the user home rc (`getAppUserDataDirectory "shellcheckrc"`,
 /// i.e. `$HOME/.shellcheckrc` on Unix) and the XDG config rc
 /// (`getXdgDirectory XdgConfig "shellcheckrc"`, i.e.
-/// `$XDG_CONFIG_HOME/shellcheckrc` or `$HOME/.config/shellcheckrc`).
-fn default_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    if let Some(home) = &home {
-        paths.push(home.join(".shellcheckrc"));
-    }
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from) {
-        paths.push(xdg.join("shellcheckrc"));
-    } else if let Some(home) = &home {
-        paths.push(home.join(".config").join("shellcheckrc"));
-    }
-    paths
+/// `$XDG_CONFIG_HOME/shellcheckrc` when that is absolute, or
+/// `$HOME/.config/shellcheckrc`).
+fn default_paths() -> Vec<String> {
+    let home = std::env::var("HOME")
+        .ok()
+        .map(|home| combine(&home, ".shellcheckrc"));
+    let xdg = xdg_config_home().map(|dir| combine(&dir, "shellcheckrc"));
+    home.into_iter().chain(xdg).collect()
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
 
@@ -752,7 +916,9 @@ mod tests {
         // so a stray byte in a comment does not discard the directives.
         let path = std::env::temp_dir().join("rshellcheck-rc-decode-test");
         std::fs::write(&path, b"# comment \xff here\ndisable=SC2086\n").unwrap();
-        let config = read_config_file(&path).expect("rc file should be readable");
+        let (name, contents) =
+            read_config(&path.display().to_string()).expect("rc file should be readable");
+        let config = parse_contents(&name, &contents);
         assert_eq!(
             config.disabled.iter().map(|r| r.from).collect::<Vec<_>>(),
             vec![2086]
@@ -1025,6 +1191,235 @@ mod tests {
         merge_into(&mut spec, &rc);
         assert_eq!(spec.shell_type_override, Some(Shell::Bash));
         assert_eq!(spec.extended_analysis, Some(true));
+    }
+
+    #[test]
+    fn a_parse_failure_is_positioned_where_the_oracle_puts_it() {
+        let at = |contents: &str| {
+            parse(contents)
+                .parse_problem
+                .map(|p| (p.line, p.column, p.suggestion))
+        };
+        let expected =
+            |line, column, suggestion: &str| Some((line, column, suggestion.to_string()));
+        assert_eq!(
+            at("disable SC2086"),
+            expected(1, 8, "Expected '=' after directive key.")
+        );
+        assert_eq!(
+            at("disable=SC2086\noops here\n"),
+            expected(2, 5, "Expected '=' after directive key.")
+        );
+        // A tab advances to the next multiple of eight; the formatters untab.
+        assert_eq!(
+            at("\tdisable SC2086"),
+            expected(1, 16, "Expected '=' after directive key.")
+        );
+        assert_eq!(
+            at("disable='SC2086"),
+            expected(1, 16, "Missing terminating quote for directive..")
+        );
+        // `string "SC"` reports a partial match where it began.
+        assert_eq!(at("disable=S"), expected(1, 9, ""));
+        assert_eq!(
+            at("x\r"),
+            expected(1, 2, "Expected '=' after directive key.")
+        );
+        assert_eq!(at("disable=SC2086\n  \"x\n"), expected(2, 3, ""));
+        assert_eq!(at("\\\nx"), expected(2, 1, "Expected whitespace."));
+    }
+
+    /// `checkWithEditorConfig`: shellcheck.* directives extracted from an
+    /// EditorConfig file are merged into the same "key=value" blob as
+    /// .shellcheckrc. We simulate that here by feeding
+    /// `editorConfigDirectives`' output through the rc parser.
+    fn with_editor_config(ec: &str, name: &str) -> RcConfig {
+        let blob = editor_config_directives(ec, name).unwrap_or_default();
+        parse_contents(".editorconfig", &blob)
+    }
+
+    #[test]
+    fn prop_editorConfigAppliesKnownShell() {
+        let c = with_editor_config("[foo]\nshellcheck.shell=bash\n", "foo");
+        assert_eq!(c.shell, Some(Shell::Bash));
+        assert!(c.parse_problem.is_none());
+    }
+
+    #[test]
+    fn prop_editorConfigAppliesDisable() {
+        let c = with_editor_config("[foo]\nshellcheck.disable=SC2086\n", "foo");
+        assert_eq!(
+            c.disabled,
+            vec![DisableRange {
+                from: 2086,
+                to: 2087
+            }]
+        );
+        assert!(c.parse_problem.is_none());
+    }
+
+    // An unknown shell can't be applied silently; it surfaces as a config
+    // parse error (SC1134) rather than being dropped.
+    #[test]
+    fn prop_editorConfigUnknownShellIsReported() {
+        let problem = with_editor_config("[foo]\nshellcheck.shell=zsh\n", "foo")
+            .parse_problem
+            .expect("SC1134");
+        assert_eq!((problem.line, problem.column), (2, 8));
+    }
+
+    // EditorConfig has no inline comments, so a '#'-prefixed value is
+    // reported as a config error (SC1134) instead of being eaten.
+    #[test]
+    fn prop_editorConfigCommentValueIsReported() {
+        let problem = with_editor_config("[foo]\nshellcheck.disable=#abc\n", "foo")
+            .parse_problem
+            .expect("SC1134");
+        assert_eq!(problem.line, 2);
+    }
+
+    // A directive in a section whose glob does not match the file is not
+    // applied (and produces no config error).
+    #[test]
+    fn prop_editorConfigNonMatchingSectionIgnored() {
+        assert_eq!(
+            with_editor_config("[bar]\nshellcheck.disable=SC2086\n", "foo"),
+            RcConfig::default()
+        );
+    }
+
+    #[test]
+    fn merge_configs_appends_the_editor_config_unless_it_was_rejected() {
+        let rc = || Some(("/p/.shellcheckrc".to_string(), "disable=SC2086".to_string()));
+        let ec = |blob: &str| Some(("/p/.editorconfig".to_string(), blob.to_string()));
+        assert_eq!(merge_configs(None, None), None);
+        assert_eq!(merge_configs(rc(), None), rc());
+        assert_eq!(merge_configs(None, ec("shell=sh\n")), ec("shell=sh\n"));
+        assert_eq!(
+            merge_configs(rc(), ec("shell=sh\n")),
+            Some((
+                "/p/.shellcheckrc".to_string(),
+                "disable=SC2086\nshell=sh\n".to_string()
+            ))
+        );
+        let rejected = "\n\ninvalid editorconfig value\n";
+        assert_eq!(merge_configs(rc(), ec(rejected)), ec(rejected));
+    }
+
+    #[test]
+    fn make_relative_to_strips_whole_directories() {
+        assert_eq!(make_relative_to("/a", "/a/b/c.sh"), "b/c.sh");
+        assert_eq!(make_relative_to("/", "/c.sh"), "c.sh");
+        assert_eq!(make_relative_to("/a/b", "/a/c.sh"), "c.sh");
+        assert_eq!(make_relative_to("/ab", "/abc/d.sh"), "d.sh");
+    }
+
+    /// A directory tree under the temp dir, removed on drop.
+    struct Tree(std::path::PathBuf);
+
+    impl Tree {
+        fn new(name: &str, files: &[(&str, &str)]) -> Tree {
+            let root =
+                std::env::temp_dir().join(format!("rshellcheck-{name}-{}", std::process::id()));
+            for (path, contents) in files {
+                let path = root.join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, contents).unwrap();
+            }
+            Tree(std::fs::canonicalize(root).unwrap())
+        }
+
+        fn path(&self, path: &str) -> String {
+            self.0.join(path).display().to_string()
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    #[test]
+    fn editor_config_collects_upwards_then_the_global_file() {
+        let tree = Tree::new(
+            "ec-collect",
+            &[
+                (
+                    ".editorconfig",
+                    "root = true\n[*.sh]\nshellcheck.disable=SC2154\n",
+                ),
+                ("inner/.editorconfig", "[sub/*.sh]\nshellcheck.shell=bash\n"),
+                ("inner/sub/x.sh", ""),
+                ("global.ini", "[*]\nshellcheck.extended-analysis=false\n"),
+            ],
+        );
+        let (name, blob) =
+            editor_config_with(&tree.path("inner/sub/x.sh"), Some(&tree.path("global.ini")))
+                .expect("contributions");
+        assert_eq!(name, tree.path("inner/.editorconfig"));
+        let c = parse_contents(&name, &blob);
+        assert!(c.parse_problem.is_none());
+        assert_eq!(c.shell, Some(Shell::Bash));
+        assert_eq!(
+            c.disabled,
+            vec![DisableRange {
+                from: 2154,
+                to: 2155
+            }]
+        );
+        assert_eq!(c.extended_analysis, Some(false));
+    }
+
+    #[test]
+    fn editor_config_stops_at_the_root_and_rejects_an_invalid_root() {
+        let tree = Tree::new(
+            "ec-root",
+            &[
+                (
+                    ".editorconfig",
+                    "root = true\n[*.sh]\nshellcheck.disable=SC2154\n",
+                ),
+                (
+                    "a/.editorconfig",
+                    "root = true\n[*.sh]\nshellcheck.shell=sh\n",
+                ),
+                ("a/x.sh", ""),
+                (
+                    "b/.editorconfig",
+                    "# c\nroot = maybe\n[*.sh]\nshellcheck.shell=sh\n",
+                ),
+                ("b/x.sh", ""),
+            ],
+        );
+        let (name, blob) = editor_config_with(&tree.path("a/x.sh"), None).expect("root");
+        assert_eq!(name, tree.path("a/.editorconfig"));
+        let c = parse_contents(&name, &blob);
+        assert_eq!(c.shell, Some(Shell::Sh));
+        assert!(c.disabled.is_empty());
+
+        let (name, blob) = editor_config_with(&tree.path("b/x.sh"), None).expect("rejected");
+        assert_eq!(name, tree.path("b/.editorconfig"));
+        assert!(!is_rejection(&blob));
+        let c = parse_contents(&name, &blob);
+        assert!(c.disabled.is_empty());
+        let problem = c.parse_problem.expect("SC1134");
+        assert_eq!((problem.line, problem.column), (2, 8));
+    }
+
+    #[test]
+    fn editor_config_is_nothing_without_a_matching_section() {
+        let tree = Tree::new(
+            "ec-none",
+            &[
+                (
+                    ".editorconfig",
+                    "root = true\n[*.py]\nshellcheck.shell=sh\n",
+                ),
+                ("x.sh", ""),
+            ],
+        );
+        assert_eq!(editor_config_with(&tree.path("x.sh"), None), None);
     }
 
     #[test]

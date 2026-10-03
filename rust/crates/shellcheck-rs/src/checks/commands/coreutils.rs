@@ -18,8 +18,8 @@ use crate::ast_lib::{get_literal_string, get_literal_string_ext};
 
 use crate::ast_lib;
 
-use crate::cfg::get_bsd_opts;
 use crate::cfg::may_become_multiple_args;
+use crate::cfg::{get_bsd_opts, get_opts};
 use crate::data::SAMPLE_WORDS;
 use crate::interface::Shell;
 use std::sync::OnceLock;
@@ -245,19 +245,17 @@ pub(super) fn check_ssh_command_string() -> CommandCheck {
         }
         let last = *non_options.last().unwrap();
         // checkArg (T_NormalWord _ [T_DoubleQuoted id parts])
-        if let InnerToken::T_NormalWord(l) = &*last.inner {
-            if l.len() == 1 {
-                if let InnerToken::T_DoubleQuoted(parts) = &*l[0].inner {
-                    if let Some(x) = parts.iter().find(|p| !is_constant(p)) {
-                        info(
-                            out,
-                            x.id(),
-                            2029,
-                            "Note that, unescaped, this expands on the client side.",
-                        );
-                    }
-                }
-            }
+        if let InnerToken::T_NormalWord(l) = &*last.inner
+            && l.len() == 1
+            && let InnerToken::T_DoubleQuoted(parts) = &*l[0].inner
+            && let Some(x) = parts.iter().find(|p| !is_constant(p))
+        {
+            info(
+                out,
+                x.id(),
+                2029,
+                "Note that, unescaped, this expands on the client side.",
+            );
         }
     })
 }
@@ -267,15 +265,16 @@ pub(super) fn check_uuoe_cmd() -> CommandCheck {
         let Some(words) = simple_command_words(t) else {
             return;
         };
-        if let Some(args) = echo_arguments(words) {
-            if args.len() == 1 && token_is_just_command_output(&args[0]) {
-                style(
-                    out,
-                    args[0].id(),
-                    2005,
-                    "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'.",
-                );
-            }
+        if let Some(args) = echo_arguments(words)
+            && args.len() == 1
+            && token_is_just_command_output(&args[0])
+        {
+            style(
+                out,
+                args[0].id(),
+                2005,
+                "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'.",
+            );
         }
     })
 }
@@ -381,6 +380,76 @@ pub(super) fn check_deprecated_fgrep() -> CommandCheck {
     })
 }
 
+pub(super) fn check_grep_sends_pipefail() -> CommandCheck {
+    CommandCheck::new(Basename("grep"), check_grep_sends_pipefail_impl)
+}
+
+pub(super) fn check_egrep_sends_pipefail() -> CommandCheck {
+    CommandCheck::new(Basename("egrep"), check_grep_sends_pipefail_impl)
+}
+
+pub(super) fn check_fgrep_sends_pipefail() -> CommandCheck {
+    CommandCheck::new(Basename("fgrep"), check_grep_sends_pipefail_impl)
+}
+
+/// `checkGrepSendsPipefailImpl`: catches occurrences of "grep -q" and
+/// variants, such as "-m" or "-L", inside of pipes under pipefail.
+fn check_grep_sends_pipefail_impl(params: &Parameters, cmd: &Token, out: &mut Out) {
+    // Contains "L", even though BSD grep does not exit early with this flag,
+    // but GNU grep does. This is consistent with the linter practice of
+    // warning about potential problems, while also allowing users to disable
+    // specific linter checks locally.
+    // `--silent` never matches upstream either.
+    const EARLY_EXIT_FLAGS: &[&str] = &["q", "quiet", "--silent", "m", "max-count", "L"];
+    const LONG_OPTIONS_CONSUMING_PARAMETER: &[&str] = &[
+        "regexp",
+        "file",
+        "max-count",
+        "after-context",
+        "before-context",
+        "context",
+        "directories",
+        "devices",
+    ];
+    if !params.has_pipefail {
+        return;
+    }
+    let long_options: Vec<(String, bool)> = LONG_OPTIONS_CONSUMING_PARAMETER
+        .iter()
+        .map(|name| (name.to_string(), true))
+        .collect();
+    let Some(opts) = get_opts(
+        true,
+        true,
+        "cilLnoqsvwxhHrRbaEFGPe:f:m:A:B:C:d:D:",
+        &long_options,
+        arguments(cmd),
+    ) else {
+        return;
+    };
+    if !opts
+        .iter()
+        .any(|(name, _)| EARLY_EXIT_FLAGS.contains(&name.as_str()))
+    {
+        return;
+    }
+    let path = get_path(params, cmd);
+    let [_, redirecting, parent, ..] = path.as_slice() else {
+        return;
+    };
+    let InnerToken::T_Pipeline { commands, .. } = &*parent.inner else {
+        return;
+    };
+    if commands.iter().skip(1).any(|c| c.id() == redirecting.id()) {
+        warn(
+            out,
+            cmd.id(),
+            2337,
+            "In pipefail mode, flags like -q, -m, or -L can cause grep to exit early, aborting the pipeline with SIGPIPE. Use a non-pipe input like '< <(cmd)' or '<<<' instead.",
+        );
+    }
+}
+
 pub(super) fn check_catastrophic_rm() -> CommandCheck {
     CommandCheck::new(Basename("rm"), |_params, t, out| {
         let recursive = get_all_flags(t)
@@ -461,15 +530,15 @@ pub(super) fn check_xargs_dashi() -> CommandCheck {
         let Some(words) = simple_command_words(t) else {
             return;
         };
-        if let Some(opts) = get_bsd_opts("0oprtxadR:S:J:L:l:n:P:s:e:E:i:I:", word_args(words)) {
-            if let Some((_, (option, _))) = opts.iter().find(|(name, _)| name == "i") {
-                info(
-                    out,
-                    option.id(),
-                    2267,
-                    "GNU xargs -i is deprecated in favor of -I{}",
-                );
-            }
+        if let Some(opts) = get_bsd_opts("0oprtxadR:S:J:L:l:n:P:s:e:E:i:I:", word_args(words))
+            && let Some((_, (option, _))) = opts.iter().find(|(name, _)| name == "i")
+        {
+            info(
+                out,
+                option.id(),
+                2267,
+                "GNU xargs -i is deprecated in favor of -I{}",
+            );
         }
     })
 }
@@ -692,10 +761,10 @@ fn has_e_flag(args: &[Token]) -> bool {
         }
         if text.starts_with("--") {
             // long option; not a short 'e'
-        } else if let Some(short) = text.strip_prefix('-') {
-            if short.contains('e') {
-                return true;
-            }
+        } else if let Some(short) = text.strip_prefix('-')
+            && short.contains('e')
+        {
+            return true;
         }
     }
     false
@@ -1246,6 +1315,63 @@ mod tests {
     #[test]
     fn prop_checkDeprecatedEgrep() {
         assert!(emits(check_deprecated_egrep(), "egrep '.+'"));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefail1_7() {
+        for s in [
+            "set -o pipefail; cat file | grep -q pattern",
+            "set -o pipefail; cat file | grep --quiet pattern",
+            "set -o pipefail; cat file | grep -iq pattern",
+            "set -o pipefail; cmd1 | cmd2 | grep -q pattern",
+            "set -euo pipefail; cmd | grep -q foo",
+            "set -o pipefail; cmd | grep -m 2 foo | cmd2",
+            "set -o pipefail; cmd | grep -L foo | cmd2",
+        ] {
+            assert!(emits(check_grep_sends_pipefail(), s), "{s}");
+        }
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefailN1_N10() {
+        for s in [
+            "cat file | grep -q pattern",
+            "set -o pipefail; grep -q pattern file",
+            "set -o pipefail; cat file | grep pattern",
+            "set -o pipefail; grep -q pattern | cat",
+            "grep -q pattern file",
+            "set -o pipefail; cmd1 | bash -c 'grep -q pattern file'",
+            "set -o pipefail; cmd1 | grep -e -q",
+            "set -o pipefail; cmd1 | grep -eq pattern",
+            "set -o pipefail; cmd1 | grep --regexp -q",
+            "set -o pipefail; cmd1 | grep -- -q",
+        ] {
+            assert!(!emits(check_grep_sends_pipefail(), s), "{s}");
+        }
+    }
+
+    #[test]
+    fn prop_checkEgrepSendsPipefail1() {
+        assert!(emits(
+            check_egrep_sends_pipefail(),
+            "set -o pipefail; cat file | egrep -q pattern"
+        ));
+    }
+
+    #[test]
+    fn prop_checkFgrepSendsPipefail1() {
+        assert!(emits(
+            check_fgrep_sends_pipefail(),
+            "set -o pipefail; cat file | fgrep -q pattern"
+        ));
+    }
+
+    #[test]
+    fn grep_silent_does_not_count_as_early_exit() {
+        assert!(!emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cat file | grep --silent pattern"
+        ));
     }
 
     #[test]

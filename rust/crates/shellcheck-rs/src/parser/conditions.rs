@@ -141,16 +141,17 @@ impl Parser {
         {
             let m = self.mark();
             let pos = self.pos();
-            if let Ok(name) = self.read_variable_name() {
-                if self.spacing1().is_ok() && COMMON_COMMANDS.contains(&name.as_str()) {
-                    self.problem_at(
+            if let Ok(name) = self.read_variable_name()
+                && self.spacing1().is_ok()
+                && COMMON_COMMANDS.contains(&name.as_str())
+            {
+                self.problem_at(
                         pos.clone(),
                         pos,
                         Severity::WarningC,
                         1014,
                         "Use 'if cmd; then ..' to check exit code, or 'if [[ $(cmd) == .. ]]' to check output.",
                     );
-                }
             }
             self.reset(m);
         }
@@ -663,22 +664,20 @@ impl Parser {
             self.reset(m);
         }
         // `checkTrailingOp`: a word ending in a test operator ran into it.
-        if let Some(lit) = ast_lib::get_trailing_unquoted_literal(&x) {
-            if let InnerToken::T_Literal(s) = lit.inner() {
-                if let Some(op) = crate::data::BINARY_TEST_OPS
-                    .iter()
-                    .find(|o| s.ends_with(**o))
-                {
-                    let (ls, le) = self.span_for(lit.id());
-                    self.problem_at(
-                        ls,
-                        le,
-                        Severity::ErrorC,
-                        1108,
-                        &format!("You need a space before and after the {op} ."),
-                    );
-                }
-            }
+        if let Some(lit) = ast_lib::get_trailing_unquoted_literal(&x)
+            && let InnerToken::T_Literal(s) = lit.inner()
+            && let Some(op) = crate::data::BINARY_TEST_OPS
+                .iter()
+                .find(|o| s.ends_with(**o))
+        {
+            let (ls, le) = self.span_for(lit.id());
+            self.problem_at(
+                ls,
+                le,
+                Severity::ErrorC,
+                1108,
+                &format!("You need a space before and after the {op} ."),
+            );
         }
         let typ = self.cond_typ(single);
         let id = self.next_id_between(start, self.pos());
@@ -964,13 +963,13 @@ impl Parser {
             return Ok(Token::new(id, InnerToken::T_Literal("|".to_string())));
         }
         // readGlobLiteral: extglobStart <|> oneOf "{}[]$"
-        if let Some(c) = self.peek() {
-            if "?*@!+".contains(c) || "{}[]$".contains(c) {
-                let start = self.pos();
-                self.bump();
-                let id = self.next_id_between(start, self.pos());
-                return Ok(Token::new(id, InnerToken::T_Literal(c.to_string())));
-            }
+        if let Some(c) = self.peek()
+            && ("?*@!+".contains(c) || "{}[]$".contains(c))
+        {
+            let start = self.pos();
+            self.bump();
+            let id = self.next_id_between(start, self.pos());
+            return Ok(Token::new(id, InnerToken::T_Literal(c.to_string())));
         }
         Err(())
     }
@@ -1080,11 +1079,11 @@ impl Parser {
         // fails, all inside another `try`: on one of its own terminators the
         // literal fails one past it, with "Unexpected " as the message, and
         // the cursor comes back so the group can go on to its `)`.
-        if let Some(c) = self.peek() {
-            if END.contains(c) {
-                self.fail_past(1, "Unexpected ");
-                return Err(());
-            }
+        if let Some(c) = self.peek()
+            && END.contains(c)
+        {
+            self.fail_past(1, "Unexpected ");
+            return Err(());
         }
         let mut s = String::new();
         while let Some(c) = self.peek() {

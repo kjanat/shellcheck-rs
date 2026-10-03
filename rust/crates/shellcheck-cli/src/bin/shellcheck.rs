@@ -9,13 +9,14 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{IsTerminal, Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 use std::rc::Rc;
 
 use shellcheck_cli::formatter::{self, checkstyle, diff, fixer, gcc, json, json1, tty};
 use shellcheck_cli::options::{self, Outcome, RunConfig};
-use shellcheck_cli::rc::{self, RcConfig};
+use shellcheck_cli::paths::{combine, drop_file_name, io_error_message, normalize};
+use shellcheck_cli::rc::{self, ConfigLookup};
 use shellcheck_rs::interface::{
     CheckSpec, ErrorMessage, PositionedComment, SystemInterface, decode_bytes,
 };
@@ -166,7 +167,7 @@ impl SystemInterface for IoSystemInterface {
         let scriptdir = drop_file_name(current_script);
         let mut candidates = vec![adjust_path(filename, &scriptdir)];
         for dir in self.source_paths.iter().chain(source_paths.iter()) {
-            candidates.push(haskell_join(&adjust_path(dir, &scriptdir), filename));
+            candidates.push(combine(&adjust_path(dir, &scriptdir), filename));
         }
         for candidate in candidates {
             if self.allowable(external_sources, &candidate) && Path::new(&candidate).is_file() {
@@ -197,86 +198,17 @@ fn input_file(file: &str, path: &std::ffi::OsStr) -> Result<(String, bool), Erro
     }
 }
 
-/// `show (ex :: IOException)` for what `openBinaryFile` throws, which is the
-/// text that reaches the user after "Not following: " and after a failing
-/// input's name.
-fn io_error_message(file: &str, e: &std::io::Error) -> ErrorMessage {
-    use std::io::ErrorKind;
-    let detail = match e.kind() {
-        ErrorKind::NotFound => "does not exist (No such file or directory)".to_string(),
-        ErrorKind::PermissionDenied => "permission denied (Permission denied)".to_string(),
-        ErrorKind::IsADirectory => "inappropriate type (is a directory)".to_string(),
-        // `read_to_string` on a directory reports this on some platforms.
-        _ if Path::new(file).is_dir() => "inappropriate type (is a directory)".to_string(),
-        ErrorKind::InvalidData => "invalid byte sequence".to_string(),
-        _ => e.to_string(),
-    };
-    format!("{file}: openBinaryFile: {detail}")
-}
-
-/// `normalize`: `canonicalizePath`, falling back to making the path absolute
-/// and removing `.` / `..` lexically when it cannot be resolved.
-fn normalize(path: &str) -> String {
-    if let Ok(p) = std::fs::canonicalize(path) {
-        return p.to_string_lossy().into_owned();
-    }
-    let mut out = PathBuf::new();
-    let joined = if Path::new(path).is_absolute() {
-        PathBuf::from(path)
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
-    };
-    for c in joined.components() {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out.to_string_lossy().into_owned()
-}
-
 /// `System.FilePath.Posix.splitDrive`: the leading run of slashes, then the rest.
 fn split_drive(path: &str) -> (&str, &str) {
     let n = path.len() - path.trim_start_matches('/').len();
     path.split_at(n)
 }
 
-/// `dropFileName`: everything up to and including the last separator, or `./`
-/// when there is none.
-fn drop_file_name(path: &str) -> String {
-    match path.rfind('/') {
-        Some(i) => path[..=i].to_string(),
-        None => "./".to_string(),
-    }
-}
-
-/// `System.FilePath.combine`.
-fn haskell_join(dir: &str, file: &str) -> String {
-    if file.starts_with('/') {
-        return file.to_string();
-    }
-    if dir.is_empty() {
-        return file.to_string();
-    }
-    if dir.ends_with('/') {
-        format!("{dir}{file}")
-    } else {
-        format!("{dir}/{file}")
-    }
-}
-
 /// `adjustPath`: a leading `SCRIPTDIR` component becomes the script's directory.
 fn adjust_path(path: &str, scriptdir: &str) -> String {
     match path.strip_prefix("SCRIPTDIR") {
         Some("") => scriptdir.to_string(),
-        Some(rest) if rest.starts_with('/') => {
-            haskell_join(scriptdir, rest.trim_start_matches('/'))
-        }
+        Some(rest) if rest.starts_with('/') => combine(scriptdir, rest.trim_start_matches('/')),
         _ => path.to_string(),
     }
 }
@@ -298,10 +230,11 @@ enum Input {
 /// error wording are the same ones a sourced file gets. Reading is lazy: stdin
 /// is only touched when a `-` input is actually reached, preserving quiet-mode's
 /// short-circuit (it must not block on stdin after an earlier file failed).
+/// The configuration is only looked up for an input that was read.
 fn load(
     name: &str,
     spec_template: &CheckSpec,
-    rc: Option<&RcConfig>,
+    config: Option<&ConfigLookup>,
     sys: &Rc<IoSystemInterface>,
 ) -> Input {
     let contents = match sys.read_file(None, name) {
@@ -318,7 +251,11 @@ fn load(
         script: contents,
         ..spec_template.clone()
     };
-    merge_rc(&mut spec, rc);
+    // Merge rc directives into the per-input `CheckSpec`; see `rc::merge_into`,
+    // which holds the rules (CLI flags win over rc where they conflict).
+    if let Some(rc) = config.and_then(|c| c.get(name)) {
+        rc::merge_into(&mut spec, &rc);
+    }
     let sys_dyn = Rc::clone(sys) as Rc<dyn SystemInterface>;
     let result = shellcheck_rs::checker::check_script_with(sys_dyn, &spec);
     Input::Ok(Loaded {
@@ -346,12 +283,12 @@ fn group_contents(sys: &Rc<IoSystemInterface>, file: &str) -> String {
     sys.read_file(Some(true), file).unwrap_or_default()
 }
 
-/// Merge rc directives into the per-input `CheckSpec`; see `rc::merge_into`,
-/// which holds the rules (CLI flags win over rc where they conflict).
-fn merge_rc(spec: &mut CheckSpec, rc: Option<&RcConfig>) {
-    if let Some(rc) = rc {
-        rc::merge_into(spec, rc);
-    }
+/// `editorConfigError`: an SC1134 for an `.editorconfig`, which makes the run a
+/// `SupportFailure`. A malformed EditorConfig (invalid `root` or
+/// `shellcheck.*` directive) means shellcheck cannot apply the requested
+/// configuration, so it fails rather than silently proceeding.
+fn is_editor_config_error(comment: &PositionedComment) -> bool {
+    comment.comment.code == 1134 && comment.start.file.ends_with(".editorconfig")
 }
 
 fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) -> ExitCode {
@@ -367,38 +304,16 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
         external_sources: _,
     } = config;
 
-    // Resolve the rc configuration policy up front (mirrors `getConfig`):
-    //   * `--norc` (ignore_rc): never use any rc file.
+    // Resolve the configuration policy up front (mirrors `getConfig`):
+    //   * `--norc` (ignore_rc): never use any rc or EditorConfig file
+    //     (`readConfigFile`'s `ignoreRC`).
     //   * `--rcfile <path>`: read exactly that file once, applied to every
-    //     input; if unreadable, warn once and proceed with no config.
+    //     input; if unreadable, warn once and proceed with no rc config.
     //   * otherwise: discover `.shellcheckrc` per input by walking up from the
     //     input's directory (CWD for stdin) and then the user config dirs.
-    let ignore_rc = spec_template.ignore_rc;
-    let rcfile_config: Option<RcConfig> = if !ignore_rc {
-        if let Some(path) = &rcfile {
-            match rc::read_config_file(std::path::Path::new(path)) {
-                Some(cfg) => Some(cfg),
-                None => {
-                    eprintln!("Warning: unable to read --rcfile {path}");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    // Per-input rc config: fixed rcfile config, directory discovery, or none.
-    let resolve_rc = |name: &str| -> Option<RcConfig> {
-        if ignore_rc {
-            None
-        } else if rcfile.is_some() {
-            rcfile_config.clone()
-        } else {
-            rc::discover(name)
-        }
-    };
+    //   * either way, merge in the input's EditorConfig directives.
+    // The lookup runs per input, only once that input has been read.
+    let config = (!spec_template.ignore_rc).then(|| ConfigLookup::new(rcfile));
 
     // Quiet mode is a streaming short-circuit: process inputs in order and exit
     // 1 on the FIRST input that has any comment or fails to read, without
@@ -409,8 +324,7 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
     // runtime error (2), matching the oracle.
     if format == "quiet" {
         for i in &inputs {
-            let rc = resolve_rc(i);
-            match load(i, &spec_template, rc.as_ref(), &sys) {
+            match load(i, &spec_template, config.as_ref(), &sys) {
                 Input::Ok(l) if !l.comments.is_empty() => return ExitCode::from(1),
                 Input::Ok(_) => {}
                 Input::Err { .. } => return ExitCode::from(1),
@@ -421,13 +335,16 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
 
     let loaded: Vec<Input> = inputs
         .iter()
-        .map(|i| load(i, &spec_template, resolve_rc(i).as_ref(), &sys))
+        .map(|i| load(i, &spec_template, config.as_ref(), &sys))
         .collect();
 
     let any_failure = loaded.iter().any(|i| matches!(i, Input::Err { .. }));
     let any_comments = loaded
         .iter()
         .any(|i| matches!(i, Input::Ok(l) if !l.comments.is_empty()));
+    let any_editor_config_error = loaded
+        .iter()
+        .any(|i| matches!(i, Input::Ok(l) if l.comments.iter().any(is_editor_config_error)));
 
     let is_tty = std::io::stdout().is_terminal();
     let use_color = formatter::should_output_color(color, is_tty);
@@ -590,9 +507,12 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
         }
     }
 
-    // statusToCode: RuntimeException (2) > SomeProblems (1) > NoProblems (0).
+    // statusToCode of the largest status:
+    // RuntimeException (2) > SupportFailure (4) > SomeProblems (1) > NoProblems (0).
     if any_failure {
         ExitCode::from(2)
+    } else if any_editor_config_error {
+        ExitCode::from(4)
     } else if any_comments {
         ExitCode::from(1)
     } else {
@@ -641,13 +561,6 @@ mod tests {
     }
 
     #[test]
-    fn drop_file_name_matches_haskell() {
-        assert_eq!(drop_file_name("psrc.sh"), "./");
-        assert_eq!(drop_file_name("dir/myscript"), "dir/");
-        assert_eq!(drop_file_name("/abs/script.sh"), "/abs/");
-    }
-
-    #[test]
     fn adjust_path_expands_scriptdir() {
         assert_eq!(adjust_path("SCRIPTDIR/inc", "./"), "./inc");
         assert_eq!(adjust_path("SCRIPTDIR", "dir/"), "dir/");
@@ -659,33 +572,10 @@ mod tests {
     }
 
     #[test]
-    fn haskell_join_follows_combine() {
-        assert_eq!(haskell_join("dir", "file"), "dir/file");
-        assert_eq!(haskell_join("dir/", "file"), "dir/file");
-        assert_eq!(haskell_join("", "file"), "file");
-        // An absolute second half wins outright.
-        assert_eq!(haskell_join("dir", "/file"), "/file");
-    }
-
-    #[test]
     fn split_drive_takes_the_leading_slashes() {
         assert_eq!(split_drive("/a/b"), ("/", "a/b"));
         assert_eq!(split_drive("//a"), ("//", "a"));
         assert_eq!(split_drive("a/b"), ("", "a/b"));
-    }
-
-    #[test]
-    fn io_error_message_reads_like_the_haskell_exception() {
-        let e = std::io::Error::from(std::io::ErrorKind::NotFound);
-        assert_eq!(
-            io_error_message("./missing.sh", &e),
-            "./missing.sh: openBinaryFile: does not exist (No such file or directory)"
-        );
-        let e = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-        assert_eq!(
-            io_error_message("x", &e),
-            "x: openBinaryFile: permission denied (Permission denied)"
-        );
     }
 
     #[test]

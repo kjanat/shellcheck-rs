@@ -67,8 +67,8 @@ pub(super) fn check_functions_used_externally(params: &Parameters, root: &Token,
         let candidates = get_potential_commands(&name, &arg_strings);
         let cmd_id = cmd_token.id();
         for (_, arg) in candidates {
-            if let Some(literal_arg) = get_unquoted_literal(arg) {
-                if let Some(&definition_id) = functions_aliases.get(&literal_arg) {
+            if let Some(literal_arg) = get_unquoted_literal(arg)
+                && let Some(&definition_id) = functions_aliases.get(&literal_arg) {
                     warn(
                         out,
                         arg.id(),
@@ -82,7 +82,6 @@ pub(super) fn check_functions_used_externally(params: &Parameters, root: &Token,
                         &format!("This function can't be invoked via {}{}", name, pattern_context(cmd_id)),
                     );
                 }
-            }
         }
     });
 }
@@ -122,14 +121,12 @@ pub(super) fn check_unpassed_in_functions(params: &Parameters, root: &Token, out
     // tracked function.
     let mut reference_list: Vec<(String, bool, Token)> = Vec::new();
     root.visit_preorder(&mut |t| {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-            if let Some((cmd, args)) = words.split_first() {
-                if let Some(str) = ast_lib::get_literal_string(cmd) {
-                    if function_map.contains_key(&str) {
-                        reference_list.push((str, args.is_empty(), t.clone()));
-                    }
-                }
-            }
+        if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
+            && let Some((cmd, args)) = words.split_first()
+            && let Some(str) = ast_lib::get_literal_string(cmd)
+            && function_map.contains_key(&str)
+        {
+            reference_list.push((str, args.is_empty(), t.clone()));
         }
     });
 
@@ -184,46 +181,46 @@ pub(super) fn check_shebang(params: &Parameters, t: &Token, out: &mut Out) {
         }
         _ => t,
     };
-    if let InnerToken::T_Script { shebang, .. } = &*script.inner {
-        if let InnerToken::T_Literal(sb) = &*shebang.inner {
-            let id = shebang.id();
-            if !params.shell_type_specified {
-                if sb.is_empty() {
-                    err(
-                        out,
-                        id,
-                        2148,
-                        "Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.",
-                    );
-                }
-                if ast_lib::executable_from_shebang(sb) == "ash" {
-                    warn(
-                        out,
-                        id,
-                        2187,
-                        "Ash scripts will be checked as Dash. Add '# shellcheck shell=dash' to silence.",
-                    );
-                }
+    if let InnerToken::T_Script { shebang, .. } = &*script.inner
+        && let InnerToken::T_Literal(sb) = &*shebang.inner
+    {
+        let id = shebang.id();
+        if !params.shell_type_specified {
+            if sb.is_empty() {
+                err(
+                    out,
+                    id,
+                    2148,
+                    "Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.",
+                );
             }
-            if !sb.is_empty() {
-                if !sb.starts_with('/') {
-                    err(
-                        out,
-                        id,
-                        2239,
-                        "Ensure the shebang uses an absolute path to the interpreter.",
-                    );
-                }
-                if let Some(first) = sb.split_whitespace().next() {
-                    if first.ends_with('/') {
-                        err(
-                            out,
-                            id,
-                            2246,
-                            "This shebang specifies a directory. Ensure the interpreter is a file.",
-                        );
-                    }
-                }
+            if ast_lib::executable_from_shebang(sb) == "ash" {
+                warn(
+                    out,
+                    id,
+                    2187,
+                    "Ash scripts will be checked as Dash. Add '# shellcheck shell=dash' to silence.",
+                );
+            }
+        }
+        if !sb.is_empty() {
+            if !sb.starts_with('/') {
+                err(
+                    out,
+                    id,
+                    2239,
+                    "Ensure the shebang uses an absolute path to the interpreter.",
+                );
+            }
+            if let Some(first) = sb.split_whitespace().next()
+                && first.ends_with('/')
+            {
+                err(
+                    out,
+                    id,
+                    2246,
+                    "This shebang specifies a directory. Ensure the interpreter is a file.",
+                );
             }
         }
     }
@@ -249,29 +246,29 @@ pub(super) fn check_use_before_definition(params: &Parameters, root: &Token, out
     }
 
     root.visit_preorder(&mut |t| {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-            if let Some(cmd) = words.first() {
-                let id = t.id();
-                (|| {
-                    let name = crate::ast_lib::get_literal_string(cmd)?;
-                    let invocations = funcs.get(&name)?;
-                    // Is the function definitely being defined later?
-                    if !invocations.iter().any(|&c| cfga.does_post_dominate(c, id)) {
-                        return None;
-                    }
-                    // Was one already defined, so it's actually a re-definition?
-                    if invocations.iter().any(|&c| cfga.does_post_dominate(id, c)) {
-                        return None;
-                    }
-                    err(
-                        out,
-                        id,
-                        2218,
-                        "This function is only defined later. Move the definition up.",
-                    );
-                    Some(())
-                })();
-            }
+        if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
+            && let Some(cmd) = words.first()
+        {
+            let id = t.id();
+            (|| {
+                let name = crate::ast_lib::get_literal_string(cmd)?;
+                let invocations = funcs.get(&name)?;
+                // Is the function definitely being defined later?
+                if !invocations.iter().any(|&c| cfga.does_post_dominate(c, id)) {
+                    return None;
+                }
+                // Was one already defined, so it's actually a re-definition?
+                if invocations.iter().any(|&c| cfga.does_post_dominate(id, c)) {
+                    return None;
+                }
+                err(
+                    out,
+                    id,
+                    2218,
+                    "This function is only defined later. Move the definition up.",
+                );
+                Some(())
+            })();
         }
     });
 }
@@ -419,10 +416,10 @@ pub(super) fn check_command_is_unreachable(params: &Parameters, t: &Token, out: 
 }
 
 pub(super) fn check_overwritten_exit_code(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
-        if crate::ast_lib::get_literal_string(op).as_deref() == Some("?") {
-            overwritten_check(params, t, out);
-        }
+    if let InnerToken::T_DollarBraced { op, .. } = &*t.inner
+        && crate::ast_lib::get_literal_string(op).as_deref() == Some("?")
+    {
+        overwritten_check(params, t, out);
     }
 }
 
@@ -594,21 +591,21 @@ fn process_alias_node(
             }
         }
         Some(name) if !name.contains('/') => {
-            if let Some(alias) = aliases.get(name) {
-                if !(is_sourced(params, t) || should_ignore_code(params, 2262, alias)) {
-                    warn(
-                        out,
-                        alias.id(),
-                        2262,
-                        "This alias can't be defined and used in the same parsing unit. Use a function instead.",
-                    );
-                    info(
-                        out,
-                        t.id(),
-                        2263,
-                        "Since they're in the same parsing unit, this command will not refer to the previously mentioned alias.",
-                    );
-                }
+            if let Some(alias) = aliases.get(name)
+                && !(is_sourced(params, t) || should_ignore_code(params, 2262, alias))
+            {
+                warn(
+                    out,
+                    alias.id(),
+                    2262,
+                    "This alias can't be defined and used in the same parsing unit. Use a function instead.",
+                );
+                info(
+                    out,
+                    t.id(),
+                    2263,
+                    "Since they're in the same parsing unit, this command will not refer to the previously mentioned alias.",
+                );
             }
         }
         _ => {}
@@ -631,14 +628,12 @@ fn add_alias(arg: &Token, aliases: &mut HashMap<String, Token>) {
 
 /// `getCommandNameAndToken True` (direct): the first word literal.
 fn direct_command_name_and_token(cmd: &Token) -> (Option<String>, &Token) {
-    if let Some(c) = get_command_local(cmd) {
-        if let InnerToken::T_SimpleCommand { words, .. } = &*c.inner {
-            if let Some(w) = words.first() {
-                if let Some(s) = ast_lib::get_literal_string(w) {
-                    return (Some(s), w);
-                }
-            }
-        }
+    if let Some(c) = get_command_local(cmd)
+        && let InnerToken::T_SimpleCommand { words, .. } = &*c.inner
+        && let Some(w) = words.first()
+        && let Some(s) = ast_lib::get_literal_string(w)
+    {
+        return (Some(s), w);
     }
     (None, cmd)
 }
@@ -659,16 +654,16 @@ fn recursion_check_list(params: &Parameters, name: &str, t: &Token, out: &mut Ou
 
 fn recursion_check_command(params: &Parameters, name: &str, cmd: &Token, out: &mut Out) {
     let (invoked, tok) = direct_command_name_and_token(cmd);
-    if let Some(invoked) = invoked {
-        if name == invoked {
-            err_with_fix(
-                out,
-                tok.id(),
-                2264,
-                "This function unconditionally re-invokes itself. Missing 'command'?",
-                fix_with(vec![replace_start(params, tok.id(), 0, "command ")]),
-            );
-        }
+    if let Some(invoked) = invoked
+        && name == invoked
+    {
+        err_with_fix(
+            out,
+            tok.id(),
+            2264,
+            "This function unconditionally re-invokes itself. Missing 'command'?",
+            fix_with(vec![replace_start(params, tok.id(), 0, "command ")]),
+        );
     }
 }
 

@@ -198,6 +198,9 @@ fn all_checks() -> Vec<CommandCheck> {
         coreutils::check_xargs_dashi(),
         coreutils::check_unquoted_echo_spaces(),
         builtins::check_eval_array(),
+        coreutils::check_grep_sends_pipefail(),
+        coreutils::check_egrep_sends_pipefail(),
+        coreutils::check_fgrep_sends_pipefail(),
     ];
     // ++ map checkArgComparison ("alias" : declaringCommands)
     for cmd in ["alias"]

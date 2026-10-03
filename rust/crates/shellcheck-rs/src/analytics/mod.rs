@@ -171,6 +171,9 @@ const OPTIONAL_CHECKS: &[(&str, Register)] = &[
     ("require-double-brackets", |c| {
         c.tree(conditions::check_require_double_bracket)
     }),
+    ("require-double-equals", |c| {
+        c.tree(conditions::check_require_double_equals)
+    }),
     ("check-set-e-suppressed", |c| {
         c.tree(flow::check_set_e_suppressed)
     }),

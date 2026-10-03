@@ -2105,11 +2105,11 @@ fn dom(g: &MutGraph, root: Node) -> (Vec<Option<Node>>, Vec<bool>) {
                     });
                 }
             }
-            if let Some(ni) = new_idom {
-                if idom[n] != Some(ni) {
-                    idom[n] = Some(ni);
-                    changed = true;
-                }
+            if let Some(ni) = new_idom
+                && idom[n] != Some(ni)
+            {
+                idom[n] = Some(ni);
+                changed = true;
             }
         }
     }
@@ -2177,10 +2177,10 @@ pub(crate) fn get_unquoted_literal(t: &Token) -> Option<String> {
 pub(crate) fn get_braced_reference(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let drop_prefix = |cs: &[char]| -> Vec<char> {
-        if let Some(&c) = cs.first() {
-            if c == '!' || c == '#' {
-                return cs[1..].to_vec();
-            }
+        if let Some(&c) = cs.first()
+            && (c == '!' || c == '#')
+        {
+            return cs[1..].to_vec();
         }
         cs.to_vec()
     };
@@ -2503,7 +2503,7 @@ fn build_flag_map(spec: &str, longopts: &[(String, bool)]) -> HashMap<String, bo
     m
 }
 
-fn get_opts(
+pub(crate) fn get_opts(
     gnu: bool,
     arbitrary_long_opts: bool,
     spec: &str,

@@ -39,15 +39,13 @@ impl Parser {
         }
         // `checkPossibleTermination`: a whole word that is just a closing
         // keyword was probably meant to close the block.
-        if let [only] = parts.as_slice() {
-            if let InnerToken::T_Literal(s) = only.inner() {
-                if terms.contains(&s.as_str()) {
-                    let msg = format!(
-                        "Use semicolon or linefeed before '{s}' (or quote to make it literal)."
-                    );
-                    self.problem_at(pos.clone(), pos, Severity::WarningC, 1010, &msg);
-                }
-            }
+        if let [only] = parts.as_slice()
+            && let InnerToken::T_Literal(s) = only.inner()
+            && terms.contains(&s.as_str())
+        {
+            let msg =
+                format!("Use semicolon or linefeed before '{s}' (or quote to make it literal).");
+            self.problem_at(pos.clone(), pos, Severity::WarningC, 1010, &msg);
         }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_NormalWord(parts)))
@@ -328,14 +326,14 @@ impl Parser {
             if c == '\\' {
                 // double-escaped: backslash + one of \"$`, else literal backslash
                 let nxt = self.peek_at(1);
-                if let Some(n) = nxt {
-                    if DOUBLE_QUOTABLE.contains(n) {
-                        self.bump();
-                        self.bump();
-                        s.push('\\');
-                        s.push(n);
-                        continue;
-                    }
+                if let Some(n) = nxt
+                    && DOUBLE_QUOTABLE.contains(n)
+                {
+                    self.bump();
+                    self.bump();
+                    s.push('\\');
+                    s.push(n);
+                    continue;
                 }
                 self.bump();
                 if nxt.is_none() {
@@ -696,17 +694,17 @@ impl Parser {
                 }
                 self.reset(m2);
             }
-            if self.peek() == Some('\'') {
-                if let Ok(t) = self.read_single_quoted() {
-                    parts.push(t);
-                    continue;
-                }
+            if self.peek() == Some('\'')
+                && let Ok(t) = self.read_single_quoted()
+            {
+                parts.push(t);
+                continue;
             }
-            if self.peek() == Some('"') {
-                if let Ok(t) = self.read_double_quoted() {
-                    parts.push(t);
-                    continue;
-                }
+            if self.peek() == Some('"')
+                && let Ok(t) = self.read_double_quoted()
+            {
+                parts.push(t);
+                continue;
             }
             if let Ok(t) = self.read_brace_literal() {
                 parts.push(t);
@@ -748,11 +746,11 @@ impl Parser {
         // fails one past it, with "Unexpected " as the message: for `{ ` in an
         // arithmetic expression that is the furthest any parse gets, and the
         // `try` around `braceExpansion` rewinds the cursor, not the error.
-        if let Some(c) = self.peek() {
-            if "{}\"$',".contains(c) || is_brace_ws(c) {
-                self.fail_past(1, "Unexpected ");
-                return Err(());
-            }
+        if let Some(c) = self.peek()
+            && ("{}\"$',".contains(c) || is_brace_ws(c))
+        {
+            self.fail_past(1, "Unexpected ");
+            return Err(());
         }
         let mut s = String::new();
         loop {
@@ -1273,17 +1271,17 @@ impl Parser {
                 self.bump();
                 let word = self.make_literal_word(&c.to_string(), word_pos);
                 let id = self.next_id_between(start, self.pos());
-                if let Some(n) = self.peek() {
-                    if n.is_ascii_digit() {
-                        // `parseNoteAt pos` in Haskell is zero-width at the `$`.
-                        self.note_at(
-                            pos.clone(),
-                            pos.clone(),
-                            Severity::ErrorC,
-                            1037,
-                            "Braces are required for positionals over 9, e.g. ${10}.",
-                        );
-                    }
+                if let Some(n) = self.peek()
+                    && n.is_ascii_digit()
+                {
+                    // `parseNoteAt pos` in Haskell is zero-width at the `$`.
+                    self.note_at(
+                        pos.clone(),
+                        pos.clone(),
+                        Severity::ErrorC,
+                        1037,
+                        "Braces are required for positionals over 9, e.g. ${10}.",
+                    );
                 }
                 return Ok(Token::new(
                     id,

@@ -54,27 +54,26 @@ pub(super) fn check_quotes_in_literals(params: &Parameters, _root: &Token, out: 
             StackData::Assignment(..) => {}
             // readF _ expr name
             StackData::Reference(_base, expr, name) => {
-                if let Some(&j) = quote_map.get(name) {
-                    if !is_param_to(params, "eval", expr)
-                        && !is_quote_free(params, expr)
-                        && !squashes_quotes(expr)
-                    {
-                        warn(
-                            out,
-                            j,
-                            2089,
-                            &format!(
-                                "Quotes/backslashes will be treated literally. {}",
-                                suggestion
-                            ),
-                        );
-                        warn(
-                            out,
-                            expr.id(),
-                            2090,
-                            "Quotes/backslashes in this variable will not be respected.",
-                        );
-                    }
+                if let Some(&j) = quote_map.get(name)
+                    && !is_param_to(params, "eval", expr)
+                    && !is_quote_free(params, expr)
+                    && !squashes_quotes(expr)
+                {
+                    warn(
+                        out,
+                        j,
+                        2089,
+                        &format!(
+                            "Quotes/backslashes will be treated literally. {}",
+                            suggestion
+                        ),
+                    );
+                    warn(
+                        out,
+                        expr.id(),
+                        2090,
+                        "Quotes/backslashes in this variable will not be respected.",
+                    );
                 }
             }
             _ => {}
@@ -119,52 +118,51 @@ pub(super) fn check_unquoted_dollar_at(params: &Parameters, t: &Token, out: &mut
         if is_strictly_quote_free(params, t) {
             return;
         }
-        if let Some(x) = parts.iter().find(|p| is_array_expansion(p)) {
-            if !is_quoted_alternative_reference(x) {
-                err(
-                    out,
-                    x.id(),
-                    2068,
-                    "Double quote array expansions to avoid re-splitting elements.",
-                );
-            }
+        if let Some(x) = parts.iter().find(|p| is_array_expansion(p))
+            && !is_quoted_alternative_reference(x)
+        {
+            err(
+                out,
+                x.id(),
+                2068,
+                "Double quote array expansions to avoid re-splitting elements.",
+            );
         }
     }
 }
 
 pub(super) fn check_unquoted_n(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TC_Unary { typ, op, token } = &*t.inner {
-        if *typ == ConditionType::SingleBracket
-            && op == "-n"
-            && will_split(token)
-            && !get_word_parts(token).iter().any(|p| is_array_expansion(p))
-        {
-            err(
-                out,
-                token.id(),
-                2070,
-                "-n doesn't work with unquoted arguments. Quote or use [[ ]].",
-            );
-        }
+    if let InnerToken::TC_Unary { typ, op, token } = &*t.inner
+        && *typ == ConditionType::SingleBracket
+        && op == "-n"
+        && will_split(token)
+        && !get_word_parts(token).iter().any(|p| is_array_expansion(p))
+    {
+        err(
+            out,
+            token.id(),
+            2070,
+            "-n doesn't work with unquoted arguments. Quote or use [[ ]].",
+        );
     }
 }
 
 /// `checkBackticks` (SC2006): legacy backticks -> `$(...)`, with a fix.
 pub(super) fn check_backticks(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Backticked(list) = &*t.inner {
-        if !list.is_empty() {
-            let fix = fix_with(vec![
-                replace_start(params, t.id(), 1, "$("),
-                replace_end(params, t.id(), 1, ")"),
-            ]);
-            style_with_fix(
-                out,
-                t.id(),
-                2006,
-                "Use $(...) notation instead of legacy backticks `...`.",
-                fix,
-            );
-        }
+    if let InnerToken::T_Backticked(list) = &*t.inner
+        && !list.is_empty()
+    {
+        let fix = fix_with(vec![
+            replace_start(params, t.id(), 1, "$("),
+            replace_end(params, t.id(), 1, ")"),
+        ]);
+        style_with_fix(
+            out,
+            t.id(),
+            2006,
+            "Use $(...) notation instead of legacy backticks `...`.",
+            fix,
+        );
     }
 }
 
@@ -184,10 +182,10 @@ pub(super) fn check_tilde_in_quotes(_params: &Parameters, t: &Token, out: &mut O
                 tiq_verify(list[0].id(), str, out);
             }
             Some(InnerToken::T_DoubleQuoted(inner)) => {
-                if let Some(f) = inner.first() {
-                    if let InnerToken::T_Literal(str) = &*f.inner {
-                        tiq_verify(f.id(), str, out);
-                    }
+                if let Some(f) = inner.first()
+                    && let InnerToken::T_Literal(str) = &*f.inner
+                {
+                    tiq_verify(f.id(), str, out);
                 }
             }
             _ => {}
@@ -198,14 +196,12 @@ pub(super) fn check_tilde_in_quotes(_params: &Parameters, t: &Token, out: &mut O
 pub(super) fn check_spurious_expansion(_params: &Parameters, t: &Token, out: &mut Out) {
     // `T_SimpleCommand _ _ [T_NormalWord _ [word]]`: the assignments are not
     // looked at, so `r= $()` is still a command that is nothing but its output.
-    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-        if words.len() == 1 {
-            if let InnerToken::T_NormalWord(parts) = &*words[0].inner {
-                if parts.len() == 1 {
-                    se_check(&parts[0], out);
-                }
-            }
-        }
+    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
+        && words.len() == 1
+        && let InnerToken::T_NormalWord(parts) = &*words[0].inner
+        && parts.len() == 1
+    {
+        se_check(&parts[0], out);
     }
 }
 
@@ -398,44 +394,38 @@ pub(super) fn check_splitting_in_arrays(params: &Parameters, t: &Token, out: &mu
 }
 
 pub(super) fn check_dollar_quote_paren(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_DollarDoubleQuoted(list) = &*t.inner {
-        if let Some(first) = list.first() {
-            if let InnerToken::T_Literal(s) = &*first.inner {
-                if let Some(c) = s.chars().next() {
-                    if c == '(' || c == '{' {
-                        let fix = fix_with(vec![replace_start(params, t.id(), 2, "\"$")]);
-                        warn_with_fix(
-                            out,
-                            t.id(),
-                            2247,
-                            "Flip leading $ and \" if this should be a quoted substitution.",
-                            fix,
-                        );
-                    }
-                }
-            }
-        }
+    if let InnerToken::T_DollarDoubleQuoted(list) = &*t.inner
+        && let Some(first) = list.first()
+        && let InnerToken::T_Literal(s) = &*first.inner
+        && let Some(c) = s.chars().next()
+        && (c == '(' || c == '{')
+    {
+        let fix = fix_with(vec![replace_start(params, t.id(), 2, "\"$")]);
+        warn_with_fix(
+            out,
+            t.id(),
+            2247,
+            "Flip leading $ and \" if this should be a quoted substitution.",
+            fix,
+        );
     }
 }
 
 pub(super) fn check_translated_string_variable(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_DollarDoubleQuoted(list) = &*t.inner {
-        if list.len() == 1 {
-            if let InnerToken::T_Literal(s) = &*list[0].inner {
-                if s.chars().all(cfg::is_variable_char)
-                    && translated_assignments(params).contains(s)
-                {
-                    let fix = fix_with(vec![replace_start(params, t.id(), 2, "\"$")]);
-                    warn_with_fix(
-                        out,
-                        t.id(),
-                        2256,
-                        "This translated string is the name of a variable. Flip leading $ and \" if this should be a quoted substitution.",
-                        fix,
-                    );
-                }
-            }
-        }
+    if let InnerToken::T_DollarDoubleQuoted(list) = &*t.inner
+        && list.len() == 1
+        && let InnerToken::T_Literal(s) = &*list[0].inner
+        && s.chars().all(cfg::is_variable_char)
+        && translated_assignments(params).contains(s)
+    {
+        let fix = fix_with(vec![replace_start(params, t.id(), 2, "\"$")]);
+        warn_with_fix(
+            out,
+            t.id(),
+            2256,
+            "This translated string is the name of a variable. Flip leading $ and \" if this should be a quoted substitution.",
+            fix,
+        );
     }
 }
 
@@ -541,12 +531,12 @@ fn is_strictly_quote_free(params: &Parameters, t: &Token) -> bool {
 fn matches_expansion_re(s: &str) -> bool {
     let bytes = s.as_bytes();
     for i in 0..bytes.len() {
-        if bytes[i] == b'$' {
-            if let Some(&c) = bytes.get(i + 1) {
-                let ch = c as char;
-                if ch == '{' || ch == '(' || ch.is_ascii_alphanumeric() || ch == '_' {
-                    return true;
-                }
+        if bytes[i] == b'$'
+            && let Some(&c) = bytes.get(i + 1)
+        {
+            let ch = c as char;
+            if ch == '{' || ch == '(' || ch.is_ascii_alphanumeric() || ch == '_' {
+                return true;
             }
         }
         if bytes[i] == b'`' {
@@ -569,16 +559,15 @@ fn matches_expansion_re(s: &str) -> bool {
 fn matches_sed_contra(s: &str) -> bool {
     let bytes = s.as_bytes();
     for i in 0..bytes.len() {
-        if bytes[i] == b'$' {
-            if let Some(&c) = bytes.get(i + 1) {
-                if matches!(c, b'{' | b'd' | b'p' | b's' | b'a' | b'i' | b'c') {
-                    match bytes.get(i + 2) {
-                        None => return true,
-                        Some(&after) => {
-                            if !(after as char).is_ascii_alphabetic() {
-                                return true;
-                            }
-                        }
+        if bytes[i] == b'$'
+            && let Some(&c) = bytes.get(i + 1)
+            && matches!(c, b'{' | b'd' | b'p' | b's' | b'a' | b'i' | b'c')
+        {
+            match bytes.get(i + 2) {
+                None => return true,
+                Some(&after) => {
+                    if !(after as char).is_ascii_alphabetic() {
+                        return true;
                     }
                 }
             }
@@ -825,12 +814,11 @@ fn iu_is_special(path: &[Token]) -> bool {
         InnerToken::T_DollarBraced { .. } => true,
         _ => {
             // (a:(TC_Binary _ _ "=~" lhs rhs):rest) -> getId a == getId rhs
-            if path.len() >= 2 {
-                if let InnerToken::TC_Binary { op, rhs, .. } = &*path[1].inner {
-                    if op == "=~" {
-                        return path[0].id() == rhs.id();
-                    }
-                }
+            if path.len() >= 2
+                && let InnerToken::TC_Binary { op, rhs, .. } = &*path[1].inner
+                && op == "=~"
+            {
+                return path[0].id() == rhs.id();
             }
             iu_is_special(&path[1..])
         }
@@ -839,20 +827,19 @@ fn iu_is_special(path: &[Token]) -> bool {
 
 fn iu_check(params: &Parameters, window: &[Token], out: &mut Out) {
     // check (T_SingleQuoted _ _ : T_Literal id str : _)
-    if window.len() >= 2 {
-        if let InnerToken::T_SingleQuoted(_) = &*window[0].inner {
-            if let InnerToken::T_Literal(str) = &*window[1].inner {
-                if !str.is_empty() && str.chars().all(|c| c.is_alphanumeric()) {
-                    info(
-                        out,
-                        window[1].id(),
-                        2026,
-                        "This word is outside of quotes. Did you intend to 'nest '\"'single quotes'\"' instead'? ",
-                    );
-                }
-                return;
-            }
+    if window.len() >= 2
+        && let InnerToken::T_SingleQuoted(_) = &*window[0].inner
+        && let InnerToken::T_Literal(str) = &*window[1].inner
+    {
+        if !str.is_empty() && str.chars().all(|c| c.is_alphanumeric()) {
+            info(
+                out,
+                window[1].id(),
+                2026,
+                "This word is outside of quotes. Did you intend to 'nest '\"'single quotes'\"' instead'? ",
+            );
         }
+        return;
     }
     // check (T_DoubleQuoted _ a : trapped : T_DoubleQuoted _ b : _)
     if window.len() >= 3 {
@@ -923,10 +910,10 @@ fn se_check(word: &Token, out: &mut Out) {
 fn translated_assignments(params: &Parameters) -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
     for sd in &params.variable_flow {
-        if let StackData::Assignment(_, _, name, _) = sd {
-            if cfg::is_variable_name(name) {
-                set.insert(name.clone());
-            }
+        if let StackData::Assignment(_, _, name, _) = sd
+            && cfg::is_variable_name(name)
+        {
+            set.insert(name.clone());
         }
     }
     set

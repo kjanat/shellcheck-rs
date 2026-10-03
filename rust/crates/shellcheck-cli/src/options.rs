@@ -244,7 +244,11 @@ pub fn usage() -> String {
             "Output format (checkstyle, diff, gcc, json, json1, quiet, tty)",
         ),
         ("", "--list-optional", "List checks disabled by default"),
-        ("", "--norc", "Don't look for .shellcheckrc files"),
+        (
+            "",
+            "--norc",
+            "Don't look for .shellcheckrc and .editorconfig files",
+        ),
         (
             "",
             "--rcfile=RCFILE",
@@ -353,6 +357,12 @@ const OPTIONAL_CHECKS: &[(&str, &str, &str, &str)] = &[
         "Require [[ and warn about [ in Bash/Ksh",
         "[ -e /etc/issue ]",
         "[[ -e /etc/issue ]]",
+    ),
+    (
+        "require-double-equals",
+        "Require == and warn about = in Bash tests",
+        "[[ \"$x\" = \"$y\" ]]",
+        "[[ \"$x\" == \"$y\" ]]",
     ),
     (
         "require-variable-braces",
@@ -848,8 +858,8 @@ mod tests {
 
     /// Every optional check upstream lists is implemented and reachable.
     #[test]
-    fn list_optional_has_all_eleven_checks() {
-        assert_eq!(list_optional_text().matches("name:").count(), 11);
+    fn list_optional_has_all_twelve_checks() {
+        assert_eq!(list_optional_text().matches("name:").count(), 12);
     }
 
     fn run(a: &[&str]) -> RunConfig {

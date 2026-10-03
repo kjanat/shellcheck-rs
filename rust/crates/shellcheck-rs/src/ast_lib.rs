@@ -362,12 +362,11 @@ pub(crate) fn is_constant(token: &Token) -> bool {
         // This ignores some cases like ~"foo": a word whose first part is a
         // literal starting with '~' is treated as non-constant.
         T_NormalWord(l) => {
-            if let Some(first) = l.first() {
-                if let T_Literal(s) = &*first.inner {
-                    if s.starts_with('~') {
-                        return false;
-                    }
-                }
+            if let Some(first) = l.first()
+                && let T_Literal(s) = &*first.inner
+                && s.starts_with('~')
+            {
+                return false;
             }
             l.iter().all(is_constant)
         }
@@ -380,19 +379,18 @@ pub(crate) fn is_constant(token: &Token) -> bool {
 
 /// `getLeadingUnquotedString`.
 pub(crate) fn get_leading_unquoted_string(t: &Token) -> Option<String> {
-    if let InnerToken::T_NormalWord(list) = &*t.inner {
-        if let Some((first, rest)) = list.split_first() {
-            if let InnerToken::T_Literal(s) = &*first.inner {
-                let mut out = s.clone();
-                for p in rest {
-                    match &*p.inner {
-                        InnerToken::T_Literal(s2) => out.push_str(s2),
-                        _ => break,
-                    }
-                }
-                return Some(out);
+    if let InnerToken::T_NormalWord(list) = &*t.inner
+        && let Some((first, rest)) = list.split_first()
+        && let InnerToken::T_Literal(s) = &*first.inner
+    {
+        let mut out = s.clone();
+        for p in rest {
+            match &*p.inner {
+                InnerToken::T_Literal(s2) => out.push_str(s2),
+                _ => break,
             }
         }
+        return Some(out);
     }
     None
 }

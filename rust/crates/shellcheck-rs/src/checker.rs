@@ -38,11 +38,11 @@ pub fn check_script_with(sys: Rc<dyn SystemInterface>, spec: &CheckSpec) -> Chec
     let mut positioned: Vec<PositionedComment> =
         parse.notes.iter().map(note_to_positioned).collect();
 
-    // An unparsable rc file is a parse *problem* on this script
-    // (`readConfigFile` -> `parseProblem ErrorC 1134`), emitted at the start of
-    // the file whether or not the script itself parses.
+    // An unparsable rc file is a parse *problem* (`readConfigFile` ->
+    // `parseProblemAt (errorPos err) ErrorC 1134`), emitted at its position in
+    // the configuration file whether or not the script itself parses.
     if let Some(problem) = spec.rc.as_ref().and_then(|rc| rc.parse_problem.as_ref()) {
-        positioned.push(rc_problem_comment(&spec.filename, problem));
+        positioned.push(rc_problem_comment(problem));
     }
 
     // Analysis comments (SC2xxx/SC3xxx): resolved from ids via the position map.
@@ -102,10 +102,11 @@ fn annotation_ignores(
             }
             if let InnerToken::T_Annotation { annotations, .. } = &*tok.inner {
                 for a in annotations {
-                    if let Annotation::DisableComment(from, to) = a {
-                        if code >= *from && code < *to {
-                            return true;
-                        }
+                    if let Annotation::DisableComment(from, to) = a
+                        && code >= *from
+                        && code < *to
+                    {
+                        return true;
                     }
                 }
             }
@@ -115,13 +116,15 @@ fn annotation_ignores(
     false
 }
 
-/// `readConfigFile`'s failure branch: `parseProblem ErrorC 1134 $ errorFor ..`,
-/// reported at the start of the script that pulled in the rc file.
-fn rc_problem_comment(script: &str, problem: &RcParseProblem) -> PositionedComment {
+/// `readConfigFile`'s failure branch:
+/// `parseProblemAt (errorPos err) ErrorC 1134 $ errorFor ..`. Report the error
+/// at its location in the config file (e.g. .shellcheckrc or .editorconfig),
+/// not at the current position in the script being checked.
+fn rc_problem_comment(problem: &RcParseProblem) -> PositionedComment {
     let pos = Position {
-        file: script.to_string(),
-        line: 1,
-        column: 1,
+        file: problem.filename.clone(),
+        line: problem.line,
+        column: problem.column,
     };
     PositionedComment {
         start: pos.clone(),
@@ -175,10 +178,10 @@ fn should_include(pc: &PositionedComment, spec: &CheckSpec) -> bool {
     // rc `disable=` ranges are annotations upstream, so they suppress a code
     // independently of the include/exclude lists. Membership is tested against
     // the endpoints (`code >= n && code < m`), never enumerated.
-    if let Some(rc) = &spec.rc {
-        if rc.disabled_ranges.iter().any(|r| r.contains(code)) {
-            return false;
-        }
+    if let Some(rc) = &spec.rc
+        && rc.disabled_ranges.iter().any(|r| r.contains(code))
+    {
+        return false;
     }
     match &spec.included_warnings {
         None => !spec.excluded_warnings.contains(&code),
@@ -810,6 +813,7 @@ mod tests {
                 parse_problem: Some(RcParseProblem {
                     filename: "/tmp/.shellcheckrc".to_string(),
                     line: 2,
+                    column: 7,
                     suggestion: "Expected '=' after directive key.".to_string(),
                 }),
             })),
@@ -827,11 +831,11 @@ mod tests {
             "Failed to process /tmp/.shellcheckrc, line 2: Expected '=' after directive key. \
              Fix any mentioned problems and try again."
         );
-        // `parseProblem` at the start of the script being checked.
-        assert_eq!(problem.start.file, "s.sh");
-        assert_eq!((problem.start.line, problem.start.column), (1, 1));
-        assert_eq!((problem.end.line, problem.end.column), (1, 1));
-        // It sorts before the other errors at 1:1 and is filterable like any
+        // `parseProblemAt (errorPos err)`: in the rc file, where it failed.
+        assert_eq!(problem.start.file, "/tmp/.shellcheckrc");
+        assert_eq!((problem.start.line, problem.start.column), (2, 7));
+        assert_eq!((problem.end.line, problem.end.column), (2, 7));
+        // Its file sorts before the script's, and it is filterable like any
         // other comment.
         assert_eq!(codes(&spec), vec![1134, 2148, 2154, 2086]);
         let excluded = CheckSpec {
@@ -849,6 +853,7 @@ mod tests {
                 parse_problem: Some(RcParseProblem {
                     filename: "rc".to_string(),
                     line: 1,
+                    column: 1,
                     suggestion: String::new(),
                 }),
             })),

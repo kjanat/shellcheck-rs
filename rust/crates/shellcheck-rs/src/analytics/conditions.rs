@@ -153,15 +153,15 @@ pub(super) fn check_single_bracket_operators(params: &Parameters, t: &Token, out
         op,
         ..
     } = &*t.inner
+        && op == "=~"
+        && matches!(params.shell, Shell::Bash | Shell::Ksh)
     {
-        if op == "=~" && matches!(params.shell, Shell::Bash | Shell::Ksh) {
-            err(
-                out,
-                t.id(),
-                2074,
-                "Can't use =~ in [ ]. Use [[..]] instead.",
-            );
-        }
+        err(
+            out,
+            t.id(),
+            2074,
+            "Can't use =~ in [ ]. Use [[..]] instead.",
+        );
     }
 }
 
@@ -172,15 +172,14 @@ pub(super) fn check_double_bracket_operators(_params: &Parameters, t: &Token, ou
         op,
         ..
     } = &*t.inner
+        && (op == "\\<" || op == "\\>")
     {
-        if op == "\\<" || op == "\\>" {
-            err(
-                out,
-                t.id(),
-                2075,
-                &format!("Escaping {} is required in [..], but invalid in [[..]]", op),
-            );
-        }
+        err(
+            out,
+            t.id(),
+            2075,
+            &format!("Escaping {} is required in [..], but invalid in [[..]]", op),
+        );
     }
 }
 
@@ -221,10 +220,10 @@ pub(super) fn check_literal_breaking_test(_params: &Parameters, t: &Token, out: 
                     "-z" => Some("Argument to -z is always false due to literal strings."),
                     _ => None,
                 };
-                if let Some(msg) = msg {
-                    if let Some(tok) = get_word_parts(w).into_iter().find(|x| is_nonempty(x)) {
-                        err(out, tok.id(), 2157, msg);
-                    }
+                if let Some(msg) = msg
+                    && let Some(tok) = get_word_parts(w).into_iter().find(|x| is_nonempty(x))
+                {
+                    err(out, tok.id(), 2157, msg);
                 }
             }
         }
@@ -234,30 +233,30 @@ pub(super) fn check_literal_breaking_test(_params: &Parameters, t: &Token, out: 
 
 /// SC2158/2159/2160/2161/2078 — `checkConstantNullary`.
 pub(super) fn check_constant_nullary(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TC_Nullary { token, .. } = &*t.inner {
-        if is_constant(token) {
-            match ast_lib::only_literal_string(token).as_str() {
-                "false" => err(
-                    out,
-                    token.id(),
-                    2158,
-                    "[ false ] is true. Remove the brackets.",
-                ),
-                "0" => err(out, token.id(), 2159, "[ 0 ] is true. Use 'false' instead."),
-                "true" => style(
-                    out,
-                    token.id(),
-                    2160,
-                    "Instead of '[ true ]', just use 'true'.",
-                ),
-                "1" => style(out, token.id(), 2161, "Instead of '[ 1 ]', use 'true'."),
-                _ => err(
-                    out,
-                    token.id(),
-                    2078,
-                    "This expression is constant. Did you forget a $ somewhere?",
-                ),
-            }
+    if let InnerToken::TC_Nullary { token, .. } = &*t.inner
+        && is_constant(token)
+    {
+        match ast_lib::only_literal_string(token).as_str() {
+            "false" => err(
+                out,
+                token.id(),
+                2158,
+                "[ false ] is true. Remove the brackets.",
+            ),
+            "0" => err(out, token.id(), 2159, "[ 0 ] is true. Use 'false' instead."),
+            "true" => style(
+                out,
+                token.id(),
+                2160,
+                "Instead of '[ true ]', just use 'true'.",
+            ),
+            "1" => style(out, token.id(), 2161, "Instead of '[ 1 ]', use 'true'."),
+            _ => err(
+                out,
+                token.id(),
+                2078,
+                "This expression is constant. Did you forget a $ somewhere?",
+            ),
         }
     }
 }
@@ -269,21 +268,22 @@ pub(super) fn check_comparison_against_glob(params: &Parameters, t: &Token, out:
     if let TC_Binary { typ, op, rhs, .. } = &*t.inner {
         let op_is_eq = matches!(op.as_str(), "=" | "==" | "!=");
         // Clause 1: [[ x == $unquoted ]] where rhs is a lone T_DollarBraced word.
-        if *typ == DoubleBracket && op_is_eq {
-            if let T_NormalWord(parts) = &*rhs.inner {
-                if parts.len() == 1 && matches!(&*parts[0].inner, T_DollarBraced { .. }) {
-                    warn(
-                        out,
-                        rhs.id(),
-                        2053,
-                        &format!(
-                            "Quote the right-hand side of {} in [[ ]] to prevent glob matching.",
-                            op
-                        ),
-                    );
-                    return;
-                }
-            }
+        if *typ == DoubleBracket
+            && op_is_eq
+            && let T_NormalWord(parts) = &*rhs.inner
+            && parts.len() == 1
+            && matches!(&*parts[0].inner, T_DollarBraced { .. })
+        {
+            warn(
+                out,
+                rhs.id(),
+                2053,
+                &format!(
+                    "Quote the right-hand side of {} in [[ ]] to prevent glob matching.",
+                    op
+                ),
+            );
+            return;
         }
         // Clause 2: [ x = glob ]
         if *typ == SingleBracket && op_is_eq && is_glob(rhs) {
@@ -312,15 +312,16 @@ pub(super) fn check_case_against_glob(_params: &Parameters, t: &Token, out: &mut
     if let InnerToken::T_CaseExpression { cases, .. } = &*t.inner {
         for (_, patterns, _) in cases {
             for expr in patterns {
-                if let InnerToken::T_NormalWord(list) = &*expr.inner {
-                    if !is_glob(expr) && list.iter().any(is_quoteable_expansion) {
-                        warn(
-                            out,
-                            expr.id(),
-                            2254,
-                            "Quote expansions in case patterns to match literally rather than as a glob.",
-                        );
-                    }
+                if let InnerToken::T_NormalWord(list) = &*expr.inner
+                    && !is_glob(expr)
+                    && list.iter().any(is_quoteable_expansion)
+                {
+                    warn(
+                        out,
+                        expr.id(),
+                        2254,
+                        "Quote expansions in case patterns to match literally rather than as a glob.",
+                    );
                 }
             }
         }
@@ -347,29 +348,27 @@ pub(super) fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
                     ..
                 },
             ) = (&*lhs.inner, &*rhs.inner)
+                && op1 == op2
+                && (op1 == "-ne" || op1 == "!=")
+                && lhs1 == lhs2
+                && rhs1 != rhs2
+                && !is_glob(rhs1)
+                && !is_glob(rhs2)
             {
-                if op1 == op2
-                    && (op1 == "-ne" || op1 == "!=")
-                    && lhs1 == lhs2
-                    && rhs1 != rhs2
-                    && !is_glob(rhs1)
-                    && !is_glob(rhs2)
-                {
-                    let conj = if *typ == ConditionType::SingleBracket {
-                        "-a"
-                    } else {
-                        "&&"
-                    };
-                    warn(
-                        out,
-                        t.id(),
-                        2055,
-                        &format!(
-                            "You probably wanted {} here, otherwise it's always true.",
-                            conj
-                        ),
-                    );
-                }
+                let conj = if *typ == ConditionType::SingleBracket {
+                    "-a"
+                } else {
+                    "&&"
+                };
+                warn(
+                    out,
+                    t.id(),
+                    2055,
+                    &format!(
+                        "You probably wanted {} here, otherwise it's always true.",
+                        conj
+                    ),
+                );
             }
         }
         // Arithmetic "or"
@@ -382,36 +381,35 @@ pub(super) fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
                     op: o2, lhs: w2, ..
                 },
             ) = (&*lhs.inner, &*rhs.inner)
+                && o1 == "!="
+                && o2 == "!="
+                && w1 == w2
             {
-                if o1 == "!=" && o2 == "!=" && w1 == w2 {
-                    warn(
-                        out,
-                        t.id(),
-                        2056,
-                        "You probably wanted && here, otherwise it's always true.",
-                    );
-                }
+                warn(
+                    out,
+                    t.id(),
+                    2056,
+                    "You probably wanted && here, otherwise it's always true.",
+                );
             }
         }
         // Command-level "or": [ x != y ] || [ x != z ]
         T_OrIf { lhs, rhs } => {
             if let (Some((lhs1, op1, rhs1)), Some((lhs2, op2, rhs2))) =
                 (or_get_expr(lhs), or_get_expr(rhs))
+                && op1 == op2
+                && (op1 == "-ne" || op1 == "!=")
+                && lhs1 == lhs2
+                && rhs1 != rhs2
+                && !is_glob(&rhs1)
+                && !is_glob(&rhs2)
             {
-                if op1 == op2
-                    && (op1 == "-ne" || op1 == "!=")
-                    && lhs1 == lhs2
-                    && rhs1 != rhs2
-                    && !is_glob(&rhs1)
-                    && !is_glob(&rhs2)
-                {
-                    warn(
-                        out,
-                        t.id(),
-                        2252,
-                        "You probably wanted && here, otherwise it's always true.",
-                    );
-                }
+                warn(
+                    out,
+                    t.id(),
+                    2252,
+                    "You probably wanted && here, otherwise it's always true.",
+                );
             }
         }
         _ => {}
@@ -438,27 +436,25 @@ pub(super) fn check_and_eq(_params: &Parameters, t: &Token, out: &mut Out) {
                     ..
                 },
             ) = (&*lhs.inner, &*rhs.inner)
+                && op1 == op2
+                && lhs1 == lhs2
+                && rhs1 != rhs2
+                && check_and_eq_operands(op1, rhs1, rhs2)
             {
-                if op1 == op2
-                    && lhs1 == lhs2
-                    && rhs1 != rhs2
-                    && check_and_eq_operands(op1, rhs1, rhs2)
-                {
-                    let conj = if *typ == ConditionType::SingleBracket {
-                        "-o"
-                    } else {
-                        "||"
-                    };
-                    warn(
-                        out,
-                        t.id(),
-                        2333,
-                        &format!(
-                            "You probably wanted {} here, otherwise it's always false.",
-                            conj
-                        ),
-                    );
-                }
+                let conj = if *typ == ConditionType::SingleBracket {
+                    "-o"
+                } else {
+                    "||"
+                };
+                warn(
+                    out,
+                    t.id(),
+                    2333,
+                    &format!(
+                        "You probably wanted {} here, otherwise it's always false.",
+                        conj
+                    ),
+                );
             }
         }
         // Arithmetic "and"
@@ -475,39 +471,35 @@ pub(super) fn check_and_eq(_params: &Parameters, t: &Token, out: &mut Out) {
                     rhs: rhs2,
                 },
             ) = (&*lhs.inner, &*rhs.inner)
+                && o1 == "=="
+                && o2 == "=="
+                && lhs1 == lhs2
+                && is_literal_number(rhs1)
+                && is_literal_number(rhs2)
             {
-                if o1 == "=="
-                    && o2 == "=="
-                    && lhs1 == lhs2
-                    && is_literal_number(rhs1)
-                    && is_literal_number(rhs2)
-                {
-                    warn(
-                        out,
-                        t.id(),
-                        2334,
-                        "You probably wanted || here, otherwise it's always false.",
-                    );
-                }
+                warn(
+                    out,
+                    t.id(),
+                    2334,
+                    "You probably wanted || here, otherwise it's always false.",
+                );
             }
         }
         // Command-level "and": [ x = y ] && [ x = z ]
         T_AndIf { lhs, rhs } => {
             if let (Some((lhs1, op1, rhs1)), Some((lhs2, op2, rhs2))) =
                 (cmd_level_get_expr(lhs), cmd_level_get_expr(rhs))
+                && op1 == op2
+                && lhs1 == lhs2
+                && rhs1 != rhs2
+                && check_and_eq_operands(&op1, &rhs1, &rhs2)
             {
-                if op1 == op2
-                    && lhs1 == lhs2
-                    && rhs1 != rhs2
-                    && check_and_eq_operands(&op1, &rhs1, &rhs2)
-                {
-                    warn(
-                        out,
-                        t.id(),
-                        2333,
-                        "You probably wanted || here, otherwise it's always false.",
-                    );
-                }
+                warn(
+                    out,
+                    t.id(),
+                    2333,
+                    "You probably wanted || here, otherwise it's always false.",
+                );
             }
         }
         _ => {}
@@ -584,17 +576,16 @@ pub(super) fn check_globbed_regex(_params: &Parameters, t: &Token, out: &mut Out
         rhs,
         ..
     } = &*t.inner
+        && op == "=~"
     {
-        if op == "=~" {
-            let s = oversimplify(rhs).concat();
-            if is_confused_glob_regex(&s) {
-                warn(
-                    out,
-                    rhs.id(),
-                    2049,
-                    "=~ is for regex, but this looks like a glob. Use = instead.",
-                );
-            }
+        let s = oversimplify(rhs).concat();
+        if is_confused_glob_regex(&s) {
+            warn(
+                out,
+                rhs.id(),
+                2049,
+                "=~ is for regex, but this looks like a glob. Use = instead.",
+            );
         }
     }
 }
@@ -812,10 +803,10 @@ pub(super) fn check_test_argument_splitting(params: &Parameters, t: &Token, out:
 
 /// SC2171 — `checkTrailingBracket`.
 pub(super) fn check_trailing_bracket(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-        if let Some(last) = words.last() {
-            trailing_check(last, t, out);
-        }
+    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
+        && let Some(last) = words.last()
+    {
+        trailing_check(last, t, out);
     }
 }
 
@@ -914,10 +905,10 @@ pub(super) fn check_unmatchable_cases(params: &Parameters, t: &Token, out: &mut 
 
 /// SC2204 / SC2205 — `checkSubshellAsTest`.
 pub(super) fn check_subshell_as_test(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Subshell(list) = &*t.inner {
-        if list.len() == 1 {
-            subshell_check(t.id(), &list[0], out);
-        }
+    if let InnerToken::T_Subshell(list) = &*t.inner
+        && list.len() == 1
+    {
+        subshell_check(t.id(), &list[0], out);
     }
 }
 
@@ -934,31 +925,32 @@ pub(super) fn check_empty_condition(_params: &Parameters, t: &Token, out: &mut O
 }
 
 pub(super) fn check_subshelled_tests(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Subshell(list) = &*t.inner {
-        if list.iter().all(sst_is_test_structure) && !sst_has_assignment(t) {
-            let path = get_path(params, t);
-            if sst_is_compound_condition(&path) {
-                style(
-                    out,
-                    t.id(),
-                    2233,
-                    "Remove superfluous (..) around condition to avoid subshell overhead.",
-                );
-            } else if sst_is_single_test(list) && !sst_is_function_body(&path) {
-                style(
-                    out,
-                    t.id(),
-                    2234,
-                    "Remove superfluous (..) around test command to avoid subshell overhead.",
-                );
-            } else {
-                style(
-                    out,
-                    t.id(),
-                    2235,
-                    "Use { ..; } instead of (..) to avoid subshell overhead.",
-                );
-            }
+    if let InnerToken::T_Subshell(list) = &*t.inner
+        && list.iter().all(sst_is_test_structure)
+        && !sst_has_assignment(t)
+    {
+        let path = get_path(params, t);
+        if sst_is_compound_condition(&path) {
+            style(
+                out,
+                t.id(),
+                2233,
+                "Remove superfluous (..) around condition to avoid subshell overhead.",
+            );
+        } else if sst_is_single_test(list) && !sst_is_function_body(&path) {
+            style(
+                out,
+                t.id(),
+                2234,
+                "Remove superfluous (..) around test command to avoid subshell overhead.",
+            );
+        } else {
+            style(
+                out,
+                t.id(),
+                2235,
+                "Use { ..; } instead of (..) to avoid subshell overhead.",
+            );
         }
     }
 }
@@ -985,10 +977,10 @@ pub(super) fn check_bad_test_and_or(params: &Parameters, t: &Token, out: &mut Ou
             for (i, cmd) in commands.iter().enumerate() {
                 if is_test_command(cmd) {
                     // before = seps[i-1] (i>0), after = seps[i] (i < seps.len())
-                    if i > 0 {
-                        if let Some(sep) = separators.get(i - 1) {
-                            check_pipe(params, sep, out);
-                        }
+                    if i > 0
+                        && let Some(sep) = separators.get(i - 1)
+                    {
+                        check_pipe(params, sep, out);
                     }
                     if let Some(sep) = separators.get(i) {
                         check_pipe(params, sep, out);
@@ -1003,36 +995,36 @@ pub(super) fn check_bad_test_and_or(params: &Parameters, t: &Token, out: &mut Ou
 
 /// SC2283 / SC2284 / SC2285 — `checkSecondArgIsComparison`.
 pub(super) fn check_second_arg_is_comparison(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-        if words.len() >= 2 {
-            let arg = &words[1];
-            if let Some(arg_string) = get_leading_unquoted_string(arg) {
-                let b: Vec<char> = arg_string.chars().collect();
-                // '=' repeated 4+ -> ignore (echo ======)
-                if b.len() >= 4 && b[0] == '=' && b[1] == '=' && b[2] == '=' && b[3] == '=' {
-                    // Nothing
-                } else if b.len() >= 2 && b[0] == '+' && b[1] == '=' {
-                    err(
-                        out,
-                        head_id(t),
-                        2285,
-                        "Remove spaces around += to assign (or quote '+=' if literal).",
-                    );
-                } else if b.len() >= 2 && b[0] == '=' && b[1] == '=' {
-                    err(
-                        out,
-                        t.id(),
-                        2284,
-                        "Use [ x = y ] to compare values (or quote '==' if literal).",
-                    );
-                } else if !b.is_empty() && b[0] == '=' {
-                    err(
-                        out,
-                        head_id(arg),
-                        2283,
-                        "Remove spaces around = to assign (or use [ ] to compare, or quote '=' if literal).",
-                    );
-                }
+    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
+        && words.len() >= 2
+    {
+        let arg = &words[1];
+        if let Some(arg_string) = get_leading_unquoted_string(arg) {
+            let b: Vec<char> = arg_string.chars().collect();
+            // '=' repeated 4+ -> ignore (echo ======)
+            if b.len() >= 4 && b[0] == '=' && b[1] == '=' && b[2] == '=' && b[3] == '=' {
+                // Nothing
+            } else if b.len() >= 2 && b[0] == '+' && b[1] == '=' {
+                err(
+                    out,
+                    head_id(t),
+                    2285,
+                    "Remove spaces around += to assign (or quote '+=' if literal).",
+                );
+            } else if b.len() >= 2 && b[0] == '=' && b[1] == '=' {
+                err(
+                    out,
+                    t.id(),
+                    2284,
+                    "Use [ x = y ] to compare values (or quote '==' if literal).",
+                );
+            } else if !b.is_empty() && b[0] == '=' {
+                err(
+                    out,
+                    head_id(arg),
+                    2283,
+                    "Remove spaces around = to assign (or use [ ] to compare, or quote '=' if literal).",
+                );
             }
         }
     }
@@ -1075,10 +1067,10 @@ fn is_zero(t: &Token) -> bool {
 
 fn is_exit_code(t: &Token) -> bool {
     let parts = get_word_parts(t);
-    if parts.len() == 1 {
-        if let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner {
-            return concat_strings(oversimplify(op)) == "?";
-        }
+    if parts.len() == 1
+        && let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner
+    {
+        return concat_strings(oversimplify(op)) == "?";
     }
     false
 }
@@ -1102,10 +1094,10 @@ fn is_only_test_in_command(params: &Parameters, t: &Token) -> bool {
             InnerToken::T_Condition { .. } => return true,
             InnerToken::T_Arithmetic(_) => return true,
             InnerToken::TA_Sequence(v) if v.len() == 1 => {
-                if let Some(gp) = params.parent(p) {
-                    if matches!(&*gp.inner, InnerToken::T_Arithmetic(_)) {
-                        return true;
-                    }
+                if let Some(gp) = params.parent(p)
+                    && matches!(&*gp.inner, InnerToken::T_Arithmetic(_))
+                {
+                    return true;
                 }
                 cur = p;
             }
@@ -1131,12 +1123,11 @@ fn get_first_command_in_function(t: &Token) -> &Token {
             get_first_command_in_function(&commands[0])
         }
         T_Redirecting { cmd, .. } => {
-            if let T_IfExpression { clauses, .. } = &*cmd.inner {
-                if let Some((conds, _)) = clauses.first() {
-                    if let Some(first) = conds.first() {
-                        return get_first_command_in_function(first);
-                    }
-                }
+            if let T_IfExpression { clauses, .. } = &*cmd.inner
+                && let Some((conds, _)) = clauses.first()
+                && let Some(first) = conds.first()
+            {
+                return get_first_command_in_function(first);
             }
             t
         }
@@ -1506,14 +1497,12 @@ fn fix_leading_x(params: &Parameters, token: &Token) -> Option<Replacement> {
                 return None;
             }
             // The side is a single, unquoted x or X, so we have to quote.
-            if let InnerToken::T_NormalWord(v) = &*token.inner {
-                if v.len() == 1 {
-                    if let InnerToken::T_Literal(single) = &*v[0].inner {
-                        if single.chars().count() == 1 {
-                            return Some(replace_start(params, v[0].id(), 1, "\"\""));
-                        }
-                    }
-                }
+            if let InnerToken::T_NormalWord(v) = &*token.inner
+                && v.len() == 1
+                && let InnerToken::T_Literal(single) = &*v[0].inner
+                && single.chars().count() == 1
+            {
+                return Some(replace_start(params, v[0].id(), 1, "\"\""));
             }
             // Otherwise we can just delete it.
             Some(replace_start(params, first.id(), 1, ""))
@@ -1621,13 +1610,11 @@ fn sst_is_test_command(t: &Token) -> bool {
         separators,
         commands,
     } = &*t.inner
+        && separators.is_empty()
+        && commands.len() == 1
+        && let InnerToken::T_Redirecting { cmd, .. } = &*commands[0].inner
     {
-        if separators.is_empty() && commands.len() == 1 {
-            if let InnerToken::T_Redirecting { cmd, .. } = &*commands[0].inner {
-                return matches!(&*cmd.inner, InnerToken::T_Condition { .. })
-                    || sst_is_command_test(cmd);
-            }
-        }
+        return matches!(&*cmd.inner, InnerToken::T_Condition { .. }) || sst_is_command_test(cmd);
     }
     false
 }
@@ -1795,28 +1782,26 @@ fn word_to_pseudo_glob_impl(exact: bool, word: &Token) -> Option<Vec<PseudoGlob>
 fn to_glob(exact: bool, word: &Token) -> Option<Vec<PseudoGlob>> {
     use InnerToken::*;
     // Special-case: T_NormalWord starting with a literal `~...`.
-    if let T_NormalWord(list) = &*word.inner {
-        if let Some((first, rest)) = list.split_first() {
-            if let T_Literal(s) = &*first.inner {
-                if s.starts_with('~') {
-                    if exact {
-                        return None;
-                    }
-                    let mut this = vec![PseudoGlob::Many];
-                    // map PGChar $ dropWhile (/= '/') str  (str is the whole literal incl '~')
-                    let after: String = s.chars().skip_while(|c| *c != '/').collect();
-                    this.extend(after.chars().map(PseudoGlob::Char));
-                    // tail: concatMap getWordParts rest, then f each
-                    let mut tail = Vec::new();
-                    for part in rest.iter().flat_map(get_word_parts) {
-                        let mut g = glob_part(exact, part)?;
-                        tail.append(&mut g);
-                    }
-                    this.append(&mut tail);
-                    return Some(this);
-                }
-            }
+    if let T_NormalWord(list) = &*word.inner
+        && let Some((first, rest)) = list.split_first()
+        && let T_Literal(s) = &*first.inner
+        && s.starts_with('~')
+    {
+        if exact {
+            return None;
         }
+        let mut this = vec![PseudoGlob::Many];
+        // map PGChar $ dropWhile (/= '/') str  (str is the whole literal incl '~')
+        let after: String = s.chars().skip_while(|c| *c != '/').collect();
+        this.extend(after.chars().map(PseudoGlob::Char));
+        // tail: concatMap getWordParts rest, then f each
+        let mut tail = Vec::new();
+        for part in rest.iter().flat_map(get_word_parts) {
+            let mut g = glob_part(exact, part)?;
+            tail.append(&mut g);
+        }
+        this.append(&mut tail);
+        return Some(this);
     }
     let mut out = Vec::new();
     for part in get_word_parts(word) {
@@ -1961,12 +1946,12 @@ fn subshell_check(id: Id, t: &Token, out: &mut Out) {
         T_AndIf { lhs, .. } => subshell_check(id, lhs, out),
         T_OrIf { lhs, .. } => subshell_check(id, lhs, out),
         T_Pipeline { commands, .. } if commands.len() == 1 => {
-            if let T_Redirecting { cmd, .. } = &*commands[0].inner {
-                if let T_SimpleCommand { assignments, words } = &*cmd.inner {
-                    if assignments.is_empty() && words.len() >= 2 {
-                        subshell_check_params(id, &words[0], &words[1], out);
-                    }
-                }
+            if let T_Redirecting { cmd, .. } = &*commands[0].inner
+                && let T_SimpleCommand { assignments, words } = &*cmd.inner
+                && assignments.is_empty()
+                && words.len() >= 2
+            {
+                subshell_check_params(id, &words[0], &words[1], out);
             }
         }
         _ => {}
@@ -1993,16 +1978,16 @@ fn subshell_check_params(id: Id, first: &Token, second: &Token, out: &mut Out) {
 }
 
 fn check_pipe(params: &Parameters, sep: &Token, out: &mut Out) {
-    if let InnerToken::T_Pipe(s) = &*sep.inner {
-        if s == "|" {
-            warn_with_fix(
-                out,
-                sep.id(),
-                2266,
-                "Use || for logical OR. Single | will pipe.",
-                fix_with(vec![replace_end(params, sep.id(), 0, "|")]),
-            );
-        }
+    if let InnerToken::T_Pipe(s) = &*sep.inner
+        && s == "|"
+    {
+        warn_with_fix(
+            out,
+            sep.id(),
+            2266,
+            "Use || for logical OR. Single | will pipe.",
+            fix_with(vec![replace_end(params, sep.id(), 0, "|")]),
+        );
     }
 }
 
@@ -2029,25 +2014,23 @@ fn check_ands(params: &Parameters, id: Id, t: &Token, out: &mut Out) {
 }
 
 fn trailing_check(word: &Token, command: &Token, out: &mut Out) {
-    if let InnerToken::T_NormalWord(list) = &*word.inner {
-        if list.len() == 1 {
-            if let InnerToken::T_Literal(str) = &*list[0].inner {
-                if str == "]]" || str == "]" {
-                    let opposite = invert_bracket(str);
-                    let parameters = oversimplify(command);
-                    if !parameters.iter().any(|p| p == opposite) {
-                        warn(
-                            out,
-                            list[0].id(),
-                            2171,
-                            &format!(
-                                "Found trailing {} outside test. Add missing {} or quote if intentional.",
-                                str, opposite
-                            ),
-                        );
-                    }
-                }
-            }
+    if let InnerToken::T_NormalWord(list) = &*word.inner
+        && list.len() == 1
+        && let InnerToken::T_Literal(str) = &*list[0].inner
+        && (str == "]]" || str == "]")
+    {
+        let opposite = invert_bracket(str);
+        let parameters = oversimplify(command);
+        if !parameters.iter().any(|p| p == opposite) {
+            warn(
+                out,
+                list[0].id(),
+                2171,
+                &format!(
+                    "Found trailing {} outside test. Add missing {} or quote if intentional.",
+                    str, opposite
+                ),
+            );
         }
     }
 }
@@ -2109,16 +2092,16 @@ fn is_dereferenced(params: &Parameters, t: &Token) -> bool {
 }
 
 fn check_unary_test_a_impl(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TC_Unary { op, .. } = &*t.inner {
-        if op == "-a" {
-            style_with_fix(
-                out,
-                t.id(),
-                2331,
-                "For file existence, prefer standard -e over legacy -a.",
-                fix_with(vec![replace_start(params, t.id(), 2, "-e")]),
-            );
-        }
+    if let InnerToken::TC_Unary { op, .. } = &*t.inner
+        && op == "-a"
+    {
+        style_with_fix(
+            out,
+            t.id(),
+            2331,
+            "For file existence, prefer standard -e over legacy -a.",
+            fix_with(vec![replace_start(params, t.id(), 2, "-e")]),
+        );
     }
 }
 
@@ -2163,6 +2146,26 @@ pub(super) fn check_require_double_bracket(params: &Parameters, root: &Token, ou
     });
 }
 
+/// `checkRequireDoubleEquals` (optional: `require-double-equals`): a tree
+/// check, since it does nothing at all outside Bash.
+pub(super) fn check_require_double_equals(params: &Parameters, root: &Token, out: &mut Out) {
+    if params.shell != Shell::Bash {
+        return;
+    }
+    root.visit_preorder(&mut |t: &Token| {
+        if let InnerToken::TC_Binary { op, .. } = &*t.inner
+            && op == "="
+        {
+            style(
+                out,
+                t.id(),
+                2338,
+                "Prefer == over = for string comparisons in Bash tests.",
+            );
+        }
+    });
+}
+
 /// `checkNullaryExpansionTest` (optional: `avoid-nullary-conditions`).
 pub(super) fn check_nullary_expansion_test(params: &Parameters, t: &Token, out: &mut Out) {
     let InnerToken::TC_Nullary { token: word, .. } = &*t.inner else {
@@ -2171,17 +2174,17 @@ pub(super) fn check_nullary_expansion_test(params: &Parameters, t: &Token, out: 
     let id = word.id();
     let fix = fix_with(vec![replace_start(params, id, 0, "-n ")]);
     let parts = ast_lib::get_word_parts(word);
-    if let [only] = parts.as_slice() {
-        if ast_lib::is_command_substitution(only) {
-            style_with_fix(
-                out,
-                id,
-                2243,
-                "Prefer explicit -n to check for output (or run command without [/[[ to check for success).",
-                fix,
-            );
-            return;
-        }
+    if let [only] = parts.as_slice()
+        && ast_lib::is_command_substitution(only)
+    {
+        style_with_fix(
+            out,
+            id,
+            2243,
+            "Prefer explicit -n to check for output (or run command without [/[[ to check for success).",
+            fix,
+        );
+        return;
     }
     // Constant operands are SC2157's business, not this one's.
     if !parts.is_empty() && !parts.iter().any(|p| ast_lib::is_constant(p)) {
@@ -2289,6 +2292,20 @@ pub(super) fn check_unnecessarily_inverted_test(_params: &Parameters, t: &Token,
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    #[test]
+    fn prop_checkRequireDoubleEquals1_5() {
+        for s in ["[[ \"$x\" = \"$y\" ]]", "[ \"$x\" = \"$y\" ]"] {
+            assert!(tree_emits(check_require_double_equals, s), "{s}");
+        }
+        for s in [
+            "[[ \"$x\" == \"$y\" ]]",
+            "#!/bin/sh\n[ \"$x\" = \"$y\" ]",
+            "#!/bin/ksh\n[[ \"$x\" = \"$y\" ]]",
+        ] {
+            assert!(!tree_emits(check_require_double_equals, s), "{s}");
+        }
+    }
 
     #[test]
     fn prop_checkNullaryExpansionTest1_6() {

@@ -112,15 +112,15 @@ fn check_sed(id: Id, cmd: &[String], out: &mut Out) {
         [a, b, v] if a == "sed" && b == "-e" => Some(v),
         _ => None,
     };
-    if let Some(v) = v {
-        if is_simple_sed(v) {
-            style(
-                out,
-                id,
-                2001,
-                "See if you can use ${variable//search/replace} instead.",
-            );
-        }
+    if let Some(v) = v
+        && is_simple_sed(v)
+    {
+        style(
+            out,
+            id,
+            2001,
+            "See if you can use ${variable//search/replace} instead.",
+        );
     }
 }
 
@@ -186,19 +186,19 @@ fn lit_string(t: &Token) -> Option<String> {
 }
 
 fn for_decimals(_p: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::TA_Expansion(_) = &*t.inner {
-        if let Some(s) = lit_string(t) {
-            let mut chars = s.chars();
-            if let Some(first) = chars.next() {
-                let rest: String = chars.collect();
-                if first.is_ascii_digit() && rest.contains('.') {
-                    err(
-                        out,
-                        t.id(),
-                        2079,
-                        "(( )) doesn't support decimals. Use bc or awk.",
-                    );
-                }
+    if let InnerToken::TA_Expansion(_) = &*t.inner
+        && let Some(s) = lit_string(t)
+    {
+        let mut chars = s.chars();
+        if let Some(first) = chars.next() {
+            let rest: String = chars.collect();
+            if first.is_ascii_digit() && rest.contains('.') {
+                err(
+                    out,
+                    t.id(),
+                    2079,
+                    "(( )) doesn't support decimals. Use bc or awk.",
+                );
             }
         }
     }
@@ -306,15 +306,15 @@ fn matches_bracket_bracket(s: &str) -> bool {
 }
 
 fn multiple_bangs(_p: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Banged(inner) = &*t.inner {
-        if let InnerToken::T_Banged(_) = &*inner.inner {
-            err(
-                out,
-                t.id(),
-                2325,
-                "Multiple ! in front of pipelines are a bash/ksh extension. Use only 0 or 1.",
-            );
-        }
+    if let InnerToken::T_Banged(inner) = &*t.inner
+        && let InnerToken::T_Banged(_) = &*inner.inner
+    {
+        err(
+            out,
+            t.id(),
+            2325,
+            "Multiple ! in front of pipelines are a bash/ksh extension. Use only 0 or 1.",
+        );
     }
 }
 
@@ -339,25 +339,23 @@ fn negated_unary_ops(_p: &Parameters, t: &Token, out: &mut Out) {
         op,
         token,
     } = &*t.inner
+        && op == "!"
+        && let InnerToken::TC_Unary { op: inner_op, .. } = &*token.inner
     {
-        if op == "!" {
-            if let InnerToken::TC_Unary { op: inner_op, .. } = &*token.inner {
-                if inner_op == "-o" {
-                    err(
-                        out,
-                        t.id(),
-                        2332,
-                        "[ ! -o opt ] is always true because -o becomes logical OR. Use [[ ]] or ! [ -o opt ].",
-                    );
-                } else if inner_op == "-a" {
-                    err(
-                        out,
-                        t.id(),
-                        2332,
-                        "[ ! -a file ] is always true because -a becomes logical AND. Use -e instead.",
-                    );
-                }
-            }
+        if inner_op == "-o" {
+            err(
+                out,
+                t.id(),
+                2332,
+                "[ ! -o opt ] is always true because -o becomes logical OR. Use [[ ]] or ! [ -o opt ].",
+            );
+        } else if inner_op == "-a" {
+            err(
+                out,
+                t.id(),
+                2332,
+                "[ ! -a file ] is always true because -a becomes logical AND. Use -e instead.",
+            );
         }
     }
 }
@@ -417,10 +415,10 @@ fn bashism_unary_test(op: &str) -> Option<(i64, &'static [Shell], String)> {
 type BashismTable = fn(&str) -> Option<(i64, &'static [Shell], String)>;
 
 fn check_test_op(out: &mut Out, p: &Parameters, id: Id, op: &str, table: BashismTable) {
-    if let Some((code, exempt, msg)) = table(op) {
-        if !exempt.contains(&p.shell) {
-            warn_msg(out, p, id, code, &msg);
-        }
+    if let Some((code, exempt, msg)) = table(op)
+        && !exempt.contains(&p.shell)
+    {
+        warn_msg(out, p, id, code, &msg);
     }
 }
 
@@ -608,7 +606,11 @@ fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
     let id = t.id();
     use InnerToken::*;
     match &*t.inner {
-        T_ProcSub { .. } => warn_msg(out, p, id, 3001, "process substitution is"),
+        T_ProcSub { .. } => {
+            if !is_busybox(p) {
+                warn_msg(out, p, id, 3001, "process substitution is");
+            }
+        }
         T_Extglob { .. } => warn_msg(out, p, id, 3002, "extglob is"),
         T_DollarDoubleQuoted(_) => warn_msg(out, p, id, 3004, "$\"..\" is"),
         T_ForArithmetic { .. } => warn_msg(out, p, id, 3005, "arithmetic for loops are"),
@@ -701,12 +703,11 @@ fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
         }
 
         TA_Expansion(pieces) => {
-            if let Some(first) = pieces.first() {
-                if let InnerToken::T_Literal(s) = &*first.inner {
-                    if matches_radix(s) {
-                        warn_msg(out, p, first.id(), 3052, "arithmetic base conversion is");
-                    }
-                }
+            if let Some(first) = pieces.first()
+                && let InnerToken::T_Literal(s) = &*first.inner
+                && matches_radix(s)
+            {
+                warn_msg(out, p, first.id(), 3052, "arithmetic base conversion is");
             }
         }
 
@@ -718,29 +719,27 @@ fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
 
 fn bashism_fd_redirect(p: &Parameters, id: Id, fd: &str, target: &Token, out: &mut Out) {
     // &>  (T_FdRedirect "&" (T_IoFile (T_Greater) _))
-    if fd == "&" {
-        if let InnerToken::T_IoFile { op, .. } = &*target.inner {
-            if matches!(&*op.inner, InnerToken::T_Greater) {
-                if !is_busybox(p) {
-                    warn_msg(out, p, id, 3020, "&> is");
-                }
-                return;
-            }
+    if fd == "&"
+        && let InnerToken::T_IoFile { op, .. } = &*target.inner
+        && matches!(&*op.inner, InnerToken::T_Greater)
+    {
+        if !is_busybox(p) {
+            warn_msg(out, p, id, 3020, "&> is");
         }
+        return;
     }
     // >& filename  (T_FdRedirect "" (T_IoFile (T_GREATAND) file))
-    if fd.is_empty() {
-        if let InnerToken::T_IoFile { op, file } = &*target.inner {
-            if matches!(&*op.inner, InnerToken::T_GREATAND) {
-                if !only_literal_string(file)
-                    .chars()
-                    .all(|c| c.is_ascii_digit())
-                {
-                    warn_msg(out, p, id, 3021, ">& filename (as opposed to >& fd) is");
-                }
-                return;
-            }
+    if fd.is_empty()
+        && let InnerToken::T_IoFile { op, file } = &*target.inner
+        && matches!(&*op.inner, InnerToken::T_GREATAND)
+    {
+        if !only_literal_string(file)
+            .chars()
+            .all(|c| c.is_ascii_digit())
+        {
+            warn_msg(out, p, id, 3021, ">& filename (as opposed to >& fd) is");
         }
+        return;
     }
     // named file descriptors  (T_FdRedirect ('{':_) _)
     if fd.starts_with('{') {
@@ -795,15 +794,17 @@ fn check_simple_command(p: &Parameters, t: &Token, words: &[Token], out: &mut Ou
     let id = t.id();
 
     // test-command forms: `test x == y`, `test -v var`.
-    if words.len() == 4 && get_literal_string(&words[0]).as_deref() == Some("test") {
-        if let Some(op) = get_literal_string(&words[2]) {
-            check_test_op(out, p, id, &op, bashism_binary_test);
-        }
+    if words.len() == 4
+        && get_literal_string(&words[0]).as_deref() == Some("test")
+        && let Some(op) = get_literal_string(&words[2])
+    {
+        check_test_op(out, p, id, &op, bashism_binary_test);
     }
-    if words.len() == 3 && get_literal_string(&words[0]).as_deref() == Some("test") {
-        if let Some(op) = get_literal_string(&words[1]) {
-            check_test_op(out, p, id, &op, bashism_unary_test);
-        }
+    if words.len() == 3
+        && get_literal_string(&words[0]).as_deref() == Some("test")
+        && let Some(op) = get_literal_string(&words[1])
+    {
+        check_test_op(out, p, id, &op, bashism_unary_test);
     }
 
     let cmd = &words[0];
@@ -972,12 +973,11 @@ fn check_general_command(p: &Parameters, t: &Token, words: &[Token], out: &mut O
         }
     }
 
-    if name == "printf" {
-        if let Some(format) = rest.first() {
-            if only_literal_string(format).contains("%q") {
-                warn_msg(out, p, format.id(), 3050, "printf %q is");
-            }
-        }
+    if name == "printf"
+        && let Some(format) = rest.first()
+        && only_literal_string(format).contains("%q")
+    {
+        warn_msg(out, p, format.id(), 3050, "printf %q is");
     }
 
     if name == "read" && rest.iter().all(is_flag) {
@@ -1953,6 +1953,14 @@ mod tests {
     #[test]
     fn prop_checkBashisms150() {
         assert!(emits(bashism, "[ -O file ]"));
+    }
+
+    #[test]
+    fn prop_checkBashisms151() {
+        assert!(!emits(
+            bashism,
+            "#!/bin/busybox sh\npwd | tee >(gzip > log.gz)"
+        ));
     }
 
     // ---- checkBraceExpansionVars (SC2051 / SC2175) ----

@@ -385,16 +385,18 @@ impl DisableRange {
 /// A configuration file that failed to parse, as reported by SC1134.
 ///
 /// The Haskell driver reads the rc file inside the parser
-/// (`Parser.readConfigFile`), so a failure there becomes a parse problem on the
-/// script being checked. This port reads rc files in the CLI, so the failure
-/// travels on the spec instead and the checker emits the comment; the message
-/// is assembled exactly as `errorFor` does.
+/// (`Parser.readConfigFile`), so a failure there becomes a parse problem at its
+/// position in the configuration file. This port reads rc files in the CLI, so
+/// the failure travels on the spec instead and the checker emits the comment;
+/// the message is assembled exactly as `errorFor` does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RcParseProblem {
     /// The rc file path, as it was used to open the file.
     pub filename: String,
     /// 1-based line of the parse failure (`sourceLine $ errorPos err`).
     pub line: i64,
+    /// 1-based column of the parse failure (`sourceColumn $ errorPos err`).
+    pub column: i64,
     /// `getStringFromParsec`'s suggestion: the explicit `fail` message plus a
     /// period, or empty when the failure carried no message.
     pub suggestion: String,

@@ -69,7 +69,7 @@ lint.rules   = {
 }
 
 [[schemas]]  # https://doc.rust-lang.org/cargo/reference/config.html#configuration-format
-path    = "https://gist.githubusercontent.com/kjanat/1172d9d2d6dbe7c6d9983aaabef2eea5/raw/cargo-config.bundle.json"
+path    = "https://www.schemastore.org/cargo-config.json"
 include = ["**/.cargo/config.toml", "**/.config/nightly.toml"]
 
 # Python

@@ -1528,11 +1528,11 @@ impl Parser {
             }
             // Reparse T_IndexedElement indices inside a T_Assignment's array value,
             // using the assignment's array name (fixIndexElement).
-            if let InnerToken::T_Assignment { value, .. } = t.inner_mut() {
-                if let InnerToken::T_Array(elems) = value.inner_mut() {
-                    for elem in elems.iter_mut() {
-                        self.reparse_indexed_element(elem, is_assoc);
-                    }
+            if let InnerToken::T_Assignment { value, .. } = t.inner_mut()
+                && let InnerToken::T_Array(elems) = value.inner_mut()
+            {
+                for elem in elems.iter_mut() {
+                    self.reparse_indexed_element(elem, is_assoc);
                 }
             }
         }
@@ -1557,12 +1557,11 @@ impl Parser {
                 } else {
                     self.sub_parse_array_index(&pos, &src)
                 };
-                if let Some(nt) = newtok {
-                    if let InnerToken::T_IndexedElement { indices, .. } = elem.inner_mut() {
-                        if let Some(slot) = indices.get_mut(i) {
-                            *slot = nt;
-                        }
-                    }
+                if let Some(nt) = newtok
+                    && let InnerToken::T_IndexedElement { indices, .. } = elem.inner_mut()
+                    && let Some(slot) = indices.get_mut(i)
+                {
+                    *slot = nt;
                 }
             }
         }
@@ -1760,12 +1759,11 @@ impl Parser {
 
     /// The single-literal command name of a T_NormalWord, if any.
     pub(super) fn command_literal_name(t: &Token) -> Option<String> {
-        if let InnerToken::T_NormalWord(parts) = &*t.inner {
-            if parts.len() == 1 {
-                if let InnerToken::T_Literal(s) = &*parts[0].inner {
-                    return Some(s.clone());
-                }
-            }
+        if let InnerToken::T_NormalWord(parts) = &*t.inner
+            && parts.len() == 1
+            && let InnerToken::T_Literal(s) = &*parts[0].inner
+        {
+            return Some(s.clone());
         }
         None
     }
@@ -2145,17 +2143,17 @@ impl Parser {
             let fdmark = self.mark();
             self.bump(); // {
             let mut name = String::new();
-            if let Some(c) = self.peek() {
-                if c == '_' || c.is_ascii_alphabetic() {
-                    name.push(c);
-                    self.bump();
-                    while let Some(c) = self.peek() {
-                        if c == '_' || c.is_ascii_alphanumeric() {
-                            name.push(c);
-                            self.bump();
-                        } else {
-                            break;
-                        }
+            if let Some(c) = self.peek()
+                && (c == '_' || c.is_ascii_alphabetic())
+            {
+                name.push(c);
+                self.bump();
+                while let Some(c) = self.peek() {
+                    if c == '_' || c.is_ascii_alphanumeric() {
+                        name.push(c);
+                        self.bump();
+                    } else {
+                        break;
                     }
                 }
             }
@@ -2841,37 +2839,35 @@ impl Parser {
                 _ => None,
             });
         }
-        if self.shell_hint.is_none() {
-            if let InnerToken::T_Literal(sb) = &*shebang.inner {
-                self.shell_hint =
-                    crate::data::shell_for_executable(&ast_lib::executable_from_shebang(sb));
-            }
+        if self.shell_hint.is_none()
+            && let InnerToken::T_Literal(sb) = &*shebang.inner
+        {
+            self.shell_hint =
+                crate::data::shell_for_executable(&ast_lib::executable_from_shebang(sb));
         }
         let mut unsupported_shell = false;
-        if !ignore_shebang {
-            if let InnerToken::T_Literal(sb) = &*shebang.inner {
-                let exe = ast_lib::executable_from_shebang(sb);
-                match Self::is_valid_shell(&exe) {
-                    Some(true) => {}
-                    Some(false) => {
-                        self.problem_at(
-                            start.clone(),
-                            start.clone(),
-                            Severity::ErrorC,
-                            1071,
-                            "ShellCheck only supports sh/bash/dash/ksh/'busybox sh' scripts. Sorry!",
-                        );
-                        unsupported_shell = true;
-                    }
-                    None => {
-                        self.problem_at(
+        if !ignore_shebang && let InnerToken::T_Literal(sb) = &*shebang.inner {
+            let exe = ast_lib::executable_from_shebang(sb);
+            match Self::is_valid_shell(&exe) {
+                Some(true) => {}
+                Some(false) => {
+                    self.problem_at(
+                        start.clone(),
+                        start.clone(),
+                        Severity::ErrorC,
+                        1071,
+                        "ShellCheck only supports sh/bash/dash/ksh/'busybox sh' scripts. Sorry!",
+                    );
+                    unsupported_shell = true;
+                }
+                None => {
+                    self.problem_at(
                             start.clone(),
                             start.clone(),
                             Severity::ErrorC,
                             1008,
                             "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify.",
                         );
-                    }
                 }
             }
         }

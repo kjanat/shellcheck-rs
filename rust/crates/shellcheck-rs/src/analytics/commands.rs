@@ -198,15 +198,15 @@ pub(super) fn check_find_exec(_params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 pub(super) fn check_lonely_dot_dash(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Redirecting { .. } = &*t.inner {
-        if is_unqualified_command(t, "./") {
-            err(
-                out,
-                t.id(),
-                2083,
-                "Don't add spaces after the slash in './file'.",
-            );
-        }
+    if let InnerToken::T_Redirecting { .. } = &*t.inner
+        && is_unqualified_command(t, "./")
+    {
+        err(
+            out,
+            t.id(),
+            2083,
+            "Don't add spaces after the slash in './file'.",
+        );
     }
 }
 
@@ -241,24 +241,22 @@ pub(super) fn check_globs_as_options(params: &Parameters, t: &Token, out: &mut O
         }
         for w in words.iter().skip(1) {
             // stop at end-of-args markers
-            if let Some(lit) = ast_lib::get_literal_string(w) {
-                if lit == "--" || lit == ":::" || lit == "::::" {
-                    break;
-                }
+            if let Some(lit) = ast_lib::get_literal_string(w)
+                && (lit == "--" || lit == ":::" || lit == "::::")
+            {
+                break;
             }
-            if let InnerToken::T_NormalWord(parts) = &*w.inner {
-                if let Some(first) = parts.first() {
-                    if let InnerToken::T_Glob(s) = &*first.inner {
-                        if s == "*" || s == "?" {
-                            info(
-                                out,
-                                first.id(),
-                                2035,
-                                "Use ./*glob* or -- *glob* so names with dashes won't become options.",
-                            );
-                        }
-                    }
-                }
+            if let InnerToken::T_NormalWord(parts) = &*w.inner
+                && let Some(first) = parts.first()
+                && let InnerToken::T_Glob(s) = &*first.inner
+                && (s == "*" || s == "?")
+            {
+                info(
+                    out,
+                    first.id(),
+                    2035,
+                    "Use ./*glob* or -- *glob* so names with dashes won't become options.",
+                );
             }
         }
     }
@@ -317,34 +315,32 @@ pub(super) fn check_cp_legacy_r(params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 pub(super) fn check_glob_as_command(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-        if let Some(first) = words.first() {
-            if is_glob(first) && !is_condition_fallback_glob(first) {
-                warn(
-                    out,
-                    first.id(),
-                    2211,
-                    "This is a glob used as a command name. Was it supposed to be in ${..}, array, or is it missing quoting?",
-                );
-            }
-        }
+    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
+        && let Some(first) = words.first()
+        && is_glob(first)
+        && !is_condition_fallback_glob(first)
+    {
+        warn(
+            out,
+            first.id(),
+            2211,
+            "This is a glob used as a command name. Was it supposed to be in ${..}, array, or is it missing quoting?",
+        );
     }
 }
 
 pub(super) fn check_flag_as_command(_params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_SimpleCommand { assignments, words } = &*t.inner {
-        if assignments.is_empty() {
-            if let Some(first) = words.first() {
-                if is_unquoted_flag(first) {
-                    warn(
-                        out,
-                        first.id(),
-                        2215,
-                        "This flag is used as a command name. Bad line break or missing [ .. ]?",
-                    );
-                }
-            }
-        }
+    if let InnerToken::T_SimpleCommand { assignments, words } = &*t.inner
+        && assignments.is_empty()
+        && let Some(first) = words.first()
+        && is_unquoted_flag(first)
+    {
+        warn(
+            out,
+            first.id(),
+            2215,
+            "This flag is used as a command name. Bad line break or missing [ .. ]?",
+        );
     }
 }
 
@@ -374,10 +370,10 @@ pub(super) fn check_equals_in_command(params: &Parameters, original: &Token, out
     let mut leading: Vec<&Token> = list[..eq_idx].iter().collect();
     let eq = &list[eq_idx];
     // stripSinglePlus: drop a trailing literal "+" from leading.
-    if let Some(last) = leading.last() {
-        if matches!(&*last.inner, InnerToken::T_Literal(s) if s == "+") {
-            leading.pop();
-        }
+    if let Some(last) = leading.last()
+        && matches!(&*last.inner, InnerToken::T_Literal(s) if s == "+")
+    {
+        leading.pop();
     }
 
     let (lit_id, s) = match &*eq.inner {
@@ -500,52 +496,51 @@ pub(super) fn check_equals_in_command(params: &Parameters, original: &Token, out
         return;
     }
     // [T_DollarBraced id braced l] | "=" prefix s
-    if leading.len() == 1 {
-        if let InnerToken::T_DollarBraced { braced, op } = &*leading[0].inner {
-            if s.starts_with('=') {
-                let db_id = leading[0].id();
-                let variable_str = crate::ast_lib::oversimplify(op).concat();
-                let variable_reference = crate::cfg::get_braced_reference(&variable_str);
-                let variable_modifier = crate::cfg::get_braced_modifier(&variable_str);
-                let is_plain = crate::cfg::is_variable_name(&variable_str);
-                let is_positional =
-                    !variable_str.is_empty() && variable_str.chars().all(|c| c.is_ascii_digit());
-                let is_array = !variable_reference.is_empty()
-                    && variable_modifier.starts_with('[')
-                    && variable_modifier.ends_with(']');
+    if leading.len() == 1
+        && let InnerToken::T_DollarBraced { braced, op } = &*leading[0].inner
+        && s.starts_with('=')
+    {
+        let db_id = leading[0].id();
+        let variable_str = crate::ast_lib::oversimplify(op).concat();
+        let variable_reference = crate::cfg::get_braced_reference(&variable_str);
+        let variable_modifier = crate::cfg::get_braced_modifier(&variable_str);
+        let is_plain = crate::cfg::is_variable_name(&variable_str);
+        let is_positional =
+            !variable_str.is_empty() && variable_str.chars().all(|c| c.is_ascii_digit());
+        let is_array = !variable_reference.is_empty()
+            && variable_modifier.starts_with('[')
+            && variable_modifier.ends_with(']');
 
-                // Mirrors Analytics.hs checkEqualsInCommand `case () of`: the
-                // empty-name (`${}=`) and `#`-prefixed (`$#=`/`${#var}=`) arms
-                // are distinct cases in the oracle that happen to share the
-                // generic message; kept separate to preserve that mapping.
-                #[allow(clippy::if_same_then_else)]
-                if variable_str.is_empty() {
-                    generic_msg(out, cmd_id);
-                } else if variable_str.starts_with('#') {
-                    generic_msg(out, cmd_id);
-                } else if variable_str == "0" {
-                    let fix = fix_with(vec![replace_token(params, db_id, "BASH_ARGV0")]);
-                    assign0_msg(out, db_id, fix);
-                } else if is_positional {
-                    positional_msg(out, db_id);
-                } else if is_array || is_plain {
-                    let sigil = if *braced { "${}" } else { "$" };
-                    let msg = format!("Don't use {} on the left side of assignments.", sigil);
-                    let fix = if *braced {
-                        fix_with(vec![
-                            replace_start(params, db_id, 2, ""),
-                            replace_end(params, db_id, 1, ""),
-                        ])
-                    } else {
-                        fix_with(vec![replace_start(params, db_id, 1, "")])
-                    };
-                    err_with_fix(out, db_id, 2281, &msg, fix);
-                } else {
-                    indirection_msg(out, db_id);
-                }
-                return;
-            }
+        // Mirrors Analytics.hs checkEqualsInCommand `case () of`: the
+        // empty-name (`${}=`) and `#`-prefixed (`$#=`/`${#var}=`) arms
+        // are distinct cases in the oracle that happen to share the
+        // generic message; kept separate to preserve that mapping.
+        #[allow(clippy::if_same_then_else)]
+        if variable_str.is_empty() {
+            generic_msg(out, cmd_id);
+        } else if variable_str.starts_with('#') {
+            generic_msg(out, cmd_id);
+        } else if variable_str == "0" {
+            let fix = fix_with(vec![replace_token(params, db_id, "BASH_ARGV0")]);
+            assign0_msg(out, db_id, fix);
+        } else if is_positional {
+            positional_msg(out, db_id);
+        } else if is_array || is_plain {
+            let sigil = if *braced { "${}" } else { "$" };
+            let msg = format!("Don't use {} on the left side of assignments.", sigil);
+            let fix = if *braced {
+                fix_with(vec![
+                    replace_start(params, db_id, 2, ""),
+                    replace_end(params, db_id, 1, ""),
+                ])
+            } else {
+                fix_with(vec![replace_start(params, db_id, 1, "")])
+            };
+            err_with_fix(out, db_id, 2281, &msg, fix);
+        } else {
+            indirection_msg(out, db_id);
         }
+        return;
     }
     if leading.is_empty() && matches_positional_assignment(&s) {
         if s.starts_with("0=") {
@@ -700,10 +695,10 @@ fn has_set_e(params: &Parameters) -> bool {
     while let InnerToken::T_Annotation { token, .. } = &*node.inner {
         node = token;
     }
-    if let InnerToken::T_Script { shebang, .. } = &*node.inner {
-        if let InnerToken::T_Literal(s) = &*shebang.inner {
-            return shebang_flag_matches(s, b'e');
-        }
+    if let InnerToken::T_Script { shebang, .. } = &*node.inner
+        && let InnerToken::T_Literal(s) = &*shebang.inner
+    {
+        return shebang_flag_matches(s, b'e');
     }
     false
 }
@@ -822,26 +817,24 @@ fn is_condition_path(params: &Parameters, t: &Token) -> bool {
 fn is_last_command_in_function(params: &Parameters, t: &Token) -> bool {
     let mut cur = t;
     while let Some(c) = params.parent(cur) {
-        if let Some(bg) = params.parent(c) {
-            if let InnerToken::T_BraceGroup(commands) = &*bg.inner {
-                // In Haskell a function body is a bare T_BraceGroup; this port
-                // wraps every compound command in a T_Redirecting, so the brace
-                // group's parent may be that wrapper before the T_Function.
-                let mut p = params.parent(bg);
-                if let Some(rp) = p {
-                    if matches!(&*rp.inner, InnerToken::T_Redirecting { .. }) {
-                        p = params.parent(rp);
-                    }
-                }
-                if let Some(func) = p {
-                    if matches!(&*func.inner, InnerToken::T_Function { .. }) {
-                        if let Some(last) = commands.last() {
-                            if last.id() == c.id() {
-                                return true;
-                            }
-                        }
-                    }
-                }
+        if let Some(bg) = params.parent(c)
+            && let InnerToken::T_BraceGroup(commands) = &*bg.inner
+        {
+            // In Haskell a function body is a bare T_BraceGroup; this port
+            // wraps every compound command in a T_Redirecting, so the brace
+            // group's parent may be that wrapper before the T_Function.
+            let mut p = params.parent(bg);
+            if let Some(rp) = p
+                && matches!(&*rp.inner, InnerToken::T_Redirecting { .. })
+            {
+                p = params.parent(rp);
+            }
+            if let Some(func) = p
+                && matches!(&*func.inner, InnerToken::T_Function { .. })
+                && let Some(last) = commands.last()
+                && last.id() == c.id()
+            {
+                return true;
             }
         }
         cur = c;
@@ -891,14 +884,14 @@ fn has_execfail(params: &Parameters) -> bool {
 }
 
 fn spurious_cleanup(t: &Token) -> bool {
-    if let InnerToken::T_Pipeline { commands, .. } = &*t.inner {
-        if commands.len() == 1 {
-            let cmd = &commands[0];
-            let is_match = get_command_name(cmd).is_some_and(|name| {
-                matches!(name.as_str(), ":" | "echo" | "exit" | "printf" | "return")
-            });
-            return is_match || spurious_is_assignment(cmd);
-        }
+    if let InnerToken::T_Pipeline { commands, .. } = &*t.inner
+        && commands.len() == 1
+    {
+        let cmd = &commands[0];
+        let is_match = get_command_name(cmd).is_some_and(|name| {
+            matches!(name.as_str(), ":" | "echo" | "exit" | "printf" | "return")
+        });
+        return is_match || spurious_is_assignment(cmd);
     }
     false
 }
@@ -950,17 +943,16 @@ fn comment_if_exec(t: &Token, out: &mut Out) {
             comment_if_exec(&commands[0], out);
         }
         InnerToken::T_Redirecting { cmd, .. } => {
-            if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-                if words.len() >= 2
-                    && ast_lib::get_literal_string(&words[0]).as_deref() == Some("exec")
-                {
-                    warn(
-                        out,
-                        cmd.id(),
-                        2093,
-                        "Remove \"exec \" if script should continue after this command.",
-                    );
-                }
+            if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner
+                && words.len() >= 2
+                && ast_lib::get_literal_string(&words[0]).as_deref() == Some("exec")
+            {
+                warn(
+                    out,
+                    cmd.id(),
+                    2093,
+                    "Remove \"exec \" if script should continue after this command.",
+                );
             }
         }
         _ => {}

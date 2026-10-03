@@ -122,10 +122,10 @@ mod redirect_heredoc_tests {
         let root = out.root.expect("parse produced a tree");
         let mut found = Vec::new();
         root.visit_preorder(&mut |t| {
-            if pred(&t.inner) {
-                if let Some((s, e)) = out.positions.get(&t.id) {
-                    found.push((s.line, s.column, e.line, e.column));
-                }
+            if pred(&t.inner)
+                && let Some((s, e)) = out.positions.get(&t.id)
+            {
+                found.push((s.line, s.column, e.line, e.column));
             }
         });
         found
@@ -265,10 +265,10 @@ mod parser_gap_tests {
         let root = out.root.expect("parse produced a tree");
         let mut found = Vec::new();
         root.visit_preorder(&mut |t| {
-            if pred(&t.inner) {
-                if let Some((s, e)) = out.positions.get(&t.id) {
-                    found.push((s.line, s.column, e.line, e.column));
-                }
+            if pred(&t.inner)
+                && let Some((s, e)) = out.positions.get(&t.id)
+            {
+                found.push((s.line, s.column, e.line, e.column));
             }
         });
         found
@@ -404,10 +404,10 @@ mod parser_gap_tests {
         // A T_Pipeline with two commands (foo | bar) must exist somewhere.
         let mut multi_stage = 0;
         root.visit_preorder(&mut |t| {
-            if let InnerToken::T_Pipeline { commands, .. } = &*t.inner {
-                if commands.len() == 2 {
-                    multi_stage += 1;
-                }
+            if let InnerToken::T_Pipeline { commands, .. } = &*t.inner
+                && commands.len() == 2
+            {
+                multi_stage += 1;
             }
         });
         assert_eq!(
@@ -566,14 +566,12 @@ mod coproc_glob_dollar_tests {
         let mut glob_with_dollar = 0;
         root.visit_preorder(&mut |t| match &*t.inner {
             InnerToken::T_DollarBraced { op, .. } => {
-                if let InnerToken::T_NormalWord(parts) = &*op.inner {
-                    if let [p] = &parts[..] {
-                        if let InnerToken::T_Literal(s) = &*p.inner {
-                            if s == "i" {
-                                dollar_i += 1;
-                            }
-                        }
-                    }
+                if let InnerToken::T_NormalWord(parts) = &*op.inner
+                    && let [p] = &parts[..]
+                    && let InnerToken::T_Literal(s) = &*p.inner
+                    && s == "i"
+                {
+                    dollar_i += 1;
                 }
             }
             InnerToken::T_Glob(g) if g.contains('$') => glob_with_dollar += 1,
@@ -638,20 +636,17 @@ mod coproc_glob_dollar_tests {
         let mut outer: Option<(i64, i64)> = None;
         let mut inner_word: Option<(i64, i64)> = None;
         root.visit_preorder(&mut |t| {
-            if let InnerToken::T_DollarBraced { braced: false, op } = &*t.inner {
-                if let InnerToken::T_NormalWord(parts) = &*op.inner {
-                    if let [p] = &parts[..] {
-                        if let InnerToken::T_Literal(s) = &*p.inner {
-                            if s == "foo" {
-                                if let Some((s0, _)) = out.positions.get(&t.id) {
-                                    outer = Some((s0.line, s0.column));
-                                }
-                                if let Some((s1, _)) = out.positions.get(&op.id) {
-                                    inner_word = Some((s1.line, s1.column));
-                                }
-                            }
-                        }
-                    }
+            if let InnerToken::T_DollarBraced { braced: false, op } = &*t.inner
+                && let InnerToken::T_NormalWord(parts) = &*op.inner
+                && let [p] = &parts[..]
+                && let InnerToken::T_Literal(s) = &*p.inner
+                && s == "foo"
+            {
+                if let Some((s0, _)) = out.positions.get(&t.id) {
+                    outer = Some((s0.line, s0.column));
+                }
+                if let Some((s1, _)) = out.positions.get(&op.id) {
+                    inner_word = Some((s1.line, s1.column));
                 }
             }
         });

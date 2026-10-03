@@ -622,10 +622,11 @@ impl Parser {
             // from the failure's snapshot too, but only when it is still on
             // top: a frame left behind by a consuming failure below stays.
             let popped = self.contexts.len() + 1;
-            if let Some(f) = &mut self.failure {
-                if f.contexts.len() == popped && f.contexts[popped - 1].serial == serial {
-                    f.contexts.truncate(popped - 1);
-                }
+            if let Some(f) = &mut self.failure
+                && f.contexts.len() == popped
+                && f.contexts[popped - 1].serial == serial
+            {
+                f.contexts.truncate(popped - 1);
             }
             // `parsecBracket`'s `<|> (after val *> fail "")` is only reached
             // when the failure consumed nothing: `<|>` cannot take over from
@@ -1721,10 +1722,10 @@ fn get_associative_arrays(root: &Token) -> std::collections::HashSet<String> {
                 if let Some(s) = crate::ast_lib::get_literal_string(a) {
                     if let Some(rest) = s.strip_prefix("--") {
                         let _ = rest;
-                    } else if let Some(chars) = s.strip_prefix('-') {
-                        if chars.contains('A') {
-                            has_a = true;
-                        }
+                    } else if let Some(chars) = s.strip_prefix('-')
+                        && chars.contains('A')
+                    {
+                        has_a = true;
                     }
                 }
             }
@@ -1734,10 +1735,10 @@ fn get_associative_arrays(root: &Token) -> std::collections::HashSet<String> {
             for a in args {
                 // non-flag args only
                 let lit = crate::ast_lib::get_literal_string(a);
-                if let Some(ref s) = lit {
-                    if s.starts_with('-') {
-                        continue;
-                    }
+                if let Some(ref s) = lit
+                    && s.starts_with('-')
+                {
+                    continue;
                 }
                 match &*a.inner {
                     InnerToken::T_Assignment { var, .. } => {
@@ -1810,19 +1811,18 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
         delim,
         ..
     } = &inner
+        && let Some(body) = bodies.get(&id)
     {
-        if let Some(body) = bodies.get(&id) {
-            return T_HereDoc {
-                dashed: *dashed,
-                quoted: *quoted,
-                delim: delim.clone(),
-                body: body
-                    .iter()
-                    .cloned()
-                    .map(|b| reattach_heredocs(b, bodies))
-                    .collect(),
-            };
-        }
+        return T_HereDoc {
+            dashed: *dashed,
+            quoted: *quoted,
+            delim: delim.clone(),
+            body: body
+                .iter()
+                .cloned()
+                .map(|b| reattach_heredocs(b, bodies))
+                .collect(),
+        };
     }
     // Generic recursive rebuild.
     macro_rules! r {

@@ -35,3 +35,5 @@ target/
 # cargo-mutants working directories (the report is read, not kept).
 /mutants.out/
 /mutants.out.old/
+/compiler/
+/probe-*.py

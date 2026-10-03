@@ -1988,10 +1988,10 @@ mod tests {
         let mut all = Vec::new();
         collect(root, &mut all);
         for t in all {
-            if let InnerToken::T_Assignment { var: v, .. } = &*t.inner {
-                if v == var {
-                    return t.id;
-                }
+            if let InnerToken::T_Assignment { var: v, .. } = &*t.inner
+                && v == var
+            {
+                return t.id;
             }
         }
         panic!("no assignment to {}", var);
@@ -2003,12 +2003,11 @@ mod tests {
         collect(root, &mut all);
         let mut out = Vec::new();
         for t in all {
-            if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
-                if let Some(w) = words.first() {
-                    if crate::ast_lib::get_literal_string(w).as_deref() == Some(name) {
-                        out.push(t.id);
-                    }
-                }
+            if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
+                && let Some(w) = words.first()
+                && crate::ast_lib::get_literal_string(w).as_deref() == Some(name)
+            {
+                out.push(t.id);
             }
         }
         out

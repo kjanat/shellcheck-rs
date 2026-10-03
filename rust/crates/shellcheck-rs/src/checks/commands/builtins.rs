@@ -137,11 +137,12 @@ pub(super) fn check_printf_var() -> CommandCheck {
                 rest = &rest[2..];
                 continue;
             }
-            if let Some(st) = &s {
-                if st.len() >= 3 && st.starts_with("-v") {
-                    rest = &rest[1..];
-                    continue;
-                }
+            if let Some(st) = &s
+                && st.len() >= 3
+                && st.starts_with("-v")
+            {
+                rest = &rest[1..];
+                continue;
             }
             printf_check(first, &rest[1..], out);
             return;
@@ -203,15 +204,15 @@ pub(super) fn check_aliases_uses_args() -> CommandCheck {
 pub(super) fn check_aliases_expand_early() -> CommandCheck {
     CommandCheck::new(Exactly("alias"), |_params, te, out| {
         for arg in arguments(te) {
-            if oversimplify_concat(arg).contains('=') {
-                if let Some(x) = get_word_parts(arg).into_iter().find(|p| !is_literal(p)) {
-                    warn(
-                        out,
-                        x.id(),
-                        2139,
-                        "This expands when defined, not when used. Consider escaping.",
-                    );
-                }
+            if oversimplify_concat(arg).contains('=')
+                && let Some(x) = get_word_parts(arg).into_iter().find(|p| !is_literal(p))
+            {
+                warn(
+                    out,
+                    x.id(),
+                    2139,
+                    "This expands when defined, not when used. Consider escaping.",
+                );
             }
         }
     })
@@ -355,18 +356,18 @@ pub(super) fn check_read_expansions() -> CommandCheck {
             for (x, (_, y)) in &opts {
                 if x.is_empty() || x == "a" {
                     // dollarWarning
-                    if let Some(name) = get_single_unmodified_braced_string(y) {
-                        if is_variable_name(&name) {
-                            warn(
-                                out,
-                                y.id(),
-                                2229,
-                                &format!(
-                                    "This does not read '{}'. Remove $/${{}} for that, or use ${{var?}} to quiet.",
-                                    name
-                                ),
-                            );
-                        }
+                    if let Some(name) = get_single_unmodified_braced_string(y)
+                        && is_variable_name(&name)
+                    {
+                        warn(
+                            out,
+                            y.id(),
+                            2229,
+                            &format!(
+                                "This does not read '{}'. Remove $/${{}} for that, or use ${{var?}} to quiet.",
+                                name
+                            ),
+                        );
                     }
                 }
             }
@@ -452,12 +453,11 @@ pub(super) fn check_arg_comparison(cmd: &'static str) -> CommandCheck {
             }
             // 'let' is parsed as a sequence of arithmetic expansions, so we
             // want the additional warning for "x=".
-            if cmd == "let" {
-                if let Some(token) = ast_lib::get_trailing_unquoted_literal(arg) {
-                    if ast_lib::get_literal_string(token).is_some_and(|s| s.ends_with('=')) {
-                        err(out, token.id(), 2290, "Remove spaces around = to assign.");
-                    }
-                }
+            if cmd == "let"
+                && let Some(token) = ast_lib::get_trailing_unquoted_literal(arg)
+                && ast_lib::get_literal_string(token).is_some_and(|s| s.ends_with('='))
+            {
+                err(out, token.id(), 2290, "Remove spaces around = to assign.");
             }
         }
     })
@@ -487,15 +487,15 @@ pub(super) fn check_masked_returns(cmd: &'static str) -> CommandCheck {
         }
 
         for a in arguments(te) {
-            if let InnerToken::T_Assignment { value, .. } = &*a.inner {
-                if get_word_parts(value).iter().any(|x| masked_has_return(x)) {
-                    warn(
-                        out,
-                        a.id(),
-                        2155,
-                        "Declare and assign separately to avoid masking return values.",
-                    );
-                }
+            if let InnerToken::T_Assignment { value, .. } = &*a.inner
+                && get_word_parts(value).iter().any(|x| masked_has_return(x))
+            {
+                warn(
+                    out,
+                    a.id(),
+                    2155,
+                    "Declare and assign separately to avoid masking return values.",
+                );
             }
         }
     })
@@ -639,13 +639,13 @@ fn set_literal(t: &Token) -> String {
 /// `getSingleUnmodifiedBracedString`.
 fn get_single_unmodified_braced_string(word: &Token) -> Option<String> {
     let parts = get_word_parts(word);
-    if parts.len() == 1 {
-        if let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner {
-            let contents = oversimplify_concat(op);
-            let name = get_braced_reference(&contents);
-            if contents == name {
-                return Some(contents);
-            }
+    if parts.len() == 1
+        && let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner
+    {
+        let contents = oversimplify_concat(op);
+        let name = get_braced_reference(&contents);
+        if contents == name {
+            return Some(contents);
         }
     }
     None
@@ -714,7 +714,7 @@ fn printf_check(format: &Token, more: &[Token], out: &mut Out) {
             // We don't know so trust the user
         } else if arg_count < format_count && printf_only_trailing_ts(&formats, arg_count) {
             // Allow trailing %()Ts since they use the current time
-        } else if arg_count > 0 && arg_count % format_count == 0 {
+        } else if arg_count > 0 && arg_count.is_multiple_of(format_count) {
             // Great: a suitable number of arguments
         } else {
             warn(
@@ -892,12 +892,11 @@ fn getopts_check(opts: &[String], case_id: Id, cases: &[CaseClause], out: &mut O
     // notRequested = handled - requested
     let mut redundant: Vec<(String, Token)> = vec![];
     for (key, expr) in &handled {
-        if !requested.contains(key) {
-            if let Some(str) = key {
-                if !["*", ":", "?"].contains(&str.as_str()) {
-                    redundant.push((str.clone(), expr.clone()));
-                }
-            }
+        if !requested.contains(key)
+            && let Some(str) = key
+            && !["*", ":", "?"].contains(&str.as_str())
+        {
+            redundant.push((str.clone(), expr.clone()));
         }
     }
     redundant.sort_by(|a, b| a.0.cmp(&b.0));

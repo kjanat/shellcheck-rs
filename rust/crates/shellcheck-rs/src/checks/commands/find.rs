@@ -19,18 +19,19 @@ pub(super) fn check_find_name_glob() -> CommandCheck {
         for pair in args.windows(2) {
             let a = &pair[0];
             let b = &pair[1];
-            if let Some(s) = get_literal_string(a) {
-                if find_accepts_glob(&s) && is_glob(b) {
-                    warn(
-                        out,
-                        b.id(),
-                        2061,
-                        &format!(
-                            "Quote the parameter to {} so the shell won't interpret it.",
-                            s
-                        ),
-                    );
-                }
+            if let Some(s) = get_literal_string(a)
+                && find_accepts_glob(&s)
+                && is_glob(b)
+            {
+                warn(
+                    out,
+                    b.id(),
+                    2061,
+                    &format!(
+                        "Quote the parameter to {} so the shell won't interpret it.",
+                        s
+                    ),
+                );
             }
         }
     })
