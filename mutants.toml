@@ -1,0 +1,38 @@
+# cargo-mutants: does the test suite actually notice when behaviour changes?
+#
+# Coverage says which lines ran; it says nothing about whether a test would have
+# failed had those lines been wrong. Mutation testing answers that directly: it
+# alters the code (a `return` value, a comparison, an arm) and reports which
+# alterations no test caught. Every surviving mutant is a place where the
+# upcoming refactor to idiomatic Rust can silently break the port -- which is
+# the list worth working from, rather than a coverage percentage.
+#
+# Run it scoped, not whole-tree: 7499 mutants at ~10s each is days, not hours.
+# `mise run mutants -- --file rust/crates/shellcheck-rs/src/ast_lib.rs`, or
+# `-- --shard k/n` to sweep the lot across runs. Paths in filters are relative
+# to the repository root, which is what the tool prints.
+
+# The harness is not the thing under test. Mutating the comparison logic in
+# `conformance` proves nothing about the port, and mutating the test support
+# only breaks the tests themselves.
+exclude_globs = [
+  "rust/crates/conformance/**",
+  "**/test_support.rs",
+  "**/tests.rs",
+]
+
+# Generated diagnostics are data, not logic: mutating a message string tells us
+# only that the message is asserted somewhere, which the gate already enforces
+# against the oracle character for character.
+exclude_re = [
+  "impl Default",
+  "fn fmt",
+]
+
+# The ported prop_ suite is the fast signal; the snapshot and the oracle gate
+# are separate (and slower) instruments, run per commit rather than per mutant.
+additional_cargo_test_args = ["-p", "shellcheck-rs", "--lib"]
+
+# A mutant that makes the parser loop forever must not hang the run. The suite
+# takes ~8s, so this is generous.
+timeout_multiplier = 6.0

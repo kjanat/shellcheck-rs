@@ -270,6 +270,13 @@ optionalTreeChecks = [
     }, checkRequireDoubleBracket)
 
     ,(newCheckDescription {
+        cdName = "require-double-equals",
+        cdDescription = "Require == and warn about = in Bash tests",
+        cdPositive = "[[ \"$x\" = \"$y\" ]]",
+        cdNegative = "[[ \"$x\" == \"$y\" ]]"
+    }, checkRequireDoubleEquals)
+
+    ,(newCheckDescription {
         cdName = "check-set-e-suppressed",
         cdDescription = "Notify when set -e is suppressed during function invocation",
         cdPositive = "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func && echo ok",
@@ -990,10 +997,11 @@ prop_checkArrayWithoutIndex8 = verifyTree checkArrayWithoutIndex "declare -a foo
 prop_checkArrayWithoutIndex9 = verifyTree checkArrayWithoutIndex "read -r -a arr <<< 'foo bar'; echo \"$arr\""
 prop_checkArrayWithoutIndex10 = verifyTree checkArrayWithoutIndex "read -ra arr <<< 'foo bar'; echo \"$arr\""
 prop_checkArrayWithoutIndex11 = verifyNotTree checkArrayWithoutIndex "read -rpfoobar r; r=42"
+prop_checkArrayWithoutIndex12 = verifyNotTree checkArrayWithoutIndex "#!/bin/sh\nPIPESTATUS=foo"
 checkArrayWithoutIndex params _ =
     doVariableFlowAnalysis readF writeF defaultSet (variableFlow params)
   where
-    defaultSet = S.fromList arrayVariables
+    defaultSet = S.fromList $ if shellType params == Bash then arrayVariables else []
     readF _ (T_DollarBraced id _ token) _ = do
         s <- get
         return . maybeToList $ do
@@ -4729,6 +4737,22 @@ checkRequireDoubleBracket params =
         TC_Unary {} -> True
         TC_Nullary {} -> True
         _ -> False
+
+
+prop_checkRequireDoubleEquals1 = verifyTree checkRequireDoubleEquals "[[ \"$x\" = \"$y\" ]]"
+prop_checkRequireDoubleEquals2 = verifyTree checkRequireDoubleEquals "[ \"$x\" = \"$y\" ]"
+prop_checkRequireDoubleEquals3 = verifyNotTree checkRequireDoubleEquals "[[ \"$x\" == \"$y\" ]]"
+prop_checkRequireDoubleEquals4 = verifyNotTree checkRequireDoubleEquals "#!/bin/sh\n[ \"$x\" = \"$y\" ]"
+prop_checkRequireDoubleEquals5 = verifyNotTree checkRequireDoubleEquals "#!/bin/ksh\n[[ \"$x\" = \"$y\" ]]"
+checkRequireDoubleEquals params =
+    if shellType params == Bash
+    then nodeChecksToTreeCheck [check] params
+    else const []
+  where
+    check _ t = case t of
+        TC_Binary id _ "=" _ _ ->
+            style id 2338 "Prefer == over = for string comparisons in Bash tests."
+        _ -> return ()
 
 
 prop_checkUnquotedParameterExpansionPattern1 = verify checkUnquotedParameterExpansionPattern  "echo \"${var#$x}\""

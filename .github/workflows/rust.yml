@@ -1,0 +1,127 @@
+name: Rust port conformance
+
+on:
+  push:
+    branches: [master]
+    paths: &PATHS
+      - "mise.toml"
+      - ".github/workflows/rust.yml"
+      - "**/Cargo.*"
+      - ".cargo/**"
+      - "mutants.toml"
+      - "rust/**"
+      - "ShellCheck.cabal"
+      - "shellcheck.hs"
+      - "src/**"
+  pull_request: { paths: *PATHS }
+
+concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
+
+env: { ghc-version: "${{ vars.GHC_VERSION || '9.6.6' }}" }
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps: [uses: actions/checkout@v7, uses: kjanat/actionlint@v1]
+
+  lint:
+    name: "Format, clippy, workflows"
+    runs-on: ubuntu-latest
+    # dprint formats .rs and .toml through `mise exec -- rustfmt|tombi`, so the
+    # toolchain comes from mise.toml. The oracle's GHC and the harness's Python
+    # are the gate job's business and would take minutes to install here.
+    env: { MISE_DISABLE_TOOLS: "ghc,ghcup,cabal,python" }
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install the toolchain (mise)
+        uses: jdx/mise-action@v5
+
+      - name: Check formatting
+        uses: kjanat/dprint-check@v3
+
+      - name: Clippy
+        run: cargo lint
+
+  conformance-gate:
+    name: Build and run gates
+    runs-on: ubuntu-latest
+    steps:
+      - parallel:
+          - name: Checkout repository
+            uses: actions/checkout@v7
+          - name: Remove shellcheck from runner
+            run: sudo apt-get remove -y shellcheck 2>/dev/null || true
+
+      - name: Install Rust stable
+        id: rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        env: { CACHE_PREFIX: "${{ format('{0}-{1}-cargo-{2}', runner.os, runner.arch, steps.rust.outputs.cachekey) }}" }
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ format('{0}-{1}-{2}', env.CACHE_PREFIX, hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**'), hashFiles('rust/crates/**')) }}
+          restore-keys: |
+            ${{ format('{0}-{1}-', env.CACHE_PREFIX, hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**')) }}
+            ${{ format('{0}-',     env.CACHE_PREFIX) }}
+
+      - name: Cache Haskell oracle
+        id: oracle
+        uses: actions/cache@v6
+        with:
+          path: .cache
+          key: ${{ format('{0}-{1}-oracle-ghc{2}-{3}', runner.os, runner.arch, env.ghc-version, hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs')) }}
+
+      - name: Setup Haskell
+        if: &NoCacheHit steps.oracle.outputs.cache-hit != 'true'
+        id: haskell
+        uses: haskell-actions/setup@v2
+        with: { ghc-version: "${{ env.ghc-version }}" }
+
+      - name: Plan Haskell oracle build
+        if: *NoCacheHit
+        run: cabal build shellcheck --dry-run
+
+      - name: Cache Haskell build
+        if: *NoCacheHit
+        uses: actions/cache@v6 # pretty-yaml-ignore
+        env: { CACHE_PREFIX: "${{ format('{0}-{1}-cabal-oracle-{2}-{3}', runner.os, runner.arch, steps.haskell.outputs.ghc-version, steps.haskell.outputs.cabal-version) }}" }
+        with:
+          path: |
+            ${{ steps.haskell.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ format('{0}-{1}-{2}', env.CACHE_PREFIX, hashFiles('dist-newstyle/cache/plan.json'), hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs', '.github/workflows/rust.yml')) }}
+          restore-keys: |
+            ${{ format('{0}-{1}-', env.CACHE_PREFIX, hashFiles('dist-newstyle/cache/plan.json')) }}
+            ${{ format('{0}-',     env.CACHE_PREFIX) }}
+
+      - name: Build Haskell oracle
+        if: *NoCacheHit
+        run: cabal install exe:shellcheck -v
+          --program-suffix="-oracle"
+          --installdir="./.cache"
+          --install-method="copy"
+          --overwrite-policy="always"
+
+      - name: Build Rust port (release)
+        run: cargo build --release
+
+      - name: Test shellcheck-rs
+        run: cargo test -p shellcheck-rs
+
+      - name: Test shellcheck-cli
+        run: cargo test -p shellcheck-cli
+
+      - name: Conformance gate
+        run: cargo conformance-gate
+
+      - name: Differential fuzz
+        env: { "${{ insert }}": "${{ fromJSON(vars.FUZZ) }}" }
+        run: cargo conformance-fuzz
