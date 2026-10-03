@@ -105,6 +105,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Install pandoc
+        uses: kjanat/actionlint/.github/actions/setup-pandoc@v1
+        with: { version: "3.12" }
+
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with: *Source
@@ -156,12 +160,13 @@ jobs:
       - name: Work around GitHub permissions bug
         run: chmod +x ./*.bin/*/shellcheck*
 
-      - name: Package binaries
+      - name: Package binaries and man
         run: |
           TAGS="$(cat source/tags)"
           export TAGS
           mkdir -p deploy
           cp -R ./*.bin/* deploy
+          ./manpage
           cd deploy
           ../.prepare_deploy
           rm -rf ./*/ ./README* ./LICENSE*
