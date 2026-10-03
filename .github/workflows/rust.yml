@@ -17,6 +17,8 @@ on:
 
 concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
 
+env: { ghc-version: "${{ vars.GHC_VERSION || '9.6.6' }}" }
+
 jobs:
   actionlint:
     name: actionlint
@@ -47,8 +49,11 @@ jobs:
     name: Build and run gates
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - parallel:
+          - name: Checkout repository
+            uses: actions/checkout@v7
+          - name: Remove shellcheck from runner
+            run: sudo apt-get remove -y shellcheck || true
 
       - name: Install Rust stable
         id: rust
@@ -56,30 +61,29 @@ jobs:
 
       - name: Cache cargo
         uses: actions/cache@v6
-        env:
-          CACHE_PREFIX: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ steps.rust.outputs.cachekey }}
+        env: { CACHE_PREFIX: "${{ format('{0}-{1}-cargo-{2}', runner.os, runner.arch, steps.rust.outputs.cachekey) }}" }
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-${{ hashFiles('rust/crates/**') }}
+          key: ${{ format('{0}-{1}-{2}', env.CACHE_PREFIX, hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**'), hashFiles('rust/crates/**')) }}
           restore-keys: |
-            ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-
-            ${{ env.CACHE_PREFIX }}-
+            ${{ format('{0}-{1}-', env.CACHE_PREFIX, hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**')) }}
+            ${{ format('{0}-',     env.CACHE_PREFIX) }}
 
       - name: Cache Haskell oracle
         id: oracle
         uses: actions/cache@v6
         with:
-          path: .cache/shellcheck-oracle
-          key: ${{ runner.os }}-${{ runner.arch }}-oracle-ghc9.6.6-${{ hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs') }}
+          path: .cache
+          key: ${{ format('{0}-{1}-oracle-ghc{2}-{3}', runner.os, runner.arch, env.ghc-version, hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs')) }}
 
       - name: Setup Haskell
         if: &NoCacheHit steps.oracle.outputs.cache-hit != 'true'
         id: haskell
         uses: haskell-actions/setup@v2
-        with: { ghc-version: "9.6.6" }
+        with: { ghc-version: "${{ env.ghc-version }}" }
 
       - name: Plan Haskell oracle build
         if: *NoCacheHit
@@ -87,25 +91,24 @@ jobs:
 
       - name: Cache Haskell build
         if: *NoCacheHit
-        uses: actions/cache@v6
-        env:
-          CACHE_PREFIX: ${{ runner.os }}-${{ runner.arch }}-cabal-oracle-${{ steps.haskell.outputs.ghc-version }}-${{ steps.haskell.outputs.cabal-version }}
+        uses: actions/cache@v6 # pretty-yaml-ignore
+        env: { CACHE_PREFIX: "${{ format('{0}-{1}-cabal-oracle-{2}-{3}', runner.os, runner.arch, steps.haskell.outputs.ghc-version, steps.haskell.outputs.cabal-version) }}" }
         with:
           path: |
             ${{ steps.haskell.outputs.cabal-store }}
             dist-newstyle
-          key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('dist-newstyle/cache/plan.json') }}-${{ hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs', '.github/workflows/rust.yml') }}
+          key: ${{ format('{0}-{1}-{2}', env.CACHE_PREFIX, hashFiles('dist-newstyle/cache/plan.json'), hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs', '.github/workflows/rust.yml')) }}
           restore-keys: |
-            ${{ env.CACHE_PREFIX }}-${{ hashFiles('dist-newstyle/cache/plan.json') }}-
-            ${{ env.CACHE_PREFIX }}-
+            ${{ format('{0}-{1}-', env.CACHE_PREFIX, hashFiles('dist-newstyle/cache/plan.json')) }}
+            ${{ format('{0}-',     env.CACHE_PREFIX) }}
 
       - name: Build Haskell oracle
         if: *NoCacheHit
-        run: |
-          cabal build shellcheck
-          mkdir -p .cache
-          ORACLE="$(cabal list-bin shellcheck)"
-          cp "${ORACLE}" .cache/shellcheck-oracle
+        run: cabal install exe:shellcheck -v
+          --program-suffix="-oracle"
+          --installdir="./.cache"
+          --install-method="copy"
+          --overwrite-policy="always"
 
       - name: Build Rust port (release)
         run: cargo build --release
@@ -120,6 +123,5 @@ jobs:
         run: cargo conformance-gate
 
       - name: Differential fuzz
-        env:
-          ${{ insert }}: ${{ fromJSON(vars.FUZZ) }}
+        env: { "${{ insert }}": "${{ fromJSON(vars.FUZZ) }}" }
         run: cargo conformance-fuzz
