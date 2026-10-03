@@ -19,8 +19,8 @@ use im_rc::ordmap::DiffItem;
 
 use crate::ast::{Id, Token};
 use crate::cfg::{
-    CFEdge, CFEffect, CFGParameters, CFGraph, CFNode, CFStringPart, CFValue, CFVariableProp, Node,
-    Scope, build_graph,
+    CFEdge, CFEffect, CFGParameters, CFGraph, CFNode, CFStringPart, CFValue, CFVariableProp,
+    InternalError, Node, Scope, build_graph,
 };
 use crate::data::{INTERNAL_VARIABLES, SPECIAL_INTEGER_VARIABLES, VARIABLES_WITHOUT_SPACES};
 
@@ -828,6 +828,8 @@ struct Ctx {
     labels: IdMap<Node, CFNode>,
     pred_flow: IdMap<Node, Vec<Node>>,
     succ_all: IdMap<Node, Vec<Node>>,
+    /// The first internal error, after which the analysis is discarded.
+    internal_error: Option<InternalError>,
 }
 
 impl Ctx {
@@ -856,7 +858,12 @@ impl Ctx {
             labels,
             pred_flow,
             succ_all,
+            internal_error: None,
         }
+    }
+
+    fn fail(&mut self, what: &'static str) {
+        self.internal_error.get_or_insert(InternalError(what));
     }
 
     const fn next_version(&mut self) -> i64 {
@@ -1345,9 +1352,8 @@ impl Ctx {
     fn do_merge(&mut self, a: &InternalState, b: &InternalState) -> InternalState {
         match (a.s_is_reachable, b.s_is_reachable) {
             (Some(true), Some(false)) | (Some(false), Some(true)) => {
-                panic!(
-                    "ShellCheck internal error: Unexpected merge of reachable and unreachable state"
-                );
+                self.fail("Unexpected merge of reachable and unreachable state");
+                return unreachable_state();
             }
             (Some(false), Some(false)) => return unreachable_state(),
             _ => {}
@@ -1386,8 +1392,12 @@ impl Ctx {
         acc
     }
     fn merge_states_nonempty(&mut self, list: &[InternalState]) -> InternalState {
-        let mut acc = list[0].clone();
-        for x in &list[1..] {
+        let Some((first, rest)) = list.split_first() else {
+            self.fail("Null node states");
+            return unreachable_state();
+        };
+        let mut acc = first.clone();
+        for x in rest {
             acc = self.merge_state(&acc, x);
         }
         acc
@@ -1420,10 +1430,13 @@ impl Ctx {
         self.node = node;
         self.stack.push(entry);
         let x = f(self);
-        let deps = self
-            .stack
-            .pop()
-            .map_or_else(BTreeSet::new, |new_entry| new_entry.dependencies);
+        let deps = self.stack.pop().map_or_else(
+            || {
+                self.fail("Missing stack frame");
+                BTreeSet::new()
+            },
+            |new_entry| new_entry.dependencies,
+        );
         self.input = saved_input;
         self.output = saved_output;
         self.node = saved_node;
@@ -1577,9 +1590,13 @@ impl Ctx {
         exit: Node,
     ) -> (BTreeSet<StateDependency>, InternalState) {
         let (states, deps) = self.with_new_stack_frame(entry, false, |s| s.dataflow(entry));
-        let res = states
-            .get(&exit)
-            .map_or_else(unreachable_state, |x| x.1.clone());
+        let res = states.get(&exit).map_or_else(
+            || {
+                self.fail("Subshell has no exit");
+                unreachable_state()
+            },
+            |(_, res)| res.clone(),
+        );
         self.register_flow_result(entry, &states, &deps);
         (deps, res)
     }
@@ -1699,10 +1716,12 @@ impl Ctx {
         let saved_out = self.output.clone();
         let mut n = ITERATION_COUNT;
         loop {
-            assert!(
-                n != 0,
-                "ShellCheck internal error: DFA did not reach fix point"
-            );
+            if n == 0 {
+                self.fail("DFA did not reach fix point");
+            }
+            if self.internal_error.is_some() {
+                break;
+            }
             if n == FALLBACK_THRESHOLD {
                 self.enable_cache = false;
             }
@@ -1727,9 +1746,13 @@ impl Ctx {
         self.node = entry;
         let (states, deps) = self.with_new_stack_frame(entry, false, |s| s.dataflow(entry));
         self.register_flow_result(entry, &states, &deps);
-        states
-            .get(&exit)
-            .map_or_else(unreachable_state, |x| x.1.clone())
+        states.get(&exit).map_or_else(
+            || {
+                self.fail("Missing exit state");
+                unreachable_state()
+            },
+            |(_, res)| res.clone(),
+        )
     }
 
     fn analyze_stragglers(&mut self, state: &InternalState, stragglers: &[FunctionDefinition]) {
@@ -1859,17 +1882,18 @@ fn node_range(g: &CFGraph) -> (Node, Node) {
 }
 
 /// The abstract-interpretation entry point (Haskell `analyzeControlFlow`).
-#[must_use]
-pub fn analyze_control_flow(params: &CFGParameters, t: &Token) -> CFGAnalysis {
-    let cfg = build_graph(*params, t);
+///
+/// # Errors
+///
+/// When an invariant of the graph or of the analysis does not hold, where
+/// upstream dies.
+pub fn analyze_control_flow(
+    params: &CFGParameters,
+    t: &Token,
+) -> Result<CFGAnalysis, InternalError> {
+    let cfg = build_graph(*params, t)?;
     let Some(&(entry, exit)) = cfg.cf_id_to_range.get(&t.id) else {
-        return CFGAnalysis {
-            graph: cfg.cf_graph,
-            token_to_range: cfg.cf_id_to_range,
-            token_to_nodes: cfg.cf_id_to_nodes,
-            post_dominators: cfg.cf_post_dominators,
-            node_to_data: IdMap::default(),
-        };
+        return Err(InternalError("Missing root"));
     };
 
     let mut ctx = Ctx::new(&cfg.cf_graph);
@@ -1947,6 +1971,10 @@ pub fn analyze_control_flow(params: &CFGParameters, t: &Token) -> CFGAnalysis {
         );
     }
 
+    if let Some(e) = ctx.internal_error {
+        return Err(e);
+    }
+
     // Fill in unreachable states for anything we didn't get to.
     let (mn, mx) = node_range(&cfg.cf_graph);
     let unreachable = internal_to_external(&unreachable_state());
@@ -1956,13 +1984,13 @@ pub fn analyze_control_flow(params: &CFGParameters, t: &Token) -> CFGAnalysis {
             .or_insert_with(|| (unreachable.clone(), unreachable.clone()));
     }
 
-    CFGAnalysis {
+    Ok(CFGAnalysis {
         graph: cfg.cf_graph,
         token_to_range: cfg.cf_id_to_range,
         token_to_nodes: cfg.cf_id_to_nodes,
         post_dominators: cfg.cf_post_dominators,
         node_to_data,
-    }
+    })
 }
 
 // ===========================================================================
@@ -1981,6 +2009,34 @@ mod tests {
     use crate::ast::InnerToken;
     use crate::parser::parse_script;
 
+    #[test]
+    fn an_internal_error_is_recorded_and_the_first_one_kept() {
+        let out = parse_script("t.sh", "echo hi\n");
+        let root = out.root.expect("parse produced a root");
+        let params = CFGParameters {
+            cf_lastpipe: false,
+            cf_pipefail: false,
+        };
+        let cfg = build_graph(params, &root).expect("the graph builds");
+        let mut ctx = Ctx::new(&cfg.cf_graph);
+        let mut reachable = new_internal_state();
+        reachable.s_is_reachable = Some(true);
+        ctx.do_merge(&reachable, &unreachable_state());
+        ctx.merge_states_nonempty(&[]);
+        assert_eq!(
+            ctx.internal_error,
+            Some(InternalError(
+                "Unexpected merge of reachable and unreachable state"
+            ))
+        );
+        let mut fresh = Ctx::new(&cfg.cf_graph);
+        fresh.merge_states_nonempty(&[]);
+        assert_eq!(
+            fresh.internal_error,
+            Some(InternalError("Null node states"))
+        );
+    }
+
     fn analyze(src: &str) -> (CFGAnalysis, Token) {
         let out = parse_script("test.sh", src);
         let root = out.root.expect("parse produced a root");
@@ -1988,7 +2044,7 @@ mod tests {
             cf_lastpipe: false,
             cf_pipefail: false,
         };
-        let a = analyze_control_flow(&params, &root);
+        let a = analyze_control_flow(&params, &root).expect("the analysis succeeds");
         (a, root)
     }
 

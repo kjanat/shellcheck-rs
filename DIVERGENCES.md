@@ -120,6 +120,16 @@ for any other rejected EditorConfig file. Its globs compile through
 `rust/crates/shellcheck-rs/src/tdfa.rs`, which accepts and rejects exactly what
 regex-tdfa's parser does, so this applies only to the globs upstream dies on.
 
+### Z7. An internal error in the dataflow analysis
+
+Where an invariant of the control flow graph or of its dataflow analysis does
+not hold, upstream ends with `ShellCheck internal error, please report: ...`
+and no output. The port drops the dataflow analysis for that file, as
+`--extended-analysis=false` would, runs every other check, and adds RSC1001 at
+the top of the file with the same text. `RSC` codes are the port's own, so none
+can collide with an upstream `SC` code. json1 writes one as the string
+`"RSC1001"`, `-i` and `-e` accept it, and the tty wiki list leaves it out.
+
 ## No open entries
 
 Sections A through G are gone; their entries are all in **Fixed** below. The

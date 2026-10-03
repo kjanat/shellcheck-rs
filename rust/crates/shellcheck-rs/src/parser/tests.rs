@@ -1248,7 +1248,7 @@ mod coproc_glob_dollar_tests {
         let codes: Vec<i64> = crate::check_script(&spec)
             .comments
             .iter()
-            .map(|c| c.comment.code)
+            .map(|c| crate::test_support::sc(c.comment.code))
             .collect();
         assert!(codes.contains(&2154), "got {codes:?}");
         assert!(

@@ -10,7 +10,8 @@
 
 use shellcheck_cli::formatter::{checkstyle, diff, gcc, json, json1, tty};
 use shellcheck_rs::interface::{
-    Comment, Fix, InsertionPoint, Position, PositionedComment, Replacement, Severity,
+    Comment, DiagnosticCode, Fix, InsertionPoint, Position, PositionedComment,
+    RSC_DATAFLOW_SKIPPED, Replacement, Severity,
 };
 
 const CONTENTS: &str = "#!/bin/bash\necho `date`\n";
@@ -36,7 +37,7 @@ fn comment(
         end: pos(2, ec),
         comment: Comment {
             severity: sev,
-            code,
+            code: DiagnosticCode::Sc(code),
             message: msg.to_string(),
         },
         fix,
@@ -88,6 +89,48 @@ fn sample() -> Vec<PositionedComment> {
             Some(fix),
         ),
     ]
+}
+
+/// The RSC1001 comment, alone at the top of the file.
+fn rsc() -> Vec<PositionedComment> {
+    vec![PositionedComment {
+        start: pos(1, 1),
+        end: pos(1, 1),
+        comment: Comment {
+            severity: Severity::ErrorC,
+            code: RSC_DATAFLOW_SKIPPED,
+            message: "Skipped.".to_string(),
+        },
+        fix: None,
+    }]
+}
+
+#[test]
+fn an_rsc_code_keeps_its_prefix_in_every_format() {
+    let mut gcc_out = String::new();
+    gcc::render_file("fix.sh", CONTENTS, &rsc(), &mut gcc_out);
+    assert_eq!(gcc_out, "fix.sh:1:1: error: Skipped. [RSC1001]\n");
+
+    let mut checkstyle_out = String::new();
+    checkstyle::render_file("fix.sh", CONTENTS, &rsc(), &mut checkstyle_out);
+    assert!(
+        checkstyle_out.contains("source='ShellCheck.RSC1001'"),
+        "{checkstyle_out}"
+    );
+
+    let doc = json1::render(&rsc()).unwrap();
+    assert!(doc.contains(r#""code":"RSC1001""#), "{doc}");
+}
+
+#[test]
+fn an_rsc_code_has_no_wiki_link() {
+    let color = shellcheck_cli::formatter::tty_color_func(false);
+    let mut wiki: Vec<tty::WikiEntry> = Vec::new();
+    let mut out = String::new();
+    tty::render_file(&color, "fix.sh", CONTENTS, &rsc(), &mut wiki, &mut out);
+    tty::render_wiki(&wiki, 3, &mut out);
+    assert!(out.contains("^-- RSC1001 (error): Skipped."), "{out}");
+    assert!(!out.contains("For more information"), "{out}");
 }
 
 #[test]

@@ -260,7 +260,7 @@ mod tests {
     fn sequence(table: CommandTable, script: &str) -> Vec<i64> {
         collect(table, script)
             .iter()
-            .map(|c| c.comment.code)
+            .map(|c| crate::test_support::sc(c.comment.code))
             .collect()
     }
 

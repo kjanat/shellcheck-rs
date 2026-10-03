@@ -10,9 +10,11 @@ use crate::ast::{Annotation, AssignmentMode, ConditionType, Id, InnerToken, Toke
 use crate::ast_lib;
 use crate::ast_lib::is_annotation_ignoring_code;
 use crate::ast_lib::{get_literal_string_def, oversimplify_concat};
-use crate::cfg::CFGParameters;
+use crate::cfg::{CFGParameters, InternalError};
 use crate::cfg_analysis::{self, CFGAnalysis};
-use crate::interface::{Code, Comment, Fix, PositionMap, Severity, Shell, TokenComment};
+use crate::interface::{
+    Code, Comment, DiagnosticCode, Fix, PositionMap, Severity, Shell, TokenComment,
+};
 use crate::regex_lib::mk_regex;
 use std::collections::BTreeMap;
 
@@ -41,6 +43,9 @@ pub struct Parameters {
     /// Result of the Control Flow Graph data-flow analysis, when extended
     /// analysis is enabled (`ShellCheck.AnalyzerLib.cfgAnalysis`).
     pub cfg_analysis: Option<CFGAnalysis>,
+    /// The internal error that stopped the dataflow analysis, which then
+    /// runs as if extended analysis were off.
+    pub dataflow_error: Option<InternalError>,
 }
 
 impl Parameters {
@@ -195,7 +200,7 @@ pub fn make_comment(severity: Severity, id: Id, code: Code, note: &str) -> Token
         id,
         comment: Comment {
             severity,
-            code,
+            code: DiagnosticCode::Sc(code),
             message: note.to_string(),
         },
         fix: None,
@@ -215,7 +220,7 @@ pub fn make_comment_with_fix(
         id,
         comment: Comment {
             severity,
-            code,
+            code: DiagnosticCode::Sc(code),
             message: note.to_string(),
         },
         // "If fix is empty, pretend it wasn't there" -- a check that decides it
@@ -653,14 +658,17 @@ pub fn make_parameters_ext(
     let extended_analysis = extended_analysis_override
         .or_else(|| get_extended_analysis_directive(&root))
         .unwrap_or(true);
-    let cfg_analysis = if extended_analysis {
+    let (cfg_analysis, dataflow_error) = if extended_analysis {
         let cf_params = CFGParameters {
             cf_lastpipe: has_lastpipe,
             cf_pipefail: has_pipefail,
         };
-        Some(cfg_analysis::analyze_control_flow(&cf_params, &root))
+        match cfg_analysis::analyze_control_flow(&cf_params, &root) {
+            Ok(analysis) => (Some(analysis), None),
+            Err(e) => (None, Some(e)),
+        }
     } else {
-        None
+        (None, None)
     };
 
     Parameters {
@@ -679,6 +687,7 @@ pub fn make_parameters_ext(
             .with(ShellOption::Execfail, has_execfail),
         variable_flow,
         cfg_analysis,
+        dataflow_error,
     }
 }
 

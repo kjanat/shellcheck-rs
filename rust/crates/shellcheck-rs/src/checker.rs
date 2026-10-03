@@ -4,9 +4,10 @@
 use crate::analytics;
 use crate::analyzer_lib;
 use crate::ast::Id;
+use crate::cfg::InternalError;
 use crate::interface::{
-    CheckResult, CheckSpec, Comment, NoExternalSources, Position, PositionedComment,
-    RcParseProblem, Severity, Shell, System, TokenComment,
+    CheckResult, CheckSpec, Comment, DiagnosticCode, NoExternalSources, Position,
+    PositionedComment, RSC_DATAFLOW_SKIPPED, RcParseProblem, Severity, Shell, System, TokenComment,
 };
 use crate::parser::{self, ParseNote};
 use std::rc::Rc;
@@ -65,6 +66,9 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
             }
             positioned.push(token_to_position(&tc, &parse.positions));
         }
+        if let Some(error) = params.dataflow_error {
+            positioned.push(dataflow_skipped_comment(&spec.filename, error));
+        }
     }
 
     // Filter by severity / include / exclude.
@@ -89,7 +93,7 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
 fn annotation_ignores(
     params: &analyzer_lib::Parameters,
     id: Id,
-    code: i64,
+    code: DiagnosticCode,
     check_sourced: bool,
 ) -> bool {
     use crate::ast::{Annotation, InnerToken};
@@ -104,6 +108,7 @@ fn annotation_ignores(
             if let InnerToken::T_Annotation { annotations, .. } = &*tok.inner {
                 for a in annotations {
                     if let Annotation::DisableComment(from, to) = a
+                        && let Some(code) = code.sc()
                         && code >= *from
                         && code < *to
                     {
@@ -132,12 +137,37 @@ fn rc_problem_comment(problem: &RcParseProblem) -> PositionedComment {
         end: pos,
         comment: Comment {
             severity: Severity::ErrorC,
-            code: 1134,
+            code: DiagnosticCode::Sc(1134),
             message: format!(
                 "Failed to process {}, line {}: {} Fix any mentioned problems and try again.",
                 crate::ast_lib::e4m(&problem.filename),
                 problem.line,
                 problem.suggestion
+            ),
+        },
+        fix: None,
+    }
+}
+
+/// RSC1001 at the top of `filename`: the dataflow analysis stopped on an
+/// internal error and its checks were skipped.
+fn dataflow_skipped_comment(
+    filename: &str,
+    InternalError(what): InternalError,
+) -> PositionedComment {
+    let pos = Position {
+        file: filename.to_string(),
+        line: 1,
+        column: 1,
+    };
+    PositionedComment {
+        start: pos.clone(),
+        end: pos,
+        comment: Comment {
+            severity: Severity::ErrorC,
+            code: RSC_DATAFLOW_SKIPPED,
+            message: format!(
+                "ShellCheck internal error, please report: {what}. The dataflow checks were skipped for this file."
             ),
         },
         fix: None,
@@ -150,7 +180,7 @@ fn note_to_positioned(n: &ParseNote) -> PositionedComment {
         end: n.end.clone(),
         comment: Comment {
             severity: n.severity,
-            code: n.code,
+            code: DiagnosticCode::Sc(n.code),
             message: n.message.clone(),
         },
         fix: None,
@@ -180,7 +210,8 @@ fn should_include(pc: &PositionedComment, spec: &CheckSpec) -> bool {
     // independently of the include/exclude lists. A code is compared against
     // the range endpoints (`code >= n && code < m`).
     if let Some(rc) = &spec.rc
-        && rc.disabled_ranges.iter().any(|r| r.contains(code))
+        && let Some(n) = code.sc()
+        && rc.disabled_ranges.iter().any(|r| r.contains(n))
     {
         return false;
     }
@@ -200,7 +231,7 @@ fn nub(v: Vec<PositionedComment>) -> Vec<PositionedComment> {
     out
 }
 
-type OrderKey = (String, i64, i64, Severity, i64, String);
+type OrderKey = (String, i64, i64, Severity, DiagnosticCode, String);
 
 fn order_key(pc: &PositionedComment) -> OrderKey {
     (
@@ -244,7 +275,7 @@ mod source_tests {
         let mut codes: Vec<i64> = check_script_with(sys, spec)
             .comments
             .iter()
-            .map(|c| c.comment.code)
+            .map(|c| crate::test_support::sc(c.comment.code))
             .collect();
         codes.sort_unstable();
         codes
@@ -256,7 +287,7 @@ mod source_tests {
             Rc::new(MockSystem::new(includes)),
             &CheckSpec {
                 script: script.to_string(),
-                excluded_warnings: vec![2148],
+                excluded_warnings: vec![DiagnosticCode::Sc(2148)],
                 ..CheckSpec::default()
             },
         )
@@ -268,7 +299,7 @@ mod source_tests {
             Rc::new(MockSystem::new(includes)),
             &CheckSpec {
                 script: script.to_string(),
-                excluded_warnings: vec![2148],
+                excluded_warnings: vec![DiagnosticCode::Sc(2148)],
                 check_sourced: true,
                 ..CheckSpec::default()
             },
@@ -769,6 +800,34 @@ mod source_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dataflow_error_is_rsc1001_at_the_top_of_the_file() {
+        let pc = dataflow_skipped_comment("x.sh", InternalError("Missing root"));
+        assert_eq!(pc.comment.code, RSC_DATAFLOW_SKIPPED);
+        assert_eq!(pc.comment.severity, Severity::ErrorC);
+        assert_eq!(
+            (pc.start.file.as_str(), pc.start.line, pc.start.column),
+            ("x.sh", 1, 1)
+        );
+        assert_eq!(
+            pc.comment.message,
+            "ShellCheck internal error, please report: Missing root. \
+             The dataflow checks were skipped for this file."
+        );
+        let spec = CheckSpec::default();
+        assert!(should_include(&pc, &spec));
+        let only_sc = CheckSpec {
+            included_warnings: Some(vec![DiagnosticCode::Sc(2086)]),
+            ..CheckSpec::default()
+        };
+        assert!(!should_include(&pc, &only_sc));
+        let excluded = CheckSpec {
+            excluded_warnings: vec![RSC_DATAFLOW_SKIPPED],
+            ..CheckSpec::default()
+        };
+        assert!(!should_include(&pc, &excluded));
+    }
     use crate::interface::{DisableRange, RcDirectives, RcParseProblem};
 
     fn spec(script: &str) -> CheckSpec {
@@ -783,7 +842,7 @@ mod tests {
         check_script(spec)
             .comments
             .iter()
-            .map(|c| c.comment.code)
+            .map(|c| crate::test_support::sc(c.comment.code))
             .collect()
     }
 
@@ -834,7 +893,7 @@ mod tests {
     fn rc_disabled_range_outranks_the_include_list() {
         // rc disables are annotations upstream, so --include cannot revive one.
         let mut spec = with_ranges("echo $x\n", &[(2086, 2087)]);
-        spec.included_warnings = Some(vec![2086, 2154]);
+        spec.included_warnings = Some(vec![DiagnosticCode::Sc(2086), DiagnosticCode::Sc(2154)]);
         assert_eq!(codes(&spec), vec![2154]);
     }
 
@@ -872,7 +931,7 @@ mod tests {
         // other comment.
         assert_eq!(codes(&spec), vec![1134, 2148, 2154, 2086]);
         let excluded = CheckSpec {
-            excluded_warnings: vec![1134],
+            excluded_warnings: vec![DiagnosticCode::Sc(1134)],
             ..spec
         };
         assert_eq!(codes(&excluded), vec![2148, 2154, 2086]);

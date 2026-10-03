@@ -589,7 +589,7 @@ mod tests {
             end: pos,
             comment: Comment {
                 severity: Severity::InfoC,
-                code: 2086,
+                code: shellcheck_rs::interface::DiagnosticCode::Sc(2086),
                 message: String::new(),
             },
             fix: None,

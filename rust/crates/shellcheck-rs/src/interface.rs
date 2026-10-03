@@ -13,6 +13,45 @@ pub type ErrorMessage = String;
 /// `Code`: the number of a diagnostic, such as 2086 for SC2086.
 pub type Code = i64;
 
+/// A comment's code: one of upstream's `SC` codes, or one of the `RSC` codes
+/// only this port emits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DiagnosticCode {
+    /// `SC` and the number.
+    Sc(Code),
+    /// `RSC` and the number.
+    Rsc(Code),
+}
+
+impl DiagnosticCode {
+    /// The number of an `SC` code.
+    #[must_use]
+    pub const fn sc(self) -> Option<Code> {
+        match self {
+            Self::Sc(n) => Some(n),
+            Self::Rsc(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for DiagnosticCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sc(n) => write!(f, "SC{n}"),
+            Self::Rsc(n) => write!(f, "RSC{n}"),
+        }
+    }
+}
+
+impl PartialEq<Code> for DiagnosticCode {
+    fn eq(&self, other: &Code) -> bool {
+        *self == Self::Sc(*other)
+    }
+}
+
+/// RSC1001: an internal error in the dataflow analysis, which was skipped.
+pub const RSC_DATAFLOW_SKIPPED: DiagnosticCode = DiagnosticCode::Rsc(1001);
+
 /// `ShellCheck.Interface.SystemInterface`: everything the parser needs from the
 /// outside world while following `source` statements.
 ///
@@ -316,7 +355,7 @@ pub struct Comment {
     /// `cSeverity`.
     pub severity: Severity,
     /// `cCode`.
-    pub code: Code,
+    pub code: DiagnosticCode,
     /// `cMessage`.
     pub message: String,
 }
@@ -326,7 +365,7 @@ impl Default for Comment {
         // newComment
         Self {
             severity: Severity::StyleC,
-            code: 0,
+            code: DiagnosticCode::Sc(0),
             message: String::new(),
         }
     }
@@ -488,9 +527,9 @@ pub struct CheckSpec {
     /// `csIgnoreRC`.
     pub ignore_rc: bool,
     /// `csExcludedWarnings`.
-    pub excluded_warnings: Vec<Code>,
+    pub excluded_warnings: Vec<DiagnosticCode>,
     /// `csIncludedWarnings`.
-    pub included_warnings: Option<Vec<Code>>,
+    pub included_warnings: Option<Vec<DiagnosticCode>>,
     /// `csShellTypeOverride`.
     pub shell_type_override: Option<Shell>,
     /// `csMinSeverity`.

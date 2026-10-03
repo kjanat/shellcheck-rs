@@ -30,7 +30,7 @@
 use std::fmt::Write;
 use std::ops::ControlFlow;
 
-use shellcheck_rs::interface::{CheckSpec, ColorOption, Severity, Shell};
+use shellcheck_rs::interface::{CheckSpec, ColorOption, DiagnosticCode, Severity, Shell};
 
 /// Formats the port implements. `getOpt`'s format validation lists exactly
 /// these, sorted (mirroring `Map.keys` of the Haskell `formats` map).
@@ -611,12 +611,25 @@ fn parse_num(s: &str) -> Result<i64, String> {
         .map_err(|_| format!("Invalid number: {s}"))
 }
 
+/// `parseNum` for `--include`/`--exclude`, which also take the port's own
+/// `RSC` codes.
+fn parse_code(s: &str) -> Result<DiagnosticCode, String> {
+    match s.strip_prefix("RSC") {
+        Some(digits) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => digits
+            .parse()
+            .map(DiagnosticCode::Rsc)
+            .map_err(|_| format!("Invalid number: {s}")),
+        Some(_) => Err(format!("Invalid number: {s}")),
+        None => parse_num(s).map(DiagnosticCode::Sc),
+    }
+}
+
 /// The codes of an `--include`/`--exclude` list; a bad one is a
 /// `SyntaxFailure` (exit 3).
-fn parse_codes(value: Option<&str>) -> ControlFlow<Outcome, Vec<i64>> {
+fn parse_codes(value: Option<&str>) -> ControlFlow<Outcome, Vec<DiagnosticCode>> {
     let mut codes = Vec::new();
     for c in split_nonempty(value.unwrap_or("")) {
-        match parse_num(&c) {
+        match parse_code(&c) {
             Ok(n) => codes.push(n),
             Err(message) => return ControlFlow::Break(Outcome::Error { message, code: 3 }),
         }
@@ -1188,8 +1201,21 @@ mod tests {
         // include: Just new <> old, so later flags prepend.
         assert_eq!(
             c.spec_template.included_warnings,
-            Some(vec![1000, 2086, 2154])
+            Some(vec![
+                DiagnosticCode::Sc(1000),
+                DiagnosticCode::Sc(2086),
+                DiagnosticCode::Sc(2154)
+            ])
         );
+        let c = run(&["-e", "RSC1001,2086", "-"]);
+        assert_eq!(
+            c.spec_template.excluded_warnings,
+            vec![DiagnosticCode::Rsc(1001), DiagnosticCode::Sc(2086)]
+        );
+        assert!(matches!(
+            parse(&args(&["-e", "RSC", "-"])),
+            Outcome::Error { code: 3, .. }
+        ));
     }
 
     #[test]

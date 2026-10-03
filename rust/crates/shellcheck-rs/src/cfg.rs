@@ -394,6 +394,11 @@ impl Ctx {
     }
 }
 
+/// An invariant of the graph or of its dataflow analysis that did not hold:
+/// upstream's `error $ pleaseReport` message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InternalError(pub &'static str);
+
 /// The graph builder: RWS state (`next`) + writer (`nodes`/`edges`/`mapping`/
 /// `assoc`) + reader (`ctx`).
 struct Builder {
@@ -404,6 +409,8 @@ struct Builder {
     assoc: Vec<(Id, Node)>,
     ctx: Ctx,
     params: CFGParameters,
+    /// The first internal error, after which the graph is discarded.
+    internal_error: Option<InternalError>,
 }
 
 fn apply_single(id: Id, effect: CFEffect) -> CFNode {
@@ -420,7 +427,12 @@ impl Builder {
             assoc: Vec::new(),
             ctx: Ctx::new(),
             params,
+            internal_error: None,
         }
+    }
+
+    fn fail(&mut self, what: &'static str) {
+        self.internal_error.get_or_insert(InternalError(what));
     }
 
     // --- core primitives (newNode, link, registerNode, ...) ---
@@ -578,12 +590,16 @@ impl Builder {
             T_Script { commands, .. } => self.sequentially(commands),
 
             // (( var[x=1] = ... ))
-            TA_Assignment { op, lhs, rhs } if matches!(&*lhs.inner, TA_Variable { .. }) => {
-                self.build_ta_assignment(id, op, lhs, rhs)
-            }
-            TA_Assignment { lhs, rhs, .. } | TA_Binary { lhs, rhs, .. } => {
-                self.sequentially(&[lhs.clone(), rhs.clone()])
-            }
+            TA_Assignment { op, lhs, rhs } => match &*lhs.inner {
+                TA_Variable { name, indices } => {
+                    self.build_ta_assignment(id, op, name, indices, rhs)
+                }
+                // This is likely an invalid assignment like (( 1 = 2 )), but it
+                // could be e.g. x=y; (( $x = 3 )); echo $y, so expand both sides
+                // without updating anything
+                _ => self.sequentially(&[lhs.clone(), rhs.clone()]),
+            },
+            TA_Binary { lhs, rhs, .. } => self.sequentially(&[lhs.clone(), rhs.clone()]),
             TA_Expansion(list)
             | TA_Sequence(list)
             | T_Array(list)
@@ -597,13 +613,12 @@ impl Builder {
             | T_Include(t2) => self.build(t2),
             TA_Trinary { cond, then, els } => self.build_ta_trinary(cond, then, els),
             TA_Variable { name, indices } => self.build_ta_variable(id, name, indices),
-            TA_Unary { op, operand }
-                if matches!(&*operand.inner, TA_Variable { .. })
-                    && (op.contains("--") || op.contains("++")) =>
-            {
-                self.build_ta_unary(id, operand)
-            }
-            TA_Unary { operand, .. } => self.build(operand),
+            TA_Unary { op, operand } => match &*operand.inner {
+                TA_Variable { name, indices } if op.contains("--") || op.contains("++") => {
+                    self.build_ta_unary(id, name, indices)
+                }
+                _ => self.build(operand),
+            },
 
             TC_And { typ, lhs, rhs, .. } | TC_Or { typ, lhs, rhs, .. } => {
                 self.build_tc_and_or(*typ, lhs, rhs)
@@ -676,24 +691,32 @@ impl Builder {
         }
     }
 
-    fn build_ta_assignment(&mut self, id: Id, op: &str, lhs: &Token, rhs: &Token) -> Range {
-        let (name, indices) = match &*lhs.inner {
-            InnerToken::TA_Variable { name, indices } => (name.clone(), indices.clone()),
-            _ => unreachable!(),
-        };
+    fn build_ta_assignment(
+        &mut self,
+        id: Id,
+        op: &str,
+        name: &str,
+        indices: &[Token],
+        rhs: &Token,
+    ) -> Range {
+        // value first: (( var[x=1] = (x=2) )) runs x=1 last
         let value = self.build(rhs);
-        let subscript = self.sequentially(&indices);
+        let subscript = self.sequentially(indices);
         let read = if op == "=" {
             self.none()
         } else {
-            self.new_node_range(apply_single(id, CFEffect::CFReadVariable(name.clone())))
+            // This is += or something
+            self.new_node_range(apply_single(id, CFEffect::CFReadVariable(name.to_string())))
         };
         let val = if indices.is_empty() {
             CFValue::CFValueInteger
         } else {
             CFValue::CFValueArray
         };
-        let write = self.new_node_range(apply_single(id, CFEffect::CFWriteVariable(name, val)));
+        let write = self.new_node_range(apply_single(
+            id,
+            CFEffect::CFWriteVariable(name.to_string(), val),
+        ));
         self.link_ranges(value, &[subscript, read, write])
     }
 
@@ -719,19 +742,19 @@ impl Builder {
         self.link_ranges(subscript, &[hint, read])
     }
 
-    fn build_ta_unary(&mut self, id: Id, operand: &Token) -> Range {
-        let (name, indices) = match &*operand.inner {
-            InnerToken::TA_Variable { name, indices } => (name.clone(), indices.clone()),
-            _ => unreachable!(),
-        };
-        let subscript = self.sequentially(&indices);
-        let read = self.new_node_range(apply_single(id, CFEffect::CFReadVariable(name.clone())));
+    fn build_ta_unary(&mut self, id: Id, name: &str, indices: &[Token]) -> Range {
+        let subscript = self.sequentially(indices);
+        let read =
+            self.new_node_range(apply_single(id, CFEffect::CFReadVariable(name.to_string())));
         let val = if indices.is_empty() {
             CFValue::CFValueInteger
         } else {
             CFValue::CFValueArray
         };
-        let write = self.new_node_range(apply_single(id, CFEffect::CFWriteVariable(name, val)));
+        let write = self.new_node_range(apply_single(
+            id,
+            CFEffect::CFWriteVariable(name.to_string(), val),
+        ));
         self.link_ranges(subscript, &[read, write])
     }
 
@@ -1255,7 +1278,8 @@ impl Builder {
 
     fn handle_return(&mut self) -> Range {
         let Some(target) = self.ctx.return_target else {
-            panic!("ShellCheck internal error: missing return target")
+            self.fail("missing return target");
+            return self.none();
         };
         let ret = self.new_node(CFNode::CFStructuralNode);
         self.link(ret, target, CFEdge::CFEFlow);
@@ -1650,10 +1674,16 @@ fn to_effects(
 // ===========================================================================
 
 /// `buildGraph :: CFGParameters -> Token -> CFGResult`.
-#[must_use]
-pub fn build_graph(params: CFGParameters, root: &Token) -> CFGResult {
+///
+/// # Errors
+///
+/// When an invariant of the graph does not hold, where upstream dies.
+pub fn build_graph(params: CFGParameters, root: &Token) -> Result<CFGResult, InternalError> {
     let mut builder = Builder::new(params);
     let root_range = builder.build_root(root);
+    if let Some(e) = builder.internal_error {
+        return Err(e);
+    }
     let base: CFW = (builder.nodes, builder.edges, builder.mapping, builder.assoc);
 
     // renumberTopologically is commented out in CFG.hs; keep the same.
@@ -1683,12 +1713,12 @@ pub fn build_graph(params: CFGParameters, root: &Token) -> CFGResult {
 
     let post_dominators = find_post_dominators(main_exit, &nodes, &only_real_edges);
 
-    CFGResult {
+    Ok(CFGResult {
         cf_graph: CFGraph::mk_graph(nodes, edges),
         cf_id_to_range: id_to_range,
         cf_id_to_nodes: id_to_nodes,
         cf_post_dominators: post_dominators,
-    }
+    })
 }
 
 // ===========================================================================
@@ -2779,7 +2809,8 @@ mod tests {
                 cf_pipefail: false,
             },
             &root,
-        );
+        )
+        .expect("the graph builds");
         let (main_start, main_exit) = result.cf_id_to_range[&root.id];
         assert!(result.cf_post_dominators.contains(main_start, main_exit));
         assert!(!result.cf_post_dominators.contains(main_exit, main_start));
@@ -2849,6 +2880,19 @@ mod tests {
     }
 
     #[test]
+    fn a_return_with_no_target_is_an_internal_error() {
+        let mut builder = Builder::new(CFGParameters {
+            cf_lastpipe: false,
+            cf_pipefail: false,
+        });
+        builder.handle_return();
+        assert_eq!(
+            builder.internal_error,
+            Some(InternalError("missing return target"))
+        );
+    }
+
+    #[test]
     fn cfg_smoke_build_graph() {
         // A small end-to-end build to ensure construction + post-dominators run.
         let out = crate::parser::parse_script("test.sh", "x=1\necho \"$x\"\n");
@@ -2857,7 +2901,7 @@ mod tests {
             cf_lastpipe: false,
             cf_pipefail: false,
         };
-        let result = build_graph(params, &root);
+        let result = build_graph(params, &root).expect("the graph builds");
         // The root's range must exist and its exit must be post-dominated by itself.
         let (_, main_exit) = result.cf_id_to_range[&root.id];
         assert!(main_exit < result.cf_post_dominators.len());
@@ -2886,7 +2930,7 @@ mod tests {
         for src in scripts {
             let out = crate::parser::parse_script("test.sh", src);
             if let Some(root) = out.root {
-                let result = build_graph(params, &root);
+                let result = build_graph(params, &root).expect("the graph builds");
                 // Post-dominator array is well-formed and covers the exit node.
                 let (_, main_exit) = result.cf_id_to_range[&root.id];
                 assert!(main_exit < result.cf_post_dominators.len());
