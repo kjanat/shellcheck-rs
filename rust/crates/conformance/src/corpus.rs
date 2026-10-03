@@ -441,10 +441,10 @@ pub fn coverage(src_dir: &Path) -> Result<Coverage, String> {
         // `src/ShellCheck/...` as the repository spells it, so an annotation
         // can name a file GitHub can find. `src_dir` is the tree's
         // `src/ShellCheck`, which is the prefix to restore.
-        let rel = f
-            .strip_prefix(src_dir)
-            .map(|p| format!("src/ShellCheck/{}", p.to_string_lossy()))
-            .unwrap_or_else(|_| f.to_string_lossy().into_owned());
+        let rel = f.strip_prefix(src_dir).map_or_else(
+            |_| f.to_string_lossy().into_owned(),
+            |p| format!("src/ShellCheck/{}", p.to_string_lossy()),
+        );
         let mut entries = extract_text(&name, &text);
         for e in &mut entries {
             e.path = rel.clone();

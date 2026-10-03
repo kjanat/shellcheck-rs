@@ -1,6 +1,6 @@
 //! Helpers shared by more than one `analytics` module.
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{Parameters, fix_with, replace_end, replace_start};
+use crate::ast::{Id, InnerToken, Token};
 use crate::interface::Fix;
 
 /// `surroundWith`.

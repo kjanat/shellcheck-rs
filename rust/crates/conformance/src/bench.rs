@@ -151,7 +151,7 @@ fn time_port(script: &str, filename: &str) -> Split {
     let t3 = Instant::now();
     let params = analyzer_lib::make_parameters_ext(
         root,
-        parse.positions.clone(),
+        parse.positions,
         None,
         None,
         spec.extended_analysis,
@@ -214,21 +214,20 @@ fn time_oracle(oracle: &str, script: &str) -> Option<Duration> {
 }
 
 pub fn run(args: &Args) -> Result<bool, String> {
-    let (script, label) = match &args.input {
-        Some(path) => (
+    let (script, label) = if let Some(path) = &args.input {
+        (
             std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?,
             path.clone(),
-        ),
-        None => {
-            let src = Path::new(&args.repo).join("src/ShellCheck");
-            let seeds: Vec<String> = corpus::extract(&src)
-                .map(|e| e.into_iter().map(|x| x.script).collect())
-                .unwrap_or_default();
-            (
-                generate_input(&seeds, args.seed, args.lines),
-                format!("generated seed={} lines={}", args.seed, args.lines),
-            )
-        }
+        )
+    } else {
+        let src = Path::new(&args.repo).join("src/ShellCheck");
+        let seeds: Vec<String> = corpus::extract(&src)
+            .map(|e| e.into_iter().map(|x| x.script).collect())
+            .unwrap_or_default();
+        (
+            generate_input(&seeds, args.seed, args.lines),
+            format!("generated seed={} lines={}", args.seed, args.lines),
+        )
     };
 
     if let Some(path) = &args.dump {

@@ -1,5 +1,7 @@
 //! Port of `ShellCheck.Analytics`: the SC2xxx node and tree checks, split by
-//! theme. `checker` registers them in the order of the Haskell `treeChecks` /
+//! theme.
+//!
+//! `checker` registers them in the order of the Haskell `treeChecks` /
 //! `nodeChecks` lists (a check missing from the port would show up here as a
 //! `not ported` line, generated from those lists).
 use crate::analyzer_lib::{Checker, Out, Parameters, run_checker};
@@ -15,134 +17,150 @@ pub(crate) mod redirections;
 pub(crate) mod script;
 pub(crate) mod variables;
 
+/// A check function, as the `treeChecks` and `nodeChecks` lists hold them.
+type CheckPtr = fn(&Parameters, &crate::ast::Token, &mut Out);
+
+/// `treeChecks`, less `checkUncheckedCdPushdPopd`, which `checker` runs as a node check.
+const TREE_CHECKS: &[CheckPtr] = &[
+    variables::check_subshell_assignment,
+    quoting::check_quotes_in_literals,
+    script::check_shebang_parameters,
+    script::check_functions_used_externally,
+    flow::check_unused_assignments,
+    script::check_unpassed_in_functions,
+    variables::check_array_without_index,
+    script::check_shebang,
+    flow::check_unassigned_references,
+    variables::check_array_assignment_indices,
+    script::check_use_before_definition,
+    script::check_alias_used_in_same_parsing_unit,
+    variables::check_array_value_used_as_index,
+];
+
+/// `nodeChecks`.
+const NODE_CHECKS: &[CheckPtr] = &[
+    redirections::check_pipe_pitfalls,
+    loops::check_for_in_quoted,
+    loops::check_for_in_ls,
+    conditions::check_shorthand_if,
+    quoting::check_dollar_star,
+    quoting::check_unquoted_dollar_at,
+    redirections::check_stderr_redirect,
+    quoting::check_unquoted_n,
+    conditions::check_number_comparisons,
+    conditions::check_single_bracket_operators,
+    conditions::check_double_bracket_operators,
+    conditions::check_literal_breaking_test,
+    conditions::check_constant_nullary,
+    arithmetic::check_div_before_mult,
+    arithmetic::check_arithmetic_deref,
+    arithmetic::check_arithmetic_bad_octal,
+    conditions::check_comparison_against_glob,
+    conditions::check_case_against_glob,
+    variables::check_commarrays,
+    conditions::check_or_neq,
+    conditions::check_and_eq,
+    redirections::check_echo_wc,
+    conditions::check_constant_ifs,
+    redirections::check_piped_assignment,
+    commands::check_assign_ate_command,
+    commands::check_uuoe_var,
+    conditions::check_quoted_cond_regex,
+    loops::check_for_in_cat,
+    commands::check_find_exec,
+    conditions::check_valid_cond_ops,
+    conditions::check_globbed_regex,
+    conditions::check_test_redirects,
+    variables::check_bad_parameter_substitution,
+    variables::check_ps1_assignments,
+    quoting::check_backticks,
+    quoting::check_inexplicably_unquoted,
+    quoting::check_tilde_in_quotes,
+    commands::check_lonely_dot_dash,
+    commands::check_spurious_exec,
+    quoting::check_spurious_expansion,
+    variables::check_dollar_brackets,
+    redirections::check_ssh_here_doc,
+    commands::check_globs_as_options,
+    loops::check_while_read_pitfalls,
+    arithmetic::check_arithmetic_op_command,
+    conditions::check_char_range_glob,
+    quoting::check_unquoted_expansions,
+    quoting::check_single_quoted_variables,
+    redirections::check_redirect_to_same,
+    variables::check_prefix_assignment_reference,
+    loops::check_loop_keyword_scope,
+    commands::check_cd_and_back,
+    arithmetic::check_wrong_arithmetic_assignment,
+    conditions::check_conditional_and_ors,
+    script::check_function_declarations,
+    redirections::check_stderr_pipe,
+    variables::check_overriding_path,
+    quoting::check_array_as_string,
+    commands::check_unsupported,
+    redirections::check_multiple_appends,
+    variables::check_suspicious_ifs,
+    redirections::check_should_use_grep_q,
+    conditions::check_test_argument_splitting,
+    quoting::check_concatenated_dollar_at,
+    quoting::check_tilde_in_path,
+    loops::check_read_without_r,
+    commands::check_cp_legacy_r,
+    loops::check_loop_variable_reassignment,
+    conditions::check_trailing_bracket,
+    conditions::check_return_against_zero,
+    redirections::check_redirected_nowhere,
+    conditions::check_unmatchable_cases,
+    conditions::check_subshell_as_test,
+    quoting::check_splitting_in_arrays,
+    redirections::check_redirection_to_number,
+    commands::check_glob_as_command,
+    commands::check_flag_as_command,
+    conditions::check_empty_condition,
+    redirections::check_pipe_to_nowhere,
+    loops::check_for_loop_glob_variables,
+    conditions::check_subshelled_tests,
+    redirections::check_redirection_to_command,
+    quoting::check_dollar_quote_paren,
+    conditions::check_useless_bang,
+    quoting::check_translated_string_variable,
+    arithmetic::check_modified_arithmetic_in_redirection,
+    script::check_blatant_recursion,
+    conditions::check_bad_test_and_or,
+    variables::check_assign_to_self,
+    commands::check_equals_in_command,
+    conditions::check_second_arg_is_comparison,
+    conditions::check_comparison_with_leading_x,
+    commands::check_command_with_trailing_symbol,
+    quoting::check_unquoted_parameter_expansion_pattern,
+    commands::check_bats_test_does_not_use_negation,
+    script::check_command_is_unreachable,
+    flow::check_spacefulness_cfg,
+    script::check_overwritten_exit_code,
+    arithmetic::check_unnecessary_arithmetic_expansion_index,
+    arithmetic::check_unnecessary_parens,
+    arithmetic::check_plus_equals_number,
+    redirections::check_expansion_with_redirection,
+    conditions::check_unary_test_a,
+];
+
 /// Assemble the Analytics checks (and the command / dialect checkers) into one
 /// `Checker`, mirroring `ShellCheck.Analyzer.analyzeScript`.
 pub fn checker() -> Checker {
     let mut c = Checker::new();
-    // treeChecks
-    c.tree(variables::check_subshell_assignment);
-    c.tree(quoting::check_quotes_in_literals);
-    c.tree(script::check_shebang_parameters);
-    c.tree(script::check_functions_used_externally);
-    c.tree(flow::check_unused_assignments);
-    c.tree(script::check_unpassed_in_functions);
-    c.tree(variables::check_array_without_index);
-    c.tree(script::check_shebang);
-    c.tree(flow::check_unassigned_references);
+    for &check in TREE_CHECKS {
+        c.tree(check);
+    }
     c.node(commands::check_unchecked_cd_pushd_popd);
-    c.tree(variables::check_array_assignment_indices);
-    c.tree(script::check_use_before_definition);
-    c.tree(script::check_alias_used_in_same_parsing_unit);
-    c.tree(variables::check_array_value_used_as_index);
-    // nodeChecks
-    c.node(redirections::check_pipe_pitfalls);
-    c.node(loops::check_for_in_quoted);
-    c.node(loops::check_for_in_ls);
-    c.node(conditions::check_shorthand_if);
-    c.node(quoting::check_dollar_star);
-    c.node(quoting::check_unquoted_dollar_at);
-    c.node(redirections::check_stderr_redirect);
-    c.node(quoting::check_unquoted_n);
-    c.node(conditions::check_number_comparisons);
-    c.node(conditions::check_single_bracket_operators);
-    c.node(conditions::check_double_bracket_operators);
-    c.node(conditions::check_literal_breaking_test);
-    c.node(conditions::check_constant_nullary);
-    c.node(arithmetic::check_div_before_mult);
-    c.node(arithmetic::check_arithmetic_deref);
-    c.node(arithmetic::check_arithmetic_bad_octal);
-    c.node(conditions::check_comparison_against_glob);
-    c.node(conditions::check_case_against_glob);
-    c.node(variables::check_commarrays);
-    c.node(conditions::check_or_neq);
-    c.node(conditions::check_and_eq);
-    c.node(redirections::check_echo_wc);
-    c.node(conditions::check_constant_ifs);
-    c.node(redirections::check_piped_assignment);
-    c.node(commands::check_assign_ate_command);
-    c.node(commands::check_uuoe_var);
-    c.node(conditions::check_quoted_cond_regex);
-    c.node(loops::check_for_in_cat);
-    c.node(commands::check_find_exec);
-    c.node(conditions::check_valid_cond_ops);
-    c.node(conditions::check_globbed_regex);
-    c.node(conditions::check_test_redirects);
-    c.node(variables::check_bad_parameter_substitution);
-    c.node(variables::check_ps1_assignments);
-    c.node(quoting::check_backticks);
-    c.node(quoting::check_inexplicably_unquoted);
-    c.node(quoting::check_tilde_in_quotes);
-    c.node(commands::check_lonely_dot_dash);
-    c.node(commands::check_spurious_exec);
-    c.node(quoting::check_spurious_expansion);
-    c.node(variables::check_dollar_brackets);
-    c.node(redirections::check_ssh_here_doc);
-    c.node(commands::check_globs_as_options);
-    c.node(loops::check_while_read_pitfalls);
-    c.node(arithmetic::check_arithmetic_op_command);
-    c.node(conditions::check_char_range_glob);
-    c.node(quoting::check_unquoted_expansions);
-    c.node(quoting::check_single_quoted_variables);
-    c.node(redirections::check_redirect_to_same);
-    c.node(variables::check_prefix_assignment_reference);
-    c.node(loops::check_loop_keyword_scope);
-    c.node(commands::check_cd_and_back);
-    c.node(arithmetic::check_wrong_arithmetic_assignment);
-    c.node(conditions::check_conditional_and_ors);
-    c.node(script::check_function_declarations);
-    c.node(redirections::check_stderr_pipe);
-    c.node(variables::check_overriding_path);
-    c.node(quoting::check_array_as_string);
-    c.node(commands::check_unsupported);
-    c.node(redirections::check_multiple_appends);
-    c.node(variables::check_suspicious_ifs);
-    c.node(redirections::check_should_use_grep_q);
-    c.node(conditions::check_test_argument_splitting);
-    c.node(quoting::check_concatenated_dollar_at);
-    c.node(quoting::check_tilde_in_path);
-    c.node(loops::check_read_without_r);
-    c.node(commands::check_cp_legacy_r);
-    c.node(loops::check_loop_variable_reassignment);
-    c.node(conditions::check_trailing_bracket);
-    c.node(conditions::check_return_against_zero);
-    c.node(redirections::check_redirected_nowhere);
-    c.node(conditions::check_unmatchable_cases);
-    c.node(conditions::check_subshell_as_test);
-    c.node(quoting::check_splitting_in_arrays);
-    c.node(redirections::check_redirection_to_number);
-    c.node(commands::check_glob_as_command);
-    c.node(commands::check_flag_as_command);
-    c.node(conditions::check_empty_condition);
-    c.node(redirections::check_pipe_to_nowhere);
-    c.node(loops::check_for_loop_glob_variables);
-    c.node(conditions::check_subshelled_tests);
-    c.node(redirections::check_redirection_to_command);
-    c.node(quoting::check_dollar_quote_paren);
-    c.node(conditions::check_useless_bang);
-    c.node(quoting::check_translated_string_variable);
-    c.node(arithmetic::check_modified_arithmetic_in_redirection);
-    c.node(script::check_blatant_recursion);
-    c.node(conditions::check_bad_test_and_or);
-    c.node(variables::check_assign_to_self);
-    c.node(commands::check_equals_in_command);
-    c.node(conditions::check_second_arg_is_comparison);
-    c.node(conditions::check_comparison_with_leading_x);
-    c.node(commands::check_command_with_trailing_symbol);
-    c.node(quoting::check_unquoted_parameter_expansion_pattern);
-    c.node(commands::check_bats_test_does_not_use_negation);
-    c.node(script::check_command_is_unreachable);
-    c.node(flow::check_spacefulness_cfg);
-    c.node(script::check_overwritten_exit_code);
-    c.node(arithmetic::check_unnecessary_arithmetic_expansion_index);
-    c.node(arithmetic::check_unnecessary_parens);
-    c.node(arithmetic::check_plus_equals_number);
-    c.node(redirections::check_expansion_with_redirection);
-    c.node(conditions::check_unary_test_a);
+    for &check in NODE_CHECKS {
+        c.node(check);
+    }
     crate::checks::register_all(&mut c);
     c
 }
 
 /// Run every check over a parsed script.
+#[must_use]
 pub fn analyze(params: &Parameters) -> Out {
     analyze_with(params, &[])
 }
@@ -153,36 +171,36 @@ pub fn analyze(params: &Parameters) -> Out {
 type Register = fn(&mut Checker);
 const OPTIONAL_CHECKS: &[(&str, Register)] = &[
     ("quote-safe-variables", |c| {
-        c.node(flow::check_verbose_spacefulness_cfg)
+        c.node(flow::check_verbose_spacefulness_cfg);
     }),
     ("avoid-nullary-conditions", |c| {
-        c.node(conditions::check_nullary_expansion_test)
+        c.node(conditions::check_nullary_expansion_test);
     }),
     ("avoid-negated-conditions", |c| {
-        c.node(conditions::check_unnecessarily_inverted_test)
+        c.node(conditions::check_unnecessarily_inverted_test);
     }),
     ("add-default-case", |c| c.node(loops::check_default_case)),
     ("require-variable-braces", |c| {
-        c.node(quoting::check_variable_braces)
+        c.node(quoting::check_variable_braces);
     }),
     ("check-unassigned-uppercase", |c| {
-        c.tree(flow::check_unassigned_references_uppercase)
+        c.tree(flow::check_unassigned_references_uppercase);
     }),
     ("require-double-brackets", |c| {
-        c.tree(conditions::check_require_double_bracket)
+        c.tree(conditions::check_require_double_bracket);
     }),
     ("require-double-equals", |c| {
-        c.tree(conditions::check_require_double_equals)
+        c.tree(conditions::check_require_double_equals);
     }),
     ("check-set-e-suppressed", |c| {
-        c.tree(flow::check_set_e_suppressed)
+        c.tree(flow::check_set_e_suppressed);
     }),
     ("check-extra-masked-returns", |c| {
-        c.tree(flow::check_extra_masked_returns)
+        c.tree(flow::check_extra_masked_returns);
     }),
     ("useless-use-of-cat", |c| c.node(redirections::check_uuoc)),
     ("deprecate-which", |c| {
-        c.node(crate::checks::commands::coreutils::check_which())
+        c.node(crate::checks::commands::coreutils::check_which());
     }),
 ];
 

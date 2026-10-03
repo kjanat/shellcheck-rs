@@ -1,10 +1,14 @@
 //! Words: literals, quotes, globs, brace expansion and `$`-expansions (`ShellCheck.Parser` readNormalWord family).
-use super::*;
+use super::{
+    ALMOST_SPACE_CHARS, BRACED_QUOTABLE, DOUBLE_QUOTABLE, InnerToken, PARAM_SUB_SPECIAL_CHARS,
+    PResult, Parser, Piped, Position, QUOTABLE_CHARS, Severity, Token, UNICODE_DOUBLE_QUOTES,
+    UNICODE_SINGLE_QUOTES, ast_lib, is_glob_class_terminator, unescape_backtick,
+};
 
 impl Parser {
     // ---- words -------------------------------------------------------------
 
-    /// `readNormalWord` = many1 word parts -> T_NormalWord
+    /// `readNormalWord` = many1 word parts -> `T_NormalWord`
     pub(super) fn read_normal_word(&mut self) -> PResult<Token> {
         self.read_normalish_word(&["do", "done", "then", "fi", "esac"])
     }
@@ -21,17 +25,16 @@ impl Parser {
         let mut parts = Vec::new();
         loop {
             let before = self.idx;
-            match self.read_normal_word_part() {
-                Ok(p) => parts.push(p),
-                Err(()) => {
-                    // `many1`: a part that failed after consuming input fails
-                    // the whole word, so a trailing `\` is a parse error rather
-                    // than a word that quietly ends early.
-                    if self.idx != before {
-                        return Err(());
-                    }
-                    break;
+            if let Ok(p) = self.read_normal_word_part() {
+                parts.push(p);
+            } else {
+                // `many1`: a part that failed after consuming input fails
+                // the whole word, so a trailing `\` is a parse error rather
+                // than a word that quietly ends early.
+                if self.idx != before {
+                    return Err(());
                 }
+                break;
             }
         }
         if parts.is_empty() {
@@ -102,16 +105,15 @@ impl Parser {
                 // position a failure here reports.
                 '<' | '>' => {
                     let pm = self.mark();
-                    match self.read_proc_sub() {
-                        Ok(t) => Ok(t),
-                        Err(()) => {
-                            // Its `try` only covers the `<(`: past that, the
-                            // `choice` has nothing left to try.
-                            if self.idx != pm.idx {
-                                return Err(());
-                            }
-                            self.read_normal_literal(end)
+                    if let Ok(t) = self.read_proc_sub() {
+                        Ok(t)
+                    } else {
+                        // Its `try` only covers the `<(`: past that, the
+                        // `choice` has nothing left to try.
+                        if self.idx != pm.idx {
+                            return Err(());
                         }
+                        self.read_normal_literal(end)
                     }
                 }
                 // `readUnicodeQuote`: a curly quote is a literal, and a warning.
@@ -142,7 +144,7 @@ impl Parser {
     }
 
     pub(super) fn read_single_quoted(&mut self) -> PResult<Token> {
-        self.called("single quoted string", |p| p.read_single_quoted_body())
+        self.called("single quoted string", Self::read_single_quoted_body)
     }
 
     fn read_single_quoted_body(&mut self) -> PResult<Token> {
@@ -201,11 +203,11 @@ impl Parser {
         }
         // A letter (or another quote) right after the closing quote: either the
         // apostrophe in `it's` ended the string, or a quote was left open.
-        if let Some(c) = self.suspect_char_after_quotes().or(match self.peek() {
-            Some('\'') => Some('\''),
-            _ => None,
-        }) {
-            if s.chars().next_back().is_some_and(|l| l.is_alphabetic()) && c.is_alphabetic() {
+        if let Some(c) = self
+            .suspect_char_after_quotes()
+            .or_else(|| self.peek().filter(|&c| c == '\''))
+        {
+            if s.chars().next_back().is_some_and(char::is_alphabetic) && c.is_alphabetic() {
                 self.problem_at(
                     end.clone(),
                     end,
@@ -222,7 +224,7 @@ impl Parser {
     }
 
     pub(super) fn read_double_quoted(&mut self) -> PResult<Token> {
-        self.called("double quoted string", |p| p.read_double_quoted_body())
+        self.called("double quoted string", Self::read_double_quoted_body)
     }
 
     /// `doubleQuotedPart = readDoubleLiteral <|> readDoubleQuotedDollar <|>
@@ -281,14 +283,13 @@ impl Parser {
         let mut parts = Vec::new();
         loop {
             let before = self.idx;
-            match self.read_double_quoted_part() {
-                Ok(t) => parts.push(t),
-                Err(()) => {
-                    if self.idx != before {
-                        return Err(());
-                    }
-                    return Ok(parts);
+            if let Ok(t) = self.read_double_quoted_part() {
+                parts.push(t);
+            } else {
+                if self.idx != before {
+                    return Err(());
                 }
+                return Ok(parts);
             }
         }
     }
@@ -401,7 +402,7 @@ impl Parser {
     /// literal text it stands for — empty for a line continuation, since the
     /// shell splices the lines together.
     pub(super) fn read_normal_escaped(&mut self) -> PResult<String> {
-        self.called("escaped char", |p| p.read_normal_escaped_body())
+        self.called("escaped char", Self::read_normal_escaped_body)
     }
 
     fn read_normal_escaped_body(&mut self) -> PResult<String> {
@@ -494,15 +495,13 @@ impl Parser {
             }
             Some('[') => {
                 let m = self.mark();
-                if let Ok(g) = self.read_glob_class(start.clone()) {
-                    Ok(g)
-                } else {
+                self.read_glob_class(start.clone()).or_else(|()| {
                     self.reset(m);
                     // globby literal '['
                     self.bump();
                     let id = self.next_id_between(start, self.pos());
                     Ok(Token::new(id, InnerToken::T_Literal("[".to_string())))
-                }
+                })
             }
             _ => Err(()),
         }
@@ -517,11 +516,11 @@ impl Parser {
         // `guard $ not (null leadingBracket) || not (null s)`: a `]` right
         // after the `[` is a member of the class, and enough on its own, so
         // `[]]` is a class holding a bracket.
-        let mut had = false;
-        if let Ok(c) = self.one_of("]") {
+        let leading = self.one_of("]");
+        if let Ok(c) = leading {
             body.push(c);
-            had = true;
         }
+        let mut had = leading.is_ok();
         loop {
             // predefined [:class:]
             let m = self.mark();
@@ -537,10 +536,8 @@ impl Parser {
                     had = true;
                     continue;
                 }
-                self.reset(m);
-            } else {
-                self.reset(m);
             }
+            self.reset(m);
             // Faithful port of `readClass`'s inner
             // `many (predefined <|> readNormalLiteralPart "]" <|> globchars)`.
             // `predefined` ([:class:]) is handled above. Here we handle escapes,
@@ -596,7 +593,7 @@ impl Parser {
             // expansion goes back with the cursor. Without that, `o{$(` gives
             // up inside the `$(` and the literal `{`'s SC1083 is dropped as
             // something the parse never reached.
-            if let Ok(t) = self.try_parse(|p| p.read_braced()) {
+            if let Ok(t) = self.try_parse(Self::read_braced) {
                 return Ok(t);
             }
             self.reset(m);
@@ -672,7 +669,7 @@ impl Parser {
 
     /// `bracedElement = T_NormalWord `withParser` many [ braceExpansion,
     /// readDollarExpression, readSingleQuoted, readDoubleQuoted, braceLiteral ]`.
-    /// `many` never fails, so this always yields a (possibly empty) NormalWord.
+    /// `many` never fails, so this always yields a (possibly empty) `NormalWord`.
     pub(super) fn read_braced_element(&mut self) -> Token {
         let start = self.pos();
         let mut parts = Vec::new();
@@ -720,7 +717,7 @@ impl Parser {
     /// "{}\"$'," <|> whitespace)`. Reads at least one char, keeping escape
     /// backslashes verbatim (except `\<newline>`, which produces nothing).
     pub(super) fn read_brace_literal(&mut self) -> PResult<Token> {
-        fn is_brace_ws(c: char) -> bool {
+        const fn is_brace_ws(c: char) -> bool {
             matches!(
                 c,
                 ' ' | '\t'
@@ -781,7 +778,7 @@ impl Parser {
     }
 
     pub(super) fn read_proc_sub(&mut self) -> PResult<Token> {
-        self.called("process substitution", |p| p.read_proc_sub_body())
+        self.called("process substitution", Self::read_proc_sub_body)
     }
 
     fn read_proc_sub_body(&mut self) -> PResult<Token> {
@@ -790,9 +787,8 @@ impl Parser {
         // `called`, so a `<` with no `(` after it leaves no context behind --
         // only Parsec's error, past the operator it read.
         let pm = self.mark();
-        let dir = match self.one_of("<>") {
-            Ok(d) => d,
-            Err(()) => return Err(()),
+        let Ok(dir) = self.one_of("<>") else {
+            return Err(());
         };
         if self.char('(').is_err() {
             self.reset(pm);
@@ -814,7 +810,7 @@ impl Parser {
     }
 
     pub(super) fn read_extglob(&mut self) -> PResult<Token> {
-        self.called("extglob", |p| p.read_extglob_body())
+        self.called("extglob", Self::read_extglob_body)
     }
 
     fn read_extglob_body(&mut self) -> PResult<Token> {
@@ -852,30 +848,22 @@ impl Parser {
             // A group is tried first, so a `(` never reaches
             // `readNormalWordPart`'s `checkForParenthesis`.
             let m = self.mark();
-            match self.read_extglob_group() {
-                Ok(t) => {
-                    parts.push(t);
-                    continue;
-                }
-                Err(()) => {
-                    if self.idx != m.idx {
-                        return Err(());
-                    }
-                    self.reset(m);
-                }
+            if let Ok(t) = self.read_extglob_group() {
+                parts.push(t);
+                continue;
             }
-            match self.read_normal_word_part_end("") {
-                Ok(t) => {
-                    parts.push(t);
-                    continue;
-                }
-                Err(()) => {
-                    if self.idx != m.idx {
-                        return Err(());
-                    }
-                    self.reset(m);
-                }
+            if self.idx != m.idx {
+                return Err(());
             }
+            self.reset(m);
+            if let Ok(t) = self.read_normal_word_part_end("") {
+                parts.push(t);
+                continue;
+            }
+            if self.idx != m.idx {
+                return Err(());
+            }
+            self.reset(m);
             if let Ok(t) = self.read_space_part() {
                 parts.push(t);
                 continue;
@@ -980,7 +968,7 @@ impl Parser {
         // `unEscape`: process backtick escapes (`\$` `` \` `` `\\`, line splices,
         // and `\"`->`"` when inside double quotes) before sub-parsing.
         let unescaped = unescape_backtick(&raw, quoted);
-        let cmds = self.subparse_commands(&unescaped, sub_start);
+        let cmds = self.subparse_commands(&unescaped, &sub_start);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Backticked(cmds)))
     }
@@ -1072,8 +1060,8 @@ impl Parser {
             // Its last attempt consumes, so `readNormalDollar`'s bare `<|>` can
             // no longer fall back to a literal `$`.
             let r = self.read_ambiguous(
-                |p| p.read_dollar_arithmetic(),
-                |p| p.read_dollar_expansion(),
+                Self::read_dollar_arithmetic,
+                Self::read_dollar_expansion,
                 |p, pos| {
                     p.note_at(
                         pos.clone(),
@@ -1111,10 +1099,7 @@ impl Parser {
         // pipe or whitespace.
         if self.peek() == Some('$')
             && self.peek_at(1) == Some('{')
-            && matches!(
-                self.peek_at(2),
-                Some('|') | Some(' ') | Some('\t') | Some('\n') | Some('\r')
-            )
+            && matches!(self.peek_at(2), Some('|' | ' ' | '\t' | '\n' | '\r'))
         {
             // The `try` inside covers only `string "${" >> (char '|' <|>
             // whitespace)`, and the guard above is that same test, so it has
@@ -1139,7 +1124,7 @@ impl Parser {
     }
 
     pub(super) fn read_dollar_arithmetic(&mut self) -> PResult<Token> {
-        self.called("$((..)) expression", |p| p.read_dollar_arithmetic_body())
+        self.called("$((..)) expression", Self::read_dollar_arithmetic_body)
     }
 
     fn read_dollar_arithmetic_body(&mut self) -> PResult<Token> {
@@ -1168,7 +1153,7 @@ impl Parser {
         } else {
             // must be whitespace
             match self.peek() {
-                Some(' ') | Some('\t') | Some('\n') | Some('\r') => {
+                Some(' ' | '\t' | '\n' | '\r') => {
                     self.bump();
                     Piped::Unpiped
                 }
@@ -1192,7 +1177,7 @@ impl Parser {
     }
 
     pub(super) fn read_dollar_bracket(&mut self) -> PResult<Token> {
-        self.called("$[..] expression", |p| p.read_dollar_bracket_body())
+        self.called("$[..] expression", Self::read_dollar_bracket_body)
     }
 
     fn read_dollar_bracket_body(&mut self) -> PResult<Token> {
@@ -1205,7 +1190,7 @@ impl Parser {
     }
 
     pub(super) fn read_dollar_expansion(&mut self) -> PResult<Token> {
-        self.called("command expansion", |p| p.read_dollar_expansion_body())
+        self.called("command expansion", Self::read_dollar_expansion_body)
     }
 
     fn read_dollar_expansion_body(&mut self) -> PResult<Token> {
@@ -1223,7 +1208,7 @@ impl Parser {
     }
 
     pub(super) fn read_dollar_braced(&mut self) -> PResult<Token> {
-        self.called("parameter expansion", |p| p.read_dollar_braced_body())
+        self.called("parameter expansion", Self::read_dollar_braced_body)
     }
 
     fn read_dollar_braced_body(&mut self) -> PResult<Token> {
@@ -1253,7 +1238,7 @@ impl Parser {
     /// production is atomic, so a bare `$` leaves nothing consumed for the
     /// alternatives after it (`$'..'`, `$".."`, the lonely `$`).
     pub(super) fn read_dollar_variable(&mut self) -> PResult<Token> {
-        self.try_parse(|p| p.read_dollar_variable_body())
+        self.try_parse(Self::read_dollar_variable_body)
     }
 
     fn read_dollar_variable_body(&mut self) -> PResult<Token> {
@@ -1277,7 +1262,7 @@ impl Parser {
                     // `parseNoteAt pos` in Haskell is zero-width at the `$`.
                     self.note_at(
                         pos.clone(),
-                        pos.clone(),
+                        pos,
                         Severity::ErrorC,
                         1037,
                         "Braces are required for positionals over 9, e.g. ${10}.",
@@ -1311,7 +1296,7 @@ impl Parser {
                     // `parseNoteAt pos` in Haskell is zero-width at the `$`.
                     self.note_at(
                         pos.clone(),
-                        pos.clone(),
+                        pos,
                         Severity::ErrorC,
                         1087,
                         "Use braces when expanding arrays, e.g. ${array[idx]} (or ${var}[.. to quiet).",
@@ -1391,7 +1376,7 @@ impl Parser {
     }
 
     pub(super) fn read_dollar_single_quote(&mut self) -> PResult<Token> {
-        self.called("$'..' expression", |p| p.read_dollar_single_quote_body())
+        self.called("$'..' expression", Self::read_dollar_single_quote_body)
     }
 
     fn read_dollar_single_quote_body(&mut self) -> PResult<Token> {
@@ -1455,14 +1440,13 @@ impl Parser {
                 }
                 Some(_) => self.read_braced_literal(),
             };
-            match r {
-                Ok(t) => parts.push(t),
-                Err(()) => {
-                    if self.idx != before {
-                        return Err(());
-                    }
-                    break;
+            if let Ok(t) = r {
+                parts.push(t);
+            } else {
+                if self.idx != before {
+                    return Err(());
                 }
+                break;
             }
         }
         Ok(parts)
@@ -1558,8 +1542,8 @@ impl Parser {
     /// Parser.hs come through here: backticks, here documents, the `trap`
     /// argument and array indices. `$(..)`, `<(..)` and `${ ..; }` parse their
     /// contents in place.
-    pub(super) fn subparse_commands(&mut self, raw: &str, start: Position) -> Vec<Token> {
-        let mut sub = self.sub_parser(raw, &start);
+    pub(super) fn subparse_commands(&mut self, raw: &str, start: &Position) -> Vec<Token> {
+        let mut sub = self.sub_parser(raw, start);
         // `subParser = readCompoundListOrEmpty >> verifyEof`, and `verifyEof`
         // reports rather than fails, so the only way this fails is a consuming
         // failure inside the commands.

@@ -40,8 +40,11 @@ const CACHE_ENTRIES: usize = 10;
 /// Declaration order is the Haskell `Ord` order and must not change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SpaceStatus {
+    /// The value is empty.
     SpaceStatusEmpty,
+    /// The value has no spaces or globs.
     SpaceStatusClean,
+    /// The value may have spaces or globs.
     SpaceStatusDirty,
 }
 
@@ -51,9 +54,13 @@ pub enum SpaceStatus {
 /// (`variableMayBeAssignedInteger` relies on `>= NumericalStatusMaybe`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NumericalStatus {
+    /// Nothing is known about the value.
     NumericalStatusUnknown,
+    /// The value is empty.
     NumericalStatusEmpty,
+    /// The value may be an integer.
     NumericalStatusMaybe,
+    /// The value is an integer.
     NumericalStatusDefinitely,
 }
 
@@ -65,13 +72,18 @@ pub type VariableProperties = BTreeSet<BTreeSet<CFVariableProp>>;
 pub struct VariableValue {
     /// For debugging only; censored to `None` in externally exposed states.
     pub literal_value: Option<String>,
+    /// Whether the value needs quoting.
     pub space_status: SpaceStatus,
+    /// Whether the value is an integer.
     pub numerical_status: NumericalStatus,
 }
 
+/// A variable's value and properties (`data VariableState`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VariableState {
+    /// The variable's value.
     pub variable_value: VariableValue,
+    /// The variable's possible property sets.
     pub variable_properties: VariableProperties,
 }
 
@@ -93,7 +105,9 @@ pub struct ProgramState {
     global_values: ScopeValues,
     local_values: ScopeValues,
     prefix_values: ScopeValues,
+    /// The tokens whose exit code `$?` may hold.
     pub exit_codes: BTreeSet<Id>,
+    /// Whether any execution path reaches this state.
     pub state_is_reachable: bool,
 }
 
@@ -107,7 +121,7 @@ struct ScopeValues {
 
 impl ScopeValues {
     fn flat(map: &VMap<VariableState>) -> Self {
-        ScopeValues {
+        Self {
             top: map.clone(),
             base: None,
         }
@@ -126,7 +140,7 @@ impl ScopeValues {
         if vm_is_quick_equal(base, diff) {
             return Self::flat(diff);
         }
-        ScopeValues {
+        Self {
             top: diff.clone(),
             base: Some(base.clone()),
         }
@@ -141,10 +155,7 @@ impl ScopeValues {
     /// The entries, base layer first, so that inserting them in order into a
     /// map leaves the top layer's value for a key in both.
     fn entries(&self) -> impl Iterator<Item = (&Rc<str>, &Rc<VariableState>)> {
-        self.base
-            .iter()
-            .flat_map(|b| b.iter())
-            .chain(self.top.iter())
+        self.base.iter().flat_map(VMap::iter).chain(self.top.iter())
     }
 }
 
@@ -161,6 +172,7 @@ impl ProgramState {
 
     /// All variables in scope, flattened. O(variables): for tests and
     /// debugging, the checks look variables up by name.
+    #[must_use]
     pub fn variables_in_scope(&self) -> BTreeMap<String, VariableState> {
         let mut flat: BTreeMap<String, VariableState> = BTreeMap::new();
         for scope in [&self.global_values, &self.local_values, &self.prefix_values] {
@@ -173,6 +185,8 @@ impl ProgramState {
         }
         flat
     }
+    /// The value of a variable in scope, with its literal value censored.
+    #[must_use]
     pub fn variable_value(&self, name: &str) -> Option<VariableValue> {
         self.variable_state(name).map(|s| {
             // Censor the literal value to avoid introducing dependencies on it.
@@ -181,25 +195,36 @@ impl ProgramState {
             v
         })
     }
+    /// The space status of a variable in scope.
+    #[must_use]
     pub fn space_status(&self, name: &str) -> Option<SpaceStatus> {
         self.variable_state(name)
             .map(|s| s.variable_value.space_status)
     }
+    /// The numerical status of a variable in scope.
+    #[must_use]
     pub fn numerical_status(&self, name: &str) -> Option<NumericalStatus> {
         self.variable_state(name)
             .map(|s| s.variable_value.numerical_status)
     }
+    /// The possible property sets of a variable in scope.
+    #[must_use]
     pub fn variable_properties(&self, name: &str) -> Option<&VariableProperties> {
         self.variable_state(name).map(|s| &s.variable_properties)
     }
-    pub fn state_is_reachable(&self) -> bool {
+    /// `stateIsReachable`.
+    #[must_use]
+    pub const fn state_is_reachable(&self) -> bool {
         self.state_is_reachable
     }
-    pub fn exit_codes(&self) -> &BTreeSet<Id> {
+    /// `exitCodes`.
+    #[must_use]
+    pub const fn exit_codes(&self) -> &BTreeSet<Id> {
         &self.exit_codes
     }
 
     /// See if any execution path declares the variable an integer (`declare -i`).
+    #[must_use]
     pub fn variable_may_be_declared_integer(&self, var: &str) -> Option<bool> {
         let value = self.variable_state(var)?;
         Some(
@@ -211,6 +236,7 @@ impl ProgramState {
     }
 
     /// See if any execution path suggests the variable may contain an integer.
+    #[must_use]
     pub fn variable_may_be_assigned_integer(&self, var: &str) -> Option<bool> {
         let value = self.variable_state(var)?;
         Some(value.variable_value.numerical_status >= NumericalStatus::NumericalStatusMaybe)
@@ -218,9 +244,12 @@ impl ProgramState {
 }
 
 /// Free-function forms matching the Haskell exports.
+#[must_use]
 pub fn variable_may_be_declared_integer(state: &ProgramState, var: &str) -> Option<bool> {
     state.variable_may_be_declared_integer(var)
 }
+/// See if any execution path suggests the variable may contain an integer.
+#[must_use]
 pub fn variable_may_be_assigned_integer(state: &ProgramState, var: &str) -> Option<bool> {
     state.variable_may_be_assigned_integer(var)
 }
@@ -228,27 +257,35 @@ pub fn variable_may_be_assigned_integer(state: &ProgramState, var: &str) -> Opti
 /// The result of the data flow analysis.
 #[derive(Debug, Clone)]
 pub struct CFGAnalysis {
+    /// The control flow graph.
     pub graph: CFGraph,
+    /// Each token's nominal start and end node.
     pub token_to_range: IdMap<Id, (Node, Node)>,
+    /// All nodes belonging to each token, recursively.
     pub token_to_nodes: IdMap<Id, BTreeSet<Node>>,
+    /// The post-dominator relation.
     pub post_dominators: crate::cfg::PostDominators,
+    /// The incoming and outgoing state of each node.
     pub node_to_data: IdMap<Node, (ProgramState, ProgramState)>,
 }
 
 impl CFGAnalysis {
     /// Conveniently get the state before a token id.
+    #[must_use]
     pub fn get_incoming_state(&self, id: Id) -> Option<ProgramState> {
         let (start, _end) = self.token_to_range.get(&id)?;
         self.node_to_data.get(start).map(|x| x.0.clone())
     }
 
     /// Conveniently get the state after a token id.
+    #[must_use]
     pub fn get_outgoing_state(&self, id: Id) -> Option<ProgramState> {
         let (_start, end) = self.token_to_range.get(&id)?;
         self.node_to_data.get(end).map(|x| x.1.clone())
     }
 
     /// Whether `target` always unconditionally runs after `base`.
+    #[must_use]
     pub fn does_post_dominate(&self, target: Id, base: Id) -> bool {
         (|| {
             let (_, base_end) = self.token_to_range.get(&base)?;
@@ -308,7 +345,7 @@ struct VMap<V> {
 
 impl<V> Clone for VMap<V> {
     fn clone(&self) -> Self {
-        VMap {
+        Self {
             version: self.version,
             storage: self.storage.clone(),
         }
@@ -344,7 +381,7 @@ shared_empty_storage!(FunctionValue);
 
 impl<V: EmptyStorage> VMap<V> {
     fn empty() -> Self {
-        VMap {
+        Self {
             version: 0,
             storage: V::empty_storage(),
         }
@@ -359,21 +396,21 @@ impl<V> VMap<V> {
         self.storage.iter()
     }
     fn insert(&self, k: &str, v: V) -> Self {
-        VMap {
+        Self {
             version: -1,
             storage: self.storage.update(Rc::from(k), Rc::new(v)),
         }
     }
     /// A map built in one pass (`M.fromList`).
     fn from_entries(entries: impl IntoIterator<Item = (Rc<str>, Rc<V>)>) -> Self {
-        VMap {
+        Self {
             version: -1,
             storage: entries.into_iter().collect(),
         }
     }
 }
 
-fn vm_is_quick_equal<V>(a: &VMap<V>, b: &VMap<V>) -> bool {
+const fn vm_is_quick_equal<V>(a: &VMap<V>, b: &VMap<V>) -> bool {
     a.version >= 0 && b.version >= 0 && a.version == b.version
 }
 fn vm_eq<V: Eq>(a: &VMap<V>, b: &VMap<V>) -> bool {
@@ -388,13 +425,13 @@ fn vm_eq<V: Eq>(a: &VMap<V>, b: &VMap<V>) -> bool {
 fn union_left<K: Ord + Clone, V: Clone>(pref: &OrdMap<K, V>, other: &OrdMap<K, V>) -> OrdMap<K, V> {
     if pref.len() <= other.len() {
         let mut out = other.clone();
-        for (k, v) in pref.iter() {
+        for (k, v) in pref {
             out.insert(k.clone(), v.clone());
         }
         out
     } else {
         let mut out = pref.clone();
-        for (k, v) in other.iter() {
+        for (k, v) in other {
             if !pref.contains_key(k) {
                 out.insert(k.clone(), v.clone());
             }
@@ -427,7 +464,7 @@ fn new_internal_state() -> InternalState {
     }
 }
 
-fn modified(mut s: InternalState) -> InternalState {
+const fn modified(mut s: InternalState) -> InternalState {
     s.version = -1;
     s
 }
@@ -438,7 +475,7 @@ fn unreachable_state() -> InternalState {
     modified(s)
 }
 
-fn state_is_quick_equal(a: &InternalState, b: &InternalState) -> bool {
+const fn state_is_quick_equal(a: &InternalState, b: &InternalState) -> bool {
     a.version >= 0 && b.version >= 0 && a.version == b.version
 }
 
@@ -456,21 +493,21 @@ fn state_eq(a: &InternalState, b: &InternalState) -> bool {
 
 // --- Value abstractions ---
 
-fn unknown_variable_value() -> VariableValue {
+const fn unknown_variable_value() -> VariableValue {
     VariableValue {
         literal_value: None,
         space_status: SpaceStatus::SpaceStatusDirty,
         numerical_status: NumericalStatus::NumericalStatusUnknown,
     }
 }
-fn empty_variable_value() -> VariableValue {
+const fn empty_variable_value() -> VariableValue {
     VariableValue {
         literal_value: Some(String::new()),
         space_status: SpaceStatus::SpaceStatusEmpty,
         numerical_status: NumericalStatus::NumericalStatusEmpty,
     }
 }
-fn unknown_integer_value() -> VariableValue {
+const fn unknown_integer_value() -> VariableValue {
     VariableValue {
         literal_value: None,
         space_status: SpaceStatus::SpaceStatusClean,
@@ -518,8 +555,8 @@ fn remove_properties(props: &BTreeSet<CFVariableProp>, state: &VariableState) ->
     }
 }
 
-fn merge_space_status(a: SpaceStatus, b: SpaceStatus) -> SpaceStatus {
-    use SpaceStatus::*;
+const fn merge_space_status(a: SpaceStatus, b: SpaceStatus) -> SpaceStatus {
+    use SpaceStatus::{SpaceStatusClean, SpaceStatusDirty, SpaceStatusEmpty};
     match (a, b) {
         (SpaceStatusEmpty, y) => y,
         (x, SpaceStatusEmpty) => x,
@@ -527,14 +564,15 @@ fn merge_space_status(a: SpaceStatus, b: SpaceStatus) -> SpaceStatus {
         _ => SpaceStatusDirty,
     }
 }
-fn merge_numerical_status(a: NumericalStatus, b: NumericalStatus) -> NumericalStatus {
-    use NumericalStatus::*;
+const fn merge_numerical_status(a: NumericalStatus, b: NumericalStatus) -> NumericalStatus {
+    use NumericalStatus::{
+        NumericalStatusDefinitely, NumericalStatusEmpty, NumericalStatusMaybe,
+        NumericalStatusUnknown,
+    };
     match (a, b) {
         (NumericalStatusDefinitely, NumericalStatusDefinitely) => NumericalStatusDefinitely,
-        (NumericalStatusDefinitely, _) => NumericalStatusMaybe,
-        (_, NumericalStatusDefinitely) => NumericalStatusMaybe,
-        (NumericalStatusMaybe, _) => NumericalStatusMaybe,
-        (_, NumericalStatusMaybe) => NumericalStatusMaybe,
+        (NumericalStatusDefinitely | NumericalStatusMaybe, _)
+        | (_, NumericalStatusDefinitely | NumericalStatusMaybe) => NumericalStatusMaybe,
         (NumericalStatusEmpty, NumericalStatusEmpty) => NumericalStatusEmpty,
         _ => NumericalStatusUnknown,
     }
@@ -561,8 +599,8 @@ fn merge_variable_state(a: &VariableState, b: &VariableState) -> VariableState {
     }
 }
 
-fn append_space_status(a: SpaceStatus, b: SpaceStatus) -> SpaceStatus {
-    use SpaceStatus::*;
+const fn append_space_status(a: SpaceStatus, b: SpaceStatus) -> SpaceStatus {
+    use SpaceStatus::{SpaceStatusClean, SpaceStatusDirty, SpaceStatusEmpty};
     match (a, b) {
         (SpaceStatusEmpty, _) => b,
         (_, SpaceStatusEmpty) => a,
@@ -570,21 +608,22 @@ fn append_space_status(a: SpaceStatus, b: SpaceStatus) -> SpaceStatus {
         _ => SpaceStatusDirty,
     }
 }
-fn append_numerical_status(a: NumericalStatus, b: NumericalStatus) -> NumericalStatus {
-    use NumericalStatus::*;
+const fn append_numerical_status(a: NumericalStatus, b: NumericalStatus) -> NumericalStatus {
+    use NumericalStatus::{
+        NumericalStatusDefinitely, NumericalStatusEmpty, NumericalStatusMaybe,
+        NumericalStatusUnknown,
+    };
     match (a, b) {
-        (NumericalStatusEmpty, x) => x,
-        (x, NumericalStatusEmpty) => x,
+        (NumericalStatusEmpty, x) | (x, NumericalStatusEmpty) => x,
         (NumericalStatusDefinitely, NumericalStatusDefinitely) => NumericalStatusDefinitely,
-        (NumericalStatusUnknown, _) => NumericalStatusUnknown,
-        (_, NumericalStatusUnknown) => NumericalStatusUnknown,
+        (NumericalStatusUnknown, _) | (_, NumericalStatusUnknown) => NumericalStatusUnknown,
         _ => NumericalStatusMaybe,
     }
 }
 fn append_variable_value(a: &VariableValue, b: &VariableValue) -> VariableValue {
     VariableValue {
         literal_value: match (&a.literal_value, &b.literal_value) {
-            (Some(x), Some(y)) => Some(format!("{}{}", x, y)),
+            (Some(x), Some(y)) => Some(format!("{x}{y}")),
             _ => None,
         },
         space_status: append_space_status(a.space_status, b.space_status),
@@ -792,7 +831,7 @@ struct Ctx {
 }
 
 impl Ctx {
-    fn new(graph: &CFGraph) -> Ctx {
+    fn new(graph: &CFGraph) -> Self {
         let mut labels = IdMap::default();
         for (n, l) in &graph.nodes {
             labels.insert(*n, l.clone());
@@ -805,7 +844,7 @@ impl Ctx {
                 pred_flow.entry(*to).or_default().push(*from);
             }
         }
-        Ctx {
+        Self {
             node: 0,
             input: new_internal_state(),
             output: new_internal_state(),
@@ -820,19 +859,17 @@ impl Ctx {
         }
     }
 
-    fn next_version(&mut self) -> i64 {
+    const fn next_version(&mut self) -> i64 {
         let n = self.counter;
         self.counter += 1;
         n
     }
 
-    fn version_map<V: Clone>(&mut self, mut m: VMap<V>) -> VMap<V> {
-        if m.version >= 0 {
-            m
-        } else {
+    const fn version_map<V: Clone>(&mut self, mut m: VMap<V>) -> VMap<V> {
+        if m.version < 0 {
             m.version = self.next_version();
-            m
         }
+        m
     }
 
     fn version_state(&mut self, mut state: InternalState) -> InternalState {
@@ -947,13 +984,14 @@ impl Ctx {
         self.lookup_stack(
             true,
             |s| {
-                if let Some(vs) = s.s_local_values.lookup(&key) {
-                    Some((vs.variable_properties.clone(), Scope::LocalScope))
-                } else {
-                    s.s_prefix_values
-                        .lookup(&key)
-                        .map(|vs| (vs.variable_properties.clone(), Scope::PrefixScope))
-                }
+                s.s_local_values.lookup(&key).map_or_else(
+                    || {
+                        s.s_prefix_values
+                            .lookup(&key)
+                            .map(|vs| (vs.variable_properties.clone(), Scope::PrefixScope))
+                    },
+                    |vs| Some((vs.variable_properties.clone(), Scope::LocalScope)),
+                )
             },
             |v: &(VariableProperties, Scope)| {
                 StateDependency::DepProperties(v.1, key.clone(), v.0.clone())
@@ -1039,9 +1077,8 @@ impl Ctx {
     fn write_variable(&mut self, name: &str, val: VariableState) {
         match self.read_variable_scope(name) {
             Scope::GlobalScope => self.write_global(name, val),
-            Scope::LocalScope => self.write_local(name, val),
             // Prefixed variables actually become local variables.
-            Scope::PrefixScope => self.write_local(name, val),
+            Scope::LocalScope | Scope::PrefixScope => self.write_local(name, val),
         }
     }
     fn update_variable_value(&mut self, name: &str, val: VariableValue) {
@@ -1052,8 +1089,7 @@ impl Ctx {
         };
         match scope {
             Scope::GlobalScope => self.write_global(name, vs),
-            Scope::LocalScope => self.write_local(name, vs),
-            Scope::PrefixScope => self.write_local(name, vs),
+            Scope::LocalScope | Scope::PrefixScope => self.write_local(name, vs),
         }
     }
     fn update_global_value(&mut self, name: &str, val: VariableValue) {
@@ -1098,7 +1134,7 @@ impl Ctx {
 
     fn cf_value_to_variable_value(&mut self, val: &CFValue) -> VariableValue {
         match val {
-            CFValue::CFValueArray => unknown_variable_value(),
+            CFValue::CFValueArray | CFValue::CFValueString => unknown_variable_value(),
             CFValue::CFValueComputed(_, parts) => {
                 let mut acc = empty_variable_value();
                 for part in parts {
@@ -1108,7 +1144,6 @@ impl Ctx {
                 acc
             }
             CFValue::CFValueInteger => unknown_integer_value(),
-            CFValue::CFValueString => unknown_variable_value(),
             CFValue::CFValueUninitialized => empty_variable_value(),
         }
     }
@@ -1169,11 +1204,7 @@ impl Ctx {
                     let state = self.read_global(name);
                     self.write_global(name, add_properties(props, &state));
                 }
-                Some(Scope::LocalScope) => {
-                    let state = self.read_local(name);
-                    self.write_local(name, add_properties(props, &state));
-                }
-                Some(Scope::PrefixScope) => {
+                Some(Scope::LocalScope | Scope::PrefixScope) => {
                     let state = self.read_local(name);
                     self.write_local(name, add_properties(props, &state));
                 }
@@ -1187,16 +1218,14 @@ impl Ctx {
                     let state = self.read_global(name);
                     self.write_global(name, remove_properties(props, &state));
                 }
-                Some(Scope::LocalScope) => {
-                    let state = self.read_local(name);
-                    self.write_local(name, remove_properties(props, &state));
-                }
-                Some(Scope::PrefixScope) => {
+                Some(Scope::LocalScope | Scope::PrefixScope) => {
                     let state = self.read_local(name);
                     self.write_local(name, remove_properties(props, &state));
                 }
             },
-            CFEffect::CFUndefineVariable(name) => self.undefine_variable(name),
+            CFEffect::CFUndefineVariable(name) | CFEffect::CFUndefineNameref(name) => {
+                self.undefine_variable(name);
+            }
             CFEffect::CFUndefineFunction(name) => self.undefine_function(name),
             CFEffect::CFUndefine(name) => {
                 self.undefine_variable(name);
@@ -1208,9 +1237,7 @@ impl Ctx {
                     FunctionDefinition::FunctionDefinition(name.clone(), *entry, *exit),
                 );
             }
-            CFEffect::CFUndefineNameref(name) => self.undefine_variable(name),
-            CFEffect::CFHintArray(_) => {}
-            CFEffect::CFHintDefined(_) => {}
+            CFEffect::CFHintArray(_) | CFEffect::CFHintDefined(_) => {}
         }
     }
 
@@ -1293,20 +1320,16 @@ impl Ctx {
 
     fn merge_maybes_exit(
         &mut self,
-        a: &Option<BTreeSet<Id>>,
-        b: &Option<BTreeSet<Id>>,
+        a: Option<&BTreeSet<Id>>,
+        b: Option<&BTreeSet<Id>>,
     ) -> Option<BTreeSet<Id>> {
         match (a, b) {
             (None, None) => None,
-            (Some(v1), None) => {
+            (Some(v), None) | (None, Some(v)) => {
                 let r = self.read_exit_codes();
-                Some(v1.union(&r).cloned().collect())
+                Some(v.union(&r).copied().collect())
             }
-            (None, Some(v2)) => {
-                let r = self.read_exit_codes();
-                Some(v2.union(&r).cloned().collect())
-            }
-            (Some(v1), Some(v2)) => Some(v1.union(v2).cloned().collect()),
+            (Some(v1), Some(v2)) => Some(v1.union(v2).copied().collect()),
         }
     }
 
@@ -1336,7 +1359,7 @@ impl Ctx {
         let locals = self.merge_maps_var(VReader::Variable, &a.s_local_values, &b.s_local_values);
         let prefix = self.merge_maps_var(VReader::Variable, &a.s_prefix_values, &b.s_prefix_values);
         let funcs = self.merge_maps_func(&a.s_function_targets, &b.s_function_targets);
-        let exit = self.merge_maybes_exit(&a.s_exit_codes, &b.s_exit_codes);
+        let exit = self.merge_maybes_exit(a.s_exit_codes.as_ref(), b.s_exit_codes.as_ref());
         let reach = match (a.s_is_reachable, b.s_is_reachable) {
             (Some(x), Some(y)) => Some(x && y),
             _ => None,
@@ -1381,7 +1404,7 @@ impl Ctx {
         node: Node,
         is_call: bool,
         f: impl FnOnce(&mut Self) -> R,
-    ) -> (R, StackEntry) {
+    ) -> (R, BTreeSet<StateDependency>) {
         let call_site = self.node;
         let state = self.output.clone();
         let entry = StackEntry {
@@ -1397,11 +1420,14 @@ impl Ctx {
         self.node = node;
         self.stack.push(entry);
         let x = f(self);
-        let new_entry = self.stack.pop().unwrap();
+        let deps = self
+            .stack
+            .pop()
+            .map_or_else(BTreeSet::new, |new_entry| new_entry.dependencies);
         self.input = saved_input;
         self.output = saved_output;
         self.node = saved_node;
-        (x, new_entry)
+        (x, deps)
     }
 
     fn would_be_recursive(&mut self, node: Node) -> bool {
@@ -1474,7 +1500,7 @@ impl Ctx {
         deps.iter().all(|d| self.fulfills_dependency(entry, d))
     }
 
-    fn get_cache(&mut self, node: Node) -> Option<InternalState> {
+    fn get_cache(&self, node: Node) -> Option<InternalState> {
         if !self.enable_cache {
             return None;
         }
@@ -1492,18 +1518,15 @@ impl Ctx {
         node: Node,
         f: impl FnOnce(&mut Self) -> (BTreeSet<StateDependency>, InternalState),
     ) {
-        match self.get_cache(node) {
-            Some(v) => {
-                self.patch_output(&v);
-            }
-            None => {
-                let (deps, diff) = f(self);
-                let old = self.cache.remove(&node).unwrap_or_default();
-                let mut newlist = vec![(deps, diff.clone())];
-                newlist.extend(old.into_iter().take(CACHE_ENTRIES));
-                self.cache.insert(node, newlist);
-                self.patch_output(&diff);
-            }
+        if let Some(v) = self.get_cache(node) {
+            self.patch_output(&v);
+        } else {
+            let (deps, diff) = f(self);
+            let old = self.cache.remove(&node).unwrap_or_default();
+            let mut newlist = vec![(deps, diff.clone())];
+            newlist.extend(old.into_iter().take(CACHE_ENTRIES));
+            self.cache.insert(node, newlist);
+            self.patch_output(&diff);
         }
     }
 
@@ -1514,10 +1537,11 @@ impl Ctx {
             CFNode::CFStructuralNode
             | CFNode::CFEntryPoint(_)
             | CFNode::CFImpliedExit
-            | CFNode::CFResolvedExit => {}
+            | CFNode::CFResolvedExit
+            | CFNode::CFSetBackgroundPid(_) => {}
             CFNode::CFExecuteCommand(cmd) => self.transfer_command(cmd.clone()),
             CFNode::CFExecuteSubshell(_reason, entry, exit) => {
-                self.transfer_subshell(*entry, *exit)
+                self.transfer_subshell(*entry, *exit);
             }
             CFNode::CFApplyEffects(effects) => {
                 for e in effects {
@@ -1527,9 +1551,9 @@ impl Ctx {
             CFNode::CFSetExitCode(id) => {
                 self.output = set_exit_code(*id, &self.output);
             }
-            CFNode::CFUnresolvedExit => self.patch_output(&unreachable_state()),
-            CFNode::CFUnreachable => self.patch_output(&unreachable_state()),
-            CFNode::CFSetBackgroundPid(_) => {}
+            CFNode::CFUnresolvedExit | CFNode::CFUnreachable => {
+                self.patch_output(&unreachable_state());
+            }
             CFNode::CFDropPrefixAssignments => {
                 let mut c = self.output.clone();
                 c.s_prefix_values = VMap::empty();
@@ -1552,20 +1576,17 @@ impl Ctx {
         entry: Node,
         exit: Node,
     ) -> (BTreeSet<StateDependency>, InternalState) {
-        let (states, frame) = self.with_new_stack_frame(entry, false, |s| s.dataflow(entry));
+        let (states, deps) = self.with_new_stack_frame(entry, false, |s| s.dataflow(entry));
         let res = states
             .get(&exit)
-            .map(|x| x.1.clone())
-            .expect("ShellCheck internal error: Subshell has no exit");
-        let deps = frame.dependencies;
+            .map_or_else(unreachable_state, |x| x.1.clone());
         self.register_flow_result(entry, &states, &deps);
         (deps, res)
     }
 
     fn transfer_command(&mut self, name: Option<String>) {
-        let name = match name {
-            Some(n) => n,
-            None => return,
+        let Some(name) = name else {
+            return;
         };
         let targets = self.read_function(&name);
         let funcs: Vec<FunctionDefinition> = targets.into_iter().collect();
@@ -1605,8 +1626,7 @@ impl Ctx {
         entry: Node,
         exit: Node,
     ) -> (BTreeSet<StateDependency>, InternalState) {
-        let (states, frame) = self.with_new_stack_frame(entry, true, |s| s.dataflow(entry));
-        let deps = frame.dependencies;
+        let (states, deps) = self.with_new_stack_frame(entry, true, |s| s.dataflow(entry));
         let res = match states.get(&exit) {
             Some((_input, output)) => {
                 // Discard local variables.
@@ -1631,22 +1651,20 @@ impl Ctx {
             .cloned()
             .unwrap_or(CFNode::CFStructuralNode);
 
-        let inputs: Vec<InternalState> = incoming
+        let mut inputs = incoming
             .iter()
             .filter_map(|c| states.get(c).map(|x| x.1.clone()))
-            .filter(|c| c.s_is_reachable != Some(false))
-            .collect();
-        let input = if incoming.is_empty() {
-            new_internal_state()
-        } else if inputs.is_empty() {
-            unreachable_state()
-        } else {
-            let mut it = inputs.into_iter();
-            let mut acc = it.next().unwrap();
-            for x in it {
-                acc = self.merge_state(&acc, &x);
+            .filter(|c| c.s_is_reachable != Some(false));
+        let input = match inputs.next() {
+            None if incoming.is_empty() => new_internal_state(),
+            None => unreachable_state(),
+            Some(first) => {
+                let mut acc = first;
+                for x in inputs {
+                    acc = self.merge_state(&acc, &x);
+                }
+                acc
             }
-            acc
         };
 
         self.input = input.clone();
@@ -1681,15 +1699,15 @@ impl Ctx {
         let saved_out = self.output.clone();
         let mut n = ITERATION_COUNT;
         loop {
-            if n == 0 {
-                panic!("ShellCheck internal error: DFA did not reach fix point");
-            }
+            assert!(
+                n != 0,
+                "ShellCheck internal error: DFA did not reach fix point"
+            );
             if n == FALLBACK_THRESHOLD {
                 self.enable_cache = false;
             }
-            let next = match pending.iter().next().copied() {
-                Some(x) => x,
-                None => break,
+            let Some(next) = pending.iter().next().copied() else {
+                break;
             };
             pending.remove(&next);
             let nexts = self.process(&mut states, next);
@@ -1707,13 +1725,11 @@ impl Ctx {
         self.input = env.clone();
         self.output = env;
         self.node = entry;
-        let (states, frame) = self.with_new_stack_frame(entry, false, |s| s.dataflow(entry));
-        let deps = frame.dependencies;
+        let (states, deps) = self.with_new_stack_frame(entry, false, |s| s.dataflow(entry));
         self.register_flow_result(entry, &states, &deps);
         states
             .get(&exit)
-            .map(|x| x.1.clone())
-            .expect("ShellCheck internal error: Missing exit state")
+            .map_or_else(unreachable_state, |x| x.1.clone())
     }
 
     fn analyze_stragglers(&mut self, state: &InternalState, stragglers: &[FunctionDefinition]) {
@@ -1755,7 +1771,7 @@ fn insert_in(
     }
 }
 
-/// Create an InternalState that fulfills the given dependencies.
+/// Create an `InternalState` that fulfills the given dependencies.
 fn deps_to_state(deps: &BTreeSet<StateDependency>) -> InternalState {
     let mut state = new_internal_state();
     for dep in deps {
@@ -1778,7 +1794,7 @@ fn deps_to_state(deps: &BTreeSet<StateDependency>) -> InternalState {
     state
 }
 
-/// Get all the functions defined in an InternalState (keyed by entry node).
+/// Get all the functions defined in an `InternalState` (keyed by entry node).
 fn get_function_targets(state: &InternalState) -> BTreeMap<Node, FunctionDefinition> {
     let mut out = BTreeMap::new();
     for (_, val) in state.s_function_targets.iter() {
@@ -1843,12 +1859,18 @@ fn node_range(g: &CFGraph) -> (Node, Node) {
 }
 
 /// The abstract-interpretation entry point (Haskell `analyzeControlFlow`).
+#[must_use]
 pub fn analyze_control_flow(params: &CFGParameters, t: &Token) -> CFGAnalysis {
     let cfg = build_graph(*params, t);
-    let (entry, exit) = *cfg
-        .cf_id_to_range
-        .get(&t.id)
-        .expect("ShellCheck internal error: Missing root");
+    let Some(&(entry, exit)) = cfg.cf_id_to_range.get(&t.id) else {
+        return CFGAnalysis {
+            graph: cfg.cf_graph,
+            token_to_range: cfg.cf_id_to_range,
+            token_to_nodes: cfg.cf_id_to_nodes,
+            post_dominators: cfg.cf_post_dominators,
+            node_to_data: IdMap::default(),
+        };
+    };
 
     let mut ctx = Ctx::new(&cfg.cf_graph);
     let env = create_environment_state();
@@ -1994,7 +2016,7 @@ mod tests {
                 return t.id;
             }
         }
-        panic!("no assignment to {}", var);
+        panic!("no assignment to {var}");
     }
 
     /// Find ids of simple commands whose first literal word is `name`.
@@ -2145,6 +2167,7 @@ mod tests {
 
     /// Every answer `ProgramState` gives, for the names in `names`.
     fn answers(st: &ProgramState, names: &[&str]) -> String {
+        use std::fmt::Write as _;
         let mut out = format!(
             "reachable={} exit={:?} scope={:?}\n",
             st.state_is_reachable(),
@@ -2152,15 +2175,17 @@ mod tests {
             st.variables_in_scope()
         );
         for n in names {
-            out.push_str(&format!(
-                "{n}: {:?} {:?} {:?} {:?} {:?} {:?}\n",
+            writeln!(
+                out,
+                "{n}: {:?} {:?} {:?} {:?} {:?} {:?}",
                 st.variable_value(n),
                 st.space_status(n),
                 st.numerical_status(n),
                 st.variable_properties(n),
                 st.variable_may_be_declared_integer(n),
                 st.variable_may_be_assigned_integer(n),
-            ));
+            )
+            .unwrap();
         }
         out
     }

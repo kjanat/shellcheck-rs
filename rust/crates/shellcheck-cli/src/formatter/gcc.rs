@@ -46,6 +46,7 @@ pub fn render_file(
 }
 
 /// GCC-style error line for a file that could not be read.
+#[must_use]
 pub fn render_failure(file: &str, msg: &str) -> String {
     format!("{file}: {msg}")
 }

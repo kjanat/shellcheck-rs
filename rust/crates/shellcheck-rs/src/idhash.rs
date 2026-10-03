@@ -5,7 +5,7 @@
 //! seed: DoS-resistant, and several times more expensive than the lookup it
 //! guards when the key is one small integer. The keys here are dense indices
 //! produced by this crate, never attacker-chosen strings, so a
-//! multiply-and-rotate hash (the FxHash construction) is enough.
+//! multiply-and-rotate hash (the `FxHash` construction) is enough.
 //!
 //! Nothing may depend on the iteration order of an [`IdMap`] or [`IdSet`]
 //! (it is deterministic but arbitrary, as it was with `RandomState`);
@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 
-/// Multiplier of FxHash (rustc-hash 2): an odd constant with well mixed bits.
+/// Multiplier of `FxHash` (rustc-hash 2): an odd constant with well mixed bits.
 const K: u64 = 0xf135_7aea_2e62_a9c5;
 
 /// Hasher for small integer keys (and tuples or enums of them).
@@ -25,7 +25,7 @@ pub struct IdHasher {
 
 impl IdHasher {
     #[inline]
-    fn add(&mut self, x: u64) {
+    const fn add(&mut self, x: u64) {
         self.hash = (self.hash.rotate_left(5) ^ x).wrapping_mul(K);
     }
 }
@@ -67,12 +67,12 @@ impl Hasher for IdHasher {
     fn write_i32(&mut self, i: i32) {
         // Sign-extend through i64 so equal values hash equally however they
         // were widened.
-        self.add(i64::from(i) as u64);
+        self.add(i64::from(i).cast_unsigned());
     }
 
     #[inline]
     fn write_isize(&mut self, i: isize) {
-        self.add(i as u64);
+        self.add((i as i64).cast_unsigned());
     }
 
     #[inline]

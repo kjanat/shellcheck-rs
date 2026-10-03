@@ -4,6 +4,7 @@
 use std::path::{Component, Path, PathBuf};
 
 /// `System.FilePath.combine` (`</>`).
+#[must_use]
 pub fn combine(dir: &str, file: &str) -> String {
     if file.starts_with('/') || dir.is_empty() {
         return file.to_string();
@@ -20,6 +21,7 @@ pub fn combine(dir: &str, file: &str) -> String {
 
 /// `dropFileName`: everything up to and including the last separator, or `./`
 /// when there is none.
+#[must_use]
 pub fn drop_file_name(path: &str) -> String {
     match path.rfind('/') {
         Some(i) => path[..=i].to_string(),
@@ -28,12 +30,14 @@ pub fn drop_file_name(path: &str) -> String {
 }
 
 /// `takeFileName`: everything after the last separator.
+#[must_use]
 pub fn take_file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
 /// `takeDirectory`: `dropFileName` without its trailing separators, unless
 /// they are all there is.
+#[must_use]
 pub fn take_directory(path: &str) -> String {
     let dir = drop_file_name(path);
     let trimmed = dir.trim_end_matches('/');
@@ -45,12 +49,14 @@ pub fn take_directory(path: &str) -> String {
 }
 
 /// `doesFileExist`: something other than a directory is at `path`.
+#[must_use]
 pub fn does_file_exist(path: &str) -> bool {
     std::fs::metadata(path).is_ok_and(|m| !m.is_dir())
 }
 
 /// `getXdgDirectory XdgConfig`: `$XDG_CONFIG_HOME` when it is absolute, else
 /// `.config` in the home directory.
+#[must_use]
 pub fn xdg_config_home() -> Option<String> {
     match std::env::var("XDG_CONFIG_HOME") {
         Ok(dir) if dir.starts_with('/') => Some(dir),
@@ -62,6 +68,7 @@ pub fn xdg_config_home() -> Option<String> {
 
 /// `normalize`: `canonicalizePath`, falling back to making the path absolute
 /// and removing `.` / `..` lexically when it cannot be resolved.
+#[must_use]
 pub fn normalize(path: &str) -> String {
     if let Ok(p) = std::fs::canonicalize(path) {
         return p.to_string_lossy().into_owned();
@@ -89,6 +96,7 @@ pub fn normalize(path: &str) -> String {
 /// `show (ex :: IOException)` for what `openBinaryFile` throws, which is the
 /// text that reaches the user after "Not following: " and after a failing
 /// input's name.
+#[must_use]
 pub fn io_error_message(file: &str, e: &std::io::Error) -> String {
     use std::io::ErrorKind;
     let detail = match e.kind() {

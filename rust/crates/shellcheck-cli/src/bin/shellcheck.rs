@@ -17,9 +17,7 @@ use shellcheck_cli::formatter::{self, checkstyle, diff, fixer, gcc, json, json1,
 use shellcheck_cli::options::{self, Outcome, RunConfig};
 use shellcheck_cli::paths::{combine, drop_file_name, io_error_message, normalize};
 use shellcheck_cli::rc::{self, ConfigLookup};
-use shellcheck_rs::interface::{
-    CheckSpec, ErrorMessage, PositionedComment, SystemInterface, decode_bytes,
-};
+use shellcheck_rs::interface::{CheckSpec, ErrorMessage, PositionedComment, System, decode_bytes};
 
 fn main() -> ExitCode {
     // SHELLCHECK_OPTS is split on whitespace (Haskell `words`) and prepended to
@@ -27,7 +25,10 @@ fn main() -> ExitCode {
     // can still override them (shellcheck.hs `getOptions`: env ++ args).
     let mut argv: Vec<String> = Vec::new();
     if let Ok(opts) = std::env::var("SHELLCHECK_OPTS") {
-        argv.extend(opts.split_whitespace().map(|s| s.to_string()));
+        argv.extend(
+            opts.split_whitespace()
+                .map(std::string::ToString::to_string),
+        );
     }
     // `getArgs` hands Haskell every argument, whatever its bytes; a filename
     // that is not valid UTF-8 is a filename like any other. `std::env::args`
@@ -74,7 +75,7 @@ fn main() -> ExitCode {
 /// `external-sources=true`, which arrives as the annotation argument) says
 /// otherwise. `-P` and `source-path=` directives say where to look for it, with
 /// `SCRIPTDIR` standing for the checked script's own directory.
-struct IoSystemInterface {
+struct IoSystem {
     /// The input filenames, normalized (`inputs <- mapM normalize files`).
     inputs: Vec<String>,
     /// `externalSources options` (`-x`).
@@ -91,12 +92,9 @@ struct IoSystemInterface {
     original_args: HashMap<String, std::ffi::OsString>,
 }
 
-impl IoSystemInterface {
-    fn new(
-        config: &RunConfig,
-        original_args: HashMap<String, std::ffi::OsString>,
-    ) -> IoSystemInterface {
-        IoSystemInterface {
+impl IoSystem {
+    fn new(config: &RunConfig, original_args: HashMap<String, std::ffi::OsString>) -> Self {
+        Self {
             inputs: config.inputs.iter().map(|f| normalize(f)).collect(),
             external_sources: config.external_sources,
             source_paths: config.source_paths.clone(),
@@ -124,7 +122,7 @@ impl IoSystemInterface {
     }
 }
 
-impl SystemInterface for IoSystemInterface {
+impl System for IoSystem {
     fn read_file(
         &self,
         external_sources: Option<bool>,
@@ -235,7 +233,7 @@ fn load(
     name: &str,
     spec_template: &CheckSpec,
     config: Option<&ConfigLookup>,
-    sys: &Rc<IoSystemInterface>,
+    sys: &Rc<IoSystem>,
 ) -> Input {
     let contents = match sys.read_file(None, name) {
         Ok(s) => s,
@@ -256,7 +254,7 @@ fn load(
     if let Some(rc) = config.and_then(|c| c.get(name)) {
         rc::merge_into(&mut spec, &rc);
     }
-    let sys_dyn = Rc::clone(sys) as Rc<dyn SystemInterface>;
+    let sys_dyn = Rc::clone(sys) as Rc<dyn System>;
     let result = shellcheck_rs::checker::check_script_with(sys_dyn, &spec);
     Input::Ok(Loaded {
         comments: result.comments,
@@ -279,7 +277,7 @@ fn file_groups(comments: &[PositionedComment]) -> Vec<(String, Vec<PositionedCom
 
 /// The contents a formatter realigns tabs against: `siReadFile sys (Just True)`,
 /// i.e. read regardless of `-x`, and an unreadable file counts as empty.
-fn group_contents(sys: &Rc<IoSystemInterface>, file: &str) -> String {
+fn group_contents(sys: &Rc<IoSystem>, file: &str) -> String {
     sys.read_file(Some(true), file).unwrap_or_default()
 }
 
@@ -292,7 +290,7 @@ fn is_editor_config_error(comment: &PositionedComment) -> bool {
 }
 
 fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) -> ExitCode {
-    let sys = Rc::new(IoSystemInterface::new(&config, original_args));
+    let sys = Rc::new(IoSystem::new(&config, original_args));
     let RunConfig {
         format,
         inputs,
@@ -355,12 +353,9 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
     let mut err = stderr.lock();
 
     match format.as_str() {
-        // "quiet" is handled by the streaming short-circuit above and never
-        // reaches this match.
+        // Handled above via streaming short-circuit.
         "json1" => {
-            // Untab per file group (makeNonVirtual); each group prepended, so
-            // files and groups come out in reverse order of processing, matching
-            // the Haskell IORef accumulation.
+            // Untabs and prepends per file group, reversing output order to match Haskell IORef accumulation.
             let mut all: Vec<PositionedComment> = Vec::new();
             for i in &loaded {
                 match i {
@@ -377,13 +372,20 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
                     }
                 }
             }
-            let _ = writeln!(out, "{}", json1::render(&all));
+            match json1::render(&all) {
+                Ok(doc) => {
+                    let _ = writeln!(out, "{doc}");
+                }
+                Err(e) => {
+                    let _ = writeln!(err, "{e}");
+                    return ExitCode::from(2);
+                }
+            }
         }
 
         "json" => {
-            // Legacy array; no untab, and no grouping either: `collectResult`
-            // prepends the *whole* comment list once per file group, so a result
-            // spanning two files lists everything twice. Faithful to upstream.
+            // Legacy behavior (matches upstream `collectResult`):
+            // prepends the full comment list per file group, causing duplicates across multiple files.
             let mut all: Vec<PositionedComment> = Vec::new();
             for i in &loaded {
                 match i {
@@ -399,7 +401,15 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
                     }
                 }
             }
-            let _ = writeln!(out, "{}", json::render(&all));
+            match json::render(&all) {
+                Ok(doc) => {
+                    let _ = writeln!(out, "{doc}");
+                }
+                Err(e) => {
+                    let _ = writeln!(err, "{e}");
+                    return ExitCode::from(2);
+                }
+            }
         }
 
         "gcc" => {
@@ -444,8 +454,7 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
         "diff" => {
             let color_fn = |s: &str| diff::color_bold_red(use_color, s);
             let mut reported = false;
-            // Rendered per file in input order (the Haskell formatter runs
-            // once per file of the fix map as the driver folds over inputs).
+            // Rendered per file in input order (matches the Haskell driver fold over inputs).
             for i in &loaded {
                 match i {
                     Input::Ok(l) => {
@@ -469,15 +478,13 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
         }
 
         _ => {
-            // tty (default).
+            // TTY (default).
             let color_func = formatter::tty_color_func(use_color);
             let mut wiki: Vec<tty::WikiEntry> = Vec::new();
             for i in &loaded {
                 match i {
                     Input::Ok(l) => {
-                        // `appendComments` runs over the whole result before the
-                        // file groups are rendered, so the wiki summary is in
-                        // result order rather than group order.
+                        // Processes the full result (see `appendComments`) before rendering file groups to keep the wiki summary in result order.
                         for (file, comments) in file_groups(&l.comments) {
                             let contents = group_contents(&sys, &file);
                             let mut buf = String::new();
@@ -507,7 +514,7 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
         }
     }
 
-    // statusToCode of the largest status:
+    // Maps the largest status via `statusToCode`:
     // RuntimeException (2) > SupportFailure (4) > SomeProblems (1) > NoProblems (0).
     if any_failure {
         ExitCode::from(2)
@@ -545,8 +552,7 @@ mod tests {
 
     #[test]
     fn file_groups_splits_adjacent_runs() {
-        // `NE.groupWith sourceFile` over comments already sorted by file: a
-        // followed source contributes its own group under its own name.
+        // Groups pre-sorted comments by source file, matching `NE.groupWith sourceFile`.
         let comments = vec![
             comment_in("./lib.sh", 1),
             comment_in("./lib.sh", 2),
@@ -557,7 +563,13 @@ mod tests {
         assert_eq!(groups[0].0, "./lib.sh");
         assert_eq!(groups[0].1.len(), 2);
         assert_eq!(groups[1].0, "main.sh");
-        assert!(file_groups(&[]).is_empty());
+        assert_eq!(
+            file_groups(&[]),
+            [] as [(
+                std::string::String,
+                std::vec::Vec<shellcheck_rs::PositionedComment>
+            ); 0]
+        );
     }
 
     #[test]
@@ -582,7 +594,7 @@ mod tests {
     fn an_input_is_readable_but_an_unnamed_sibling_is_not() {
         // `allowable`: the inputs are readable whatever the flags say; anything
         // else needs -x or an `external-sources` directive.
-        let sys = IoSystemInterface {
+        let sys = IoSystem {
             inputs: vec![normalize("Cargo.toml")],
             external_sources: false,
             source_paths: Vec::new(),
@@ -602,7 +614,7 @@ mod tests {
             "Cargo.lock was not specified as input, and external files were disabled via directive."
         );
         // An input that is not there at all still reports the read failure.
-        let sys = IoSystemInterface {
+        let sys = IoSystem {
             inputs: vec![normalize("nope.sh")],
             external_sources: false,
             source_paths: Vec::new(),
@@ -623,7 +635,7 @@ mod tests {
         let path = std::env::temp_dir().join("rshellcheck-decode-test.sh");
         std::fs::write(&path, b"#!/bin/sh\necho \xff\xfe $u\n").unwrap();
         let name = path.to_str().unwrap().to_string();
-        let sys = IoSystemInterface {
+        let sys = IoSystem {
             inputs: vec![normalize(&name)],
             external_sources: false,
             source_paths: Vec::new(),
@@ -643,7 +655,7 @@ mod tests {
         // This crate's own directory, so the lookups do not depend on the
         // working directory the test happens to run in.
         let dir = env!("CARGO_MANIFEST_DIR");
-        let sys = IoSystemInterface {
+        let sys = IoSystem {
             inputs: Vec::new(),
             external_sources: true,
             source_paths: vec!["SCRIPTDIR/src".to_string()],
@@ -656,7 +668,7 @@ mod tests {
             format!("{dir}/src/options.rs")
         );
         // An annotation path is searched too, after the flag paths.
-        let no_flags = IoSystemInterface {
+        let no_flags = IoSystem {
             inputs: Vec::new(),
             external_sources: true,
             source_paths: Vec::new(),

@@ -17,12 +17,15 @@
 //!
 //! Public entry point: [`build_graph`] (Haskell `buildGraph`).
 
-use crate::ast::*;
+use crate::ast::{
+    AssignmentMode, CaseClause, CaseType, ConditionType, Id, IfClause, InnerToken, Token,
+};
 use crate::ast_lib::get_literal_string;
 use crate::ast_lib::will_split;
 use crate::ast_lib::{get_literal_string_def, oversimplify_concat};
 use crate::data::{FLAGS_FOR_MAPFILE, FLAGS_FOR_READ};
 use crate::idhash::{IdMap, IdSet};
+use crate::regex_lib::mk_regex;
 use std::collections::{BTreeSet, HashMap};
 
 use regex::Regex;
@@ -66,6 +69,7 @@ pub enum CFNode {
 /// Edge labels in a Control Flow Graph (`data CFEdge`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CFEdge {
+    /// An edge followed on an error exit; nothing creates one.
     CFEErrExit,
     /// Regular control flow edge.
     CFEFlow,
@@ -78,17 +82,29 @@ pub enum CFEdge {
 /// Actions we track (`data CFEffect`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CFEffect {
+    /// Add properties to a variable in an optional scope.
     CFSetProps(Option<Scope>, String, BTreeSet<CFVariableProp>),
+    /// Remove properties from a variable in an optional scope.
     CFUnsetProps(Option<Scope>, String, BTreeSet<CFVariableProp>),
+    /// Read a variable.
     CFReadVariable(String),
+    /// Write a variable in the current scope.
     CFWriteVariable(String, CFValue),
+    /// Write a global variable, as `declare -g` does.
     CFWriteGlobal(String, CFValue),
+    /// Write a function-local variable.
     CFWriteLocal(String, CFValue),
+    /// Write a prefix assignment such as `x=1 cmd`.
     CFWritePrefix(String, CFValue),
+    /// Define a function: name, defining token, entry node and exit node.
     CFDefineFunction(String, Id, Node, Node),
+    /// Unset a name with plain `unset`.
     CFUndefine(String),
+    /// Unset a variable with `unset -v`.
     CFUndefineVariable(String),
+    /// Unset a function with `unset -f`.
     CFUndefineFunction(String),
+    /// Unset a nameref with `unset -n`.
     CFUndefineNameref(String),
     /// Usage implies that this is an array (e.g. it's expanded with index).
     CFHintArray(String),
@@ -99,13 +115,16 @@ pub enum CFEffect {
 /// `data IdTagged a = IdTagged Id a`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdTagged<A> {
+    /// The token the value belongs to.
     pub id: Id,
+    /// The tagged value.
     pub value: A,
 }
 
 impl<A> IdTagged<A> {
-    pub fn new(id: Id, value: A) -> Self {
-        IdTagged { id, value }
+    /// `IdTagged id value`.
+    pub const fn new(id: Id, value: A) -> Self {
+        Self { id, value }
     }
 }
 
@@ -140,17 +159,24 @@ pub enum CFStringPart {
 /// The properties of a variable (`data CFVariableProp`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CFVariableProp {
+    /// Exported to the environment.
     CFVPExport,
+    /// An indexed array.
     CFVPArray,
+    /// An associative array.
     CFVPAssociative,
+    /// Declared integer with `declare -i`.
     CFVPInteger,
 }
 
 /// `data Scope`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Scope {
+    /// The global scope.
     GlobalScope,
+    /// The scope of the enclosing function.
     LocalScope,
+    /// The scope of a prefix assignment such as `x=1 cmd`.
     PrefixScope,
 }
 
@@ -186,17 +212,21 @@ pub struct CFGResult {
 /// `edges`, `labNodes`, `labEdges`).
 #[derive(Debug, Clone)]
 pub struct CFGraph {
+    /// Labeled nodes.
     pub nodes: Vec<(Node, CFNode)>,
+    /// Labeled edges as `(from, to, label)`.
     pub edges: Vec<(Node, Node, CFEdge)>,
 }
 
 impl CFGraph {
     /// `mkGraph nodes edges`.
-    pub fn mk_graph(nodes: Vec<(Node, CFNode)>, edges: Vec<(Node, Node, CFEdge)>) -> CFGraph {
-        CFGraph { nodes, edges }
+    #[must_use]
+    pub const fn mk_graph(nodes: Vec<(Node, CFNode)>, edges: Vec<(Node, Node, CFEdge)>) -> Self {
+        Self { nodes, edges }
     }
 
     /// Label of a node, if present.
+    #[must_use]
     pub fn lab(&self, n: Node) -> Option<&CFNode> {
         self.nodes.iter().find(|(id, _)| *id == n).map(|(_, l)| l)
     }
@@ -214,8 +244,8 @@ struct MutGraph {
 }
 
 impl MutGraph {
-    fn from(nodes: &[(Node, CFNode)], edges: &[(Node, Node, CFEdge)]) -> MutGraph {
-        let mut g = MutGraph {
+    fn from(nodes: &[(Node, CFNode)], edges: &[(Node, Node, CFEdge)]) -> Self {
+        let mut g = Self {
             labels: IdMap::default(),
             succ: IdMap::default(),
             pred: IdMap::default(),
@@ -232,7 +262,7 @@ impl MutGraph {
         g
     }
 
-    /// All node ids, ascending (mirrors PatriciaTree's `nodes`).
+    /// All node ids, ascending (mirrors `PatriciaTree`'s `nodes`).
     fn node_list(&self) -> Vec<Node> {
         let mut v: Vec<Node> = self.labels.keys().copied().collect();
         v.sort_unstable();
@@ -309,7 +339,7 @@ impl MutGraph {
     }
 
     /// `grev` — reverse every edge.
-    fn grev(&mut self) {
+    const fn grev(&mut self) {
         std::mem::swap(&mut self.succ, &mut self.pred);
     }
 }
@@ -322,7 +352,7 @@ impl MutGraph {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Range(pub Node, pub Node);
 
-fn node_to_range(n: Node) -> Range {
+const fn node_to_range(n: Node) -> Range {
     Range(n, n)
 }
 
@@ -353,8 +383,8 @@ struct Ctx {
 }
 
 impl Ctx {
-    fn new() -> Ctx {
-        Ctx {
+    const fn new() -> Self {
+        Self {
             is_condition: false,
             is_function: false,
             token_stack: Vec::new(),
@@ -381,8 +411,8 @@ fn apply_single(id: Id, effect: CFEffect) -> CFNode {
 }
 
 impl Builder {
-    fn new(params: CFGParameters) -> Builder {
-        Builder {
+    const fn new(params: CFGParameters) -> Self {
+        Self {
             next: 0,
             nodes: Vec::new(),
             edges: Vec::new(),
@@ -434,11 +464,9 @@ impl Builder {
         self.link_range_as(CFEdge::CFEFlow, a, b)
     }
 
-    fn link_ranges(&mut self, ranges: &[Range]) -> Range {
-        let mut it = ranges.iter();
-        let first = *it.next().expect("Empty range");
+    fn link_ranges(&mut self, first: Range, rest: &[Range]) -> Range {
         let mut acc = first;
-        for r in it {
+        for r in rest {
             acc = self.link_range(acc, *r);
         }
         acc
@@ -446,12 +474,12 @@ impl Builder {
 
     fn sequentially(&mut self, list: &[Token]) -> Range {
         let first = self.new_structural_node();
-        let mut ranges = vec![first];
+        let mut ranges = Vec::new();
         for t in list {
             let r = self.build(t);
             ranges.push(r);
         }
-        self.link_ranges(&ranges)
+        self.link_ranges(first, &ranges)
     }
 
     // --- scoping helpers (local / under / subshell / withFunctionScope) ---
@@ -471,7 +499,7 @@ impl Builder {
         self.ctx.return_target = saved_ret;
         let sr = node_to_range(start);
         let er = node_to_range(end);
-        self.link_ranges(&[sr, middle, er]);
+        self.link_ranges(sr, &[middle, er]);
         self.new_node_range(CFNode::CFExecuteSubshell(reason.to_string(), start, end))
     }
 
@@ -485,7 +513,7 @@ impl Builder {
         self.ctx.return_target = saved_ret;
         self.ctx.is_function = saved_fn;
         let er = node_to_range(end);
-        self.link_ranges(&[body, er])
+        self.link_ranges(body, &[er])
     }
 
     fn as_condition(&mut self, f: impl FnOnce(&mut Self) -> Range) -> Range {
@@ -510,12 +538,10 @@ impl Builder {
         let start = self.build(t);
         self.ctx.exit_target = saved_exit;
         self.ctx.return_target = saved_ret;
-        let range = self.link_ranges(&[
+        let range = self.link_ranges(
             entry,
-            start,
-            node_to_range(implied_exit),
-            node_to_range(end),
-        ]);
+            &[start, node_to_range(implied_exit), node_to_range(end)],
+        );
         self.register_node(t.id, range);
         self.ctx.token_stack.pop();
         range
@@ -530,228 +556,84 @@ impl Builder {
     }
 
     fn build_prime(&mut self, t: &Token) -> Range {
-        use InnerToken::*;
+        use InnerToken::{
+            T_AndIf, T_Annotation, T_Arithmetic, T_Array, T_Assignment, T_Backgrounded,
+            T_Backticked, T_Banged, T_BatsTest, T_BraceExpansion, T_BraceGroup, T_CaseExpression,
+            T_CoProc, T_CoProcBody, T_Condition, T_DollarArithmetic, T_DollarBraceCommandExpansion,
+            T_DollarBraced, T_DollarBracket, T_DollarDoubleQuoted, T_DollarExpansion,
+            T_DoubleQuoted, T_Extglob, T_FdRedirect, T_ForArithmetic, T_ForIn, T_Function,
+            T_HereDoc, T_HereString, T_IfExpression, T_Include, T_IndexedElement, T_IoDuplicate,
+            T_IoFile, T_NormalWord, T_OrIf, T_Pipeline, T_ProcSub, T_Redirecting, T_Script,
+            T_SelectIn, T_SimpleCommand, T_SourceCommand, T_Subshell, T_UntilExpression,
+            T_WhileExpression, TA_Assignment, TA_Binary, TA_Expansion, TA_Parenthesis, TA_Sequence,
+            TA_Trinary, TA_Unary, TA_Variable, TC_And, TC_Binary, TC_Empty, TC_Group, TC_Nullary,
+            TC_Or, TC_Unary,
+        };
         let id = t.id;
         match &*t.inner {
-            T_Annotation { token, .. } => self.build(token),
+            T_Annotation { token, .. }
+            | TC_Group { token, .. }
+            | TC_Nullary { token, .. }
+            | TC_Unary { token, .. } => self.build(token),
             T_Script { commands, .. } => self.sequentially(commands),
 
             // (( var[x=1] = ... ))
             TA_Assignment { op, lhs, rhs } if matches!(&*lhs.inner, TA_Variable { .. }) => {
-                let (name, indices) = match &*lhs.inner {
-                    TA_Variable { name, indices } => (name.clone(), indices.clone()),
-                    _ => unreachable!(),
-                };
-                let value = self.build(rhs);
-                let subscript = self.sequentially(&indices);
-                let read = if op == "=" {
-                    self.none()
-                } else {
-                    self.new_node_range(apply_single(id, CFEffect::CFReadVariable(name.clone())))
-                };
-                let val = if indices.is_empty() {
-                    CFValue::CFValueInteger
-                } else {
-                    CFValue::CFValueArray
-                };
-                let write =
-                    self.new_node_range(apply_single(id, CFEffect::CFWriteVariable(name, val)));
-                self.link_ranges(&[value, subscript, read, write])
+                self.build_ta_assignment(id, op, lhs, rhs)
             }
-            TA_Assignment { lhs, rhs, .. } => self.sequentially(&[lhs.clone(), rhs.clone()]),
-            TA_Binary { lhs, rhs, .. } => self.sequentially(&[lhs.clone(), rhs.clone()]),
-            TA_Expansion(list) => self.sequentially(list),
-            TA_Sequence(list) => self.sequentially(list),
-            TA_Parenthesis(t2) => self.build(t2),
-            TA_Trinary { cond, then, els } => {
-                let condition = self.build(cond);
-                let ifthen = self.build(then);
-                let elsethen = self.build(els);
-                let end = self.new_structural_node();
-                self.link_ranges(&[condition, ifthen, end]);
-                self.link_ranges(&[condition, elsethen, end])
+            TA_Assignment { lhs, rhs, .. } | TA_Binary { lhs, rhs, .. } => {
+                self.sequentially(&[lhs.clone(), rhs.clone()])
             }
-            TA_Variable { name, indices } => {
-                let subscript = self.sequentially(indices);
-                let hint = if indices.is_empty() {
-                    self.none()
-                } else {
-                    node_to_range(
-                        self.new_node(apply_single(id, CFEffect::CFHintArray(name.clone()))),
-                    )
-                };
-                let read = node_to_range(
-                    self.new_node(apply_single(id, CFEffect::CFReadVariable(name.clone()))),
-                );
-                self.link_ranges(&[subscript, hint, read])
-            }
+            TA_Expansion(list)
+            | TA_Sequence(list)
+            | T_Array(list)
+            | T_BraceExpansion(list)
+            | T_DollarDoubleQuoted(list)
+            | T_DoubleQuoted(list)
+            | T_NormalWord(list)
+            | T_Extglob { list, .. }
+            | T_DollarBraceCommandExpansion { list, .. } => self.sequentially(list),
+            TA_Parenthesis(t2) | T_CoProcBody(t2) | T_DollarBracket(t2) | T_HereString(t2)
+            | T_Include(t2) => self.build(t2),
+            TA_Trinary { cond, then, els } => self.build_ta_trinary(cond, then, els),
+            TA_Variable { name, indices } => self.build_ta_variable(id, name, indices),
             TA_Unary { op, operand }
                 if matches!(&*operand.inner, TA_Variable { .. })
                     && (op.contains("--") || op.contains("++")) =>
             {
-                let (name, indices) = match &*operand.inner {
-                    TA_Variable { name, indices } => (name.clone(), indices.clone()),
-                    _ => unreachable!(),
-                };
-                let subscript = self.sequentially(&indices);
-                let read =
-                    self.new_node_range(apply_single(id, CFEffect::CFReadVariable(name.clone())));
-                let val = if indices.is_empty() {
-                    CFValue::CFValueInteger
-                } else {
-                    CFValue::CFValueArray
-                };
-                let write =
-                    self.new_node_range(apply_single(id, CFEffect::CFWriteVariable(name, val)));
-                self.link_ranges(&[subscript, read, write])
+                self.build_ta_unary(id, operand)
             }
             TA_Unary { operand, .. } => self.build(operand),
 
-            TC_And {
-                typ: ConditionType::SingleBracket,
-                lhs,
-                rhs,
-                ..
-            } => self.sequentially(&[lhs.clone(), rhs.clone()]),
-            TC_And {
-                typ: ConditionType::DoubleBracket,
-                lhs,
-                rhs,
-                ..
-            } => {
-                let left = self.build(lhs);
-                let right = self.build(rhs);
-                let end = self.new_structural_node();
-                self.link_ranges(&[left, right, end]);
-                self.link_range(left, end)
+            TC_And { typ, lhs, rhs, .. } | TC_Or { typ, lhs, rhs, .. } => {
+                self.build_tc_and_or(*typ, lhs, rhs)
             }
-            TC_Binary { lhs, rhs, .. } => {
-                let left = self.build(lhs);
-                let right = self.build(rhs);
-                self.link_range(left, right)
-            }
+            TC_Binary { lhs, rhs, .. } => self.build_tc_binary(lhs, rhs),
             TC_Empty { .. } => self.new_structural_node(),
-            TC_Group { token, .. } => self.build(token),
-            TC_Nullary { token, .. } => self.build(token),
-            TC_Or {
-                typ: ConditionType::SingleBracket,
-                lhs,
-                rhs,
-                ..
-            } => self.sequentially(&[lhs.clone(), rhs.clone()]),
-            TC_Or {
-                typ: ConditionType::DoubleBracket,
-                lhs,
-                rhs,
-                ..
-            } => {
-                let left = self.build(lhs);
-                let right = self.build(rhs);
-                let end = self.new_structural_node();
-                self.link_ranges(&[left, right, end]);
-                self.link_range(left, end)
-            }
-            TC_Unary { token, .. } => self.build(token),
 
-            T_Arithmetic(root) => {
-                let exe = self.build(root);
-                let status = self.new_node_range(CFNode::CFSetExitCode(id));
-                self.link_range(exe, status)
-            }
-            T_AndIf { lhs, rhs } => {
-                let left = self.build(lhs);
-                let right = self.build(rhs);
-                let end = self.new_structural_node();
-                self.link_range(left, right);
-                self.link_range(right, end);
-                self.link_range(left, end)
-            }
-            T_Array(list) => self.sequentially(list),
-            T_Assignment { .. } => self.build_assignment(None, t),
-            T_Backgrounded(body) => {
-                let start = self.new_structural_node();
-                let fork = self.subshell(id, "backgrounding '&'", |b| b.build(body));
-                let pid = self.new_node_range(CFNode::CFSetBackgroundPid(id));
-                let status = self.new_node_range(CFNode::CFSetExitCode(id));
-                self.link_range(start, fork);
-                self.link_range_as(CFEdge::CFEFalseFlow, fork, pid);
-                self.link_ranges(&[start, pid, status])
-            }
-            T_Backticked(body) => self.subshell(id, "`..` expansion", |b| b.sequentially(body)),
-            T_Banged(cmd) => {
-                let main = self.build(cmd);
+            T_Arithmetic(token) | T_Banged(token) | T_Condition { token, .. } => {
+                let main = self.build(token);
                 let status = self.new_node_range(CFNode::CFSetExitCode(id));
                 self.link_range(main, status)
             }
-            T_BatsTest { body, .. } => {
-                let status = self.new_node_range(apply_single(
-                    id,
-                    CFEffect::CFWriteVariable("status".to_string(), CFValue::CFValueInteger),
-                ));
-                let output = self.new_node_range(apply_single(
-                    id,
-                    CFEffect::CFWriteVariable("output".to_string(), CFValue::CFValueString),
-                ));
-                let main = self.build(body);
-                self.link_ranges(&[status, output, main])
-            }
-            T_BraceExpansion(list) => self.sequentially(list),
-            T_BraceGroup(body) => self.sequentially(body),
+            T_AndIf { lhs, rhs } | T_OrIf { lhs, rhs } => self.build_and_or_if(lhs, rhs),
+            T_Assignment { .. } => self.build_assignment(None, t),
+            T_Backgrounded(body) => self.build_backgrounded(id, body),
+            T_Backticked(body) => self.subshell(id, "`..` expansion", |b| b.sequentially(body)),
+            T_BatsTest { body, .. } => self.build_bats_test(id, body),
+            T_BraceGroup(body) | T_HereDoc { body, .. } => self.sequentially(body),
 
             T_CaseExpression { word, cases } if cases.is_empty() => self.build(word),
             T_CaseExpression { word, cases } => self.build_case(id, word, cases),
 
-            T_Condition { token, .. } => {
-                let cond = self.build(token);
-                let status = self.new_node_range(CFNode::CFSetExitCode(id));
-                self.link_range(cond, status)
-            }
-            T_CoProc { name, body } => {
-                let maybe_name = match name {
-                    Some(x) => get_literal_string(x),
-                    None => Some("COPROC".to_string()),
-                };
-                let parent_node = match &maybe_name {
-                    Some(s) => apply_single(
-                        id,
-                        CFEffect::CFWriteVariable(s.clone(), CFValue::CFValueArray),
-                    ),
-                    None => CFNode::CFStructuralNode,
-                };
-                let start = self.new_structural_node();
-                let parent = self.new_node_range(parent_node);
-                let child = self.subshell(id, "coproc", |b| b.build(body));
-                let end = self.new_node_range(CFNode::CFSetExitCode(id));
-                self.link_range(start, parent);
-                self.link_range(start, child);
-                self.link_range(parent, end);
-                self.link_range_as(CFEdge::CFEFalseFlow, child, end);
-                Range(start.0, end.1)
-            }
-            T_CoProcBody(t2) => self.build(t2),
+            T_CoProc { name, body } => self.build_coproc(id, name.as_ref(), body),
 
             T_DollarArithmetic(arith) => self.build(arith),
-            T_DollarDoubleQuoted(list) => self.sequentially(list),
-            T_DollarSingleQuoted(_) => self.none(),
-            T_DollarBracket(t2) => self.build(t2),
             T_DollarBraced { op, .. } => self.build_dollar_braced(id, op),
-            T_DollarBraceCommandExpansion { list, .. } => self.sequentially(list),
-            T_DoubleQuoted(list) => self.sequentially(list),
-            T_DollarExpansion(body) => {
-                self.subshell(id, "$(..) expansion", |b| b.sequentially(body))
-            }
-            T_Extglob { list, .. } => self.sequentially(list),
+            T_DollarExpansion(body) => self.build_dollar_expansion(id, body),
 
             T_FdRedirect { fd, target } if fd.starts_with('{') => {
-                let name: String = fd[1..].chars().take_while(|c| *c != '}').collect();
-                let expression = self.build(target);
-                let effect = if is_closing_file_op(target) {
-                    apply_single(id, CFEffect::CFReadVariable(name))
-                } else {
-                    apply_single(id, CFEffect::CFWriteVariable(name, CFValue::CFValueInteger))
-                };
-                let rw = self.new_node_range(effect);
-                self.link_range(expression, rw)
+                self.build_fd_redirect(id, fd, target)
             }
             T_FdRedirect { target, .. } => self.build(target),
 
@@ -760,118 +642,33 @@ impl Builder {
                 cond,
                 step,
                 body,
-            } => {
-                let init_r = self.build(init);
-                let cond_r = self.build(cond);
-                let body_r = self.sequentially(body);
-                let inc_r = self.build(step);
-                let end = self.new_structural_node();
-                self.link_ranges(&[init_r, cond_r, body_r, inc_r]);
-                self.link_range(cond_r, end);
-                self.link_range(inc_r, cond_r);
-                Range(init_r.0, end.1)
-            }
-            T_ForIn { var, items, body } => self.for_in_helper(id, var, items, body),
-
-            T_Function { name, body, .. } => {
-                let saved_exit = self.ctx.exit_target;
-                self.ctx.exit_target = None;
-                let entry = self.new_node_range(CFNode::CFEntryPoint(format!("function {}", name)));
-                let f = self.with_function_scope(|b| b.build(body));
-                let range = self.link_range(entry, f);
-                self.ctx.exit_target = saved_exit;
-                let (entry_n, exit_n) = (range.0, range.1);
-                let definition = self.new_node_range(apply_single(
-                    id,
-                    CFEffect::CFDefineFunction(name.clone(), id, entry_n, exit_n),
-                ));
-                let exe = self.new_node_range(CFNode::CFSetExitCode(id));
-                self.link_range(definition, exe)
+            } => self.build_for_arithmetic(init, cond, step, body),
+            T_ForIn { var, items, body } | T_SelectIn { var, items, body } => {
+                self.for_in_helper(id, var, items, body)
             }
 
-            T_Glob(_) => self.none(),
-            T_HereString(t2) => self.build(t2),
-            T_HereDoc { body, .. } => self.sequentially(body),
+            T_Function { name, body, .. } => self.build_function(id, name, body),
 
             T_IfExpression { clauses, elses } => self.build_if(id, clauses, elses),
-            T_Include(t2) => self.build(t2),
-            T_IndexedElement { indices, value } => {
-                let indices_r = self.sequentially(indices);
-                let value_r = self.build(value);
-                self.link_range(indices_r, value_r)
-            }
+            T_IndexedElement { indices, value } => self.build_indexed_element(indices, value),
             T_IoDuplicate { op, .. } => self.build(op),
-            T_IoFile { op, file } => {
-                let exp = self.build(file);
-                let doesnt_do_much = self.build(op);
-                self.link_range(exp, doesnt_do_much)
-            }
-            T_Literal(_) => self.none(),
-            T_NormalWord(list) => self.sequentially(list),
-            T_OrIf { lhs, rhs } => {
-                let left = self.build(lhs);
-                let right = self.build(rhs);
-                let end = self.new_structural_node();
-                self.link_range(left, right);
-                self.link_range(right, end);
-                self.link_range(left, end)
-            }
+            T_IoFile { op, file } => self.build_io_file(op, file),
 
             T_Pipeline { commands, .. } if commands.len() == 1 => self.build(&commands[0]),
             T_Pipeline { commands, .. } => self.build_pipeline(id, commands),
 
-            T_ProcSub { op, list } => {
-                let start = self.new_structural_node();
-                let reason = format!("{}() process substitution", op);
-                let body = self.subshell(id, &reason, |b| b.sequentially(list));
-                let end = self.new_structural_node();
-                self.link_range(start, body);
-                self.link_range_as(CFEdge::CFEFalseFlow, body, end);
-                self.link_range(start, end)
-            }
-            T_Redirecting { redirs, cmd } => {
-                let redir = self.sequentially(redirs);
-                let body = self.build(cmd);
-                self.link_range(redir, body)
-            }
-            T_SelectIn { var, items, body } => self.for_in_helper(id, var, items, body),
+            T_ProcSub { op, list } => self.build_proc_sub(id, op, list),
+            T_Redirecting { redirs, cmd } => self.build_redirecting(redirs, cmd),
 
-            T_SimpleCommand { assignments, words } if words.is_empty() => {
-                let assigns = self.sequentially(assignments);
-                let status = self.new_node_range(CFNode::CFSetExitCode(id));
-                self.link_range(assigns, status)
-            }
             T_SimpleCommand { assignments, words } => {
-                let literal = get_unquoted_literal(&words[0]);
-                self.handle_command(id, assignments, words, literal)
+                self.build_simple_command(id, assignments, words)
             }
 
-            T_SingleQuoted(_) => self.none(),
-            T_SourceCommand { includer, included } => {
-                let cmd = self.build(includer);
-                let end = self.new_structural_node();
-                let _ = end; // withReturn end is a no-op in CFG.hs
-                let inline = self.build(included);
-                self.link_range(cmd, inline);
-                self.link_range(inline, end);
-                Range(cmd.0, inline.1)
+            T_SourceCommand { includer, included } => self.build_source_command(includer, included),
+            T_Subshell(body) => self.build_subshell(id, body),
+            T_UntilExpression { condition, body } | T_WhileExpression { condition, body } => {
+                self.while_helper(id, condition, body)
             }
-            T_Subshell(body) => {
-                let main = self.subshell(id, "explicit (..) subshell", |b| b.sequentially(body));
-                let status = self.new_node_range(CFNode::CFSetExitCode(id));
-                self.link_range(main, status)
-            }
-            T_UntilExpression { condition, body } => self.while_helper(id, condition, body),
-            T_WhileExpression { condition, body } => self.while_helper(id, condition, body),
-
-            T_CLOBBER
-            | T_GREATAND
-            | T_LESSAND
-            | T_LESSGREAT
-            | T_DGREAT
-            | T_Greater
-            | T_Less
-            | T_ParamSubSpecialChar(_) => self.none(),
 
             // Everything else: the Haskell `error` line is stripped in release
             // builds, falling through to `none`.
@@ -879,6 +676,235 @@ impl Builder {
         }
     }
 
+    fn build_ta_assignment(&mut self, id: Id, op: &str, lhs: &Token, rhs: &Token) -> Range {
+        let (name, indices) = match &*lhs.inner {
+            InnerToken::TA_Variable { name, indices } => (name.clone(), indices.clone()),
+            _ => unreachable!(),
+        };
+        let value = self.build(rhs);
+        let subscript = self.sequentially(&indices);
+        let read = if op == "=" {
+            self.none()
+        } else {
+            self.new_node_range(apply_single(id, CFEffect::CFReadVariable(name.clone())))
+        };
+        let val = if indices.is_empty() {
+            CFValue::CFValueInteger
+        } else {
+            CFValue::CFValueArray
+        };
+        let write = self.new_node_range(apply_single(id, CFEffect::CFWriteVariable(name, val)));
+        self.link_ranges(value, &[subscript, read, write])
+    }
+
+    fn build_ta_trinary(&mut self, cond: &Token, then: &Token, els: &Token) -> Range {
+        let condition = self.build(cond);
+        let ifthen = self.build(then);
+        let elsethen = self.build(els);
+        let end = self.new_structural_node();
+        self.link_ranges(condition, &[ifthen, end]);
+        self.link_ranges(condition, &[elsethen, end])
+    }
+
+    fn build_ta_variable(&mut self, id: Id, name: &str, indices: &[Token]) -> Range {
+        let subscript = self.sequentially(indices);
+        let hint = if indices.is_empty() {
+            self.none()
+        } else {
+            node_to_range(self.new_node(apply_single(id, CFEffect::CFHintArray(name.to_string()))))
+        };
+        let read = node_to_range(
+            self.new_node(apply_single(id, CFEffect::CFReadVariable(name.to_string()))),
+        );
+        self.link_ranges(subscript, &[hint, read])
+    }
+
+    fn build_ta_unary(&mut self, id: Id, operand: &Token) -> Range {
+        let (name, indices) = match &*operand.inner {
+            InnerToken::TA_Variable { name, indices } => (name.clone(), indices.clone()),
+            _ => unreachable!(),
+        };
+        let subscript = self.sequentially(&indices);
+        let read = self.new_node_range(apply_single(id, CFEffect::CFReadVariable(name.clone())));
+        let val = if indices.is_empty() {
+            CFValue::CFValueInteger
+        } else {
+            CFValue::CFValueArray
+        };
+        let write = self.new_node_range(apply_single(id, CFEffect::CFWriteVariable(name, val)));
+        self.link_ranges(subscript, &[read, write])
+    }
+
+    fn build_tc_and_or(&mut self, typ: ConditionType, lhs: &Token, rhs: &Token) -> Range {
+        match typ {
+            ConditionType::SingleBracket => self.sequentially(&[lhs.clone(), rhs.clone()]),
+            ConditionType::DoubleBracket => {
+                let left = self.build(lhs);
+                let right = self.build(rhs);
+                let end = self.new_structural_node();
+                self.link_ranges(left, &[right, end]);
+                self.link_range(left, end)
+            }
+        }
+    }
+
+    fn build_tc_binary(&mut self, lhs: &Token, rhs: &Token) -> Range {
+        let left = self.build(lhs);
+        let right = self.build(rhs);
+        self.link_range(left, right)
+    }
+
+    fn build_indexed_element(&mut self, indices: &[Token], value: &Token) -> Range {
+        let indices_r = self.sequentially(indices);
+        let value_r = self.build(value);
+        self.link_range(indices_r, value_r)
+    }
+
+    fn build_io_file(&mut self, op: &Token, file: &Token) -> Range {
+        let exp = self.build(file);
+        let doesnt_do_much = self.build(op);
+        self.link_range(exp, doesnt_do_much)
+    }
+
+    fn build_redirecting(&mut self, redirs: &[Token], cmd: &Token) -> Range {
+        let redir = self.sequentially(redirs);
+        let body = self.build(cmd);
+        self.link_range(redir, body)
+    }
+
+    fn build_simple_command(&mut self, id: Id, assignments: &[Token], words: &[Token]) -> Range {
+        let Some(cmd) = words.first() else {
+            let assigns = self.sequentially(assignments);
+            let status = self.new_node_range(CFNode::CFSetExitCode(id));
+            return self.link_range(assigns, status);
+        };
+        let literal = get_unquoted_literal(cmd);
+        self.handle_command(id, assignments, words, literal)
+    }
+
+    fn build_dollar_expansion(&mut self, id: Id, body: &[Token]) -> Range {
+        self.subshell(id, "$(..) expansion", |b| b.sequentially(body))
+    }
+
+    fn build_subshell(&mut self, id: Id, body: &[Token]) -> Range {
+        let main = self.subshell(id, "explicit (..) subshell", |b| b.sequentially(body));
+        let status = self.new_node_range(CFNode::CFSetExitCode(id));
+        self.link_range(main, status)
+    }
+
+    fn build_and_or_if(&mut self, lhs: &Token, rhs: &Token) -> Range {
+        let left = self.build(lhs);
+        let right = self.build(rhs);
+        let end = self.new_structural_node();
+        self.link_range(left, right);
+        self.link_range(right, end);
+        self.link_range(left, end)
+    }
+
+    fn build_backgrounded(&mut self, id: Id, body: &Token) -> Range {
+        let start = self.new_structural_node();
+        let fork = self.subshell(id, "backgrounding '&'", |b| b.build(body));
+        let pid = self.new_node_range(CFNode::CFSetBackgroundPid(id));
+        let status = self.new_node_range(CFNode::CFSetExitCode(id));
+        self.link_range(start, fork);
+        self.link_range_as(CFEdge::CFEFalseFlow, fork, pid);
+        self.link_ranges(start, &[pid, status])
+    }
+
+    fn build_bats_test(&mut self, id: Id, body: &Token) -> Range {
+        let status = self.new_node_range(apply_single(
+            id,
+            CFEffect::CFWriteVariable("status".to_string(), CFValue::CFValueInteger),
+        ));
+        let output = self.new_node_range(apply_single(
+            id,
+            CFEffect::CFWriteVariable("output".to_string(), CFValue::CFValueString),
+        ));
+        let main = self.build(body);
+        self.link_ranges(status, &[output, main])
+    }
+
+    fn build_coproc(&mut self, id: Id, name: Option<&Token>, body: &Token) -> Range {
+        let maybe_name = name.map_or_else(|| Some("COPROC".to_string()), get_literal_string);
+        let parent_node = maybe_name.map_or(CFNode::CFStructuralNode, |s| {
+            apply_single(id, CFEffect::CFWriteVariable(s, CFValue::CFValueArray))
+        });
+        let start = self.new_structural_node();
+        let parent = self.new_node_range(parent_node);
+        let child = self.subshell(id, "coproc", |b| b.build(body));
+        let end = self.new_node_range(CFNode::CFSetExitCode(id));
+        self.link_range(start, parent);
+        self.link_range(start, child);
+        self.link_range(parent, end);
+        self.link_range_as(CFEdge::CFEFalseFlow, child, end);
+        Range(start.0, end.1)
+    }
+
+    fn build_fd_redirect(&mut self, id: Id, fd: &str, target: &Token) -> Range {
+        let name: String = fd[1..].chars().take_while(|c| *c != '}').collect();
+        let expression = self.build(target);
+        let effect = if is_closing_file_op(target) {
+            apply_single(id, CFEffect::CFReadVariable(name))
+        } else {
+            apply_single(id, CFEffect::CFWriteVariable(name, CFValue::CFValueInteger))
+        };
+        let rw = self.new_node_range(effect);
+        self.link_range(expression, rw)
+    }
+
+    fn build_for_arithmetic(
+        &mut self,
+        init: &Token,
+        cond: &Token,
+        step: &Token,
+        body: &[Token],
+    ) -> Range {
+        let init_r = self.build(init);
+        let cond_r = self.build(cond);
+        let body_r = self.sequentially(body);
+        let inc_r = self.build(step);
+        let end = self.new_structural_node();
+        self.link_ranges(init_r, &[cond_r, body_r, inc_r]);
+        self.link_range(cond_r, end);
+        self.link_range(inc_r, cond_r);
+        Range(init_r.0, end.1)
+    }
+
+    fn build_function(&mut self, id: Id, name: &str, body: &Token) -> Range {
+        let saved_exit = self.ctx.exit_target;
+        self.ctx.exit_target = None;
+        let entry = self.new_node_range(CFNode::CFEntryPoint(format!("function {name}")));
+        let f = self.with_function_scope(|b| b.build(body));
+        let range = self.link_range(entry, f);
+        self.ctx.exit_target = saved_exit;
+        let (entry_n, exit_n) = (range.0, range.1);
+        let definition = self.new_node_range(apply_single(
+            id,
+            CFEffect::CFDefineFunction(name.to_string(), id, entry_n, exit_n),
+        ));
+        let exe = self.new_node_range(CFNode::CFSetExitCode(id));
+        self.link_range(definition, exe)
+    }
+
+    fn build_proc_sub(&mut self, id: Id, op: &str, list: &[Token]) -> Range {
+        let start = self.new_structural_node();
+        let reason = format!("{op}() process substitution");
+        let body = self.subshell(id, &reason, |b| b.sequentially(list));
+        let end = self.new_structural_node();
+        self.link_range(start, body);
+        self.link_range_as(CFEdge::CFEFalseFlow, body, end);
+        self.link_range(start, end)
+    }
+
+    fn build_source_command(&mut self, original_command: &Token, inlined_source: &Token) -> Range {
+        let cmd = self.build(original_command);
+        let end = self.new_structural_node();
+        let _ = end; // withReturn end is a no-op in CFG.hs
+        let inline = self.build(inlined_source);
+        self.link_range(cmd, inline);
+        self.link_range(inline, end);
+        Range(cmd.0, inline.1)
+    }
     // --- compound builders ---
 
     fn build_dollar_braced(&mut self, id: Id, op: &Token) -> Range {
@@ -888,13 +914,13 @@ impl Builder {
         let indices = get_index_references(&str);
         let offsets = get_offset_references(&str);
         let vals = self.build(op);
-        let mut deps_list = vec![vals];
+        let mut others = Vec::new();
         for x in indices.iter().chain(offsets.iter()) {
             let r =
                 node_to_range(self.new_node(apply_single(id, CFEffect::CFReadVariable(x.clone()))));
-            deps_list.push(r);
+            others.push(r);
         }
-        let deps = self.link_ranges(&deps_list);
+        let deps = self.link_ranges(vals, &others);
         let read = node_to_range(self.new_node(apply_single(
             id,
             CFEffect::CFReadVariable(reference.clone()),
@@ -952,10 +978,9 @@ impl Builder {
         for c in &leading {
             self.link_range_as(CFEdge::CFEFalseFlow, *c, end);
         }
-        let mut chain = vec![start];
-        chain.extend(last.iter().copied());
+        let mut chain = last;
         chain.push(end);
-        self.link_ranges(&chain)
+        self.link_ranges(start, &chain)
     }
 
     fn build_pipe(&mut self, id: Id, lp: bool, cmds: &[Token]) -> (Vec<Range>, Vec<Range>) {
@@ -994,10 +1019,10 @@ impl Builder {
 
         // neighbors: zip branches (tail branches)
         for i in 0..branches.len() - 1 {
-            let (typ, _cond, body) = branches[i];
+            let (typ, cond, body) = branches[i];
             let (_, next_cond, next_body) = branches[i + 1];
             // Failure case
-            self.link_range(_cond, next_cond);
+            self.link_range(cond, next_cond);
             // After body
             match typ {
                 CaseType::CaseBreak => {
@@ -1028,9 +1053,7 @@ impl Builder {
             conds.push(r);
         }
         let end = self.new_structural_node();
-        let mut chain = vec![start];
-        chain.extend(conds.iter().copied());
-        self.link_ranges(&chain);
+        self.link_ranges(start, &conds);
         for c in &conds {
             self.link_range(*c, end);
         }
@@ -1063,9 +1086,9 @@ impl Builder {
         };
         let body_r = self.sequentially(body);
         let exit = self.new_structural_node();
-        self.link_ranges(&[entry, expansion, assignment_choice]);
+        self.link_ranges(entry, &[expansion, assignment_choice]);
         for a in &assignments {
-            self.link_ranges(&[assignment_choice, *a, body_r]);
+            self.link_ranges(assignment_choice, &[*a, body_r]);
         }
         self.link_range(body_r, exit);
         self.link_range(expansion, exit);
@@ -1111,7 +1134,7 @@ impl Builder {
                     None => CFEffect::CFWriteVariable(var.clone(), value_type),
                 };
                 let write = self.new_node_range(apply_single(t.id, effect));
-                self.link_ranges(&[expand, index, read, write])
+                self.link_ranges(expand, &[index, read, write])
             }
             _ => self.none(),
         };
@@ -1129,28 +1152,25 @@ impl Builder {
         literal_cmd: Option<String>,
     ) -> Range {
         match literal_cmd.as_deref() {
-            Some("exit") => self.regular_expansion(vars, words, |b| b.handle_exit()),
-            Some("return") => self.regular_expansion(vars, words, |b| b.handle_return()),
+            Some("exit") => self.regular_expansion(vars, words, Self::handle_exit),
+            Some("return") => self.regular_expansion(vars, words, Self::handle_return),
             Some("unset") => {
                 self.regular_expansion_with_status(vars, words, |b| b.handle_unset(words))
             }
-            Some("declare") | Some("local") | Some("typeset") => self.handle_declare(words),
+            Some("declare" | "local" | "typeset") => self.handle_declare(words),
             Some("printf") => {
                 self.regular_expansion_with_status(vars, words, |b| b.handle_printf(words))
             }
             Some("wait") => {
                 self.regular_expansion_with_status(vars, words, |b| b.handle_wait(words))
             }
-            Some("mapfile") | Some("readarray") => {
+            Some("mapfile" | "readarray") => {
                 self.regular_expansion_with_status(vars, words, |b| b.handle_mapfile(words))
             }
             Some("read") => {
                 self.regular_expansion_with_status(vars, words, |b| b.handle_read(words))
             }
-            Some("DEFINE_boolean")
-            | Some("DEFINE_float")
-            | Some("DEFINE_integer")
-            | Some("DEFINE_string") => {
+            Some("DEFINE_boolean" | "DEFINE_float" | "DEFINE_integer" | "DEFINE_string") => {
                 self.regular_expansion_with_status(vars, words, |b| b.handle_define(words))
             }
             Some("builtin") => {
@@ -1194,7 +1214,7 @@ impl Builder {
         p: impl FnOnce(&mut Self) -> Range,
     ) -> Range {
         let args_r = self.sequentially(args);
-        let mut ranges = vec![args_r];
+        let mut ranges = Vec::new();
         for v in vars {
             let a = self.build_assignment(Some(Scope::PrefixScope), v);
             ranges.push(a);
@@ -1205,7 +1225,7 @@ impl Builder {
             let drop = self.new_node_range(CFNode::CFDropPrefixAssignments);
             ranges.push(drop);
         }
-        self.link_ranges(&ranges)
+        self.link_ranges(args_r, &ranges)
     }
 
     fn regular_expansion_with_status(
@@ -1221,53 +1241,49 @@ impl Builder {
     }
 
     fn handle_exit(&mut self) -> Range {
-        match self.ctx.exit_target {
-            Some(target) => {
-                let exit = self.new_node(CFNode::CFResolvedExit);
-                self.link(exit, target, CFEdge::CFEExit);
-                let unreachable = self.new_node(CFNode::CFUnreachable);
-                Range(exit, unreachable)
-            }
-            None => {
-                let exit = self.new_node(CFNode::CFUnresolvedExit);
-                let unreachable = self.new_node(CFNode::CFUnreachable);
-                Range(exit, unreachable)
-            }
+        if let Some(target) = self.ctx.exit_target {
+            let exit = self.new_node(CFNode::CFResolvedExit);
+            self.link(exit, target, CFEdge::CFEExit);
+            let unreachable = self.new_node(CFNode::CFUnreachable);
+            Range(exit, unreachable)
+        } else {
+            let exit = self.new_node(CFNode::CFUnresolvedExit);
+            let unreachable = self.new_node(CFNode::CFUnreachable);
+            Range(exit, unreachable)
         }
     }
 
     fn handle_return(&mut self) -> Range {
-        match self.ctx.return_target {
-            None => panic!("ShellCheck internal error: missing return target"),
-            Some(target) => {
-                let ret = self.new_node(CFNode::CFStructuralNode);
-                self.link(ret, target, CFEdge::CFEFlow);
-                let unreachable = self.new_node(CFNode::CFUnreachable);
-                Range(ret, unreachable)
-            }
-        }
+        let Some(target) = self.ctx.return_target else {
+            panic!("ShellCheck internal error: missing return target")
+        };
+        let ret = self.new_node(CFNode::CFStructuralNode);
+        self.link(ret, target, CFEdge::CFEFlow);
+        let unreachable = self.new_node(CFNode::CFUnreachable);
+        Range(ret, unreachable)
     }
 
     fn handle_unset(&mut self, words: &[Token]) -> Range {
         let args = &words[1..];
         // pairs :: [(flagString, token)]
-        let pairs: Vec<(String, Token)> = match get_gnu_opts("vfn", args) {
-            Some(flags) => flags
-                .into_iter()
-                .map(|(s, (flag, _val))| (s, flag))
-                .collect(),
-            None => args.iter().map(|c| (String::new(), c.clone())).collect(),
-        };
+        let pairs: Vec<(String, Token)> = get_gnu_opts("vfn", args).map_or_else(
+            || args.iter().map(|c| (String::new(), c.clone())).collect(),
+            |flags| {
+                flags
+                    .into_iter()
+                    .map(|(s, (flag, _val))| (s, flag))
+                    .collect()
+            },
+        );
         let names: Vec<&(String, Token)> = pairs.iter().filter(|(s, _)| s.is_empty()).collect();
         let flag_names: Vec<&String> = pairs
             .iter()
             .filter(|(s, _)| !s.is_empty())
             .map(|(s, _)| s)
             .collect();
-        let literal_names: Vec<(Token, String)> = names
+        let literal_names = names
             .iter()
-            .filter_map(|(_, t)| get_literal_string(t).map(|s| (t.clone(), s)))
-            .collect();
+            .filter_map(|(_, t)| get_literal_string(t).map(|s| (t.clone(), s)));
 
         let ctor: fn(String) -> CFEffect = if flag_names.iter().any(|s| *s == "n") {
             CFEffect::CFUndefineNameref
@@ -1279,7 +1295,6 @@ impl Builder {
             CFEffect::CFUndefine
         };
         let effects: Vec<IdTagged<CFEffect>> = literal_names
-            .into_iter()
             .map(|(token, name)| IdTagged::new(token.id, ctor(name)))
             .collect();
         self.new_node_range(CFNode::CFApplyEffects(effects))
@@ -1348,100 +1363,16 @@ impl Builder {
         let sc = scope(global, is_func);
 
         // mconcat of per-arg (evaluated, assignments, added, removed)
-        let mut evaluated: Vec<Token> = Vec::new();
-        let mut assignments: Vec<IdTagged<CFEffect>> = Vec::new();
-        let mut added: Vec<IdTagged<CFEffect>> = Vec::new();
-        let mut removed: Vec<IdTagged<CFEffect>> = Vec::new();
-
+        let mut effects = DeclareEffects::default();
         for a in args {
-            match &*a.inner {
-                InnerToken::T_Assignment {
-                    mode,
-                    var,
-                    indices,
-                    value,
-                } => {
-                    evaluated.extend(indices.iter().cloned());
-                    evaluated.push(value.clone());
-                    let mut parts: Vec<CFStringPart> = Vec::new();
-                    if *mode == AssignmentMode::Append {
-                        parts.push(CFStringPart::CFStringVariable(var.clone()));
-                    }
-                    parts.extend(token_to_parts(value));
-                    assignments.push(IdTagged::new(
-                        a.id,
-                        w(var.clone(), CFValue::CFValueComputed(value.id, parts)),
-                    ));
-                    if !added_props.is_empty() {
-                        added.push(IdTagged::new(
-                            a.id,
-                            CFEffect::CFSetProps(sc, var.clone(), added_props.clone()),
-                        ));
-                    }
-                    if !removed_props.is_empty() {
-                        // NB: CFG.hs passes addedProps here (guarded by removedProps).
-                        removed.push(IdTagged::new(
-                            a.id,
-                            CFEffect::CFUnsetProps(sc, var.clone(), added_props.clone()),
-                        ));
-                    }
-                }
-                _ => {
-                    let literal = get_literal_string_def("\0", a);
-                    let is_known = !literal.contains('\0');
-                    let m = var_assign_match(&literal);
-                    let name = m.clone().unwrap_or_else(|| literal.clone());
-                    evaluated.push(a.clone());
-                    if !is_variable_name(&name) {
-                        // (pre, [], [], [])
-                    } else if m.is_some() && is_known {
-                        let after_eq: String = {
-                            let rest: String = literal.chars().skip_while(|c| *c != '=').collect();
-                            rest.chars().skip(1).collect()
-                        };
-                        assignments.push(IdTagged::new(
-                            a.id,
-                            w(
-                                name.clone(),
-                                CFValue::CFValueComputed(
-                                    a.id,
-                                    vec![CFStringPart::CFStringLiteral(after_eq)],
-                                ),
-                            ),
-                        ));
-                        added.push(IdTagged::new(
-                            a.id,
-                            CFEffect::CFSetProps(sc, name.clone(), added_props.clone()),
-                        ));
-                        removed.push(IdTagged::new(
-                            a.id,
-                            CFEffect::CFUnsetProps(sc, name.clone(), removed_props.clone()),
-                        ));
-                    } else if m.is_some() {
-                        assignments
-                            .push(IdTagged::new(a.id, w(name.clone(), CFValue::CFValueString)));
-                        added.push(IdTagged::new(
-                            a.id,
-                            CFEffect::CFSetProps(sc, name.clone(), added_props.clone()),
-                        ));
-                        removed.push(IdTagged::new(
-                            a.id,
-                            CFEffect::CFUnsetProps(sc, name.clone(), removed_props.clone()),
-                        ));
-                    } else {
-                        // e.g. declare -i x
-                        added.push(IdTagged::new(
-                            a.id,
-                            CFEffect::CFSetProps(sc, name.clone(), added_props.clone()),
-                        ));
-                        removed.push(IdTagged::new(
-                            a.id,
-                            CFEffect::CFUnsetProps(sc, name.clone(), removed_props.clone()),
-                        ));
-                    }
-                }
-            }
+            to_effects(&mut effects, a, w, sc, &added_props, &removed_props);
         }
+        let DeclareEffects {
+            evaluated,
+            assignments,
+            added,
+            removed,
+        } = effects;
 
         let before = self.sequentially(&evaluated);
         let assignments_r = self.new_node_range(CFNode::CFApplyEffects(assignments));
@@ -1456,7 +1387,7 @@ impl Builder {
             self.new_node_range(CFNode::CFApplyEffects(removed))
         };
         let result = self.new_node_range(CFNode::CFSetExitCode(cmd.id));
-        self.link_ranges(&[before, assignments_r, added_r, removed_r, result])
+        self.link_ranges(before, &[assignments_r, added_r, removed_r, result])
     }
 
     fn handle_printf(&mut self, words: &[Token]) -> Range {
@@ -1508,7 +1439,7 @@ impl Builder {
         };
         let (id, name) = get_from_arg()
             .or_else(get_from_fallback)
-            .unwrap_or((cmd.id, "MAPFILE".to_string()));
+            .unwrap_or_else(|| (cmd.id, "MAPFILE".to_string()));
         let effect = IdTagged::new(id, CFEffect::CFWriteVariable(name, CFValue::CFValueArray));
         self.new_node_range(CFNode::CFApplyEffects(vec![effect]))
     }
@@ -1580,8 +1511,9 @@ impl Builder {
                 .collect()
         };
 
-        let main: Vec<IdTagged<CFEffect>> = match get_gnu_opts(FLAGS_FOR_READ, args) {
-            Some(flags) => {
+        let main: Vec<IdTagged<CFEffect>> = get_gnu_opts(FLAGS_FOR_READ, args).map_or_else(
+            || fallback(args),
+            |flags| {
                 if lookup("a", &flags).is_some() {
                     // `-a` present: use its array name, else fall back to the
                     // trailing literal run (the `-a` value wasn't a real name).
@@ -1589,9 +1521,8 @@ impl Builder {
                 } else {
                     with_fields(&flags)
                 }
-            }
-            None => fallback(args),
-        };
+            },
+        );
         self.new_node_range(CFNode::CFApplyEffects(main))
     }
 
@@ -1612,18 +1543,122 @@ impl Builder {
     }
 }
 
+/// The concatenated per-argument outputs of `handleDeclare`'s `toEffects`.
+#[derive(Default)]
+struct DeclareEffects {
+    evaluated: Vec<Token>,
+    assignments: Vec<IdTagged<CFEffect>>,
+    added: Vec<IdTagged<CFEffect>>,
+    removed: Vec<IdTagged<CFEffect>>,
+}
+
+/// `toEffects` from `handleDeclare`, appending one argument's effects to `out`.
+fn to_effects(
+    out: &mut DeclareEffects,
+    a: &Token,
+    w: fn(String, CFValue) -> CFEffect,
+    sc: Option<Scope>,
+    added_props: &BTreeSet<CFVariableProp>,
+    removed_props: &BTreeSet<CFVariableProp>,
+) {
+    if let InnerToken::T_Assignment {
+        mode,
+        var,
+        indices,
+        value,
+    } = &*a.inner
+    {
+        out.evaluated.extend(indices.iter().cloned());
+        out.evaluated.push(value.clone());
+        let mut parts: Vec<CFStringPart> = Vec::new();
+        if *mode == AssignmentMode::Append {
+            parts.push(CFStringPart::CFStringVariable(var.clone()));
+        }
+        parts.extend(token_to_parts(value));
+        out.assignments.push(IdTagged::new(
+            a.id,
+            w(var.clone(), CFValue::CFValueComputed(value.id, parts)),
+        ));
+        if !added_props.is_empty() {
+            out.added.push(IdTagged::new(
+                a.id,
+                CFEffect::CFSetProps(sc, var.clone(), added_props.clone()),
+            ));
+        }
+        if !removed_props.is_empty() {
+            // NB: CFG.hs passes addedProps here (guarded by removedProps).
+            out.removed.push(IdTagged::new(
+                a.id,
+                CFEffect::CFUnsetProps(sc, var.clone(), added_props.clone()),
+            ));
+        }
+    } else {
+        let literal = get_literal_string_def("\0", a);
+        let is_known = !literal.contains('\0');
+        let m = var_assign_match(&literal);
+        let name = m.clone().unwrap_or_else(|| literal.clone());
+        out.evaluated.push(a.clone());
+        if !is_variable_name(&name) {
+            // (pre, [], [], [])
+        } else if m.is_some() && is_known {
+            let after_eq: String = {
+                let rest: String = literal.chars().skip_while(|c| *c != '=').collect();
+                rest.chars().skip(1).collect()
+            };
+            out.assignments.push(IdTagged::new(
+                a.id,
+                w(
+                    name.clone(),
+                    CFValue::CFValueComputed(a.id, vec![CFStringPart::CFStringLiteral(after_eq)]),
+                ),
+            ));
+            out.added.push(IdTagged::new(
+                a.id,
+                CFEffect::CFSetProps(sc, name.clone(), added_props.clone()),
+            ));
+            out.removed.push(IdTagged::new(
+                a.id,
+                CFEffect::CFUnsetProps(sc, name, removed_props.clone()),
+            ));
+        } else if m.is_some() {
+            out.assignments
+                .push(IdTagged::new(a.id, w(name.clone(), CFValue::CFValueString)));
+            out.added.push(IdTagged::new(
+                a.id,
+                CFEffect::CFSetProps(sc, name.clone(), added_props.clone()),
+            ));
+            out.removed.push(IdTagged::new(
+                a.id,
+                CFEffect::CFUnsetProps(sc, name, removed_props.clone()),
+            ));
+        } else {
+            // e.g. declare -i x
+            out.added.push(IdTagged::new(
+                a.id,
+                CFEffect::CFSetProps(sc, name.clone(), added_props.clone()),
+            ));
+            out.removed.push(IdTagged::new(
+                a.id,
+                CFEffect::CFUnsetProps(sc, name, removed_props.clone()),
+            ));
+        }
+    }
+}
+
 // ===========================================================================
 // buildGraph
 // ===========================================================================
 
 /// `buildGraph :: CFGParameters -> Token -> CFGResult`.
+#[must_use]
 pub fn build_graph(params: CFGParameters, root: &Token) -> CFGResult {
     let mut builder = Builder::new(params);
-    builder.build_root(root);
+    let root_range = builder.build_root(root);
     let base: CFW = (builder.nodes, builder.edges, builder.mapping, builder.assoc);
 
     // renumberTopologically is commented out in CFG.hs; keep the same.
-    let (nodes, edges, mapping, association) = remove_unnecessary_structural_nodes(base);
+    let ((nodes, edges, mapping, association), recursive_remapping) =
+        collapse_structural_nodes(base);
 
     let id_to_range: IdMap<Id, (Node, Node)> = {
         let mut m = IdMap::default();
@@ -1639,7 +1674,7 @@ pub fn build_graph(params: CFGParameters, root: &Token) -> CFGResult {
         .filter(|(_, _, e)| matches!(e, CFEdge::CFEFlow | CFEdge::CFEExit))
         .collect();
 
-    let (_, main_exit) = *id_to_range.get(&root.id).expect("root range missing");
+    let main_exit = remap_helper(&recursive_remapping, root_range.1);
 
     let mut id_to_nodes: IdMap<Id, BTreeSet<Node>> = IdMap::default();
     for (id, n) in &association {
@@ -1716,6 +1751,7 @@ fn remap_graph(remap: &IdMap<Node, Node>, g: CFW) -> CFW {
 }
 
 /// Renumber the graph so there are no gaps in node numbers.
+#[must_use]
 pub fn renumber_graph(g: CFW) -> CFW {
     let mut ids: Vec<Node> = g.0.iter().map(|(n, _)| *n).collect();
     ids.sort_unstable();
@@ -1724,6 +1760,7 @@ pub fn renumber_graph(g: CFW) -> CFW {
 }
 
 /// Renumber the graph in topological order.
+#[must_use]
 pub fn renumber_topologically(g: CFW) -> CFW {
     let order = topsort(&g.0, &g.1);
     let renumbering: IdMap<Node, Node> =
@@ -1732,7 +1769,23 @@ pub fn renumber_topologically(g: CFW) -> CFW {
 }
 
 /// Collapse structural nodes that just form long chains like x->x->x.
+#[must_use]
 pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
+    collapse_structural_nodes(g).0
+}
+
+/// `removeUnnecessaryStructuralNodes`, also returning its `recursiveRemapping`.
+fn collapse_structural_nodes(g: CFW) -> (CFW, IdMap<Node, Node>) {
+    fn recursive_lookup(map: &IdMap<Node, Node>, mut node: Node) -> Node {
+        while let Some(&x) = map.get(&node) {
+            if x == node {
+                break;
+            }
+            node = x;
+        }
+        node
+    }
+
     let (nodes, edges, mapping, association) = g;
 
     let is_regular_edge = |e: &(Node, Node, CFEdge)| matches!(e.2, CFEdge::CFEFlow);
@@ -1780,15 +1833,6 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
         remapping.insert(k, v); // last wins, matching sorted fromList
     }
 
-    fn recursive_lookup(map: &IdMap<Node, Node>, mut node: Node) -> Node {
-        while let Some(&x) = map.get(&node) {
-            if x == node {
-                break;
-            }
-            node = x;
-        }
-        node
-    }
     let recursive_remapping: IdMap<Node, Node> = remapping
         .keys()
         .map(|c| (*c, recursive_lookup(&remapping, *c)))
@@ -1803,10 +1847,11 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
         .filter(|e| !edges_to_collapse_set.contains(e))
         .collect();
 
-    remap_graph(
+    let graph = remap_graph(
         &recursive_remapping,
         (filtered_nodes, filtered_edges, mapping, association),
-    )
+    );
+    (graph, recursive_remapping)
 }
 
 // ===========================================================================
@@ -1816,6 +1861,7 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
 /// Topological sort matching fgl's `topsort = reverse . postflatten . dff`:
 /// DFS forest over nodes in ascending id order, successors in edge order,
 /// reverse of the postorder.
+#[must_use]
 pub fn topsort(nodes: &[(Node, CFNode)], edges: &[(Node, Node, CFEdge)]) -> Vec<Node> {
     let mut succ: IdMap<Node, Vec<Node>> = IdMap::default();
     for (n, _) in nodes {
@@ -1843,8 +1889,7 @@ pub fn topsort(nodes: &[(Node, CFNode)], edges: &[(Node, Node, CFEdge)]) -> Vec<
             if idx < children.len() {
                 stack.push((node, idx + 1));
                 let c = children[idx];
-                if !visited.contains(&c) {
-                    visited.insert(c);
+                if visited.insert(c) {
                     stack.push((c, 0));
                 }
             } else {
@@ -1971,6 +2016,7 @@ impl PostDominators {
     /// `target `elem` (postDominators ! base)`: is `target` on `base`'s
     /// post-dominator chain? False for a `base` past the end of the array or
     /// with an empty entry, exactly as indexing it and finding `[]` was.
+    #[must_use]
     pub fn contains(&self, base: Node, target: Node) -> bool {
         if !self.has_chain.get(base).copied().unwrap_or(false) {
             return false;
@@ -1993,11 +2039,14 @@ impl PostDominators {
     }
 
     /// The length of the array upstream indexes, for the bounds assertions.
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.has_chain.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    /// Whether the array upstream indexes is empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.has_chain.is_empty()
     }
 }
@@ -2046,8 +2095,7 @@ fn dom(g: &MutGraph, root: Node) -> (Vec<Option<Node>>, Vec<bool>) {
             if idx < children.len() {
                 stack.push((node, idx + 1));
                 let c = children[idx];
-                if !visited.contains(&c) {
-                    visited.insert(c);
+                if visited.insert(c) {
                     stack.push((c, 0));
                 }
             } else {
@@ -2068,23 +2116,22 @@ fn dom(g: &MutGraph, root: Node) -> (Vec<Option<Node>>, Vec<bool>) {
     let mut idom: Vec<Option<Node>> = vec![None; cap];
     idom[root] = Some(root);
 
-    let intersect =
-        |mut a: Node, mut b: Node, idom: &[Option<Node>], number: &[Option<usize>]| -> Node {
-            while a != b {
-                while number[a] > number[b] {
-                    a = idom[a].expect("a node on a dominator chain has an idom");
-                }
-                while number[b] > number[a] {
-                    b = idom[b].expect("a node on a dominator chain has an idom");
-                }
+    let intersect = |mut a: Node, mut b: Node, idom: &[Option<Node>], number: &[Option<usize>]| {
+        while a != b {
+            while number[a] > number[b] {
+                a = idom[a]?;
             }
-            a
-        };
+            while number[b] > number[a] {
+                b = idom[b]?;
+            }
+        }
+        Some(a)
+    };
 
     let mut changed = true;
     while changed {
         changed = false;
-        for &n in rpo.iter() {
+        for &n in &rpo {
             if n == root {
                 continue;
             }
@@ -2099,10 +2146,7 @@ fn dom(g: &MutGraph, root: Node) -> (Vec<Option<Node>>, Vec<bool>) {
                     continue; // unreachable pred
                 }
                 if idom[p].is_some() {
-                    new_idom = Some(match new_idom {
-                        None => p,
-                        Some(cur) => intersect(p, cur, &idom, &number),
-                    });
+                    new_idom = new_idom.map_or(Some(p), |cur| intersect(p, cur, &idom, &number));
                 }
             }
             if let Some(ni) = new_idom
@@ -2137,10 +2181,10 @@ fn dom(g: &MutGraph, root: Node) -> (Vec<Option<Node>>, Vec<bool>) {
 // ASTLib helpers ported locally (CFG.hs relies on these)
 // ===========================================================================
 
-pub(crate) fn is_variable_start_char(c: char) -> bool {
+pub(crate) const fn is_variable_start_char(c: char) -> bool {
     c == '_' || c.is_ascii_lowercase() || c.is_ascii_uppercase()
 }
-pub(crate) fn is_variable_char(c: char) -> bool {
+pub(crate) const fn is_variable_char(c: char) -> bool {
     is_variable_start_char(c) || c.is_ascii_digit()
 }
 pub(crate) fn is_special_variable_char(c: char) -> bool {
@@ -2150,10 +2194,8 @@ pub(crate) fn is_special_variable_char(c: char) -> bool {
 /// `isVariableName`.
 pub(crate) fn is_variable_name(s: &str) -> bool {
     let mut it = s.chars();
-    match it.next() {
-        Some(x) => is_variable_start_char(x) && it.all(is_variable_char),
-        None => false,
-    }
+    it.next()
+        .is_some_and(|x| is_variable_start_char(x) && it.all(is_variable_char))
 }
 
 /// `getUnquotedLiteral`.
@@ -2241,42 +2283,44 @@ pub(crate) fn get_braced_modifier(s: &str) -> String {
 fn variable_name_regex() -> &'static Regex {
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"[_a-zA-Z][_a-zA-Z0-9]*").unwrap())
+    RE.get_or_init(|| mk_regex(r"[_a-zA-Z][_a-zA-Z0-9]*"))
 }
 
 /// `getIndexReferences`.
 pub(crate) fn get_index_references(s: &str) -> Vec<String> {
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"(\[.*\])").unwrap());
-    match re.captures(s).and_then(|c| c.get(1)) {
-        Some(m) => variable_name_regex()
-            .find_iter(m.as_str())
-            .map(|x| x.as_str().to_string())
-            .collect(),
-        None => Vec::new(),
-    }
+    let re = RE.get_or_init(|| mk_regex(r"(\[.*\])"));
+    re.captures(s)
+        .and_then(|c| c.get(1))
+        .map_or_else(Vec::new, |m| {
+            variable_name_regex()
+                .find_iter(m.as_str())
+                .map(|x| x.as_str().to_string())
+                .collect()
+        })
 }
 
 /// `getOffsetReferences`.
 pub(crate) fn get_offset_references(mods: &str) -> Vec<String> {
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"^(\[.+\])? *:([^-=?+].*)").unwrap());
-    match re.captures(mods).and_then(|c| c.get(2)) {
-        Some(m) => variable_name_regex()
-            .find_iter(m.as_str())
-            .map(|x| x.as_str().to_string())
-            .collect(),
-        None => Vec::new(),
-    }
+    let re = RE.get_or_init(|| mk_regex(r"^(\[.+\])? *:([^-=?+].*)"));
+    re.captures(mods)
+        .and_then(|c| c.get(2))
+        .map_or_else(Vec::new, |m| {
+            variable_name_regex()
+                .find_iter(m.as_str())
+                .map(|x| x.as_str().to_string())
+                .collect()
+        })
 }
 
 /// `variableAssignRegex` match: group 1 of `^([_a-zA-Z][_a-zA-Z0-9]*)=`.
 fn var_assign_match(s: &str) -> Option<String> {
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"^([_a-zA-Z][_a-zA-Z0-9]*)=").unwrap());
+    let re = RE.get_or_init(|| mk_regex(r"^([_a-zA-Z][_a-zA-Z0-9]*)="));
     re.captures(s)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
@@ -2296,22 +2340,22 @@ fn is_unmodified_parameter_expansion(t: &Token) -> bool {
 
 /// `tokenToParts`.
 fn token_to_parts(t: &Token) -> Vec<CFStringPart> {
-    use InnerToken::*;
+    use InnerToken::{
+        T_DollarArithmetic, T_DollarBraced, T_DollarBracket, T_DoubleQuoted, T_Literal,
+        T_NormalWord, T_SingleQuoted,
+    };
     match &*t.inner {
-        T_NormalWord(list) => list.iter().flat_map(token_to_parts).collect(),
-        T_DoubleQuoted(list) => list.iter().flat_map(token_to_parts).collect(),
-        T_SingleQuoted(str) => vec![CFStringPart::CFStringLiteral(str.clone())],
-        T_Literal(str) => vec![CFStringPart::CFStringLiteral(str.clone())],
-        T_DollarArithmetic(_) => vec![CFStringPart::CFStringInteger],
-        T_DollarBracket(_) => vec![CFStringPart::CFStringInteger],
+        T_NormalWord(list) | T_DoubleQuoted(list) => list.iter().flat_map(token_to_parts).collect(),
+        T_SingleQuoted(str) | T_Literal(str) => vec![CFStringPart::CFStringLiteral(str.clone())],
+        T_DollarArithmetic(_) | T_DollarBracket(_) => vec![CFStringPart::CFStringInteger],
         T_DollarBraced { op, .. } if is_unmodified_parameter_expansion(t) => {
             let reference = get_braced_reference(&oversimplify_concat(op));
             vec![CFStringPart::CFStringVariable(reference)]
         }
-        _ => match get_literal_string(t) {
-            Some(s) => vec![CFStringPart::CFStringLiteral(s)],
-            None => vec![CFStringPart::CFStringUnknown],
-        },
+        _ => get_literal_string(t).map_or_else(
+            || vec![CFStringPart::CFStringUnknown],
+            |s| vec![CFStringPart::CFStringLiteral(s)],
+        ),
     }
 }
 
@@ -2346,11 +2390,9 @@ fn is_closing_file_op(op: &Token) -> bool {
 
 pub(crate) fn will_become_multiple_args(t: &Token) -> bool {
     will_concat_in_assignment(t) || {
-        use InnerToken::*;
+        use InnerToken::{T_BraceExpansion, T_Extglob, T_Glob, T_NormalWord};
         match &*t.inner {
-            T_Extglob { .. } => true,
-            T_Glob(_) => true,
-            T_BraceExpansion(_) => true,
+            T_Extglob { .. } | T_Glob(_) | T_BraceExpansion(_) => true,
             T_NormalWord(l) => l.iter().any(will_become_multiple_args),
             _ => false,
         }
@@ -2358,11 +2400,10 @@ pub(crate) fn will_become_multiple_args(t: &Token) -> bool {
 }
 
 pub(crate) fn will_concat_in_assignment(t: &Token) -> bool {
-    use InnerToken::*;
+    use InnerToken::{T_DollarBraced, T_DoubleQuoted, T_NormalWord};
     match &*t.inner {
         T_DollarBraced { .. } => is_array_expansion(t),
-        T_DoubleQuoted(parts) => parts.iter().any(will_concat_in_assignment),
-        T_NormalWord(parts) => parts.iter().any(will_concat_in_assignment),
+        T_DoubleQuoted(parts) | T_NormalWord(parts) => parts.iter().any(will_concat_in_assignment),
         _ => false,
     }
 }
@@ -2392,8 +2433,9 @@ pub(crate) enum PseudoGlob {
 pub(crate) fn word_to_exact_pseudo_glob(word: &Token) -> Option<Vec<PseudoGlob>> {
     fn f(x: &Token) -> Option<Vec<PseudoGlob>> {
         match &*x.inner {
-            InnerToken::T_Literal(s) => Some(s.chars().map(PseudoGlob::PGChar).collect()),
-            InnerToken::T_SingleQuoted(s) => Some(s.chars().map(PseudoGlob::PGChar).collect()),
+            InnerToken::T_Literal(s) | InnerToken::T_SingleQuoted(s) => {
+                Some(s.chars().map(PseudoGlob::PGChar).collect())
+            }
             InnerToken::T_Glob(g) if g == "?" => Some(vec![PseudoGlob::PGAny]),
             InnerToken::T_Glob(g) if g == "*" => Some(vec![PseudoGlob::PGMany]),
             // exact = true: '[' globs and everything else fail.
@@ -2405,23 +2447,19 @@ pub(crate) fn word_to_exact_pseudo_glob(word: &Token) -> Option<Vec<PseudoGlob>>
     for p in crate::ast_lib::get_word_parts(word) {
         out.extend(f(p)?);
     }
-    Some(simplify_pseudo_glob(out))
+    Some(simplify_pseudo_glob(&out))
 }
 
-fn simplify_pseudo_glob(list: Vec<PseudoGlob>) -> Vec<PseudoGlob> {
+fn simplify_pseudo_glob(list: &[PseudoGlob]) -> Vec<PseudoGlob> {
     fn order(s: &[PseudoGlob]) -> Vec<PseudoGlob> {
         let anys: Vec<PseudoGlob> = s
             .iter()
             .copied()
             .filter(|x| *x == PseudoGlob::PGAny)
             .collect();
-        let many: Vec<PseudoGlob> = s
-            .iter()
-            .copied()
-            .filter(|x| *x == PseudoGlob::PGMany)
-            .collect();
+        let many = s.iter().copied().filter(|x| *x == PseudoGlob::PGMany);
         let mut out = anys;
-        out.extend(many.into_iter().take(1));
+        out.extend(many.take(1));
         out
     }
     let mut out = Vec::new();
@@ -2464,8 +2502,7 @@ pub(crate) fn pseudo_glob_is_superset_of(x: &[PseudoGlob], y: &[PseudoGlob]) -> 
 fn has_catch_all(conds: &[Token]) -> bool {
     conds.iter().any(|c| {
         word_to_exact_pseudo_glob(c)
-            .map(|pg| pseudo_glob_is_superset_of(&pg, &[PseudoGlob::PGMany]))
-            .unwrap_or(false)
+            .is_some_and(|pg| pseudo_glob_is_superset_of(&pg, &[PseudoGlob::PGMany]))
     })
 }
 
@@ -2510,7 +2547,6 @@ pub(crate) fn get_opts(
     longopts: &[(String, bool)],
     args: &[Token],
 ) -> Option<Vec<(String, (Token, Token))>> {
-    let flag_map = build_flag_map(spec, longopts);
     fn list_to_args(list: &[Token]) -> Vec<(String, (Token, Token))> {
         list.iter()
             .map(|x| (String::new(), (x.clone(), x.clone())))
@@ -2568,10 +2604,9 @@ pub(crate) fn get_opts(
         }
         if let Some(word) = s.strip_prefix("--") {
             // span (/= '=')
-            let (name, arg) = match word.find('=') {
-                Some(idx) => (&word[..idx], &word[idx..]),
-                None => (word, ""),
-            };
+            let (name, arg) = word
+                .find('=')
+                .map_or((word, ""), |idx| (&word[..idx], &word[idx..]));
             let needs_arg = if arbitrary {
                 *flag_map.get(name).unwrap_or(&false)
             } else {
@@ -2607,6 +2642,7 @@ pub(crate) fn get_opts(
         }
     }
 
+    let flag_map = build_flag_map(spec, longopts);
     process(args, &flag_map, gnu, arbitrary_long_opts)
 }
 
@@ -2633,42 +2669,41 @@ pub(crate) fn get_generic_opts(args: &[Token]) -> Vec<(String, (Token, Token))> 
         out.extend(get_generic_opts(rest));
         return out;
     }
-    if let Some(optstring) = s.strip_prefix('-') {
-        // Only if not "--" (handled) — a bare "-" gives empty opts.
-        let opts: String = optstring.chars().take_while(|c| *c != '\0').collect();
-        let opt_chars: Vec<char> = opts.chars().collect();
-        match rest.first() {
-            Some(next) if get_literal_string_def("\0", next).starts_with('-') => {
-                let mut out: Vec<(String, (Token, Token))> = opt_chars
+    let Some(optstring) = s.strip_prefix('-') else {
+        let mut out = vec![(String::new(), (token.clone(), token.clone()))];
+        out.extend(get_generic_opts(rest));
+        return out;
+    };
+    // Only if not "--" (handled) — a bare "-" gives empty opts.
+    let opts: String = optstring.chars().take_while(|c| *c != '\0').collect();
+    let opt_chars: Vec<char> = opts.chars().collect();
+    match rest.first() {
+        Some(next) if get_literal_string_def("\0", next).starts_with('-') => {
+            let mut out: Vec<(String, (Token, Token))> = opt_chars
+                .iter()
+                .map(|c| (c.to_string(), (token.clone(), token.clone())))
+                .collect();
+            out.extend(get_generic_opts(rest));
+            out
+        }
+        Some(next) => {
+            let remainder = &rest[1..];
+            if let Some((last, initial)) = opt_chars.split_last() {
+                let mut out: Vec<(String, (Token, Token))> = initial
                     .iter()
                     .map(|c| (c.to_string(), (token.clone(), token.clone())))
                     .collect();
-                out.extend(get_generic_opts(rest));
+                out.push((last.to_string(), (token.clone(), next.clone())));
+                out.extend(get_generic_opts(remainder));
                 out
+            } else {
+                get_generic_opts(remainder)
             }
-            Some(next) => {
-                let remainder = &rest[1..];
-                if let Some((last, initial)) = opt_chars.split_last() {
-                    let mut out: Vec<(String, (Token, Token))> = initial
-                        .iter()
-                        .map(|c| (c.to_string(), (token.clone(), token.clone())))
-                        .collect();
-                    out.push((last.to_string(), (token.clone(), next.clone())));
-                    out.extend(get_generic_opts(remainder));
-                    out
-                } else {
-                    get_generic_opts(remainder)
-                }
-            }
-            None => opt_chars
-                .iter()
-                .map(|c| (c.to_string(), (token.clone(), token.clone())))
-                .collect(),
         }
-    } else {
-        let mut out = vec![(String::new(), (token.clone(), token.clone()))];
-        out.extend(get_generic_opts(rest));
-        out
+        None => opt_chars
+            .iter()
+            .map(|c| (c.to_string(), (token.clone(), token.clone())))
+            .collect(),
     }
 }
 
@@ -2681,7 +2716,7 @@ pub(crate) fn may_become_multiple_args(t: &Token) -> bool {
 }
 
 pub(crate) fn mbma_f(quoted: bool, t: &Token) -> bool {
-    use InnerToken::*;
+    use InnerToken::{T_DollarBraced, T_DoubleQuoted, T_NormalWord};
     match &*t.inner {
         T_DollarBraced { op, .. } => {
             let string = oversimplify_concat(op);
@@ -2827,7 +2862,7 @@ mod tests {
         let (_, main_exit) = result.cf_id_to_range[&root.id];
         assert!(main_exit < result.cf_post_dominators.len());
         assert!(result.cf_post_dominators.contains(main_exit, main_exit));
-        assert!(!result.cf_graph.nodes.is_empty());
+        assert_ne!(result.cf_graph.nodes, Vec::new());
     }
 
     #[test]
@@ -2840,7 +2875,7 @@ mod tests {
             "case $x in foo) echo a;; *) exit 1;; esac\n",
             "( echo sub ) | grep x || true\n",
             "declare -i -x y=5; declare -A m; unset -v y\n",
-            "x=$(echo hi) && echo \"${x:-default}\" &\n",
+            concat!("x=$(echo hi) && echo \"${", "x:-default}\" &\n"),
             "if [ -z \"$x\" ]; then echo empty; elif true; then echo mid; else echo full; fi\n",
             "mapfile -t arr < file; printf -v out '%s' done\n",
         ];

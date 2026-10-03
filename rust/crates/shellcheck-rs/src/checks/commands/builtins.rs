@@ -1,13 +1,16 @@
 //! Checks on shell builtins, from `ShellCheck.Checks.Commands`.
-use super::common::*;
-use super::{CommandCheck, CommandName::*};
+use super::common::word_args;
+use super::{CommandCheck, CommandName::Exactly};
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::get_command_name;
 use crate::analyzer_lib::is_array_expansion;
 use crate::analyzer_lib::is_true_assignment_source;
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{
+    Out, Parameters, StackData, err, get_command_token_or_this, get_path, get_printf_formats,
+    get_variable_flow, head_id, info, simple_command_words, style, warn,
+};
+use crate::ast::{CaseClause, Id, InnerToken, Token};
 use crate::ast_lib;
 use crate::ast_lib::e4m;
 use crate::ast_lib::get_literal_string;
@@ -32,21 +35,18 @@ pub(super) fn check_trap_quotes() -> CommandCheck {
         let Some(words) = simple_command_words(t) else {
             return;
         };
-        let arg = match words.get(1) {
-            Some(a) => a,
-            None => return,
+        let Some(arg) = words.get(1) else {
+            return;
         };
         // checkTrap (T_NormalWord _ [T_DoubleQuoted _ rs])
-        let parts = match &*arg.inner {
-            InnerToken::T_NormalWord(l) => l,
-            _ => return,
+        let InnerToken::T_NormalWord(parts) = &*arg.inner else {
+            return;
         };
         if parts.len() != 1 {
             return;
         }
-        let rs = match &*parts[0].inner {
-            InnerToken::T_DoubleQuoted(rs) => rs,
-            _ => return,
+        let InnerToken::T_DoubleQuoted(rs) = &*parts[0].inner else {
+            return;
         };
         for r in rs {
             let hit = matches!(
@@ -124,9 +124,8 @@ pub(super) fn check_printf_var() -> CommandCheck {
         // f: skip leading `--`, `-v var`, `-vVAR`.
         let mut rest = arguments(te);
         loop {
-            let first = match rest.first() {
-                Some(f) => f,
-                None => return,
+            let Some(first) = rest.first() else {
+                return;
             };
             let s = ast_lib::get_literal_string(first);
             if s.as_deref() == Some("--") {
@@ -176,8 +175,7 @@ pub(super) fn check_exported_expansions() -> CommandCheck {
                     arg.id(),
                     2163,
                     &format!(
-                        "This does not export '{}'. Remove $/${{}} for that, or use ${{var?}} to quiet.",
-                        name
+                        "This does not export '{name}'. Remove $/${{}} for that, or use ${{var?}} to quiet."
                     ),
                 );
             }
@@ -261,13 +259,11 @@ pub(super) fn check_while_getopts_case() -> CommandCheck {
         let arg1 = &words[1];
         let name = &words[2];
 
-        let options = match ast_lib::get_literal_string(arg1) {
-            Some(o) => o,
-            None => return,
+        let Some(options) = ast_lib::get_literal_string(arg1) else {
+            return;
         };
-        let getopts_var = match ast_lib::get_literal_string(name) {
-            Some(v) => v,
-            None => return,
+        let Some(getopts_var) = ast_lib::get_literal_string(name) else {
+            return;
         };
 
         let path = get_path(params, te);
@@ -283,15 +279,13 @@ pub(super) fn check_while_getopts_case() -> CommandCheck {
                 _ => {}
             }
         }
-        let body = match while_body {
-            Some(b) => b,
-            None => return,
+        let Some(body) = while_body else {
+            return;
         };
 
         // mapMaybe findCase body !!! 0
-        let case_tok = match body.iter().find_map(|s| getopts_find_case(s)) {
-            Some(c) => c,
-            None => return,
+        let Some(case_tok) = body.iter().find_map(|s| getopts_find_case(s)) else {
+            return;
         };
         let (word, cases, case_id) = match &*case_tok.inner {
             InnerToken::T_CaseExpression { word, cases } => (word, cases, case_tok.id()),
@@ -303,9 +297,11 @@ pub(super) fn check_while_getopts_case() -> CommandCheck {
         if wp.len() != 1 {
             return;
         }
-        let braced_word = match &*wp[0].inner {
-            InnerToken::T_DollarBraced { op, .. } => op,
-            _ => return,
+        let InnerToken::T_DollarBraced {
+            op: braced_word, ..
+        } = &*wp[0].inner
+        else {
+            return;
         };
         // [T_Literal _ caseVar] <- return $ getWordParts bracedWord
         let wp2 = get_word_parts(braced_word);
@@ -364,8 +360,7 @@ pub(super) fn check_read_expansions() -> CommandCheck {
                             y.id(),
                             2229,
                             &format!(
-                                "This does not read '{}'. Remove $/${{}} for that, or use ${{var?}} to quiet.",
-                                name
+                                "This does not read '{name}'. Remove $/${{}} for that, or use ${{var?}} to quiet."
                             ),
                         );
                     }
@@ -398,10 +393,9 @@ pub(super) fn check_source_args() -> CommandCheck {
         let args = arguments(te);
         if args.len() >= 2 {
             // (file:arg1:_)
-            let arg1 = &args[1];
             warn(
                 out,
-                arg1.id(),
+                args[1].id(),
                 2240,
                 "The dot command does not support arguments in sh/dash. Set them as variables.",
             );
@@ -451,8 +445,7 @@ pub(super) fn check_arg_comparison(cmd: &'static str) -> CommandCheck {
                     );
                 }
             }
-            // 'let' is parsed as a sequence of arithmetic expansions, so we
-            // want the additional warning for "x=".
+            // 'let' is parsed as a sequence of arithmetic expansions, so we want the additional warning for "x=".
             if cmd == "let"
                 && let Some(token) = ast_lib::get_trailing_unquoted_literal(arg)
                 && ast_lib::get_literal_string(token).is_some_and(|s| s.ends_with('='))
@@ -465,9 +458,8 @@ pub(super) fn check_arg_comparison(cmd: &'static str) -> CommandCheck {
 
 pub(super) fn check_masked_returns(cmd: &'static str) -> CommandCheck {
     CommandCheck::new(Exactly(cmd), move |params, te, out| {
-        let name = match get_command_name(te) {
-            Some(n) => n,
-            None => return,
+        let Some(name) = get_command_name(te) else {
+            return;
         };
         let path = get_path(params, te);
         let shell = params.shell;
@@ -517,8 +509,7 @@ pub(super) fn check_multiple_declaring(cmd: &'static str) -> CommandCheck {
                     get_command_token_or_this(arg).id(),
                     2316,
                     &format!(
-                        "This applies {} to the variable named {}, which is probably not what you want. Use a separate command or the appropriate `declare` options instead.",
-                        cmd, lit
+                        "This applies {cmd} to the variable named {lit}, which is probably not what you want. Use a separate command or the appropriate `declare` options instead."
                     ),
                 );
             }
@@ -527,8 +518,8 @@ pub(super) fn check_multiple_declaring(cmd: &'static str) -> CommandCheck {
 }
 
 /// `map checkBackreferencingDeclaration declaringCommands`: an argument of a
-/// declaring command that reads a variable assigned earlier in the same
-/// command, where that assignment has not taken effect yet.
+/// declaring command that reads a variable assigned earlier in the same command,
+/// where that assignment has not taken effect yet.
 pub(super) fn check_backreferencing_declaration(cmd: &'static str) -> CommandCheck {
     CommandCheck::new(Exactly(cmd), move |params, te, out| {
         let Some(cfga) = params.cfg_analysis.as_ref() else {
@@ -559,9 +550,8 @@ pub(super) fn check_backreferencing_declaration(cmd: &'static str) -> CommandChe
 }
 
 fn trap_check(param: &Token, out: &mut Out) {
-    let str = match get_literal_string(param) {
-        Some(s) => s,
-        None => return,
+    let Some(str) = get_literal_string(param) else {
+        return;
     };
     let id = param.id();
     // checkNumeric
@@ -698,7 +688,7 @@ fn printf_check(format: &Token, more: &[Token], out: &mut Out) {
             if n == 1 {
                 word.to_string()
             } else {
-                format!("{}s", word)
+                format!("{word}s")
             }
         };
         if arg_count == 0 && format_count == 0 {
@@ -787,8 +777,7 @@ fn backref_warn(
                 *id,
                 2318,
                 &format!(
-                    "This assignment is used again in this '{}', but won't have taken effect. Use two '{}'s.",
-                    cmd, cmd
+                    "This assignment is used again in this '{cmd}', but won't have taken effect. Use two '{cmd}'s."
                 ),
             );
         }
@@ -799,7 +788,7 @@ fn modifies_variable(params: &Parameters, token: &Token, name: &str) -> bool {
     let flow = get_variable_flow(
         &params.parent_map,
         &params.id_map,
-        params.has_lastpipe,
+        params.has_lastpipe(),
         token,
     );
     flow.iter().any(|sd| match sd {

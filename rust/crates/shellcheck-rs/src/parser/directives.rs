@@ -1,5 +1,5 @@
 //! ShellCheck directive annotations (`# shellcheck ...`).
-use super::*;
+use super::{ALMOST_SPACE_CHARS, Annotation, PResult, Parser, Position, Severity};
 
 impl Parser {
     /// `readAnnotations`: zero or more `# shellcheck ...` directive lines.
@@ -7,21 +7,18 @@ impl Parser {
         let mut out = Vec::new();
         loop {
             let m = self.mark();
-            match self.read_annotation() {
-                Ok(mut anns) => {
-                    out.append(&mut anns);
-                    self.allspacing();
+            if let Ok(mut anns) = self.read_annotation() {
+                out.append(&mut anns);
+                self.allspacing();
+            } else {
+                // `many` stops on a failure that consumed nothing; a
+                // malformed directive has consumed its prefix, and nothing
+                // above can recover from that.
+                if self.idx != m.idx {
+                    self.commit();
                 }
-                Err(()) => {
-                    // `many` stops on a failure that consumed nothing; a
-                    // malformed directive has consumed its prefix, and nothing
-                    // above can recover from that.
-                    if self.idx != m.idx {
-                        self.commit();
-                    }
-                    self.reset(m);
-                    break;
-                }
+                self.reset(m);
+                break;
             }
         }
         out
@@ -30,7 +27,7 @@ impl Parser {
     /// A single `# shellcheck <keys>` directive. A line that is not one fails
     /// without consuming; one that is, but is malformed, is a parse error.
     pub(super) fn read_annotation(&mut self) -> PResult<Vec<Annotation>> {
-        self.called("shellcheck directive", |p| p.read_annotation_body())
+        self.called("shellcheck directive", Self::read_annotation_body)
     }
 
     fn read_annotation_body(&mut self) -> PResult<Vec<Annotation>> {
@@ -59,7 +56,7 @@ impl Parser {
         let mut keys = 0;
         // `many1 readKey`
         loop {
-            if matches!(self.peek(), None | Some('\n') | Some('\r')) {
+            if matches!(self.peek(), None | Some('\n' | '\r')) {
                 break;
             }
             let key_pos = self.pos();
@@ -214,23 +211,22 @@ impl Parser {
     /// rather than split: a malformed element is a parse failure at a precise
     /// position, and what it leaves unread is what SC1125 reports.
     fn read_disable_value(&mut self) -> PResult<Vec<Annotation>> {
-        self.plain_or_quoted(|p| p.read_disable_elements())
+        self.plain_or_quoted(Self::read_disable_elements)
     }
 
     fn read_disable_elements(&mut self) -> PResult<Vec<Annotation>> {
         let mut out = Vec::new();
         let m = self.mark();
-        match self.read_disable_element() {
-            Ok(a) => out.push(a),
-            Err(()) => {
-                // `sepBy` allows none at all, but only if the first attempt
-                // consumed nothing.
-                if self.idx != m.idx {
-                    return Err(());
-                }
-                self.reset(m);
-                return Ok(out);
+        if let Ok(a) = self.read_disable_element() {
+            out.push(a);
+        } else {
+            // `sepBy` allows none at all, but only if the first attempt
+            // consumed nothing.
+            if self.idx != m.idx {
+                return Err(());
             }
+            self.reset(m);
+            return Ok(out);
         }
         while self.char(',').is_ok() {
             out.push(self.read_disable_element()?);
@@ -287,8 +283,9 @@ impl Parser {
         }
         let m = self.mark();
         let mut s = String::new();
-        while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-            s.push(self.bump().unwrap());
+        while let Some(c) = self.peek().filter(char::is_ascii_digit) {
+            s.push(c);
+            self.bump();
         }
         if s.is_empty() {
             self.reset(m);
@@ -349,7 +346,7 @@ impl Parser {
     ) -> PResult<Vec<Annotation>> {
         Ok(match key {
             "disable" => return self.read_disable_value(),
-            "enable" => self.plain_or_quoted(|p| p.read_enable_names())?,
+            "enable" => self.plain_or_quoted(Self::read_enable_names)?,
             "source" => vec![Annotation::SourceOverride(self.read_directive_word()?)],
             "source-path" => vec![Annotation::SourcePath(self.read_directive_word()?)],
             "shell" => {
@@ -368,7 +365,7 @@ impl Parser {
             }
             "extended-analysis" => {
                 let pos = self.pos();
-                let v = self.plain_or_quoted(|p| p.read_letters1())?;
+                let v = self.plain_or_quoted(Self::read_letters1)?;
                 match v.as_str() {
                     "true" => vec![Annotation::ExtendedAnalysis(true)],
                     "false" => vec![Annotation::ExtendedAnalysis(false)],
@@ -386,7 +383,7 @@ impl Parser {
             }
             "external-sources" => {
                 let pos = self.pos();
-                let v = self.plain_or_quoted(|p| p.read_letters1())?;
+                let v = self.plain_or_quoted(Self::read_letters1)?;
                 match v.as_str() {
                     // `readAnnotationWithoutPrefix sandboxed`: this path is the
                     // sandboxed one (a script), where enabling external sources

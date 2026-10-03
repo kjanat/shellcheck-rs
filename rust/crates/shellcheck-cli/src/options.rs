@@ -11,9 +11,9 @@
 //!   * 0 = no problems / informational exit (`--version`, `--help`, ...)
 //!   * 1 = problems found (decided by the caller after running the analysis)
 //!   * 2 = runtime/IO error (decided by the caller)
-//!   * 3 = SyntaxFailure  (getOpt/usage error: unknown flag, missing argument,
+//!   * 3 = `SyntaxFailure`  (getOpt/usage error: unknown flag, missing argument,
 //!     bad number, bad boolean)
-//!   * 4 = SupportFailure (unknown format / shell / severity / color value)
+//!   * 4 = `SupportFailure` (unknown format / shell / severity / color value)
 //!
 //! The parser is intentionally IO-free and returns an [`Outcome`]; the binary
 //! is responsible for printing to stderr/stdout and exiting. This keeps the
@@ -42,26 +42,25 @@ pub enum Outcome {
     Error { message: String, code: u8 },
 }
 
-/// A successful parse: the format to render, the input files (`-` == stdin),
-/// and a `CheckSpec` template carrying the wired analysis options. The caller
-/// clones the template per input, filling in `filename`/`script`.
+/// Options resulting from a successful CLI argument parse.
+///
+/// Holds the format, input targets, and a `CheckSpec` template that the caller
+/// clones per input file when setting `filename` and `script`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunConfig {
     pub format: String,
+    /// Input file paths, or `"-"` for stdin.
     pub inputs: Vec<String>,
     pub spec_template: CheckSpec,
-    /// Resolved from `-C/--color` (default `auto`), used by tty/diff.
+    /// Resolved color setting from `-C`/`--color` (defaults to `auto`), used by tty and diff output.
     pub color: ColorOption,
-    /// `-W/--wiki-link-count` (default 3), used by tty's wiki summary.
+    /// Max wiki link count from `-W`/`--wiki-link-count` (defaults to 3), used by tty wiki summary.
     pub wiki_link_count: usize,
-    /// `--rcfile <path>`: prefer this config file over directory search.
-    /// `None` means normal `.shellcheckrc` discovery applies (unless `--norc`).
+    /// Explicit config path from `--rcfile <path>`. When `None`, standard `.shellcheckrc` discovery applies.
     pub rcfile: Option<String>,
-    /// `-P/--source-path`: directories searched for a sourced file, in flag
-    /// order. `SCRIPTDIR` in an entry stands for the checked script's directory.
+    /// Search directories for sourced files from `-P`/`--source-path` in flag order. `SCRIPTDIR` expands to target script directory.
     pub source_paths: Vec<String>,
-    /// `-x/--external-sources`: allow reading sourced files that were not given
-    /// as inputs.
+    /// Allows reading sourced files not included in `inputs` (`-x`/`--external-sources`).
     pub external_sources: bool,
 }
 
@@ -206,6 +205,7 @@ fn find_short(c: char) -> Option<&'static OptDef> {
 
 /// The usage summary (`getUsageInfo`). Faithful in spirit to `usageInfo`; the
 /// exact column layout is not load-bearing.
+#[must_use]
 pub fn usage() -> String {
     // Mirrors GHC getOpt's `usageInfo`: two left columns (short-with-arg,
     // long-with-arg) padded to the widest entry, then the description. The
@@ -378,9 +378,11 @@ const OPTIONAL_CHECKS: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
-/// Render the `--list-optional` catalog exactly as the oracle does: for each
-/// check, four `key: value` lines followed by a blank line (`newLinesBetween`
-/// in `printOptional`), including a trailing blank line after the last entry.
+/// Renders the `--list-optional` catalog matching upstream `printOptional`.
+///
+/// Outputs four `key: value` lines (`name`, `desc`, `example`, `fix`) per check,
+/// separated by blank lines (`newLinesBetween`), including a trailing blank line.
+#[must_use]
 pub fn list_optional_text() -> String {
     let mut s = String::new();
     for (name, desc, example, fix) in OPTIONAL_CHECKS {
@@ -394,6 +396,7 @@ pub fn list_optional_text() -> String {
 }
 
 /// The version banner (`printVersion`), using the crate version.
+#[must_use]
 pub fn version_banner() -> String {
     format!(
         "ShellCheck - shell script analysis tool\nversion: {}\nlicense: GNU General Public License, version 3\nwebsite: https://www.shellcheck.net",
@@ -409,7 +412,7 @@ struct Flag {
 }
 
 /// Phase 1: tokenise argv into flags + files, mirroring `getOpt Permute`.
-/// Returns `Err(message)` for a getOpt-level error (SyntaxFailure / exit 3):
+/// Returns `Err(message)` for a getOpt-level error (`SyntaxFailure` / exit 3):
 /// unknown option or a missing required argument.
 fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
     let mut flags: Vec<Flag> = Vec::new();
@@ -429,9 +432,8 @@ fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
                 Some((n, v)) => (n, Some(v.to_string())),
                 None => (long, None),
             };
-            let def = match find_long(name) {
-                Some(d) => d,
-                None => return Err(format!("unrecognized option `--{name}'")),
+            let Some(def) = find_long(name) else {
+                return Err(format!("unrecognized option `--{name}'"));
             };
             match def.kind {
                 ArgKind::None => {
@@ -474,9 +476,8 @@ fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
             let mut j = 1; // skip leading '-'
             while j < chars.len() {
                 let c = chars[j];
-                let def = match find_short(c) {
-                    Some(d) => d,
-                    None => return Err(format!("unrecognized option `-{c}'")),
+                let Some(def) = find_short(c) else {
+                    return Err(format!("unrecognized option `-{c}'"));
                 };
                 match def.kind {
                     ArgKind::None => {
@@ -488,9 +489,7 @@ fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
                     }
                     ArgKind::Required => {
                         let rest: String = chars[j + 1..].iter().collect();
-                        let v = if !rest.is_empty() {
-                            rest
-                        } else {
+                        let v = if rest.is_empty() {
                             i += 1;
                             match argv.get(i) {
                                 Some(v) => v.clone(),
@@ -498,6 +497,8 @@ fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
                                     return Err(format!("option `-{c}' requires an argument"));
                                 }
                             }
+                        } else {
+                            rest
                         };
                         flags.push(Flag {
                             key: def.key,
@@ -529,7 +530,7 @@ fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
 fn split_nonempty(s: &str) -> Vec<String> {
     s.split(',')
         .filter(|x| !x.is_empty())
-        .map(|x| x.to_string())
+        .map(std::string::ToString::to_string)
         .collect()
 }
 
@@ -547,6 +548,7 @@ fn parse_num(s: &str) -> Result<i64, String> {
 /// `shellForExecutable` (ShellCheck.Data): maps interpreter names, including
 /// the established aliases, to a dialect. Used for `--shell`, rc `shell=`, and
 /// `# shellcheck shell=` directives.
+#[must_use]
 pub fn parse_shell(s: &str) -> Option<Shell> {
     Some(match s {
         "sh" => Shell::Sh,
@@ -575,10 +577,14 @@ fn parse_severity(s: &str) -> Option<Severity> {
     })
 }
 
-/// Full argument parse. Mirrors `parseArguments` (phase 1, exit 3 on getOpt
-/// errors) followed by `process`/`parseOption` (phase 2: fold over flags in
-/// order, with `--version`/`--help`/`--list-optional` exiting 0 immediately,
-/// value validation failing with exit 4, and format validated last).
+/// Parses CLI arguments following upstream's two-phase process.
+///
+/// - **Phase 1 (`parseArguments`)**: Tokenizes flags; exits with code 3 on `getOpt` errors.
+/// - **Phase 2 (`process` / `parseOption`)**: Folds flags in order:
+///   - Exits 0 immediately for `--version`, `--help`, and `--list-optional`.
+///   - Exits 4 on option value validation errors.
+///   - Validates format last.
+#[must_use]
 pub fn parse(argv: &[String]) -> Outcome {
     // Phase 1: getOpt-level recognition.
     let (flags, files) = match tokenize(argv) {
@@ -837,7 +843,7 @@ fn split_search_path(value: &str) -> Vec<String> {
         .collect()
 }
 
-/// Build a SupportFailure (exit 4) error mirroring `parseEnum`.
+/// Build a `SupportFailure` (exit 4) error mirroring `parseEnum`.
 fn support_error(name: &str, valid: &[&str]) -> Outcome {
     Outcome::Error {
         message: format!(
@@ -853,7 +859,7 @@ mod tests {
     use super::*;
 
     fn args(a: &[&str]) -> Vec<String> {
-        a.iter().map(|s| s.to_string()).collect()
+        a.iter().map(std::string::ToString::to_string).collect()
     }
 
     /// Every optional check upstream lists is implemented and reachable.
@@ -900,7 +906,7 @@ mod tests {
         // input list (the oracle exits 0 having checked nothing), unlike the
         // no-arguments case which is a usage error.
         let c = run(&["--files-from=/dev/null"]);
-        assert!(c.inputs.is_empty());
+        assert_eq!(c.inputs, [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -1099,7 +1105,7 @@ mod tests {
         // Neither is on by default.
         let c = run(&["-"]);
         assert!(!c.external_sources);
-        assert!(c.source_paths.is_empty());
+        assert_eq!(c.source_paths, [] as [std::string::String; 0]);
         assert!(!c.spec_template.check_sourced);
     }
 

@@ -10,8 +10,9 @@ pub mod tty;
 
 use shellcheck_rs::interface::ColorOption;
 
-/// A TTY color function: `(level, text) -> rendered`. Mirrors the Haskell
-/// `ColorFunc = String -> String -> String`.
+/// A TTY color function: `(level, text) -> rendered`.
+///
+/// Mirrors the Haskell `ColorFunc = String -> String -> String`.
 pub type ColorFunc = Box<dyn Fn(&str, &str) -> String>;
 
 fn color_for_level(level: &str) -> i32 {
@@ -27,9 +28,10 @@ fn color_for_level(level: &str) -> i32 {
     }
 }
 
-/// Build the TTY color function. When `use_color` is false, text passes through
-/// unchanged (`const id`); otherwise every level (including `source`, code 0) is
-/// wrapped in the ANSI escape and cleared, matching `colorComment`.
+/// Builds the TTY color function matching upstream `colorComment`.
+///
+/// Wraps all severity levels (including `source`, code 0) in ANSI escape sequences
+/// when `use_color` is `true`. Passes text through unchanged when `false`.
 pub fn tty_color_func(use_color: bool) -> ColorFunc {
     if use_color {
         Box::new(|level: &str, text: &str| {
@@ -40,15 +42,17 @@ pub fn tty_color_func(use_color: bool) -> ColorFunc {
     }
 }
 
-/// `shouldOutputColor`: resolve a `ColorOption` against the terminal state.
-/// (No Windows handling: this port targets non-mingw platforms.)
+/// Resolves a [`ColorOption`] against terminal state matching upstream `shouldOutputColor`.
+///
+/// > **TODO:** Add Windows terminal support.
+#[must_use]
 pub fn should_output_color(opt: ColorOption, is_tty: bool) -> bool {
     match opt {
         ColorOption::ColorAlways => true,
         ColorOption::ColorNever => false,
         ColorOption::ColorAuto => {
             let term = std::env::var("TERM").ok();
-            let dumb = matches!(term.as_deref(), Some("dumb") | Some("") | None);
+            let dumb = matches!(term.as_deref(), Some("dumb" | "") | None);
             is_tty && !dumb
         }
     }

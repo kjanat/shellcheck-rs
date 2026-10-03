@@ -394,17 +394,10 @@ pub(crate) const PRIVILEGE_ELEVATION_COMMANDS: &[&str] = &["sudo", "doas", "run0
 pub(crate) fn shell_for_executable(name: &str) -> Option<Shell> {
     Some(match name {
         "sh" => Shell::Sh,
-        "bash" => Shell::Bash,
-        "bats" => Shell::Bash,
-        "busybox" => Shell::BusyboxSh,
-        "busybox sh" => Shell::BusyboxSh,
-        "busybox ash" => Shell::BusyboxSh,
-        "dash" => Shell::Dash,
-        "ash" => Shell::Dash,
-        "ksh" => Shell::Ksh,
-        "ksh88" => Shell::Ksh,
-        "ksh93" => Shell::Ksh,
-        "oksh" => Shell::Ksh,
+        "bash" | "bats" => Shell::Bash,
+        "busybox" | "busybox sh" | "busybox ash" => Shell::BusyboxSh,
+        "dash" | "ash" => Shell::Dash,
+        "ksh" | "ksh88" | "ksh93" | "oksh" => Shell::Ksh,
         _ => return None,
     })
 }

@@ -1,18 +1,19 @@
 //! Port of `ShellCheck.Checker`: the parse -> analyze -> resolve -> filter ->
-//! sort pipeline that turns a `CheckSpec` into a `CheckResult`.
+//! sort pipeline that turns a [`CheckSpec`] into a [`CheckResult`].
 
 use crate::analytics;
 use crate::analyzer_lib;
 use crate::ast::Id;
 use crate::interface::{
     CheckResult, CheckSpec, Comment, NoExternalSources, Position, PositionedComment,
-    RcParseProblem, Severity, Shell, SystemInterface, TokenComment,
+    RcParseProblem, Severity, Shell, System, TokenComment,
 };
 use crate::parser::{self, ParseNote};
 use std::rc::Rc;
 
 /// `checkScript` with the default interface: no sourced file is ever read, and
 /// the refusal is worded as the CLI words it without `-x`.
+#[must_use]
 pub fn check_script(spec: &CheckSpec) -> CheckResult {
     check_script_with(Rc::new(NoExternalSources), spec)
 }
@@ -22,7 +23,7 @@ pub fn check_script(spec: &CheckSpec) -> CheckResult {
 /// Upstream every caller passes a `SystemInterface`; here [`check_script`]
 /// supplies a default so that an embedder that never sources anything does not
 /// have to.
-pub fn check_script_with(sys: Rc<dyn SystemInterface>, spec: &CheckSpec) -> CheckResult {
+pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
     let parse = parser::parse_script_spec(&parser::ParseSpec {
         filename: spec.filename.clone(),
         script: spec.script.clone(),
@@ -176,17 +177,17 @@ fn should_include(pc: &PositionedComment, spec: &CheckSpec) -> bool {
         return false;
     }
     // rc `disable=` ranges are annotations upstream, so they suppress a code
-    // independently of the include/exclude lists. Membership is tested against
-    // the endpoints (`code >= n && code < m`), never enumerated.
+    // independently of the include/exclude lists. A code is compared against
+    // the range endpoints (`code >= n && code < m`).
     if let Some(rc) = &spec.rc
         && rc.disabled_ranges.iter().any(|r| r.contains(code))
     {
         return false;
     }
-    match &spec.included_warnings {
-        None => !spec.excluded_warnings.contains(&code),
-        Some(included) => included.contains(&code),
-    }
+    spec.included_warnings.as_ref().map_or_else(
+        || !spec.excluded_warnings.contains(&code),
+        |included| included.contains(&code),
+    )
 }
 
 fn nub(v: Vec<PositionedComment>) -> Vec<PositionedComment> {
@@ -235,11 +236,11 @@ mod source_tests {
     //! The source-following properties of `ShellCheck.Checker`, which upstream
     //! runs against `mockedSystemInterface`.
     use super::*;
-    use crate::interface::{ErrorMessage, MockSystemInterface};
+    use crate::interface::{ErrorMessage, MockSystem};
     use std::cell::RefCell;
 
     /// `getErrors`: the codes, sorted.
-    fn errors(sys: Rc<dyn SystemInterface>, spec: &CheckSpec) -> Vec<i64> {
+    fn errors(sys: Rc<dyn System>, spec: &CheckSpec) -> Vec<i64> {
         let mut codes: Vec<i64> = check_script_with(sys, spec)
             .comments
             .iter()
@@ -252,7 +253,7 @@ mod source_tests {
     /// `checkWithIncludes`: SC2148 excluded, sources read from the mock.
     fn check_with_includes(includes: &[(&str, &str)], script: &str) -> Vec<i64> {
         errors(
-            Rc::new(MockSystemInterface::new(includes)),
+            Rc::new(MockSystem::new(includes)),
             &CheckSpec {
                 script: script.to_string(),
                 excluded_warnings: vec![2148],
@@ -264,7 +265,7 @@ mod source_tests {
     /// `checkRecursive`: as above with `csCheckSourced`.
     fn check_recursive(includes: &[(&str, &str)], script: &str) -> Vec<i64> {
         errors(
-            Rc::new(MockSystemInterface::new(includes)),
+            Rc::new(MockSystem::new(includes)),
             &CheckSpec {
                 script: script.to_string(),
                 excluded_warnings: vec![2148],
@@ -290,12 +291,12 @@ mod source_tests {
     type Finder = dyn Fn(&str, Option<bool>, &[String], &str) -> String;
 
     struct FindSourceMock {
-        files: MockSystemInterface,
+        files: MockSystem,
         find: Box<Finder>,
         asked: RefCell<Vec<FindArgs>>,
     }
 
-    impl SystemInterface for FindSourceMock {
+    impl System for FindSourceMock {
         fn read_file(
             &self,
             external_sources: Option<bool>,
@@ -323,7 +324,7 @@ mod source_tests {
 
     #[test]
     fn prop_canParseDevNull() {
-        assert!(check("source /dev/null").is_empty());
+        assert_eq!(check("source /dev/null"), Vec::<i64>::new());
     }
 
     #[test]
@@ -333,37 +334,47 @@ mod source_tests {
 
     #[test]
     fn prop_worksWhenSourcing() {
-        assert!(check_with_includes(&[("lib", "bar=1")], "source lib; echo \"$bar\"").is_empty());
+        assert_eq!(
+            check_with_includes(&[("lib", "bar=1")], "source lib; echo \"$bar\""),
+            Vec::<i64>::new()
+        );
     }
 
     #[test]
     fn prop_worksWhenSourcingWithDashDash() {
-        assert!(
-            check_with_includes(&[("lib", "bar=1")], "source -- lib; echo \"$bar\"").is_empty()
+        assert_eq!(
+            check_with_includes(&[("lib", "bar=1")], "source -- lib; echo \"$bar\""),
+            Vec::<i64>::new()
         );
     }
 
     #[test]
     fn prop_worksWhenSourcingWithDashP() {
-        assert!(
+        assert_eq!(
             check_with_includes(
                 &[("lib", "bar=1")],
                 "source -p \"$MYPATH\" lib; echo \"$bar\""
-            )
-            .is_empty()
+            ),
+            Vec::<i64>::new()
         );
     }
 
     #[test]
     fn prop_worksWhenDotting() {
-        assert!(check_with_includes(&[("lib", "bar=1")], ". lib; echo \"$bar\"").is_empty());
+        assert_eq!(
+            check_with_includes(&[("lib", "bar=1")], ". lib; echo \"$bar\""),
+            Vec::<i64>::new()
+        );
     }
 
     #[test]
     fn prop_noInfiniteSourcing() {
         // The recursion guard stops at the second frame, and SC1093 is squashed
         // without --check-sourced (upstream's FIXME).
-        assert!(check_with_includes(&[("lib", "source lib")], "source lib").is_empty());
+        assert_eq!(
+            check_with_includes(&[("lib", "source lib")], "source lib"),
+            Vec::<i64>::new()
+        );
         assert_eq!(
             check_recursive(&[("lib", "source lib")], "source lib"),
             vec![1093]
@@ -393,33 +404,39 @@ mod source_tests {
 
     #[test]
     fn prop_canStripPrefixAndSource() {
-        assert!(check_with_includes(&[("./lib", "")], "source \"$MYDIR/lib\"").is_empty());
+        assert_eq!(
+            check_with_includes(&[("./lib", "")], "source \"$MYDIR/lib\""),
+            Vec::<i64>::new()
+        );
     }
 
     #[test]
     fn prop_canStripPrefixAndSource2() {
-        assert!(
+        assert_eq!(
             check_with_includes(
                 &[("./utils.sh", "")],
                 "source \"$(dirname \"${BASH_SOURCE[0]}\")/utils.sh\""
-            )
-            .is_empty()
+            ),
+            Vec::<i64>::new()
         );
     }
 
     #[test]
     fn prop_canSourceDynamicWhenRedirected() {
-        assert!(check_with_includes(&[("lib", "")], "#shellcheck source=lib\n. \"$1\"").is_empty());
+        assert_eq!(
+            check_with_includes(&[("lib", "")], "#shellcheck source=lib\n. \"$1\""),
+            Vec::<i64>::new()
+        );
     }
 
     #[test]
     fn prop_canRedirectWithSpaces() {
-        assert!(
+        assert_eq!(
             check_with_includes(
                 &[("my file", "")],
                 "#shellcheck source=\"my file\"\n. \"$1\""
-            )
-            .is_empty()
+            ),
+            Vec::<i64>::new()
         );
     }
 
@@ -441,24 +458,30 @@ mod source_tests {
 
     #[test]
     fn prop_nonRecursiveAnalysis() {
-        assert!(check_with_includes(&[("lib", "echo $1")], "source lib").is_empty());
+        assert_eq!(
+            check_with_includes(&[("lib", "echo $1")], "source lib"),
+            Vec::<i64>::new()
+        );
     }
 
     #[test]
     fn prop_nonRecursiveParsing() {
-        assert!(check_with_includes(&[("lib", "echo \"$10\"")], "source lib").is_empty());
+        assert_eq!(
+            check_with_includes(&[("lib", "echo \"$10\"")], "source lib"),
+            Vec::<i64>::new()
+        );
     }
 
     #[test]
     fn prop_sourceDirectiveDoesntFollowFile() {
         // The directive applies to the `.` it precedes, not to the `source bar`
         // inside the file it names, so `baz` is never defined.
-        assert!(
+        assert_eq!(
             check_with_includes(
                 &[("foo", "source bar"), ("bar", "baz=3")],
                 "#shellcheck source=foo\n. \"$1\"; echo \"$baz\""
-            )
-            .is_empty()
+            ),
+            Vec::<i64>::new()
         );
     }
 
@@ -481,7 +504,7 @@ mod source_tests {
         // the file it sources.
         assert_eq!(
             errors(
-                Rc::new(MockSystemInterface::new(&[("file.ksh", "(( 3.14 ))")])),
+                Rc::new(MockSystem::new(&[("file.ksh", "(( 3.14 ))")])),
                 &CheckSpec {
                     filename: "file.bash".to_string(),
                     script: "source file.ksh".to_string(),
@@ -497,15 +520,16 @@ mod source_tests {
     fn prop_sourceWithHereDocWorks() {
         // The sourced file is read between the `<<` and its body, and the
         // caller's pending here document survives that.
-        assert!(
-            check_with_includes(&[("bar", "true\n")], "source bar << eof\nlol\neof").is_empty()
+        assert_eq!(
+            check_with_includes(&[("bar", "true\n")], "source bar << eof\nlol\neof"),
+            Vec::<i64>::new()
         );
     }
 
     #[test]
     fn prop_sourcePathRedirectsName() {
         let sys = Rc::new(FindSourceMock {
-            files: MockSystemInterface::new(&[("foo/lib", "echo $1")]),
+            files: MockSystem::new(&[("foo/lib", "echo $1")]),
             find: Box::new(|_, _, _, name| {
                 assert_eq!(name, "lib");
                 "foo/lib".to_string()
@@ -513,7 +537,7 @@ mod source_tests {
             asked: RefCell::new(Vec::new()),
         });
         let codes = errors(
-            Rc::clone(&sys) as Rc<dyn SystemInterface>,
+            Rc::clone(&sys) as Rc<dyn System>,
             &CheckSpec {
                 filename: "dir/myscript".to_string(),
                 script: "#!/bin/bash\nsource lib".to_string(),
@@ -530,7 +554,7 @@ mod source_tests {
     #[test]
     fn prop_sourcePathAddsAnnotation() {
         let sys = Rc::new(FindSourceMock {
-            files: MockSystemInterface::new(&[("foo/lib", "echo $1")]),
+            files: MockSystem::new(&[("foo/lib", "echo $1")]),
             find: Box::new(|_, _, paths, _| {
                 assert_eq!(paths, ["mypath".to_string()]);
                 "foo/lib".to_string()
@@ -554,7 +578,7 @@ mod source_tests {
     #[test]
     fn prop_sourcePathWorksWithSpaces() {
         let sys = Rc::new(FindSourceMock {
-            files: MockSystemInterface::new(&[("foo/lib", "echo $1")]),
+            files: MockSystem::new(&[("foo/lib", "echo $1")]),
             find: Box::new(|_, _, paths, _| {
                 assert_eq!(paths, ["my path".to_string()]);
                 "foo/lib".to_string()
@@ -581,7 +605,7 @@ mod source_tests {
         // The `source=` directive names what is looked up; the resolver still
         // gets a say in where it comes from.
         let sys = Rc::new(FindSourceMock {
-            files: MockSystemInterface::new(&[("foo/lib", "echo $1")]),
+            files: MockSystem::new(&[("foo/lib", "echo $1")]),
             find: Box::new(|_, _, _, name| {
                 if name == "lib" {
                     "foo/lib".to_string()
@@ -610,7 +634,7 @@ mod source_tests {
         // `external-sources=true` in a script is refused (SC1144) and, with the
         // annotation dropped, the source is not followed either.
         let sys = Rc::new(FindSourceMock {
-            files: MockSystemInterface::new(&[("foo", "true")]),
+            files: MockSystem::new(&[("foo", "true")]),
             find: Box::new(|_, external, _, name| {
                 assert_eq!(
                     external, None,
@@ -640,7 +664,7 @@ mod source_tests {
         // The other half of `external-sources`: `false` does reach the
         // interface, which is how the refusal is worded differently.
         let sys = Rc::new(FindSourceMock {
-            files: MockSystemInterface::new(&[]),
+            files: MockSystem::new(&[]),
             find: Box::new(|_, external, _, name| {
                 assert_eq!(external, Some(false));
                 name.to_string()
@@ -696,7 +720,7 @@ mod source_tests {
             filename: "main.sh".to_string(),
             script: "source lib\n".to_string(),
             check_sourced: true,
-            sys: Rc::new(MockSystemInterface::new(&[("lib", "echo $x\n")])),
+            sys: Rc::new(MockSystem::new(&[("lib", "echo $x\n")])),
             ..crate::parser::ParseSpec::default()
         });
         let root = parse.root.expect("parses");
@@ -723,7 +747,7 @@ mod source_tests {
             }
         });
         assert!(files.iter().all(|f| f == "lib"), "got {files:?}");
-        assert!(!files.is_empty());
+        assert_ne!(files, Vec::<String>::new());
     }
 
     #[test]
@@ -731,7 +755,7 @@ mod source_tests {
         // DIVERGENCES.md E1: SC3051 matches `T_SourceCommand`, so it can only
         // fire once /dev/null is actually followed.
         let codes = errors(
-            Rc::new(MockSystemInterface::new(&[])),
+            Rc::new(MockSystem::new(&[])),
             &CheckSpec {
                 script: "source /dev/null".to_string(),
                 shell_type_override: Some(Shell::Sh),
@@ -790,11 +814,20 @@ mod tests {
             codes(&with_ranges("echo $x\n", &[(2086, 2154)])),
             vec![2154]
         );
-        assert!(codes(&with_ranges("echo $x\n", &[(2086, 2155)])).is_empty());
+        assert_eq!(
+            codes(&with_ranges("echo $x\n", &[(2086, 2155)])),
+            Vec::<i64>::new()
+        );
         // `disable=all` is one range, and an enormous range is still two
         // numbers rather than a billion of them.
-        assert!(codes(&with_ranges("echo $x\n", &[(0, 1_000_000)])).is_empty());
-        assert!(codes(&with_ranges("echo $x\n", &[(1000, 1_000_000_000)])).is_empty());
+        assert_eq!(
+            codes(&with_ranges("echo $x\n", &[(0, 1_000_000)])),
+            Vec::<i64>::new()
+        );
+        assert_eq!(
+            codes(&with_ranges("echo $x\n", &[(1000, 1_000_000_000)])),
+            Vec::<i64>::new()
+        );
     }
 
     #[test]
@@ -840,7 +873,7 @@ mod tests {
         assert_eq!(codes(&spec), vec![1134, 2148, 2154, 2086]);
         let excluded = CheckSpec {
             excluded_warnings: vec![1134],
-            ..spec.clone()
+            ..spec
         };
         assert_eq!(codes(&excluded), vec![2148, 2154, 2086]);
     }

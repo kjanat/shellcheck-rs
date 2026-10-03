@@ -1,12 +1,16 @@
 //! Arithmetic-context checks from `ShellCheck.Analytics`.
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{
+    Out, Parameters, StackData, err, fix_with, has_floating_point, info, replace_end,
+    replace_start, style, style_with_fix, warn,
+};
+use crate::ast::{AssignmentMode, Id, InnerToken, Token};
 use crate::ast_lib;
 use crate::ast_lib::get_word_parts;
 use crate::ast_lib::oversimplify_concat;
 use crate::cfg::get_braced_reference;
 use crate::cfg::get_unquoted_literal;
 use crate::interface::Shell;
+use crate::regex_lib::mk_regex;
 
 pub(super) fn check_div_before_mult(params: &Parameters, t: &Token, out: &mut Out) {
     // TA_Binary _ "*" (TA_Binary id "/" _ x) y
@@ -32,9 +36,8 @@ pub(super) fn check_div_before_mult(params: &Parameters, t: &Token, out: &mut Ou
 }
 
 pub(super) fn check_arithmetic_deref(params: &Parameters, t: &Token, out: &mut Out) {
-    let list = match &*t.inner {
-        InnerToken::TA_Expansion(l) => l,
-        _ => return,
+    let InnerToken::TA_Expansion(list) = &*t.inner else {
+        return;
     };
     if list.len() != 1 {
         return;
@@ -105,7 +108,7 @@ pub(super) fn check_arithmetic_op_command(_params: &Parameters, t: &Token, out: 
             out,
             first_word.id(),
             2099,
-            &format!("Use $((..)) for arithmetics, e.g. i=$((i {} 2))", op),
+            &format!("Use $((..)) for arithmetics, e.g. i=$((i {op} 2))"),
         );
     }
 }
@@ -139,7 +142,7 @@ pub(super) fn check_wrong_arithmetic_assignment(params: &Parameters, t: &Token, 
             out,
             value.id(),
             2100,
-            &format!("Use $((..)) for arithmetics, e.g. i=$((i {} 2))", op),
+            &format!("Use $((..)) for arithmetics, e.g. i=$((i {op} 2))"),
         );
     }
 }
@@ -264,10 +267,9 @@ pub(super) fn check_plus_equals_number(params: &Parameters, t: &Token, out: &mut
 
 fn arith_deref_is_exception(s: &str) -> bool {
     const SPECIAL: &str = "/.:#%?*@$-!+=^,";
-    match s.chars().next() {
-        None => true,
-        Some(h) => s.chars().any(|c| SPECIAL.contains(c)) || h.is_ascii_digit(),
-    }
+    s.chars()
+        .next()
+        .is_none_or(|h| s.chars().any(|c| SPECIAL.contains(c)) || h.is_ascii_digit())
 }
 
 /// `getGlobOrLiteralString`.
@@ -320,7 +322,7 @@ fn match_wrong_arith(s: &str) -> Option<(String, char)> {
 }
 
 /// `getLiteralString` mirroring `getLiteralStringExt (const Nothing)`, including
-/// the `TA_Expansion` / `T_ParamSubSpecialChar` cases the shared ast_lib helper
+/// the `TA_Expansion` / `T_ParamSubSpecialChar` cases the shared `ast_lib` helper
 /// omits. (decodeEscapes on `T_DollarSingleQuoted` is not needed for our uses.)
 fn full_literal_string(t: &Token) -> Option<String> {
     fn go(t: &Token, out: &mut String) -> bool {
@@ -368,7 +370,7 @@ fn get_unmodified_parameter_expansion(t: &Token) -> Option<String> {
 fn octal_re_match(s: &str) -> bool {
     use std::sync::OnceLock;
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| regex::Regex::new(r"^0[0-7]*[8-9]").unwrap());
+    let re = RE.get_or_init(|| mk_regex(r"^0[0-7]*[8-9]"));
     re.is_match(s)
 }
 
@@ -446,7 +448,7 @@ fn check_leading(params: &Parameters, str: &str, t: &Token, out: &mut Out) {
             out,
             id,
             2323,
-            &format!("{}. Prefer not wrapping in additional parentheses.", str),
+            &format!("{str}. Prefer not wrapping in additional parentheses."),
             paren_fix(params, id),
         );
     }
@@ -465,8 +467,7 @@ fn is_number(state: &crate::cfg_analysis::ProgramState, word: &Token) -> bool {
     let is_unquoted_number = !is_empty
         && unquoted_literal
             .as_ref()
-            .map(|s| s.chars().all(|c| c.is_ascii_digit()))
-            .unwrap_or(false);
+            .is_some_and(|s| s.chars().all(|c| c.is_ascii_digit()));
     let is_numerical_variable_name = unquoted_literal
         .as_ref()
         .and_then(|str| state.variable_may_be_assigned_integer(str))

@@ -37,8 +37,8 @@ impl CommandCheck {
     pub(crate) fn new(
         name: CommandName,
         f: impl Fn(&Parameters, &Token, &mut Out) + 'static,
-    ) -> CommandCheck {
-        CommandCheck {
+    ) -> Self {
+        Self {
             name,
             f: Box::new(f),
         }
@@ -121,11 +121,8 @@ fn route(t: &Token) -> Option<Route> {
     })
 }
 
-/// `buildCommandMap` + `checkCommand`: every command check, in one node check
-/// that looks the simple command up once instead of every check re-deriving
-/// the command name for every node. A name maps to its checks in registration
-/// order (the order the checks ran in when each was a node check of its own),
-/// whether they are keyed `Exactly` or `Basename`.
+/// `buildCommandMap` + `checkCommand`: every command check, in one node check.
+/// A name maps to its checks in registration order, whether they are keyed [`Exactly`] or [`Basename`].
 #[derive(Default)]
 pub(crate) struct CommandTable {
     by_name: HashMap<&'static str, Vec<CommandCheck>>,
@@ -203,10 +200,7 @@ fn all_checks() -> Vec<CommandCheck> {
         coreutils::check_fgrep_sends_pipefail(),
     ];
     // ++ map checkArgComparison ("alias" : declaringCommands)
-    for cmd in ["alias"]
-        .into_iter()
-        .chain(DECLARING_COMMANDS.iter().copied())
-    {
+    for cmd in std::iter::once("alias").chain(DECLARING_COMMANDS.iter().copied()) {
         checks.push(builtins::check_arg_comparison(cmd));
     }
     // ++ map checkMaskedReturns declaringCommands
@@ -232,6 +226,7 @@ fn all_checks() -> Vec<CommandCheck> {
     checks
 }
 
+/// `getChecker commandChecks`: adds every command check to `c` as one node check.
 pub fn register(c: &mut Checker) {
     let mut table = CommandTable::default();
     for check in all_checks() {
@@ -247,8 +242,7 @@ mod tests {
     use crate::test_support::collect;
 
     /// One check per entry of `all_checks`, each a node check of its own and
-    /// running its own `dispatch`: how the checks were registered before the
-    /// table.
+    /// running its own `dispatch`: how the checks were registered before the table.
     struct Separately(Vec<CommandCheck>);
 
     impl Check for Separately {
@@ -280,8 +274,7 @@ mod tests {
 
     #[test]
     fn checks_on_one_name_run_in_registration_order() {
-        // `Exactly` and `Basename` on one name interleave as registered, and a
-        // check on another name does not run.
+        // `Exactly` and `Basename` on one name interleave as registered, and a check on another name does not run.
         let checks = || {
             vec![
                 emitting(Basename("foo"), 1),

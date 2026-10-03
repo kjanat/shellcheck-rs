@@ -4,8 +4,11 @@ use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::get_command_name;
 use crate::analyzer_lib::is_command;
 use crate::analyzer_lib::is_unqualified_command;
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{
+    Out, Parameters, err, err_with_fix, fix_with, info, replace_end, replace_start, replace_token,
+    style, style_with_fix, token_is_just_command_output, warn, warn_with_fix,
+};
+use crate::ast::{CaseType, Id, InnerToken, Token};
 use crate::ast_lib::get_command_sequences;
 use crate::ast_lib::get_literal_string_def;
 use crate::ast_lib::is_glob;
@@ -28,9 +31,8 @@ pub(super) fn check_unchecked_cd_pushd_popd(params: &Parameters, t: &Token, out:
     if !matches!(&*t.inner, InnerToken::T_SimpleCommand { .. }) {
         return;
     }
-    let name = match get_command_name(t) {
-        Some(n) => n,
-        None => return,
+    let Some(name) = get_command_name(t) else {
+        return;
     };
     if !matches!(name.as_str(), "cd" | "pushd" | "popd") {
         return;
@@ -51,25 +53,24 @@ pub(super) fn check_unchecked_cd_pushd_popd(params: &Parameters, t: &Token, out:
         out,
         t.id(),
         2164,
-        &format!(
-            "Use '{n} ... || exit' or '{n} ... || return' in case {n} fails.",
-            n = name
-        ),
+        &format!("Use '{name} ... || exit' or '{name} ... || return' in case {name} fails."),
         fix_with(vec![replace_end(params, t.id(), 0, " || exit")]),
     );
 }
 
 pub(super) fn check_assign_ate_command(_params: &Parameters, t: &Token, out: &mut Out) {
-    let (assignments, words) = match &*t.inner {
-        InnerToken::T_SimpleCommand { assignments, words } => (assignments, words),
-        _ => return,
+    let InnerToken::T_SimpleCommand { assignments, words } = &*t.inner else {
+        return;
     };
     if assignments.len() != 1 {
         return;
     }
-    let assignment_term = match &*assignments[0].inner {
-        InnerToken::T_Assignment { value, .. } => value,
-        _ => return,
+    let InnerToken::T_Assignment {
+        value: assignment_term,
+        ..
+    } = &*assignments[0].inner
+    else {
+        return;
     };
     if first_word_is_arg(words) {
         err(
@@ -78,7 +79,7 @@ pub(super) fn check_assign_ate_command(_params: &Parameters, t: &Token, out: &mu
             2037,
             "To assign the output of a command, use var=$(cmd) .",
         );
-    } else if is_common_command(&get_unquoted_literal(assignment_term)) {
+    } else if is_common_command(get_unquoted_literal(assignment_term).as_deref()) {
         warn(
             out,
             t.id(),
@@ -90,8 +91,7 @@ pub(super) fn check_assign_ate_command(_params: &Parameters, t: &Token, out: &mu
 
 pub(super) fn check_uuoe_var(_params: &Parameters, t: &Token, out: &mut Out) {
     let (id, cmds) = match &*t.inner {
-        InnerToken::T_Backticked(cmds) => (t.id(), cmds),
-        InnerToken::T_DollarExpansion(cmds) => (t.id(), cmds),
+        InnerToken::T_Backticked(cmds) | InnerToken::T_DollarExpansion(cmds) => (t.id(), cmds),
         _ => return,
     };
     // check id (T_Pipeline _ _ [T_Redirecting _ _ c]) = warnForEcho id c
@@ -103,26 +103,23 @@ pub(super) fn check_uuoe_var(_params: &Parameters, t: &Token, out: &mut Out) {
         InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => commands,
         _ => return,
     };
-    let c = match &*commands[0].inner {
-        InnerToken::T_Redirecting { cmd, .. } => cmd,
-        _ => return,
+    let InnerToken::T_Redirecting { cmd: c, .. } = &*commands[0].inner else {
+        return;
     };
     // checkUnqualifiedCommand "echo": first word literal (unqualified) == "echo".
     let words = match &*c.inner {
         InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => words,
         _ => return,
     };
-    let cmd_name = match ast_lib::get_literal_string(&words[0]) {
-        Some(n) => n,
-        None => return,
+    let Some(cmd_name) = ast_lib::get_literal_string(&words[0]) else {
+        return;
     };
     if cmd_name != "echo" {
         return;
     }
     let vars = &words[1..];
-    let (first, rest) = match vars.split_first() {
-        Some(x) => x,
-        None => return,
+    let Some((first, rest)) = vars.split_first() else {
+        return;
     };
     let is_covered = rest.is_empty() && token_is_just_command_output(first);
     if is_covered || only_literal_string(first).starts_with('-') {
@@ -139,13 +136,6 @@ pub(super) fn check_uuoe_var(_params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 pub(super) fn check_find_exec(_params: &Parameters, t: &Token, out: &mut Out) {
-    let InnerToken::T_SimpleCommand { words, .. } = &*t.inner else {
-        return;
-    };
-    if words.is_empty() || !is_command(t, "find") {
-        return;
-    }
-
     fn should_warn(x: &Token) -> bool {
         matches!(
             &*x.inner,
@@ -160,6 +150,13 @@ pub(super) fn check_find_exec(_params: &Parameters, t: &Token, out: &mut Out) {
             InnerToken::T_NormalWord(l) => l,
             _ => &[],
         }
+    }
+
+    let InnerToken::T_SimpleCommand { words, .. } = &*t.inner else {
+        return;
+    };
+    if words.is_empty() || !is_command(t, "find") {
+        return;
     }
 
     // broken over words[1..]
@@ -179,15 +176,14 @@ pub(super) fn check_find_exec(_params: &Parameters, t: &Token, out: &mut Out) {
             }
         }
         v = match ast_lib::get_literal_string(w).as_deref() {
-            Some("-exec") | Some("-execdir") | Some("-ok") | Some("-okdir") => true,
-            Some("+") | Some(";") => false,
+            Some("-exec" | "-execdir" | "-ok" | "-okdir") => true,
+            Some("+" | ";") => false,
             _ => v,
         };
     }
-    if v {
-        // last of t (== words, since assignments precede words but Haskell `t`
-        // here is the words list `(h:r)`).
-        let last = words.last().unwrap();
+    // last of t (== words, since assignments precede words but Haskell `t`
+    // here is the words list `(h:r)`).
+    if v && let Some(last) = words.last() {
         err(
             out,
             last.id(),
@@ -215,12 +211,13 @@ pub(super) fn check_spurious_exec(params: &Parameters, t: &Token, out: &mut Out)
         return;
     }
     match &*t.inner {
-        InnerToken::T_Script { commands, .. } => do_list(commands, false, out),
-        InnerToken::T_BraceGroup(cmds) => do_list(cmds, false, out),
-        InnerToken::T_WhileExpression { body, .. } => do_list(body, true, out),
-        InnerToken::T_UntilExpression { body, .. } => do_list(body, true, out),
-        InnerToken::T_ForIn { body, .. } => do_list(body, true, out),
-        InnerToken::T_ForArithmetic { body, .. } => do_list(body, true, out),
+        InnerToken::T_Script { commands: cmds, .. } | InnerToken::T_BraceGroup(cmds) => {
+            do_list(cmds, false, out);
+        }
+        InnerToken::T_WhileExpression { body, .. }
+        | InnerToken::T_UntilExpression { body, .. }
+        | InnerToken::T_ForIn { body, .. }
+        | InnerToken::T_ForArithmetic { body, .. } => do_list(body, true, out),
         InnerToken::T_IfExpression { clauses, elses } => {
             for (_, l) in clauses {
                 do_list(l, false, out);
@@ -236,7 +233,7 @@ pub(super) fn check_spurious_exec(params: &Parameters, t: &Token, out: &mut Out)
 pub(super) fn check_globs_as_options(params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner {
         let base = command_basename(words);
-        if matches!(base.as_deref(), Some("echo") | Some("printf")) || params.has_noglob {
+        if matches!(base.as_deref(), Some("echo" | "printf")) || params.has_noglob() {
             return;
         }
         for w in words.iter().skip(1) {
@@ -345,27 +342,18 @@ pub(super) fn check_flag_as_command(_params: &Parameters, t: &Token, out: &mut O
 }
 
 pub(super) fn check_equals_in_command(params: &Parameters, original: &Token, out: &mut Out) {
-    let (assignments_empty, single_word, words) = match &*original.inner {
-        InnerToken::T_SimpleCommand { assignments, words } => {
-            (assignments.is_empty(), words.len() == 1, words)
-        }
-        _ => return,
-    };
-    let word = match words.first() {
-        Some(w) => w,
-        None => return,
-    };
-    let list = match &*word.inner {
-        InnerToken::T_NormalWord(list) => list,
-        _ => return,
-    };
-    if !list.iter().any(eic_has_equals) {
+    let InnerToken::T_SimpleCommand { assignments, words } = &*original.inner else {
         return;
-    }
+    };
+    let Some(word) = words.first() else {
+        return;
+    };
+    let InnerToken::T_NormalWord(list) = &*word.inner else {
+        return;
+    };
     // break hasEquals: leading before the first '='-literal, eq = that literal.
-    let eq_idx = match list.iter().position(eic_has_equals) {
-        Some(i) => i,
-        None => return,
+    let Some(eq_idx) = list.iter().position(eic_has_equals) else {
+        return;
     };
     let mut leading: Vec<&Token> = list[..eq_idx].iter().collect();
     let eq = &list[eq_idx];
@@ -375,106 +363,25 @@ pub(super) fn check_equals_in_command(params: &Parameters, original: &Token, out
     {
         leading.pop();
     }
+    let is_lone_word = assignments.is_empty() && words.len() == 1;
+    equals_in_command_msg(params, original, is_lone_word, word, &leading, eq, out);
+}
 
+/// `msg` from `checkEqualsInCommand`.
+fn equals_in_command_msg(
+    params: &Parameters,
+    original: &Token,
+    is_lone_word: bool,
+    word: &Token,
+    leading: &[&Token],
+    eq: &Token,
+    out: &mut Out,
+) {
     let (lit_id, s) = match &*eq.inner {
         InnerToken::T_Literal(s) => (eq.id(), s.clone()),
         _ => return,
     };
     let cmd_id = word.id();
-
-    // Message helpers.
-    let positional_msg = |out: &mut Out, id: Id| {
-        err(
-            out,
-            id,
-            2270,
-            "To assign positional parameters, use 'set -- first second ..' (or use [ ] to compare).",
-        );
-    };
-    let indirection_msg = |out: &mut Out, id: Id| {
-        err(
-            out,
-            id,
-            2271,
-            "For indirection, use arrays, declare \"var$n=value\", or (for sh) read/eval.",
-        );
-    };
-    let bad_comparison_msg = |out: &mut Out, id: Id| {
-        err(
-            out,
-            id,
-            2272,
-            "Command name contains ==. For comparison, use [ \"$var\" = value ].",
-        );
-    };
-    let conflict_marker_msg = |out: &mut Out, id: Id| {
-        err(
-            out,
-            id,
-            2273,
-            "Sequence of ===s found. Merge conflict or intended as a commented border?",
-        );
-    };
-    let border_msg = |out: &mut Out, id: Id| {
-        err(
-            out,
-            id,
-            2274,
-            "Command name starts with ===. Intended as a commented border?",
-        );
-    };
-    let prefix_msg = |out: &mut Out, id: Id| {
-        err(out, id, 2275, "Command name starts with =. Bad line break?");
-    };
-    let generic_msg = |out: &mut Out, id: Id| {
-        err(
-            out,
-            id,
-            2276,
-            "This is interpreted as a command name containing '='. Bad assignment or comparison?",
-        );
-    };
-    let leading_number_msg = |out: &mut Out, id: Id| {
-        err(
-            out,
-            id,
-            2282,
-            "Variable names can't start with numbers, so this is interpreted as a command.",
-        );
-    };
-    let assign0_msg = |out: &mut Out, id: Id, bashfix: Fix| match params.shell {
-        Shell::Bash => err_with_fix(
-            out,
-            id,
-            2277,
-            "Use BASH_ARGV0 to assign to $0 in bash (or use [ ] to compare).",
-            bashfix,
-        ),
-        Shell::Ksh => err(
-            out,
-            id,
-            2278,
-            "$0 can't be assigned in Ksh (but it does reflect the current function).",
-        ),
-        Shell::Dash => err(
-            out,
-            id,
-            2279,
-            "$0 can't be assigned in Dash. This becomes a command name.",
-        ),
-        Shell::BusyboxSh => err(
-            out,
-            id,
-            2279,
-            "$0 can't be assigned in Busybox Ash. This becomes a command name.",
-        ),
-        _ => err(
-            out,
-            id,
-            2280,
-            "$0 can't be assigned this way, and there is no portable alternative.",
-        ),
-    };
 
     // The order of these branches matters.
     if leading.is_empty() && s.starts_with('-') {
@@ -482,7 +389,7 @@ pub(super) fn check_equals_in_command(params: &Parameters, original: &Token, out
         return;
     }
     if leading.is_empty() && s.starts_with('=') {
-        if assignments_empty && single_word && is_conflict_marker(word) {
+        if is_lone_word && is_conflict_marker(word) {
             conflict_marker_msg(out, original.id());
         } else if s.starts_with("===") {
             border_msg(out, original.id());
@@ -522,12 +429,12 @@ pub(super) fn check_equals_in_command(params: &Parameters, original: &Token, out
             generic_msg(out, cmd_id);
         } else if variable_str == "0" {
             let fix = fix_with(vec![replace_token(params, db_id, "BASH_ARGV0")]);
-            assign0_msg(out, db_id, fix);
+            assign0_msg(params, out, db_id, fix);
         } else if is_positional {
             positional_msg(out, db_id);
         } else if is_array || is_plain {
             let sigil = if *braced { "${}" } else { "$" };
-            let msg = format!("Don't use {} on the left side of assignments.", sigil);
+            let msg = format!("Don't use {sigil} on the left side of assignments.");
             let fix = if *braced {
                 fix_with(vec![
                     replace_start(params, db_id, 2, ""),
@@ -545,7 +452,7 @@ pub(super) fn check_equals_in_command(params: &Parameters, original: &Token, out
     if leading.is_empty() && matches_positional_assignment(&s) {
         if s.starts_with("0=") {
             let fix = fix_with(vec![replace_start(params, lit_id, 1, "BASH_ARGV0")]);
-            assign0_msg(out, lit_id, fix);
+            assign0_msg(params, out, lit_id, fix);
         } else {
             positional_msg(out, lit_id);
         }
@@ -557,12 +464,124 @@ pub(super) fn check_equals_in_command(params: &Parameters, original: &Token, out
     }
     if !leading.is_empty() {
         let before_eq: String = s.chars().take_while(|&c| c != '=').collect();
-        if may_be_variable_name(&leading) && before_eq.chars().all(crate::cfg::is_variable_char) {
+        if may_be_variable_name(leading) && before_eq.chars().all(crate::cfg::is_variable_char) {
             indirection_msg(out, cmd_id);
             return;
         }
     }
     generic_msg(out, cmd_id);
+}
+
+/// `positionalMsg` from `checkEqualsInCommand`.
+fn positional_msg(out: &mut Out, id: Id) {
+    err(
+        out,
+        id,
+        2270,
+        "To assign positional parameters, use 'set -- first second ..' (or use [ ] to compare).",
+    );
+}
+
+/// `indirectionMsg` from `checkEqualsInCommand`.
+fn indirection_msg(out: &mut Out, id: Id) {
+    err(
+        out,
+        id,
+        2271,
+        "For indirection, use arrays, declare \"var$n=value\", or (for sh) read/eval.",
+    );
+}
+
+/// `badComparisonMsg` from `checkEqualsInCommand`.
+fn bad_comparison_msg(out: &mut Out, id: Id) {
+    err(
+        out,
+        id,
+        2272,
+        "Command name contains ==. For comparison, use [ \"$var\" = value ].",
+    );
+}
+
+/// `conflictMarkerMsg` from `checkEqualsInCommand`.
+fn conflict_marker_msg(out: &mut Out, id: Id) {
+    err(
+        out,
+        id,
+        2273,
+        "Sequence of ===s found. Merge conflict or intended as a commented border?",
+    );
+}
+
+/// `borderMsg` from `checkEqualsInCommand`.
+fn border_msg(out: &mut Out, id: Id) {
+    err(
+        out,
+        id,
+        2274,
+        "Command name starts with ===. Intended as a commented border?",
+    );
+}
+
+/// `prefixMsg` from `checkEqualsInCommand`.
+fn prefix_msg(out: &mut Out, id: Id) {
+    err(out, id, 2275, "Command name starts with =. Bad line break?");
+}
+
+/// `genericMsg` from `checkEqualsInCommand`.
+fn generic_msg(out: &mut Out, id: Id) {
+    err(
+        out,
+        id,
+        2276,
+        "This is interpreted as a command name containing '='. Bad assignment or comparison?",
+    );
+}
+
+/// `assign0Msg` from `checkEqualsInCommand`.
+fn assign0_msg(params: &Parameters, out: &mut Out, id: Id, bashfix: Fix) {
+    match params.shell {
+        Shell::Bash => err_with_fix(
+            out,
+            id,
+            2277,
+            "Use BASH_ARGV0 to assign to $0 in bash (or use [ ] to compare).",
+            bashfix,
+        ),
+        Shell::Ksh => err(
+            out,
+            id,
+            2278,
+            "$0 can't be assigned in Ksh (but it does reflect the current function).",
+        ),
+        Shell::Dash => err(
+            out,
+            id,
+            2279,
+            "$0 can't be assigned in Dash. This becomes a command name.",
+        ),
+        Shell::BusyboxSh => err(
+            out,
+            id,
+            2279,
+            "$0 can't be assigned in Busybox Ash. This becomes a command name.",
+        ),
+        Shell::Sh => err(
+            out,
+            id,
+            2280,
+            "$0 can't be assigned this way, and there is no portable alternative.",
+        ),
+    }
+}
+
+/// `leadingNumberMsg` from `checkEqualsInCommand`.
+fn leading_number_msg(out: &mut Out, id: Id) {
+    err(
+        out,
+        id,
+        2282,
+        "Variable names can't start with numbers, so this is interpreted as a command.",
+    );
 }
 
 pub(super) fn check_command_with_trailing_symbol(_params: &Parameters, t: &Token, out: &mut Out) {
@@ -620,7 +639,7 @@ pub(super) fn check_bats_test_does_not_use_negation(params: &Parameters, t: &Tok
     let InnerToken::T_BraceGroup(commands) = &*body.inner else {
         return;
     };
-    let is_last = |x: &Token| commands.last().map(|c| c == x).unwrap_or(false);
+    let is_last = |x: &Token| commands.last().is_some_and(|c| c == x);
     for cmd in commands {
         if let InnerToken::T_Banged(inner) = &*cmd.inner {
             // T_Banged (T_Pipeline _ _ [T_Redirecting _ _ (T_Condition ..)])
@@ -684,11 +703,11 @@ fn could_be_optimized(t: &Token) -> bool {
     }
 }
 
-/// `containsSetE`: `params.has_set_e` (which covers `set -e` commands) plus the
+/// `containsSetE`: `params.has_set_e()` (which covers `set -e` commands) plus the
 /// shebang check `T_Script _ (T_Literal _ str) _ -> str matches "[[:space:]]-[^-]*e"`
 /// that the shared `contains_set_e` does not perform.
 fn has_set_e(params: &Parameters) -> bool {
-    if params.has_set_e {
+    if params.has_set_e() {
         return true;
     }
     let mut node = &params.root;
@@ -704,14 +723,14 @@ fn has_set_e(params: &Parameters) -> bool {
 }
 
 /// Matches the regex `[[:space:]]-[^-]*<c>`: whitespace, `-`, non-dashes, then `c`.
-fn shebang_flag_matches(s: &str, c: u8) -> bool {
-    let b = s.as_bytes();
+const fn shebang_flag_matches(s: &str, c: u8) -> bool {
+    let bytes = s.as_bytes();
     let mut i = 0;
-    while i < b.len() {
-        if b[i].is_ascii_whitespace() && i + 1 < b.len() && b[i + 1] == b'-' {
+    while i < bytes.len() {
+        if bytes[i].is_ascii_whitespace() && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
             let mut j = i + 2;
-            while j < b.len() && b[j] != b'-' {
-                if b[j] == c {
+            while j < bytes.len() && bytes[j] != b'-' {
+                if bytes[j] == c {
                     return true;
                 }
                 j += 1;
@@ -755,7 +774,7 @@ fn find_cd_pair(list: &[&Token]) -> Option<Id> {
 }
 
 /// `^/*((\.|\.\.)/+)*(\.|\.\.)?$`
-fn matches_safe_dir(s: &str) -> bool {
+const fn matches_safe_dir(s: &str) -> bool {
     let b = s.as_bytes();
     let mut i = 0;
     while i < b.len() && b[i] == b'/' {
@@ -800,9 +819,8 @@ fn is_condition_path(params: &Parameters, t: &Token) -> bool {
         if matches!(&*child.inner, InnerToken::T_BatsTest { .. }) {
             return true;
         }
-        let parent = match params.parent(child) {
-            Some(p) => p,
-            None => return false,
+        let Some(parent) = params.parent(child) else {
+            return false;
         };
         if condition_children(parent)
             .iter()
@@ -842,18 +860,13 @@ fn is_last_command_in_function(params: &Parameters, t: &Token) -> bool {
     false
 }
 
-fn is_common_command(s: &Option<String>) -> bool {
-    match s {
-        Some(x) => COMMON_COMMANDS.contains(&x.as_str()),
-        None => false,
-    }
+fn is_common_command(s: Option<&str>) -> bool {
+    s.is_some_and(|x| COMMON_COMMANDS.contains(&x))
 }
 
 fn first_word_is_arg(list: &[Token]) -> bool {
-    match list.first() {
-        Some(head) => is_glob(head) || is_unquoted_flag(head),
-        None => false,
-    }
+    list.first()
+        .is_some_and(|head| is_glob(head) || is_unquoted_flag(head))
 }
 
 /// Parser-gap guard. The Rust parser does not yet parse every `[ .. ]` /
@@ -879,8 +892,8 @@ fn is_condition_fallback_glob(first: &Token) -> bool {
     has_spaced_glob(first)
 }
 
-fn has_execfail(params: &Parameters) -> bool {
-    params.has_execfail
+const fn has_execfail(params: &Parameters) -> bool {
+    params.has_execfail()
 }
 
 fn spurious_cleanup(t: &Token) -> bool {
@@ -963,7 +976,7 @@ fn eic_has_equals(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_Literal(s) if s.contains('='))
 }
 
-fn matches_positional_assignment(s: &str) -> bool {
+const fn matches_positional_assignment(s: &str) -> bool {
     let b = s.as_bytes();
     if b.is_empty() || !b[0].is_ascii_digit() {
         return false;
@@ -975,28 +988,19 @@ fn matches_positional_assignment(s: &str) -> bool {
 }
 
 fn is_leading_number_var(s: &str) -> bool {
-    let lead: &str = match s.find('=') {
-        Some(i) => &s[..i],
-        None => s,
-    };
-    let mut chars = lead.chars();
-    match chars.next() {
-        Some(x) => {
-            x.is_ascii_digit()
-                && lead.chars().all(crate::cfg::is_variable_char)
-                && !lead.chars().all(|c| c.is_ascii_digit())
-        }
-        None => false,
-    }
+    let lead: &str = s.find('=').map_or(s, |i| &s[..i]);
+    lead.chars().next().is_some_and(|x| {
+        x.is_ascii_digit()
+            && lead.chars().all(crate::cfg::is_variable_char)
+            && !lead.chars().all(|c| c.is_ascii_digit())
+    })
 }
 
 fn is_conflict_marker(cmd: &Token) -> bool {
-    if let Some(str) = get_unquoted_literal(cmd) {
+    get_unquoted_literal(cmd).is_some_and(|str| {
         let n = str.chars().count();
         str.chars().all(|c| c == '=') && (4..=12).contains(&n)
-    } else {
-        false
-    }
+    })
 }
 
 fn may_be_variable_name(leading: &[&Token]) -> bool {
@@ -1014,7 +1018,7 @@ fn may_be_variable_name(leading: &[&Token]) -> bool {
     crate::cfg::is_variable_name(&s)
 }
 
-fn shell_lower(s: Shell) -> &'static str {
+const fn shell_lower(s: Shell) -> &'static str {
     match s {
         Shell::Ksh => "ksh",
         Shell::Sh => "sh",
@@ -1049,7 +1053,7 @@ fn trailing_symbol_format(x: char) -> String {
         ' ' => "space".to_string(),
         '\'' => "apostrophe".to_string(),
         '"' => "doublequote".to_string(),
-        _ => format!("'{}'", x),
+        _ => format!("'{x}'"),
     }
 }
 

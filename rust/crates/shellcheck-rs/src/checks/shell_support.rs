@@ -1,9 +1,9 @@
-//! Port of `ShellCheck.Checks.ShellSupport`: dialect-specific checks (`ForShell`).
+//! Port of `ShellCheck.Checks.ShellSupport`: dialect-specific checks ([`ForShell`]).
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::get_leading_flags;
 use crate::analyzer_lib::{Check, Checker, Out, Parameters, StackData, err, style, warn};
-use crate::ast::*;
+use crate::ast::{AssignmentMode, ConditionType, Id, InnerToken, Token};
 use crate::ast_lib::is_flag;
 use crate::ast_lib::is_glob;
 use crate::ast_lib::is_only_redirection;
@@ -20,8 +20,8 @@ pub(crate) struct ForShell {
 }
 
 impl ForShell {
-    pub(crate) fn new(shells: &'static [Shell], f: fn(&Parameters, &Token, &mut Out)) -> ForShell {
-        ForShell { shells, f }
+    pub(crate) fn new(shells: &'static [Shell], f: fn(&Parameters, &Token, &mut Out)) -> Self {
+        Self { shells, f }
     }
 }
 
@@ -33,6 +33,7 @@ impl Check for ForShell {
     }
 }
 
+/// `checker`: adds the `ForShell` checks to `c` in the order of the Haskell `checks` list.
 pub fn register(c: &mut Checker) {
     c.node(check_for_decimals());
     c.node(check_bashisms());
@@ -150,9 +151,9 @@ fn is_dash(p: &Parameters) -> bool {
 /// "In POSIX sh, X undefined."
 fn warn_msg(out: &mut Out, p: &Parameters, id: Id, code: i64, s: &str) {
     if is_dash(p) {
-        err(out, id, code, &format!("In dash, {} not supported.", s));
+        err(out, id, code, &format!("In dash, {s} not supported."));
     } else {
-        warn(out, id, code, &format!("In POSIX sh, {} undefined.", s));
+        warn(out, id, code, &format!("In POSIX sh, {s} undefined."));
     }
 }
 
@@ -161,7 +162,10 @@ fn warn_msg(out: &mut Out, p: &Parameters, id: Id, code: i64, s: &str) {
 /// (needed by `checkForDecimals`).
 fn lit_string(t: &Token) -> Option<String> {
     fn go(t: &Token, out: &mut String) -> bool {
-        use InnerToken::*;
+        use InnerToken::{
+            T_DollarDoubleQuoted, T_DollarSingleQuoted, T_DoubleQuoted, T_Literal, T_NormalWord,
+            T_ParamSubSpecialChar, T_SingleQuoted, TA_Expansion,
+        };
         match &*t.inner {
             T_Literal(s)
             | T_SingleQuoted(s)
@@ -234,7 +238,11 @@ fn brace_expansion_vars(p: &Parameters, t: &Token, out: &mut Out) {
 /// for `$`-expansions and "-" for anything else non-literal.
 fn brace_element_to_string(t: &Token) -> String {
     fn go(t: &Token, out: &mut String) {
-        use InnerToken::*;
+        use InnerToken::{
+            T_DollarArithmetic, T_DollarBraced, T_DollarDoubleQuoted, T_DollarExpansion,
+            T_DollarSingleQuoted, T_DoubleQuoted, T_Literal, T_NormalWord, T_ParamSubSpecialChar,
+            T_SingleQuoted, TA_Expansion,
+        };
         match &*t.inner {
             T_Literal(s)
             | T_SingleQuoted(s)
@@ -256,18 +264,15 @@ fn brace_element_to_string(t: &Token) -> String {
 
 /// `isEvaled`: the closest enclosing command is an unqualified `eval`.
 fn is_evaled(p: &Parameters, t: &Token) -> bool {
-    match get_closest_command(p, t) {
-        Some(cmd) => crate::analyzer_lib::get_command_name(cmd).as_deref() == Some("eval"),
-        None => false,
-    }
+    get_closest_command(p, t)
+        .is_some_and(|cmd| crate::analyzer_lib::get_command_name(cmd).as_deref() == Some("eval"))
 }
 
 fn multi_dimensional_arrays(_p: &Parameters, t: &Token, out: &mut Out) {
     match &*t.inner {
-        InnerToken::T_Assignment { indices, .. } if indices.len() >= 2 => {
-            about(out, &indices[1]);
-        }
-        InnerToken::T_IndexedElement { indices, .. } if indices.len() >= 2 => {
+        InnerToken::T_Assignment { indices, .. } | InnerToken::T_IndexedElement { indices, .. }
+            if indices.len() >= 2 =>
+        {
             about(out, &indices[1]);
         }
         InnerToken::T_DollarBraced { op, .. } if is_multi_dim(op) => {
@@ -365,14 +370,14 @@ fn bashism_binary_test(op: &str) -> Option<(i64, &'static [Shell], String)> {
         "<" | ">" | "\\<" | "\\>" | "<=" | ">=" | "\\<=" | "\\>=" => (
             3012,
             &[Shell::Dash, Shell::BusyboxSh][..],
-            format!("lexicographical {} is", op),
+            format!("lexicographical {op} is"),
         ),
         "==" => (
             3014,
             &[Shell::BusyboxSh][..],
-            format!("{} in place of = is", op),
+            format!("{op} in place of = is"),
         ),
-        "=~" => (3015, &[][..], format!("{} regex matching is", op)),
+        "=~" => (3015, &[][..], format!("{op} regex matching is")),
         _ => return None,
     })
 }
@@ -382,30 +387,30 @@ fn bashism_unary_test(op: &str) -> Option<(i64, &'static [Shell], String)> {
         "-v" => (
             3016,
             &[][..],
-            format!("test {} (in place of [ -n \"${{var+x}}\" ]) is", op),
+            format!("test {op} (in place of [ -n \"${{var+x}}\" ]) is"),
         ),
-        "-a" => (3017, &[][..], format!("unary {} in place of -e is", op)),
-        "-o" => (3062, &[][..], format!("test {} to check options is", op)),
+        "-a" => (3017, &[][..], format!("unary {op} in place of -e is")),
+        "-o" => (3062, &[][..], format!("test {op} to check options is")),
         "-R" => (
             3063,
             &[][..],
-            format!("test {} and namerefs in general are", op),
+            format!("test {op} and namerefs in general are"),
         ),
-        "-N" => (3064, &[][..], format!("test {} is", op)),
+        "-N" => (3064, &[][..], format!("test {op} is")),
         "-k" => (
             3065,
             &[Shell::Dash, Shell::BusyboxSh][..],
-            format!("test {} is", op),
+            format!("test {op} is"),
         ),
         "-G" => (
             3066,
             &[Shell::Dash, Shell::BusyboxSh][..],
-            format!("test {} is", op),
+            format!("test {op} is"),
         ),
         "-O" => (
             3067,
             &[Shell::Dash, Shell::BusyboxSh][..],
-            format!("test {} is", op),
+            format!("test {op} is"),
         ),
         _ => return None,
     })
@@ -489,11 +494,11 @@ fn is_bash_variable(p: &Parameters, var: &str) -> bool {
     dyn_or_static && !(is_dash(p) && DASH_VARS.contains(&var))
 }
 
-fn is_v(c: char) -> bool {
+const fn is_v(c: char) -> bool {
     c == '_' || c.is_ascii_alphanumeric()
 }
 
-fn is_v_star_at(c: char) -> bool {
+const fn is_v_star_at(c: char) -> bool {
     is_v(c) || c == '*' || c == '@'
 }
 
@@ -553,7 +558,7 @@ fn re_3057(s: &[char]) -> bool {
     i >= 1 && i < s.len() && s[i] == ':' && i + 1 < s.len() && !"-=?+".contains(s[i + 1])
 }
 
-fn re_3058(s: &[char]) -> bool {
+const fn re_3058(s: &[char]) -> bool {
     if s.len() < 2 {
         return false;
     }
@@ -603,8 +608,14 @@ fn matches_radix(s: &str) -> bool {
 }
 
 fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
+    use InnerToken::{
+        T_Arithmetic, T_Array, T_Assignment, T_Backticked, T_BraceExpansion, T_CoProc, T_Condition,
+        T_DollarBraced, T_DollarBracket, T_DollarDoubleQuoted, T_DollarExpansion, T_Extglob,
+        T_FdRedirect, T_ForArithmetic, T_Function, T_Glob, T_HereString, T_IoFile, T_Pipe,
+        T_ProcSub, T_SelectIn, T_SimpleCommand, T_SourceCommand, TA_Binary, TA_Expansion, TA_Unary,
+        TA_Variable, TC_Binary, TC_Unary,
+    };
     let id = t.id();
-    use InnerToken::*;
     match &*t.inner {
         T_ProcSub { .. } => {
             if !is_busybox(p) {
@@ -633,7 +644,7 @@ fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
 
         TA_Unary { op, .. } if matches!(op.as_str(), "|++" | "|--" | "++|" | "--|") => {
             let filtered: String = op.chars().filter(|&c| c != '|').collect();
-            warn_msg(out, p, id, 3018, &format!("{} is", filtered));
+            warn_msg(out, p, id, 3018, &format!("{filtered} is"));
         }
         TA_Binary { op, .. } if op == "**" => {
             warn_msg(out, p, id, 3019, "exponentials are");
@@ -648,14 +659,7 @@ fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
             warn_msg(out, p, id, 3024, "+= is");
         }
 
-        T_IoFile { file, .. } => {
-            let f = only_literal_string(file);
-            if f.starts_with("/dev/tcp") || f.starts_with("/dev/udp") {
-                warn_msg(out, p, id, 3025, "/dev/{tcp,udp} is");
-            } else if is_glob(file) {
-                warn_msg(out, p, id, 3031, "redirecting to/from globs is");
-            }
-        }
+        T_IoFile { file, .. } => bashism_io_file(p, id, file, out),
 
         T_Glob(s) if s.contains("[^") => {
             warn_msg(
@@ -668,7 +672,7 @@ fn bashism(p: &Parameters, t: &Token, out: &mut Out) {
         }
 
         TA_Variable { name, .. } if is_bash_variable(p, name) => {
-            warn_msg(out, p, id, 3028, &format!("{} is", name));
+            warn_msg(out, p, id, 3028, &format!("{name} is"));
         }
 
         T_Pipe(op) if op == "|&" => warn_msg(out, p, id, 3029, "|& in place of 2>&1 | is"),
@@ -752,6 +756,15 @@ fn bashism_fd_redirect(p: &Parameters, id: Id, fd: &str, target: &Token, out: &m
     }
 }
 
+fn bashism_io_file(p: &Parameters, id: Id, file: &Token, out: &mut Out) {
+    let f = only_literal_string(file);
+    if f.starts_with("/dev/tcp") || f.starts_with("/dev/udp") {
+        warn_msg(out, p, id, 3025, "/dev/{tcp,udp} is");
+    } else if is_glob(file) {
+        warn_msg(out, p, id, 3031, "redirecting to/from globs is");
+    }
+}
+
 fn bashism_dollar_braced(p: &Parameters, id: Id, op: &Token, out: &mut Out) {
     let s = oversimplify_concat(op);
     let cs: Vec<char> = s.chars().collect();
@@ -783,7 +796,7 @@ fn bashism_dollar_braced(p: &Parameters, id: Id, op: &Token, out: &mut Out) {
     }
     let var = get_braced_reference(&s);
     if is_bash_variable(p, &var) {
-        warn_msg(out, p, id, 3028, &format!("{} is", var));
+        warn_msg(out, p, id, 3028, &format!("{var} is"));
     }
 }
 
@@ -872,8 +885,8 @@ fn allowed_flags(name: &str, p: &Parameters) -> Option<Vec<&'static str>> {
     let busybox = is_busybox(p);
     Some(match name {
         "cd" => vec!["L", "P"],
-        "exec" => vec![],
-        "export" => vec!["p"],
+        "exec" | "printf" | "trap" | "wait" => vec![],
+        "export" | "readonly" => vec!["p"],
         "hash" => {
             if dash {
                 vec!["r", "v"]
@@ -882,7 +895,6 @@ fn allowed_flags(name: &str, p: &Parameters) -> Option<Vec<&'static str>> {
             }
         }
         "jobs" => vec!["l", "p"],
-        "printf" => vec![],
         "read" => {
             if dash || busybox {
                 vec!["r", "p"]
@@ -890,8 +902,6 @@ fn allowed_flags(name: &str, p: &Parameters) -> Option<Vec<&'static str>> {
                 vec!["r"]
             }
         }
-        "readonly" => vec!["p"],
-        "trap" => vec![],
         "type" => {
             if busybox {
                 vec!["p"]
@@ -910,7 +920,6 @@ fn allowed_flags(name: &str, p: &Parameters) -> Option<Vec<&'static str>> {
         }
         "umask" => vec!["S"],
         "unset" => vec!["f", "v"],
-        "wait" => vec![],
         _ => return None,
     })
 }
@@ -927,7 +936,7 @@ fn check_general_command(p: &Parameters, t: &Token, words: &[Token], out: &mut O
         warn_msg(out, p, id, 3043, "'local' is");
     }
     if UNSUPPORTED_COMMANDS.contains(&name.as_str()) {
-        warn_msg(out, p, id, 3044, &format!("'{}' is", name));
+        warn_msg(out, p, id, 3044, &format!("'{name}' is"));
     }
 
     if let Some(allowed) = allowed_flags(&name, p) {
@@ -936,7 +945,7 @@ fn check_general_command(p: &Parameters, t: &Token, words: &[Token], out: &mut O
             .iter()
             .find(|(_, f)| !f.is_empty() && !allowed.contains(&f.as_str()))
         {
-            warn_msg(out, p, word.id(), 3045, &format!("{} -{} is", name, flag));
+            warn_msg(out, p, word.id(), 3045, &format!("{name} -{flag} is"));
         }
     }
 
@@ -949,7 +958,7 @@ fn check_general_command(p: &Parameters, t: &Token, words: &[Token], out: &mut O
             if let Some(s) = get_literal_string(token) {
                 let upper = s.to_uppercase();
                 if matches!(upper.as_str(), "ERR" | "DEBUG" | "RETURN") {
-                    warn_msg(out, p, token.id(), 3047, &format!("trapping {} is", s));
+                    warn_msg(out, p, token.id(), 3047, &format!("trapping {s} is"));
                 }
                 if !is_busybox(p) && upper.starts_with("SIG") {
                     warn_msg(
@@ -1045,7 +1054,7 @@ fn check_set_options_rec(p: &Parameters, args: &[(Id, String)], out: &mut Out) {
         let (oid, opt) = &args[1];
         if set_o_flag(flag) {
             if !SET_LONG_OPTIONS.contains(&opt.as_str()) {
-                warn_msg(out, p, *oid, 3040, &format!("set option {} is", opt));
+                warn_msg(out, p, *oid, 3040, &format!("set option {opt} is"));
             }
             let mut next = vec![args[0].clone()];
             next.extend_from_slice(&args[2..]);
@@ -1070,13 +1079,13 @@ fn check_set_flags_rec(p: &Parameters, args: &[(Id, String)], out: &mut Out) {
         if !set_valid_flags(flag) {
             for letter in flag.chars().skip(1) {
                 if !SET_OPTIONS.contains(letter) {
-                    warn_msg(out, p, *fid, 3041, &format!("set flag -{} is", letter));
+                    warn_msg(out, p, *fid, 3041, &format!("set flag -{letter} is"));
                 }
             }
         }
         check_set_options_rec(p, rest, out);
     } else if set_begins_double_dash(flag) {
-        warn_msg(out, p, *fid, 3042, &format!("set flag {} is", flag));
+        warn_msg(out, p, *fid, 3042, &format!("set flag {flag} is"));
         check_set_options_rec(p, rest, out);
     }
 }
@@ -1209,7 +1218,7 @@ mod tests {
 
     #[test]
     fn prop_checkBashisms11() {
-        assert!(!emits(bashism, "echo ${var:-4}"));
+        assert!(!emits(bashism, concat!("echo ${var", ":-4}")));
     }
 
     #[test]

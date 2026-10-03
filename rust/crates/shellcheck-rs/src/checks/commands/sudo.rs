@@ -1,18 +1,17 @@
 //! Privilege-elevation checks (sudo/doas/run0) from `ShellCheck.Checks.Commands`.
-use super::{CommandCheck, CommandName::*};
+use super::{CommandCheck, CommandName::Basename};
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::get_closest_command;
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{Out, info, warn};
+use crate::ast::{InnerToken, Token};
 use crate::ast_lib;
 use crate::ast_lib::oversimplify_concat;
 use crate::cfg::get_bsd_opts;
 
 pub(super) fn check_sudo_args(cmd: &'static str) -> CommandCheck {
     CommandCheck::new(Basename(cmd), move |_params, te, out| {
-        let opts = match get_bsd_opts("vAknSbEHPa:g:h:p:u:c:T:r:", arguments(te)) {
-            Some(o) => o,
-            None => return,
+        let Some(opts) = get_bsd_opts("vAknSbEHPa:g:h:p:u:c:T:r:", arguments(te)) else {
+            return;
         };
         // find (null . fst) opts  -> first operand
         if let Some((_, (command_arg, _))) = opts.iter().find(|(name, _)| name.is_empty())
@@ -24,8 +23,7 @@ pub(super) fn check_sudo_args(cmd: &'static str) -> CommandCheck {
                 te.id(),
                 2232,
                 &format!(
-                    "Can't use sudo/doas/run0 with builtins like {}. Did you want sudo/doas/run0 sh -c .. instead?",
-                    command
+                    "Can't use sudo/doas/run0 with builtins like {command}. Did you want sudo/doas/run0 sh -c .. instead?"
                 ),
             );
         }
@@ -55,7 +53,7 @@ const SUDO_BUILTINS: [&str; 25] = [
 ];
 
 fn sudo_redirect_warn_about(redir: &Token, out: &mut Out) {
-    use InnerToken::*;
+    use InnerToken::{T_DGREAT, T_FdRedirect, T_Greater, T_IoFile, T_Less};
     let T_FdRedirect { fd, target } = &*redir.inner else {
         return;
     };

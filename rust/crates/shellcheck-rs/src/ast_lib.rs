@@ -1,9 +1,11 @@
 //! Port of selected `ShellCheck.ASTLib` helpers (grown as checks need them).
 
-use crate::ast::*;
+use crate::ast::{Annotation, InnerToken, Token};
+use crate::regex_lib::mk_regex;
 
 /// `getLiteralString`: the literal string of a word, or None if any part is
 /// non-literal (an expansion, glob, etc.).
+#[must_use]
 pub fn get_literal_string(t: &Token) -> Option<String> {
     get_literal_string_ext(t, &|_| None)
 }
@@ -14,47 +16,27 @@ pub fn get_literal_string_ext(
     t: &Token,
     fallback: &dyn Fn(&InnerToken) -> Option<String>,
 ) -> Option<String> {
-    fn go(t: &Token, fb: &dyn Fn(&InnerToken) -> Option<String>, out: &mut String) -> bool {
+    fn go(t: &Token, fb: &dyn Fn(&InnerToken) -> Option<String>, out: &mut String) -> Option<()> {
         match &*t.inner {
-            InnerToken::T_Literal(s) | InnerToken::T_SingleQuoted(s) => {
-                out.push_str(s);
-                true
-            }
-            InnerToken::T_DollarSingleQuoted(s) => {
-                out.push_str(&decode_escapes(s));
-                true
-            }
+            InnerToken::T_Literal(s)
+            | InnerToken::T_SingleQuoted(s)
+            | InnerToken::T_ParamSubSpecialChar(s) => out.push_str(s),
+            InnerToken::T_DollarSingleQuoted(s) => out.push_str(&decode_escapes(s)),
             InnerToken::T_NormalWord(parts)
             | InnerToken::T_DoubleQuoted(parts)
             | InnerToken::T_DollarDoubleQuoted(parts)
             | InnerToken::TA_Expansion(parts) => {
                 for p in parts {
-                    if !go(p, fb, out) {
-                        return false;
-                    }
-                }
-                true
-            }
-            InnerToken::T_ParamSubSpecialChar(s) => {
-                out.push_str(s);
-                true
-            }
-            other => {
-                if let Some(s) = fb(other) {
-                    out.push_str(&s);
-                    true
-                } else {
-                    false
+                    go(p, fb, out)?;
                 }
             }
+            other => out.push_str(&fb(other)?),
         }
+        Some(())
     }
     let mut s = String::new();
-    if go(t, fallback, &mut s) {
-        Some(s)
-    } else {
-        None
-    }
+    go(t, fallback, &mut s)?;
+    Some(s)
 }
 
 /// `decodeEscapes` from `getLiteralStringExt`: bash style `$'..'` decoding.
@@ -73,6 +55,7 @@ pub fn get_literal_string_ext(
 ///
 /// There is no `\c` (control char) case: upstream has none, so `$'\cA'` falls
 /// into the octal branch, fails to parse, and stays `\cA`.
+#[must_use]
 pub fn decode_escapes(s: &str) -> String {
     let cs: Vec<char> = s.chars().collect();
     let mut out = String::new();
@@ -163,35 +146,36 @@ fn push_code_point(out: &mut String, n: Option<u32>) {
     }
 }
 
-/// `oversimplify`: flatten a token to its most literal string forms. Faithful
-/// to `ShellCheck.ASTLib.oversimplify`: words concatenate their parts,
+/// `oversimplify`: flatten a token to its most literal string forms.
+///
+/// Faithful to `ShellCheck.ASTLib.oversimplify`: words concatenate their parts,
 /// expansions become `"${VAR}"`, globs and literals pass through, and a
 /// single-element pipeline / redirected / annotated command is looked through.
 /// This is the single implementation in the crate; `cfg::oversimplify`
 /// delegates here.
 pub fn oversimplify(t: &Token) -> Vec<String> {
-    use InnerToken::*;
+    use InnerToken::{
+        T_Annotation, T_Backticked, T_DollarArithmetic, T_DollarBraced, T_DollarExpansion,
+        T_DollarSingleQuoted, T_DoubleQuoted, T_Glob, T_Literal, T_NormalWord,
+        T_ParamSubSpecialChar, T_Pipeline, T_Redirecting, T_SimpleCommand, T_SingleQuoted,
+        TA_Expansion, TA_Sequence,
+    };
     match &*t.inner {
-        T_NormalWord(l) => {
+        T_NormalWord(l) | T_DoubleQuoted(l) => {
             let s: String = l.iter().flat_map(oversimplify).collect::<Vec<_>>().concat();
             vec![s]
         }
-        T_DoubleQuoted(l) => {
-            let s: String = l.iter().flat_map(oversimplify).collect::<Vec<_>>().concat();
-            vec![s]
+        T_SingleQuoted(s)
+        | T_Glob(s)
+        | T_Literal(s)
+        | T_ParamSubSpecialChar(s)
+        | T_DollarSingleQuoted(s) => vec![s.clone()],
+        T_DollarBraced { .. } | T_DollarArithmetic(_) | T_DollarExpansion(_) | T_Backticked(_) => {
+            vec!["${VAR}".to_string()]
         }
-        T_SingleQuoted(s) => vec![s.clone()],
-        T_DollarBraced { .. } => vec!["${VAR}".to_string()],
-        T_DollarArithmetic(_) => vec!["${VAR}".to_string()],
-        T_DollarExpansion(_) => vec!["${VAR}".to_string()],
-        T_Backticked(_) => vec!["${VAR}".to_string()],
-        T_Glob(s) => vec![s.clone()],
         T_Pipeline { commands, .. } if commands.len() == 1 => oversimplify(&commands[0]),
-        T_Literal(x) => vec![x.clone()],
-        T_ParamSubSpecialChar(x) => vec![x.clone()],
         T_SimpleCommand { words, .. } => words.iter().flat_map(oversimplify).collect(),
         T_Redirecting { cmd, .. } => oversimplify(cmd),
-        T_DollarSingleQuoted(s) => vec![s.clone()],
         T_Annotation { token, .. } => oversimplify(token),
         // Workaround for `let "foo = bar"` parsing (as in the Haskell source).
         TA_Sequence(seq) if seq.len() == 1 && matches!(&*seq[0].inner, TA_Expansion(_)) => {
@@ -206,16 +190,20 @@ pub fn oversimplify(t: &Token) -> Vec<String> {
 
 /// `onlyLiteralString = getLiteralStringDef ""`: definitely get a literal
 /// string, treating every non-literal part as the empty string.
+#[must_use]
 pub fn only_literal_string(t: &Token) -> String {
     get_literal_string_ext(t, &|_| Some(String::new())).unwrap_or_default()
 }
 
 /// `braceExpand`: return the list of `T_NormalWord`s that a word would produce
-/// under brace expansion. For each part, a `T_BraceExpansion` chooses one of its
+/// under brace expansion.
+///
+/// For each part, a `T_BraceExpansion` chooses one of its
 /// elements (recursively expanded) while any other part passes through
 /// unchanged; the result is the cartesian product, capped at 1000 like Haskell's
 /// `take 1000`. Non-`T_NormalWord` input returns the single token. The produced
 /// words reuse the original word's id.
+#[must_use]
 pub fn brace_expand(word: &Token) -> Vec<Token> {
     let (id, list) = match &*word.inner {
         InnerToken::T_NormalWord(list) => (word.id, list),
@@ -264,10 +252,7 @@ fn part_choices(part: &Token) -> Vec<Token> {
 /// `basename = reverse . takeWhile (/= '/') . reverse`: the part after the
 /// last `/` (the whole string if there is none).
 pub(crate) fn basename(path: &str) -> String {
-    match path.rsplit('/').next() {
-        Some(x) => x.to_string(),
-        None => path.to_string(),
-    }
+    path.rsplit('/').next().unwrap_or(path).to_string()
 }
 
 /// `executableFromShebang`: extract the interpreter name from a shebang string.
@@ -278,8 +263,7 @@ pub fn executable_from_shebang(sb: &str) -> String {
     // env form -- not the word `env` appearing anywhere. `#!n\tenv bash` is an
     // interpreter called `n`, not bash.
     static ENV_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let env_re =
-        ENV_RE.get_or_init(|| regex::Regex::new(r"/env +(-S|--split-string=?)? *(.*)").unwrap());
+    let env_re = ENV_RE.get_or_init(|| mk_regex(r"/env +(-S|--split-string=?)? *(.*)"));
     if let Some(caps) = env_re.captures(sb) {
         let rest = caps.get(2).map_or("", |m| m.as_str());
         let args: Vec<&str> = rest.split_whitespace().collect();
@@ -317,11 +301,10 @@ fn from_env_args(args: &[&str]) -> String {
 
 /// `getWordParts`.
 pub(crate) fn get_word_parts(t: &Token) -> Vec<&Token> {
-    use InnerToken::*;
+    use InnerToken::{T_DoubleQuoted, T_NormalWord, TA_Expansion};
     match &*t.inner {
-        T_NormalWord(l) => l.iter().flat_map(get_word_parts).collect(),
+        T_NormalWord(l) | TA_Expansion(l) => l.iter().flat_map(get_word_parts).collect(),
         T_DoubleQuoted(l) => l.iter().collect(),
-        TA_Expansion(l) => l.iter().flat_map(get_word_parts).collect(),
         _ => vec![t],
     }
 }
@@ -338,10 +321,9 @@ pub(crate) fn has_split_range(l: &[Token]) -> bool {
 
 /// Faithful port of `ShellCheck.ASTLib.isGlob`.
 pub(crate) fn is_glob(t: &Token) -> bool {
-    use InnerToken::*;
+    use InnerToken::{T_Extglob, T_Glob, T_NormalWord};
     match &*t.inner {
-        T_Extglob { .. } => true,
-        T_Glob(_) => true,
+        T_Extglob { .. } | T_Glob(_) => true,
         T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
         _ => false,
     }
@@ -349,15 +331,14 @@ pub(crate) fn is_glob(t: &Token) -> bool {
 
 /// `isFlag`: word whose first part is a `-`-prefixed literal.
 pub(crate) fn is_flag(t: &Token) -> bool {
-    match get_word_parts(t).first() {
-        Some(p) => matches!(&*p.inner, InnerToken::T_Literal(s) if s.starts_with('-')),
-        None => false,
-    }
+    get_word_parts(t)
+        .first()
+        .is_some_and(|p| matches!(&*p.inner, InnerToken::T_Literal(s) if s.starts_with('-')))
 }
 
 /// Faithful port of `ShellCheck.ASTLib.isConstant`.
 pub(crate) fn is_constant(token: &Token) -> bool {
-    use InnerToken::*;
+    use InnerToken::{T_DoubleQuoted, T_Literal, T_NormalWord, T_SingleQuoted};
     match &*token.inner {
         // This ignores some cases like ~"foo": a word whose first part is a
         // literal starting with '~' is treated as non-constant.
@@ -371,8 +352,7 @@ pub(crate) fn is_constant(token: &Token) -> bool {
             l.iter().all(is_constant)
         }
         T_DoubleQuoted(l) => l.iter().all(is_constant),
-        T_SingleQuoted(_) => true,
-        T_Literal(_) => true,
+        T_SingleQuoted(_) | T_Literal(_) => true,
         _ => false,
     }
 }
@@ -405,7 +385,7 @@ pub(crate) fn is_literal(t: &Token) -> bool {
     get_literal_string(t).is_some()
 }
 
-/// `isOnlyRedirection` (ASTLib).
+/// `isOnlyRedirection` (`ASTLib`).
 pub(crate) fn is_only_redirection(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => {
@@ -438,7 +418,7 @@ pub(crate) fn is_function(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_Function { .. })
 }
 
-/// `isQuotes` (ASTLib).
+/// `isQuotes` (`ASTLib`).
 pub(crate) fn is_quotes(t: &Token) -> bool {
     matches!(
         &*t.inner,
@@ -460,6 +440,7 @@ pub(crate) fn is_annotation_ignoring_code(code: i64, t: &Token) -> bool {
 
 /// `escapeForMessage` (`e4m`).
 pub(crate) fn e4m(s: &str) -> String {
+    use std::fmt::Write;
     let mut out = String::new();
     for c in s.chars() {
         match c {
@@ -473,9 +454,9 @@ pub(crate) fn e4m(s: &str) -> String {
                 if should_escape {
                     let n = c as u32;
                     if n < 256 {
-                        out.push_str(&format!("\\x{:02X}", n));
+                        let _ = write!(out, "\\x{n:02X}");
                     } else {
-                        out.push_str(&format!("\\U{:04X}", n));
+                        let _ = write!(out, "\\U{n:04X}");
                     }
                 } else {
                     out.push(c);
@@ -498,15 +479,20 @@ pub(crate) fn is_command_substitution(t: &Token) -> bool {
 
 /// `getCommandSequences`.
 pub(crate) fn get_command_sequences(t: &Token) -> Vec<&[Token]> {
-    use InnerToken::*;
+    use InnerToken::{
+        T_Annotation, T_Backticked, T_BraceGroup, T_DollarBraceCommandExpansion, T_DollarExpansion,
+        T_ForArithmetic, T_ForIn, T_IfExpression, T_Script, T_Subshell, T_UntilExpression,
+        T_WhileExpression,
+    };
     match &*t.inner {
         T_Script { commands, .. } => vec![&commands[..]],
-        T_BraceGroup(cmds) => vec![&cmds[..]],
-        T_Subshell(cmds) => vec![&cmds[..]],
-        T_WhileExpression { condition, body } => vec![&condition[..], &body[..]],
-        T_UntilExpression { condition, body } => vec![&condition[..], &body[..]],
-        T_ForIn { body, .. } => vec![&body[..]],
-        T_ForArithmetic { body, .. } => vec![&body[..]],
+        T_BraceGroup(cmds) | T_Subshell(cmds) | T_DollarExpansion(cmds) | T_Backticked(cmds) => {
+            vec![&cmds[..]]
+        }
+        T_WhileExpression { condition, body } | T_UntilExpression { condition, body } => {
+            vec![&condition[..], &body[..]]
+        }
+        T_ForIn { body, .. } | T_ForArithmetic { body, .. } => vec![&body[..]],
         T_IfExpression { clauses, elses } => {
             let mut out: Vec<&[Token]> = vec![];
             for (a, b) in clauses {
@@ -517,9 +503,7 @@ pub(crate) fn get_command_sequences(t: &Token) -> Vec<&[Token]> {
             out
         }
         T_Annotation { token, .. } => get_command_sequences(token),
-        T_DollarExpansion(cmds) => vec![&cmds[..]],
         T_DollarBraceCommandExpansion { list, .. } => vec![&list[..]],
-        T_Backticked(cmds) => vec![&cmds[..]],
         _ => vec![],
     }
 }
@@ -531,7 +515,10 @@ pub(crate) fn get_literal_string_def(def: &str, t: &Token) -> String {
 
 /// `willSplit`.
 pub(crate) fn will_split(t: &Token) -> bool {
-    use InnerToken::*;
+    use InnerToken::{
+        T_Backticked, T_BraceExpansion, T_DollarBraced, T_DollarExpansion, T_DoubleQuoted,
+        T_Extglob, T_Glob, T_NormalWord,
+    };
     match &*t.inner {
         T_DollarBraced { .. }
         | T_DollarExpansion(_)
@@ -557,6 +544,7 @@ pub(crate) fn oversimplify_concat(t: &Token) -> String {
 
 /// `getTrailingUnquotedLiteral`: the word's last part, when it is an unquoted
 /// literal.
+#[must_use]
 pub fn get_trailing_unquoted_literal(t: &Token) -> Option<&Token> {
     if let InnerToken::T_NormalWord(list) = t.inner() {
         let last = list.last()?;

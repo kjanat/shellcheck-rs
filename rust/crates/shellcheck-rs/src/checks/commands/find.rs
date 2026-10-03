@@ -1,9 +1,9 @@
 //! `find` checks from `ShellCheck.Checks.Commands`.
-use super::common::*;
-use super::{CommandCheck, CommandName::*};
+use super::common::{word_args, word_flags};
+use super::{CommandCheck, CommandName::Basename};
 use crate::analyzer_lib::get_closest_command;
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{Out, info, simple_command_words, warn};
+use crate::ast::{Id, InnerToken, Token};
 use crate::ast_lib::get_literal_string_def;
 use crate::ast_lib::is_glob;
 use crate::ast_lib::{get_literal_string, only_literal_string};
@@ -14,8 +14,7 @@ pub(super) fn check_find_name_glob() -> CommandCheck {
             return;
         };
         let args = word_args(words);
-        // Consecutive pairs (a, b): warn on b when a is a glob-accepting flag and b
-        // is a glob.
+        // Consecutive pairs (a, b): warn on b when a is a glob-accepting flag and b is a glob.
         for pair in args.windows(2) {
             let a = &pair[0];
             let b = &pair[1];
@@ -27,10 +26,7 @@ pub(super) fn check_find_name_glob() -> CommandCheck {
                     out,
                     b.id(),
                     2061,
-                    &format!(
-                        "Quote the parameter to {} so the shell won't interpret it.",
-                        s
-                    ),
+                    &format!("Quote the parameter to {s} so the shell won't interpret it."),
                 );
             }
         }
@@ -52,13 +48,11 @@ pub(super) fn check_find_exec_with_single_argument() -> CommandCheck {
             let exec = &window[0];
             let arg = &window[1];
             let term = &window[2];
-            let exec_s = match get_literal_string(exec) {
-                Some(s) => s,
-                None => continue,
+            let Some(exec_s) = get_literal_string(exec) else {
+                continue;
             };
-            let term_s = match get_literal_string(term) {
-                Some(s) => s,
-                None => continue,
+            let Some(term_s) = get_literal_string(term) else {
+                continue;
             };
             let cmd_s = get_literal_string_def(" ", arg);
             if !matches!(exec_s.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir") {
@@ -74,10 +68,7 @@ pub(super) fn check_find_exec_with_single_argument() -> CommandCheck {
                 out,
                 exec.id(),
                 2150,
-                &format!(
-                    "{0} does not invoke a shell. Rewrite or use {0} sh -c .. .",
-                    exec_s
-                ),
+                &format!("{exec_s} does not invoke a shell. Rewrite or use {exec_s} sh -c .. ."),
             );
         }
     })
@@ -98,12 +89,12 @@ pub(super) fn check_injectable_find_sh() -> CommandCheck {
 
 pub(super) fn check_find_action_precedence() -> CommandCheck {
     CommandCheck::new(Basename("find"), |_p, t, out| {
+        // pattern = [isMatch, const True, isParam ["-o","-or"], isMatch, const True, isAction]
+        const PLEN: usize = 6;
         let Some(words) = simple_command_words(t) else {
             return;
         };
         let list: Vec<&Token> = word_args(words).iter().collect();
-        // pattern = [isMatch, const True, isParam ["-o","-or"], isMatch, const True, isAction]
-        const PLEN: usize = 6;
         let mut start = 0;
         while start + PLEN <= list.len() {
             let w = &list[start..start + PLEN];
@@ -145,30 +136,22 @@ pub(super) fn check_find_without_path() -> CommandCheck {
 
 pub(super) fn check_find_redirections() -> CommandCheck {
     CommandCheck::new(Basename("find"), |params, t, out| {
-        let redirecting = match get_closest_command(params, t) {
-            Some(r) => r,
-            None => return,
+        let Some(redirecting) = get_closest_command(params, t) else {
+            return;
         };
-        if let InnerToken::T_Redirecting { redirs, cmd } = &*redirecting.inner {
-            if redirs.is_empty() {
-                return;
-            }
-            if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner {
-                if words.len() < 2 {
-                    return;
-                }
-                let min_redir = redirs.iter().map(|r| r.id().0).min().unwrap();
-                let max_arg = words.iter().map(|w| w.id().0).max().unwrap();
-                if min_redir < max_arg {
-                    let min_id = redirs.iter().min_by_key(|r| r.id().0).unwrap().id();
-                    warn(
-                        out,
-                        min_id,
-                        2227,
-                        "Redirection applies to the find command itself. Rewrite to work per action (or move to end).",
-                    );
-                }
-            }
+        if let InnerToken::T_Redirecting { redirs, cmd } = &*redirecting.inner
+            && let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner
+            && words.len() >= 2
+            && let Some(min_redir) = redirs.iter().map(Token::id).min()
+            && let Some(max_arg) = words.iter().map(Token::id).max()
+            && min_redir < max_arg
+        {
+            warn(
+                out,
+                min_redir,
+                2227,
+                "Redirection applies to the find command itself. Rewrite to work per action (or move to end).",
+            );
         }
     })
 }
@@ -245,10 +228,7 @@ fn injectable_match(test_idx: usize, items: &[(Id, String)], out: &mut Out) {
 }
 
 fn fap_is_param(t: &Token, strs: &[&str]) -> bool {
-    match get_literal_string(t) {
-        Some(s) => strs.contains(&s.as_str()),
-        None => false,
-    }
+    get_literal_string(t).is_some_and(|s| strs.contains(&s.as_str()))
 }
 
 fn fap_is_match(t: &Token) -> bool {

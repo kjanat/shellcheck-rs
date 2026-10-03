@@ -1,25 +1,25 @@
 //! Test conditions `[ .. ]` and `[[ .. ]]` (`ShellCheck.Parser.readCondition`).
-use super::*;
+use super::{
+    COMMON_COMMANDS, ConditionType, InnerToken, PResult, Parser, Position, Severity, Token,
+    ast_lib, columns,
+};
 
 impl Parser {
     /// `readConditionCommand`: a condition plus optional redirects, wrapped in
-    /// T_Redirecting like every other command. Returns Err (with full reset)
+    /// `T_Redirecting` like every other command. Returns Err (with full reset)
     /// on any failure so the caller can fall back to a simple command.
     pub(super) fn read_condition_command(&mut self) -> PResult<Token> {
         let m = self.mark();
         let start = self.pos();
-        let cond = match self.read_condition() {
-            Ok(c) => c,
-            Err(()) => {
-                // As in `readCommand`'s `choice`: once the test expression has
-                // consumed input there is no falling back to a simple command.
-                if self.idx != m.idx {
-                    self.commit();
-                    return Err(());
-                }
-                self.reset(m);
+        let Ok(cond) = self.read_condition() else {
+            // As in `readCommand`'s `choice`: once the test expression has
+            // consumed input there is no falling back to a simple command.
+            if self.idx != m.idx {
+                self.commit();
                 return Err(());
             }
+            self.reset(m);
+            return Err(());
         };
         let redirs = self.read_redirect_list()?;
         let id = self.next_id_between(start, self.pos());
@@ -29,7 +29,7 @@ impl Parser {
             .find(|s| self.string_peek(s));
         if let Some(c) = has_dash_ao {
             let mut end = pos.clone();
-            end.column += c.len() as i64;
+            end.column += columns(c.len());
             let alt = match c {
                 "or" | "-o" => "||",
                 _ => "&&",
@@ -87,7 +87,7 @@ impl Parser {
     }
 
     pub(super) fn read_condition(&mut self) -> PResult<Token> {
-        self.called("test expression", |p| p.read_condition_body())
+        self.called("test expression", Self::read_condition_body)
     }
 
     fn read_condition_body(&mut self) -> PResult<Token> {
@@ -102,11 +102,7 @@ impl Parser {
             self.char('[')?;
         }
         let single = !dbl;
-        let typ = if single {
-            ConditionType::SingleBracket
-        } else {
-            ConditionType::DoubleBracket
-        };
+        let typ = Self::cond_typ(single);
 
         // required space after the bracket
         let space_pos = self.pos();
@@ -163,21 +159,20 @@ impl Parser {
             // have made this an empty condition is never reached.
             return Err(());
         }
-        let token = match contents {
-            Some(c) => c,
-            None => {
-                // `guard (not (null space)); lookAhead (string "]")`: an empty
-                // condition is one whose closing bracket comes next. With
-                // anything else there this alternative fails too, and so does
-                // the whole `readCondition` -- the line that would have asked
-                // for the bracket, message and all, is never reached.
-                if space.is_empty() || self.peek() != Some(']') {
-                    self.fail_implicitly();
-                    return Err(());
-                }
-                let id = self.next_id_between(start.clone(), self.pos());
-                Token::new(id, InnerToken::TC_Empty { typ })
+        let token = if let Some(c) = contents {
+            c
+        } else {
+            // `guard (not (null space)); lookAhead (string "]")`: an empty
+            // condition is one whose closing bracket comes next. With
+            // anything else there this alternative fails too, and so does
+            // the whole `readCondition` -- the line that would have asked
+            // for the bracket, message and all, is never reached.
+            if space.is_empty() || self.peek() != Some(']') {
+                self.fail_implicitly();
+                return Err(());
             }
+            let id = self.next_id_between(start.clone(), self.pos());
+            Token::new(id, InnerToken::TC_Empty { typ })
         };
         // `try (string "]]") <|> string "]"`: whichever bracket is actually
         // there, so a mismatched pair still parses and gets reported.
@@ -261,24 +256,21 @@ impl Parser {
                 let op_end = self.pos();
                 // `readAndOrOp .. requiresSpacing`: only the word forms need it.
                 self.cond_spacing_checked(single, op.starts_with('-'));
-                match self.read_cond_and(single) {
-                    Ok(right) => {
-                        let typ = self.cond_typ(single);
-                        let id = self.next_id_between(op_start, op_end);
-                        left = Token::new(
-                            id,
-                            InnerToken::TC_And {
-                                typ,
-                                op,
-                                lhs: left,
-                                rhs: right,
-                            },
-                        );
-                    }
-                    Err(()) => {
-                        self.reset(m);
-                        break;
-                    }
+                if let Ok(right) = self.read_cond_and(single) {
+                    let typ = Self::cond_typ(single);
+                    let id = self.next_id_between(op_start, op_end);
+                    left = Token::new(
+                        id,
+                        InnerToken::TC_And {
+                            typ,
+                            op,
+                            lhs: left,
+                            rhs: right,
+                        },
+                    );
+                } else {
+                    self.reset(m);
+                    break;
                 }
             } else {
                 self.reset(m);
@@ -298,24 +290,21 @@ impl Parser {
             if let Some(op) = self.read_cond_or_op() {
                 let op_end = self.pos();
                 self.cond_spacing_checked(single, op.starts_with('-'));
-                match self.read_cond_term(single) {
-                    Ok(right) => {
-                        let typ = self.cond_typ(single);
-                        let id = self.next_id_between(op_start, op_end);
-                        left = Token::new(
-                            id,
-                            InnerToken::TC_Or {
-                                typ,
-                                op,
-                                lhs: left,
-                                rhs: right,
-                            },
-                        );
-                    }
-                    Err(()) => {
-                        self.reset(m);
-                        break;
-                    }
+                if let Ok(right) = self.read_cond_term(single) {
+                    let typ = Self::cond_typ(single);
+                    let id = self.next_id_between(op_start, op_end);
+                    left = Token::new(
+                        id,
+                        InnerToken::TC_Or {
+                            typ,
+                            op,
+                            lhs: left,
+                            rhs: right,
+                        },
+                    );
+                } else {
+                    self.reset(m);
+                    break;
                 }
             } else {
                 self.reset(m);
@@ -325,7 +314,7 @@ impl Parser {
         Ok(left)
     }
 
-    pub(super) fn cond_typ(&self, single: bool) -> ConditionType {
+    pub(super) const fn cond_typ(single: bool) -> ConditionType {
         if single {
             ConditionType::SingleBracket
         } else {
@@ -382,7 +371,7 @@ impl Parser {
         let id = self.next_id_between(start, self.pos());
         self.cond_spacing_checked(single, true);
         let expr = self.read_cond_expr(single)?;
-        let typ = self.cond_typ(single);
+        let typ = Self::cond_typ(single);
         Ok(Token::new(
             id,
             InnerToken::TC_Unary {
@@ -448,7 +437,7 @@ impl Parser {
         };
         self.cond_spacing_checked(single, single);
         self.warn_cond_paren(single, rparen == ")", &cpos);
-        let typ = self.cond_typ(single);
+        let typ = Self::cond_typ(single);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::TC_Group { typ, token: inner }))
     }
@@ -511,12 +500,9 @@ impl Parser {
         // "file exists"/"option set" tests. Their AND/OR meaning is only reached
         // by `readCondAndOp`/`readCondOrOp` in the chainl1 layer, i.e. between two
         // already-parsed operands — so a left operand must exist first.
-        let op = match self.read_cond_op_flag() {
-            Some(o) => o,
-            None => {
-                self.reset(m);
-                return Err(());
-            }
+        let Some(op) = self.read_cond_op_flag() else {
+            self.reset(m);
+            return Err(());
         };
         // `readCondUnaryOp`: the TC_Unary id spans the OPERATOR ALONE
         // (`startSpan .. endSpan` around `readOp`, before the trailing spacing),
@@ -536,29 +522,26 @@ impl Parser {
         // argument that fails *after consuming* (`[ -n $(`) rewinds like any
         // other -- commitment included. Without that, the point of no return
         // set inside the argument would silence the SC1019 below.
-        match self.try_parse(|p| p.read_cond_word(single)) {
-            Ok(word) => {
-                let typ = self.cond_typ(single);
-                let id = self.next_id_between(start, op_end);
-                Ok(Token::new(
-                    id,
-                    InnerToken::TC_Unary {
-                        typ,
-                        op,
-                        token: word,
-                    },
-                ))
-            }
-            Err(()) => {
-                self.problem_at(
-                    arg_pos.clone(),
-                    arg_pos,
-                    Severity::ErrorC,
-                    1019,
-                    "Expected this to be an argument to the unary condition.",
-                );
-                self.fail_with("Expected an argument for the unary operator")
-            }
+        if let Ok(word) = self.try_parse(|p| p.read_cond_word(single)) {
+            let typ = Self::cond_typ(single);
+            let id = self.next_id_between(start, op_end);
+            Ok(Token::new(
+                id,
+                InnerToken::TC_Unary {
+                    typ,
+                    op,
+                    token: word,
+                },
+            ))
+        } else {
+            self.problem_at(
+                arg_pos.clone(),
+                arg_pos,
+                Severity::ErrorC,
+                1019,
+                "Expected this to be an argument to the unary condition.",
+            );
+            self.fail_with("Expected an argument for the unary operator")
         }
     }
 
@@ -624,45 +607,39 @@ impl Parser {
             } else {
                 self.read_cond_word(single)
             };
-            match y {
-                Ok(y) => {
-                    let typ = self.cond_typ(single);
-                    let id = self.next_id_between(op_start, op_end);
-                    return Ok(Token::new(
-                        id,
-                        InnerToken::TC_Binary {
-                            typ,
-                            op,
-                            lhs: x,
-                            rhs: y,
-                        },
-                    ));
-                }
-                Err(()) => {
-                    // The operand consumed before failing, so neither the
-                    // `<|>` that reports SC1027 nor the one that would fall
-                    // back to a nullary expression can recover.
-                    if self.idx != ym.idx {
-                        return Err(());
-                    }
-                    if !is_regex {
-                        // The operator was there, so there is no falling back to
-                        // a nullary expression: what is missing is its argument.
-                        self.problem_at(
-                            op_start.clone(),
-                            op_start,
-                            Severity::ErrorC,
-                            1027,
-                            "Expected another argument for this operator.",
-                        );
-                        return Err(());
-                    }
-                    self.reset(m);
-                }
+            if let Ok(y) = y {
+                let typ = Self::cond_typ(single);
+                let id = self.next_id_between(op_start, op_end);
+                return Ok(Token::new(
+                    id,
+                    InnerToken::TC_Binary {
+                        typ,
+                        op,
+                        lhs: x,
+                        rhs: y,
+                    },
+                ));
             }
-        } else {
-            self.reset(m);
+            // The operand consumed before failing, so neither the
+            // `<|>` that reports SC1027 nor the one that would fall
+            // back to a nullary expression can recover.
+            if self.idx != ym.idx {
+                return Err(());
+            }
+            if !is_regex {
+                // The operator was there, so there is no falling back to
+                // a nullary expression: what is missing is its argument.
+                self.problem_at(
+                    op_start.clone(),
+                    op_start,
+                    Severity::ErrorC,
+                    1027,
+                    "Expected another argument for this operator.",
+                );
+                return Err(());
+            }
         }
+        self.reset(m);
         // `checkTrailingOp`: a word ending in a test operator ran into it.
         if let Some(lit) = ast_lib::get_trailing_unquoted_literal(&x)
             && let InnerToken::T_Literal(s) = lit.inner()
@@ -679,7 +656,7 @@ impl Parser {
                 &format!("You need a space before and after the {op} ."),
             );
         }
-        let typ = self.cond_typ(single);
+        let typ = Self::cond_typ(single);
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::TC_Nullary { typ, token: x }))
     }
@@ -718,7 +695,7 @@ impl Parser {
     /// `readCondBinaryOp`: `readRegularOrEscaped anyOp`, then trailing spacing.
     /// Returns the operator string (with a leading `\` re-added for
     /// escaped/quoted `<`/`>`/`(`/`)`, matching `escaped`) and the position just
-    /// after the operator (before spacing), used for the TC_Binary span.
+    /// after the operator (before spacing), used for the `TC_Binary` span.
     pub(super) fn read_cond_binary_op(&mut self, single: bool) -> Option<(String, Position)> {
         let m = self.mark();
         // `optional guardArithmetic`
@@ -807,7 +784,7 @@ impl Parser {
 
     pub(super) fn escape_cond_op(s: &str) -> String {
         if s.chars().any(|c| "<>()".contains(c)) {
-            format!("\\{}", s)
+            format!("\\{s}")
         } else {
             s.to_string()
         }
@@ -897,7 +874,7 @@ impl Parser {
     /// unquoted `]]`/`)` inside a `( .. )` group does not terminate the
     /// condition, while unquoted whitespace outside a group ends the regex.
     pub(super) fn read_regex(&mut self) -> PResult<Token> {
-        self.called("regex", |p| p.read_regex_body())
+        self.called("regex", Self::read_regex_body)
     }
 
     fn read_regex_body(&mut self) -> PResult<Token> {
@@ -1012,9 +989,9 @@ impl Parser {
     }
 
     /// `readGroup`: `( .. )` inside a regex. Inside, `readRegexLiteral` swallows
-    /// runs of chars (including spaces and `]]`) until a `'"$`()` boundary.
+    /// runs of chars (including spaces and `]]`) until a `` '"$`() `` boundary.
     pub(super) fn read_regex_group(&mut self) -> PResult<Token> {
-        self.called("regex grouping", |p| p.read_regex_group_body())
+        self.called("regex grouping", Self::read_regex_group_body)
     }
 
     fn read_regex_group_body(&mut self) -> PResult<Token> {
@@ -1036,15 +1013,11 @@ impl Parser {
                     parts.push(p);
                     continue;
                 }
-                Ok(_) => self.reset(m),
                 Err(()) if self.idx != before => return Err(()),
-                Err(()) => self.reset(m),
+                Ok(_) | Err(()) => self.reset(m),
             }
             match self.read_regex_literal() {
-                Ok(p) => {
-                    parts.push(p);
-                    continue;
-                }
+                Ok(p) => parts.push(p),
                 Err(()) if self.idx != before => return Err(()),
                 Err(()) => break,
             }

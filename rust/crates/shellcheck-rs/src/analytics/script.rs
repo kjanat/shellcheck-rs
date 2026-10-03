@@ -1,9 +1,13 @@
 //! Script-structure checks (shebang, functions, aliases, reachability) from `ShellCheck.Analytics`.
-use super::common::*;
+use super::common::get_command_local;
 use crate::analyzer_lib::is_sourced;
 use crate::analyzer_lib::is_unqualified_command;
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{
+    Out, Parameters, StackData, err, err_with_fix, fix_with, get_command_basename,
+    get_command_name, get_command_token_or_this, get_path, get_variable_flow, info, replace_start,
+    should_ignore_code, warn,
+};
+use crate::ast::{Annotation, Id, InnerToken, Token};
 use crate::ast_lib;
 use crate::ast_lib::basename;
 use crate::ast_lib::e4m;
@@ -14,29 +18,30 @@ use crate::cfg::get_braced_modifier;
 use crate::cfg::get_unquoted_literal;
 use crate::cfg::is_variable_name;
 use crate::interface::Shell;
+use crate::regex_lib::mk_regex;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 pub(super) fn check_shebang_parameters(_params: &Parameters, t: &Token, out: &mut Out) {
-    match &*t.inner {
-        InnerToken::T_Annotation { token, .. } => check_shebang_parameters(_params, token, out),
-        InnerToken::T_Script { shebang, .. } => {
-            if let InnerToken::T_Literal(sb) = &*shebang.inner {
-                use std::sync::OnceLock;
-                static RE: OnceLock<regex::Regex> = OnceLock::new();
-                let re = RE.get_or_init(|| regex::Regex::new(r"env +(-S|--split-string)").unwrap());
-                let is_multi_word = sb.split_whitespace().count() > 2 && !re.is_match(sb);
-                if is_multi_word {
-                    err(
-                        out,
-                        shebang.id(),
-                        2096,
-                        "On most OS, shebangs can only specify a single parameter.",
-                    );
-                }
-            }
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let mut t = t;
+    while let InnerToken::T_Annotation { token, .. } = &*t.inner {
+        t = token;
+    }
+    if let InnerToken::T_Script { shebang, .. } = &*t.inner
+        && let InnerToken::T_Literal(sb) = &*shebang.inner
+    {
+        let re = RE.get_or_init(|| mk_regex(r"env +(-S|--split-string)"));
+        let is_multi_word = sb.split_whitespace().count() > 2 && !re.is_match(sb);
+        if is_multi_word {
+            err(
+                out,
+                shebang.id(),
+                2096,
+                "On most OS, shebangs can only specify a single parameter.",
+            );
         }
-        _ => {}
     }
 }
 
@@ -51,17 +56,15 @@ pub(super) fn check_functions_used_externally(params: &Parameters, root: &Token,
     };
 
     root.visit_preorder(&mut |t| {
-        let argv = match &*t.inner {
-            InnerToken::T_SimpleCommand { words, .. } => words,
-            _ => return,
+        let InnerToken::T_SimpleCommand { words, .. } = &*t.inner else {
+            return;
         };
-        let name_str = match get_command_name(t) {
-            Some(s) => s,
-            None => return,
+        let Some(name_str) = get_command_name(t) else {
+            return;
         };
         let cmd_token = get_command_token_or_this(t);
         let name = basename(&name_str);
-        let args = skip_over(cmd_token, argv);
+        let args = skip_over(cmd_token, words);
         let arg_strings: Vec<(String, Token)> =
             args.iter().map(|x| (ast_lib::only_literal_string(x), x.clone())).collect();
         let candidates = get_potential_commands(&name, &arg_strings);
@@ -95,7 +98,7 @@ pub(super) fn check_unpassed_in_functions(params: &Parameters, root: &Token, out
             let flow = get_variable_flow(
                 &params.parent_map,
                 &params.id_map,
-                params.has_lastpipe,
+                params.has_lastpipe(),
                 body,
             );
             let references_positional = flow.iter().any(|sd| match sd {
@@ -161,7 +164,7 @@ pub(super) fn check_unpassed_in_functions(params: &Parameters, root: &Token, out
             out,
             func.id(),
             2120,
-            &format!("{} references arguments, but none are ever passed.", name),
+            &format!("{name} references arguments, but none are ever passed."),
         );
     }
 }
@@ -227,9 +230,8 @@ pub(super) fn check_shebang(params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 pub(super) fn check_use_before_definition(params: &Parameters, root: &Token, out: &mut Out) {
-    let cfga = match params.cfg_analysis.as_ref() {
-        Some(c) => c,
-        None => return,
+    let Some(cfga) = params.cfg_analysis.as_ref() else {
+        return;
     };
 
     // funcs: name -> [definition ids]
@@ -457,10 +459,9 @@ fn functions_and_aliases(root: &Token) -> HashMap<String, Id> {
 
 /// `skipOver t list` = drop everything up to and including the token `t`.
 fn skip_over(tok: &Token, list: &[Token]) -> Vec<Token> {
-    match list.iter().position(|c| c.id() == tok.id()) {
-        Some(i) => list[i + 1..].to_vec(),
-        None => Vec::new(),
-    }
+    list.iter()
+        .position(|c| c.id() == tok.id())
+        .map_or_else(Vec::new, |i| list[i + 1..].to_vec())
 }
 
 /// `getPotentialCommands name argAndString`.
@@ -503,8 +504,7 @@ fn is_default_value_modifier(s: &str) -> bool {
     const HANDLES_DEFAULT: &str = "-+?";
     let chars: Vec<char> = s.chars().collect();
     match chars.as_slice() {
-        [':', c, ..] => HANDLES_DEFAULT.contains(*c),
-        [c, ..] => HANDLES_DEFAULT.contains(*c),
+        [':', c, ..] | [c, ..] => HANDLES_DEFAULT.contains(*c),
         _ => false,
     }
 }
@@ -530,8 +530,7 @@ fn is_direct_child_of(params: &Parameters, child: &Token, parent: &Token) -> boo
                 InnerToken::T_Function { .. } | InnerToken::T_Script { .. }
             )
         })
-        .map(|f| f.id() == parent.id())
-        .unwrap_or(false)
+        .is_some_and(|f| f.id() == parent.id())
 }
 
 /// `groupByLink`: group consecutive elements where each adjacent pair links.
@@ -542,16 +541,12 @@ fn group_by_link<'a, F: Fn(&Token, &Token) -> bool>(
     let mut out: Vec<Vec<&'a Token>> = vec![];
     let mut current: Vec<&'a Token> = vec![];
     for &item in list {
-        if let Some(&prev) = current.last() {
-            if f(prev, item) {
-                current.push(item);
-            } else {
-                out.push(std::mem::take(&mut current));
-                current.push(item);
-            }
-        } else {
-            current.push(item);
+        if let Some(&prev) = current.last()
+            && !f(prev, item)
+        {
+            out.push(std::mem::take(&mut current));
         }
+        current.push(item);
     }
     if !current.is_empty() {
         out.push(current);
@@ -614,10 +609,9 @@ fn process_alias_node(
 
 fn add_alias(arg: &Token, aliases: &mut HashMap<String, Token>) {
     let full = get_literal_string_def("-", arg);
-    let (name, value) = match full.find('=') {
-        Some(i) => (&full[..i], &full[i..]),
-        None => (full.as_str(), ""),
-    };
+    let (name, value) = full
+        .find('=')
+        .map_or((full.as_str(), ""), |i| (&full[..i], &full[i..]));
     if is_variable_name(name) && !value.is_empty() {
         // insertWith (\new old -> old): keep the first inserted.
         aliases
@@ -641,8 +635,9 @@ fn direct_command_name_and_token(cmd: &Token) -> (Option<String>, &Token) {
 fn recursion_check_list(params: &Parameters, name: &str, t: &Token, out: &mut Out) {
     match &*t.inner {
         InnerToken::T_Backgrounded(inner) => recursion_check_list(params, name, inner, out),
-        InnerToken::T_AndIf { lhs, .. } => recursion_check_list(params, name, lhs, out),
-        InnerToken::T_OrIf { lhs, .. } => recursion_check_list(params, name, lhs, out),
+        InnerToken::T_AndIf { lhs, .. } | InnerToken::T_OrIf { lhs, .. } => {
+            recursion_check_list(params, name, lhs, out);
+        }
         InnerToken::T_Pipeline { commands, .. } => {
             for cmd in commands {
                 recursion_check_command(params, name, cmd, out);
@@ -695,7 +690,7 @@ fn overwritten_check(params: &Parameters, t: &Token, out: &mut Out) {
         }
         // traverse (Map.lookup) — all must be present.
         let mut exit_code_tokens: Vec<Token> = Vec::new();
-        for k in exit_code_ids.iter() {
+        for k in &exit_code_ids {
             let tok = params.id_map.get(k)?;
             exit_code_tokens.push(tok.clone());
         }
@@ -735,18 +730,14 @@ fn used_unconditionally(
     t: &Token,
     test_ids: &std::collections::BTreeSet<Id>,
 ) -> bool {
-    let cfga = match params.cfg_analysis.as_ref() {
-        Some(c) => c,
-        None => return false,
+    let Some(cfga) = params.cfg_analysis.as_ref() else {
+        return false;
     };
     test_ids.iter().all(|&c| cfga.does_post_dominate(t.id(), c))
 }
 
 fn is_printing(t: &Token) -> bool {
-    matches!(
-        get_command_basename(t).as_deref(),
-        Some("echo") | Some("printf")
-    )
+    matches!(get_command_basename(t).as_deref(), Some("echo" | "printf"))
 }
 
 #[cfg(test)]

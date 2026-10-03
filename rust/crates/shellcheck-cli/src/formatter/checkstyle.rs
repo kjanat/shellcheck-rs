@@ -7,8 +7,7 @@ use super::fixer::make_non_virtual;
 pub const HEADER: &str = "<?xml version='1.0' encoding='UTF-8'?>\n<checkstyle version='4.3'>\n";
 pub const FOOTER: &str = "</checkstyle>\n";
 
-/// `escape'`: keep ASCII letters, digits, space, `.` and `/`; everything else
-/// becomes a numeric character reference.
+/// `escape'`: keep ASCII letters, digits, space, `.` and `/`; everything else becomes a numeric character reference.
 fn escape(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars() {
@@ -32,7 +31,7 @@ fn attr(name: &str, value: &str) -> String {
     format!("{name}='{}' ", escape(value))
 }
 
-fn severity(sev: Severity) -> &'static str {
+const fn severity(sev: Severity) -> &'static str {
     match sev {
         Severity::ErrorC => "error",
         Severity::WarningC => "warning",
@@ -67,6 +66,7 @@ pub fn render_file(
 }
 
 /// A `<file>` block describing a read failure.
+#[must_use]
 pub fn render_failure(file: &str, msg: &str) -> String {
     format!(
         "<file {}>\n<error {}{}{}{}{}/>\n</file>\n",

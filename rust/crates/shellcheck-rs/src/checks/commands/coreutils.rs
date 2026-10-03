@@ -1,13 +1,19 @@
 //! Checks on external commands, from `ShellCheck.Checks.Commands`.
-use super::common::*;
-use super::{CommandCheck, CommandName::*};
+use super::common::{word_args, word_flags};
+use super::{
+    CommandCheck,
+    CommandName::{Basename, Exactly},
+};
 use crate::analyzer_lib::arguments;
 use crate::analyzer_lib::find_grep_regex;
 use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::is_confused_glob_regex;
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{
+    Out, Parameters, err, get_command_token_or_this, info, simple_command_words, style,
+    token_is_just_command_output, warn,
+};
+use crate::ast::{Id, InnerToken, Token};
 use crate::ast_lib::get_word_parts;
 use crate::ast_lib::is_constant;
 use crate::ast_lib::is_glob;
@@ -22,6 +28,7 @@ use crate::cfg::may_become_multiple_args;
 use crate::cfg::{get_bsd_opts, get_opts};
 use crate::data::SAMPLE_WORDS;
 use crate::interface::Shell;
+use crate::regex_lib::mk_regex;
 use std::sync::OnceLock;
 
 pub(super) fn check_tr() -> CommandCheck {
@@ -123,9 +130,8 @@ pub(super) fn check_grep_re() -> CommandCheck {
         let Some(words) = simple_command_words(t) else {
             return;
         };
-        let re = match find_grep_regex(word_args(words)) {
-            Some(re) => re,
-            None => return,
+        let Some(re) = find_grep_regex(word_args(words)) else {
+            return;
         };
 
         if is_glob(re) {
@@ -197,9 +203,8 @@ pub(super) fn check_mkdir_dash_pm() -> CommandCheck {
         if !has_dash_p {
             return;
         }
-        let dash_m = match dash_m {
-            Some(m) => m,
-            None => return,
+        let Some(dash_m) = dash_m else {
+            return;
         };
         // guard: any couldHaveSubdirs (drop 1 $ arguments t)
         let args = arguments(t);
@@ -237,13 +242,13 @@ pub(super) fn check_interactive_su() -> CommandCheck {
 pub(super) fn check_ssh_command_string() -> CommandCheck {
     CommandCheck::new(Basename("ssh"), |_params, te, out| {
         let args = arguments(te);
-        let options: Vec<&Token> = args.iter().filter(|x| ssh_is_option(x)).collect();
-        let non_options: Vec<&Token> = args.iter().filter(|x| !ssh_is_option(x)).collect();
-        // ([], hostport:r@(_:_))
-        if !options.is_empty() || non_options.len() < 2 {
+        if args.iter().any(ssh_is_option) {
             return;
         }
-        let last = *non_options.last().unwrap();
+        // ([], hostport:r@(_:_))
+        let [_hostport, .., last] = args else {
+            return;
+        };
         // checkArg (T_NormalWord _ [T_DoubleQuoted id parts])
         if let InnerToken::T_NormalWord(l) = &*last.inner
             && l.len() == 1
@@ -310,15 +315,14 @@ pub(super) fn check_timed_command() -> CommandCheck {
             return;
         };
         // f (T_SimpleCommand _ _ (c:args@(_:_)))
-        let args = word_args(words);
-        if args.is_empty() {
+        // "time" is parsed with a command as argument
+        let Some(cmd) = word_args(words).last() else {
             return;
-        }
+        };
         if !when_shell(p, &[Shell::Sh, Shell::Dash, Shell::BusyboxSh]) {
             return;
         }
         let c = &words[0];
-        let cmd = args.last().unwrap(); // "time" is parsed with a command as argument
         if timed_is_piped(cmd) {
             warn(
                 out,
@@ -411,7 +415,7 @@ fn check_grep_sends_pipefail_impl(params: &Parameters, cmd: &Token, out: &mut Ou
         "directories",
         "devices",
     ];
-    if !params.has_pipefail {
+    if !params.has_pipefail() {
         return;
     }
     let long_options: Vec<(String, bool)> = LONG_OPTIONS_CONSUMING_PARAMETER
@@ -546,27 +550,29 @@ pub(super) fn check_xargs_dashi() -> CommandCheck {
 pub(super) fn check_unquoted_echo_spaces() -> CommandCheck {
     CommandCheck::new(Basename("echo"), |params, t, out| {
         let args = arguments(t);
-        let m = &params.token_positions;
+        let token_positions = &params.token_positions;
 
         let positions: Vec<(crate::interface::Position, crate::interface::Position)> = args
             .iter()
-            .filter_map(|c| m.get(&c.id()).cloned())
+            .filter_map(|c| token_positions.get(&c.id()).cloned())
             .collect();
         if positions.len() < 2 {
             return;
         }
 
-        let redir = match get_closest_command(params, t) {
-            Some(r) => r,
-            None => return,
+        let Some(redir) = get_closest_command(params, t) else {
+            return;
         };
-        let redir_tokens = match &*redir.inner {
-            InnerToken::T_Redirecting { redirs, .. } => redirs,
-            _ => return,
+        let InnerToken::T_Redirecting {
+            redirs: redir_tokens,
+            ..
+        } = &*redir.inner
+        else {
+            return;
         };
         let redir_positions: Vec<crate::interface::Position> = redir_tokens
             .iter()
-            .filter_map(|c| m.get(&c.id()).map(|(s, _)| s.clone()))
+            .filter_map(|c| token_positions.get(&c.id()).map(|(s, _)| s.clone()))
             .collect();
 
         let has_spaces_between =
@@ -594,7 +600,7 @@ pub(super) fn check_unquoted_echo_spaces() -> CommandCheck {
     })
 }
 
-/// Effective argument list of an `echo` command per the CommandCheck dispatch:
+/// Effective argument list of an `echo` command per the `CommandCheck` dispatch:
 /// the first word literal must be exactly "echo" (no slash → `Basename`
 /// dispatch, which is a different check), with a `builtin echo` re-dispatch.
 fn echo_arguments(words: &[Token]) -> Option<&[Token]> {
@@ -636,10 +642,7 @@ fn matches_dotdot_re(name: &str) -> bool {
 }
 
 fn could_have_subdirs(t: &Token) -> bool {
-    match get_literal_string(t) {
-        None => true,
-        Some(name) => name.contains('/') && !matches_dotdot_re(&name),
-    }
+    get_literal_string(t).is_none_or(|name| name.contains('/') && !matches_dotdot_re(&name))
 }
 
 fn important_paths() -> Vec<String> {
@@ -664,7 +667,7 @@ fn important_paths() -> Vec<String> {
     let mut out = vec![];
     for x in suffixes {
         for p in paths {
-            let s = format!("{}{}", p, x);
+            let s = format!("{p}{x}");
             if !s.is_empty() {
                 out.push(s);
             }
@@ -736,10 +739,7 @@ fn check_rm_word(token: &Token, important: &[String], out: &mut Out) {
                         out,
                         token.id(),
                         2115,
-                        &format!(
-                            "Use \"${{var:?}}\" to ensure this never expands to {} .",
-                            path
-                        ),
+                        &format!("Use \"${{var:?}}\" to ensure this never expands to {path} ."),
                     );
                 }
             }
@@ -749,7 +749,7 @@ fn check_rm_word(token: &Token, important: &[String], out: &mut Out) {
 
 fn echo_escapes_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"\\([rntabefv']|[0-7]{1,3}|x[0-9A-Fa-f]{1,2})").unwrap())
+    RE.get_or_init(|| mk_regex(r"\\([rntabefv']|[0-7]{1,3}|x[0-9A-Fa-f]{1,2})"))
 }
 
 /// Does the command have short flag `e` (before `--`)?
@@ -900,20 +900,22 @@ fn grep_matches_contra(cs: &[char]) -> bool {
 }
 
 fn word_starting_with(c: char) -> String {
-    let mut candidates: Vec<String> = SAMPLE_WORDS.iter().map(|s| s.to_string()).collect();
+    let mut candidates: Vec<String> = SAMPLE_WORDS
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     for w in SAMPLE_WORDS {
         let mut chs = w.chars();
-        let up: String = match chs.next() {
-            Some(first) => first.to_ascii_uppercase().to_string() + chs.as_str(),
-            None => String::new(),
-        };
+        let up: String = chs.next().map_or_else(String::new, |first| {
+            first.to_ascii_uppercase().to_string() + chs.as_str()
+        });
         candidates.push(up);
     }
     let prefix = c.to_string();
-    match candidates.iter().find(|w| w.starts_with(&prefix)) {
-        Some(w) => w.clone(),
-        None => format!("{}test", c),
-    }
+    candidates
+        .iter()
+        .find(|w| w.starts_with(&prefix))
+        .map_or_else(|| format!("{c}test"), Clone::clone)
 }
 
 fn su_undirected(t: &Token) -> bool {
@@ -983,7 +985,7 @@ fn missing_destination(te: &Token, out: &mut Out, handler: impl Fn(&mut Out, Id)
 }
 
 /// `checkWhich` (optional: `deprecate-which`).
-pub(crate) fn check_which() -> CommandCheck {
+pub fn check_which() -> CommandCheck {
     CommandCheck::new(Basename("which"), |_p, t, out| {
         info(
             out,

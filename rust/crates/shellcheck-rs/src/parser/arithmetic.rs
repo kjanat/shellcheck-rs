@@ -1,5 +1,5 @@
 //! Arithmetic contents `$((..))` / `((..))` (`ShellCheck.Parser` readArithmeticContents family).
-use super::*;
+use super::{Id, InnerToken, PResult, Parser, Severity, Token};
 
 impl Parser {
     /// `spacing` local to arithmetic: many (whitespace | "\\\n").
@@ -44,12 +44,9 @@ impl Parser {
             self.reset(m);
             self.restore_failure(saved);
         }
-        let op = match matched {
-            Some(o) => o,
-            None => {
-                self.reset(outer);
-                return Err(());
-            }
+        let Some(op) = matched else {
+            self.reset(outer);
+            return Err(());
         };
         let id = self.next_id_between(start, self.pos());
         self.arith_spacing();
@@ -99,7 +96,7 @@ impl Parser {
                 pos,
                 Severity::ErrorC,
                 1106,
-                &format!("In arithmetic contexts, use {} instead of -{}", alt, s),
+                &format!("In arithmetic contexts, use {alt} instead of -{s}"),
             );
         }
         let id = self.next_id_between(start, self.pos());
@@ -117,16 +114,13 @@ impl Parser {
         let mut x = sub(self)?;
         loop {
             let m = self.mark();
-            match self.arith_read_combo_op(ops) {
-                Ok((id, op)) => {
-                    // op consumed: term is now required (Parsec propagates failure)
-                    let y = sub(self)?;
-                    x = Token::new(id, InnerToken::TA_Binary { op, lhs: x, rhs: y });
-                }
-                Err(()) => {
-                    self.reset(m);
-                    break;
-                }
+            if let Ok((id, op)) = self.arith_read_combo_op(ops) {
+                // op consumed: term is now required (Parsec propagates failure)
+                let y = sub(self)?;
+                x = Token::new(id, InnerToken::TA_Binary { op, lhs: x, rhs: y });
+            } else {
+                self.reset(m);
+                break;
             }
         }
         Ok(x)
@@ -176,21 +170,18 @@ impl Parser {
     pub(super) fn read_arith_assignment(&mut self) -> PResult<Token> {
         let x = self.read_arith_trinary()?;
         let m = self.mark();
-        match self.arith_read_combo_op(&[
+        if let Ok((id, op)) = self.arith_read_combo_op(&[
             "=", "*=", "/=", "%=", "+=", "-=", "<<=", ">>=", "&=", "^=", "|=",
         ]) {
-            Ok((id, op)) => {
-                // chainr1: right-recurse
-                let y = self.read_arith_assignment()?;
-                Ok(Token::new(
-                    id,
-                    InnerToken::TA_Assignment { op, lhs: x, rhs: y },
-                ))
-            }
-            Err(()) => {
-                self.reset(m);
-                Ok(x)
-            }
+            // chainr1: right-recurse
+            let y = self.read_arith_assignment()?;
+            Ok(Token::new(
+                id,
+                InnerToken::TA_Assignment { op, lhs: x, rhs: y },
+            ))
+        } else {
+            self.reset(m);
+            Ok(x)
         }
     }
 
@@ -255,19 +246,13 @@ impl Parser {
         loop {
             let m = self.mark();
             // try "+" combo op, else minus op
-            let opres = match self.arith_read_combo_op(&["+"]) {
-                Ok(r) => Some(r),
-                Err(()) => {
+            let opres = self.arith_read_combo_op(&["+"]).ok().or_else(|| {
+                self.reset(m);
+                self.arith_read_minus_op().ok().or_else(|| {
                     self.reset(m);
-                    match self.arith_read_minus_op() {
-                        Ok(r) => Some(r),
-                        Err(()) => {
-                            self.reset(m);
-                            None
-                        }
-                    }
-                }
-            };
+                    None
+                })
+            });
             match opres {
                 Some((id, op)) => {
                     let y = self.read_arith_multiplication()?;
@@ -346,12 +331,9 @@ impl Parser {
             }
             self.reset(m);
         }
-        let op = match got {
-            Some(c) => c,
-            None => {
-                self.reset(outer);
-                return Err(());
-            }
+        let Some(op) = got else {
+            self.reset(outer);
+            return Err(());
         };
         let id = self.next_id_between(start, self.pos());
         self.arith_spacing();
@@ -399,7 +381,7 @@ impl Parser {
         Ok(Token::new(
             id,
             InnerToken::TA_Unary {
-                op: format!("{}|", op),
+                op: format!("{op}|"),
                 operand: x,
             },
         ))
@@ -430,7 +412,7 @@ impl Parser {
                 Ok(Token::new(
                     id,
                     InnerToken::TA_Unary {
-                        op: format!("|{}", op),
+                        op: format!("|{op}"),
                         operand: x,
                     },
                 ))
@@ -495,7 +477,7 @@ impl Parser {
     /// storing the source position and the raw text, read through
     /// `readStringForParser readArithmeticContents` -- so what the inner parse
     /// reported is forgotten, and when it fails, the frames it opened are put
-    /// back before the failure goes on: `((a[\`` names the `((..))` command,
+    /// back before the failure goes on: `` ((a[` `` names the `((..))` command,
     /// not the backtick.
     pub(super) fn read_arith_array_index(&mut self) -> PResult<Token> {
         let start = self.pos();

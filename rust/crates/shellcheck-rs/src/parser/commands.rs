@@ -1,5 +1,9 @@
 //! Lists, pipelines, simple commands, redirections, here-docs and the script entry (`ShellCheck.Parser` readScript / readSimpleCommand family).
-use super::*;
+use super::{
+    Annotation, AssignmentMode, Dashed, Id, InnerToken, PResult, ParseNote, Parser, PendingHereDoc,
+    Position, QUOTABLE_CHARS, Quoted, Severity, Shell, Token, ast_lib, columns,
+};
+use crate::interface::ErrorMessage;
 
 /// Which `readCmdSuffix` variant a command's arguments get: the plain one,
 /// `readModifierSuffix` (assignments stay assignments) or `readEvalSuffix`
@@ -236,12 +240,11 @@ impl Parser {
             Some('&') if self.peek_at(1) != Some('&') => {
                 let pos = self.pos();
                 self.bump();
-                // What follows a `&` usually means it was not meant to
-                // background anything.
+                // What follows a `&` usually means it was not meant to background anything.
                 if ["amp;", "gt;", "lt;"].iter().any(|s| self.string_peek(s)) {
                     self.problem_at(
                         pos.clone(),
-                        pos.clone(),
+                        pos,
                         Severity::ErrorC,
                         1109,
                         "This is an unquoted HTML entity. Replace with corresponding character.",
@@ -272,7 +275,7 @@ impl Parser {
                 }
                 Some('&')
             }
-            Some(';') if matches!(self.peek_at(1), Some(';') | Some('&')) => {
+            Some(';') if matches!(self.peek_at(1), Some(';' | '&')) => {
                 // `notFollowedBy2 (void g_AND_IF <|> void readCaseSeparator)`,
                 // and `notFollowedBy2` is `unexpecting ""`: it reads the case
                 // separator -- `;;&`, `;&` or `;;`, and the spacing after it,
@@ -298,7 +301,7 @@ impl Parser {
         }
     }
 
-    /// Returns (separator_char, (start,end)) or None.
+    /// Returns (`separator_char`, (start,end)) or None.
     pub(super) fn read_separator(&mut self) -> Option<(char, (Position, Position))> {
         let start = self.pos();
         if let Some(op) = self.read_separator_op() {
@@ -346,17 +349,16 @@ impl Parser {
     pub(super) fn read_compound_list_or_empty(&mut self) -> Vec<Token> {
         self.allspacing();
         let m = self.mark();
-        match self.read_term() {
-            Some(t) => t,
-            None => {
-                // `readTerm <|> return []` only recovers a failure that
-                // consumed nothing.
-                if self.idx != m.idx {
-                    self.commit();
-                }
-                self.reset(m);
-                Vec::new()
+        if let Some(t) = self.read_term() {
+            t
+        } else {
+            // `readTerm <|> return []` only recovers a failure that
+            // consumed nothing.
+            if self.idx != m.idx {
+                self.commit();
             }
+            self.reset(m);
+            Vec::new()
         }
     }
 
@@ -376,22 +378,19 @@ impl Parser {
             };
             // try to read another and-or
             let m = self.mark();
-            match self.read_and_or() {
-                Ok(next) => {
-                    let mut v = vec![node];
-                    v.extend(self.read_term_more(next)?);
-                    Ok(v)
+            if let Ok(next) = self.read_and_or() {
+                let mut v = vec![node];
+                v.extend(self.read_term_more(next)?);
+                Ok(v)
+            } else {
+                // `option (T_EOF id) readAndOr`: a failure that consumed
+                // input is out of reach of that `option`, and of the
+                // `<|> return [current]` around it.
+                if self.idx != m.idx {
+                    return Err(());
                 }
-                Err(()) => {
-                    // `option (T_EOF id) readAndOr`: a failure that consumed
-                    // input is out of reach of that `option`, and of the
-                    // `<|> return [current]` around it.
-                    if self.idx != m.idx {
-                        return Err(());
-                    }
-                    self.reset(m);
-                    Ok(vec![node])
-                }
+                self.reset(m);
+                Ok(vec![node])
             }
         } else {
             Ok(vec![current])
@@ -416,7 +415,7 @@ impl Parser {
                 "ShellCheck directives are only valid in front of complete compound commands, like 'if', not e.g. individual 'elif' branches.",
             );
         }
-        let left = self.with_annotations(&annotations, |p| p.read_and_or_chain())?;
+        let left = self.with_annotations(&annotations, Self::read_and_or_chain)?;
         if annotations.is_empty() {
             Ok(left)
         } else {
@@ -450,37 +449,34 @@ impl Parser {
             } else {
                 None
             };
-            match op {
-                Some(is_and) => {
-                    // T_AndIf/T_OrIf inherit the operator token's span (matching
-                    // ShellCheck's g_AND_IF / g_OR_IF ids), so checks that emit on
-                    // the node land on the `&&` / `||`.
-                    let op_end = self.pos();
-                    self.line_break();
-                    let right = self.read_pipeline()?;
-                    let id = self.next_id_between(op_start, op_end);
-                    left = if is_and {
-                        Token::new(
-                            id,
-                            InnerToken::T_AndIf {
-                                lhs: left,
-                                rhs: right,
-                            },
-                        )
-                    } else {
-                        Token::new(
-                            id,
-                            InnerToken::T_OrIf {
-                                lhs: left,
-                                rhs: right,
-                            },
-                        )
-                    };
-                }
-                None => {
-                    self.reset(m);
-                    break;
-                }
+            if let Some(is_and) = op {
+                // T_AndIf/T_OrIf inherit the operator token's span (matching
+                // ShellCheck's g_AND_IF / g_OR_IF ids), so checks that emit on
+                // the node land on the `&&` / `||`.
+                let op_end = self.pos();
+                self.line_break();
+                let right = self.read_pipeline()?;
+                let id = self.next_id_between(op_start, op_end);
+                left = if is_and {
+                    Token::new(
+                        id,
+                        InnerToken::T_AndIf {
+                            lhs: left,
+                            rhs: right,
+                        },
+                    )
+                } else {
+                    Token::new(
+                        id,
+                        InnerToken::T_OrIf {
+                            lhs: left,
+                            rhs: right,
+                        },
+                    )
+                };
+            } else {
+                self.reset(m);
+                break;
             }
         }
         Ok(left)
@@ -586,8 +582,7 @@ impl Parser {
         match self.peek() {
             // `g_Rbrace` is a bare `char '}'` with no word boundary, so that
             // ksh's `${ foo; }bar` closes where it should.
-            Some('}') => Some(1),
-            Some(')') => Some(1),
+            Some('}' | ')') => Some(1),
             Some(';') if self.peek_at(1) == Some(';') => Some(2),
             _ => None,
         }
@@ -625,31 +620,26 @@ impl Parser {
         if self.peek() == Some('!') {
             let bang_id = self.g_bang()?;
             let m = self.mark();
-            match self.read_banged() {
-                Ok(inner) => return Ok(Token::new(bang_id, InnerToken::T_Banged(inner))),
-                Err(()) => {
-                    if self.idx != m.idx
-                        || self.has_committed_failure()
-                        || !self.empty_negation_ok()
-                    {
-                        return Err(());
-                    }
-                    // A deliberate deviation from upstream, which rejects this
-                    // for every dialect and so throws away the whole file's
-                    // analysis over a line bash runs. See PARITY-NOTES.md,
-                    // `upstream-false-parse-error`.
-                    let here = self.pos();
-                    let id = self.next_id_between(here.clone(), here);
-                    let nothing = Token::new(
-                        id,
-                        InnerToken::T_Pipeline {
-                            separators: Vec::new(),
-                            commands: Vec::new(),
-                        },
-                    );
-                    return Ok(Token::new(bang_id, InnerToken::T_Banged(nothing)));
-                }
+            if let Ok(inner) = self.read_banged() {
+                return Ok(Token::new(bang_id, InnerToken::T_Banged(inner)));
             }
+            if self.idx != m.idx || self.has_committed_failure() || !self.empty_negation_ok() {
+                return Err(());
+            }
+            // A deliberate deviation from upstream, which rejects this
+            // for every dialect and so throws away the whole file's
+            // analysis over a line bash runs. See PARITY-NOTES.md,
+            // `upstream-false-parse-error`.
+            let here = self.pos();
+            let id = self.next_id_between(here.clone(), here);
+            let nothing = Token::new(
+                id,
+                InnerToken::T_Pipeline {
+                    separators: Vec::new(),
+                    commands: Vec::new(),
+                },
+            );
+            return Ok(Token::new(bang_id, InnerToken::T_Banged(nothing)));
         }
         self.read_pipe_sequence()
     }
@@ -673,7 +663,7 @@ impl Parser {
             // `(!` is a syntax error in bash as much as anywhere, because the
             // subshell never closes, and upstream's reading of it is right.
             None => self.contexts.is_empty(),
-            Some('\n') | Some('\r') => true,
+            Some('\n' | '\r') => true,
             Some(';') => self.peek_at(1) != Some(';'),
             _ => false,
         }
@@ -781,7 +771,7 @@ impl Parser {
     /// a compound form (optional name word + compound command body) or a simple
     /// form (a simple-command body). The body is wrapped in `T_CoProcBody`.
     pub(super) fn read_coproc(&mut self) -> PResult<Token> {
-        self.called("coproc", |p| p.read_coproc_inner())
+        self.called("coproc", Self::read_coproc_inner)
     }
 
     fn read_coproc_inner(&mut self) -> PResult<Token> {
@@ -852,7 +842,7 @@ impl Parser {
     // ---- compound commands -------------------------------------------------
 
     pub(super) fn read_arithmetic_command(&mut self) -> PResult<Token> {
-        self.called("((..)) command", |p| p.read_arithmetic_command_body())
+        self.called("((..)) command", Self::read_arithmetic_command_body)
     }
 
     fn read_arithmetic_command_body(&mut self) -> PResult<Token> {
@@ -870,7 +860,7 @@ impl Parser {
     // ---- simple command ----------------------------------------------------
 
     pub(super) fn read_simple_command(&mut self) -> PResult<Token> {
-        self.called("simple command", |p| p.read_simple_command_body())
+        self.called("simple command", Self::read_simple_command_body)
     }
 
     fn read_simple_command_body(&mut self) -> PResult<Token> {
@@ -909,11 +899,7 @@ impl Parser {
             };
             let is_modifier = matches!(
                 effective.as_deref(),
-                Some("declare")
-                    | Some("export")
-                    | Some("local")
-                    | Some("readonly")
-                    | Some("typeset")
+                Some("declare" | "export" | "local" | "readonly" | "typeset")
             );
             if effective.as_deref() == Some("let") {
                 suffix = self.read_let_suffix()?;
@@ -937,12 +923,9 @@ impl Parser {
         for s in &suffix {
             all_for_span.push(s);
         }
-        let (sstart, send) = if let Some(first) = all_for_span.first() {
-            let s = self.span_for(first.id()).0;
-            let e = self.span_for(all_for_span.last().unwrap().id()).1;
-            (s, e)
-        } else {
-            (self.pos(), self.pos())
+        let (sstart, send) = match (all_for_span.first(), all_for_span.last()) {
+            (Some(first), Some(last)) => (self.span_for(first.id()).0, self.span_for(last.id()).1),
+            _ => (self.pos(), self.pos()),
         };
         let id1 = self.next_id_between(sstart.clone(), send.clone());
         let id2 = self.next_id_between(sstart, send);
@@ -984,7 +967,7 @@ impl Parser {
         );
         // `case () of _ | isCommand ["source", "."] cmd -> readSource result ..`
         match Self::command_literal_name_of(&result).as_deref() {
-            Some("source") | Some(".") => return Ok(self.read_source(result)),
+            Some("source" | ".") => return Ok(self.read_source(result)),
             Some("trap") => self.syntax_check_trap(&result),
             _ => {}
         }
@@ -1019,7 +1002,9 @@ impl Parser {
             .or_else(|| file.as_ref().and_then(ast_lib::get_literal_string))
             .or_else(|| file.as_ref().and_then(strip_dynamic_prefix))
             .filter(|name| !name.starts_with("~/"));
-        let file_id = file.as_ref().map_or_else(|| cmd.id(), |f| f.id());
+        let file_id = file
+            .as_ref()
+            .map_or_else(|| cmd.id(), super::super::ast::Token::id);
 
         let Some(filename) = literal_file else {
             let (start, end) = self.span_for(file_id);
@@ -1046,28 +1031,7 @@ impl Parser {
             return t;
         }
 
-        let (input, resolved) = if filename == "/dev/null" {
-            // Always allow /dev/null.
-            (Ok(String::new()), filename.clone())
-        } else {
-            let annotations = self.current_annotations();
-            let paths: Vec<String> = annotations
-                .iter()
-                .filter_map(|a| match a {
-                    Annotation::SourcePath(p) => Some(p.clone()),
-                    _ => None,
-                })
-                .collect();
-            let external = annotations.iter().find_map(|a| match a {
-                Annotation::ExternalSources(b) => Some(*b),
-                _ => None,
-            });
-            let root = self.root_filename.clone();
-            let sys = std::rc::Rc::clone(&self.sys);
-            let resolved = sys.find_source(&root, external, &paths, &filename);
-            let contents = sys.read_file(external, &resolved);
-            (contents, resolved)
-        };
+        let (input, resolved) = self.read_source_input(&filename);
 
         match input {
             Err(err) => {
@@ -1087,31 +1051,54 @@ impl Parser {
                 let (start, end) = self.span_for(cmd_id);
                 let id1 = self.next_id_between(start.clone(), end.clone());
                 let id2 = self.next_id_between(start, end);
-                match self.sub_read(&resolved, &script) {
-                    Some(src) => {
-                        let included = Token::new(id2, InnerToken::T_Include(src));
-                        Token::new(
-                            id1,
-                            InnerToken::T_SourceCommand {
-                                includer: t,
-                                included,
-                            },
-                        )
-                    }
-                    None => {
-                        let (start, end) = self.span_for(file_id);
-                        self.note_at(
-                            start,
-                            end,
-                            Severity::WarningC,
-                            1094,
-                            "Parsing of sourced file failed. Ignoring it.",
-                        );
-                        t
-                    }
+                if let Some(src) = self.sub_read(&resolved, &script) {
+                    let included = Token::new(id2, InnerToken::T_Include(src));
+                    Token::new(
+                        id1,
+                        InnerToken::T_SourceCommand {
+                            includer: t,
+                            included,
+                        },
+                    )
+                } else {
+                    let (start, end) = self.span_for(file_id);
+                    self.note_at(
+                        start,
+                        end,
+                        Severity::WarningC,
+                        1094,
+                        "Parsing of sourced file failed. Ignoring it.",
+                    );
+                    t
                 }
             }
         }
+    }
+
+    /// `readSource`'s `(input, resolvedFile)`: the sourced file's contents and
+    /// the name it resolved to.
+    fn read_source_input(&self, filename: &str) -> (Result<String, ErrorMessage>, String) {
+        if filename == "/dev/null" {
+            // Always allow /dev/null.
+            return (Ok(String::new()), filename.to_string());
+        }
+        let annotations = self.current_annotations();
+        let paths: Vec<String> = annotations
+            .iter()
+            .filter_map(|a| match a {
+                Annotation::SourcePath(p) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        let external = annotations.iter().find_map(|a| match a {
+            Annotation::ExternalSources(b) => Some(*b),
+            _ => None,
+        });
+        let resolved = self
+            .sys
+            .find_source(&self.root_filename, external, &paths, filename);
+        let contents = self.sys.read_file(external, &resolved);
+        (contents, resolved)
     }
 
     /// `subRead`: parse `script` as a whole file of its own, under a
@@ -1123,7 +1110,7 @@ impl Parser {
     /// file's parse *problems* either way -- only its notes, which the frame
     /// filters, can reach the caller.
     fn sub_read(&mut self, name: &str, script: &str) -> Option<Token> {
-        let mut sub = Parser::with_shell_flag(
+        let mut sub = Self::with_shell_flag(
             name,
             script,
             self.shell_flag_specified,
@@ -1133,13 +1120,13 @@ impl Parser {
         );
         sub.next_id = self.next_id;
         sub.next_serial = self.next_serial;
-        sub.contexts = self.contexts.clone();
-        sub.ann_contexts = self.ann_contexts.clone();
+        sub.contexts.clone_from(&self.contexts);
+        sub.ann_contexts.clone_from(&self.ann_contexts);
         sub.ann_contexts
             .push(super::AnnContext::Source(name.to_string()));
         sub.sys = std::rc::Rc::clone(&self.sys);
         sub.check_sourced = self.check_sourced;
-        sub.root_filename = self.root_filename.clone();
+        sub.root_filename.clone_from(&self.root_filename);
         // `pendingHereDocs = []`: the caller's unread here documents are not the
         // sourced file's business, and are put back afterwards.
         let root = sub.read_script_file();
@@ -1258,7 +1245,7 @@ impl Parser {
             return;
         }
         let (start, _) = self.span_for(arg.id());
-        self.subparse_commands(&str, start);
+        self.subparse_commands(&str, &start);
     }
 
     /// `readTimeSuffix`: `time [-p ...] <pipeline>`. Reads optional flag words
@@ -1301,21 +1288,18 @@ impl Parser {
             break;
         }
         self.spacing();
-        match self.read_pipeline() {
-            Ok(p) => {
-                out.push(p);
-                Ok(out)
+        if let Ok(p) = self.read_pipeline() {
+            out.push(p);
+            Ok(out)
+        } else {
+            // `option []` recovers only from a suffix that consumed
+            // nothing: bare `time` is a command, `time -` is a flag with
+            // nothing to time.
+            if self.idx != m.idx {
+                return Err(());
             }
-            Err(()) => {
-                // `option []` recovers only from a suffix that consumed
-                // nothing: bare `time` is a command, `time -` is a flag with
-                // nothing to time.
-                if self.idx != m.idx {
-                    return Err(());
-                }
-                self.reset(m);
-                Ok(Vec::new())
-            }
+            self.reset(m);
+            Ok(Vec::new())
         }
     }
 
@@ -1330,21 +1314,17 @@ impl Parser {
             }
             // assignment?
             let m = self.mark();
-            match self.read_assignment_word() {
-                Ok(a) => {
-                    out.push(a);
-                    continue;
-                }
-                Err(()) => {
-                    // Only the part up to the `=` is a `try`: past it, a
-                    // failure is the parse error (`x=((`).
-                    if self.idx != m.idx {
-                        self.commit();
-                    }
-                    self.reset(m);
-                    break;
-                }
+            if let Ok(a) = self.read_assignment_word() {
+                out.push(a);
+                continue;
             }
+            // Only the part up to the `=` is a `try`: past it, a
+            // failure is the parse error (`x=((`).
+            if self.idx != m.idx {
+                self.commit();
+            }
+            self.reset(m);
+            break;
         }
         out
     }
@@ -1371,22 +1351,21 @@ impl Parser {
         }
         let m = self.mark();
         // don't treat keywords as command names in command position handled by caller
-        match self.read_normal_word() {
-            Ok(w) => Ok(Some(w)),
-            Err(()) => {
-                // `readCmdName` is not behind a `try`, so a word that failed
-                // after consuming input ends the parse rather than leaving the
-                // command nameless -- and the cursor is not rewound, or the
-                // `called "simple command"` around this would take the failure
-                // for one that consumed nothing and pop a frame the word left
-                // behind (`[-z$('` names the single quoted string).
-                if self.idx != m.idx {
-                    self.commit();
-                    return Err(());
-                }
-                self.reset(m);
-                Ok(None)
+        if let Ok(w) = self.read_normal_word() {
+            Ok(Some(w))
+        } else {
+            // `readCmdName` is not behind a `try`, so a word that failed
+            // after consuming input ends the parse rather than leaving the
+            // command nameless -- and the cursor is not rewound, or the
+            // `called "simple command"` around this would take the failure
+            // for one that consumed nothing and pop a frame the word left
+            // behind (`[-z$('` names the single quoted string).
+            if self.idx != m.idx {
+                self.commit();
+                return Err(());
             }
+            self.reset(m);
+            Ok(None)
         }
     }
 
@@ -1416,54 +1395,49 @@ impl Parser {
             // well-formed assignments as T_Assignment (readModifierSuffix).
             if kind == CmdSuffix::Modifier {
                 let am = self.mark();
-                match self.read_well_formed_assignment() {
-                    Ok(a) => {
-                        out.push(a);
-                        continue;
-                    }
-                    Err(()) => {
-                        // `readWellFormedAssignment` inside `many1`: a failure
-                        // that consumed input (`readonly f=(` with no `)`) ends
-                        // the whole command, rather than being retried as a word.
-                        if self.idx != am.idx {
-                            self.commit();
-                            return Err(());
-                        }
-                        self.reset(am);
-                    }
+                if let Ok(a) = self.read_well_formed_assignment() {
+                    out.push(a);
+                    continue;
                 }
+                // `readWellFormedAssignment` inside `many1`: a failure
+                // that consumed input (`readonly f=(` with no `)`) ends
+                // the whole command, rather than being retried as a word.
+                if self.idx != am.idx {
+                    self.commit();
+                    return Err(());
+                }
+                self.reset(am);
             }
             let m = self.mark();
-            match self.read_normal_word() {
-                Ok(w) => out.push(w),
-                Err(()) => {
-                    // `many` stops on a failure that consumed nothing; one that
-                    // consumed ends the parse, as a trailing `\` does.
-                    if self.idx != m.idx {
-                        self.commit();
-                        return Err(());
-                    }
-                    self.reset(m);
-                    // `evalFallback`: `lookAhead (char '(')`, a warning, and a
-                    // `fail` that consumed nothing, so the suffix simply ends
-                    // here and the `(` is reported by whatever reads it next.
-                    if kind == CmdSuffix::Eval && self.peek() == Some('(') {
-                        let pos = self.pos();
-                        self.problem_at(
-                            pos.clone(),
-                            pos,
-                            Severity::WarningC,
-                            1098,
-                            "Quote/escape special characters when using eval, e.g. eval \"a=(b)\".",
-                        );
-                        // The message ends in a period, and `getStringFromParsec`
-                        // adds another: that is what upstream prints.
-                        let _: PResult<()> = self.fail_recoverable(
-                            "Unexpected parentheses. Make sure to quote when eval'ing as shell parsers differ.",
-                        );
-                    }
-                    break;
+            if let Ok(w) = self.read_normal_word() {
+                out.push(w);
+            } else {
+                // `many` stops on a failure that consumed nothing; one that
+                // consumed ends the parse, as a trailing `\` does.
+                if self.idx != m.idx {
+                    self.commit();
+                    return Err(());
                 }
+                self.reset(m);
+                // `evalFallback`: `lookAhead (char '(')`, a warning, and a
+                // `fail` that consumed nothing, so the suffix simply ends
+                // here and the `(` is reported by whatever reads it next.
+                if kind == CmdSuffix::Eval && self.peek() == Some('(') {
+                    let pos = self.pos();
+                    self.problem_at(
+                        pos.clone(),
+                        pos,
+                        Severity::WarningC,
+                        1098,
+                        "Quote/escape special characters when using eval, e.g. eval \"a=(b)\".",
+                    );
+                    // The message ends in a period, and `getStringFromParsec`
+                    // adds another: that is what upstream prints.
+                    let _: PResult<()> = self.fail_recoverable(
+                        "Unexpected parentheses. Make sure to quote when eval'ing as shell parsers differ.",
+                    );
+                }
+                break;
             }
         }
         Ok(out)
@@ -1486,15 +1460,16 @@ impl Parser {
         assoc: &std::collections::HashSet<String>,
     ) {
         let name = match &*t.inner {
-            InnerToken::T_Assignment { var, .. } => Some(var.clone()),
-            InnerToken::TA_Variable { name, .. } => Some(name.clone()),
+            InnerToken::T_Assignment { var: name, .. } | InnerToken::TA_Variable { name, .. } => {
+                Some(name.clone())
+            }
             _ => None,
         };
         if let Some(name) = name {
             let is_assoc = assoc.contains(&name);
             let indices: Option<&mut Vec<Token>> = match t.inner_mut() {
-                InnerToken::T_Assignment { indices, .. } => Some(indices),
-                InnerToken::TA_Variable { indices, .. } => Some(indices),
+                InnerToken::T_Assignment { indices, .. }
+                | InnerToken::TA_Variable { indices, .. } => Some(indices),
                 _ => None,
             };
             if let Some(indices) = indices {
@@ -1517,8 +1492,8 @@ impl Parser {
                     if let Some(nt) = newtok {
                         // Re-fetch the indices vec (borrow released after sub_parse).
                         if let Some(slot) = match t.inner_mut() {
-                            InnerToken::T_Assignment { indices, .. } => indices.get_mut(i),
-                            InnerToken::TA_Variable { indices, .. } => indices.get_mut(i),
+                            InnerToken::T_Assignment { indices, .. }
+                            | InnerToken::TA_Variable { indices, .. } => indices.get_mut(i),
                             _ => None,
                         } {
                             *slot = nt;
@@ -1603,26 +1578,23 @@ impl Parser {
             let _ = p.one_of(" \t\n\r");
             p.read_arithmetic_contents()
         });
-        match r {
-            Ok(tok) => {
-                self.merge_sub(sub);
-                Some(tok)
-            }
-            Err(()) => {
-                // `reparseIndices` runs `mapM` in the parser monad, so a
-                // sub-parse that fails is the whole file's failure: `a[(]=` has
-                // an index that is not an expression, and there is nothing left
-                // to recover with.
-                let contexts = sub
-                    .frozen_contexts
-                    .clone()
-                    .unwrap_or_else(|| sub.contexts.clone());
-                self.failure = sub.failure.clone();
-                self.committed = true;
-                self.frozen_contexts = Some(contexts);
-                self.merge_sub(sub);
-                None
-            }
+        if let Ok(tok) = r {
+            self.merge_sub(sub);
+            Some(tok)
+        } else {
+            // `reparseIndices` runs `mapM` in the parser monad, so a
+            // sub-parse that fails is the whole file's failure: `a[(]=` has
+            // an index that is not an expression, and there is nothing left
+            // to recover with.
+            let contexts = sub
+                .frozen_contexts
+                .clone()
+                .unwrap_or_else(|| sub.contexts.clone());
+            self.failure.clone_from(&sub.failure);
+            self.committed = true;
+            self.frozen_contexts = Some(contexts);
+            self.merge_sub(sub);
+            None
         }
     }
 
@@ -1633,7 +1605,7 @@ impl Parser {
         let mut sub = self.sub_parser(src, pos);
         let start = sub.pos();
         let parts = sub
-            .called("associative array index", |p| p.read_index_span())
+            .called("associative array index", Self::read_index_span)
             .ok()?;
         let id = sub.next_id_between(start, sub.pos());
         let tok = Token::new(id, InnerToken::T_NormalWord(parts));
@@ -1701,15 +1673,14 @@ impl Parser {
             // `try readLetExpression` rewinds; `readCmdWord` reads the word
             // for what it is, and a failure that consumed is the command's.
             self.reset(m);
-            match self.read_normal_word() {
-                Ok(w) => out.push(w),
-                Err(()) => {
-                    if self.idx != m.idx {
-                        self.commit();
-                        return Err(());
-                    }
-                    break;
+            if let Ok(w) = self.read_normal_word() {
+                out.push(w);
+            } else {
+                if self.idx != m.idx {
+                    self.commit();
+                    return Err(());
                 }
+                break;
             }
         }
         Ok(out)
@@ -1757,7 +1728,7 @@ impl Parser {
         }
     }
 
-    /// The single-literal command name of a T_NormalWord, if any.
+    /// The single-literal command name of a `T_NormalWord`, if any.
     pub(super) fn command_literal_name(t: &Token) -> Option<String> {
         if let InnerToken::T_NormalWord(parts) = &*t.inner
             && parts.len() == 1
@@ -1823,8 +1794,8 @@ impl Parser {
             // `otherLiteral`: a run of the characters a word part cannot take.
             let lit_start = self.pos();
             let mut lit = String::new();
-            while matches!(self.peek(), Some(c) if QUOTABLE_CHARS.contains(c)) {
-                lit.push(self.peek().expect("just matched"));
+            while let Some(c) = self.peek().filter(|&c| QUOTABLE_CHARS.contains(c)) {
+                lit.push(c);
                 self.bump();
             }
             if lit.is_empty() {
@@ -1856,80 +1827,10 @@ impl Parser {
         // started, so the enclosing `called` unwinds and leaves no context
         // behind either.
         let prefix = self.mark();
-        // `leadingDollarPos <- optionMaybe $ getSpanPositionsFor (char '$')`:
-        // read so that `$foo=(bar)` can be warned about at parse time, since
-        // it would otherwise fail to parse and never reach the checks.
-        let leading_dollar = if lenient && self.peek() == Some('$') {
-            let l = self.pos();
-            self.bump();
-            Some((l, self.pos()))
-        } else {
-            None
-        };
-        // name
-        let Ok(name) = self.read_variable_name() else {
+        let Ok((name, indices, op_start, mode)) = self.read_assignment_prefix(lenient) else {
             self.reset(prefix);
             return Err(());
         };
-        // `many readArrayIndex`
-        let mut indices = Vec::new();
-        while self.peek() == Some('[') {
-            match self.read_array_index() {
-                Ok(i) => indices.push(i),
-                Err(()) => {
-                    self.reset(prefix);
-                    return Err(());
-                }
-            }
-        }
-        // The T_Assignment span ends here (variable name + indices), before the
-        // `=` — matching ShellCheck's `id <- endSpan start` placement, so that
-        // SC2034 etc. point at the variable name rather than the whole word.
-        // `hasLeftSpace <- fmap (not . null) spacing`: space before the `=`
-        // is read, and then makes this not an assignment after all.
-        let before_left = self.idx;
-        self.spacing();
-        let has_left_space = self.idx != before_left;
-        let op_start = self.pos();
-        // `readAssignmentOp` opens with `unexpecting "===" (string "===")`:
-        // `a===b` is probably ascii-art, so it is a command name rather than an
-        // assignment. The message lands past the three characters read.
-        if self.string_peek("===") {
-            self.fail_past(3, "Unexpected ===");
-            self.reset(prefix);
-            return Err(());
-        }
-        // += or =
-        let mode = if self.string("+=").is_ok() {
-            AssignmentMode::Append
-        } else if self.char('=').is_ok() {
-            AssignmentMode::Assign
-        } else {
-            self.reset(prefix);
-            return Err(());
-        };
-        if leading_dollar.is_some() || has_left_space {
-            // `when (isJust leadingDollarPos || hasLeftSpace)`: not an
-            // assignment after all, and with a `$` and a `(` ahead one that
-            // would otherwise fail to parse, so it is warned about here. The
-            // `fail ""` sits inside the `try`.
-            let m = self.mark();
-            self.spacing();
-            let paren = self.peek() == Some('(');
-            self.reset(m);
-            if let (true, Some((l, r))) = (paren, leading_dollar) {
-                self.problem_at(
-                    l,
-                    r,
-                    Severity::ErrorC,
-                    1066,
-                    "Don't use $ on the left side of assignments.",
-                );
-            }
-            let _: PResult<()> = self.fail_recoverable("");
-            self.reset(prefix);
-            return Err(());
-        }
         // Space after the `=`, or nothing left of the command, means the value
         // is the empty string — and if it was space, that is rarely intended.
         let right_start = self.pos();
@@ -1998,6 +1899,81 @@ impl Parser {
         ))
     }
 
+    /// The `try` of `readAssignmentWordExt`: the name, its indices, where the
+    /// operator starts and the operator itself.
+    fn read_assignment_prefix(
+        &mut self,
+        lenient: bool,
+    ) -> PResult<(String, Vec<Token>, Position, AssignmentMode)> {
+        // `leadingDollarPos <- optionMaybe $ getSpanPositionsFor (char '$')`:
+        // read so that `$foo=(bar)` can be warned about at parse time, since
+        // it would otherwise fail to parse and never reach the checks.
+        let leading_dollar = if lenient && self.peek() == Some('$') {
+            let l = self.pos();
+            self.bump();
+            Some((l, self.pos()))
+        } else {
+            None
+        };
+        // name
+        let name = self.read_variable_name()?;
+        // `many readArrayIndex`
+        let mut indices = Vec::new();
+        while self.peek() == Some('[') {
+            indices.push(self.read_array_index()?);
+        }
+        // The T_Assignment span ends here (variable name + indices), before the
+        // `=` — matching ShellCheck's `id <- endSpan start` placement, so that
+        // SC2034 etc. point at the variable name rather than the whole word.
+        // `hasLeftSpace <- fmap (not . null) spacing`: space before the `=`
+        // is read, and then makes this not an assignment after all.
+        let before_left = self.idx;
+        self.spacing();
+        let has_left_space = self.idx != before_left;
+        let op_start = self.pos();
+        let mode = self.read_assignment_op()?;
+        if leading_dollar.is_some() || has_left_space {
+            // `when (isJust leadingDollarPos || hasLeftSpace)`: not an
+            // assignment after all, and with a `$` and a `(` ahead one that
+            // would otherwise fail to parse, so it is warned about here. The
+            // `fail ""` sits inside the `try`.
+            let m = self.mark();
+            self.spacing();
+            let paren = self.peek() == Some('(');
+            self.reset(m);
+            if let (true, Some((l, r))) = (paren, leading_dollar) {
+                self.problem_at(
+                    l,
+                    r,
+                    Severity::ErrorC,
+                    1066,
+                    "Don't use $ on the left side of assignments.",
+                );
+            }
+            return self.fail_recoverable("");
+        }
+        Ok((name, indices, op_start, mode))
+    }
+
+    /// `readAssignmentOp`.
+    fn read_assignment_op(&mut self) -> PResult<AssignmentMode> {
+        // `readAssignmentOp` opens with `unexpecting "===" (string "===")`:
+        // `a===b` is probably ascii-art, so it is a command name rather than an
+        // assignment. The message lands past the three characters read.
+        if self.string_peek("===") {
+            self.fail_past(3, "Unexpected ===");
+            return Err(());
+        }
+        // += or =
+        if self.string("+=").is_ok() {
+            Ok(AssignmentMode::Append)
+        } else if self.char('=').is_ok() {
+            Ok(AssignmentMode::Assign)
+        } else {
+            Err(())
+        }
+    }
+
     pub(super) fn empty_literal_word(&mut self) -> Token {
         let p = self.pos();
         let lit_id = self.next_id_between(p.clone(), p.clone());
@@ -2007,7 +1983,7 @@ impl Parser {
     }
 
     pub(super) fn read_array(&mut self) -> PResult<Token> {
-        self.called("array assignment", |p| p.read_array_body())
+        self.called("array assignment", Self::read_array_body)
     }
 
     fn read_array_body(&mut self) -> PResult<Token> {
@@ -2105,21 +2081,18 @@ impl Parser {
         let mut out = Vec::new();
         loop {
             let before = self.idx;
-            match self.read_io_redirect() {
-                Ok(r) => {
-                    out.push(r);
-                    // `readIoRedirect` ends with `spacing`, so the next attempt
-                    // begins at the next token and the gap is not given back
-                    // when it declines: `{o;}>/` and a tab and a word still get
-                    // SC1141 for the word.
-                    self.spacing();
+            if let Ok(r) = self.read_io_redirect() {
+                out.push(r);
+                // `readIoRedirect` ends with `spacing`, so the next attempt
+                // begins at the next token and the gap is not given back
+                // when it declines: `{o;}>/` and a tab and a word still get
+                // SC1141 for the word.
+                self.spacing();
+            } else {
+                if self.idx != before {
+                    return Err(());
                 }
-                Err(()) => {
-                    if self.idx != before {
-                        return Err(());
-                    }
-                    return Ok(out);
-                }
+                return Ok(out);
             }
         }
     }
@@ -2127,6 +2100,99 @@ impl Parser {
     pub(super) fn read_io_redirect(&mut self) -> PResult<Token> {
         let m = self.mark();
         let start = self.pos();
+        let fd = self.read_io_source();
+        // `op_start` is the position after the fd source, where the redirection
+        // operator begins. Parser.hs captures `startSpan` for the inner redir
+        // token (T_IoFile/T_IoDuplicate/T_HereString/T_HereDoc) here, *after*
+        // `readIoSource` has consumed the fd, so a glued `1>2` anchors T_IoFile
+        // (and thus SC2210) at the `>`, not the fd digit.
+        let op_start = self.pos();
+        // heredoc
+        if self.peek() == Some('<') && self.peek_at(1) == Some('<') {
+            let r = self.read_heredoc_or_herestring(start, op_start, fd);
+            if r.is_err() {
+                // The `<<` is consumed, so this is a here document whatever
+                // follows: `read -ra a<<)` is a parse error, not a word.
+                self.commit();
+            }
+            return r;
+        }
+        // dup: <& or >&
+        // `readIoDuplicate` is a `try`, and its target is `digitsAndOrDash`:
+        // digits with an optional dash, or a bare dash. With neither, this is
+        // not a duplicate but a `>& file` / `<& file` redirect, which
+        // `readIoFile` takes with `>&`/`<&` as the operator.
+        if let Some(opc @ ('<' | '>')) = self.peek()
+            && self.peek_at(1) == Some('&')
+            && matches!(self.peek_at(2), Some(c) if c.is_ascii_digit() || c == '-')
+        {
+            self.bump();
+            self.bump(); // &
+            let mut num = String::new();
+            while let Some(c) = self.peek() {
+                if c.is_ascii_digit() {
+                    num.push(c);
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+            if self.peek() == Some('-') {
+                num.push('-');
+                self.bump();
+            }
+            let opid = self.next_id_between(op_start.clone(), self.pos());
+            let op_tok = Token::new(
+                opid,
+                if opc == '<' {
+                    InnerToken::T_LESSAND
+                } else {
+                    InnerToken::T_GREATAND
+                },
+            );
+            let dup_id = self.next_id_between(op_start, self.pos());
+            let dup = Token::new(dup_id, InnerToken::T_IoDuplicate { op: op_tok, num });
+            let id = self.next_id_between(start, self.pos());
+            return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: dup }));
+        }
+        // `readIoFile = called "redirection"`, so a redirection operator left
+        // without a filename is reported as one — and, having consumed the
+        // operator, it is not something the caller can back out of.
+        let (os, fdc, st) = (op_start, fd, start);
+        let om = self.mark();
+        let r = self.called("redirection", move |p| {
+            let op_tok = p.read_io_file_op(os.clone()).ok_or(())?;
+            p.spacing();
+            let file = p.read_normal_word()?;
+            let iofile_id = p.next_id_between(os.clone(), p.pos());
+            let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
+            let id = p.next_id_between(st, p.pos());
+            Ok(Token::new(
+                id,
+                InnerToken::T_FdRedirect {
+                    fd: fdc,
+                    target: iofile,
+                },
+            ))
+        });
+        if r.is_err() {
+            if self.idx == om.idx {
+                // `readIoSource` is a `try`, so the fd source rolls back when
+                // no redirection operator follows it.
+                self.reset(m);
+            } else {
+                // The operator was consumed, so neither the `<|>` in
+                // `readIoRedirect` nor the `many`/`many1` around it can
+                // recover: the parse is over.
+                self.commit();
+            }
+        }
+        r
+    }
+
+    /// `readIoSource`: the fd number, `{var}` or `&` in front of a
+    /// redirection operator.
+    fn read_io_source(&mut self) -> String {
         // optional fd number or {var}
         let mut fd = String::new();
         while let Some(c) = self.peek() {
@@ -2159,10 +2225,10 @@ impl Parser {
             }
             let ok = !name.is_empty()
                 && self.peek() == Some('}')
-                && matches!(self.peek_at(1), Some('<') | Some('>'));
+                && matches!(self.peek_at(1), Some('<' | '>'));
             if ok {
                 self.bump(); // }
-                fd = format!("{{{}}}", name);
+                fd = format!("{{{name}}}");
             } else {
                 self.reset(fdmark);
             }
@@ -2173,7 +2239,7 @@ impl Parser {
         // the following operator (`>`/`>>`/`<`/`<<`/...) is parsed as the
         // redirection, matching Parser.hs (`ls &> bar`, `ls &>> bar`).
         if fd.is_empty() && self.peek() == Some('&') {
-            if matches!(self.peek_at(1), Some('<') | Some('>')) {
+            if matches!(self.peek_at(1), Some('<' | '>')) {
                 self.bump(); // &
                 fd = "&".to_string();
             } else {
@@ -2188,93 +2254,7 @@ impl Parser {
                 self.reset(m);
             }
         }
-        // `op_start` is the position after the fd source, where the redirection
-        // operator begins. Parser.hs captures `startSpan` for the inner redir
-        // token (T_IoFile/T_IoDuplicate/T_HereString/T_HereDoc) here, *after*
-        // `readIoSource` has consumed the fd, so a glued `1>2` anchors T_IoFile
-        // (and thus SC2210) at the `>`, not the fd digit.
-        let op_start = self.pos();
-        // heredoc
-        if self.peek() == Some('<') && self.peek_at(1) == Some('<') {
-            let r = self.read_heredoc_or_herestring(start, op_start, fd);
-            if r.is_err() {
-                // The `<<` is consumed, so this is a here document whatever
-                // follows: `read -ra a<<)` is a parse error, not a word.
-                self.commit();
-            }
-            return r;
-        }
-        // dup: <& or >&
-        // `readIoDuplicate` is a `try`, and its target is `digitsAndOrDash`:
-        // digits with an optional dash, or a bare dash. With neither, this is
-        // not a duplicate but a `>& file` / `<& file` redirect, which
-        // `readIoFile` takes with `>&`/`<&` as the operator.
-        if (self.peek() == Some('<') || self.peek() == Some('>'))
-            && self.peek_at(1) == Some('&')
-            && matches!(self.peek_at(2), Some(c) if c.is_ascii_digit() || c == '-')
-        {
-            let opc = self.bump().unwrap();
-            self.bump(); // &
-            let mut num = String::new();
-            while let Some(c) = self.peek() {
-                if c.is_ascii_digit() {
-                    num.push(c);
-                    self.bump();
-                } else {
-                    break;
-                }
-            }
-            if self.peek() == Some('-') {
-                num.push('-');
-                self.bump();
-            }
-            let opid = self.next_id_between(op_start.clone(), self.pos());
-            let op_tok = Token::new(
-                opid,
-                if opc == '<' {
-                    InnerToken::T_LESSAND
-                } else {
-                    InnerToken::T_GREATAND
-                },
-            );
-            let dup_id = self.next_id_between(op_start.clone(), self.pos());
-            let dup = Token::new(dup_id, InnerToken::T_IoDuplicate { op: op_tok, num });
-            let id = self.next_id_between(start, self.pos());
-            return Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: dup }));
-        }
-        // `readIoFile = called "redirection"`, so a redirection operator left
-        // without a filename is reported as one — and, having consumed the
-        // operator, it is not something the caller can back out of.
-        let (os, fdc, st) = (op_start.clone(), fd.clone(), start.clone());
-        let om = self.mark();
-        let r = self.called("redirection", move |p| {
-            let op_tok = p.read_io_file_op(os.clone()).ok_or(())?;
-            p.spacing();
-            let file = p.read_normal_word()?;
-            let iofile_id = p.next_id_between(os.clone(), p.pos());
-            let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
-            let id = p.next_id_between(st, p.pos());
-            Ok(Token::new(
-                id,
-                InnerToken::T_FdRedirect {
-                    fd: fdc,
-                    target: iofile,
-                },
-            ))
-        });
-        if r.is_err() {
-            if self.idx == om.idx {
-                // `readIoSource` is a `try`, so the fd source rolls back when
-                // no redirection operator follows it.
-                self.reset(m);
-            } else {
-                // The operator was consumed, so neither the `<|>` in
-                // `readIoRedirect` nor the `many`/`many1` around it can
-                // recover: the parse is over.
-                self.commit();
-            }
-        }
-        r
+        fd
     }
 
     pub(super) fn read_io_file_op(&mut self, start: Position) -> Option<Token> {
@@ -2286,7 +2266,7 @@ impl Parser {
             (Some('>'), Some('|')) => (InnerToken::T_CLOBBER, 2),
             // `redirToken` ends with `notFollowedBy2 (char '(')`, so `<(`/`>(`
             // stay whole for `readProcSub` to take as a word.
-            (Some('<'), Some('(')) | (Some('>'), Some('(')) => return None,
+            (Some('<' | '>'), Some('(')) => return None,
             (Some('<'), _) => (InnerToken::T_Less, 1),
             (Some('>'), _) => (InnerToken::T_Greater, 1),
             _ => return None,
@@ -2413,7 +2393,7 @@ impl Parser {
             // failed and consumed: an unterminated document with no lines at
             // all leaves nothing behind to name.
             if r.is_ok() || self.idx == from {
-                self.contexts = outer.clone();
+                self.contexts.clone_from(&outer);
                 self.ann_contexts = outer_disabled;
                 // The restore happens before the failure reaches the top, so
                 // the report names the restored stack.
@@ -2433,7 +2413,7 @@ impl Parser {
             let doc_start = self.pos();
             let (terminated, was_warned, lines) = self.read_doc_lines(hd);
             let doc_end = self.pos();
-            let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+            let body: String = lines.iter().flat_map(|l| [l.as_str(), "\n"]).collect();
             if !terminated {
                 if !was_warned {
                     self.debug_here_doc(hd, &body);
@@ -2457,7 +2437,7 @@ impl Parser {
                     let lit_id = self.next_id_between(doc_start, doc_end);
                     vec![Token::new(lit_id, InnerToken::T_Literal(body))]
                 }
-                Quoted::Unquoted => self.read_here_data(&body, doc_start)?,
+                Quoted::Unquoted => self.read_here_data(&body, &doc_start)?,
             };
             self.heredoc_bodies.insert(hd.id, tokens);
         }
@@ -2505,33 +2485,9 @@ impl Parser {
         line: &str,
         line_pos: &Position,
     ) -> (bool, bool) {
-        // `linewhitespace \`reluctantlyTill\` string endToken`: blanks, then the
-        // token. Reluctant, so the blanks stop at the first position where the
-        // token matches — an end token that itself starts with a space still
-        // lines up. Anything else in front and this is an ordinary body line.
-        let mut split = None;
-        for (i, c) in line
-            .char_indices()
-            .chain(std::iter::once((line.len(), '\0')))
-        {
-            if line[i..].starts_with(hd.delim.as_str()) {
-                split = Some(i);
-                break;
-            }
-            if c != ' ' && c != '\t' {
-                break;
-            }
-        }
-        let Some(split) = split else {
+        let Some((leading, trailing, trailer)) = split_here_doc_end(line, &hd.delim) else {
             return (false, false);
         };
-        let leading = line[..split].to_string();
-        let after = &line[split + hd.delim.len()..];
-        let trailing: String = after
-            .chars()
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .collect();
-        let trailer = &after[trailing.len()..];
 
         let leading_spaces_are_tabs = leading.chars().all(|c| c == '\t');
         let leader_is_ok =
@@ -2543,7 +2499,7 @@ impl Parser {
         let col = |offset: usize| Position {
             file: line_pos.file.clone(),
             line: line_pos.line,
-            column: line_pos.column + offset as i64,
+            column: line_pos.column + columns(offset),
         };
         let trailing_pos = col(leading.len() + hd.delim.chars().count());
         let trailer_pos = col(leading.len() + hd.delim.chars().count() + trailing.len());
@@ -2594,8 +2550,6 @@ impl Parser {
                 );
                 (false, true)
             }
-            // The end token is only a prefix of this line's first word.
-            Some(_) => (false, false),
             None if !trailing.is_empty() && leader_is_ok => {
                 ppt(
                     trailing_pos,
@@ -2621,7 +2575,8 @@ impl Parser {
                 );
                 (false, true)
             }
-            None => (false, false),
+            // `Some`: the end token is only a prefix of this line's first word.
+            Some(_) | None => (false, false),
         }
     }
 
@@ -2671,8 +2626,8 @@ impl Parser {
     /// same token stream a double-quoted string produces (literals, dollar
     /// expansions, backtick command substitutions), with `"` and other
     /// non-`` `$\ `` characters kept literal via `readHereLiteral`.
-    pub(super) fn read_here_data(&mut self, body: &str, start: Position) -> PResult<Vec<Token>> {
-        let mut sub = self.sub_parser(body, &start);
+    pub(super) fn read_here_data(&mut self, body: &str, start: &Position) -> PResult<Vec<Token>> {
+        let mut sub = self.sub_parser(body, start);
         let r = sub.read_here_data_parts();
         // The stack the sub-parse reports from: the one it froze when it
         // committed, or the live one if nothing did.
@@ -2682,18 +2637,17 @@ impl Parser {
             .unwrap_or_else(|| sub.contexts.clone());
         let failure = sub.failure.clone();
         self.merge_sub(sub);
-        match r {
-            Ok(parts) => Ok(parts),
-            Err(()) => {
-                // A plain `subParse`, not `tryWithErrors`: the failure comes
-                // straight back out, and the contexts it was left in -- the
-                // here document's own among them -- are what gets reported.
-                self.contexts = contexts.clone();
-                self.failure = failure;
-                self.commit();
-                self.frozen_contexts = Some(contexts);
-                Err(())
-            }
+        if let Ok(parts) = r {
+            Ok(parts)
+        } else {
+            // A plain `subParse`, not `tryWithErrors`: the failure comes
+            // straight back out, and the contexts it was left in -- the
+            // here document's own among them -- are what gets reported.
+            self.contexts.clone_from(&contexts);
+            self.failure = failure;
+            self.commit();
+            self.frozen_contexts = Some(contexts);
+            Err(())
         }
     }
 
@@ -2702,16 +2656,15 @@ impl Parser {
         let mut parts = Vec::new();
         loop {
             let before = self.idx;
-            match self.read_here_data_part() {
-                Ok(t) => parts.push(t),
-                Err(()) => {
-                    // `many`: an alternative that consumed before failing takes
-                    // the here document down with it.
-                    if self.idx != before {
-                        return Err(());
-                    }
-                    return Ok(parts);
+            if let Ok(t) = self.read_here_data_part() {
+                parts.push(t);
+            } else {
+                // `many`: an alternative that consumed before failing takes
+                // the here document down with it.
+                if self.idx != before {
+                    return Err(());
                 }
+                return Ok(parts);
             }
         }
     }
@@ -2779,7 +2732,7 @@ impl Parser {
     fn at_keyword(&mut self) -> bool {
         const WORDS: [&str; 7] = ["then", "else", "elif", "fi", "do", "done", "esac"];
         WORDS.iter().any(|k| self.keyword_ahead(k))
-            || matches!(self.peek(), Some('}') | Some(')'))
+            || matches!(self.peek(), Some('}' | ')'))
             || (self.peek() == Some(';') && self.peek_at(1) == Some(';'))
     }
 
@@ -2879,7 +2832,7 @@ impl Parser {
         // its dropping of the annotations.
         if unsupported_shell {
             while self.bump().is_some() {}
-            let id = self.next_id_between(start.clone(), self.pos());
+            let id = self.next_id_between(start, self.pos());
             return Some(Token::new(
                 id,
                 InnerToken::T_Script {
@@ -2902,7 +2855,7 @@ impl Parser {
         }
         let script_id = self.next_id_between(start.clone(), self.pos());
         let script = Token::new(script_id, InnerToken::T_Script { shebang, commands });
-        let ann_id = self.next_id_between(start.clone(), self.pos());
+        let ann_id = self.next_id_between(start, self.pos());
         let root = Token::new(
             ann_id,
             InnerToken::T_Annotation {
@@ -2972,6 +2925,34 @@ fn unquote_here_delim(s: &str) -> (String, Quoted) {
         return (s.chars().filter(|c| *c != '\\').collect(), Quoted::Quoted);
     }
     (s.to_string(), Quoted::Unquoted)
+}
+
+/// `checkEnd`'s match of a here document line against its end token: the
+/// blanks before the token, the blanks after it and the rest of the line.
+fn split_here_doc_end<'a>(line: &'a str, delim: &str) -> Option<(&'a str, &'a str, &'a str)> {
+    // `linewhitespace \`reluctantlyTill\` string endToken`: blanks, then the
+    // token. Reluctant, so the blanks stop at the first position where the
+    // token matches — an end token that itself starts with a space still
+    // lines up. Anything else in front and this is an ordinary body line.
+    let mut split = None;
+    for (i, c) in line
+        .char_indices()
+        .chain(std::iter::once((line.len(), '\0')))
+    {
+        if line[i..].starts_with(delim) {
+            split = Some(i);
+            break;
+        }
+        if c != ' ' && c != '\t' {
+            break;
+        }
+    }
+    let split = split?;
+    let leading = &line[..split];
+    let after = &line[split + delim.len()..];
+    let rest = after.trim_start_matches([' ', '\t']);
+    let trailing = &after[..after.len() - rest.len()];
+    Some((leading, trailing, rest))
 }
 
 /// Haskell's `lines`: split on `\n`, and no empty piece after a trailing one.

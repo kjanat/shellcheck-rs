@@ -36,7 +36,7 @@ enum DiffElem {
     Second(String),
 }
 
-fn is_both(d: &DiffElem) -> bool {
+const fn is_both(d: &DiffElem) -> bool {
     matches!(d, DiffElem::Both(_))
 }
 
@@ -75,7 +75,7 @@ fn get_diff(old: &[String], new: &[String]) -> Vec<DiffElem> {
 /// Unreachable-cell cost. Kept far from `i64::MAX` so `+ 1` cannot overflow.
 const INF: i64 = i64::MAX / 4;
 
-fn add1(x: i64) -> i64 {
+const fn add1(x: i64) -> i64 {
     if x >= INF { INF } else { x + 1 }
 }
 
@@ -94,16 +94,13 @@ fn diff_into(old: &[String], new: &[String], out: &mut Vec<DiffElem>) {
         // A single old line: the walk inserts up to the first occurrence of it
         // and matches there; with no occurrence it deletes first, then inserts.
         let x = &old[0];
-        match new.iter().position(|y| y == x) {
-            Some(k) => {
-                out.extend(new[..k].iter().cloned().map(DiffElem::Second));
-                out.push(DiffElem::Both(x.clone()));
-                out.extend(new[k + 1..].iter().cloned().map(DiffElem::Second));
-            }
-            None => {
-                out.push(DiffElem::First(x.clone()));
-                out.extend(new.iter().cloned().map(DiffElem::Second));
-            }
+        if let Some(k) = new.iter().position(|y| y == x) {
+            out.extend(new[..k].iter().cloned().map(DiffElem::Second));
+            out.push(DiffElem::Both(x.clone()));
+            out.extend(new[k + 1..].iter().cloned().map(DiffElem::Second));
+        } else {
+            out.push(DiffElem::First(x.clone()));
+            out.extend(new.iter().cloned().map(DiffElem::Second));
         }
         return;
     }
@@ -424,7 +421,7 @@ fn has_trailing_linefeed(s: &str) -> bool {
 }
 
 fn covers_last_line(regions: &[(bool, Vec<DiffElem>)]) -> bool {
-    regions.last().map(|(o, _)| *o).unwrap_or(false)
+    regions.last().is_some_and(|(o, _)| *o)
 }
 
 /// `makeDiff` + `formatDoc`: the unified diff for one file's merged fix.
@@ -449,6 +446,7 @@ pub struct DiffOutput {
 }
 
 /// Render the diff for one file's comments (already the file's own fixes).
+#[must_use]
 pub fn render_file(
     use_color: bool,
     filename: &str,
@@ -482,6 +480,7 @@ pub fn render_file(
 pub const NONE_FIXABLE_MSG: &str =
     "Issues were detected, but none were auto-fixable. Use another format to see them.";
 
+#[must_use]
 pub fn color_bold_red(use_color: bool, s: &str) -> String {
     colorize(use_color, BOLD, &colorize(use_color, RED, s))
 }
@@ -512,7 +511,7 @@ mod tests {
             (true, vec![b(2), b(3), b(4), l(5), b(6), b(7), b(8)]),
             (false, vec![b(9)]),
         ];
-        assert!(keys(&got) == want);
+        assert_eq!(keys(&got), want);
     }
 
     #[test]
@@ -529,7 +528,7 @@ mod tests {
             (false, vec![b(4)]),
             (true, vec![b(5), b(6), b(7), r(8)]),
         ];
-        assert!(keys(&got) == want);
+        assert_eq!(keys(&got), want);
     }
 
     /// The straightforward full-matrix walk the linear-space `get_diff` must

@@ -1,5 +1,5 @@
 //! Quoting and word-splitting checks from `ShellCheck.Analytics`.
-use super::common::*;
+use super::common::surround_with;
 use crate::analyzer_lib::assignment_is_quoting;
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::get_command_basename;
@@ -8,8 +8,12 @@ use crate::analyzer_lib::is_array_expansion;
 use crate::analyzer_lib::is_quote_free;
 use crate::analyzer_lib::is_quote_free_element;
 use crate::analyzer_lib::simple_command_words;
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{
+    DataSource, DataType, Out, Parameters, StackData, err, fix_with, get_command_token_or_this,
+    get_path, info, info_with_fix, is_counting_reference, is_param_to, replace_end, replace_start,
+    style_with_fix, warn, warn_with_fix,
+};
+use crate::ast::{AssignmentMode, ConditionType, Id, InnerToken, Token};
 use crate::ast_lib;
 use crate::ast_lib::get_word_parts;
 use crate::ast_lib::oversimplify;
@@ -51,7 +55,7 @@ pub(super) fn check_quotes_in_literals(params: &Parameters, _root: &Token, out: 
                 }
             }
             // writeF _ _ _ _ = return []  (no state change)
-            StackData::Assignment(..) => {}
+            StackData::Assignment(..) | StackData::StackScope(_) | StackData::StackScopeEnd => {}
             // readF _ expr name
             StackData::Reference(_base, expr, name) => {
                 if let Some(&j) = quote_map.get(name)
@@ -63,10 +67,7 @@ pub(super) fn check_quotes_in_literals(params: &Parameters, _root: &Token, out: 
                         out,
                         j,
                         2089,
-                        &format!(
-                            "Quotes/backslashes will be treated literally. {}",
-                            suggestion
-                        ),
+                        &format!("Quotes/backslashes will be treated literally. {suggestion}"),
                     );
                     warn(
                         out,
@@ -76,7 +77,6 @@ pub(super) fn check_quotes_in_literals(params: &Parameters, _root: &Token, out: 
                     );
                 }
             }
-            _ => {}
         }
     }
 }
@@ -206,11 +206,9 @@ pub(super) fn check_spurious_expansion(_params: &Parameters, t: &Token, out: &mu
 }
 
 pub(super) fn check_unquoted_expansions(p: &Parameters, t: &Token, out: &mut Out) {
-    use InnerToken::*;
+    use InnerToken::{T_Backticked, T_DollarBraceCommandExpansion, T_DollarExpansion};
     let contents: &[Token] = match &*t.inner {
-        T_DollarExpansion(c) => c,
-        T_Backticked(c) => c,
-        T_DollarBraceCommandExpansion { list, .. } => list,
+        T_DollarExpansion(c) | T_Backticked(c) | T_DollarBraceCommandExpansion { list: c, .. } => c,
         _ => return,
     };
     if contents.is_empty() {
@@ -223,9 +221,8 @@ pub(super) fn check_unquoted_expansions(p: &Parameters, t: &Token, out: &mut Out
 }
 
 pub(super) fn check_single_quoted_variables(params: &Parameters, t: &Token, out: &mut Out) {
-    let s = match &*t.inner {
-        InnerToken::T_SingleQuoted(s) => s,
-        _ => return,
+    let InnerToken::T_SingleQuoted(s) = &*t.inner else {
+        return;
     };
     if !matches_expansion_re(s) {
         return;
@@ -489,25 +486,25 @@ fn is_quote_free_context_strict(params: &Parameters, t: &Token) -> Option<bool> 
     match &*t.inner {
         InnerToken::TC_Nullary {
             typ: DoubleBracket, ..
-        } => Some(true),
-        InnerToken::TC_Unary {
+        }
+        | InnerToken::TC_Unary {
             typ: DoubleBracket, ..
-        } => Some(true),
-        InnerToken::TC_Binary {
+        }
+        | InnerToken::TC_Binary {
             typ: DoubleBracket, ..
-        } => Some(true),
-        InnerToken::TA_Sequence(_) => Some(true),
-        InnerToken::T_Arithmetic(_) => Some(true),
+        }
+        | InnerToken::TA_Sequence(_)
+        | InnerToken::T_Arithmetic(_)
+        | InnerToken::T_DoubleQuoted(_)
+        | InnerToken::T_DollarDoubleQuoted(_)
+        | InnerToken::T_CaseExpression { .. }
+        | InnerToken::T_HereDoc { .. }
+        | InnerToken::T_DollarBraced { .. } => Some(true),
         InnerToken::T_Assignment { .. } => Some(assignment_is_quoting(params, t)),
-        InnerToken::T_Redirecting { .. } => Some(false),
-        InnerToken::T_DoubleQuoted(_) => Some(true),
-        InnerToken::T_DollarDoubleQuoted(_) => Some(true),
-        InnerToken::T_CaseExpression { .. } => Some(true),
-        InnerToken::T_HereDoc { .. } => Some(true),
-        InnerToken::T_DollarBraced { .. } => Some(true),
+        InnerToken::T_Redirecting { .. }
         // strict = True.
-        InnerToken::T_ForIn { .. } => Some(false),
-        InnerToken::T_SelectIn { .. } => Some(false),
+        | InnerToken::T_ForIn { .. }
+        | InnerToken::T_SelectIn { .. } => Some(false),
         _ => None,
     }
 }
@@ -527,7 +524,7 @@ fn is_strictly_quote_free(params: &Parameters, t: &Token) -> bool {
     false
 }
 
-/// `re = \$[{(0-9a-zA-Z_]|`[^`]+``
+/// `` re = \$[{(0-9a-zA-Z_]|`[^`]+` ``
 fn matches_expansion_re(s: &str) -> bool {
     let bytes = s.as_bytes();
     for i in 0..bytes.len() {
@@ -577,28 +574,25 @@ fn matches_sed_contra(s: &str) -> bool {
 }
 
 fn get_find_command(cmd: &Token) -> String {
-    let words = match simple_command_words(cmd) {
-        Some(w) => w,
-        None => return "find".to_string(),
+    let Some(words) = simple_command_words(cmd) else {
+        return "find".to_string();
     };
     let lits: Vec<Option<String>> = words.iter().map(ast_lib::get_literal_string).collect();
     let exec_flags = ["-exec", "-execdir", "-ok", "-okdir"];
     // dropWhile (not in exec_flags)
-    let start = lits.iter().position(|x| {
-        x.as_deref()
-            .map(|s| exec_flags.contains(&s))
-            .unwrap_or(false)
-    });
-    match start {
-        Some(idx) => {
+    let start = lits
+        .iter()
+        .position(|x| x.as_deref().is_some_and(|s| exec_flags.contains(&s)));
+    start.map_or_else(
+        || "find".to_string(),
+        |idx| {
             // cmd is at idx+1 (flag:cmd:rest)
             match lits.get(idx + 1) {
                 Some(Some(c)) => c.clone(),
                 _ => "find".to_string(),
             }
-        }
-        None => "find".to_string(),
-    }
+        },
+    )
 }
 
 fn get_git_command(cmd: &Token) -> String {
@@ -659,11 +653,13 @@ const SC2016_COMMONLY_QUOTED: &[&str] = &["PS1", "PS2", "PS3", "PS4", "PROMPT_CO
 
 /// `getCommandNameFromExpansion`: if a substitution is a single command, its name.
 fn get_command_name_from_expansion(t: &Token) -> Option<String> {
-    use InnerToken::*;
+    use InnerToken::{T_Backticked, T_DollarBraceCommandExpansion, T_DollarExpansion, T_Pipeline};
     let list: &[Token] = match &*t.inner {
-        T_DollarExpansion(l) if l.len() == 1 => l,
-        T_Backticked(l) if l.len() == 1 => l,
-        T_DollarBraceCommandExpansion { list, .. } if list.len() == 1 => list,
+        T_DollarExpansion(l) | T_Backticked(l) | T_DollarBraceCommandExpansion { list: l, .. }
+            if l.len() == 1 =>
+        {
+            l
+        }
         _ => return None,
     };
     match &*list[0].inner {
@@ -672,9 +668,9 @@ fn get_command_name_from_expansion(t: &Token) -> Option<String> {
     }
 }
 
-/// `usedAsCommandName`: is the token the first word of a T_SimpleCommand?
+/// `usedAsCommandName`: is the token the first word of a `T_SimpleCommand`?
 fn used_as_command_name(p: &Parameters, token: &Token) -> bool {
-    use InnerToken::*;
+    use InnerToken::{T_DoubleQuoted, T_NormalWord, T_SimpleCommand};
     let mut current_id = token.id();
     let mut node = p.parent(token);
     while let Some(t) = node {
@@ -700,12 +696,12 @@ fn used_as_command_name(p: &Parameters, token: &Token) -> bool {
 fn should_be_split(t: &Token) -> bool {
     matches!(
         get_command_name_from_expansion(t).as_deref(),
-        Some("seq") | Some("pgrep")
+        Some("seq" | "pgrep")
     )
 }
 
 /// `supportsArrays`.
-fn supports_arrays(shell: Shell) -> bool {
+const fn supports_arrays(shell: Shell) -> bool {
     matches!(shell, Shell::Bash | Shell::Ksh)
 }
 
@@ -831,7 +827,7 @@ fn iu_check(params: &Parameters, window: &[Token], out: &mut Out) {
         && let InnerToken::T_SingleQuoted(_) = &*window[0].inner
         && let InnerToken::T_Literal(str) = &*window[1].inner
     {
-        if !str.is_empty() && str.chars().all(|c| c.is_alphanumeric()) {
+        if !str.is_empty() && str.chars().all(char::is_alphanumeric) {
             info(
                 out,
                 window[1].id(),
@@ -848,15 +844,7 @@ fn iu_check(params: &Parameters, window: &[Token], out: &mut Out) {
             (&*a.inner, &*b.inner)
         {
             match &*trapped.inner {
-                InnerToken::T_DollarExpansion(_) => {
-                    warn(
-                        out,
-                        trapped.id(),
-                        2027,
-                        "The surrounding quotes actually unquote this. Remove or escape them.",
-                    );
-                }
-                InnerToken::T_DollarBraced { .. } => {
+                InnerToken::T_DollarExpansion(_) | InnerToken::T_DollarBraced { .. } => {
                     warn(
                         out,
                         trapped.id(),

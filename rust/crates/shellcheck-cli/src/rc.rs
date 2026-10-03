@@ -31,8 +31,7 @@ use std::cell::RefCell;
 
 use shellcheck_rs::ast::Annotation;
 use shellcheck_rs::editor_config::{
-    editor_config_directives, invalid_root_lines, is_editor_config_root, is_rejection,
-    rejected_root,
+    invalid_root_lines, is_editor_config_root, is_rejection, rejected_root,
 };
 use shellcheck_rs::interface::{
     CheckSpec, DisableRange, RcDirectives, RcParseProblem, Shell, decode_bytes,
@@ -70,8 +69,8 @@ impl RcConfig {
     /// The reduction described above (`ShellCheck.AnalyzerLib.determineShell`,
     /// `ASTLib.getExtendedAnalysisDirective`, `Checker`'s
     /// `getEnableDirectives`).
-    fn from_annotations(annotations: &[Annotation]) -> RcConfig {
-        let mut cfg = RcConfig::default();
+    fn from_annotations(annotations: &[Annotation]) -> Self {
+        let mut cfg = Self::default();
         for a in annotations {
             match a {
                 Annotation::DisableComment(from, to) => cfg.disabled.push(DisableRange {
@@ -103,6 +102,7 @@ impl RcConfig {
 /// Parse the contents of the rc file at `filename` (used only in the SC1134
 /// message). Never fails: a parse failure becomes `parse_problem`, with every
 /// directive discarded, as `readConfigFile` returns `[]` on `Left`.
+#[must_use]
 pub fn parse_contents(filename: &str, contents: &str) -> RcConfig {
     match read_config_kvs(contents) {
         Ok(annotations) => RcConfig::from_annotations(&annotations),
@@ -216,8 +216,8 @@ struct ConfigParser {
 }
 
 impl ConfigParser {
-    fn new(contents: &str) -> ConfigParser {
-        ConfigParser {
+    fn new(contents: &str) -> Self {
+        Self {
             chars: contents.chars().collect(),
             idx: 0,
             line: 1,
@@ -229,7 +229,7 @@ impl ConfigParser {
         self.chars.get(self.idx).copied()
     }
 
-    fn eof(&self) -> bool {
+    const fn eof(&self) -> bool {
         self.idx >= self.chars.len()
     }
 
@@ -268,7 +268,7 @@ impl ConfigParser {
     }
 
     /// A failure with no message of its own, like Parsec's implicit errors.
-    fn fail<T>(&self) -> Result<T, Fail> {
+    const fn fail<T>(&self) -> Result<T, Fail> {
         Err(Fail {
             line: self.line,
             column: self.column,
@@ -520,7 +520,7 @@ impl ConfigParser {
         // `subParse start p str`, with `start` taken just after the opening
         // quote: the quoted text cannot span lines, so a failure inside it is
         // reported on this line, at its column from there.
-        let mut sub = ConfigParser::new(&inner);
+        let mut sub = Self::new(&inner);
         sub.line = line;
         sub.column = column;
         p(&mut sub)
@@ -685,8 +685,9 @@ pub struct ConfigLookup {
 }
 
 impl ConfigLookup {
-    pub fn new(rcfile: Option<String>) -> ConfigLookup {
-        ConfigLookup {
+    #[must_use]
+    pub const fn new(rcfile: Option<String>) -> Self {
+        Self {
             rcfile,
             cache: RefCell::new(None),
         }
@@ -744,6 +745,7 @@ impl ConfigLookup {
 /// `readConfig`: the contents of `file` if it exists. One that exists but
 /// cannot be read is reported and counts as empty. The path is reported
 /// verbatim in SC1134, as the oracle does.
+#[must_use]
 pub fn read_config(file: &str) -> Option<RawConfig> {
     if !does_file_exist(file) {
         return None;
@@ -763,6 +765,7 @@ pub fn read_config(file: &str) -> Option<RawConfig> {
 /// `mergeConfigs`: the `.shellcheckrc` followed by the EditorConfig
 /// directives, under the `.shellcheckrc`'s name, unless the EditorConfig
 /// files were rejected.
+#[must_use]
 pub fn merge_configs(rc: Option<RawConfig>, ec: Option<RawConfig>) -> Option<RawConfig> {
     match (rc, ec) {
         (None, ec) => ec,
@@ -772,11 +775,9 @@ pub fn merge_configs(rc: Option<RawConfig>, ec: Option<RawConfig>) -> Option<Raw
     }
 }
 
-/// `getEditorConfig`: look for .editorconfig files in the target file's
-/// directory and all its parents (as per the EditorConfig spec), plus the
-/// global ${XDG_CONFIG_HOME}/editorconfig.ini default. shellcheck.* keys in
-/// matching sections are turned into directives. The blobs are concatenated
-/// under the name of the first file that contributes one.
+/// Looks for `.editorconfig` files in the target directory, parent directories, and `${XDG_CONFIG_HOME}/editorconfig.ini`.
+/// Converts `shellcheck.*` keys in matching sections into directives, concatenating blobs under the first contributing file's name.
+#[must_use]
 pub fn editor_config(filename: &str) -> Option<RawConfig> {
     let global = xdg_config_home().map(|dir| combine(&dir, "editorconfig.ini"));
     editor_config_with(filename, global.as_deref())
@@ -813,7 +814,10 @@ fn editor_config_with(filename: &str, global: Option<&str>) -> Option<RawConfig>
 fn directives_for(path: &str, (file, contents): &RawConfig) -> Option<RawConfig> {
     let blob = match invalid_root_lines(contents).first() {
         Some(&line) => rejected_root(line),
-        None => editor_config_directives(contents, &make_relative_to(&take_directory(file), path))?,
+        None => shellcheck_rs::editor_config::directives(
+            contents,
+            &make_relative_to(&take_directory(file), path),
+        )?,
     };
     Some((file.clone(), blob))
 }
@@ -1008,7 +1012,7 @@ mod tests {
         );
         // `sepBy` allows an empty list: `enable=` is not an error.
         let c = parse("enable=\n");
-        assert!(c.enabled_checks.is_empty());
+        assert_eq!(c.enabled_checks, [] as [std::string::String; 0]);
         assert!(c.parse_problem.is_none());
     }
 
@@ -1071,7 +1075,7 @@ mod tests {
             c.disabled.iter().map(|r| r.from).collect::<Vec<_>>(),
             vec![2148]
         );
-        assert!(c.enabled_checks.is_empty());
+        assert_eq!(c.enabled_checks, [] as [std::string::String; 0]);
         assert!(c.parse_problem.is_none());
     }
 
@@ -1090,7 +1094,10 @@ mod tests {
         );
         // ... and it discards the directives that did parse.
         let c = parse("disable=SC2086\noops here\n");
-        assert!(c.disabled.is_empty());
+        assert_eq!(
+            c.disabled,
+            [] as [shellcheck_rs::interface::DisableRange; 0]
+        );
         assert_eq!(
             c.parse_problem.map(|p| (p.line, p.suggestion)),
             Some((2, "Expected '=' after directive key.".to_string()))
@@ -1234,7 +1241,7 @@ mod tests {
     /// .shellcheckrc. We simulate that here by feeding
     /// `editorConfigDirectives`' output through the rc parser.
     fn with_editor_config(ec: &str, name: &str) -> RcConfig {
-        let blob = editor_config_directives(ec, name).unwrap_or_default();
+        let blob = shellcheck_rs::editor_config::directives(ec, name).unwrap_or_default();
         parse_contents(".editorconfig", &blob)
     }
 
@@ -1318,7 +1325,7 @@ mod tests {
     struct Tree(std::path::PathBuf);
 
     impl Tree {
-        fn new(name: &str, files: &[(&str, &str)]) -> Tree {
+        fn new(name: &str, files: &[(&str, &str)]) -> Self {
             let root =
                 std::env::temp_dir().join(format!("rshellcheck-{name}-{}", std::process::id()));
             for (path, contents) in files {
@@ -1326,7 +1333,7 @@ mod tests {
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(path, contents).unwrap();
             }
-            Tree(std::fs::canonicalize(root).unwrap())
+            Self(std::fs::canonicalize(root).unwrap())
         }
 
         fn path(&self, path: &str) -> String {
@@ -1396,13 +1403,19 @@ mod tests {
         assert_eq!(name, tree.path("a/.editorconfig"));
         let c = parse_contents(&name, &blob);
         assert_eq!(c.shell, Some(Shell::Sh));
-        assert!(c.disabled.is_empty());
+        assert_eq!(
+            c.disabled,
+            [] as [shellcheck_rs::interface::DisableRange; 0]
+        );
 
         let (name, blob) = editor_config_with(&tree.path("b/x.sh"), None).expect("rejected");
         assert_eq!(name, tree.path("b/.editorconfig"));
         assert!(!is_rejection(&blob));
         let c = parse_contents(&name, &blob);
-        assert!(c.disabled.is_empty());
+        assert_eq!(
+            c.disabled,
+            [] as [shellcheck_rs::interface::DisableRange; 0]
+        );
         let problem = c.parse_problem.expect("SC1134");
         assert_eq!((problem.line, problem.column), (2, 8));
     }
@@ -1428,8 +1441,11 @@ mod tests {
         let mut spec = CheckSpec::default();
         merge_into(&mut spec, &rc);
         let directives = spec.rc.expect("rc directives");
-        assert!(directives.disabled_ranges.is_empty());
-        assert!(spec.optional_checks.is_empty());
+        assert_eq!(
+            directives.disabled_ranges,
+            [] as [shellcheck_rs::interface::DisableRange; 0]
+        );
+        assert_eq!(spec.optional_checks, [] as [std::string::String; 0]);
         let problem = directives.parse_problem.expect("SC1134 problem");
         assert_eq!(problem.filename, "rc");
         assert_eq!(problem.line, 2);

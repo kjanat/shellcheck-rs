@@ -53,7 +53,7 @@ fn interpreter(script: &str, shell: Option<&str>) -> &'static str {
         })
     });
     match named.as_deref() {
-        Some("sh") | Some("dash") => "dash",
+        Some("sh" | "dash") => "dash",
         Some("ksh") => "ksh",
         Some("busybox") => "busybox",
         _ => "bash",

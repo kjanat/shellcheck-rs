@@ -2,13 +2,15 @@
 //! parse -> analyze -> format pipeline.
 //!
 //! Field names follow the Haskell record fields but rendered as idiomatic
-//! snake_case (e.g. `posFile` -> `file`). Ordering-sensitive derives (`Ord`)
+//! `snake_case` (e.g. `posFile` -> `file`). Ordering-sensitive derives (`Ord`)
 //! mirror the derived `Ord` on the Haskell side, which is used when sorting
 //! messages for output.
 
 use std::collections::BTreeMap;
 
+/// `ErrorMessage`.
 pub type ErrorMessage = String;
+/// `Code`: the number of a diagnostic, such as 2086 for SC2086.
 pub type Code = i64;
 
 /// `ShellCheck.Interface.SystemInterface`: everything the parser needs from the
@@ -21,11 +23,15 @@ pub type Code = i64;
 ///
 /// `siGetConfig` has no counterpart here: this port reads rc files in the CLI
 /// (see `shellcheck_cli::rc`) rather than from inside the parser.
-pub trait SystemInterface {
+pub trait System {
     /// `siReadFile`: given what annotations say about including external files
     /// (`None` when nothing said anything) and a resolved filename from
-    /// [`SystemInterface::find_source`], read it or explain why not. The
+    /// [`System::find_source`], read it or explain why not. The
     /// explanation is what SC1091 prints after "Not following: ".
+    ///
+    /// # Errors
+    ///
+    /// The explanation, when the file cannot be read.
     fn read_file(&self, external_sources: Option<bool>, file: &str)
     -> Result<String, ErrorMessage>;
 
@@ -43,9 +49,9 @@ pub trait SystemInterface {
 
 /// `newSystemInterface`: reads nothing and resolves a name to itself.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct NullSystemInterface;
+pub struct NullSystem;
 
-impl SystemInterface for NullSystemInterface {
+impl System for NullSystem {
     fn read_file(
         &self,
         _external_sources: Option<bool>,
@@ -76,7 +82,7 @@ impl SystemInterface for NullSystemInterface {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoExternalSources;
 
-impl SystemInterface for NoExternalSources {
+impl System for NoExternalSources {
     fn read_file(
         &self,
         external_sources: Option<bool>,
@@ -97,6 +103,7 @@ impl SystemInterface for NoExternalSources {
 }
 
 /// `ioInterface`'s two refusals for a file that is not among the inputs.
+#[must_use]
 pub fn not_an_input(external_sources: Option<bool>, file: &str) -> ErrorMessage {
     if external_sources == Some(false) {
         format!(
@@ -126,6 +133,7 @@ pub fn not_an_input(external_sources: Option<bool>, file: &str) -> ErrorMessage 
 /// `char` cannot hold. Such a sequence becomes U+FFFD -- still exactly one
 /// character, so columns continue to match; only the character's identity
 /// differs, and it is a non-syntactic character either way.
+#[must_use]
 pub fn decode_bytes(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
     let mut i = 0;
@@ -139,22 +147,18 @@ pub fn decode_bytes(bytes: &[u8]) -> String {
         // `num >= 0xF8` and `num < 0xC0` are `Nothing` outright; the rest name
         // the low bits of the lead byte and how many continuation bytes follow.
         let next = match byte {
-            0xF8..=0xFF => None,
             0xF0..=0xF7 => construct_codepoint(u32::from(byte & 0x07), 3, bytes, i + 1),
             0xE0..=0xEF => construct_codepoint(u32::from(byte & 0x0F), 2, bytes, i + 1),
             0xC0..=0xDF => construct_codepoint(u32::from(byte & 0x1F), 1, bytes, i + 1),
             _ => None,
         };
-        match next {
-            Some((codepoint, rest)) => {
-                out.push(char::from_u32(codepoint).unwrap_or('\u{FFFD}'));
-                i = rest;
-            }
+        if let Some((codepoint, rest)) = next {
+            out.push(char::from_u32(codepoint).unwrap_or('\u{FFFD}'));
+            i = rest;
+        } else {
             // `c : decode rest`: the byte stands for itself, as ISO-8859-1.
-            None => {
-                out.push(byte as char);
-                i += 1;
-            }
+            out.push(byte as char);
+            i += 1;
         }
     }
     out
@@ -164,7 +168,7 @@ pub fn decode_bytes(bytes: &[u8]) -> String {
 fn construct_codepoint(x: u32, n: u32, bytes: &[u8], i: usize) -> Option<(u32, usize)> {
     if n == 0 {
         // `guard $ x <= 0x10FFFF`
-        return if x <= 0x10FFFF { Some((x, i)) } else { None };
+        return if x <= 0x0010_FFFF { Some((x, i)) } else { None };
     }
     let byte = *bytes.get(i)?;
     if (0x80..=0xBF).contains(&byte) {
@@ -175,16 +179,20 @@ fn construct_codepoint(x: u32, n: u32, bytes: &[u8], i: usize) -> Option<(u32, u
 }
 
 /// `mockedSystemInterface`: a fixed list of (name, contents) pairs, with names
-/// resolved to themselves. Exported for the same reason the Haskell exports it:
+/// resolved to themselves.
+///
+/// Exported for the same reason the Haskell exports it:
 /// the checker's own tests source files that do not exist on disk.
 #[derive(Debug, Default, Clone)]
-pub struct MockSystemInterface {
+pub struct MockSystem {
     files: Vec<(String, String)>,
 }
 
-impl MockSystemInterface {
-    pub fn new(files: &[(&str, &str)]) -> MockSystemInterface {
-        MockSystemInterface {
+impl MockSystem {
+    /// `mockedSystemInterface files`.
+    #[must_use]
+    pub fn new(files: &[(&str, &str)]) -> Self {
+        Self {
             files: files
                 .iter()
                 .map(|(n, c)| ((*n).to_string(), (*c).to_string()))
@@ -193,7 +201,7 @@ impl MockSystemInterface {
     }
 }
 
-impl SystemInterface for MockSystemInterface {
+impl System for MockSystem {
     fn read_file(
         &self,
         _external_sources: Option<bool>,
@@ -219,17 +227,24 @@ impl SystemInterface for MockSystemInterface {
 /// `ShellCheck.Interface.Shell`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Shell {
+    /// `Ksh`.
     Ksh,
+    /// `Sh`.
     Sh,
+    /// `Bash`.
     Bash,
+    /// `Dash`.
     Dash,
+    /// `BusyboxSh`.
     BusyboxSh,
 }
 
 /// `ShellCheck.Interface.ExecutionMode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {
+    /// `Executed`.
     Executed,
+    /// `Sourced`.
     Sourced,
 }
 
@@ -241,20 +256,25 @@ pub enum ExecutionMode {
 /// output, so the derived Rust `Ord` must match it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Severity {
+    /// `ErrorC`.
     ErrorC,
+    /// `WarningC`.
     WarningC,
+    /// `InfoC`.
     InfoC,
+    /// `StyleC`.
     StyleC,
 }
 
 impl Severity {
     /// Lowercase name used by JSON/GCC formatters ("error", "warning", ...).
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Severity::ErrorC => "error",
-            Severity::WarningC => "warning",
-            Severity::InfoC => "info",
-            Severity::StyleC => "style",
+            Self::ErrorC => "error",
+            Self::WarningC => "warning",
+            Self::InfoC => "info",
+            Self::StyleC => "style",
         }
     }
 }
@@ -265,15 +285,18 @@ impl Severity {
 /// (file, line, column) lexicographically as in Haskell.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Position {
+    /// `posFile`: the filename.
     pub file: String,
+    /// `posLine`: the 1-based source line.
     pub line: i64,
+    /// `posColumn`: the 1-based source column, where tabs are 8.
     pub column: i64,
 }
 
 impl Default for Position {
     fn default() -> Self {
         // newPosition
-        Position {
+        Self {
             file: String::new(),
             line: 1,
             column: 1,
@@ -284,15 +307,18 @@ impl Default for Position {
 /// `ShellCheck.Interface.Comment`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comment {
+    /// `cSeverity`.
     pub severity: Severity,
+    /// `cCode`.
     pub code: Code,
+    /// `cMessage`.
     pub message: String,
 }
 
 impl Default for Comment {
     fn default() -> Self {
         // newComment
-        Comment {
+        Self {
             severity: Severity::StyleC,
             code: 0,
             message: String::new(),
@@ -303,25 +329,31 @@ impl Default for Comment {
 /// `ShellCheck.Interface.InsertionPoint`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertionPoint {
+    /// `InsertBefore`: insert immediately before the region.
     InsertBefore,
+    /// `InsertAfter`: insert immediately after the region.
     InsertAfter,
 }
 
 /// `ShellCheck.Interface.Replacement`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Replacement {
+    /// `repStartPos`.
     pub start: Position,
+    /// `repEndPos`.
     pub end: Position,
+    /// `repString`: the text to put in place of the region.
     pub string: String,
     /// Highest precedence applied first.
     pub precedence: i32,
+    /// `repInsertionPoint`: whether to insert immediately before or immediately after the region.
     pub insertion_point: InsertionPoint,
 }
 
 impl Default for Replacement {
     fn default() -> Self {
         // newReplacement
-        Replacement {
+        Self {
             start: Position::default(),
             end: Position::default(),
             string: String::new(),
@@ -334,15 +366,20 @@ impl Default for Replacement {
 /// `ShellCheck.Interface.Fix`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Fix {
+    /// `fixReplacements`.
     pub replacements: Vec<Replacement>,
 }
 
 /// `ShellCheck.Interface.PositionedComment`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PositionedComment {
+    /// `pcStartPos`.
     pub start: Position,
+    /// `pcEndPos`.
     pub end: Position,
+    /// `pcComment`.
     pub comment: Comment,
+    /// `pcFix`.
     pub fix: Option<Fix>,
 }
 
@@ -350,34 +387,45 @@ pub struct PositionedComment {
 /// resolved to a position later via the token position map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenComment {
+    /// `tcId`.
     pub id: crate::ast::Id,
+    /// `tcComment`.
     pub comment: Comment,
+    /// `tcFix`.
     pub fix: Option<Fix>,
 }
 
 /// `ShellCheck.Interface.ColorOption`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorOption {
+    /// `ColorAuto`.
     ColorAuto,
+    /// `ColorAlways`.
     ColorAlways,
+    /// `ColorNever`.
     ColorNever,
 }
 
 /// A half-open range of codes `[from, to)`, as carried by
-/// `Annotation.DisableComment from to`. `disable=SC2086` is the single-code
+/// `Annotation.DisableComment from to`.
+///
+/// `disable=SC2086` is the single-code
 /// range `2086..2087`, `disable=SC1000-SC2000` is `1000..2000`, and
-/// `disable=all` is `0..1000000`. Membership is tested, never enumerated:
-/// `shouldIgnoreCode`/`contextItemDisablesCode` compare against the endpoints
+/// `disable=all` is `0..1000000`. `shouldIgnoreCode` and
+/// `contextItemDisablesCode` compare a code against the endpoints
 /// (`code >= n && code < m`), so an enormous range costs nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DisableRange {
+    /// The first code in the range.
     pub from: Code,
+    /// The first code past the range.
     pub to: Code,
 }
 
 impl DisableRange {
     /// `disabling' (DisableComment n m) = code >= n && code < m`.
-    pub fn contains(&self, code: Code) -> bool {
+    #[must_use]
+    pub const fn contains(&self, code: Code) -> bool {
         code >= self.from && code < self.to
     }
 }
@@ -415,7 +463,7 @@ pub struct RcDirectives {
     ///
     /// As `DisableComment` annotations upstream, these suppress a code wherever
     /// it comes from and regardless of `csIncludedWarnings`. They are kept as
-    /// endpoints, never enumerated: the range may be arbitrarily wide.
+    /// endpoints, and a range may be arbitrarily wide.
     pub disabled_ranges: Vec<DisableRange>,
     /// Set when the rc file itself could not be parsed; the checker turns it
     /// into the SC1134 comment and no rc directive takes effect.
@@ -425,15 +473,25 @@ pub struct RcDirectives {
 /// `ShellCheck.Interface.CheckSpec`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckSpec {
+    /// `csFilename`.
     pub filename: String,
+    /// `csScript`.
     pub script: String,
+    /// `csCheckSourced`.
     pub check_sourced: bool,
+    /// `csIgnoreRC`.
     pub ignore_rc: bool,
+    /// `csExcludedWarnings`.
     pub excluded_warnings: Vec<Code>,
+    /// `csIncludedWarnings`.
     pub included_warnings: Option<Vec<Code>>,
+    /// `csShellTypeOverride`.
     pub shell_type_override: Option<Shell>,
+    /// `csMinSeverity`.
     pub min_severity: Severity,
+    /// `csExtendedAnalysis`.
     pub extended_analysis: Option<bool>,
+    /// `csOptionalChecks`.
     pub optional_checks: Vec<String>,
     /// Whatever an rc file contributed that has no `csXxx` counterpart. Boxed
     /// so that a spec without an rc file costs one pointer.
@@ -443,7 +501,7 @@ pub struct CheckSpec {
 impl Default for CheckSpec {
     fn default() -> Self {
         // emptyCheckSpec
-        CheckSpec {
+        Self {
             filename: String::new(),
             script: String::new(),
             check_sourced: false,
@@ -462,7 +520,9 @@ impl Default for CheckSpec {
 /// `ShellCheck.Interface.CheckResult`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CheckResult {
+    /// `crFilename`.
     pub filename: String,
+    /// `crComments`.
     pub comments: Vec<PositionedComment>,
 }
 

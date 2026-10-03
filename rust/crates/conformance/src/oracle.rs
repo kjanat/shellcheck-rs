@@ -55,7 +55,7 @@ fn resolve(spec: &str) -> Result<PathBuf, String> {
             .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
             .split(';')
             .filter(|e| !e.is_empty())
-            .map(|e| e.to_string())
+            .map(std::string::ToString::to_string)
             .collect()
     } else {
         Vec::new()
@@ -86,12 +86,12 @@ impl Oracle {
     /// `spec` is either a path to the binary or a bare command name to look up
     /// on `PATH`, so `--oracle shellcheck` uses the installed ShellCheck
     /// without a build of its own.
-    pub fn new(spec: &str) -> Result<Oracle, String> {
+    pub fn new(spec: &str) -> Result<Self, String> {
         let binary = resolve(spec)?;
         let dir =
             std::env::temp_dir().join(format!("shellcheck-conformance-{}", std::process::id()));
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        Ok(Oracle {
+        Ok(Self {
             binary,
             dir,
             counter: std::cell::Cell::new(0),
@@ -156,29 +156,28 @@ impl Oracle {
                 .output()
                 .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
             let stdout = String::from_utf8_lossy(&res.stdout);
-            let v: Value = match serde_json::from_str(stdout.trim()) {
-                Ok(v) => v,
-                Err(_) => {
-                    // One input in this batch killed the oracle, and its answer
-                    // for the other 199 died with it. Re-run them one at a time
-                    // so the run continues and the culprit is named, rather than
-                    // ending the comparison on an upstream crash.
-                    for (name, body) in chunk {
-                        match self.check_one_enabled(body, shell, enable) {
-                            Ok((comments, _)) => {
-                                out.entry(name.clone()).or_default().extend(comments);
-                            }
-                            Err(why) => {
-                                self.crashes.borrow_mut().push((body.clone(), why));
-                                out.remove(name);
-                            }
+            let v: Value = if let Ok(v) = serde_json::from_str(stdout.trim()) {
+                v
+            } else {
+                // One input in this batch killed the oracle, and its answer
+                // for the other 199 died with it. Re-run them one at a time
+                // so the run continues and the culprit is named, rather than
+                // ending the comparison on an upstream crash.
+                for (name, body) in chunk {
+                    match self.check_one_enabled(body, shell, enable) {
+                        Ok((comments, _)) => {
+                            out.entry(name.clone()).or_default().extend(comments);
+                        }
+                        Err(why) => {
+                            self.crashes.borrow_mut().push((body.clone(), why));
+                            out.remove(name);
                         }
                     }
-                    for p in &paths {
-                        let _ = std::fs::remove_file(p);
-                    }
-                    continue;
                 }
+                for p in &paths {
+                    let _ = std::fs::remove_file(p);
+                }
+                continue;
             };
             for c in v
                 .get("comments")

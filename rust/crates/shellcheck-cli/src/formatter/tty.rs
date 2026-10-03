@@ -17,7 +17,7 @@ const WIKI_LINK: &str = "https://www.shellcheck.net/wiki/";
 const UNINTERESTING: &[i64] = &[1009, 1019, 1036, 1047, 1062, 1070, 1072, 1073, 1088, 1089];
 
 /// A wiki-summary entry: (ranking, code, message). Ranking is
-/// (rank_char, severity, code) to match the Haskell `Ranking`.
+/// (`rank_char`, severity, code) to match the Haskell `Ranking`.
 #[derive(Clone)]
 pub struct WikiEntry {
     ranking: (char, Severity, i64),
@@ -25,7 +25,7 @@ pub struct WikiEntry {
     message: String,
 }
 
-fn severity_text(sev: Severity) -> &'static str {
+const fn severity_text(sev: Severity) -> &'static str {
     match sev {
         Severity::ErrorC => "error",
         Severity::WarningC => "warning",

@@ -1,13 +1,16 @@
 //! Compound commands: subshells, groups, if/while/until/for/select/case and function definitions.
-use super::*;
+use super::{
+    ALMOST_SPACE_CHARS, CaseClause, CaseType, IfClause, InnerToken, PResult, Parser, Position,
+    Severity, Token, columns,
+};
 
 impl Parser {
     /// `readAmbiguous "((" readArithmeticExpression readSubshell`: `((` opens
     /// an arithmetic command in most shells and nested subshells in others.
     fn read_ambiguous_arithmetic(&mut self) -> PResult<Token> {
         self.read_ambiguous(
-            |p| p.read_arithmetic_command(),
-            |p| p.read_subshell(),
+            Self::read_arithmetic_command,
+            Self::read_subshell,
             |p, pos| {
                 p.note_at(
                     pos.clone(),
@@ -63,27 +66,24 @@ impl Parser {
                 }
             }
         };
-        match cmd {
-            Ok(t) => {
-                // Every compound command is wrapped in T_Redirecting (with a
-                // possibly-empty redirect list), exactly as ShellCheck's
-                // readCompoundCommand. This keeps parent-path depth (and thus
-                // fix precedence) identical to the oracle.
-                let redirs = self.read_redirect_list()?;
-                let (s, _) = self.span_for(t.id());
-                let e = self.pos();
-                let id = self.next_id_between(s, e);
-                self.warn_on_tokens_after_compound_command()?;
-                Ok(Token::new(id, InnerToken::T_Redirecting { redirs, cmd: t }))
+        if let Ok(t) = cmd {
+            // Every compound command is wrapped in T_Redirecting (with a
+            // possibly-empty redirect list), exactly as ShellCheck's
+            // readCompoundCommand. This keeps parent-path depth (and thus
+            // fix precedence) identical to the oracle.
+            let redirs = self.read_redirect_list()?;
+            let (s, _) = self.span_for(t.id());
+            let e = self.pos();
+            let id = self.next_id_between(s, e);
+            self.warn_on_tokens_after_compound_command()?;
+            Ok(Token::new(id, InnerToken::T_Redirecting { redirs, cmd: t }))
+        } else {
+            // The cursor is left where the attempt gave up: callers need it
+            // to tell a recoverable failure from one that has committed.
+            if self.idx == m.idx {
+                self.reset(m);
             }
-            Err(()) => {
-                // The cursor is left where the attempt gave up: callers need it
-                // to tell a recoverable failure from one that has committed.
-                if self.idx == m.idx {
-                    self.reset(m);
-                }
-                Err(())
-            }
+            Err(())
         }
     }
 
@@ -124,20 +124,19 @@ impl Parser {
         let mut any = false;
         loop {
             let wm = self.mark();
-            match self.read_normal_word() {
-                Ok(_) => any = true,
-                Err(()) => {
-                    if self.idx != wm.idx {
-                        // There is no `try` inside this `lookAhead`, so the
-                        // failure is `readCompoundCommand`'s own and travels
-                        // out of it: `coproc {d;}$(` is a compound coproc that
-                        // fails here, which the `try` in `readCoProc` catches
-                        // and reads as a simple one instead.
-                        return Err(());
-                    }
-                    self.reset(wm);
-                    break;
+            if self.read_normal_word().is_ok() {
+                any = true;
+            } else {
+                if self.idx != wm.idx {
+                    // There is no `try` inside this `lookAhead`, so the
+                    // failure is `readCompoundCommand`'s own and travels
+                    // out of it: `coproc {d;}$(` is a compound coproc that
+                    // fails here, which the `try` in `readCoProc` catches
+                    // and reads as a simple one instead.
+                    return Err(());
                 }
+                self.reset(wm);
+                break;
             }
         }
         let pos_end = self.pos();
@@ -299,7 +298,7 @@ impl Parser {
             _ => return,
         };
         let mut pos = self.pos();
-        pos.column += offset as i64;
+        pos.column += columns(offset);
         self.problem_at(
             pos.clone(),
             pos,
@@ -352,7 +351,7 @@ impl Parser {
     }
 
     pub(super) fn read_subshell(&mut self) -> PResult<Token> {
-        self.called("explicit subshell", |p| p.read_subshell_body())
+        self.called("explicit subshell", Self::read_subshell_body)
     }
 
     fn read_subshell_body(&mut self) -> PResult<Token> {
@@ -377,7 +376,7 @@ impl Parser {
     }
 
     pub(super) fn read_brace_group(&mut self) -> PResult<Token> {
-        self.called("brace group", |p| p.read_brace_group_body())
+        self.called("brace group", Self::read_brace_group_body)
     }
 
     fn read_brace_group_body(&mut self) -> PResult<Token> {
@@ -532,7 +531,7 @@ impl Parser {
         }
         if self.consume_keyword("done").is_err() {
             self.problem_at(
-                do_pos.clone(),
+                do_pos,
                 do_end,
                 Severity::ErrorC,
                 1061,
@@ -566,7 +565,7 @@ impl Parser {
     }
 
     pub(super) fn read_if_clause(&mut self) -> PResult<Token> {
-        self.called("if expression", |p| p.read_if_clause_body())
+        self.called("if expression", Self::read_if_clause_body)
     }
 
     fn read_if_clause_body(&mut self) -> PResult<Token> {
@@ -582,35 +581,31 @@ impl Parser {
             self.allspacing();
             let m = self.mark();
             let r = if after_success {
-                self.many_attempt(|p| p.read_elif_part())
+                self.many_attempt(Self::read_elif_part)
             } else {
                 self.read_elif_part()
             };
-            match r {
-                Ok(c) => {
-                    clauses.push(c);
-                    after_success = true;
-                }
-                Err(()) => {
-                    if self.idx != m.idx {
-                        return Err(());
-                    }
-                    self.reset(m);
-                    break;
-                }
-            }
-        }
-        self.allspacing();
-        let m = self.mark();
-        let elses = match self.read_else_part() {
-            Ok(e) => e,
-            Err(()) => {
+            if let Ok(c) = r {
+                clauses.push(c);
+                after_success = true;
+            } else {
                 if self.idx != m.idx {
                     return Err(());
                 }
                 self.reset(m);
-                Vec::new()
+                break;
             }
+        }
+        self.allspacing();
+        let m = self.mark();
+        let elses = if let Ok(e) = self.read_else_part() {
+            e
+        } else {
+            if self.idx != m.idx {
+                return Err(());
+            }
+            self.reset(m);
+            Vec::new()
         };
         self.allspacing();
         if self.has_committed_failure() {
@@ -792,7 +787,7 @@ impl Parser {
     }
 
     pub(super) fn read_while_clause(&mut self) -> PResult<Token> {
-        self.called("while loop", |p| p.read_while_clause_body())
+        self.called("while loop", Self::read_while_clause_body)
     }
 
     fn read_while_clause_body(&mut self) -> PResult<Token> {
@@ -814,7 +809,7 @@ impl Parser {
     }
 
     pub(super) fn read_until_clause(&mut self) -> PResult<Token> {
-        self.called("until loop", |p| p.read_until_clause_body())
+        self.called("until loop", Self::read_until_clause_body)
     }
 
     fn read_until_clause_body(&mut self) -> PResult<Token> {
@@ -835,7 +830,7 @@ impl Parser {
     }
 
     pub(super) fn read_for_clause(&mut self) -> PResult<Token> {
-        self.called("for loop", |p| p.read_for_clause_body())
+        self.called("for loop", Self::read_for_clause_body)
     }
 
     fn read_for_clause_body(&mut self) -> PResult<Token> {
@@ -848,7 +843,7 @@ impl Parser {
         self.spacing();
         // arithmetic for: for ((init; cond; step))
         if self.peek() == Some('(') {
-            let id_span = (start.clone(), for_end.clone());
+            let id_span = (start, for_end);
             return self.called("arithmetic for condition", |p| {
                 p.read_arithmetic_delimiter(
                     '(',
@@ -922,7 +917,7 @@ impl Parser {
             }
         };
         let body = self.read_braced_or_do_group(&kw)?;
-        let id = self.next_id_between(start.clone(), for_end);
+        let id = self.next_id_between(start, for_end);
         Ok(Token::new(id, InnerToken::T_ForIn { var, items, body }))
     }
 
@@ -940,20 +935,17 @@ impl Parser {
                 break;
             }
             let m = self.mark();
-            match self.read_normal_word() {
-                Ok(w) => {
-                    items.push(w);
-                    self.spacing();
+            if let Ok(w) = self.read_normal_word() {
+                items.push(w);
+                self.spacing();
+            } else {
+                // `reluctantlyTill` ends on `<|> return []`, which only
+                // catches a failure that consumed nothing.
+                if self.idx != m.idx {
+                    return Err(());
                 }
-                Err(()) => {
-                    // `reluctantlyTill` ends on `<|> return []`, which only
-                    // catches a failure that consumed nothing.
-                    if self.idx != m.idx {
-                        return Err(());
-                    }
-                    self.reset(m);
-                    break;
-                }
+                self.reset(m);
+                break;
             }
         }
         if self.keyword_ahead("do") {
@@ -983,7 +975,7 @@ impl Parser {
     fn at_in_clause_end(&mut self) -> bool {
         match self.peek() {
             Some(';') => self.peek_at(1) != Some(';'),
-            Some('\n') | Some('\r') => true,
+            Some('\n' | '\r') => true,
             _ => self.keyword_ahead("do"),
         }
     }
@@ -991,7 +983,7 @@ impl Parser {
     /// `readBatsTest`: `@test <name> { ... }`, where <name> is everything on the
     /// line up to the last ` {`.
     pub(super) fn read_bats_test(&mut self) -> PResult<Token> {
-        self.called("bats @test", |p| p.read_bats_test_body())
+        self.called("bats @test", Self::read_bats_test_body)
     }
 
     fn read_bats_test_body(&mut self) -> PResult<Token> {
@@ -1017,7 +1009,7 @@ impl Parser {
     }
 
     pub(super) fn read_select_clause(&mut self) -> PResult<Token> {
-        self.called("select loop", |p| p.read_select_clause_body())
+        self.called("select loop", Self::read_select_clause_body)
     }
 
     fn read_select_clause_body(&mut self) -> PResult<Token> {
@@ -1051,12 +1043,12 @@ impl Parser {
             }
         };
         let body = self.read_do_group(&kw)?;
-        let id = self.next_id_between(start.clone(), sel_end);
+        let id = self.next_id_between(start, sel_end);
         Ok(Token::new(id, InnerToken::T_SelectIn { var, items, body }))
     }
 
     pub(super) fn read_case_clause(&mut self) -> PResult<Token> {
-        self.called("case expression", |p| p.read_case_clause_body())
+        self.called("case expression", Self::read_case_clause_body)
     }
 
     fn read_case_clause_body(&mut self) -> PResult<Token> {
@@ -1077,22 +1069,19 @@ impl Parser {
             self.allspacing();
             let m = self.mark();
             let r = if after_success {
-                self.many_attempt(|p| p.read_case_item())
+                self.many_attempt(Self::read_case_item)
             } else {
                 self.read_case_item()
             };
-            match r {
-                Ok(c) => {
-                    cases.push(c);
-                    after_success = true;
+            if let Ok(c) = r {
+                cases.push(c);
+                after_success = true;
+            } else {
+                if self.idx != m.idx {
+                    return Err(());
                 }
-                Err(()) => {
-                    if self.idx != m.idx {
-                        return Err(());
-                    }
-                    self.reset(m);
-                    break;
-                }
+                self.reset(m);
+                break;
             }
         }
         self.allspacing();
@@ -1197,7 +1186,7 @@ impl Parser {
 
     /// True at a case-clause terminator: `;;`, `;&`, or `;;&`.
     pub(super) fn at_case_terminator(&self) -> bool {
-        self.peek() == Some(';') && matches!(self.peek_at(1), Some(';') | Some('&'))
+        self.peek() == Some(';') && matches!(self.peek_at(1), Some(';' | '&'))
     }
 
     /// `readLineBreak; list <- (lookAhead readCaseSeparator >> return []) <|>
@@ -1213,14 +1202,13 @@ impl Parser {
             return Ok(Vec::new());
         }
         let m = self.mark();
-        match self.read_term() {
-            Some(list) => Ok(list),
-            None => {
-                if self.idx != m.idx {
-                    self.commit();
-                }
-                Err(())
+        if let Some(list) = self.read_term() {
+            Ok(list)
+        } else {
+            if self.idx != m.idx {
+                self.commit();
             }
+            Err(())
         }
     }
 
@@ -1242,14 +1230,14 @@ impl Parser {
         if name == "time" {
             return false;
         }
-        while matches!(self.input.get(i), Some(' ') | Some('\t')) {
+        while matches!(self.input.get(i), Some(' ' | '\t')) {
             i += 1;
         }
         if self.input.get(i) != Some(&'(') {
             return false;
         }
         i += 1;
-        while matches!(self.input.get(i), Some(' ') | Some('\t')) {
+        while matches!(self.input.get(i), Some(' ' | '\t')) {
             i += 1;
         }
         // `readWithoutFunction` is a bare `try` with no lookahead: a `(` after
@@ -1262,7 +1250,7 @@ impl Parser {
     /// Both this and the `function` keyword form are one `called "function"`
     /// production in Haskell, so both name the function in SC1073/SC1009.
     pub(super) fn read_posix_function(&mut self) -> PResult<Token> {
-        self.called("function", |p| p.read_posix_function_body())
+        self.called("function", Self::read_posix_function_body)
     }
 
     fn read_posix_function_body(&mut self) -> PResult<Token> {
@@ -1280,12 +1268,9 @@ impl Parser {
             p.read_function_parens()?;
             Ok(name)
         })(self);
-        let name = match signature {
-            Ok(n) => n,
-            Err(()) => {
-                self.reset(sm);
-                return Err(());
-            }
+        let Ok(name) = signature else {
+            self.reset(sm);
+            return Err(());
         };
         self.allspacing();
         let body = if self.peek() == Some('{') {
@@ -1338,7 +1323,7 @@ impl Parser {
     }
 
     pub(super) fn read_function_def(&mut self) -> PResult<Token> {
-        self.called("function", |p| p.read_function_def_body())
+        self.called("function", Self::read_function_def_body)
     }
 
     fn read_function_def_body(&mut self) -> PResult<Token> {
@@ -1367,7 +1352,7 @@ impl Parser {
             } else {
                 false
             };
-            if !has_parens && !had_spaces && matches!(p.peek(), Some('{') | Some('(')) {
+            if !has_parens && !had_spaces && matches!(p.peek(), Some('{' | '(')) {
                 let pos = p.pos();
                 p.problem_at(
                     pos.clone(),

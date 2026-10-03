@@ -1,8 +1,11 @@
 //! Variable and array checks from `ShellCheck.Analytics`.
-use super::common::*;
+use super::common::surround_with;
 use crate::analyzer_lib::is_true_assignment_source;
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{
+    DataSource, DataType, Out, Parameters, Scope, StackData, err, get_command_name, get_path, info,
+    style, warn, warn_with_fix, word_parts,
+};
+use crate::ast::{AssignmentMode, Id, InnerToken, Token};
 use crate::ast_lib;
 use crate::ast_lib::get_word_parts;
 use crate::ast_lib::is_command_substitution;
@@ -11,6 +14,7 @@ use crate::ast_lib::oversimplify;
 use crate::cfg;
 use crate::interface::Fix;
 use crate::interface::Shell;
+use crate::regex_lib::mk_regex;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -39,18 +43,14 @@ pub(super) fn check_subshell_assignment(params: &Parameters, _root: &Token, out:
                         write_token.id(),
                         2030,
                         &format!(
-                            "Modification of {} is local (to subshell caused by {}).",
-                            name, reason
+                            "Modification of {name} is local (to subshell caused by {reason})."
                         ),
                     );
                     info(
                         out,
                         read_token.id(),
                         2031,
-                        &format!(
-                            "{} was modified in a subshell. That change might be lost.",
-                            name
-                        ),
+                        &format!("{name} was modified in a subshell. That change might be lost."),
                     );
                 }
             }
@@ -76,7 +76,10 @@ pub(super) fn check_subshell_assignment(params: &Parameters, _root: &Token, out:
 pub(super) fn check_array_without_index(params: &Parameters, _root: &Token, out: &mut Out) {
     // doVariableFlowAnalysis readF writeF defaultSet (variableFlow params)
     let mut arrays: HashSet<String> = if params.shell == Shell::Bash {
-        ARRAY_VARIABLES.iter().map(|s| s.to_string()).collect()
+        ARRAY_VARIABLES
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect()
     } else {
         HashSet::new()
     };
@@ -129,7 +132,7 @@ pub(super) fn check_array_without_index(params: &Parameters, _root: &Token, out:
                         arrays.insert(name.clone());
                     }
                     // writeF _ expr name _
-                    _ => {
+                    DataType::DataString(_) => {
                         if is_indexed(place) {
                             arrays.insert(name.clone());
                         } else {
@@ -203,8 +206,7 @@ pub(super) fn check_array_value_used_as_index(params: &Parameters, _root: &Token
                             array_ref.id(),
                             2303,
                             &format!(
-                                "{} is an array value, not a key. Use directly or loop over keys instead.",
-                                name
+                                "{name} is an array value, not a key. Use directly or loop over keys instead."
                             ),
                         );
                     }
@@ -256,7 +258,7 @@ pub(super) fn check_prefix_assignment_reference(params: &Parameters, t: &Token, 
     if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
         let name = cfg::get_braced_reference(&ast_lib::oversimplify_concat(op));
         let path = get_path(params, t);
-        let id_path: Vec<Id> = path.iter().map(|x| x.id()).collect();
+        let id_path: Vec<Id> = path.iter().map(super::super::ast::Token::id).collect();
         // check: walk path until a T_SimpleCommand with vars and non-empty words.
         for node in &path {
             if let InnerToken::T_SimpleCommand { assignments, words } = &*node.inner
@@ -344,7 +346,7 @@ pub(super) fn check_suspicious_ifs(params: &Parameters, t: &Token, out: &mut Out
             out,
             value.id(),
             2141,
-            &format!("This backslash is literal. Did you mean IFS={} ?", r),
+            &format!("This backslash is literal. Did you mean IFS={r} ?"),
         );
     };
     let suggest2 = |out: &mut Out, desc: &str| {
@@ -353,8 +355,7 @@ pub(super) fn check_suspicious_ifs(params: &Parameters, t: &Token, out: &mut Out
             value.id(),
             2141,
             &format!(
-                "This IFS value contains {}. For tabs/linefeeds/escapes, use $'..', literal, or printf.",
-                desc
+                "This IFS value contains {desc}. For tabs/linefeeds/escapes, use $'..', literal, or printf."
             ),
         );
     };
@@ -421,12 +422,12 @@ pub(super) fn check_ps1_assignments(_params: &Parameters, t: &Token, out: &mut O
 
 fn enclosed_regex() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"\\\[.*\\\]").unwrap())
+    RE.get_or_init(|| mk_regex(r"\\\[.*\\\]"))
 }
 
 fn escape_regex() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"\\x1[Bb]|\\e|\x1b|\\033").unwrap())
+    RE.get_or_init(|| mk_regex(r"\\x1[Bb]|\\e|\x1b|\\033"))
 }
 
 fn contains_unescaped(s: &str) -> bool {
@@ -471,7 +472,7 @@ fn is_indexed(expr: &Token) -> bool {
 }
 
 fn commarray_literal(t: &Token) -> String {
-    use InnerToken::*;
+    use InnerToken::{T_IndexedElement, T_Literal, T_NormalWord};
     match &*t.inner {
         T_IndexedElement { value, .. } => commarray_literal(value),
         T_NormalWord(l) => l.iter().map(commarray_literal).collect(),
@@ -494,10 +495,10 @@ fn is_unmodified_parameter_expansion(t: &Token) -> bool {
 
 fn bps_is_indirection_part(t: &Token) -> Option<bool> {
     match &*t.inner {
-        InnerToken::T_DollarExpansion(_) => Some(true),
-        InnerToken::T_Backticked(_) => Some(true),
-        InnerToken::T_DollarBraced { .. } => Some(true),
-        InnerToken::T_DollarArithmetic(_) => Some(true),
+        InnerToken::T_DollarExpansion(_)
+        | InnerToken::T_Backticked(_)
+        | InnerToken::T_DollarBraced { .. }
+        | InnerToken::T_DollarArithmetic(_) => Some(true),
         InnerToken::T_Literal(s) => {
             if s.chars().all(cfg::is_variable_char) {
                 None
@@ -541,10 +542,7 @@ fn bps_check_first(first: &Token, out: &mut Out) {
                     out,
                     first.id(),
                     2296,
-                    &format!(
-                        "Parameter expansions can't start with {}. Double check syntax.",
-                        c
-                    ),
+                    &format!("Parameter expansions can't start with {c}. Double check syntax."),
                 );
             }
         }
@@ -627,10 +625,7 @@ fn caai_get_associative_arrays(root: &Token) -> std::collections::HashSet<String
                 return;
             }
             let name = get_command_name(t);
-            if !matches!(
-                name.as_deref(),
-                Some("declare") | Some("local") | Some("typeset")
-            ) {
+            if !matches!(name.as_deref(), Some("declare" | "local" | "typeset")) {
                 return;
             }
             let args = &words[1..];
@@ -760,9 +755,11 @@ fn avi_get_array_if_used_as_index<'a>(
             }
             // grandparent must be T_DollarBraced whose op word-parts are [Literal, index, Literal, ..]
             let grandparent = params.parent(parent_word)?;
-            let parent_list = match &*grandparent.inner {
-                InnerToken::T_DollarBraced { op, .. } => op,
-                _ => return None,
+            let InnerToken::T_DollarBraced {
+                op: parent_list, ..
+            } = &*grandparent.inner
+            else {
+                return None;
             };
             let gp_parts = word_parts(parent_list);
             if gp_parts.len() < 3 {
@@ -787,14 +784,16 @@ fn avi_get_array_if_used_as_index<'a>(
         }
         InnerToken::T_NormalWord(_) => {
             let parent = params.parent(t)?;
-            let parent_list = match &*parent.inner {
-                InnerToken::T_DollarBraced { op, .. } => op,
-                _ => return None,
+            let InnerToken::T_DollarBraced {
+                op: parent_list, ..
+            } = &*parent.inner
+            else {
+                return None;
             };
             let str = ast_lib::oversimplify_concat(t);
             let modifier = cfg::get_braced_modifier(&str);
             let _ = parent_list;
-            if !modifier.starts_with(&format!("[{}]", name)) {
+            if !modifier.starts_with(&format!("[{name}]")) {
                 return None;
             }
             let pstr = ast_lib::oversimplify_concat(match &*parent.inner {
@@ -838,7 +837,7 @@ fn avi_get_array_if_used_as_index<'a>(
     }
 }
 
-/// `decodeEscapes` for `$'..'` contents (ANSI-C), matching ASTLib.
+/// `decodeEscapes` for `$'..'` contents (ANSI-C), matching `ASTLib`.
 fn decode_escapes(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::new();
@@ -846,55 +845,27 @@ fn decode_escapes(s: &str) -> String {
     while i < chars.len() {
         if chars[i] == '\\' && i + 1 < chars.len() {
             let c = chars[i + 1];
+            let simple = match c {
+                'a' => Some('\u{07}'),
+                'b' => Some('\u{08}'),
+                'e' | 'E' => Some('\u{1B}'),
+                'f' => Some('\u{0C}'),
+                'n' => Some('\n'),
+                'r' => Some('\r'),
+                't' => Some('\t'),
+                'v' => Some('\u{0B}'),
+                '\\' => Some('\\'),
+                '\'' => Some('\''),
+                '"' => Some('"'),
+                '?' => Some('?'),
+                _ => None,
+            };
+            if let Some(ch) = simple {
+                out.push(ch);
+                i += 2;
+                continue;
+            }
             match c {
-                'a' => {
-                    out.push('\u{07}');
-                    i += 2;
-                }
-                'b' => {
-                    out.push('\u{08}');
-                    i += 2;
-                }
-                'e' | 'E' => {
-                    out.push('\u{1B}');
-                    i += 2;
-                }
-                'f' => {
-                    out.push('\u{0C}');
-                    i += 2;
-                }
-                'n' => {
-                    out.push('\n');
-                    i += 2;
-                }
-                'r' => {
-                    out.push('\r');
-                    i += 2;
-                }
-                't' => {
-                    out.push('\t');
-                    i += 2;
-                }
-                'v' => {
-                    out.push('\u{0B}');
-                    i += 2;
-                }
-                '\\' => {
-                    out.push('\\');
-                    i += 2;
-                }
-                '\'' => {
-                    out.push('\'');
-                    i += 2;
-                }
-                '"' => {
-                    out.push('"');
-                    i += 2;
-                }
-                '?' => {
-                    out.push('?');
-                    i += 2;
-                }
                 'x' => {
                     let hex: String = chars[i + 2..].iter().take(2).collect();
                     match u32::from_str_radix(&hex, 16) {
@@ -930,18 +901,15 @@ fn decode_escapes(s: &str) -> String {
                 }
                 _ => {
                     let oct: String = chars[i + 1..].iter().take(3).collect();
-                    match u32::from_str_radix(&oct, 8) {
-                        Ok(n) => {
-                            if let Some(ch) = char::from_u32(n % 256) {
-                                out.push(ch);
-                            }
-                            i += 1 + oct.len();
+                    if let Ok(n) = u32::from_str_radix(&oct, 8) {
+                        if let Some(ch) = char::from_u32(n % 256) {
+                            out.push(ch);
                         }
-                        _ => {
-                            out.push('\\');
-                            out.push(c);
-                            i += 2;
-                        }
+                        i += 1 + oct.len();
+                    } else {
+                        out.push('\\');
+                        out.push(c);
+                        i += 2;
                     }
                 }
             }
@@ -953,9 +921,12 @@ fn decode_escapes(s: &str) -> String {
     out
 }
 
-/// `getLiteralString` mirroring ASTLib (decodes `$'..'`).
+/// `getLiteralString` mirroring `ASTLib` (decodes `$'..'`).
 fn decoded_literal_string(t: &Token) -> Option<String> {
-    use InnerToken::*;
+    use InnerToken::{
+        T_DollarDoubleQuoted, T_DollarSingleQuoted, T_DoubleQuoted, T_Literal, T_NormalWord,
+        T_ParamSubSpecialChar, T_SingleQuoted, TA_Expansion,
+    };
     match &*t.inner {
         T_Literal(s) | T_SingleQuoted(s) | T_ParamSubSpecialChar(s) => Some(s.clone()),
         T_DollarSingleQuoted(s) => Some(decode_escapes(s)),

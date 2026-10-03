@@ -1,6 +1,11 @@
 //! Data-flow checks (CFG based) from `ShellCheck.Analytics`.
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{
+    Out, Parameters, StackData, dist, fix_with, get_all_flags, get_command, get_command_basename,
+    get_path, info, info_with_fix, is_array_expansion, is_counting_reference, is_param_to,
+    is_quote_free, is_quoted_alternative_reference, replace_end, replace_start, style_with_fix,
+    used_as_command_name, warn,
+};
+use crate::ast::{Id, InnerToken, Token};
 use crate::ast_lib::oversimplify_concat;
 use crate::cfg::{CFVariableProp, get_braced_modifier, get_braced_reference, is_variable_char};
 use crate::cfg_analysis::SpaceStatus;
@@ -31,7 +36,7 @@ pub(super) fn check_unused_assignments(params: &Parameters, _root: &Token, out: 
     }
 
     // unused = assignments not in references (Map.assocs -> sorted by name).
-    for (name, token) in assignments.iter() {
+    for (name, token) in &assignments {
         if references.contains(name) {
             continue;
         }
@@ -42,10 +47,7 @@ pub(super) fn check_unused_assignments(params: &Parameters, _root: &Token, out: 
             out,
             token.id(),
             2034,
-            &format!(
-                "{} appears unused. Verify use (or export if used externally).",
-                name
-            ),
+            &format!("{name} appears unused. Verify use (or export if used externally)."),
         );
     }
 }
@@ -100,14 +102,14 @@ pub(super) fn check_extra_masked_returns(params: &Parameters, root: &Token, out:
     let mut masked: Vec<Token> = Vec::new();
     transparent.visit_preorder(&mut |t| {
         let lists: Vec<&Token> = match &*t.inner {
-            InnerToken::T_Arithmetic(list) => vec![list],
-            InnerToken::T_Array(list) => all_but_last_simple_commands(list),
-            InnerToken::T_Condition { token, .. } => vec![token],
-            InnerToken::T_DoubleQuoted(list) => all_but_last_simple_commands(list),
+            InnerToken::T_Arithmetic(list)
+            | InnerToken::T_Condition { token: list, .. }
+            | InnerToken::T_HereString(list) => vec![list],
+            InnerToken::T_Array(list)
+            | InnerToken::T_DoubleQuoted(list)
+            | InnerToken::T_NormalWord(list) => all_but_last_simple_commands(list),
             InnerToken::T_HereDoc { body, .. } => body.iter().collect(),
-            InnerToken::T_HereString(word) => vec![word],
-            InnerToken::T_NormalWord(parts) => all_but_last_simple_commands(parts),
-            InnerToken::T_Pipeline { commands, .. } if !params.has_pipefail => {
+            InnerToken::T_Pipeline { commands, .. } if !params.has_pipefail() => {
                 all_but_last_simple_commands(commands)
             }
             InnerToken::T_ProcSub { list, .. } => list.iter().collect(),
@@ -122,7 +124,7 @@ pub(super) fn check_extra_masked_returns(params: &Parameters, root: &Token, out:
         for list in lists {
             list.visit_preorder(&mut |n| match &*n.inner {
                 InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => {
-                    masked.push(n.clone())
+                    masked.push(n.clone());
                 }
                 InnerToken::T_Condition { .. } => masked.push(n.clone()),
                 _ => {}
@@ -210,10 +212,7 @@ fn is_mask_deliberate(params: &Parameters, t: &Token) -> bool {
         let InnerToken::T_Redirecting { cmd, .. } = &*only.inner else {
             return false;
         };
-        matches!(
-            get_command_basename(cmd).as_deref(),
-            Some("true") | Some(":")
-        )
+        matches!(get_command_basename(cmd).as_deref(), Some("true" | ":"))
     })
 }
 
@@ -221,7 +220,7 @@ fn is_mask_deliberate(params: &Parameters, t: &Token) -> bool {
 /// function where `set -e` does not apply — in a condition, or inside a command
 /// substitution that does not inherit errexit.
 pub(super) fn check_set_e_suppressed(params: &Parameters, root: &Token, out: &mut Out) {
-    if !params.has_set_e {
+    if !params.has_set_e() {
         return;
     }
     // `functions t`: every function this script defines, by name.
@@ -268,7 +267,7 @@ pub(super) fn check_set_e_suppressed(params: &Parameters, root: &Token, out: &mu
         };
         // `errExitEnabled`: a substitution that re-enables it is fine.
         let err_exit_enabled =
-            |t: &Token| params.has_inherit_errexit || crate::analyzer_lib::contains_set_e(t);
+            |t: &Token| params.has_inherit_errexit() || crate::analyzer_lib::contains_set_e(t);
 
         // Walk child-then-parent up the path, as `go (child:parent:rest)` does.
         let path = get_path(params, cmd);
@@ -277,29 +276,29 @@ pub(super) fn check_set_e_suppressed(params: &Parameters, root: &Token, out: &mu
             let (child, parent) = (&pair[0], &pair[1]);
             match &*parent.inner {
                 InnerToken::T_Banged(condition) if child.id() == condition.id() => {
-                    inform_conditional("a ! condition", out)
+                    inform_conditional("a ! condition", out);
                 }
                 InnerToken::T_AndIf { lhs, .. } if child.id() == lhs.id() => {
-                    inform_conditional("an && condition", out)
+                    inform_conditional("an && condition", out);
                 }
                 InnerToken::T_OrIf { lhs, .. } if child.id() == lhs.id() => {
-                    inform_conditional("an || condition", out)
+                    inform_conditional("an || condition", out);
                 }
                 InnerToken::T_IfExpression { clauses, .. }
                     if clauses.iter().any(|(conds, _)| is_in(child, conds)) =>
                 {
-                    inform_conditional("an 'if' condition", out)
+                    inform_conditional("an 'if' condition", out);
                 }
                 InnerToken::T_UntilExpression { condition, .. } if is_in(child, condition) => {
-                    inform_conditional("an 'until' condition", out)
+                    inform_conditional("an 'until' condition", out);
                 }
                 InnerToken::T_WhileExpression { condition, .. } if is_in(child, condition) => {
-                    inform_conditional("a 'while' condition", out)
+                    inform_conditional("a 'while' condition", out);
                 }
                 InnerToken::T_DollarExpansion(_) | InnerToken::T_Backticked(_)
                     if !err_exit_enabled(parent) =>
                 {
-                    inform_uninherited(out)
+                    inform_uninherited(out);
                 }
                 _ => {}
             }
@@ -328,11 +327,11 @@ fn check_unassigned_references_impl(
 
     // read map (first occurrence wins), write set.
     let mut read_map: BTreeMap<String, Token> = BTreeMap::new();
-    let mut write_map: BTreeMap<String, ()> = BTreeMap::new();
+    let mut write_map: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for sd in flow {
         match sd {
             StackData::Assignment(_, _, name, _) => {
-                write_map.insert(name.clone(), ());
+                write_map.insert(name.clone());
             }
             StackData::Reference(_, place, name) => {
                 read_map
@@ -350,14 +349,14 @@ fn check_unassigned_references_impl(
         .collect();
 
     let written_vars: Vec<String> = write_map
-        .keys()
+        .iter()
         .filter(|k| crate::cfg::is_variable_name(k))
         .cloned()
         .collect();
 
     // unassigned = readMap - writeMap - defaultAssigned, sorted by name.
-    for (var, place) in read_map.iter() {
-        if write_map.contains_key(var) || default_assigned.contains(var.as_str()) {
+    for (var, place) in &read_map {
+        if write_map.contains(var) || default_assigned.contains(var.as_str()) {
             continue;
         }
         if !crate::cfg::is_variable_name(var) {
@@ -369,18 +368,16 @@ fn check_unassigned_references_impl(
         if include_globals || is_local(var) {
             // SC2154
             let optional_tip = if COMMON_COMMANDS.contains(&var.as_str()) {
-                format!(" (for output from commands, use \"$({} ...)\" )", var)
+                format!(" (for output from commands, use \"$({var} ...)\" )")
             } else {
-                match get_best_match(var, &written_vars) {
-                    Some(m) => format!(" (did you mean '{}'?)", m),
-                    None => String::new(),
-                }
+                get_best_match(var, &written_vars)
+                    .map_or_else(String::new, |m| format!(" (did you mean '{m}'?)"))
             };
             warn(
                 out,
                 place.id(),
                 2154,
-                &format!("{} is referenced but not assigned{}.", var, optional_tip),
+                &format!("{var} is referenced but not assigned{optional_tip}."),
             );
         } else {
             // SC2153
@@ -389,10 +386,7 @@ fn check_unassigned_references_impl(
                     out,
                     place.id(),
                     2153,
-                    &format!(
-                        "Possible misspelling: {} may not be assigned. Did you mean {}?",
-                        var, m
-                    ),
+                    &format!("Possible misspelling: {var} may not be assigned. Did you mean {m}?"),
                 );
             }
         }
@@ -400,7 +394,7 @@ fn check_unassigned_references_impl(
 }
 
 fn is_local(var: &str) -> bool {
-    var.chars().any(|c| c.is_lowercase())
+    var.chars().any(char::is_lowercase)
 }
 
 fn match_score(var: &str, candidate: &str) -> usize {
@@ -503,7 +497,7 @@ fn check_spacefulness_cfg_impl(
 
     let is_clean = compute_is_clean(params, id, &name);
     // dirtyPass == not isClean  (dirtyPass is always true here)
-    if dirty_pass != !is_clean {
+    if dirty_pass == is_clean {
         return;
     }
 
@@ -594,7 +588,7 @@ pub(super) fn quotes_may_conflict_with_sc2281(params: &Parameters, t: &Token) ->
     // path[2] is T_SimpleCommand whose first word == normalword.
     match &*path[2].inner {
         InnerToken::T_SimpleCommand { words, .. } => {
-            words.first().map(|w| w.id()) == Some(parent_id)
+            words.first().map(super::super::ast::Token::id) == Some(parent_id)
         }
         _ => false,
     }

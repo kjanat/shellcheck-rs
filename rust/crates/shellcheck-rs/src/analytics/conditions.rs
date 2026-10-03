@@ -8,8 +8,12 @@ use crate::analyzer_lib::is_command;
 use crate::analyzer_lib::is_confused_glob_regex;
 use crate::analyzer_lib::is_function_body;
 use crate::analyzer_lib::is_test_command;
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{
+    Out, Parameters, StackData, err, err_with_fix, fix_with, get_path, has_floating_point, info,
+    info_with_fix, is_array_expansion, replace_end, replace_start, style, style_with_fix, warn,
+    warn_with_fix, word_parts,
+};
+use crate::ast::{CaseType, ConditionType, Id, InnerToken, Token};
 use crate::ast_lib;
 use crate::ast_lib::get_leading_unquoted_string;
 use crate::ast_lib::get_literal_string;
@@ -30,36 +34,36 @@ use crate::interface::Shell;
 
 pub(super) fn check_shorthand_if(params: &Parameters, x: &Token, out: &mut Out) {
     // x@(T_OrIf _ (T_AndIf id _ b) (T_Pipeline _ _ t))
-    let (or_lhs, or_rhs) = match &*x.inner {
-        InnerToken::T_OrIf { lhs, rhs } => (lhs, rhs),
-        _ => return,
+    let InnerToken::T_OrIf {
+        lhs: or_lhs,
+        rhs: or_rhs,
+    } = &*x.inner
+    else {
+        return;
     };
     let (and_id, b) = match &*or_lhs.inner {
         InnerToken::T_AndIf { rhs, .. } => (or_lhs.id(), rhs),
         _ => return,
     };
-    let commands = match &*or_rhs.inner {
-        InnerToken::T_Pipeline { commands, .. } => commands,
-        _ => return,
+    let InnerToken::T_Pipeline { commands, .. } = &*or_rhs.inner else {
+        return;
     };
 
     // isOk [t] = isAssignment t || basename in [echo, exit, return, printf, true, :]
     let is_ok = if commands.len() == 1 {
         let cmd = &commands[0];
         is_assignment(cmd)
-            || get_command_basename(cmd)
-                .map(|name| {
-                    matches!(
-                        name.as_str(),
-                        "echo" | "exit" | "return" | "printf" | "true" | ":"
-                    )
-                })
-                .unwrap_or(false)
+            || get_command_basename(cmd).is_some_and(|name| {
+                matches!(
+                    name.as_str(),
+                    "echo" | "exit" | "return" | "printf" | "true" | ":"
+                )
+            })
     } else {
         false
     };
 
-    if !(is_ok || in_condition(params, x)) && !is_test_command(b) {
+    if !is_ok && !in_condition(params, x) && !is_test_command(b) {
         info(
             out,
             and_id,
@@ -122,16 +126,13 @@ pub(super) fn check_number_comparisons(params: &Parameters, t: &Token, out: &mut
                     out,
                     id,
                     2073,
-                    &format!("Escape \\{} to prevent it redirecting.", op),
+                    &format!("Escape \\{op} to prevent it redirecting."),
                 ),
                 _ => err(
                     out,
                     id,
                     2073,
-                    &format!(
-                        "Escape \\{} to prevent it redirecting (or switch to [[ .. ]]).",
-                        op
-                    ),
+                    &format!("Escape \\{op} to prevent it redirecting (or switch to [[ .. ]])."),
                 ),
             }
         }
@@ -178,7 +179,7 @@ pub(super) fn check_double_bracket_operators(_params: &Parameters, t: &Token, ou
             out,
             t.id(),
             2075,
-            &format!("Escaping {} is required in [..], but invalid in [[..]]", op),
+            &format!("Escaping {op} is required in [..], but invalid in [[..]]"),
         );
     }
 }
@@ -263,8 +264,8 @@ pub(super) fn check_constant_nullary(_params: &Parameters, t: &Token, out: &mut 
 
 /// SC2053 / SC2081 / SC2330 — `checkComparisonAgainstGlob`.
 pub(super) fn check_comparison_against_glob(params: &Parameters, t: &Token, out: &mut Out) {
-    use ConditionType::*;
-    use InnerToken::*;
+    use ConditionType::{DoubleBracket, SingleBracket};
+    use InnerToken::{T_DollarBraced, T_NormalWord, TC_Binary};
     if let TC_Binary { typ, op, rhs, .. } = &*t.inner {
         let op_is_eq = matches!(op.as_str(), "=" | "==" | "!=");
         // Clause 1: [[ x == $unquoted ]] where rhs is a lone T_DollarBraced word.
@@ -278,10 +279,7 @@ pub(super) fn check_comparison_against_glob(params: &Parameters, t: &Token, out:
                 out,
                 rhs.id(),
                 2053,
-                &format!(
-                    "Quote the right-hand side of {} in [[ ]] to prevent glob matching.",
-                    op
-                ),
+                &format!("Quote the right-hand side of {op} in [[ ]] to prevent glob matching."),
             );
             return;
         }
@@ -330,7 +328,7 @@ pub(super) fn check_case_against_glob(_params: &Parameters, t: &Token, out: &mut
 
 /// SC2055 / SC2056 / SC2252 — `checkOrNeq`.
 pub(super) fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
-    use InnerToken::*;
+    use InnerToken::{T_OrIf, TA_Binary, TC_Binary, TC_Or};
     match &*t.inner {
         // Test-level "or": [ x != y -o x != z ]
         TC_Or { typ, lhs, rhs, .. } => {
@@ -364,10 +362,7 @@ pub(super) fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
                     out,
                     t.id(),
                     2055,
-                    &format!(
-                        "You probably wanted {} here, otherwise it's always true.",
-                        conj
-                    ),
+                    &format!("You probably wanted {conj} here, otherwise it's always true."),
                 );
             }
         }
@@ -418,7 +413,7 @@ pub(super) fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
 
 /// SC2333 / SC2334 — `checkAndEq`.
 pub(super) fn check_and_eq(_params: &Parameters, t: &Token, out: &mut Out) {
-    use InnerToken::*;
+    use InnerToken::{T_AndIf, TA_Binary, TC_And, TC_Binary};
     match &*t.inner {
         // Test-level "and": [ x = y -a x = z ]
         TC_And { typ, lhs, rhs, .. } => {
@@ -450,10 +445,7 @@ pub(super) fn check_and_eq(_params: &Parameters, t: &Token, out: &mut Out) {
                     out,
                     t.id(),
                     2333,
-                    &format!(
-                        "You probably wanted {} here, otherwise it's always false.",
-                        conj
-                    ),
+                    &format!("You probably wanted {conj} here, otherwise it's always false."),
                 );
             }
         }
@@ -591,9 +583,8 @@ pub(super) fn check_globbed_regex(_params: &Parameters, t: &Token, out: &mut Out
 }
 
 pub(super) fn check_test_redirects(_params: &Parameters, t: &Token, out: &mut Out) {
-    let (redirs, cmd) = match &*t.inner {
-        InnerToken::T_Redirecting { redirs, cmd } => (redirs, cmd),
-        _ => return,
+    let InnerToken::T_Redirecting { redirs, cmd } = &*t.inner else {
+        return;
     };
     if !crate::analyzer_lib::is_command(cmd, "test") {
         return;
@@ -654,8 +645,8 @@ pub(super) fn check_char_range_glob(params: &Parameters, t: &Token, out: &mut Ou
 
 /// SC2107/2108/2109/2110/2166 — `checkConditionalAndOrs`.
 pub(super) fn check_conditional_and_ors(_params: &Parameters, t: &Token, out: &mut Out) {
-    use ConditionType::*;
-    use InnerToken::*;
+    use ConditionType::{DoubleBracket, SingleBracket};
+    use InnerToken::{TC_And, TC_Or};
     match &*t.inner {
         TC_And {
             typ: SingleBracket,
@@ -739,7 +730,7 @@ pub(super) fn check_test_argument_splitting(params: &Parameters, t: &Token, out:
                 // Ksh appears to stop processing after unrecognized tokens.
                 let ksh_ops: Vec<String> = "bcdfgkprsuwxLhNOGRS"
                     .chars()
-                    .map(|c| format!("-{}", c))
+                    .map(|c| format!("-{c}"))
                     .collect();
                 if ksh_ops.iter().any(|o| o == op) {
                     warn(
@@ -747,8 +738,7 @@ pub(super) fn check_test_argument_splitting(params: &Parameters, t: &Token, out:
                         token.id(),
                         2245,
                         &format!(
-                            "{} only applies to the first expansion of this glob. Use a loop to check any/all.",
-                            op
+                            "{op} only applies to the first expansion of this glob. Use a loop to check any/all."
                         ),
                     );
                 }
@@ -757,7 +747,7 @@ pub(super) fn check_test_argument_splitting(params: &Parameters, t: &Token, out:
                     out,
                     token.id(),
                     2144,
-                    &format!("{} doesn't work with globs. Use a for loop.", op),
+                    &format!("{op} doesn't work with globs. Use a for loop."),
                 );
             }
         }
@@ -788,12 +778,11 @@ pub(super) fn check_test_argument_splitting(params: &Parameters, t: &Token, out:
             }
         }
         InnerToken::TC_Binary { typ, op, lhs, rhs } => {
+            tas_check_all(params, *typ, lhs, out);
             if matches!(op.as_str(), "=" | "==" | "!=" | "=~") {
-                tas_check_all(params, *typ, lhs, out);
                 tas_check_arrays(params, *typ, rhs, out);
                 tas_check_braces(params, *typ, rhs, out);
             } else {
-                tas_check_all(params, *typ, lhs, out);
                 tas_check_all(params, *typ, rhs, out);
             }
         }
@@ -811,19 +800,19 @@ pub(super) fn check_trailing_bracket(_params: &Parameters, t: &Token, out: &mut 
 }
 
 pub(super) fn check_return_against_zero(params: &Parameters, t: &Token, out: &mut Out) {
-    use InnerToken::*;
+    use InnerToken::{TA_Binary, TA_Sequence, TA_Unary, TC_Binary};
     match &*t.inner {
         TC_Binary { op, lhs, rhs, .. } => rz_check(params, t, op, lhs, rhs, out),
         TA_Binary { op, lhs, rhs }
             if matches!(op.as_str(), ">" | "<" | ">=" | "<=" | "==" | "!=") =>
         {
-            rz_check(params, t, op, lhs, rhs, out)
+            rz_check(params, t, op, lhs, rhs, out);
         }
         TA_Unary { op, operand } if op == "!" && is_exit_code(operand) => {
-            rz_message(params, t, checks_success_lhs("!"), operand.id(), out)
+            rz_message(params, t, checks_success_lhs("!"), operand.id(), out);
         }
         TA_Sequence(v) if v.len() == 1 && is_exit_code(&v[0]) => {
-            rz_message(params, t, false, v[0].id(), out)
+            rz_message(params, t, false, v[0].id(), out);
         }
         _ => {}
     }
@@ -956,7 +945,7 @@ pub(super) fn check_subshelled_tests(params: &Parameters, t: &Token, out: &mut O
 }
 
 pub(super) fn check_useless_bang(params: &Parameters, t: &Token, out: &mut Out) {
-    if !params.has_set_e {
+    if !params.has_set_e() {
         return;
     }
     for c in non_returning_commands(params, t) {
@@ -966,7 +955,7 @@ pub(super) fn check_useless_bang(params: &Parameters, t: &Token, out: &mut Out) 
 
 /// SC2265 / SC2266 — `checkBadTestAndOr`.
 pub(super) fn check_bad_test_and_or(params: &Parameters, t: &Token, out: &mut Out) {
-    use InnerToken::*;
+    use InnerToken::{T_Backgrounded, T_Pipeline};
     match &*t.inner {
         T_Pipeline {
             separators,
@@ -1041,7 +1030,7 @@ pub(super) fn check_comparison_with_leading_x(params: &Parameters, t: &Token, ou
             if ast_lib::get_literal_string(cmd).as_deref() == Some("test")
                 && matches!(
                     ast_lib::get_literal_string(op).as_deref(),
-                    Some("=") | Some("==") | Some("!=")
+                    Some("=" | "==" | "!=")
                 )
             {
                 leading_x_check(params, &words[1], &words[3], out);
@@ -1057,7 +1046,7 @@ pub(super) fn check_unary_test_a(params: &Parameters, t: &Token, out: &mut Out) 
     check_unary_test_a_impl(params, t, out);
 }
 
-fn concat_strings(v: Vec<String>) -> String {
+fn concat_strings(v: &[String]) -> String {
     v.concat()
 }
 
@@ -1070,7 +1059,7 @@ fn is_exit_code(t: &Token) -> bool {
     if parts.len() == 1
         && let InnerToken::T_DollarBraced { op, .. } = &*parts[0].inner
     {
-        return concat_strings(oversimplify(op)) == "?";
+        return concat_strings(&oversimplify(op)) == "?";
     }
     false
 }
@@ -1086,13 +1075,11 @@ fn checks_success_rhs(op: &str) -> bool {
 fn is_only_test_in_command(params: &Parameters, t: &Token) -> bool {
     let mut cur = t;
     loop {
-        let p = match params.parent(cur) {
-            Some(p) => p,
-            None => return false,
+        let Some(p) = params.parent(cur) else {
+            return false;
         };
         match &*p.inner {
-            InnerToken::T_Condition { .. } => return true,
-            InnerToken::T_Arithmetic(_) => return true,
+            InnerToken::T_Condition { .. } | InnerToken::T_Arithmetic(_) => return true,
             InnerToken::TA_Sequence(v) if v.len() == 1 => {
                 if let Some(gp) = params.parent(p)
                     && matches!(&*gp.inner, InnerToken::T_Arithmetic(_))
@@ -1101,24 +1088,27 @@ fn is_only_test_in_command(params: &Parameters, t: &Token) -> bool {
                 }
                 cur = p;
             }
-            InnerToken::TC_Unary { op, .. } if op == "!" => cur = p,
-            InnerToken::TA_Unary { op, .. } if op == "!" => cur = p,
-            InnerToken::TC_Group { .. } => cur = p,
-            InnerToken::TA_Parenthesis(_) => cur = p,
+            InnerToken::TC_Unary { op, .. } | InnerToken::TA_Unary { op, .. } if op == "!" => {
+                cur = p;
+            }
+            InnerToken::TC_Group { .. } | InnerToken::TA_Parenthesis(_) => cur = p,
             _ => return false,
         }
     }
 }
 
 fn get_first_command_in_function(t: &Token) -> &Token {
-    use InnerToken::*;
+    use InnerToken::{
+        T_AndIf, T_Annotation, T_BraceGroup, T_Function, T_IfExpression, T_OrIf, T_Pipeline,
+        T_Redirecting, T_Subshell,
+    };
     match &*t.inner {
         T_Function { body, .. } => get_first_command_in_function(body),
-        T_BraceGroup(cmds) if !cmds.is_empty() => get_first_command_in_function(&cmds[0]),
-        T_Subshell(cmds) if !cmds.is_empty() => get_first_command_in_function(&cmds[0]),
+        T_BraceGroup(cmds) | T_Subshell(cmds) if !cmds.is_empty() => {
+            get_first_command_in_function(&cmds[0])
+        }
         T_Annotation { token, .. } => get_first_command_in_function(token),
-        T_AndIf { lhs, .. } => get_first_command_in_function(lhs),
-        T_OrIf { lhs, .. } => get_first_command_in_function(lhs),
+        T_AndIf { lhs, .. } | T_OrIf { lhs, .. } => get_first_command_in_function(lhs),
         T_Pipeline { commands, .. } if !commands.is_empty() => {
             get_first_command_in_function(&commands[0])
         }
@@ -1149,13 +1139,11 @@ fn is_first_command_in_function(params: &Parameters, t: &Token) -> bool {
             None => break,
         }
     }
-    let func = match func {
-        Some(f) => f,
-        None => return false,
+    let Some(func) = func else {
+        return false;
     };
-    let cmd = match get_closest_command(params, t) {
-        Some(c) => c,
-        None => return false,
+    let Some(cmd) = get_closest_command(params, t) else {
+        return false;
     };
     cmd.id() == get_first_command_in_function(func).id()
 }
@@ -1176,8 +1164,7 @@ fn rz_message(params: &Parameters, t: &Token, for_success: bool, id: Id, out: &m
             id,
             2181,
             &format!(
-                "Check exit code directly with e.g. 'if {}mycmd;', not indirectly with $?.",
-                prefix
+                "Check exit code directly with e.g. 'if {prefix}mycmd;', not indirectly with $?."
             ),
         );
     }
@@ -1190,10 +1177,7 @@ fn has_metachars(s: &str) -> bool {
 
 /// `isConstantNonRe`: a literal with no regex metacharacters.
 fn is_constant_non_re(t: &Token) -> bool {
-    match get_literal_string(t) {
-        Some(s) => !has_metachars(&s),
-        None => false,
-    }
+    get_literal_string(t).is_some_and(|s| !has_metachars(&s))
 }
 
 fn drop_last<T>(v: &[T]) -> &[T] {
@@ -1212,18 +1196,15 @@ fn non_returning_commands<'a>(params: &Parameters, t: &'a Token) -> Vec<&'a Toke
             }
         }
         InnerToken::T_Subshell(list) => drop_last(list).iter().collect(),
-        InnerToken::T_WhileExpression { condition, body } => {
+        InnerToken::T_WhileExpression { condition, body }
+        | InnerToken::T_UntilExpression { condition, body } => {
             let mut v: Vec<&Token> = drop_last(condition).iter().collect();
             v.extend(body.iter());
             v
         }
-        InnerToken::T_UntilExpression { condition, body } => {
-            let mut v: Vec<&Token> = drop_last(condition).iter().collect();
-            v.extend(body.iter());
-            v
+        InnerToken::T_ForIn { body, .. } | InnerToken::T_ForArithmetic { body, .. } => {
+            body.iter().collect()
         }
-        InnerToken::T_ForIn { body, .. } => body.iter().collect(),
-        InnerToken::T_ForArithmetic { body, .. } => body.iter().collect(),
         InnerToken::T_Annotation { token, .. } => non_returning_commands(params, token),
         InnerToken::T_IfExpression { clauses, elses } => {
             let mut v: Vec<&Token> = Vec::new();
@@ -1306,10 +1287,10 @@ fn esc(typ: ConditionType) -> &'static str {
 fn seqv(op: &str, typ: ConditionType) -> String {
     let e = esc(typ);
     match op {
-        "-ge" => format!("! a {}< b", e),
-        "-gt" => format!("{}>", e),
-        "-le" => format!("! a {}> b", e),
-        "-lt" => format!("{}<", e),
+        "-ge" => format!("! a {e}< b"),
+        "-gt" => format!("{e}>"),
+        "-le" => format!("! a {e}> b"),
+        "-lt" => format!("{e}<"),
         "-eq" => "=".to_string(),
         "-ne" => "!=".to_string(),
         _ => "the string equivalent".to_string(),
@@ -1336,7 +1317,7 @@ fn is_fraction(t: &Token) -> bool {
 }
 
 /// `matchRegex "^[-+]?[0-9]+\.[0-9]+$"` — implemented directly to avoid a regex dep.
-fn matches_float(s: &str) -> bool {
+const fn matches_float(s: &str) -> bool {
     let bytes = s.as_bytes();
     let mut i = 0usize;
     let n = bytes.len();
@@ -1389,7 +1370,7 @@ fn is_num(params: &Parameters, t: &Token) -> bool {
 }
 
 /// `numChar x = isDigit x || x `elem` "+-. "`.
-fn num_char(c: char) -> bool {
+const fn num_char(c: char) -> bool {
     c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | ' ')
 }
 
@@ -1631,8 +1612,9 @@ fn sst_is_test_structure(t: &Token) -> bool {
         } if separators.is_empty() && commands.len() == 1 => {
             if let InnerToken::T_Redirecting { cmd, .. } = &*commands[0].inner {
                 match &*cmd.inner {
-                    InnerToken::T_BraceGroup(ts) => ts.iter().all(sst_is_test_structure),
-                    InnerToken::T_Subshell(ts) => ts.iter().all(sst_is_test_structure),
+                    InnerToken::T_BraceGroup(ts) | InnerToken::T_Subshell(ts) => {
+                        ts.iter().all(sst_is_test_structure)
+                    }
                     _ => sst_is_test_command(t),
                 }
             } else {
@@ -1669,27 +1651,25 @@ fn sst_is_compound_condition(path: &[Token]) -> bool {
     // dropWhile skippable over the tail (parents) of the path.
     let tail = if path.len() > 1 { &path[1..] } else { &[][..] };
     let mut iter = tail.iter().skip_while(|t| sst_skippable(t));
-    match iter.next() {
-        Some(t) => matches!(
+    iter.next().is_some_and(|t| {
+        matches!(
             &*t.inner,
             InnerToken::T_IfExpression { .. }
                 | InnerToken::T_WhileExpression { .. }
                 | InnerToken::T_UntilExpression { .. }
-        ),
-        None => false,
-    }
+        )
+    })
 }
 
 fn sst_is_assignment_node(t: &Token) -> bool {
     match &*t.inner {
-        InnerToken::TA_Assignment { .. } => true,
+        InnerToken::TA_Assignment { .. } | InnerToken::T_DollarBraceCommandExpansion { .. } => true,
         InnerToken::TA_Unary { op, .. } => op.contains("++") || op.contains("--"),
         InnerToken::T_DollarBraced { op, .. } => {
             let str = crate::ast_lib::oversimplify(op).concat();
             let modifier = crate::cfg::get_braced_modifier(&str);
             modifier.starts_with('=') || modifier.starts_with(":=")
         }
-        InnerToken::T_DollarBraceCommandExpansion { .. } => true,
         _ => false,
     }
 }
@@ -1718,7 +1698,10 @@ const UNARY_TEST_OPS: &[&str] = &[
 /// including the `TA_Expansion` and `T_ParamSubSpecialChar` cases (which the
 /// crate's `ast_lib::get_literal_string` omits).
 fn get_literal_string_local(t: &Token) -> Option<String> {
-    use InnerToken::*;
+    use InnerToken::{
+        T_DollarDoubleQuoted, T_DollarSingleQuoted, T_DoubleQuoted, T_Literal, T_NormalWord,
+        T_ParamSubSpecialChar, T_SingleQuoted, TA_Expansion,
+    };
     fn go(t: &Token, out: &mut String) -> bool {
         match &*t.inner {
             T_DoubleQuoted(l) | T_DollarDoubleQuoted(l) | T_NormalWord(l) | TA_Expansion(l) => {
@@ -1740,17 +1723,11 @@ fn get_literal_string_local(t: &Token) -> Option<String> {
 
 /// `isLiteralNumber`.
 fn is_literal_number(t: &Token) -> bool {
-    match get_literal_string_local(t) {
-        Some(s) => s.chars().all(|c| c.is_ascii_digit()),
-        None => false,
-    }
+    get_literal_string_local(t).is_some_and(|s| s.chars().all(|c| c.is_ascii_digit()))
 }
 
 fn is_command_match(t: &Token, matcher: impl Fn(&str) -> bool) -> bool {
-    match get_command_name(t) {
-        Some(cmd) => matcher(&cmd),
-        None => false,
-    }
+    get_command_name(t).is_some_and(|cmd| matcher(&cmd))
 }
 
 /// `isDereferencingBinaryOp`.
@@ -1780,7 +1757,7 @@ fn word_to_pseudo_glob_impl(exact: bool, word: &Token) -> Option<Vec<PseudoGlob>
 }
 
 fn to_glob(exact: bool, word: &Token) -> Option<Vec<PseudoGlob>> {
-    use InnerToken::*;
+    use InnerToken::{T_Literal, T_NormalWord};
     // Special-case: T_NormalWord starting with a literal `~...`.
     if let T_NormalWord(list) = &*word.inner
         && let Some((first, rest)) = list.split_first()
@@ -1812,7 +1789,7 @@ fn to_glob(exact: bool, word: &Token) -> Option<Vec<PseudoGlob>> {
 }
 
 fn glob_part(exact: bool, x: &Token) -> Option<Vec<PseudoGlob>> {
-    use InnerToken::*;
+    use InnerToken::{T_Glob, T_Literal, T_SingleQuoted};
     match &*x.inner {
         T_Literal(s) | T_SingleQuoted(s) => Some(s.chars().map(PseudoGlob::Char).collect()),
         T_Glob(g) if g == "?" => Some(vec![PseudoGlob::Any]),
@@ -1833,25 +1810,22 @@ fn simplify_pseudo_glob(list: &[PseudoGlob]) -> Vec<PseudoGlob> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < list.len() {
-        match list[i] {
-            PseudoGlob::Char(_) => {
-                out.push(list[i]);
+        if let PseudoGlob::Char(_) = list[i] {
+            out.push(list[i]);
+            i += 1;
+        } else {
+            // span of Many/Any
+            let start = i;
+            while i < list.len() && matches!(list[i], PseudoGlob::Many | PseudoGlob::Any) {
                 i += 1;
             }
-            _ => {
-                // span of Many/Any
-                let start = i;
-                while i < list.len() && matches!(list[i], PseudoGlob::Many | PseudoGlob::Any) {
-                    i += 1;
-                }
-                let seg = &list[start..i];
-                // order: all PGAny first, then take 1 PGMany
-                for g in seg.iter().filter(|g| matches!(g, PseudoGlob::Any)) {
-                    out.push(*g);
-                }
-                if seg.iter().any(|g| matches!(g, PseudoGlob::Many)) {
-                    out.push(PseudoGlob::Many);
-                }
+            let seg = &list[start..i];
+            // order: all PGAny first, then take 1 PGMany
+            for g in seg.iter().filter(|g| matches!(g, PseudoGlob::Any)) {
+                out.push(*g);
+            }
+            if seg.iter().any(|g| matches!(g, PseudoGlob::Many)) {
+                out.push(PseudoGlob::Many);
             }
         }
     }
@@ -1862,14 +1836,12 @@ fn simplify_pseudo_glob(list: &[PseudoGlob]) -> Vec<PseudoGlob> {
 fn pseudo_globs_can_overlap(x: &[PseudoGlob], y: &[PseudoGlob]) -> bool {
     match (x.first(), y.first()) {
         (Some(xf), Some(yf)) => match (xf, yf) {
-            (PseudoGlob::Many, _) => {
+            (PseudoGlob::Many, _) | (_, PseudoGlob::Many) => {
                 pseudo_globs_can_overlap(x, &y[1..]) || pseudo_globs_can_overlap(&x[1..], y)
             }
-            (_, PseudoGlob::Many) => {
-                pseudo_globs_can_overlap(x, &y[1..]) || pseudo_globs_can_overlap(&x[1..], y)
+            (PseudoGlob::Any, _) | (_, PseudoGlob::Any) => {
+                pseudo_globs_can_overlap(&x[1..], &y[1..])
             }
-            (PseudoGlob::Any, _) => pseudo_globs_can_overlap(&x[1..], &y[1..]),
-            (_, PseudoGlob::Any) => pseudo_globs_can_overlap(&x[1..], &y[1..]),
             (a, b) => a == b && pseudo_globs_can_overlap(&x[1..], &y[1..]),
         },
         (None, None) => true,
@@ -1909,10 +1881,9 @@ fn or_get_expr(x: &Token) -> Option<(Token, String, Token)> {
 }
 
 fn cmd_level_get_expr(x: &Token) -> Option<(Token, String, Token)> {
-    use InnerToken::*;
+    use InnerToken::{T_AndIf, T_Condition, T_OrIf, T_Pipeline, T_Redirecting, TC_Binary};
     match &*x.inner {
-        T_OrIf { lhs, .. } => cmd_level_get_expr(lhs),
-        T_AndIf { lhs, .. } => cmd_level_get_expr(lhs),
+        T_OrIf { lhs, .. } | T_AndIf { lhs, .. } => cmd_level_get_expr(lhs),
         T_Pipeline { commands, .. } if commands.len() == 1 => cmd_level_get_expr(&commands[0]),
         T_Redirecting { cmd, .. } => cmd_level_get_expr(cmd),
         T_Condition { token, .. } => cmd_level_get_expr(token),
@@ -1940,11 +1911,10 @@ fn check_and_eq_operands(op: &str, rhs1: &Token, rhs2: &Token) -> bool {
 }
 
 fn subshell_check(id: Id, t: &Token, out: &mut Out) {
-    use InnerToken::*;
+    use InnerToken::{T_AndIf, T_Banged, T_OrIf, T_Pipeline, T_Redirecting, T_SimpleCommand};
     match &*t.inner {
         T_Banged(w) => subshell_check(id, w, out),
-        T_AndIf { lhs, .. } => subshell_check(id, lhs, out),
-        T_OrIf { lhs, .. } => subshell_check(id, lhs, out),
+        T_AndIf { lhs, .. } | T_OrIf { lhs, .. } => subshell_check(id, lhs, out),
         T_Pipeline { commands, .. } if commands.len() == 1 => {
             if let T_Redirecting { cmd, .. } = &*commands[0].inner
                 && let T_SimpleCommand { assignments, words } = &*cmd.inner
@@ -1992,24 +1962,22 @@ fn check_pipe(params: &Parameters, sep: &Token, out: &mut Out) {
 }
 
 fn check_ands(params: &Parameters, id: Id, t: &Token, out: &mut Out) {
-    use InnerToken::*;
-    match &*t.inner {
-        T_AndIf { rhs, .. } => check_ands(params, id, rhs, out),
-        T_OrIf { rhs, .. } => check_ands(params, id, rhs, out),
-        T_Pipeline { commands, .. } if !commands.is_empty() => {
-            check_ands(params, id, commands.last().unwrap(), out)
-        }
-        _cmd => {
-            if is_test_command(t) {
-                err_with_fix(
-                    out,
-                    id,
-                    2265,
-                    "Use && for logical AND. Single & will background and return true.",
-                    fix_with(vec![replace_end(params, id, 0, "&")]),
-                );
-            }
-        }
+    use InnerToken::{T_AndIf, T_OrIf, T_Pipeline};
+    let next = match &*t.inner {
+        T_AndIf { rhs, .. } | T_OrIf { rhs, .. } => Some(rhs),
+        T_Pipeline { commands, .. } => commands.last(),
+        _ => None,
+    };
+    if let Some(next) = next {
+        check_ands(params, id, next, out);
+    } else if is_test_command(t) {
+        err_with_fix(
+            out,
+            id,
+            2265,
+            "Use && for logical AND. Single & will background and return true.",
+            fix_with(vec![replace_end(params, id, 0, "&")]),
+        );
     }
 }
 
@@ -2027,8 +1995,7 @@ fn trailing_check(word: &Token, command: &Token, out: &mut Out) {
                 list[0].id(),
                 2171,
                 &format!(
-                    "Found trailing {} outside test. Add missing {} or quote if intentional.",
-                    str, opposite
+                    "Found trailing {str} outside test. Add missing {opposite} or quote if intentional."
                 ),
             );
         }
@@ -2052,7 +2019,7 @@ fn pattern_context(params: &Parameters, id: Id) -> String {
 
 fn drop_negation(s: &str) -> String {
     match s.chars().next() {
-        Some('!') | Some('^') => s.chars().skip(1).collect(),
+        Some('!' | '^') => s.chars().skip(1).collect(),
         _ => s.to_string(),
     }
 }
@@ -2066,14 +2033,12 @@ fn has_dupes(contents: &str) -> bool {
 }
 
 fn is_ignored_command(params: &Parameters, t: &Token) -> bool {
-    match get_closest_command(params, t) {
-        Some(cmd) => is_command_match(cmd, |s| s == "tr" || s == "read"),
-        None => false,
-    }
+    get_closest_command(params, t)
+        .is_some_and(|cmd| is_command_match(cmd, |s| s == "tr" || s == "read"))
 }
 
 fn is_dereferenced(params: &Parameters, t: &Token) -> bool {
-    use InnerToken::*;
+    use InnerToken::{T_SimpleCommand, TC_Binary, TC_Unary};
     for node in get_path(params, t) {
         match &*node.inner {
             TC_Binary {
@@ -2108,9 +2073,6 @@ fn check_unary_test_a_impl(params: &Parameters, t: &Token, out: &mut Out) {
 /// `checkRequireDoubleBracket` (optional: `require-double-brackets`): a tree
 /// check, since it does nothing at all outside the shells that have `[[ ]]`.
 pub(super) fn check_require_double_bracket(params: &Parameters, root: &Token, out: &mut Out) {
-    if !matches!(params.shell, Shell::Bash | Shell::Ksh | Shell::BusyboxSh) {
-        return;
-    }
     // `isSimple`: operators like `<` and `-o` are not tagged well enough to
     // rewrite, so only the straightforward conditions get a fix.
     fn is_simple(t: &Token) -> bool {
@@ -2120,6 +2082,9 @@ pub(super) fn check_require_double_bracket(params: &Parameters, root: &Token, ou
             InnerToken::TC_Unary { .. } | InnerToken::TC_Nullary { .. } => true,
             _ => false,
         }
+    }
+    if !matches!(params.shell, Shell::Bash | Shell::Ksh | Shell::BusyboxSh) {
+        return;
     }
     root.visit_preorder(&mut |t: &Token| {
         if let InnerToken::T_Condition {

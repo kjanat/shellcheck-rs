@@ -17,6 +17,7 @@ use shellcheck_rs::interface::{Fix, InsertionPoint, Position, PositionedComment,
 
 /// Haskell `Data.List.lines`: split on `'\n'` only (no `\r` handling), no
 /// trailing empty element for a final newline, `""` -> `[]`.
+#[must_use]
 pub fn lines(s: &str) -> Vec<String> {
     if s.is_empty() {
         return Vec::new();
@@ -37,6 +38,7 @@ pub fn lines(s: &str) -> Vec<String> {
 }
 
 /// Haskell `unlines`: `concatMap (++ "\n")`.
+#[must_use]
 pub fn unlines(xs: &[String]) -> String {
     let mut s = String::new();
     for x in xs {
@@ -55,6 +57,7 @@ fn overlap(x: &Replacement, y: &Replacement) -> bool {
 
 /// `Fix`'s `Semigroup`: merge `f2` into `f1` unless any replacement overlaps,
 /// in which case `f1` wins unchanged.
+#[must_use]
 pub fn fix_append(f1: &Fix, f2: &Fix) -> Fix {
     let conflict = f2
         .replacements
@@ -71,6 +74,7 @@ pub fn fix_append(f1: &Fix, f2: &Fix) -> Fix {
 
 /// `mconcat`: `foldl mappend mempty` (fold left to right so `<>` discards the
 /// right side on overlap).
+#[must_use]
 pub fn fix_mconcat(fixes: &[Fix]) -> Fix {
     let mut acc = Fix::default();
     for f in fixes {
@@ -130,6 +134,7 @@ fn realign_column(lines: &[String], line_no: i64, col_no: i64) -> i64 {
 }
 
 /// `removeTabStops` for a `Replacement`.
+#[must_use]
 pub fn remove_tab_stops_rep(r: &Replacement, lines: &[String]) -> Replacement {
     let start_col = realign_column(lines, r.start.line, r.start.column);
     let end_col = realign_column(lines, r.end.line, r.end.column);
@@ -147,6 +152,7 @@ pub fn remove_tab_stops_rep(r: &Replacement, lines: &[String]) -> Replacement {
 }
 
 /// `removeTabStops` for a `PositionedComment`.
+#[must_use]
 pub fn remove_tab_stops_comment(c: &PositionedComment, lines: &[String]) -> PositionedComment {
     let start_col = realign_column(lines, c.start.line, c.start.column);
     let end_col = realign_column(lines, c.end.line, c.end.column);
@@ -164,6 +170,7 @@ pub fn remove_tab_stops_comment(c: &PositionedComment, lines: &[String]) -> Posi
 }
 
 /// `makeNonVirtual`: untab each comment's own range and its fix replacements.
+#[must_use]
 pub fn make_non_virtual(comments: &[PositionedComment], contents: &str) -> Vec<PositionedComment> {
     let arr = lines(contents);
     comments
@@ -188,15 +195,15 @@ enum PSTree {
     Leaf,
     Branch {
         pivot: i64,
-        left: Box<PSTree>,
-        right: Box<PSTree>,
+        left: Box<Self>,
+        right: Box<Self>,
         cumulative: i64,
     },
 }
 
 impl PSTree {
-    fn new() -> Self {
-        PSTree::Leaf
+    const fn new() -> Self {
+        Self::Leaf
     }
 
     /// Sum of values whose keys are `<= target`.
@@ -205,14 +212,14 @@ impl PSTree {
         let mut node = self;
         loop {
             match node {
-                PSTree::Leaf => return sum,
-                PSTree::Branch {
+                Self::Leaf => return sum,
+                Self::Branch {
                     pivot,
                     left,
                     right,
                     cumulative,
                 } => {
-                    use std::cmp::Ordering::*;
+                    use std::cmp::Ordering::{Equal, Greater, Less};
                     match target.cmp(pivot) {
                         Less => node = left,
                         Greater => {
@@ -232,21 +239,21 @@ impl PSTree {
             return;
         }
         match self {
-            PSTree::Leaf => {
-                *self = PSTree::Branch {
+            Self::Leaf => {
+                *self = Self::Branch {
                     pivot: key,
-                    left: Box::new(PSTree::Leaf),
-                    right: Box::new(PSTree::Leaf),
+                    left: Box::new(Self::Leaf),
+                    right: Box::new(Self::Leaf),
                     cumulative: value,
                 };
             }
-            PSTree::Branch {
+            Self::Branch {
                 pivot,
                 left,
                 right,
                 cumulative,
             } => {
-                use std::cmp::Ordering::*;
+                use std::cmp::Ordering::{Equal, Greater, Less};
                 match key.cmp(pivot) {
                     Less => {
                         left.add(key, value);
@@ -336,6 +343,7 @@ fn multi_to_single(fix: &Fix, lines_in: &[String]) -> (Fix, String) {
 }
 
 /// `applyFix`: apply `fix` to `file_lines` (1-based), returning the new lines.
+#[must_use]
 pub fn apply_fix(fix: &Fix, file_lines: &[String]) -> Vec<String> {
     let untabbed = Fix {
         replacements: fix

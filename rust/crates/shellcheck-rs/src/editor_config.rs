@@ -1,12 +1,12 @@
 //! Port of `ShellCheck.EditorConfig`.
 //!
-//! Minimal support for reading shellcheck directives from EditorConfig style
-//! files (<https://editorconfig.org/>). Only the `shellcheck.*` keys of
-//! sections whose glob matches the file being checked are extracted, and
-//! turned into the same "key=value" directive syntax that is used in
-//! .shellcheckrc files.
+//! Minimal support for reading shellcheck directives from EditorConfig style files (<https://editorconfig.org/>).
+//!
+//! Only the `shellcheck.*` keys of sections whose glob matches the file being checked are extracted,
+//! and turned into the same "key=value" directive syntax that is used in .shellcheckrc files.
 
 use crate::data::shell_for_executable;
+use std::fmt::Write;
 
 const REJECTED: &str = "invalid editorconfig value";
 
@@ -14,15 +14,18 @@ const REJECTED: &str = "invalid editorconfig value";
 /// and the trimmed value.
 type Directive = (usize, String, String);
 
-/// `parseEditorConfig`: given the contents of an EditorConfig style file and
-/// the name of the file being checked, return the shellcheck directives (as a
-/// "key=value\n" delimited blob, suitable for feeding into the same parser as
-/// .shellcheckrc) found in matching sections.
+/// `parseEditorConfig`: the shellcheck directives in matching sections.
+///
+/// Given the contents of an EditorConfig style file and the name of the file
+/// being checked, return the shellcheck directives (as a "key=value\n"
+/// delimited blob, suitable for feeding into the same parser as .shellcheckrc)
+/// found in matching sections.
 ///
 /// As per the EditorConfig spec, files are read top to bottom and properties
 /// from later sections override those from earlier ones (for the same key),
 /// so on conflicts the last matching section wins.
-pub fn parse_editor_config(contents: &str, name: &str) -> String {
+#[must_use]
+pub fn parse(contents: &str, name: &str) -> String {
     let usable: Vec<Directive> = all_directives(contents, name)
         .into_iter()
         .filter(|(_, key, value)| is_usable_directive(key, value))
@@ -33,7 +36,7 @@ pub fn parse_editor_config(contents: &str, name: &str) -> String {
     let mut previous = 0;
     for (line, key, value) in last_wins(usable) {
         out.push_str(&"\n".repeat(line.saturating_sub(previous + 1)));
-        out.push_str(&format!("{key}={value}\n"));
+        let _ = writeln!(out, "{key}={value}");
         previous = line;
     }
     out
@@ -52,6 +55,7 @@ pub fn parse_editor_config(contents: &str, name: &str) -> String {
 ///     Plain empty values are not reported here: they are simply no-ops.
 ///
 /// Only directives in sections whose glob matches the file are reported.
+#[must_use]
 pub fn invalid_directive_lines(contents: &str, name: &str) -> Vec<usize> {
     all_directives(contents, name)
         .into_iter()
@@ -67,29 +71,31 @@ pub fn invalid_directive_lines(contents: &str, name: &str) -> Vec<usize> {
 }
 
 /// `editorConfigDirectives`: build the directive blob contributed by a single
-/// EditorConfig file for the given file being checked. Returns `None` if the
-/// file contributes nothing (no matching section, or only empty values).
-/// Returns a blob of "key=value\n" directives when the matching sections are
+/// EditorConfig file for the given file being checked.
+///
+/// Returns `None` if the file contributes nothing (no matching section, or
+/// only empty values). Returns a blob of "key=value\n" directives when the matching sections are
 /// valid, or a single rejected line at the position of any invalid
 /// `shellcheck.*` directive so that the .shellcheckrc parser reports it as
 /// SC1134.
-pub fn editor_config_directives(contents: &str, name: &str) -> Option<String> {
+#[must_use]
+pub fn directives(contents: &str, name: &str) -> Option<String> {
     let mut bad = invalid_directive_lines(contents, name);
     if !bad.is_empty() {
         bad.sort_unstable();
         bad.dedup();
-        return Some(
-            bad.iter()
-                .map(|n| format!("{}{REJECTED}\n", "\n".repeat(n.saturating_sub(1))))
-                .collect(),
-        );
+        return Some(bad.iter().fold(String::new(), |mut out, n| {
+            let _ = writeln!(out, "{}{REJECTED}", "\n".repeat(n.saturating_sub(1)));
+            out
+        }));
     }
-    let result = parse_editor_config(contents, name);
+    let result = parse(contents, name);
     (!result.is_empty()).then_some(result)
 }
 
 /// A blob that only says an EditorConfig file was rejected:
 /// `isEditorConfigRejection`.
+#[must_use]
 pub fn is_rejection(blob: &str) -> bool {
     lines(blob)
         .iter()
@@ -97,6 +103,7 @@ pub fn is_rejection(blob: &str) -> bool {
 }
 
 /// The blob `getEditorConfig` builds for an invalid `root` declaration.
+#[must_use]
 pub fn rejected_root(line: usize) -> String {
     format!("{}{REJECTED}\n", "\n".repeat(line.saturating_sub(1)))
 }
@@ -104,6 +111,7 @@ pub fn rejected_root(line: usize) -> String {
 /// `isEditorConfigRoot`: does the top-level (pre-section) part of an
 /// EditorConfig file declare "root = true"? Per the spec, this stops the
 /// search for further EditorConfig files in parent directories.
+#[must_use]
 pub fn is_editor_config_root(contents: &str) -> bool {
     pre_section_lines(contents)
         .iter()
@@ -112,6 +120,7 @@ pub fn is_editor_config_root(contents: &str) -> bool {
 
 /// `invalidRootLines`: returns the 1-based line numbers of invalid `root`
 /// declarations, i.e. root values other than true/false (such as `root =`).
+#[must_use]
 pub fn invalid_root_lines(contents: &str) -> Vec<usize> {
     pre_section_lines(contents)
         .iter()
@@ -124,8 +133,11 @@ pub fn invalid_root_lines(contents: &str) -> Vec<usize> {
 }
 
 /// `globToRegexString`: translate an EditorConfig glob pattern into an
-/// anchored regex string. Per the spec, patterns without a path separator are
-/// matched against the file at any depth (as if prefixed with "**/").
+/// anchored regex string.
+///
+/// Per the spec, patterns without a path separator are matched against the
+/// file at any depth (as if prefixed with "**/").
+#[must_use]
 pub fn glob_to_regex_string(pattern: &str) -> String {
     let prefix = if pattern.contains('/') { "" } else { "(.*/)?" };
     let chars: Vec<char> = pattern.chars().collect();
@@ -290,10 +302,9 @@ fn split_top_level_commas(body: &str) -> Vec<String> {
 /// optional minus sign, digits.
 fn read_int(s: &str) -> Option<i64> {
     let s = s.trim_start_matches(is_space);
-    let (negative, digits) = match s.strip_prefix('-') {
-        Some(rest) => (true, rest.trim_start_matches(is_space)),
-        None => (false, s),
-    };
+    let (negative, digits) = s
+        .strip_prefix('-')
+        .map_or((false, s), |rest| (true, rest.trim_start_matches(is_space)));
     if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
@@ -416,7 +427,7 @@ fn trim(s: &str) -> &str {
 
 /// `Data.Char.isSpace`: the ASCII spaces and controls `\t`..`\r`, the Latin-1
 /// no-break space, and the Unicode space separators above it.
-fn is_space(c: char) -> bool {
+const fn is_space(c: char) -> bool {
     match c {
         ' ' | '\t'..='\r' | '\u{a0}' => true,
         c if c > '\u{377}' => matches!(
@@ -586,7 +597,7 @@ mod tests {
     #[test]
     fn prop_parseEditorConfig1() {
         assert_eq!(
-            parse_editor_config(
+            parse(
                 "[*.{ebuild,eclass}]\nshellcheck.shell=bash\nshellcheck.disable=SC2034\n",
                 "foo.ebuild"
             ),
@@ -597,7 +608,7 @@ mod tests {
     #[test]
     fn prop_parseEditorConfig2() {
         assert_eq!(
-            parse_editor_config("[*.{ebuild,eclass}]\nshellcheck.shell=bash\n", "foo.txt"),
+            parse("[*.{ebuild,eclass}]\nshellcheck.shell=bash\n", "foo.txt"),
             ""
         );
     }
@@ -605,7 +616,7 @@ mod tests {
     #[test]
     fn prop_parseEditorConfig3() {
         assert_eq!(
-            parse_editor_config(
+            parse(
                 "[{PKGBUILD,APKBUILD}]\nshellcheck.disable=SC2034\n",
                 "PKGBUILD"
             ),
@@ -616,7 +627,7 @@ mod tests {
     #[test]
     fn prop_parseEditorConfig4() {
         assert_eq!(
-            parse_editor_config(
+            parse(
                 "root = true\n[*.sh]\nindent_style = space\nshellcheck.shell=bash\n",
                 "foo.sh"
             ),
@@ -629,7 +640,7 @@ mod tests {
     #[test]
     fn prop_parseEditorConfig5() {
         assert_eq!(
-            parse_editor_config(
+            parse(
                 "[*]\nshellcheck.shell=sh\n\n[foo]\nshellcheck.shell=bash\n",
                 "foo"
             ),
@@ -641,7 +652,7 @@ mod tests {
     #[test]
     fn prop_parseEditorConfig6() {
         assert_eq!(
-            parse_editor_config(
+            parse(
                 "[*]\nshellcheck.shell=sh\n\n[foo]\nshellcheck.disable=SC2034\n",
                 "foo"
             ),
@@ -653,23 +664,17 @@ mod tests {
     // line is reported via invalidDirectiveLines so the caller can reject it.
     #[test]
     fn prop_parseEditorConfigUnknownShell() {
-        assert_eq!(
-            parse_editor_config("[*]\nshellcheck.shell=zsh\n", "foo"),
-            ""
-        );
+        assert_eq!(parse("[*]\nshellcheck.shell=zsh\n", "foo"), "");
     }
 
     #[test]
     fn prop_parseEditorConfigEmptyShell() {
-        assert_eq!(
-            parse_editor_config("[*]\nshellcheck.shell=\n", "foo"),
-            "\nshell=\n"
-        );
+        assert_eq!(parse("[*]\nshellcheck.shell=\n", "foo"), "\nshell=\n");
     }
 
     #[test]
     fn prop_parseEditorConfigEmptyDisable() {
-        assert_eq!(parse_editor_config("[*]\nshellcheck.disable=\n", "foo"), "");
+        assert_eq!(parse("[*]\nshellcheck.disable=\n", "foo"), "");
     }
 
     // A '#' embedded anywhere in the value (not just at the start) makes it
@@ -677,10 +682,7 @@ mod tests {
     // .shellcheckrc parser would otherwise silently truncate it at the '#'.
     #[test]
     fn prop_parseEditorConfigEmbeddedComment() {
-        assert_eq!(
-            parse_editor_config("[*]\nshellcheck.disable=SC2148 #abc\n", "foo"),
-            ""
-        );
+        assert_eq!(parse("[*]\nshellcheck.disable=SC2148 #abc\n", "foo"), "");
     }
 
     // EditorConfig does not allow inline comments, so a trailing '# ...'
@@ -689,27 +691,18 @@ mod tests {
     // directive is dropped. It is reported via invalidDirectiveLines.
     #[test]
     fn prop_parseEditorConfigInlineComment() {
-        assert_eq!(
-            parse_editor_config("[*]\nshellcheck.shell=bash # inline\n", "foo"),
-            ""
-        );
+        assert_eq!(parse("[*]\nshellcheck.shell=bash # inline\n", "foo"), "");
     }
 
     // Full-line comments starting on first non-ws char are stripped.
     #[test]
     fn prop_parseEditorConfigLineComment() {
-        assert_eq!(
-            parse_editor_config("[*]\n# shellcheck.shell=bash\n", "foo"),
-            ""
-        );
+        assert_eq!(parse("[*]\n# shellcheck.shell=bash\n", "foo"), "");
     }
 
     #[test]
     fn prop_parseEditorConfigSemicolonComment() {
-        assert_eq!(
-            parse_editor_config("[*]\n; shellcheck.shell=bash\n", "foo"),
-            ""
-        );
+        assert_eq!(parse("[*]\n; shellcheck.shell=bash\n", "foo"), "");
     }
 
     // Empty brace alternative makes the glob group optional; 'foo' matches
@@ -717,7 +710,7 @@ mod tests {
     #[test]
     fn prop_parseEditorConfigBraceEmpty() {
         assert_eq!(
-            parse_editor_config("[foo{,bar}]\nshellcheck.shell=sh\n", "foo"),
+            parse("[foo{,bar}]\nshellcheck.shell=sh\n", "foo"),
             "\nshell=sh\n"
         );
     }
@@ -727,7 +720,7 @@ mod tests {
     #[test]
     fn prop_parseEditorConfigBraceNested() {
         assert_eq!(
-            parse_editor_config("[{foo,ba{r,z}}]\nshellcheck.shell=sh\n", "baz"),
+            parse("[{foo,ba{r,z}}]\nshellcheck.shell=sh\n", "baz"),
             "\nshell=sh\n"
         );
     }
@@ -754,17 +747,20 @@ mod tests {
 
     #[test]
     fn prop_invalidRootLinesTrue() {
-        assert!(invalid_root_lines("root = true\n").is_empty());
+        assert_eq!(invalid_root_lines("root = true\n"), Vec::<usize>::new());
     }
 
     #[test]
     fn prop_invalidRootLinesFalse() {
-        assert!(invalid_root_lines("root = false\n").is_empty());
+        assert_eq!(invalid_root_lines("root = false\n"), Vec::<usize>::new());
     }
 
     #[test]
     fn prop_invalidRootLinesInSection() {
-        assert!(invalid_root_lines("[*]\nroot = true\n").is_empty());
+        assert_eq!(
+            invalid_root_lines("[*]\nroot = true\n"),
+            Vec::<usize>::new()
+        );
     }
 
     // An unsupported non-empty shell is reported at its line.
@@ -779,13 +775,19 @@ mod tests {
     // An empty shell is valid (the rc parser rejects it), so no error.
     #[test]
     fn prop_invalidDirectiveLinesEmptyShell() {
-        assert!(invalid_directive_lines("[*]\nshellcheck.shell=\n", "foo").is_empty());
+        assert_eq!(
+            invalid_directive_lines("[*]\nshellcheck.shell=\n", "foo"),
+            Vec::<usize>::new()
+        );
     }
 
     // A known shell is fine.
     #[test]
     fn prop_invalidDirectiveLinesKnownShell() {
-        assert!(invalid_directive_lines("[*]\nshellcheck.shell=bash\n", "foo").is_empty());
+        assert_eq!(
+            invalid_directive_lines("[*]\nshellcheck.shell=bash\n", "foo"),
+            Vec::<usize>::new()
+        );
     }
 
     // A '#'-prefixed value is reported (EditorConfig has no inline comments).
@@ -831,52 +833,58 @@ mod tests {
     // comment marker.
     #[test]
     fn prop_invalidDirectiveLinesEmptyValueNotInvalid() {
-        assert!(invalid_directive_lines("[foo]\nshellcheck.disable =\n", "foo").is_empty());
+        assert_eq!(
+            invalid_directive_lines("[foo]\nshellcheck.disable =\n", "foo"),
+            Vec::<usize>::new()
+        );
     }
 
     // A plain invalid value (no comment marker) is not reported here; it is
     // rejected by the .shellcheckrc parser as SC1134 instead.
     #[test]
     fn prop_invalidDirectiveLinesPlainValue() {
-        assert!(invalid_directive_lines("[foo]\nshellcheck.disable = abc\n", "foo").is_empty());
+        assert_eq!(
+            invalid_directive_lines("[foo]\nshellcheck.disable = abc\n", "foo"),
+            Vec::<usize>::new()
+        );
     }
 
     // Directives in non-matching sections are ignored.
     #[test]
     fn prop_invalidDirectiveLinesNoMatch() {
-        assert!(invalid_directive_lines("[*.txt]\nshellcheck.shell=zsh\n", "foo").is_empty());
+        assert_eq!(
+            invalid_directive_lines("[*.txt]\nshellcheck.shell=zsh\n", "foo"),
+            Vec::<usize>::new()
+        );
     }
 
     // Only the matching section's invalid directive is reported.
     #[test]
     fn prop_invalidDirectiveLinesMatchingSection() {
-        assert!(
+        assert_eq!(
             invalid_directive_lines(
                 "[*.txt]\nshellcheck.shell=zsh\n[foo]\nshellcheck.shell=bash\n",
                 "foo"
-            )
-            .is_empty()
+            ),
+            Vec::<usize>::new()
         );
     }
 
     #[test]
     fn editor_config_directives_rejects_each_invalid_line_at_its_position() {
         assert_eq!(
-            editor_config_directives("[foo]\nshellcheck.shell=zsh\n", "foo").as_deref(),
+            directives("[foo]\nshellcheck.shell=zsh\n", "foo").as_deref(),
             Some("\ninvalid editorconfig value\n")
         );
         assert!(is_rejection("\ninvalid editorconfig value\n"));
         assert!(!is_rejection("\nshell=bash\n"));
-        assert_eq!(
-            editor_config_directives("[bar]\nshellcheck.shell=sh\n", "foo"),
-            None
-        );
+        assert_eq!(directives("[bar]\nshellcheck.shell=sh\n", "foo"), None);
         assert_eq!(rejected_root(3), "\n\ninvalid editorconfig value\n");
     }
 
     #[test]
     fn haskell_lines_and_spaces() {
-        assert!(lines("").is_empty());
+        assert_eq!(lines(""), Vec::<&str>::new());
         assert_eq!(lines("a\n"), vec!["a"]);
         assert_eq!(lines("a\r\nb"), vec!["a\r", "b"]);
         assert!(is_space('\u{a0}'));

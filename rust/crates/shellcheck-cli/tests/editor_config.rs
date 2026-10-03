@@ -103,7 +103,7 @@ struct Run {
 }
 
 impl Fixture {
-    fn new(name: &str) -> Fixture {
+    fn new(name: &str) -> Self {
         let dir = std::env::temp_dir().join(format!(
             "rshellcheck-editorconfig-{name}-{}",
             std::process::id()
@@ -116,7 +116,7 @@ impl Fixture {
         }
         std::fs::create_dir_all(dir.join("home")).unwrap();
         std::fs::create_dir_all(dir.join("xdg")).unwrap();
-        Fixture(std::fs::canonicalize(dir).unwrap())
+        Self(std::fs::canonicalize(dir).unwrap())
     }
 
     fn root(&self) -> String {

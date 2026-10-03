@@ -4,8 +4,11 @@ use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::get_command_name;
 use crate::analyzer_lib::is_command;
 use crate::analyzer_lib::is_unqualified_command;
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{
+    Out, Parameters, err, fix_with, get_command, get_command_basename, get_command_token_or_this,
+    get_path, info, replace_end, warn, warn_with_fix,
+};
+use crate::ast::{Id, InnerToken, Token};
 
 use crate::ast_lib;
 use crate::ast_lib::get_literal_string;
@@ -32,9 +35,7 @@ pub(super) fn check_for_in_quoted(params: &Parameters, t: &Token, out: &mut Out)
     {
         let word = &nw[0];
         let guard1 = (list.iter().any(will_split) && !may_become_multiple_args(word))
-            || ast_lib::get_literal_string(word)
-                .map(|s| would_have_been_glob(&s))
-                .unwrap_or(false);
+            || ast_lib::get_literal_string(word).is_some_and(|s| would_have_been_glob(&s));
         if guard1 {
             err(
                 out,
@@ -64,10 +65,7 @@ pub(super) fn check_for_in_quoted(params: &Parameters, t: &Token, out: &mut Out)
     // Equation 3: [single]
     if items.len() == 1 {
         let single = &items[0];
-        if get_unquoted_literal(single)
-            .map(|s| s.contains(','))
-            .unwrap_or(false)
-        {
+        if get_unquoted_literal(single).is_some_and(|s| s.contains(',')) {
             warn(
                 out,
                 single.id(),
@@ -115,10 +113,9 @@ pub(super) fn check_for_in_ls(_params: &Parameters, t: &Token, out: &mut Out) {
                 return;
             }
             match &*parts[0].inner {
-                InnerToken::T_DollarExpansion(cmds) if cmds.len() == 1 => {
-                    check_flls(out, parts[0].id(), &cmds[0]);
-                }
-                InnerToken::T_Backticked(cmds) if cmds.len() == 1 => {
+                InnerToken::T_DollarExpansion(cmds) | InnerToken::T_Backticked(cmds)
+                    if cmds.len() == 1 =>
+                {
                     check_flls(out, parts[0].id(), &cmds[0]);
                 }
                 _ => {}
@@ -177,7 +174,7 @@ pub(super) fn check_loop_keyword_scope(params: &Parameters, t: &Token, out: &mut
                 out,
                 t.id(),
                 2106,
-                &format!("This only exits the subshell caused by the {}.", str),
+                &format!("This only exits the subshell caused by the {str}."),
             );
         }
     } else {
@@ -187,7 +184,7 @@ pub(super) fn check_loop_keyword_scope(params: &Parameters, t: &Token, out: &mut
                     out,
                     t.id(),
                     2104,
-                    &format!("In functions, use return instead of {}.", name),
+                    &format!("In functions, use return instead of {name}."),
                 );
             }
             _ => {
@@ -195,7 +192,7 @@ pub(super) fn check_loop_keyword_scope(params: &Parameters, t: &Token, out: &mut
                     out,
                     t.id(),
                     2105,
-                    &format!("{} is only valid in loops.", name),
+                    &format!("{name} is only valid in loops."),
                 );
             }
         }
@@ -360,7 +357,7 @@ fn is_stdin_read_command(t: &Token) -> bool {
         && let InnerToken::T_Redirecting { redirs, cmd } = &*commands[0].inner
     {
         let plaintext = oversimplify(cmd);
-        return plaintext.first().map(|s| s.as_str()) == Some("read")
+        return plaintext.first().map(std::string::String::as_str) == Some("read")
             && !plaintext.iter().any(|s| s == "-u")
             && !redirs.iter().any(stdin_redirect);
     }
@@ -376,8 +373,7 @@ fn stdin_redirect(r: &Token) -> bool {
             return match &*target.inner {
                 InnerToken::T_IoFile { op, .. } => matches!(&*op.inner, InnerToken::T_Less),
                 InnerToken::T_IoDuplicate { op, .. } => matches!(&*op.inner, InnerToken::T_LESSAND),
-                InnerToken::T_HereString(_) => true,
-                InnerToken::T_HereDoc { .. } => true,
+                InnerToken::T_HereString(_) | InnerToken::T_HereDoc { .. } => true,
                 _ => false,
             };
         }
@@ -420,8 +416,7 @@ fn check_muncher(params: &Parameters, while_id: Id, t: &Token, out: &mut Out) {
                             while_id,
                             2095,
                             &format!(
-                                "{} may swallow stdin, preventing this loop from working properly.",
-                                name
+                                "{name} may swallow stdin, preventing this loop from working properly."
                             ),
                         );
                         let fix = build_munch_fix(params, fixkind, flag, cmd);
@@ -429,10 +424,7 @@ fn check_muncher(params: &Parameters, while_id: Id, t: &Token, out: &mut Out) {
                             out,
                             cmd.id(),
                             2095,
-                            &format!(
-                                "Use {} {} to prevent {} from swallowing stdin.",
-                                name, flag, name
-                            ),
+                            &format!("Use {name} {flag} to prevent {name} from swallowing stdin."),
                             fix,
                         );
                     }
@@ -452,13 +444,11 @@ fn run_munch_check(kind: MunchCheck, flag: &str, cmd: &Token) -> bool {
             get_all_flags(cmd).iter().any(|(_, s)| s == f)
         }
         // hasArgument arg = elem arg . mapMaybe getLiteralString . fromJust . getCommandArgv
-        MunchCheck::HasArgument => get_command_argv(cmd)
-            .map(|argv| {
-                argv.iter()
-                    .filter_map(ast_lib::get_literal_string)
-                    .any(|s| s == flag)
-            })
-            .unwrap_or(false),
+        MunchCheck::HasArgument => get_command_argv(cmd).is_some_and(|argv| {
+            argv.iter()
+                .filter_map(ast_lib::get_literal_string)
+                .any(|s| s == flag)
+        }),
         MunchCheck::Never => false,
     }
 }
@@ -468,24 +458,16 @@ fn build_munch_fix(params: &Parameters, fixkind: MunchFix, flag: &str, cmd: &Tok
         // addFlag: replaceEnd (getId $ getCommandTokenOrThis cmd) params 0 (' ':string)
         MunchFix::AddFlag => {
             let tok = get_command_token_or_this(cmd);
-            fix_with(vec![replace_end(
-                params,
-                tok.id(),
-                0,
-                &format!(" {}", flag),
-            )])
+            fix_with(vec![replace_end(params, tok.id(), 0, &format!(" {flag}"))])
         }
         // addRedirect: replaceEnd (getId cmd) params 0 (' ':string)
-        MunchFix::AddRedirect => fix_with(vec![replace_end(
-            params,
-            cmd.id(),
-            0,
-            &format!(" {}", flag),
-        )]),
+        MunchFix::AddRedirect => {
+            fix_with(vec![replace_end(params, cmd.id(), 0, &format!(" {flag}"))])
+        }
     }
 }
 
-/// `getWords`: for a T_Assignment, its value's word parts; else its own.
+/// `getWords`: for a `T_Assignment`, its value's word parts; else its own.
 fn get_words(t: &Token) -> Vec<&Token> {
     match &*t.inner {
         InnerToken::T_Assignment { value, .. } => ast_lib::get_word_parts(value),
@@ -506,15 +488,23 @@ fn get_command_argv(t: &Token) -> Option<Vec<Token>> {
 
 /// `getCommandSequences`: command lists inside compound tokens.
 fn get_command_sequences(t: &Token) -> Vec<Vec<Token>> {
-    use InnerToken::*;
+    use InnerToken::{
+        T_Annotation, T_Backticked, T_BraceGroup, T_DollarBraceCommandExpansion, T_DollarExpansion,
+        T_ForArithmetic, T_ForIn, T_IfExpression, T_Script, T_Subshell, T_UntilExpression,
+        T_WhileExpression,
+    };
     match &*t.inner {
-        T_Script { commands, .. } => vec![commands.clone()],
-        T_BraceGroup(cmds) => vec![cmds.clone()],
-        T_Subshell(cmds) => vec![cmds.clone()],
-        T_WhileExpression { condition, body } => vec![condition.clone(), body.clone()],
-        T_UntilExpression { condition, body } => vec![condition.clone(), body.clone()],
-        T_ForIn { body, .. } => vec![body.clone()],
-        T_ForArithmetic { body, .. } => vec![body.clone()],
+        T_Script { commands: cmds, .. }
+        | T_BraceGroup(cmds)
+        | T_Subshell(cmds)
+        | T_ForIn { body: cmds, .. }
+        | T_ForArithmetic { body: cmds, .. }
+        | T_DollarExpansion(cmds)
+        | T_DollarBraceCommandExpansion { list: cmds, .. }
+        | T_Backticked(cmds) => vec![cmds.clone()],
+        T_WhileExpression { condition, body } | T_UntilExpression { condition, body } => {
+            vec![condition.clone(), body.clone()]
+        }
         T_IfExpression { clauses, elses } => {
             let mut out: Vec<Vec<Token>> = Vec::new();
             for (a, b) in clauses {
@@ -525,9 +515,6 @@ fn get_command_sequences(t: &Token) -> Vec<Vec<Token>> {
             out
         }
         T_Annotation { token, .. } => get_command_sequences(token),
-        T_DollarExpansion(cmds) => vec![cmds.clone()],
-        T_DollarBraceCommandExpansion { list, .. } => vec![list.clone()],
-        T_Backticked(cmds) => vec![cmds.clone()],
         _ => vec![],
     }
 }
@@ -577,7 +564,10 @@ fn would_have_been_glob(s: &str) -> bool {
 
 /// `leadType`/`subshellType` for a token (returns the subshell scope string).
 fn subshell_type(params: &Parameters, t: &Token) -> Option<String> {
-    use InnerToken::*;
+    use InnerToken::{
+        T_Backgrounded, T_Backticked, T_BatsTest, T_CoProcBody, T_DollarExpansion, T_Redirecting,
+        T_Subshell,
+    };
     let s = |x: &str| Some(x.to_string());
     match &*t.inner {
         T_DollarExpansion(_) => s("$(..) expansion"),
@@ -605,7 +595,7 @@ fn causes_subshell(params: &Parameters, t: &Token) -> bool {
         return false;
     };
     if commands.len() >= 2 {
-        !params.has_lastpipe || commands.last().map(|x| x.id()) != Some(t.id())
+        !params.has_lastpipe() || commands.last().map(super::super::ast::Token::id) != Some(t.id())
     } else {
         false
     }

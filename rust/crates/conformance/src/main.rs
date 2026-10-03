@@ -164,6 +164,7 @@ fn key_from_value(v: &Value) -> CommentKey {
 ///
 /// `filename` matters: both tools may infer a dialect from it, so the caller
 /// passes whatever path the oracle saw.
+#[must_use]
 pub fn port_keys(script: &str, filename: &str, shell: Option<&str>) -> Vec<CommentKey> {
     port_keys_with(script, filename, shell, &[])
 }
@@ -588,6 +589,7 @@ impl Args {
     /// binary built from this tree if it is there, else whatever `shellcheck`
     /// is on `PATH`. The latter is what makes an installed release usable as
     /// the oracle with no build of its own.
+    #[must_use]
     pub fn oracle_path(&self) -> &str {
         self.oracle()
     }
@@ -611,6 +613,7 @@ impl Args {
     /// The flag, or `ORACLE_ANY_VERSION` in the environment. Read here rather
     /// than through clap's `env`, which for a flag insists on the literal
     /// `true`/`false` and would reject the `=1` this has always accepted.
+    #[must_use]
     pub fn any_oracle_version(&self) -> bool {
         self.any_oracle_version
             || std::env::var("ORACLE_ANY_VERSION")

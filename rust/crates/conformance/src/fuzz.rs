@@ -37,10 +37,10 @@ type Finding = (
 pub struct Rng(u64);
 
 impl Rng {
-    pub fn new(seed: u64) -> Rng {
-        Rng(seed.wrapping_mul(2685821657736338717).max(1))
+    pub fn new(seed: u64) -> Self {
+        Self(seed.wrapping_mul(2685821657736338717).max(1))
     }
-    fn next_u64(&mut self) -> u64 {
+    const fn next_u64(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x >> 12;
         x ^= x << 25;
@@ -48,7 +48,7 @@ impl Rng {
         self.0 = x;
         x.wrapping_mul(2685821657736338717)
     }
-    fn below(&mut self, n: usize) -> usize {
+    const fn below(&mut self, n: usize) -> usize {
         if n == 0 {
             0
         } else {
@@ -62,7 +62,7 @@ impl Rng {
         &xs[self.below(xs.len())]
     }
     /// True with probability `num/100`.
-    fn chance(&mut self, pct: u64) -> bool {
+    const fn chance(&mut self, pct: u64) -> bool {
         self.next_u64() % 100 < pct
     }
 }
@@ -657,7 +657,7 @@ pub fn run(args: &Args) -> Result<bool, String> {
         let path = oracle.dir().join("x");
         let pk = port_keys(&small, &path.to_string_lossy(), sh);
         println!("\n--- {sig}");
-        println!("  script: {:?}", small);
+        println!("  script: {small:?}");
         println!("  oracle (exit {oexit}): {}", render_keys(&ok));
         println!("  port:   {}", render_keys(&pk));
         // A generated script exists nowhere in the repository, so the

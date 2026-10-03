@@ -17,9 +17,12 @@
 //!   *problems* are always emitted. (`ShellCheck.Parser.parseNote` vs
 //!   `parseProblem`.)
 
-use crate::ast::*;
+use crate::ast::{
+    Annotation, AssignmentMode, CaseClause, CaseType, ConditionType, Dashed, Id, IfClause,
+    InnerToken, Piped, Quoted, Token,
+};
 use crate::ast_lib;
-use crate::interface::{NoExternalSources, Position, Severity, Shell, SystemInterface};
+use crate::interface::{NoExternalSources, Position, Severity, Shell, System};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -207,17 +210,25 @@ const COMMON_COMMANDS: &[&str] = &[
 /// A pending parse note/problem (SC1xxx), before id/position resolution.
 #[derive(Debug, Clone)]
 pub struct ParseNote {
+    /// Where the note starts.
     pub start: Position,
+    /// Where the note ends.
     pub end: Position,
+    /// How serious the note is.
     pub severity: Severity,
+    /// The `SC` code number.
     pub code: i64,
+    /// The message text.
     pub message: String,
 }
 
 /// Result of parsing a script.
 pub struct ParseOutput {
+    /// `prRoot`: the script's root token, if the parse succeeded.
     pub root: Option<Token>,
+    /// `prComments`: the parse notes and problems.
     pub notes: Vec<ParseNote>,
+    /// `prTokenPositions`: each token's start and end.
     pub positions: BTreeMap<Id, (Position, Position)>,
 }
 
@@ -270,6 +281,7 @@ pub(super) enum AnnContext {
     Source(String),
 }
 
+/// The state of a `ShellCheck.Parser` parse.
 pub struct Parser {
     input: Vec<char>,
     idx: usize,
@@ -333,7 +345,7 @@ pub struct Parser {
     /// means the shebang no longer decides anything and is not checked.
     shell_flag_specified: bool,
     /// `Environment.systemInterface`: how a sourced file is resolved and read.
-    sys: Rc<dyn SystemInterface>,
+    sys: Rc<dyn System>,
     /// `Environment.checkSourced`: whether diagnostics from inside a sourced
     /// file are kept (`-a`).
     check_sourced: bool,
@@ -402,7 +414,7 @@ const ALMOST_SPACE_CHARS: &str =
 /// `]` is handled by the caller (closes the class); `\` is an escape; `[` and the
 /// extglob chars `?*@!+` are accepted as globchars by the caller. What remains here
 /// are the pure terminators.
-fn is_glob_class_terminator(c: char) -> bool {
+const fn is_glob_class_terminator(c: char) -> bool {
     matches!(
         c,
         '{' | '}'
@@ -429,22 +441,30 @@ fn is_glob_class_terminator(c: char) -> bool {
     )
 }
 
+/// A character count as a `Position` column offset.
+fn columns(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
 impl Parser {
-    pub fn new(filename: &str, script: &str) -> Parser {
-        Parser::with_shell_flag(filename, script, false, None)
+    /// A parser over `script` with no `--shell` flag and no dialect hint.
+    #[must_use]
+    pub fn new(filename: &str, script: &str) -> Self {
+        Self::with_shell_flag(filename, script, false, None)
     }
 
     /// `shell_flag_specified` mirrors Haskell's `shellTypeOverride`: `--shell`
     /// suppresses the shebang checks just as a `# shellcheck shell=` directive
     /// does, because the caller has already said what dialect this is.
     /// `shell_hint` is that dialect, when the caller or the filename named one.
+    #[must_use]
     pub fn with_shell_flag(
         filename: &str,
         script: &str,
         shell_flag_specified: bool,
         shell_hint: Option<Shell>,
-    ) -> Parser {
-        Parser {
+    ) -> Self {
+        Self {
             shell_hint,
             shell_flag_specified,
             sys: Rc::new(NoExternalSources),
@@ -482,7 +502,7 @@ impl Parser {
     // ---- cursor primitives -------------------------------------------------
 
     #[inline]
-    fn mark(&self) -> Mark {
+    const fn mark(&self) -> Mark {
         Mark {
             idx: self.idx,
             line: self.line,
@@ -516,6 +536,7 @@ impl Parser {
     /// the port must too) or never commits in the first place. Empty is the
     /// goal; debug builds only.
     #[cfg(debug_assertions)]
+    #[must_use]
     pub fn backtracked_over_commitment(&self) -> Vec<String> {
         let mut v: Vec<String> = self.commitment_backtracks.iter().cloned().collect();
         v.sort();
@@ -578,7 +599,7 @@ impl Parser {
         Some(c)
     }
 
-    fn eof(&self) -> bool {
+    const fn eof(&self) -> bool {
         self.idx >= self.input.len()
     }
 
@@ -759,7 +780,7 @@ impl Parser {
 
     /// Whether a production has failed outright past the point of commitment,
     /// which is what ends the parse.
-    pub(super) fn has_committed_failure(&self) -> bool {
+    pub(super) const fn has_committed_failure(&self) -> bool {
         self.committed
     }
 
@@ -787,17 +808,16 @@ impl Parser {
         let frozen = self.frozen_contexts.clone();
         let pending = self.pending_heredocs.clone();
         let bodies = self.heredoc_bodies.clone();
-        match f(self) {
-            Ok(v) => Ok(v),
-            Err(()) => {
-                self.reset(m);
-                self.notes.truncate(notes);
-                self.committed = committed;
-                self.frozen_contexts = frozen;
-                self.pending_heredocs = pending;
-                self.heredoc_bodies = bodies;
-                Err(())
-            }
+        if let Ok(v) = f(self) {
+            Ok(v)
+        } else {
+            self.reset(m);
+            self.notes.truncate(notes);
+            self.committed = committed;
+            self.frozen_contexts = frozen;
+            self.pending_heredocs = pending;
+            self.heredoc_bodies = bodies;
+            Err(())
         }
     }
 
@@ -993,22 +1013,22 @@ impl Parser {
     /// but everything in the `StateT` underneath it -- contexts, problems --
     /// carries straight through, so the sub-parse's diagnostics name the
     /// productions that contain it.
-    pub(super) fn sub_parser(&self, input: &str, start: &Position) -> Parser {
-        let mut sub = Parser::new(&self.filename, input);
+    pub(super) fn sub_parser(&self, input: &str, start: &Position) -> Self {
+        let mut sub = Self::new(&self.filename, input);
         sub.line = start.line;
         sub.col = start.column;
         sub.next_id = self.next_id;
-        sub.contexts = self.contexts.clone();
+        sub.contexts.clone_from(&self.contexts);
         sub.next_serial = self.next_serial;
-        sub.ann_contexts = self.ann_contexts.clone();
+        sub.ann_contexts.clone_from(&self.ann_contexts);
         sub.sys = Rc::clone(&self.sys);
         sub.check_sourced = self.check_sourced;
-        sub.root_filename = self.root_filename.clone();
+        sub.root_filename.clone_from(&self.root_filename);
         sub
     }
 
     /// Take back what a sub-parser produced: ids, spans and diagnostics.
-    pub(super) fn merge_sub(&mut self, sub: Parser) {
+    pub(super) fn merge_sub(&mut self, sub: Self) {
         self.next_id = sub.next_id;
         self.next_serial = sub.next_serial;
         for (k, v) in sub.positions {
@@ -1092,10 +1112,9 @@ impl Parser {
     /// contexts it reports come from the stack as it stands then, so the
     /// freshest snapshot is the right one.
     fn outranks_current(&self, rank: (usize, bool, bool, bool)) -> bool {
-        match &self.failure {
-            None => true,
-            Some(f) => rank >= (f.reach, !f.message.is_empty(), f.explicit, f.consumed),
-        }
+        self.failure
+            .as_ref()
+            .is_none_or(|f| rank >= (f.reach, !f.message.is_empty(), f.explicit, f.consumed))
     }
 
     /// Put back a failure that was accumulated before an attempt which has
@@ -1439,7 +1458,7 @@ impl Parser {
             return false;
         }
         i += 1;
-        while matches!(self.input.get(i), Some(' ') | Some('\t')) {
+        while matches!(self.input.get(i), Some(' ' | '\t')) {
             i += 1;
         }
         for ch in "shellcheck".chars() {
@@ -1485,14 +1504,13 @@ impl Parser {
     /// alternation down with it, as a bare `<|>` does.
     fn linefeed_or_carriage_return(&mut self) -> PResult<char> {
         let m = self.mark();
-        match self.linefeed() {
-            Ok(c) => Ok(c),
-            Err(()) => {
-                if self.idx != m.idx {
-                    return Err(());
-                }
-                self.carriage_return()
+        if let Ok(c) = self.linefeed() {
+            Ok(c)
+        } else {
+            if self.idx != m.idx {
+                return Err(());
             }
+            self.carriage_return()
         }
     }
 
@@ -1573,16 +1591,18 @@ impl Parser {
 }
 
 /// Public entry point mirroring `ShellCheck.Parser.parseScript`.
+#[must_use]
 pub fn parse_script(filename: &str, script: &str) -> ParseOutput {
     parse_script_with(filename, script, false, None)
 }
 
-/// Parse a script, telling the parser whether the caller supplied `--shell`,
-/// and which dialect the caller or the filename named if either did.
 /// Parse `script` and report the `reset` sites that rewound over a commitment
-/// (see [`Parser::backtracked_over_commitment`]). For the `try`-emulation
-/// audit; debug builds only, and the parse result itself is discarded.
+/// (see [`Parser::backtracked_over_commitment`]).
+///
+/// For the `try`-emulation audit; debug builds only, and the parse result
+/// itself is discarded.
 #[cfg(debug_assertions)]
+#[must_use]
 pub fn audit_commitment_backtracks(filename: &str, script: &str) -> Vec<String> {
     let mut p = Parser::new(filename, script);
     let _ = p.read_script_file();
@@ -1594,7 +1614,9 @@ pub fn audit_commitment_backtracks(filename: &str, script: &str) -> Vec<String> 
 /// `shell_flag_specified` / `shell_hint` stand for `psShellTypeOverride` plus
 /// the filename-derived fallback the checker resolves before parsing.
 pub struct ParseSpec {
+    /// `psFilename`.
     pub filename: String,
+    /// `psScript`.
     pub script: String,
     /// `psCheckSourced`.
     pub check_sourced: bool,
@@ -1603,14 +1625,14 @@ pub struct ParseSpec {
     /// The dialect as far as the caller knows it.
     pub shell_hint: Option<Shell>,
     /// How `source` statements are resolved and read.
-    pub sys: Rc<dyn SystemInterface>,
+    pub sys: Rc<dyn System>,
 }
 
 impl Default for ParseSpec {
     /// `newParseSpec`, with the interface that refuses every source as
     /// not-an-input (see [`NoExternalSources`]).
     fn default() -> Self {
-        ParseSpec {
+        Self {
             filename: String::new(),
             script: String::new(),
             check_sourced: false,
@@ -1622,6 +1644,7 @@ impl Default for ParseSpec {
 }
 
 /// `parseScript`: the full entry point, including source following.
+#[must_use]
 pub fn parse_script_spec(spec: &ParseSpec) -> ParseOutput {
     let mut p = Parser::with_shell_flag(
         &spec.filename,
@@ -1631,10 +1654,13 @@ pub fn parse_script_spec(spec: &ParseSpec) -> ParseOutput {
     );
     p.sys = Rc::clone(&spec.sys);
     p.check_sourced = spec.check_sourced;
-    p.root_filename = spec.filename.clone();
+    p.root_filename.clone_from(&spec.filename);
     finish_parse(p)
 }
 
+/// Parse a script, telling the parser whether the caller supplied `--shell`,
+/// and which dialect the caller or the filename named if either did.
+#[must_use]
 pub fn parse_script_with(
     filename: &str,
     script: &str,
@@ -1709,10 +1735,7 @@ fn get_associative_arrays(root: &Token) -> std::collections::HashSet<String> {
                 },
                 _ => None,
             };
-            if !matches!(
-                name.as_deref(),
-                Some("declare") | Some("local") | Some("typeset")
-            ) {
+            if !matches!(name.as_deref(), Some("declare" | "local" | "typeset")) {
                 return;
             }
             let args = &words[1..];
@@ -1802,8 +1825,22 @@ fn reattach_heredocs(t: Token, bodies: &BTreeMap<Id, Vec<Token>>) -> Token {
     }
 }
 
+fn reattach_all(ts: Vec<Token>, bodies: &BTreeMap<Id, Vec<Token>>) -> Vec<Token> {
+    ts.into_iter()
+        .map(|t| reattach_heredocs(t, bodies))
+        .collect()
+}
+
 fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: Id) -> InnerToken {
-    use InnerToken::*;
+    use InnerToken::{
+        T_Arithmetic, T_Array, T_Assignment, T_Backticked, T_BatsTest, T_BraceGroup,
+        T_CaseExpression, T_Condition, T_DollarArithmetic, T_DollarBraced, T_DollarBracket,
+        T_DollarDoubleQuoted, T_DollarExpansion, T_DoubleQuoted, T_Extglob, T_ForArithmetic,
+        T_ForIn, T_Function, T_HereDoc, T_HereString, T_IfExpression, T_NormalWord, T_ProcSub,
+        T_SelectIn, T_Subshell, T_UntilExpression, T_WhileExpression, TA_Assignment, TA_Binary,
+        TA_Expansion, TA_Parenthesis, TA_Sequence, TA_Trinary, TA_Unary, TA_Variable, TC_And,
+        TC_Binary, TC_Group, TC_Nullary, TC_Or, TC_Unary,
+    };
     // Special-case heredoc body fill.
     if let T_HereDoc {
         dashed,
@@ -1825,126 +1862,69 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
         };
     }
     // Generic recursive rebuild.
-    macro_rules! r {
-        ($t:expr) => {
-            reattach_heredocs($t, bodies)
-        };
-    }
-    macro_rules! rv {
-        ($v:expr) => {
-            $v.into_iter()
-                .map(|x| reattach_heredocs(x, bodies))
-                .collect()
-        };
-    }
     match inner {
-        T_NormalWord(l) => T_NormalWord(rv!(l)),
-        T_DoubleQuoted(l) => T_DoubleQuoted(rv!(l)),
-        T_DollarDoubleQuoted(l) => T_DollarDoubleQuoted(rv!(l)),
-        T_DollarExpansion(l) => T_DollarExpansion(rv!(l)),
-        T_Backticked(l) => T_Backticked(rv!(l)),
-        T_Subshell(l) => T_Subshell(rv!(l)),
-        T_BraceGroup(l) => T_BraceGroup(rv!(l)),
-        T_Array(l) => T_Array(rv!(l)),
-        T_Extglob { op, list } => T_Extglob {
-            op,
-            list: rv!(list),
-        },
-        T_ProcSub { op, list } => T_ProcSub {
-            op,
-            list: rv!(list),
-        },
-        T_Condition { typ, token } => T_Condition {
-            typ,
-            token: r!(token),
-        },
-        TC_And { typ, op, lhs, rhs } => TC_And {
-            typ,
-            op,
-            lhs: r!(lhs),
-            rhs: r!(rhs),
-        },
-        TC_Or { typ, op, lhs, rhs } => TC_Or {
-            typ,
-            op,
-            lhs: r!(lhs),
-            rhs: r!(rhs),
-        },
-        TC_Binary { typ, op, lhs, rhs } => TC_Binary {
-            typ,
-            op,
-            lhs: r!(lhs),
-            rhs: r!(rhs),
-        },
-        TC_Group { typ, token } => TC_Group {
-            typ,
-            token: r!(token),
-        },
-        TC_Nullary { typ, token } => TC_Nullary {
-            typ,
-            token: r!(token),
-        },
-        TC_Unary { typ, op, token } => TC_Unary {
-            typ,
-            op,
-            token: r!(token),
-        },
-        T_DollarArithmetic(t) => T_DollarArithmetic(r!(t)),
-        T_DollarBracket(t) => T_DollarBracket(r!(t)),
-        T_Arithmetic(t) => T_Arithmetic(r!(t)),
-        TA_Binary { op, lhs, rhs } => TA_Binary {
-            op,
-            lhs: r!(lhs),
-            rhs: r!(rhs),
-        },
-        TA_Assignment { op, lhs, rhs } => TA_Assignment {
-            op,
-            lhs: r!(lhs),
-            rhs: r!(rhs),
-        },
-        TA_Variable { name, indices } => TA_Variable {
-            name,
-            indices: rv!(indices),
-        },
-        TA_Expansion(l) => TA_Expansion(rv!(l)),
-        TA_Sequence(l) => TA_Sequence(rv!(l)),
-        TA_Parenthesis(t) => TA_Parenthesis(r!(t)),
-        TA_Trinary { cond, then, els } => TA_Trinary {
-            cond: r!(cond),
-            then: r!(then),
-            els: r!(els),
-        },
-        TA_Unary { op, operand } => TA_Unary {
-            op,
-            operand: r!(operand),
-        },
-        T_Backgrounded(t) => T_Backgrounded(r!(t)),
-        T_Banged(t) => T_Banged(r!(t)),
-        T_HereString(t) => T_HereString(r!(t)),
-        T_DollarBraced { braced, op } => T_DollarBraced { braced, op: r!(op) },
-        T_AndIf { lhs, rhs } => T_AndIf {
-            lhs: r!(lhs),
-            rhs: r!(rhs),
-        },
-        T_OrIf { lhs, rhs } => T_OrIf {
-            lhs: r!(lhs),
-            rhs: r!(rhs),
-        },
-        T_Pipeline {
-            separators,
-            commands,
-        } => T_Pipeline {
-            separators: rv!(separators),
-            commands: rv!(commands),
-        },
-        T_Redirecting { redirs, cmd } => T_Redirecting {
-            redirs: rv!(redirs),
-            cmd: r!(cmd),
-        },
-        T_SimpleCommand { assignments, words } => T_SimpleCommand {
-            assignments: rv!(assignments),
-            words: rv!(words),
-        },
+        T_NormalWord(_)
+        | T_DoubleQuoted(_)
+        | T_DollarDoubleQuoted(_)
+        | T_DollarExpansion(_)
+        | T_Backticked(_)
+        | T_Array(_)
+        | T_Extglob { .. }
+        | T_ProcSub { .. }
+        | T_HereString(_)
+        | T_DollarBraced { .. }
+        | T_Assignment { .. } => map_word_children(inner, bodies),
+        T_Condition { .. }
+        | TC_And { .. }
+        | TC_Or { .. }
+        | TC_Binary { .. }
+        | TC_Group { .. }
+        | TC_Nullary { .. }
+        | TC_Unary { .. } => map_condition_children(inner, bodies),
+        T_DollarArithmetic(_)
+        | T_DollarBracket(_)
+        | T_Arithmetic(_)
+        | TA_Binary { .. }
+        | TA_Assignment { .. }
+        | TA_Variable { .. }
+        | TA_Expansion(_)
+        | TA_Sequence(_)
+        | TA_Parenthesis(_)
+        | TA_Trinary { .. }
+        | TA_Unary { .. } => map_arithmetic_children(inner, bodies),
+        T_Subshell(_)
+        | T_BraceGroup(_)
+        | T_IfExpression { .. }
+        | T_WhileExpression { .. }
+        | T_UntilExpression { .. }
+        | T_ForIn { .. }
+        | T_SelectIn { .. }
+        | T_ForArithmetic { .. }
+        | T_CaseExpression { .. }
+        | T_Function { .. }
+        | T_BatsTest { .. } => map_compound_children(inner, bodies),
+        other => map_command_children(other, bodies),
+    }
+}
+
+fn map_word_children(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>) -> InnerToken {
+    use InnerToken::{
+        T_Array, T_Assignment, T_Backticked, T_DollarBraced, T_DollarDoubleQuoted,
+        T_DollarExpansion, T_DoubleQuoted, T_Extglob, T_HereString, T_NormalWord, T_ProcSub,
+    };
+    let r = |t| reattach_heredocs(t, bodies);
+    let rv = |v| reattach_all(v, bodies);
+    match inner {
+        T_NormalWord(l) => T_NormalWord(rv(l)),
+        T_DoubleQuoted(l) => T_DoubleQuoted(rv(l)),
+        T_DollarDoubleQuoted(l) => T_DollarDoubleQuoted(rv(l)),
+        T_DollarExpansion(l) => T_DollarExpansion(rv(l)),
+        T_Backticked(l) => T_Backticked(rv(l)),
+        T_Array(l) => T_Array(rv(l)),
+        T_Extglob { op, list } => T_Extglob { op, list: rv(list) },
+        T_ProcSub { op, list } => T_ProcSub { op, list: rv(list) },
+        T_HereString(t) => T_HereString(r(t)),
+        T_DollarBraced { braced, op } => T_DollarBraced { braced, op: r(op) },
         T_Assignment {
             mode,
             var,
@@ -1953,30 +1933,128 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
         } => T_Assignment {
             mode,
             var,
-            indices: rv!(indices),
-            value: r!(value),
+            indices: rv(indices),
+            value: r(value),
         },
+        other => other,
+    }
+}
+
+fn map_condition_children(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>) -> InnerToken {
+    use InnerToken::{T_Condition, TC_And, TC_Binary, TC_Group, TC_Nullary, TC_Or, TC_Unary};
+    let r = |t| reattach_heredocs(t, bodies);
+    match inner {
+        T_Condition { typ, token } => T_Condition {
+            typ,
+            token: r(token),
+        },
+        TC_And { typ, op, lhs, rhs } => TC_And {
+            typ,
+            op,
+            lhs: r(lhs),
+            rhs: r(rhs),
+        },
+        TC_Or { typ, op, lhs, rhs } => TC_Or {
+            typ,
+            op,
+            lhs: r(lhs),
+            rhs: r(rhs),
+        },
+        TC_Binary { typ, op, lhs, rhs } => TC_Binary {
+            typ,
+            op,
+            lhs: r(lhs),
+            rhs: r(rhs),
+        },
+        TC_Group { typ, token } => TC_Group {
+            typ,
+            token: r(token),
+        },
+        TC_Nullary { typ, token } => TC_Nullary {
+            typ,
+            token: r(token),
+        },
+        TC_Unary { typ, op, token } => TC_Unary {
+            typ,
+            op,
+            token: r(token),
+        },
+        other => other,
+    }
+}
+
+fn map_arithmetic_children(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>) -> InnerToken {
+    use InnerToken::{
+        T_Arithmetic, T_DollarArithmetic, T_DollarBracket, TA_Assignment, TA_Binary, TA_Expansion,
+        TA_Parenthesis, TA_Sequence, TA_Trinary, TA_Unary, TA_Variable,
+    };
+    let r = |t| reattach_heredocs(t, bodies);
+    let rv = |v| reattach_all(v, bodies);
+    match inner {
+        T_DollarArithmetic(t) => T_DollarArithmetic(r(t)),
+        T_DollarBracket(t) => T_DollarBracket(r(t)),
+        T_Arithmetic(t) => T_Arithmetic(r(t)),
+        TA_Binary { op, lhs, rhs } => TA_Binary {
+            op,
+            lhs: r(lhs),
+            rhs: r(rhs),
+        },
+        TA_Assignment { op, lhs, rhs } => TA_Assignment {
+            op,
+            lhs: r(lhs),
+            rhs: r(rhs),
+        },
+        TA_Variable { name, indices } => TA_Variable {
+            name,
+            indices: rv(indices),
+        },
+        TA_Expansion(l) => TA_Expansion(rv(l)),
+        TA_Sequence(l) => TA_Sequence(rv(l)),
+        TA_Parenthesis(t) => TA_Parenthesis(r(t)),
+        TA_Trinary { cond, then, els } => TA_Trinary {
+            cond: r(cond),
+            then: r(then),
+            els: r(els),
+        },
+        TA_Unary { op, operand } => TA_Unary {
+            op,
+            operand: r(operand),
+        },
+        other => other,
+    }
+}
+
+fn map_compound_children(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>) -> InnerToken {
+    use InnerToken::{
+        T_BatsTest, T_BraceGroup, T_CaseExpression, T_ForArithmetic, T_ForIn, T_Function,
+        T_IfExpression, T_SelectIn, T_Subshell, T_UntilExpression, T_WhileExpression,
+    };
+    let r = |t| reattach_heredocs(t, bodies);
+    let rv = |v| reattach_all(v, bodies);
+    match inner {
+        T_Subshell(l) => T_Subshell(rv(l)),
+        T_BraceGroup(l) => T_BraceGroup(rv(l)),
         T_IfExpression { clauses, elses } => T_IfExpression {
-            clauses: clauses.into_iter().map(|(c, b)| (rv!(c), rv!(b))).collect(),
-            elses: rv!(elses),
+            clauses: clauses.into_iter().map(|(c, b)| (rv(c), rv(b))).collect(),
+            elses: rv(elses),
         },
         T_WhileExpression { condition, body } => T_WhileExpression {
-            condition: rv!(condition),
-            body: rv!(body),
+            condition: rv(condition),
+            body: rv(body),
         },
         T_UntilExpression { condition, body } => T_UntilExpression {
-            condition: rv!(condition),
-            body: rv!(body),
+            condition: rv(condition),
+            body: rv(body),
         },
         T_ForIn { var, items, body } => T_ForIn {
             var,
-            items: rv!(items),
-            body: rv!(body),
+            items: rv(items),
+            body: rv(body),
         },
         T_SelectIn { var, items, body } => T_SelectIn {
             var,
-            items: rv!(items),
-            body: rv!(body),
+            items: rv(items),
+            body: rv(body),
         },
         T_ForArithmetic {
             init,
@@ -1984,16 +2062,16 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
             step,
             body,
         } => T_ForArithmetic {
-            init: r!(init),
-            cond: r!(cond),
-            step: r!(step),
-            body: rv!(body),
+            init: r(init),
+            cond: r(cond),
+            step: r(step),
+            body: rv(body),
         },
         T_CaseExpression { word, cases } => T_CaseExpression {
-            word: r!(word),
+            word: r(word),
             cases: cases
                 .into_iter()
-                .map(|(t, p, b)| (t, rv!(p), rv!(b)))
+                .map(|(t, p, b)| (t, rv(p), rv(b)))
                 .collect(),
         },
         T_Function {
@@ -2005,38 +2083,75 @@ fn map_children_inner(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>, id: 
             keyword,
             parens,
             name,
-            body: r!(body),
+            body: r(body),
         },
         T_BatsTest { name, body } => T_BatsTest {
             name,
-            body: r!(body),
+            body: r(body),
+        },
+        other => other,
+    }
+}
+
+fn map_command_children(inner: InnerToken, bodies: &BTreeMap<Id, Vec<Token>>) -> InnerToken {
+    use InnerToken::{
+        T_AndIf, T_Annotation, T_Backgrounded, T_Banged, T_FdRedirect, T_Include, T_IoDuplicate,
+        T_IoFile, T_OrIf, T_Pipeline, T_Redirecting, T_Script, T_SimpleCommand, T_SourceCommand,
+    };
+    let r = |t| reattach_heredocs(t, bodies);
+    let rv = |v| reattach_all(v, bodies);
+    match inner {
+        T_Backgrounded(t) => T_Backgrounded(r(t)),
+        T_Banged(t) => T_Banged(r(t)),
+        T_AndIf { lhs, rhs } => T_AndIf {
+            lhs: r(lhs),
+            rhs: r(rhs),
+        },
+        T_OrIf { lhs, rhs } => T_OrIf {
+            lhs: r(lhs),
+            rhs: r(rhs),
+        },
+        T_Pipeline {
+            separators,
+            commands,
+        } => T_Pipeline {
+            separators: rv(separators),
+            commands: rv(commands),
+        },
+        T_Redirecting { redirs, cmd } => T_Redirecting {
+            redirs: rv(redirs),
+            cmd: r(cmd),
+        },
+        T_SimpleCommand { assignments, words } => T_SimpleCommand {
+            assignments: rv(assignments),
+            words: rv(words),
         },
         T_Script { shebang, commands } => T_Script {
-            shebang: r!(shebang),
-            commands: rv!(commands),
+            shebang: r(shebang),
+            commands: rv(commands),
         },
         T_Annotation { annotations, token } => T_Annotation {
             annotations,
-            token: r!(token),
+            token: r(token),
         },
         T_IoFile { op, file } => T_IoFile {
-            op: r!(op),
-            file: r!(file),
+            op: r(op),
+            file: r(file),
         },
-        T_IoDuplicate { op, num } => T_IoDuplicate { op: r!(op), num },
+        T_IoDuplicate { op, num } => T_IoDuplicate { op: r(op), num },
         T_FdRedirect { fd, target } => T_FdRedirect {
             fd,
-            target: r!(target),
+            target: r(target),
         },
         // A sourced file has already had its own here documents reattached by
         // the sub-parse that read it (`readScriptFile` does that per file), but
         // the `source` command itself is an ordinary command that may carry
         // one, so both halves are still walked.
         T_SourceCommand { includer, included } => T_SourceCommand {
-            includer: r!(includer),
-            included: r!(included),
+            includer: r(includer),
+            included: r(included),
         },
-        T_Include(t) => T_Include(r!(t)),
+        T_Include(t) => T_Include(r(t)),
         other => other,
     }
 }

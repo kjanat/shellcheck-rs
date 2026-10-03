@@ -1,7 +1,7 @@
 //! Command dispatch and helpers shared by the `commands` modules.
-use crate::analyzer_lib::*;
+use crate::analyzer_lib::get_flags_until_args;
 
-use crate::ast::*;
+use crate::ast::Token;
 
 /// `arguments`: the words after the command name.
 pub(super) fn word_args(words: &[Token]) -> &[Token] {

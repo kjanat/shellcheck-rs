@@ -6,13 +6,14 @@
 //! node-checks (run on every node pre-order); each is a boxed closure that
 //! pushes diagnostics into an output vector.
 
-use crate::ast::*;
+use crate::ast::{Annotation, AssignmentMode, ConditionType, Id, InnerToken, Token};
 use crate::ast_lib;
 use crate::ast_lib::is_annotation_ignoring_code;
 use crate::ast_lib::{get_literal_string_def, oversimplify_concat};
 use crate::cfg::CFGParameters;
 use crate::cfg_analysis::{self, CFGAnalysis};
 use crate::interface::{Code, Comment, Fix, PositionMap, Severity, Shell, TokenComment};
+use crate::regex_lib::mk_regex;
 use std::collections::BTreeMap;
 
 /// Precomputed analysis context (`ShellCheck.AnalyzerLib.Parameters`).
@@ -20,29 +21,109 @@ use std::collections::BTreeMap;
 /// Grown as checks require more fields. The linear `variableFlow` and CFG are
 /// added when their dependent checks are ported.
 pub struct Parameters {
+    /// `shellType`: the shell type, such as Bash or Ksh.
     pub shell: Shell,
+    /// `shellTypeSpecified`: true if the shell type was forced via flags.
     pub shell_type_specified: bool,
+    /// `rootNode`: the root node of the AST.
     pub root: Token,
+    /// `tokenPositions`: map from token id to start and end position.
     pub token_positions: PositionMap,
     /// Id -> parent Id.
     pub parent_map: BTreeMap<Id, Id>,
     /// Id -> a clone of that token (for parent/ancestor inspection).
     pub id_map: BTreeMap<Id, Token>,
-    pub has_set_e: bool,
-    pub has_pipefail: bool,
-    pub has_lastpipe: bool,
-    /// `hasInheritErrexit`: whether a command substitution inherits `set -e`.
-    /// Bash only when `shopt -s inherit_errexit`; always for the POSIX shells;
-    /// never for ksh.
-    pub has_inherit_errexit: bool,
-    pub has_noglob: bool,
-    /// `hasExecfail`: `shopt -s execfail`, and bash only.
-    pub has_execfail: bool,
+    /// `hasSetE`, `hasPipefail`, `hasLastpipe`, `hasInheritErrexit`, `hasNoglob` and `hasExecfail`,
+    /// read through the methods of the same names.
+    pub options: ShellOptions,
     /// A linear (bad) analysis of data flow (`ShellCheck.AnalyzerLib.variableFlow`).
     pub variable_flow: Vec<StackData>,
     /// Result of the Control Flow Graph data-flow analysis, when extended
     /// analysis is enabled (`ShellCheck.AnalyzerLib.cfgAnalysis`).
     pub cfg_analysis: Option<CFGAnalysis>,
+}
+
+impl Parameters {
+    /// `hasSetE`: whether this script has `set -e` anywhere.
+    #[must_use]
+    pub const fn has_set_e(&self) -> bool {
+        self.options.has(ShellOption::SetE)
+    }
+
+    /// `hasPipefail`: whether this script has `set -o pipefail` anywhere.
+    #[must_use]
+    pub const fn has_pipefail(&self) -> bool {
+        self.options.has(ShellOption::Pipefail)
+    }
+
+    /// `hasLastpipe`: whether this script has the `lastpipe` option set or default.
+    #[must_use]
+    pub const fn has_lastpipe(&self) -> bool {
+        self.options.has(ShellOption::Lastpipe)
+    }
+
+    /// `hasInheritErrexit`: whether a command substitution inherits `set -e`.
+    /// Bash only when `shopt -s inherit_errexit`; always for the POSIX shells;
+    /// never for ksh.
+    #[must_use]
+    pub const fn has_inherit_errexit(&self) -> bool {
+        self.options.has(ShellOption::InheritErrexit)
+    }
+
+    /// `hasNoglob`: whether this script has `set -f` or `set -o noglob` anywhere.
+    #[must_use]
+    pub const fn has_noglob(&self) -> bool {
+        self.options.has(ShellOption::Noglob)
+    }
+
+    /// `hasExecfail`: `shopt -s execfail`, and bash only.
+    #[must_use]
+    pub const fn has_execfail(&self) -> bool {
+        self.options.has(ShellOption::Execfail)
+    }
+}
+
+/// A shell option that `Parameters` records for the whole script.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellOption {
+    /// `set -e`.
+    SetE,
+    /// `set -o pipefail`.
+    Pipefail,
+    /// `shopt -s lastpipe`, or ksh.
+    Lastpipe,
+    /// `shopt -s inherit_errexit`, or a POSIX shell.
+    InheritErrexit,
+    /// `set -f` or `set -o noglob`.
+    Noglob,
+    /// `shopt -s execfail` in bash.
+    Execfail,
+}
+
+/// The set of `ShellOption`s that hold for a script.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShellOptions(u8);
+
+impl ShellOptions {
+    const fn bit(option: ShellOption) -> u8 {
+        1 << option as u8
+    }
+
+    /// Whether `option` holds.
+    #[must_use]
+    pub const fn has(self, option: ShellOption) -> bool {
+        self.0 & Self::bit(option) != 0
+    }
+
+    /// This set, with `option` added when `on` holds.
+    #[must_use]
+    pub const fn with(self, option: ShellOption, on: bool) -> Self {
+        if on {
+            Self(self.0 | Self::bit(option))
+        } else {
+            self
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -52,31 +133,42 @@ pub struct Parameters {
 /// `data Scope = SubshellScope String | NoneScope`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
+    /// `SubshellScope`: a subshell, named by what created it.
     SubshellScope(String),
+    /// `NoneScope`.
     NoneScope,
 }
 
 /// `data DataType = DataString DataSource | DataArray DataSource`.
 #[derive(Debug, Clone)]
 pub enum DataType {
+    /// `DataString`.
     DataString(DataSource),
+    /// `DataArray`.
     DataArray(DataSource),
 }
 
 /// `data DataSource = ...`.
 #[derive(Debug, Clone)]
 pub enum DataSource {
+    /// `SourceFrom`: the value comes from these tokens.
     SourceFrom(Vec<Token>),
+    /// `SourceExternal`.
     SourceExternal,
+    /// `SourceDeclaration`.
     SourceDeclaration,
+    /// `SourceInteger`.
     SourceInteger,
+    /// `SourceChecked`.
     SourceChecked,
 }
 
 /// `data StackData` — one event of the linear flow.
 #[derive(Debug, Clone)]
 pub enum StackData {
+    /// `StackScope`: a scope opens.
     StackScope(Scope),
+    /// `StackScopeEnd`: the innermost scope closes.
     StackScopeEnd,
     /// (base expression, specific position, var name, assigned values)
     Assignment(Token, Token, String, DataType),
@@ -85,6 +177,8 @@ pub enum StackData {
 }
 
 impl Parameters {
+    /// The parent of `t` in `parentMap`.
+    #[must_use]
     pub fn parent(&self, t: &Token) -> Option<&Token> {
         let pid = self.parent_map.get(&t.id())?;
         self.id_map.get(pid)
@@ -94,6 +188,8 @@ impl Parameters {
 /// A check pushes `TokenComment`s into this sink via the emit helpers.
 pub type Out = Vec<TokenComment>;
 
+/// `makeComment`.
+#[must_use]
 pub fn make_comment(severity: Severity, id: Id, code: Code, note: &str) -> TokenComment {
     TokenComment {
         id,
@@ -106,6 +202,8 @@ pub fn make_comment(severity: Severity, id: Id, code: Code, note: &str) -> Token
     }
 }
 
+/// `makeCommentWithFix`.
+#[must_use]
 pub fn make_comment_with_fix(
     severity: Severity,
     id: Id,
@@ -131,21 +229,27 @@ pub fn make_comment_with_fix(
     }
 }
 
+/// `err`: emit a `ErrorC` comment.
 pub fn err(out: &mut Out, id: Id, code: Code, note: &str) {
     out.push(make_comment(Severity::ErrorC, id, code, note));
 }
+/// `warn`: emit a `WarningC` comment.
 pub fn warn(out: &mut Out, id: Id, code: Code, note: &str) {
     out.push(make_comment(Severity::WarningC, id, code, note));
 }
+/// `info`: emit a `InfoC` comment.
 pub fn info(out: &mut Out, id: Id, code: Code, note: &str) {
     out.push(make_comment(Severity::InfoC, id, code, note));
 }
+/// `style`: emit a `StyleC` comment.
 pub fn style(out: &mut Out, id: Id, code: Code, note: &str) {
     out.push(make_comment(Severity::StyleC, id, code, note));
 }
+/// `errWithFix`: emit a `ErrorC` comment with a fix.
 pub fn err_with_fix(out: &mut Out, id: Id, code: Code, note: &str, fix: Fix) {
     out.push(make_comment_with_fix(Severity::ErrorC, id, code, note, fix));
 }
+/// `warnWithFix`: emit a `WarningC` comment with a fix.
 pub fn warn_with_fix(out: &mut Out, id: Id, code: Code, note: &str, fix: Fix) {
     out.push(make_comment_with_fix(
         Severity::WarningC,
@@ -155,9 +259,11 @@ pub fn warn_with_fix(out: &mut Out, id: Id, code: Code, note: &str, fix: Fix) {
         fix,
     ));
 }
+/// `infoWithFix`: emit a `InfoC` comment with a fix.
 pub fn info_with_fix(out: &mut Out, id: Id, code: Code, note: &str, fix: Fix) {
     out.push(make_comment_with_fix(Severity::InfoC, id, code, note, fix));
 }
+/// `styleWithFix`: emit a `StyleC` comment with a fix.
 pub fn style_with_fix(out: &mut Out, id: Id, code: Code, note: &str, fix: Fix) {
     out.push(make_comment_with_fix(Severity::StyleC, id, code, note, fix));
 }
@@ -179,6 +285,7 @@ fn fix_depth(params: &Parameters, id: Id) -> i32 {
 }
 
 /// `replaceStart id params n r`: replace `n` columns at the token's start.
+#[must_use]
 pub fn replace_start(params: &Parameters, id: Id, n: i64, r: &str) -> Replacement {
     let (start, _) = params.token_positions.get(&id).cloned().unwrap_or_default();
     let new_end = Position {
@@ -195,6 +302,7 @@ pub fn replace_start(params: &Parameters, id: Id, n: i64, r: &str) -> Replacemen
 }
 
 /// `replaceEnd id params n r`: replace `n` columns at the token's end.
+#[must_use]
 pub fn replace_end(params: &Parameters, id: Id, n: i64, r: &str) -> Replacement {
     let (_, end) = params.token_positions.get(&id).cloned().unwrap_or_default();
     let new_start = Position {
@@ -211,6 +319,7 @@ pub fn replace_end(params: &Parameters, id: Id, n: i64, r: &str) -> Replacement 
 }
 
 /// `replaceToken id params r`: replace the whole token span.
+#[must_use]
 pub fn replace_token(params: &Parameters, id: Id, r: &str) -> Replacement {
     let (start, end) = params.token_positions.get(&id).cloned().unwrap_or_default();
     Replacement {
@@ -222,53 +331,66 @@ pub fn replace_token(params: &Parameters, id: Id, r: &str) -> Replacement {
     }
 }
 
-pub fn fix_with(replacements: Vec<Replacement>) -> Fix {
+/// `fixWith`.
+#[must_use]
+pub const fn fix_with(replacements: Vec<Replacement>) -> Fix {
     Fix { replacements }
 }
 
 /// A single tree- or node-level check: `Parameters -> Token -> Writer [TokenComment] ()`.
+///
 /// A check over one token: Haskell's `Parameters -> Token -> Writer [TokenComment] ()`.
 /// Plain functions and closures implement it directly; `CommandCheck` and
 /// `ForShell` implement it with their dispatch in front.
 pub trait Check {
+    /// Run the check on `t`, pushing its comments into `out`.
     fn run(&self, params: &Parameters, t: &Token, out: &mut Out);
 }
 
 impl<F: Fn(&Parameters, &Token, &mut Out)> Check for F {
     fn run(&self, params: &Parameters, t: &Token, out: &mut Out) {
-        self(params, t, out)
+        self(params, t, out);
     }
 }
 
+/// A boxed [`Check`].
 pub type CheckFn = Box<dyn Check>;
 
 /// `ShellCheck.AnalyzerLib.Checker` — a set of tree- and node-level checks.
 #[derive(Default)]
 pub struct Checker {
+    /// `perScript`: checks run once on the root.
     pub tree_checks: Vec<CheckFn>,
+    /// `perToken`: checks run on every node.
     pub node_checks: Vec<CheckFn>,
 }
 
 impl Checker {
-    pub fn new() -> Checker {
-        Checker::default()
+    /// `mempty`.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
     }
 
+    /// Add a tree check.
     pub fn tree<C: Check + 'static>(&mut self, c: C) {
         self.tree_checks.push(Box::new(c));
     }
 
+    /// Add a node check.
     pub fn node<C: Check + 'static>(&mut self, c: C) {
         self.node_checks.push(Box::new(c));
     }
 
-    pub fn merge(&mut self, mut other: Checker) {
+    /// `<>`: append the checks of `other`.
+    pub fn merge(&mut self, mut other: Self) {
         self.tree_checks.append(&mut other.tree_checks);
         self.node_checks.append(&mut other.node_checks);
     }
 }
 
 /// `runChecker`: run tree checks on the root, then node checks on every node.
+#[must_use]
 pub fn run_checker(params: &Parameters, checker: &Checker) -> Out {
     let mut out = Out::new();
     for c in &checker.tree_checks {
@@ -288,6 +410,7 @@ pub fn run_checker(params: &Parameters, checker: &Checker) -> Out {
 
 /// `determineShell`: derive the shell from the shebang / shell override, else
 /// the fallback, else Bash.
+#[must_use]
 pub fn determine_shell(fallback: Option<Shell>, root: &Token) -> Shell {
     let candidate = get_candidate(root);
     crate::data::shell_for_executable(&candidate)
@@ -319,9 +442,8 @@ fn from_shebang(shebang: &Token) -> String {
 }
 
 /// Build Id -> parent-Id and Id -> token maps.
+#[must_use]
 pub fn build_maps(root: &Token) -> (BTreeMap<Id, Id>, BTreeMap<Id, Token>) {
-    let mut parent = BTreeMap::new();
-    let mut id_map = BTreeMap::new();
     fn go(t: &Token, parent: &mut BTreeMap<Id, Id>, id_map: &mut BTreeMap<Id, Token>) {
         id_map.insert(t.id(), t.clone());
         for c in t.children() {
@@ -329,6 +451,8 @@ pub fn build_maps(root: &Token) -> (BTreeMap<Id, Id>, BTreeMap<Id, Token>) {
             go(c, parent, id_map);
         }
     }
+    let mut parent = BTreeMap::new();
+    let mut id_map = BTreeMap::new();
     go(root, &mut parent, &mut id_map);
     (parent, id_map)
 }
@@ -341,6 +465,7 @@ pub fn build_maps(root: &Token) -> (BTreeMap<Id, Id>, BTreeMap<Id, Token>) {
 ///   with an `o` flag before `--` at all. That last clause is the oracle's
 ///   behaviour (any `set -o ...` satisfies it for every `opt`), reproduced
 ///   deliberately rather than "corrected".
+#[must_use]
 pub fn is_option_set(opt: &str, root: &Token) -> bool {
     let mut found = false;
     root.visit_preorder(&mut |t| {
@@ -360,14 +485,15 @@ pub fn is_option_set(opt: &str, root: &Token) -> bool {
     found
 }
 
-/// `containsNoglob`: does the script disable globbing anywhere? Same shape as
-/// `contains_set_e` with `noglob` / flag `f`: a `set` command whose arguments
+/// `containsNoglob`: does the script disable globbing anywhere?
+///
+/// Same shape as `contains_set_e` with `noglob` / flag `f`: a `set` command whose arguments
 /// contain `noglob` (with or without `-o`) or carry `f` in a flag group before
 /// `--`, or a shebang such as `#!/bin/sh -f` (Haskell's `[[:space:]]-[^-]*f`).
 pub fn contains_noglob(root: &Token) -> bool {
     use std::sync::OnceLock;
     static SHEBANG_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let shebang_re = SHEBANG_RE.get_or_init(|| regex::Regex::new(r"[[:space:]]-[^-]*f").unwrap());
+    let shebang_re = SHEBANG_RE.get_or_init(|| mk_regex(r"[[:space:]]-[^-]*f"));
     let mut found = false;
     root.visit_preorder(&mut |t| {
         if found {
@@ -390,7 +516,7 @@ pub fn contains_noglob(root: &Token) -> bool {
 }
 
 /// `getFlagsUntil stopCondition`: turn a simple command's arguments into
-/// `(token, flag)` pairs the way ASTLib does — `-avz` yields `a`, `v`, `z`;
+/// `(token, flag)` pairs the way `ASTLib` does — `-avz` yields `a`, `v`, `z`;
 /// `--bar=baz` yields `bar`; a non-flag argument yields `""`. From the first
 /// argument satisfying `stop` onward, everything (that argument included) is
 /// a non-flag, so for `get_all_flags` nothing at or after `--` is a flag.
@@ -440,15 +566,16 @@ pub(crate) fn get_all_flags(t: &Token) -> Vec<(&Token, String)> {
     get_flags_until(&|s| s == "--", t)
 }
 
-/// `containsSetE`: does the script enable errexit anywhere? True for a `set`
-/// command whose arguments contain `errexit` or carry the short flag `e` in
+/// `containsSetE`: does the script enable errexit anywhere?
+///
+/// True for a `set` command whose arguments contain `errexit` or carry the short flag `e` in
 /// any flag group before `--` (`set -e`, `set -ue`, `set -xe`, `set -o
 /// errexit`, but not `set -- -e`), or for a shebang such as `#!/bin/sh -e`
 /// (Haskell's `[[:space:]]-[^-]*e`).
 pub fn contains_set_e(root: &Token) -> bool {
     use std::sync::OnceLock;
     static SHEBANG_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let shebang_re = SHEBANG_RE.get_or_init(|| regex::Regex::new(r"[[:space:]]-[^-]*e").unwrap());
+    let shebang_re = SHEBANG_RE.get_or_init(|| mk_regex(r"[[:space:]]-[^-]*e"));
     let mut found = false;
     root.visit_preorder(&mut |t| {
         if found {
@@ -471,6 +598,7 @@ pub fn contains_set_e(root: &Token) -> bool {
 }
 
 /// Build the full `Parameters` for a parsed script.
+#[must_use]
 pub fn make_parameters(
     root: Token,
     token_positions: PositionMap,
@@ -481,9 +609,11 @@ pub fn make_parameters(
 }
 
 /// Like [`make_parameters`] but with an explicit extended-analysis override from
-/// the `CheckSpec` (`--extended-analysis` / rc `extended-analysis=`). The
-/// override takes precedence over any inline directive, matching the Haskell
+/// the `CheckSpec` (`--extended-analysis` / rc `extended-analysis=`).
+///
+/// The override takes precedence over any inline directive, matching the Haskell
 /// `AnalyzerLib`: `fromMaybe True $ msum [asExtendedAnalysis spec, directive]`.
+#[must_use]
 pub fn make_parameters_ext(
     root: Token,
     token_positions: PositionMap,
@@ -540,20 +670,24 @@ pub fn make_parameters_ext(
         token_positions,
         parent_map,
         id_map,
-        has_set_e,
-        has_pipefail,
-        has_lastpipe,
-        has_inherit_errexit,
-        has_noglob,
-        has_execfail,
+        options: ShellOptions::default()
+            .with(ShellOption::SetE, has_set_e)
+            .with(ShellOption::Pipefail, has_pipefail)
+            .with(ShellOption::Lastpipe, has_lastpipe)
+            .with(ShellOption::InheritErrexit, has_inherit_errexit)
+            .with(ShellOption::Noglob, has_noglob)
+            .with(ShellOption::Execfail, has_execfail),
         variable_flow,
         cfg_analysis,
     }
 }
 
 /// `getEnableDirectives`: the `enable=` names on the file-wide annotation, which
-/// turn optional checks on exactly as `--enable` does. Only the root is
+/// turn optional checks on exactly as `--enable` does.
+///
+/// Only the root is
 /// consulted, as upstream does -- an `enable=` deeper in the file does nothing.
+#[must_use]
 pub fn get_enable_directives(root: &Token) -> Vec<String> {
     match &*root.inner {
         InnerToken::T_Annotation { annotations, .. } => annotations
@@ -629,7 +763,7 @@ fn get_formats(cs: &[char]) -> String {
 }
 
 fn regex_based_get_formats(rest: &[char]) -> String {
-    match match_format_re(rest) {
+    let (mut out, remaining) = match match_format_re(rest) {
         Some((width_star, prec_star, typ, remaining)) => {
             let mut out = String::new();
             if width_star {
@@ -639,25 +773,19 @@ fn regex_based_get_formats(rest: &[char]) -> String {
                 out.push('*');
             }
             out.push(typ);
-            out.push_str(&get_formats(remaining));
-            out
+            (out, remaining)
         }
-        None => {
-            let mut out = String::new();
-            if let Some(&c) = rest.first() {
-                out.push(c);
-            }
-            out.push_str(&get_formats(rest));
-            out
-        }
-    }
+        None => (rest.iter().take(1).collect::<String>(), rest),
+    };
+    out.push_str(&get_formats(remaining));
+    out
 }
 
 const PRINTF_TYPE_CHARS: &str = "diouxXfFeEgGaAcsbqQSC";
 
 /// Manual match of
 /// `^#?-?\+? ?0?(\*|\d*)\.?(\d*|\*)(hh|h|l|ll|q|L|j|z|Z|t)?([diouxXfFeEgGaAcsbqQSC])((\n|.)*)`
-/// Returns (width_is_star, precision_is_star, type_char, remaining_after_type).
+/// Returns (`width_is_star`, `precision_is_star`, `type_char`, `remaining_after_type`).
 fn match_format_re(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
     let mut i = 0usize;
     // flags: #? -? +? space? 0?  (each optional, fixed order)
@@ -683,7 +811,7 @@ fn match_format_re(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
         i += 1;
     } else {
         width_star = false;
-        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
+        while rest.get(i).is_some_and(char::is_ascii_digit) {
             i += 1;
         }
     }
@@ -698,7 +826,7 @@ fn match_format_re(rest: &[char]) -> Option<(bool, bool, char, &[char])> {
         i += 1;
     } else {
         prec_star = false;
-        while rest.get(i).is_some_and(|c| c.is_ascii_digit()) {
+        while rest.get(i).is_some_and(char::is_ascii_digit) {
             i += 1;
         }
     }
@@ -749,10 +877,9 @@ pub(crate) fn get_path(params: &Parameters, t: &Token) -> Vec<Token> {
 // ---- command-name resolution ----------------------------------------------
 
 fn is_flag_word(t: &Token) -> bool {
-    match word_parts(t).first() {
-        Some(p) => matches!(&*p.inner, InnerToken::T_Literal(s) if s.starts_with('-')),
-        None => false,
-    }
+    word_parts(t)
+        .first()
+        .is_some_and(|p| matches!(&*p.inner, InnerToken::T_Literal(s) if s.starts_with('-')))
 }
 
 /// `getCommand`.
@@ -813,15 +940,12 @@ pub(crate) fn get_command_basename(t: &Token) -> Option<String> {
 
 /// `isCommandMatch`.
 fn is_command_match(t: &Token, matcher: impl Fn(&str) -> bool) -> bool {
-    match get_command_name(t) {
-        Some(s) => matcher(&s),
-        None => false,
-    }
+    get_command_name(t).is_some_and(|s| matcher(&s))
 }
 
 /// `isCommand token str` (also matches `/usr/bin/str`).
 pub(crate) fn is_command(t: &Token, str: &str) -> bool {
-    is_command_match(t, |cmd| cmd == str || cmd.ends_with(&format!("/{}", str)))
+    is_command_match(t, |cmd| cmd == str || cmd.ends_with(&format!("/{str}")))
 }
 
 /// `getAllFlags` restricted to the flag strings (`map snd $ getAllFlags`).
@@ -917,7 +1041,7 @@ pub(crate) fn is_quoted_alternative_reference(t: &Token) -> bool {
 
 /// `usedAsCommandName`.
 pub(crate) fn used_as_command_name(params: &Parameters, token: &Token) -> bool {
-    use InnerToken::*;
+    use InnerToken::{T_DoubleQuoted, T_NormalWord, T_SimpleCommand};
     let mut current_id = token.id();
     let mut node = params.parent(token);
     while let Some(t) = node {
@@ -944,9 +1068,8 @@ pub(crate) fn used_as_command_name(params: &Parameters, token: &Token) -> bool {
 pub(crate) fn is_param_to(params: &Parameters, cmd: &str, t: &Token) -> bool {
     let mut cur = t;
     loop {
-        let parent = match params.parent(cur) {
-            Some(p) => p,
-            None => return false,
+        let Some(parent) = params.parent(cur) else {
+            return false;
         };
         match &*parent.inner {
             InnerToken::T_SingleQuoted(_)
@@ -987,32 +1110,36 @@ pub(crate) fn is_quote_free_element(params: &Parameters, t: &Token) -> bool {
 }
 
 pub(crate) fn is_quote_free_context(params: &Parameters, t: &Token) -> Option<bool> {
-    use InnerToken::*;
+    use InnerToken::{
+        T_Arithmetic, T_Assignment, T_CaseExpression, T_DollarArithmetic, T_DollarBraced,
+        T_DollarDoubleQuoted, T_DoubleQuoted, T_ForIn, T_HereDoc, T_Redirecting, T_SelectIn,
+        TA_Sequence, TC_Binary, TC_Nullary, TC_Unary,
+    };
     match &*t.inner {
         TC_Nullary {
             typ: ConditionType::DoubleBracket,
             ..
-        } => Some(true),
-        TC_Unary {
+        }
+        | TC_Unary {
             typ: ConditionType::DoubleBracket,
             ..
-        } => Some(true),
-        TC_Binary {
+        }
+        | TC_Binary {
             typ: ConditionType::DoubleBracket,
             ..
-        } => Some(true),
-        TA_Sequence(_) => Some(true),
-        T_Arithmetic(_) => Some(true),
-        T_DollarArithmetic(_) => Some(true),
+        }
+        | TA_Sequence(_)
+        | T_Arithmetic(_)
+        | T_DollarArithmetic(_)
+        | T_DoubleQuoted(_)
+        | T_DollarDoubleQuoted(_)
+        | T_CaseExpression { .. }
+        | T_HereDoc { .. }
+        | T_DollarBraced { .. }
+        | T_ForIn { .. }
+        | T_SelectIn { .. } => Some(true),
         T_Assignment { .. } => Some(assignment_is_quoting(params, t)),
         T_Redirecting { .. } => Some(false),
-        T_DoubleQuoted(_) => Some(true),
-        T_DollarDoubleQuoted(_) => Some(true),
-        T_CaseExpression { .. } => Some(true),
-        T_HereDoc { .. } => Some(true),
-        T_DollarBraced { .. } => Some(true),
-        T_ForIn { .. } => Some(true),
-        T_SelectIn { .. } => Some(true),
         _ => None,
     }
 }
@@ -1052,7 +1179,7 @@ pub(crate) fn dist(a: &str, b: &str) -> usize {
     for i in 1..=n {
         cur[0] = i;
         for j in 1..=m {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            let cost = usize::from(a[i - 1] != b[j - 1]);
             cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut cur);
@@ -1065,7 +1192,7 @@ pub(crate) fn dist(a: &str, b: &str) -> usize {
 fn get_variables_from_literal(s: &str) -> Vec<String> {
     use std::sync::OnceLock;
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| regex::Regex::new(r"\$\{?([A-Za-z0-9_]+)").unwrap());
+    let re = RE.get_or_init(|| mk_regex(r"\$\{?([A-Za-z0-9_]+)"));
     re.captures_iter(s)
         .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
         .collect()
@@ -1091,7 +1218,7 @@ struct FlowCtx<'a> {
     has_lastpipe: bool,
 }
 
-impl<'a> FlowCtx<'a> {
+impl FlowCtx<'_> {
     fn parent(&self, t: &Token) -> Option<&Token> {
         let pid = self.parent_map.get(&t.id())?;
         self.id_map.get(pid)
@@ -1104,7 +1231,7 @@ enum DefCtor {
     Arr,
 }
 
-fn apply_def(d: &DefCtor, src: DataSource) -> DataType {
+const fn apply_def(d: &DefCtor, src: DataSource) -> DataType {
     match d {
         DefCtor::Str => DataType::DataString(src),
         DefCtor::Arr => DataType::DataArray(src),
@@ -1178,7 +1305,10 @@ fn push_modified(t: &Token, out: &mut Vec<StackData>) {
 }
 
 fn lead_type(ctx: &FlowCtx, t: &Token) -> Scope {
-    use InnerToken::*;
+    use InnerToken::{
+        T_Backgrounded, T_Backticked, T_BatsTest, T_CoProcBody, T_DollarExpansion, T_Redirecting,
+        T_Subshell,
+    };
     let s = |x: &str| Scope::SubshellScope(x.to_string());
     match &*t.inner {
         T_DollarExpansion(_) => s("$(..) expansion"),
@@ -1200,12 +1330,11 @@ fn lead_type(ctx: &FlowCtx, t: &Token) -> Scope {
 
 fn causes_subshell(ctx: &FlowCtx, t: &Token) -> Option<bool> {
     let parent = ctx.parent(t)?;
-    let list = match &*parent.inner {
-        InnerToken::T_Pipeline { commands, .. } => commands,
-        _ => return None,
+    let InnerToken::T_Pipeline { commands: list, .. } = &*parent.inner else {
+        return None;
     };
     Some(if list.len() >= 2 {
-        !ctx.has_lastpipe || list.last().map(|x| x.id()) != Some(t.id())
+        !ctx.has_lastpipe || list.last().map(super::ast::Token::id) != Some(t.id())
     } else {
         false
     })
@@ -1258,27 +1387,89 @@ fn mark_as_checked(place: &Token, token: &Token) -> Vec<(Token, Token, String, D
 }
 
 fn get_modified_variables(t: &Token) -> Vec<(Token, Token, String, DataType)> {
-    use InnerToken::*;
+    use DataSource::{SourceChecked, SourceExternal, SourceFrom, SourceInteger};
+    use DataType::{DataArray, DataString};
+    use InnerToken::{
+        T_Assignment, T_BatsTest, T_CoProc, T_DollarBraced, T_FdRedirect, T_ForIn, T_SelectIn,
+        T_SimpleCommand, TA_Assignment, TA_Unary, TC_Nullary, TC_Unary,
+    };
+    let own = |name: String, dt: DataType| (t.clone(), t.clone(), name, dt);
     match &*t.inner {
-        T_SimpleCommand { assignments, words } => {
-            if words.is_empty() {
-                assignments
-                    .iter()
-                    .filter_map(|x| match &*x.inner {
-                        T_Assignment { var, value, .. } => Some((
-                            x.clone(),
-                            x.clone(),
-                            var.clone(),
-                            data_type_from(&DefCtor::Str, value),
-                        )),
-                        _ => None,
-                    })
-                    .collect()
+        T_SimpleCommand { assignments, words } if words.is_empty() => assignments
+            .iter()
+            .filter_map(|x| match &*x.inner {
+                T_Assignment { var, value, .. } => Some((
+                    x.clone(),
+                    x.clone(),
+                    var.clone(),
+                    data_type_from(&DefCtor::Str, value),
+                )),
+                _ => None,
+            })
+            .collect(),
+        T_SimpleCommand { words, .. } => get_modified_variable_command(t, words),
+
+        TA_Unary { .. } | TA_Assignment { .. } => get_modified_arithmetic_variable(t),
+
+        T_BatsTest { .. } => vec![
+            own("lines".into(), DataArray(SourceExternal)),
+            own("status".into(), DataString(SourceInteger)),
+            own("output".into(), DataString(SourceExternal)),
+            own("stderr".into(), DataString(SourceExternal)),
+            own("stderr_lines".into(), DataArray(SourceExternal)),
+        ],
+
+        TC_Unary { op, token, .. } if op == "-v" => get_variable_for_test_dash_v(token)
+            .map(|str| (t.clone(), token.clone(), str, DataString(SourceChecked)))
+            .into_iter()
+            .collect(),
+        TC_Unary { op, token, .. } if op == "-n" || op == "-z" => mark_as_checked(t, token),
+        TC_Nullary { token, .. } => mark_as_checked(t, token),
+
+        T_DollarBraced { op, .. } => {
+            let string = oversimplify_concat(op);
+            let modifier = get_braced_modifier(&string);
+            if modifier.starts_with('=') || modifier.starts_with(":=") {
+                vec![own(
+                    get_braced_reference(&string),
+                    DataString(SourceFrom(vec![op.clone()])),
+                )]
             } else {
-                get_modified_variable_command(t, words)
+                vec![]
             }
         }
 
+        T_FdRedirect { fd, target } if fd.starts_with('{') => {
+            if is_closing_file_op(target) {
+                vec![]
+            } else {
+                let var: String = fd[1..].chars().take_while(|c| *c != '}').collect();
+                vec![own(var, DataString(SourceInteger))]
+            }
+        }
+
+        T_CoProc { name: None, .. } => vec![own("COPROC".into(), DataArray(SourceInteger))],
+        T_CoProc {
+            name: Some(token), ..
+        } => ast_lib::get_literal_string(token)
+            .map(|name| own(name, DataArray(SourceInteger)))
+            .into_iter()
+            .collect(),
+
+        T_ForIn { var, items, .. } if items.is_empty() => {
+            vec![own(var.clone(), DataString(SourceExternal))]
+        }
+        T_ForIn { var, items, .. } | T_SelectIn { var, items, .. } => {
+            vec![own(var.clone(), DataString(SourceFrom(items.clone())))]
+        }
+        _ => vec![],
+    }
+}
+
+/// The `TA_Unary` and `TA_Assignment` cases of `getModifiedVariables`.
+fn get_modified_arithmetic_variable(t: &Token) -> Vec<(Token, Token, String, DataType)> {
+    use InnerToken::{TA_Assignment, TA_Unary, TA_Variable};
+    match &*t.inner {
         TA_Unary { op, operand } if op.contains("++") || op.contains("--") => {
             match &*operand.inner {
                 TA_Variable { name, .. } => vec![(
@@ -1306,122 +1497,6 @@ fn get_modified_variables(t: &Token) -> Vec<(Token, Token, String, DataType)> {
             }
             vec![]
         }
-
-        T_BatsTest { .. } => vec![
-            (
-                t.clone(),
-                t.clone(),
-                "lines".into(),
-                DataType::DataArray(DataSource::SourceExternal),
-            ),
-            (
-                t.clone(),
-                t.clone(),
-                "status".into(),
-                DataType::DataString(DataSource::SourceInteger),
-            ),
-            (
-                t.clone(),
-                t.clone(),
-                "output".into(),
-                DataType::DataString(DataSource::SourceExternal),
-            ),
-            (
-                t.clone(),
-                t.clone(),
-                "stderr".into(),
-                DataType::DataString(DataSource::SourceExternal),
-            ),
-            (
-                t.clone(),
-                t.clone(),
-                "stderr_lines".into(),
-                DataType::DataArray(DataSource::SourceExternal),
-            ),
-        ],
-
-        TC_Unary { op, token, .. } if op == "-v" => match get_variable_for_test_dash_v(token) {
-            Some(str) => vec![(
-                t.clone(),
-                token.clone(),
-                str,
-                DataType::DataString(DataSource::SourceChecked),
-            )],
-            None => vec![],
-        },
-        TC_Unary { op, token, .. } if op == "-n" || op == "-z" => mark_as_checked(t, token),
-        TC_Nullary { token, .. } => mark_as_checked(t, token),
-
-        T_DollarBraced { op, .. } => {
-            let string = oversimplify_concat(op);
-            let modifier = get_braced_modifier(&string);
-            if modifier.starts_with('=') || modifier.starts_with(":=") {
-                vec![(
-                    t.clone(),
-                    t.clone(),
-                    get_braced_reference(&string),
-                    DataType::DataString(DataSource::SourceFrom(vec![op.clone()])),
-                )]
-            } else {
-                vec![]
-            }
-        }
-
-        T_FdRedirect { fd, target } if fd.starts_with('{') => {
-            if is_closing_file_op(target) {
-                vec![]
-            } else {
-                let var: String = fd[1..].chars().take_while(|c| *c != '}').collect();
-                vec![(
-                    t.clone(),
-                    t.clone(),
-                    var,
-                    DataType::DataString(DataSource::SourceInteger),
-                )]
-            }
-        }
-
-        T_CoProc { name: None, .. } => vec![(
-            t.clone(),
-            t.clone(),
-            "COPROC".into(),
-            DataType::DataArray(DataSource::SourceInteger),
-        )],
-        T_CoProc {
-            name: Some(token), ..
-        } => match ast_lib::get_literal_string(token) {
-            Some(name) => vec![(
-                t.clone(),
-                t.clone(),
-                name,
-                DataType::DataArray(DataSource::SourceInteger),
-            )],
-            None => vec![],
-        },
-
-        T_ForIn { var, items, .. } => {
-            if items.is_empty() {
-                vec![(
-                    t.clone(),
-                    t.clone(),
-                    var.clone(),
-                    DataType::DataString(DataSource::SourceExternal),
-                )]
-            } else {
-                vec![(
-                    t.clone(),
-                    t.clone(),
-                    var.clone(),
-                    DataType::DataString(DataSource::SourceFrom(items.clone())),
-                )]
-            }
-        }
-        T_SelectIn { var, items, .. } => vec![(
-            t.clone(),
-            t.clone(),
-            var.clone(),
-            DataType::DataString(DataSource::SourceFrom(items.clone())),
-        )],
         _ => vec![],
     }
 }
@@ -1589,7 +1664,7 @@ fn get_flag_variable(base: &Token, rest: &[Token]) -> Option<(Token, Token, Stri
         Some((
             base.clone(),
             rest[0].clone(),
-            format!("FLAGS_{}", name),
+            format!("FLAGS_{name}"),
             DataType::DataString(DataSource::SourceExternal),
         ))
     } else {
@@ -1597,59 +1672,102 @@ fn get_flag_variable(base: &Token, rest: &[Token]) -> Option<(Token, Token, Stri
     }
 }
 
-/// `getModifiedVariableCommand` — `base` is the T_SimpleCommand, `words[0]` its name.
+/// The `x` of `T_NormalWord _ (T_Literal _ x:_)`: a word's leading literal.
+fn leading_literal(word: &Token) -> Option<&str> {
+    let InnerToken::T_NormalWord(parts) = &*word.inner else {
+        return None;
+    };
+    match &*parts.first()?.inner {
+        InnerToken::T_Literal(s) => Some(s),
+        _ => None,
+    }
+}
+
+/// `getPrintfVariable`.
+fn get_printf_variable(base: &Token, rest: &[Token]) -> Option<(Token, Token, String, DataType)> {
+    get_flag_assigned_variable(
+        base,
+        "v",
+        DataSource::SourceFrom(rest.to_vec()),
+        cfg_get_bsd_opts("v:", rest),
+    )
+}
+
+/// `getWaitVariable`.
+fn get_wait_variable(base: &Token, rest: &[Token]) -> Option<(Token, Token, String, DataType)> {
+    get_flag_assigned_variable(
+        base,
+        "p",
+        DataSource::SourceInteger,
+        Some(cfg_get_generic_opts(rest)),
+    )
+}
+
+/// `forDeclare`, with its `declaredVars`.
+fn for_declare(
+    base: &Token,
+    rest: &[Token],
+    has: &dyn Fn(&str) -> bool,
+) -> Vec<(Token, Token, String, DataType)> {
+    if has("F") || has("f") || has("p") {
+        return vec![];
+    }
+    let def = if has("a") || has("A") {
+        DefCtor::Arr
+    } else {
+        DefCtor::Str
+    };
+    rest.iter()
+        .flat_map(|t| get_modifier_param(&def, base, t))
+        .collect()
+}
+
+/// The `"read"` case of `getModifiedVariableCommand`.
+fn get_read_variables(base: &Token, rest: &[Token]) -> Vec<(Token, Token, String, DataType)> {
+    let fallback = || -> Vec<(Token, Token, String, DataType)> {
+        let mut v = Vec::new();
+        for tok in rest.iter().rev() {
+            match get_literal_c(base, tok) {
+                Some(a) => v.push(a),
+                None => break,
+            }
+        }
+        v
+    };
+    let Some(parsed) = cfg_get_gnu_opts("sreu:n:N:i:p:a:t:", rest) else {
+        return fallback();
+    };
+    match parsed.iter().find(|(f, _)| f == "a") {
+        // Haskell: `Just (_, var) -> (:[]) <$> getLiteralArray var`
+        // inside `fromMaybe fallback $ do ...`. When getLiteralArray
+        // is Nothing (non-literal, or `-`-prefixed such as the
+        // bundled `-ar` in `read -ar foo`), the whole `do` is Nothing
+        // and control falls back to the trailing-literal run.
+        Some((_, (_, var))) => get_literal_array_c(base, var).map_or_else(fallback, |a| vec![a]),
+        None => parsed
+            .iter()
+            .filter(|(f, _)| f.is_empty())
+            .filter_map(|(_, (_, v))| get_literal_c(base, v))
+            .collect(),
+    }
+}
+
+/// `getModifiedVariableCommand` — `base` is the `T_SimpleCommand`, `words[0]` its name.
 fn get_modified_variable_command(
     base: &Token,
     words: &[Token],
 ) -> Vec<(Token, Token, String, DataType)> {
     // first word's leading literal is the command name x
-    let x = match words.first().and_then(|w| match &*w.inner {
-        InnerToken::T_NormalWord(parts) => parts.first().and_then(|p| match &*p.inner {
-            InnerToken::T_Literal(s) => Some(s.clone()),
-            _ => None,
-        }),
-        _ => None,
-    }) {
-        Some(x) => x,
-        None => return vec![],
+    let Some(x) = words.first().and_then(leading_literal) else {
+        return vec![];
     };
     let rest = &words[1..];
     let flags = command_flag_strings(words);
     let has = |f: &str| flags.iter().any(|s| s == f);
 
-    let result: Vec<(Token, Token, String, DataType)> = match x.as_str() {
+    let result: Vec<(Token, Token, String, DataType)> = match x {
         "builtin" => return get_modified_variable_command(base, rest),
-        "read" => {
-            let fallback = || -> Vec<(Token, Token, String, DataType)> {
-                let mut v = Vec::new();
-                for tok in rest.iter().rev() {
-                    match get_literal_c(base, tok) {
-                        Some(a) => v.push(a),
-                        None => break,
-                    }
-                }
-                v
-            };
-            match cfg_get_gnu_opts("sreu:n:N:i:p:a:t:", rest) {
-                Some(parsed) => match parsed.iter().find(|(f, _)| f == "a") {
-                    // Haskell: `Just (_, var) -> (:[]) <$> getLiteralArray var`
-                    // inside `fromMaybe fallback $ do ...`. When getLiteralArray
-                    // is Nothing (non-literal, or `-`-prefixed such as the
-                    // bundled `-ar` in `read -ar foo`), the whole `do` is Nothing
-                    // and control falls back to the trailing-literal run.
-                    Some((_, (_, var))) => match get_literal_array_c(base, var) {
-                        Some(a) => vec![a],
-                        None => fallback(),
-                    },
-                    None => parsed
-                        .iter()
-                        .filter(|(f, _)| f.is_empty())
-                        .filter_map(|(_, (_, v))| get_literal_c(base, v))
-                        .collect(),
-                },
-                None => fallback(),
-            }
-        }
+        "read" => get_read_variables(base, rest),
         "getopts" => {
             if rest.len() >= 2 {
                 get_literal_c(base, &rest[1]).into_iter().collect()
@@ -1670,20 +1788,7 @@ fn get_modified_variable_command(
                     .collect()
             }
         }
-        "declare" | "typeset" => {
-            if has("F") || has("f") || has("p") {
-                vec![]
-            } else {
-                let def = if has("a") || has("A") {
-                    DefCtor::Arr
-                } else {
-                    DefCtor::Str
-                };
-                rest.iter()
-                    .flat_map(|t| get_modifier_param(&def, base, t))
-                    .collect()
-            }
-        }
+        "declare" | "typeset" => for_declare(base, rest, &has),
         "local" => rest
             .iter()
             .flat_map(|t| get_modifier_param_string(base, t))
@@ -1697,31 +1802,19 @@ fn get_modified_variable_command(
                     .collect()
             }
         }
-        "set" => match get_set_params(rest) {
-            Some(params) => vec![(
-                base.clone(),
-                base.clone(),
-                "@".into(),
-                DataType::DataString(DataSource::SourceFrom(params)),
-            )],
-            None => vec![],
-        },
-        "printf" => get_flag_assigned_variable(
-            base,
-            "v",
-            DataSource::SourceFrom(rest.to_vec()),
-            cfg_get_bsd_opts("v:", rest),
-        )
-        .into_iter()
-        .collect(),
-        "wait" => get_flag_assigned_variable(
-            base,
-            "p",
-            DataSource::SourceInteger,
-            Some(cfg_get_generic_opts(rest)),
-        )
-        .into_iter()
-        .collect(),
+        "set" => get_set_params(rest)
+            .map(|params| {
+                (
+                    base.clone(),
+                    base.clone(),
+                    "@".into(),
+                    DataType::DataString(DataSource::SourceFrom(params)),
+                )
+            })
+            .into_iter()
+            .collect(),
+        "printf" => get_printf_variable(base, rest).into_iter().collect(),
+        "wait" => get_wait_variable(base, rest).into_iter().collect(),
         "mapfile" | "readarray" => get_mapfile_array(base, rest).into_iter().collect(),
         "DEFINE_boolean" | "DEFINE_float" | "DEFINE_integer" | "DEFINE_string" => {
             get_flag_variable(base, rest).into_iter().collect()
@@ -1741,20 +1834,17 @@ fn is_dereferencing_binary_op(op: &str) -> bool {
 }
 
 fn is_arithmetic_assignment(ctx: &FlowCtx, t: &Token) -> bool {
-    match ctx.parent(t) {
-        Some(p) => match &*p.inner {
-            InnerToken::TA_Assignment { op, lhs, .. } if op == "=" => lhs == t,
-            _ => false,
-        },
-        None => false,
-    }
+    ctx.parent(t).is_some_and(|p| match &*p.inner {
+        InnerToken::TA_Assignment { op, lhs, .. } if op == "=" => lhs == t,
+        _ => false,
+    })
 }
 
 fn get_if_reference(context: &Token, token: &Token) -> Vec<(Token, Token, String)> {
-    match get_variable_for_test_dash_v(token) {
-        Some(str) => vec![(context.clone(), token.clone(), get_braced_reference(&str))],
-        None => vec![],
-    }
+    get_variable_for_test_dash_v(token)
+        .map(|str| (context.clone(), token.clone(), get_braced_reference(&str)))
+        .into_iter()
+        .collect()
 }
 
 fn special_references(name: &str, base: &Token, word: &Token) -> Vec<(Token, Token, String)> {
@@ -1770,7 +1860,9 @@ fn special_references(name: &str, base: &Token, word: &Token) -> Vec<(Token, Tok
 }
 
 fn get_referenced_variables(ctx: &FlowCtx, t: &Token) -> Vec<(Token, Token, String)> {
-    use InnerToken::*;
+    use InnerToken::{
+        T_Assignment, T_BatsTest, T_DollarBraced, T_FdRedirect, TA_Variable, TC_Binary, TC_Unary,
+    };
     match &*t.inner {
         T_DollarBraced { op, .. } => {
             let str = oversimplify_concat(op);
@@ -1855,21 +1947,14 @@ fn get_referenced_variable_command(base: &Token) -> Vec<(Token, Token, String)> 
         InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => words,
         _ => return vec![],
     };
-    let x = match words.first().and_then(|w| match &*w.inner {
-        InnerToken::T_NormalWord(parts) => parts.first().and_then(|p| match &*p.inner {
-            InnerToken::T_Literal(s) => Some(s.clone()),
-            _ => None,
-        }),
-        _ => None,
-    }) {
-        Some(x) => x,
-        None => return vec![],
+    let Some(x) = words.first().and_then(leading_literal) else {
+        return vec![];
     };
     let rest = &words[1..];
     let flags = command_flag_strings(words);
     let has = |f: &str| flags.iter().any(|s| s == f);
 
-    match x.as_str() {
+    match x {
         "declare" | "typeset" => {
             if (has("x") || has("p")) && !(has("f") || has("F")) {
                 rest.iter().flat_map(get_reference).collect()
@@ -1891,13 +1976,12 @@ fn get_referenced_variable_command(base: &Token) -> Vec<(Token, Token, String)> 
                 vec![]
             }
         }
-        "trap" => match rest.first() {
-            Some(head) => get_variables_from_literal_token(head)
+        "trap" => rest.first().map_or_else(Vec::new, |head| {
+            get_variables_from_literal_token(head)
                 .into_iter()
                 .map(|v| (base.clone(), head.clone(), v))
-                .collect(),
-            None => vec![],
-        },
+                .collect()
+        }),
         "alias" => rest
             .iter()
             .flat_map(|token| {
@@ -1936,13 +2020,11 @@ pub(crate) fn get_closest_command<'a>(params: &'a Parameters, t: &'a Token) -> O
 }
 
 /// `isTrueAssignmentSource` from `ShellCheck.AnalyzerLib`.
-pub(crate) fn is_true_assignment_source(dt: &DataType) -> bool {
+pub(crate) const fn is_true_assignment_source(dt: &DataType) -> bool {
     !matches!(
         dt,
-        DataType::DataString(DataSource::SourceChecked)
-            | DataType::DataString(DataSource::SourceDeclaration)
-            | DataType::DataArray(DataSource::SourceChecked)
-            | DataType::DataArray(DataSource::SourceDeclaration)
+        DataType::DataString(DataSource::SourceChecked | DataSource::SourceDeclaration)
+            | DataType::DataArray(DataSource::SourceChecked | DataSource::SourceDeclaration)
     )
 }
 
@@ -1979,14 +2061,13 @@ pub(crate) fn is_sourced(params: &Parameters, t: &Token) -> bool {
 /// Condition-children of a parent node, per `isCondition`'s `getConditionChildren`.
 pub(crate) fn condition_children(t: &Token) -> Vec<&Token> {
     match &*t.inner {
-        InnerToken::T_AndIf { lhs, .. } => vec![lhs],
-        InnerToken::T_OrIf { lhs, .. } => vec![lhs],
+        InnerToken::T_AndIf { lhs, .. } | InnerToken::T_OrIf { lhs, .. } => vec![lhs],
         InnerToken::T_IfExpression { clauses, .. } => {
             // concatMap (take 1 . reverse . fst) conditions
             clauses.iter().filter_map(|(cond, _)| cond.last()).collect()
         }
-        InnerToken::T_WhileExpression { condition, .. } => condition.last().into_iter().collect(),
-        InnerToken::T_UntilExpression { condition, .. } => condition.last().into_iter().collect(),
+        InnerToken::T_WhileExpression { condition, .. }
+        | InnerToken::T_UntilExpression { condition, .. } => condition.last().into_iter().collect(),
         _ => vec![],
     }
 }
@@ -2000,9 +2081,8 @@ pub(crate) fn in_condition(params: &Parameters, t: &Token) -> bool {
         if matches!(&*child.inner, InnerToken::T_BatsTest { .. }) {
             return true;
         }
-        let parent = match params.parent(child) {
-            Some(p) => p,
-            None => return false,
+        let Some(parent) = params.parent(child) else {
+            return false;
         };
         if condition_children(parent)
             .iter()
@@ -2016,7 +2096,7 @@ pub(crate) fn in_condition(params: &Parameters, t: &Token) -> bool {
 
 /// `isTestCommand`.
 pub(crate) fn is_test_command(t: &Token) -> bool {
-    use InnerToken::*;
+    use InnerToken::{T_Annotation, T_Condition, T_Pipeline, T_Redirecting, T_SimpleCommand};
     match &*t.inner {
         T_Condition { .. } => true,
         T_SimpleCommand { .. } => is_command(t, "test"),
@@ -2162,12 +2242,12 @@ mod set_option_tests {
             let r = root(script);
             make_parameters(r, PositionMap::new(), None, None)
         };
-        assert!(params("#!/bin/bash\nshopt -s execfail; exec foo; bar").has_execfail);
-        assert!(!params("#!/bin/bash\nexec foo; bar").has_execfail);
-        assert!(!params("#!/bin/dash\nshopt -s execfail; exec foo; bar").has_execfail);
+        assert!(params("#!/bin/bash\nshopt -s execfail; exec foo; bar").has_execfail());
+        assert!(!params("#!/bin/bash\nexec foo; bar").has_execfail());
+        assert!(!params("#!/bin/dash\nshopt -s execfail; exec foo; bar").has_execfail());
         // And the value the check reads is the field, not a fresh tree walk.
         let p = params("#!/bin/bash\nshopt -s execfail; exec foo; bar");
-        assert_eq!(p.has_execfail, is_option_set("execfail", &p.root));
+        assert_eq!(p.has_execfail(), is_option_set("execfail", &p.root));
     }
 }
 
@@ -2249,11 +2329,13 @@ pub(crate) fn token_is_just_command_output(t: &Token) -> bool {
         && parts.len() == 1
     {
         match &*parts[0].inner {
-            InnerToken::T_DollarExpansion(cmds) => return check(cmds),
-            InnerToken::T_Backticked(cmds) => return check(cmds),
+            InnerToken::T_DollarExpansion(cmds) | InnerToken::T_Backticked(cmds) => {
+                return check(cmds);
+            }
             InnerToken::T_DoubleQuoted(inner) if inner.len() == 1 => match &*inner[0].inner {
-                InnerToken::T_DollarExpansion(cmds) => return check(cmds),
-                InnerToken::T_Backticked(cmds) => return check(cmds),
+                InnerToken::T_DollarExpansion(cmds) | InnerToken::T_Backticked(cmds) => {
+                    return check(cmds);
+                }
                 _ => {}
             },
             _ => {}

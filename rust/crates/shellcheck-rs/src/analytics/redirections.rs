@@ -1,10 +1,13 @@
 //! Redirection and pipeline checks from `ShellCheck.Analytics`.
-use super::common::*;
+use super::common::get_command_local;
 use crate::analyzer_lib::get_all_flags;
 use crate::analyzer_lib::get_closest_command;
 use crate::analyzer_lib::get_command_basename;
-use crate::analyzer_lib::*;
-use crate::ast::*;
+use crate::analyzer_lib::{
+    Out, Parameters, err, get_command, get_command_token_or_this, get_path, has_flag, info,
+    is_command, simple_command_words, style, warn,
+};
+use crate::ast::{Id, InnerToken, Quoted, Token};
 use crate::ast_lib;
 use crate::ast_lib::get_command_sequences;
 use crate::ast_lib::is_assignment;
@@ -22,14 +25,6 @@ pub(super) fn check_pipe_pitfalls(_params: &Parameters, t: &Token, out: &mut Out
         .iter()
         .map(|c| oversimplify(c).into_iter().next().unwrap_or_default())
         .collect();
-
-    let has_short_parameter = |args: &[String], ch: char| -> bool {
-        args.iter().any(|x| x.starts_with('-') && x.contains(ch))
-    };
-    let has_parameter = |args: &[String], string: &str| -> bool {
-        args.iter()
-            .any(|x| x.trim_start_matches('-').starts_with(string))
-    };
 
     // for ["find", "xargs"] -> SC2038
     for n in index_of_sublists(&["find", "xargs"], &names) {
@@ -70,41 +65,7 @@ pub(super) fn check_pipe_pitfalls(_params: &Parameters, t: &Token, out: &mut Out
 
     // for ["grep", "wc"] -> SC2126
     for n in index_of_sublists(&["grep", "wc"], &names) {
-        let grep = &commands[n];
-        let wc = &commands[n + 1];
-        let flags_grep = command_flag_strings(get_command_local(grep));
-        let flags_wc = command_flag_strings(get_command_local(wc));
-        let grep_ok = flags_grep.iter().any(|f| {
-            matches!(
-                f.as_str(),
-                "l" | "files-with-matches"
-                    | "L"
-                    | "files-without-matches"
-                    | "o"
-                    | "only-matching"
-                    | "r"
-                    | "R"
-                    | "recursive"
-                    | "A"
-                    | "after-context"
-                    | "B"
-                    | "before-context"
-            )
-        });
-        let wc_ok = flags_wc.iter().any(|f| {
-            matches!(
-                f.as_str(),
-                "m" | "chars" | "w" | "words" | "c" | "bytes" | "L" | "max-line-length"
-            )
-        });
-        if !(grep_ok || wc_ok || flags_wc.is_empty()) {
-            style(
-                out,
-                grep.id(),
-                2126,
-                "Consider using 'grep -c' instead of 'grep|wc -l'.",
-            );
-        }
+        check_grep_wc(&commands[n], &commands[n + 1], out);
     }
 
     // didLs: ls|grep (SC2010) and ls|xargs (SC2011)
@@ -146,10 +107,57 @@ pub(super) fn check_pipe_pitfalls(_params: &Parameters, t: &Token, out: &mut Out
     }
 }
 
+/// `hasShortParameter` from `checkPipePitfalls`.
+fn has_short_parameter(args: &[String], ch: char) -> bool {
+    args.iter().any(|x| x.starts_with('-') && x.contains(ch))
+}
+
+/// `hasParameter` from `checkPipePitfalls`.
+fn has_parameter(args: &[String], string: &str) -> bool {
+    args.iter()
+        .any(|x| x.trim_start_matches('-').starts_with(string))
+}
+
+/// The `for ["grep", "wc"]` arm of `checkPipePitfalls` (SC2126).
+fn check_grep_wc(grep: &Token, wc: &Token, out: &mut Out) {
+    let flags_grep = command_flag_strings(get_command_local(grep));
+    let flags_wc = command_flag_strings(get_command_local(wc));
+    let grep_ok = flags_grep.iter().any(|f| {
+        matches!(
+            f.as_str(),
+            "l" | "files-with-matches"
+                | "L"
+                | "files-without-matches"
+                | "o"
+                | "only-matching"
+                | "r"
+                | "R"
+                | "recursive"
+                | "A"
+                | "after-context"
+                | "B"
+                | "before-context"
+        )
+    });
+    let wc_ok = flags_wc.iter().any(|f| {
+        matches!(
+            f.as_str(),
+            "m" | "chars" | "w" | "words" | "c" | "bytes" | "L" | "max-line-length"
+        )
+    });
+    if !(grep_ok || wc_ok || flags_wc.is_empty()) {
+        style(
+            out,
+            grep.id(),
+            2126,
+            "Consider using 'grep -c' instead of 'grep|wc -l'.",
+        );
+    }
+}
+
 pub(super) fn check_stderr_redirect(params: &Parameters, redir: &Token, out: &mut Out) {
-    let redirs = match &*redir.inner {
-        InnerToken::T_Redirecting { redirs, .. } => redirs,
-        _ => return,
+    let InnerToken::T_Redirecting { redirs, .. } = &*redir.inner else {
+        return;
     };
     if redirs.len() != 2 {
         return;
@@ -245,9 +253,8 @@ pub(super) fn check_ssh_here_doc(_params: &Parameters, t: &Token, out: &mut Out)
 }
 
 pub(super) fn check_redirect_to_same(params: &Parameters, t: &Token, out: &mut Out) {
-    let list = match &*t.inner {
-        InnerToken::T_Pipeline { commands, .. } => commands,
-        _ => return,
+    let InnerToken::T_Pipeline { commands: list, .. } = &*t.inner else {
+        return;
     };
     // getAllRedirs: files targeted by > < >> across all pipeline stages.
     let mut all_redirs: Vec<&Token> = vec![];
@@ -266,12 +273,12 @@ pub(super) fn check_redirect_to_same(params: &Parameters, t: &Token, out: &mut O
             }
         }
     }
-    for l in list {
+    for stage in list {
         let mut nodes: Vec<&Token> = vec![];
-        all_nodes(l, &mut nodes);
-        for x in &all_redirs {
-            for u in &nodes {
-                check_occurrences(params, x, u, out);
+        all_nodes(stage, &mut nodes);
+        for redir_file in &all_redirs {
+            for node in &nodes {
+                check_occurrences(params, redir_file, node, out);
             }
         }
     }
@@ -296,22 +303,22 @@ pub(super) fn check_multiple_appends(_params: &Parameters, t: &Token, out: &mut 
         let mut i = 0;
         while i < targets.len() {
             let key = targets[i].map(|(f, _)| f);
-            let mut j = i + 1;
-            while j < targets.len() {
-                let k2 = targets[j].map(|(f, _)| f);
+            let mut end = i + 1;
+            while end < targets.len() {
+                let k2 = targets[end].map(|(f, _)| f);
                 let same = match (key, k2) {
-                    (Some(a), Some(b)) => a == b,
+                    (Some(lhs), Some(rhs)) => lhs == rhs,
                     (None, None) => true,
                     _ => false,
                 };
                 if !same {
                     break;
                 }
-                j += 1;
+                end += 1;
             }
-            // group is targets[i..j]; checkGroup fires when first is Just and len>=3
+            // group is targets[i..end]; checkGroup fires when first is Just and len>=3
             if let Some((_, id)) = targets[i]
-                && j - i >= 3
+                && end - i >= 3
             {
                 style(
                     out,
@@ -320,7 +327,7 @@ pub(super) fn check_multiple_appends(_params: &Parameters, t: &Token, out: &mut 
                     "Consider using { cmd1; cmd2; } >> file instead of individual redirects.",
                 );
             }
-            i = j;
+            i = end;
         }
     }
 }
@@ -339,10 +346,7 @@ pub(super) fn check_should_use_grep_q(_params: &Parameters, t: &Token, out: &mut
             out,
             id,
             2143,
-            &format!(
-                "Use {}{} -q instead of comparing output with [ {} .. ].",
-                flip, name, op
-            ),
+            &format!("Use {flip}{name} -q instead of comparing output with [ {op} .. ]."),
         );
     }
 }
@@ -413,11 +417,11 @@ pub(super) fn check_redirection_to_command(_params: &Parameters, t: &Token, out:
 }
 
 pub(super) fn check_expansion_with_redirection(params: &Parameters, t: &Token, out: &mut Out) {
-    let list = match &*t.inner {
-        InnerToken::T_DollarExpansion(l) => l,
-        InnerToken::T_Backticked(l) => l,
-        InnerToken::T_DollarBraceCommandExpansion { list, .. } => list,
-        _ => return,
+    let (InnerToken::T_DollarExpansion(list)
+    | InnerToken::T_Backticked(list)
+    | InnerToken::T_DollarBraceCommandExpansion { list, .. }) = &*t.inner
+    else {
+        return;
     };
     if list.len() == 1 {
         ewr_check(params, t.id(), &list[0], out);
@@ -454,8 +458,7 @@ fn is_captured(params: &Parameters, redir: &Token) -> bool {
                 commands.len() > 1
                     && !commands
                         .last()
-                        .map(|last| is_parent_of(params, last, redir))
-                        .unwrap_or(false)
+                        .is_some_and(|last| is_parent_of(params, last, redir))
             }
             InnerToken::T_ProcSub { .. }
             | InnerToken::T_DollarExpansion(_)
@@ -523,17 +526,12 @@ fn parent_io_op<'a>(params: &'a Parameters, t: &'a Token) -> Option<&'a Token> {
 }
 
 fn is_input(params: &Parameters, t: &Token) -> bool {
-    match parent_io_op(params, t) {
-        Some(op) => matches!(&*op.inner, InnerToken::T_Less),
-        None => false,
-    }
+    parent_io_op(params, t).is_some_and(|op| matches!(&*op.inner, InnerToken::T_Less))
 }
 
 fn is_output(params: &Parameters, t: &Token) -> bool {
-    match parent_io_op(params, t) {
-        Some(op) => matches!(&*op.inner, InnerToken::T_Greater | InnerToken::T_DGREAT),
-        None => false,
-    }
+    parent_io_op(params, t)
+        .is_some_and(|op| matches!(&*op.inner, InnerToken::T_Greater | InnerToken::T_DGREAT))
 }
 
 fn special(t: &Token) -> bool {
@@ -541,26 +539,20 @@ fn special(t: &Token) -> bool {
 }
 
 fn is_harmless_command(params: &Parameters, arg: &Token) -> bool {
-    match get_closest_command(params, arg).and_then(get_command_basename) {
-        Some(name) => matches!(name.as_str(), "echo" | "mapfile" | "printf" | "sponge"),
-        None => false,
-    }
+    get_closest_command(params, arg)
+        .and_then(get_command_basename)
+        .is_some_and(|name| matches!(name.as_str(), "echo" | "mapfile" | "printf" | "sponge"))
 }
 
 fn contains_assignment(params: &Parameters, arg: &Token) -> bool {
-    match get_closest_command(params, arg) {
-        Some(cmd) => is_assignment(cmd),
-        None => false,
-    }
+    get_closest_command(params, arg).is_some_and(is_assignment)
 }
 
 /// `getTarget`: (append-file, redirecting-id) for a command that appends (`>>`).
 fn get_target(t: &Token) -> Option<(&Token, Id)> {
     match &*t.inner {
         InnerToken::T_Annotation { token, .. } => get_target(token),
-        InnerToken::T_Pipeline { commands, .. } if !commands.is_empty() => {
-            get_target(commands.last().unwrap())
-        }
+        InnerToken::T_Pipeline { commands, .. } => get_target(commands.last()?),
         InnerToken::T_Redirecting { redirs, .. } => {
             // file <- mapMaybe getAppend list !!! 0
             for r in redirs {
@@ -593,8 +585,7 @@ fn sshd_check_here_doc(r: &Token, out: &mut Out) {
             target.id(),
             2087,
             &format!(
-                "Quote '{}' to make here document expansions happen on the server side rather than on the client.",
-                delim
+                "Quote '{delim}' to make here document expansions happen on the server side rather than on the client."
             ),
         );
     }
@@ -618,8 +609,7 @@ fn rn_is_in_expansion(params: &Parameters, t: &Token) -> bool {
         return false;
     }
     match &*path[1].inner {
-        InnerToken::T_DollarExpansion(l) if l.len() == 1 => true,
-        InnerToken::T_Backticked(l) if l.len() == 1 => true,
+        InnerToken::T_DollarExpansion(l) | InnerToken::T_Backticked(l) if l.len() == 1 => true,
         InnerToken::T_Annotation { .. } => rn_is_in_expansion(params, &path[1]),
         _ => false,
     }
@@ -670,8 +660,7 @@ fn ptn_tree_contains(pred: fn(&Token) -> bool, t: &Token) -> bool {
 fn ptn_may_consume(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_ProcSub { op, .. } if op == "<" => true,
-        InnerToken::T_Backticked(_) => true,
-        InnerToken::T_DollarExpansion(_) => true,
+        InnerToken::T_Backticked(_) | InnerToken::T_DollarExpansion(_) => true,
         _ => false,
     }
 }
@@ -690,14 +679,11 @@ fn ptn_get_op_id(t: &Token) -> Id {
 
 fn ptn_get_default_fds(redir: &Token) -> Option<Vec<i64>> {
     match &*redir.inner {
-        InnerToken::T_HereDoc { .. } => Some(vec![0]),
-        InnerToken::T_HereString(_) => Some(vec![0]),
+        InnerToken::T_HereDoc { .. } | InnerToken::T_HereString(_) => Some(vec![0]),
         InnerToken::T_IoFile { op, .. } => match &*op.inner {
             InnerToken::T_Less => Some(vec![0]),
-            InnerToken::T_Greater => Some(vec![1]),
-            InnerToken::T_DGREAT => Some(vec![1]),
+            InnerToken::T_Greater | InnerToken::T_DGREAT | InnerToken::T_CLOBBER => Some(vec![1]),
             InnerToken::T_GREATAND => Some(vec![1, 2]),
-            InnerToken::T_CLOBBER => Some(vec![1]),
             InnerToken::T_IoDuplicate { op: inner, num } if num == "-" => {
                 ptn_get_default_fds(inner)
             }
@@ -741,7 +727,7 @@ fn ptn_fd_str(n: i64) -> String {
         0 => "stdin".to_string(),
         1 => "stdout".to_string(),
         2 => "stderr".to_string(),
-        _ => format!("FD {}", n),
+        _ => format!("FD {n}"),
     }
 }
 
@@ -797,10 +783,7 @@ fn ptn_check_pipe(
             out,
             cmd.id(),
             2216,
-            &format!(
-                "Piping to '{}', a command that doesn't read stdin. {}",
-                name, suggestion
-            ),
+            &format!("Piping to '{name}', a command that doesn't read stdin. {suggestion}"),
         );
     }
 
@@ -885,10 +868,7 @@ fn ptn_check_redir(_params: &Parameters, cmd: &Token, out: &mut Out) {
             out,
             cmd.id(),
             2217,
-            &format!(
-                "Redirecting to '{}', a command that doesn't read stdin. {}",
-                name, suggestion
-            ),
+            &format!("Redirecting to '{name}', a command that doesn't read stdin. {suggestion}"),
         );
     }
 }
@@ -968,20 +948,19 @@ fn ewr_check_cmd(_params: &Parameters, capture_id: Id, redir_cmd: &Token, out: &
 
 /// The flag strings of a command (`map snd . getAllFlags`), given a command token.
 fn command_flag_strings(cmd: Option<&Token>) -> Vec<String> {
-    match cmd {
-        Some(c) => get_all_flags(c).into_iter().map(|(_, s)| s).collect(),
-        None => vec![],
-    }
+    cmd.map_or_else(Vec::new, |c| {
+        get_all_flags(c).into_iter().map(|(_, s)| s).collect()
+    })
 }
 
 /// `indexOfSublists sub list` with "?" wildcard matching any element.
 fn index_of_sublists(sub: &[&str], list: &[String]) -> Vec<usize> {
     fn matches_at(sub: &[&str], list: &[String]) -> bool {
         match (sub.first(), list.first()) {
-            (Some(&"?"), Some(_)) => matches_at(&sub[1..], &list[1..]),
-            (Some(x), Some(y)) if *x == y.as_str() => matches_at(&sub[1..], &list[1..]),
-            (Some(_), Some(_)) => false,
-            (Some(_), None) => false,
+            (Some(x), Some(y)) if *x == "?" || *x == y.as_str() => {
+                matches_at(&sub[1..], &list[1..])
+            }
+            (Some(_), _) => false,
             (None, _) => true,
         }
     }
@@ -1000,9 +979,13 @@ const GREP_NAMES: &[&str] = &[
 
 fn get_pipeline(t: &Token) -> Option<Vec<Token>> {
     match &*t.inner {
-        InnerToken::T_NormalWord(l) if l.len() == 1 => get_pipeline(&l[0]),
-        InnerToken::T_DoubleQuoted(l) if l.len() == 1 => get_pipeline(&l[0]),
-        InnerToken::T_DollarExpansion(l) if l.len() == 1 => get_pipeline(&l[0]),
+        InnerToken::T_NormalWord(l)
+        | InnerToken::T_DoubleQuoted(l)
+        | InnerToken::T_DollarExpansion(l)
+            if l.len() == 1 =>
+        {
+            get_pipeline(&l[0])
+        }
         InnerToken::T_Pipeline { commands, .. } => Some(commands.clone()),
         _ => None,
     }
@@ -1010,10 +993,7 @@ fn get_pipeline(t: &Token) -> Option<Vec<Token>> {
 
 fn get_final_grep(t: &Token) -> Option<String> {
     let cmds = get_pipeline(t)?;
-    if cmds.is_empty() {
-        return None;
-    }
-    let name = get_command_basename(cmds.last().unwrap())?;
+    let name = get_command_basename(cmds.last()?)?;
     if GREP_NAMES.contains(&name.as_str()) {
         Some(name)
     } else {
