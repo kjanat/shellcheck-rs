@@ -4,7 +4,6 @@ about: Create a new bug report
 title: ''
 labels: ''
 assignees: ''
-
 ---
 
 #### For bugs with existing features
@@ -17,7 +16,7 @@ assignees: ''
 #### Here's a snippet or screenshot that shows the problem:
 
 ```sh
-#!/bin/sh
+#!/usr/bin/env sh
 your script here
 ```
 
@@ -26,3 +25,4 @@ your script here
 
 
 #### Here's what I wanted or expected to see:
+

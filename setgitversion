@@ -4,8 +4,8 @@
 # building git snapshots.
 
 file="src/ShellCheck/Data.hs"
-test -e "$file"
+test -e "${file}"
 tmp=$(mktemp)
 version=$(git describe)
-sed -e "s/=.*VERSIONSTRING.*/= \"$version\" -- VERSIONSTRING, DO NOT SUBMIT/" "$file" > "$tmp"
-mv "$tmp" "$file"
+sed -e "s/=.*VERSIONSTRING.*/= \"${version}\" -- VERSIONSTRING, DO NOT SUBMIT/" "${file}" >"${tmp}"
+mv "${tmp}" "${file}"

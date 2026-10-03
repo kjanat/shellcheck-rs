@@ -1,0 +1,2095 @@
+//! `h2r lower` — the lowering reports. M3a: `Main.main`-rooted
+//! reachability over the closed world, with the independent verifier's
+//! result printed beside it.
+//!
+//! Kept out of `main.rs` for the reason [`crate::m23`] and [`crate::m24`]
+//! are: every later sub-milestone prints into the same report.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Result, bail};
+use h2r_analysis::dictflow::{self, DictFlow, Outcome};
+use h2r_analysis::higher::{Higher, Slot, Verdict as HigherVerdict};
+use h2r_core_ir::{BinderId, ExprId, Module, load_dirs};
+use h2r_lower::reachability::{
+    DeadReason, LinkError, LiveSet, NodeId, RULES, TRUSTED, enclosing_top_pair, root_name,
+    top_pair_binders,
+};
+use h2r_lower::verify::{Audit, verify};
+
+/// Lower only an explicitly selected live leaf. No successful result here
+/// implies that the rest of the program has been lowered.
+pub fn nir(dir: &Path, with: &[PathBuf], name: &str) -> Result<()> {
+    let dumps = load_dirs(dir, with)?;
+    print!("{}", nir_report(&dumps.modules, name)?);
+    Ok(())
+}
+
+/// Print all outcomes before returning failure for an incomplete lowering pass.
+pub fn nir_program(dir: &Path, with: &[PathBuf]) -> Result<()> {
+    let dumps = load_dirs(dir, with)?;
+    let (report, refused) = nir_program_report(&dumps.modules, &|m| !dumps.is_library(m))?;
+    print!("{report}");
+    if refused != 0 {
+        bail!("NIR lowering incomplete: {refused} live bindings refused");
+    }
+    Ok(())
+}
+
+/// Specialize and report every instance the roots need. With `--fn` the root
+/// is that one binding and the full NIR of each instance is printed; without
+/// it, every live binding is a root and the report is the whole-program
+/// measure: how many instances the live set requires, how many lower, and what
+/// the remaining blockers are.
+///
+/// Refusals are recorded rather than fatal, so the report is the whole picture
+/// of what the roots reach. The instances a refused one would itself have
+/// required stay unknown, which makes every count a lower bound.
+pub enum Root<'a> {
+    Every,
+    Whole(&'a str),
+    At {
+        name: &'a str,
+        types: &'a [String],
+        dictionaries: &'a [String],
+    },
+}
+
+pub fn nir_specialize(dir: &Path, with: &[PathBuf], root: Root<'_>, progress: bool) -> Result<()> {
+    let dumps = load_dirs(dir, with)?;
+    let (report, refused) =
+        nir_specialize_report(&dumps.modules, &|m| !dumps.is_library(m), &root, progress)?;
+    print!("{report}");
+    if refused != 0 {
+        bail!("specialization incomplete: {refused} instances refused");
+    }
+    Ok(())
+}
+
+/// Every refusal the whole-program survey attributes to `subject`, grouped by
+/// the shape of the call at its site, so the next implementation is written
+/// against the forms the program actually uses.
+pub fn nir_sites(dir: &Path, with: &[PathBuf], subjects: &[String]) -> Result<()> {
+    let dumps = load_dirs(dir, with)?;
+    print!(
+        "{}",
+        nir_sites_report(&dumps.modules, &|m| !dumps.is_library(m), subjects)?
+    );
+    Ok(())
+}
+
+/// Every live binding a Haskell caller can name, with its type and whether a
+/// standalone Rust entry can be emitted for it: the candidates for testing
+/// ShellCheck's own Core against the GHC-built library.
+pub fn nir_entries(dir: &Path, with: &[PathBuf]) -> Result<()> {
+    use std::fmt::Write;
+
+    let dumps = load_dirs(dir, with)?;
+    let modules = &dumps.modules;
+    let live = audited_live_set(modules)?;
+    let mut emitted = Vec::new();
+    let mut refused: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for binding in &live.live {
+        let key = live.node(binding.node).key;
+        let module = &modules[key.module as usize];
+        let binder = module.binder(key.binder);
+        if binder.source_exported != Some(true) {
+            continue;
+        }
+        let line = format!(
+            "{} :: {}",
+            binder.name,
+            module.binder_ty(key.binder).render()
+        );
+        match h2r_lower::emit::emit_entry(modules, &binder.name) {
+            Ok(_) => emitted.push(line),
+            Err(reason) => {
+                let reason = reason
+                    .rsplit_once(": ")
+                    .map_or(reason.as_str(), |(_, tail)| tail)
+                    .split(" (at source expression ")
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                refused.entry(reason).or_default().push(line);
+            }
+        }
+    }
+    let mut out = format!(
+        "Exported live bindings: {} emitted, {} refused\nEmitted:\n",
+        emitted.len(),
+        refused.values().map(Vec::len).sum::<usize>()
+    );
+    for line in &emitted {
+        writeln!(out, "    {line}").unwrap();
+    }
+    let mut ranked: Vec<_> = refused.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    for (reason, lines) in ranked {
+        writeln!(out, "Refused, {}: {reason}", lines.len()).unwrap();
+        for line in lines {
+            writeln!(out, "    {line}").unwrap();
+        }
+    }
+    print!("{out}");
+    Ok(())
+}
+
+pub fn nir_emit_program(dir: &Path, with: &[PathBuf], output: &Path) -> Result<()> {
+    use h2r_lower::emit::RootOutcome;
+    use h2r_lower::nir::specialize;
+    use std::fmt::Write;
+
+    let dumps = load_dirs(dir, with)?;
+    let modules = &dumps.modules;
+    let live = audited_live_set(modules)?;
+    let roots: Vec<_> = live
+        .live
+        .iter()
+        .map(|binding| live.node(binding.node).key)
+        .filter(|key| !dumps.is_library(key.module as usize))
+        .map(|key| specialize::Instance::whole(key.module as usize, key.binder))
+        .collect();
+    let program = h2r_lower::emit::emit_program(modules, &roots).map_err(anyhow::Error::msg)?;
+    std::fs::write(output, &program.source)?;
+    let mut out = format!(
+        "Roots: {} live program bindings, {} of them emitted\n\
+         Instances: {} reached, {} lowered, {} emit on their own, {} emitted with their whole closure\n\
+         Source: {} bytes, {} lines\n\
+         Lowered instances whose own code does not emit, by reason:\n",
+        roots.len(),
+        program
+            .roots
+            .iter()
+            .filter(|outcome| **outcome == RootOutcome::Emitted)
+            .count(),
+        program.instances,
+        program.lowered,
+        program.emittable,
+        program.emitted,
+        program.source.len(),
+        program.source.lines().count(),
+    );
+    for (reason, count) in rank_counts(program.refusals) {
+        writeln!(out, "{count:8}  {reason}").unwrap();
+    }
+    let mut causes: BTreeMap<String, usize> = BTreeMap::new();
+    for outcome in &program.roots {
+        let cause = match outcome {
+            RootOutcome::Emitted => continue,
+            RootOutcome::NotLowered => "the root itself does not lower".to_string(),
+            RootOutcome::Refused(reason) => reason.clone(),
+            RootOutcome::DependencyRefused => "a dependency does not emit".to_string(),
+        };
+        *causes.entry(cause).or_insert(0) += 1;
+    }
+    writeln!(out, "Roots not emitted, by cause:").unwrap();
+    for (cause, count) in rank_counts(causes) {
+        writeln!(out, "{count:8}  {cause}").unwrap();
+    }
+    let mut by_module: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for (root, outcome) in roots.iter().zip(&program.roots) {
+        let entry = by_module
+            .entry(modules[root.module].name.as_str())
+            .or_default();
+        entry.1 += 1;
+        if *outcome == RootOutcome::Emitted {
+            entry.0 += 1;
+        }
+    }
+    writeln!(out, "Roots emitted, by module:").unwrap();
+    for (module, (emitted, total)) in by_module {
+        writeln!(out, "{emitted:8} of {total:<6} {module}").unwrap();
+    }
+    print!("{out}");
+    Ok(())
+}
+
+/// GHC gives a foreign call's Id an internal name and no entry in the id table.
+pub fn boundary(dir: &Path, with: &[PathBuf]) -> Result<()> {
+    use h2r_core_ir::split_stable_name;
+    use std::fmt::Write;
+
+    let dumps = load_dirs(dir, with)?;
+    let modules = &dumps.modules;
+    let live = audited_live_set(modules)?;
+    let details = |name: &str| {
+        modules
+            .iter()
+            .find_map(|module| module.ids.get(name))
+            .map_or("", |info| info.details.as_str())
+    };
+    let mut primops: BTreeMap<&str, u32> = BTreeMap::new();
+    let mut constructors = (0usize, 0u32);
+    let mut bindings: BTreeMap<(&str, &str), BTreeMap<&str, u32>> = BTreeMap::new();
+    for (name, use_) in &live.imports {
+        if use_.from_live == 0 || live.foreign.contains_key(name) {
+            continue;
+        }
+        let kind = details(name);
+        if kind.contains("PrimOp") {
+            primops.insert(name, use_.from_live);
+        } else if kind.contains("DataCon") {
+            constructors.0 += 1;
+            constructors.1 += use_.from_live;
+        } else {
+            let (unit, module) = split_stable_name(name).map_or(("", ""), |(u, m, _)| (u, m));
+            bindings
+                .entry((unit, module))
+                .or_default()
+                .insert(name, use_.from_live);
+        }
+    }
+    let foreign: Vec<(String, u32)> = live
+        .foreign
+        .iter()
+        .filter(|(_, use_)| use_.from_live != 0)
+        .map(|(name, use_)| {
+            (
+                name.split_whitespace().collect::<Vec<_>>().join(" "),
+                use_.from_live,
+            )
+        })
+        .collect();
+    let mut out = format!(
+        "Out-of-world names referenced from live code\n\
+         Primops: {} names over {} occurrences\n",
+        primops.len(),
+        primops.values().sum::<u32>()
+    );
+    for (name, count) in rank_counts(primops) {
+        writeln!(out, "{count:8}  {name}").unwrap();
+    }
+    writeln!(
+        out,
+        "Foreign calls: {} names over {} occurrences",
+        foreign.len(),
+        foreign.iter().map(|(_, count)| count).sum::<u32>()
+    )
+    .unwrap();
+    for (name, count) in rank_counts(foreign.into_iter().collect()) {
+        writeln!(out, "{count:8}  {name}").unwrap();
+    }
+    writeln!(
+        out,
+        "Bindings: {} names in {} modules over {} occurrences",
+        bindings.values().map(BTreeMap::len).sum::<usize>(),
+        bindings.len(),
+        bindings.values().flat_map(BTreeMap::values).sum::<u32>()
+    )
+    .unwrap();
+    for ((unit, module), names) in &bindings {
+        writeln!(
+            out,
+            "  {unit}:{module}: {} names over {} occurrences",
+            names.len(),
+            names.values().sum::<u32>()
+        )
+        .unwrap();
+        for (name, count) in rank_counts(names.clone()) {
+            writeln!(out, "{count:8}  {name}").unwrap();
+        }
+    }
+    writeln!(
+        out,
+        "Constructors: {} names over {} occurrences",
+        constructors.0, constructors.1
+    )
+    .unwrap();
+    let mut called: BTreeMap<&str, BTreeMap<&str, u32>> = BTreeMap::new();
+    for edge in &live.edges {
+        let (from, to) = (live.node(edge.from), live.node(edge.to));
+        if !live.is_live(edge.from)
+            || dumps.is_library(from.key.module as usize)
+            || !dumps.is_library(to.key.module as usize)
+        {
+            continue;
+        }
+        *called
+            .entry(to.module_name.as_str())
+            .or_default()
+            .entry(to.name.as_str())
+            .or_insert(0) += edge.occurrences;
+    }
+    writeln!(
+        out,
+        "Library bindings live program code names directly: {} in {} modules",
+        called.values().map(BTreeMap::len).sum::<usize>(),
+        called.len()
+    )
+    .unwrap();
+    for (module, names) in called {
+        writeln!(out, "  {module}: {} names", names.len()).unwrap();
+        for (name, count) in rank_counts(names) {
+            writeln!(out, "{count:8}  {name}").unwrap();
+        }
+    }
+    print!("{out}");
+    Ok(())
+}
+
+/// The live set every NIR path roots from: complete in-world linkage, and no
+/// disagreement with the independent verifier.
+fn audited_live_set(modules: &[Module]) -> Result<LiveSet> {
+    let selected: Vec<_> = modules.iter().collect();
+    let live = LiveSet::of_modules(selected.iter().copied())
+        .map_err(|error| anyhow::anyhow!("the live graph has no root: {error}"))?;
+    if !live.in_world_missing.is_empty() {
+        bail!("NIR requires complete in-world linkage; A5-IN-WORLD-MISSING is nonzero");
+    }
+    let audit = verify(&selected, &live);
+    if audit.total_disagreements != 0 {
+        bail!(
+            "reachability verification failed: {} disagreements",
+            audit.total_disagreements
+        );
+    }
+    Ok(live)
+}
+
+/// Which modules' live bindings are roots: the program's own. A library
+/// binding is needed only at the instantiations the program asks for.
+type Owns<'a> = &'a dyn Fn(usize) -> bool;
+
+fn nir_sites_report(modules: &[Module], owns: Owns<'_>, subjects: &[String]) -> Result<String> {
+    use h2r_core_ir::{Edge, Expr};
+    use h2r_lower::nir::specialize;
+    use std::fmt::Write;
+
+    let live = audited_live_set(modules)?;
+    let roots: Vec<_> = live
+        .live
+        .iter()
+        .map(|binding| live.node(binding.node).key)
+        .filter(|key| owns(key.module as usize))
+        .map(|key| specialize::Instance::whole(key.module as usize, key.binder))
+        .collect();
+    let program = specialize::survey(modules, &roots);
+    let mut out = String::new();
+    for subject in subjects {
+        let subject = subject.as_str();
+        let mut groups: BTreeMap<(String, String, String), Vec<String>> = BTreeMap::new();
+        for error in &program.refused {
+            if error.detail.as_deref() != Some(subject) {
+                continue;
+            }
+            let module = &modules[error.instance.module];
+            let instance = format!(
+                "{} at {}",
+                module.binder(error.instance.binder).occ,
+                type_arguments(&error.instance)
+            );
+            let Some(site) = error.source else {
+                groups
+                    .entry((
+                        refusal_reason(error).to_string(),
+                        "no source site".into(),
+                        String::new(),
+                    ))
+                    .or_default()
+                    .push(instance);
+                continue;
+            };
+            let root = module.spine_root(site);
+            let (head, arguments) = module.spine(root);
+            let mut shape = match module.expr(head) {
+                Expr::Var { occ, .. } => occ.clone(),
+                other => format!("<{}>", expression_kind(other)),
+            };
+            for argument in arguments {
+                let argument = module.strip(argument);
+                shape.push(' ');
+                shape.push_str(&match module.expr(argument) {
+                    Expr::Type { ty, .. } => format!("@{{{}}}", module.ty(*ty).render()),
+                    Expr::Var { name, .. } => match module.resolve(argument) {
+                        Some(binder) => format!("(local :: {})", module.binder_ty(binder).render()),
+                        None => name.clone(),
+                    },
+                    Expr::App { .. } => match module.expr(module.spine(argument).0) {
+                        Expr::Var { occ, .. } => format!("({occ} ..)"),
+                        _ => "(application)".into(),
+                    },
+                    other => format!("<{}>", expression_kind(other)),
+                });
+            }
+            let context = match (module.parent[root as usize], &module.edge[root as usize]) {
+                (Some(parent), Edge::CaseScrut) => match module.expr(parent) {
+                    Expr::Case { binder, .. } => {
+                        format!("case scrutinee :: {}", module.binder_ty(*binder).render())
+                    }
+                    _ => "case scrutinee".into(),
+                },
+                (None, _) => "a top-level right-hand side".into(),
+                (Some(_), edge) => format!("{edge:?}"),
+            };
+            groups
+                .entry((refusal_reason(error).to_string(), shape, context))
+                .or_default()
+                .push(instance);
+        }
+        let total: usize = groups.values().map(Vec::len).sum();
+        writeln!(out, "Sites refused about {subject}: {total}").unwrap();
+        let mut ranked: Vec<_> = groups.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+        for ((reason, shape, context), instances) in ranked {
+            writeln!(out, "{:6}  {shape}", instances.len()).unwrap();
+            writeln!(out, "        in {context}; {reason}").unwrap();
+            for instance in instances {
+                writeln!(out, "        - {instance}").unwrap();
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn expression_kind(expr: &h2r_core_ir::Expr) -> &'static str {
+    use h2r_core_ir::Expr;
+    match expr {
+        Expr::Var { .. } => "variable",
+        Expr::Lit(_) => "literal",
+        Expr::App { .. } => "application",
+        Expr::Lam { .. } => "lambda",
+        Expr::Let { .. } => "let",
+        Expr::Case { .. } => "case",
+        Expr::Cast { .. } => "cast",
+        Expr::Tick(_) => "tick",
+        Expr::Type { .. } => "type",
+        Expr::Coercion => "coercion",
+    }
+}
+
+fn nir_specialize_report(
+    modules: &[Module],
+    owns: Owns<'_>,
+    root: &Root<'_>,
+    progress: bool,
+) -> Result<(String, usize)> {
+    use h2r_lower::nir::{pretty::format_leaf, specialize};
+    use std::fmt::Write;
+
+    let live = audited_live_set(modules)?;
+    let (roots, heading) = match *root {
+        Root::Whole(name) | Root::At { name, .. } => {
+            let (module, binder) = one_binding(&live, name)?;
+            let instance = match *root {
+                Root::At {
+                    types,
+                    dictionaries,
+                    ..
+                } => specialize::Instance {
+                    module,
+                    binder,
+                    type_arguments: types
+                        .iter()
+                        .map(|text| Tokens::of(text).whole(Tokens::ty))
+                        .collect::<Result<_>>()?,
+                    dictionaries: dictionaries
+                        .iter()
+                        .map(|text| Tokens::of(text).whole(|t| t.dictionary(&live)))
+                        .collect::<Result<_>>()?,
+                },
+                _ => specialize::Instance::whole(module, binder),
+            };
+            if let Root::At { .. } = root
+                && let Ok((leaf, Err(error))) = h2r_lower::nir::lower::lower_leaf_unverified(
+                    modules,
+                    None,
+                    instance.module,
+                    instance.binder,
+                    h2r_lower::nir::FnId(0),
+                    &instance.type_arguments,
+                    &instance.dictionaries,
+                )
+            {
+                print!("UNVERIFIED {}\n{}", error.reason, format_leaf(&leaf));
+            }
+            (vec![instance], format!("NIR specialization root: {name}"))
+        }
+        Root::Every => {
+            let roots: Vec<_> = live
+                .live
+                .iter()
+                .map(|binding| live.node(binding.node).key)
+                .filter(|key| owns(key.module as usize))
+                .map(|key| specialize::Instance::whole(key.module as usize, key.binder))
+                .collect();
+            let heading = format!(
+                "NIR specialization roots: {} live bindings\nScope: the instances a \
+                 dependency-closed program would need, as far as the lowered ones reveal; \
+                 a refused instance hides its own requirements, so every count is a lower bound",
+                roots.len()
+            );
+            (roots, heading)
+        }
+    };
+    let program = if progress {
+        specialize::survey_observed(modules, &roots, &mut |step| {
+            eprintln!(
+                "progress: {} lowered, {} interned, {} pending, {} resident, at {} {}",
+                step.lowered,
+                step.interned,
+                step.pending,
+                resident(),
+                modules[step.instance.module]
+                    .binder(step.instance.binder)
+                    .name,
+                type_arguments(step.instance),
+            );
+        })
+    } else {
+        specialize::survey(modules, &roots)
+    };
+    let owners = program.instances_per_owner();
+    let specialized = program
+        .instances
+        .iter()
+        .filter(|i| !i.type_arguments.is_empty() || !i.dictionaries.is_empty())
+        .count();
+    let dictionaries = program
+        .instances
+        .iter()
+        .filter(|i| !i.dictionaries.is_empty())
+        .count();
+    let lowered = program.lowered_count();
+    let refused = program.refused.len();
+    let (values, distinct) = (0..program.instances.len())
+        .filter_map(|index| program.leaf(index))
+        .flat_map(|leaf| &leaf.function.blocks)
+        .flat_map(|block| {
+            block
+                .params
+                .iter()
+                .chain(block.instructions.iter().map(|i| &i.result))
+        })
+        .fold((0usize, BTreeMap::new()), |(count, mut distinct), value| {
+            distinct
+                .entry(std::sync::Arc::as_ptr(&value.ty))
+                .or_insert_with(|| ty_bytes(&value.ty));
+            (count + 1, distinct)
+        });
+    let distinct_types = distinct.len();
+    let value_type_bytes: usize = distinct.values().sum();
+    let mut out = format!(
+        "{heading}\nInstances: {} = {lowered} lowered + {refused} refused, over {} owners\nSpecialized: {specialized} at type or dictionary arguments, of which {dictionaries} carry a dictionary\nRetained NIR: {values} values over {distinct_types} shared types of {value_type_bytes} bytes\n",
+        lowered + refused,
+        owners.len(),
+    );
+    if !matches!(root, Root::Every) {
+        let mut stream = std::io::BufWriter::new(std::io::stdout().lock());
+        std::io::Write::write_all(&mut stream, out.as_bytes())?;
+        out.clear();
+        for (index, instance) in program.instances.iter().enumerate() {
+            let Some(leaf) = program.leaf(index) else {
+                continue;
+            };
+            std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "INSTANCE {index} {:?} in {} {} at {}, {} dictionaries\n{}",
+                    modules[instance.module].binder(instance.binder).name,
+                    modules[instance.module].unit,
+                    modules[instance.module].name,
+                    type_arguments(instance),
+                    instance.dictionaries.len(),
+                    format_leaf(leaf),
+                )
+                .as_bytes(),
+            )?;
+        }
+        std::io::Write::flush(&mut stream)?;
+        for error in &program.refused {
+            writeln!(
+                out,
+                "REFUSED {:?} at {}: {}{} [required through {}]{}",
+                modules[error.instance.module]
+                    .binder(error.instance.binder)
+                    .name,
+                type_arguments(&error.instance),
+                error.reason,
+                error
+                    .detail
+                    .as_deref()
+                    .map(|detail| format!(" [about {detail}]"))
+                    .unwrap_or_default(),
+                error
+                    .path
+                    .iter()
+                    .map(|step| modules[step.module].binder(step.binder).name.clone())
+                    .collect::<Vec<_>>()
+                    .join(" -> "),
+                reproduction(modules, &error.instance)
+                    .map(|flags| format!(" [reproduce with {flags}]"))
+                    .unwrap_or_default(),
+            )
+            .unwrap();
+        }
+    } else {
+        let (open, closed): (Vec<_>, Vec<_>) = program
+            .refused
+            .iter()
+            .partition(|error| open_signature(modules, &error.instance));
+        let requested_closed: BTreeSet<_> = program
+            .instances
+            .iter()
+            .filter(|instance| !open_signature(modules, instance))
+            .map(|instance| (instance.module, instance.binder))
+            .collect();
+        let open_owners: BTreeSet<_> = open
+            .iter()
+            .map(|error| (error.instance.module, error.instance.binder))
+            .collect();
+        writeln!(
+            out,
+            "Refused: {refused} = {} at a closed signature + {} at an open signature",
+            closed.len(),
+            open.len()
+        )
+        .unwrap();
+        writeln!(out, "Blockers, by reason:").unwrap();
+        out.push_str(&rank_reasons(&closed));
+        out.push_str(&blocked_subjects("Blockers", &closed));
+        writeln!(
+            out,
+            "Open signatures: {} refused instances of {} bindings quantified over types they were not given; {} of those bindings were also requested at closed types",
+            open.len(),
+            open_owners.len(),
+            open_owners.intersection(&requested_closed).count(),
+        )
+        .unwrap();
+        out.push_str(&rank_reasons(&open));
+        out.push_str(&blocked_subjects("Open signatures", &open));
+        out.push_str(&external_demand(&program));
+        writeln!(out, "Specialized instances:").unwrap();
+        for (index, instance) in program.instances.iter().enumerate() {
+            if instance.type_arguments.is_empty() && instance.dictionaries.is_empty() {
+                continue;
+            }
+            writeln!(
+                out,
+                "    {} {:?} at {}, {} dictionaries",
+                if program.leaf(index).is_some() {
+                    "lowered"
+                } else {
+                    "refused"
+                },
+                modules[instance.module].binder(instance.binder).name,
+                type_arguments(instance),
+                instance.dictionaries.len(),
+            )
+            .unwrap();
+        }
+    }
+    Ok((out, refused))
+}
+
+fn one_binding(live: &LiveSet, name: &str) -> Result<(usize, BinderId)> {
+    let matches = live.by_name(name);
+    let [node] = matches.as_slice() else {
+        bail!(
+            "specialization needs one exact stable root name; {name:?} matched {} bindings",
+            matches.len()
+        );
+    };
+    let key = live.node(*node).key;
+    Ok((key.module as usize, key.binder))
+}
+
+struct Tokens {
+    items: Vec<String>,
+    next: usize,
+}
+
+impl Tokens {
+    fn of(text: &str) -> Tokens {
+        let mut items = Vec::new();
+        let mut current = String::new();
+        for c in text.chars() {
+            if matches!(c, '{' | '}' | ';') || c.is_whitespace() {
+                if !current.is_empty() {
+                    items.push(std::mem::take(&mut current));
+                }
+                if !c.is_whitespace() {
+                    items.push(c.to_string());
+                }
+            } else {
+                current.push(c);
+            }
+        }
+        if !current.is_empty() {
+            items.push(current);
+        }
+        Tokens { items, next: 0 }
+    }
+
+    fn whole<T>(mut self, parse: impl FnOnce(&mut Tokens) -> Result<T>) -> Result<T> {
+        let parsed = parse(&mut self)?;
+        if let Some(rest) = self.items.get(self.next) {
+            bail!("unexpected {rest:?} after a complete argument");
+        }
+        Ok(parsed)
+    }
+
+    fn peek(&self) -> Option<&str> {
+        self.items.get(self.next).map(String::as_str)
+    }
+
+    fn take(&mut self) -> Result<String> {
+        let token = self
+            .items
+            .get(self.next)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("an argument ends early"))?;
+        self.next += 1;
+        Ok(token)
+    }
+
+    fn name(&mut self) -> Result<String> {
+        let token = self.take()?;
+        if matches!(token.as_str(), "{" | "}" | ";") {
+            bail!("expected a stable name, found {token:?}");
+        }
+        Ok(token)
+    }
+
+    fn close(&mut self) -> Result<()> {
+        match self.take()?.as_str() {
+            "}" => Ok(()),
+            other => bail!("expected }}, found {other:?}"),
+        }
+    }
+
+    fn ty(&mut self) -> Result<h2r_core_ir::Ty> {
+        let (name, args) = if self.peek() == Some("{") {
+            self.next += 1;
+            let name = self.name()?;
+            let mut args = Vec::new();
+            while self.peek() != Some("}") {
+                args.push(self.ty()?);
+            }
+            self.close()?;
+            (name, args)
+        } else {
+            (self.name()?, Vec::new())
+        };
+        let occ = name.rsplit('$').next().unwrap_or_default().to_string();
+        Ok(h2r_core_ir::Ty::Con {
+            tycon: h2r_core_ir::TyConId {
+                name: name.into(),
+                occ: occ.into(),
+                unique: Default::default(),
+            },
+            args,
+        })
+    }
+
+    fn dictionary(&mut self, live: &LiveSet) -> Result<h2r_lower::nir::DictionaryRef> {
+        let (name, type_arguments, dictionaries) = if self.peek() == Some("{") {
+            self.next += 1;
+            let name = self.name()?;
+            let mut types = Vec::new();
+            while !matches!(self.peek(), Some("}" | ";")) {
+                types.push(self.ty()?);
+            }
+            let mut dictionaries = Vec::new();
+            if self.peek() == Some(";") {
+                self.next += 1;
+                while self.peek() != Some("}") {
+                    dictionaries.push(self.dictionary(live)?);
+                }
+            }
+            self.close()?;
+            (name, types, dictionaries)
+        } else {
+            (self.name()?, Vec::new(), Vec::new())
+        };
+        let (module, binder) = one_binding(live, &name)?;
+        Ok(h2r_lower::nir::DictionaryRef {
+            module,
+            binder,
+            type_arguments,
+            dictionaries,
+        })
+    }
+}
+
+fn stable_type(ty: &h2r_core_ir::Ty) -> Option<String> {
+    let h2r_core_ir::Ty::Con { tycon, args } = ty else {
+        return None;
+    };
+    if args.is_empty() {
+        return Some(tycon.name.to_string());
+    }
+    let args = args.iter().map(stable_type).collect::<Option<Vec<_>>>()?;
+    Some(format!("{{{} {}}}", tycon.name, args.join(" ")))
+}
+
+fn stable_dictionary(
+    modules: &[Module],
+    reference: &h2r_lower::nir::DictionaryRef,
+) -> Option<String> {
+    let name = &modules[reference.module].binder(reference.binder).name;
+    if reference.type_arguments.is_empty() && reference.dictionaries.is_empty() {
+        return Some(name.clone());
+    }
+    let types = reference
+        .type_arguments
+        .iter()
+        .map(stable_type)
+        .collect::<Option<Vec<_>>>()?;
+    let dictionaries = reference
+        .dictionaries
+        .iter()
+        .map(|d| stable_dictionary(modules, d))
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!(
+        "{{{name} {} ; {}}}",
+        types.join(" "),
+        dictionaries.join(" ")
+    ))
+}
+
+fn reproduction(
+    modules: &[Module],
+    instance: &h2r_lower::nir::specialize::Instance,
+) -> Option<String> {
+    let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+    let mut flags = format!(
+        "--fn {}",
+        quote(&modules[instance.module].binder(instance.binder).name)
+    );
+    let types = instance
+        .type_arguments
+        .iter()
+        .map(|ty| stable_type(ty).map(|text| quote(&text)))
+        .collect::<Option<Vec<_>>>()?;
+    let dictionaries = instance
+        .dictionaries
+        .iter()
+        .map(|d| stable_dictionary(modules, d).map(|text| quote(&text)))
+        .collect::<Option<Vec<_>>>()?;
+    if !types.is_empty() {
+        flags.push_str(&format!(" --at {}", types.join(" ")));
+    }
+    if !dictionaries.is_empty() {
+        flags.push_str(&format!(" --dictionaries {}", dictionaries.join(" ")));
+    }
+    Some(flags)
+}
+
+fn type_arguments(instance: &h2r_lower::nir::specialize::Instance) -> String {
+    let rendered: Vec<_> = instance
+        .type_arguments
+        .iter()
+        .map(h2r_core_ir::Ty::render)
+        .collect();
+    format!("[{}]", rendered.join(", "))
+}
+
+fn open_signature(modules: &[Module], instance: &h2r_lower::nir::specialize::Instance) -> bool {
+    let mut ty = modules[instance.module].binder_ty(instance.binder);
+    let mut quantifiers = 0;
+    while let h2r_core_ir::Ty::ForAll { body, .. } = ty {
+        quantifiers += 1;
+        ty = body;
+    }
+    instance.type_arguments.len() < quantifiers
+}
+
+fn refusal_reason(error: &h2r_lower::nir::specialize::SpecializeError) -> &str {
+    error
+        .reason
+        .split(" (at source expression ")
+        .next()
+        .unwrap_or(&error.reason)
+}
+
+fn rank_reasons(errors: &[&h2r_lower::nir::specialize::SpecializeError]) -> String {
+    use std::fmt::Write;
+
+    let mut reasons: BTreeMap<&str, usize> = BTreeMap::new();
+    for error in errors {
+        *reasons.entry(refusal_reason(error)).or_insert(0) += 1;
+    }
+    let mut out = String::new();
+    for (reason, count) in rank_counts(reasons) {
+        writeln!(out, "{count:8}  {reason}").unwrap();
+    }
+    out
+}
+
+/// Most demanded first, ties broken by the key so a report is reproducible.
+fn rank_counts<K: Ord, V: Ord>(counts: BTreeMap<K, V>) -> Vec<(K, V)> {
+    let mut ranked: Vec<_> = counts.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    ranked
+}
+
+/// What each refusal was about, where the refusing site knew: the type
+/// constructor whose carrier is missing, the family whose layout is not
+/// supported. A reason says which rule stopped an instance; this says which
+/// type would have to be carried for that rule to pass. Refusals whose site
+/// named no subject are counted but not itemised.
+fn blocked_subjects(
+    heading: &str,
+    errors: &[&h2r_lower::nir::specialize::SpecializeError],
+) -> String {
+    use std::fmt::Write;
+
+    const EXTERNAL: &str = "imported binding is outside the loaded world";
+    let mut subjects: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for error in errors {
+        let reason = refusal_reason(error);
+        if reason == EXTERNAL {
+            continue;
+        }
+        if let Some(subject) = error.detail.as_deref() {
+            *subjects.entry((reason, subject)).or_insert(0) += 1;
+        }
+    }
+    if subjects.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("{heading}, by the type they are about:\n");
+    for ((reason, subject), count) in rank_counts(subjects) {
+        writeln!(out, "{count:8}  {subject}  ({reason})").unwrap();
+    }
+    out
+}
+
+/// The external boundary, ranked by demand: which library bindings the survey
+/// asked for and could not find in the loaded world. One instance may name the
+/// same binding at several sites and is counted once per site it refused at, so
+/// these are refusals, not distinct call sites, and — like every survey count —
+/// a lower bound: a refused instance never revealed its own requirements.
+fn external_demand(program: &h2r_lower::nir::specialize::Specialization) -> String {
+    use h2r_core_ir::split_stable_name;
+    use std::fmt::Write;
+
+    const OUTSIDE: &str = "imported binding is outside the loaded world";
+    let mut bindings: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut origins: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for error in &program.refused {
+        if !error.reason.starts_with(OUTSIDE) {
+            continue;
+        }
+        let Some(name) = error.detail.as_deref() else {
+            continue;
+        };
+        *bindings.entry(name).or_insert(0) += 1;
+        if let Some((unit, module, _)) = split_stable_name(name) {
+            *origins.entry((unit, module)).or_insert(0) += 1;
+        }
+    }
+    if bindings.is_empty() {
+        return String::new();
+    }
+    let named: usize = bindings.values().sum();
+    let unnamed = program
+        .refused
+        .iter()
+        .filter(|error| error.reason.starts_with(OUTSIDE) && error.detail.is_none())
+        .count();
+    let mut out = format!(
+        "External boundary: {} distinct bindings over {named} refusals, in {} modules{}\n",
+        bindings.len(),
+        origins.len(),
+        if unnamed == 0 {
+            String::new()
+        } else {
+            format!("; {unnamed} refusals named no occurrence")
+        }
+    );
+    writeln!(out, "External modules, by refusals:").unwrap();
+    for ((unit, module), count) in rank_counts(origins) {
+        writeln!(out, "{count:8}  {unit}:{module}").unwrap();
+    }
+    writeln!(out, "External bindings, by refusals:").unwrap();
+    for (name, count) in rank_counts(bindings) {
+        writeln!(out, "{count:8}  {name}").unwrap();
+    }
+    out
+}
+
+fn nir_program_report(modules: &[Module], owns: Owns<'_>) -> Result<(String, usize)> {
+    use h2r_lower::nir::{pretty::format_leaf, program::lower_program_owners};
+    use std::fmt::Write;
+
+    let attempt = lower_program_owners(modules, owns).map_err(anyhow::Error::msg)?;
+    let mut out = format!(
+        "NIR program attempt (leaf subset; no executable output)\nLive owners: {} = {} lowered + {} refused; {} dead skipped\n",
+        attempt.live,
+        attempt.lowered.len(),
+        attempt.refused.len(),
+        attempt.dead,
+    );
+    if attempt.library != 0 {
+        writeln!(
+            out,
+            "Live library bindings: {}, lowered only as the instances the program requests",
+            attempt.library
+        )
+        .unwrap();
+    }
+    for leaf in &attempt.lowered {
+        let function = &leaf.function;
+        writeln!(
+            out,
+            "LOWERED {:?}",
+            modules[function.module].binder(function.owner).name
+        )
+        .unwrap();
+        out.push_str(&format_leaf(leaf));
+    }
+    for error in &attempt.refused {
+        writeln!(
+            out,
+            "REFUSED module {} binder {} {:?} at {:?}: {}",
+            error.module,
+            error.owner,
+            modules[error.module].binder(error.owner).name,
+            error.source,
+            error.reason
+        )
+        .unwrap();
+    }
+    Ok((out, attempt.refused.len()))
+}
+
+fn nir_report(modules: &[Module], name: &str) -> Result<String> {
+    use h2r_lower::nir::{
+        FnId, lower::lower_leaf_in_world, pretty::format_leaf, verify::verify_leaf_in_world,
+    };
+
+    let live = audited_live_set(modules)?;
+    let matches = live.by_name(name);
+    let [node] = matches.as_slice() else {
+        bail!(
+            "--fn requires one exact stable name; {name:?} matched {} bindings",
+            matches.len()
+        );
+    };
+    if !live.is_live(*node) {
+        bail!("selected binding {name:?} is not reachable from Main.main");
+    }
+    let binding = live.node(*node);
+    let module_index = binding.key.module as usize;
+    let owner = binding.key.binder;
+    let id = FnId(*node);
+    let lowered = lower_leaf_in_world(modules, module_index, owner, id).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot lower {name:?} at {:?}: {}",
+            error.source,
+            error.reason
+        )
+    })?;
+    let accounting = verify_leaf_in_world(modules, module_index, owner, id, &lowered)
+        .map_err(|error| anyhow::anyhow!("NIR source verification failed: {error}"))?;
+    Ok(format!(
+        "NIR leaf: {name}\nScope: one reachable function; not whole-program lowering\nVerified source nodes: {} = {} parameters + {} type parameters + {} value + {} erased ticks + {} erased casts + {} type applications + {} type arguments + {} value applications + {} value arguments\n{}",
+        accounting.source_nodes,
+        accounting.parameter_nodes,
+        accounting.type_parameter_nodes,
+        accounting.value_nodes,
+        accounting.erased_ticks,
+        accounting.erased_casts,
+        accounting.type_application_nodes,
+        accounting.type_argument_nodes,
+        accounting.value_application_nodes,
+        accounting.value_argument_nodes,
+        format_leaf(&lowered),
+    ))
+}
+
+/// One row of the [`A5-IN-WORLD-MISSING`] table, grouped by the module the
+/// unlinkable name points into: how many names, how many occurrences, and
+/// which live modules carry them.
+type TargetRow<'a> = (usize, u32, BTreeSet<&'a str>);
+
+/// How many bindings `--explain` spells out when a name matches several.
+const EXPLAIN_CAP: usize = 20;
+
+/// How many import names the summary lists.
+const TOP_IMPORTS: usize = 20;
+
+#[allow(clippy::too_many_arguments)]
+pub fn lower(
+    dir: &Path,
+    with: &[PathBuf],
+    reachability: bool,
+    json: bool,
+    rules: bool,
+    explain: Option<String>,
+    link: Option<String>,
+    m24_link: bool,
+) -> Result<()> {
+    if rules {
+        print_rules();
+        return Ok(());
+    }
+    if !reachability {
+        bail!(
+            "h2r lower needs --reachability or --nir [--fn <stable-name>]. \
+             --rules prints the reachability rule table."
+        );
+    }
+    let dumps = load_dirs(dir, with)?;
+    let modules = dumps.modules;
+    let selected: Vec<&Module> = modules.iter().collect();
+    let live = match LiveSet::of_modules(selected.iter().copied()) {
+        Ok(l) => l,
+        Err(e) => bail!("the live graph has no root: {e}"),
+    };
+    let audit = verify(&selected, &live);
+
+    if json {
+        let v = serde_json::json!({
+            "reachability": &live,
+            "verifier": &audit,
+            "rules": RULES,
+        });
+        println!("{}", serde_json::to_string_pretty(&v)?);
+        return Ok(());
+    }
+
+    if let Some(what) = link {
+        return print_link(&live, &what);
+    }
+
+    if let Some(what) = explain {
+        return print_explain(&live, &what);
+    }
+
+    print_report(&selected, &live, &audit);
+    if m24_link {
+        println!();
+        print_m24_link(&selected, &live);
+    }
+    Ok(())
+}
+
+fn print_rules() {
+    println!("  rules");
+    for (id, level, meaning) in RULES {
+        println!("  {id:<24} level {level}  {meaning}");
+    }
+}
+
+fn print_report(modules: &[&Module], live: &LiveSet, audit: &Audit) {
+    let a = &live.accounting;
+    println!(
+        "M3a — the Main.main-rooted live set. The nodes are the {} top-level\n\
+         bindings of the {} modules in the dump; the edges are the references\n\
+         between them, established by the resolver (A2-EDGE-LOCAL) and by stable\n\
+         name (A3-EDGE-GLOBAL); live is the transitive closure from the roots.",
+        a.top,
+        modules.len()
+    );
+    println!();
+    println!("  trusted inputs (consulted, never verified — the verifier shares exactly these)");
+    for t in TRUSTED {
+        println!("    - {t}");
+    }
+    println!();
+
+    println!("  roots [{}]", crate::lower::root_rule(live));
+    for r in &live.roots {
+        let t = live.node(r.node);
+        println!("    {} {}  ({})", t.module_name, t.occ, t.name);
+    }
+    if live.roots.is_empty() {
+        println!("    (none)");
+    }
+    // The GHC-generated `:Main.main` wrapper is not the M3a root; say so
+    // rather than leave a reader wondering where it went.
+    for n in live.by_name("$main$:Main$main") {
+        let state = if live.is_live(n) { "live" } else { "dead" };
+        println!(
+            "    note: GHC's own entry wrapper $main$:Main$main is {state}; M3a's root is\n\
+             \x20         $<unit>$Main$main, which it calls through base's runMainIO."
+        );
+    }
+    println!();
+
+    if a.in_world_missing > 0 {
+        println!("  STATUS — THE DEAD SET IS CONDITIONAL [A5-IN-WORLD-MISSING]");
+        println!(
+            "    {} stable name(s) over {} occurrence(s) name a module of this world and no\n\
+             \x20   top-level binding of it. The plugin serialises the CoreProgram *before*\n\
+             \x20   GHC's CoreTidy pass, and CoreTidy is what externalises a top-level binder\n\
+             \x20   GHC has kept internal — so the defining module's dump carries $_in$$wchecker\n\
+             \x20   where a downstream module, which read the tidied interface, refers to\n\
+             \x20   $<unit>$<module>$$wchecker. The closed world cannot see that the two are one\n\
+             \x20   binding, so the reference establishes no edge and the binding can be called\n\
+             \x20   dead although the program calls it.",
+            a.in_world_missing, a.missing_impact.occurrences
+        );
+        println!(
+            "    {} of those names are referenced from LIVE code. Every dead verdict in the {} \n\
+             \x20   module(s) they point into — {} of the {} — is therefore conditional on a\n\
+             \x20   linkage the dump cannot supply, and the live set below is a LOWER BOUND.\n\
+             \x20   This is not a defect of the walk; it is the dump's naming, and it is the\n\
+             \x20   first thing M3 has to fix.",
+            a.missing_impact.names_referenced_from_live,
+            a.missing_impact.suspect_modules.len(),
+            a.missing_impact.suspect_dead,
+            a.dead
+        );
+        println!();
+    } else {
+        // The check stays; only the verdict changes. The conditional block
+        // above is what M3a had to print, and M3a' is the milestone that
+        // removed its cause.
+        println!("  A5-IN-WORLD-MISSING 0: the dead set is unconditional");
+        println!();
+    }
+
+    println!("  per module");
+    println!(
+        "  {:<34} {:>6} {:>6} {:>10} {:>12}",
+        "module", "top", "live", "dead(0-ref)", "dead(only-dead)"
+    );
+    for m in &a.modules {
+        println!(
+            "  {:<34} {:>6} {:>6} {:>10} {:>12}",
+            m.module, m.top, m.live, m.dead_no_refs, m.dead_only_from_dead
+        );
+    }
+    println!(
+        "  {:<34} {:>6} {:>6} {:>10} {:>12}",
+        "TOTAL", a.top, a.live, a.dead_no_refs, a.dead_only_from_dead
+    );
+    println!();
+    println!(
+        "  top {} = live {} + dead {} ({:.1}% dead): asserted per module and in total \
+         [A10-ACCOUNTING]",
+        a.top,
+        a.live,
+        a.dead,
+        100.0 * a.dead as f64 / a.top.max(1) as f64
+    );
+    println!(
+        "  dead {} = no-references {} + only-dead-referrers {}: asserted [A10-ACCOUNTING]",
+        a.dead, a.dead_no_refs, a.dead_only_from_dead
+    );
+    println!(
+        "  edges {} ({} intra-module [A2-EDGE-LOCAL], {} inter-module [A3-EDGE-GLOBAL]) over {} \
+         occurrences",
+        a.edges, a.edges_local, a.edges_global, a.edge_occurrences
+    );
+    println!();
+
+    println!("  the subset check against M2.4c's zero-reference set");
+    println!(
+        "    zero-reference (dictflow's own T_UNREACHABLE predicate)      {:>6}",
+        a.zero_reference
+    );
+    println!(
+        "    …of which are roots (an entry point is not called by the\n\
+         \x20    program, so the root is zero-reference by construction)     {:>6}",
+        a.zero_reference_roots
+    );
+    for n in live.zero_reference_not_dead() {
+        let t = live.node(n);
+        println!(
+            "        {} {}  ({}){}",
+            t.module_name,
+            t.occ,
+            t.name,
+            if live.is_root(n) {
+                "  [A1-ROOT-MAIN]"
+            } else {
+                "  NOT A ROOT"
+            }
+        );
+    }
+    println!(
+        "    …of which are rooted-dead                                    {:>6}",
+        a.zero_reference - a.zero_reference_roots - a.zero_reference_live
+    );
+    println!(
+        "    …neither dead nor a root (the gate asserts 0)                {:>6}",
+        a.zero_reference_live
+    );
+    println!(
+        "    rooted dead                                                 {:>6}",
+        a.dead
+    );
+    println!(
+        "    …additional dead the rooted analysis finds                   {:>6}",
+        a.additional_dead
+    );
+    println!(
+        "    subset: {}",
+        if a.zero_reference_live == 0 {
+            "every zero-reference binding but the root is rooted-dead [A7-DEAD-NO-REFS]"
+        } else {
+            "FAILED — see the accounting"
+        }
+    );
+    println!();
+
+    println!("  imports — external names referenced from live code, top {TOP_IMPORTS} by count");
+    println!(
+        "    {} distinct external stable names in all, {} occurrences from live code and {} \
+         from dead [A4-IMPORT]",
+        a.import_names, a.import_occurrences_live, a.import_occurrences_dead
+    );
+    for (name, use_) in live.imports_by_live_use().into_iter().take(TOP_IMPORTS) {
+        println!("    {:>7}  {}", use_.from_live, name);
+    }
+    println!();
+
+    println!("  in-world missing [A5-IN-WORLD-MISSING]");
+    println!(
+        "    a global occurrence naming an in-world module that GHC's own flags explain \n\
+         \x20   without a top-level binding is not a hole: {} data-constructor name(s) over {} \n\
+         \x20   occurrences, {} class-op selector(s) over {} occurrences and {} wired-in Id(s) \n\
+         \x20   with no source binding over {} occurrences.",
+        a.in_world_non_bindings.data_con_names,
+        a.in_world_non_bindings.data_con_occurrences,
+        a.in_world_non_bindings.class_op_names,
+        a.in_world_non_bindings.class_op_occurrences,
+        a.in_world_non_bindings.wired_in_names,
+        a.in_world_non_bindings.wired_in_occurrences
+    );
+    if a.in_world_missing == 0 {
+        println!("    0 names remain: the closed world links every other in-world reference.");
+    } else {
+        let mi = &a.missing_impact;
+        println!(
+            "    {} name(s) remain, over {} occurrence(s): a linkage hole, NOT 0. The plugin\n\
+             \x20   serialises the CoreProgram before GHC's CoreTidy pass, so a top-level\n\
+             \x20   binding GHC has not externalised yet carries an internal name in its own\n\
+             \x20   module's dump while a downstream module — which read the tidied interface —\n\
+             \x20   names it externally. Every stable-name linkage in the compiler has this\n\
+             \x20   gap; M3a is the first pass to measure it.",
+            mi.names, mi.occurrences
+        );
+        println!(
+            "    {} of the {} names are referenced from live code; {} have no name-matched\n\
+             \x20   candidate binding at all.",
+            mi.names_referenced_from_live, mi.names, mi.names_without_candidate
+        );
+        println!(
+            "    the sound bound, which needs no name: the {} module(s) an unlinkable name\n\
+             \x20   referenced from live code points into hold {} of the {} dead bindings, and\n\
+             \x20   those verdicts are conditional on the linkage:\n\
+             \x20   {}",
+            mi.suspect_modules.len(),
+            mi.suspect_dead,
+            a.dead,
+            mi.suspect_modules.join(", ")
+        );
+        println!(
+            "    the constructive bound [A11-MISSING-IMPACT, evidence level 6 — a NAME match,\n\
+             \x20   never an edge]: re-running the closure with every name-matched edge added\n\
+             \x20   makes {} further binding(s) live, from {} candidate binding(s), {} of them\n\
+             \x20   currently dead. Where it lands:",
+            mi.would_become_live, mi.candidates, mi.candidates_dead
+        );
+        let mut by: Vec<(&String, &usize)> = mi.would_become_live_by_module.iter().collect();
+        by.sort_by(|x, y| y.1.cmp(x.1).then(x.0.cmp(y.0)));
+        for (m, k) in by {
+            println!("      {k:>6}  {m}");
+        }
+        let mut by_target: BTreeMap<&str, TargetRow<'_>> = BTreeMap::new();
+        for m in &live.in_world_missing {
+            let e = by_target.entry(m.in_module.as_str()).or_default();
+            e.0 += 1;
+            e.1 += m.occurrences;
+            for r in &m.live_referrer_modules {
+                e.2.insert(r.as_str());
+            }
+        }
+        println!("    by the module the name points into, with the live modules that name it");
+        let mut tr: Vec<(&&str, &TargetRow<'_>)> = by_target.iter().collect();
+        tr.sort_by(|x, y| y.1.1.cmp(&x.1.1).then(x.0.cmp(y.0)));
+        for (target, (names, occs, from)) in tr {
+            println!(
+                "      {occs:>6} occ over {names:>3} name(s)  {target}  <- {}",
+                if from.is_empty() {
+                    "(nothing live)".to_string()
+                } else {
+                    from.iter().copied().collect::<Vec<_>>().join(", ")
+                }
+            );
+        }
+        let mut rows: Vec<&h2r_lower::reachability::Missing> =
+            live.in_world_missing.iter().collect();
+        rows.sort_by(|x, y| y.occurrences.cmp(&x.occurrences).then(x.name.cmp(&y.name)));
+        println!("    the ten most referenced, with their name-matched candidates");
+        for m in rows.iter().take(10) {
+            println!(
+                "      {:>6}  {}  ({} candidate(s), {} dead, {})",
+                m.occurrences,
+                m.name,
+                m.candidates.len(),
+                m.candidates_dead,
+                if m.referenced_from_live {
+                    "referenced from live code"
+                } else {
+                    "referenced only from dead code"
+                }
+            );
+        }
+    }
+    println!();
+
+    println!("  the identity rules, with their counts");
+    println!(
+        "    [{A12}] external stable names an in-world top-level binding defines  {:>6}",
+        a.external_names_defined,
+        A12 = h2r_lower::reachability::A12_EXTERNAL_UNIQUE
+    );
+    println!(
+        "      ...defined by more than one binding (the graph refuses to build     {:>6}\n\
+         \x20      otherwise, so this is 0 or there is no report)",
+        a.external_name_collisions
+    );
+    println!(
+        "    [{A13}] Ref::Global occurrences carrying an internal stable name    {:>6}",
+        a.global_internal_occurrences,
+        A13 = h2r_lower::reachability::A13_GLOBAL_EXTERNAL
+    );
+    println!(
+        "      ...distinct such names                                              {:>6}",
+        a.global_internal_names
+    );
+    println!(
+        "    the IR resolver's unique-collision guard, over the whole world        {:>6}",
+        a.unique_collisions
+    );
+    println!();
+
+    println!("  accounting [A10-ACCOUNTING]");
+    let bad = a.check();
+    if bad.is_empty() {
+        println!("    every identity holds");
+    } else {
+        for b in &bad {
+            println!("    FAILED  {b}");
+        }
+    }
+    println!();
+
+    println!("  the independent verifier ({})", audit.headline());
+    for line in audit.report_lines() {
+        println!("    {line}");
+    }
+    println!();
+
+    println!("  the largest dead components, by module");
+    let mut rows: Vec<(&str, usize, usize)> = a
+        .modules
+        .iter()
+        .map(|m| (m.module.as_str(), m.dead(), m.top))
+        .collect();
+    rows.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(y.0)));
+    for (name, dead, top) in rows.iter().take(10) {
+        println!("    {dead:>6} of {top:<6}  {name}");
+    }
+    println!();
+
+    println!("  what the rooted analysis adds over the zero-reference subset, by example");
+    let mut extra: Vec<NodeId> = live
+        .dead
+        .iter()
+        .filter(|d| d.reason == DeadReason::DeadReferencedOnlyFromDead)
+        .map(|d| d.node)
+        .collect();
+    extra.sort_by_key(|&n| {
+        let t = live.node(n);
+        (t.module_name.clone(), t.name.clone(), n)
+    });
+    println!(
+        "    {} bindings are referenced and still dead, because every binding that\n\
+         \x20   references them is itself dead [A8-DEAD-ONLY-FROM-DEAD]",
+        extra.len()
+    );
+    for n in extra.iter().take(10) {
+        let t = live.node(*n);
+        let d = live.dead_of(*n).expect("dead");
+        let from: Vec<String> = d
+            .referrers
+            .iter()
+            .take(3)
+            .map(|&r| live.node(r).occ.clone())
+            .collect();
+        println!(
+            "      {} {}  referenced by {} dead binding(s): {}",
+            t.module_name,
+            t.occ,
+            d.referrers.len(),
+            from.join(", ")
+        );
+    }
+}
+
+fn root_rule(live: &LiveSet) -> &'static str {
+    live.roots
+        .first()
+        .map(|r| r.rule)
+        .unwrap_or(h2r_lower::reachability::A1_ROOT_MAIN)
+}
+
+fn print_explain(live: &LiveSet, what: &str) -> Result<()> {
+    let hits = live.by_name_or_occ(what);
+    if hits.is_empty() {
+        bail!(
+            "no top-level binding is named {what}. Give a stable name \
+             (e.g. {}) or an occurrence name.",
+            root_name("<unit>")
+        );
+    }
+    if hits.len() > 1 {
+        println!(
+            "{} top-level bindings answer to {what}; a name is not an identity{}.",
+            hits.len(),
+            if hits.len() > EXPLAIN_CAP {
+                format!(", so the first {EXPLAIN_CAP} follow")
+            } else {
+                ", so all of them follow".to_string()
+            }
+        );
+    }
+    for n in hits.into_iter().take(EXPLAIN_CAP) {
+        let t = live.node(n);
+        println!();
+        println!(
+            "{} {}  ({})  binder {}{}{}",
+            t.module_name,
+            t.occ,
+            t.name,
+            t.key.binder,
+            if t.exported { ", exported" } else { "" },
+            if t.external {
+                ""
+            } else {
+                ", internal name (reachable only through A2-EDGE-LOCAL)"
+            }
+        );
+        match live.live_of(n) {
+            Some(l) => {
+                println!(
+                    "  LIVE — witness [{}], {} hop(s)",
+                    l.rule,
+                    l.witness.len() - 1
+                );
+                print_witness(live, &l.witness);
+            }
+            None => {
+                let d = live.dead_of(n).expect("neither live nor dead");
+                println!("  DEAD — {} [{}]", d.reason.label(), d.rule);
+                match d.reason {
+                    DeadReason::DeadNoReferences => println!(
+                        "    no occurrence anywhere in the closed world: under A0-CLOSED-WORLD \
+                         nothing can name it"
+                    ),
+                    DeadReason::DeadReferencedOnlyFromDead => {
+                        println!(
+                            "    referenced by {} top-level binding(s), every one of them dead:",
+                            d.referrers.len()
+                        );
+                        for &r in &d.referrers {
+                            let s = live.node(r);
+                            let rd = live.dead_of(r).expect("a live referrer of a dead binding");
+                            println!("      {} {}  ({})", s.module_name, s.occ, rd.reason.label());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `--link <stable name>`: the whole-program linkage of one name, end to
+/// end.
+///
+/// This is the view M3a′ exists to make possible. It answers, for one
+/// external stable name: which single top-level binding of which module
+/// defines it ([`A12-EXTERNAL-UNIQUE`]), which modules' bindings refer to it
+/// and under which rule ([`A2-EDGE-LOCAL`] inside the defining module,
+/// [`A3-EDGE-GLOBAL`] from outside), and — if it is live — the shortest
+/// chain of edges from `Main.main` to it ([`A9-WITNESS`]).
+///
+/// The defining binding is found through the external-name index, never by
+/// a name heuristic: an internal stable name is not an identity, so
+/// `--link` refuses one and says why.
+fn print_link(live: &LiveSet, what: &str) -> Result<()> {
+    let link = match live.link(what) {
+        Ok(l) => l,
+        Err(LinkError::NotFound) => bail!(
+            "no top-level binding of this world carries the stable name {what}. \
+             --link takes a stable name ($<unit>$<Module>$<occ>), which is an \
+             identity; --explain also accepts an occurrence name, which is not."
+        ),
+        Err(LinkError::InternalName) => bail!(
+            "{what} is an INTERNAL stable name. Internal names are not unique \
+             — several top-level bindings can render as one — so nothing links \
+             through them and --link has no single answer. Such a binding is \
+             reachable only through A2-EDGE-LOCAL, inside its own module; ask \
+             --explain instead."
+        ),
+        Err(LinkError::Ambiguous(k)) => bail!(
+            "{k} top-level bindings carry the external stable name {what}: \
+             A12-EXTERNAL-UNIQUE does not hold and nothing here is an identity."
+        ),
+    };
+    let t = live.node(link.node);
+
+    println!("  link — {}", link.name);
+    println!();
+    println!("  defined by exactly one top-level binding [{}]", link.rule);
+    println!(
+        "    module {}   binder #{}   occ {}",
+        t.module_name, t.key.binder, t.occ
+    );
+    println!(
+        "    the name is external, so another module can name it [A3-EDGE-GLOBAL]{}",
+        if t.exported {
+            "; GHC also marks the binder exported"
+        } else {
+            ""
+        }
+    );
+    println!();
+
+    let bindings: usize = link.referrers.iter().map(|r| r.bindings).sum();
+    let occurrences: u32 = link.referrers.iter().map(|r| r.occurrences).sum();
+    let modules: BTreeSet<&str> = link.referrers.iter().map(|r| r.module.as_str()).collect();
+    println!(
+        "  referenced by {bindings} top-level binding(s) over {occurrences} occurrence(s), \
+         in {} module(s)",
+        modules.len()
+    );
+    if link.referrers.is_empty() {
+        println!("    (nothing in the closed world names it)");
+    }
+    for r in &link.referrers {
+        println!(
+            "    {:>6} occ over {:>4} binding(s)  {:<34} [{}]",
+            r.occurrences, r.bindings, r.module, r.rule
+        );
+    }
+    println!();
+
+    match &link.witness {
+        Some(w) => {
+            println!(
+                "  LIVE — witness [{}], {} hop(s) from the root",
+                h2r_lower::reachability::A9_WITNESS,
+                w.len() - 1
+            );
+            print_witness(live, w);
+        }
+        None => {
+            let d = live.dead_of(link.node).expect("neither live nor dead");
+            println!("  DEAD — {} [{}]", d.reason.label(), d.rule);
+            for &r in d.referrers.iter().take(EXPLAIN_CAP) {
+                let s = live.node(r);
+                println!("    referenced by {} {}  (dead)", s.module_name, s.occ);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One witness chain, with the rule that made each step.
+fn print_witness(live: &LiveSet, witness: &[NodeId]) {
+    for (i, &step) in witness.iter().enumerate() {
+        let s = live.node(step);
+        let rule = if i == 0 {
+            live.roots
+                .iter()
+                .find(|r| r.node == step)
+                .map(|r| r.rule)
+                .unwrap_or("?")
+        } else {
+            let prev = witness[i - 1];
+            live.edges
+                .iter()
+                .find(|e| e.from == prev && e.to == step)
+                .map(|e| e.rule)
+                .unwrap_or("?")
+        };
+        println!(
+            "    {:>3}. {:<32} {}{}  [{}]",
+            i,
+            s.module_name,
+            s.name,
+            if s.external {
+                String::new()
+            } else {
+                format!("#{}", s.key.binder)
+            },
+            rule
+        );
+    }
+}
+
+//------------------------------------------------------------------------------
+// The cross-reference with M2.4
+//------------------------------------------------------------------------------
+
+/// Which top-level binding a node lies in, for the whole world. Built the
+/// way the verifier builds it — by climbing to the arena root — so the
+/// cross-reference reads the same owner relation the audit checked.
+struct Owners {
+    pair_binder: Vec<Vec<BinderId>>,
+    node_of: Vec<std::collections::HashMap<BinderId, NodeId>>,
+}
+
+impl Owners {
+    fn new(modules: &[&Module], live: &LiveSet) -> Owners {
+        let mut node_of = vec![std::collections::HashMap::new(); modules.len()];
+        for (i, t) in live.nodes.iter().enumerate() {
+            node_of[t.key.module as usize].insert(t.key.binder, i as NodeId);
+        }
+        Owners {
+            pair_binder: modules.iter().map(|m| top_pair_binders(m)).collect(),
+            node_of,
+        }
+    }
+
+    fn of(&self, modules: &[&Module], mi: usize, node: ExprId) -> Option<NodeId> {
+        let pair = enclosing_top_pair(modules[mi], node)?;
+        let b = *self.pair_binder[mi].get(pair)?;
+        self.node_of[mi].get(&b).copied()
+    }
+}
+
+/// How much of M2.4's residual is inside code `Main.main` cannot reach.
+///
+/// The counts are cross-references, not verdicts: they say where an
+/// existing `Unresolved` sits, and nothing about whether it is resolvable.
+/// Every one of them inherits M3a's own `A5` caveat — a site inside a
+/// binding the linkage hole wrongly calls dead is counted here as dead.
+fn print_m24_link(modules: &[&Module], live: &LiveSet) {
+    let owners = Owners::new(modules, live);
+    let flow = DictFlow::of_modules(modules.iter().copied());
+    let higher = Higher::of_modules(modules.iter().copied());
+
+    let mut sites = 0usize;
+    let mut unresolved = 0usize;
+    let mut unresolved_dead = 0usize;
+    let mut unreachable_reason = 0usize;
+    let mut unreachable_reason_dead = 0usize;
+    let mut unlocated = 0usize;
+    for s in &flow.sites {
+        sites += 1;
+        let Outcome::Unresolved(reason) = &s.outcome else {
+            continue;
+        };
+        unresolved += 1;
+        let by_unreachable = reason.starts_with(dictflow::T_UNREACHABLE);
+        if by_unreachable {
+            unreachable_reason += 1;
+        }
+        match owners.of(modules, s.mi, s.node) {
+            Some(n) if !live.is_live(n) => {
+                unresolved_dead += 1;
+                if by_unreachable {
+                    unreachable_reason_dead += 1;
+                }
+            }
+            Some(_) => {}
+            None => unlocated += 1,
+        }
+    }
+
+    let mut bounds = 0usize;
+    let mut b_unresolved = 0usize;
+    let mut b_unresolved_dead = 0usize;
+    let mut b_field = 0usize;
+    for b in &higher.boundaries {
+        bounds += 1;
+        if !matches!(b.verdict, HigherVerdict::Unresolved(_)) {
+            continue;
+        }
+        b_unresolved += 1;
+        let mi = match b.slot {
+            Slot::Param { mi, .. } | Slot::Return { mi, .. } => mi,
+            // A constructor field is a slot of a *type*, not a site in one
+            // binding: it has no enclosing top-level binding to be dead in.
+            Slot::Field { .. } => {
+                b_field += 1;
+                continue;
+            }
+        };
+        if let Some(n) = owners.of(modules, mi, b.node)
+            && !live.is_live(n)
+        {
+            b_unresolved_dead += 1;
+        }
+    }
+
+    println!("  cross-reference with M2.4 — where its residual sits in the live set");
+    println!(
+        "    these are cross-references, not verdicts, and they inherit A5: a site inside a\n\
+         \x20   binding the linkage hole wrongly calls dead is counted dead here too."
+    );
+    println!("    class-op dispatch sites                              {sites:>6}");
+    println!("      Unresolved                                         {unresolved:>6}");
+    println!("        …inside a rooted-dead top-level binding          {unresolved_dead:>6}");
+    println!(
+        "      Unresolved with reason {:<28} {unreachable_reason:>6}",
+        dictflow::T_UNREACHABLE
+    );
+    println!(
+        "        …inside a rooted-dead top-level binding          {unreachable_reason_dead:>6}"
+    );
+    if unlocated > 0 {
+        println!("        …not inside any top-level right-hand side        {unlocated:>6}");
+    }
+    println!("    function-valued boundaries                           {bounds:>6}");
+    println!("      Unresolved                                         {b_unresolved:>6}");
+    println!("        …inside a rooted-dead top-level binding          {b_unresolved_dead:>6}");
+    println!("        …a constructor field, with no one binding to be in {b_field:>4}");
+}
+
+fn ty_bytes(ty: &h2r_core_ir::Ty) -> usize {
+    use h2r_core_ir::Ty;
+    let names = |parts: [&str; 3]| parts.iter().map(|part| part.len()).sum::<usize>();
+    std::mem::size_of::<Ty>()
+        + match ty {
+            Ty::Var(var) => names([&var.name, &var.occ, &var.unique]),
+            Ty::Con { tycon, args } => {
+                names([&tycon.name, &tycon.occ, &tycon.unique])
+                    + args.iter().map(ty_bytes).sum::<usize>()
+            }
+            Ty::App { fun, arg } => ty_bytes(fun) + ty_bytes(arg),
+            Ty::Fun { mult, arg, res } => ty_bytes(mult) + ty_bytes(arg) + ty_bytes(res),
+            Ty::ForAll { binder, body } => {
+                names([&binder.name, &binder.occ, &binder.unique]) + ty_bytes(body)
+            }
+            Ty::Lit { kind, text } => kind.len() + text.len(),
+            Ty::Opaque { pretty } => pretty.len(),
+        }
+}
+
+fn resident() -> String {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("VmRSS:"))
+                .map(|value| value.trim().to_string())
+        })
+        .unwrap_or_else(|| "unknown".into())
+}
+
+#[cfg(test)]
+mod nir_tests {
+    use super::*;
+    use h2r_core_ir::raw;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn a_reproduced_root_type_reads_back_as_printed() {
+        for text in [
+            "$base$Data.Functor.Identity$Identity",
+            "{$ghc-prim$GHC.Types$List {$base$Data.Maybe$Maybe $ghc-prim$GHC.Types$Int}}",
+            "{$ghc-prim$GHC.Tuple.Prim$(,) $ghc-prim$GHC.Types$[] $a$B$T'}",
+        ] {
+            let ty = Tokens::of(text).whole(Tokens::ty).unwrap();
+            assert_eq!(stable_type(&ty).as_deref(), Some(text));
+        }
+        for broken in ["{$a$B$T", "$a$B$T }", "{ }", "$a$B$T $a$B$U"] {
+            assert!(Tokens::of(broken).whole(Tokens::ty).is_err(), "{broken}");
+        }
+    }
+
+    fn binder(name: &str) -> Value {
+        json!({
+            "kind": "id", "name": format!("$u$Main${name}"), "occ": name, "unique": name,
+            "type": "T", "ty": 0, "arity": 0, "callArity": 0, "exported": true,
+            "dmdSig": {"args": [], "diverges": false, "pretty": ""}, "cprSig": "",
+            "demand": {"strict": false, "absent": false, "usedOnce": false, "pretty": "L"},
+            "occInfo": {"kind": "many", "tailCalled": false}, "oneShot": false,
+            "details": "", "hasUnfolding": false, "isJoinPoint": false, "isDataCon": false
+        })
+    }
+
+    fn fixture() -> Module {
+        fixture_with_link(false)
+    }
+
+    fn fixture_with_link(missing: bool) -> Module {
+        let lit = json!({
+            "node": "Lit",
+            "lit": {"kind": "number", "pretty": "7#", "value": "7", "numType": "Int"},
+        });
+        let target = if missing { "missing" } else { "leaf" };
+        let mut binds = Vec::new();
+        for (name, rhs) in [
+            (
+                "main",
+                json!({"node": "Var", "name": format!("$u$Main${target}"), "occ": target, "unique": target, "isGlobal": missing}),
+            ),
+            ("leaf", lit.clone()),
+            ("dead", lit),
+        ] {
+            binds.push(
+                json!({"rec": false, "pairs": [{"binder": binder(name), "rhs": rhs,
+                "whnf": true, "trivial": true, "cheap": true, "okForSpec": true}]}),
+            );
+        }
+        Module::from_raw(serde_json::from_value(json!({
+            "format": raw::FORMAT, "module": "Main", "unit": "u", "ids": {},
+            "types": [{"kind": "TyConApp", "tycon": {"name": "$u$Main$T", "occ": "T", "unique": "T"}, "args": []}],
+            "binds": binds
+        })).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn program_attempt_accounts_for_every_live_owner_and_skips_dead() {
+        use h2r_lower::nir::{FnId, program::lower_program};
+        let mut modules = [fixture()];
+        // Dead unsupported code must not turn the attempt into a refusal.
+        let dead_rhs = modules[0].top[2].pairs[0].rhs;
+        modules[0].exprs[dead_rhs as usize] = h2r_core_ir::Expr::Coercion;
+        let attempt = lower_program(&modules).unwrap();
+        assert_eq!((attempt.live, attempt.dead), (2, 1));
+        assert!(attempt.refused.is_empty());
+        assert_eq!(
+            attempt
+                .lowered
+                .iter()
+                .map(|leaf| leaf.function.id)
+                .collect::<Vec<_>>(),
+            vec![FnId(0), FnId(1)]
+        );
+        let (report, refusals) = nir_program_report(&modules, &|_| true).unwrap();
+        assert_eq!(refusals, 0);
+        assert!(report.contains("2 = 2 lowered + 0 refused; 1 dead skipped"));
+        assert!(report.contains("no executable output"));
+        assert_eq!(report, nir_program_report(&modules, &|_| true).unwrap().0);
+    }
+
+    #[test]
+    fn program_attempt_retains_successes_and_addressed_refusals() {
+        use h2r_lower::nir::program::lower_program;
+        let mut modules = [fixture()];
+        let pair = &modules[0].top[1].pairs[0];
+        let (owner, rhs) = (pair.binder, pair.rhs);
+        modules[0].exprs[rhs as usize] = h2r_core_ir::Expr::Coercion;
+        let attempt = lower_program(&modules).unwrap();
+        // Main's reference can lower even when its target cannot. Never mistake
+        // the accepted vector for a dependency-closed executable program.
+        assert_eq!((attempt.lowered.len(), attempt.refused.len()), (1, 1));
+        let refusal = &attempt.refused[0];
+        assert_eq!(
+            (refusal.module, refusal.owner, refusal.source),
+            (0, owner, Some(rhs))
+        );
+        assert!(refusal.reason.contains("type or coercion"));
+        let (report, refusals) = nir_program_report(&modules, &|_| true).unwrap();
+        assert_eq!(refusals, 1);
+        assert!(report.contains("2 = 1 lowered + 1 refused"));
+        assert!(report.contains("LOWERED"));
+        assert!(report.contains("REFUSED"));
+        assert!(report.contains(&format!("at Some({rhs})")));
+    }
+
+    #[test]
+    fn program_attempt_requires_authoritative_reachability() {
+        use h2r_lower::nir::program::lower_program;
+        assert!(lower_program(&[]).unwrap_err().contains("no root"));
+        assert!(
+            lower_program(&[fixture_with_link(true)])
+                .unwrap_err()
+                .contains("A5-IN-WORLD-MISSING")
+        );
+    }
+
+    #[test]
+    fn reports_verified_live_leaf_deterministically() {
+        let modules = [fixture()];
+        let first = nir_report(&modules, "$u$Main$leaf").unwrap();
+        assert_eq!(first, nir_report(&modules, "$u$Main$leaf").unwrap());
+        assert!(first.contains("not whole-program lowering"));
+        assert!(first.contains("1 = 0 parameters + 0 type parameters + 1 value + 0 erased ticks"));
+        assert!(first.contains("literal number \"7#\""));
+        assert!(first.contains("return v0"));
+        assert!(first.contains("Expr("));
+    }
+
+    #[test]
+    fn refuses_dead_missing_ambiguous_and_unsupported_bindings() {
+        let mut modules = [fixture()];
+        assert!(
+            nir_report(&modules, "$u$Main$dead")
+                .unwrap_err()
+                .to_string()
+                .contains("not reachable")
+        );
+        assert!(
+            nir_report(&modules, "leaf")
+                .unwrap_err()
+                .to_string()
+                .contains("matched 0")
+        );
+        assert!(
+            nir_report(&modules, "$u$Main$main")
+                .unwrap()
+                .contains("top-ref module 0")
+        );
+        let dead = modules[0].top[2].pairs[0].binder;
+        modules[0].binders[dead as usize].name = "$u$Main$leaf".into();
+        assert!(nir_report(&modules, "$u$Main$leaf").is_err());
+        let mut modules = [fixture()];
+        let source = modules[0].top[1].pairs[0].rhs;
+        modules[0].exprs[source as usize] = h2r_core_ir::Expr::Coercion;
+        assert!(
+            nir_report(&modules, "$u$Main$leaf")
+                .unwrap_err()
+                .to_string()
+                .contains("type or coercion")
+        );
+    }
+
+    #[test]
+    fn specialization_roots_from_an_audited_live_set() {
+        let mut m = fixture();
+        let owner = m.top[0].pairs[0].binder;
+        m.binders[owner as usize].name = "$u$Main$notMain".into();
+        assert!(
+            nir_specialize_report(&[m], &|_| true, &Root::Every, false)
+                .unwrap_err()
+                .to_string()
+                .contains("no root")
+        );
+        assert!(
+            nir_specialize_report(&[fixture_with_link(true)], &|_| true, &Root::Every, false)
+                .unwrap_err()
+                .to_string()
+                .contains("A5-IN-WORLD-MISSING")
+        );
+        let (report, refused) =
+            nir_specialize_report(&[fixture()], &|_| true, &Root::Every, false).unwrap();
+        assert_eq!(refused, 0);
+        assert!(report.contains("NIR specialization roots: 2 live bindings"));
+    }
+
+    #[test]
+    fn refuses_missing_root_and_incomplete_linkage() {
+        let mut m = fixture();
+        let owner = m.top[0].pairs[0].binder;
+        m.binders[owner as usize].name = "$u$Main$notMain".into();
+        assert!(
+            nir_report(&[m], "$u$Main$leaf")
+                .unwrap_err()
+                .to_string()
+                .contains("no root")
+        );
+        assert!(
+            nir_report(&[fixture_with_link(true)], "$u$Main$leaf")
+                .unwrap_err()
+                .to_string()
+                .contains("A5-IN-WORLD-MISSING")
+        );
+    }
+}

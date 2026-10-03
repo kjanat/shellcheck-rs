@@ -1,0 +1,11 @@
+cabal-version: 2.4
+name: h2r-canary
+version: 0.1.0.0
+build-type: Simple
+
+executable h2r-canary
+  main-is: Main.hs
+  other-modules: Bench, Canary, Helpers
+  build-depends: base >= 4.18 && < 4.19, containers, transformers, mtl, h2r-plugin
+  default-language: Haskell2010
+  ghc-options: -O1 -fno-worker-wrapper
