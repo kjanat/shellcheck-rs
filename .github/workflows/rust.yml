@@ -121,8 +121,5 @@ jobs:
 
       - name: Differential fuzz
         env:
-          SEED: "${{ github.run_number }}"
-          ITERATIONS: "4000"
-          MAX_FINDINGS: "50"
-          ${{ insert }}: ${{ fromJSON(toJSON(vars)) }}
+          ${{ insert }}: ${{ fromJSON(vars.FUZZ) }}
         run: cargo conformance-fuzz
