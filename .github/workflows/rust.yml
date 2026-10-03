@@ -123,5 +123,5 @@ jobs:
         env:
           SEED: "${{ vars.SEED || github.run_number }}"
           ITERATIONS: "${{ vars.ITERATIONS || 4000 }}"
-          MAX_FINDINGS: "${{ vars.MAX_FINDINGS || '' }}"
+          MAX_FINDINGS: "${{ vars.MAX_FINDINGS || 50 }}"
         run: cargo conformance-fuzz

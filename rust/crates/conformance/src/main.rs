@@ -554,7 +554,7 @@ pub enum Command {
 /// The command line.
 pub struct Args {
     /// What to run: the property gate, the fuzzer, or a listing of the corpus.
-    #[arg(value_enum, default_value_t)]
+    #[arg(value_enum, env = "CONFORMANCE_CMD", default_value_t)]
     cmd: Command,
 
     /// ShellCheck to trust as the oracle: a path, or a name to find on PATH.
@@ -565,19 +565,19 @@ pub struct Args {
     oracle: Option<String>,
 
     /// The ShellCheck source tree to take properties and versions from.
-    #[arg(long, default_value = ".")]
+    #[arg(long, env = "REPO", default_value = ".")]
     pub repo: String,
 
     /// Check only the first N properties (gate), or list N of them (extract).
-    #[arg(long)]
+    #[arg(long, env = "LIMIT")]
     limit: Option<usize>,
 
     /// Dialect to check as, as `--shell` would name it to either tool.
-    #[arg(long)]
+    #[arg(long, env = "CONFORMANCE_SHELL")]
     shell: Option<String>,
 
     /// Print only the verdict.
-    #[arg(long)]
+    #[arg(long, env = "QUIET")]
     quiet: bool,
 
     /// Compare against an oracle whose version is not this tree's.
@@ -605,19 +605,29 @@ pub struct Args {
 #[derive(clap::Args)]
 pub struct Fuzzing {
     /// Seed for the generator, so a run can be replayed.
-    #[arg(long, default_value_t = 0, help_heading = "Fuzzing")]
+    #[arg(long, env = "SEED", default_value_t = 0, help_heading = "Fuzzing")]
     pub seed: u64,
 
     /// How many generated scripts to check.
-    #[arg(long, default_value_t = 2000, help_heading = "Fuzzing")]
+    #[arg(
+        long,
+        env = "ITERATIONS",
+        default_value_t = 2000,
+        help_heading = "Fuzzing"
+    )]
     pub iterations: usize,
 
     /// Stop after this many distinct divergences.
-    #[arg(long, default_value_t = 25, help_heading = "Fuzzing")]
+    #[arg(
+        long,
+        env = "MAX_FINDINGS",
+        default_value_t = 50,
+        help_heading = "Fuzzing"
+    )]
     pub max_findings: usize,
 
     /// Check every dialect rather than one per script.
-    #[arg(long, help_heading = "Fuzzing")]
+    #[arg(long, env = "ALL_SHELLS", help_heading = "Fuzzing")]
     pub all_shells: bool,
 }
 
@@ -628,7 +638,7 @@ pub struct SnapshotArgs {
     ///
     /// Every write is a claim that the behaviour change is intended, so the
     /// diff of `rust/snapshot.txt` belongs in the commit that causes it.
-    #[arg(long, help_heading = "Snapshot")]
+    #[arg(long, env = "WRITE", help_heading = "Snapshot")]
     pub write: bool,
 }
 
@@ -636,19 +646,19 @@ pub struct SnapshotArgs {
 #[derive(clap::Args)]
 pub struct BenchArgs {
     /// Lines of generated shell to benchmark.
-    #[arg(long, default_value_t = 4000, help_heading = "Bench")]
+    #[arg(long, env = "LINES", default_value_t = 4000, help_heading = "Bench")]
     pub lines: usize,
 
     /// Benchmark this file instead of generated shell.
-    #[arg(long, help_heading = "Bench")]
+    #[arg(long, env = "INPUT", help_heading = "Bench")]
     pub input: Option<String>,
 
     /// Time the port this many times and keep the fastest run.
-    #[arg(long, default_value_t = 3, help_heading = "Bench")]
+    #[arg(long, env = "REPEAT", default_value_t = 3, help_heading = "Bench")]
     pub repeat: usize,
 
     /// Write the benchmarked script here, so it can be re-run by hand.
-    #[arg(long, help_heading = "Bench")]
+    #[arg(long, env = "DUMP", help_heading = "Bench")]
     pub dump: Option<String>,
 }
 
