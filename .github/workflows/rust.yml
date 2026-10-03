@@ -4,15 +4,15 @@ on:
   push:
     branches: [master]
     paths: &PATHS
-      - "rust/**"
+      - "mise.toml"
+      - ".github/workflows/rust.yml"
       - "**/Cargo.*"
       - ".cargo/**"
-      - "mise.toml"
       - "mutants.toml"
-      - ".github/workflows/rust.yml"
+      - "rust/**"
       - "ShellCheck.cabal"
-      - "src/**"
       - "shellcheck.hs"
+      - "src/**"
   pull_request: { paths: *PATHS }
 
 concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
@@ -53,7 +53,7 @@ jobs:
           - name: Checkout repository
             uses: actions/checkout@v7
           - name: Remove shellcheck from runner
-            run: sudo apt-get remove -y shellcheck || true
+            run: sudo apt-get remove -y shellcheck 2>/dev/null || true
 
       - name: Install Rust stable
         id: rust
