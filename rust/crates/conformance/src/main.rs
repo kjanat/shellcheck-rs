@@ -37,6 +37,7 @@ use actions_rs::{Annotation, Cell, Summary, log, output};
 use clap::{ArgAction, Parser, ValueEnum};
 use serde_json::Value;
 use shellcheck_cli::formatter::{fixer, json1};
+use shellcheck_cli::options::parse_shell;
 use shellcheck_rs::interface::CheckSpec;
 
 // ---------------------------------------------------------------------------
@@ -63,6 +64,7 @@ pub struct CommentKey {
     end_line: i64,
     end_column: i64,
     level: String,
+    /// The SC code.
     pub code: i64,
     message: String,
     fix: Option<Vec<ReplacementKey>>,
@@ -81,27 +83,10 @@ fn render_keys(keys: &[CommentKey]) -> String {
     let parts: Vec<String> = keys
         .iter()
         .map(|k| {
-            let fix = match &k.fix {
-                None => "-".to_string(),
-                Some(reps) => {
-                    let inner: Vec<String> = reps
-                        .iter()
-                        .map(|r| {
-                            format!(
-                                "{}:{}-{}:{} {} p{} {:?}",
-                                r.line,
-                                r.column,
-                                r.end_line,
-                                r.end_column,
-                                r.insertion_point,
-                                r.precedence,
-                                r.replacement
-                            )
-                        })
-                        .collect();
-                    format!("fix[{}]", inner.join(", "))
-                }
-            };
+            let fix = k
+                .fix
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |reps| render_fix(reps));
             format!(
                 "SC{} {} {}:{}-{}:{} {:?} {}",
                 k.code, k.level, k.line, k.column, k.end_line, k.end_column, k.message, fix
@@ -109,6 +94,25 @@ fn render_keys(keys: &[CommentKey]) -> String {
         })
         .collect();
     format!("[{}]", parts.join(" | "))
+}
+
+fn render_fix(reps: &[ReplacementKey]) -> String {
+    let inner: Vec<String> = reps
+        .iter()
+        .map(|r| {
+            format!(
+                "{}:{}-{}:{} {} p{} {:?}",
+                r.line,
+                r.column,
+                r.end_line,
+                r.end_column,
+                r.insertion_point,
+                r.precedence,
+                r.replacement
+            )
+        })
+        .collect();
+    format!("fix[{}]", inner.join(", "))
 }
 
 fn as_i64(v: &Value, field: &str) -> i64 {
@@ -164,18 +168,29 @@ fn key_from_value(v: &Value) -> CommentKey {
 ///
 /// `filename` matters: both tools may infer a dialect from it, so the caller
 /// passes whatever path the oracle saw.
-#[must_use]
-pub fn port_keys(script: &str, filename: &str, shell: Option<&str>) -> Vec<CommentKey> {
+///
+/// # Errors
+///
+/// When a comment does not serialize to json1.
+pub fn port_keys(
+    script: &str,
+    filename: &str,
+    shell: Option<&str>,
+) -> Result<Vec<CommentKey>, String> {
     port_keys_with(script, filename, shell, &[])
 }
 
 /// As [`port_keys`], with optional checks enabled — what `--enable` passes.
+///
+/// # Errors
+///
+/// When a comment does not serialize to json1.
 pub fn port_keys_with(
     script: &str,
     filename: &str,
     shell: Option<&str>,
     optional: &[String],
-) -> Vec<CommentKey> {
+) -> Result<Vec<CommentKey>, String> {
     let spec = CheckSpec {
         filename: filename.to_string(),
         script: script.to_string(),
@@ -188,23 +203,11 @@ pub fn port_keys_with(
     untabbed
         .iter()
         .map(|pc| {
-            let j = json1::to_comment(pc);
-            let v = serde_json::to_value(&j).expect("json1 comment serializes");
-            key_from_value(&v)
+            serde_json::to_value(json1::to_comment(pc))
+                .map(|v| key_from_value(&v))
+                .map_err(|e| format!("{filename}: a json1 comment does not serialize: {e}"))
         })
         .collect()
-}
-
-fn parse_shell(s: &str) -> Option<shellcheck_rs::interface::Shell> {
-    use shellcheck_rs::interface::Shell;
-    match s {
-        "sh" => Some(Shell::Sh),
-        "bash" => Some(Shell::Bash),
-        "dash" => Some(Shell::Dash),
-        "ksh" => Some(Shell::Ksh),
-        "busybox" => Some(Shell::BusyboxSh),
-        _ => None,
-    }
 }
 
 /// The oracle's comments for one script, as comparison keys.
@@ -213,7 +216,7 @@ fn oracle_keys(comments: &[Value]) -> Vec<CommentKey> {
 }
 
 /// Publish a run's numbers as step outputs and a job-summary table.
-pub fn job_summary(headline: &str, stats: &[(&str, usize)]) {
+pub fn job_summary(headline: &str, stats: &[(&str, &dyn std::fmt::Display)]) {
     if !actions_rs::env::is_github_actions() {
         return;
     }
@@ -318,7 +321,7 @@ fn gate(args: &Args) -> Result<bool, String> {
         compared += 1;
         let path = oracle.dir().join(name);
         let ok = oracle_keys(ocomments);
-        let pk = port_keys(script, &path.to_string_lossy(), args.shell.as_deref());
+        let pk = port_keys(script, &path.to_string_lossy(), args.shell.as_deref())?;
         if keys_match(&pk, &ok) {
             continue;
         }
@@ -350,7 +353,7 @@ fn gate(args: &Args) -> Result<bool, String> {
                 &path.to_string_lossy(),
                 args.shell.as_deref(),
                 std::slice::from_ref(&ex.name),
-            );
+            )?;
             if !keys_match(&pk, &ok) {
                 divergent.push((format!("--enable={} ({kind})", ex.name), pk, ok));
             }
@@ -358,42 +361,14 @@ fn gate(args: &Args) -> Result<bool, String> {
     }
 
     if !args.quiet {
-        let max = args.max_findings;
-        let ci = actions_rs::env::is_github_actions();
-        let report = || {
-            for (id, port, oracle) in divergent.iter().take(max) {
-                println!("DIVERGE {id}");
-                println!("  oracle: {}", render_keys(oracle));
-                println!("  port:   {}", render_keys(port));
-                if ci {
-                    let mut a = Annotation::new().title(format!("Divergence: {id}"));
-                    if let Some((file, line)) = where_of.get(id) {
-                        a = a.file(file).line(u32::try_from(*line).unwrap_or(u32::MAX));
-                    }
-                    a.error(format!(
-                        "oracle: {}\nport:   {}",
-                        render_keys(oracle),
-                        render_keys(port)
-                    ));
-                }
-            }
-            if divergent.len() > max {
-                println!("... and {} more", divergent.len() - max);
-            }
-            for (id, d) in deviations.iter().take(max) {
-                println!("DEVIATION {id} [{}]: {}", d.id, d.what);
-                if ci {
-                    log::notice(format!("Sanctioned deviation {id} [{}]: {}", d.id, d.what));
-                }
-            }
-        };
-        if ci {
-            log::group("Divergences".to_string(), report);
-        } else {
-            report();
-        }
+        print_divergences(
+            &divergent,
+            &deviations,
+            &where_of,
+            args.fuzzing.max_findings,
+        );
     }
-    let crashes = report_crashes(&oracle, args.max_findings, args.quiet);
+    let crashes = report_crashes(&oracle, args.fuzzing.max_findings, args.quiet);
     let agree = compared + optional_checked - divergent.len() - deviations.len();
     let line = format!(
         "gate: {compared} properties + {optional_checked} optional-check examples, \
@@ -405,16 +380,59 @@ fn gate(args: &Args) -> Result<bool, String> {
     job_summary(
         &line,
         &[
-            ("properties", compared),
-            ("optional_examples", optional_checked),
-            ("agree", agree),
-            ("divergences", divergent.len()),
-            ("deviations", deviations.len()),
-            ("oracle_crashes", crashes),
-            ("unreplayable_properties", coverage_skipped),
+            ("properties", &compared),
+            ("optional_examples", &optional_checked),
+            ("agree", &agree),
+            ("divergences", &divergent.len()),
+            ("deviations", &deviations.len()),
+            ("oracle_crashes", &crashes),
+            ("unreplayable_properties", &coverage_skipped),
         ],
     );
     Ok(divergent.is_empty())
+}
+
+/// The gate's divergences and sanctioned deviations, at most `max` of each,
+/// with an annotation on the defining Haskell line of each in CI.
+fn print_divergences(
+    divergent: &[(String, Vec<CommentKey>, Vec<CommentKey>)],
+    deviations: &[(String, &'static deviations::Deviation)],
+    where_of: &std::collections::HashMap<String, (String, usize)>,
+    max: usize,
+) {
+    let ci = actions_rs::env::is_github_actions();
+    let report = || {
+        for (id, port, oracle) in divergent.iter().take(max) {
+            println!("DIVERGE {id}");
+            println!("  oracle: {}", render_keys(oracle));
+            println!("  port:   {}", render_keys(port));
+            if ci {
+                let mut a = Annotation::new().title(format!("Divergence: {id}"));
+                if let Some((file, line)) = where_of.get(id) {
+                    a = a.file(file).line(u32::try_from(*line).unwrap_or(u32::MAX));
+                }
+                a.error(format!(
+                    "oracle: {}\nport:   {}",
+                    render_keys(oracle),
+                    render_keys(port)
+                ));
+            }
+        }
+        if divergent.len() > max {
+            println!("... and {} more", divergent.len() - max);
+        }
+        for (id, d) in deviations.iter().take(max) {
+            println!("DEVIATION {id} [{}]: {}", d.id, d.what);
+            if ci {
+                log::notice(format!("Sanctioned deviation {id} [{}]: {}", d.id, d.what));
+            }
+        }
+    };
+    if ci {
+        log::group("Divergences".to_string(), report);
+    } else {
+        report();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -453,14 +471,15 @@ fn audit(args: &Args) -> Result<bool, String> {
             std::collections::BTreeMap::new();
         let mut scripts: Vec<String> = coverage.entries.iter().map(|e| e.script.clone()).collect();
         // The generated corpus reaches recovery paths the properties never do.
-        let generated = fuzz::sample_scripts(&scripts.clone(), args.seed, args.iterations);
+        let generated =
+            fuzz::sample_scripts(&scripts.clone(), args.fuzzing.seed, args.fuzzing.iterations);
         scripts.extend(generated);
         for script in &scripts {
             for site in shellcheck_rs::parser::audit_commitment_backtracks("-", script) {
-                let e = sites.entry(site).or_insert((0, script.clone()));
+                let e = sites.entry(site).or_insert_with(|| (0, script.clone()));
                 e.0 += 1;
                 if script.len() < e.1.len() {
-                    e.1 = script.clone();
+                    e.1.clone_from(script);
                 }
             }
         }
@@ -485,11 +504,14 @@ fn audit(args: &Args) -> Result<bool, String> {
 /// must pass.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum Command {
+    /// Replay upstream's `prop_` scripts through both tools.
     #[default]
     Gate,
+    /// Generated and mutated shell through both tools.
     Fuzz,
     /// External validity: both tools against the shells, not against each other.
     Shells,
+    /// List the property corpus the gate replays.
     Extract,
     /// Where the port rewinds over a commitment instead of using a `try`.
     Audit,
@@ -508,6 +530,7 @@ pub enum Command {
                   Exit codes: 0 = agreement, 1 = at least one divergence, 2 = harness error.",
     disable_help_subcommand = true
 )]
+/// The command line.
 pub struct Args {
     /// What to run: the property gate, the fuzzer, or a listing of the corpus.
     #[arg(value_enum, default_value_t)]
@@ -544,6 +567,22 @@ pub struct Args {
     #[arg(long, action = ArgAction::SetTrue)]
     any_oracle_version: bool,
 
+    /// The generator's options.
+    #[command(flatten)]
+    pub fuzzing: Fuzzing,
+
+    /// The snapshot's options.
+    #[command(flatten)]
+    pub snapshot: SnapshotArgs,
+
+    /// The benchmark's options.
+    #[command(flatten)]
+    pub bench: BenchArgs,
+}
+
+/// The options under the "Fuzzing" heading.
+#[derive(clap::Args)]
+pub struct Fuzzing {
     /// Seed for the generator, so a run can be replayed.
     #[arg(long, default_value_t = 0, help_heading = "Fuzzing")]
     pub seed: u64,
@@ -559,14 +598,22 @@ pub struct Args {
     /// Check every dialect rather than one per script.
     #[arg(long, help_heading = "Fuzzing")]
     pub all_shells: bool,
+}
 
+/// The options under the "Snapshot" heading.
+#[derive(clap::Args)]
+pub struct SnapshotArgs {
     /// Re-freeze the snapshot instead of checking against it.
     ///
     /// Every write is a claim that the behaviour change is intended, so the
     /// diff of `rust/snapshot.txt` belongs in the commit that causes it.
     #[arg(long, help_heading = "Snapshot")]
     pub write: bool,
+}
 
+/// The options under the "Bench" heading.
+#[derive(clap::Args)]
+pub struct BenchArgs {
     /// Lines of generated shell to benchmark.
     #[arg(long, default_value_t = 4000, help_heading = "Bench")]
     pub lines: usize,
@@ -734,7 +781,7 @@ mod tests {
     fn args_take_a_subcommand_and_flags() {
         let a = parse(&["fuzz", "--seed", "7"]);
         assert!(a.cmd == Command::Fuzz);
-        assert_eq!(a.seed, 7);
+        assert_eq!(a.fuzzing.seed, 7);
     }
 
     #[test]

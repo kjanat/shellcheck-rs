@@ -43,7 +43,12 @@ fn main() -> ExitCode {
         argv.push(text);
     }
 
-    let config = match options::parse(&argv) {
+    let exists = |name: &str| {
+        original_args
+            .get(name)
+            .map_or_else(|| Path::new(name).exists(), |os| Path::new(os).exists())
+    };
+    let config = match options::parse(&argv, &exists) {
         Outcome::Run(c) => *c,
         Outcome::PrintVersion => {
             println!("{}", options::version_banner());
@@ -352,166 +357,39 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
     let stderr = std::io::stderr();
     let mut err = stderr.lock();
 
-    match format.as_str() {
-        // Handled above via streaming short-circuit.
-        "json1" => {
-            // Untabs and prepends per file group, reversing output order to match Haskell IORef accumulation.
-            let mut all: Vec<PositionedComment> = Vec::new();
-            for i in &loaded {
-                match i {
-                    Input::Ok(l) => {
-                        for (file, comments) in file_groups(&l.comments) {
-                            let contents = group_contents(&sys, &file);
-                            let mut new = fixer::make_non_virtual(&comments, &contents);
-                            new.extend(std::mem::take(&mut all));
-                            all = new;
-                        }
-                    }
-                    Input::Err { name, message } => {
-                        let _ = writeln!(err, "{name}: {message}");
-                    }
-                }
-            }
-            match json1::render(&all) {
-                Ok(doc) => {
-                    let _ = writeln!(out, "{doc}");
-                }
-                Err(e) => {
-                    let _ = writeln!(err, "{e}");
-                    return ExitCode::from(2);
-                }
-            }
-        }
-
-        "json" => {
-            // Legacy behavior (matches upstream `collectResult`):
-            // prepends the full comment list per file group, causing duplicates across multiple files.
-            let mut all: Vec<PositionedComment> = Vec::new();
-            for i in &loaded {
-                match i {
-                    Input::Ok(l) => {
-                        for _ in file_groups(&l.comments) {
-                            let mut new = l.comments.clone();
-                            new.extend(std::mem::take(&mut all));
-                            all = new;
-                        }
-                    }
-                    Input::Err { name, message } => {
-                        let _ = writeln!(err, "{name}: {message}");
-                    }
-                }
-            }
-            match json::render(&all) {
-                Ok(doc) => {
-                    let _ = writeln!(out, "{doc}");
-                }
-                Err(e) => {
-                    let _ = writeln!(err, "{e}");
-                    return ExitCode::from(2);
-                }
-            }
-        }
-
+    let written = match format.as_str() {
+        "json1" => print_json(
+            json1::render(&json1_comments(&loaded, &sys, &mut err)),
+            &mut out,
+        ),
+        "json" => print_json(json::render(&json_comments(&loaded, &mut err)), &mut out),
         "gcc" => {
-            for i in &loaded {
-                match i {
-                    Input::Ok(l) => {
-                        for (file, comments) in file_groups(&l.comments) {
-                            let contents = group_contents(&sys, &file);
-                            let mut buf = String::new();
-                            gcc::render_file(&file, &contents, &comments, &mut buf);
-                            let _ = out.write_all(buf.as_bytes());
-                        }
-                    }
-                    Input::Err { name, message } => {
-                        let _ = writeln!(err, "{}", gcc::render_failure(name, message));
-                    }
-                }
-            }
+            write_gcc(&loaded, &sys, &mut out, &mut err);
+            Ok(())
         }
-
         "checkstyle" => {
-            let _ = out.write_all(checkstyle::HEADER.as_bytes());
-            for i in &loaded {
-                match i {
-                    Input::Ok(l) => {
-                        for (file, comments) in file_groups(&l.comments) {
-                            let contents = group_contents(&sys, &file);
-                            let mut buf = String::new();
-                            checkstyle::render_file(&file, &contents, &comments, &mut buf);
-                            let _ = out.write_all(buf.as_bytes());
-                        }
-                    }
-                    Input::Err { name, message } => {
-                        // CheckStyle onFailure writes to stdout.
-                        let _ = out.write_all(checkstyle::render_failure(name, message).as_bytes());
-                    }
-                }
-            }
-            let _ = out.write_all(checkstyle::FOOTER.as_bytes());
+            write_checkstyle(&loaded, &sys, &mut out);
+            Ok(())
         }
-
         "diff" => {
-            let color_fn = |s: &str| diff::color_bold_red(use_color, s);
-            let mut reported = false;
-            // Rendered per file in input order (matches the Haskell driver fold over inputs).
-            for i in &loaded {
-                match i {
-                    Input::Ok(l) => {
-                        for (file, comments) in file_groups(&l.comments) {
-                            let contents = group_contents(&sys, &file);
-                            let d = diff::render_file(use_color, &file, &contents, &comments);
-                            if d.reported {
-                                let _ = out.write_all(d.text.as_bytes());
-                                reported = true;
-                            }
-                        }
-                    }
-                    Input::Err { name, message } => {
-                        let _ = writeln!(err, "{}", color_fn(&format!("{name}: {message}")));
-                    }
-                }
-            }
-            if any_comments && !reported {
-                let _ = writeln!(err, "{}", color_fn(diff::NONE_FIXABLE_MSG));
-            }
+            write_diff(&loaded, &sys, use_color, any_comments, &mut out, &mut err);
+            Ok(())
         }
-
         _ => {
-            // TTY (default).
-            let color_func = formatter::tty_color_func(use_color);
-            let mut wiki: Vec<tty::WikiEntry> = Vec::new();
-            for i in &loaded {
-                match i {
-                    Input::Ok(l) => {
-                        // Processes the full result (see `appendComments`) before rendering file groups to keep the wiki summary in result order.
-                        for (file, comments) in file_groups(&l.comments) {
-                            let contents = group_contents(&sys, &file);
-                            let mut buf = String::new();
-                            tty::render_file(
-                                &color_func,
-                                &file,
-                                &contents,
-                                &comments,
-                                &mut wiki,
-                                &mut buf,
-                            );
-                            let _ = out.write_all(buf.as_bytes());
-                        }
-                    }
-                    Input::Err { name, message } => {
-                        let _ = writeln!(
-                            err,
-                            "{}",
-                            color_func("error", &format!("{name}: {message}"))
-                        );
-                    }
-                }
-            }
-            let mut wbuf = String::new();
-            tty::render_wiki(&wiki, wiki_link_count, &mut wbuf);
-            let _ = out.write_all(wbuf.as_bytes());
+            write_tty(
+                &loaded,
+                &sys,
+                use_color,
+                wiki_link_count,
+                &mut out,
+                &mut err,
+            );
+            Ok(())
         }
+    };
+    if let Err(e) = written {
+        let _ = writeln!(err, "{e}");
+        return ExitCode::from(2);
     }
 
     // Maps the largest status via `statusToCode`:
@@ -525,6 +403,174 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// A json document on its own line.
+fn print_json(doc: serde_json::Result<String>, out: &mut impl Write) -> serde_json::Result<()> {
+    let _ = writeln!(out, "{}", doc?);
+    Ok(())
+}
+
+/// The json1 comments: each file group untabbed and prepended, so the output
+/// lists the groups in reverse, as the Haskell `IORef` accumulation does.
+fn json1_comments(
+    loaded: &[Input],
+    sys: &Rc<IoSystem>,
+    err: &mut impl Write,
+) -> Vec<PositionedComment> {
+    let mut all: Vec<PositionedComment> = Vec::new();
+    for i in loaded {
+        match i {
+            Input::Ok(l) => {
+                for (file, comments) in file_groups(&l.comments) {
+                    let contents = group_contents(sys, &file);
+                    let mut new = fixer::make_non_virtual(&comments, &contents);
+                    new.extend(std::mem::take(&mut all));
+                    all = new;
+                }
+            }
+            Input::Err { name, message } => {
+                let _ = writeln!(err, "{name}: {message}");
+            }
+        }
+    }
+    all
+}
+
+/// The legacy json comments (matches upstream `collectResult`): the full
+/// comment list is prepended once per file group, causing duplicates across
+/// multiple files.
+fn json_comments(loaded: &[Input], err: &mut impl Write) -> Vec<PositionedComment> {
+    let mut all: Vec<PositionedComment> = Vec::new();
+    for i in loaded {
+        match i {
+            Input::Ok(l) => {
+                for _ in file_groups(&l.comments) {
+                    let mut new = l.comments.clone();
+                    new.extend(std::mem::take(&mut all));
+                    all = new;
+                }
+            }
+            Input::Err { name, message } => {
+                let _ = writeln!(err, "{name}: {message}");
+            }
+        }
+    }
+    all
+}
+
+fn write_gcc(loaded: &[Input], sys: &Rc<IoSystem>, out: &mut impl Write, err: &mut impl Write) {
+    for i in loaded {
+        match i {
+            Input::Ok(l) => {
+                for (file, comments) in file_groups(&l.comments) {
+                    let contents = group_contents(sys, &file);
+                    let mut buf = String::new();
+                    gcc::render_file(&file, &contents, &comments, &mut buf);
+                    let _ = out.write_all(buf.as_bytes());
+                }
+            }
+            Input::Err { name, message } => {
+                let _ = writeln!(err, "{}", gcc::render_failure(name, message));
+            }
+        }
+    }
+}
+
+fn write_checkstyle(loaded: &[Input], sys: &Rc<IoSystem>, out: &mut impl Write) {
+    let _ = out.write_all(checkstyle::HEADER.as_bytes());
+    for i in loaded {
+        match i {
+            Input::Ok(l) => {
+                for (file, comments) in file_groups(&l.comments) {
+                    let contents = group_contents(sys, &file);
+                    let mut buf = String::new();
+                    checkstyle::render_file(&file, &contents, &comments, &mut buf);
+                    let _ = out.write_all(buf.as_bytes());
+                }
+            }
+            Input::Err { name, message } => {
+                // CheckStyle onFailure writes to stdout.
+                let _ = out.write_all(checkstyle::render_failure(name, message).as_bytes());
+            }
+        }
+    }
+    let _ = out.write_all(checkstyle::FOOTER.as_bytes());
+}
+
+fn write_diff(
+    loaded: &[Input],
+    sys: &Rc<IoSystem>,
+    use_color: bool,
+    any_comments: bool,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) {
+    let color_fn = |s: &str| diff::color_bold_red(use_color, s);
+    let mut reported = false;
+    // Rendered per file in input order (matches the Haskell driver fold over inputs).
+    for i in loaded {
+        match i {
+            Input::Ok(l) => {
+                for (file, comments) in file_groups(&l.comments) {
+                    let contents = group_contents(sys, &file);
+                    let d = diff::render_file(use_color, &file, &contents, &comments);
+                    if d.reported {
+                        let _ = out.write_all(d.text.as_bytes());
+                        reported = true;
+                    }
+                }
+            }
+            Input::Err { name, message } => {
+                let _ = writeln!(err, "{}", color_fn(&format!("{name}: {message}")));
+            }
+        }
+    }
+    if any_comments && !reported {
+        let _ = writeln!(err, "{}", color_fn(diff::NONE_FIXABLE_MSG));
+    }
+}
+
+fn write_tty(
+    loaded: &[Input],
+    sys: &Rc<IoSystem>,
+    use_color: bool,
+    wiki_link_count: usize,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) {
+    let color_func = formatter::tty_color_func(use_color);
+    let mut wiki: Vec<tty::WikiEntry> = Vec::new();
+    for i in loaded {
+        match i {
+            Input::Ok(l) => {
+                // Processes the full result (see `appendComments`) before rendering file groups to keep the wiki summary in result order.
+                for (file, comments) in file_groups(&l.comments) {
+                    let contents = group_contents(sys, &file);
+                    let mut buf = String::new();
+                    tty::render_file(
+                        &color_func,
+                        &file,
+                        &contents,
+                        &comments,
+                        &mut wiki,
+                        &mut buf,
+                    );
+                    let _ = out.write_all(buf.as_bytes());
+                }
+            }
+            Input::Err { name, message } => {
+                let _ = writeln!(
+                    err,
+                    "{}",
+                    color_func("error", &format!("{name}: {message}"))
+                );
+            }
+        }
+    }
+    let mut wbuf = String::new();
+    tty::render_wiki(&wiki, wiki_link_count, &mut wbuf);
+    let _ = out.write_all(wbuf.as_bytes());
 }
 
 #[cfg(test)]

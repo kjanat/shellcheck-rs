@@ -6,6 +6,7 @@
 //! and turned into the same "key=value" directive syntax that is used in .shellcheckrc files.
 
 use crate::data::shell_for_executable;
+use regex::Regex;
 use std::fmt::Write;
 
 const REJECTED: &str = "invalid editorconfig value";
@@ -78,9 +79,13 @@ pub fn invalid_directive_lines(contents: &str, name: &str) -> Vec<usize> {
 /// valid, or a single rejected line at the position of any invalid
 /// `shellcheck.*` directive so that the .shellcheckrc parser reports it as
 /// SC1134.
+///
+/// A section header whose glob is not a valid regex rejects the file the same
+/// way, at that header's line: upstream's `mkRegex` dies on it instead.
 #[must_use]
 pub fn directives(contents: &str, name: &str) -> Option<String> {
-    let mut bad = invalid_directive_lines(contents, name);
+    let mut bad = invalid_glob_lines(contents);
+    bad.extend(invalid_directive_lines(contents, name));
     if !bad.is_empty() {
         bad.sort_unstable();
         bad.dedup();
@@ -144,12 +149,28 @@ pub fn glob_to_regex_string(pattern: &str) -> String {
     format!("^{prefix}{}$", glob_body(&chars))
 }
 
+/// `mkRegex (globToRegexString pattern)`: the glob as a regex, or why it does
+/// not translate into one.
+fn glob_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    Regex::new(&format!("(?m){}", glob_to_regex_string(pattern)))
+}
+
 /// `matchesGlob`: does the (relative path of the) file match the given
-/// EditorConfig glob? A pattern that does not translate into a valid regex
-/// matches nothing.
-fn matches_glob(pattern: &str, name: &str) -> bool {
-    regex::Regex::new(&format!("(?m){}", glob_to_regex_string(pattern)))
-        .is_ok_and(|re| re.is_match(name))
+/// EditorConfig glob?
+#[cfg(test)]
+fn matches_glob(pattern: &str, name: &str) -> Result<bool, regex::Error> {
+    Ok(glob_regex(pattern)?.is_match(name))
+}
+
+/// The 1-based header lines of sections whose glob does not translate into a
+/// valid regex.
+#[must_use]
+pub fn invalid_glob_lines(contents: &str) -> Vec<usize> {
+    sections(contents)
+        .into_iter()
+        .filter(|section| section.glob.is_err())
+        .map(|section| section.header)
+        .collect()
 }
 
 fn glob_body(pattern: &[char]) -> String {
@@ -314,26 +335,46 @@ fn read_int(s: &str) -> Option<i64> {
 
 /// `allDirectives name sections`: all `shellcheck.*` directives (as
 /// (line, key, value) tuples) found in sections whose glob matches the file
-/// being checked, in file order.
+/// being checked, in file order. A section whose glob is not a valid regex
+/// contributes nothing; `invalid_glob_lines` reports it.
 fn all_directives(contents: &str, name: &str) -> Vec<Directive> {
     sections(contents)
         .into_iter()
-        .filter(|(pattern, _)| matches_glob(pattern, name))
-        .flat_map(|(_, body)| body.into_iter().filter_map(|(n, l)| directive(n, l)))
+        .filter(|section| section.glob.as_ref().is_ok_and(|re| re.is_match(name)))
+        .flat_map(|section| {
+            section
+                .body
+                .into_iter()
+                .filter_map(|(n, l)| directive(n, l))
+        })
         .collect()
 }
 
-/// `splitSections 1 (lines contents)`: each section header's pattern with the
+/// One section of an EditorConfig file.
+struct Section<'a> {
+    /// The 1-based line of the `[glob]` header.
+    header: usize,
+    /// The header's glob as a regex.
+    glob: Result<Regex, regex::Error>,
+    /// The numbered lines up to the next header.
+    body: Vec<(usize, &'a str)>,
+}
+
+/// `splitSections 1 (lines contents)`: each section header's glob with the
 /// numbered lines up to the next header. Lines before the first header
 /// belong to no section.
-fn sections(contents: &str) -> Vec<(String, Vec<(usize, &str)>)> {
-    let mut out: Vec<(String, Vec<(usize, &str)>)> = Vec::new();
+fn sections(contents: &str) -> Vec<Section<'_>> {
+    let mut out: Vec<Section<'_>> = Vec::new();
     for (i, l) in lines(contents).into_iter().enumerate() {
         match parse_header(l) {
-            Some(pattern) => out.push((pattern, Vec::new())),
+            Some(pattern) => out.push(Section {
+                header: i + 1,
+                glob: glob_regex(&pattern),
+                body: Vec::new(),
+            }),
             None => {
-                if let Some((_, body)) = out.last_mut() {
-                    body.push((i + 1, l));
+                if let Some(section) = out.last_mut() {
+                    section.body.push((i + 1, l));
                 }
             }
         }
@@ -454,144 +495,144 @@ mod tests {
 
     #[test]
     fn prop_globStar() {
-        assert!(matches_glob("*.ebuild", "foo.ebuild"));
+        assert_eq!(matches_glob("*.ebuild", "foo.ebuild"), Ok(true));
     }
 
     #[test]
     fn prop_globBraceExt() {
-        assert!(matches_glob("*.{ebuild,eclass}", "foo.eclass"));
+        assert_eq!(matches_glob("*.{ebuild,eclass}", "foo.eclass"), Ok(true));
     }
 
     #[test]
     fn prop_globBraceExt2() {
-        assert!(matches_glob("*.{ebuild,eclass}", "foo.ebuild"));
+        assert_eq!(matches_glob("*.{ebuild,eclass}", "foo.ebuild"), Ok(true));
     }
 
     #[test]
     fn prop_globBraceName() {
-        assert!(matches_glob("{PKGBUILD,APKBUILD}", "PKGBUILD"));
+        assert_eq!(matches_glob("{PKGBUILD,APKBUILD}", "PKGBUILD"), Ok(true));
     }
 
     #[test]
     fn prop_globBraceName2() {
-        assert!(matches_glob("{PKGBUILD,APKBUILD}", "APKBUILD"));
+        assert_eq!(matches_glob("{PKGBUILD,APKBUILD}", "APKBUILD"), Ok(true));
     }
 
     #[test]
     fn prop_globNoMatch() {
-        assert!(!matches_glob("*.ebuild", "foo.txt"));
+        assert_eq!(matches_glob("*.ebuild", "foo.txt"), Ok(false));
     }
 
     #[test]
     fn prop_globQuestion() {
-        assert!(matches_glob("foo?.sh", "food.sh"));
+        assert_eq!(matches_glob("foo?.sh", "food.sh"), Ok(true));
     }
 
     #[test]
     fn prop_globClass() {
-        assert!(matches_glob("foo[0-9].sh", "foo1.sh"));
+        assert_eq!(matches_glob("foo[0-9].sh", "foo1.sh"), Ok(true));
     }
 
     #[test]
     fn prop_globClassNeg() {
-        assert!(!matches_glob("foo[!0-9].sh", "foo1.sh"));
+        assert_eq!(matches_glob("foo[!0-9].sh", "foo1.sh"), Ok(false));
     }
 
     // Patterns without a path separator should match at any depth.
     #[test]
     fn prop_globAnyDepth() {
-        assert!(matches_glob("*.sh", "sub/dir/foo.sh"));
+        assert_eq!(matches_glob("*.sh", "sub/dir/foo.sh"), Ok(true));
     }
 
     #[test]
     fn prop_globAnyDepthPlain() {
-        assert!(matches_glob("foo", "sub/foo"));
+        assert_eq!(matches_glob("foo", "sub/foo"), Ok(true));
     }
 
     // Patterns with a path separator are only matched against the full
     // relative path.
     #[test]
     fn prop_globWithSlashNoMatch() {
-        assert!(!matches_glob("sub/*.sh", "other/foo.sh"));
+        assert_eq!(matches_glob("sub/*.sh", "other/foo.sh"), Ok(false));
     }
 
     #[test]
     fn prop_globWithSlashMatch() {
-        assert!(matches_glob("sub/*.sh", "sub/foo.sh"));
+        assert_eq!(matches_glob("sub/*.sh", "sub/foo.sh"), Ok(true));
     }
 
     // Numeric range expansion
     #[test]
     fn prop_globRange() {
-        assert!(matches_glob("file{1..3}.sh", "file2.sh"));
+        assert_eq!(matches_glob("file{1..3}.sh", "file2.sh"), Ok(true));
     }
 
     #[test]
     fn prop_globRangeStart() {
-        assert!(matches_glob("file{1..3}.sh", "file1.sh"));
+        assert_eq!(matches_glob("file{1..3}.sh", "file1.sh"), Ok(true));
     }
 
     #[test]
     fn prop_globRangeEnd() {
-        assert!(matches_glob("file{1..3}.sh", "file3.sh"));
+        assert_eq!(matches_glob("file{1..3}.sh", "file3.sh"), Ok(true));
     }
 
     #[test]
     fn prop_globRangeNoMatch() {
-        assert!(!matches_glob("file{1..3}.sh", "file4.sh"));
+        assert_eq!(matches_glob("file{1..3}.sh", "file4.sh"), Ok(false));
     }
 
     #[test]
     fn prop_globRangeNegative() {
-        assert!(matches_glob("file{-2..0}.sh", "file-1.sh"));
+        assert_eq!(matches_glob("file{-2..0}.sh", "file-1.sh"), Ok(true));
     }
 
     #[test]
     fn prop_globRangeDescending() {
-        assert!(!matches_glob("file{3..1}.sh", "file2.sh"));
+        assert_eq!(matches_glob("file{3..1}.sh", "file2.sh"), Ok(false));
     }
 
     #[test]
     fn prop_globLiteralDots() {
-        assert!(!matches_glob("file{1..3}.sh", "file1..3.sh"));
+        assert_eq!(matches_glob("file{1..3}.sh", "file1..3.sh"), Ok(false));
     }
 
     // Empty brace alternatives (e.g. 'foo{,bar}') make the group optional:
     // 'foo' and 'foobar' both match.
     #[test]
     fn prop_globBraceEmptyAlt() {
-        assert!(matches_glob("foo{,bar}", "foo"));
+        assert_eq!(matches_glob("foo{,bar}", "foo"), Ok(true));
     }
 
     #[test]
     fn prop_globBraceEmptyAlt2() {
-        assert!(matches_glob("foo{,bar}", "foobar"));
+        assert_eq!(matches_glob("foo{,bar}", "foobar"), Ok(true));
     }
 
     #[test]
     fn prop_globBraceEmptyAltNoMatch() {
-        assert!(!matches_glob("foo{,bar}", "foobaz"));
+        assert_eq!(matches_glob("foo{,bar}", "foobaz"), Ok(false));
     }
 
     // Nested braces: '{foo,ba{r,z}}' matches foo, bar and baz.
     #[test]
     fn prop_globBraceNested1() {
-        assert!(matches_glob("{foo,ba{r,z}}", "foo"));
+        assert_eq!(matches_glob("{foo,ba{r,z}}", "foo"), Ok(true));
     }
 
     #[test]
     fn prop_globBraceNested2() {
-        assert!(matches_glob("{foo,ba{r,z}}", "bar"));
+        assert_eq!(matches_glob("{foo,ba{r,z}}", "bar"), Ok(true));
     }
 
     #[test]
     fn prop_globBraceNested3() {
-        assert!(matches_glob("{foo,ba{r,z}}", "baz"));
+        assert_eq!(matches_glob("{foo,ba{r,z}}", "baz"), Ok(true));
     }
 
     #[test]
     fn prop_globBraceNestedNoMatch() {
-        assert!(!matches_glob("{foo,ba{r,z}}", "baq"));
+        assert_eq!(matches_glob("{foo,ba{r,z}}", "baq"), Ok(false));
     }
 
     #[test]

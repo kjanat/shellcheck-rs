@@ -4,7 +4,7 @@
 //! Expected output names the fixture's root as `{T}`, its checkstyle escape as
 //! `{TX}`, and the first 15 characters of it as `{T15}`.
 
-use std::io::Write;
+use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -103,28 +103,30 @@ struct Run {
 }
 
 impl Fixture {
-    fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "rshellcheck-editorconfig-{name}-{}",
-            std::process::id()
-        ));
-        std::fs::remove_dir_all(&dir).ok();
+    fn new(name: &str) -> io::Result<Self> {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("editorconfig-{name}-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)?;
+        }
         for (path, contents) in FILES {
             let path = dir.join(path);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, contents).unwrap();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, contents)?;
         }
-        std::fs::create_dir_all(dir.join("home")).unwrap();
-        std::fs::create_dir_all(dir.join("xdg")).unwrap();
-        Self(std::fs::canonicalize(dir).unwrap())
+        std::fs::create_dir_all(dir.join("home"))?;
+        std::fs::create_dir_all(dir.join("xdg"))?;
+        Ok(Self(std::fs::canonicalize(dir)?))
     }
 
     fn root(&self) -> String {
         self.0.display().to_string()
     }
 
-    fn write(&self, path: &str, contents: &str) {
-        std::fs::write(self.0.join(path), contents).unwrap();
+    fn write(&self, path: &str, contents: &str) -> io::Result<()> {
+        std::fs::write(self.0.join(path), contents)
     }
 
     fn expand(&self, template: &str) -> String {
@@ -136,11 +138,17 @@ impl Fixture {
             .replace("{T}", &root)
     }
 
-    fn run(&self, args: &[&str]) -> Run {
+    fn run(&self, args: &[&str]) -> io::Result<Run> {
         self.run_in("", &[], None, args)
     }
 
-    fn run_in(&self, dir: &str, env: &[(&str, String)], stdin: Option<&str>, args: &[&str]) -> Run {
+    fn run_in(
+        &self,
+        dir: &str,
+        env: &[(&str, String)],
+        stdin: Option<&str>,
+        args: &[&str],
+    ) -> io::Result<Run> {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_rshellcheck"));
         cmd.args(args)
             .current_dir(self.0.join(dir))
@@ -153,18 +161,22 @@ impl Fixture {
         for (key, value) in env {
             cmd.env(key, value);
         }
-        let mut child = cmd.spawn().unwrap();
-        let mut input = child.stdin.take().unwrap();
-        input
-            .write_all(stdin.unwrap_or_default().as_bytes())
-            .unwrap();
+        let mut child = cmd.spawn()?;
+        let mut input = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("stdin is not piped"))?;
+        input.write_all(stdin.unwrap_or_default().as_bytes())?;
         drop(input);
-        let out = child.wait_with_output().unwrap();
-        Run {
-            stdout: String::from_utf8(out.stdout).unwrap(),
-            stderr: String::from_utf8(out.stderr).unwrap(),
-            code: out.status.code().unwrap(),
-        }
+        let out = child.wait_with_output()?;
+        Ok(Run {
+            stdout: String::from_utf8(out.stdout).map_err(io::Error::other)?,
+            stderr: String::from_utf8(out.stderr).map_err(io::Error::other)?,
+            code: out
+                .status
+                .code()
+                .ok_or_else(|| io::Error::other("rshellcheck was killed by a signal"))?,
+        })
     }
 
     fn assert(&self, run: &Run, stdout: &str, stderr: &str, code: i32) {
@@ -184,13 +196,15 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).ok();
+        if let Err(e) = std::fs::remove_dir_all(&self.0) {
+            eprintln!("leaving {}: {e}", self.0.display());
+        }
     }
 }
 
 #[test]
-fn an_unknown_shell_is_an_sc1134_in_the_editorconfig_and_exits_4() {
-    let f = Fixture::new("zsh");
+fn an_unknown_shell_is_an_sc1134_in_the_editorconfig_and_exits_4() -> io::Result<()> {
+    let f = Fixture::new("zsh")?;
     let ec = sc1134("{T}/z/.editorconfig", 3, 8);
     let cases: [(&str, String, i32); 6] = [
         ("json1", json1(std::slice::from_ref(&ec)), 4),
@@ -230,14 +244,15 @@ fn an_unknown_shell_is_an_sc1134_in_the_editorconfig_and_exits_4() {
         ("quiet", String::new(), 1),
     ];
     for (format, stdout, code) in cases {
-        let run = f.run(&["-f", format, "z/foo"]);
+        let run = f.run(&["-f", format, "z/foo"])?;
         f.assert(&run, &stdout, "", code);
     }
+    Ok(())
 }
 
 #[test]
-fn an_invalid_root_rejects_the_editorconfig_and_its_parents() {
-    let f = Fixture::new("root");
+fn an_invalid_root_rejects_the_editorconfig_and_its_parents() -> io::Result<()> {
+    let f = Fixture::new("root")?;
     let ec = sc1134("{T}/r/b/.editorconfig", 2, 8);
     let script = on(X_2154_2086, "r/b/x.sh");
     let cases: [(&str, String, i32); 6] = [
@@ -298,26 +313,28 @@ fn an_invalid_root_rejects_the_editorconfig_and_its_parents() {
         ("quiet", String::new(), 1),
     ];
     for (format, stdout, code) in cases {
-        let run = f.run(&["-f", format, "r/b/x.sh"]);
+        let run = f.run(&["-f", format, "r/b/x.sh"])?;
         f.assert(&run, &stdout, "", code);
     }
+    Ok(())
 }
 
 #[test]
-fn the_shellcheckrc_and_the_editorconfig_both_apply() {
-    let f = Fixture::new("merge");
-    let run = f.run(&["-f", "json1", "m/x.sh"]);
+fn the_shellcheckrc_and_the_editorconfig_both_apply() -> io::Result<()> {
+    let f = Fixture::new("merge")?;
+    let run = f.run(&["-f", "json1", "m/x.sh"])?;
     f.assert(&run, &json1(&[]), "", 0);
+    Ok(())
 }
 
 #[test]
-fn a_rejected_editorconfig_replaces_the_shellcheckrc() {
-    let f = Fixture::new("fish");
+fn a_rejected_editorconfig_replaces_the_shellcheckrc() -> io::Result<()> {
+    let f = Fixture::new("fish")?;
     let ec = sc1134("{T}/j/.editorconfig", 3, 1);
-    let run = f.run(&["-f", "json1", "j/x.sh"]);
+    let run = f.run(&["-f", "json1", "j/x.sh"])?;
     f.assert(&run, &json1(&[on(X_2154_2086, "j/x.sh"), ec]), "", 4);
 
-    let run = f.run(&["j/x.sh"]);
+    let run = f.run(&["j/x.sh"])?;
     let tty = concat!(
         "\n",
         "In {T}/j/.editorconfig line 3:\n",
@@ -339,106 +356,115 @@ fn a_rejected_editorconfig_replaces_the_shellcheckrc() {
         "  https://www.shellcheck.net/wiki/SC2086 -- Double quote to prevent globbing ...",
     );
     f.assert(&run, tty, "", 4);
+    Ok(())
 }
 
 #[test]
-fn a_broken_shellcheckrc_is_an_sc1134_in_it_and_exits_1() {
-    let f = Fixture::new("brokenrc");
+fn a_broken_shellcheckrc_is_an_sc1134_in_it_and_exits_1() -> io::Result<()> {
+    let f = Fixture::new("brokenrc")?;
     let rc = sc1134("{T}/k/.shellcheckrc", 1, 5);
-    let run = f.run(&["-f", "json1", "k/x.sh"]);
+    let run = f.run(&["-f", "json1", "k/x.sh"])?;
     f.assert(&run, &json1(&[on(X_2154_2086, "k/x.sh"), rc]), "", 1);
+    Ok(())
 }
 
 #[test]
-fn stdin_matches_a_section_named_dash() {
-    let f = Fixture::new("stdin");
-    let run = f.run_in("s", &[], Some(SCRIPT), &["-f", "json1", "-"]);
+fn stdin_matches_a_section_named_dash() -> io::Result<()> {
+    let f = Fixture::new("stdin")?;
+    let run = f.run_in("s", &[], Some(SCRIPT), &["-f", "json1", "-"])?;
     f.assert(&run, &json1(&[on(X_2154, "-")]), "", 1);
+    Ok(())
 }
 
 #[test]
-fn norc_skips_the_editorconfig_too() {
-    let f = Fixture::new("norc");
-    let run = f.run(&["--norc", "-f", "json1", "m/x.sh"]);
+fn norc_skips_the_editorconfig_too() -> io::Result<()> {
+    let f = Fixture::new("norc")?;
+    let run = f.run(&["--norc", "-f", "json1", "m/x.sh"])?;
     f.assert(&run, &json1(&[on(X_2154_2086, "m/x.sh")]), "", 1);
+    Ok(())
 }
 
 #[test]
-fn rcfile_replaces_the_shellcheckrc_and_keeps_the_editorconfig() {
-    let f = Fixture::new("rcfile");
-    let run = f.run(&["--rcfile", "rcf", "-f", "json1", "m/x.sh"]);
+fn rcfile_replaces_the_shellcheckrc_and_keeps_the_editorconfig() -> io::Result<()> {
+    let f = Fixture::new("rcfile")?;
+    let run = f.run(&["--rcfile", "rcf", "-f", "json1", "m/x.sh"])?;
     f.assert(&run, &json1(&[on(X_2086, "m/x.sh")]), "", 1);
 
-    let run = f.run(&["--rcfile", "nope", "-f", "json1", "m/x.sh"]);
+    let run = f.run(&["--rcfile", "nope", "-f", "json1", "m/x.sh"])?;
     f.assert(
         &run,
         &json1(&[on(X_2086, "m/x.sh")]),
         "Warning: unable to read --rcfile nope",
         1,
     );
+    Ok(())
 }
 
 #[test]
-fn a_missing_rcfile_is_not_read_for_an_input_that_is_not_read() {
-    let f = Fixture::new("missingboth");
-    let run = f.run(&["--rcfile", "nope", "-f", "json1", "nope.sh"]);
+fn a_missing_rcfile_is_not_read_for_an_input_that_is_not_read() -> io::Result<()> {
+    let f = Fixture::new("missingboth")?;
+    let run = f.run(&["--rcfile", "nope", "-f", "json1", "nope.sh"])?;
     f.assert(
         &run,
         &json1(&[]),
         "nope.sh: nope.sh: openBinaryFile: does not exist (No such file or directory)",
         2,
     );
+    Ok(())
 }
 
 #[test]
-fn the_global_editorconfig_applies_without_exit_4() {
-    let f = Fixture::new("global");
-    f.write("xdg/editorconfig.ini", "[*.sh]\nshellcheck.shell=zsh\n");
+fn the_global_editorconfig_applies_without_exit_4() -> io::Result<()> {
+    let f = Fixture::new("global")?;
+    f.write("xdg/editorconfig.ini", "[*.sh]\nshellcheck.shell=zsh\n")?;
     let ini = sc1134("{T}/xdg/editorconfig.ini", 2, 8);
-    let run = f.run(&["-f", "json1", "g/x.sh"]);
+    let run = f.run(&["-f", "json1", "g/x.sh"])?;
     f.assert(&run, &json1(&[on(X_2154_2086, "g/x.sh"), ini]), "", 1);
 
     f.write(
         "xdg/editorconfig.ini",
         "[*.sh]\nshellcheck.disable=SC2086\n",
-    );
-    let run = f.run(&["-f", "json1", "g/x.sh"]);
+    )?;
+    let run = f.run(&["-f", "json1", "g/x.sh"])?;
     f.assert(&run, &json1(&[on(X_2154, "g/x.sh")]), "", 1);
 
     let relative = [("XDG_CONFIG_HOME", "xdg".to_string())];
-    let run = f.run_in("", &relative, None, &["-f", "json1", "g/x.sh"]);
+    let run = f.run_in("", &relative, None, &["-f", "json1", "g/x.sh"])?;
     f.assert(&run, &json1(&[on(X_2154_2086, "g/x.sh")]), "", 1);
+    Ok(())
 }
 
 #[test]
-fn a_failed_input_outranks_exit_4() {
-    let f = Fixture::new("twomissing");
-    let run = f.run(&["-f", "json1", "z/foo", "missing.sh"]);
+fn a_failed_input_outranks_exit_4() -> io::Result<()> {
+    let f = Fixture::new("twomissing")?;
+    let run = f.run(&["-f", "json1", "z/foo", "missing.sh"])?;
     f.assert(
         &run,
         &json1(&[sc1134("{T}/z/.editorconfig", 3, 8)]),
         "missing.sh: missing.sh: openBinaryFile: does not exist (No such file or directory)",
         2,
     );
+    Ok(())
 }
 
 #[test]
-fn exit_4_outranks_a_clean_input() {
-    let f = Fixture::new("twoclean");
-    let run = f.run(&["-f", "gcc", "z/foo", "m/x.sh"]);
+fn exit_4_outranks_a_clean_input() -> io::Result<()> {
+    let f = Fixture::new("twoclean")?;
+    let run = f.run(&["-f", "gcc", "z/foo", "m/x.sh"])?;
     f.assert(
         &run,
         "{T}/z/.editorconfig:3:8: error: Failed to process {T}/z/.editorconfig, line 3: Expected '=' after directive key. Fix any mentioned problems and try again. [SC1134]",
         "",
         4,
     );
+    Ok(())
 }
 
 #[test]
-fn an_unreadable_editorconfig_is_reported_for_every_input() {
-    let f = Fixture::new("unreadable");
+fn an_unreadable_editorconfig_is_reported_for_every_input() -> io::Result<()> {
+    let f = Fixture::new("unreadable")?;
     let ec = f.0.join("u/.editorconfig");
-    std::fs::set_permissions(&ec, std::fs::Permissions::from_mode(0o000)).unwrap();
+    std::fs::set_permissions(&ec, std::fs::Permissions::from_mode(0o000))?;
     assert!(
         std::fs::read(&ec).is_err(),
         "the fixture needs a user who cannot read a mode 000 file"
@@ -446,14 +472,15 @@ fn an_unreadable_editorconfig_is_reported_for_every_input() {
     let denied = "{T}/u/.editorconfig: {T}/u/.editorconfig: openBinaryFile: permission denied (Permission denied)";
     let script = on(X_2154_2086, "u/x.sh");
 
-    let run = f.run(&["-f", "json1", "u/x.sh"]);
+    let run = f.run(&["-f", "json1", "u/x.sh"])?;
     f.assert(&run, &json1(std::slice::from_ref(&script)), denied, 1);
 
-    let run = f.run(&["-f", "json1", "u/x.sh", "u/x.sh"]);
+    let run = f.run(&["-f", "json1", "u/x.sh", "u/x.sh"])?;
     f.assert(
         &run,
         &json1(&[script.clone(), script]),
         &format!("{denied}\n{denied}"),
         1,
     );
+    Ok(())
 }

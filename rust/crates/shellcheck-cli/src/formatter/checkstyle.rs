@@ -1,10 +1,14 @@
 //! Port of `ShellCheck.Formatter.CheckStyle`: CheckStyle 4.3 XML output.
 
+use std::fmt::Write;
+
 use shellcheck_rs::interface::{PositionedComment, Severity};
 
 use super::fixer::make_non_virtual;
 
+/// `header`: the XML declaration and the opening `<checkstyle>` element.
 pub const HEADER: &str = "<?xml version='1.0' encoding='UTF-8'?>\n<checkstyle version='4.3'>\n";
+/// `footer`: the closing `</checkstyle>` element.
 pub const FOOTER: &str = "</checkstyle>\n";
 
 /// `escape'`: keep ASCII letters, digits, space, `.` and `/`; everything else becomes a numeric character reference.
@@ -20,7 +24,7 @@ fn escape(s: &str) -> String {
         if ok {
             out.push(c);
         } else {
-            out.push_str(&format!("&#{};", c as u32));
+            let _ = write!(out, "&#{};", u32::from(c));
         }
     }
     out
@@ -58,7 +62,7 @@ pub fn render_file(
     out: &mut String,
 ) {
     let untabbed = make_non_virtual(comments, contents);
-    out.push_str(&format!("<file {}>\n", attr("name", filename)));
+    let _ = writeln!(out, "<file {}>", attr("name", filename));
     for c in &untabbed {
         out.push_str(&format_comment(c));
     }

@@ -168,14 +168,13 @@ fn unescape(body: &str) -> String {
             '\'' => Some('\''),
             _ => None,
         };
-        match simple {
-            Some(ch) => out.push(ch),
+        if let Some(ch) = simple {
+            out.push(ch);
+        } else {
             // Anything else: keep the backslash and the character, which is
             // what an unrecognized sequence means in practice.
-            None => {
-                out.push('\\');
-                out.push(e);
-            }
+            out.push('\\');
+            out.push(e);
         }
         i += 1;
     }
@@ -447,7 +446,7 @@ pub fn coverage(src_dir: &Path) -> Result<Coverage, String> {
         );
         let mut entries = extract_text(&name, &text);
         for e in &mut entries {
-            e.path = rel.clone();
+            e.path.clone_from(&rel);
         }
         // Every property the file defines, so the ones with no script to
         // replay are counted rather than passed over in silence.
@@ -631,6 +630,9 @@ mod tests {
 
     #[test]
     fn non_property_lines_are_ignored() {
-        assert!(extract_text("X.hs", "checkFoo = doStuff \"not a prop\"").is_empty());
+        assert_eq!(
+            extract_text("X.hs", "checkFoo = doStuff \"not a prop\""),
+            Vec::<Entry>::new()
+        );
     }
 }

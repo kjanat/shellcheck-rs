@@ -38,7 +38,7 @@ pub struct Rng(u64);
 
 impl Rng {
     pub fn new(seed: u64) -> Self {
-        Self(seed.wrapping_mul(2685821657736338717).max(1))
+        Self(seed.wrapping_mul(2_685_821_657_736_338_717).max(1))
     }
     const fn next_u64(&mut self) -> u64 {
         let mut x = self.0;
@@ -46,14 +46,16 @@ impl Rng {
         x ^= x << 25;
         x ^= x >> 27;
         self.0 = x;
-        x.wrapping_mul(2685821657736338717)
+        x.wrapping_mul(2_685_821_657_736_338_717)
     }
-    const fn below(&mut self, n: usize) -> usize {
+    fn below(&mut self, n: usize) -> usize {
         if n == 0 {
-            0
-        } else {
-            (self.next_u64() % n as u64) as usize
+            return 0;
         }
+        let Ok(i) = usize::try_from(self.next_u64() % n as u64) else {
+            unreachable!("a remainder below {n} fits in usize")
+        };
+        i
     }
     fn range(&mut self, lo: usize, hi: usize) -> usize {
         lo + self.below(hi - lo + 1)
@@ -463,23 +465,23 @@ struct Shrinker<'a> {
 }
 
 impl Shrinker<'_> {
-    fn diverges_the_same_way(&self, cand: &str) -> bool {
+    fn diverges_the_same_way(&self, cand: &str) -> Result<bool, String> {
         if cand.trim().is_empty() {
-            return false;
+            return Ok(false);
         }
         let Ok((ocomments, _)) = self.oracle.check_one(cand, self.shell) else {
-            return false;
+            return Ok(false);
         };
         let ok = crate::oracle_keys(&ocomments);
         let name = format!("{}/x", self.oracle.dir().display());
-        let pk = port_keys(cand, &name, self.shell);
+        let pk = port_keys(cand, &name, self.shell)?;
         if keys_match(&pk, &ok) {
-            return false;
+            return Ok(false);
         }
-        signature(&pk, &ok, self.shell) == self.want
+        Ok(signature(&pk, &ok, self.shell) == self.want)
     }
 
-    fn shrink(&self, start: &str) -> String {
+    fn shrink(&self, start: &str) -> Result<String, String> {
         let mut cur = start.to_string();
         let mut budget = 200;
         // Whole lines first: the biggest wins, and keeps the result readable.
@@ -495,7 +497,7 @@ impl Shrinker<'_> {
                 let mut cand: Vec<String> = lines.clone();
                 cand.remove(i);
                 let cand = cand.join("\n");
-                if self.diverges_the_same_way(&cand) {
+                if self.diverges_the_same_way(&cand)? {
                     cur = cand;
                     progress = true;
                     break;
@@ -514,7 +516,7 @@ impl Shrinker<'_> {
                     continue;
                 }
                 let cand = format!("{}{}", &cur[..i], &cur[end..]);
-                if self.diverges_the_same_way(&cand) {
+                if self.diverges_the_same_way(&cand)? {
                     cur = cand;
                 } else {
                     i += size;
@@ -522,7 +524,7 @@ impl Shrinker<'_> {
             }
             size /= 2;
         }
-        cur
+        Ok(cur)
     }
 }
 
@@ -536,25 +538,27 @@ impl Shrinker<'_> {
 /// same seed.
 pub fn sample_scripts(seeds: &[String], seed: u64, count: usize) -> Vec<String> {
     let mut rng = Rng::new(seed.wrapping_add(1));
-    (0..count)
-        .map(|_| {
-            let s = if rng.chance(45) && !seeds.is_empty() {
-                let base = rng.pick(seeds).clone();
-                mutate(&mut rng, &base, seeds)
-            } else if rng.chance(50) {
-                script(&mut rng)
-            } else {
-                let g = script(&mut rng);
-                mutate(&mut rng, &g, seeds)
-            };
-            if s.len() > 4000 {
-                s[..4000].to_string()
-            } else {
-                s
-            }
-        })
-        .collect()
+    (0..count).map(|_| sample(&mut rng, seeds)).collect()
 }
+
+/// One generated input: a mutated seed, a fresh script, or a mutated fresh
+/// script, cut to its first 4000 bytes.
+fn sample(rng: &mut Rng, seeds: &[String]) -> String {
+    let mut s = if rng.chance(45) && !seeds.is_empty() {
+        let base = rng.pick(seeds).clone();
+        mutate(rng, &base, seeds)
+    } else if rng.chance(50) {
+        script(rng)
+    } else {
+        let g = script(rng);
+        mutate(rng, &g, seeds)
+    };
+    s.truncate(s.floor_char_boundary(4000));
+    s
+}
+
+/// Inputs per oracle call.
+const ROUND: usize = crate::oracle::BATCH;
 
 pub fn run(args: &Args) -> Result<bool, String> {
     let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
@@ -566,7 +570,7 @@ pub fn run(args: &Args) -> Result<bool, String> {
         "{}",
         crate::oracle::verify(&oracle, &args.repo, args.any_oracle_version())?
     );
-    let mut rng = Rng::new(args.seed.wrapping_add(1));
+    let mut rng = Rng::new(args.fuzzing.seed.wrapping_add(1));
 
     let mut seen: HashSet<String> = HashSet::new();
     // Deviation ids already announced, so one class is reported once rather
@@ -575,11 +579,10 @@ pub fn run(args: &Args) -> Result<bool, String> {
     let mut found: Vec<Finding> = Vec::new();
     let mut checked = 0usize;
 
-    const ROUND: usize = crate::oracle::BATCH;
-    let rounds = args.iterations.div_ceil(ROUND);
+    let rounds = args.fuzzing.iterations.div_ceil(ROUND);
     'outer: for _ in 0..rounds {
         // Build a round of inputs, each with the dialect it will be checked in.
-        let shell: Option<String> = if args.all_shells {
+        let shell: Option<String> = if args.fuzzing.all_shells {
             None
         } else {
             rng.pick(&SHELLS).map(str::to_string)
@@ -587,20 +590,7 @@ pub fn run(args: &Args) -> Result<bool, String> {
         let mut batch: Vec<(String, String)> = Vec::with_capacity(ROUND);
         let mut sources: Vec<String> = Vec::with_capacity(ROUND);
         for _ in 0..ROUND {
-            let s = if rng.chance(45) && !seeds.is_empty() {
-                let base = rng.pick(&seeds).clone();
-                mutate(&mut rng, &base, &seeds)
-            } else if rng.chance(50) {
-                script(&mut rng)
-            } else {
-                let g = script(&mut rng);
-                mutate(&mut rng, &g, &seeds)
-            };
-            let s = if s.len() > 4000 {
-                s[..4000].to_string()
-            } else {
-                s
-            };
+            let s = sample(&mut rng, &seeds);
             batch.push((oracle.name(), s.clone()));
             sources.push(s);
         }
@@ -613,7 +603,7 @@ pub fn run(args: &Args) -> Result<bool, String> {
             };
             let ok = crate::oracle_keys(ocomments);
             let path = oracle.dir().join(name);
-            let pk = port_keys(source, &path.to_string_lossy(), shell.as_deref());
+            let pk = port_keys(source, &path.to_string_lossy(), shell.as_deref())?;
             if keys_match(&pk, &ok) {
                 continue;
             }
@@ -633,7 +623,7 @@ pub fn run(args: &Args) -> Result<bool, String> {
                 println!("found divergence {} ({sig})", found.len() + 1);
             }
             found.push((sig, shell.clone(), source.clone(), pk, ok));
-            if found.len() >= args.max_findings {
+            if found.len() >= args.fuzzing.max_findings {
                 break 'outer;
             }
         }
@@ -644,18 +634,34 @@ pub fn run(args: &Args) -> Result<bool, String> {
         found.len()
     );
     println!("\n{summary_line}");
-    for (sig, shell, source, _, _) in &found {
+    report_findings(&oracle, &found)?;
+    let crashes = crate::report_crashes(&oracle, args.fuzzing.max_findings, args.quiet);
+    crate::job_summary(
+        &summary_line,
+        &[
+            ("inputs", &checked),
+            ("divergences", &found.len()),
+            ("oracle_crashes", &crashes),
+            ("seed", &args.fuzzing.seed),
+        ],
+    );
+    Ok(found.is_empty())
+}
+
+/// Each finding shrunk to a small reproducer, with both tools' answers on it.
+fn report_findings(oracle: &Oracle, found: &[Finding]) -> Result<(), String> {
+    for (sig, shell, source, _, _) in found {
         let sh = shell.as_deref();
         let sm = Shrinker {
-            oracle: &oracle,
+            oracle,
             shell: sh,
             want: sig.clone(),
         };
-        let small = sm.shrink(source);
+        let small = sm.shrink(source)?;
         let (ocomments, oexit) = oracle.check_one(&small, sh)?;
         let ok = crate::oracle_keys(&ocomments);
         let path = oracle.dir().join("x");
-        let pk = port_keys(&small, &path.to_string_lossy(), sh);
+        let pk = port_keys(&small, &path.to_string_lossy(), sh)?;
         println!("\n--- {sig}");
         println!("  script: {small:?}");
         println!("  oracle (exit {oexit}): {}", render_keys(&ok));
@@ -672,17 +678,7 @@ pub fn run(args: &Args) -> Result<bool, String> {
                 ));
         }
     }
-    let crashes = crate::report_crashes(&oracle, args.max_findings, args.quiet);
-    crate::job_summary(
-        &summary_line,
-        &[
-            ("inputs", checked),
-            ("divergences", found.len()),
-            ("oracle_crashes", crashes),
-            ("seed", args.seed as usize),
-        ],
-    );
-    Ok(found.is_empty())
+    Ok(())
 }
 
 #[cfg(test)]
@@ -714,7 +710,7 @@ mod tests {
     fn generated_scripts_are_non_empty() {
         let mut r = Rng::new(1);
         for _ in 0..50 {
-            assert!(!script(&mut r).trim().is_empty());
+            assert_ne!(script(&mut r).trim(), "");
         }
     }
 

@@ -111,7 +111,7 @@ struct Split {
     comments: usize,
 }
 
-fn time_port(script: &str, filename: &str) -> Split {
+fn time_port(script: &str, filename: &str) -> Result<Split, String> {
     let spec = CheckSpec {
         filename: filename.to_string(),
         script: script.to_string(),
@@ -129,7 +129,10 @@ fn time_port(script: &str, filename: &str) -> Split {
         sys: std::rc::Rc::new(shellcheck_rs::interface::NoExternalSources),
     });
     let d_parse = t0.elapsed();
-    let root = parse.root.clone().expect("benchmark input parses");
+    let root = parse
+        .root
+        .clone()
+        .ok_or_else(|| format!("{filename}: the benchmark input does not parse"))?;
 
     // Phase 2/3: the two pure sub-phases of `make_parameters`, timed on their
     // own so the rest of it can be reported as a residual.
@@ -177,7 +180,7 @@ fn time_port(script: &str, filename: &str) -> Split {
         .saturating_sub(d_params)
         .saturating_sub(d_checks);
 
-    Split {
+    Ok(Split {
         parse: d_parse,
         maps: d_maps,
         cfg: d_cfg,
@@ -186,12 +189,12 @@ fn time_port(script: &str, filename: &str) -> Split {
         resolve: d_resolve,
         total: d_whole,
         comments: n.max(result.comments.len()),
-    }
+    })
 }
 
-/// Wall time of one oracle process over the same script, or `None` when no
-/// oracle binary is there to run.
-fn time_oracle(oracle: &str, script: &str) -> Option<Duration> {
+/// Wall time of one oracle process over the same script, or why the oracle
+/// could not be run.
+fn time_oracle(oracle: &str, script: &str) -> Result<Duration, String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -202,19 +205,19 @@ fn time_oracle(oracle: &str, script: &str) -> Option<Duration> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .ok()?;
+        .map_err(|e| format!("{oracle}: {e}"))?;
     child
         .stdin
-        .as_mut()
-        .expect("stdin piped")
+        .take()
+        .ok_or_else(|| format!("{oracle}: stdin is not piped"))?
         .write_all(script.as_bytes())
-        .ok()?;
-    child.wait().ok()?;
-    Some(t.elapsed())
+        .map_err(|e| format!("{oracle}: {e}"))?;
+    child.wait().map_err(|e| format!("{oracle}: {e}"))?;
+    Ok(t.elapsed())
 }
 
 pub fn run(args: &Args) -> Result<bool, String> {
-    let (script, label) = if let Some(path) = &args.input {
+    let (script, label) = if let Some(path) = &args.bench.input {
         (
             std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?,
             path.clone(),
@@ -225,12 +228,15 @@ pub fn run(args: &Args) -> Result<bool, String> {
             .map(|e| e.into_iter().map(|x| x.script).collect())
             .unwrap_or_default();
         (
-            generate_input(&seeds, args.seed, args.lines),
-            format!("generated seed={} lines={}", args.seed, args.lines),
+            generate_input(&seeds, args.fuzzing.seed, args.bench.lines),
+            format!(
+                "generated seed={} lines={}",
+                args.fuzzing.seed, args.bench.lines
+            ),
         )
     };
 
-    if let Some(path) = &args.dump {
+    if let Some(path) = &args.bench.dump {
         std::fs::write(path, &script).map_err(|e| format!("{path}: {e}"))?;
         println!("bench: wrote {path}");
     }
@@ -239,17 +245,16 @@ pub fn run(args: &Args) -> Result<bool, String> {
         "bench: {label} ({} lines, {} bytes), {} repeat(s)",
         script.lines().count(),
         script.len(),
-        args.repeat
+        args.bench.repeat
     );
 
-    let mut best: Option<Split> = None;
-    for _ in 0..args.repeat.max(1) {
-        let s = time_port(&script, "-");
-        if best.as_ref().is_none_or(|b| s.total < b.total) {
-            best = Some(s);
+    let mut s = time_port(&script, "-")?;
+    for _ in 1..args.bench.repeat {
+        let next = time_port(&script, "-")?;
+        if next.total < s.total {
+            s = next;
         }
     }
-    let s = best.expect("at least one repeat");
 
     let pct = |d: Duration| 100.0 * d.as_secs_f64() / s.total.as_secs_f64().max(f64::MIN_POSITIVE);
     println!(
@@ -268,15 +273,15 @@ pub fn run(args: &Args) -> Result<bool, String> {
         println!("        {name:<12} {:9.1} ms  {:5.1}%", ms(d), pct(d));
     }
 
-    let oracle_path = args.oracle_path();
-    if let Some(d) = time_oracle(oracle_path, &script) {
-        println!("  oracle           {:9.1} ms  (process, -f json1)", ms(d));
-        println!(
-            "  ratio            {:9.1}x  port/oracle",
-            s.total.as_secs_f64() / d.as_secs_f64().max(f64::MIN_POSITIVE)
-        );
-    } else {
-        println!("  oracle           (not runnable: {oracle_path})");
+    match time_oracle(args.oracle_path(), &script) {
+        Ok(d) => {
+            println!("  oracle           {:9.1} ms  (process, -f json1)", ms(d));
+            println!(
+                "  ratio            {:9.1}x  port/oracle",
+                s.total.as_secs_f64() / d.as_secs_f64().max(f64::MIN_POSITIVE)
+            );
+        }
+        Err(e) => println!("  oracle           (not runnable: {e})"),
     }
 
     Ok(true)
@@ -300,7 +305,7 @@ mod tests {
     /// `resolve` being a residual allows.
     #[test]
     fn phase_split_covers_the_pipeline() {
-        let s = time_port("echo $foo\nfor i in 1 2; do echo $i; done\n", "-");
+        let s = time_port("echo $foo\nfor i in 1 2; do echo $i; done\n", "-").unwrap();
         assert!(s.total > Duration::ZERO);
         let phases = s.parse + s.maps + s.cfg + s.params_other + s.checks + s.resolve;
         assert!(phases >= s.total);

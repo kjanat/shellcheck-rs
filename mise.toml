@@ -60,3 +60,7 @@ run = [
 # being worked on: `mise run mutants -- --file rust/crates/shellcheck-rs/src/cfg.rs`.
 [tasks.mutants]
 run = "cargo mutants"
+
+[wrappers."rshellcheck"]
+command = "cargo"
+args    = ["shellcheck"]

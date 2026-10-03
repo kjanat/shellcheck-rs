@@ -103,14 +103,13 @@ pub fn run(args: &Args) -> Result<bool, String> {
     let seeds: Vec<String> = corpus::extract(&src)
         .map(|e| e.into_iter().map(|x| x.script).collect())
         .unwrap_or_default();
-    let mut rng = Rng::new(args.seed.wrapping_add(7));
+    let mut rng = Rng::new(args.fuzzing.seed.wrapping_add(7));
     let mut scripts: Vec<String> = seeds.clone();
-    for _ in 0..args.iterations {
+    for _ in 0..args.fuzzing.iterations {
         scripts.push(generate(&mut rng, &seeds));
     }
 
-    let mut port: BTreeMap<&str, Tally> = BTreeMap::new();
-    let mut oracle_t: BTreeMap<&str, Tally> = BTreeMap::new();
+    let mut tallies: Tallies = BTreeMap::new();
     let mut missing: Vec<&str> = Vec::new();
 
     for (dialect, program, flags) in DIALECTS {
@@ -135,15 +134,13 @@ pub fn run(args: &Args) -> Result<bool, String> {
                     .map(|k| k.code)
                     .collect();
                 let path = oracle.dir().join(name);
-                let pcodes: Vec<i64> = port_keys(script, &path.to_string_lossy(), Some(dialect))
+                let pcodes: Vec<i64> = port_keys(script, &path.to_string_lossy(), Some(dialect))?
                     .iter()
                     .map(|k| k.code)
                     .collect();
 
-                for (tally, codes) in [
-                    (oracle_t.entry(dialect).or_default(), &ocodes),
-                    (port.entry(dialect).or_default(), &pcodes),
-                ] {
+                let (oracle_tally, port_tally) = tallies.entry(dialect).or_default();
+                for (tally, codes) in [(oracle_tally, &ocodes), (port_tally, &pcodes)] {
                     tally.checked += 1;
                     match (shell_ok, tool_parses(codes)) {
                         (true, false) => {
@@ -161,6 +158,19 @@ pub fn run(args: &Args) -> Result<bool, String> {
         }
     }
 
+    report(&tallies, &missing);
+
+    // This mode reports; it does not gate. Both tools disagree with the shells
+    // in both directions today, by design in places (ShellCheck rejects some
+    // valid-but-awful syntax on purpose), so a threshold would be arbitrary
+    // until the numbers have been read and triaged.
+    Ok(true)
+}
+
+/// Per dialect: the oracle's tally, then the port's.
+type Tallies<'a> = BTreeMap<&'a str, (Tally, Tally)>;
+
+fn report(tallies: &Tallies<'_>, missing: &[&str]) {
     println!(
         "\nexternal validity: does each tool's idea of \"this parses\" match the shell's?\n\
          (rejects-valid = shell runs it, tool refuses to analyse; \
@@ -171,10 +181,9 @@ pub fn run(args: &Args) -> Result<bool, String> {
         "dialect", "scripts", "rejects-valid", "accepts-invalid"
     );
     for (dialect, _, _) in DIALECTS {
-        let Some(p) = port.get(dialect) else { continue };
-        let o = oracle_t
-            .get(dialect)
-            .expect("both tallies are filled together");
+        let Some((o, p)) = tallies.get(dialect) else {
+            continue;
+        };
         println!(
             "{dialect:<9} {:>8}  {:>8} / {:<7} {:>8} / {:<7}",
             p.checked,
@@ -191,7 +200,9 @@ pub fn run(args: &Args) -> Result<bool, String> {
         );
     }
     for (dialect, _, _) in DIALECTS {
-        let Some(p) = port.get(dialect) else { continue };
+        let Some((_, p)) = tallies.get(dialect) else {
+            continue;
+        };
         if let Some(s) = &p.example_rejects_valid {
             println!("\n{dialect}: port rejects, {dialect} runs it:\n  {s:?}");
         }
@@ -199,10 +210,4 @@ pub fn run(args: &Args) -> Result<bool, String> {
             println!("\n{dialect}: port analyses, {dialect} rejects it:\n  {s:?}");
         }
     }
-
-    // This mode reports; it does not gate. Both tools disagree with the shells
-    // in both directions today, by design in places (ShellCheck rejects some
-    // valid-but-awful syntax on purpose), so a threshold would be arbitrary
-    // until the numbers have been read and triaged.
-    Ok(true)
 }

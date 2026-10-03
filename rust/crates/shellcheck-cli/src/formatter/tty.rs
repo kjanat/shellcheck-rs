@@ -5,6 +5,8 @@
 //! information:" wiki list. Coloring is gated on the resolved color mode
 //! (see `super::ColorFunc`).
 
+use std::fmt::Write;
+
 use shellcheck_rs::interface::{PositionedComment, Severity};
 
 use super::ColorFunc;
@@ -58,13 +60,22 @@ fn cute_indent(c: &PositionedComment) -> String {
     } else {
         "^--".to_string()
     };
-    let indent = " ".repeat((col - 1).max(0) as usize);
+    let indent = " ".repeat(usize::try_from(col - 1).unwrap_or(0));
     format!(
         "{indent}{arrow} SC{} ({}): {}",
         c.comment.code,
         severity_text(c.comment.severity),
         c.comment.message
     )
+}
+
+/// The text of 1-based `line`, or empty when the file has no such line.
+fn source_line(file_lines: &[String], line: i64) -> String {
+    usize::try_from(line - 1)
+        .ok()
+        .and_then(|i| file_lines.get(i))
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// `sliceFile`: rebase a fix (and the excerpt lines) to the lines it spans.
@@ -83,10 +94,8 @@ fn slice_file(
     if fix.replacements.is_empty() {
         return (fix.clone(), Vec::new());
     }
-    let lo = (min_line.max(1)) as usize;
-    let hi = (max_line.max(1)) as usize;
-    let excerpt: Vec<String> = (lo..=hi)
-        .map(|i| file_lines.get(i - 1).cloned().unwrap_or_default())
+    let excerpt: Vec<String> = (min_line.max(1)..=max_line.max(1))
+        .map(|line| source_line(file_lines, line))
         .collect();
     let adjusted = map_positions(fix, |p| shellcheck_rs::interface::Position {
         line: p.line - min_line + 1,
@@ -135,7 +144,6 @@ pub fn render_file(
     }
 
     let file_lines = hs_lines(contents);
-    let line_count = file_lines.len() as i64;
 
     // Group consecutive comments by start line (they are already sorted).
     let mut i = 0;
@@ -147,11 +155,7 @@ pub fn render_file(
         }
         let group: Vec<&PositionedComment> = comments[i..j].iter().collect();
 
-        let line = if line_num < 1 || line_num > line_count {
-            String::new()
-        } else {
-            file_lines[(line_num - 1) as usize].clone()
-        };
+        let line = source_line(&file_lines, line_num);
 
         out.push('\n');
         out.push_str(&color(
@@ -192,11 +196,7 @@ pub fn render_wiki(entries: &[WikiEntry], wiki_link_count: usize, out: &mut Stri
     }
     out.push_str("For more information:\n");
     for e in issues {
-        out.push_str(&format!(
-            "  {WIKI_LINK}SC{} -- {}\n",
-            e.code,
-            shorten(&e.message)
-        ));
+        let _ = writeln!(out, "  {WIKI_LINK}SC{} -- {}", e.code, shorten(&e.message));
     }
 }
 

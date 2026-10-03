@@ -36,11 +36,11 @@ fn corpus_for(args: &Args) -> Result<Vec<(String, String)>, String> {
         .map(|e| (e.id.clone(), e.script.clone()))
         .collect();
     let seeds: Vec<String> = out.iter().map(|(_, s)| s.clone()).collect();
-    for (i, s) in crate::fuzz::sample_scripts(&seeds, args.seed, args.iterations)
+    for (i, s) in crate::fuzz::sample_scripts(&seeds, args.fuzzing.seed, args.fuzzing.iterations)
         .into_iter()
         .enumerate()
     {
-        out.push((format!("gen/{}/{i:05}", args.seed), s));
+        out.push((format!("gen/{}/{i:05}", args.fuzzing.seed), s));
     }
     Ok(out)
 }
@@ -73,12 +73,12 @@ const DIALECTS: [Option<&str>; 6] = [
     Some("busybox"),
 ];
 
-fn record(script: &str) -> Entry {
+fn record(script: &str) -> Result<Entry, String> {
     let mut payload = String::new();
     let mut messages = String::new();
     let mut codes: Vec<String> = Vec::new();
     for shell in DIALECTS {
-        let keys = port_keys(script, "-", shell);
+        let keys = port_keys(script, "-", shell)?;
         let _ = write!(payload, "[{}]", shell.unwrap_or("-"));
         for k in &keys {
             // Everything a user can observe, in the order they see it.
@@ -96,12 +96,12 @@ fn record(script: &str) -> Entry {
     }
     codes.sort_unstable();
     codes.dedup();
-    Entry {
+    Ok(Entry {
         payload: fnv(&payload),
         // A message-only change would otherwise move nothing but the payload
         // hash, so its own short hash rides along.
         summary: format!("{} msg:{}", codes.join(","), &fnv(&messages)[..8]),
-    }
+    })
 }
 
 fn build(args: &Args) -> Result<BTreeMap<String, Entry>, String> {
@@ -110,7 +110,7 @@ fn build(args: &Args) -> Result<BTreeMap<String, Entry>, String> {
         // The script is part of the key: an input that changed is a different
         // input, reported as added/removed rather than as a behaviour change.
         let key = format!("{label} {}", fnv(&script));
-        map.insert(key, record(&script));
+        map.insert(key, record(&script)?);
     }
     Ok(map)
 }
@@ -158,7 +158,7 @@ fn parse(text: &str) -> BTreeMap<String, (String, String)> {
 pub fn run(args: &Args) -> Result<bool, String> {
     let current = build(args)?;
     let file = path(args);
-    if args.write {
+    if args.snapshot.write {
         std::fs::write(&file, serialize(&current))
             .map_err(|e| format!("{}: {e}", file.display()))?;
         println!(
@@ -194,13 +194,13 @@ pub fn run(args: &Args) -> Result<bool, String> {
         .collect();
 
     if !args.quiet {
-        for (k, was, now) in changed.iter().take(args.max_findings) {
+        for (k, was, now) in changed.iter().take(args.fuzzing.max_findings) {
             println!("CHANGED {k}");
             println!("  was: {was}");
             println!("  now: {now}");
         }
-        if changed.len() > args.max_findings {
-            println!("... and {} more", changed.len() - args.max_findings);
+        if changed.len() > args.fuzzing.max_findings {
+            println!("... and {} more", changed.len() - args.fuzzing.max_findings);
         }
         for k in added.iter().take(5) {
             println!("ADDED   {k}");

@@ -50,7 +50,7 @@ use crate::paths::{
 /// `getExtendedAnalysisDirective` take the FIRST `ShellOverride` /
 /// `ExtendedAnalysis` in file order. This mirrors that reduction.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RcConfig {
+pub struct Config {
     /// Code ranges from `disable=` directives, as endpoints.
     pub disabled: Vec<DisableRange>,
     /// Names from `enable=` directives, in order.
@@ -65,7 +65,7 @@ pub struct RcConfig {
     pub parse_problem: Option<RcParseProblem>,
 }
 
-impl RcConfig {
+impl Config {
     /// The reduction described above (`ShellCheck.AnalyzerLib.determineShell`,
     /// `ASTLib.getExtendedAnalysisDirective`, `Checker`'s
     /// `getEnableDirectives`).
@@ -100,20 +100,22 @@ impl RcConfig {
 }
 
 /// Parse the contents of the rc file at `filename` (used only in the SC1134
-/// message). Never fails: a parse failure becomes `parse_problem`, with every
+/// message).
+///
+/// Never fails: a parse failure becomes `parse_problem`, with every
 /// directive discarded, as `readConfigFile` returns `[]` on `Left`.
 #[must_use]
-pub fn parse_contents(filename: &str, contents: &str) -> RcConfig {
+pub fn parse_contents(filename: &str, contents: &str) -> Config {
     match read_config_kvs(contents) {
-        Ok(annotations) => RcConfig::from_annotations(&annotations),
-        Err(fail) => RcConfig {
+        Ok(annotations) => Config::from_annotations(&annotations),
+        Err(fail) => Config {
             parse_problem: Some(RcParseProblem {
                 filename: filename.to_string(),
                 line: fail.line,
                 column: fail.column,
                 suggestion: fail.suggestion(),
             }),
-            ..RcConfig::default()
+            ..Config::default()
         },
     }
 }
@@ -121,7 +123,7 @@ pub fn parse_contents(filename: &str, contents: &str) -> RcConfig {
 /// Apply one rc file's directives to a spec. CLI flags win where they conflict
 /// (`csShellTypeOverride` and `csExtendedAnalysis` are consulted before the
 /// annotations upstream), while `disable`/`enable` always add.
-pub fn merge_into(spec: &mut CheckSpec, rc: &RcConfig) {
+pub fn merge_into(spec: &mut CheckSpec, rc: &Config) {
     let directives = spec
         .rc
         .get_or_insert_with(|| Box::new(RcDirectives::default()));
@@ -155,10 +157,9 @@ struct Fail {
 impl Fail {
     /// `getStringFromParsec`: the message plus a period, or nothing at all.
     fn suggestion(&self) -> String {
-        match &self.message {
-            Some(m) => format!("{m}."),
-            None => String::new(),
-        }
+        self.message
+            .as_ref()
+            .map_or_else(String::new, |m| format!("{m}."))
     }
 }
 
@@ -276,13 +277,19 @@ impl ConfigParser {
         })
     }
 
-    /// `many linewhitespace`, returning what it matched.
-    fn line_whitespace(&mut self) -> String {
+    /// Consume characters while `keep` holds, returning them.
+    fn take_while(&mut self, keep: impl Fn(char) -> bool) -> String {
         let mut out = String::new();
-        while matches!(self.peek(), Some(' ' | '\t')) {
-            out.push(self.bump().unwrap());
+        while let Some(c) = self.peek().filter(|&c| keep(c)) {
+            self.bump();
+            out.push(c);
         }
         out
+    }
+
+    /// `many linewhitespace`, returning what it matched.
+    fn line_whitespace(&mut self) -> String {
+        self.take_while(|c| c == ' ' || c == '\t')
     }
 
     /// `readAnyComment`: `#` and the rest of the line.
@@ -450,11 +457,7 @@ impl ConfigParser {
 
     /// `many1 (letter <|> char '-')`, possibly empty (the caller decides).
     fn read_key_name(&mut self) -> String {
-        let mut s = String::new();
-        while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic() || c == '-') {
-            s.push(self.bump().unwrap());
-        }
-        s
+        self.take_while(|c| c.is_ascii_alphabetic() || c == '-')
     }
 
     /// The `case key of` in `readKey`.
@@ -499,16 +502,12 @@ impl ConfigParser {
     /// `plainOrQuoted p = quoted p <|> p`: run `p` on the contents of a quoted
     /// value, or on the input directly.
     fn plain_or_quoted<T>(&mut self, p: impl Fn(&mut Self) -> Result<T, Fail>) -> Result<T, Fail> {
-        let quote = match self.peek() {
-            Some(q @ ('\'' | '"')) => q,
-            _ => return p(self),
+        let Some(quote @ ('\'' | '"')) = self.peek() else {
+            return p(self);
         };
         self.bump();
         let (line, column) = (self.line, self.column);
-        let mut inner = String::new();
-        while matches!(self.peek(), Some(c) if c != quote && c != '\n') {
-            inner.push(self.bump().unwrap());
-        }
+        let inner = self.take_while(|c| c != quote && c != '\n');
         // `many1 $ noneOf (c:"\n")` — an empty pair of quotes fails, and the
         // opening quote is already consumed, so there is no going back to `p`.
         if inner.is_empty() {
@@ -528,10 +527,7 @@ impl ConfigParser {
 
     /// `many1 letter`.
     fn read_letters(&mut self) -> Result<String, Fail> {
-        let mut s = String::new();
-        while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
-            s.push(self.bump().unwrap());
-        }
+        let s = self.take_while(|c| c.is_ascii_alphabetic());
         if s.is_empty() {
             return self.fail();
         }
@@ -543,10 +539,7 @@ impl ConfigParser {
     fn read_word_value(&mut self) -> Result<String, Fail> {
         if let Some(q @ ('\'' | '"')) = self.peek() {
             self.bump();
-            let mut inner = String::new();
-            while matches!(self.peek(), Some(c) if c != q && c != '\n') {
-                inner.push(self.bump().unwrap());
-            }
+            let inner = self.take_while(|c| c != q && c != '\n');
             if inner.is_empty() {
                 return self.fail();
             }
@@ -555,10 +548,7 @@ impl ConfigParser {
             }
             return Ok(inner);
         }
-        let mut s = String::new();
-        while matches!(self.peek(), Some(c) if c != ' ' && c != '\n') {
-            s.push(self.bump().unwrap());
-        }
+        let s = self.take_while(|c| c != ' ' && c != '\n');
         if s.is_empty() {
             return self.fail();
         }
@@ -639,10 +629,7 @@ impl ConfigParser {
                 });
             }
         }
-        let mut s = String::new();
-        while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-            s.push(self.bump().unwrap());
-        }
+        let s = self.take_while(|c| c.is_ascii_digit());
         if s.is_empty() {
             return self.fail();
         }
@@ -685,6 +672,7 @@ pub struct ConfigLookup {
 }
 
 impl ConfigLookup {
+    /// A lookup that reads `rcfile` in place of searching, when given.
     #[must_use]
     pub const fn new(rcfile: Option<String>) -> Self {
         Self {
@@ -696,7 +684,7 @@ impl ConfigLookup {
     /// `getConfig`, parsed: returns the name and contents of .shellcheckrc for
     /// the given file, merged with any shellcheck.* directives found in
     /// applicable EditorConfig files.
-    pub fn get(&self, filename: &str) -> Option<RcConfig> {
+    pub fn get(&self, filename: &str) -> Option<Config> {
         let rc = self.rc_config(filename);
         let ec = editor_config(filename);
         merge_configs(rc, ec).map(|(path, contents)| parse_contents(&path, &contents))
@@ -721,22 +709,22 @@ impl ConfigLookup {
         {
             return result.clone();
         }
-        let result = match &self.rcfile {
-            // We have a specified rcfile. Ignore normal rcfile resolution.
-            Some(file) => {
-                let result = read_config(file);
-                if result.is_none() {
-                    eprintln!("Warning: unable to read --rcfile {file}");
-                }
-                result
-            }
+        let result = self.rcfile.as_deref().map_or_else(
             // `findConfig`/`readConfig` select the FIRST candidate that EXISTS
             // (doesFileExist). A nearer existing-but-unreadable file is still
             // selected: the oracle reports the read error and uses an empty
             // config, rather than silently falling through to a parent or user
             // config.
-            None => config_paths(&key).iter().find_map(|p| read_config(p)),
-        };
+            || config_paths(&key).iter().find_map(|p| read_config(p)),
+            // We have a specified rcfile. Ignore normal rcfile resolution.
+            |file| {
+                let result = read_config(file);
+                if result.is_none() {
+                    eprintln!("Warning: unable to read --rcfile {file}");
+                }
+                result
+            },
+        );
         *self.cache.borrow_mut() = Some((key, result.clone()));
         result
     }
@@ -775,8 +763,12 @@ pub fn merge_configs(rc: Option<RawConfig>, ec: Option<RawConfig>) -> Option<Raw
     }
 }
 
-/// Looks for `.editorconfig` files in the target directory, parent directories, and `${XDG_CONFIG_HOME}/editorconfig.ini`.
-/// Converts `shellcheck.*` keys in matching sections into directives, concatenating blobs under the first contributing file's name.
+/// `getEditorConfig`: Look for .editorconfig files in the target file's
+/// directory and all its parents (as per the EditorConfig spec), plus the
+/// global `${XDG_CONFIG_HOME}/editorconfig.ini` default.
+///
+/// `shellcheck.*` keys in matching sections are turned into directives. The
+/// blobs are concatenated under the first contributing file's name.
 #[must_use]
 pub fn editor_config(filename: &str) -> Option<RawConfig> {
     let global = xdg_config_home().map(|dir| combine(&dir, "editorconfig.ini"));
@@ -829,10 +821,8 @@ fn make_relative_to(dir: &str, path: &str) -> String {
     } else {
         format!("{dir}/")
     };
-    match path.strip_prefix(&prefix) {
-        Some(rest) => rest.to_string(),
-        None => take_file_name(path).to_string(),
-    }
+    path.strip_prefix(&prefix)
+        .map_or_else(|| take_file_name(path).to_string(), str::to_string)
 }
 
 /// `collectDirConfigs`: the `.editorconfig` files from `dir` upwards, nearest
@@ -894,7 +884,7 @@ fn default_paths() -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn parse(contents: &str) -> RcConfig {
+    fn parse(contents: &str) -> Config {
         parse_contents("rc", contents)
     }
 
@@ -946,7 +936,7 @@ mod tests {
 
     #[test]
     fn ignores_blank_lines() {
-        assert_eq!(parse("\n\n   \n\t\n"), RcConfig::default());
+        assert_eq!(parse("\n\n   \n\t\n"), Config::default());
     }
 
     #[test]
@@ -1082,7 +1072,7 @@ mod tests {
     #[test]
     fn inert_directives_parse_without_error() {
         let c = parse("external-sources=true\nsource-path=/x\nsource=lib.sh");
-        assert_eq!(c, RcConfig::default());
+        assert_eq!(c, Config::default());
     }
 
     #[test]
@@ -1240,7 +1230,7 @@ mod tests {
     /// EditorConfig file are merged into the same "key=value" blob as
     /// .shellcheckrc. We simulate that here by feeding
     /// `editorConfigDirectives`' output through the rc parser.
-    fn with_editor_config(ec: &str, name: &str) -> RcConfig {
+    fn with_editor_config(ec: &str, name: &str) -> Config {
         let blob = shellcheck_rs::editor_config::directives(ec, name).unwrap_or_default();
         parse_contents(".editorconfig", &blob)
     }
@@ -1291,7 +1281,7 @@ mod tests {
     fn prop_editorConfigNonMatchingSectionIgnored() {
         assert_eq!(
             with_editor_config("[bar]\nshellcheck.disable=SC2086\n", "foo"),
-            RcConfig::default()
+            Config::default()
         );
     }
 

@@ -22,7 +22,7 @@ use crate::ast::{
     InnerToken, Piped, Quoted, Token,
 };
 use crate::ast_lib;
-use crate::interface::{NoExternalSources, Position, Severity, Shell, System};
+use crate::interface::{NoExternalSources, Position, Severity, Shell, System, columns};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -439,11 +439,6 @@ const fn is_glob_class_terminator(c: char) -> bool {
             | '\u{2033}'
             | '\u{2036}'
     )
-}
-
-/// A character count as a `Position` column offset.
-fn columns(n: usize) -> i64 {
-    i64::try_from(n).unwrap_or(i64::MAX)
 }
 
 impl Parser {

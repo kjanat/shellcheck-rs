@@ -96,6 +96,21 @@ only from a shell's verdict: for `-s dash`, which rejects `! # c`, the sanction
 is refused and the divergence stands. See `PARITY-NOTES.md` item 2 and
 `rust/crates/conformance/src/deviations.rs`.
 
+### Z5. A filename that starts with `-`
+
+`rshellcheck -.sh` checks the file `-.sh`. Upstream's `getOpt` reads every
+argument that starts with `-` as options, so it stops at `.` with
+``unrecognized option `-.'`` and exit 3. The port reads such an argument as a
+filename when its first option does not exist (`-.sh`, `-nope.sh`, `--bogus`),
+and also when it reads as options but fails or carries a value that its option
+rejects (`-fope.sh`, `-xZ`) while a file by that name exists. Without the file
+the second kind keeps upstream's error. A valid option such as `-x` stays an
+option whatever the directory holds. [POSIX Utility Syntax Guideline 14][g14]
+asks only that arguments identifiable as options be treated as options. Kept,
+like Z4.
+
+[g14]: https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap12.html#tag_12_02
+
 ## No open entries
 
 Sections A through G are gone; their entries are all in **Fixed** below. The

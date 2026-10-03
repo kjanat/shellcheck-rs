@@ -364,16 +364,14 @@ mod tests {
                 .to_string_lossy()
                 .into_owned()
         });
-        match Oracle::new(&spec) {
-            Ok(o) => Some(o),
-            Err(_) => {
+        Oracle::new(&spec)
+            .inspect_err(|e| {
                 println!(
-                    "skipped: no oracle at {spec} (build one: cabal build shellcheck && \
+                    "skipped: no oracle at {spec}: {e} (build one: cabal build shellcheck && \
                      cp \"$(cabal list-bin shellcheck)\" .cache/shellcheck-oracle)"
                 );
-                None
-            }
-        }
+            })
+            .ok()
     }
 
     /// An input that kills the oracle must not take the rest of the batch with

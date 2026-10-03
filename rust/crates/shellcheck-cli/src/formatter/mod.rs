@@ -17,14 +17,11 @@ pub type ColorFunc = Box<dyn Fn(&str, &str) -> String>;
 
 fn color_for_level(level: &str) -> i32 {
     match level {
-        "error" => 31,
-        "warning" => 33,
-        "info" => 32,
-        "style" => 32,
-        "verbose" => 32,
-        "message" => 1,
-        "source" => 0,
-        _ => 0,
+        "error" => 31,                      // red
+        "warning" => 33,                    // yellow
+        "info" | "style" | "verbose" => 32, // green
+        "message" => 1,                     // bold
+        _ => 0,                             // "source" and the rest: none
     }
 }
 

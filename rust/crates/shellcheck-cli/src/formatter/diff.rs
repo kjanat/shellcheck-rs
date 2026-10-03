@@ -9,7 +9,7 @@ use shellcheck_rs::interface::{Fix, PositionedComment};
 
 use super::fixer::{apply_fix, fix_mconcat, lines as hs_lines, unlines};
 
-const CONTEXT: i64 = 3;
+const CONTEXT: usize = 3;
 
 const RED: i32 = 31;
 const GREEN: i32 = 32;
@@ -72,25 +72,23 @@ fn get_diff(old: &[String], new: &[String]) -> Vec<DiffElem> {
     out
 }
 
-/// Unreachable-cell cost. Kept far from `i64::MAX` so `+ 1` cannot overflow.
-const INF: i64 = i64::MAX / 4;
+/// Unreachable-cell cost. Kept far from `usize::MAX` so `+ 1` cannot overflow.
+const INF: usize = usize::MAX / 4;
 
-const fn add1(x: i64) -> i64 {
+const fn add1(x: usize) -> usize {
     if x >= INF { INF } else { x + 1 }
 }
 
 fn diff_into(old: &[String], new: &[String], out: &mut Vec<DiffElem>) {
-    let n = old.len();
-    let m = new.len();
-    if n == 0 {
+    if old.is_empty() {
         out.extend(new.iter().cloned().map(DiffElem::Second));
         return;
     }
-    if m == 0 {
+    if new.is_empty() {
         out.extend(old.iter().cloned().map(DiffElem::First));
         return;
     }
-    if n == 1 {
+    if old.len() == 1 {
         // A single old line: the walk inserts up to the first occurrence of it
         // and matches there; with no occurrence it deletes first, then inserts.
         let x = &old[0];
@@ -104,21 +102,21 @@ fn diff_into(old: &[String], new: &[String], out: &mut Vec<DiffElem>) {
         }
         return;
     }
-    let a = n / 2; // 1 <= a <= n-1 because n >= 2
-    let head = forward_costs(old, new, a);
-    let tail = backward_costs(old, new, a);
-    // Leftmost minimizer: the walk's own crossing column at row `a`.
-    let mut b = 0usize;
+    let row = old.len() / 2; // 1 <= row <= old.len()-1 because old.len() >= 2
+    let head = forward_costs(old, new, row);
+    let tail = backward_costs(old, new, row);
+    // Leftmost minimizer: the walk's own crossing column at `row`.
+    let mut column = 0;
     let mut best = INF;
-    for j in 0..=m {
-        let c = head[j].saturating_add(tail[j]);
-        if c < best {
-            best = c;
-            b = j;
+    for (j, (h, t)) in head.iter().zip(&tail).enumerate() {
+        let cost = h.saturating_add(*t);
+        if cost < best {
+            best = cost;
+            column = j;
         }
     }
-    diff_into(&old[..a], &new[..b], out);
-    diff_into(&old[a..], &new[b..], out);
+    diff_into(&old[..row], &new[..column], out);
+    diff_into(&old[row..], &new[column..], out);
 }
 
 /// `cost((0,0) -> (a, j))` for every `j`, over the snake-extended grid.
@@ -126,7 +124,7 @@ fn diff_into(old: &[String], new: &[String], out: &mut Vec<DiffElem>) {
 /// A cell where `old[i] == new[j]` has only its diagonal exit, so a step into a
 /// cell is available only when the cell it leaves is not such a match cell.
 /// Requires `0 < a < old.len()` and `!new.is_empty()`.
-fn forward_costs(old: &[String], new: &[String], a: usize) -> Vec<i64> {
+fn forward_costs(old: &[String], new: &[String], a: usize) -> Vec<usize> {
     let m = new.len();
     let mut prev = vec![INF; m + 1];
     // Row 0: reachable by inserting, until a match cell forces the diagonal.
@@ -149,7 +147,7 @@ fn forward_costs(old: &[String], new: &[String], a: usize) -> Vec<i64> {
         for j in 1..=m {
             let mut best = INF;
             // Down step from (i-1, j).
-            if !(j < m && old[i - 1] == new[j]) {
+            if new.get(j) != Some(&old[i - 1]) {
                 best = best.min(add1(prev[j]));
             }
             // Right step from (i, j-1). `i <= a < n`, so (i, j-1) is a real cell.
@@ -168,11 +166,11 @@ fn forward_costs(old: &[String], new: &[String], a: usize) -> Vec<i64> {
 }
 
 /// `cost((a, j) -> (n, m))` for every `j`, over the same snake-extended grid.
-fn backward_costs(old: &[String], new: &[String], a: usize) -> Vec<i64> {
+fn backward_costs(old: &[String], new: &[String], a: usize) -> Vec<usize> {
     let n = old.len();
     let m = new.len();
     // Row n: only insertions remain.
-    let mut prev: Vec<i64> = (0..=m).map(|j| (m - j) as i64).collect();
+    let mut prev: Vec<usize> = (0..=m).map(|j| m - j).collect();
     let mut cur = vec![INF; m + 1];
     for i in (a..n).rev() {
         // Column m: only the down step remains.
@@ -202,9 +200,11 @@ fn backward_costs(old: &[String], new: &[String], a: usize) -> Vec<i64> {
 fn group_diff(diffs: &[DiffElem]) -> Vec<(bool, Vec<DiffElem>)> {
     enum State {
         /// `hunt`: outside a hunk.
+        /// Churn through 'Both's until we find a difference
         Hunt,
         /// `gather`: inside a hunk, having seen this many trailing `Both`s.
-        Gather(i64),
+        /// Pick out differences until we find a run of Both's
+        Gather(usize),
     }
 
     /// `splitAt k current`, in `acc` form: the trailing `k` elements are handed
@@ -230,21 +230,21 @@ fn group_diff(diffs: &[DiffElem]) -> Vec<(bool, Vec<DiffElem>)> {
                     acc.push(diffs[idx].clone());
                     idx += 1;
                 } else {
-                    let context = split_off_context(&mut acc, CONTEXT as usize);
+                    let context = split_off_context(&mut acc, CONTEXT);
                     out.push((false, std::mem::replace(&mut acc, context)));
                     state = State::Gather(0);
                 }
             }
             State::Gather(n) => {
                 if idx == diffs.len() {
-                    let extras = split_off_context(&mut acc, (n - CONTEXT).max(0) as usize);
+                    let extras = split_off_context(&mut acc, n.saturating_sub(CONTEXT));
                     out.push((true, std::mem::take(&mut acc)));
                     out.push((false, extras));
                     break;
                 }
                 if is_both(&diffs[idx]) {
                     if n == CONTEXT * 2 {
-                        let context = split_off_context(&mut acc, CONTEXT as usize);
+                        let context = split_off_context(&mut acc, CONTEXT);
                         out.push((true, std::mem::replace(&mut acc, context)));
                         state = State::Hunt;
                     } else {
@@ -286,6 +286,7 @@ struct DiffRegion {
     diffs: Vec<DiffElem>,
 }
 
+/// Get line numbers for hunks
 fn find_regions(hunks: &[(bool, Vec<DiffElem>)]) -> Vec<DiffRegion> {
     let mut out = Vec::new();
     let mut left = 1i64;
@@ -324,24 +325,19 @@ fn format_line(use_color: bool, d: &DiffElem) -> String {
 fn get_strings(use_color: bool, lf: Lf, list: &[DiffElem]) -> Vec<String> {
     match lf {
         Lf::Ok => list.iter().map(|d| format_line(use_color, d)).collect(),
-        Lf::Missing => {
-            if let Some(first) = list.first() {
-                match first {
-                    DiffElem::Both(_) | DiffElem::First(_) => {
-                        let mut out = vec![NO_LF.to_string()];
-                        out.extend(list.iter().map(|d| format_line(use_color, d)));
-                        out
-                    }
-                    DiffElem::Second(_) => {
-                        let mut out = vec![format_line(use_color, first)];
-                        out.extend(get_strings(use_color, Lf::Missing, &list[1..]));
-                        out
-                    }
-                }
-            } else {
-                Vec::new()
+        Lf::Missing => match list.split_first() {
+            None => Vec::new(),
+            Some((DiffElem::Both(_) | DiffElem::First(_), _)) => {
+                let mut out = vec![NO_LF.to_string()];
+                out.extend(list.iter().map(|d| format_line(use_color, d)));
+                out
             }
-        }
+            Some((head @ DiffElem::Second(_), rest)) => {
+                let mut out = vec![format_line(use_color, head)];
+                out.extend(get_strings(use_color, Lf::Missing, rest));
+                out
+            }
+        },
     }
 }
 
@@ -367,6 +363,7 @@ fn reversed_strings(mut v: Vec<String>) -> Vec<String> {
     v
 }
 
+/// git patch does not like `\` on Windows
 fn normalize_path(path: &str) -> String {
     path.chars()
         .map(|c| {
@@ -440,8 +437,10 @@ fn make_diff_string(use_color: bool, name: &str, contents: &str, fix: &Fix) -> S
 }
 
 /// Result of rendering: the diff text and whether anything was reported.
-pub struct DiffOutput {
+pub struct Output {
+    /// The unified diff, empty when the file has no fix.
     pub text: String,
+    /// Whether the file had a fix to show, as `reportedIssues` records.
     pub reported: bool,
 }
 
@@ -452,17 +451,17 @@ pub fn render_file(
     filename: &str,
     contents: &str,
     comments: &[PositionedComment],
-) -> DiffOutput {
+) -> Output {
     let fixes: Vec<Fix> = comments.iter().filter_map(|c| c.fix.clone()).collect();
     if fixes.is_empty() {
-        return DiffOutput {
+        return Output {
             text: String::new(),
             reported: false,
         };
     }
     let merged = fix_mconcat(&fixes);
     if merged.replacements.is_empty() {
-        return DiffOutput {
+        return Output {
             text: String::new(),
             reported: false,
         };
@@ -470,7 +469,7 @@ pub fn render_file(
     // `putStrLn $ formatDoc ...` adds a trailing newline.
     let mut text = make_diff_string(use_color, filename, contents, &merged);
     text.push('\n');
-    DiffOutput {
+    Output {
         text,
         reported: true,
     }
@@ -480,6 +479,7 @@ pub fn render_file(
 pub const NONE_FIXABLE_MSG: &str =
     "Issues were detected, but none were auto-fixable. Use another format to see them.";
 
+/// `printErr`'s coloring: bold, then red.
 #[must_use]
 pub fn color_bold_red(use_color: bool, s: &str) -> String {
     colorize(use_color, BOLD, &colorize(use_color, RED, s))
@@ -489,13 +489,13 @@ pub fn color_bold_red(use_color: bool, s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn b(n: i64) -> DiffElem {
+    fn b(n: usize) -> DiffElem {
         DiffElem::Both(n.to_string())
     }
-    fn l(n: i64) -> DiffElem {
+    fn l(n: usize) -> DiffElem {
         DiffElem::First(n.to_string())
     }
-    fn r(n: i64) -> DiffElem {
+    fn r(n: usize) -> DiffElem {
         DiffElem::Second(n.to_string())
     }
 
@@ -632,13 +632,18 @@ mod tests {
             state ^= state << 17;
             state
         };
-        for case in 0..400 {
+        for case in 0..400u64 {
             let alphabet = 1 + (case % 4);
             let n = (next() % 40) as usize;
             let m = (next() % 40) as usize;
             let mut make = |len: usize| -> Vec<String> {
                 (0..len)
-                    .map(|_| (b'a' + (next() % alphabet as u64) as u8) as char)
+                    .map(|_| {
+                        char::from(
+                            b'a' + u8::try_from(next() % alphabet)
+                                .expect("the alphabet has at most four letters"),
+                        )
+                    })
                     .map(|c| c.to_string())
                     .collect()
             };
@@ -795,19 +800,22 @@ mod tests {
             if is_both(&list[0]) {
                 return hunt(prepend(list[0].clone(), current), &list[1..]);
             }
-            let (context, previous) = split_at_ctx(&current, CONTEXT as usize);
+            let (context, previous) = split_at_ctx(&current, CONTEXT);
             let mut out = vec![(false, reversed(previous))];
             out.extend(gather(context, 0, list));
             out
         }
-        fn gather(current: Vec<DiffElem>, n: i64, list: &[DiffElem]) -> Vec<(bool, Vec<DiffElem>)> {
+        fn gather(
+            current: Vec<DiffElem>,
+            n: usize,
+            list: &[DiffElem],
+        ) -> Vec<(bool, Vec<DiffElem>)> {
             if list.is_empty() {
-                let take = (n - CONTEXT).max(0) as usize;
-                let (extras, patch) = split_at_ctx(&current, take);
+                let (extras, patch) = split_at_ctx(&current, n.saturating_sub(CONTEXT));
                 return vec![(true, reversed(patch)), (false, reversed(extras))];
             }
             if is_both(&list[0]) && n == CONTEXT * 2 {
-                let (context, previous) = split_at_ctx(&current, CONTEXT as usize);
+                let (context, previous) = split_at_ctx(&current, CONTEXT);
                 let mut out = vec![(true, reversed(previous))];
                 out.extend(hunt(context, list));
                 return out;
@@ -833,7 +841,7 @@ mod tests {
             for s in &frontier {
                 for k in 0..3 {
                     let mut t = s.clone();
-                    let n = t.len() as i64;
+                    let n = t.len();
                     t.push(match k {
                         0 => b(n),
                         1 => l(n),

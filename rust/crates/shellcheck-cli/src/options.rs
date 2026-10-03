@@ -15,9 +15,20 @@
 //!     bad number, bad boolean)
 //!   * 4 = `SupportFailure` (unknown format / shell / severity / color value)
 //!
-//! The parser is intentionally IO-free and returns an [`Outcome`]; the binary
-//! is responsible for printing to stderr/stdout and exiting. This keeps the
-//! parser unit-testable without shelling out.
+//! One deliberate difference: an argument that starts with `-` is a filename
+//! when its first option does not exist, and also when it reads as options but
+//! fails, or carries a value that its option rejects, while a file by that name
+//! exists. `getOpt` rejects both (exit 3); [POSIX Utility Syntax Guideline 14]
+//! only asks that arguments identifiable as options be treated as options.
+//!
+//! [POSIX Utility Syntax Guideline 14]: https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap12.html#tag_12_02
+//!
+//! The parser returns an [`Outcome`]; the binary is responsible for printing to
+//! stderr/stdout and exiting. Its only IO is reading `--files-from` lists and
+//! the existence check the caller passes in.
+
+use std::fmt::Write;
+use std::ops::ControlFlow;
 
 use shellcheck_rs::interface::{CheckSpec, ColorOption, Severity, Shell};
 
@@ -39,7 +50,12 @@ pub enum Outcome {
     /// Print the (currently empty) optional-check listing to stdout and exit 0.
     ListOptional,
     /// Print `message` to stderr and exit with `code` (3 or 4).
-    Error { message: String, code: u8 },
+    Error {
+        /// What to print.
+        message: String,
+        /// The exit status.
+        code: u8,
+    },
 }
 
 /// Options resulting from a successful CLI argument parse.
@@ -48,9 +64,11 @@ pub enum Outcome {
 /// clones per input file when setting `filename` and `script`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunConfig {
+    /// The `-f`/`--format` name, `tty` by default.
     pub format: String,
     /// Input file paths, or `"-"` for stdin.
     pub inputs: Vec<String>,
+    /// The `CheckSpec` every input starts from.
     pub spec_template: CheckSpec,
     /// Resolved color setting from `-C`/`--color` (defaults to `auto`), used by tty and diff output.
     pub color: ColorOption,
@@ -76,12 +94,16 @@ enum ArgKind {
     Optional,
 }
 
-/// Internal option key (the Haskell `Flag var` name) plus how it takes an arg.
+/// One `Option` of the Haskell `options` list: its letter, long name, the
+/// `Flag` key it produces, how it takes an argument, the argument's
+/// placeholder, and its help text.
 struct OptDef {
     short: Option<char>,
     long: &'static str,
     key: &'static str,
     kind: ArgKind,
+    arg: &'static str,
+    help: &'static str,
 }
 
 /// The recognised option table (mirrors `options` in shellcheck.hs).
@@ -91,213 +113,200 @@ const OPTS: &[OptDef] = &[
         long: "check-sourced",
         key: "sourced",
         kind: ArgKind::None,
+        arg: "",
+        help: "Include warnings from sourced files",
     },
     OptDef {
         short: Some('C'),
         long: "color",
         key: "color",
         kind: ArgKind::Optional,
+        arg: "WHEN",
+        help: "Use color (auto, always, never)",
     },
     OptDef {
         short: Some('i'),
         long: "include",
         key: "include",
         kind: ArgKind::Required,
+        arg: "CODE1,CODE2..",
+        help: "Consider only given types of warnings",
     },
     OptDef {
         short: Some('e'),
         long: "exclude",
         key: "exclude",
         kind: ArgKind::Required,
+        arg: "CODE1,CODE2..",
+        help: "Exclude types of warnings",
     },
     OptDef {
         short: None,
         long: "extended-analysis",
         key: "extended-analysis",
         kind: ArgKind::Required,
+        arg: "bool",
+        help: "Perform dataflow analysis (default true)",
     },
     OptDef {
         short: Some('f'),
         long: "format",
         key: "format",
         kind: ArgKind::Required,
+        arg: "FORMAT",
+        help: "Output format (checkstyle, diff, gcc, json, json1, quiet, tty)",
     },
     OptDef {
         short: None,
         long: "list-optional",
         key: "list-optional",
         kind: ArgKind::None,
+        arg: "",
+        help: "List checks disabled by default",
     },
     OptDef {
         short: None,
         long: "norc",
         key: "norc",
         kind: ArgKind::None,
+        arg: "",
+        help: "Don't look for .shellcheckrc and .editorconfig files",
     },
     OptDef {
         short: None,
         long: "rcfile",
         key: "rcfile",
         kind: ArgKind::Required,
+        arg: "RCFILE",
+        help: "Prefer the specified configuration file over searching for one",
     },
     OptDef {
         short: Some('o'),
         long: "enable",
         key: "enable",
         kind: ArgKind::Required,
+        arg: "check1,check2..",
+        help: "List of optional checks to enable (or 'all')",
     },
     OptDef {
         short: Some('P'),
         long: "source-path",
         key: "source-path",
         kind: ArgKind::Required,
+        arg: "SOURCEPATHS",
+        help: "Specify path when looking for sourced files (\"SCRIPTDIR\" for script's dir)",
     },
     OptDef {
         short: Some('s'),
         long: "shell",
         key: "shell",
         kind: ArgKind::Required,
+        arg: "SHELLNAME",
+        help: "Specify dialect (sh, bash, dash, ksh, busybox)",
     },
     OptDef {
         short: Some('S'),
         long: "severity",
         key: "severity",
         kind: ArgKind::Required,
+        arg: "SEVERITY",
+        help: "Minimum severity of errors to consider (error, warning, info, style)",
     },
     OptDef {
         short: Some('V'),
         long: "version",
         key: "version",
         kind: ArgKind::None,
+        arg: "",
+        help: "Print version information",
     },
     OptDef {
         short: Some('W'),
         long: "wiki-link-count",
         key: "wiki-link-count",
         kind: ArgKind::Required,
+        arg: "NUM",
+        help: "The number of wiki links to show, when applicable",
     },
     OptDef {
         short: Some('x'),
         long: "external-sources",
         key: "externals",
         kind: ArgKind::None,
+        arg: "",
+        help: "Allow 'source' outside of FILES",
     },
     OptDef {
         short: None,
         long: "help",
         key: "help",
         kind: ArgKind::None,
+        arg: "",
+        help: "Show this usage summary and exit",
     },
     OptDef {
         short: None,
         long: "files-from",
         key: "files-from",
         kind: ArgKind::Required,
+        arg: "FILE",
+        help: "Read input files from FILE (one per line, or '-' for stdin)",
     },
 ];
 
-fn find_long(name: &str) -> Option<&'static OptDef> {
-    OPTS.iter().find(|o| o.long == name)
-}
 fn find_short(c: char) -> Option<&'static OptDef> {
     OPTS.iter().find(|o| o.short == Some(c))
 }
 
-/// The usage summary (`getUsageInfo`). Faithful in spirit to `usageInfo`; the
-/// exact column layout is not load-bearing.
-#[must_use]
-pub fn usage() -> String {
-    // Mirrors GHC getOpt's `usageInfo`: two left columns (short-with-arg,
-    // long-with-arg) padded to the widest entry, then the description. The
-    // wording/placeholders match shellcheck.hs so `--help` and the
-    // "No files specified." error read like the oracle's.
-    let mut s = String::from("Usage: shellcheck [OPTIONS...] FILES...\n");
-    let lines = [
-        (
-            "-a",
-            "--check-sourced",
-            "Include warnings from sourced files",
-        ),
-        (
-            "-C[WHEN]",
-            "--color[=WHEN]",
-            "Use color (auto, always, never)",
-        ),
-        (
-            "-i CODE1,CODE2..",
-            "--include=CODE1,CODE2..",
-            "Consider only given types of warnings",
-        ),
-        (
-            "-e CODE1,CODE2..",
-            "--exclude=CODE1,CODE2..",
-            "Exclude types of warnings",
-        ),
-        (
-            "",
-            "--extended-analysis=bool",
-            "Perform dataflow analysis (default true)",
-        ),
-        (
-            "-f FORMAT",
-            "--format=FORMAT",
-            "Output format (checkstyle, diff, gcc, json, json1, quiet, tty)",
-        ),
-        ("", "--list-optional", "List checks disabled by default"),
-        (
-            "",
-            "--norc",
-            "Don't look for .shellcheckrc and .editorconfig files",
-        ),
-        (
-            "",
-            "--rcfile=RCFILE",
-            "Prefer the specified configuration file over searching for one",
-        ),
-        (
-            "-o check1,check2..",
-            "--enable=check1,check2..",
-            "List of optional checks to enable (or 'all')",
-        ),
-        (
-            "-P SOURCEPATHS",
-            "--source-path=SOURCEPATHS",
-            "Specify path when looking for sourced files (\"SCRIPTDIR\" for script's dir)",
-        ),
-        (
-            "-s SHELLNAME",
-            "--shell=SHELLNAME",
-            "Specify dialect (sh, bash, dash, ksh, busybox)",
-        ),
-        (
-            "-S SEVERITY",
-            "--severity=SEVERITY",
-            "Minimum severity of errors to consider (error, warning, info, style)",
-        ),
-        ("-V", "--version", "Print version information"),
-        (
-            "-W NUM",
-            "--wiki-link-count=NUM",
-            "The number of wiki links to show, when applicable",
-        ),
-        (
-            "-x",
-            "--external-sources",
-            "Allow 'source' outside of FILES",
-        ),
-        ("", "--help", "Show this usage summary and exit"),
-        (
-            "",
-            "--files-from=FILE",
-            "Read input files from FILE (one per line, or '-' for stdin)",
-        ),
-    ];
-    let short_w = lines.iter().map(|(sh, _, _)| sh.len()).max().unwrap_or(0);
-    let long_w = lines.iter().map(|(_, lo, _)| lo.len()).max().unwrap_or(0);
-    for (short, long, desc) in lines {
-        s.push_str(&format!("  {short:<short_w$}  {long:<long_w$}  {desc}\n"));
+impl OptDef {
+    /// `fmtShort`: the letter with its argument placeholder.
+    fn short_form(&self) -> String {
+        self.short.map_or_else(String::new, |c| match self.kind {
+            ArgKind::None => format!("-{c}"),
+            ArgKind::Required => format!("-{c} {}", self.arg),
+            ArgKind::Optional => format!("-{c}[{}]", self.arg),
+        })
+    }
+
+    /// `fmtLong`: the long name with its argument placeholder.
+    fn long_form(&self) -> String {
+        match self.kind {
+            ArgKind::None => format!("--{}", self.long),
+            ArgKind::Required => format!("--{}={}", self.long, self.arg),
+            ArgKind::Optional => format!("--{}[={}]", self.long, self.arg),
+        }
+    }
+}
+
+/// `usageInfo`'s table: the short and long forms, each column padded to its
+/// widest entry, then the help text.
+fn usage_table<'a>(opts: impl Iterator<Item = &'a OptDef> + Clone) -> String {
+    let short_w = opts
+        .clone()
+        .map(|o| o.short_form().len())
+        .max()
+        .unwrap_or(0);
+    let long_w = opts.clone().map(|o| o.long_form().len()).max().unwrap_or(0);
+    let mut s = String::new();
+    for o in opts {
+        let _ = writeln!(
+            s,
+            "  {:<short_w$}  {:<long_w$}  {}",
+            o.short_form(),
+            o.long_form(),
+            o.help
+        );
     }
     s
+}
+
+/// The usage summary (`getUsageInfo`).
+#[must_use]
+pub fn usage() -> String {
+    format!(
+        "Usage: shellcheck [OPTIONS...] FILES...\n{}",
+        usage_table(OPTS.iter())
+    )
 }
 
 /// The optional checks the analyzer knows about, in the order the Haskell
@@ -386,11 +395,10 @@ const OPTIONAL_CHECKS: &[(&str, &str, &str, &str)] = &[
 pub fn list_optional_text() -> String {
     let mut s = String::new();
     for (name, desc, example, fix) in OPTIONAL_CHECKS {
-        s.push_str(&format!("name:    {name}\n"));
-        s.push_str(&format!("desc:    {desc}\n"));
-        s.push_str(&format!("example: {example}\n"));
-        s.push_str(&format!("fix:     {fix}\n"));
-        s.push('\n');
+        let _ = writeln!(
+            s,
+            "name:    {name}\ndesc:    {desc}\nexample: {example}\nfix:     {fix}\n"
+        );
     }
     s
 }
@@ -411,118 +419,176 @@ struct Flag {
     value: Option<String>,
 }
 
-/// Phase 1: tokenise argv into flags + files, mirroring `getOpt Permute`.
-/// Returns `Err(message)` for a getOpt-level error (`SyntaxFailure` / exit 3):
-/// unknown option or a missing required argument.
-fn tokenize(argv: &[String]) -> Result<(Vec<Flag>, Vec<String>), String> {
+/// One result of `getOpt`'s `getNext` for an option argument.
+enum OptResult {
+    /// `Opt`: a recognised option.
+    Opt(Flag),
+    /// `UnreqOpt`: an option nothing declares, as written.
+    Unrecognized(String),
+    /// `OptErr`: an ambiguous long option, or a missing or unwanted argument.
+    Error(String),
+}
+
+/// Phase 1: `getOpt Permute`. Returns the flags, the files, and the error
+/// messages, each ending in a newline: the argument errors first, then the
+/// unrecognized options, as `getOpt` orders them.
+///
+/// An argument whose first option does not exist can only be a filename, and
+/// is one. An argument that reads as options but fails, or carries a value
+/// that its option rejects, is a filename when `exists` says so.
+fn tokenize(
+    argv: &[String],
+    exists: &dyn Fn(&str) -> bool,
+) -> (Vec<Flag>, Vec<String>, Vec<String>) {
     let mut flags: Vec<Flag> = Vec::new();
     let mut files: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < argv.len() {
-        let arg = &argv[i];
+    let mut errors: Vec<String> = Vec::new();
+    let mut unrecognized: Vec<String> = Vec::new();
+    let mut rest = argv.iter();
+    while let Some(arg) = rest.next() {
         if arg == "--" {
-            // Everything after `--` is a non-option.
-            files.extend(argv[i + 1..].iter().cloned());
-            break;
-        } else if arg == "-" {
-            // stdin: a filename, not an option.
-            files.push("-".to_string());
-        } else if let Some(long) = arg.strip_prefix("--") {
-            let (name, inline_val) = match long.split_once('=') {
-                Some((n, v)) => (n, Some(v.to_string())),
-                None => (long, None),
-            };
-            let Some(def) = find_long(name) else {
-                return Err(format!("unrecognized option `--{name}'"));
-            };
-            match def.kind {
-                ArgKind::None => {
-                    if inline_val.is_some() {
-                        return Err(format!("option `--{name}' doesn't allow an argument"));
-                    }
-                    flags.push(Flag {
-                        key: def.key,
-                        value: None,
-                    });
-                }
-                ArgKind::Required => {
-                    let v = if let Some(v) = inline_val {
-                        v
-                    } else {
-                        i += 1;
-                        match argv.get(i) {
-                            Some(v) => v.clone(),
-                            None => {
-                                return Err(format!("option `--{name}' requires an argument"));
-                            }
-                        }
-                    };
-                    flags.push(Flag {
-                        key: def.key,
-                        value: Some(v),
-                    });
-                }
-                ArgKind::Optional => {
-                    // OptArg: only an inline `=value` supplies an argument.
-                    flags.push(Flag {
-                        key: def.key,
-                        value: inline_val,
-                    });
-                }
-            }
-        } else if arg.starts_with('-') && arg.len() > 1 {
-            // Short option cluster, e.g. `-ax`, `-sbash`, `-s bash`.
-            let chars: Vec<char> = arg.chars().collect();
-            let mut j = 1; // skip leading '-'
-            while j < chars.len() {
-                let c = chars[j];
-                let Some(def) = find_short(c) else {
-                    return Err(format!("unrecognized option `-{c}'"));
-                };
-                match def.kind {
-                    ArgKind::None => {
-                        flags.push(Flag {
-                            key: def.key,
-                            value: None,
-                        });
-                        j += 1;
-                    }
-                    ArgKind::Required => {
-                        let rest: String = chars[j + 1..].iter().collect();
-                        let v = if rest.is_empty() {
-                            i += 1;
-                            match argv.get(i) {
-                                Some(v) => v.clone(),
-                                None => {
-                                    return Err(format!("option `-{c}' requires an argument"));
-                                }
-                            }
-                        } else {
-                            rest
-                        };
-                        flags.push(Flag {
-                            key: def.key,
-                            value: Some(v),
-                        });
-                        break; // rest of cluster consumed as the argument
-                    }
-                    ArgKind::Optional => {
-                        let rest: String = chars[j + 1..].iter().collect();
-                        let v = if rest.is_empty() { None } else { Some(rest) };
-                        flags.push(Flag {
-                            key: def.key,
-                            value: v,
-                        });
-                        break;
-                    }
-                }
-            }
-        } else {
-            files.push(arg.clone());
+            files.extend(rest.by_ref().cloned());
+            continue;
         }
-        i += 1;
+        if arg == "-" || !arg.starts_with('-') {
+            files.push(arg.clone());
+            continue;
+        }
+        let mut ahead = rest.clone();
+        let results = get_next(arg, &mut ahead);
+        let only_a_file = matches!(results.first(), Some(OptResult::Unrecognized(_)));
+        if only_a_file || (!results.iter().all(is_valid_opt) && exists(arg)) {
+            files.push(arg.clone());
+            continue;
+        }
+        rest = ahead;
+        for result in results {
+            match result {
+                OptResult::Opt(flag) => flags.push(flag),
+                OptResult::Unrecognized(u) => {
+                    unrecognized.push(format!("unrecognized option `{u}'\n"));
+                }
+                OptResult::Error(e) => errors.push(e),
+            }
+        }
     }
-    Ok((flags, files))
+    errors.extend(unrecognized);
+    (flags, files, errors)
+}
+
+/// `getNext` for an argument that starts with `-` and is neither `-` nor
+/// `--`. A short cluster yields one result per option, and an unrecognized
+/// letter does not stop the rest of the cluster.
+fn get_next(arg: &str, rest: &mut std::slice::Iter<'_, String>) -> Vec<OptResult> {
+    if let Some(long) = arg.strip_prefix("--") {
+        return vec![long_opt(long, rest)];
+    }
+    let mut out = Vec::new();
+    let mut chars = arg[1..].chars();
+    while let Some(c) = chars.next() {
+        let tail = chars.as_str().to_string();
+        let Some(def) = find_short(c) else {
+            out.push(OptResult::Unrecognized(format!("-{c}")));
+            continue;
+        };
+        let value = match def.kind {
+            ArgKind::None => {
+                out.push(OptResult::Opt(Flag {
+                    key: def.key,
+                    value: None,
+                }));
+                continue;
+            }
+            ArgKind::Required if tail.is_empty() => {
+                let Some(v) = rest.next() else {
+                    out.push(OptResult::Error(format!(
+                        "option `-{c}' requires an argument {}\n",
+                        def.arg
+                    )));
+                    return out;
+                };
+                Some(v.clone())
+            }
+            ArgKind::Required => Some(tail),
+            ArgKind::Optional => (!tail.is_empty()).then_some(tail),
+        };
+        out.push(OptResult::Opt(Flag {
+            key: def.key,
+            value,
+        }));
+        return out;
+    }
+    out
+}
+
+/// `longOpt`: an exact name wins, otherwise any option whose name starts with
+/// the one given; more than one candidate is ambiguous.
+fn long_opt(long: &str, rest: &mut std::slice::Iter<'_, String>) -> OptResult {
+    let (name, inline) = match long.split_once('=') {
+        Some((name, value)) => (name, Some(value)),
+        None => (long, None),
+    };
+    let exact: Vec<&OptDef> = OPTS.iter().filter(|o| o.long == name).collect();
+    let candidates = if exact.is_empty() {
+        OPTS.iter().filter(|o| o.long.starts_with(name)).collect()
+    } else {
+        exact
+    };
+    let def = match candidates.as_slice() {
+        [] => return OptResult::Unrecognized(format!("--{long}")),
+        [def] => def,
+        many => {
+            return OptResult::Error(format!(
+                "option `--{name}' is ambiguous; could be one of:\n{}",
+                usage_table(many.iter().copied())
+            ));
+        }
+    };
+    let value = match (def.kind, inline) {
+        (ArgKind::None, None) => None,
+        (ArgKind::None, Some(_)) => {
+            return OptResult::Error(format!("option `--{name}' doesn't allow an argument\n"));
+        }
+        (ArgKind::Required, Some(v)) => Some(v.to_string()),
+        (ArgKind::Required, None) => match rest.next() {
+            Some(v) => Some(v.clone()),
+            None => {
+                return OptResult::Error(format!(
+                    "option `--{name}' requires an argument {}\n",
+                    def.arg
+                ));
+            }
+        },
+        (ArgKind::Optional, v) => v.map(str::to_string),
+    };
+    OptResult::Opt(Flag {
+        key: def.key,
+        value,
+    })
+}
+
+/// A recognised option with a value that the option accepts. `parseOption`
+/// and the format lookup decide, and `--enable` names must be checks that
+/// exist.
+fn is_valid_opt(result: &OptResult) -> bool {
+    let OptResult::Opt(flag) = result else {
+        return false;
+    };
+    match flag.key {
+        "format" => flag
+            .value
+            .as_deref()
+            .is_some_and(|f| SUPPORTED_FORMATS.contains(&f)),
+        "enable" => {
+            flag.value.as_deref().unwrap_or("").split(',').all(|name| {
+                name == "all" || OPTIONAL_CHECKS.iter().any(|(check, ..)| *check == name)
+            })
+        }
+        _ => !matches!(
+            parse_option(flag, &mut Folded::new()),
+            ControlFlow::Break(Outcome::Error { .. })
+        ),
+    }
 }
 
 /// Split a comma-separated list, dropping empty entries (Haskell
@@ -545,6 +611,19 @@ fn parse_num(s: &str) -> Result<i64, String> {
         .map_err(|_| format!("Invalid number: {s}"))
 }
 
+/// The codes of an `--include`/`--exclude` list; a bad one is a
+/// `SyntaxFailure` (exit 3).
+fn parse_codes(value: Option<&str>) -> ControlFlow<Outcome, Vec<i64>> {
+    let mut codes = Vec::new();
+    for c in split_nonempty(value.unwrap_or("")) {
+        match parse_num(&c) {
+            Ok(n) => codes.push(n),
+            Err(message) => return ControlFlow::Break(Outcome::Error { message, code: 3 }),
+        }
+    }
+    ControlFlow::Continue(codes)
+}
+
 /// `shellForExecutable` (ShellCheck.Data): maps interpreter names, including
 /// the established aliases, to a dialect. Used for `--shell`, rc `shell=`, and
 /// `# shellcheck shell=` directives.
@@ -552,17 +631,10 @@ fn parse_num(s: &str) -> Result<i64, String> {
 pub fn parse_shell(s: &str) -> Option<Shell> {
     Some(match s {
         "sh" => Shell::Sh,
-        "bash" => Shell::Bash,
-        "bats" => Shell::Bash,
-        "busybox" => Shell::BusyboxSh,
-        "busybox sh" => Shell::BusyboxSh,
-        "busybox ash" => Shell::BusyboxSh,
-        "dash" => Shell::Dash,
-        "ash" => Shell::Dash,
-        "ksh" => Shell::Ksh,
-        "ksh88" => Shell::Ksh,
-        "ksh93" => Shell::Ksh,
-        "oksh" => Shell::Ksh,
+        "bash" | "bats" => Shell::Bash,
+        "busybox" | "busybox sh" | "busybox ash" => Shell::BusyboxSh,
+        "dash" | "ash" => Shell::Dash,
+        "ksh" | "ksh88" | "ksh93" | "oksh" => Shell::Ksh,
         _ => return None,
     })
 }
@@ -577,6 +649,192 @@ fn parse_severity(s: &str) -> Option<Severity> {
     })
 }
 
+/// The options folded so far, flag by flag.
+struct Folded {
+    spec: CheckSpec,
+    format: Option<String>,
+    color: ColorOption,
+    wiki_link_count: usize,
+    rcfile: Option<String>,
+    source_paths: Vec<String>,
+    external_sources: bool,
+}
+
+impl Folded {
+    fn new() -> Self {
+        Self {
+            spec: CheckSpec::default(),
+            format: None,
+            color: ColorOption::ColorAuto,
+            wiki_link_count: 3,
+            rcfile: None,
+            source_paths: Vec::new(),
+            external_sources: false,
+        }
+    }
+}
+
+/// `parseOption` for one flag. `Break` ends the parse with that outcome.
+fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
+    match flag.key {
+        // --- Immediate informational exits (exit 0). ---
+        "version" => return ControlFlow::Break(Outcome::PrintVersion),
+        "help" => return ControlFlow::Break(Outcome::PrintHelp),
+        "list-optional" => return ControlFlow::Break(Outcome::ListOptional),
+
+        // --- Wired into CheckSpec (effective in the analysis core). ---
+        "shell" => {
+            let v = flag.value.as_deref().unwrap_or("");
+            match parse_shell(v) {
+                Some(sh) => o.spec.shell_type_override = Some(sh),
+                None => {
+                    return ControlFlow::Break(Outcome::Error {
+                        message: format!("Unknown shell: {v}"),
+                        code: 4,
+                    });
+                }
+            }
+        }
+        "severity" => {
+            let Some(sev) = parse_severity(flag.value.as_deref().unwrap_or("")) else {
+                let valid = ["error", "warning", "info", "style"];
+                return ControlFlow::Break(support_error("severity", &valid));
+            };
+            o.spec.min_severity = sev;
+        }
+        "include" => {
+            let mut new = parse_codes(flag.value.as_deref())?;
+            // csIncludedWarnings = if null new then old else Just new <> old
+            if !new.is_empty() {
+                if let Some(old) = &mut o.spec.included_warnings {
+                    new.append(old);
+                }
+                o.spec.included_warnings = Some(new);
+            }
+        }
+        "exclude" => {
+            let mut new = parse_codes(flag.value.as_deref())?;
+            // csExcludedWarnings = new ++ old
+            new.extend(std::mem::take(&mut o.spec.excluded_warnings));
+            o.spec.excluded_warnings = new;
+        }
+        "enable" => {
+            // csOptionalChecks = old ++ split ',' value  (no empty-filter)
+            let value = flag.value.as_deref().unwrap_or("");
+            for c in value.split(',') {
+                o.spec.optional_checks.push(c.to_string());
+            }
+        }
+        "norc" => o.spec.ignore_rc = true,
+
+        // --- Accepted and set on the spec, effective where the core supports it. ---
+        "sourced" => o.spec.check_sourced = true,
+        "extended-analysis" => {
+            let v = flag.value.as_deref().unwrap_or("");
+            match v {
+                "true" => o.spec.extended_analysis = Some(true),
+                "false" => o.spec.extended_analysis = Some(false),
+                _ => {
+                    return ControlFlow::Break(Outcome::Error {
+                        message: format!("Invalid boolean, expected true/false: {v}"),
+                        code: 3,
+                    });
+                }
+            }
+        }
+
+        // --- Validated but not yet effective in the core. ---
+        "color" => {
+            // Default value when no argument is given is "always" (matches
+            // the Haskell OptArg default), then validated.
+            o.color = match flag.value.as_deref().unwrap_or("always") {
+                "auto" => ColorOption::ColorAuto,
+                "always" => ColorOption::ColorAlways,
+                "never" => ColorOption::ColorNever,
+                _ => {
+                    return ControlFlow::Break(support_error(
+                        "color",
+                        &["auto", "always", "never"],
+                    ));
+                }
+            };
+        }
+        "wiki-link-count" => {
+            // Parsed as a number; invalid -> SyntaxFailure (exit 3).
+            match parse_num(flag.value.as_deref().unwrap_or("")) {
+                Ok(n) => o.wiki_link_count = usize::try_from(n).unwrap_or(usize::MAX),
+                Err(message) => return ControlFlow::Break(Outcome::Error { message, code: 3 }),
+            }
+        }
+
+        // -P/--source-path: `sourcePaths = sourcePaths options ++ paths`,
+        // where each flag's value is one search path (`splitSearchPath`).
+        "source-path" => {
+            o.source_paths
+                .extend(split_search_path(flag.value.as_deref().unwrap_or("")));
+        }
+        // -x/--external-sources: allow 'source' outside of FILES.
+        "externals" => o.external_sources = true,
+        // --rcfile: captured here; resolved per input in the driver.
+        // A later flag overwrites an earlier one (last-wins, matching the
+        // Haskell fold `options { rcfile = Just str }`).
+        "rcfile" => o.rcfile.clone_from(&flag.value),
+        // --files-from: handled by `files_from` (expands into the input list).
+        "files-from" => {}
+
+        // --format: validated after the fold (handled specially, like Haskell).
+        // getOption returns the FIRST matching flag, so `-f json -f tty`
+        // keeps json. Only set when not already set.
+        "format" => {
+            if o.format.is_none() {
+                o.format.clone_from(&flag.value);
+            }
+        }
+
+        other => {
+            // Should be unreachable: every OPTS key is handled above.
+            return ControlFlow::Break(Outcome::Error {
+                message: format!("Internal error for --{other}. Please file a bug :("),
+                code: 3,
+            });
+        }
+    }
+    ControlFlow::Continue(())
+}
+
+/// The inputs every `--files-from` lists, in flag order: one path per line,
+/// '#' comments and blanks skipped.
+fn files_from(flags: &[Flag]) -> Result<Vec<String>, Outcome> {
+    let mut inputs: Vec<String> = Vec::new();
+    for flag in flags.iter().filter(|f| f.key == "files-from") {
+        let path = flag.value.as_deref().unwrap_or("");
+        let contents = if path == "-" {
+            use std::io::Read;
+            let mut s = String::new();
+            if std::io::stdin().read_to_string(&mut s).is_err() {
+                return Err(Outcome::Error {
+                    message: "Could not read file list from stdin".to_string(),
+                    code: 2,
+                });
+            }
+            s
+        } else {
+            std::fs::read_to_string(path).map_err(|e| Outcome::Error {
+                message: format!("Could not read file list: {path}: {e}"),
+                code: 2,
+            })?
+        };
+        inputs.extend(
+            contents
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(str::to_string),
+        );
+    }
+    Ok(inputs)
+}
+
 /// Parses CLI arguments following upstream's two-phase process.
 ///
 /// - **Phase 1 (`parseArguments`)**: Tokenizes flags; exits with code 3 on `getOpt` errors.
@@ -584,216 +842,31 @@ fn parse_severity(s: &str) -> Option<Severity> {
 ///   - Exits 0 immediately for `--version`, `--help`, and `--list-optional`.
 ///   - Exits 4 on option value validation errors.
 ///   - Validates format last.
+///
+/// `exists` says whether a file by a given name exists.
 #[must_use]
-pub fn parse(argv: &[String]) -> Outcome {
+pub fn parse(argv: &[String], exists: &dyn Fn(&str) -> bool) -> Outcome {
     // Phase 1: getOpt-level recognition.
-    let (flags, files) = match tokenize(argv) {
-        Ok(x) => x,
-        Err(msg) => {
-            return Outcome::Error {
-                message: format!("{msg}\n\n{}", usage()),
-                code: 3,
-            };
-        }
-    };
+    let (flags, files, errors) = tokenize(argv, exists);
+    if !errors.is_empty() {
+        return Outcome::Error {
+            message: format!("{}\n{}", errors.concat(), usage()),
+            code: 3,
+        };
+    }
 
     // Phase 2: fold over flags in order.
-    let mut spec = CheckSpec::default();
-    let mut format: Option<String> = None;
-    let mut color = ColorOption::ColorAuto;
-    let mut wiki_link_count: usize = 3;
-    let mut rcfile: Option<String> = None;
-    let mut source_paths: Vec<String> = Vec::new();
-    let mut external_sources = false;
-
+    let mut o = Folded::new();
     for flag in &flags {
-        match flag.key {
-            // --- Immediate informational exits (exit 0). ---
-            "version" => return Outcome::PrintVersion,
-            "help" => return Outcome::PrintHelp,
-            "list-optional" => return Outcome::ListOptional,
-
-            // --- Wired into CheckSpec (effective in the analysis core). ---
-            "shell" => {
-                let v = flag.value.as_deref().unwrap_or("");
-                match parse_shell(v) {
-                    Some(sh) => spec.shell_type_override = Some(sh),
-                    None => {
-                        return Outcome::Error {
-                            message: format!("Unknown shell: {v}"),
-                            code: 4,
-                        };
-                    }
-                }
-            }
-            "severity" => {
-                let v = flag.value.as_deref().unwrap_or("");
-                match parse_severity(v) {
-                    Some(sev) => spec.min_severity = sev,
-                    None => {
-                        return support_error("severity", &["error", "warning", "info", "style"]);
-                    }
-                }
-            }
-            "include" => {
-                let mut new = Vec::new();
-                for c in split_nonempty(flag.value.as_deref().unwrap_or("")) {
-                    match parse_num(&c) {
-                        Ok(n) => new.push(n),
-                        Err(m) => {
-                            return Outcome::Error {
-                                message: m,
-                                code: 3,
-                            };
-                        }
-                    }
-                }
-                // csIncludedWarnings = if null new then old else Just new <> old
-                if !new.is_empty() {
-                    if let Some(old) = &mut spec.included_warnings {
-                        new.append(old);
-                    }
-                    spec.included_warnings = Some(new);
-                }
-            }
-            "exclude" => {
-                let mut new = Vec::new();
-                for c in split_nonempty(flag.value.as_deref().unwrap_or("")) {
-                    match parse_num(&c) {
-                        Ok(n) => new.push(n),
-                        Err(m) => {
-                            return Outcome::Error {
-                                message: m,
-                                code: 3,
-                            };
-                        }
-                    }
-                }
-                // csExcludedWarnings = new ++ old
-                new.extend(std::mem::take(&mut spec.excluded_warnings));
-                spec.excluded_warnings = new;
-            }
-            "enable" => {
-                // csOptionalChecks = old ++ split ',' value  (no empty-filter)
-                let value = flag.value.as_deref().unwrap_or("");
-                for c in value.split(',') {
-                    spec.optional_checks.push(c.to_string());
-                }
-            }
-            "norc" => spec.ignore_rc = true,
-
-            // --- Accepted and set on the spec, effective where the core supports it. ---
-            "sourced" => spec.check_sourced = true,
-            "extended-analysis" => {
-                let v = flag.value.as_deref().unwrap_or("");
-                match v {
-                    "true" => spec.extended_analysis = Some(true),
-                    "false" => spec.extended_analysis = Some(false),
-                    _ => {
-                        return Outcome::Error {
-                            message: format!("Invalid boolean, expected true/false: {v}"),
-                            code: 3,
-                        };
-                    }
-                }
-            }
-
-            // --- Validated but not yet effective in the core. ---
-            "color" => {
-                // Default value when no argument is given is "always" (matches
-                // the Haskell OptArg default), then validated.
-                let v = flag.value.clone().unwrap_or_else(|| "always".to_string());
-                color = match v.as_str() {
-                    "auto" => ColorOption::ColorAuto,
-                    "always" => ColorOption::ColorAlways,
-                    "never" => ColorOption::ColorNever,
-                    _ => return support_error("color", &["auto", "always", "never"]),
-                };
-            }
-            "wiki-link-count" => {
-                // Parsed as a number; invalid -> SyntaxFailure (exit 3).
-                let v = flag.value.as_deref().unwrap_or("");
-                match parse_num(v) {
-                    Ok(n) => wiki_link_count = n.max(0) as usize,
-                    Err(m) => {
-                        return Outcome::Error {
-                            message: m,
-                            code: 3,
-                        };
-                    }
-                }
-            }
-
-            // -P/--source-path: `sourcePaths = sourcePaths options ++ paths`,
-            // where each flag's value is one search path (`splitSearchPath`).
-            "source-path" => {
-                source_paths.extend(split_search_path(flag.value.as_deref().unwrap_or("")));
-            }
-            // -x/--external-sources: allow 'source' outside of FILES.
-            "externals" => external_sources = true,
-            // --rcfile: captured here; resolved per input in the driver.
-            // A later flag overwrites an earlier one (last-wins, matching the
-            // Haskell fold `options { rcfile = Just str }`).
-            "rcfile" => rcfile = flag.value.clone(),
-            // --files-from: handled below (expands into the input list).
-            "files-from" => {}
-
-            // --format: validated after the fold (handled specially, like Haskell).
-            // getOption returns the FIRST matching flag, so `-f json -f tty`
-            // keeps json. Only set when not already set.
-            "format" => {
-                if format.is_none() {
-                    format = flag.value.clone();
-                }
-            }
-
-            other => {
-                // Should be unreachable: every OPTS key is handled above.
-                return Outcome::Error {
-                    message: format!("Internal error for --{other}. Please file a bug :("),
-                    code: 3,
-                };
-            }
+        if let ControlFlow::Break(outcome) = parse_option(flag, &mut o) {
+            return outcome;
         }
     }
 
-    // Expand --files-from (one path per line, '#' comments and blanks skipped).
-    let mut inputs: Vec<String> = Vec::new();
-    let mut had_files_from = false;
-    for flag in &flags {
-        if flag.key == "files-from" {
-            had_files_from = true;
-            let path = flag.value.as_deref().unwrap_or("");
-            let contents = if path == "-" {
-                use std::io::Read;
-                let mut s = String::new();
-                if std::io::stdin().read_to_string(&mut s).is_err() {
-                    return Outcome::Error {
-                        message: "Could not read file list from stdin".to_string(),
-                        code: 2,
-                    };
-                }
-                s
-            } else {
-                match std::fs::read_to_string(path) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        return Outcome::Error {
-                            message: format!("Could not read file list: {path}: {e}"),
-                            code: 2,
-                        };
-                    }
-                }
-            };
-            for line in contents.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                inputs.push(line.to_string());
-            }
-        }
-    }
+    let mut inputs = match files_from(&flags) {
+        Ok(inputs) => inputs,
+        Err(e) => return e,
+    };
     inputs.extend(files);
 
     // An empty input list with NO --files-from is a usage error (exit 3), NOT
@@ -805,7 +878,7 @@ pub fn parse(argv: &[String]) -> Outcome {
     // An explicit but empty --files-from (e.g. `--files-from=/dev/null`) is
     // deliberately permitted: the oracle checks zero files and exits 0. In that
     // case we fall through with an empty input list, which renders nothing.
-    if inputs.is_empty() && !had_files_from {
+    if inputs.is_empty() && !flags.iter().any(|f| f.key == "files-from") {
         return Outcome::Error {
             message: format!("No files specified.\n\n{}", usage()),
             code: 3,
@@ -813,11 +886,11 @@ pub fn parse(argv: &[String]) -> Outcome {
     }
 
     // Validate format last (mirrors `process`: fold, then format lookup).
-    let format = format.unwrap_or_else(|| "tty".to_string());
+    let format = o.format.unwrap_or_else(|| "tty".to_string());
     if !SUPPORTED_FORMATS.contains(&format.as_str()) {
         let mut message = format!("Unknown format {format}\nSupported formats:");
         for f in SUPPORTED_FORMATS {
-            message.push_str(&format!("\n  {f}"));
+            let _ = write!(message, "\n  {f}");
         }
         return Outcome::Error { message, code: 4 };
     }
@@ -825,12 +898,12 @@ pub fn parse(argv: &[String]) -> Outcome {
     Outcome::Run(Box::new(RunConfig {
         format,
         inputs,
-        spec_template: spec,
-        color,
-        wiki_link_count,
-        rcfile,
-        source_paths,
-        external_sources,
+        spec_template: o.spec,
+        color: o.color,
+        wiki_link_count: o.wiki_link_count,
+        rcfile: o.rcfile,
+        source_paths: o.source_paths,
+        external_sources: o.external_sources,
     }))
 }
 
@@ -860,6 +933,94 @@ mod tests {
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(std::string::ToString::to_string).collect()
+    }
+
+    /// `parse` in a directory with no files in it.
+    fn parse(argv: &[String]) -> Outcome {
+        super::parse(argv, &|_| false)
+    }
+
+    #[test]
+    fn a_dash_argument_whose_first_option_does_not_exist_is_a_file() {
+        let c = run(&["-.sh", "-nope.sh", "--bogus"]);
+        assert_eq!(c.inputs, vec!["-.sh", "-nope.sh", "--bogus"]);
+        assert_eq!(c.spec_template.optional_checks, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_failing_option_argument_is_a_file_only_when_the_file_exists() {
+        let exists = |name: &str| matches!(name, "-fope.sh" | "-ope.sh" | "-xZ" | "-xa");
+        match super::parse(&args(&["-fope.sh", "-ope.sh", "-xZ"]), &exists) {
+            Outcome::Run(c) => assert_eq!(c.inputs, vec!["-fope.sh", "-ope.sh", "-xZ"]),
+            other => panic!("expected Run, got {other:?}"),
+        }
+        // Without the files they stay options, with their errors.
+        match parse(&args(&["-fope.sh", "x"])) {
+            Outcome::Error { code, message } => {
+                assert_eq!(code, 4);
+                assert!(message.starts_with("Unknown format ope.sh"));
+            }
+            other => panic!("expected Error(4), got {other:?}"),
+        }
+        match parse(&args(&["-xZ", "x"])) {
+            Outcome::Error { code, message } => {
+                assert_eq!(code, 3);
+                assert!(message.starts_with("unrecognized option `-Z'\n\nUsage:"));
+            }
+            other => panic!("expected Error(3), got {other:?}"),
+        }
+        // A valid option stays an option, whatever files exist.
+        match super::parse(&args(&["-xa", "f.sh"]), &exists) {
+            Outcome::Run(c) => {
+                assert!(c.external_sources);
+                assert!(c.spec_template.check_sourced);
+                assert_eq!(c.inputs, vec!["f.sh"]);
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_long_option_may_be_abbreviated_to_a_unique_prefix() {
+        assert_eq!(parse(&args(&["--vers"])), Outcome::PrintVersion);
+        assert_eq!(
+            run(&["--exten=false", "-"]).spec_template.extended_analysis,
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_prefix_lists_its_candidates() {
+        match parse(&args(&["--e", "x"])) {
+            Outcome::Error { code, message } => {
+                assert_eq!(code, 3);
+                let candidates = "option `--e' is ambiguous; could be one of:\n  \
+                    -e CODE1,CODE2..    --exclude=CODE1,CODE2..   Exclude types of warnings\n  \
+                    \x20                   --extended-analysis=bool  Perform dataflow analysis (default true)\n  \
+                    -o check1,check2..  --enable=check1,check2..  List of optional checks to enable (or 'all')\n  \
+                    -x                  --external-sources        Allow 'source' outside of FILES\n\nUsage:";
+                assert!(message.starts_with(candidates), "{message}");
+            }
+            other => panic!("expected Error(3), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_option_error_is_reported_argument_errors_first() {
+        match parse(&args(&["-xZ", "--norc=1", "--shell"])) {
+            Outcome::Error { code, message } => {
+                assert_eq!(code, 3);
+                assert!(
+                    message.starts_with(
+                        "option `--norc' doesn't allow an argument\n\
+                         option `--shell' requires an argument SHELLNAME\n\
+                         unrecognized option `-Z'\n\nUsage:"
+                    ),
+                    "{message}"
+                );
+            }
+            other => panic!("expected Error(3), got {other:?}"),
+        }
     }
 
     /// Every optional check upstream lists is implemented and reachable.
@@ -917,22 +1078,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_flag_is_syntax_error() {
-        match parse(&args(&["--bogusflag"])) {
-            Outcome::Error { code, .. } => assert_eq!(code, 3),
-            other => panic!("expected Error(3), got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn unknown_short_flag_is_syntax_error() {
-        match parse(&args(&["-Z"])) {
-            Outcome::Error { code, .. } => assert_eq!(code, 3),
-            other => panic!("expected Error(3), got {other:?}"),
-        }
-    }
-
-    #[test]
     fn version_exits_zero() {
         assert_eq!(parse(&args(&["-V"])), Outcome::PrintVersion);
         assert_eq!(parse(&args(&["--version"])), Outcome::PrintVersion);
@@ -948,10 +1093,10 @@ mod tests {
     }
 
     #[test]
-    fn unknown_flag_beats_version() {
-        // getOpt recognition (phase 1) runs before the fold, so an unknown
-        // flag anywhere is exit 3 even with --version present.
-        match parse(&args(&["--version", "--bogusflag"])) {
+    fn an_option_error_beats_version() {
+        // getOpt recognition (phase 1) runs before the fold, so an option
+        // error anywhere is exit 3 even with --version present.
+        match parse(&args(&["--version", "--shell"])) {
             Outcome::Error { code, .. } => assert_eq!(code, 3),
             other => panic!("expected Error(3), got {other:?}"),
         }

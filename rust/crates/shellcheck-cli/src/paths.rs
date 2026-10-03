@@ -23,10 +23,8 @@ pub fn combine(dir: &str, file: &str) -> String {
 /// when there is none.
 #[must_use]
 pub fn drop_file_name(path: &str) -> String {
-    match path.rfind('/') {
-        Some(i) => path[..=i].to_string(),
-        None => "./".to_string(),
-    }
+    path.rfind('/')
+        .map_or_else(|| "./".to_string(), |i| path[..=i].to_string())
 }
 
 /// `takeFileName`: everything after the last separator.

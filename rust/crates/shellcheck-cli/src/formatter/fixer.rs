@@ -13,7 +13,9 @@
 //!
 //! Columns and lines are 1-based, matching the Haskell `Position`.
 
-use shellcheck_rs::interface::{Fix, InsertionPoint, Position, PositionedComment, Replacement};
+use shellcheck_rs::interface::{
+    Fix, InsertionPoint, Position, PositionedComment, Replacement, columns,
+};
 
 /// Haskell `Data.List.lines`: split on `'\n'` only (no `\r` handling), no
 /// trailing empty element for a final newline, `""` -> `[]`.
@@ -126,11 +128,10 @@ fn real_col(line: &str, target: i64) -> i64 {
 }
 
 fn realign_column(lines: &[String], line_no: i64, col_no: i64) -> i64 {
-    if line_no > 0 && line_no <= lines.len() as i64 {
-        real_col(&lines[(line_no - 1) as usize], col_no)
-    } else {
-        col_no
-    }
+    usize::try_from(line_no - 1)
+        .ok()
+        .and_then(|i| lines.get(i))
+        .map_or(col_no, |line| real_col(line, col_no))
 }
 
 /// `removeTabStops` for a `Replacement`.
@@ -269,11 +270,20 @@ impl PSTree {
 
 // --- Replacement application ------------------------------------------------
 
+/// `n` as an index into `len` items, clamped to `0..=len`.
+fn clamp_index(n: i64, len: usize) -> usize {
+    if n <= 0 {
+        0
+    } else {
+        usize::try_from(n).map_or(len, |i| i.min(len))
+    }
+}
+
 /// `doReplace start end o r` (1-based columns over the char sequence).
 fn do_replace(start: i64, end: i64, o: &str, r: &str) -> String {
     let chars: Vec<char> = o.chars().collect();
-    let si = ((start - 1).max(0) as usize).min(chars.len());
-    let ei = ((end - 1).max(0) as usize).min(chars.len());
+    let si = clamp_index(start - 1, chars.len());
+    let ei = clamp_index(end - 1, chars.len());
     let ei = ei.max(si);
     let mut out = String::new();
     out.extend(chars[..si].iter());
@@ -282,19 +292,19 @@ fn do_replace(start: i64, end: i64, o: &str, r: &str) -> String {
     out
 }
 
-fn apply_replacement(rep: &Replacement, s: String, tree: &mut PSTree) -> String {
+fn apply_replacement(rep: &Replacement, s: &str, tree: &mut PSTree) -> String {
     let old_start = rep.start.column;
     let old_end = rep.end.column;
     let new_start = old_start + tree.prefix_sum(old_start);
     let new_end = old_end + tree.prefix_sum(old_end);
     let replacer = &rep.string;
-    let shift = replacer.chars().count() as i64 - (old_end - old_start);
+    let shift = columns(replacer.chars().count()) - (old_end - old_start);
     let insertion_point = match rep.insertion_point {
         InsertionPoint::InsertBefore => old_start,
         InsertionPoint::InsertAfter => old_end + 1,
     };
     tree.add(insertion_point, shift);
-    do_replace(new_start, new_end, &s, replacer)
+    do_replace(new_start, new_end, s, replacer)
 }
 
 /// Apply replacements in precedence order (highest precedence first).
@@ -306,7 +316,7 @@ fn apply_replacements(reps: &[Replacement], s: String) -> String {
     let mut tree = PSTree::new();
     let mut cur = s;
     for rep in order {
-        cur = apply_replacement(rep, cur, &mut tree);
+        cur = apply_replacement(rep, &cur, &mut tree);
     }
     cur
 }
@@ -321,17 +331,18 @@ fn multi_to_single(fix: &Fix, lines_in: &[String]) -> (Fix, String) {
     prefix.push(0); // shift for line 1 is 0
     let mut acc = 0i64;
     for line in lines_in {
-        acc += line.chars().count() as i64 + 1;
+        acc += columns(line.chars().count()) + 1;
         prefix.push(acc);
     }
     let adjust = |pos: &Position| -> Position {
         let l = pos.line;
-        let shift = if l >= 1 && (l as usize) < prefix.len() {
-            prefix[l as usize]
-        } else if l >= prefix.len() as i64 {
-            *prefix.last().unwrap()
-        } else {
+        let shift = if l < 1 {
             0
+        } else {
+            usize::try_from(l)
+                .ok()
+                .and_then(|i| prefix.get(i).copied())
+                .unwrap_or(acc)
         };
         Position {
             file: pos.file.clone(),

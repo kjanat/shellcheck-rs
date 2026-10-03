@@ -293,6 +293,12 @@ pub struct Position {
     pub column: i64,
 }
 
+/// A character count as a `Position` column offset.
+#[must_use]
+pub fn columns(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
 impl Default for Position {
     fn default() -> Self {
         // newPosition
