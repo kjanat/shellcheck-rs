@@ -63,9 +63,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**', '.github/workflows/rust.yml') }}-${{ hashFiles('rust/crates/**') }}
+          key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-${{ hashFiles('rust/crates/**') }}
           restore-keys: |
-            ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**', '.github/workflows/rust.yml') }}-
+            ${{ env.CACHE_PREFIX }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-
             ${{ env.CACHE_PREFIX }}-
 
       - name: Cache Haskell oracle
@@ -73,7 +73,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .cache/shellcheck-oracle
-          key: ${{ runner.os }}-${{ runner.arch }}-oracle-ghc9.6.6-${{ hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs', '.github/workflows/rust.yml') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-oracle-ghc9.6.6-${{ hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs') }}
 
       - name: Setup Haskell
         if: &NoCacheHit steps.oracle.outputs.cache-hit != 'true'
@@ -121,7 +121,8 @@ jobs:
 
       - name: Differential fuzz
         env:
-          SEED: "${{ vars.SEED || github.run_number }}"
-          ITERATIONS: "${{ vars.ITERATIONS || 4000 }}"
-          MAX_FINDINGS: "${{ vars.MAX_FINDINGS || 50 }}"
+          SEED: "${{ github.run_number }}"
+          ITERATIONS: "4000"
+          MAX_FINDINGS: "50"
+          ${{ insert }}: ${{ fromJSON(toJSON(vars)) }}
         run: cargo conformance-fuzz
