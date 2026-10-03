@@ -16,3 +16,6 @@ im-rc.workspace = true
 # Core stays IO-free so an LSP or other tool can embed it cheaply.
 # regex mirrors Haskell's regex-tdfa usage in the parser/analytics.
 regex.workspace = true
+
+[lints]
+workspace = true
