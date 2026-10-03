@@ -486,6 +486,7 @@ pub fn color_bold_red(use_color: bool, s: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
 
@@ -499,36 +500,62 @@ mod tests {
         DiffElem::Second(n.to_string())
     }
 
-    fn keys(g: &[(bool, Vec<DiffElem>)]) -> Vec<(bool, Vec<DiffElem>)> {
-        g.to_vec()
+    #[test]
+    fn prop_identifiesProperContext() {
+        assert_eq!(
+            group_diff(&[b(1), b(2), b(3), b(4), l(5), b(6), b(7), b(8), b(9)]),
+            [
+                (false, vec![b(1)]),
+                (true, vec![b(2), b(3), b(4), l(5), b(6), b(7), b(8)]),
+                (false, vec![b(9)]),
+            ]
+        );
     }
 
     #[test]
-    fn identifies_proper_context() {
-        let got = group_diff(&[b(1), b(2), b(3), b(4), l(5), b(6), b(7), b(8), b(9)]);
-        let want = vec![
-            (false, vec![b(1)]),
-            (true, vec![b(2), b(3), b(4), l(5), b(6), b(7), b(8)]),
-            (false, vec![b(9)]),
-        ];
-        assert_eq!(keys(&got), want);
+    fn prop_includesContextFromStartIfNecessary() {
+        assert_eq!(
+            group_diff(&[b(4), l(5), b(6), b(7), b(8), b(9)]),
+            [
+                (true, vec![b(4), l(5), b(6), b(7), b(8)]),
+                (false, vec![b(9)])
+            ]
+        );
     }
 
     #[test]
-    fn count_deltas_works() {
+    fn prop_includesContextUntilEndIfNecessary() {
+        assert_eq!(group_diff(&[b(4), l(5)]), [(true, vec![b(4), l(5)])]);
+    }
+
+    #[test]
+    fn prop_splitsIntoMultipleHunks() {
+        assert_eq!(
+            group_diff(&[l(1), b(1), b(2), b(3), b(4), b(5), b(6), b(7), r(8)]),
+            [
+                (true, vec![l(1), b(1), b(2), b(3)]),
+                (false, vec![b(4)]),
+                (true, vec![b(5), b(6), b(7), r(8)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn prop_splitsIntoMultipleHunksUnlessTouching() {
+        assert_eq!(
+            group_diff(&[l(1), b(1), b(2), b(3), b(4), b(5), b(6), r(7)]),
+            [(true, vec![l(1), b(1), b(2), b(3), b(4), b(5), b(6), r(7)])]
+        );
+    }
+
+    #[test]
+    fn prop_countDeltasWorks() {
         assert_eq!(count_delta(&[b(1), l(2), r(3), r(4), b(5)]), (3, 4));
-        assert_eq!(count_delta(&[]), (0, 0));
     }
 
     #[test]
-    fn splits_into_multiple_hunks() {
-        let got = group_diff(&[l(1), b(1), b(2), b(3), b(4), b(5), b(6), b(7), r(8)]);
-        let want = vec![
-            (true, vec![l(1), b(1), b(2), b(3)]),
-            (false, vec![b(4)]),
-            (true, vec![b(5), b(6), b(7), r(8)]),
-        ];
-        assert_eq!(keys(&got), want);
+    fn prop_countDeltasWorks2() {
+        assert_eq!(count_delta(&[]), (0, 0));
     }
 
     /// The straightforward full-matrix walk the linear-space `get_diff` must

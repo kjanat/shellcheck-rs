@@ -534,12 +534,9 @@ fn is_direct_child_of(params: &Parameters, child: &Token, parent: &Token) -> boo
 }
 
 /// `groupByLink`: group consecutive elements where each adjacent pair links.
-fn group_by_link<'a, F: Fn(&Token, &Token) -> bool>(
-    f: F,
-    list: &[&'a Token],
-) -> Vec<Vec<&'a Token>> {
-    let mut out: Vec<Vec<&'a Token>> = vec![];
-    let mut current: Vec<&'a Token> = vec![];
+fn group_by_link<T: Copy, F: Fn(T, T) -> bool>(f: F, list: &[T]) -> Vec<Vec<T>> {
+    let mut out: Vec<Vec<T>> = vec![];
+    let mut current: Vec<T> = vec![];
     for &item in list {
         if let Some(&prev) = current.last()
             && !f(prev, item)
@@ -745,6 +742,22 @@ fn is_printing(t: &Token) -> bool {
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    #[test]
+    fn prop_groupByLink1() {
+        assert_eq!(
+            group_by_link(|a: i64, b| a + 1 == b, &[1, 2, 3, 2, 3, 7, 8, 9]),
+            [vec![1, 2, 3], vec![2, 3], vec![7, 8, 9]]
+        );
+    }
+
+    #[test]
+    fn prop_groupByLink2() {
+        assert_eq!(
+            group_by_link(|a: (), b: ()| a.eq(&b), &[]),
+            Vec::<Vec<()>>::new()
+        );
+    }
 
     #[test]
     fn prop_checkFunctionsUsedExternally1() {

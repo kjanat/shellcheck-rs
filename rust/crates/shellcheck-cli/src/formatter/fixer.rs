@@ -369,6 +369,7 @@ pub fn apply_fix(fix: &Fix, file_lines: &[String]) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
     use shellcheck_rs::interface::{InsertionPoint, Position};
@@ -406,94 +407,244 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    fn test_fix(replacements: Vec<Replacement>) -> Fix {
+        Fix { replacements }
+    }
+
+    fn assert_overlap(x: &Replacement, y: &Replacement) {
+        assert!(overlap(x, y) && overlap(y, x));
+    }
+
+    fn assert_no_overlap(x: &Replacement, y: &Replacement) {
+        assert!(!overlap(x, y) && !overlap(y, x));
+    }
+
     #[test]
-    fn do_replace_cases() {
+    fn prop_overlap_contiguous() {
+        assert_no_overlap(
+            &t_from_start(10, 12, "foo", 1),
+            &t_from_start(12, 14, "bar", 2),
+        );
+    }
+
+    #[test]
+    fn prop_overlap_adjacent_zerowidth() {
+        assert_no_overlap(&t_from_start(3, 3, "foo", 1), &t_from_start(3, 3, "bar", 2));
+    }
+
+    #[test]
+    fn prop_overlap_enclosed() {
+        assert_overlap(
+            &t_from_start(3, 5, "foo", 1),
+            &t_from_start(1, 10, "bar", 2),
+        );
+    }
+
+    #[test]
+    fn prop_overlap_partial() {
+        assert_overlap(&t_from_start(1, 5, "foo", 1), &t_from_start(3, 7, "bar", 2));
+    }
+
+    #[test]
+    fn prop_doReplace1() {
         assert_eq!(do_replace(0, 0, "1234", "A"), "A1234");
+    }
+
+    #[test]
+    fn prop_doReplace2() {
         assert_eq!(do_replace(1, 1, "1234", "A"), "A1234");
+    }
+
+    #[test]
+    fn prop_doReplace3() {
         assert_eq!(do_replace(1, 2, "1234", "A"), "A234");
+    }
+
+    #[test]
+    fn prop_doReplace4() {
         assert_eq!(do_replace(3, 3, "1234", "A"), "12A34");
+    }
+
+    #[test]
+    fn prop_doReplace5() {
         assert_eq!(do_replace(4, 4, "1234", "A"), "123A4");
+    }
+
+    #[test]
+    fn prop_doReplace6() {
         assert_eq!(do_replace(5, 5, "1234", "A"), "1234A");
     }
 
+    fn pstree_sums_correctly(kvs: &[(i64, i64)], targets: &[i64]) {
+        let dumb: Vec<i64> = targets
+            .iter()
+            .map(|&target| {
+                kvs.iter()
+                    .filter(|(k, _)| *k <= target)
+                    .map(|(_, v)| v)
+                    .sum()
+            })
+            .collect();
+        let mut tree = PSTree::new();
+        for &(pos, shift) in kvs {
+            tree.add(pos, shift);
+        }
+        let smart: Vec<i64> = targets.iter().map(|&x| tree.prefix_sum(x)).collect();
+        assert_eq!(smart, dumb, "kvs {kvs:?}");
+    }
+
     #[test]
-    fn simple_fix() {
+    fn prop_pstreeSumsCorrectly() {
+        let keys = -2..=2;
+        let values = -1..=1;
+        let pairs: Vec<(i64, i64)> = keys
+            .flat_map(|k| values.clone().map(move |v| (k, v)))
+            .collect();
+        let targets: Vec<i64> = (-3..=3).collect();
+        pstree_sums_correctly(&[], &targets);
+        pstree_sums_correctly(&[(1, 1)], &[]);
+        for &a in &pairs {
+            pstree_sums_correctly(&[a], &targets);
+            for &b in &pairs {
+                pstree_sums_correctly(&[a, b], &targets);
+                for &c in &pairs {
+                    pstree_sums_correctly(&[a, b, c], &targets);
+                }
+            }
+        }
+        let long: Vec<(i64, i64)> = (0..200)
+            .map(|i| ((i * 7) % 23 - 11, (i * 5) % 9 - 4))
+            .collect();
+        let long_targets: Vec<i64> = (-12..=12).collect();
+        pstree_sums_correctly(&long, &long_targets);
+    }
+
+    #[test]
+    fn prop_simpleFix1() {
         test_fixes(
             "hello world",
             "hell world",
-            &[Fix {
-                replacements: vec![t_from_end(5, 5, "o", 1)],
-            }],
+            &[test_fix(vec![t_from_end(5, 5, "o", 1)])],
         );
     }
 
     #[test]
-    fn anchors_left() {
+    fn prop_anchorsLeft() {
         test_fixes(
             "-->foobar<--",
             "--><--",
-            &[Fix {
-                replacements: vec![t_from_start(4, 4, "foo", 1), t_from_start(4, 4, "bar", 2)],
-            }],
+            &[test_fix(vec![
+                t_from_start(4, 4, "foo", 1),
+                t_from_start(4, 4, "bar", 2),
+            ])],
         );
     }
 
     #[test]
-    fn anchors_right() {
+    fn prop_anchorsRight() {
         test_fixes(
             "-->foobar<--",
             "--><--",
-            &[Fix {
-                replacements: vec![t_from_end(4, 4, "bar", 1), t_from_end(4, 4, "foo", 2)],
-            }],
+            &[test_fix(vec![
+                t_from_end(4, 4, "bar", 1),
+                t_from_end(4, 4, "foo", 2),
+            ])],
         );
     }
 
     #[test]
-    fn compose_fixes1() {
+    fn prop_anchorsBoth1() {
+        test_fixes(
+            "-->foobar<--",
+            "--><--",
+            &[test_fix(vec![
+                t_from_start(4, 4, "bar", 2),
+                t_from_end(4, 4, "foo", 1),
+            ])],
+        );
+    }
+
+    #[test]
+    fn prop_anchorsBoth2() {
+        test_fixes(
+            "-->foobar<--",
+            "--><--",
+            &[test_fix(vec![
+                t_from_end(4, 4, "foo", 2),
+                t_from_start(4, 4, "bar", 1),
+            ])],
+        );
+    }
+
+    #[test]
+    fn prop_composeFixes1() {
         test_fixes(
             "cd \"$1\" || exit",
             "cd $1",
             &[
-                Fix {
-                    replacements: vec![t_from_start(4, 4, "\"", 10), t_from_end(6, 6, "\"", 10)],
-                },
-                Fix {
-                    replacements: vec![t_from_end(6, 6, " || exit", 5)],
-                },
+                test_fix(vec![
+                    t_from_start(4, 4, "\"", 10),
+                    t_from_end(6, 6, "\"", 10),
+                ]),
+                test_fix(vec![t_from_end(6, 6, " || exit", 5)]),
             ],
         );
     }
 
     #[test]
-    fn compose_fixes3() {
+    fn prop_composeFixes2() {
         test_fixes(
-            "(x)[x]",
-            "xx",
-            &[Fix {
-                replacements: vec![
-                    t_from_start(1, 1, "(", 4),
-                    t_from_end(2, 2, ")", 3),
-                    t_from_start(2, 2, "[", 2),
-                    t_from_end(3, 3, "]", 1),
-                ],
-            }],
+            "$(\"$1\")",
+            "`$1`",
+            &[
+                test_fix(vec![t_from_start(1, 2, "$(", 5), t_from_end(4, 5, ")", 5)]),
+                test_fix(vec![
+                    t_from_start(2, 2, "\"", 10),
+                    t_from_end(4, 4, "\"", 10),
+                ]),
+            ],
         );
     }
 
     #[test]
-    fn compose_fixes5() {
+    fn prop_composeFixes3() {
+        test_fixes(
+            "(x)[x]",
+            "xx",
+            &[test_fix(vec![
+                t_from_start(1, 1, "(", 4),
+                t_from_end(2, 2, ")", 3),
+                t_from_start(2, 2, "[", 2),
+                t_from_end(3, 3, "]", 1),
+            ])],
+        );
+    }
+
+    #[test]
+    fn prop_composeFixes4() {
+        test_fixes(
+            "(x)[x]",
+            "xx",
+            &[test_fix(vec![
+                t_from_start(1, 1, "(", 4),
+                t_from_start(2, 2, "[", 3),
+                t_from_end(2, 2, ")", 2),
+                t_from_end(3, 3, "]", 1),
+            ])],
+        );
+    }
+
+    #[test]
+    fn prop_composeFixes5() {
         test_fixes(
             "\"$(x)\"",
             "`x`",
-            &[Fix {
-                replacements: vec![
-                    t_from_start(1, 2, "$(", 2),
-                    t_from_end(3, 4, ")", 2),
-                    t_from_start(1, 1, "\"", 1),
-                    t_from_end(4, 4, "\"", 1),
-                ],
-            }],
+            &[test_fix(vec![
+                t_from_start(1, 2, "$(", 2),
+                t_from_end(3, 4, ")", 2),
+                t_from_start(1, 1, "\"", 1),
+                t_from_end(4, 4, "\"", 1),
+            ])],
         );
     }
 

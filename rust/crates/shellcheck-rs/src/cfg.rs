@@ -2759,6 +2759,7 @@ pub(crate) fn mbma_f(quoted: bool, t: &Token) -> bool {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
 
@@ -2817,7 +2818,7 @@ mod tests {
     }
 
     #[test]
-    fn prop_test_renumbering() {
+    fn prop_testRenumbering() {
         let before: CFW = (
             vec![(1, s()), (3, s()), (4, s()), (8, s())],
             vec![
@@ -2842,7 +2843,7 @@ mod tests {
     }
 
     #[test]
-    fn prop_test_renumber_topologically() {
+    fn prop_testRenumberTopologically() {
         let before: CFW = (
             vec![(4, s()), (2, s()), (3, s())],
             vec![(4, 2, CFEdge::CFEFlow), (2, 3, CFEdge::CFEFlow)],
@@ -2859,7 +2860,7 @@ mod tests {
     }
 
     #[test]
-    fn prop_test_remove_structural() {
+    fn prop_testRemoveStructural() {
         let before: CFW = (
             vec![(1, s()), (2, s()), (3, s()), (4, s())],
             vec![

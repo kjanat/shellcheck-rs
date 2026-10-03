@@ -560,6 +560,10 @@ pub fn get_trailing_unquoted_literal(t: &Token) -> Option<&Token> {
 mod tests {
     use super::*;
     use crate::ast::{Id, InnerToken, Token};
+    use crate::cfg::{
+        get_braced_modifier, get_braced_reference, get_index_references, get_offset_references,
+        is_variable_name,
+    };
 
     fn lit(s: &str) -> Token {
         Token::new(Id(0), InnerToken::T_Literal(s.to_string()))
@@ -569,36 +573,148 @@ mod tests {
         Token::new(Id(0), InnerToken::T_DollarSingleQuoted(s.to_string()))
     }
 
-    // `prop_getLiteralString1..23`: $'..' contents are decoded, and the odd
-    // partial-window cases behave as in the Haskell.
     #[test]
-    fn prop_getLiteralString() {
+    fn prop_getLiteralString1() {
+        assert_eq!(get_literal_string(&dsq("\\x01")).as_deref(), Some("\u{1}"));
+    }
+
+    #[test]
+    fn prop_getLiteralString2() {
+        assert_eq!(get_literal_string(&dsq("\\xyz")).as_deref(), Some("\\xyz"));
+    }
+
+    #[test]
+    fn prop_getLiteralString3() {
+        assert_eq!(get_literal_string(&dsq("\\x1")).as_deref(), Some("\u{1}"));
+    }
+
+    #[test]
+    fn prop_getLiteralString4() {
+        assert_eq!(get_literal_string(&dsq("\\x1y")).as_deref(), Some("\u{1}y"));
+    }
+
+    #[test]
+    fn prop_getLiteralString5() {
+        assert_eq!(get_literal_string(&dsq("\\xy")).as_deref(), Some("\\xy"));
+    }
+
+    #[test]
+    fn prop_getLiteralString6() {
+        assert_eq!(get_literal_string(&dsq("\\x")).as_deref(), Some("\\x"));
+    }
+
+    #[test]
+    fn prop_getLiteralString7() {
+        assert_eq!(get_literal_string(&dsq("\\1x")).as_deref(), Some("\u{1}x"));
+    }
+
+    #[test]
+    fn prop_getLiteralString8() {
+        assert_eq!(get_literal_string(&dsq("\\12x")).as_deref(), Some("\u{a}x"));
+    }
+
+    #[test]
+    fn prop_getLiteralString9() {
+        assert_eq!(
+            get_literal_string(&dsq("\\123x")).as_deref(),
+            Some("\u{53}x")
+        );
+    }
+
+    #[test]
+    fn prop_getLiteralString10() {
+        assert_eq!(
+            get_literal_string(&dsq("\\1234")).as_deref(),
+            Some("\u{53}4")
+        );
+    }
+
+    #[test]
+    fn prop_getLiteralString11() {
+        assert_eq!(get_literal_string(&dsq("\\1")).as_deref(), Some("\u{1}"));
+    }
+
+    #[test]
+    fn prop_getLiteralString12() {
+        assert_eq!(get_literal_string(&dsq("\\12")).as_deref(), Some("\u{a}"));
+    }
+
+    #[test]
+    fn prop_getLiteralString13() {
+        assert_eq!(get_literal_string(&dsq("\\123")).as_deref(), Some("\u{53}"));
+    }
+
+    #[test]
+    fn prop_getLiteralString14() {
+        assert_eq!(
+            get_literal_string(&dsq("\\e[1mfoo\\E[0mbar")).as_deref(),
+            Some("\u{1b}[1mfoo\u{1b}[0mbar")
+        );
+    }
+
+    #[test]
+    fn prop_getLiteralString15() {
+        assert_eq!(get_literal_string(&dsq("\\?")).as_deref(), Some("?"));
+    }
+
+    #[test]
+    fn prop_getLiteralString16() {
+        assert_eq!(get_literal_string(&dsq("\\u9")).as_deref(), Some("\t"));
+    }
+
+    #[test]
+    fn prop_getLiteralString17() {
+        assert_eq!(get_literal_string(&dsq("\\u2F")).as_deref(), Some("/"));
+    }
+
+    #[test]
+    fn prop_getLiteralString18() {
+        assert_eq!(
+            get_literal_string(&dsq("\\u100")).as_deref(),
+            Some("\u{100}")
+        );
+    }
+
+    #[test]
+    fn prop_getLiteralString19() {
+        assert_eq!(
+            get_literal_string(&dsq("\\u1d00")).as_deref(),
+            Some("\u{1d00}")
+        );
+    }
+
+    #[test]
+    fn prop_getLiteralString20() {
+        assert_eq!(
+            get_literal_string(&dsq("\\u1D56C")).as_deref(),
+            Some("\u{1d56}C")
+        );
+    }
+
+    #[test]
+    fn prop_getLiteralString21() {
+        assert_eq!(get_literal_string(&dsq("\\U9z")).as_deref(), Some("\tz"));
+    }
+
+    #[test]
+    fn prop_getLiteralString22() {
+        assert_eq!(
+            get_literal_string(&dsq("\\u1d00.")).as_deref(),
+            Some("\u{1d00}.")
+        );
+    }
+
+    #[test]
+    fn prop_getLiteralString23() {
+        assert_eq!(
+            get_literal_string(&dsq("\\U1D56C")).as_deref(),
+            Some("\u{1d56c}")
+        );
+    }
+
+    #[test]
+    fn get_literal_string_keeps_unrecognised_escapes() {
         for (src, want) in [
-            ("\\x01", "\u{1}"),
-            ("\\xyz", "\\xyz"),
-            ("\\x1", "\u{1}"),
-            ("\\x1y", "\u{1}y"),
-            ("\\xy", "\\xy"),
-            ("\\x", "\\x"),
-            ("\\1x", "\u{1}x"),
-            ("\\12x", "\u{a}x"),
-            ("\\123x", "\u{53}x"),
-            ("\\1234", "\u{53}4"),
-            ("\\1", "\u{1}"),
-            ("\\12", "\u{a}"),
-            ("\\123", "\u{53}"),
-            ("\\e[1mfoo\\E[0mbar", "\u{1b}[1mfoo\u{1b}[0mbar"),
-            ("\\?", "?"),
-            ("\\u9", "\t"),
-            ("\\u2F", "/"),
-            ("\\u100", "\u{100}"),
-            ("\\u1d00", "\u{1d00}"),
-            ("\\u1D56C", "\u{1d56}C"),
-            ("\\U9z", "\tz"),
-            ("\\u1d00.", "\u{1d00}."),
-            ("\\U1D56C", "\u{1d56c}"),
-            // Negative cases: no escape at all, and escapes upstream does not
-            // recognise (there is no \c control-char case).
             ("plain text", "plain text"),
             ("\\cA", "\\cA"),
             ("\\8", "\\8"),
@@ -625,25 +741,209 @@ mod tests {
         assert_eq!(get_literal_string(&word).as_deref(), Some("echo!"));
     }
 
-    // `prop_executableFromShebang1..11`, which the gate cannot replay: they
-    // test the helper, not a script.
     #[test]
-    fn prop_executableFromShebang() {
-        for (sb, want) in [
-            ("/bin/sh", "sh"),
-            ("/bin/bash", "bash"),
-            ("/usr/bin/env ksh", "ksh"),
-            ("/usr/bin/env -S foo=bar bash -x", "bash"),
-            ("/usr/bin/env --split-string=bash -x", "bash"),
-            ("/usr/bin/env --split-string=foo=bar bash -x", "bash"),
-            ("/usr/bin/env --split-string bash -x", "bash"),
-            ("/usr/bin/env --split-string foo=bar bash -x", "bash"),
-            ("/usr/bin/env foo=bar dash", "dash"),
-            ("/bin/busybox sh", "busybox sh"),
-            ("/bin/busybox ash", "busybox ash"),
-        ] {
-            assert_eq!(executable_from_shebang(sb), want, "for {sb:?}");
-        }
+    fn prop_executableFromShebang1() {
+        assert_eq!(executable_from_shebang("/bin/sh"), "sh");
+    }
+
+    #[test]
+    fn prop_executableFromShebang2() {
+        assert_eq!(executable_from_shebang("/bin/bash"), "bash");
+    }
+
+    #[test]
+    fn prop_executableFromShebang3() {
+        assert_eq!(executable_from_shebang("/usr/bin/env ksh"), "ksh");
+    }
+
+    #[test]
+    fn prop_executableFromShebang4() {
+        assert_eq!(
+            executable_from_shebang("/usr/bin/env -S foo=bar bash -x"),
+            "bash"
+        );
+    }
+
+    #[test]
+    fn prop_executableFromShebang5() {
+        assert_eq!(
+            executable_from_shebang("/usr/bin/env --split-string=bash -x"),
+            "bash"
+        );
+    }
+
+    #[test]
+    fn prop_executableFromShebang6() {
+        assert_eq!(
+            executable_from_shebang("/usr/bin/env --split-string=foo=bar bash -x"),
+            "bash"
+        );
+    }
+
+    #[test]
+    fn prop_executableFromShebang7() {
+        assert_eq!(
+            executable_from_shebang("/usr/bin/env --split-string bash -x"),
+            "bash"
+        );
+    }
+
+    #[test]
+    fn prop_executableFromShebang8() {
+        assert_eq!(
+            executable_from_shebang("/usr/bin/env --split-string foo=bar bash -x"),
+            "bash"
+        );
+    }
+
+    #[test]
+    fn prop_executableFromShebang9() {
+        assert_eq!(executable_from_shebang("/usr/bin/env foo=bar dash"), "dash");
+    }
+
+    #[test]
+    fn prop_executableFromShebang10() {
+        assert_eq!(executable_from_shebang("/bin/busybox sh"), "busybox sh");
+    }
+
+    #[test]
+    fn prop_executableFromShebang11() {
+        assert_eq!(executable_from_shebang("/bin/busybox ash"), "busybox ash");
+    }
+
+    #[test]
+    fn prop_isVariableName1() {
+        assert!(is_variable_name("_fo123"));
+    }
+
+    #[test]
+    fn prop_isVariableName2() {
+        assert!(!is_variable_name("4"));
+    }
+
+    #[test]
+    fn prop_isVariableName3() {
+        assert!(!is_variable_name("test: "));
+    }
+
+    #[test]
+    fn prop_getBracedReference1() {
+        assert_eq!(get_braced_reference("foo"), "foo");
+    }
+
+    #[test]
+    fn prop_getBracedReference2() {
+        assert_eq!(get_braced_reference("#foo"), "foo");
+    }
+
+    #[test]
+    fn prop_getBracedReference3() {
+        assert_eq!(get_braced_reference("#"), "#");
+    }
+
+    #[test]
+    fn prop_getBracedReference4() {
+        assert_eq!(get_braced_reference("##"), "#");
+    }
+
+    #[test]
+    fn prop_getBracedReference5() {
+        assert_eq!(get_braced_reference("#!"), "!");
+    }
+
+    #[test]
+    fn prop_getBracedReference6() {
+        assert_eq!(get_braced_reference("!#"), "#");
+    }
+
+    #[test]
+    fn prop_getBracedReference7() {
+        assert_eq!(get_braced_reference("!foo#?"), "foo");
+    }
+
+    #[test]
+    fn prop_getBracedReference8() {
+        assert_eq!(get_braced_reference("foo-bar"), "foo");
+    }
+
+    #[test]
+    fn prop_getBracedReference9() {
+        assert_eq!(get_braced_reference("foo:-bar"), "foo");
+    }
+
+    #[test]
+    fn prop_getBracedReference10() {
+        assert_eq!(get_braced_reference("foo: -1"), "foo");
+    }
+
+    #[test]
+    fn prop_getBracedReference11() {
+        assert_eq!(get_braced_reference("!os*"), "");
+    }
+
+    #[test]
+    fn prop_getBracedReference11b() {
+        assert_eq!(get_braced_reference("!os@"), "");
+    }
+
+    #[test]
+    fn prop_getBracedReference12() {
+        assert_eq!(get_braced_reference("!os?bar**"), "");
+    }
+
+    #[test]
+    fn prop_getBracedReference13() {
+        assert_eq!(get_braced_reference("foo[bar]"), "foo");
+    }
+
+    #[test]
+    fn prop_getBracedModifier1() {
+        assert_eq!(get_braced_modifier("foo:bar:baz"), ":bar:baz");
+    }
+
+    #[test]
+    fn prop_getBracedModifier2() {
+        assert_eq!(get_braced_modifier("!var:-foo"), ":-foo");
+    }
+
+    #[test]
+    fn prop_getBracedModifier3() {
+        assert_eq!(get_braced_modifier("foo[bar]"), "[bar]");
+    }
+
+    #[test]
+    fn prop_getBracedModifier4() {
+        assert_eq!(get_braced_modifier("foo[@]@Q"), "[@]@Q");
+    }
+
+    #[test]
+    fn prop_getBracedModifier5() {
+        assert_eq!(get_braced_modifier("@@Q"), "@Q");
+    }
+
+    #[test]
+    fn prop_getIndexReferences1() {
+        assert_eq!(get_index_references("var[x+y+1]"), ["x", "y"]);
+    }
+
+    #[test]
+    fn prop_getOffsetReferences1() {
+        assert_eq!(get_offset_references(":bar"), ["bar"]);
+    }
+
+    #[test]
+    fn prop_getOffsetReferences2() {
+        assert_eq!(get_offset_references(":bar:baz"), ["bar", "baz"]);
+    }
+
+    #[test]
+    fn prop_getOffsetReferences3() {
+        assert_eq!(get_offset_references("[foo]:bar"), ["bar"]);
+    }
+
+    #[test]
+    fn prop_getOffsetReferences4() {
+        assert_eq!(get_offset_references("[foo]:bar:baz"), ["bar", "baz"]);
     }
 
     // It is the path `/env` that makes a shebang an env shebang. A word `env`

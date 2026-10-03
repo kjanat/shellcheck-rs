@@ -2310,6 +2310,106 @@ mod printf_format_tests {
     }
 }
 
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::{determine_shell, get_variables_from_literal};
+    use crate::interface::Shell;
+
+    fn determine_shell_test_with(fallback: Option<Shell>, script: &str) -> Shell {
+        let root = crate::parser::parse_script("script", script)
+            .root
+            .expect("test script parses");
+        determine_shell(fallback, &root)
+    }
+
+    fn determine_shell_test(script: &str) -> Shell {
+        determine_shell_test_with(None, script)
+    }
+
+    #[test]
+    fn prop_determineShell0() {
+        assert_eq!(determine_shell_test("#!/bin/sh"), Shell::Sh);
+    }
+
+    #[test]
+    fn prop_determineShell1() {
+        assert_eq!(determine_shell_test("#!/usr/bin/env ksh"), Shell::Ksh);
+    }
+
+    #[test]
+    fn prop_determineShell2() {
+        assert_eq!(determine_shell_test(""), Shell::Bash);
+    }
+
+    #[test]
+    fn prop_determineShell3() {
+        assert_eq!(determine_shell_test("#!/bin/sh -e"), Shell::Sh);
+    }
+
+    #[test]
+    fn prop_determineShell4() {
+        assert_eq!(
+            determine_shell_test("#!/bin/ksh\n#shellcheck shell=sh\nfoo"),
+            Shell::Sh
+        );
+    }
+
+    #[test]
+    fn prop_determineShell5() {
+        assert_eq!(determine_shell_test("#shellcheck shell=sh\nfoo"), Shell::Sh);
+    }
+
+    #[test]
+    fn prop_determineShell6() {
+        assert_eq!(determine_shell_test("#! /bin/sh"), Shell::Sh);
+    }
+
+    #[test]
+    fn prop_determineShell7() {
+        assert_eq!(determine_shell_test("#! /bin/ash"), Shell::Dash);
+    }
+
+    #[test]
+    fn prop_determineShell8() {
+        assert_eq!(
+            determine_shell_test_with(Some(Shell::Ksh), "#!/bin/sh"),
+            Shell::Sh
+        );
+    }
+
+    #[test]
+    fn prop_determineShell9() {
+        assert_eq!(determine_shell_test("#!/bin/env -S dash -x"), Shell::Dash);
+    }
+
+    #[test]
+    fn prop_determineShell10() {
+        assert_eq!(
+            determine_shell_test("#!/bin/env --split-string= dash -x"),
+            Shell::Dash
+        );
+    }
+
+    #[test]
+    fn prop_determineShell11() {
+        assert_eq!(determine_shell_test("#!/bin/busybox sh"), Shell::BusyboxSh);
+    }
+
+    #[test]
+    fn prop_determineShell12() {
+        assert_eq!(determine_shell_test("#!/bin/busybox ash"), Shell::BusyboxSh);
+    }
+
+    #[test]
+    fn prop_getVariablesFromLiteral1() {
+        assert_eq!(
+            get_variables_from_literal("$foo${bar//a/b}$BAZ"),
+            ["foo", "bar", "BAZ"]
+        );
+    }
+}
+
 /// `hasFloatingPoint` (Analytics): only ksh does floating point in arithmetic.
 pub(crate) fn has_floating_point(params: &Parameters) -> bool {
     params.shell == Shell::Ksh

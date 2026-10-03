@@ -236,10 +236,183 @@ pub fn register(c: &mut Checker) {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
     use crate::analyzer_lib::{Out, style};
+    use crate::ast::Id;
+    use crate::cfg::{get_generic_opts, get_opts};
     use crate::test_support::collect;
+
+    type Opts = Vec<(String, (Token, Token))>;
+
+    fn check_get_opts(
+        s: &str,
+        flags: &[&str],
+        args: &[&str],
+        f: impl Fn(&[Token]) -> Option<Opts>,
+    ) {
+        let tokens: Vec<Token> = s
+            .split_whitespace()
+            .map(|w| Token::new(Id(0), InnerToken::T_Literal(w.to_string())))
+            .collect();
+        let opts = f(&tokens).unwrap_or_default();
+        let actual_flags: Vec<String> = opts
+            .iter()
+            .map(|(flag, _)| flag.clone())
+            .filter(|flag| !flag.is_empty())
+            .collect();
+        let actual_args: Vec<String> = opts
+            .iter()
+            .filter(|(flag, _)| flag.is_empty())
+            .map(|(_, (_, x))| only_literal_string(x))
+            .collect();
+        assert_eq!(actual_flags, flags);
+        assert_eq!(actual_args, args);
+    }
+
+    fn opts(
+        gnu: bool,
+        arbitrary: bool,
+        spec: &str,
+        longopts: &[(&str, bool)],
+    ) -> impl Fn(&[Token]) -> Option<Opts> {
+        let spec = spec.to_string();
+        let longopts: Vec<(String, bool)> = longopts
+            .iter()
+            .map(|(n, b)| ((*n).to_string(), *b))
+            .collect();
+        move |args| get_opts(gnu, arbitrary, &spec, &longopts, args)
+    }
+
+    fn generic() -> impl Fn(&[Token]) -> Option<Opts> {
+        |args| Some(get_generic_opts(args))
+    }
+
+    #[test]
+    fn prop_checkGetOptsS1() {
+        check_get_opts("-f x", &["f"], &[], opts(true, true, "f:", &[]));
+    }
+
+    #[test]
+    fn prop_checkGetOptsS2() {
+        check_get_opts("-fx", &["f"], &[], opts(true, true, "f:", &[]));
+    }
+
+    #[test]
+    fn prop_checkGetOptsS3() {
+        check_get_opts("-f -x", &["f", "x"], &[], opts(true, true, "fx", &[]));
+    }
+
+    #[test]
+    fn prop_checkGetOptsS4() {
+        check_get_opts("-f -x", &["f"], &[], opts(true, true, "f:", &[]));
+    }
+
+    #[test]
+    fn prop_checkGetOptsS5() {
+        check_get_opts("-fx", &[], &[], opts(true, true, "fx:", &[]));
+    }
+
+    #[test]
+    fn prop_checkGenericOptsS1() {
+        check_get_opts("-f x", &["f"], &[], generic());
+    }
+
+    #[test]
+    fn prop_checkGenericOptsS2() {
+        check_get_opts("-abc x", &["a", "b", "c"], &[], generic());
+    }
+
+    #[test]
+    fn prop_checkGenericOptsS3() {
+        check_get_opts("-abc -x", &["a", "b", "c", "x"], &[], generic());
+    }
+
+    #[test]
+    fn prop_checkGenericOptsS4() {
+        check_get_opts("-x", &["x"], &[], generic());
+    }
+
+    #[test]
+    fn prop_checkGetOptsL1() {
+        check_get_opts(
+            "--foo=bar baz",
+            &["foo"],
+            &["baz"],
+            opts(true, false, "", &[("foo", true)]),
+        );
+    }
+
+    #[test]
+    fn prop_checkGetOptsL2() {
+        check_get_opts(
+            "--foo bar baz",
+            &["foo"],
+            &["baz"],
+            opts(true, false, "", &[("foo", true)]),
+        );
+    }
+
+    #[test]
+    fn prop_checkGetOptsL3() {
+        check_get_opts("--foo baz", &["foo"], &["baz"], opts(true, true, "", &[]));
+    }
+
+    #[test]
+    fn prop_checkGetOptsL4() {
+        check_get_opts("--foo baz", &[], &[], opts(true, false, "", &[]));
+    }
+
+    #[test]
+    fn prop_checkGenericOptsL1() {
+        check_get_opts("--foo=bar", &["foo"], &[], generic());
+    }
+
+    #[test]
+    fn prop_checkGenericOptsL2() {
+        check_get_opts("--foo bar", &["foo"], &["bar"], generic());
+    }
+
+    #[test]
+    fn prop_checkGenericOptsL3() {
+        check_get_opts("-x --foo", &["x", "foo"], &[], generic());
+    }
+
+    #[test]
+    fn prop_checkGetOptsT1() {
+        check_get_opts("-a x -b", &["a", "b"], &["x"], opts(true, true, "ab", &[]));
+    }
+
+    #[test]
+    fn prop_checkGetOptsT2() {
+        check_get_opts(
+            "-a x -b",
+            &["a"],
+            &["x", "-b"],
+            opts(false, true, "ab", &[]),
+        );
+    }
+
+    #[test]
+    fn prop_checkGetOptsT3() {
+        check_get_opts("-a -- -b", &["a"], &["-b"], opts(true, true, "ab", &[]));
+    }
+
+    #[test]
+    fn prop_checkGetOptsT4() {
+        check_get_opts("-a -- -b", &["a", "b"], &[], opts(true, true, "a:b", &[]));
+    }
+
+    #[test]
+    fn prop_checkGenericOptsT1() {
+        check_get_opts("-x -- -y", &["x"], &["-y"], generic());
+    }
+
+    #[test]
+    fn prop_checkGenericOptsT2() {
+        check_get_opts("-xy --", &["x", "y"], &[], generic());
+    }
 
     /// One check per entry of `all_checks`, each a node check of its own and
     /// running its own `dispatch`: how the checks were registered before the table.
