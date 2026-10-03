@@ -111,6 +111,15 @@ like Z4.
 
 [g14]: https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap12.html#tag_12_02
 
+### Z6. An EditorConfig glob that is not a regex
+
+A section such as `[[z-a]]` ends upstream with regex-tdfa's
+`parseRegex ... failed` error and no output, for every input under that
+`.editorconfig`. The port reports SC1134 at the section header and exits 4, as
+for any other rejected EditorConfig file. Its globs compile through
+`rust/crates/shellcheck-rs/src/tdfa.rs`, which accepts and rejects exactly what
+regex-tdfa's parser does, so this applies only to the globs upstream dies on.
+
 ## No open entries
 
 Sections A through G are gone; their entries are all in **Fixed** below. The

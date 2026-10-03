@@ -56,6 +56,11 @@ const FILES: &[(&str, &str)] = &[
         "root = true\n[*]\nshellcheck.disable=SC2086\n",
     ),
     ("u/x.sh", SCRIPT),
+    (
+        "b/.editorconfig",
+        "root = true\n[[z-a]]\nshellcheck.shell=bash\n",
+    ),
+    ("b/x.sh", SCRIPT),
 ];
 
 const X_2154_2086: &str = r#"{"file":"X","line":2,"endLine":2,"column":6,"endColumn":8,"level":"warning","code":2154,"message":"x is referenced but not assigned.","fix":null},{"file":"X","line":2,"endLine":2,"column":6,"endColumn":8,"level":"info","code":2086,"message":"Double quote to prevent globbing and word splitting.","fix":{"replacements":[{"column":6,"endColumn":6,"endLine":2,"insertionPoint":"afterEnd","line":2,"precedence":7,"replacement":"\""},{"column":8,"endColumn":8,"endLine":2,"insertionPoint":"beforeStart","line":2,"precedence":7,"replacement":"\""}]}}"#;
@@ -443,6 +448,24 @@ fn a_failed_input_outranks_exit_4() -> io::Result<()> {
         &json1(&[sc1134("{T}/z/.editorconfig", 3, 8)]),
         "missing.sh: missing.sh: openBinaryFile: does not exist (No such file or directory)",
         2,
+    );
+    Ok(())
+}
+
+/// Upstream dies on this glob instead.
+#[test]
+fn a_glob_that_is_not_a_regex_is_an_sc1134_at_its_header_and_exits_4() -> io::Result<()> {
+    let f = Fixture::new("badglob")?;
+    let run = f.run(&["-f", "gcc", "b/x.sh"])?;
+    f.assert(
+        &run,
+        concat!(
+            "{T}/b/.editorconfig:2:8: error: Failed to process {T}/b/.editorconfig, line 2: Expected '=' after directive key. Fix any mentioned problems and try again. [SC1134]\n",
+            "b/x.sh:2:6: warning: x is referenced but not assigned. [SC2154]\n",
+            "b/x.sh:2:6: note: Double quote to prevent globbing and word splitting. [SC2086]",
+        ),
+        "",
+        4,
     );
     Ok(())
 }

@@ -39,6 +39,7 @@ pub mod editor_config;
 pub mod idhash;
 pub mod parser;
 pub mod regex_lib;
+pub mod tdfa;
 #[cfg(test)]
 mod test_support;
 

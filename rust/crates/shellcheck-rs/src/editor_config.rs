@@ -6,6 +6,7 @@
 //! and turned into the same "key=value" directive syntax that is used in .shellcheckrc files.
 
 use crate::data::shell_for_executable;
+use crate::tdfa::make_regex;
 use regex::Regex;
 use std::fmt::Write;
 
@@ -151,14 +152,14 @@ pub fn glob_to_regex_string(pattern: &str) -> String {
 
 /// `mkRegex (globToRegexString pattern)`: the glob as a regex, or why it does
 /// not translate into one.
-fn glob_regex(pattern: &str) -> Result<Regex, regex::Error> {
-    Regex::new(&format!("(?m){}", glob_to_regex_string(pattern)))
+fn glob_regex(pattern: &str) -> Result<Regex, String> {
+    make_regex(&glob_to_regex_string(pattern))
 }
 
 /// `matchesGlob`: does the (relative path of the) file match the given
 /// EditorConfig glob?
 #[cfg(test)]
-fn matches_glob(pattern: &str, name: &str) -> Result<bool, regex::Error> {
+fn matches_glob(pattern: &str, name: &str) -> Result<bool, String> {
     Ok(glob_regex(pattern)?.is_match(name))
 }
 
@@ -355,7 +356,7 @@ struct Section<'a> {
     /// The 1-based line of the `[glob]` header.
     header: usize,
     /// The header's glob as a regex.
-    glob: Result<Regex, regex::Error>,
+    glob: Result<Regex, String>,
     /// The numbered lines up to the next header.
     body: Vec<(usize, &'a str)>,
 }
@@ -633,6 +634,23 @@ mod tests {
     #[test]
     fn prop_globBraceNestedNoMatch() {
         assert_eq!(matches_glob("{foo,ba{r,z}}", "baq"), Ok(false));
+    }
+
+    #[test]
+    fn a_bracket_in_a_glob_follows_regex_tdfa() {
+        assert_eq!(matches_glob("[a[b].sh", "[.sh"), Ok(true));
+        assert_eq!(matches_glob("[a&&b].sh", "&.sh"), Ok(true));
+        assert_eq!(matches_glob("[]a].sh", "].sh"), Ok(true));
+        assert!(matches_glob("[a--b].sh", "c.sh").is_err());
+        assert!(matches_glob("[z-a].sh", "x.sh").is_err());
+    }
+
+    #[test]
+    fn a_glob_that_is_not_a_regex_rejects_the_file_at_its_header() {
+        let contents =
+            "root = true\n[*.sh]\nshellcheck.disable=SC2086\n[[z-a]]\nshellcheck.shell=bash\n";
+        assert_eq!(invalid_glob_lines(contents), vec![4]);
+        assert_eq!(directives(contents, "x.sh"), Some(rejected_root(4)));
     }
 
     #[test]
