@@ -1,0 +1,3 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/kjanat/actionlint/v1/actionlint.schema.json
+---
+paths: { .github/workflows/rust.yml: { ignore: ['undefined variable "insert"'] } }
