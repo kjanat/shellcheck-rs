@@ -1,27 +1,24 @@
 # The implementations the benchmark compares.
 #
-# Every candidate ends up as .bench/bin/<name>/shellcheck plus a manifest.json
-# recording exactly what was built. bench/build.sh derives a content key for
-# each one (version or commit + the build script + platform); CI caches the
-# built binary under that key so an unchanged candidate is never rebuilt.
+# Every candidate ends up as .bench/bin/<name>/shellcheck plus a manifest.json recording exactly what was built.
+# bench/build.sh derives a content key for each one (version or commit + the build script + platform);
+# CI caches the built binary under that key so an unchanged candidate is never rebuilt.
 
-# koalaman's latest GitHub release. mise installs it (tools.shellcheck in
-# mise.toml, aqua backend, checksum-verified); mise.lock pins the version.
+# koalaman's latest GitHub release.
+# mise installs it (tools.shellcheck in mise.toml, aqua backend, checksum-verified); # mise.lock pins the version.
 [candidates.upstream]
 kind     = "release"
 baseline = true
 
-# The hand-written Rust port (branch `rust-port`), built with the rust toolchain
-# from mise.toml.
+# The hand-written Rust port (branch `rust-port`), built with the rust toolchain from mise.toml.
 [candidates.rust-port]
-kind = "git"
-ref  = "rust-port"
+kind  = "git"
+ref   = "rust-port"
 build = "bench/build/rust-port.sh"
 
-# ShellCheck compiled from GHC Core to Rust (branch `h2r-compiler`). Its build
-# extracts Core with GHC 9.6.7 (pinned in that branch's mise.lock), emits Rust
-# and compiles it; this is the slow one, hence the caching.
+# ShellCheck compiled from GHC Core to Rust (branch `h2r-compiler`).
+# Its build extracts Core with GHC 9.6.7 (pinned in that branch's mise.lock), emits Rust and compiles it; this is the slow one, hence the caching.
 [candidates.h2r]
-kind = "git"
-ref  = "h2r-compiler"
+kind  = "git"
+ref   = "h2r-compiler"
 build = "bench/build/h2r.sh"

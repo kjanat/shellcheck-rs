@@ -1,0 +1,51 @@
+[project]
+name            = "shellcheck-bench"
+version         = "0.0.0"
+requires-python = ">= 3.14"
+license         = "MIT"
+dependencies    = [
+  "matplotlib>=3.11.2",
+  "numpy>=2.5.3",
+  "pydantic>=2.13.5",
+  "scipy>=1.18.1",
+]
+
+[project.scripts]
+analyze    = "bench.analyze:main"
+bench      = "bench.run:main"
+candidates = "bench.candidates:main"
+corpus     = "bench.corpus:main"
+
+[dependency-groups]
+dev = [
+  "basedpyright>=1.40.1",
+  "ruff>=0.16.10",
+  "scipy-stubs>=1.18.1.1",
+  "ty>=0.0.84",
+]
+
+[build-system]
+requires      = ["uv_build>=0.12.23,<0.13"]
+build-backend = "uv_build"
+
+[tool.pyright]
+pythonVersion = "3.14"
+include       = ["bench/**/*.py"]
+venvPath      = "."
+venv          = ".venv"
+
+[tool.ruff]
+target-version = "py314"
+include        = ["bench/**/*.py"]
+preview        = true
+
+[tool.ty]
+environment.python-version = "3.14"
+environment.python         = ".venv"
+src.respect-ignore-files   = true
+src.include                = ["bench/**/*.py"]
+
+[tool.uv]
+build-backend.module-root = ""
+build-backend.module-name = "bench"
+package                   = true

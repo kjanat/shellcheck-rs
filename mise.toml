@@ -9,20 +9,41 @@
 #
 # Exact tool versions are pinned in mise.lock (`mise up` bumps them).
 
-min_version = "2026.1.0"
+min_version = "2026.10.0"
 
 [tools]
-hyperfine  = "latest" # the timer
-python     = "3.13"   # for uv's scripts
-rust       = "latest" # builds the rust-port candidate (h2r pins its own toolchain in its worktree)
-shellcheck = "latest" # the upstream candidate: koalaman/shellcheck's latest GitHub release
-uv         = "latest" # runs bench/*.py with their inline dependencies
+hyperfine  = "1.20.0"   # the timer
+python     = "3.14"     # for the bench project
+rust       = "latest"   # builds the rust-port candidate (h2r pins its own toolchain in its worktree)
+shellcheck = "latest"   # the upstream candidate: koalaman/shellcheck's latest GitHub release
+uv         = "0.12.23"  # syncs the bench project and runs its commands
+runner-run = "0.27.1"   # task runner
+
+[tool_alias]
+shellcheck = "github:koalaman/shellcheck"
+runner-run = "github:kjanat/runner"
+
+[bootstrap.repos]
+[bootstrap.repos."source"]
+url = "https://github.com/kjanat/shellcheck-rs.git"
+ref = "master"
+
+[bootstrap.repos."ports/rust"]
+url = "https://github.com/kjanat/shellcheck-rs.git"
+ref = "rust-port"
+
+[bootstrap.repos."ports/h2r"]
+url = "https://github.com/kjanat/shellcheck-rs.git"
+ref = "h2r-compiler"
 
 [settings]
-lockfile = true
+lockfile                            = true
+minimum_release_age                 = "0s"
+python.uv_venv_auto                 = "create|source"
+idiomatic_version_file_enable_tools = ["python"]
 
 [env]
-BENCH_ROOT = "{{ config_root }}/.bench"
+BENCH_ROOT   = "{{ config_root }}/.bench"
 UV_LINK_MODE = "copy"
 
 # -----------------------------------------------------------------------------
@@ -32,10 +53,7 @@ UV_LINK_MODE = "copy"
 [tasks.bench]
 description = "Build every candidate, generate the corpus, run the benchmark and write the report"
 depends     = ["bench:build", "bench:corpus"]
-run         = [
-  { task = "bench:run" },
-  { task = "bench:analyze" },
-]
+run         = [{ task = "bench:run" }, { task = "bench:analyze" }]
 
 # -----------------------------------------------------------------------------
 # Steps
@@ -50,13 +68,13 @@ description = "Build the candidates into .bench/bin/<name>/ (skips a candidate w
 usage       = '''
 arg "[candidates]" var=#true help="Candidate names from bench/candidates.toml (default: all)"
 '''
-run         = 'bench/build.sh build ${usage_candidates:-}'
+run         = "bench/build.sh build ${usage_candidates:-}"
 
 [tasks."bench:corpus"]
 description = "Generate the deterministic shell-script corpus into .bench/corpus/"
-sources     = ["bench/corpus.py"]
+sources     = ["bench/corpus.py", "bench/schema.py"]
 outputs     = [".bench/corpus/corpus.json"]
-run         = "uv run bench/corpus.py --out .bench/corpus"
+run         = "uv run corpus --out .bench/corpus"
 
 [tasks."bench:run"]
 description = "Time every candidate on every scenario with hyperfine, in shuffled interleaved rounds"
@@ -71,7 +89,7 @@ flag "--max-run-seconds <s>" default="15" help="A candidate whose pre-check run 
 flag "--out <dir>" default="" help="Results directory (default: .bench/results/<timestamp>)"
 '''
 run         = '''
-uv run bench/run.py \
+uv run bench \
   --rounds "${usage_rounds?}" --runs "${usage_runs?}" --warmup "${usage_warmup?}" \
   ${usage_scenarios:+--scenarios "$usage_scenarios"} \
   ${usage_candidates:+--candidates "$usage_candidates"} \
@@ -85,11 +103,11 @@ description = "Compute the statistics for a results directory and write report.m
 usage       = '''
 arg "[results]" default="" help="Results directory (default: the newest under .bench/results/)"
 '''
-run         = 'uv run bench/analyze.py ${usage_results:+"$usage_results"}'
+run         = 'uv run analyze ${usage_results:+"$usage_results"}'
 
 [tasks."bench:selftest"]
 description = "Check the analysis (per-candidate peak RSS) on synthetic runs; needs no hyperfine and no built candidates"
-run         = "uv run bench/analyze.py --selftest"
+run         = "uv run analyze --selftest"
 
 [tasks."bench:clean"]
 description = "Remove built candidates, worktrees, corpus and results"

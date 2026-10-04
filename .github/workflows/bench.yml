@@ -50,66 +50,62 @@ jobs:
   resolve:
     name: Resolve candidates
     runs-on: ubuntu-latest
-    outputs:
-      candidates: ${{ steps.resolve.outputs.candidates }}
+    outputs: { candidates: "${{ steps.resolve.outputs.candidates }}" }
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v4
-        with:
-          install: false
+      - uses: &CheckOut actions/checkout@v7
+      - uses: &Mise jdx/mise-action@v5
+        with: { install_args: uv }
       - name: Resolve refs and cache keys
         id: resolve
-        run: bench/build.sh resolve
+        run: ./bench/build.sh resolve
 
   build:
     name: Build ${{ matrix.candidate }}
     needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    strategy:
-      fail-fast: false
-      matrix:
-        candidate: [upstream, rust-port, h2r]
+    strategy: { fail-fast: false, matrix: { candidate: [upstream, rust-port, h2r] } }
     env:
       PIN: ${{ fromJSON(needs.resolve.outputs.candidates)[matrix.candidate].pin }}
       KEY: ${{ fromJSON(needs.resolve.outputs.candidates)[matrix.candidate].key }}
+      bench_bin_path: .bench/bin
     steps:
-      - uses: actions/checkout@v7
+      - uses: *CheckOut
 
       # Fast path: the finished binary for exactly this commit/version.
       - name: Restore built binary
         id: bin
-        uses: actions/cache/restore@v6
-        with:
-          path: .bench/bin/${{ matrix.candidate }}
+        uses: &RestoreCache actions/cache/restore@v6
+        with: &CandidateCache
+          path: ${{ env.bench_bin_path }}/${{ matrix.candidate }}
           key: bench-bin-${{ matrix.candidate }}-${{ env.KEY }}
 
-      - name: Check out ${{ matrix.candidate }} @ ${{ env.PIN }}
-        if: steps.bin.outputs.cache-hit != 'true' && matrix.candidate != 'upstream'
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ env.PIN }}
-          path: .bench/src/${{ matrix.candidate }}
+      - parallel:
+          - name: Check out ${{ matrix.candidate }} @ ${{ env.PIN }}
+            if: steps.bin.outputs.cache-hit != 'true' && matrix.candidate != 'upstream'
+            uses: *CheckOut
+            with:
+              ref: ${{ env.PIN }}
+              path: .bench/src/${{ matrix.candidate }}
 
-      - name: System libraries for GHC
-        if: steps.bin.outputs.cache-hit != 'true' && matrix.candidate == 'h2r'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgmp-dev libnuma-dev zlib1g-dev pkg-config
+          - name: System libraries for GHC
+            if: steps.bin.outputs.cache-hit != 'true' && matrix.candidate == 'h2r'
+            run: sudo apt-get update -qq && sudo apt-get install -y -qq libgmp-dev libnuma-dev zlib1g-dev pkg-config
 
       - name: Install root toolchain (mise)
-        if: steps.bin.outputs.cache-hit != 'true'
-        uses: jdx/mise-action@v4
-        with:
-          cache: false
+        if: &NoCache steps.bin.outputs.cache-hit != 'true'
+        uses: *Mise
+        with: { cache: false }
 
       # Slow path helpers: intermediate layers so a rebuild after a branch push
       # is incremental. restore-keys fall back to the newest cache for the
       # candidate when the exact commit changed.
       - name: Restore toolchains and build layers
-        if: steps.bin.outputs.cache-hit != 'true'
+        if: *NoCache
         id: layers
-        uses: actions/cache/restore@v6
+        uses: *RestoreCache
         with:
-          path: |
+          path: &ToolChainCachePaths |
             ~/.local/share/mise/installs
             ~/.local/share/mise/plugins
             ~/.cargo/registry
@@ -124,42 +120,34 @@ jobs:
             bench-layers-${{ matrix.candidate }}-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build ${{ matrix.candidate }}
-        if: steps.bin.outputs.cache-hit != 'true'
+        if: *NoCache
         env:
           # actions/checkout put the source in place; make build.sh use that exact commit.
           BENCH_SHA_RUST_PORT: ${{ matrix.candidate == 'rust-port' && env.PIN || '' }}
           BENCH_SHA_H2R: ${{ matrix.candidate == 'h2r' && env.PIN || '' }}
+          candidate: ${{ matrix.candidate }}
         run: |
-          bench/build.sh build ${{ matrix.candidate }}
-          test "$(bench/build.sh key ${{ matrix.candidate }})" = "$KEY" || { echo "::error::cache key drifted between resolve and build"; exit 1; }
-          cat .bench/bin/${{ matrix.candidate }}/manifest.json
+          ./bench/build.sh build "${candidate}"
+          built_key="$(bench/build.sh key "${candidate}")"
+          test "${built_key}" = "${KEY}" || { echo "::error::cache key drifted between resolve and build"; exit 1; }
+          cat "${bench_bin_path}/${candidate}/manifest.json"
 
       - name: Save built binary
-        if: steps.bin.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: .bench/bin/${{ matrix.candidate }}
-          key: bench-bin-${{ matrix.candidate }}-${{ env.KEY }}
+        if: *NoCache
+        uses: &SaveCache actions/cache/save@v6
+        with: *CandidateCache
 
       - name: Save toolchains and build layers
         if: steps.bin.outputs.cache-hit != 'true' && steps.layers.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
+        uses: *SaveCache
         with:
-          path: |
-            ~/.local/share/mise/installs
-            ~/.local/share/mise/plugins
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.rustup/toolchains
-            ~/.cache/cabal
-            ~/.local/state/cabal
-            .bench/target/${{ matrix.candidate }}
+          path: *ToolChainCachePaths
           key: ${{ steps.layers.outputs.cache-primary-key }}
 
-      - uses: actions/upload-artifact@v7
+      - uses: &Upload actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.candidate }}
-          path: .bench/bin/${{ matrix.candidate }}
+          path: "${{ env.bench_bin_path }}/${{ matrix.candidate }}"
           if-no-files-found: error
           retention-days: 30
 
@@ -168,21 +156,24 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    env: { bench_results_path: .bench/results/ci }
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v4
+      - uses: *CheckOut
+      - uses: *Mise
 
       - uses: actions/download-artifact@v8
         with:
           pattern: bin-*
-          path: .bench/bin
+          path: &BinPath .bench/bin
+
       - name: Arrange binaries
+        shell: "/bin/bash -eu {0}"
+        env: { bin_path: *BinPath }
         run: |
-          set -eu
-          for d in .bench/bin/bin-*; do mv "$d" ".bench/bin/${d##*/bin-}"; done
-          chmod +x .bench/bin/*/shellcheck
-          for m in .bench/bin/*/manifest.json; do
-            printf '%s: ' "$(dirname "$m")"; jq -r '"\(.name) \(.pin) key \(.key) sha256 \(.binary_sha256)"' "$m"
+          for d in "${bin_path}/bin-"*; do mv "${d}" "${bin_path}/${d##*/bin-}"; done
+          chmod +x "${bin_path}"/*/shellcheck
+          for m in "${bin_path}"/*/manifest.json; do
+            printf '%s: ' "$(dirname "${m}")"; jq -r '"\(.name) \(.pin) key \(.key) sha256 \(.binary_sha256)"' "${m}"
           done
 
       - name: Generate corpus
@@ -194,17 +185,17 @@ jobs:
           RUNS: ${{ inputs.runs || '10' }}
           WARMUP: ${{ inputs.warmup || '3' }}
           SCENARIOS: ${{ inputs.scenarios }}
-        run: |
-          mise run bench:run --rounds "$ROUNDS" --runs "$RUNS" --warmup "$WARMUP" \
-            ${SCENARIOS:+--scenarios "$SCENARIOS"} --out .bench/results/ci
+        run: mise run bench:run --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}"
+          ${SCENARIOS:+--scenarios "${SCENARIOS}"} --out "${bench_results_path}"
 
       - name: Analyze
-        run: |
-          mise run bench:analyze .bench/results/ci > /dev/null
-          cat .bench/results/ci/report.md >> "$GITHUB_STEP_SUMMARY"
+        run: mise run bench:analyze "${bench_results_path}" >/dev/null;
 
-      - uses: actions/upload-artifact@v7
+      - name: Report
+        run: tee /dev/stderr <"${bench_results_path}/report.md" >"${GITHUB_STEP_SUMMARY}"
+
+      - uses: *Upload
         with:
           name: bench-results
-          path: .bench/results/ci
+          path: "${{ env.bench_results_path }}"
           retention-days: 90

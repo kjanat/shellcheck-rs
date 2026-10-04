@@ -30,3 +30,6 @@ stack.yaml.lock
 ### bench ###
 /.bench/
 __pycache__/
+/compiler/
+**/target/
+/probe*.py
