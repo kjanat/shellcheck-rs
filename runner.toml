@@ -4,8 +4,8 @@
 on_fail = "wait"
 
 [install]
-frozen = false
 tools  = true
+frozen = false
 
 [output]
 warnings = true
@@ -16,6 +16,6 @@ groups   = true
 timing   = true
 
 [tasks."bench"]
-pm     = "uv"
 source = "pyproject.toml"
+pm     = "uv"
 output = { progress = false }
