@@ -11,7 +11,7 @@
 #![allow(dead_code)]
 
 use crate::idhash::IdMap;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use im_rc::OrdMap;
@@ -823,7 +823,9 @@ struct Ctx {
     counter: i64,
     cache: IdMap<Node, Vec<(BTreeSet<StateDependency>, InternalState)>>,
     enable_cache: bool,
-    invocations: HashMap<Vec<Node>, (BTreeSet<StateDependency>, StateMap)>,
+    // Invocation paths determine the order of state merges, as in Haskell's
+    // Data.Map. Randomized iteration must not decide state/version ordering.
+    invocations: BTreeMap<Vec<Node>, (BTreeSet<StateDependency>, StateMap)>,
     // Graph adjacency, derived from CFGraph.
     labels: IdMap<Node, CFNode>,
     pred_flow: IdMap<Node, Vec<Node>>,
@@ -854,7 +856,7 @@ impl Ctx {
             counter: 1,
             cache: IdMap::default(),
             enable_cache: true,
-            invocations: HashMap::new(),
+            invocations: BTreeMap::new(),
             labels,
             pred_flow,
             succ_all,

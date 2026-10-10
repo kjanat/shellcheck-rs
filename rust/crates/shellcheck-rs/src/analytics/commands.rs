@@ -834,28 +834,40 @@ fn is_condition_path(params: &Parameters, t: &Token) -> bool {
 
 fn is_last_command_in_function(params: &Parameters, t: &Token) -> bool {
     let mut cur = t;
-    while let Some(c) = params.parent(cur) {
-        if let Some(bg) = params.parent(c)
-            && let InnerToken::T_BraceGroup(commands) = &*bg.inner
-        {
-            // In Haskell a function body is a bare T_BraceGroup; this port
-            // wraps every compound command in a T_Redirecting, so the brace
-            // group's parent may be that wrapper before the T_Function.
-            let mut p = params.parent(bg);
-            if let Some(rp) = p
-                && matches!(&*rp.inner, InnerToken::T_Redirecting { .. })
-            {
-                p = params.parent(rp);
+    let ends_with = |commands: &[Token], child: &Token| {
+        commands.last().is_some_and(|last| last.id() == child.id())
+    };
+    while let Some(parent) = params.parent(cur) {
+        // Each ancestor must preserve this command's return status. Being
+        // somewhere inside the final compound statement is insufficient.
+        let propagates = match &*parent.inner {
+            InnerToken::T_Function { body, .. } => return body.id() == cur.id(),
+            InnerToken::T_Redirecting { cmd, .. } => cmd.id() == cur.id(),
+            InnerToken::T_Annotation { token, .. } => token.id() == cur.id(),
+            InnerToken::T_Pipeline { commands, .. } => {
+                commands.len() == 1 && ends_with(commands, cur)
             }
-            if let Some(func) = p
-                && matches!(&*func.inner, InnerToken::T_Function { .. })
-                && let Some(last) = commands.last()
-                && last.id() == c.id()
-            {
-                return true;
+            InnerToken::T_BraceGroup(commands) | InnerToken::T_Subshell(commands) => {
+                ends_with(commands, cur)
             }
+            InnerToken::T_IfExpression { clauses, elses } => {
+                clauses.iter().any(|(_, body)| ends_with(body, cur)) || ends_with(elses, cur)
+            }
+            InnerToken::T_CaseExpression { cases, .. } => cases.iter().any(|(kind, _, body)| {
+                *kind == crate::ast::CaseType::CaseBreak && ends_with(body, cur)
+            }),
+            InnerToken::T_AndIf { rhs, .. } | InnerToken::T_OrIf { rhs, .. } => {
+                rhs.id() == cur.id()
+            }
+            // Another iteration can overwrite even the last body command's
+            // failure. Conditions, substitutions, !, and background jobs
+            // likewise do not return this command's status unchanged.
+            _ => false,
+        };
+        if !propagates {
+            return false;
         }
-        cur = c;
+        cur = parent;
     }
     false
 }

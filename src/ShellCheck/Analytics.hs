@@ -3307,6 +3307,15 @@ prop_checkUncheckedPopd11 = verifyNotTree checkUncheckedCdPushdPopd "cd ../.././
 prop_checkUncheckedPopd12 = verifyNotTree checkUncheckedCdPushdPopd "cd /"
 prop_checkUncheckedPopd13 = verifyTree checkUncheckedCdPushdPopd "cd ../../.../.."
 prop_checkUncheckedCdInFunction1 = verifyNotTree checkUncheckedCdPushdPopd "#!/bin/bash\nfoo() {\n  cd /abc\n}"
+prop_checkUncheckedCdInFunction2 = verifyTree checkUncheckedCdPushdPopd "f() { if true; then cd /abc; echo continued; fi; }"
+prop_checkUncheckedCdInFunction3 = verifyTree checkUncheckedCdPushdPopd "f() { case x in x) cd /abc; echo continued;; esac; }"
+prop_checkUncheckedCdInFunction4 = verifyTree checkUncheckedCdPushdPopd "f() { for x in a b; do cd /abc; echo continued; done; }"
+prop_checkUncheckedCdInFunction5 = verifyNotTree checkUncheckedCdPushdPopd "f() { if true; then cd /abc; fi; }"
+prop_checkUncheckedCdInFunction6 = verifyNotTree checkUncheckedCdPushdPopd "f() { case x in x) cd /abc;; esac; }"
+prop_checkUncheckedCdInFunction7 = verifyTree checkUncheckedCdPushdPopd "f() { for x in a b; do cd /abc; done; }"
+prop_checkUncheckedCdInFunction8 = verifyTree checkUncheckedCdPushdPopd "f() { case x in x) cd /abc;& y) echo continued;; esac; }"
+prop_checkUncheckedCdInFunction9 = verifyNotTree checkUncheckedCdPushdPopd "f() { { cd /abc; }; }"
+prop_checkUncheckedCdInFunction10 = verifyTree checkUncheckedCdPushdPopd "f() { { cd /abc; echo continued; }; }"
 
 checkUncheckedCdPushdPopd params root =
     if hasSetE params then
@@ -3326,12 +3335,26 @@ checkUncheckedCdPushdPopd params root =
     checkElement _ = return ()
     getName t = fromMaybe "" $ getCommandName t
     isLastCommandInFunction t =
-        go $ NE.tail $ getPath (parentMap params) t
+        go $ NE.toList $ getPath (parentMap params) t
       where
-        go (child:T_BraceGroup _ commands:T_Function {}:_) =
-            not (null commands) && getId (last commands) == getId child
-        go (_:rest) = go rest
-        go [] = False
+        go (child:T_Function _ _ _ _ body:_) = getId child == getId body
+        go (child:parent:rest) = preservesStatus child parent && go (parent:rest)
+        go _ = False
+        endsWith child commands = not (null commands) && getId (last commands) == getId child
+        preservesStatus child parent = case parent of
+            T_Redirecting _ _ command -> getId child == getId command
+            T_Annotation _ _ command -> getId child == getId command
+            T_Pipeline _ _ commands -> length commands == 1 && endsWith child commands
+            T_BraceGroup _ commands -> endsWith child commands
+            T_Subshell _ commands -> endsWith child commands
+            T_IfExpression _ clauses elses ->
+                any (endsWith child . snd) clauses || endsWith child elses
+            T_CaseExpression _ _ cases ->
+                any (\(kind, _, body) -> kind == CaseBreak && endsWith child body) cases
+            T_AndIf _ _ rhs -> getId child == getId rhs
+            T_OrIf _ _ rhs -> getId child == getId rhs
+            -- Later loop iterations, ! and background jobs can mask failure.
+            _ -> False
     isSafeDir t = case oversimplify t of
           [_, str] -> str `matches` regex
           _ -> False

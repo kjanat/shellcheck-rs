@@ -52,13 +52,13 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
     }
 
     // Analysis comments (SC2xxx/SC3xxx): resolved from ids via the position map.
-    let dataflow_error = if let Some(root) = parse.root.clone() {
+    let dataflow_error = if let Some(root) = parse.root {
         // `asOptionalChecks = getEnableDirectives root ++ csOptionalChecks spec`
         let mut optional = analyzer_lib::get_enable_directives(&root);
         optional.extend(spec.optional_checks.iter().cloned());
         let params = analyzer_lib::make_parameters_ext(
             root,
-            parse.positions.clone(),
+            parse.positions,
             spec.shell_type_override,
             shell_from_filename(&spec.filename),
             spec.extended_analysis,
@@ -68,7 +68,7 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
             if annotation_ignores(&params, tc.id, tc.comment.code, spec.check_sourced) {
                 continue;
             }
-            positioned.push(token_to_position(&tc, &parse.positions));
+            positioned.push(token_to_position(&tc, &params.token_positions));
         }
         params.dataflow_error
     } else {
@@ -280,6 +280,41 @@ mod source_tests {
     /// `check`: no includes at all, so every source fails to resolve.
     fn check(script: &str) -> Vec<i64> {
         check_with_includes(&[], script)
+    }
+
+    #[test]
+    fn unchecked_cd_is_not_hidden_by_a_final_compound_command() {
+        for body in [
+            "if true; then cd /missing; echo continued; fi",
+            "case x in x) cd /missing; echo continued;; esac",
+            "for x in a b; do cd /missing; echo continued; done",
+            "for x in a b; do cd /missing; done",
+            "while true; do cd /missing; echo continued; done",
+            "until false; do cd /missing; echo continued; done",
+            "{ cd /missing; echo continued; }",
+            "case x in x) cd /missing;& y) echo continued;; esac",
+            "if true; then if true; then cd /missing; fi; echo continued; fi",
+        ] {
+            let script = format!("#!/bin/bash\nf() {{ {body}; }}\n");
+            assert!(check(&script).contains(&2164), "{script}");
+        }
+    }
+
+    #[test]
+    fn a_function_can_return_an_unchecked_cd_failure() {
+        for body in [
+            "cd /missing",
+            "if true; then cd /missing; fi",
+            "if true; then :; else cd /missing; fi",
+            "case x in x) cd /missing;; esac",
+            "{ cd /missing; }",
+            "( cd /missing )",
+            "cd /missing || return 1; echo continued",
+            "if cd /missing; then echo succeeded; fi",
+        ] {
+            let script = format!("#!/bin/bash\nf() {{ {body}; }}\n");
+            assert!(!check(&script).contains(&2164), "{script}");
+        }
     }
 
     /// `checkWithSpec`.

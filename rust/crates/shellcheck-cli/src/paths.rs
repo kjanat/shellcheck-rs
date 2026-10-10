@@ -68,8 +68,16 @@ pub fn xdg_config_home() -> Option<String> {
 /// and removing `.` / `..` lexically when it cannot be resolved.
 #[must_use]
 pub fn normalize(path: &str) -> String {
+    normalize_path(Path::new(path))
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Normalize a filesystem identity without replacing invalid Unicode bytes.
+#[must_use]
+pub fn normalize_path(path: &Path) -> PathBuf {
     if let Ok(p) = std::fs::canonicalize(path) {
-        return p.to_string_lossy().into_owned();
+        return p;
     }
     let mut out = PathBuf::new();
     let joined = if Path::new(path).is_absolute() {
@@ -88,7 +96,7 @@ pub fn normalize(path: &str) -> String {
             other => out.push(other),
         }
     }
-    out.to_string_lossy().into_owned()
+    out
 }
 
 /// `show (ex :: IOException)` for what `openBinaryFile` throws, which is the

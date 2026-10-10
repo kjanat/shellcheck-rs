@@ -1,6 +1,50 @@
 //! Parser unit tests (ports of the `Parser.hs` props and regression cases).
 use super::*;
 
+#[test]
+fn lookahead_restores_context_frames_even_when_the_prefix_was_replaced() {
+    let mut parser = Parser::new("-", "echo hello");
+    for _ in 0..200 {
+        parser.push_ctx("outer");
+    }
+    let before = parser.contexts.clone();
+    let answer = parser.peek_ahead(|p| {
+        p.contexts.truncate(10);
+        p.push_ctx("replacement");
+        p.commit();
+        Err::<(), ()>(())
+    });
+    assert!(answer.is_none());
+    assert_eq!(parser.contexts, before);
+    assert!(!parser.committed);
+    assert!(parser.frozen_contexts.is_none());
+}
+
+#[test]
+fn deeply_nested_if_statements_parse_without_losing_contexts() {
+    // Test threads have a smaller stack than the CLI's main thread. Parsing
+    // is recursive; this test measures correctness rather than stack size.
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            let script = format!(
+                "#!/bin/bash\n{}:\n{}",
+                "if true; then\n".repeat(800),
+                "fi\n".repeat(800)
+            );
+            let result = parse_script_spec(&ParseSpec {
+                filename: "nested.sh".to_string(),
+                script,
+                ..ParseSpec::default()
+            });
+            assert!(result.root.is_some());
+            assert!(result.notes.is_empty(), "{:?}", result.notes);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[cfg(test)]
 mod arith_tests {
     use super::*;

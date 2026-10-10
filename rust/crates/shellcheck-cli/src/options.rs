@@ -27,8 +27,10 @@
 //! stderr/stdout and exiting. Its only IO is reading `--files-from` lists and
 //! the existence check the caller passes in.
 
+use std::ffi::OsString;
 use std::fmt::Write;
 use std::ops::ControlFlow;
+use std::path::{Path, PathBuf};
 
 use shellcheck_rs::interface::{CheckSpec, ColorOption, Severity, Shell};
 
@@ -67,7 +69,7 @@ pub struct RunConfig {
     /// The `-f`/`--format` name, `tty` by default.
     pub format: String,
     /// Input file paths, or `"-"` for stdin.
-    pub inputs: Vec<String>,
+    pub inputs: Vec<PathBuf>,
     /// The `CheckSpec` every input starts from.
     pub spec_template: CheckSpec,
     /// Resolved color setting from `-C`/`--color` (defaults to `auto`), used by tty and diff output.
@@ -437,28 +439,29 @@ enum OptResult {
 /// is one. An argument that reads as options but fails, or carries a value
 /// that its option rejects, is a filename when `exists` says so.
 fn tokenize(
-    argv: &[String],
-    exists: &dyn Fn(&str) -> bool,
-) -> (Vec<Flag>, Vec<String>, Vec<String>) {
+    argv: &[OsString],
+    exists: &dyn Fn(&Path) -> bool,
+) -> (Vec<Flag>, Vec<PathBuf>, Vec<String>) {
     let mut flags: Vec<Flag> = Vec::new();
-    let mut files: Vec<String> = Vec::new();
+    let mut files: Vec<PathBuf> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     let mut unrecognized: Vec<String> = Vec::new();
     let mut rest = argv.iter();
-    while let Some(arg) = rest.next() {
+    while let Some(native_arg) = rest.next() {
+        let arg = native_arg.to_string_lossy();
         if arg == "--" {
-            files.extend(rest.by_ref().cloned());
+            files.extend(rest.by_ref().map(PathBuf::from));
             continue;
         }
         if arg == "-" || !arg.starts_with('-') {
-            files.push(arg.clone());
+            files.push(PathBuf::from(native_arg));
             continue;
         }
         let mut ahead = rest.clone();
-        let results = get_next(arg, &mut ahead);
+        let results = get_next(&arg, &mut ahead);
         let only_a_file = matches!(results.first(), Some(OptResult::Unrecognized(_)));
-        if only_a_file || (!results.iter().all(is_valid_opt) && exists(arg)) {
-            files.push(arg.clone());
+        if only_a_file || (!results.iter().all(is_valid_opt) && exists(Path::new(native_arg))) {
+            files.push(PathBuf::from(native_arg));
             continue;
         }
         rest = ahead;
@@ -479,7 +482,7 @@ fn tokenize(
 /// `getNext` for an argument that starts with `-` and is neither `-` nor
 /// `--`. A short cluster yields one result per option, and an unrecognized
 /// letter does not stop the rest of the cluster.
-fn get_next(arg: &str, rest: &mut std::slice::Iter<'_, String>) -> Vec<OptResult> {
+fn get_next(arg: &str, rest: &mut std::slice::Iter<'_, OsString>) -> Vec<OptResult> {
     if let Some(long) = arg.strip_prefix("--") {
         return vec![long_opt(long, rest)];
     }
@@ -507,7 +510,7 @@ fn get_next(arg: &str, rest: &mut std::slice::Iter<'_, String>) -> Vec<OptResult
                     )));
                     return out;
                 };
-                Some(v.clone())
+                Some(v.to_string_lossy().into_owned())
             }
             ArgKind::Required => Some(tail),
             ArgKind::Optional => (!tail.is_empty()).then_some(tail),
@@ -523,7 +526,7 @@ fn get_next(arg: &str, rest: &mut std::slice::Iter<'_, String>) -> Vec<OptResult
 
 /// `longOpt`: an exact name wins, otherwise any option whose name starts with
 /// the one given; more than one candidate is ambiguous.
-fn long_opt(long: &str, rest: &mut std::slice::Iter<'_, String>) -> OptResult {
+fn long_opt(long: &str, rest: &mut std::slice::Iter<'_, OsString>) -> OptResult {
     let (name, inline) = match long.split_once('=') {
         Some((name, value)) => (name, Some(value)),
         None => (long, None),
@@ -551,7 +554,7 @@ fn long_opt(long: &str, rest: &mut std::slice::Iter<'_, String>) -> OptResult {
         }
         (ArgKind::Required, Some(v)) => Some(v.to_string()),
         (ArgKind::Required, None) => match rest.next() {
-            Some(v) => Some(v.clone()),
+            Some(v) => Some(v.to_string_lossy().into_owned()),
             None => {
                 return OptResult::Error(format!(
                     "option `--{name}' requires an argument {}\n",
@@ -846,6 +849,16 @@ fn files_from(flags: &[Flag]) -> Result<Vec<String>, Outcome> {
 /// `exists` says whether a file by a given name exists.
 #[must_use]
 pub fn parse(argv: &[String], exists: &dyn Fn(&str) -> bool) -> Outcome {
+    let argv: Vec<OsString> = argv.iter().map(OsString::from).collect();
+    parse_os(&argv, &|path| path.to_str().is_some_and(exists))
+}
+
+/// Parse native CLI arguments without using their display text as file identity.
+///
+/// Option names and values are textual; input filenames retain their exact
+/// platform representation, including filenames beginning with a dash.
+#[must_use]
+pub fn parse_os(argv: &[OsString], exists: &dyn Fn(&Path) -> bool) -> Outcome {
     // Phase 1: getOpt-level recognition.
     let (flags, files, errors) = tokenize(argv, exists);
     if !errors.is_empty() {
@@ -863,10 +876,11 @@ pub fn parse(argv: &[String], exists: &dyn Fn(&str) -> bool) -> Outcome {
         }
     }
 
-    let mut inputs = match files_from(&flags) {
+    let inputs = match files_from(&flags) {
         Ok(inputs) => inputs,
         Err(e) => return e,
     };
+    let mut inputs: Vec<PathBuf> = inputs.into_iter().map(PathBuf::from).collect();
     inputs.extend(files);
 
     // An empty input list with NO --files-from is a usage error (exit 3), NOT
@@ -943,7 +957,7 @@ mod tests {
     #[test]
     fn a_dash_argument_whose_first_option_does_not_exist_is_a_file() {
         let c = run(&["-.sh", "-nope.sh", "--bogus"]);
-        assert_eq!(c.inputs, vec!["-.sh", "-nope.sh", "--bogus"]);
+        assert_eq!(c.inputs, ["-.sh", "-nope.sh", "--bogus"].map(PathBuf::from));
         assert_eq!(c.spec_template.optional_checks, Vec::<String>::new());
     }
 
@@ -951,7 +965,9 @@ mod tests {
     fn a_failing_option_argument_is_a_file_only_when_the_file_exists() {
         let exists = |name: &str| matches!(name, "-fope.sh" | "-ope.sh" | "-xZ" | "-xa");
         match super::parse(&args(&["-fope.sh", "-ope.sh", "-xZ"]), &exists) {
-            Outcome::Run(c) => assert_eq!(c.inputs, vec!["-fope.sh", "-ope.sh", "-xZ"]),
+            Outcome::Run(c) => {
+                assert_eq!(c.inputs, ["-fope.sh", "-ope.sh", "-xZ"].map(PathBuf::from));
+            }
             other => panic!("expected Run, got {other:?}"),
         }
         // Without the files they stay options, with their errors.
@@ -974,7 +990,7 @@ mod tests {
             Outcome::Run(c) => {
                 assert!(c.external_sources);
                 assert!(c.spec_template.check_sourced);
-                assert_eq!(c.inputs, vec!["f.sh"]);
+                assert_eq!(c.inputs, [PathBuf::from("f.sh")]);
             }
             other => panic!("expected Run, got {other:?}"),
         }
@@ -1039,7 +1055,7 @@ mod tests {
     #[test]
     fn explicit_stdin_tty() {
         let c = run(&["-"]);
-        assert_eq!(c.inputs, vec!["-".to_string()]);
+        assert_eq!(c.inputs, vec![PathBuf::from("-")]);
         assert_eq!(c.format, "tty");
     }
 
@@ -1067,7 +1083,7 @@ mod tests {
         // input list (the oracle exits 0 having checked nothing), unlike the
         // no-arguments case which is a usage error.
         let c = run(&["--files-from=/dev/null"]);
-        assert_eq!(c.inputs, [] as [std::string::String; 0]);
+        assert_eq!(c.inputs, [] as [PathBuf; 0]);
     }
 
     #[test]
@@ -1146,7 +1162,7 @@ mod tests {
         // Separate-arg form must set the shell, not be treated as a filename.
         let c = run(&["-s", "bash", "-"]);
         assert_eq!(c.spec_template.shell_type_override, Some(Shell::Bash));
-        assert_eq!(c.inputs, vec!["-".to_string()]);
+        assert_eq!(c.inputs, vec![PathBuf::from("-")]);
 
         let c = run(&["--shell=ksh", "-"]);
         assert_eq!(c.spec_template.shell_type_override, Some(Shell::Ksh));
@@ -1242,7 +1258,7 @@ mod tests {
         // --rcfile is captured into RunConfig (last-wins) but still does not
         // become a filename.
         let c = run(&["-x", "-a", "-P", "src", "--rcfile", "my.rc", "-"]);
-        assert_eq!(c.inputs, vec!["-".to_string()]);
+        assert_eq!(c.inputs, vec![PathBuf::from("-")]);
         assert!(c.spec_template.check_sourced);
         assert!(c.external_sources);
         assert_eq!(c.source_paths, vec!["src".to_string()]);
@@ -1302,13 +1318,13 @@ mod tests {
     #[test]
     fn files_and_options_interleave() {
         let c = run(&["a.sh", "-s", "bash", "b.sh"]);
-        assert_eq!(c.inputs, vec!["a.sh".to_string(), "b.sh".to_string()]);
+        assert_eq!(c.inputs, vec![PathBuf::from("a.sh"), PathBuf::from("b.sh")]);
         assert_eq!(c.spec_template.shell_type_override, Some(Shell::Bash));
     }
 
     #[test]
     fn double_dash_stops_option_parsing() {
         let c = run(&["--", "-s", "bash"]);
-        assert_eq!(c.inputs, vec!["-s".to_string(), "bash".to_string()]);
+        assert_eq!(c.inputs, vec![PathBuf::from("-s"), PathBuf::from("bash")]);
     }
 }

@@ -247,6 +247,12 @@ struct Mark {
 
 type PResult<T> = Result<T, ()>;
 
+// Speculation and failures retain complete context stacks. Persistent vectors
+// share their structure, and immutable frames avoid copying filename strings
+// when a shared vector chunk is changed. Restoring a snapshot also restores
+// any prefix changes; it is not merely a truncation of the current stack.
+type ContextStack = im_rc::Vector<Rc<Context>>;
+
 #[derive(Clone)]
 struct PendingHereDoc {
     dashed: Dashed,
@@ -257,7 +263,7 @@ struct PendingHereDoc {
     /// The context stack as it stood at the `<<`. `readPendingHereDocs` runs
     /// under `swapContext`, so a body that never terminates is reported
     /// against the redirection rather than whatever line it ran into.
-    contexts: Vec<Context>,
+    contexts: ContextStack,
     /// The annotation/source frames in scope at the `<<`, which in Haskell are
     /// `ContextAnnotation` frames on that same stack -- so a directive in
     /// front of the command covers what its here document reports, even
@@ -298,7 +304,7 @@ pub struct Parser {
     /// The productions currently being parsed, innermost last. Haskell keeps
     /// the same stack as `ContextName pos str` and reports the innermost two
     /// when a parse fails (`notesForContext`).
-    contexts: Vec<Context>,
+    contexts: ContextStack,
     /// Input index where each *currently* open production began, which
     /// [`Parser::contexts`] no longer tracks now that it keeps failed frames.
     /// A failure past the innermost of these has consumed input, which in
@@ -331,7 +337,7 @@ pub struct Parser {
     /// The context stack as it stood when the parse committed. Parsec stops
     /// dead there, so that is the stack `notesForContext` reads at the end --
     /// whatever this parser goes on to push while it unwinds.
-    frozen_contexts: Option<Vec<Context>>,
+    frozen_contexts: Option<ContextStack>,
     /// The dialect the script is being checked as, as far as it is known while
     /// parsing: `--shell` or a file-wide `shell=` directive, else the shebang,
     /// else `None` — which means the same as bash, the dialect ShellCheck
@@ -399,7 +405,7 @@ pub(super) struct Failure {
     /// parser backtracks in places Parsec would not, and those recoveries pop
     /// frames off the top, so the stack is captured with the failure that will
     /// be reported instead of read at the end.
-    contexts: Vec<Context>,
+    contexts: ContextStack,
     /// True when the failing production had already consumed input. Parsec's
     /// `<|>` only tries the next alternative if the previous one failed
     /// *without* consuming, so such a failure both describes the error better
@@ -502,7 +508,7 @@ impl Parser {
             problems: Vec::new(),
             pending_heredocs: Vec::new(),
             heredoc_bodies: BTreeMap::new(),
-            contexts: Vec::new(),
+            contexts: ContextStack::new(),
             open_starts: Vec::new(),
             ann_contexts: Vec::new(),
             next_serial: 0,
@@ -631,11 +637,12 @@ impl Parser {
         let pos = self.pos();
         self.next_serial += 1;
         let serial = self.next_serial;
-        self.contexts.push(Context { pos, name, serial });
+        self.contexts
+            .push_back(Rc::new(Context { pos, name, serial }));
     }
 
     fn pop_ctx(&mut self) {
-        let _ = self.contexts.pop();
+        let _ = self.contexts.pop_back();
     }
 
     /// Run `body` as the named production, so that a failure inside it can
@@ -648,7 +655,7 @@ impl Parser {
         let start_idx = self.idx;
         let committed = self.committed;
         self.push_ctx(name);
-        let serial = self.contexts.last().map_or(0, |c| c.serial);
+        let serial = self.contexts.back().map_or(0, |c| c.serial);
         self.open_starts.push(start_idx);
         let r = body(self);
         self.open_starts.pop();
@@ -1092,7 +1099,7 @@ impl Parser {
     /// `tryWithErrors`: a sub-parse whose failure is reported rather than
     /// propagated -- the error itself plus the contexts it was left in -- after
     /// which the caller carries on with nothing (`<|> return []`).
-    pub(super) fn report_sub_failure(&mut self, contexts: Vec<Context>, failure: Option<Failure>) {
+    pub(super) fn report_sub_failure(&mut self, contexts: ContextStack, failure: Option<Failure>) {
         if self.committed {
             // The outer parse was already over, so this expansion is one the
             // original never reached, let alone reported on.

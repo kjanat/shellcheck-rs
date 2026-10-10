@@ -7,15 +7,15 @@
 //! checkstyle, json, json1, quiet, and diff.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
 
 use shellcheck_cli::formatter::{self, checkstyle, diff, fixer, gcc, json, json1, tty};
 use shellcheck_cli::options::{self, Outcome, RunConfig};
-use shellcheck_cli::paths::{combine, drop_file_name, io_error_message, normalize};
+use shellcheck_cli::paths::{combine, drop_file_name, io_error_message, normalize_path};
 use shellcheck_cli::rc::{self, ConfigLookup};
 use shellcheck_rs::cfg::InternalError;
 use shellcheck_rs::interface::{
@@ -26,32 +26,12 @@ fn main() -> ExitCode {
     // SHELLCHECK_OPTS is split on whitespace (Haskell `words`) and prepended to
     // argv before parsing, so env-configured defaults apply but explicit argv
     // can still override them (shellcheck.hs `getOptions`: env ++ args).
-    let mut argv: Vec<String> = Vec::new();
+    let mut argv: Vec<std::ffi::OsString> = Vec::new();
     if let Ok(opts) = std::env::var("SHELLCHECK_OPTS") {
-        argv.extend(
-            opts.split_whitespace()
-                .map(std::string::ToString::to_string),
-        );
+        argv.extend(opts.split_whitespace().map(std::ffi::OsString::from));
     }
-    // `getArgs` hands Haskell every argument, whatever its bytes; a filename
-    // that is not valid UTF-8 is a filename like any other. `std::env::args`
-    // panics on one, so take the `OsString`s and keep the originals to open
-    // with -- the lossy text is only ever what gets parsed and printed.
-    let mut original_args: HashMap<String, std::ffi::OsString> = HashMap::new();
-    for arg in std::env::args_os().skip(1) {
-        let text = arg.to_string_lossy().into_owned();
-        if std::ffi::OsStr::new(&text) != arg {
-            original_args.insert(text.clone(), arg);
-        }
-        argv.push(text);
-    }
-
-    let exists = |name: &str| {
-        original_args
-            .get(name)
-            .map_or_else(|| Path::new(name).exists(), |os| Path::new(os).exists())
-    };
-    let config = match options::parse(&argv, &exists) {
+    argv.extend(std::env::args_os().skip(1));
+    let config = match options::parse_os(&argv, &Path::exists) {
         Outcome::Run(c) => *c,
         Outcome::PrintVersion => {
             println!("{}", options::version_banner());
@@ -73,7 +53,7 @@ fn main() -> ExitCode {
         }
     };
 
-    run(config, original_args)
+    run(config)
 }
 
 /// Port of `ioInterface` (shellcheck.hs): the real filesystem, as seen by the
@@ -83,41 +63,55 @@ fn main() -> ExitCode {
 /// `external-sources=true`, which arrives as the annotation argument) says
 /// otherwise. `-P` and `source-path=` directives say where to look for it, with
 /// `SCRIPTDIR` standing for the checked script's own directory.
+#[derive(Clone)]
 struct IoSystem {
     /// The input filenames, normalized (`inputs <- mapM normalize files`).
-    inputs: Vec<String>,
+    inputs: Rc<HashSet<PathBuf>>,
     /// `externalSources options` (`-x`).
     external_sources: bool,
     /// `sourcePaths options` (`-P`), in flag order.
     source_paths: Vec<String>,
     /// `inputFile`'s cache for inputs that cannot be reopened -- stdin. A
     /// seekable file is re-read instead, exactly as upstream does.
-    cache: RefCell<HashMap<String, String>>,
-    /// Command line arguments whose bytes are not valid UTF-8, keyed by the
-    /// lossy text they are known by everywhere else. Upstream never loses those
-    /// bytes (GHC round-trips them through the locale encoding), so opening the
-    /// file must use the original and not the lossy name.
-    original_args: HashMap<String, std::ffi::OsString>,
+    cache: Rc<RefCell<HashMap<String, String>>>,
+    /// Native root input for this analysis. Display names may collide, so
+    /// each input and its formatter use their own filesystem view.
+    input: Option<PathBuf>,
 }
 
 impl IoSystem {
-    fn new(config: &RunConfig, original_args: HashMap<String, std::ffi::OsString>) -> Self {
+    fn new(config: &RunConfig) -> Self {
         Self {
-            inputs: config.inputs.iter().map(|f| normalize(f)).collect(),
+            inputs: Rc::new(config.inputs.iter().map(|f| normalize_path(f)).collect()),
             external_sources: config.external_sources,
             source_paths: config.source_paths.clone(),
-            cache: RefCell::new(HashMap::new()),
-            original_args,
+            cache: Rc::new(RefCell::new(HashMap::new())),
+            input: None,
         }
     }
 
-    /// The bytes to actually open `file` with: the original argument when the
-    /// name came from a command line that was not valid UTF-8, else the name.
-    fn os_path(&self, file: &str) -> std::ffi::OsString {
-        self.original_args
-            .get(file)
-            .cloned()
-            .unwrap_or_else(|| std::ffi::OsString::from(file))
+    fn for_input(&self, input: &Path) -> Self {
+        Self {
+            input: Some(input.to_path_buf()),
+            ..self.clone()
+        }
+    }
+
+    fn os_path(&self, file: &str) -> PathBuf {
+        if let Some(input) = &self.input {
+            if file == input.to_string_lossy() {
+                return input.clone();
+            }
+            // SCRIPTDIR expands in the analyzer's textual interface. Restore
+            // the native directory before following or formatting that source.
+            if let Some(dir) = input.parent().filter(|dir| dir.to_str().is_none()) {
+                let prefix = format!("{}/", dir.to_string_lossy());
+                if let Some(relative) = file.strip_prefix(&prefix) {
+                    return dir.join(relative);
+                }
+            }
+        }
+        PathBuf::from(file)
     }
 
     /// `allowable`: an external file is readable only when a flag or directive
@@ -126,7 +120,7 @@ impl IoSystem {
         if external_sources.unwrap_or(self.external_sources) {
             return true;
         }
-        self.inputs.contains(&normalize(file))
+        self.inputs.contains(&normalize_path(&self.os_path(file)))
     }
 }
 
@@ -145,7 +139,7 @@ impl System for IoSystem {
                 file,
             ));
         }
-        let (contents, should_cache) = input_file(file, &self.os_path(file))?;
+        let (contents, should_cache) = input_file(file, self.os_path(file).as_os_str())?;
         if should_cache {
             self.cache
                 .borrow_mut()
@@ -176,7 +170,7 @@ impl System for IoSystem {
             candidates.push(combine(&adjust_path(dir, &scriptdir), filename));
         }
         for candidate in candidates {
-            if self.allowable(external_sources, &candidate) && Path::new(&candidate).is_file() {
+            if self.allowable(external_sources, &candidate) && self.os_path(&candidate).is_file() {
                 return candidate;
             }
         }
@@ -224,6 +218,7 @@ fn adjust_path(path: &str, scriptdir: &str) -> String {
 /// each comment belongs to, which for a followed `source` is not this input.
 struct Loaded {
     name: String,
+    sys: Rc<IoSystem>,
     comments: Vec<PositionedComment>,
     /// Why the analysis is incomplete, reported as a read failure is.
     failure: Option<String>,
@@ -286,11 +281,14 @@ fn dataflow_failure(InternalError(what): InternalError) -> String {
 /// short-circuit (it must not block on stdin after an earlier file failed).
 /// The configuration is only looked up for an input that was read.
 fn load(
-    name: &str,
+    path: &Path,
     spec_template: &CheckSpec,
     config: Option<&ConfigLookup>,
     sys: &Rc<IoSystem>,
 ) -> Input {
+    let sys = Rc::new(sys.for_input(path));
+    let name = path.to_string_lossy();
+    let name = name.as_ref();
     let contents = match sys.read_file(None, name) {
         Ok(s) => s,
         Err(message) => {
@@ -310,10 +308,11 @@ fn load(
     if let Some(rc) = config.and_then(|c| c.get(name)) {
         rc::merge_into(&mut spec, &rc);
     }
-    let sys_dyn = Rc::clone(sys) as Rc<dyn System>;
+    let sys_dyn = Rc::clone(&sys) as Rc<dyn System>;
     let result = shellcheck_rs::checker::check_script_with(sys_dyn, &spec);
     Input::Ok(Loaded {
         name: name.to_string(),
+        sys,
         comments: result.comments,
         failure: result.dataflow_error.map(dataflow_failure),
     })
@@ -347,8 +346,8 @@ fn is_editor_config_error(comment: &PositionedComment) -> bool {
     comment.comment.code == 1134 && comment.start.file.ends_with(".editorconfig")
 }
 
-fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) -> ExitCode {
-    let sys = Rc::new(IoSystem::new(&config, original_args));
+fn run(config: RunConfig) -> ExitCode {
+    let sys = Rc::new(IoSystem::new(&config));
     let RunConfig {
         format,
         inputs,
@@ -403,32 +402,22 @@ fn run(config: RunConfig, original_args: HashMap<String, std::ffi::OsString>) ->
     let mut err = stderr.lock();
 
     let written = match format.as_str() {
-        "json1" => print_json(
-            json1::render(&json1_comments(&loaded, &sys, &mut err)),
-            &mut out,
-        ),
+        "json1" => print_json(json1::render(&json1_comments(&loaded, &mut err)), &mut out),
         "json" => print_json(json::render(&json_comments(&loaded, &mut err)), &mut out),
         "gcc" => {
-            write_gcc(&loaded, &sys, &mut out, &mut err);
+            write_gcc(&loaded, &mut out, &mut err);
             Ok(())
         }
         "checkstyle" => {
-            write_checkstyle(&loaded, &sys, &mut out);
+            write_checkstyle(&loaded, &mut out);
             Ok(())
         }
         "diff" => {
-            write_diff(&loaded, &sys, use_color, any_comments, &mut out, &mut err);
+            write_diff(&loaded, use_color, any_comments, &mut out, &mut err);
             Ok(())
         }
         _ => {
-            write_tty(
-                &loaded,
-                &sys,
-                use_color,
-                wiki_link_count,
-                &mut out,
-                &mut err,
-            );
+            write_tty(&loaded, use_color, wiki_link_count, &mut out, &mut err);
             Ok(())
         }
     };
@@ -448,17 +437,13 @@ fn print_json(doc: serde_json::Result<String>, out: &mut impl Write) -> serde_js
 
 /// The json1 comments: each file group untabbed and prepended, so the output
 /// lists the groups in reverse, as the Haskell `IORef` accumulation does.
-fn json1_comments(
-    loaded: &[Input],
-    sys: &Rc<IoSystem>,
-    err: &mut impl Write,
-) -> Vec<PositionedComment> {
+fn json1_comments(loaded: &[Input], err: &mut impl Write) -> Vec<PositionedComment> {
     let mut all: Vec<PositionedComment> = Vec::new();
     for i in loaded {
         match i {
             Input::Ok(l) => {
                 for (file, comments) in file_groups(&l.comments) {
-                    let contents = group_contents(sys, &file);
+                    let contents = group_contents(&l.sys, &file);
                     let mut new = fixer::make_non_virtual(&comments, &contents);
                     new.extend(std::mem::take(&mut all));
                     all = new;
@@ -496,12 +481,12 @@ fn json_comments(loaded: &[Input], err: &mut impl Write) -> Vec<PositionedCommen
     all
 }
 
-fn write_gcc(loaded: &[Input], sys: &Rc<IoSystem>, out: &mut impl Write, err: &mut impl Write) {
+fn write_gcc(loaded: &[Input], out: &mut impl Write, err: &mut impl Write) {
     for i in loaded {
         match i {
             Input::Ok(l) => {
                 for (file, comments) in file_groups(&l.comments) {
-                    let contents = group_contents(sys, &file);
+                    let contents = group_contents(&l.sys, &file);
                     let mut buf = String::new();
                     gcc::render_file(&file, &contents, &comments, &mut buf);
                     let _ = out.write_all(buf.as_bytes());
@@ -515,13 +500,13 @@ fn write_gcc(loaded: &[Input], sys: &Rc<IoSystem>, out: &mut impl Write, err: &m
     }
 }
 
-fn write_checkstyle(loaded: &[Input], sys: &Rc<IoSystem>, out: &mut impl Write) {
+fn write_checkstyle(loaded: &[Input], out: &mut impl Write) {
     let _ = out.write_all(checkstyle::HEADER.as_bytes());
     for i in loaded {
         match i {
             Input::Ok(l) => {
                 for (file, comments) in file_groups(&l.comments) {
-                    let contents = group_contents(sys, &file);
+                    let contents = group_contents(&l.sys, &file);
                     let mut buf = String::new();
                     checkstyle::render_file(&file, &contents, &comments, &mut buf);
                     let _ = out.write_all(buf.as_bytes());
@@ -539,7 +524,6 @@ fn write_checkstyle(loaded: &[Input], sys: &Rc<IoSystem>, out: &mut impl Write) 
 
 fn write_diff(
     loaded: &[Input],
-    sys: &Rc<IoSystem>,
     use_color: bool,
     any_comments: bool,
     out: &mut impl Write,
@@ -552,7 +536,7 @@ fn write_diff(
         match i {
             Input::Ok(l) => {
                 for (file, comments) in file_groups(&l.comments) {
-                    let contents = group_contents(sys, &file);
+                    let contents = group_contents(&l.sys, &file);
                     let d = diff::render_file(use_color, &file, &contents, &comments);
                     if d.reported {
                         let _ = out.write_all(d.text.as_bytes());
@@ -573,7 +557,6 @@ fn write_diff(
 
 fn write_tty(
     loaded: &[Input],
-    sys: &Rc<IoSystem>,
     use_color: bool,
     wiki_link_count: usize,
     out: &mut impl Write,
@@ -586,7 +569,7 @@ fn write_tty(
             Input::Ok(l) => {
                 // Processes the full result (see `appendComments`) before rendering file groups to keep the wiki summary in result order.
                 for (file, comments) in file_groups(&l.comments) {
-                    let contents = group_contents(sys, &file);
+                    let contents = group_contents(&l.sys, &file);
                     let mut buf = String::new();
                     tty::render_file(
                         &color_func,
@@ -682,11 +665,11 @@ mod tests {
         // `allowable`: the inputs are readable whatever the flags say; anything
         // else needs -x or an `external-sources` directive.
         let sys = IoSystem {
-            inputs: vec![normalize("Cargo.toml")],
+            inputs: Rc::new(HashSet::from([normalize_path(Path::new("Cargo.toml"))])),
             external_sources: false,
             source_paths: Vec::new(),
-            cache: RefCell::new(HashMap::new()),
-            original_args: HashMap::new(),
+            cache: Rc::new(RefCell::new(HashMap::new())),
+            input: None,
         };
         assert!(sys.allowable(None, "Cargo.toml"));
         assert!(sys.allowable(None, "./Cargo.toml"));
@@ -702,11 +685,11 @@ mod tests {
         );
         // An input that is not there at all still reports the read failure.
         let sys = IoSystem {
-            inputs: vec![normalize("nope.sh")],
+            inputs: Rc::new(HashSet::from([normalize_path(Path::new("nope.sh"))])),
             external_sources: false,
             source_paths: Vec::new(),
-            cache: RefCell::new(HashMap::new()),
-            original_args: HashMap::new(),
+            cache: Rc::new(RefCell::new(HashMap::new())),
+            input: None,
         };
         assert_eq!(
             sys.read_file(None, "nope.sh").unwrap_err(),
@@ -723,11 +706,11 @@ mod tests {
         std::fs::write(&path, b"#!/bin/sh\necho \xff\xfe $u\n").unwrap();
         let name = path.to_str().unwrap().to_string();
         let sys = IoSystem {
-            inputs: vec![normalize(&name)],
+            inputs: Rc::new(HashSet::from([normalize_path(Path::new(&name))])),
             external_sources: false,
             source_paths: Vec::new(),
-            cache: RefCell::new(HashMap::new()),
-            original_args: HashMap::new(),
+            cache: Rc::new(RefCell::new(HashMap::new())),
+            input: None,
         };
         let contents = sys.read_file(None, &name).unwrap();
         assert_eq!(contents, "#!/bin/sh\necho \u{ff}\u{fe} $u\n");
@@ -743,11 +726,11 @@ mod tests {
         // working directory the test happens to run in.
         let dir = env!("CARGO_MANIFEST_DIR");
         let sys = IoSystem {
-            inputs: Vec::new(),
+            inputs: Rc::new(HashSet::new()),
             external_sources: true,
             source_paths: vec!["SCRIPTDIR/src".to_string()],
-            cache: RefCell::new(HashMap::new()),
-            original_args: HashMap::new(),
+            cache: Rc::new(RefCell::new(HashMap::new())),
+            input: None,
         };
         // SCRIPTDIR is the checked script's directory, not the sourcing file's.
         assert_eq!(
@@ -756,11 +739,11 @@ mod tests {
         );
         // An annotation path is searched too, after the flag paths.
         let no_flags = IoSystem {
-            inputs: Vec::new(),
+            inputs: Rc::new(HashSet::new()),
             external_sources: true,
             source_paths: Vec::new(),
-            cache: RefCell::new(HashMap::new()),
-            original_args: HashMap::new(),
+            cache: Rc::new(RefCell::new(HashMap::new())),
+            input: None,
         };
         assert_eq!(
             no_flags.find_source("x.sh", None, &[format!("{dir}/src")], "rc.rs"),
@@ -784,16 +767,19 @@ mod tests {
         vec![
             Input::Ok(Loaded {
                 name: "a.sh".to_string(),
+                sys: no_sources(),
                 comments: vec![comment_in("a.sh", 2)],
                 failure: failure.clone(),
             }),
             Input::Ok(Loaded {
                 name: "b.sh".to_string(),
+                sys: no_sources(),
                 comments: Vec::new(),
                 failure: None,
             }),
             Input::Ok(Loaded {
                 name: "c.sh".to_string(),
+                sys: no_sources(),
                 comments: Vec::new(),
                 failure,
             }),
@@ -802,11 +788,11 @@ mod tests {
 
     fn no_sources() -> Rc<IoSystem> {
         Rc::new(IoSystem {
-            inputs: Vec::new(),
+            inputs: Rc::new(HashSet::new()),
             external_sources: false,
             source_paths: Vec::new(),
-            cache: RefCell::new(HashMap::new()),
-            original_args: HashMap::new(),
+            cache: Rc::new(RefCell::new(HashMap::new())),
+            input: None,
         })
     }
 
@@ -829,9 +815,9 @@ mod tests {
 
     #[test]
     fn json1_keeps_numeric_codes_and_reports_the_failure_on_stderr() {
-        let (sys, mut err) = (no_sources(), Vec::new());
-        let doc = json1::render(&json1_comments(&injected(), &sys, &mut err))
-            .unwrap_or_else(|e| panic!("{e}"));
+        let mut err = Vec::new();
+        let doc =
+            json1::render(&json1_comments(&injected(), &mut err)).unwrap_or_else(|e| panic!("{e}"));
         let value: serde_json::Value = serde_json::from_str(&doc).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(value["comments"][0]["code"], serde_json::json!(2086));
         assert!(!doc.contains("RSC"), "{doc}");
@@ -846,9 +832,8 @@ mod tests {
 
     #[test]
     fn every_other_format_reports_the_failure_as_it_reports_a_read_failure() {
-        let sys = no_sources();
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        write_gcc(&injected(), &sys, &mut out, &mut err);
+        write_gcc(&injected(), &mut out, &mut err);
         assert_eq!(
             text(err),
             format!(
@@ -860,7 +845,7 @@ mod tests {
         assert!(text(out).contains("[SC2086]"));
 
         let mut out = Vec::new();
-        write_checkstyle(&injected(), &sys, &mut out);
+        write_checkstyle(&injected(), &mut out);
         let out = text(out);
         assert!(
             out.contains(&checkstyle::render_failure("a.sh", MESSAGE)),
@@ -872,12 +857,12 @@ mod tests {
         );
 
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        write_tty(&injected(), &sys, false, 3, &mut out, &mut err);
+        write_tty(&injected(), false, 3, &mut out, &mut err);
         assert_eq!(text(err), format!("a.sh: {MESSAGE}\nc.sh: {MESSAGE}\n"));
         assert!(text(out).contains("SC2086"));
 
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        write_diff(&injected(), &sys, false, true, &mut out, &mut err);
+        write_diff(&injected(), false, true, &mut out, &mut err);
         assert!(text(err).starts_with(&format!("a.sh: {MESSAGE}\nc.sh: {MESSAGE}\n")));
     }
 }
