@@ -350,6 +350,12 @@ def publish(binary: Path, build: Build, directory: Path) -> Manifest:
         binary_sha256=digest(data),
         binary_bytes=len(data),
         version_output=version,
+        repo=build.spec.repo
+        or (
+            "https://github.com/koalaman/shellcheck"
+            if build.spec.tool == "shellcheck"
+            else None
+        ),
         source=build.source,
         dirty=build.dirty,
         source_sha256=build.source_sha256 or None,

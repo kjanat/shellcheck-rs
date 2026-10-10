@@ -31,6 +31,7 @@ class Manifest(BaseModel):
     binary_sha256: str
     binary_bytes: int
     version_output: str
+    repo: str | None = None
     source: str | None = None
     dirty: bool = False
     source_sha256: str | None = None

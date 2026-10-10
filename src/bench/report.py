@@ -1,10 +1,38 @@
 """A compact decision surface over the complete statistical summary."""
 
-from bench.schema import Run, Summary
+from bench.schema import Manifest, Run, Summary
 
 
 def duration(seconds: float) -> str:
     return f"{seconds * 1000:.2f} ms" if seconds < 1 else f"{seconds:.3f} s"
+
+
+def workload(run: Run, name: str) -> str:
+    scenario = run.scenarios[name]
+    files = [arg for arg in scenario.args if arg in run.corpus.files]
+    if not files:
+        return scenario.description or name
+    lines = sum(run.corpus.files[file] for file in files)
+    size = (
+        f"{lines:,}-line script"
+        if len(files) == 1
+        else f"{len(files):,} scripts ({lines:,} lines total)"
+    )
+    output = {"gcc": "GCC diagnostics", "json1": "JSON diagnostics"}.get(
+        scenario.format, f"{scenario.format} output"
+    )
+    return f"{size} · {output}"
+
+
+def revision(candidate: Manifest) -> str:
+    label = candidate.pin[:12] or "supplied binary"
+    if candidate.repo and candidate.repo.startswith("https://github.com/"):
+        repo = candidate.repo.rstrip("/").removesuffix(".git")
+        if candidate.kind == "git" and candidate.pin:
+            return f"[{label}]({repo}/commit/{candidate.pin})"
+        if candidate.kind == "release" and candidate.pin:
+            return f"[{label}]({repo}/releases/tag/v{candidate.pin.removeprefix('v')})"
+    return label
 
 
 def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None) -> str:
@@ -16,7 +44,9 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
         if pair.reference == baseline
     }
     lines = [
-        f"# ShellCheck benchmark: {run.created[:10]}",
+        f"# 🏁 ShellCheck benchmark: {run.created[:10]}",
+        "",
+        "## Where to look first",
         "",
         f"Baseline: **{baseline}**. Ratios are candidate ÷ baseline; higher means more cost.",
         "",
@@ -34,10 +64,12 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             flags = summary.flags[scenario][name] + summary.flags[scenario][baseline]
             if check.parity == "differs":
                 actions.append(
-                    f"{name}/{scenario}: inspect the [output diff](precheck/{scenario}/{name}.diff) before interpreting performance."
+                    f"{name}, **{workload(run, scenario)}**: inspect the [output diff](precheck/{scenario}/{name}.diff) before interpreting performance."
                 )
             if check.status == "failed":
-                actions.append(f"{name}/{scenario}: investigate {check.reason}.")
+                actions.append(
+                    f"{name}, **{workload(run, scenario)}**: investigate {check.reason}."
+                )
             if not cell or not base or check.parity != "identical":
                 continue
             pair = comparisons.get((scenario, name))
@@ -62,14 +94,20 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 ))
         if reliable:
             ratio, scenario = max(reliable)
+            cell = summary.descriptives[scenario][name]
+            base = summary.descriptives[scenario][baseline]
+            assert cell and base
             actions.append(
-                f"{name}: investigate runtime on **{scenario}** ({ratio:.2f}× baseline)."
+                f"{name}: profile the **{workload(run, scenario)}**: "
+                f"**{duration(cell.median)}** vs {baseline} **{duration(base.median)}** "
+                f"(**{ratio:.2f}× time**)."
             )
         if memory:
             ratio, scenario, rss = max(memory)
             if ratio > 1:
                 actions.append(
-                    f"{name}: largest observed memory ratio is **{scenario}** ({ratio:.2f}× baseline, {rss / 2**20:.0f} MiB)."
+                    f"{name}: largest observed memory ratio is on the **{workload(run, scenario)}** "
+                    f"(**{rss / 2**20:.0f} MiB**, **{ratio:.2f}× baseline**)."
                 )
     if actions:
         lines += [f"- {action}" for action in actions[:8]]
@@ -83,11 +121,31 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
         )
     lines += [
         "",
-        "| candidate | workload | output | median | time / baseline [95% CI] | peak RSS | RSS / baseline | status |",
-        "|---|---|---|---:|---:|---:|---:|---|",
+        "## The results",
+        "",
+        "🏆 marks the lowest reliable median with matching output. Statistical significance appears in the status column.",
     ]
     for scenario in run.scenarios:
+        lines += [
+            "",
+            f"### {workload(run, scenario)}",
+            "",
+            "| candidate | output | median | time / baseline [95% CI] | peak RSS | RSS / baseline | status |",
+            "|---|---|---:|---:|---:|---:|---|",
+        ]
         base = summary.descriptives[scenario][baseline]
+        eligible = {
+            name: cell.median
+            for name in names
+            if (cell := summary.descriptives[scenario][name]) is not None
+            and run.precheck[scenario][name].status == "ok"
+            and run.precheck[scenario][name].parity in ("baseline", "identical")
+            and not any(
+                flag.startswith(("noisy", "drift", "only ", "not comparable"))
+                for flag in summary.flags[scenario][name]
+            )
+        }
+        winner = min(eligible, key=eligible.__getitem__, default=None)
         for name in names:
             check = run.precheck[scenario][name]
             cell = summary.descriptives[scenario][name]
@@ -147,22 +205,25 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 status = pair.verdict
             else:
                 status = "not comparable"
+            if name == winner:
+                median = f"***🏆 {median}***"
             lines.append(
-                f"| {name} | {scenario} | {output} | {median} | {ratio} | {rss / 2**20:.0f} MiB | {rss_ratio} | {status} |"
+                f"| {name} | {output} | {median} | {ratio} | {rss / 2**20:.0f} MiB | {rss_ratio} | {status} |"
             )
     lines += ["", "Candidates:", ""]
     for candidate in run.candidates:
-        revision = candidate.pin[:12] or "supplied binary"
         dirty = " + local changes" if candidate.dirty else ""
         lines.append(
-            f"- **{candidate.name}**: `{revision}`{dirty}; {candidate.binary_bytes / 2**20:.1f} MiB binary; SHA-256 `{candidate.binary_sha256}`."
+            f"- **{candidate.name}**: {revision(candidate)}{dirty}; "
+            f"{candidate.binary_bytes / 2**20:.1f} MiB binary; "
+            f"SHA-256 [{candidate.binary_sha256[:12]}](run.json)."
         )
     config = run.config
     lines += [
         "",
         (
             f"{config.rounds} shuffled rounds × {config.runs} timed runs, {config.warmup} warm-ups per round. "
-            f"Seed {config.seed}; corpus `{run.corpus.sha256[:12]}`. "
+            f"Seed {config.seed}; corpus [{run.corpus.sha256[:12]}](run.json). "
             f"CPU: {run.environment.cpu_model or 'unknown'}; {'CPU ' + config.pin if config.pin else 'no CPU pinning'}."
         ),
         "",
