@@ -12,27 +12,17 @@
 		]
 	},
 	"excludes": [
-		"**/.bench/{bin,src}",
+		"**/.bench/**",
+		"ports/**",
+		"source/**",
+		"compiler/**",
+		"dist-newstyle/**",
+		"probe*.py",
+		"results/**",
 		"**/target/**",
 		".github/ISSUE_TEMPLATE/*.md",
-		"bench/results/**/*.json",
-		"shellcheck.1.md"
+		"results/**/*.json",
 	],
-	"shfmt": {
-		"associations": [
-			"test/*",
-			"!test/shellcheck.hs",
-			".github_deploy",
-			".multi_arch_docker",
-			".prepare_deploy",
-			"manpage",
-			"nextnumber",
-			"quickrun",
-			"quicktest",
-			"setgitversion",
-			"striptests"
-		]
-	},
 	"markdown": {
 		"list.unorderedMarker": "asterisks",
 		"maxBlankLines": 2,
@@ -44,21 +34,12 @@
 				"table.skipFormat": true
 			},
 			{
-				"files": ["bench/**/*.md"],
+				"files": ["README.md", "docs/**/*.md", "results/**/*.md"],
 				"list.unorderedMarker": "dashes",
 				"textWrap": "never"
 			}
 		],
 		"associations": ["!CHANGELOG.md"]
-	},
-	"yaml": {
-		"overrides": [
-			{
-				"files": ["stack.yaml"],
-				"quotes": "preferSingle",
-				"indentBlockSequenceInMap": false
-			}
-		]
 	},
 	"ruff": {
 		"preview": true,

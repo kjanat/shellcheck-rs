@@ -1,35 +1,16 @@
-# Created by https://www.gitignore.io
-
-### Haskell ###
-dist
-cabal-dev
-*.o
-*.hi
-*.chi
-*.chs.h
-.virtualenv
-.hsenv
-.cabal-sandbox/
-cabal.sandbox.config
-cabal.config
-cabal.project.freeze
-.stack-work
-stack.yaml.lock
-
-### Snap ###
-/snap/.snapcraft/
-/stage/
-/parts/
-/prime/
-*.snap
-/dist-newstyle/
-
-### misc ###
-/shellcheck.1
-
-### bench ###
+# Local preparation and measurement state, including expensive build caches.
 /.bench/
-__pycache__/
+# Existing development checkouts are independent repositories.
+/ports/
+/source/
+# Existing compiler outputs and local probes.
 /compiler/
+/dist-newstyle/
 **/target/
 /probe*.py
+/.venv/
+__pycache__/
+*.py[cod]
+/.ruff_cache/
+/.pytest_cache/
+/dist/

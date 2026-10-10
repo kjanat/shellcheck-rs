@@ -1,38 +1,15 @@
 name: Bench
 
-# Compares koalaman's latest ShellCheck release with this repository's
-# `rust-port` and `h2r-compiler` branches. See bench/README.md.
-#
-# Layout: `resolve` pins every candidate to a commit/version and derives its
-# content key; one `build` job per candidate restores the finished binary from
-# the Actions cache under that key and only builds on a miss (the h2r pipeline
-# takes an hour or more; its intermediate layers are cached too, so even a
-# miss is cheaper the second time); `bench` then downloads the three binaries
-# and times them on one runner, in one job, so the numbers are comparable.
-
 on:
   workflow_dispatch:
     inputs:
-      rounds:
-        description: Interleaved rounds (candidate order is re-shuffled each round)
-        default: "5"
-      runs:
-        description: Timed runs per candidate per round
-        default: "10"
-      warmup:
-        description: Warm-up runs per candidate per round
-        default: "3"
-      scenarios:
-        description: Comma-separated scenario subset (empty = all)
-        default: ""
+      rounds: { description: Shuffled rounds, default: "5" }
+      runs: { description: Timed runs per round, default: "10" }
+      warmup: { description: Warm-ups per round, default: "3" }
+      scenarios: { description: Comma-separated workload subset, default: "" }
   push:
     branches: [bench]
-    paths:
-      - bench/**
-      - "!bench/results/**" # archived reports do not need re-measuring
-      - mise.toml
-      - mise.lock
-      - .github/workflows/bench.yml
+    paths: [src/**, tests/**, pyproject.toml, uv.lock, mise.toml, mise.lock, .github/workflows/bench.yml]
 
 permissions:
   contents: read
@@ -43,159 +20,142 @@ concurrency:
 
 env:
   MISE_YES: "1"
-  # bench/build.sh trusts the candidate worktrees itself; the root config is ours.
   MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
 
 jobs:
   resolve:
-    name: Resolve candidates
+    name: Resolve exact candidate identities
     runs-on: ubuntu-latest
-    outputs: { candidates: "${{ steps.resolve.outputs.candidates }}" }
+    timeout-minutes: 15
+    outputs:
+      candidates: ${{ steps.plan.outputs.candidates }}
     steps:
-      - uses: &CheckOut actions/checkout@v7
-      - uses: &Mise jdx/mise-action@v5
-        with: { install_args: uv }
-      - name: Resolve refs and cache keys
-        id: resolve
-        run: ./bench/build.sh resolve
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with: { install_args: "python uv shellcheck" }
+      - name: Resolve once
+        id: plan
+        run: |
+          uv run bench prepare --resolve-only --plan .bench/plan.json
+          uv run python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          plan = json.loads(Path('.bench/plan.json').read_text())
+          matrix = [{key: item[key] for key in ('name', 'key', 'layers_key')} for item in plan['builds']]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('candidates=' + json.dumps(matrix, separators=(',', ':')) + '\n')
+          PY
+      - uses: actions/upload-artifact@v7
+        with: { name: candidate-plan, path: .bench/plan.json, include-hidden-files: true }
 
-  build:
-    name: Build ${{ matrix.candidate }}
+  prepare:
+    name: Prepare ${{ matrix.name }}
     needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    strategy: { fail-fast: false, matrix: { candidate: [upstream, rust-port, h2r] } }
-    env:
-      PIN: ${{ fromJSON(needs.resolve.outputs.candidates)[matrix.candidate].pin }}
-      KEY: ${{ fromJSON(needs.resolve.outputs.candidates)[matrix.candidate].key }}
-      bench_bin_path: .bench/bin
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.candidates) }}
     steps:
-      - uses: *CheckOut
-
-      # Fast path: the finished binary for exactly this commit/version.
-      - name: Restore built binary
-        id: bin
-        uses: &RestoreCache actions/cache/restore@v6
-        with: &CandidateCache
-          path: ${{ env.bench_bin_path }}/${{ matrix.candidate }}
-          key: bench-bin-${{ matrix.candidate }}-${{ env.KEY }}
-
-      - parallel:
-          - name: Check out ${{ matrix.candidate }} @ ${{ env.PIN }}
-            if: steps.bin.outputs.cache-hit != 'true' && matrix.candidate != 'upstream'
-            uses: *CheckOut
-            with:
-              ref: ${{ env.PIN }}
-              path: .bench/src/${{ matrix.candidate }}
-
-          - name: System libraries for GHC
-            if: steps.bin.outputs.cache-hit != 'true' && matrix.candidate == 'h2r'
-            run: sudo apt-get update -qq && sudo apt-get install -y -qq libgmp-dev libnuma-dev zlib1g-dev pkg-config
-
-      - name: Install root toolchain (mise)
-        if: &NoCache steps.bin.outputs.cache-hit != 'true'
-        uses: *Mise
-        with: { cache: false }
-
-      # Slow path helpers: intermediate layers so a rebuild after a branch push
-      # is incremental. restore-keys fall back to the newest cache for the
-      # candidate when the exact commit changed.
-      - name: Restore toolchains and build layers
-        if: *NoCache
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with: { install_args: "python uv shellcheck" }
+      - uses: actions/download-artifact@v8
+        with: { name: candidate-plan, path: .bench }
+      - name: Restore completed binary and provenance
+        id: binary
+        uses: actions/cache/restore@v6
+        with: &BinaryCache
+          path: .bench/cache/${{ matrix.name }}/${{ matrix.key }}
+          key: bench-binary-${{ matrix.name }}-${{ matrix.key }}
+      - name: Restore compatible build layers
         id: layers
-        uses: *RestoreCache
+        if: steps.binary.outputs.cache-hit != 'true' && matrix.name != 'upstream'
+        uses: actions/cache/restore@v6
         with:
-          path: &ToolChainCachePaths |
-            ~/.local/share/mise/installs
-            ~/.local/share/mise/plugins
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.rustup/toolchains
+          path: &BuildLayers |
+            .bench/build/${{ matrix.name }}
             ~/.cache/cabal
             ~/.local/state/cabal
-            .bench/target/${{ matrix.candidate }}
-          key: bench-layers-${{ matrix.candidate }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', format('.bench/src/{0}/mise.lock', matrix.candidate), format('.bench/src/{0}/Cargo.lock', matrix.candidate)) }}-${{ env.PIN }}
-          restore-keys: |
-            bench-layers-${{ matrix.candidate }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', format('.bench/src/{0}/mise.lock', matrix.candidate), format('.bench/src/{0}/Cargo.lock', matrix.candidate)) }}-
-            bench-layers-${{ matrix.candidate }}-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Build ${{ matrix.candidate }}
-        if: *NoCache
-        env:
-          # actions/checkout put the source in place; make build.sh use that exact commit.
-          BENCH_SHA_RUST_PORT: ${{ matrix.candidate == 'rust-port' && env.PIN || '' }}
-          BENCH_SHA_H2R: ${{ matrix.candidate == 'h2r' && env.PIN || '' }}
-          candidate: ${{ matrix.candidate }}
-        run: |
-          ./bench/build.sh build "${candidate}"
-          built_key="$(bench/build.sh key "${candidate}")"
-          test "${built_key}" = "${KEY}" || { echo "::error::cache key drifted between resolve and build"; exit 1; }
-          cat "${bench_bin_path}/${candidate}/manifest.json"
-
-      - name: Save built binary
-        if: *NoCache
-        uses: &SaveCache actions/cache/save@v6
-        with: *CandidateCache
-
-      - name: Save toolchains and build layers
-        if: steps.bin.outputs.cache-hit != 'true' && steps.layers.outputs.cache-hit != 'true'
-        uses: *SaveCache
+            ~/.local/share/mise/installs
+            ~/.local/share/mise/plugins
+            ~/.rustup/toolchains
+          key: bench-layers-${{ matrix.name }}-${{ matrix.layers_key }}-${{ matrix.key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: bench-layers-${{ matrix.name }}-${{ matrix.layers_key }}-
+      - name: Restore Rust dependency downloads
+        id: dependencies
+        if: steps.binary.outputs.cache-hit != 'true' && matrix.name != 'upstream'
+        uses: actions/cache/restore@v6
         with:
-          path: *ToolChainCachePaths
+          path: .bench/dependencies/cargo
+          key: bench-dependencies-${{ matrix.name }}-${{ matrix.layers_key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: bench-dependencies-${{ matrix.name }}-${{ matrix.layers_key }}-
+      - name: Install h2r system libraries
+        if: matrix.name == 'h2r'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgmp-dev libnuma-dev zlib1g-dev pkg-config
+      - name: Prepare or verify cached binary
+        run: uv run bench prepare --plan .bench/plan.json --candidates "${CANDIDATE}"
+        env: { CANDIDATE: "${{ matrix.name }}" }
+      - name: Save completed binary
+        if: steps.binary.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with: *BinaryCache
+      - name: Preserve build layers, including recoverable partial builds
+        if: always() && !cancelled() && steps.layers.outcome == 'success' && steps.layers.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: *BuildLayers
           key: ${{ steps.layers.outputs.cache-primary-key }}
-
-      - uses: &Upload actions/upload-artifact@v7
+      - name: Preserve downloaded dependencies
+        if: always() && !cancelled() && steps.dependencies.outcome == 'success' && steps.dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
         with:
-          name: bin-${{ matrix.candidate }}
-          path: "${{ env.bench_bin_path }}/${{ matrix.candidate }}"
-          if-no-files-found: error
-          retention-days: 30
+          path: .bench/dependencies/cargo
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: prepared-${{ matrix.name }}
+          path: .bench/prepared/${{ matrix.name }}
+          include-hidden-files: true
 
-  bench:
-    name: Benchmark
-    needs: build
+  measure:
+    name: Measure all candidates together
+    needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 180
-    env: { bench_results_path: .bench/results/ci }
+    timeout-minutes: 120
     steps:
-      - uses: *CheckOut
-      - uses: *Mise
-
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with: { install_args: "python uv hyperfine" }
+      - name: Install measurement runtime dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq time libgmp10 libnuma1
       - uses: actions/download-artifact@v8
-        with:
-          pattern: bin-*
-          path: &BinPath .bench/bin
-
-      - name: Arrange binaries
-        shell: "/bin/bash -eu {0}"
-        env: { bin_path: *BinPath }
+        with: { pattern: prepared-*, path: .bench/artifacts }
+      - name: Assemble and verify prepared artifacts
         run: |
-          for d in "${bin_path}/bin-"*; do mv "${d}" "${bin_path}/${d##*/bin-}"; done
-          chmod +x "${bin_path}"/*/shellcheck
-          for m in "${bin_path}"/*/manifest.json; do
-            printf '%s: ' "$(dirname "${m}")"; jq -r '"\(.name) \(.pin) key \(.key) sha256 \(.binary_sha256)"' "${m}"
+          mkdir -p .bench/prepared
+          for name in upstream rust-port h2r; do
+            mv ".bench/artifacts/prepared-${name}" ".bench/prepared/${name}"
           done
-
-      - name: Generate corpus
-        run: mise run bench:corpus
-
-      - name: Run
+          chmod +x .bench/prepared/*/*/rshellcheck
+          uv run bench prepare --verify
+      - name: Generate workloads
+        run: uv run bench corpus --out .bench/corpus
+      - name: Measure
         env:
           ROUNDS: ${{ inputs.rounds || '5' }}
           RUNS: ${{ inputs.runs || '10' }}
           WARMUP: ${{ inputs.warmup || '3' }}
           SCENARIOS: ${{ inputs.scenarios }}
-        run: mise run bench:run --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}"
-          ${SCENARIOS:+--scenarios "${SCENARIOS}"} --out "${bench_results_path}"
-
-      - name: Analyze
-        run: mise run bench:analyze "${bench_results_path}" >/dev/null;
-
+        run: |
+          uv run bench run --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" \
+            ${SCENARIOS:+--scenarios "${SCENARIOS}"} --out .bench/results/ci
       - name: Report
-        run: tee /dev/stderr <"${bench_results_path}/report.md" >"${GITHUB_STEP_SUMMARY}"
-
-      - uses: *Upload
-        with:
-          name: bench-results
-          path: "${{ env.bench_results_path }}"
-          retention-days: 90
+        run: |
+          uv run bench report .bench/results/ci
+          cat .bench/results/ci/report.md >> "${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@v7
+        if: always() && !cancelled()
+        with: { name: bench-results, path: .bench/results/ci, include-hidden-files: true, retention-days: 90 }

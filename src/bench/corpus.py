@@ -456,11 +456,11 @@ class Args(argparse.Namespace):
     seed: int = SEED
 
 
-def main():
+def main(argv: list[str] | None = None):
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     _ = ap.add_argument("--out", required=True, type=Path)
     _ = ap.add_argument("--seed", type=int, default=SEED)
-    args = ap.parse_args(namespace=Args())
+    args = ap.parse_args(argv, namespace=Args())
 
     rng = random.Random(args.seed)
     gen = Gen(rng)
@@ -486,7 +486,7 @@ def main():
         )
     manifest = CorpusManifest(
         seed=args.seed,
-        generator="bench/corpus.py",
+        generator="src/bench/corpus.py",
         files=entries,
         sha256=hashlib.sha256(
             "".join(f"{k}:{entries[k].sha256}\n" for k in sorted(entries)).encode()

@@ -4,17 +4,16 @@ version         = "0.0.0"
 requires-python = ">= 3.14"
 license         = "MIT"
 dependencies    = [
-  "matplotlib>=3.11.2",
   "numpy>=2.5.3",
   "pydantic>=2.13.5",
   "scipy>=1.18.1",
 ]
 
 [project.scripts]
-analyze    = "bench.analyze:main"
-bench      = "bench.run:main"
-candidates = "bench.candidates:main"
-corpus     = "bench.corpus:main"
+bench = "bench.cli:main"
+
+[project.optional-dependencies]
+plots = ["matplotlib>=3.11.2"]
 
 [dependency-groups]
 dev = [
@@ -30,22 +29,21 @@ build-backend = "uv_build"
 
 [tool.pyright]
 pythonVersion = "3.14"
-include       = ["bench/**/*.py"]
+include       = ["src/**/*.py"]
 venvPath      = "."
 venv          = ".venv"
 
 [tool.ruff]
 target-version = "py314"
-include        = ["bench/**/*.py"]
+include        = ["src/**/*.py", "tests/**/*.py"]
 preview        = true
 
 [tool.ty]
 environment.python-version = "3.14"
 environment.python         = ".venv"
 src.respect-ignore-files   = true
-src.include                = ["bench/**/*.py"]
+src.include                = ["src/**/*.py", "tests/**/*.py"]
 
 [tool.uv]
-build-backend.module-root = ""
 build-backend.module-name = "bench"
 package                   = true

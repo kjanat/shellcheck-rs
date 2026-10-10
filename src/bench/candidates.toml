@@ -1,0 +1,16 @@
+[candidates.upstream]
+binary   = "shellcheck"
+baseline = true
+tool     = "shellcheck"
+
+[candidates.rust-port]
+repo    = "https://github.com/kjanat/shellcheck-rs.git"
+ref     = "rust-port"
+package = "shellcheck-cli"
+tools   = ["rust"]
+
+[candidates.h2r]
+repo    = "https://github.com/kjanat/shellcheck-rs.git"
+ref     = "h2r-compiler"
+package = "rshellcheck"
+tools   = ["ghcup", "ghc", "cabal", "rust"]

@@ -14,13 +14,12 @@ Design, in the order it happens:
    hyperfine invocation (`-N`, no shell) *per candidate*, with `runs` timed
    runs after `warmup` untimed ones. The candidate order is re-shuffled every
    round from a seeded PRNG, so slow drift of the machine (thermal state,
-   background load, page cache) spreads over all candidates instead of
-   landing on whichever one happened to go last. Rounds are kept apart in
+   background load, page cache) spreads evenly over all candidates. Rounds are kept apart in
    the output so the analysis can test for that drift.
 
    Why one hyperfine process per candidate: hyperfine reports memory from
    getrusage(RUSAGE_CHILDREN).ru_maxrss, which is the maximum over *all*
-   children the hyperfine process has reaped so far, not per command. With
+   children the hyperfine process has reaped so far. With
    several commands in one invocation every later command would report at
    least the largest peak of the commands before it (a small candidate that
    ran after a big one inherits the big one's number). A fresh hyperfine
@@ -29,11 +28,11 @@ Design, in the order it happens:
 
 3. Everything (samples, per-run memory, exit codes, the pre-check, the
    environment, the candidate manifests, the corpus checksum) goes into
-   <out>/run.json for bench/analyze.py.
+   <out>/run.json for analyze.py.
 
-    bench [--rounds 5] [--runs 10] [--warmup 3] [--seed 1] [--pin CPU]
+    bench run [--rounds 5] [--runs 10] [--warmup 3] [--seed 1] [--pin CPU]
           [--scenarios a,b] [--candidates x,y] [--max-rss-gib 4] [--timeout 600]
-          [--bin-dir .bench/bin] [--corpus .bench/corpus] [--out .bench/results/<ts>]
+          [--corpus .bench/corpus] [--out .bench/results/<ts>]
 """
 
 import argparse
@@ -46,6 +45,7 @@ import platform
 import random
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -58,7 +58,6 @@ from pathlib import Path
 from pydantic import JsonValue, TypeAdapter
 
 from bench.schema import (
-    CandidatesFile,
     Config,
     CorpusManifest,
     CorpusRef,
@@ -76,8 +75,8 @@ from bench.schema import (
 )
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
-BENCH = Path(os.environ.get("BENCH_ROOT", ROOT / ".bench"))
+ROOT = HERE.parent.parent
+BENCH = ROOT / ".bench"
 JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
@@ -93,35 +92,28 @@ def warn(msg: str) -> None:
 
 
 def load_candidates(
-    bin_dir: Path, only: list[str] | None
+    prepared: Path, only: list[str] | None, config: Path = HERE / "candidates.toml"
 ) -> tuple[list[Manifest], str]:
-    with open(HERE / "candidates.toml", "rb") as f:
-        table = CandidatesFile.model_validate(tomllib.load(f)).candidates
-    baseline = next((n for n, c in table.items() if c.baseline), next(iter(table)))
-    found: list[Manifest] = []
-    for name in table:
-        if only and name not in only:
-            continue
-        manifest = bin_dir / name / "manifest.json"
-        if not manifest.exists():
-            warn(f"candidate {name!r} is not built ({manifest} missing); skipping it")
-            continue
-        m = Manifest.model_validate_json(manifest.read_text())
-        m.binary = str(bin_dir / name / "shellcheck")
-        found.append(m)
-    if len(found) < 2:
-        sys.exit("bench: need at least two built candidates to compare")
-    if baseline not in [c.name for c in found]:
-        warn(
-            f"baseline {baseline!r} is not among the candidates; using {found[0].name!r}"
-        )
-        baseline = found[0].name
+    from bench.candidates import read_manifest, selected, specs
+
+    table = specs(config)
+    names = selected(table, ",".join(only or []))
+    baseline = next(name for name, spec in table.items() if spec.baseline)
+    if baseline not in names or len(names) < 2:
+        raise ValueError(f"select {baseline} and at least one other candidate")
+    found = [read_manifest(prepared / name) for name in names]
+    if [manifest.name for manifest in found] != names:
+        raise ValueError("prepared manifest names do not match candidate selection")
     return found, baseline
 
 
 def load_scenarios(corpus: Path, only: list[str] | None) -> dict[str, Scenario]:
     with open(HERE / "scenarios.toml", "rb") as f:
         table = ScenariosFile.model_validate(tomllib.load(f)).scenarios
+    if only and set(only) - table.keys():
+        raise ValueError(
+            "unknown scenarios: " + ", ".join(sorted(set(only) - table.keys()))
+        )
     out: dict[str, Scenario] = {}
     for name, sc in table.items():
         if only and name not in only:
@@ -216,53 +208,95 @@ class Guarded:
     killed: str | None
 
 
+@dataclass
+class WatchdogState:
+    reason: str | None = None
+    peak_rss: int = 0
+
+
 def run_guarded(
     cmd: list[str], cwd: Path, timeout: float, max_rss: int, stdout: Path, stderr: Path
 ) -> Guarded:
-    """Run once; kill on timeout or when RSS passes max_rss. Returns exit, signal,
-    wall, peak RSS (bytes, from rusage) and the reason it was killed, if any."""
-    killed: dict[str, str | None] = {"reason": None}
+    """Measure from a small native supervisor, avoiding Python's pre-exec RSS floor.
+
+    GNU time records the completed command's peak. The watchdog bounds elapsed
+    time and process-tree RSS, retaining sampled memory when the group is killed.
+    """
+    timer = Path("/usr/bin/time")
+    if not timer.is_file():
+        raise ValueError(
+            "pre-check memory accounting requires GNU time (/usr/bin/time)"
+        )
+    memory = stdout.with_suffix(".rss").resolve()
+    memory.unlink(missing_ok=True)
+    watch = WatchdogState()
+    done = threading.Event()
     with open(stdout, "wb") as out, open(stderr, "wb") as err:
         start = time.perf_counter()
-        proc = subprocess.Popen(cmd, cwd=cwd, stdout=out, stderr=err)
+        proc = subprocess.Popen(
+            [str(timer), "-q", "-f", "%M", "-o", str(memory), "--", *cmd],
+            cwd=cwd,
+            stdout=out,
+            stderr=err,
+            start_new_session=True,
+        )
 
         def watchdog() -> None:
-            status = Path(f"/proc/{proc.pid}/status")
-            while proc.poll() is None and killed["reason"] is None:
-                if time.perf_counter() - start > timeout:
-                    killed["reason"] = f"timeout after {timeout:g}s"
-                else:
+            while not done.is_set():
+                total = 0
+                pending = [proc.pid]
+                seen: set[int] = set()
+                while pending:
+                    pid = pending.pop()
+                    if pid in seen:
+                        continue
+                    seen.add(pid)
                     try:
-                        for line in status.read_text().splitlines():
+                        for line in (
+                            Path(f"/proc/{pid}/status").read_text().splitlines()
+                        ):
                             if line.startswith("VmRSS:"):
-                                if int(line.split()[1]) * 1024 > max_rss:
-                                    killed["reason"] = (
-                                        f"peak RSS exceeded {max_rss / 2**30:g} GiB"
-                                    )
-                                break
+                                total += int(line.split()[1]) * 1024
+                        pending.extend(
+                            int(child)
+                            for child in Path(f"/proc/{pid}/task/{pid}/children")
+                            .read_text()
+                            .split()
+                        )
                     except OSError:
                         pass
-                if killed["reason"]:
-                    proc.kill()
+                watch.peak_rss = max(watch.peak_rss, total)
+                if time.perf_counter() - start > timeout:
+                    watch.reason = f"timeout after {timeout:g}s"
+                elif total > max_rss:
+                    watch.reason = f"process-tree RSS exceeded {max_rss / 2**30:g} GiB"
+                if watch.reason:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                     return
-                time.sleep(0.02)
+                done.wait(0.02)
 
-        t = threading.Thread(target=watchdog, daemon=True)
-        t.start()
-        _, status, rusage = os.wait4(proc.pid, 0)
+        thread = threading.Thread(target=watchdog, daemon=True)
+        thread.start()
+        proc.wait()
+        done.set()
         wall = time.perf_counter() - start
-        proc.returncode = (
-            os.waitstatus_to_exitcode(status)
-            if not os.WIFSIGNALED(status)
-            else -os.WTERMSIG(status)
-        )
-        t.join()
+        thread.join()
+    if watch.reason:
+        rss = watch.peak_rss
+    else:
+        value = memory.read_text().strip() if memory.is_file() else ""
+        if not value.isdecimal():
+            raise ValueError("GNU time did not record a valid peak RSS")
+        rss = int(value) * 1024
     return Guarded(
         exit=proc.returncode if proc.returncode >= 0 else None,
         signal=-proc.returncode if proc.returncode < 0 else None,
         wall_s=wall,
-        peak_rss_bytes=rusage.ru_maxrss * 1024,
-        killed=killed["reason"],
+        peak_rss_bytes=rss,
+        killed=watch.reason,
     )
 
 
@@ -390,6 +424,7 @@ def hyperfine_one(
     runs: int,
     name: str,
     cmd: list[str],
+    timeout: float = 600.0,
 ) -> HyperfineResult:
     """One hyperfine process for ONE command, so its `memory_usage_byte` (the
     cumulative RUSAGE_CHILDREN maximum of that process) belongs to this command
@@ -413,21 +448,30 @@ def hyperfine_one(
         shlex.join(cmd),
     ]
     # hyperfine warns about every non-zero exit (ShellCheck exits 1 on findings); keep its stderr unless it actually fails.
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         argv,
         cwd=corpus,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
-        check=True,
+        start_new_session=True,
     )
+    try:
+        _, stderr = proc.communicate(timeout=(runs + warmup) * timeout + 10)
+    except subprocess.TimeoutExpired as error:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise ValueError(
+            f"{name}: timed round exceeded its execution budget"
+        ) from error
     if proc.returncode != 0:
-        sys.exit(f"bench: hyperfine failed ({proc.returncode}):\n{proc.stderr}")
+        raise ValueError(f"hyperfine failed ({proc.returncode}):\n{stderr}")
     return HyperfineExport.model_validate_json(export.read_text()).results[0]
 
 
 class Args(argparse.Namespace):
-    bin_dir: Path = BENCH / "bin"
+    config: Path = HERE / "candidates.toml"
+    prepared: Path = BENCH / "prepared"
     corpus: Path = BENCH / "corpus"
     out: Path | None = None
     rounds: int = 5
@@ -443,12 +487,13 @@ class Args(argparse.Namespace):
     hyperfine: str = shutil.which("hyperfine") or "hyperfine"
 
 
-def main() -> None:
+def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description=(__doc__ or "").split("\n\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    _ = ap.add_argument("--bin-dir", type=Path)
+    _ = ap.add_argument("--config", type=Path)
+    _ = ap.add_argument("--prepared", type=Path)
     _ = ap.add_argument("--corpus", type=Path)
     _ = ap.add_argument("--out", type=Path)
     _ = ap.add_argument("--rounds", type=int)
@@ -463,7 +508,7 @@ def main() -> None:
     _ = ap.add_argument(
         "--max-rss-gib",
         type=float,
-        help="pre-check memory cap (default: physical RAM minus 1 GiB, so a runaway run fails instead of the machine)",
+        help="pre-check memory cap (default: physical RAM minus 1 GiB)",
     )
     _ = ap.add_argument(
         "--timeout",
@@ -473,11 +518,24 @@ def main() -> None:
     _ = ap.add_argument(
         "--max-run-seconds",
         type=float,
-        help="a candidate whose pre-check run takes longer is timed once only, not in the rounds",
+        help="a candidate whose pre-check run takes longer is timed once only and skips the rounds",
     )
     _ = ap.add_argument("--hyperfine")
-    args = ap.parse_args(namespace=Args())
+    return ap
 
+
+def main(argv: list[str] | None = None) -> Path:
+    args = parser().parse_args(argv, namespace=Args())
+
+    if (
+        args.warmup < 0
+        or args.timeout <= 0
+        or args.max_run_seconds <= 0
+        or (args.max_rss_gib is not None and args.max_rss_gib <= 0)
+    ):
+        raise ValueError(
+            "warmup must be nonnegative and execution limits must be positive"
+        )
     if args.rounds < 1 or args.runs < 1:
         sys.exit("bench: --rounds and --runs must be at least 1")
     if args.rounds * args.runs < 20:
@@ -508,13 +566,18 @@ def main() -> None:
         args.out or BENCH / "results" / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     ).resolve()
     corpus = args.corpus.resolve()
+    if (out / "run.json").exists():
+        raise ValueError(f"{out} already contains a run; choose a new output directory")
     out.mkdir(parents=True, exist_ok=True)
     (out / "raw").mkdir(exist_ok=True)
 
     only_c = [s for s in args.candidates.split(",") if s] or None
     only_s = [s for s in args.scenarios.split(",") if s] or None
-    candidates, baseline = load_candidates(args.bin_dir.resolve(), only_c)
+    candidates, baseline = load_candidates(args.prepared, only_c, args.config)
     scenarios = load_scenarios(corpus, only_s)
+    for filename, entry in corpus_info.files.items():
+        if hashlib.sha256((corpus / filename).read_bytes()).hexdigest() != entry.sha256:
+            raise ValueError(f"corpus file changed: {filename}; regenerate the corpus")
     env = environment(args.hyperfine)
     log(
         f"{len(candidates)} candidates ({', '.join(c.name for c in candidates)}; baseline {baseline}), "
@@ -570,6 +633,7 @@ def main() -> None:
                     args.runs,
                     c.name,
                     cmd,
+                    min(args.timeout, args.max_run_seconds),
                 )
                 entry = samples[sname][c.name]
                 entry.times.extend(res.times)
@@ -625,7 +689,7 @@ def main() -> None:
     )
     _ = (out / "run.json").write_text(run.model_dump_json(indent=1) + "\n")
     log(f"wrote {out / 'run.json'} ({run.elapsed_s:.0f}s of timing)")
-    print(out)
+    return out
 
 
 if __name__ == "__main__":

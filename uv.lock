@@ -574,10 +574,14 @@ name = "shellcheck-bench"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
-    { name = "matplotlib" },
     { name = "numpy" },
     { name = "pydantic" },
     { name = "scipy" },
+]
+
+[package.optional-dependencies]
+plots = [
+    { name = "matplotlib" },
 ]
 
 [package.dev-dependencies]
@@ -590,11 +594,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "matplotlib", specifier = ">=3.11.2" },
+    { name = "matplotlib", marker = "extra == 'plots'", specifier = ">=3.11.2" },
     { name = "numpy", specifier = ">=2.5.3" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "scipy", specifier = ">=1.18.1" },
 ]
+provides-extras = ["plots"]
 
 [package.metadata.requires-dev]
 dev = [
