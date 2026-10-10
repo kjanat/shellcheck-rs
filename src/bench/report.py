@@ -21,7 +21,8 @@ def workload(run: Run, name: str) -> str:
     output = {"gcc": "GCC diagnostics", "json1": "JSON diagnostics"}.get(
         scenario.format, f"{scenario.format} output"
     )
-    return f"{size} · {output}"
+    context = f"{scenario.label} · " if scenario.label else ""
+    return f"{context}{size} · {output}"
 
 
 def revision(candidate: Manifest) -> str:
@@ -46,6 +47,23 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
     lines = [
         f"# 🏁 ShellCheck benchmark: {run.created[:10]}",
         "",
+    ]
+    for name, source in run.corpus.sources.items():
+        files = {
+            file: count
+            for file, count in run.corpus.files.items()
+            if file.startswith(source.prefix + "/")
+        }
+        repo = source.repo.rstrip("/").removesuffix(".git")
+        file_label = "shell file" if len(files) == 1 else "shell files"
+        lines += [
+            (
+                f"**{name.title()}**: [{source.pin[:12]}]({repo}/commit/{source.pin}); "
+                f"**{len(files):,} {file_label}, {sum(files.values()):,} lines**."
+            ),
+            "",
+        ]
+    lines += [
         "## Where to look first",
         "",
         f"Baseline: **{baseline}**. Ratios are candidate ÷ baseline; higher means more cost.",
@@ -219,6 +237,20 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             f"SHA-256 [{candidate.binary_sha256[:12]}](run.json)."
         )
     config = run.config
+    budgets = sorted(
+        {
+            scenario.max_run_seconds or config.max_run_s
+            for scenario in run.scenarios.values()
+        }
+        - {0}
+    )
+    if budgets:
+        lines += [
+            "",
+            "Per-run sampling budgets: "
+            + ", ".join(f"**{budget:g}s**" for budget in budgets)
+            + ". Over-budget candidates are reported once, without a timing confidence interval.",
+        ]
     lines += [
         "",
         (

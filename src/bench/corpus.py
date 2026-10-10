@@ -21,7 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import ClassVar, Literal
 
-from bench.schema import CorpusFile, CorpusManifest
+from bench.schema import CorpusFile, CorpusManifest, CorpusSource
 
 SEED = 20260928
 
@@ -454,13 +454,25 @@ chown $USER:$GROUP {self.path()}
 class Args(argparse.Namespace):
     out: Path = Path()
     seed: int = SEED
+    omarchy: bool = False
+    omarchy_source: Path | None = None
 
 
 def main(argv: list[str] | None = None):
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     _ = ap.add_argument("--out", required=True, type=Path)
     _ = ap.add_argument("--seed", type=int, default=SEED)
+    _ = ap.add_argument(
+        "--omarchy", action="store_true", help="include the pinned Omarchy shell corpus"
+    )
+    _ = ap.add_argument(
+        "--omarchy-source",
+        type=Path,
+        help="read an existing clean checkout at the pinned Omarchy commit",
+    )
     args = ap.parse_args(argv, namespace=Args())
+    if args.omarchy_source and not args.omarchy:
+        raise ValueError("--omarchy-source requires --omarchy")
 
     rng = random.Random(args.seed)
     gen = Gen(rng)
@@ -484,6 +496,13 @@ def main(argv: list[str] | None = None):
             lines=text.count("\n"),
             bytes=len(text.encode()),
         )
+    sources: dict[str, CorpusSource] = {}
+    if args.omarchy:
+        from bench.omarchy import prepare
+
+        imported, identity = prepare(out, args.omarchy_source)
+        entries.update(imported)
+        sources["omarchy"] = identity
     manifest = CorpusManifest(
         seed=args.seed,
         generator="src/bench/corpus.py",
@@ -491,11 +510,12 @@ def main(argv: list[str] | None = None):
         sha256=hashlib.sha256(
             "".join(f"{k}:{entries[k].sha256}\n" for k in sorted(entries)).encode()
         ).hexdigest(),
+        sources=sources,
     )
     _ = (out / "corpus.json").write_text(manifest.model_dump_json(indent=2) + "\n")
     total = sum(v.lines for v in entries.values())
     print(
-        f"wrote {len(files)} files, {total} lines, corpus sha256 {manifest.sha256[:16]} to {out}"
+        f"wrote {len(entries)} files, {total} lines, corpus sha256 {manifest.sha256[:16]} to {out}"
     )
 
 

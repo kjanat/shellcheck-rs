@@ -37,7 +37,6 @@ Design, in the order it happens:
 
 import argparse
 import difflib
-import glob
 import hashlib
 import json
 import os
@@ -53,7 +52,7 @@ import time
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydantic import JsonValue, TypeAdapter
 
@@ -110,6 +109,7 @@ def load_candidates(
 def load_scenarios(corpus: Path, only: list[str] | None) -> dict[str, Scenario]:
     with open(HERE / "scenarios.toml", "rb") as f:
         table = ScenariosFile.model_validate(tomllib.load(f)).scenarios
+    manifest = CorpusManifest.model_validate_json((corpus / "corpus.json").read_text())
     if only and set(only) - table.keys():
         raise ValueError(
             "unknown scenarios: " + ", ".join(sorted(set(only) - table.keys()))
@@ -118,10 +118,20 @@ def load_scenarios(corpus: Path, only: list[str] | None) -> dict[str, Scenario]:
     for name, sc in table.items():
         if only and name not in only:
             continue
+        if sc.dataset and sc.dataset not in manifest.sources:
+            if only:
+                raise ValueError(
+                    f"{name}: {sc.dataset} inputs missing; run bench corpus --omarchy --out {corpus}"
+                )
+            continue
         args: list[str] = []
         for a in sc.args:
             if any(ch in a for ch in "*?["):
-                matches = sorted(glob.glob(a, root_dir=corpus))
+                matches = sorted(
+                    filename
+                    for filename in manifest.files
+                    if PurePosixPath(filename).full_match(a)
+                )
                 if not matches:
                     sys.exit(
                         f"bench: scenario {name}: glob {a!r} matches nothing in {corpus}"
@@ -132,7 +142,14 @@ def load_scenarios(corpus: Path, only: list[str] | None) -> dict[str, Scenario]:
         fmt = "tty"
         if "-f" in args:
             fmt = args[args.index("-f") + 1]
-        out[name] = Scenario(description=sc.description, args=args, format=fmt)
+        out[name] = Scenario(
+            description=sc.description,
+            args=args,
+            format=fmt,
+            label=sc.label,
+            cwd=manifest.sources[sc.dataset].prefix if sc.dataset else "",
+            max_run_seconds=sc.max_run_seconds,
+        )
     if not out:
         sys.exit("bench: no scenarios selected")
     return out
@@ -346,17 +363,17 @@ def precheck(
         pdir = out / "precheck" / sname
         pdir.mkdir(parents=True, exist_ok=True)
         for c in candidates:
-            cmd = wrap(pin, [c.binary, *sc.args])
+            cmd = scenario_command(c, sc, pin)
             g = run_guarded(
                 cmd,
-                corpus,
+                corpus / sc.cwd,
                 timeout,
                 max_rss,
                 pdir / f"{c.name}.stdout",
                 pdir / f"{c.name}.stderr",
             )
             stdout = (pdir / f"{c.name}.stdout").read_bytes()
-            status, reason = classify(g, max_run)
+            status, reason = classify(g, sc.max_run_seconds or max_run)
             r = Precheck(
                 exit=g.exit,
                 signal=g.signal,
@@ -414,6 +431,14 @@ def precheck(
 
 def wrap(pin: str | None, cmd: list[str]) -> list[str]:
     return ["taskset", "-c", pin, *cmd] if pin else cmd
+
+
+def scenario_command(
+    candidate: Manifest, scenario: Scenario, pin: str | None
+) -> list[str]:
+    prefix = scenario.cwd.rstrip("/") + "/" if scenario.cwd else ""
+    args = [arg.removeprefix(prefix) if prefix else arg for arg in scenario.args]
+    return wrap(pin, [candidate.binary, *args])
 
 
 def hyperfine_one(
@@ -483,7 +508,7 @@ class Args(argparse.Namespace):
     pin: str | None = None
     max_rss_gib: float | None = None
     timeout: float = 600.0
-    max_run_seconds: float = 15.0
+    max_run_seconds: float | None = None
     hyperfine: str = shutil.which("hyperfine") or "hyperfine"
 
 
@@ -518,7 +543,7 @@ def parser() -> argparse.ArgumentParser:
     _ = ap.add_argument(
         "--max-run-seconds",
         type=float,
-        help="a candidate whose pre-check run takes longer is timed once only and skips the rounds",
+        help="override workload sampling budgets (default: 15s synthetic, 60s Omarchy); slower candidates are timed once only",
     )
     _ = ap.add_argument("--hyperfine")
     return ap
@@ -530,7 +555,7 @@ def main(argv: list[str] | None = None) -> Path:
     if (
         args.warmup < 0
         or args.timeout <= 0
-        or args.max_run_seconds <= 0
+        or (args.max_run_seconds is not None and args.max_run_seconds <= 0)
         or (args.max_rss_gib is not None and args.max_rss_gib <= 0)
     ):
         raise ValueError(
@@ -575,6 +600,11 @@ def main(argv: list[str] | None = None) -> Path:
     only_s = [s for s in args.scenarios.split(",") if s] or None
     candidates, baseline = load_candidates(args.prepared, only_c, args.config)
     scenarios = load_scenarios(corpus, only_s)
+    if args.max_run_seconds is not None:
+        scenarios = {
+            name: scenario.model_copy(update={"max_run_seconds": args.max_run_seconds})
+            for name, scenario in scenarios.items()
+        }
     for filename, entry in corpus_info.files.items():
         if hashlib.sha256((corpus / filename).read_bytes()).hexdigest() != entry.sha256:
             raise ValueError(f"corpus file changed: {filename}; regenerate the corpus")
@@ -597,7 +627,7 @@ def main(argv: list[str] | None = None) -> Path:
         args.timeout,
         int(max_rss_gib * 2**30),
         args.pin,
-        args.max_run_seconds,
+        args.max_run_seconds or 15.0,
     )
 
     rng = random.Random(args.seed)
@@ -623,17 +653,19 @@ def main(argv: list[str] | None = None) -> Path:
                 continue
             summary: list[str] = []
             for pos, c in enumerate(order):
-                cmd = wrap(args.pin, [c.binary, *sc.args])
+                cmd = scenario_command(c, sc, args.pin)
                 export = out / "raw" / f"round{rnd:02d}-{sname}-{c.name}.json"
                 res = hyperfine_one(
                     args.hyperfine,
-                    corpus,
+                    corpus / sc.cwd,
                     export,
                     args.warmup,
                     args.runs,
                     c.name,
                     cmd,
-                    min(args.timeout, args.max_run_seconds),
+                    min(
+                        args.timeout, sc.max_run_seconds or args.max_run_seconds or 15.0
+                    ),
                 )
                 entry = samples[sname][c.name]
                 entry.times.extend(res.times)
@@ -668,7 +700,7 @@ def main(argv: list[str] | None = None) -> Path:
             pin=args.pin,
             max_rss_gib=max_rss_gib,
             timeout_s=args.timeout,
-            max_run_s=args.max_run_seconds,
+            max_run_s=args.max_run_seconds or 15.0,
             hyperfine_flags=["-N", "--ignore-failure", "--output", "null"],
             # one hyperfine process per candidate per round: memory_bytes are per candidate
             memory_isolated=True,
@@ -681,6 +713,7 @@ def main(argv: list[str] | None = None) -> Path:
             sha256=corpus_info.sha256,
             seed=corpus_info.seed,
             files={k: v.lines for k, v in corpus_info.files.items()},
+            sources=corpus_info.sources,
         ),
         scenarios=scenarios,
         precheck=checks,

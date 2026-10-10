@@ -41,6 +41,9 @@ class Manifest(BaseModel):
 class ScenarioSpec(BaseModel):
     description: str = ""
     args: list[str]
+    dataset: str | None = None
+    label: str = ""
+    max_run_seconds: float | None = Field(default=None, gt=0)
 
 
 class ScenariosFile(BaseModel):
@@ -51,6 +54,15 @@ class Scenario(BaseModel):
     description: str
     args: list[str]
     format: str
+    label: str = ""
+    cwd: str = ""
+    max_run_seconds: float | None = Field(default=None, gt=0)
+
+
+class CorpusSource(BaseModel):
+    repo: str
+    pin: str
+    prefix: str
 
 
 class CorpusFile(BaseModel):
@@ -64,6 +76,7 @@ class CorpusManifest(BaseModel):
     generator: str
     files: dict[str, CorpusFile]
     sha256: str
+    sources: dict[str, CorpusSource] = Field(default_factory=dict)
 
 
 class CorpusRef(BaseModel):
@@ -71,6 +84,7 @@ class CorpusRef(BaseModel):
     sha256: str
     seed: int
     files: dict[str, int]
+    sources: dict[str, CorpusSource] = Field(default_factory=dict)
 
 
 class HyperfineResult(BaseModel):

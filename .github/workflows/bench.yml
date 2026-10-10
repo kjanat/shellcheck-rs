@@ -124,7 +124,7 @@ jobs:
     name: Measure all candidates together
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
@@ -141,8 +141,14 @@ jobs:
           done
           chmod +x .bench/prepared/*/*/rshellcheck
           uv run bench prepare --verify
-      - name: Generate workloads
-        run: uv run bench corpus --out .bench/corpus
+      - name: Restore pinned Omarchy source
+        uses: actions/cache@v6
+        with:
+          path: .bench/corpora/omarchy-source
+          key: bench-corpus-omarchy-${{ runner.os }}-${{ hashFiles('src/bench/corpora.toml') }}
+      - name: Generate synthetic and pinned Omarchy workloads
+        run: uv run bench corpus --omarchy --out .bench/corpus
+        env: { GH_TOKEN: "${{ github.token }}" }
       - name: Measure
         env:
           ROUNDS: ${{ inputs.rounds || '5' }}

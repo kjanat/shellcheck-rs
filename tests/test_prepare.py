@@ -354,7 +354,12 @@ tools = ["rust"]
             "2",
             "--warmup",
             "0",
+            "--max-run-seconds",
+            "2",
         )
+        recorded = json.loads((out / "run.json").read_text())
+        self.assertEqual(recorded["config"]["max_run_s"], 2)
+        self.assertEqual(recorded["scenarios"]["startup"]["max_run_seconds"], 2)
         raw = (out / "run.json").read_bytes()
         self.cli("report", str(out))
         report = (out / "report.md").read_bytes()

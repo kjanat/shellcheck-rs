@@ -25,6 +25,8 @@ src/bench/
   schema.py                  shared artifact contracts
   candidates.toml            defaults for the three implementations
   scenarios.toml             workload definitions
+  corpora.toml               pinned real-world source identities
+  omarchy.py                 checked import of the Omarchy shell corpus
 tests/                       substantive measurement and report checks
 results/                     deliberately archived runs
 .bench/                      ignored checkouts, builds, generated workloads/runs
@@ -50,6 +52,10 @@ For each scenario and candidate show correctness status, median elapsed time, ru
 The first screen should answer: where does each implementation produce different output, where does it spend more time or memory, and which measurements need repeating? Summarize the largest reliable cost differences before detailed rows. Show links to output diffs and raw samples. Diagnose mechanisms such as algorithmic complexity only when measurements or profiling support them.
 
 Startup, small/medium/large scripts, JSON output, and many-file batches retain distinct purposes. Include representative real scripts when redistributable and versioned. Generated workloads provide controlled scaling probes; do not imply they represent every real script.
+
+Omarchy is a structural CI workload, pinned by full commit SHA independently of candidate builds. Import all tracked regular files with a shell extension or shell shebang, including non-executable installation fragments. Preserve bytes, record checksums and provenance in the corpus and run manifests, and expand scenario globs only against that recorded inventory. Commands, installation scripts, migrations, tests, and remaining shell files form disjoint groups; the largest command and complete GCC/JSON batches provide additional views. Run from the snapshot root so relative source paths retain their context. Never execute Omarchy's scripts.
+
+Each scenario records its sampling budget: 15 seconds for generated fixtures and 60 seconds for Omarchy. An explicit CLI budget overrides both. Pre-checks use that budget to admit candidates to repeated sampling; timed rounds use it multiplied by their execution count, plus a small overhead allowance. Reuse candidate binaries across both datasets and cache the pinned source separately; fetching or changing the corpus must not trigger h2r compilation.
 
 Keep shuffled repeated measurements and uncertainty estimates. Preserve output parity checks and bounded execution. Mark mismatches, noisy runs, timeouts, memory limits, and single-run observations explicitly. Mismatched output does not earn a speed verdict. Historical results remain historical, including the original limits and candidate commits.
 

@@ -51,6 +51,22 @@ Both ratios are **candidate ÷ upstream**: `2×` means twice the cost; `0.5×` m
 
 Workloads cover startup, small/medium/large scripts, JSON formatting, and a batch of 120 files. They are generated from a fixed seed and checked against their checksums before timing. These are controlled workloads; their results do not establish performance on every real script.
 
+## Omarchy: real shell workloads
+
+CI also runs [Omarchy](https://github.com/omacom/omarchy) at the exact commit in [corpora.toml](src/bench/corpora.toml). The pinned snapshot contains **1,203 shell files and 118,431 lines**. Separate workloads cover runtime commands, installation scripts, migrations, tests, other shell files, the largest command, and the whole corpus in GCC and JSON formats. Test scripts are analyzed as source files; none of the Omarchy scripts are executed.
+
+```sh
+uv run bench corpus --omarchy --out .bench/corpus
+uv run bench run --scenarios omarchy-commands,omarchy-installation,omarchy-migrations
+uv run bench report .bench/results/<run>
+```
+
+Use `uv run bench --omarchy` to compose preparation, corpus import, measurement, and reporting. An existing clean checkout at the pinned commit can supply the inputs with `bench corpus --omarchy --omarchy-source /path/to/omarchy --out .bench/corpus`; otherwise the importer uses `gh repo clone` and caches the checkout under `.bench/corpora/`. Authentication follows the normal `gh` configuration; CI supplies its read-only token.
+
+Selection includes tracked shell extensions and shell shebangs, even without execute permission; symlinks and other languages are excluded. Every selected file gets a checksum. Reports show the source commit as a hyperlink, workload purpose, exact file and line counts, output diffs, and observed winners qualified by measurement status. Glob expansion uses the recorded input inventory, so unrelated files cannot enter a timed batch.
+
+Omarchy's per-run sampling budget is **60 seconds**, compared with **15 seconds** for synthetic workloads. Both suites retain five shuffled rounds, ten timed runs, and three warm-ups by default. Over-budget candidates remain single observations. `--max-run-seconds` overrides all workload budgets. Corpus changes do not invalidate candidate binaries; CI caches the pinned Omarchy source separately and allows up to six hours for the combined measurement job.
+
 Every candidate runs on the same inputs, in shuffled rounds, under its own hyperfine process so peak RSS belongs to that candidate. Verdicts use seeded bootstrap intervals and Holm-adjusted Mann–Whitney tests. Complete statistics and quality flags stay in `summary.json`.
 
 Preparation, builds, workloads, and runs live under ignored `.bench/`. Each completed run contains:

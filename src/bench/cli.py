@@ -7,6 +7,11 @@ from pathlib import Path
 from bench import candidates, corpus, measure
 
 
+class Args(measure.Args):
+    omarchy: bool = False
+    omarchy_source: Path | None = None
+
+
 def main(argv: list[str] | None = None) -> None:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
@@ -35,7 +40,13 @@ def main(argv: list[str] | None = None) -> None:
         parser.add_argument(
             "--source", action="append", default=[], metavar="NAME=PATH"
         )
-        args = parser.parse_args(arguments, namespace=measure.Args())
+        parser.add_argument(
+            "--omarchy", action="store_true", help="include pinned Omarchy workloads"
+        )
+        parser.add_argument("--omarchy-source", type=Path)
+        args = parser.parse_args(arguments, namespace=Args())
+        if args.omarchy_source and not args.omarchy:
+            raise ValueError("--omarchy-source requires --omarchy")
         table = candidates.specs(args.config)
         plan = candidates.resolve(
             table,
@@ -45,8 +56,13 @@ def main(argv: list[str] | None = None) -> None:
             args.state.resolve(),
         )
         candidates.prepare(plan, args.state.resolve(), args.prepared.resolve())
-        if not (args.corpus / "corpus.json").exists():
-            corpus.main(["--out", str(args.corpus)])
+        if args.omarchy or not (args.corpus / "corpus.json").exists():
+            corpus_arguments = ["--out", str(args.corpus)]
+            if args.omarchy:
+                corpus_arguments.append("--omarchy")
+            if args.omarchy_source:
+                corpus_arguments.extend(("--omarchy-source", str(args.omarchy_source)))
+            corpus.main(corpus_arguments)
         run_flags = {
             action.dest: action.option_strings[0]
             for action in measure.parser()._actions

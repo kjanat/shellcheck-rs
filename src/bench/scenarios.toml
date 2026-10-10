@@ -26,3 +26,59 @@ args        = ["-f", "json1", "large.sh"]
 [scenarios.many]
 description = "120 small scripts checked in one invocation"
 args        = ["-f", "gcc", "many/*.sh"]
+
+[scenarios.omarchy-commands]
+dataset         = "omarchy"
+label           = "Omarchy runtime commands"
+description     = "All tracked shell commands under bin/"
+max_run_seconds = 60
+args            = ["-s", "bash", "-f", "gcc", "omarchy/bin/*"]
+
+[scenarios.omarchy-installation]
+dataset         = "omarchy"
+label           = "Omarchy installation scripts"
+description     = "All tracked installation shell scripts, including sourced fragments"
+max_run_seconds = 60
+args            = ["-s", "bash", "-f", "gcc", "omarchy/install/**"]
+
+[scenarios.omarchy-migrations]
+dataset         = "omarchy"
+label           = "Omarchy migrations"
+description     = "All tracked migration shell scripts"
+max_run_seconds = 60
+args            = ["-s", "bash", "-f", "gcc", "omarchy/migrations/**"]
+
+[scenarios.omarchy-tests]
+dataset         = "omarchy"
+label           = "Omarchy test scripts"
+description     = "All tracked shell tests, including acceptance-test source files"
+max_run_seconds = 60
+args            = ["-s", "bash", "-f", "gcc", "omarchy/test/**"]
+
+[scenarios.omarchy-other]
+dataset         = "omarchy"
+label           = "Omarchy configuration and desktop scripts"
+description     = "The remaining tracked shell scripts under config/, default/, etc/, and shell/"
+max_run_seconds = 60
+args            = ["-s", "bash", "-f", "gcc", "omarchy/config/**", "omarchy/default/**", "omarchy/etc/**", "omarchy/shell/**"]
+
+[scenarios.omarchy-largest]
+dataset         = "omarchy"
+label           = "Omarchy bin/omarchy-upgrade-to-quattro"
+description     = "Largest runtime command in the pinned Omarchy snapshot"
+max_run_seconds = 60
+args            = ["-s", "bash", "-f", "gcc", "omarchy/bin/omarchy-upgrade-to-quattro"]
+
+[scenarios.omarchy-all]
+dataset         = "omarchy"
+label           = "All Omarchy shell scripts"
+description     = "The complete pinned shell corpus in one GCC-format invocation"
+max_run_seconds = 60
+args            = ["-s", "bash", "-f", "gcc", "omarchy/**"]
+
+[scenarios.omarchy-json1]
+dataset         = "omarchy"
+label           = "All Omarchy shell scripts"
+description     = "The complete pinned shell corpus in one JSON-format invocation"
+max_run_seconds = 60
+args            = ["-s", "bash", "-f", "json1", "omarchy/**"]
