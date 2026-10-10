@@ -63,6 +63,8 @@ class CorpusSource(BaseModel):
     repo: str
     pin: str
     prefix: str
+    shell_globs: list[str] = Field(default_factory=list)
+    exclude_globs: list[str] = Field(default_factory=list)
 
 
 class CorpusFile(BaseModel):

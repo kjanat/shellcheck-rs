@@ -1,4 +1,14 @@
 [corpora.omarchy]
-repo   = "https://github.com/omacom/omarchy"
-pin    = "077ac1da939de00d061c1035e1a1d00587a119b8"
-prefix = "omarchy"
+repo          = "https://github.com/omacom/omarchy"
+pin           = "077ac1da939de00d061c1035e1a1d00587a119b8"
+prefix        = "omarchy"
+shell_globs   = [
+  "default/bash/*",
+  "default/bash/fns/*",
+  "default/bashrc",
+  "default/uwsm/**",
+  "etc/mkinitcpio.conf.d/*.conf",
+  "etc/limine-entry-tool.d/*.conf",
+  "default/limine/default.conf",
+]
+exclude_globs = ["default/bash/inputrc"]

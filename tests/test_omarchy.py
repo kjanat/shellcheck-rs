@@ -30,6 +30,11 @@ class OmarchyTests(unittest.TestCase):
             "install/nested/fragment.sh": b"printf 'sourced fragment\\n'\n",
             "migrations/1.sh": b"#!/bin/bash\ntrue\n",
             "test/nested/check.sh": b"#!/bin/bash\ntrue\n",
+            "default/bash/rc": b'source "$OMARCHY_PATH/default/bash/envs"\n',
+            "default/bash/fns/helper": b"helper() { true; }\n",
+            "default/bash/inputrc": b"set editing-mode emacs\n",
+            "etc/mkinitcpio.conf.d/hooks.conf": b"HOOKS=(base udev)\n",
+            "etc/systemd/example.conf": b"[Service]\nType=simple\n",
             "notes.txt": b"not a shell script\n",
         }
         for name, data in files.items():
@@ -54,6 +59,8 @@ class OmarchyTests(unittest.TestCase):
             repo="https://github.com/omacom/omarchy",
             pin=self.git("rev-parse", "HEAD"),
             prefix="omarchy",
+            shell_globs=["default/bash/**", "etc/mkinitcpio.conf.d/*.conf"],
+            exclude_globs=["default/bash/inputrc"],
         )
 
     def git(self, *args: str) -> str:
@@ -82,6 +89,9 @@ class OmarchyTests(unittest.TestCase):
                 "omarchy/install/nested/fragment.sh",
                 "omarchy/migrations/1.sh",
                 "omarchy/test/nested/check.sh",
+                "omarchy/default/bash/rc",
+                "omarchy/default/bash/fns/helper",
+                "omarchy/etc/mkinitcpio.conf.d/hooks.conf",
             },
         )
         for name, entry in manifest.files.items():

@@ -3,7 +3,7 @@
 import hashlib
 import re
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel
 
@@ -36,10 +36,17 @@ def snapshot(source: Path, out: Path, identity: CorpusSource) -> dict[str, Corpu
         path = source / name
         if path.is_symlink() or not path.is_file():
             continue
+        relative_path = PurePosixPath(name)
+        if any(relative_path.full_match(pattern) for pattern in identity.exclude_globs):
+            continue
         with path.open("rb") as file:
             header = file.readline(256)
-        if path.suffix not in (".sh", ".bash", ".ksh", ".zsh") and not re.match(
-            rb"^#!.*\b(?:ba|da|k|z)?sh(?:\s|$)", header
+        if (
+            path.suffix not in (".sh", ".bash", ".ksh", ".zsh")
+            and not re.match(rb"^#!.*\b(?:ba|da|k|z)?sh(?:\s|$)", header)
+            and not any(
+                relative_path.full_match(pattern) for pattern in identity.shell_globs
+            )
         ):
             continue
         data = path.read_bytes()

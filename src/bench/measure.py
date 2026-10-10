@@ -507,7 +507,7 @@ class Args(argparse.Namespace):
     candidates: str = ""
     pin: str | None = None
     max_rss_gib: float | None = None
-    timeout: float = 600.0
+    timeout: float | None = None
     max_run_seconds: float | None = None
     hyperfine: str = shutil.which("hyperfine") or "hyperfine"
 
@@ -538,7 +538,7 @@ def parser() -> argparse.ArgumentParser:
     _ = ap.add_argument(
         "--timeout",
         type=float,
-        help="pre-check wall-clock cap per run, seconds",
+        help="override pre-check wall-clock cap, seconds (default: 600 synthetic-only, 1200 with Omarchy)",
     )
     _ = ap.add_argument(
         "--max-run-seconds",
@@ -554,7 +554,7 @@ def main(argv: list[str] | None = None) -> Path:
 
     if (
         args.warmup < 0
-        or args.timeout <= 0
+        or (args.timeout is not None and args.timeout <= 0)
         or (args.max_run_seconds is not None and args.max_run_seconds <= 0)
         or (args.max_rss_gib is not None and args.max_rss_gib <= 0)
     ):
@@ -600,6 +600,9 @@ def main(argv: list[str] | None = None) -> Path:
     only_s = [s for s in args.scenarios.split(",") if s] or None
     candidates, baseline = load_candidates(args.prepared, only_c, args.config)
     scenarios = load_scenarios(corpus, only_s)
+    timeout = args.timeout or (
+        1200.0 if any(scenario.cwd for scenario in scenarios.values()) else 600.0
+    )
     if args.max_run_seconds is not None:
         scenarios = {
             name: scenario.model_copy(update={"max_run_seconds": args.max_run_seconds})
@@ -624,7 +627,7 @@ def main(argv: list[str] | None = None) -> Path:
         scenarios,
         corpus,
         out,
-        args.timeout,
+        timeout,
         int(max_rss_gib * 2**30),
         args.pin,
         args.max_run_seconds or 15.0,
@@ -663,9 +666,7 @@ def main(argv: list[str] | None = None) -> Path:
                     args.runs,
                     c.name,
                     cmd,
-                    min(
-                        args.timeout, sc.max_run_seconds or args.max_run_seconds or 15.0
-                    ),
+                    min(timeout, sc.max_run_seconds or args.max_run_seconds or 15.0),
                 )
                 entry = samples[sname][c.name]
                 entry.times.extend(res.times)
@@ -699,7 +700,7 @@ def main(argv: list[str] | None = None) -> Path:
             seed=args.seed,
             pin=args.pin,
             max_rss_gib=max_rss_gib,
-            timeout_s=args.timeout,
+            timeout_s=timeout,
             max_run_s=args.max_run_seconds or 15.0,
             hyperfine_flags=["-N", "--ignore-failure", "--output", "null"],
             # one hyperfine process per candidate per round: memory_bytes are per candidate
